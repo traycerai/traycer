@@ -92,7 +92,7 @@ function emptyLog(): HostLog {
 
 /**
  * The bare host client the actions reach for when the owner host has no mirror
- * session here - the whole point of the explicit routing (critique C1).
+ * session here - the whole point of the explicit routing (C1).
  */
 function fakeClient(log: HostLog) {
   return {

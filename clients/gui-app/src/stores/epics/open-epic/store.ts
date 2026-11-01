@@ -28,6 +28,7 @@ import type { ConfirmedChatMutation } from "@traycer-clients/shared/replica-runt
  * `replicaGeneration()` exists to tell us.
  */
 import type { EpicAdapterArm } from "./runtime/epic-adapter-selection";
+import { markRenameInFlight } from "./rename-in-flight";
 import { create, type StoreApi, type UseBoundStore } from "zustand";
 import { replaceEqualDeep } from "@tanstack/react-query";
 import { persist, createJSONStorage } from "zustand/middleware";
@@ -385,7 +386,6 @@ export interface OpenEpicState {
    * older host's doc projection is its authoritative record table.
    */
   readonly chatRecordListAuthoritative: boolean;
-  /** Projected ingest counters - see `EpicRecordsProjection`. */
   /** Projected adapter arm - see `EpicControlProjection`. */
   readonly installedArm: EpicAdapterArm | null;
   /**
@@ -395,6 +395,7 @@ export interface OpenEpicState {
    * inherited because this interface names its projected fields explicitly.
    */
   readonly heldAttachmentHashes: readonly string[];
+  /** Projected ingest counters - see `EpicRecordsProjection`. */
   readonly chatIngestSeq: number;
   readonly tuiAgentIngestSeq: number;
   /**
@@ -779,7 +780,7 @@ export interface OpenEpicState {
    * answer therefore belongs to exactly one session: a rebuilt store is a
    * different cache entry, its first read is a real request, and no fence can
    * cross a generation in the first place. That also makes renderer parking
-   * (plan C, C1) honest - a park releases the session, and the show that
+   * honest - a park releases the session, and the show that
    * follows re-reads instead of replaying the pre-park answer.
    *
    * The hooks used to carry this alongside the fence and compare the two at
@@ -1033,12 +1034,6 @@ export interface OpenEpicState {
     artifactId: string,
   ) => EpicArtifactRoomAvailability;
   /**
-   * Resolves the artifact-room hosting `artifactId`'s body, or `null` when the
-   * artifact does not exist or has not been assigned a room yet. Exposed so a
-   * lease holder can re-acquire when the artifact's room changes underneath
-   * it, which is not always visible in {@link getArtifactBodyAvailability}.
-   */
-  /**
    * The key the artifact-body tier holds this artifact's live doc under, for the
    * one consumer that re-takes a lease when that doc's identity changes. The
    * `@1` arm answers with the artifact's room; the lane arm answers with the
@@ -1173,19 +1168,6 @@ export interface OpenEpicStoreHandle {
 let nextIngestFenceIdentity = 1;
 
 /**
- * Constructs a fresh per-Epic session.
- *
- * Responsibilities, all of them adapter-shaped:
- *   - Build the replica runtime and give it a delivery that lands in this
- *     store, coalescing a multi-plane frame into one `setState`
- *   - Map the runtime's `bindingEpoch` onto the React remount token, and
- *     republish the live `Y` handles when the replica is replaced
- *   - Feed the runtime the signed-in identity, and rebuild the owner-selected
- *     record slices when it changes
- *   - Persist only `lastFocusedArtifactId` + `lastFocusedThreadId` to
- *     localStorage under a key scoped to `epicId`
- */
-/**
  * A published slice, as far as this layer checks.
  *
  * A predicate rather than an assertion, and a CHEAP one on purpose: the
@@ -1202,10 +1184,55 @@ export function isProjectionPatch(
   return typeof value === "object" && value !== null;
 }
 
+/**
+ * Constructs a fresh per-Epic session.
+ *
+ * Responsibilities, all of them adapter-shaped:
+ *   - Apply the supplied runtime's projection patches to this store
+ *   - Map the runtime's `bindingEpoch` onto the React remount token
+ *   - Feed the runtime the signed-in identity, and rebuild the owner-selected
+ *     record slices when it changes
+ *   - Persist only `lastFocusedArtifactId` + `lastFocusedThreadId` to
+ *     localStorage under a key scoped to `epicId`
+ */
+/**
+ * The title the projection currently shows for a node on any of the three
+ * record planes, `null` when none holds it. Read by the rename-in-flight
+ * release to tell a rolled-back overlay from one still displayed.
+ */
+function projectedNodeTitle(
+  state: OpenEpicState,
+  nodeId: string,
+): string | null {
+  if (Object.hasOwn(state.artifacts.byId, nodeId)) {
+    return state.artifacts.byId[nodeId].title;
+  }
+  if (Object.hasOwn(state.chats.byId, nodeId)) {
+    return state.chats.byId[nodeId].title;
+  }
+  if (Object.hasOwn(state.tuiAgents.byId, nodeId)) {
+    return state.tuiAgents.byId[nodeId].title;
+  }
+  return null;
+}
+
 export function createOpenEpicStore(
   options: OpenEpicStoreOptions,
 ): OpenEpicStoreHandle {
   const { epicId, userId, hostId } = options;
+  /**
+   * Renames stamped on the overlay whose outcome has not been applied, by
+   * request id. Each holds the `rename-in-flight.ts` mark for its node until
+   * the retire below releases it.
+   */
+  const renamesInFlight = new Map<
+    string,
+    {
+      readonly nodeId: string;
+      readonly title: string;
+      readonly release: () => void;
+    }
+  >();
   const mintedIngestFenceIdentity = nextIngestFenceIdentity;
   nextIngestFenceIdentity += 1;
 
@@ -1418,46 +1445,6 @@ export function createOpenEpicStore(
    */
 
   /**
-   * The one write into zustand, and now the PROJECTION HANDLER's apply.
-   *
-   * `bindingEpoch` is translated here rather than published under its final
-   * name, because the translation IS the seam: the runtime reports that a live
-   * binding was invalidated, and only this side knows the consequence is a
-   * React remount.
-   *
-   * The `doc` / `awareness` republish that used to ride this write is gone
-   * with them. They were live `Y` objects the runtime exposed as getters plus
-   * a generation counter; the root replica is worker-side now, so there is no
-   * pair to republish and no generation to compare - which is why
-   * `replicaGeneration` stopped having a question to answer.
-   *
-   * Batching is gone too, and deliberately: the WORKER batches, publishing one
-   * coalesced slice per commit. Re-batching here would be a second window over
-   * an already-windowed stream.
-   */
-  /**
-   * Release main's copy of any body whose ROOM is no longer `ready`.
-   *
-   * Main holds the live docs; the worker holds the replicas they are copies
-   * of. When the worker destroys a replica - a reset after a fresh root
-   * snapshot, a room leaving `ready`, a viewer downgrade discarding unsent
-   * edits - main's copy becomes a document nothing will ever settle, and a
-   * re-acquire REVIVES it rather than materializing the new replica. That is
-   * how a discarded offline edit came back after a reconnect.
-   *
-   * Keyed on AVAILABILITY rather than on `bindingEpoch`, which was the obvious
-   * signal and the wrong one: the epoch advances on every room SEED
-   * (`epic-rooms-replica.ts:281`), so acting on it dropped every live body
-   * each time any room was seeded. Availability says which rooms exist right
-   * now, which is the question actually being asked.
-   *
-   * Entries are forgotten WITHOUT a demote: there is nothing on the far side to
-   * settle into, and a demote would sit pending on a `not-held`. What `forget`
-   * does with the worker's demand is its own business - a still-held body goes
-   * back to awaiting, so the sibling below re-materializes it into the mounted
-   * editor when its room is ready again.
-   */
-  /**
    * Doc keys the projection currently calls `ready`, each with the ready
    * artifacts filed under it.
    *
@@ -1491,6 +1478,28 @@ export function createOpenEpicStore(
     return ready;
   }
 
+  /**
+   * Release main's copy of any body whose ROOM is no longer `ready`.
+   *
+   * Main holds the live docs; the worker holds the replicas they are copies
+   * of. When the worker destroys a replica - a reset after a fresh root
+   * snapshot, a room leaving `ready`, a viewer downgrade discarding unsent
+   * edits - main's copy becomes a document nothing will ever settle, and a
+   * re-acquire REVIVES it rather than materializing the new replica. That is
+   * how a discarded offline edit came back after a reconnect.
+   *
+   * Keyed on AVAILABILITY rather than on `bindingEpoch`, which was the obvious
+   * signal and the wrong one: the epoch advances on every room SEED
+   * (`epic-rooms-replica.ts:281`), so acting on it dropped every live body
+   * each time any room was seeded. Availability says which rooms exist right
+   * now, which is the question actually being asked.
+   *
+   * Entries are forgotten WITHOUT a demote: there is nothing on the far side to
+   * settle into, and a demote would sit pending on a `not-held`. What `forget`
+   * does with the worker's demand is its own business - a still-held body goes
+   * back to awaiting, so the sibling below re-materializes it into the mounted
+   * editor when its room is ready again.
+   */
   function dropBodiesWhoseRoomIsGone(): void {
     const resident = bodyDocs.residentDocKeys();
     if (resident.length === 0) return;
@@ -1656,6 +1665,24 @@ export function createOpenEpicStore(
 
   const isDisposed = (): boolean => disposed;
 
+  /**
+   * The one write into zustand, and now the PROJECTION HANDLER's apply.
+   *
+   * `bindingEpoch` is translated here rather than published under its final
+   * name, because the translation IS the seam: the runtime reports that a live
+   * binding was invalidated, and only this side knows the consequence is a
+   * React remount.
+   *
+   * The `doc` / `awareness` republish that used to ride this write is gone
+   * with them. They were live `Y` objects the runtime exposed as getters plus
+   * a generation counter; the root replica is worker-side now, so there is no
+   * pair to republish and no generation to compare - which is why
+   * `replicaGeneration` stopped having a question to answer.
+   *
+   * Batching is gone too, and deliberately: the WORKER batches, publishing one
+   * coalesced slice per commit. Re-batching here would be a second window over
+   * an already-windowed stream.
+   */
   function applyProjection(patch: Partial<EpicRuntimeProjection>): void {
     if (disposed) return;
     const api = storeApi;
@@ -2285,13 +2312,33 @@ export function createOpenEpicStore(
               : false;
           },
           beginRenameMutation: async (nodeId, nextTitle) => {
-            const result = await applyMutation({
-              kind: "begin-rename",
-              request: { nodeId, title: nextTitle },
+            // Marked BEFORE the stamp is sent: the worker republishes the
+            // optimistic projection before it answers, so a mark taken after
+            // the answer would leave a window in which a persisting reader
+            // (`rename-in-flight.ts`) sees the overlay with no mark on it.
+            const release = markRenameInFlight(epicId, nodeId);
+            let result: EpicMutationResult;
+            try {
+              result = await applyMutation({
+                kind: "begin-rename",
+                request: { nodeId, title: nextTitle },
+              });
+            } catch (cause: unknown) {
+              release();
+              throw cause;
+            }
+            const requestId =
+              result.kind === "begin-rename" ? result.value.requestId : null;
+            if (requestId === null) {
+              release();
+              return null;
+            }
+            renamesInFlight.set(requestId, {
+              nodeId,
+              title: nextTitle,
+              release,
             });
-            return result.kind === "begin-rename"
-              ? result.value.requestId
-              : null;
+            return requestId;
           },
           beginEpicTitleMutation: async (nextTitle) => {
             const result = await applyMutation({
@@ -2316,6 +2363,32 @@ export function createOpenEpicStore(
               kind: "retire-pending",
               request: { requestId, outcome },
             });
+            const rename = renamesInFlight.get(requestId);
+            if (rename !== undefined) {
+              renamesInFlight.delete(requestId);
+              // "landed" is proof the host holds the title, so the mark can
+              // go now. "failed" drops the overlay on the worker, which
+              // republishes before it answers - but that projection reaches
+              // this store on its own path, not ordered against the answer,
+              // so the mark holds until the refused title has actually left
+              // the projection.
+              if (
+                outcome === "landed" ||
+                projectedNodeTitle(get(), rename.nodeId) !== rename.title
+              ) {
+                rename.release();
+              } else {
+                const unsubscribe = api.subscribe((state) => {
+                  if (
+                    projectedNodeTitle(state, rename.nodeId) === rename.title
+                  ) {
+                    return;
+                  }
+                  unsubscribe();
+                  rename.release();
+                });
+              }
+            }
             return result.kind === "retire-pending"
               ? result.value.retired
               : false;

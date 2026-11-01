@@ -148,6 +148,29 @@ export type ServerFrameHandler = (
 ) => void;
 
 /**
+ * What a status transition means for the subscription behind the stream, which
+ * the status alone cannot say: the status is what a person should be told, and
+ * this is what a consumer should do with its state.
+ *
+ * - `"held"`, on `reconnecting`: the connection is down, so the host must not
+ *   read as live, but it holds this subscription and its frames continue in
+ *   order on a resume. Keep per-cycle state. Frames sent now queue.
+ *   A stream held before its first frame arrived is the exception on both
+ *   counts: frames sent now drop as on any `reconnecting`, and its first frame
+ *   brings `open` with `null`, because that snapshot really is coming.
+ * - `"continued"`, on `open`: the same subscription went on. No re-subscribe
+ *   ran and no snapshot is coming, so this does not start a cycle.
+ * - `null`, on every other transition, including a `reconnecting` that follows
+ *   `"held"`: the subscription is gone, and the next `open` is a fresh cycle.
+ *
+ * Its own argument because `reconnecting` and `open` have to keep meaning what
+ * they say to every reader of the status. A listener that takes three
+ * parameters never sees this one. Only a session that negotiated resume sends
+ * anything but `null`.
+ */
+export type StreamContinuity = "held" | "continued" | null;
+
+/**
  * `retryCause` is the host's reason for a RETRYABLE close, delivered on the
  * `reconnecting` transition that close causes, and `null` on every other
  * transition. A consumer that counts failed attempts records it (the chat
@@ -160,11 +183,15 @@ export type ServerFrameHandler = (
  * `caller` as a failure), so a reason on a `reconnecting` transition would
  * turn every retry into a failure there. A listener that takes two
  * parameters never sees this one.
+ *
+ * `continuity` says whether this transition belongs to one subscription that
+ * outlives the outage; see {@link StreamContinuity}.
  */
 export type StatusChangeHandler = (
   status: StreamConnectionStatus,
   reason: StreamCloseReason | null,
   retryCause: FatalErrorDetails | null,
+  continuity: StreamContinuity,
 ) => void;
 
 export interface IStreamSession {
@@ -176,7 +203,9 @@ export interface IStreamSession {
    * If the connection is mid-reconnect the frame is dropped on the floor -
    * streaming contracts are fire-and-forget by design (decision #9 in the
    * tech plan), and Y.js CRDT convergence absorbs any missed update once
-   * the socket returns.
+   * the socket returns. A stream that is `held` (see {@link StreamContinuity})
+   * is the exception: the frame queues, reaches the host after the resume, and
+   * is discarded only if the session rebuilds instead.
    */
   sendClientFrame(
     envelope: StreamFrameEnvelope,

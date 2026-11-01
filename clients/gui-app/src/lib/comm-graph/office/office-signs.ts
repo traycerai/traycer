@@ -606,7 +606,7 @@ export function officeBoardText(args: {
  *
  * That trade has to go this way round rather than the other. A civic sign with
  * no counter on it says `FRONT DESK` - a fact about the floor plan that was
- * equally true last week - and feedback round 1 named exactly that reading
+ * equally true last week - and exactly that reading was named
  * twice: "too prominent and not adding value". The counter is the whole of
  * what a ward's sign is worth at a glance, so the band that draws the sign and
  * the band that draws its number are now the same band by construction.
@@ -626,7 +626,7 @@ const OFFICE_FIXTURE_LETTERING_LOD: OfficeLod = 2;
  * the beds that are taken. `CAFETERIA`, `SOLO DESKS` and `FRONT DESK` say the
  * same thing they said on the first frame and will say on the last.
  *
- * This is feedback round 1, and it is four complaints rather than one: the
+ * This is four complaints rather than one: the
  * amenity plates were "too prominent", "repetitive" ( `SOLO DESKS` once per
  * storey down a tower), "not adding value", and - the one that settles it -
  * "the labels completely cover the artwork". A plate is drawn at a fixed face
@@ -693,7 +693,7 @@ export function officeSignLetteredAt(args: {
  * HOW LONG ONE FRAME OF A WARD'S BEACON IS UP.
  *
  * Mission control has no street, so no ambulance can come for the agent lying
- * in its medbay (C6) - the light on the ward's own sign is the whole of the
+ * in its medbay - the light on the ward's own sign is the whole of the
  * alarm there. A quarter-second is the vehicles' own cadence, stated once
  * here because the two are meant to read as the same light.
  */
@@ -734,24 +734,6 @@ const SIREN_DARK_FRAME = 0;
 const SIREN_LIT_FRAME = 1;
 
 /**
- * WHAT ONE CIVIC SIGN COUNTS, or `null` where its room counts nothing.
- *
- * Three rules, one per kind that has one:
- *
- * - a ward or a waiting room says how many of ITS OWN seats are taken, because
- *   "is there a bed free" is the question somebody looking at it has;
- * - the archive says how many records it holds, which is its whole content
- *   (C5: no crate per agent, the number is the room) - ITS OWN host's records
- *   in a view whose storeys belong to one host each, and every host's in a view
- *   whose one floor serves them all. `room.hostScope` is what says which, and
- *   it is a field rather than a reading of `hostId` because `null` there is the
- *   unattributed host - a real host with records of its own - so a shared room
- *   and an unattributed one are indistinguishable by that field alone;
- * - the help desk says nothing. The queue standing in front of it is the
- *   count, drawn at full size, and a number over it would be the same fact
- *   said twice.
- */
-/**
  * HOW MANY RECORDS THIS ARCHIVE HOLDS, over the hosts its room serves.
  *
  * The tally is kept per host because that is what the population knows, and a
@@ -769,6 +751,24 @@ function archivedFor(room: OfficeCivicRoom, tally: OfficeCivicTally): number {
   return total;
 }
 
+/**
+ * WHAT ONE CIVIC SIGN COUNTS, or `null` where its room counts nothing.
+ *
+ * Three rules, one per kind that has one:
+ *
+ * - a ward or a waiting room says how many of ITS OWN seats are taken, because
+ *   "is there a bed free" is the question somebody looking at it has;
+ * - the archive says how many records it holds, which is its whole content
+ *   (no crate per agent, the number is the room) - ITS OWN host's records
+ *   in a view whose storeys belong to one host each, and every host's in a view
+ *   whose one floor serves them all. `room.hostScope` is what says which, and
+ *   it is a field rather than a reading of `hostId` because `null` there is the
+ *   unattributed host - a real host with records of its own - so a shared room
+ *   and an unattributed one are indistinguishable by that field alone;
+ * - the help desk says nothing. The queue standing in front of it is the
+ *   count, drawn at full size, and a number over it would be the same fact
+ *   said twice.
+ */
 function civicCounterOf(
   room: OfficeCivicRoom,
   tally: OfficeCivicTally,
@@ -863,10 +863,10 @@ export function officeCivicSignText(args: {
  * WHICH FRAME OF THE BEACON A WARD'S SIGN SHOWS, or `null` for a sign that
  * carries no beacon.
  *
- * A ward carries one exactly where NO AMBULANCE CAN COME: decision C6 gives
- * every view with a street a vehicle and gives the one without - Mission
- * control, whose amphitheatre has no road - a light on the medbay's own sign
- * instead. Derived from the room and its storey rather than from a table of
+ * A ward carries one exactly where NO AMBULANCE CAN COME: every view with a
+ * street has a vehicle, while Mission control - whose amphitheatre has no
+ * road - has a light on the medbay's own sign instead.
+ * This is derived from the room and its storey rather than from a table of
  * view names, so a later view that plans a ward on a roadless floor lights up
  * without a line of code here.
  *
@@ -967,7 +967,7 @@ function civicSignToDraw(args: {
   // A BEACON IS A REPORT, and it hangs off this plate's own top edge - so a
   // ward whose counter did not fit is still lettered when it carries one.
   // Dropping the plate here would take the lamp with it, and on a roadless
-  // floor that lamp is the whole of the alarm (C6): Mission control has no
+  // floor that lamp is the whole of the alarm: Mission control has no
   // street for an ambulance to come down.
   if (
     sirenFrame === null &&

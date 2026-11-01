@@ -195,7 +195,7 @@ describe("<WorkspaceFileTile /> path header", () => {
 
     await user.keyboard("{Enter}");
     expect(writeText).toHaveBeenCalledWith(POSIX_ABSOLUTE_PATH);
-    // CodeRabbit finding: a static aria-label never announces the copy to a
+    // A static aria-label never announces the copy to a
     // screen reader - it must swap to "Copied" on success.
     await waitFor(() => {
       expect(copyButton.getAttribute("aria-label")).toBe("Copied");

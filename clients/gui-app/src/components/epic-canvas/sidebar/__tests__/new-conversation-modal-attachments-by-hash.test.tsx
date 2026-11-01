@@ -86,7 +86,7 @@ vi.mock("sonner", () => ({
  * A separate file from `new-conversation-submit-gate.test.tsx` rather than an
  * addition to it: that file's placement mock's `client` is a bare
  * `{ getActiveHostId }` stub with no upload method, and it is being edited by
- * other work on this ticket in parallel - duplicating its large mock block
+ * other work in parallel - duplicating its large mock block
  * here keeps this suite's own fixture from colliding with that.
  */
 
@@ -408,6 +408,7 @@ vi.mock("@/hooks/sandboxes/use-staged-send-sign-in-check", () => ({
 vi.mock("@/components/home/hooks/use-composer-toolbar-store", async () => {
   const { createStore } = await import("zustand/vanilla");
   const store = createStore(() => ({
+    ultracode: false,
     selection: { harnessId: "claude", modelSlug: "sonnet", profileId: null },
     values: {
       selection: { harnessId: "claude", modelSlug: "sonnet", profileId: null },
@@ -1057,7 +1058,7 @@ function stageWorktreeIntent(): void {
     });
 }
 
-// Item 40 (G40): `deferWorktreeProvisioning` shares its negotiated minor
+// `deferWorktreeProvisioning` shares its negotiated minor
 // (`@1.2`) with the by-hash gate, and the modal's own hold/seed bookkeeping -
 // this suite already carries every OTHER fact the predicate needs
 // (`hasInitialMessage`, a non-folderless workspace via `stageWorktreeIntent`
@@ -1101,7 +1102,7 @@ describe("new-conversation modal: deferWorktreeProvisioning opt-in", () => {
 });
 
 /**
- * Ticket 8's modal unheld mark, pinned in the modal's own suite.
+ * The modal unheld mark, pinned in the modal's own suite.
  *
  * The opt-in describe above pins the WIRE field and the entry's two
  * consumer-facing predicates. What it cannot see is the entry ITSELF: which

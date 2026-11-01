@@ -1337,7 +1337,7 @@ describe("createBrowserMediaPeer.answerOffer codec-order pin (minor 8)", () => {
     // `getTransceivers` is `preferH264IfCapable`'s only observable call on
     // this fake (it finds no video transceiver to touch and returns) - its
     // position between `setRemoteDescription` and `createAnswer` is the
-    // order the review asked to pin.
+    // order pinned here.
     expect(connection.calls).toEqual([
       "setRemoteDescription",
       "getTransceivers",

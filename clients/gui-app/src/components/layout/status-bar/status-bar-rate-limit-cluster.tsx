@@ -561,7 +561,7 @@ function StatusBarRateLimitRefresh(props: {
  * One target's cold-start pull, through `fetchProviderRateLimits`.
  *
  * Exported for the tab strip's usage reading, which owns the fetching the
- * same way whenever the reading lives there instead (G6).
+ * same way whenever the reading lives there instead.
  *
  * Its own component so the hook count stays fixed while the provider list
  * changes. This is the only automatic fetch the cluster initiates for the

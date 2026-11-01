@@ -17,8 +17,8 @@ type TouchLoginMutationResult = UseMutationResult<
 >;
 
 /**
- * Keepalive for an in-flight `providers.startLogin` child (code-paste
- * decision log's "Timeouts" row): resets the host's rolling kill timer
+ * Keepalive for an in-flight `providers.startLogin` child:
+ * resets the host's rolling kill timer
  * without submitting a code. Fired throttled from the paste field while the
  * user is still away in the browser.
  *

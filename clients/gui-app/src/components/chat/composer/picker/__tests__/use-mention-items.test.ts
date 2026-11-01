@@ -921,8 +921,8 @@ function browserSessionsState(
 describe("browserTabMentionEntriesFromSessions", () => {
   // The picker used to see exactly ONE coordinator (the canvas host's) and
   // dropped its rows whenever that host was not the chat's - so a tab on
-  // another host vanished from the menu entirely. Cross-host mentions (spec
-  // decision #10) invert that: every host's tabs surface, and the chat's OWN
+  // another host vanished from the menu entirely. Cross-host mentions
+  // invert that: every host's tabs surface, and the chat's OWN
   // host is the only one whose tabs come back drivable.
   it("marks tabs on the chat's own host as drivable (contextOnly: false)", () => {
     const sessions = browserSessionsState({
@@ -974,8 +974,8 @@ describe("browserTabMentionEntriesFromSessions", () => {
   // A tab on a host that is not the chat's own no longer disappears - it
   // comes back marked `contextOnly: true`, carrying the owning host's label,
   // because it can only ever be attached as snapshot context (url, title,
-  // screenshot), never a `browser-tab:` drive token the agent could attach to
-  // (spec decision #10).
+  // screenshot), never a `browser-tab:` drive token the agent could attach
+  // to.
   it("marks tabs on a different host as contextOnly instead of dropping them, and carries the host's label", () => {
     const sessions = browserSessionsState({
       hostId: "canvas-host",

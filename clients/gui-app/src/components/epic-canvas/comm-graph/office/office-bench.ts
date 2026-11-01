@@ -12,7 +12,7 @@
  *
  * ```
  * ?officeBench=1000                          triage, the shape every estimate is quoted at
- * ?officeBench=1000&officeBenchShape=many-roots   the review's 101 MiB case
+ * ?officeBench=1000&officeBenchShape=many-roots   the 101 MiB case
  * ?officeBench=400&officeBenchShape=two-hosts&officeBenchScript=outbreak&officeBenchOutbreak=12
  *                                            twelve crash on one floor, then recover one by one
  * ?officeBench=400&officeBenchScript=waiting  more agents wait than the lounge seats
@@ -109,8 +109,8 @@ export const OFFICE_BENCH_OUTBREAK_DEFAULT = 2;
 /**
  * HOW MANY MORE AGENTS WAIT THAN THE LOUNGE CAN SEAT.
  *
- * `waiting` exists to show the overflow keeping its desk glyph (C2) and the
- * freed chair going to the earliest waiter (C3), and neither is visible unless
+ * `waiting` exists to show the overflow keeping its desk glyph and the
+ * freed chair going to the earliest waiter, and neither is visible unless
  * the lounge is genuinely short. Taken from `civicCapacityFor` rather than
  * written down, so it stays an overflow when the live sitting moves the
  * capacity numbers.

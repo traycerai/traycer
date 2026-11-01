@@ -204,7 +204,7 @@ export function LandingTerminalLegacyBootstrap(
     // own host has not published. Neither is evidence about the bound host, and
     // this tile used to render the dead state for both. It is still not a dead
     // state - but it now says which host it is waiting on, and it ends
-    // (invariant 6; audit S5's wordless skeleton).
+    // (invariant 6).
     return (
       <TileHostLoadState
         load={hostLoad}

@@ -1,5 +1,5 @@
 /**
- * A bot's task list in the bot's own view (Tracy Bots T82, T86): where each
+ * A bot's task list in the bot's own view (Tracy Bots T82): where each
  * task came from, as the Activity page draws it. "for <post>" names the
  * channel post the task was set up for and "from <post>" the thread that set
  * it up; each opens its thread beside the channel. The real list runs over a
@@ -25,7 +25,7 @@ const mocks = vi.hoisted(() => {
   const botRows: Record<
     string,
     {
-      readonly announcement?: { kind: "question"; link: null };
+      readonly announcement?: { kind: "question" | "automation"; link: null };
       readonly repliesTo?: string;
     }
   > = {};
@@ -208,6 +208,7 @@ function threadOn(
       senderUserId,
       sentAt: 1_000,
       resolvedAt: null,
+      excerpt: null,
     },
     replyCount: 2,
     lastReplyAt: 2_000,
@@ -231,6 +232,7 @@ function task(taskId: string, overrides: Partial<BotTaskEntry>): BotTaskEntry {
     originRequestId: null,
     createdByChatId: null,
     checkins: null,
+    inputNeeded: null,
     pause: null,
     stop: null,
     runRequest: null,
@@ -321,7 +323,7 @@ describe("<BotTaskList /> in the bot's view: where a task came from", () => {
     expect(mocks.openPost).toHaveBeenLastCalledWith({
       anchorMessageId: THREAD_POST,
       announcement: false,
-      answer: false,
+      anchorKind: null,
       sent: null,
     });
 
@@ -336,7 +338,7 @@ describe("<BotTaskList /> in the bot's view: where a task came from", () => {
     expect(mocks.openPost).toHaveBeenLastCalledWith({
       anchorMessageId: THREAD_POST,
       announcement: false,
-      answer: false,
+      anchorKind: null,
       sent: null,
     });
 
@@ -351,7 +353,7 @@ describe("<BotTaskList /> in the bot's view: where a task came from", () => {
     expect(mocks.openPost).toHaveBeenLastCalledWith({
       anchorMessageId: DIRECT_POST,
       announcement: true,
-      answer: false,
+      anchorKind: null,
       sent: null,
     });
   });
@@ -378,7 +380,7 @@ describe("<BotTaskList /> in the bot's view: where a task came from", () => {
     expect(mocks.openPost).toHaveBeenLastCalledWith({
       anchorMessageId: "question-1",
       announcement: true,
-      answer: false,
+      anchorKind: null,
       sent: null,
     });
   });
@@ -405,7 +407,34 @@ describe("<BotTaskList /> in the bot's view: where a task came from", () => {
     expect(mocks.openPost).toHaveBeenLastCalledWith({
       anchorMessageId: "answer-1",
       announcement: true,
-      answer: true,
+      anchorKind: "answer",
+      sent: null,
+    });
+  });
+
+  it("opens a thread rooted on another row of the bot through that row's own gate", async () => {
+    const user = userEvent.setup();
+    mocks.state.botRows["notice-1"] = {
+      announcement: { kind: "automation", link: null },
+    };
+    loadChannel([["notice-1", "Nightly triage now runs at 02:00"]]);
+    mount(
+      [
+        task("task-watch", {
+          originRequestId: "req-opener",
+          createdByChatId: "thread-notice",
+        }),
+      ],
+      [threadOn("thread-notice", "notice-1", "req-opener", null)],
+    );
+
+    await user.click(
+      within(taskRow("task-watch")).getByTestId("bot-task-thread"),
+    );
+    expect(mocks.openPost).toHaveBeenLastCalledWith({
+      anchorMessageId: "notice-1",
+      announcement: true,
+      anchorKind: "message",
       sent: null,
     });
   });
@@ -438,7 +467,7 @@ describe("<BotTaskList /> in the bot's view: where a task came from", () => {
     expect(mocks.openPost).toHaveBeenLastCalledWith({
       anchorMessageId: "answer-1",
       announcement: true,
-      answer: true,
+      anchorKind: "answer",
       sent: null,
     });
   });

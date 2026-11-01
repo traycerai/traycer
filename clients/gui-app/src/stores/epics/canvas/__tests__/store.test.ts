@@ -1059,7 +1059,7 @@ describe("epic canvas store header tabs", () => {
   });
 
   /**
-   * Cross-tab canvas isolation guard (ticket 12).
+   * Cross-tab canvas isolation guard.
    *
    * Tab A's mutations must not touch tab B's canvas reference. The
    * regression this guards against: a shared canvas reference (or a
@@ -1133,7 +1133,7 @@ describe("epic canvas store header tabs", () => {
   });
 
   /**
-   * Ticket 20: backs the corrected doc comment at `commitHeaderStripDrop`
+   * Backs the corrected doc comment at `commitHeaderStripDrop`
    * (`root-dnd-commits.ts`) - the tile that tears off keeps its OWN
    * instanceId; only the new HEADER TAB record gets a fresh id
    * (`newTabId` above, an `EpicViewTab.tabId`, not a tile instanceId). The
@@ -2349,7 +2349,7 @@ describe("restoreClosedTilePreview", () => {
 });
 
 /**
- * Ticket 20: the 5 mechanism pins in chat-messages.test.tsx prove the
+ * The 5 mechanism pins in chat-messages.test.tsx prove the
  * handoff registry works; the tear-off instanceId pin above proves MOVE
  * semantics. These wiring tests pin that EACH of the 9 structural action
  * creators calls `flushChatTabViewportHandoff` with the correct instanceId
@@ -2695,7 +2695,7 @@ describe("ticket 20: pre-structural-mutation viewport handoff wiring", () => {
   });
 
   /**
-   * Ticket 20 review round 1, finding 1 (CONFIRMED HIGH): `splitPaneAtEdge`
+   * `splitPaneAtEdge`
    * resolves a `node` source whose content is ALREADY OPEN elsewhere into a
    * `tab`-kind cross-pane MOVE before doing anything else - the same
    * "already open" resolution `insertNodeOnTabStrip` performs - but this

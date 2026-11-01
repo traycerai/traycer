@@ -86,8 +86,7 @@ interface UseHostScopedMutationArgs<
    * UI disagreeing - a resource the host created that nothing else will ever
    * surface - belongs here, not in a `mutate(vars, { onSuccess })` at the call
    * site.
-   */
-  /**
+   *
    * `hostId` is the one captured in `onMutate` - the host this request was
    * SENT on, which is not necessarily the one the client addresses by the time
    * it answers (a surface whose target host moved mid-flight re-points the

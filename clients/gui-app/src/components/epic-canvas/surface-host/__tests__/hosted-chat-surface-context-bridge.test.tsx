@@ -1,5 +1,5 @@
 /**
- * Ticket 21 slice 4: pins the environment-to-context bridge for a hosted
+ * Pins the environment-to-context bridge for a hosted
  * chat. Scope note - `renderTile` is swapped for a test probe that reads the
  * bridged contexts and surfaces the `isActive` argument the bridge body
  * computed. The full real-`renderTile` path is exercised transitively by the

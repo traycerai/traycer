@@ -91,7 +91,7 @@ describe("draft entry routes", () => {
     expect(invokeIndexBeforeLoad("signed-out")).toBeNull();
   });
 
-  // T2: `beforeLoad` moved from `status !== "signed-in"` to
+  // `beforeLoad` moved from `status !== "signed-in"` to
   // `!admitsLocalPlane(status)`. Before the fix, an `unverified` user (a
   // stored session identity with no held `/api/v3/user` verdict) with no
   // restored tabs got NO redirect here, and `RootLandingPage` renders `null`

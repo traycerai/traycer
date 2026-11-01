@@ -1466,7 +1466,7 @@ describe("unknown activity grace applies only to epic cap eviction", () => {
 });
 
 // ── acquireMounted / releaseMounted: the mount-reference contract ────────────
-// Oracle for the seam the risk review names untested: "releaseMounted on
+// Oracle for the seam named untested: "releaseMounted on
 // unmount... a demand-0 release is a no-op." Provider-level coverage already
 // pins that an unmount leaves a warm handle adoptable by a later remount
 // (`epic-session-provider.test.tsx`, "retryRepoint forces reconnectAll on a
@@ -1517,7 +1517,7 @@ describe("acquireMounted / releaseMounted mount-reference counting", () => {
 // by `epic-session-provider.test.tsx`'s "retires the handle a worker fatal
 // killed..." and "hands a FRESH surface a new handle during the corpse
 // window...". What is untested anywhere is the narrower registry-only claim
-// the risk review calls out by name: `acquire` has NO such guard, so the
+// called out by name: `acquire` has NO such guard, so the
 // non-mounted path a future controller might reach for would adopt the
 // corpse instead of rebuilding it.
 describe("retireIfDead runs only from acquireMounted, on the next acquisition", () => {
@@ -1557,7 +1557,7 @@ describe("retireIfDead runs only from acquireMounted, on the next acquisition", 
 
 // ── Desktop-ownership release listener: pendingPark / "replaced" exemptions ──
 // Oracle for "pendingPark and 'replaced' ownership-release exemptions;
-// setReleaseListener has no test caller" - the risk review's own words for
+// setReleaseListener has no test caller" - the exact words for
 // this gap. Ownership belongs to the tab/Epic, not to one transient
 // transport, so a park (tab stays open) and a re-point (tab stays open, new
 // transport) must NOT tell the desktop layer this window gave the epic up -
@@ -2467,7 +2467,7 @@ function raceAgainstHang(waiter: Promise<unknown>): Promise<unknown> {
  * `buildRetentionHandle`-style construction (a real `openStoreForTest` store,
  * marked clean), but with the write gate actually OPEN and a `writeCommand`
  * that never settles - so a command enqueued against it stays genuinely in
- * flight, for R3-1's sibling: a clean outgoing handle that `replaceMounted`
+ * flight, for a clean outgoing handle that `replaceMounted`
  * disposes while it still has an outstanding write command.
  */
 function buildRetentionHandleWithNeverSettlingWrite(epicId: string): {
@@ -2497,7 +2497,7 @@ function buildRetentionHandleWithNeverSettlingWrite(epicId: string): {
     writeCommand: () => new Promise<{ readonly hostId: string }>(() => {}),
   });
   if (captured.value === null) throw new Error("factory not invoked");
-  captured.value.onConnectionStatus("open", null, false);
+  captured.value.onConnectionStatus("open", null, false, null);
   captured.value.onSnapshot(
     writeGateOpenSnapshotMeta(epicId),
     Y.encodeStateAsUpdate(new Y.Doc()),
@@ -2803,7 +2803,7 @@ describe("retained unsynced buffers across a host re-point (F10)", () => {
   // The ordering is structural today (disposal is a CONSEQUENCE of
   // `replaceMounted`, reached through the registry's own replace path), so
   // this pin exists to keep it that way when the flip moves the tail around:
-  // §8's constraint was that `replaceMounted` precedes dispose in the async
+  // The constraint is that `replaceMounted` precedes dispose in the async
   // tail, and an async tail is exactly where an await lands in front of it.
   it("still retains when the outgoing store would read CLEAN after teardown", () => {
     // ONE pin, not two. A companion asserting "a dirty handle is retained"
@@ -2986,7 +2986,7 @@ describe("release states its meaning for retained buffers", () => {
   });
 
   it("retains the DIRTY LIVE handle when an owner-identity rotation releases it", () => {
-    // Codex #1243 post-merge. `"keep"` spared only buffers ALREADY retained;
+    // `"keep"` spared only buffers ALREADY retained;
     // the live handle - the one actually holding the user's unsynced edits -
     // was disposed either way. An owner-identity rotation leaves `userId`
     // unchanged, so the provider takes this arm, and a same-host
@@ -3070,7 +3070,7 @@ describe("a re-point whose edits were MERGED into the replacement", () => {
   const EPIC = "epic-transferred";
 
   it("disposes the outgoing handle instead of retaining a duplicate of it", () => {
-    // Codex #1243 T-57. When both snapshots name the same room,
+    // When both snapshots name the same room,
     // `EpicSessionProvider` applies the outgoing doc into the replacement
     // under LOCAL_ORIGIN BEFORE calling this - so those edits are already
     // queued on the new handle and will sync through its transport.

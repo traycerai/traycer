@@ -499,6 +499,40 @@ export const agentMessageReceiptSchema = lazySchema(() =>
 );
 export type AgentMessageReceipt = z.infer<typeof agentMessageReceiptSchema>;
 
+export const botSendSlackPostSchema = lazySchema(() =>
+  z.object({
+    channelId: z.string(),
+    threadTs: z.string().nullable(),
+  }),
+);
+export type BotSendSlackPost = z.infer<typeof botSendSlackPostSchema>;
+
+// The channel post a bot's `traycer_reply`, `traycer_ask` or
+// `traycer_announce` call wrote (Tracy Bots T94): the conversation it went to
+// (the bot's channel or the session's thread), the post's message id, and for
+// a question the request it opened. The host stamps it at
+// `tool_call.completed` from the post it committed while serving the call,
+// so the session view's card can read the post's state. Null for every other
+// tool call and for every block persisted before this field.
+//
+// A send posted in Slack instead (Slack for Tracy, S4b) carries `slack`: the
+// Slack channel and the thread root it went under (null for an announcement
+// at the channel's top level and for a DM), so the card says where it went
+// and links nowhere - no Traycer post exists. Its `messageId` is then the
+// relay's item id, and `conversationId` the session's thread or, for an
+// announcement, the Slack channel. Null for every Traycer post and for every
+// receipt persisted before this member.
+export const botSendReceiptSchema = lazySchema(() =>
+  z.object({
+    conversationId: z.string(),
+    messageId: z.string(),
+    requestId: z.string().nullable(),
+    kind: z.enum(["reply", "ask", "announce"]),
+    slack: botSendSlackPostSchema.nullable().default(null),
+  }),
+);
+export type BotSendReceipt = z.infer<typeof botSendReceiptSchema>;
+
 // Where a cross-host `traycer_send_message` call stands. A send to an agent on
 // another host is queued through the cloud rather than delivered while the
 // call runs, and the sending host learns only of a failure (traycer#2421):
@@ -927,6 +961,9 @@ export const toolCallBlockSchema = lazySchema(() =>
     // hand-frozen `toolCallBlockSchemaPreDelivery` below, so `1.28` and older
     // never see it.
     agentMessageDelivery: agentMessageDeliverySchema.nullable().default(null),
+    // The post a bot's send wrote - see `botSendReceiptSchema`. Null for every
+    // other tool call and for blocks persisted before this field.
+    botSendReceipt: botSendReceiptSchema.nullable().default(null),
     // The shell a `traycer_run_shell` call created - see
     // `toolCallManagedCommandSchema`. Null for every other tool call.
     managedCommand: toolCallManagedCommandSchema.nullable().default(null),
@@ -1004,6 +1041,36 @@ export const toolCallBlockSchemaPreArtifact = lazySchema(() =>
   }),
 );
 export type ToolCallBlock = z.infer<typeof toolCallBlockSchema>;
+
+// Wire-freeze copy of `toolCallBlockSchema` as the stream lines bound to
+// `openContentBlockSchemaPreNotApplied` (from `chat.subscribe@1.31`) ship it:
+// the live block without the `botSendReceipt` stamp. Hand-frozen, NOT
+// `.omit()`-derived; keys keep the live order.
+export const toolCallBlockSchemaPreBotSendReceipt = lazySchema(() =>
+  z.object({
+    ...baseBlockFields,
+    status: actionBlockStatus,
+    type: z.literal("tool_call"),
+    toolName: z.string(),
+    inputSummary: z.string().nullable().default(null),
+    inputDetail: toolInputDetailSchema.nullable().default(null),
+    taskTodoItems: z.array(parsedTaskTodoSchema).nullable().default(null),
+    error: z.string().nullable(),
+    agentMessageSend: agentMessageSendSchema.nullable().default(null),
+    agentMessageReceipt: agentMessageReceiptSchema.nullable().default(null),
+    agentMessageDelivery: agentMessageDeliverySchema.nullable().default(null),
+    managedCommand: toolCallManagedCommandSchema.nullable().default(null),
+    progress: z.string().nullable().default(null),
+    backgroundOutput: backgroundTaskOutputSchema.nullable().default(null),
+    startedAt: z.number().nullable().default(null),
+    endedAt: z.number().nullable().default(null),
+    backgroundTask: z.boolean().nullable().default(false),
+    stopped: z.boolean().default(false),
+    imageResults: z.array(imageGenerationResultSchema).default([]),
+    artifact: toolCallArtifactStampSchema.nullable().default(null),
+    mcpApp: toolCallMcpAppStampSchema.nullable().default(null),
+  }),
+);
 
 // Wire-freeze copy of `toolCallBlockSchema` as `chat.subscribe@1.23` through
 // `@1.28` ship it: the live block without the `agentMessageDelivery` stamp

@@ -1,6 +1,6 @@
 /**
- * The result list of the global chat search dialog, as the spec's noise-control
- * wireframe draws it: title matches under "Chats", a divider labelled "matches
+ * The result list of the global chat search dialog:
+ * title matches under "Chats", a divider labelled "matches
  * in messages", then message matches grouped by chat.
  *
  * Presentational. The pages are fetched and folded by the panel

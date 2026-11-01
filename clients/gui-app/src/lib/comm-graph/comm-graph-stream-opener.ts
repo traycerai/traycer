@@ -57,18 +57,18 @@ function openCommGraphSubscription(
         handlers.onEvent(parsed.data.event);
       }
     });
-    session.onStatusChange((status, reason) => {
+    session.onStatusChange((status, reason, _retryCause, continuity) => {
       if (closed) return;
       if (status === "connecting") {
-        handlers.onStatus("connecting");
+        handlers.onStatus("connecting", continuity);
         return;
       }
       if (status === "open") {
-        handlers.onStatus("live");
+        handlers.onStatus("live", continuity);
         return;
       }
       if (status === "reconnecting") {
-        handlers.onStatus("reconnecting");
+        handlers.onStatus("reconnecting", continuity);
         return;
       }
       // A caller-initiated close is our own teardown; nothing to report.
@@ -82,6 +82,7 @@ function openCommGraphSubscription(
         client.getMethodSupport(COMM_GRAPH_METHOD) === "unsupported"
           ? "unsupported"
           : "unreachable",
+        continuity,
       );
     });
     return {

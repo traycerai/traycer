@@ -40,6 +40,22 @@ import type {
   SandboxVerbFetchResult,
 } from "../host-client/sandbox-control";
 import type {
+  VoiceAvailabilityFetchResult,
+  VoiceSessionEndFetchResult,
+  VoiceSessionMintFetchResult,
+  VoiceSessionIndicator,
+  VoiceSessionMintRequest,
+  VoiceTrayAction,
+} from "../host-client/voice-sessions";
+import type { VoiceRouteFetchResult } from "../host-client/voice-router";
+import type {
+  SlackAppInstallUrlResult,
+  SlackAppManifestResult,
+  SlackAppReadResult,
+  SlackAppWriteResult,
+} from "../host-client/slack-app";
+import type { SlackAppRegisterRequest } from "@traycer/protocol/host/slack-app";
+import type {
   EnvironmentProvidersFetchResult,
   SandboxGrantsFetchResult,
   TeamEnvironmentFetchResult,
@@ -402,6 +418,52 @@ export interface IRunnerHost {
   ): Promise<SandboxCatalogueFetchResult>;
   /** `GET /api/traycer/models`: the Traycer models every sandbox runs. */
   getTraycerModels(bearerToken: string): Promise<TraycerModelsFetchResult>;
+  /**
+   * The voice session routes (traycer-server `/api/voice/sessions`) with the
+   * user bearer: the SDP exchange that opens a session on the person's own
+   * account, and the end that closes it. Same placement as the sandbox
+   * control plane above (Electron main on desktop, native HTTP on mobile, the
+   * shared helpers in `host-client/voice-sessions.ts` elsewhere). Never
+   * throw: failures collapse into the discriminated results.
+   */
+  getVoiceAvailability(
+    bearerToken: string,
+  ): Promise<VoiceAvailabilityFetchResult>;
+  mintVoiceSession(
+    bearerToken: string,
+    request: VoiceSessionMintRequest,
+  ): Promise<VoiceSessionMintFetchResult>;
+  endVoiceSession(
+    bearerToken: string,
+    voiceSessionId: string,
+  ): Promise<VoiceSessionEndFetchResult>;
+  /**
+   * The voice router's one model call (traycer-server's inference
+   * passthrough, `host-client/voice-router.ts`) with the user bearer, billed
+   * to the person's own account. `requestBody` is the JSON the app built; the
+   * answer comes back opaque for the app's structured-output parser. Same
+   * placement as the voice session routes above. Never throws.
+   */
+  routeVoiceUtterance(
+    bearerToken: string,
+    requestBody: string,
+  ): Promise<VoiceRouteFetchResult>;
+  /**
+   * Tells the shell whether this window holds a live voice session. A
+   * desktop window whose voice is live is hidden rather than destroyed when
+   * the person closes it (the microphone and the session live in its
+   * renderer; Tanveer, 2026-10-29: window close keeps the session, lock,
+   * sleep and quit end it). Shells with one window and no close (mobile,
+   * web) take no action.
+   */
+  setVoiceSessionLive(live: boolean): Promise<void>;
+  /**
+   * Tells the shell what this window's live session is doing, for the item
+   * the desktop shows while the window is away (macOS menu bar, the Windows
+   * and Linux notification area): listening, muted, or paused for
+   * dictation. Shells with no such item take no action.
+   */
+  setVoiceSessionIndicator(indicator: VoiceSessionIndicator): Promise<void>;
   createSandbox(
     bearerToken: string,
     request: SandboxCreateRequest,
@@ -435,6 +497,31 @@ export interface IRunnerHost {
     bearerToken: string,
     target: SandboxAutomationOpenTarget | null,
   ): Promise<SandboxAutomationOpenFetchResult>;
+  /**
+   * A bot's Slack app (traycer-server `/api/slack/apps/*`) with the person's
+   * bearer, for its members: the app as they see it, the manifest it is
+   * created from, the credentials' registration, Slack's install URL and the
+   * disconnect. Same placement as the sandbox control plane above: desktop in
+   * Electron main, mobile through the native HTTP layer. See
+   * `host-client/slack-app.ts`. Never throw.
+   */
+  readSlackApp(bearerToken: string, botId: string): Promise<SlackAppReadResult>;
+  getSlackAppManifest(
+    bearerToken: string,
+    botId: string,
+  ): Promise<SlackAppManifestResult>;
+  registerSlackApp(
+    bearerToken: string,
+    request: SlackAppRegisterRequest,
+  ): Promise<SlackAppWriteResult>;
+  mintSlackAppInstallUrl(
+    bearerToken: string,
+    botId: string,
+  ): Promise<SlackAppInstallUrlResult>;
+  disconnectSlackApp(
+    bearerToken: string,
+    botId: string,
+  ): Promise<SlackAppWriteResult>;
   /**
    * The secrets broker (authn), with the user's bearer: the grants one
    * sandbox host holds, and the answer to an agent's grant request. See
@@ -491,19 +578,21 @@ export interface IRunnerHost {
   ): Promise<readonly string[]>;
 
   /**
-   * Ensures OS microphone access before voice capture. On macOS this triggers
-   * the native permission prompt when the status is undetermined, and returns
-   * the existing decision otherwise (macOS never re-prompts a denied app - the
-   * caller then routes to `openMicrophoneSettings`). Shells without a native
-   * gate resolve `"granted"` and let `getUserMedia` drive the prompt.
+   * Ensures OS microphone access before voice capture. On macOS, iOS and
+   * Android this triggers the native permission prompt when the status is
+   * undetermined, and returns the existing decision otherwise (none of them
+   * re-prompts a denied app - the caller then routes to
+   * `openMicrophoneSettings`). Shells without a native gate resolve
+   * `"granted"` and let `getUserMedia` drive the prompt.
    */
   requestMicrophoneAccess(): Promise<MicrophoneAccessStatus>;
 
   /**
    * Opens the OS Privacy → Microphone settings pane so the user can re-grant
-   * mic access (used by the voice-input "denied" affordance). Desktop opens the
-   * native pane; shells without a settings deep link (mobile/web/tests)
-   * implement this as a resolved no-op.
+   * mic access (used by the voice-input and voice-session "denied"
+   * affordances). Desktop opens the native pane and the phone the app's own
+   * settings page; shells without a settings deep link (web, tests) implement
+   * this as a resolved no-op.
    */
   openMicrophoneSettings(): Promise<void>;
 
@@ -681,6 +770,29 @@ export interface IRunnerHost {
    * gracefully where no native signal exists.
    */
   onSystemResumed(handler: (event: SystemResumeEvent) => void): Disposable;
+
+  /**
+   * Subscribes to the moments the person leaves the machine, or the OS takes
+   * the sound away: the OS is about to sleep or the screen locked
+   * (`locked`), the app went to the background (`background`), or a call or
+   * another app interrupted a live voice session's audio (`interrupted`). An
+   * open microphone must not outlive the person at the machine, so a live
+   * voice session ends on this signal and says why. Desktop bridges Electron
+   * `powerMonitor` `suspend`/`lock-screen` as `locked`. Mobile raises
+   * `background` on the app's real background edge (which a screen lock is,
+   * and a transient overlay such as a permission prompt is not) and
+   * `interrupted` from the OS audio session while a session is live. Shells
+   * with no such signal (web, tests) install a no-op whose handler never
+   * fires.
+   */
+  onSystemSuspended(handler: (cause: SystemSuspendCause) => void): Disposable;
+
+  /**
+   * Subscribes to the shell item's actions on this window's live session:
+   * Mute or Unmute, and End. The desktop sends them only to the window
+   * whose session the item shows; shells with no such item never fire.
+   */
+  onVoiceTrayAction(handler: (action: VoiceTrayAction) => void): Disposable;
 
   /**
    * Subscribes to network-path changes the shell can observe natively:
@@ -1208,6 +1320,9 @@ export interface RegisteredHostsChange {
 
 /** Outcome of `IRunnerHost.requestMicrophoneAccess()`. */
 export type MicrophoneAccessStatus = "granted" | "denied";
+
+/** Why `IRunnerHost.onSystemSuspended` fired. */
+export type SystemSuspendCause = "locked" | "background" | "interrupted";
 
 export interface IFileDropHost {
   resolveDroppedFilePaths(files: readonly File[]): Promise<readonly string[]>;

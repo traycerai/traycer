@@ -538,7 +538,7 @@ export interface ManagedCommandOutputTileRef {
  * flow units in `graph` and sprite pixels in `office`, so a camera chosen in
  * one says nothing about the other.
  *
- * D68 settles that by giving each renderer its own: this shape is the GRAPH's
+ * The camera split settles that by giving each renderer its own: this shape is the GRAPH's
  * camera, and the office keeps {@link CommGraphTileViewState.officeCamera}
  * beside it. Neither is reset by a mode switch - a detour through the graph
  * and back is not a statement about how the office was framed, and the
@@ -585,9 +585,9 @@ export interface CommGraphTileViewState extends CommGraphTileCamera {
    * `x`, `y` and `zoom` on this same object are the GRAPH's, and always were
    * in `graph` mode - the two renderers simply used to take turns holding one
    * set of numbers, which only worked because every mode switch wiped them.
-   * D68 ends the sharing: a detour through the Graph and back now returns the
-   * office to exactly where it was, because the graph never had anywhere to
-   * write that would disturb it.
+   * The camera split ends the sharing: a detour through the Graph and back
+   * now returns the office to exactly where it was, because the graph never
+   * had anywhere to write that would disturb it.
    *
    * `null` is what the office canvas reads as "fit yourself", so it is also
    * what every writer that invalidates a framing stores - a view pick that

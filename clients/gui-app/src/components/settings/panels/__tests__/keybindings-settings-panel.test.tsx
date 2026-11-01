@@ -163,7 +163,7 @@ describe("KeybindingsSettingsPanel - Global shortcuts (T2)", () => {
     expect(screen.getByText("Summon Traycer")).toBeTruthy();
   });
 
-  // R1: a disabled/dormant summon chord doesn't reserve itself in the
+  // A disabled/dormant summon chord doesn't reserve itself in the
   // renderer conflict map, so a renderer action can claim the same chord
   // while summon is off. Re-enabling must not silently let the OS chord
   // swallow that renderer binding.
@@ -192,7 +192,7 @@ describe("KeybindingsSettingsPanel - Global shortcuts (T2)", () => {
     ).toBeTruthy();
   });
 
-  // R3: only the switch used to be gated on `mutation.isPending`; the
+  // Only the switch used to be gated on `mutation.isPending`; the
   // capture control must be gated too, or a user could fire an overlapping
   // rebind while a set-invoke is already in flight.
   it("disables every mutation trigger while a summon mutation is pending", async () => {
@@ -258,7 +258,7 @@ describe("KeybindingsSettingsPanel - Global shortcuts (T2)", () => {
     });
   });
 
-  // R4: the summon mutation is lifted so "Reset all to defaults" can share
+  // The summon mutation is lifted so "Reset all to defaults" can share
   // it - a disabled/customized summon chord must reset alongside the
   // renderer bindings the button visually sits below.
   it("resets the summon shortcut to defaults alongside renderer bindings on 'Reset all to defaults'", async () => {
@@ -291,7 +291,7 @@ describe("KeybindingsSettingsPanel - Global shortcuts (T2)", () => {
     });
   });
 
-  // R5: a bare-key global registration would swallow ordinary typing
+  // A bare-key global registration would swallow ordinary typing
   // system-wide, so the global row rejects modifierless captures - but that
   // restriction is scoped to the global row only; a regular renderer action
   // must still accept a bare-key binding exactly as before.
@@ -330,12 +330,12 @@ describe("KeybindingsSettingsPanel - Global shortcuts (T2)", () => {
     expect(useKeybindingStore.getState().bindings["epic.new"]).toBe("b");
   });
 
-  // Decision 6: capturing a GLOBAL chord checks against every renderer
+  // Capturing a GLOBAL chord checks against every renderer
   // binding - a global shortcut swallows its chord system-wide before any
   // renderer listener sees it, so any overlap is a real conflict. This never
   // exercised the actual `externalReserved`/`checkConflict` wiring on the
-  // global row's capture control before - only the enable-path (R1) and reset
-  // (R4) did. Must fail if that wiring is removed.
+  // global row's capture control before - only the enable-path and reset
+  // did. Must fail if that wiring is removed.
   it("blocks the global row's capture when a renderer action already holds the candidate chord, and never calls bridge.set", () => {
     useKeybindingStore.setState({
       bindings: { ...getDefaultBindings(), "epic.new": "mod+alt+g" },
@@ -363,10 +363,10 @@ describe("KeybindingsSettingsPanel - Global shortcuts (T2)", () => {
     ).toBeTruthy();
   });
 
-  // Decision 6 (amended): the global chord is reserved by persisted INTENT,
+  // The global chord is reserved by persisted INTENT,
   // not live OS status - a chord the user intends enabled stays reserved even
   // while the OS currently rejects it (it will register on a later launch).
-  // This is the specific regression check for the F2 fix in
+  // This is the specific regression check for the fix in
   // `chord-capture-input.tsx`: it must fail if the reservation goes back to
   // being gated on `status === "registered"` instead of `intent.enabled`.
   it("blocks a renderer capture against the global chord while intent is enabled even when the OS status is rejected (not registered)", () => {
@@ -398,7 +398,7 @@ describe("KeybindingsSettingsPanel - Global shortcuts (T2)", () => {
     ).toBeTruthy();
   });
 
-  // F1: `ChordCaptureCore` handles Backspace by calling `onClear()` directly
+  // `ChordCaptureCore` handles Backspace by calling `onClear()` directly
   // without checking what "clear" resolves to. The global row's clear
   // persists `chord: null`, which means the enabled DEFAULT chord becomes
   // live - so Backspace must run the same duplicate check against that

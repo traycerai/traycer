@@ -52,7 +52,7 @@ describe("<AppTelemetryBridge /> layout_snapshot firing (tech-plan section 7)", 
 
   // A day of the denominator per device per launch is what a claimed-but-unsent
   // window costs, and the only symptom is a PostHog number that is quietly too
-  // small (G3-04, L-83).
+  // small (L-83).
   it("gives the 24h window back when the event does not go out", () => {
     const trackSpy = vi
       .spyOn(Analytics.getInstance(), "track")

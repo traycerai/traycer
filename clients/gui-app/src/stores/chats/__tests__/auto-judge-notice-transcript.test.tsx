@@ -754,6 +754,7 @@ describe("auto-mode judge notices in the windowed transcript", () => {
             hideReasoning: false,
             queuePauseReasonProtocolSupported: null,
             splitLongTurns: true,
+            botSendQuestionStates: null,
           })[0]?.units,
         ).toEqual([]);
       }

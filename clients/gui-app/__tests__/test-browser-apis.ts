@@ -69,8 +69,8 @@ afterEach(() => {
 // worker's port, which is what makes the owed #4 pin's second arm exist at
 // all).
 //
-// The correction matters beyond this file: §8 argued Arm B was not
-// constructible BECAUSE the entry did not compose, and that argument expired
+// The correction matters beyond this file: the argument that Arm B was not
+// constructible BECAUSE the entry did not compose expired
 // with this comment. A reader checking the claim would have found this text and
 // stopped.
 __setEpicRuntimeWorkerFactoryForTests(() => {

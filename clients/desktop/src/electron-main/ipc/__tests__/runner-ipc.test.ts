@@ -61,6 +61,13 @@ import type {
   runSandboxVerbViaHttp,
 } from "@traycer-clients/shared/host-client/sandbox-control";
 import type {
+  disconnectSlackAppViaHttp,
+  fetchSlackAppManifestViaHttp,
+  mintSlackAppInstallUrlViaHttp,
+  readSlackAppViaHttp,
+  registerSlackAppViaHttp,
+} from "@traycer-clients/shared/host-client/slack-app";
+import type {
   decideSecretRequestViaHttp,
   fetchEnvironmentProvidersViaHttp,
   fetchSandboxGrantsViaHttp,
@@ -135,6 +142,34 @@ const openSandboxAutomationViaHttpMock = vi.hoisted(() =>
     detail: "unscripted",
   })),
 );
+/** A bot's Slack app calls, observed. */
+const readSlackAppViaHttpMock = vi.hoisted(() =>
+  vi.fn<typeof readSlackAppViaHttp>(async () => ({ kind: "ok", app: null })),
+);
+const fetchSlackAppManifestViaHttpMock = vi.hoisted(() =>
+  vi.fn<typeof fetchSlackAppManifestViaHttp>(async () => ({
+    kind: "ok",
+    manifest: "{}",
+  })),
+);
+const registerSlackAppViaHttpMock = vi.hoisted(() =>
+  vi.fn<typeof registerSlackAppViaHttp>(async () => ({
+    kind: "network-error",
+    detail: "unscripted",
+  })),
+);
+const mintSlackAppInstallUrlViaHttpMock = vi.hoisted(() =>
+  vi.fn<typeof mintSlackAppInstallUrlViaHttp>(async () => ({
+    kind: "network-error",
+    detail: "unscripted",
+  })),
+);
+const disconnectSlackAppViaHttpMock = vi.hoisted(() =>
+  vi.fn<typeof disconnectSlackAppViaHttp>(async () => ({
+    kind: "network-error",
+    detail: "unscripted",
+  })),
+);
 /** The secrets broker's grants read and decide the two handlers make, observed. */
 const fetchSandboxGrantsViaHttpMock = vi.hoisted(() =>
   vi.fn<typeof fetchSandboxGrantsViaHttp>(async () => ({
@@ -181,6 +216,13 @@ vi.mock(
     openSandboxAutomationViaHttp: openSandboxAutomationViaHttpMock,
   }),
 );
+vi.mock("@traycer-clients/shared/host-client/slack-app", () => ({
+  readSlackAppViaHttp: readSlackAppViaHttpMock,
+  fetchSlackAppManifestViaHttp: fetchSlackAppManifestViaHttpMock,
+  registerSlackAppViaHttp: registerSlackAppViaHttpMock,
+  mintSlackAppInstallUrlViaHttp: mintSlackAppInstallUrlViaHttpMock,
+  disconnectSlackAppViaHttp: disconnectSlackAppViaHttpMock,
+}));
 vi.mock("@traycer-clients/shared/host-client/sandbox-secrets", () => ({
   fetchSandboxGrantsViaHttp: fetchSandboxGrantsViaHttpMock,
   fetchTeamEnvironmentViaHttp: fetchTeamEnvironmentViaHttpMock,
@@ -763,6 +805,19 @@ describe("RunnerIpcBridge", () => {
           RunnerHostInvoke.runSandboxVerb,
           RunnerHostInvoke.getSandboxAutomation,
           RunnerHostInvoke.openSandboxAutomation,
+          // The voice routes, for the same CORS reason.
+          RunnerHostInvoke.getVoiceAvailability,
+          RunnerHostInvoke.mintVoiceSession,
+          RunnerHostInvoke.endVoiceSession,
+          RunnerHostInvoke.routeVoiceUtterance,
+          RunnerHostInvoke.setVoiceSessionLive,
+          RunnerHostInvoke.setVoiceSessionIndicator,
+          // A bot's Slack app, on traycer-server too.
+          RunnerHostInvoke.readSlackApp,
+          RunnerHostInvoke.getSlackAppManifest,
+          RunnerHostInvoke.registerSlackApp,
+          RunnerHostInvoke.mintSlackAppInstallUrl,
+          RunnerHostInvoke.disconnectSlackApp,
           // The secrets broker, on authn.
           RunnerHostInvoke.getSandboxGrants,
           RunnerHostInvoke.getTeamEnvironment,
@@ -1194,6 +1249,35 @@ describe("RunnerIpcBridge", () => {
         RunnerHostInvoke.openSandboxAutomation,
         openSandboxAutomationViaHttpMock,
         [null],
+      ],
+      [RunnerHostInvoke.readSlackApp, readSlackAppViaHttpMock, ["bot-1"]],
+      [
+        RunnerHostInvoke.getSlackAppManifest,
+        fetchSlackAppManifestViaHttpMock,
+        ["bot-1"],
+      ],
+      [
+        RunnerHostInvoke.registerSlackApp,
+        registerSlackAppViaHttpMock,
+        [
+          {
+            botId: "bot-1",
+            appId: "A07K2M9QX4T",
+            clientId: "123.456",
+            clientSecret: "client-secret",
+            signingSecret: "signing-secret",
+          },
+        ],
+      ],
+      [
+        RunnerHostInvoke.mintSlackAppInstallUrl,
+        mintSlackAppInstallUrlViaHttpMock,
+        ["bot-1"],
+      ],
+      [
+        RunnerHostInvoke.disconnectSlackApp,
+        disconnectSlackAppViaHttpMock,
+        ["bot-1"],
       ],
     ];
     for (const [channel, mock, args] of calls) {

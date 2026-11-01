@@ -3,7 +3,7 @@
  * (`SystemTabModalHost`): the modal flipping to non-modal while the theme
  * editor is up (Radix remounts its content), promotion to the Settings tab,
  * tab eviction and reconstruction, and the frame where "Settings open" reads
- * false. Each path is named by its review id (H4).
+ * false. Each path is named by its id (H4).
  *
  * Drivers that are not real UI, and why:
  *  - section changes use the modal api's `setSection` (the real store action

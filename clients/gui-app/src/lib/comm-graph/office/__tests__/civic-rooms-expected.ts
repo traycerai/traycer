@@ -35,7 +35,7 @@ export const CIVIC_ROOMS_EXPECTED: Readonly<Record<OfficeViewId, boolean>> = {
  * Four of the five offices are buildings with a way in from outside, and a
  * vehicle pulls up at their kerbs. Mission control is ONE AMPHITHEATRE: nothing
  * drives into a hall, so it plans no road and every one of its four rooms names
- * a null kerb - C6's own reading, and the reason its medbay is marked by a siren
+ * a null kerb, which is why its medbay is marked by a siren
  * light rather than by an ambulance.
  *
  * A SECOND TABLE rather than a tolerated `null`, for the reason the first one

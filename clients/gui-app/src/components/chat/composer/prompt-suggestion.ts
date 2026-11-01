@@ -138,6 +138,6 @@ export function fillComposerWithSuggestion(
   // Never replace a draft based only on that earlier render's empty state.
   if (!isSuggestionPlaceholderDocument(editor.getJSON())) return false;
   editor.setContent(plainTextPromptContent(suggestion), null);
-  editor.focusAtEnd();
+  editor.focusAtEnd("reveal-caret");
   return true;
 }

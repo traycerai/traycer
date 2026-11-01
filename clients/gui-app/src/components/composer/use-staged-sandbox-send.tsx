@@ -273,7 +273,7 @@ export function useOpenLandingStagedTerminal(surfaceKey: string): () => void {
 }
 
 /**
- * The send side of a staged sandbox (sandboxes plan D1, the critique's
+ * The send side of a staged sandbox (a
  * two-phase handoff). Phase 1 creates or wakes the staged sandbox and waits
  * until it is ready, then pins the surface to it (`runStagedSandbox`); phase
  * 2 is {@link useStagedSandboxHandoff}'s.

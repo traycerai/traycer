@@ -1,9 +1,9 @@
 /**
- * T4's race rule, the new-conversation modal's half:
+ * The race rule, the new-conversation modal's half:
  * `collectNewChatDirtyWrites` must withhold a draft while its content still
  * holds a PENDING inline image node (`b64content` surviving, its hash rewrite
  * not yet landed) - publishing now would put the whole base64 snapshot on the
- * wire, the exact megabyte-draft failure this ticket removes. The rewrite's
+ * wire, the exact megabyte-draft failure this change removes. The rewrite's
  * own document change re-dirties the patch moments later, so it is collected
  * on the very next pass. Same rule, same shape as
  * `collectComposerDirtyWrites`'s coverage in `composer-draft-mirror.test.ts`.

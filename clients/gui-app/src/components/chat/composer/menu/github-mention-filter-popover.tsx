@@ -403,8 +403,8 @@ interface FilterGroupOption {
  *
  * The primitive is doing real work here, not decoration: it supplies roving
  * focus (one tab stop per group), arrow navigation within the group, and Space
- * activation - the keyboard model both the core flows and the tech plan
- * specify. Hand-rolled `role="radio"` buttons had none of it, and a native
+ * activation - the keyboard model a radio group needs.
+ * Hand-rolled `role="radio"` buttons had none of it, and a native
  * button additionally activates on keyup rather than keydown.
  *
  * `onSelect` takes the raw string because that is what the DOM hands back; each

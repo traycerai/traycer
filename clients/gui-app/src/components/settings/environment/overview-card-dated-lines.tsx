@@ -27,10 +27,10 @@ import { useHostNegotiatedMethodVersion } from "@/hooks/host/use-host-negotiated
 import { useRetrospectiveSheetStore } from "@/stores/settings/retrospective-sheet-store";
 
 /**
- * Overview settings-card dated lines P5 owns (shared by an earlier version,
+ * Overview settings-card dated lines (shared by an earlier version,
  * stopped using Personal with the cleanup it still owes, returned from a
  * team) and `Stop using Personal on this computer` with its help line.
- * `Moved to Personal on …` is E4's; P3's
+ * `Moved to Personal on …` is E4's; the
  * `Details` line is a separate stub. The `Details` verb on the
  * earlier-version line opens the retrospective sheet, mounted app-wide
  * (`EnvironmentSheetsHost`), which also shows it once by itself.

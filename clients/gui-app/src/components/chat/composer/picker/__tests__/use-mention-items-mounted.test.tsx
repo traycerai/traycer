@@ -143,8 +143,14 @@ vi.mock("@/providers/use-open-epic-handle", () => ({
 vi.mock("@/stores/auth/auth-store", () => ({
   authorizesCloudCapability: (status: string): boolean =>
     status === "signed-in",
-  useAuthStore: <T,>(selector: (state: { status: string }) => T): T =>
-    selector(stableMocks.authState),
+  useAuthStore: Object.assign(
+    <T,>(selector: (state: { status: string }) => T): T =>
+      selector(stableMocks.authState),
+    {
+      getState: () => stableMocks.authState,
+      subscribe: () => () => undefined,
+    },
+  ),
 }));
 
 vi.mock("@/lib/host", () => ({

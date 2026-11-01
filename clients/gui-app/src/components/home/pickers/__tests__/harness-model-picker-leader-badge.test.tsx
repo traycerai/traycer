@@ -5,7 +5,7 @@ import { PickerLeaderBadge } from "@/components/home/pickers/harness-model-picke
 // The badge is purely visual now - digit only, `aria-hidden`. The spoken
 // modifier name lives on the parent control's own `aria-label`, built by
 // `pickerLeaderControlLabel` (see harness-model-picker-shortcut-hint.test.ts)
-// - CodeRabbit flagged the old `aria-label` here as unreachable through a
+// - the old `aria-label` here was unreachable through a
 // parent that already owns an accessible name.
 describe("<PickerLeaderBadge />", () => {
   afterEach(() => cleanup());

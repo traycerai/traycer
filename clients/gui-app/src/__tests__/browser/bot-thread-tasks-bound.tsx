@@ -113,6 +113,7 @@ const tasks: ReadonlyArray<BotTaskEntry> = Array.from(
     originRequestId: null,
     createdByChatId: THREAD_ID,
     checkins: null,
+    inputNeeded: null,
     pause: null,
     stop: null,
     runRequest: null,
@@ -130,6 +131,7 @@ const thread: BotThreadSummary = {
     senderUserId: null,
     sentAt: 1_000,
     resolvedAt: null,
+    excerpt: null,
   },
   replyCount: 3,
   lastReplyAt: 2_000,
@@ -193,6 +195,9 @@ export function Pane(): ReactElement {
                   onOpenActivity={noop}
                   onEditPost={noop}
                   onOpenTurn={noop}
+                  onOpenSession={noop}
+                  landOn={null}
+                  quote={null}
                 />
               </ChatFindForceStoreProvider>
             </A2AOpenStoreProvider>

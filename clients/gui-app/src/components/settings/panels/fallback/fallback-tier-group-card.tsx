@@ -164,7 +164,7 @@ export interface FallbackTierGroupCardProps {
 // they always hold the same glyph and the same three buttons.
 //
 // Below the panel's breakpoint (`@2xl`, the one the Overrides matrix beside
-// this tab uses) the table gives way to stacked rows (spec §Wireframe 5):
+// this tab uses) the table gives way to stacked rows:
 // each row is its own small grid - rank, provider and effort on one line,
 // the model or pattern under them, then the try line, then the controls.
 // Named areas carry both layouts, so the cells are written once.
@@ -279,7 +279,7 @@ export function FallbackTierGroupCard(
             "border-b border-border/40 bg-foreground/3 py-1.5 text-ui-xs font-medium text-muted-foreground",
           )}
         >
-          {/* The rank is decorative (spec §Accessibility): try order is the
+          {/* The rank is decorative: try order is the
               row's position and its try line. */}
           <span aria-hidden>#</span>
           <span>Provider</span>
@@ -608,7 +608,7 @@ function CandidateRow(props: {
       ?.click();
   };
   // What "fix this row" is called: a pattern is edited, an exact pick is
-  // swapped for another model (review R11) - "Edit pattern" on a row holding
+  // swapped for another model (R11) - "Edit pattern" on a row holding
   // `gpt-5.6-terra` names a thing the row does not have.
   const editLabel = isModelPattern(candidate.modelFamily.trim())
     ? "Edit pattern"
@@ -777,7 +777,7 @@ function CandidateRow(props: {
  * The row's status line - what it tries, or why it tries nothing - drawn from
  * {@link rowStatusLine}.
  *
- * Colour never carries meaning alone (spec §Accessibility): the red line says
+ * Colour never carries meaning alone: the red line says
  * "matches nothing", an amber pill carries its reason as a word, and a model
  * the walk would skip is struck through AND followed by that pill.
  */
@@ -916,12 +916,12 @@ function TryStepView(props: {
 }
 
 /**
- * A model this row shares with another tier (spec §Wireframe 3, "In two
+ * A model this row shares with another tier ("In two
  * tiers") - red, because it is the user's to fix, and never a gate: nothing
  * about it stops another edit from saving.
  *
- * `role="alert"` on the conflict's FIRST appearance in the panel (spec
- * §Accessibility) - an edit elsewhere, an Undo, a catalog that loads - so it
+ * `role="alert"` on the conflict's FIRST appearance in the panel
+ * - an edit elsewhere, an Undo, a catalog that loads - so it
  * is announced where it lands, and never again for the same conflict when the
  * tab is revisited or a deletion re-keys the block
  * (`fallback-conflict-announcements.ts`). It names the other tier, says which

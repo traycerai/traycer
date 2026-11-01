@@ -56,7 +56,7 @@ vi.mock("@/lib/epic-selectors", () => ({
     }
     return null;
   },
-  useOpenEpicId: () => "epic-1",
+  useMaybeOpenEpicId: () => "epic-1",
 }));
 
 // An open epic: the card names and links its receiver as the epic resolves it.
@@ -70,6 +70,11 @@ vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
 
 vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
   useTabHostId: () => "active-host-1",
+}));
+
+// A bot receiver's channel opener; no case here sends to a bot.
+vi.mock("@/hooks/bots/use-open-bot-channel", () => ({
+  useOpenBotChannel: () => vi.fn(),
 }));
 
 const TEAM_SENTENCE =
@@ -202,6 +207,7 @@ function renderSend(error: string, variant: "card" | "row"): void {
         mcpApp={null}
         agentMessageReceipt={null}
         agentMessageDelivery={null}
+        botSendReceipt={null}
         isStreaming={false}
         endState={null}
         stopped={false}

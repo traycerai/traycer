@@ -30,6 +30,7 @@ describe("landing draft store: forkDraft", () => {
     };
     const selection = { from: 1, to: 6 };
     const settings: ChatRunSettings = {
+      ultracode: false,
       harnessId: "claude",
       model: "sonnet",
       permissionMode: "supervised",

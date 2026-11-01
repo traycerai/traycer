@@ -11,7 +11,7 @@ import {
  * `right` and `left` are flex order in the shell and need nothing here. This
  * module is the third mode: a panel the user picked up and put somewhere,
  * which is the one thing allowed to overlap the canvas because they chose it
- * and can move it again (the scoped exception to P3).
+ * and can move it again (the scoped exception to the no-overlap rule).
  *
  * The drag is the prototype's physical one (L-29): 1:1 from the grab point
  * with pointer capture, clamped to the window, and a release near either side
@@ -19,7 +19,7 @@ import {
  * it is editing.
  */
 
-/** Section 6's frozen float geometry. */
+/** The frozen float geometry. */
 export const FLOAT_DOCK_WIDTH = 380;
 const FLOAT_DOCK_MAX_HEIGHT = 560;
 const FLOAT_DOCK_VIEWPORT_MARGIN = 92;

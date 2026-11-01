@@ -4,6 +4,7 @@ import type { AutoJudgeNoticeMarker } from "@traycer/protocol/persistence/chat-t
 import type {
   BotAnnouncement,
   BotQuestion,
+  BotSurfaceReference,
   ConversationRequest,
 } from "@traycer/protocol/persistence/epic/messages";
 import type {
@@ -31,6 +32,7 @@ import type {
   AgentMessageSend,
   ArtifactOperationAction,
   BackgroundTaskOutput,
+  BotSendReceipt,
   BrowserSessionReference,
   DiffSource,
   FileEditReason,
@@ -166,6 +168,10 @@ export interface ToolSegment {
   // expired or refused. Null for every other tool call, for a send delivered
   // on the same host, and for sends persisted before the host carried this.
   agentMessageDelivery: AgentMessageDelivery | null;
+  // The channel post a bot's send wrote, stamped on the block at completion
+  // (Tracy Bots T94). Null for every other tool call and for sends persisted
+  // before the host carried this.
+  botSendReceipt: BotSendReceipt | null;
   isStreaming: boolean;
   // Terminal outcome when the turn ended mid-flight (else null). See SegmentEndState.
   endState: SegmentEndState;
@@ -390,13 +396,6 @@ export interface PlanSegmentModel {
 }
 
 /**
- * A semantic artifact create / update / delete card. The card resolves the live
- * title / ticket status / deletion tombstone reactively from the open-epic
- * projection by `artifactId`; `title` is only a fallback for the short delete
- * window before the tombstone projection arrives. `kind` is the segment
- * discriminant, so the artifact's own kind is named `artifactKind`.
- */
-/**
  * The merged file change behind an artifact card (first-before → last-after
  * across any coalesced edits), carried on the `artifact_operation` block itself
  * so it's available the moment the edit completes - no wait for turn-end
@@ -408,6 +407,13 @@ export interface ArtifactSegmentChange {
   afterHash: string | null;
 }
 
+/**
+ * A semantic artifact create / update / delete card. The card resolves the live
+ * title / ticket status / deletion tombstone reactively from the open-epic
+ * projection by `artifactId`; `title` is a fallback when no projection
+ * title is available. `kind` is the segment
+ * discriminant, so the artifact's own kind is named `artifactKind`.
+ */
 export interface ArtifactOperationSegment {
   id: string;
   kind: "artifact_operation";
@@ -559,7 +565,7 @@ export type MessageSegment =
       id: string;
       kind: "setup-card";
       /**
-       * Consolidated worktree-setup view-model (T2 deriver output). The segment
+       * Consolidated worktree-setup view-model (deriver output). The segment
        * is synthesized in `rendered-messages` for a `role: "system"` row and is
        * never persisted, so it carries the tab-scoped `viewTabId` the card needs
        * for its focus-terminal path rather than threading a per-row prop.
@@ -567,7 +573,7 @@ export type MessageSegment =
       model: SetupCardViewModel;
       viewTabId: string;
       /**
-       * Ticket 13 (decision #28): the raw triggering message id this card is
+       * The raw triggering message id this card is
        * associated with (`SetupCardRow.triggeringMessageId`) - `null` only
        * for the genesis card or a defensive creating-event-without-id shape.
        * A card whose trigger never became (or no longer is) an anchor
@@ -580,7 +586,7 @@ export type MessageSegment =
        */
       anchorMessageId: string | null;
       /**
-       * Ticket 13 (decision #28): true only for the pinned genesis card
+       * True only for the pinned genesis card
        * (the chat's back-filled initial worktree, unconditionally unshifted
        * to row index 0 - it has no triggering send to match against, so it
        * substitutes for whatever the chat's first row is).
@@ -788,6 +794,13 @@ export interface ChatMessage {
    * Absent on every other row.
    */
   question?: BotQuestion;
+  /**
+   * What in a task a bot's post points at (Tracy Bots T89) - a question, an
+   * approval, a browser session or an artifact - with how it was settled:
+   * drawn as a card under the row's text, which stands alone for an older
+   * client. Absent on every other row.
+   */
+  surface?: BotSurfaceReference;
   /**
    * The member's post a bot's direct reply answers, by its message id (Tracy
    * Bots, reply mode `direct`), on the bot's row in its channel. Absent on

@@ -26,7 +26,7 @@ export { MAX_EMBEDDED_DOWNLOAD_BYTES } from "@/lib/sandbox/download-limits";
  * - `ui/update-model-context` → `chat.mcpApp.updateModelContext`, sent as the
  *   standard `{content, structuredContent}` request. The host normalizes the
  *   text (§2.5); here only the shape is: one block or an array, absent → null.
- * - `ui/message` → a composer draft (D29), text blocks only.
+ * - `ui/message` → a composer draft, text blocks only.
  * - `ui/request-display-mode` → the row's overlay claim.
  * - `ui/download-file` → always confirmed. An embedded resource up to 25 MiB
  *   is saved; a `resource_link` must be https and opens as a link.
@@ -334,7 +334,7 @@ export function createMcpAppRequestHandler(
     throw new Error(response.message ?? ERROR_TEXT[response.code]);
   };
 
-  // D31: how each call ended, and nothing about what it was.
+  // How each call ended, and nothing about what it was.
   const trackCall = (outcome: "approved" | "denied" | "refused"): void => {
     Analytics.getInstance().track(AnalyticsEvent.McpAppCall, { outcome });
   };

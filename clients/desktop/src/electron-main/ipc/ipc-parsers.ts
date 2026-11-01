@@ -1,5 +1,5 @@
 import {
-  SANDBOX_ARTIFACT_SPAN_BYTES,
+  ARTIFACT_OBJECT_SPAN_BYTES,
   type SandboxArtifactReply,
 } from "../../ipc-contracts/sandbox-artifact-types";
 import type { IpcMainEvent, IpcMainInvokeEvent } from "electron";
@@ -48,6 +48,11 @@ import {
   type SandboxPatchRequest,
   type SandboxVerbGesture,
 } from "@traycer/protocol/host/sandbox-control";
+import {
+  slackAppBotRequestSchema,
+  slackAppRegisterRequestSchema,
+  type SlackAppRegisterRequest,
+} from "@traycer/protocol/host/slack-app";
 import {
   SECRET_REQUEST_DECISIONS,
   type SecretRequestDecision,
@@ -681,6 +686,33 @@ export function parseSandboxAutomationOpenTarget(
   };
 }
 
+/**
+ * The renderer-supplied Slack app registration, against the protocol's own
+ * bounds. The error names the field and the rule, never the value: two of
+ * the fields are the app's secrets.
+ */
+export function parseSlackAppRegisterRequest(
+  value: unknown,
+): SlackAppRegisterRequest {
+  const checked = slackAppRegisterRequestSchema.safeParse(value);
+  if (!checked.success) {
+    const issue = checked.error.issues[0];
+    throw new Error(
+      `registerSlackApp.request.${issue.path.join(".")}: ${issue.message}`,
+    );
+  }
+  return checked.data;
+}
+
+/** The bot a Slack app call names, against the protocol's bounds. */
+export function parseSlackAppBotId(value: unknown, name: string): string {
+  const checked = slackAppBotRequestSchema.safeParse({ botId: value });
+  if (!checked.success) {
+    throw new Error(`${name}: ${checked.error.issues[0].message}`);
+  }
+  return checked.data.botId;
+}
+
 /** `null` stays `null` (the server's default); anything else must parse. */
 function nullOr<T>(value: unknown, parse: (value: unknown) => T): T | null {
   return value === null ? null : parse(value);
@@ -816,7 +848,7 @@ export function parseSandboxArtifactReply(
   if (
     record.kind !== "bytes" ||
     !(record.bytes instanceof Uint8Array) ||
-    record.bytes.byteLength > SANDBOX_ARTIFACT_SPAN_BYTES + 1024 ||
+    record.bytes.byteLength > ARTIFACT_OBJECT_SPAN_BYTES + 1024 ||
     typeof record.offset !== "number" ||
     !Number.isSafeInteger(record.offset) ||
     record.offset < 0 ||

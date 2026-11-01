@@ -8,7 +8,7 @@ import {
 
 /**
  * Marks the element that draws a placement surface - the tab strip in either
- * placement, the canvas's sidebar - so the canvas can select it (D14).
+ * placement, the canvas's sidebar - so the canvas can select it.
  *
  * The surface's sibling of `useLayoutRegion`, and gated the same way: only
  * while a session is live, and never from a hidden pane. `data-layout-surface`

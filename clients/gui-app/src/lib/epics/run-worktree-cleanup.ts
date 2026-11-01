@@ -316,7 +316,13 @@ function runCleanupCommand(
                 settle({ kind: "failed", reason });
               },
               onUnsupported: () => reportUnsupported(),
-              onConnectionStatus: (status) => {
+              onConnectionStatus: (
+                status,
+                _reason,
+                _retryCause,
+                continuity,
+              ) => {
+                if (continuity === "held") return;
                 if (status === "open") {
                   state.reachedHost = true;
                   return;
@@ -478,7 +484,13 @@ function deleteOneWorktree(input: {
                     : { kind: "failed", reason: DECLINED_REASON },
                 ),
               onFailed: (reason) => finish({ kind: "failed", reason }),
-              onConnectionStatus: (status) => {
+              onConnectionStatus: (
+                status,
+                _reason,
+                _retryCause,
+                continuity,
+              ) => {
+                if (continuity === "held") return;
                 // Fail fast on the FIRST drop after start. The one-shot delete
                 // stream must not silently re-run, but WsStreamClient's own
                 // reconnect loop keeps rescheduling `reconnecting` (reason:

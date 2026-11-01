@@ -33,7 +33,7 @@ import {
 } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
 
 /**
- * THE OWNERSHIP WIRING, against the REAL container (cold-review P3).
+ * THE OWNERSHIP WIRING, against the REAL container.
  *
  * The banner unit tests inject `ownedByViewer` / `cloneAllowed` directly and
  * the published tile's suite stubs this container, so before this file a
@@ -251,7 +251,7 @@ function seedChatOwnedBy(ownerUserId: string): (doc: Y.Doc) => void {
 }
 
 // One epic id (and harness) PER TEST: the session registry retains the most
-// recent session per epic id across acquires (the R-1 rotation), so a second
+// recent session per epic id across acquires, so a second
 // test reusing the id can be handed the previous test's session - whose
 // snapshot generation has moved on - and its installed role never lands.
 // Distinct ids make every test's session its own.

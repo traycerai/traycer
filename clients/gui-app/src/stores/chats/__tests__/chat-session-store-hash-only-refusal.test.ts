@@ -1,5 +1,5 @@
 /**
- * T5's refusal path: a `MISSING_ATTACHMENT_BYTES` rejection of a send whose
+ * The refusal path: a `MISSING_ATTACHMENT_BYTES` rejection of a send whose
  * `restore.content` carries a hash-only image node forks in
  * `onActionAck` (`chat-session-store.ts`). Covers the silent `not-on-host`
  * retry, the loud `unsupported-format` mark, `too-large`, and the retry's
@@ -92,7 +92,7 @@ vi.mock("@/lib/drafts/draft-mirror-coordinator", () => ({
   draftMirrorClientForHost: () => null,
 }));
 
-// R4F1/R4F2: the durable-handoff tests assert on exactly what a disposing
+// The durable-handoff tests assert on exactly what a disposing
 // store hands to the prompt stash. Going through the REAL repository would
 // hit the same permanently-poisoned `dbPromise` the comment above describes
 // (its module-load-time `hydrate()` opens the DB before this file's
@@ -149,6 +149,7 @@ async function imageHash(): Promise<string> {
 }
 
 const SETTINGS: ChatRunSettings = {
+  ultracode: false,
   harnessId: "codex",
   model: "gpt-5-codex",
   permissionMode: "supervised",
@@ -354,7 +355,7 @@ function emitOwnerSnapshot(
   callbacks: ChatStreamCallbacks,
   queueItems: ReadonlyArray<ChatQueuedManagedCommandItem>,
 ): void {
-  callbacks.onConnectionStatus("open", null, null);
+  callbacks.onConnectionStatus("open", null, null, null);
   const chat: Chat = {
     id: CHAT_ID,
     parentId: null,
@@ -489,7 +490,7 @@ function sendHashOnlyMessage(
 
 /** Sends `wireContent` while freezing `restoreContent` as the hand-back
  * document, mirroring how `use-chat-composer-submit.ts` can send content the
- * restore document never carried (T5's F3). */
+ * restore document never carried (F3). */
 function sendMessageWithContent(
   harness: Harness,
   wireContent: JsonContent,
@@ -917,7 +918,7 @@ describe("chat session store - hash-only refusal (T5)", () => {
 
     // The connection drops WHILE the byte resolution is in flight, so by the
     // time the retry's `sendAction` runs, `canSendAction` refuses it.
-    harness.callbacks().onConnectionStatus("reconnecting", null, null);
+    harness.callbacks().onConnectionStatus("reconnecting", null, null, null);
 
     await vi.waitFor(() => {
       expect(
@@ -1545,7 +1546,7 @@ describe("chat session store - hash-only refusal (T5)", () => {
     // A's own dispatch now gets refused - the connection drops while the
     // byte resolution is still outstanding, so `sendAction` refuses A's retry
     // when it finally tries to go out.
-    harness.callbacks().onConnectionStatus("reconnecting", null, null);
+    harness.callbacks().onConnectionStatus("reconnecting", null, null, null);
 
     await vi.waitFor(() => {
       expect(
@@ -1562,7 +1563,7 @@ describe("chat session store - hash-only refusal (T5)", () => {
     // A is not silently destroyed - and "not destroyed" has to mean A's TEXT
     // is still recoverable, not that a sentence about A was shown. The first
     // version of this test asserted only the reason and a generic phrase, so
-    // it passed with A's content gone: exactly the failure the reviewer
+    // it passed with A's content gone: exactly the failure this test
     // reproduced. The assertion that matters is the prompt itself.
     const aNotice = finalState.errorNotices.find(
       (notice) => notice.clientActionId === a.clientActionId,
@@ -1869,7 +1870,7 @@ describe("chat session store - hash-only refusal (T5)", () => {
     expect(
       Object.keys(harness.handle.store.getState().hashOnlyRecoveries),
     ).toHaveLength(1);
-    harness.callbacks().onConnectionStatus("reconnecting", null, null);
+    harness.callbacks().onConnectionStatus("reconnecting", null, null, null);
     await vi.waitFor(() => {
       expect(
         Object.keys(harness?.handle.store.getState().hashOnlyRecoveries ?? {}),
@@ -1881,7 +1882,7 @@ describe("chat session store - hash-only refusal (T5)", () => {
     );
   });
 
-  // ─── T5 follow-ups (RR1-RR7) ─────────────────────────────────────────────
+  // ─── Follow-ups (RR1-RR7) ─────────────────────────────────────────────
 
   it("RR1 (DRIVE RED): a chat with a pending hash-only recovery is not evicted by warm-pool overflow, and a reacquire finds it intact", async () => {
     // The guard is `hasActiveWork`, NOT `isEvictable`. That correction is
@@ -1984,7 +1985,7 @@ describe("chat session store - hash-only refusal (T5)", () => {
   });
 
   it("RRR1 (2, DRIVE RED): a chat whose retry is dispatched but not yet acknowledged is not evicted by warm-pool overflow, and a reacquire finds it intact", async () => {
-    // Re-review 3's finding. Drive red via `hasActiveWork`, which is the
+    // Drive red via `hasActiveWork`, which is the
     // predicate the cap walk actually reaches (see RR1 above).
     // `holdsUnrecordedPrompt` reads `hashOnlyRecoveries`, which
     // empties the MOMENT the retry is dispatched - before the host has seen
@@ -2122,7 +2123,7 @@ describe("chat session store - hash-only refusal (T5)", () => {
   });
 
   it("RRR1 (3, DRIVE RED): a chat whose failed send is handed back but not yet consumed by the composer is not evicted by warm-pool overflow, and a reacquire finds it intact", () => {
-    // Re-review 3's finding: a refused dispatch moves the prompt into
+    // A refused dispatch moves the prompt into
     // `failedSendRestoration` and removes the recovery record in the same
     // step, so the predicate read this as settled even though nobody has
     // copied the restoration into the composer draft store yet. Drive red via
@@ -2218,10 +2219,10 @@ describe("chat session store - hash-only refusal (T5)", () => {
   });
 
   it("RRR1 (4, DRIVE RED): idle expiry defers disposal while a hash-only recovery is outstanding, and disposes once everything settles", async () => {
-    // Re-review 3's second entry to the same loss: the shared registry's
+    // The second entry to the same loss: the shared registry's
     // `expireIfIdle` never consults `isEvictable` at all - it defers only on
     // `hasActiveWork`, which pre-fix was bare `hasActiveChatWork`. The
-    // reviewer's concrete case: a recovery beginning 5s before the idle timer
+    // The concrete case: a recovery beginning 5s before the idle timer
     // fires is torn down well inside its own 30s recovery deadline.
     const hash = await seedConfirmedImage();
     localImageMocks.getImageBytes.mockImplementation(
@@ -2552,7 +2553,7 @@ describe("chat session store - hash-only refusal (T5)", () => {
     // A's own dispatch now gets refused - the connection drops while the
     // byte resolution is still outstanding, so `sendAction` refuses A's
     // retry when it finally tries to go out.
-    harness.callbacks().onConnectionStatus("reconnecting", null, null);
+    harness.callbacks().onConnectionStatus("reconnecting", null, null, null);
 
     await vi.waitFor(() => {
       expect(
@@ -2682,7 +2683,7 @@ describe("chat session store - hash-only refusal (T5)", () => {
     expect(readStagedWorktreeIntent(stagingKey)).toEqual(intentC);
 
     // A's own dispatch now gets refused.
-    harness.callbacks().onConnectionStatus("reconnecting", null, null);
+    harness.callbacks().onConnectionStatus("reconnecting", null, null, null);
     await vi.waitFor(() => {
       expect(
         Object.keys(harness?.handle.store.getState().hashOnlyRecoveries ?? {}),
@@ -2917,7 +2918,7 @@ describe("chat session store - hash-only refusal (T5)", () => {
   }, 15_000);
 
   it("RRR2 (DRIVE RED): the shared deadline inlines whichever hash resolved and leaves only the stalled one bare, in the SAME document", async () => {
-    // Re-review 3's finding: pre-fix, `prepareDraftImageInlining`'s single
+    // Pre-fix, `prepareDraftImageInlining`'s single
     // all-or-nothing `commit` only ran once its WHOLE batch settled, so a
     // deadline firing while hash B was stalled harvested an EMPTY map -
     // hash A, which had resolved in milliseconds, went out bare beside B and
@@ -3107,7 +3108,7 @@ describe("chat session store - hash-only refusal (T5)", () => {
     harness.handle.dispose();
 
     // Exactly one of the two could take the single restoration slot; the
-    // other is the "displaced" loser this round's finding is about.
+    // other is the "displaced" loser this case is about.
     const afterDispose = harness.handle.store.getState();
     expect(afterDispose.failedSendRestoration).not.toBeNull();
     const winnerId = afterDispose.failedSendRestoration?.clientActionId;
@@ -3180,7 +3181,7 @@ describe("chat session store - hash-only refusal (T5)", () => {
 
     // The connection drops while the retry's byte resolution is still
     // outstanding, so `sendAction` refuses it - onto a FREE restoration slot.
-    harness.callbacks().onConnectionStatus("reconnecting", null, null);
+    harness.callbacks().onConnectionStatus("reconnecting", null, null, null);
     await vi.waitFor(() => {
       expect(
         Object.keys(harness?.handle.store.getState().hashOnlyRecoveries ?? {}),
@@ -3350,7 +3351,7 @@ describe("chat session store - hash-only refusal (T5)", () => {
       chatA.handle.store.getState().failedSendRestoration?.clientActionId,
     ).toBe(b.clientActionId);
 
-    chatA.callbacks().onConnectionStatus("reconnecting", null, null);
+    chatA.callbacks().onConnectionStatus("reconnecting", null, null, null);
     await vi.waitFor(() => {
       expect(
         Object.keys(chatA.handle.store.getState().hashOnlyRecoveries),
@@ -3463,7 +3464,7 @@ describe("chat session store - hash-only refusal (T5)", () => {
       token: null,
     });
 
-    harness.callbacks().onConnectionStatus("reconnecting", null, null);
+    harness.callbacks().onConnectionStatus("reconnecting", null, null, null);
     await vi.waitFor(() => {
       expect(
         Object.keys(harness?.handle.store.getState().hashOnlyRecoveries ?? {}),

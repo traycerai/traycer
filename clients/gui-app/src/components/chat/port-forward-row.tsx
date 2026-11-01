@@ -88,7 +88,7 @@ export function PortForwardRow(props: {
           >
             {/* One cluster, not two row items: the twisty belongs to the
                 kind glyph it opens, and the recipe's `gap-2` between them read
-                the chevron as a sibling of the label (R6H-08). */}
+                the chevron as a sibling of the label. */}
             <span className="flex shrink-0 items-center gap-1">
               <ChevronRight
                 aria-hidden

@@ -682,7 +682,7 @@ describe("<TerminalTile /> basis notification gate", () => {
 });
 
 /**
- * S5: this tile used to render a wordless skeleton for BOTH `checking` and
+ * This tile used to render a wordless skeleton for BOTH `checking` and
  * `host-starting` - indistinguishable from a terminal about to appear, and
  * neither state ended. It now names the host it is waiting on (invariant 6).
  * Asserted on the rendered SENTENCE, not on the absence of a spinner - an

@@ -7,7 +7,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 /**
- * F4 (durability audit), settings surface: `ProviderProfileScopedSection` /
+ * Settings surface: `ProviderProfileScopedSection` /
  * `ProviderProfileCard` (provider-profile-scoped-section.tsx,
  * provider-profile-card.tsx) render a profile's `label` and `identity.email`
  * as plain JSX text (`profileDisplayLabel`, `ProfileCardIdentityLine`) - no

@@ -54,6 +54,14 @@ export interface RecordedSession {
    * the host's details as its retry cause (see `StatusChangeHandler`).
    */
   emitRetryableReconnect(retryCause: FatalErrorDetails): void;
+  /**
+   * Drives the `reconnecting` / `open` transitions of a resumable stream,
+   * carrying the host's continuity as the fourth argument.
+   */
+  emitContinuity(
+    status: StreamConnectionStatus,
+    continuity: "held" | "continued" | null,
+  ): void;
   setNegotiatedVersion(version: SchemaVersion | null): void;
   /** Re-reads the provider, as a wire re-subscribe would. */
   readParams(): unknown;
@@ -114,10 +122,13 @@ export function createRecordingStreamClient(): RecordingStreamClient {
         frameHandler?.(envelope, binaryPayload);
       },
       emitStatus: (status, reason) => {
-        statusHandler?.(status, reason, null);
+        statusHandler?.(status, reason, null, null);
       },
       emitRetryableReconnect: (retryCause) => {
-        statusHandler?.("reconnecting", null, retryCause);
+        statusHandler?.("reconnecting", null, retryCause, null);
+      },
+      emitContinuity: (status, continuity) => {
+        statusHandler?.(status, null, null, continuity);
       },
       setNegotiatedVersion: (version) => {
         negotiated = version;

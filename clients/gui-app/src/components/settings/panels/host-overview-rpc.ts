@@ -584,7 +584,7 @@ export function useHostServiceDeregister(
           latchStore.releaseDeregisterAccepted(context.hostId);
           return;
         }
-        // THE DISPATCH SLOT'S DEREGISTER CLEAR (D8) - the second of the two
+        // THE DISPATCH SLOT'S DEREGISTER CLEAR - the second of the two
         // the status stream cannot express, beside the panel's UNSEEN TTL, and
         // the fourth of the slot's four in total. The host service is going
         // away, and an update dispatch is a claim about a host that will be
@@ -632,7 +632,7 @@ export function useHostServiceDeregister(
 export function useHostUpdateInstall(
   client: HostClient<HostRpcRegistry> | null,
   /**
-   * The dispatching `HostOverviewPanel` mount's token (D8). Captured in
+   * The dispatching `HostOverviewPanel` mount's token. Captured in
    * `onMutate` and compared at settle, so ownership is written only while the
    * mount that asked is still on screen — see {@link settleUpdateDispatch}.
    */

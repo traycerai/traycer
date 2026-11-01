@@ -280,6 +280,7 @@ function createInertStreamSession(closedReason: string): IStreamSession {
             },
           },
           null,
+          null,
         );
       });
     },
@@ -3506,7 +3507,7 @@ class StreamSession<
     if (handler === null) {
       return;
     }
-    handler(next, reason, retryCause);
+    handler(next, reason, retryCause, null);
   }
 
   private disposeSession(): boolean {

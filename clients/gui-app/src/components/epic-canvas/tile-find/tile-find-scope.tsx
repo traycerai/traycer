@@ -14,7 +14,8 @@ import {
 } from "@/stores/tile-find";
 
 interface TileFindScopeProps {
-  readonly node: EpicCanvasTileRef;
+  /** The tile find is scoped to: a canvas tile, or a surface that hosts one tile's content (a bot's session). */
+  readonly node: Pick<EpicCanvasTileRef, "instanceId" | "id" | "type">;
   readonly viewTabId: string;
   readonly tileId: string;
   readonly epicId: string;

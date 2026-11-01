@@ -139,7 +139,6 @@ function ResolvedBrowserSessionTile(
     [persistViewportPresetInTab, props.viewTabId, props.node.instanceId],
   );
 
-  /** Open a tab in this tile's session and place it beside this tile. */
   /**
    * Clicking into the native view moves the focus there, and the pane it sits
    * in has to know - otherwise the previously active pane keeps the activation
@@ -160,6 +159,7 @@ function ResolvedBrowserSessionTile(
     });
   }, [props.paneId, props.viewTabId]);
 
+  /** Open a tab in this tile's session and place it beside this tile. */
   const onOpenLinkInNewTile = useCallback(
     (url: string, disposition: "foreground" | "background") => {
       if (

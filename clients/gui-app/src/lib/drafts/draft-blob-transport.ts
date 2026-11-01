@@ -49,7 +49,7 @@ const blobUnsupportedHosts = new Set<string>();
  *    here so it is not read later as an oversight: confirming under B REPLACES
  *    A's record, so after an account switch A re-uploads once per digest. That
  *    is the fail-safe direction - an extra upload, never a bare hash the host
- *    cannot answer - and it is the shape the ticket specifies. Widen it to a
+ *    cannot answer - and it is the chosen shape. Widen it to a
  *    per-digest owner SET only if switching accounts on one host turns out to
  *    be common enough for the churn to matter.
  *  - `inFlightBlobUploads`: upload key -> the upload already running for it, so
@@ -99,7 +99,7 @@ const blobUnsupportedHosts = new Set<string>();
  * is not: it bumps only in `close()`, so the reconnect re-bootstrap - the case
  * that matters here - reuses it. Bumping it there instead would also change
  * when `runBootstrap`'s two early-return guards fire, which is not this
- * ticket's to move.
+ * change's to move.
  */
 const confirmedBlobOwners = new Map<string, Map<string, string>>();
 const inFlightBlobUploads = new Map<string, Map<string, Promise<boolean>>>();
@@ -313,7 +313,7 @@ export function isDraftBlobUnbridgeable(
 
 /**
  * Drop the "this host withholds blob methods" cache so the next put/read
- * re-probes. Same shape as T6's scope-cache invalidate: a reconnecting
+ * re-probes. Same shape as the scope-cache invalidate: a reconnecting
  * session (host upgraded mid-lifetime) is the signal, not a timer.
  */
 export function forgetBlobUnsupportedHost(hostId: string): void {
@@ -460,7 +460,7 @@ export async function putDraftBlobsWithProgress(input: {
   const confirmed: string[] = [];
   const pending: string[] = [];
   for (const sha256 of new Set(hashes)) {
-    // The memo hit, and the whole point of the ticket: no local read, no
+    // The memo hit, and the whole point: no local read, no
     // base64, no request.
     if (isDraftBlobConfirmed(hostId, sha256, ownerUserId)) {
       confirmed.push(sha256);

@@ -792,7 +792,7 @@ describe("tile surface membership - live store integration", () => {
 
   it("add-background: openTileInBackgroundTab does not touch active-chat membership", () => {
     // Correction vs brief: `openTileInPane` always activates the new tab
-    // (and would deselect the prior active chat under decision #17). The
+    // (and would deselect the prior active chat under the old policy). The
     // real "add background without switching active tab" store action is
     // `openTileInBackgroundTab`.
     useEpicCanvasStore.setState({
@@ -960,7 +960,7 @@ describe("design-review F2: shared eligibility discriminator (remote-deletion)",
       // Mirrors what `TileSurfaceSlot` does once mounted for a real hosted
       // chat - a published environment is the thing that would otherwise
       // linger as a second, orphaned owner alongside the inline
-      // `DeletedArtifactBody` (design-review slice-4 finding 2).
+      // `DeletedArtifactBody`.
       publishTileSurfaceEnvironment(
         buildSyntheticTileSurfaceEnvironment("chat-1", {
           placement: {

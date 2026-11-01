@@ -12,6 +12,7 @@ function testStore() {
     reasoningFallback: "model-default",
     seedKey: "composer-toolbar-left-test",
     values: {
+      ultracode: false,
       permission: "supervised",
       selection: {
         harnessId: "claude",
@@ -24,6 +25,7 @@ function testStore() {
     onSettingsChange: null,
     tuiOnly: false,
     chatLineCarriesAutoMode: null,
+    ultracodeCarried: false,
     hostId: null,
   });
 }

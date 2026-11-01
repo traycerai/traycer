@@ -1,5 +1,5 @@
 import { QuoteSelectionPopover } from "@/components/chat/quote/quote-selection-popover";
-import { quoteSnapshotIntoDraft } from "@/components/chat/quote/quote-snapshot-into-draft";
+import { QuoteSinkContext } from "@/components/chat/quote/quote-sink-context";
 import { useNativeQuoteRequest } from "@/components/chat/quote/use-native-quote-request";
 import { useQuoteSelection } from "@/components/chat/quote/use-quote-selection";
 import { useChatFindController } from "@/components/chat/use-chat-find-controller";
@@ -10,6 +10,7 @@ import {
 } from "@/components/chat/chat-timeline";
 import {
   type ChatTimelineFollowLatch,
+  type ChatTimelineReaderGesture,
   type ChatTimelineReaderGestureIntent,
   chatTimelineEndScrollTop,
   isChatTimelineAtStrictBottom,
@@ -206,9 +207,9 @@ import {
 interface ChatMessagesProps {
   taskTitle: string;
   /** Chat tab identity; keys the composer draft the quote affordance appends to.
-   *  Also this chat's `chatId` half of the ticket-15 dual-key identity. */
+   *  Also this chat's `chatId` half of the dual-key identity. */
   taskId: string;
-  /** The epic this chat belongs to - the other half of the ticket-15
+  /** The epic this chat belongs to - the other half of the
    *  dual-key `(epicId, chatId)` durable identity. */
   epicId: string;
   /** Host this chat tab is bound to for its full lifetime. */
@@ -262,7 +263,7 @@ interface ChatMessagesProps {
   /** Per-tab identity; keys this transcript's saved scroll anchor. */
   instanceId: string;
   /** paneVisible ∧ tab selected: drives the reading-position tracking that
-   *  feeds the ticket-5 free-scrolling save anchor. */
+   *  feeds the free-scrolling save anchor. */
   visible: boolean;
   /** A frontmost system modal overlays the chat; body-portaled quote UI must stay hidden. */
   systemOverlayActive: boolean;
@@ -303,6 +304,18 @@ interface PendingScrollRequestLanding {
   readonly requestId: number;
   readonly messageId: string;
   readonly blockId: string | null;
+  /**
+   * `suspended` while a hide that COLLAPSED the box has parked this landing:
+   * its loop was torn down without reporting an outcome, so the request is
+   * still the live intent and the show re-issues it. The state lives on the
+   * landing rather than beside it so "pending, not suspended, and concealed
+   * with a collapsed box" has no representation.
+   *
+   * A box that survives concealment keeps measuring, so a landing concealed
+   * that way is never suspended: it settles while hidden exactly as it does
+   * without this field.
+   */
+  readonly state: "pending" | "suspended";
 }
 
 export type ChatMessageScrollRequest =
@@ -329,11 +342,10 @@ const EMPTY_ROW_SKELETON: readonly (RowSkeletonEntry | undefined)[] = [];
  *  hardcoding a copy of this number. Used only by the DOM-event-based
  *  `scrollToEnd`/`navigateToMessage` settle paths - the anchor engine's
  *  Promise-based settle uses its own, longer, `CHAT_TIMELINE_ANCHOR_SCROLL_
- *  PROMISE_TIMEOUT_MS` below (review finding: this shorter window is unsafe
+ *  PROMISE_TIMEOUT_MS` below (this shorter window is unsafe
  *  as a validate-and-settle deadline for an animated anchor scroll). */
 export const CHAT_ANCHOR_SETTLE_FALLBACK_MS = 750;
-/** Ticket 18 (review fix round 2, watchdog false-early-settle - source-
- *  proven residual): the full library contract this must clear is TWO
+/** The full library contract this must clear is TWO
  *  sequential windows, not one - `IMPERATIVE_SCROLL_SETTLE_MAX_WAIT_MS` =
  *  800ms (vendored `react.js:6624`, the readiness poll BEFORE the library
  *  even issues the underlying scroll - a data/measurement transition can
@@ -350,15 +362,39 @@ export const CHAT_ANCHOR_SETTLE_FALLBACK_MS = 750;
  *  always going to finish on its own - if either cited constant changes,
  *  this comment (not just the number) needs updating. */
 export const CHAT_TIMELINE_ANCHOR_SCROLL_PROMISE_TIMEOUT_MS = 2_600;
-/** Ticket 10: pixel tolerance for the settle/re-issue validation below - a
+/** Pixel tolerance for the settle/re-issue validation below - a
  *  navigation whose landing is off by more than this is treated as a real
  *  undershoot, not float/rounding noise. */
 const CHAT_TIMELINE_NAVIGATION_LANDING_EPSILON_PX = 1;
-/** Ticket 10: bounded retry count for the settle/re-issue loop (ticket text:
- *  "max 2-3") - the upper end, since the field bug this fixes needed
+/** Bounded retry count for the settle/re-issue loop (at most 2-3) - the
+ *  upper end, since the field bug this fixes needed
  *  multiple manual pill re-clicks to converge and the goal is to absorb that
  *  automatically in one operation. */
 const CHAT_TIMELINE_NAVIGATION_MAX_RETRIES = 3;
+/** How far the saved row's own position may differ between two consecutive
+ *  settles and still count as having HELD STILL, for the restore's
+ *  still-settling check below. A tolerance, never a cap: it is not a budget
+ *  and nothing is refused for exceeding it.
+ *
+ *  A tolerance rather than equality because the rows above the saved row are
+ *  re-measured repeatedly while a transcript settles, and every one of those
+ *  re-measurements nudges the saved row's position. The regression covering
+ *  this drives that directly, stepping a row's padding in 12px increments for
+ *  as long as it runs, with the list's size cache trailing each step by one
+ *  ResizeObserver delivery - so two consecutive settles can read positions a
+ *  few pixels apart with nothing wrong. Strict equality would hold only when
+ *  two settles happened to catch the same step: a coin flip rather than
+ *  convergence, and it would equally accept a premature landing whenever two
+ *  settles matched inside the half-measured window.
+ *
+ *  The error it has to catch is three orders larger: a restore that accepted
+ *  while the transcript was half measured put the saved row at 4430 where a
+ *  settled one puts it at ~10250, a 5,820px miss. So this sits far above a few
+ *  pixels of re-measurement and far below that gap. Acceptance itself still
+ *  uses `CHAT_TIMELINE_NAVIGATION_LANDING_EPSILON_PX`; this only decides
+ *  whether the position is still moving. If the measurement above changes,
+ *  this comment needs updating with the number. */
+const CHAT_TIMELINE_RESTORE_POSITION_HELD_EPSILON_PX = 64;
 
 /** The controller's own follow-vs-free scroll state - a pure mirror of
  *  LegendList's strict `isAtEnd`, never an independent source of truth. */
@@ -462,7 +498,10 @@ interface FreeRestoreGeometry {
   readonly scrollTop: number | null;
   readonly scrollHeight: number | null;
   readonly clientHeight: number | null;
-  readonly rowPosition: number | null;
+  /** Null when there is no list or no target row to read. Undefined when
+   *  the list has one but the layout pass has not laid it out, which
+   *  `positionAtIndex` answers with no position rather than a number. */
+  readonly rowPosition: number | null | undefined;
 }
 
 /**
@@ -528,27 +567,36 @@ interface IssuedFreeRestoreTarget {
   readonly geometry: FreeRestoreGeometry;
 }
 
-/** Fixup (atomic-reader-supersession): a past-target landing is only
- *  trustworthy as reader motion if nothing that could have moved the
- *  viewport out from under the restore happened in between - append,
- *  in-place growth, or a reorder all drive LegendList's own static
- *  `maintainScrollAtEnd` regardless of reader input. Require row
- *  identity/order, scroll height, viewport height, and the target row's own
- *  position to still match what was issued before trusting the raw
- *  scrollTop comparison. */
+/** A past-target landing is only trustworthy as reader motion if nothing
+ * that could have moved the viewport out from under the restore happened in
+ * between - append, in-place growth, or a reorder all drive LegendList's
+ * own static `maintainScrollAtEnd` regardless of reader input. Require row
+ * identity/order, scroll height, viewport height, and the target row's own
+ * position to still match what was issued before trusting the raw scrollTop
+ * comparison.
+ *
+ *  The issued position is narrowed to a number rather than tested against
+ *  `null`, as `isStillSettling` narrows the same withheld reading: the list
+ *  gives no position for a row it has not laid out, and two withheld
+ *  readings are equal to each other, so comparing them would report the
+ *  position as unmoved on no evidence at all. The live position needs no
+ *  test of its own - it is compared for equality against a number, which a
+ *  withheld reading cannot satisfy. */
 function isDemonstrablyPastIssuedFreeRestoreTarget(
   issued: IssuedFreeRestoreTarget,
   liveRows: ReadonlyArray<TranscriptListRow>,
   live: FreeRestoreGeometry,
 ): boolean {
+  const issuedRowPosition = issued.geometry.rowPosition;
   const geometryAndContentUnchanged =
     liveRows === issued.rows &&
     issued.geometry.scrollHeight !== null &&
     live.scrollHeight === issued.geometry.scrollHeight &&
     issued.geometry.clientHeight !== null &&
     live.clientHeight === issued.geometry.clientHeight &&
-    issued.geometry.rowPosition !== null &&
-    live.rowPosition === issued.geometry.rowPosition;
+    typeof issuedRowPosition === "number" &&
+    Number.isFinite(issuedRowPosition) &&
+    live.rowPosition === issuedRowPosition;
   return (
     geometryAndContentUnchanged &&
     issued.targetScrollTop !== null &&
@@ -863,7 +911,7 @@ function scheduleChatTimelineDoubleRaf(callback: () => void): () => void {
 }
 
 /**
- * Ticket 18: waits for LegendList's OWN `scrollToIndex`/`scrollToOffset`
+ * Waits for LegendList's OWN `scrollToIndex`/`scrollToOffset`
  * Promise to resolve - its target-aware finish (`finishScrollTo` in the
  * vendored source only resolves once the library itself considers that
  * specific scroll done), not any `scrollend` DOM event/timeout race
@@ -874,14 +922,14 @@ function scheduleChatTimelineDoubleRaf(callback: () => void): () => void {
  * reissue creates a NEW promise each attempt, and this must await THAT one,
  * not a stale earlier one.
  *
- * Review fix round 1 (finding: watchdog-as-false-early-settle): the fallback
+ * The watchdog must never become a false early settle, so the fallback
  * timer routes through the SAME `settleAfterQuietWindow` the promise path
  * uses - never settles "raw".
  *
- * Review fix round 2 (source-proven residual: no finite `timeoutMs` can be
+ * No finite `timeoutMs` can be
  * PROVEN to exceed the library's full contract window with certainty - see
  * `CHAT_TIMELINE_ANCHOR_SCROLL_PROMISE_TIMEOUT_MS`'s own doc comment for the
- * two sequential library windows this is trying to clear). `onSettle` now
+ * two sequential library windows this is trying to clear. `onSettle` now
  * receives `timedOut` - `false` when the library's own promise genuinely
  * resolved (or - defensively, it never actually rejects today - if it somehow
  * rejected), `true` only when the local fallback timer fired first. The
@@ -926,7 +974,7 @@ function awaitChatTimelineScrollPromiseSettle(
 }
 
 /**
- * Ticket 10: a generic settle/re-issue pattern for validated explicit
+ * A generic settle/re-issue pattern for validated explicit
  * navigation (`navigateToMessage`/find/deep-link, `scrollToEnd`, restoration
  * convergence). An ANIMATED intent targets ESTIMATED geometry; the installed
  * LegendList 3.2.0 has no mid-flight retargeting as real measurements replace
@@ -949,11 +997,29 @@ function awaitChatTimelineScrollPromiseSettle(
  * once every retry is exhausted and the landing is still off, or
  * `shouldYieldToReader` fires (neither ever called if `isAborted` fires
  * first).
+ *
+ * `isStillSettling` separates "the target is not where it will end up yet"
+ * from "this landing missed". A caller whose target can MOVE under it while
+ * the list measures - the rows above a saved row resolving from estimates to
+ * real heights - would otherwise spend its whole budget on placements aimed at
+ * a coordinate that no longer existed, and then report the last one as the
+ * reader's arrival. When it answers true the same semantic target is re-issued
+ * and the loop re-settles WITHOUT consuming a retry, because those placements
+ * were not aimed badly. The budget still covers real undershoots, and the
+ * reader checks above still end the loop, so a caller that answers true
+ * forever is bounded by the reader rather than by the count: its own predicate
+ * has to be one that goes false once the target stops moving.
+ *
+ * A caller that passes `false` keeps exactly the behavior it had before this
+ * check existed: its landing is judged on the first settle. That says nothing
+ * about whether its own target can move - only that it does not defer
+ * acceptance when it does.
  */
 function settleChatTimelineNavigation(input: {
   readonly awaitSettle: (onSettle: () => void) => () => void;
   readonly isAborted: () => boolean;
   readonly shouldYieldToReader: () => boolean;
+  readonly isStillSettling: () => boolean;
   readonly validate: () => boolean;
   readonly reissue: () => void;
   readonly onSettledValid: () => void;
@@ -972,6 +1038,14 @@ function settleChatTimelineNavigation(input: {
       }
       if (input.shouldYieldToReader()) {
         input.onSettledInvalid();
+        return;
+      }
+      // Deliberately below `shouldYieldToReader`: a real gesture outranks a
+      // target that is still moving, or a caller waiting for its own geometry
+      // to settle would keep re-issuing over a reader who has taken over.
+      if (input.isStillSettling()) {
+        input.reissue();
+        attempt(retriesLeft);
         return;
       }
       if (input.validate()) {
@@ -993,20 +1067,41 @@ function settleChatTimelineNavigation(input: {
   };
 }
 
+/** Which operation owns the active navigation settle loop, and how to end it.
+ *
+ *  The owner is carried with the cleanup rather than inferred, because the two
+ *  readers of this ref need different answers. A supersede ends whatever is
+ *  registered and does not care what it was. The hide-time cancellation does:
+ *  a restore has nothing left to converge on once the tile is concealed, while
+ *  a cross-tile scroll request is the newer intent the show branch re-issues
+ *  and must not report cancelled.
+ *
+ *  Whether that request is PENDING answers neither question. A request whose
+ *  row is not in the rendered index yet is pending with no loop of its own -
+ *  `landScrollRequestRow` returns before it registers anything - so a restore
+ *  stays the owner, and a hide that read pending-ness would leave it running.
+ *
+ *  Only `"request"` is tested; `"restore"` and `"navigation"` are kept apart so
+ *  each registration states what it is, not what it is not. */
+interface ActiveNavigationSettleCleanup {
+  readonly owner: "restore" | "request" | "navigation";
+  readonly cancel: () => void;
+}
+
 /**
  * Virtualized chat transcript. The full derived row history is handed to
  * `ChatTimeline` (LegendList), which windows the mounted DOM to the viewport.
  * Scroll ownership is a pure mirror of LegendList's own strict `isAtEnd`
  * (`following-end` / `free-scrolling` - behavior contract: "one edge, one
  * rule"). This component also owns the composer/queued-surface overlay
- * inset math (decision #13).
+ * inset math.
  */
 export function ChatMessages(props: ChatMessagesProps) {
-  // Ticket 15 (decision #29): one identity built once per mount, threaded to
+  // One identity built once per mount, threaded to
   // every registry in the dual-key restoration family - the tab instanceId
-  // stays primary (unchanged from ticket 5); `epicId`/`taskId` (chatId) are
+  // stays primary; `epicId`/`taskId` (chatId) are
   // the durable fallback. Stable for the component's whole lifetime (a chat
-  // tile fully remounts on any real identity change - decision #17), so a
+  // tile fully remounts on any real identity change), so a
   // `useState` initializer is enough; no need to react to prop changes.
   const [identity] = useState<ChatTabPersistenceIdentity>(() => ({
     tileInstanceId: props.instanceId,
@@ -1025,12 +1120,12 @@ export function ChatMessages(props: ChatMessagesProps) {
         : { chatId: props.taskId, hostId: props.hostId },
     [props.hostId, props.taskId],
   );
-  // Ticket 15 review round 3: opening a chat clears its own tombstone (a
+  // Opening a chat clears its own tombstone (a
   // prior deletion is over; this is the SAME chatId only if the host has
   // genuinely recreated it, which mints a fresh chatId in practice - this
   // clear is a no-op then, but cheap and correct either way). An effect,
   // not inline in the identity's own useState initializer above - no store
-  // writes during render (round-3 finding: render-phase purity).
+  // writes during render (render-phase purity).
   //
   // Also clears the EPIC-level tombstone: `handleEpicAccessLoss` tombstones
   // by epic PREFIX (not an exact chat key - see chat-tab-persistence-
@@ -1042,14 +1137,14 @@ export function ChatMessages(props: ChatMessagesProps) {
     clearEpicPrefixTombstone(identity.epicId);
     clearReadingPositionTombstones(readingPositionIdentityForChat(identity));
   }, [identity]);
-  // Ticket 5: registry-backed, keyed by tile instance id, so expanded A2A
+  // Registry-backed, keyed by tile instance id, so expanded A2A
   // cards survive a remount of this SAME instance - retention-cap or top-level
   // eviction, or a hosted-eligibility flip; no longer an inner tab switch
-  // (decision #17 was reversed by pane chat retention) - and are evicted when
+  // (pane chat retention) - and are evicted when
   // the tab permanently closes (canvas store's tile-removal subscriber), never
   // on a mere remount. A reopen is a new instance, not a revival of this one.
   //
-  // Ticket 15 review round 3 (mandated simplification): no longer commits
+  // No longer commits
   // to durable on its OWN unmount - the canvas close sweep's promotion
   // choke point (store.ts) now owns that, reading this store directly
   // before eviction. That single point covers both an active view's close
@@ -1073,7 +1168,7 @@ interface ChatMessagesInnerProps extends ChatMessagesProps {
 }
 
 /**
- * Ticket 15 review (live pass S5, confirmed defect): non-null only when the
+ * Non-null only when the
  * mount-time restore had to clamp away from the true saved anchor - i.e.
  * `restoreChatTabState` silently substituted a neighbor because `messages`
  * was still mid-hydration, not because the anchor is genuinely gone. The
@@ -2112,9 +2207,9 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     [splitLongTurns, transcriptWindow, messages],
   );
 
-  // Restore the persisted reading position once, on mount (ticket 15: tries
-  // the tab-key entry first, then the durable chat-key entry - RESTORE-FIRST,
-  // decision #29). The identity is stable for the mount, so re-reading per
+  // Restore the persisted reading position once, on mount (tries
+  // the tab-key entry first, then the durable chat-key entry - RESTORE-FIRST).
+  // The identity is stable for the mount, so re-reading per
   // render would only repeat an O(n) row scan whose result the
   // initializers below already captured.
   const [restoredTabState] = useState<SavedChatTabScrollState>(() =>
@@ -2123,7 +2218,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       listRows.map((row) => row.key),
     ),
   );
-  // Ticket 5: a restored row becomes LegendList's own `initialScrollIndex`
+  // A restored row becomes LegendList's own `initialScrollIndex`
   // measurement bootstrap - the same self-correcting path
   // `initialScrollAtEnd` uses, carrying the saved pixel offset. `null` for a
   // fresh open or a saved bottom-following view (LegendList's own
@@ -2267,7 +2362,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   // hydration, and a value dependency would re-register the find adapter each
   // time.
   const transcriptWindowRef = useRef<TranscriptWindow | null>(transcriptWindow);
-  // Ticket 5 / decision #18: LegendList's measured header size (the main
+  // LegendList's measured header size (the main
   // component of getTopOffsetAdjustment). Capture folds this into the saved
   // viewOffset so initialScrollIndex restore lands on the same pixel - bare
   // positionAtIndex - scroll under-counts by exactly this pad.
@@ -2288,7 +2383,8 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   const blockReveal = useChatNavigationBlockReveal({
     getScroller,
   });
-  const activeNavigationSettleCleanupRef = useRef<(() => void) | null>(null);
+  const activeNavigationSettleCleanupRef =
+    useRef<ActiveNavigationSettleCleanup | null>(null);
   // The cleanup above stays installed after its loop finishes, so it cannot
   // say whether a restore or navigation still has a command the list holds.
   // This does. A loop claims it once it has issued its first command. However
@@ -2333,7 +2429,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     // Stop that placeholder restore before its valid/exhausted callbacks
     // normalize durable state. The raw hydration coordinate stays armed
     // unless the frozen issued target proves the reader moved past it.
-    activeNavigationSettleCleanupRef.current?.();
+    activeNavigationSettleCleanupRef.current?.cancel();
     activeNavigationSettleCleanupRef.current = null;
     resolvePendingRestoreEndLandingRef.current = null;
     pendingMeasuredFreeRestoreRef.current = null;
@@ -2396,7 +2492,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       if (navigationHighlightTimeoutRef.current !== null) {
         window.clearTimeout(navigationHighlightTimeoutRef.current);
       }
-      activeNavigationSettleCleanupRef.current?.();
+      activeNavigationSettleCleanupRef.current?.cancel();
       activeAnimatedImperativeScrollGenerationRef.current = null;
     },
     [],
@@ -2454,16 +2550,16 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     (): boolean => isTranscriptWindowRecovering(transcriptWindowRef.current),
     [],
   );
-  // Fixup (fix-top-level-task-tab-scroll-restoration): continuously mirrors
-  // the last KNOWN-COHERENT scroll snapshot while the DOM is genuinely
-  // measurable (kept fresh by the rAF-throttled viewport update below, same
-  // cadence as `scrolledActiveUserMessageIdRef`). A top-level pane hide
-  // zeroes this tile's scroll container's measured geometry in the SAME
-  // commit as the `visible` prop flipping false - a hide-time read would
-  // already observe zeroed geometry, so the visibility-handoff effect
-  // publishes THIS ref's last-good value instead of reading live DOM at
-  // that moment. See `hooks/scroll/use-scroll-restoration.ts`'s doc comment
-  // for the same hazard already solved this way for other tile kinds.
+  // Continuously mirrors the last KNOWN-COHERENT scroll snapshot while the
+  // DOM is genuinely measurable (kept fresh by the rAF-throttled viewport
+  // update below, same cadence as `scrolledActiveUserMessageIdRef`). A
+  // top-level pane hide zeroes this tile's scroll container's measured
+  // geometry in the SAME commit as the `visible` prop flipping false - a
+  // hide-time read would already observe zeroed geometry, so the
+  // visibility-handoff effect publishes THIS ref's last-good value instead
+  // of reading live DOM at that moment. See
+  // `hooks/scroll/use-scroll-restoration.ts`'s doc comment for the same
+  // hazard already solved this way for other tile kinds.
   const lastVisibleScrollSnapshotRef = useRef<Omit<
     SaveChatTabStateInput,
     "identity"
@@ -2488,7 +2584,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   const [hasUnseenTurnCompletion, setHasUnseenTurnCompletion] = useState(false);
   // Ref-only (no React state): the minimap derives in-view highlighting from
   // list state, not a stored active id, so nothing renders off this value
-  // anymore - only the ticket-5 unmount-save effect reads it imperatively. A
+  // anymore - only the unmount-save effect reads it imperatively. A
   // state setter here would just re-render the whole component on every
   // scroll tick for no observable effect.
   const setScrolledActiveUserMessageIdIfChanged = useCallback(
@@ -2499,7 +2595,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   );
 
   // `releasePersistenceGate` decouples "publish following-end" from "the
-  // saved coordinate is resolved" (fixup: hydration-transaction). A temporary
+  // saved coordinate is resolved". A temporary
   // landing at the strict edge while `pendingHydrationRestoreAnchorIdRef` is
   // still unresolved is not reader intent and must not release the
   // persistence gate - every caller that already represents a real gesture
@@ -2550,7 +2646,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     setTimelineMode("following-end", true);
   }, [resolveSuppressedEndLanding, setTimelineMode]);
 
-  // Decision #6/#5/#7: reader input freezes an in-flight native smooth-scroll
+  // Reader input freezes an in-flight native smooth-scroll
   // and re-syncs ownership against the actual physical position. Transcript
   // pointerdown is a preflight because a disclosure click can resize content
   // without publishing a reading position; wheel/touch/keyboard and scrollbar
@@ -2559,7 +2655,8 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     ({
       freezeInFlightScroll,
       publishesReaderPosition,
-    }: ChatTimelineReaderGestureIntent): void => {
+      viewportCanAnswer,
+    }: ChatTimelineReaderGesture): void => {
       clearNavigationHighlight();
       const hadActiveAnimatedImperativeScroll =
         activeAnimatedImperativeScrollGenerationRef.current !== null;
@@ -2574,14 +2671,30 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       // atomically. Explicit navigation retires that target when its own loop
       // replaces the restore's.
       if (publishesReaderPosition) {
-        readerPositionGenerationRef.current += 1;
-        pendingMeasuredFreeRestoreRef.current = null;
-        pendingHydrationRestoreAnchorIdRef.current = null;
-        forgetPendingHydrationRestore(identity);
-        restorePersistencePendingRef.current = false;
+        // Only a gesture the viewport could answer moved the reader. One it
+        // could not - a wheel up while a fresh mount still sits at offset 0 -
+        // left them exactly where they already were, which is nowhere they
+        // chose: a restore that has not placed them yet still owns the
+        // landing they asked for by reopening, and its measured loop is the
+        // only thing that converges on it, `initialScrollIndex` being an
+        // estimate-driven bootstrap that clamps to an estimated end.
+        if (viewportCanAnswer) {
+          readerPositionGenerationRef.current += 1;
+          pendingMeasuredFreeRestoreRef.current = null;
+          pendingHydrationRestoreAnchorIdRef.current = null;
+          forgetPendingHydrationRestore(identity);
+          restorePersistencePendingRef.current = false;
+        }
         // The restore or navigation this ends may have a command the list
         // still holds until its layout settles; it would land after the
-        // reader's own scroll and undo it.
+        // reader's own scroll and undo it. A gesture the viewport could not
+        // answer ends one too: a command held past a loop that has given up
+        // is re-issued by nothing and lands whenever the layout settles,
+        // while a loop still converging issues its own next command and
+        // loses nothing to this. It stays after the retirement above, whose
+        // generation bump must land before the cancel settles the command's
+        // promise - reversed, that settle would re-issue into a loop the bump
+        // is about to abort.
         if (inFlightNavigationSettleRef.current !== null) {
           chatTimelineRef.current?.cancelPendingScroll();
         }
@@ -2613,7 +2726,9 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       if (followLatch) {
         followLatch.noteReaderGesture(intent);
       } else {
-        handleTimelineReaderGesture(intent);
+        // No latch, so nothing has read the geometry: the gesture is taken to
+        // have moved the reader, as it was before the latch said otherwise.
+        handleTimelineReaderGesture({ ...intent, viewportCanAnswer: true });
       }
     },
     [handleTimelineReaderGesture],
@@ -2651,15 +2766,15 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   }, [setTimelineMode]);
 
   // scrollToEnd reset (pill click / any future explicit "go live" action).
-  // Ticket 10: this is an explicit user action - the `setTimelineMode`
+  // This is an explicit user action - the `setTimelineMode`
   // call below is decision-sanctioned and unconditional, same as before;
   // the settle/re-issue only corrects the LANDING it produces, never
   // re-decides whether the click counts as "following". Pill action is an
-  // explicit supersession (fixup: hydration-transaction), so the pending
+  // explicit supersession, so the pending
   // hydration id is cleared above and the gate always releases.
   const scrollToEnd = useCallback(
     (animated: boolean): void => {
-      activeNavigationSettleCleanupRef.current?.();
+      activeNavigationSettleCleanupRef.current?.cancel();
       activeNavigationSettleCleanupRef.current = null;
       clearNavigationHighlight();
       pendingHydrationRestoreAnchorIdRef.current = null;
@@ -2687,6 +2802,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
         // its own - a real gesture already bumps the generation and is
         // caught by `isAborted` above.
         shouldYieldToReader: () => false,
+        isStillSettling: () => false,
         // While the reader still follows, a landing short of the end is a
         // tail that outgrew it - a streaming reply can grow past every retry
         // before its `scrollend` - and the latch's own corrections chase it.
@@ -2706,7 +2822,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
           // growing short of the landing is reached by maintenance instead.
           followLatchRef.current?.followEndIfPermitted();
         },
-        // Ticket 10: free-scrolling with the pill visible beats silently
+        // Free-scrolling with the pill visible beats silently
         // claiming ownership from an invalid landing.
         onSettledInvalid: () => {
           releaseSettle();
@@ -2717,9 +2833,12 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
         onAborted: releaseSettle,
         maxRetries: CHAT_TIMELINE_NAVIGATION_MAX_RETRIES,
       });
-      activeNavigationSettleCleanupRef.current = (): void => {
-        cancelSettle();
-        releaseSettle();
+      activeNavigationSettleCleanupRef.current = {
+        owner: "navigation",
+        cancel: (): void => {
+          cancelSettle();
+          releaseSettle();
+        },
       };
     },
     [
@@ -2748,17 +2867,17 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       if (isFollowing) {
         setFollowingEndFromTimelinePosition();
       } else {
-        // Fixup (remove-passive-supersession): a following-to-free
-        // transition is NOT necessarily reader intent - it is also the
-        // expected geometry of the hydration catch-up's OWN programmatic
-        // scroll away from a temporary tail landing, reported via the
-        // browser `scroll` event BEFORE that operation's bounded settle has
-        // validated (`restorePersistedTimelineLocation`). Clearing the
-        // pending coordinate here would resolve the transaction before
-        // validation and defeat the whole point of routing hydration
-        // catch-up through a validated retry. Bare edge geometry must never
-        // supersede - only a validated landing or a recognized reader/
-        // explicit-navigation path (their own direct clears) may.
+        // A following-to-free transition is NOT necessarily reader intent -
+        // it is also the expected geometry of the hydration catch-up's OWN
+        // programmatic scroll away from a temporary tail landing, reported
+        // via the browser `scroll` event BEFORE that operation's bounded
+        // settle has validated (`restorePersistedTimelineLocation`).
+        // Clearing the pending coordinate here would resolve the
+        // transaction before validation and defeat the whole point of
+        // routing hydration catch-up through a validated retry. Bare edge
+        // geometry must never supersede - only a validated landing or a
+        // recognized reader/explicit-navigation path (their own direct
+        // clears) may.
         setTimelineMode("free-scrolling", true);
         setShowScrollToBottom(true);
       }
@@ -2794,25 +2913,30 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       if (!timeline || !scroller) return;
       event.preventDefault();
       event.stopPropagation();
+      const towardEnd =
+        scrollAction === "page-down" ||
+        scrollAction === "line-down" ||
+        scrollAction === "bottom";
       // Freeze an owned native smooth-scroll at its current pixel first, then
-      // apply this key's deterministic step as the replacement movement. The
-      // resulting native `scroll` event is what determines follow, via
-      // the latch's geometry observer - no separate reattach check needed here.
+      // apply this key's deterministic step as the replacement movement. A
+      // step that moves the view decides follow at its native `scroll` event,
+      // via the latch's geometry observer.
       cancelTimelineLiveFollowForUserNavigation({
-        direction:
-          scrollAction === "page-down" ||
-          scrollAction === "line-down" ||
-          scrollAction === "bottom"
-            ? "toward-end"
-            : "away-from-end",
+        direction: towardEnd ? "toward-end" : "away-from-end",
         freezeInFlightScroll: true,
         publishesReaderPosition: true,
       });
+      const scrollTopBefore = scroller.scrollTop;
       applyChatKeyboardScroll(
         scroller,
         scrollAction,
         chatTimelineEndScrollTop(timeline, scroller),
       );
+      // A step toward the end that moved nothing sends no scroll event: at
+      // the end, as a wheel down there, it is the reader asking for the end.
+      if (towardEnd && scroller.scrollTop === scrollTopBefore) {
+        followLatchRef.current?.followEndIfPermitted();
+      }
     },
     [cancelTimelineLiveFollowForUserNavigation],
   );
@@ -2889,13 +3013,13 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     backgroundToolBlockIdsRef.current = backgroundToolBlockIds;
   }, [backgroundToolBlockIds]);
 
-  // Ticket 5: tool/subagent open state now survives a chat tile's remount
+  // Tool/subagent open state now survives a chat tile's remount
   // (module-scope stores scoped by `instanceId` - see `tool-open-store.ts` /
   // `subagent-open-store.ts`), so mount no longer resets it. A permanently
   // closed tab's entries are reclaimed by the canvas store's tile-removal
   // subscriber (`stores/epics/canvas/store.ts`) instead.
 
-  // Ticket 20: the coherent-snapshot capture used by BOTH this component's
+  // The coherent-snapshot capture used by BOTH this component's
   // own unmount-cleanup save below AND the pre-structural-mutation viewport
   // handoff (`chat-tab-viewport-handoff.ts`) a canvas-store action creator
   // flushes just before a drag/split-wrap/dissolve/tear-off commits a move
@@ -2904,7 +3028,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   // `restoreChatTabState` render-time state initializer BEFORE this
   // component's own unmount cleanup ever runs - render happens before ANY
   // commit-phase effect, including a removed fiber's layout-effect cleanup
-  // (painted-chat lifecycle audit finding 1: a disposable probe recorded
+  // (a disposable probe recorded
   // `initialize:stale` then `cleanup:fresh`). One function backs both call
   // sites so the coherent-snapshot invariant below can never drift into two
   // independently maintained copies.
@@ -2921,7 +3045,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       timelineScrollModeRef.current,
     );
     const list = chatTimelineRef.current;
-    // Ticket 15 review (live pass S5 round 3, confirmed regression):
+    // Confirmed regression:
     // `scrolledActiveUserMessageIdRef` is an rAF-throttled mirror
     // (`scheduleActiveViewportUpdate`) of "which row is at the reading
     // line" - it can lag a scroll that happened in the same tick as this
@@ -3019,7 +3143,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   // viewport even if unmount ordering changes. The unmount capture remains
   // authoritative and overwrites it whenever a later position exists.
   //
-  // Liveness-guarded (ticket 5; ticket-15 review round F1): a permanent tab
+  // Liveness-guarded: a permanent tab
   // close removes the tile from the canvas FIRST, synchronously - which
   // fires the canvas store's tile-removal subscriber that evicts the
   // tab-key entry - before this unmount cleanup runs, so
@@ -3051,15 +3175,15 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
         }
         return;
       }
-      // Fixup (hidden-close-and-rapid-capture, P1): a still-mounted tile
-      // whose top-level pane is currently hidden/zero-sized (concealed via
-      // the geometry coordinator, not unmounted) reports zeroed geometry
-      // here just like it would to any other live read - sampling it would
-      // overwrite the already-published `lastVisibleScrollSnapshotRef`
-      // value (published by the visibility-handoff effect on the earlier
-      // hide transition) with row-zero/clamped garbage. Fall back to that
-      // already-known-good mirror instead of a live read whenever the
-      // surface cannot be measured right now.
+      // A still-mounted tile whose top-level pane is currently
+      // hidden/zero-sized (concealed via the geometry coordinator, not
+      // unmounted) reports zeroed geometry here just like it would to any
+      // other live read - sampling it would overwrite the already-published
+      // `lastVisibleScrollSnapshotRef` value (published by the
+      // visibility-handoff effect on the earlier hide transition) with
+      // row-zero/clamped garbage. Fall back to that already-known-good
+      // mirror instead of a live read whenever the surface cannot be
+      // measured right now.
       const list = chatTimelineRef.current;
       const scrollableNode =
         list === null ? null : getScrollableNodeOrNull(list);
@@ -3120,10 +3244,14 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
 
   // Quote-to-composer: track selections inside the transcript wrapper below and
   // surface the floating quote button. The hook attaches no listeners while the
-  // setting is off, so a disabled affordance costs nothing.
+  // setting is off, so a disabled affordance costs nothing. Where a quote goes
+  // is the surface's (`QuoteSinkContext`): this chat's draft unless a bot's
+  // view says otherwise, and nowhere - no quote offered - in a view without a
+  // box.
   const quoteReplyEnabled = useSettingsStore(
     (state) => state.quoteReplyEnabled,
   );
+  const quoteSink = use(QuoteSinkContext);
   const minimapSide = useArrangementValue("minimapSide");
   const isMobileViewport = useIsMobileViewport();
   // This tile's `minimap` region, registered here because this is the
@@ -3144,7 +3272,8 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   const minimapShown = useRegionShown("minimap") || minimapGhost;
   // A bot channel draws no rail (`shouldMountChatTurnMinimap`); the region
   // stays registered so the layout editor still lists it for agent chats.
-  const quoteEnabled = quoteReplyEnabled && visible && !systemOverlayActive;
+  const quoteEnabled =
+    quoteReplyEnabled && visible && !systemOverlayActive && quoteSink !== null;
   const quoteSelection = useQuoteSelection({
     containerRef: transcriptContainerRef,
     enabled: quoteEnabled,
@@ -3156,29 +3285,30 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     containerRef: transcriptContainerRef,
     enabled: quoteEnabled,
     onQuote: (snapshot) => {
-      quoteSnapshotIntoDraft(taskId, snapshot);
+      if (quoteSink === null) return;
+      quoteSink(taskId, snapshot);
       subagentDrillIn.close();
       quoteSelection.dismiss();
     },
   });
 
-  // Ticket 5: registry-backed, keyed by tile instance id, so expanded
+  // Registry-backed, keyed by tile instance id, so expanded
   // activity groups survive a remount of this SAME instance - retention-cap or
   // top-level eviction, or a hosted-eligibility flip; no longer an inner tab
-  // switch (decision #17 was reversed by pane chat retention) - and are evicted
+  // switch (pane chat retention) - and are evicted
   // when the tab permanently closes (canvas store's tile-removal subscriber),
   // never on a mere remount. A reopen is a new instance, not a revival.
   //
-  // Ticket 15 review round 3: no longer commits to durable on its own
+  // No longer commits to durable on its own
   // unmount - see the matching comment on `a2aOpenStore` above.
   const [activityGroupOpenStore] = useState(() =>
     getOrCreateActivityGroupOpenStore(identity),
   );
 
-  // Ticket 15 (decision #29): dual-keys the global tool/subagent open
+  // Dual-keys the global tool/subagent open
   // stores for this tab - seeds this tab's expanded cards from the durable
   // chat-key snapshot on a genuinely fresh (never-initialized) scope only.
-  // Round 3: the durable commit moved to the canvas sweep's promotion
+  // The durable commit moved to the canvas sweep's promotion
   // choke point - see the hook's own doc comment.
   useChatScopedOpenStoreDualKeySeed(
     useToolOpenStore,
@@ -3193,14 +3323,14 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     subagentOpenInitializedScopes,
   );
 
-  // Recompute the ticket-5 free-scrolling save anchor (nearest human user
+  // Recompute the free-scrolling save anchor (nearest human user
   // message to the reading line) from LegendList's own measured positions -
   // no DOM rect probing - coalesced to one read per frame.
   const scheduleActiveViewportUpdate = useAnimationFrameThrottle(
     useCallback(
       (atBottom: boolean): void => {
         if (atBottom) {
-          // P4: same zero-human-row fallback as `viewportActiveUserMessageId`
+          // Same zero-human-row fallback as `viewportActiveUserMessageId`
           // (see its own doc comment) - an A2A-only transcript has no
           // candidate for the human-only gate, so at the tail the natural
           // role-agnostic anchor is simply the last row, any role.
@@ -3214,8 +3344,8 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
         const rawState = chatTimelineRef.current?.getState();
         if (rawState === undefined) return;
         // list.getState() does not expose headerSize/topOffsetAdjustment -
-        // fold in the live measured value (decision #18), same as the
-        // ticket-5 save path's measurementSource below.
+        // fold in the live measured value, same as the
+        // save path's measurementSource below.
         const state = {
           ...rawState,
           topOffsetAdjustment: listTopOffsetAdjustmentRef.current,
@@ -3233,12 +3363,12 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     ),
   );
 
-  // Fixup (hidden-close-and-rapid-capture, P1): must run SYNCHRONOUSLY inside
-  // the scroll event handler, never rAF-throttled. A reader who scrolls then
-  // immediately switches away hides the pane in the SAME tick the scroll
-  // event was dispatched - a throttled capture scheduled for the next frame
-  // never runs before the hide-time effect below reads the mirror, which
-  // would publish the previous (stale) position instead of the new one.
+  // Must run SYNCHRONOUSLY inside the scroll event handler, never
+  // rAF-throttled. A reader who scrolls then immediately switches away
+  // hides the pane in the SAME tick the scroll event was dispatched - a
+  // throttled capture scheduled for the next frame never runs before the
+  // hide-time effect below reads the mirror, which would publish the
+  // previous (stale) position instead of the new one.
   const captureLastVisibleScrollSnapshot = useCallback((): void => {
     const list = chatTimelineRef.current;
     // A concealed container reports a zero-height box; ignore so a
@@ -3254,14 +3384,16 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   }, [captureLiveChatTabScrollSnapshot]);
 
   const handleScroll = useCallback((): void => {
-    // O2 (ticket 16 listener consolidation): drives the minimap's in-view highlighting
+    // Listener consolidation: drives the minimap's in-view highlighting
     // off THIS existing LegendList scroll callback instead of a second
     // scroll-listener lifecycle the minimap used to attach itself
     // (rAF-polling attach + native listener + detach). Called unconditionally,
     // ahead of the `visible` early-return below - the minimap's own previous
     // native listener never gated on this component's `visible` prop either,
     // and there is no reason a background/not-yet-selected tile's scroll
-    // (e.g. a still-settling restore) should leave its in-view dots stale.
+    // (e.g. a restore still settling on a tile never selected yet - a tile
+    // hidden AFTER being visible has no settling restore, since the hide ends
+    // it) should leave its in-view dots stale.
     minimapInViewRefreshRef.current();
     if (!visible) return;
     const scrollNode = chatTimelineRef.current?.getScrollableNode();
@@ -3291,7 +3423,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   // strict-end report. Bare scrollTop direction is never used as intent
   // because MVCP and layout compensation produce the same browser signal.
   //
-  // Ticket 10: settle/re-issue against the CURRENT geometry - an ANIMATED
+  // Settle/re-issue against the CURRENT geometry - an ANIMATED
   // long jump targets ESTIMATED heights; no mid-flight retargeting in the
   // installed LegendList.
   //
@@ -3309,7 +3441,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       location: ChatTimelineNavigationLocation,
       afterSettle: (() => void) | null,
     ): void => {
-      activeNavigationSettleCleanupRef.current?.();
+      activeNavigationSettleCleanupRef.current?.cancel();
       const generationAtIssue = anchorUserScrollGenerationRef.current;
       const list = chatTimelineRef.current;
       if (!list) return;
@@ -3343,6 +3475,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
         // No reader-departure detection here - a real gesture already bumps
         // the generation and is caught above.
         shouldYieldToReader: () => false,
+        isStillSettling: () => false,
         validate: () =>
           !lastSettleTimedOut &&
           chatTimelineNavigationSettledAtLocation(
@@ -3401,11 +3534,14 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       });
       // A cancelled navigation has no landing of its own to decide: it only
       // stops owning the view, which whatever cancelled it now decides.
-      activeNavigationSettleCleanupRef.current = (): void => {
-        cancelled = true;
-        cancelSettle();
-        releaseSettle();
-        followLatchRef.current?.cancelOwnedFreeNavigation();
+      activeNavigationSettleCleanupRef.current = {
+        owner: "navigation",
+        cancel: (): void => {
+          cancelled = true;
+          cancelSettle();
+          releaseSettle();
+          followLatchRef.current?.cancelOwnedFreeNavigation();
+        },
       };
     },
     [
@@ -3423,15 +3559,15 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     [issueFreeTimelineNavigation],
   );
 
-  // Ticket 20 (no-visible-traversal requirement): `animated` is an explicit
+  // No visible traversal is allowed: `animated` is an explicit
   // caller intent, not a hardcoded constant - minimap/deep-link navigation
   // (this function's other two callers below) are real (if programmatic)
-  // user-triggered jumps, animated by design (decision #21's "manual-
-  // navigation cancellation" framing already treats them as navigations the
+  // user-triggered jumps, animated by design (manual-navigation
+  // cancellation already treats them as navigations the
   // reader should perceive happening). Find does NOT go through this
   // function at all - `use-chat-find-controller.ts`'s own
   // `scrollToMessageForFind` independently builds its location with
-  // `animated: false` already, unchanged by this ticket. The late-hydration
+  // `animated: false` already. The late-hydration
   // catch-up effect below is different from either: it is a RESTORE landing
   // where the transcript simply grew to finally contain a position already
   // decided at mount, not a fresh navigation the reader initiated - it must
@@ -3444,8 +3580,8 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
    * reissues the same semantic target, bounded, if geometry moved underneath
    * it. A reader gesture bumps the shared generation and wins immediately.
    *
-   * `isAborted`/`onValidated`/`onExhausted` are caller-supplied (fixup:
-   * hydration-transaction) because the two callers below need different
+   * `isAborted`/`onValidated`/`onExhausted` are caller-supplied
+   * because the two callers below need different
    * failure policy: the reserve-convergence caller (below) accepts the
    * browser-clamped landing as its new fallback truth on exhaustion, while
    * the late-hydration catch-up caller must instead retain the original
@@ -3468,7 +3604,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       const initialIndex = rowIndexByKeyRef.current.get(messageId);
       if (!list || initialIndex === undefined) return false;
 
-      activeNavigationSettleCleanupRef.current?.();
+      activeNavigationSettleCleanupRef.current?.cancel();
       const generationAtIssue = readerPositionGenerationRef.current;
       const scrollNode = list.getScrollableNode();
       const targetIndex = (): number | null =>
@@ -3505,6 +3641,12 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
         () => pendingRestoreScrollPromise,
       );
       let lastRestoreSettleTimedOut = false;
+      // The saved row's own position as of the PREVIOUS settle, for the
+      // still-settling check below. A closure local, not a ref: it belongs to
+      // this one restore, and a newer restore or navigation gets a fresh one
+      // after superseding this loop through the cleanup above. `null` means no
+      // settle has read it yet.
+      let rowPositionAtPreviousSettle: number | null = null;
       const cancelSettle = settleChatTimelineNavigation({
         awaitSettle: (onSettle) =>
           awaitChatTimelineScrollPromiseSettle(
@@ -3515,21 +3657,76 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
             },
             CHAT_TIMELINE_ANCHOR_SCROLL_PROMISE_TIMEOUT_MS,
           ),
-        // Fixup (pointer-generation-order): the caller's own predicate must
-        // run FIRST. A scrollbar pointerdown bumps
-        // `readerPositionGenerationRef` and can go on to scroll past this
-        // restore's issued target to true bottom - with the generation check
-        // first, `||` short-circuits and the caller's atomic frozen-target
-        // predicate (which performs the pending-id/registry/gate clear as a
-        // side effect when it resolves) never runs at all, leaving all three
-        // pieces armed after a pointer-driven reach-the-edge. Callers whose
-        // own predicate never has a resolving side effect (`() => false`, the
-        // hydration-retry and visibility-replay callers) are unaffected by
-        // the reorder - `false || X` and `X || false` are equivalent there.
+        // The caller's own predicate must run FIRST. A scrollbar
+        // pointerdown bumps `readerPositionGenerationRef` and can go on to
+        // scroll past this restore's issued target to true bottom - with
+        // the generation check first, `||` short-circuits and the caller's
+        // atomic frozen-target predicate (which performs the
+        // pending-id/registry/gate clear as a side effect when it resolves)
+        // never runs at all, leaving all three pieces armed after a
+        // pointer-driven reach-the-edge. Callers whose own predicate never
+        // has a resolving side effect (`() => false`, the hydration-retry
+        // and visibility-replay callers) are unaffected by the reorder -
+        // `false || X` and `X || false` are equivalent there.
         isAborted: () =>
           isAborted() ||
           readerPositionGenerationRef.current !== generationAtIssue,
         shouldYieldToReader: () => false,
+        // The saved row's position is a sum over the rows ABOVE it, which
+        // resolve from estimates to real heights over several commits, so it
+        // keeps moving while the transcript measures - and the landing check
+        // compares it against a `scrollTop` those same estimates produced.
+        // Both sides then read one number and agree with each other wherever
+        // it happens to point: observed on CI accepting the saved row at 4430
+        // on a half-measured transcript that settled with the row at ~10250,
+        // leaving the reader a screenful away with the row never mounted and
+        // the restore reporting a valid landing. Require the position to have
+        // HELD STILL since the previous settle before the landing check is
+        // allowed to speak. Growth below the row - a streaming reply arriving
+        // under the reader - cannot move a row above it, so it never defers
+        // acceptance here.
+        isStillSettling: () => {
+          // A wait that EXPIRED never settled, so the position it would read
+          // says nothing about whether the target is still moving - the
+          // command behind it may not have run at all. An expiry is the
+          // abnormal case the retry budget already exists for: leave it to
+          // `validate`, which fails it, and to the budget, which bounds it.
+          if (lastRestoreSettleTimedOut) return false;
+          const index = targetIndex();
+          if (index === null) return false;
+          const livePosition = measureFreeRestoreGeometry(
+            list,
+            index,
+          ).rowPosition;
+          // The list withholds this reading for a row it has not measured, as
+          // `null` or as nothing at all - `expectedTimelineScrollTop` guards
+          // the same call the same way. An unknown reading says nothing about
+          // whether the target moved, and subtracting it yields `NaN`, which
+          // fails the comparison below and would be read as having HELD STILL:
+          // the restore would then accept an unmeasured row, the very landing
+          // this check exists to defer. Nor is it stored, or it would poison
+          // the next comparison too. `typeof` rather than a `null` test, so a
+          // withheld reading narrows out here instead of reaching the
+          // arithmetic below typed as a number it is not.
+          if (
+            typeof livePosition !== "number" ||
+            !Number.isFinite(livePosition)
+          ) {
+            return true;
+          }
+          const previousPosition = rowPositionAtPreviousSettle;
+          rowPositionAtPreviousSettle = livePosition;
+          if (previousPosition === null) {
+            // The first settle has nothing to compare against, so it cannot
+            // tell a landed restore from one whose target is still moving.
+            // Re-issue once and judge the position against this reading.
+            return true;
+          }
+          return (
+            Math.abs(livePosition - previousPosition) >
+            CHAT_TIMELINE_RESTORE_POSITION_HELD_EPSILON_PX
+          );
+        },
         validate: () => !lastRestoreSettleTimedOut && landedAtSavedLocation(),
         reissue: () => {
           const index = targetIndex();
@@ -3558,16 +3755,15 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
           } else {
             pendingMeasuredFreeRestoreRef.current = null;
           }
-          // Fixup (fix-top-level-task-tab-scroll-restoration, acceptance
-          // criterion 5): warm the visibility-handoff mirror IMMEDIATELY on
-          // every validated convergence (mount-time reserve, hydration
-          // catch-up, and the visibility-replay below all route through
-          // here) rather than waiting on the next native `scroll` event.
-          // Without this, a rapid hide landing between "restoration just
-          // validated" and "the next scroll-driven capture" would find the
-          // mirror still unwarmed and fall back to the last-persisted
-          // value - harmless (still never a jump to row 0), but not the
-          // freshest coherent snapshot the acceptance criterion asks for.
+          // Warm the visibility-handoff mirror IMMEDIATELY on every
+          // validated convergence (mount-time reserve, hydration catch-up,
+          // and the visibility-replay below all route through here) rather
+          // than waiting on the next native `scroll` event. Without this, a
+          // rapid hide landing between "restoration just validated" and
+          // "the next scroll-driven capture" would find the mirror still
+          // unwarmed and fall back to the last-persisted value - harmless
+          // (still never a jump to row 0), but not the freshest coherent
+          // snapshot the acceptance criterion asks for.
           const settledSnapshot = captureLiveChatTabScrollSnapshot();
           if (settledSnapshot !== null) {
             lastVisibleScrollSnapshotRef.current = settledSnapshot;
@@ -3580,9 +3776,12 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
         onAborted: releaseSettle,
         maxRetries: CHAT_TIMELINE_NAVIGATION_MAX_RETRIES,
       });
-      activeNavigationSettleCleanupRef.current = (): void => {
-        cancelSettle();
-        releaseSettle();
+      activeNavigationSettleCleanupRef.current = {
+        owner: "restore",
+        cancel: (): void => {
+          cancelSettle();
+          releaseSettle();
+        },
       };
       return true;
     },
@@ -3652,7 +3851,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       // Superseding an earlier landing of THIS request is a re-issue, not a
       // cancellation; any other active navigation is torn down as cancelled.
       reissuingScrollRequestIdRef.current = requestId;
-      activeNavigationSettleCleanupRef.current?.();
+      activeNavigationSettleCleanupRef.current?.cancel();
       reissuingScrollRequestIdRef.current = null;
       const generationAtIssue = anchorUserScrollGenerationRef.current;
       followLatchRef.current?.beginOwnedFreeNavigation();
@@ -3726,6 +3925,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
           return true;
         },
         shouldYieldToReader: () => false,
+        isStillSettling: () => false,
         validate: () => !lastSettleTimedOut && landedOnHydratedRow(),
         reissue: () => {
           const index = targetIndex();
@@ -3774,12 +3974,15 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       // from here instead - otherwise the request stays pending, a later
       // hidden→visible transition re-issues the stale landing over the tail,
       // and the tile keeps the target row's hydration hold until its TTL.
-      activeNavigationSettleCleanupRef.current = (): void => {
-        cancelLandingLoop();
-        finish();
-        if (reissuingScrollRequestIdRef.current !== requestId) {
-          settleScrollRequest(requestId, "cancelled");
-        }
+      activeNavigationSettleCleanupRef.current = {
+        owner: "request",
+        cancel: (): void => {
+          cancelLandingLoop();
+          finish();
+          if (reissuingScrollRequestIdRef.current !== requestId) {
+            settleScrollRequest(requestId, "cancelled");
+          }
+        },
       };
       return true;
     },
@@ -3799,13 +4002,12 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     if (pending === null) return;
     if (timelineScrollModeRef.current !== "free-scrolling") return;
 
-    // Fixup (atomic-reader-supersession): freeze the target and the content/
-    // geometry fingerprint actually issued below - `isAborted` must compare
-    // against THESE frozen values, never recompute them, or automatic
-    // content/layout movement during settle (append, in-place growth,
-    // reorder) could be misread as reader motion: recomputing from the
-    // LATEST list state would follow that same movement and always agree
-    // with wherever the geometry currently sits.
+    // Freeze the target and the content/geometry fingerprint actually
+    // issued below - `isAborted` must compare against THESE frozen values,
+    // never recompute them, or automatic content/layout movement during
+    // settle (append, in-place growth, reorder) could be misread as reader
+    // motion: recomputing from the LATEST list state would follow that same
+    // movement and always agree with wherever the geometry currently sits.
     const list = chatTimelineRef.current;
     const issuedIndex = rowIndexByKeyRef.current.get(pending.messageId);
     const issuedTarget: IssuedFreeRestoreTarget = {
@@ -3852,25 +4054,26 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
           // viewport.
           followLatchRef.current?.observeLiveGeometry();
           if (timelineScrollModeRef.current === "free-scrolling") return false;
-          // Fixup (internal-tab-bottom-follow): `settleChatTimelineNavigation`'s
-          // own abort path (`if (input.isAborted()) return;`) calls neither
-          // `onSettledValid` nor `onSettledInvalid`, so nothing else would
-          // ever release the persistence gate for this mount if a saved
-          // free-scrolling restore was still converging when the timeline
-          // reported following-end - every later scroll-mirror capture and
-          // the eventual unmount save would silently no-op forever
-          // (`captureLiveChatTabScrollSnapshot`'s own gate check), leaving a
-          // stale free-scrolling cache entry across the next same-pane
-          // remount. But hydration-transaction P1 (chat-messages.test.tsx
-          // "close-before-hydration"/"bare pointerdown... before hydration")
-          // needs the OPPOSITE outcome for a tail-only partial snapshot,
-          // whose clamped restore target IS the current tail - that landing
-          // reports following-end purely because not enough content has
-          // hydrated yet, not because the reader moved anywhere, and must
-          // NOT release the gate (a later remount still needs the ORIGINAL
-          // saved row, not this transient tail).
-          // `isDemonstrablyPastIssuedFreeRestoreTarget` distinguishes the two
-          // against the frozen `issuedTarget` above, not a recomputed one.
+          // `settleChatTimelineNavigation`'s own abort path (`if
+          // (input.isAborted()) return;`) calls neither `onSettledValid`
+          // nor `onSettledInvalid`, so nothing else would ever release the
+          // persistence gate for this mount if a saved free-scrolling
+          // restore was still converging when the timeline reported
+          // following-end - every later scroll-mirror capture and the
+          // eventual unmount save would silently no-op forever
+          // (`captureLiveChatTabScrollSnapshot`'s own gate check), leaving
+          // a stale free-scrolling cache entry across the next same-pane
+          // remount. But hydration-transaction (chat-messages.test.tsx
+          // "close-before-hydration"/"bare pointerdown... before
+          // hydration") needs the OPPOSITE outcome for a tail-only partial
+          // snapshot, whose clamped restore target IS the current tail -
+          // that landing reports following-end purely because not enough
+          // content has hydrated yet, not because the reader moved
+          // anywhere, and must NOT release the gate (a later remount still
+          // needs the ORIGINAL saved row, not this transient tail).
+          // `isDemonstrablyPastIssuedFreeRestoreTarget` distinguishes the
+          // two against the frozen `issuedTarget` above, not a recomputed
+          // one.
           const isPastTarget = resolvePendingEndLanding();
           if (isPastTarget) {
             // Atomic reader-supersession: resolve the WHOLE pending
@@ -3914,15 +4117,18 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     // that loop instead.
     const settleCleanup = activeNavigationSettleCleanupRef.current;
     if (issued && settleCleanup !== null) {
-      activeNavigationSettleCleanupRef.current = (): void => {
-        settleCleanup();
-        if (
-          resolvePendingRestoreEndLandingRef.current ===
-          resolvePendingEndLanding
-        ) {
-          resolvePendingRestoreEndLandingRef.current = null;
-          pendingMeasuredFreeRestoreRef.current = null;
-        }
+      activeNavigationSettleCleanupRef.current = {
+        owner: settleCleanup.owner,
+        cancel: (): void => {
+          settleCleanup.cancel();
+          if (
+            resolvePendingRestoreEndLandingRef.current ===
+            resolvePendingEndLanding
+          ) {
+            resolvePendingRestoreEndLandingRef.current = null;
+            pendingMeasuredFreeRestoreRef.current = null;
+          }
+        },
       };
     }
   }, [
@@ -3932,21 +4138,20 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     restorePersistedTimelineLocation,
   ]);
 
-  // Fixup (fix-top-level-task-tab-scroll-restoration): `ChatMessages` stays
-  // mounted while its top-level task/epic pane hides (`TopLevelTabHost`'s
-  // keep-alive). A same-pane inner chat-tab switch now takes THIS path too
-  // (pane chat retention, which reversed decision #17); the mount-time path
-  // above is reached only by a real remount - retention-cap or top-level
-  // eviction, a close, or a hosted-eligibility flip. A hide
-  // eventually zeroes this tile's measured geometry (`PaneVisibilityContext`'s
-  // own doc comment: "size-measuring surfaces... read a 0x0 box while
-  // hidden"), so this effect never TRUSTS a live DOM read on the transition -
-  // it publishes through the SAME chat-tab-state-cache/restoration seam
-  // mount-time restore uses, not a second store or a new automatic-scroll
-  // policy. On show, re-deriving via `restoreChatTabState` (not the frozen
-  // mount-time `restoredTabState`) picks up the SAME clamp-to-surviving-
-  // neighbor/natural-clamp fallback a destructive mutation while hidden
-  // already gets on an ordinary remount.
+  // `ChatMessages` stays mounted while its top-level task/epic pane hides
+  // (`TopLevelTabHost`'s keep-alive). A same-pane inner chat-tab switch now
+  // takes THIS path too (pane chat retention);
+  // the mount-time path above is reached only by a real remount -
+  // retention-cap or top-level eviction, a close, or a hosted-eligibility
+  // flip. A hide eventually zeroes this tile's measured geometry
+  // (`PaneVisibilityContext`'s own doc comment: "size-measuring surfaces...
+  // read a 0x0 box while hidden"), so this effect never TRUSTS a live DOM
+  // read on the transition - it publishes through the SAME
+  // chat-tab-state-cache/restoration seam mount-time restore uses, not a
+  // second store or a new automatic-scroll policy. On show, re-deriving via
+  // `restoreChatTabState` (not the frozen mount-time `restoredTabState`)
+  // picks up the SAME clamp-to-surviving-neighbor/natural-clamp fallback a
+  // destructive mutation while hidden already gets on an ordinary remount.
   const wasSurfaceVisibleRef = useRef(visible);
   // The scroll node's raw geometry at the moment it was concealed, or `null`
   // when the hide had already collapsed it (a `display:none` top-level tab;
@@ -3964,38 +4169,157 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   const concealedScrollGeometryRef = useRef<ConcealedScrollGeometry | null>(
     null,
   );
+  // Ends the navigation settle loop a hide leaves behind. Only a hide that
+  // COLLAPSED the box makes that loop unfinishable, so only that hide calls
+  // this: the collapse zeroes this tile's measured geometry, every further
+  // settle reads a viewport that cannot answer, and a re-issue the loop makes
+  // from a continuation resolving after the hide writes the saved position back
+  // onto a concealed node - over the reset a collapsing tab host just
+  // performed. A box that survives concealment keeps measuring, so its loop is
+  // left to finish. For the collapsed hide the
+  // show branch is then the only placement a hidden tile takes, and it
+  // re-derives the anchor from the state cache rather than from wherever this
+  // loop had reached - which is also what gives a row destroyed while hidden
+  // its clamp-to-neighbour fallback.
+  //
+  // Skips a loop a cross-tile scroll request owns, because cancelling that one
+  // reports the request `cancelled` (`landScrollRequestRow` registers it so)
+  // while it is still live. `suspendScrollRequestLandingForCollapse` below is
+  // what a collapsed hide uses for that loop instead: it parks the landing
+  // without reporting any outcome, so the request stays the live intent.
+  //
+  // The test is the registered OWNER, never whether a request is pending: a
+  // request whose row is not in the rendered index yet is pending with no loop
+  // of its own, so a hide reading pending-ness would leave the restore running,
+  // which is the bug this helper exists to prevent.
+  //
+  // A named callback rather than the guard inline, because inlining it puts the
+  // effect below at `eslint(complexity)` 17 against a cap of 16. The show branch
+  // does not share it: a pending request there is not a no-op, it re-issues
+  // against the now-measurable geometry first.
+  const endNavigationSettleForConcealment = useCallback((): void => {
+    const active = activeNavigationSettleCleanupRef.current;
+    if (active === null || active.owner === "request") return;
+    active.cancel();
+    activeNavigationSettleCleanupRef.current = null;
+  }, []);
+  /**
+   * Set by THIS tile's own hide, and only when that hide collapsed the box;
+   * cleared at its show. A request arriving while the tile is concealed reads
+   * it to decide whether its landing may be issued at all.
+   *
+   * Recorded rather than derived. `concealedScrollGeometryRef.current === null`
+   * would read the same for a collapsed hide and for a tile that was simply
+   * MOUNTED hidden - null is also that ref's initial value - and a
+   * mounted-hidden tile has no last visible `scrollTop` for the predicate to
+   * judge against. So a tile that never ran a hide keeps the unsuspended
+   * behaviour, and so does one whose hide left the box measurable.
+   */
+  const concealedWithCollapsedBoxRef = useRef(false);
+  // The counterpart to the suspension below. A named callback rather than a
+  // ternary at its caller, because inlining it puts the visibility effect at
+  // `eslint(complexity)` 17 against a cap of 16 - the same reason
+  // `endNavigationSettleForConcealment` is one.
+  const resumeSuspendedScrollRequestLanding = useCallback(
+    (pending: PendingScrollRequestLanding): PendingScrollRequestLanding => {
+      if (pending.state !== "suspended") return pending;
+      const resumed: PendingScrollRequestLanding = {
+        ...pending,
+        state: "pending",
+      };
+      pendingScrollRequestLandingRef.current = resumed;
+      return resumed;
+    },
+    [],
+  );
+  // Parks a cross-tile scroll request's landing across a hide that COLLAPSED
+  // the box. Only that hide: a box which survives concealment keeps measuring,
+  // so its landing settles while hidden - invisibly, and finished before the
+  // show - and parking it instead would move that placement in front of the
+  // reader on show, where concealment had taken none.
+  //
+  // Left to run against a collapsed box, the loop keeps writing onto a
+  // zero-sized node and, worse, can reach a TERMINAL outcome there: it reports
+  // `landed`, the terminal callback clears the pending landing, and the show's
+  // re-issue branch is then unreachable - the reader's navigation is consumed
+  // by a viewport that could not answer. A truly zero-sized box spends the
+  // retry budget to `exhausted` and consumes it the same way.
+  //
+  // So the loop is torn down WITHOUT reporting an outcome, through the same
+  // `reissuingScrollRequestIdRef` escape the cleanup already honours for a
+  // landing that supersedes itself. The request stays pending, marked
+  // `suspended`, and the show branch re-issues it against geometry that can
+  // answer. `scrollRequestLandingIssuedRef` is cleared with it so that if the
+  // show's own re-issue still cannot find the row, the `listRows` re-attempt
+  // owns it again rather than treating it as already issued.
+  const suspendScrollRequestLandingForCollapse = useCallback((): void => {
+    const pending = pendingScrollRequestLandingRef.current;
+    if (pending === null || pending.state === "suspended") return;
+    pendingScrollRequestLandingRef.current = {
+      ...pending,
+      state: "suspended",
+    };
+    scrollRequestLandingIssuedRef.current = null;
+    // Parking the landing is unconditional; tearing a loop down is not. A
+    // request whose row was never in the rendered index is pending with no
+    // loop of its own, and a loop another owner holds is not this request's to
+    // end - `endNavigationSettleForConcealment` has already dealt with that
+    // one.
+    const active = activeNavigationSettleCleanupRef.current;
+    if (active === null || active.owner !== "request") return;
+    reissuingScrollRequestIdRef.current = pending.requestId;
+    active.cancel();
+    activeNavigationSettleCleanupRef.current = null;
+    reissuingScrollRequestIdRef.current = null;
+  }, []);
   useLayoutEffect(() => {
     const wasVisible = wasSurfaceVisibleRef.current;
     wasSurfaceVisibleRef.current = visible;
     if (visible === wasVisible) return;
 
     if (!visible) {
-      concealedScrollGeometryRef.current = readIntactConcealedGeometry(
+      const concealed = readIntactConcealedGeometry(
         chatTimelineRef.current?.getScrollableNode(),
         lastVisibleScrollTopRef.current,
       );
-      // Fixup (hidden-close-and-rapid-capture, P1 #2): publish the
-      // continuously-mirrored snapshot (kept fresh, synchronously, by
-      // `captureLastVisibleScrollSnapshot` above - no app-level rAF
-      // throttle sits between a scroll event and this ref anymore).
-      // Deliberately NOT a live read here: LegendList's OWN internal
-      // scroll/position bookkeeping (`getState().scroll`, `positionAtIndex`,
-      // and the rendered-window bounds `viewportAnchorMessageId` searches)
-      // can still be internally INCONSISTENT for a handful of milliseconds
-      // after a raw `scrollTop` write, even while `clientHeight` already
-      // reads non-zero - a guarded live read in that window does not fail
-      // safely (return null); it can silently resolve to the WRONG row
-      // (verified empirically: row 0, not the target). The mirror is only
-      // ever written from `handleScroll`, after LegendList's own state is
-      // internally coherent, so it never carries that failure mode - at
-      // worst it is one scroll event behind, which is still a position the
-      // reader genuinely was at.
+      concealedScrollGeometryRef.current = concealed;
+      // A null read is already the precondition the calls below need: it says
+      // this hide collapsed the box. Ending the loop for a hide that did not
+      // left its persistence gate armed into the show, and an armed gate
+      // replays the saved anchor over a list the reader never left. The
+      // request's landing is the other loop a collapsed box cannot answer, and
+      // it is parked rather than ended, because ending it would report an
+      // outcome for a navigation the reader is still owed.
+      if (concealed === null) {
+        concealedWithCollapsedBoxRef.current = true;
+        endNavigationSettleForConcealment();
+        suspendScrollRequestLandingForCollapse();
+      }
+      // Publish the continuously-mirrored snapshot (kept fresh,
+      // synchronously, by `captureLastVisibleScrollSnapshot` above - no
+      // app-level rAF throttle sits between a scroll event and this ref
+      // anymore). Deliberately NOT a live read here: LegendList's OWN
+      // internal scroll/position bookkeeping (`getState().scroll`,
+      // `positionAtIndex`, and the rendered-window bounds
+      // `viewportAnchorMessageId` searches) can still be internally
+      // INCONSISTENT for a handful of milliseconds after a raw `scrollTop`
+      // write, even while `clientHeight` already reads non-zero - a guarded
+      // live read in that window does not fail safely (return null); it can
+      // silently resolve to the WRONG row (verified empirically: row 0, not
+      // the target). The mirror is only ever written from `handleScroll`,
+      // after LegendList's own state is internally coherent, so it never
+      // carries that failure mode - at worst it is one scroll event behind,
+      // which is still a position the reader genuinely was at.
       const snapshot = lastVisibleScrollSnapshotRef.current;
       if (snapshot !== null) {
         saveChatTabState({ identity, ...snapshot });
       }
       return;
     }
+
+    // The recorded hide is spent: the box can answer again, so a request
+    // arriving from here on is issued rather than parked.
+    concealedWithCollapsedBoxRef.current = false;
 
     // A scroll request that has not reached a terminal outcome is the newer
     // intent: re-issue it against the now-measurable geometry instead of
@@ -4005,12 +4329,16 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     // pending, or it would report that request cancelled and release it.
     const pendingLanding = pendingScrollRequestLandingRef.current;
     if (pendingLanding !== null) {
-      if (landScrollRequestRow(pendingLanding)) {
-        scrollRequestLandingIssuedRef.current = pendingLanding.requestId;
+      // A landing a collapsed hide suspended resumes here: back to `pending`
+      // before it is re-issued, or the `listRows` re-attempt would keep
+      // skipping it if this issue cannot find its row in the index yet.
+      const resumed = resumeSuspendedScrollRequestLanding(pendingLanding);
+      if (landScrollRequestRow(resumed)) {
+        scrollRequestLandingIssuedRef.current = resumed.requestId;
       }
       return;
     }
-    activeNavigationSettleCleanupRef.current?.();
+    activeNavigationSettleCleanupRef.current?.cancel();
     activeNavigationSettleCleanupRef.current = null;
     queueMicrotask(() => {
       clearNavigationHighlight();
@@ -4020,11 +4348,12 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       listRowsRef.current.map((row) => row.key),
     );
     // An undisturbed list needs no replay (see `concealedScrollGeometryRef`).
-    // Unless a saved restore is still converging: the cleanup above just
-    // cancelled its settle loop, and that loop was the only thing that would
-    // release the persistence gate - returning here would leave the gate
-    // armed with no scroll capture allowed until the next publishing reader
-    // gesture. Let the replay below re-issue it and own the release instead.
+    // Unless a restore is still pending: its gate is what suppresses scroll
+    // capture, and returning here would leave it armed with nothing left to
+    // release it until the next publishing reader gesture. The replay below
+    // re-issues and owns the release instead. A restore converging over a box
+    // that survived the hide does not reach here still pending - that loop was
+    // left running and releases its own gate.
     const concealed = concealedScrollGeometryRef.current;
     concealedScrollGeometryRef.current = null;
     if (
@@ -4074,15 +4403,18 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     if (!issued) acceptFailedReplayLanding();
   }, [
     clearNavigationHighlight,
+    endNavigationSettleForConcealment,
     identity,
     isSavedTurnPart,
     landScrollRequestRow,
     reconcileInvalidTimelineLanding,
     restorePersistedTimelineLocation,
+    resumeSuspendedScrollRequestLanding,
+    suspendScrollRequestLandingForCollapse,
     visible,
   ]);
 
-  // Decision #21: minimap/find/deep-link/status-bar navigation all perform
+  // Minimap/find/deep-link/status-bar navigation all perform
   // manual-navigation cancellation first. Not a real gesture - a plain
   // release, no freeze: the navigation's own scroll (issued right after, via
   // issueFreeTimelineNavigation) takes over immediately regardless.
@@ -4191,7 +4523,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     settleScrollRequest,
   ]);
 
-  // Ticket 15 review (live pass S5, confirmed defect): `restoredTabState`/
+  // `restoredTabState`/
   // `initialScrollIndexAnchor` are computed ONCE at mount against whatever
   // `messages` the tile had at that instant. `chat.subscribe`'s snapshot can
   // still grow after this tile's own `snapshotLoaded` first flips true (a
@@ -4207,8 +4539,8 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   // routinely learns about content before its own stream delivers it) -
   // and, like that precedent, UNBOUNDED: an anchor-absent `messages`
   // transition is free to observe (an O(1) map lookup) and costs nothing,
-  // so there is no budget to exhaust. Ticket 15 review (live pass S5 round
-  // 2): an earlier version bounded this by counting every anchor-absent
+  // so there is no budget to exhaust. An earlier version bounded this by
+  // counting every anchor-absent
   // transition as an "attempt" - a live reopen can replay dozens of
   // incremental `messages` reference changes before the anchor's own
   // commit lands, exhausting a small counter and disarming the retry
@@ -4219,17 +4551,17 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   // precedent already accepts. Disarms permanently the first time it
   // lands - a NEW live message arriving afterward can never re-trigger a
   // jump back here.
-  // Fixup (hydration-transaction): route the catch-up through the same
-  // bounded validate/retry operation restoration convergence uses, and only
-  // clear the pending id/session fallback from the VALIDATED-success path
-  // (`onValidated` below) - never up front. If measurement, list
-  // availability, timeout, or landing validation fails, `onExhausted` is a
-  // no-op: the coordinate and persistence gate stay armed, so this same
-  // effect re-attempts on the next `messages` change (unbounded, matching
-  // the retry precedent documented above - never disarmed by a failed
-  // attempt). A real gesture or explicit navigation supersedes immediately
-  // via its own unconditional clear (`cancelTimelineLiveFollowForUser
-  // Navigation`'s `publishesReaderPosition` branch, `navigateToMessage`,
+  // Route the catch-up through the same bounded validate/retry operation
+  // restoration convergence uses, and only clear the pending id/session
+  // fallback from the VALIDATED-success path (`onValidated` below) - never
+  // up front. If measurement, list availability, timeout, or landing
+  // validation fails, `onExhausted` is a no-op: the coordinate and
+  // persistence gate stay armed, so this same effect re-attempts on the
+  // next `messages` change (unbounded, matching the retry precedent
+  // documented above - never disarmed by a failed attempt). A real gesture
+  // or explicit navigation supersedes immediately via its own unconditional
+  // clear (`cancelTimelineLiveFollowForUserNavigation`'s
+  // `publishesReaderPosition` branch, `navigateToMessage`,
   // `releaseForExplicitNavigation`), independent of this effect.
   useEffect(() => {
     const anchorId = pendingHydrationRestoreAnchorIdRef.current;
@@ -4422,6 +4754,14 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     // view covering it would hide where the jump lands.
     closeSubagentDrillIn();
     if (request.kind === "end") {
+      // The same supersession the message branch below performs: an `end`
+      // request is a reader action, so it is always the newer intent. Not
+      // redundant with `scrollToEnd`'s own cancel below - that ends only a
+      // landing whose loop is live, and the one this reaches was never ISSUED,
+      // which the `listRows` retry would otherwise place after the end.
+      const superseded = pendingScrollRequestLandingRef.current;
+      if (superseded !== null)
+        settleScrollRequest(superseded.requestId, "cancelled");
       scrollToEnd(request.animated ?? true);
       scrollRequestRef.current = null;
       return;
@@ -4445,7 +4785,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       // any layout-effect-triggered update) - it just isn't guaranteed
       // synchronous by the time navigateToMessage runs right below, so its
       // scrollToIndex can race a still-collapsed measurement on the first
-      // frame. Same tradeoff this call already had before ticket 6; wrapping
+      // frame. Same tradeoff this call already had; wrapping
       // it added a warning without actually closing the race.
       activityGroupOpenStore.getState().setOpen(activityGroupId, true);
     }
@@ -4457,6 +4797,13 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       requestId: request.requestId,
       messageId: request.messageId,
       blockId: resolvedScrollBlockId(request.blockId),
+      // A request can arrive at a tile that is already concealed, and nothing
+      // on this path reads `visible`. Issuing it into a box this tile's own
+      // hide collapsed is the same defect the hide-time suspension exists for,
+      // reached by its other entrance, so it starts parked and the show issues
+      // it. Only a RECORDED collapsed hide parks it: a tile merely mounted
+      // hidden has none, and keeps the behaviour it has without this.
+      state: concealedWithCollapsedBoxRef.current ? "suspended" : "pending",
     };
     pendingScrollRequestLandingRef.current = landing;
     // Same prelude as `navigateToMessage`: a cross-tile jump is an explicit
@@ -4489,13 +4836,20 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   useLayoutEffect(() => {
     const pending = pendingScrollRequestLandingRef.current;
     if (pending === null) return;
+    // A collapsed hide parked this landing, so a row hydrating while the tile
+    // is concealed must not re-attempt it into a viewport that cannot answer;
+    // the show resumes it. The test is the suspension, never `visible`: with a
+    // box that survives concealment this retry runs while hidden on purpose,
+    // settles there, and is over before the show - gating it on visibility
+    // would carry that placement into the reader's view instead.
+    if (pending.state === "suspended") return;
     if (scrollRequestLandingIssuedRef.current === pending.requestId) return;
     if (landScrollRequestRow(pending)) {
       scrollRequestLandingIssuedRef.current = pending.requestId;
     }
   }, [landScrollRequestRow, listRows, scrollRequest?.requestId]);
 
-  // --- Transcript completion signal (decision #24) -------------------------
+  // --- Transcript completion signal ----------------------------------------
 
   // The transcript observer uses the store's provenance to identify live
   // completions. They feed both the shared region and the "New reply" latch;
@@ -4508,14 +4862,14 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   });
   useLayoutEffect(() => {
     if (announcement === null) return;
-    // Decision #10/#16: turn completion below the fold stays anchored - no
+    // Turn completion below the fold stays anchored - no
     // auto-reveal. The pill flips to "New reply" instead, unless the reader
     // is already at the tail (nothing to signal).
     if (timelineScrollModeRef.current === "following-end") return;
     setHasUnseenTurnCompletion(true);
   }, [announcement]);
 
-  // --- Stateful scroll-to-end pill (decision #16) ----------------------------
+  // --- Stateful scroll-to-end pill -------------------------------------------
 
   const lastAssistantMessage = messages
     .filter((message) => message.role === "assistant")
@@ -4523,15 +4877,10 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   const turnRunning =
     lastAssistantMessage !== undefined &&
     lastAssistantMessage.completedAt === null;
-  // Read through a ref by the latch's scroll and layout callbacks, which no
-  // render accompanies. The turn finishing releases a reader the end fell
-  // onto while it ran.
-  const turnRunningRef = useRef(turnRunning);
+  // The turn finishing releases a reader the end fell onto while it ran.
   useLayoutEffect(() => {
-    turnRunningRef.current = turnRunning;
     if (!turnRunning) followLatchRef.current?.reconcileTurnAtRest();
   }, [turnRunning]);
-  const isTurnRunning = useCallback((): boolean => turnRunningRef.current, []);
   useStopReadingOnNewReply(instanceId, lastAssistantMessage?.id ?? null);
   const contextWorkingVerb = use(WorkingVerbContext);
   const workingVerb =
@@ -4561,7 +4910,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     <ChatOpenStoreScopeProvider value={instanceId}>
       <ActivityGroupOpenStoreProvider store={activityGroupOpenStore}>
         {/* One menu for the whole transcript, naming the region under the
-            pointer (G3-10): timestamps, activity rows and reasoning blocks
+            pointer: timestamps, activity rows and reasoning blocks
             repeat on every message, and a root per item was a Radix menu per
             row of a long chat. The minimap is inside it too (L-144). */}
         <OpenSubagentAsChatContext.Provider value={subagentDrillIn.open}>
@@ -4609,7 +4958,6 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
                   isFollowCorrectionSuppressed={isFollowCorrectionSuppressed}
                   resolveSuppressedEndLanding={resolveSuppressedEndLanding}
                   isReattachSuppressed={isReattachSuppressed}
-                  isTurnRunning={isTurnRunning}
                   navigationHighlightedMessageId={
                     navigationHighlight?.messageId ?? null
                   }
@@ -4653,12 +5001,12 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
                   />
                 ) : null}
               </div>
-              {quoteSelection.snapshot !== null ? (
+              {quoteSink !== null && quoteSelection.snapshot !== null ? (
                 <QuoteSelectionPopover
-                  taskId={taskId}
                   snapshot={quoteSelection.snapshot}
+                  onQuote={(snapshot) => quoteSink(taskId, snapshot)}
                   onDismiss={quoteSelection.dismiss}
-                  // A quote goes into THIS chat's draft, and under an
+                  // A task chat's quote goes into its draft, and under an
                   // open-as-chat view the composer holding it is hidden. So a
                   // quote taken there returns to the chat, as a terminal quote
                   // reveals the chat it was added to.

@@ -6,7 +6,7 @@ import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 
 /**
- * Drives the "restore-to-composer" half of Flow 8 for chats.
+ * Drives the "restore-to-composer" half of setup-failure handling for chats.
  *
  * Watches the latest restorable setup interruption chat event for this
  * chat-session handle. When a new failure/cancellation event arrives that

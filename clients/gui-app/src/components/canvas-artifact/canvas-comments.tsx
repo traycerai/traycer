@@ -55,13 +55,15 @@ export function CanvasCommentAction(props: {
           useCommentThreadsStore
             .getState()
             .setActiveThread(props.scope.epicId, null);
-          props.registry.view?.setCommenting(true);
+          // One draft for this element, and the canvas stays in select mode:
+          // a button acts once, and the Comments toggle is what enters the
+          // sticky mode.
           const entry = props.registry.get(props.selection.boardPath);
           if (entry.bridge === null || entry.frame === null) return;
           void openFrameCommentDraft({
             epicId: props.scope.epicId,
             tileId: props.tileId,
-            artifactType: "canvas",
+            artifactType: props.scope.artifactType,
             selection: props.selection,
             bridge: entry.bridge,
             frame: entry.frame,
@@ -104,7 +106,7 @@ export function CanvasCommentPins(props: {
   const allThreads = useFrameCommentThreads(
     props.scope.epicId,
     props.scope.artifactId,
-    "canvas",
+    props.scope.artifactType,
   );
   const threads = useMemo(
     () =>
@@ -122,12 +124,9 @@ export function CanvasCommentPins(props: {
   const ordered = useOrderedFrameThreads(
     props.scope.epicId,
     props.scope.artifactId,
-    "canvas",
+    props.scope.artifactType,
   );
-  const activate = useActivateCommentThread({
-    ...props.scope,
-    artifactType: "canvas",
-  });
+  const activate = useActivateCommentThread(props.scope);
   const commenting = useSyncExternalStore(
     props.registry.subscribe,
     () => props.registry.view?.commenting === true,
@@ -185,7 +184,7 @@ export function CanvasCommentPins(props: {
     <FrameCommentPins
       epicId={props.scope.epicId}
       artifactId={props.scope.artifactId}
-      artifactType="canvas"
+      artifactType={props.scope.artifactType}
       ordered={ordered ?? []}
       threads={threads}
       source={
@@ -294,7 +293,7 @@ export function CanvasCommentIndex(props: {
   const threads = useFrameCommentThreads(
     scope.epicId,
     scope.artifactId,
-    "canvas",
+    scope.artifactType,
   );
   const focused = usePaneFocused();
   const paths = view?.order ?? [];

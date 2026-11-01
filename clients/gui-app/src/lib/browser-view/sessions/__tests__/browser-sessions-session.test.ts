@@ -5,6 +5,7 @@ import type {
   StatusChangeHandler,
   StreamCloseReason,
   StreamConnectionStatus,
+  StreamContinuity,
   StreamFrameEnvelope,
 } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
@@ -29,6 +30,7 @@ function recordingCallbacks(): {
   readonly statuses: Array<{
     readonly lifecycle: BrowserSessionsLifecycle;
     readonly errorMessage: string | null;
+    readonly continuity: StreamContinuity;
   }>;
   readonly frames: BrowserSessionsUxServerFrame[];
   readonly bound: BrowserViewNativeTabCapability[];
@@ -37,6 +39,7 @@ function recordingCallbacks(): {
     readonly onStatus: (
       lifecycle: BrowserSessionsLifecycle,
       errorMessage: string | null,
+      continuity: StreamContinuity,
     ) => void;
     readonly onFrame: (frame: BrowserSessionsUxServerFrame) => void;
     readonly onTabBound: (capability: BrowserViewNativeTabCapability) => void;
@@ -48,6 +51,7 @@ function recordingCallbacks(): {
   const statuses: Array<{
     lifecycle: BrowserSessionsLifecycle;
     errorMessage: string | null;
+    continuity: StreamContinuity;
   }> = [];
   const frames: BrowserSessionsUxServerFrame[] = [];
   const bound: BrowserViewNativeTabCapability[] = [];
@@ -58,8 +62,8 @@ function recordingCallbacks(): {
     bound,
     released,
     callbacks: {
-      onStatus: (lifecycle, errorMessage) => {
-        statuses.push({ lifecycle, errorMessage });
+      onStatus: (lifecycle, errorMessage, continuity) => {
+        statuses.push({ lifecycle, errorMessage, continuity });
       },
       onFrame: (frame) => {
         frames.push(frame);
@@ -101,19 +105,31 @@ describe("openBrowserSessionsSession on a desktop shell (browserView present)", 
     // A frame on some OTHER stream's key must not reach this session.
     bridge.emitSessionsStreamEvent({
       key: { ...KEY, scope: epicScope("other-epic") },
-      event: { kind: "status", lifecycle: "live", errorMessage: null },
+      event: {
+        kind: "status",
+        lifecycle: "live",
+        errorMessage: null,
+        continuity: null,
+      },
     });
     expect(statuses).toEqual([]);
 
     bridge.emitSessionsStreamEvent({
       key: KEY,
-      event: { kind: "status", lifecycle: "live", errorMessage: null },
+      event: {
+        kind: "status",
+        lifecycle: "live",
+        errorMessage: null,
+        continuity: null,
+      },
     });
     bridge.emitSessionsStreamEvent({
       key: KEY,
       event: { kind: "frame", frame: SNAPSHOT_FRAME },
     });
-    expect(statuses).toEqual([{ lifecycle: "live", errorMessage: null }]);
+    expect(statuses).toEqual([
+      { lifecycle: "live", errorMessage: null, continuity: null },
+    ]);
     expect(frames).toEqual([SNAPSHOT_FRAME]);
 
     session.send({
@@ -145,6 +161,44 @@ describe("openBrowserSessionsSession on a desktop shell (browserView present)", 
       event: { kind: "frame", frame: SNAPSHOT_FRAME },
     });
     expect(frames).toEqual([SNAPSHOT_FRAME]);
+  });
+
+  it("relays the continuity a status event carries, held and continued included", () => {
+    const bridge = new FakeBrowserViewBridge({});
+    const { statuses, callbacks } = recordingCallbacks();
+    openBrowserSessionsSession({
+      key: KEY,
+      userId: "user-1",
+      browserView: bridge,
+      openTransport: () => {
+        throw new Error("unused on the IPC path");
+      },
+      callbacks,
+    });
+
+    bridge.emitSessionsStreamEvent({
+      key: KEY,
+      event: {
+        kind: "status",
+        lifecycle: "reconnecting",
+        errorMessage: null,
+        continuity: "held",
+      },
+    });
+    bridge.emitSessionsStreamEvent({
+      key: KEY,
+      event: {
+        kind: "status",
+        lifecycle: "live",
+        errorMessage: null,
+        continuity: "continued",
+      },
+    });
+
+    expect(statuses).toEqual([
+      { lifecycle: "reconnecting", errorMessage: null, continuity: "held" },
+      { lifecycle: "live", errorMessage: null, continuity: "continued" },
+    ]);
   });
 
   it("relays tabBound and tabReleased by identity only", () => {
@@ -189,6 +243,7 @@ function fakeHostStreamClient(): {
   readonly emitStatus: (
     status: StreamConnectionStatus,
     reason: StreamCloseReason | null,
+    continuity: StreamContinuity,
   ) => void;
   closed: boolean;
 } {
@@ -236,8 +291,8 @@ function fakeHostStreamClient(): {
     emit: (envelope, binaryPayload) => {
       onServerFrame?.(envelope, binaryPayload);
     },
-    emitStatus: (status, reason) => {
-      onStatusChange?.(status, reason, null);
+    emitStatus: (status, reason, continuity) => {
+      onStatusChange?.(status, reason, null, continuity);
     },
     get closed() {
       return state.closed;
@@ -293,5 +348,31 @@ describe("openBrowserSessionsSession on a shell with no browserView bridge", () 
 
     session.close();
     expect(transportClosed).toBe(true);
+  });
+
+  it("forwards the stream's continuity to the status callback", () => {
+    const fake = fakeHostStreamClient();
+    const transport: DurableStreamTransport = {
+      wsStreamClient: fake.client,
+      close: () => undefined,
+    };
+    const { statuses, callbacks } = recordingCallbacks();
+    openBrowserSessionsSession({
+      key: KEY,
+      userId: "user-1",
+      browserView: null,
+      openTransport: () => transport,
+      callbacks,
+    });
+
+    fake.emitStatus("reconnecting", null, "held");
+    fake.emitStatus("open", null, "continued");
+    fake.emitStatus("reconnecting", null, null);
+
+    expect(statuses.map((status) => status.continuity)).toEqual([
+      "held",
+      "continued",
+      null,
+    ]);
   });
 });

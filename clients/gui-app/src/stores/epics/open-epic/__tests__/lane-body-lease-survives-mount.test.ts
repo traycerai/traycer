@@ -16,7 +16,7 @@
  *
  * ## The defect this describes
  *
- * Measured in the running app (epic-sync-overhaul finding 11): a tile mounts,
+ * Measured in the running app: a tile mounts,
  * `acquireArtifactBodyLease` runs, `ensureAttached` opens a lane, the
  * `artifact.subscribe` open crosses the worker bridge and main wires a real
  * session - and then the body demand falls to zero and `closeLane` tears the

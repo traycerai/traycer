@@ -144,6 +144,12 @@ const EXPECTED_SILENT: ReadonlyArray<SilentExemption> = [
     why: "the footer it styles is inside the model picker, which is closed here; the row pictures both options, and the editor opens its sample picker while Model is selected (L-173)",
   },
   {
+    id: "model-ultracode-style",
+    matches: (entry) =>
+      entry.id.startsWith("region-style:model:ultracodeStyle"),
+    why: "neither window has a chat with Ultracode on, so the model chip draws no request for the style to change; the row pictures all three styles on a Claude chip with the request on",
+  },
+  {
     id: "status-bar-parked",
     matches: (entry) => entry.id === "arrangement-field:statusBarParked",
     why: "it only remembers what the Toggle status bar command last sent up, for the next press to bring back; nothing draws from it",

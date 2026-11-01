@@ -22,7 +22,7 @@ vi.mock("@/components/settings/host-scope/use-scoped-stream-binding", () => ({
 // / 68 tests takes the UNBOUND arm exclusively. None of them touch
 // `BoundHostUpdateBanner`, `OperationContent`, `describeUpdateOperation`, or
 // `LocalHostRestartFlow`'s cooperative arm - this file is what actually
-// exercises that code, which is the coverage gap the ticket flagged.
+// exercises that code.
 interface HostBindingFixture {
   readonly directory: {
     readonly getLocalEntry: () => HostDirectoryEntry | null;
@@ -30,7 +30,7 @@ interface HostBindingFixture {
     readonly onChange: (cb: () => void) => { dispose: () => void };
   };
   /**
-   * G8's isolation test additionally mounts the REAL `HostOverviewPanel`
+   * The isolation test additionally mounts the REAL `HostOverviewPanel`
    * (`@/lib/host`'s `useHostBinding` re-exports from `./runtime`, so this
    * mock covers both call sites) — which reads `binding.hostClient`, not
    * `binding.directory`. One fixture object carries both shapes so the
@@ -46,7 +46,7 @@ vi.mock("@/lib/host/runtime", async (importOriginal) => {
   return { ...actual, useHostBinding: () => hostBindingMock.current };
 });
 
-// G8's isolation test needs the real `HostSettingsPanel` seam, which reads
+// The isolation test needs the real `HostSettingsPanel` seam, which reads
 // its host scope through this hook rather than through props.
 const scopeOverrides = vi.hoisted((): { current: Record<string, unknown> } => ({
   current: {},
@@ -111,7 +111,7 @@ vi.mock("sonner", () => ({
   },
 }));
 
-// G7: the banner's Diagnostics button now routes through the in-app Settings
+// The banner's Diagnostics button now routes through the in-app Settings
 // modal (`useSystemTabModalActions().openSettings`), which needs a mounted
 // `<RouterProvider>` this file's harness does not stand up. Mocked rather than
 // wired for the same reason `use-host-directory-list-query` and
@@ -366,7 +366,7 @@ async function findPhaseText(): Promise<string> {
 }
 
 /**
- * G8's isolation replacement: the REAL production composition — this
+ * The isolation proof uses the REAL production composition — this
  * computer's `HostOverviewPanel` (Restart, Diagnostics and the overflow menu
  * all live on it) mounted beside the real `HostUpdateBanner`, both reading the
  * SAME fixture. Any regression that made the failing attempt inert
@@ -491,7 +491,7 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
       renderBanner(undefined);
       const text = await findPhaseText();
       expect(text).toMatch(expectedPhrase);
-      // Never the generic fallback the experience doc forbids.
+      // Never the generic fallback.
       expect(text).not.toMatch(/^Updating this host/i);
     },
   );
@@ -562,7 +562,7 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
     expect(percentEl.textContent).toBe("55%");
   });
 
-  // G5 — measured byte progress, independently of percentage.
+  // Measured byte progress, independently of percentage.
   it("bytes-only (no percent measured) renders the byte text AND keeps the bar indeterminate", async () => {
     bindLocalHost({
       "host.status": () =>
@@ -733,7 +733,7 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
 
   // 5. The banner never blocks host controls.
   //
-  // G8 (independent cold review, finding 7): the ORIGINAL version of this
+  // The ORIGINAL version of this
   // test mounted two arbitrary sibling `<button>`s and asserted their
   // `.disabled` property. That renders neither Restart, Diagnostics,
   // Activate nor the overflow menu — none of the production controls the
@@ -752,7 +752,7 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
       name: "failed",
       operation: baseAttempt({ phase: "downloading", liveness: "interrupted" }),
       // No coarse mirror for a terminal outcome — a failed attempt was never
-      // the shape Ticket 04's mapping locked on.
+      // the shape the coarse mapping locked on.
       updateProgress: null,
     },
     {
@@ -762,7 +762,7 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
         execution: "parked",
       }),
       // A @1.3 host still mirrors the rich attempt into the legacy coarse
-      // field for pre-@1.3 siblings mid-fleet-update, and Ticket 04's mapping
+      // field for pre-@1.3 siblings mid-fleet-update, and the coarse mapping
       // reads ANY non-terminal attempt — parked included — as `"updating"`.
       // Without this mirrored alongside `updateOperation`, this case cannot
       // tell `holdsLifecycleGate(operationView)` (the fix) apart from the
@@ -885,7 +885,7 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
     });
   });
 
-  // G7. Terminal lifecycle: Retry / Diagnostics / Dismiss for a failed rich
+  // Terminal lifecycle: Retry / Diagnostics / Dismiss for a failed rich
   // attempt, evidence retention on the Overview, dismissal re-arming on a
   // newer attempt, and complete's auto-collapse.
   describe("G7 — terminal lifecycle", () => {
@@ -1136,7 +1136,7 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
   });
 
   // G9 — the landing page never shows a success view at all. Product decision
-  // (superseding G7's now-removed auto-collapse test and the "complete" case
+  // (superseding the now-removed auto-collapse test and the "complete" case
   // in STATE_CASES above): a completed or finalizing-record update is
   // Settings-only. Landing shows nothing for it, on first read, once retained
   // as a stale record, and across a genuine live transition into it — and it
@@ -1430,7 +1430,7 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
     });
   });
 
-  // 9. The host-down window reaching THIS surface (Ticket 07 §5.2.7).
+  // 9. The host-down window reaching THIS surface.
   //
   // The projector's record arm always returns `kind: "unknown"` carrying
   // `lastKnownKind`, and this banner's supersede predicate rejected `unknown`

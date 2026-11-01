@@ -15,7 +15,7 @@ import {
  * restates only the one it is about.
  *
  * Read `lib/layout-overrides.ts` before wrapping anything - what may be wrapped
- * is a VISUAL LEAF, and the passivity contract (D11) and the ancestor seams an
+ * is a VISUAL LEAF, and the passivity contract and the ancestor seams an
  * override cannot reach are both written down there.
  */
 export function LayoutOverrideProvider(props: {

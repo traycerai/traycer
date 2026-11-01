@@ -59,6 +59,7 @@ describe("chat find projection", () => {
       hideReasoning: false,
       queuePauseReasonProtocolSupported: null,
       splitLongTurns: true,
+      botSendQuestionStates: null,
     })[0];
     const completedQuestion = row.units.find(
       (unit) =>
@@ -131,6 +132,7 @@ describe("chat find projection", () => {
         hideReasoning: false,
         queuePauseReasonProtocolSupported: null,
         splitLongTurns: true,
+        botSendQuestionStates: null,
       },
     )[0];
 
@@ -238,6 +240,7 @@ describe("chat find projection", () => {
       hideReasoning: false,
       queuePauseReasonProtocolSupported: null,
       splitLongTurns: true,
+      botSendQuestionStates: null,
     })[0];
     const model = deriveInterviewReviewModel({
       blockId: segment.id,
@@ -400,6 +403,7 @@ describe("chat find projection", () => {
         hideReasoning: false,
         queuePauseReasonProtocolSupported: null,
         splitLongTurns: true,
+        botSendQuestionStates: null,
       },
     );
     const joined = rows.map((row) => rowSearchText(row)).join("\n");
@@ -442,6 +446,7 @@ describe("chat find projection", () => {
       hideReasoning: false,
       queuePauseReasonProtocolSupported: null,
       splitLongTurns: true,
+      botSendQuestionStates: null,
     })
       .map((row) => rowSearchText(row))
       .join("\n");
@@ -464,6 +469,7 @@ describe("chat find projection", () => {
         managedCommand: null,
         agentMessageReceipt: null,
         agentMessageDelivery: null,
+        botSendReceipt: null,
         isStreaming: false,
         endState: null,
         stopped: false,
@@ -503,6 +509,7 @@ describe("chat find projection", () => {
       hideReasoning: false,
       queuePauseReasonProtocolSupported: null,
       splitLongTurns: true,
+      botSendQuestionStates: null,
     })[0];
 
     expect(rowSearchText(row)).toContain("Read 1 file, edited 1 file");
@@ -526,6 +533,7 @@ describe("chat find projection", () => {
       managedCommand: null,
       agentMessageReceipt: null,
       agentMessageDelivery: null,
+      botSendReceipt: null,
       isStreaming: false,
       endState: null,
       stopped: false,
@@ -553,6 +561,7 @@ describe("chat find projection", () => {
       hideReasoning: false,
       queuePauseReasonProtocolSupported: null,
       splitLongTurns: true,
+      botSendQuestionStates: null,
     });
 
     const joined = rows.map((row) => rowSearchText(row)).join("\n");
@@ -579,6 +588,7 @@ describe("chat find projection", () => {
       hideReasoning: false,
       queuePauseReasonProtocolSupported: null,
       splitLongTurns: true,
+      botSendQuestionStates: null,
     })[0];
 
     expect(rowSearchText(row)).toContain("Thought for 2s");
@@ -603,6 +613,7 @@ describe("chat find projection", () => {
       hideReasoning: false,
       queuePauseReasonProtocolSupported: null,
       splitLongTurns: true,
+      botSendQuestionStates: null,
     })[0];
 
     expect(rowSearchText(row)).toContain("Thinking");
@@ -636,6 +647,7 @@ describe("chat find projection", () => {
         hideReasoning: false,
         queuePauseReasonProtocolSupported: null,
         splitLongTurns: true,
+        botSendQuestionStates: null,
       })[0],
     );
 
@@ -665,6 +677,7 @@ describe("chat find projection", () => {
           managedCommand: null,
           agentMessageReceipt: null,
           agentMessageDelivery: null,
+          botSendReceipt: null,
           isStreaming: false,
           endState: null,
           stopped: false,
@@ -694,6 +707,7 @@ describe("chat find projection", () => {
       hideReasoning: false,
       queuePauseReasonProtocolSupported: null,
       splitLongTurns: true,
+      botSendQuestionStates: null,
     })[0].units.map((unit) => unit.unitId);
 
     // The run starts at the reasoning block, because the tool stands alone.
@@ -735,6 +749,7 @@ describe("chat find projection", () => {
       hideReasoning: false,
       queuePauseReasonProtocolSupported: null,
       splitLongTurns: true,
+      botSendQuestionStates: null,
     })[0];
 
     // Exactly once - in the group summary ("Thought for 2s"). The label is
@@ -792,6 +807,7 @@ describe("chat find projection", () => {
         hideReasoning: false,
         queuePauseReasonProtocolSupported: null,
         splitLongTurns: true,
+        botSendQuestionStates: null,
       },
     )[0];
 
@@ -842,6 +858,7 @@ describe("chat find projection", () => {
       hideReasoning: false,
       queuePauseReasonProtocolSupported: null,
       splitLongTurns: true,
+      botSendQuestionStates: null,
     })[0];
 
     expect(row.units.map((unit) => unit.unitId)).toContain(
@@ -883,6 +900,7 @@ describe("chat find projection", () => {
         hideReasoning: false,
         queuePauseReasonProtocolSupported: null,
         splitLongTurns: true,
+        botSendQuestionStates: null,
       },
     )
       .flatMap((row) => row.units)
@@ -928,6 +946,7 @@ describe("chat find projection", () => {
       hideReasoning: false,
       queuePauseReasonProtocolSupported: null,
       splitLongTurns: true,
+      botSendQuestionStates: null,
     })[0];
     const renderId = derivePromotedSubagentRenderId(subagentId);
     const headerUnit = row.units.find(
@@ -996,6 +1015,7 @@ describe("chat find projection", () => {
       hideReasoning: false,
       queuePauseReasonProtocolSupported: null,
       splitLongTurns: true,
+      botSendQuestionStates: null,
     })[0];
     const renderId = derivePromotedSubagentRenderId(subagentId);
     const bodyUnit = row.units.find(
@@ -1047,6 +1067,7 @@ describe("chat find projection", () => {
       hideReasoning: false,
       queuePauseReasonProtocolSupported: null,
       splitLongTurns: true,
+      botSendQuestionStates: null,
     })[0];
     const headerUnit = row.units.find(
       (unit) =>
@@ -1096,6 +1117,7 @@ describe("chat find projection", () => {
       hideReasoning: false,
       queuePauseReasonProtocolSupported: null,
       splitLongTurns: true,
+      botSendQuestionStates: null,
     })[0];
 
     expect(rowSearchText(row)).toContain("1 of 3 Done");
@@ -1152,6 +1174,7 @@ describe("chat find projection", () => {
       hideReasoning: false,
       queuePauseReasonProtocolSupported: null,
       splitLongTurns: true,
+      botSendQuestionStates: null,
     })[0];
 
     expect(rowSearchText(row)).toContain("Refactor the search index");
@@ -1199,6 +1222,7 @@ describe("chat find projection", () => {
       hideReasoning: false,
       queuePauseReasonProtocolSupported: null,
       splitLongTurns: true,
+      botSendQuestionStates: null,
     })
       .map((row) => rowSearchText(row))
       .join("\n");
@@ -1239,6 +1263,7 @@ describe("chat find projection", () => {
       hideReasoning: false,
       queuePauseReasonProtocolSupported: null,
       splitLongTurns: true,
+      botSendQuestionStates: null,
     })[0];
     const noticeUnit = row.units.find(
       (unit) => unit.unitId === chatFindSegmentUnitId("notice-top"),
@@ -1285,6 +1310,7 @@ describe("chat find projection", () => {
       hideReasoning: false,
       queuePauseReasonProtocolSupported: null,
       splitLongTurns: true,
+      botSendQuestionStates: null,
     })[0];
     const textOf = (id: string): string | undefined =>
       row.units.find((unit) => unit.unitId === chatFindSegmentUnitId(id))?.text;
@@ -1326,6 +1352,7 @@ describe("chat find projection", () => {
       hideReasoning: false,
       queuePauseReasonProtocolSupported: null,
       splitLongTurns: true,
+      botSendQuestionStates: null,
     })[0];
     const retryUnit = row.units.find(
       (unit) => unit.unitId === chatFindSegmentUnitId("retry-notice"),
@@ -1382,6 +1409,7 @@ describe("chat find projection", () => {
       hideReasoning: false,
       queuePauseReasonProtocolSupported: null,
       splitLongTurns: true,
+      botSendQuestionStates: null,
     })[0];
     const renderId = derivePromotedSubagentRenderId(subagentId);
     const bodyUnit = row.units.find(
@@ -1437,6 +1465,7 @@ describe("chat find projection", () => {
         hideReasoning: false,
         queuePauseReasonProtocolSupported: null,
         splitLongTurns: true,
+        botSendQuestionStates: null,
       })[0];
     }
 
@@ -1547,6 +1576,7 @@ describe("chat find projection", () => {
       hideReasoning: false,
       queuePauseReasonProtocolSupported: null,
       splitLongTurns: true,
+      botSendQuestionStates: null,
     })[0];
 
     expect(row.units.map((unit) => unit.unitId)).toEqual([
@@ -1583,6 +1613,7 @@ describe("chat find projection", () => {
       hideReasoning: false,
       queuePauseReasonProtocolSupported: null,
       splitLongTurns: true,
+      botSendQuestionStates: null,
     })[0];
 
     expect(row.units.map((unit) => unit.unitId)).toEqual([
@@ -1610,6 +1641,7 @@ describe("chat find projection", () => {
       hideReasoning: false,
       queuePauseReasonProtocolSupported: null,
       splitLongTurns: true,
+      botSendQuestionStates: null,
     })[0];
 
     expect(row.units.map((unit) => unit.unitId)).toEqual([
@@ -1640,6 +1672,7 @@ describe("chat find projection", () => {
       hideReasoning: false,
       queuePauseReasonProtocolSupported: null,
       splitLongTurns: true,
+      botSendQuestionStates: null,
     })[0];
     const unsplit = buildChatFindRows(
       [assistant],
@@ -1649,6 +1682,7 @@ describe("chat find projection", () => {
         hideReasoning: false,
         queuePauseReasonProtocolSupported: null,
         splitLongTurns: false,
+        botSendQuestionStates: null,
       },
     )[0];
     const splitUnit = split.units.find(
@@ -1685,6 +1719,7 @@ describe("chat find projection", () => {
       hideReasoning: false,
       queuePauseReasonProtocolSupported: null,
       splitLongTurns: true,
+      botSendQuestionStates: null,
     })[0];
 
     expect(row.units.map((unit) => unit.unitId)).toEqual([
@@ -1716,6 +1751,7 @@ describe("chat find projection", () => {
       hideReasoning: false,
       queuePauseReasonProtocolSupported: null,
       splitLongTurns: true,
+      botSendQuestionStates: null,
     })[0];
 
     expect(row.units.map((unit) => unit.unitId)).toEqual([
@@ -1752,6 +1788,7 @@ describe("chat find projection", () => {
       hideReasoning: false,
       queuePauseReasonProtocolSupported: null,
       splitLongTurns: true,
+      botSendQuestionStates: null,
     })[0];
 
     expect(row.units).toEqual([]);
@@ -1828,6 +1865,7 @@ describe("chat find projection", () => {
           hideReasoning: false,
           queuePauseReasonProtocolSupported: null,
           splitLongTurns: true,
+          botSendQuestionStates: null,
         },
       )[0];
 
@@ -1862,6 +1900,7 @@ describe("chat find projection", () => {
           hideReasoning: false,
           queuePauseReasonProtocolSupported: null,
           splitLongTurns: true,
+          botSendQuestionStates: null,
         },
       )[0];
 
@@ -1888,6 +1927,7 @@ describe("chat find projection", () => {
             hideReasoning: false,
             queuePauseReasonProtocolSupported: null,
             splitLongTurns: true,
+            botSendQuestionStates: null,
           },
         )[0];
         const text = rowSearchText(row);
@@ -1928,6 +1968,7 @@ describe("chat find projection", () => {
         hideReasoning: false,
         queuePauseReasonProtocolSupported: true,
         splitLongTurns: true,
+        botSendQuestionStates: null,
       })[0];
 
       expect(
@@ -1947,6 +1988,7 @@ describe("chat find projection", () => {
         hideReasoning: false,
         queuePauseReasonProtocolSupported: true,
         splitLongTurns: true,
+        botSendQuestionStates: null,
       })[0];
 
       expect(rowSearchText(row)).toContain("queued message was held");
@@ -1965,6 +2007,7 @@ describe("chat find projection", () => {
         hideReasoning: false,
         queuePauseReasonProtocolSupported: false,
         splitLongTurns: true,
+        botSendQuestionStates: null,
       })[0];
 
       expect(
@@ -1987,6 +2030,7 @@ describe("chat find projection", () => {
         hideReasoning: false,
         queuePauseReasonProtocolSupported: null,
         splitLongTurns: true,
+        botSendQuestionStates: null,
       })[0];
 
       expect(
@@ -2049,6 +2093,7 @@ describe("chat find projection", () => {
             hideReasoning: false,
             queuePauseReasonProtocolSupported: protocolSupported,
             splitLongTurns: true,
+            botSendQuestionStates: null,
           },
         )[0];
 
@@ -2077,6 +2122,7 @@ describe("chat find projection", () => {
         hideReasoning: false,
         queuePauseReasonProtocolSupported: true,
         splitLongTurns: true,
+        botSendQuestionStates: null,
       })[0];
 
       expect(
@@ -2104,6 +2150,7 @@ describe("chat find projection", () => {
         hideReasoning: false,
         queuePauseReasonProtocolSupported: true,
         splitLongTurns: true,
+        botSendQuestionStates: null,
       })[0];
 
       expect(
@@ -2140,6 +2187,7 @@ describe("buildChatFindRows - hideReasoning", () => {
       hideReasoning: true,
       queuePauseReasonProtocolSupported: true,
       splitLongTurns: true,
+      botSendQuestionStates: null,
     })[0];
 
     expect(row.units).toEqual([]);
@@ -2251,6 +2299,7 @@ describe("buildSubagentChatFindRows", () => {
       managedCommand: null,
       agentMessageReceipt: null,
       agentMessageDelivery: null,
+      botSendReceipt: null,
       isStreaming: false,
       endState: null,
       stopped: false,
@@ -2326,6 +2375,7 @@ describe("chat find projection of an unsuccessful compaction", () => {
     hideReasoning: false,
     queuePauseReasonProtocolSupported: null,
     splitLongTurns: true,
+    botSendQuestionStates: null,
   } as const;
 
   function findTextOf(persisted: Record<string, unknown>): string {

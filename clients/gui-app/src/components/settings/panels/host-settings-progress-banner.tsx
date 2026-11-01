@@ -9,7 +9,7 @@ interface HostProgressBannerProps {
 /**
  * Settings' live host-mutation banner.
  *
- * Reads the SAME copy table as the window narrator (F19). These two surfaces
+ * Reads the SAME copy table as the window narrator. These two surfaces
  * used to phrase one install two ways - "Setting up host" here against
  * "Setting up Traycer Host…" there, MiB here against MB there - so watching a
  * download from Settings and from the boot surface showed different words and

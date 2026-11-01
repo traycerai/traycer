@@ -1,6 +1,7 @@
 import type { Element, Root, Text } from "hast";
 import { visit } from "unist-util-visit";
-import { TRAYCER_AGENT_TAG } from "./const";
+import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
+import { TRAYCER_AGENT_TAG, TRAYCER_MENTION_TAG } from "./const";
 
 const UUID_REFERENCE_TOKEN_PATTERN =
   /(?<![0-9a-f-])[0-9a-f][0-9a-f-]{7,35}(?![0-9a-f-])/gi;
@@ -16,7 +17,12 @@ export function rehypeTraycerAgentReferences() {
         "tagName" in parent &&
         (parent.tagName === "code" ||
           parent.tagName === "a" ||
-          parent.tagName === TRAYCER_AGENT_TAG)
+          parent.tagName === TRAYCER_AGENT_TAG ||
+          // A mention's text is a member's id, not an agent's. Without the
+          // features there are no mentions: a raw `traycer-mention` tag is
+          // read through, as the release before read it.
+          (UNRELEASED_FEATURES_ENABLED &&
+            parent.tagName === TRAYCER_MENTION_TAG))
       ) {
         return;
       }

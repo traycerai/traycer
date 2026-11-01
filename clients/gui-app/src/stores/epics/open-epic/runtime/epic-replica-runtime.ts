@@ -141,7 +141,7 @@ export interface EpicReplicaRuntimeOptions {
   /**
    * Where this runtime's bytes are reported.
    *
-   * Supplied, never reached for. T5's accountant is a module-scoped singleton
+   * Supplied, never reached for. The accountant is a module-scoped singleton
    * whose app-wideness comes from MODULE IDENTITY, so a worker that imported
    * it would silently keep a second copy of the books — invisible in-process,
    * where there is only ever one. Taking the port as an option is what moves
@@ -1261,47 +1261,6 @@ export function createEpicReplicaRuntime(
   }
 
   /**
-   * Re-read the manifest and move the arm if it says to.
-   *
-   * Idempotent and cheap: an unchanged verdict plans no steps, and an
-   * `"undecided"` one holds whatever is installed - which is what makes this
-   * safe to call from a support-change listener that also fires on every
-   * reconnect's support reset.
-   *
-   * ## Undecided without the LANES installed is the PROBE case, not a hold
-   *
-   * The hold rule ("an undecided verdict never displaces an installed arm")
-   * describes a reconnect, where support was wiped but an arm is already
-   * serving. It is a rule about not TEARING DOWN a working arm, and the probe
-   * respects it: probing leaves whatever is installed serving, and only a
-   * probe that succeeds moves anything.
-   *
-   * With no arm installed there is nothing to hold and, worse, nothing that
-   * would ever make the verdict decide: the client learns a method's support
-   * from a subscribe completing, so a runtime that installs nothing while it
-   * waits opens no subscribe, receives no answer, and stalls on that
-   * connection permanently. So that case probes rather than waits - see
-   * {@link EpicLaneArm.probe}.
-   *
-   * An installed LEGACY arm is the same stall one step later, and it is the
-   * one a relay reaches every time. `RemoteStreamClient.getMethodSupport` is
-   * `"unknown"` forever and its support subscription is a no-op, so on a
-   * remote host the verdict is `"undecided"` for the life of the runtime: the
-   * first probe fails against an old host, legacy installs, and the tab is
-   * then pinned to `@1` no matter what the host becomes. Nothing short of
-   * recreating the runtime moved it - not the reconnect, not the re-handshake
-   * that a host upgraded in place performs, because neither produces a
-   * manifest verdict on that transport. Re-probing on the same edge is what
-   * makes "a host that upgrades under this tab moves onto the lanes" true on
-   * the transport where the manifest cannot say so.
-   *
-   * The cost on a host that is genuinely legacy is one refused subscribe per
-   * reconnect - the same one the first open already pays. A LOCAL legacy host
-   * mostly avoids even that: its client learns `"unsupported"` from the failed
-   * subscribe, so its verdict is `"legacy"` rather than `"undecided"` until a
-   * reconnect wipes it.
-   */
-  /**
    * The key the body tier holds one artifact's live doc under, per arm.
    *
    * `@1` addresses a body by the ROOM that hosts it - one room, many bodies -
@@ -1346,6 +1305,47 @@ export function createEpicReplicaRuntime(
     options.delivery.publish({ installedArm });
   }
 
+  /**
+   * Re-read the manifest and move the arm if it says to.
+   *
+   * Idempotent and cheap: an unchanged verdict plans no steps, and an
+   * `"undecided"` one holds whatever is installed - which is what makes this
+   * safe to call from a support-change listener that also fires on every
+   * reconnect's support reset.
+   *
+   * ## Undecided without the LANES installed is the PROBE case, not a hold
+   *
+   * The hold rule ("an undecided verdict never displaces an installed arm")
+   * describes a reconnect, where support was wiped but an arm is already
+   * serving. It is a rule about not TEARING DOWN a working arm, and the probe
+   * respects it: probing leaves whatever is installed serving, and only a
+   * probe that succeeds moves anything.
+   *
+   * With no arm installed there is nothing to hold and, worse, nothing that
+   * would ever make the verdict decide: the client learns a method's support
+   * from a subscribe completing, so a runtime that installs nothing while it
+   * waits opens no subscribe, receives no answer, and stalls on that
+   * connection permanently. So that case probes rather than waits - see
+   * {@link EpicLaneArm.probe}.
+   *
+   * An installed LEGACY arm is the same stall one step later, and it is the
+   * one a relay reaches every time. `RemoteStreamClient.getMethodSupport` is
+   * `"unknown"` forever and its support subscription is a no-op, so on a
+   * remote host the verdict is `"undecided"` for the life of the runtime: the
+   * first probe fails against an old host, legacy installs, and the tab is
+   * then pinned to `@1` no matter what the host becomes. Nothing short of
+   * recreating the runtime moved it - not the reconnect, not the re-handshake
+   * that a host upgraded in place performs, because neither produces a
+   * manifest verdict on that transport. Re-probing on the same edge is what
+   * makes "a host that upgrades under this tab moves onto the lanes" true on
+   * the transport where the manifest cannot say so.
+   *
+   * The cost on a host that is genuinely legacy is one refused subscribe per
+   * reconnect - the same one the first open already pays. A LOCAL legacy host
+   * mostly avoids even that: its client learns `"unsupported"` from the failed
+   * subscribe, so its verdict is `"legacy"` rather than `"undecided"` until a
+   * reconnect wipes it.
+   */
   function applySelection(): void {
     if (disposed) return;
     const verdict =
@@ -1366,6 +1366,26 @@ export function createEpicReplicaRuntime(
       return;
     }
     executeTransition(verdict);
+  }
+
+  /**
+   * A lane the installed arm requires is not served. Fall back to legacy.
+   *
+   * The installed arm requires ALL its required lanes to be served. A host can serve `epic.status.subscribe` and
+   * refuse `epic.state.subscribe` - a rolling upgrade, a lane behind a flag -
+   * and on that host the probe succeeds, the arm installs, and the records
+   * lane then dies with a typed refusal that no manifest will ever repeat. The
+   * result is an epic that renders nothing, on the arm whose whole contract is
+   * to be indistinguishable from `@1`.
+   *
+   * So this is a full replacement rather than a degraded mode: detach the lane
+   * arm, reset the planes, open `@1`. Idempotent - the arm reports once, and
+   * an arm already replaced is not replaced again.
+   */
+  function applyRequiredLaneUnsupported(): void {
+    if (disposed) return;
+    if (installedArm !== "lanes") return;
+    executeTransition("legacy");
   }
 
   /**
@@ -1392,27 +1412,6 @@ export function createEpicReplicaRuntime(
    * manifest path runs. Reached only through `applySelection`'s re-probe, so
    * on any transport where the manifest CAN decide, it already has.
    */
-  /**
-   * A lane the installed arm requires is not served. Fall back to legacy.
-   *
-   * The arm is installed on ALL its required lanes being served, not on the
-   * first one that answers. A host can serve `epic.status.subscribe` and
-   * refuse `epic.state.subscribe` - a rolling upgrade, a lane behind a flag -
-   * and on that host the probe succeeds, the arm installs, and the records
-   * lane then dies with a typed refusal that no manifest will ever repeat. The
-   * result is an epic that renders nothing, on the arm whose whole contract is
-   * to be indistinguishable from `@1`.
-   *
-   * So this is a full replacement rather than a degraded mode: detach the lane
-   * arm, reset the planes, open `@1`. Idempotent - the arm reports once, and
-   * an arm already replaced is not replaced again.
-   */
-  function applyRequiredLaneUnsupported(): void {
-    if (disposed) return;
-    if (installedArm !== "lanes") return;
-    executeTransition("legacy");
-  }
-
   function applyProbeOutcome(outcome: EpicLaneProbeOutcome): void {
     if (disposed) return;
     if (installedArm === "lanes") return;

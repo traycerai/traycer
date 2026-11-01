@@ -4,7 +4,7 @@ import { DefaultHostReadyGate } from "@/components/layout/host-readiness-control
 /**
  * Compatibility-named signed-in readiness root.
  *
- * T8 keeps this component name so route-level callers do not need a migration.
+ * This component keeps its name so route-level callers do not need a migration.
  * The one controller mounts above RouterProvider so host-stream bridges and
  * routed slots consume the exact same lifecycle; this wrapper deliberately adds
  * no second subscription of its own.

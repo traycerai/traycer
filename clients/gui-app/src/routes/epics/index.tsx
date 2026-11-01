@@ -55,7 +55,7 @@ export const Route = createFileRoute("/epics/")({
     // released cloud-backed list on the retained credential, so without the
     // gate a route navigation spent cloud capability the verdict withheld. A
     // manifest that has not arrived yet answers `null` and skips - the
-    // component fetches the moment the host says `1.6`. Found in review.
+    // component fetches the moment the host says `1.6`.
     if (
       !authorizesCloudCapability(auth.status) &&
       !negotiatedListTasksServesLocalFirst(

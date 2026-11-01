@@ -254,8 +254,8 @@ export type ResourceMonitorPopoverTrigger =
       readonly trigger: "header-button";
       /**
        * The glyph, or an outlined box beside the usage button as its equal and
-       * so in that button's own treatment: the strip's tile and readout (F6),
-       * the width they are given, or the header's readings at their own (G6).
+       * so in that button's own treatment: the strip's tile and readout,
+       * the width they are given, or the header's readings at their own.
        */
       readonly form: BarReadingForm;
     }

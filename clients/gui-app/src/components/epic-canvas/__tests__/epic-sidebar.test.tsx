@@ -908,7 +908,7 @@ describe("<EpicLeftPanelRail />", () => {
   /**
    * A divider is a spacer the user adds to the rail (L-155): at rest it draws
    * as the rail's own gap and nothing more, and it becomes a handle only for
-   * the rail the user is actually customizing (L-109, R3-06). The shipped
+   * the rail the user is actually customizing (L-109). The shipped
    * rail carries none, so most of these seed one first.
    */
   describe("dividers", () => {
@@ -1464,7 +1464,7 @@ describe("<EpicLeftPanelRail />", () => {
 
 /**
  * The sidebar body draws the one panel the rail says is active, and it draws
- * it WHOLE (L-157, R5R-01).
+ * it WHOLE (L-157).
  *
  * Per-panel section collapse belongs to a stacked member only (L-166), and the
  * case that forced that is an upgrade rather than a gesture: a user who collapsed Artifacts while it was

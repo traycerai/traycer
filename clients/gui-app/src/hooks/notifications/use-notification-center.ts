@@ -103,7 +103,7 @@ export function useNotificationCenter(): NotificationCenter {
     nestedMenuOpenRef.current = menuOpen;
   }, []);
 
-  // Analytics-only entry-point tracking, independent of the T04 focus-
+  // Analytics-only entry-point tracking, independent of the focus-
   // modality ref above: a direct trigger interaction sets this just before
   // the open transition; anything that flips `open` without going through the
   // trigger (native-notification bridge opens, including the
@@ -215,7 +215,7 @@ export function useNotificationCenter(): NotificationCenter {
       // Radix's DismissableLayer reads that as focus leaving the popover
       // and dismisses it. Escape still closes the popover normally; this
       // only turns off the focus-outside path, which nothing else in the
-      // T04 focus contract depends on.
+      // focus contract depends on.
       onFocusOutside: (event) => event.preventDefault(),
       // Real-browser-only bug (jsdom's fireEvent bypasses hit-testing and
       // never reproduced it): while the modal filter menu is open, its

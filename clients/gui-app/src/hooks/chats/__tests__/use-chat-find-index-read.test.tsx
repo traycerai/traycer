@@ -11,7 +11,7 @@ import {
 } from "@/stores/chats/transcript-window";
 
 /**
- * F14-9: chat find's index READ - the row an index hit names, hydrated without
+ * Chat find's index READ - the row an index hit names, hydrated without
  * moving the viewport so the client scan can confirm the hit.
  *
  * The host is faked at `useHostQuery`, the same seam `use-chat-locate-row`'s

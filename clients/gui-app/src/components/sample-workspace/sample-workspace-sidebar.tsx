@@ -93,7 +93,7 @@ const MINUTE_MS = 60_000;
 
 /**
  * The sample scene's sidebar, expanded, drawn from the real sidebar's own
- * components (F3): the rail's tiles, stacks and dividers, the task header, the
+ * components: the rail's tiles, stacks and dividers, the task header, the
  * sidebar body with its sections and split, and the agent and artifact rows.
  * What is the sample's own is only the data: the sample task's rows, and a
  * `Body` per panel that feeds them in.
@@ -101,7 +101,7 @@ const MINUTE_MS = 60_000;
  * The body shows the panel the user is customizing: the selected Sidebar
  * setting when it is a panel, otherwise the rail's first. A hidden panel is
  * absent at rest and materialises, ghosted, only while its setting is hovered
- * or selected (C3).
+ * or selected.
  *
  * The `<aside>` is the sidebar surface: its empty space selects it, a drag
  * moves it, and its rail is the cluster a rail drag resolves against. A
