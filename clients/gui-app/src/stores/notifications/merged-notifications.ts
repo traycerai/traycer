@@ -33,6 +33,7 @@ import {
   invalidateNotificationIndicatorsForEntities,
 } from "@/lib/notifications/notification-indicator-cache";
 import {
+  categoryForHostNotification,
   categoryForNotificationSource,
   type NotificationCategory,
 } from "@/lib/notifications/notification-category";
@@ -155,8 +156,9 @@ export interface MergedNotificationRow {
    * relayed the feed. Feed mutations never use it - they address the entry.
    * `null` for rows with no meaningful origin. */
   readonly originHostId: string | null;
-  /** Product-vocabulary category, mapped from `source` at the projection
-   * boundary so consumers never branch on the internal source seam. */
+  /** Product-vocabulary category, assigned by the projection so consumers
+   * never branch on the internal source seam. A row's `source` answers for it
+   * unless its kind names its own category. */
   readonly category: NotificationCategory;
 }
 
@@ -2107,7 +2109,7 @@ function rowFromHostEntryForOrigin(
     resolvedAt: "resolvedAt" in entry ? (entry.resolvedAt ?? null) : null,
     sourceRef: entry.sourceRef,
     originHostId,
-    category: categoryForNotificationSource("host"),
+    category: categoryForHostNotification("host", entry.kind),
   };
 }
 
@@ -2189,7 +2191,7 @@ export function rowFromCloudFeedRow(
       "resolvedAt" in row.entry ? (row.entry.resolvedAt ?? null) : null,
     sourceRef: row.entry.sourceRef,
     originHostId: row.originHostId,
-    category: categoryForNotificationSource("cloud"),
+    category: categoryForHostNotification("cloud", row.entry.kind),
   };
 }
 

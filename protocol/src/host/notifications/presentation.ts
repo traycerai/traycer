@@ -294,7 +294,11 @@ function sandboxNoticePresentation(
   }
 }
 
-/** The environments rows. The server no longer writes these kinds; readers drop them. */
+/**
+ * The environments rows. The server no longer writes these kinds and readers
+ * drop them, except `team.role.changed` — the center's one named exception,
+ * which is written and shown, so the copy composed for it below is read.
+ */
 function environmentNotificationPresentation(
   kind:
     | "environment.move.stalled"

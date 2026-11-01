@@ -43,7 +43,7 @@ import {
   type ParsedNotificationActivationPayload,
 } from "@/lib/notifications/notification-activation-envelope";
 import type { NotificationPayload } from "@/lib/notifications/payload";
-import { isDroppedNotification } from "@/lib/notifications/dropped-notification-kinds";
+import { isLiveAnnouncedNotification } from "@/lib/notifications/dropped-notification-kinds";
 import {
   notificationChimeEventTypeForSeverities,
   playNotificationChimeSound,
@@ -476,7 +476,7 @@ export async function displayHostChannelEmission(
   const rows: MergedNotificationRow[] = [];
   const occurrences: NotificationFeedOccurrence[] = [];
   for (const entry of entries) {
-    if (isDroppedNotification(entry, null)) continue;
+    if (!isLiveAnnouncedNotification(entry, null)) continue;
     const key = feedOccurrenceKey(originHostId, entry.id, entry);
     if (feedDisplayReceipts.has(key) || entry.readAt !== null) {
       continue;
@@ -513,6 +513,9 @@ export async function displayCloudSnapshotArrivals(
   const focused = readFocusedHostNotificationPresence();
   const deliveries: Promise<void>[] = [];
   for (const entry of entries) {
+    // An arrival is a row the cloud store already KEPT, so the read policy has
+    // run; what is left to decide is whether this kind announces itself.
+    if (!isLiveAnnouncedNotification(entry.entry, entry.entryId)) continue;
     const key = feedOccurrenceKey(
       entry.originHostId,
       entry.coalesceKey,

@@ -61,6 +61,9 @@ import {
   type OrganizationContextValue,
 } from "@/hooks/organization/organization-context";
 import { tabRefKey } from "@/stores/tabs/layout";
+import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
+import { TRACY_TAB_REF } from "@/stores/tabs/kinds/tracy";
+import { useSettingsStore } from "@/stores/settings/settings-store";
 import { useTabsStore } from "@/stores/tabs/store";
 import type { TabRef } from "@/stores/tabs/types";
 
@@ -74,6 +77,8 @@ vi.mock("@/hooks/notifications/use-host-notification-indicators-query", () => ({
     refetch: () => Promise.resolve(),
   }),
 }));
+
+const SHOW_TRACY_AT_START = useSettingsStore.getState().showTracy;
 
 const A: TabRef = { kind: "epic", id: "row-a" };
 const B: TabRef = { kind: "epic", id: "row-b" };
@@ -372,6 +377,8 @@ describe("RootDndProvider on a vertical strip", () => {
     vi.restoreAllMocks();
     useTabsStore.setState(useTabsStore.getInitialState(), true);
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    useTracySurfaceStore.setState(useTracySurfaceStore.getInitialState(), true);
+    useSettingsStore.setState({ showTracy: SHOW_TRACY_AT_START });
   });
 
   for (const edge of ["left", "right"] as const) {
@@ -669,9 +676,12 @@ describe("RootDndProvider on a vertical strip", () => {
 
     it("never joins a group with a tab that is not a task, and goes past it whole", async () => {
       seedOrganizationGroup([B, X, Y], [A, B, X, Y]);
-      // The dragged row is a bot's tab: groups hold tasks.
-      const botTab: TabRef = { kind: "bot", id: A.id };
+      // The dragged row is the Tracy surface's tab, ordinary with Show Tracy
+      // off (pinned, it cannot be dragged at all): groups hold tasks.
+      const botTab: TabRef = TRACY_TAB_REF;
       act(() => {
+        useSettingsStore.setState({ showTracy: false });
+        useTracySurfaceStore.getState().openSurface("host-1");
         const state = useTabsStore.getState();
         useTabsStore.setState({
           items: state.items.map((item) =>

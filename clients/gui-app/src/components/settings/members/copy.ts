@@ -150,10 +150,6 @@ export function roleGrantCommon(teamName: string): string {
   return `Full use and management of ${teamName}'s sandboxes and connected services. Uses your ${teamName} credits. Every member can interrupt or permanently delete any ${teamName} sandbox, including ones you created. Your name and email are visible to ${teamName}'s members. Your actions are attributed to you in status, history and notifications that the reader is authorized to see.`;
 }
 
-export function roleGrantText(role: TeamRole, teamName: string): string {
-  return `${roleGrantPrefix(role, teamName)} ${roleGrantCommon(teamName)}`;
-}
-
 export function invitePendingSeatsSentence(teamName: string): string {
   return `Pending invitations count toward ${teamName}'s paid seats as soon as they are sent, before acceptance.`;
 }

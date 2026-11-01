@@ -26,7 +26,7 @@ const FIRST_IMPORTS: ReadonlyArray<readonly [string, () => Promise<unknown>]> =
     ],
     ["kinds/epic", () => import("@/stores/tabs/kinds/epic")],
     ["kinds/draft", () => import("@/stores/tabs/kinds/draft")],
-    ["kinds/bot", () => import("@/stores/tabs/kinds/bot")],
+    ["kinds/tracy", () => import("@/stores/tabs/kinds/tracy")],
     ["kinds/history", () => import("@/stores/tabs/kinds/history")],
     ["kinds/settings", () => import("@/stores/tabs/kinds/settings")],
     ["kinds/home", () => import("@/stores/tabs/kinds/home")],

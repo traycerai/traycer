@@ -50,7 +50,7 @@ import {
   useBotOpenThreadStore,
   useBotRail,
 } from "@/stores/bots/bot-open-thread-store";
-import { useBotTabsStore } from "@/stores/bots/bot-tabs-store";
+import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
 import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { __resetBotSubscriptionsForTesting } from "@/hooks/bots/use-bot-subscription";
@@ -595,9 +595,8 @@ beforeEach(() => {
   };
   botStream = new StubSession();
   mocks.streamClient = new StubHostStreamClient(botStream);
-  useBotTabsStore
-    .getState()
-    .openBotTab({ botId: BOT_ID, hostId: HOST_ID, title: "Tracy" });
+  useTracySurfaceStore.getState().openSurface(HOST_ID);
+  useTracySurfaceStore.getState().selectChannel(BOT_ID);
 });
 
 afterEach(() => {
@@ -609,7 +608,12 @@ afterEach(() => {
   sessions.clear();
   mocks.sessionFor = null;
   mocks.threadListData = { threads: [], threadAnchors: null };
-  useBotTabsStore.setState({ tabs: {} });
+  useTracySurfaceStore.setState({
+    open: false,
+    hostId: null,
+    botId: null,
+    visitedBotIds: [],
+  });
   useBotOpenThreadStore.setState({ byBotId: {} });
   useAuthStore.setState({ profile: null });
   __resetBotSubscriptionsForTesting();

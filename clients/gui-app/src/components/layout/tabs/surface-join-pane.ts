@@ -61,9 +61,9 @@ export function surfaceJoinPane(
       return draftJoinPane(landing.get(tab.id) ?? null, edge);
     case "settings":
       return edge === "left" ? "panel" : "surface";
-    // A bot tab paints its own surface edge to edge, like a draft: a header
+    // The Tracy surface paints its own surface edge to edge, like a draft: a header
     // band on top and the conversation below it, no canvas showing through.
-    case "bot":
+    case "tracy":
       return "surface";
     case "home":
     case "history":
