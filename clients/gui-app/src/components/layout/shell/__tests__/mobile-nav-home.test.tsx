@@ -150,6 +150,12 @@ vi.mock("@/lib/host", () => ({
   useAuthService: () => ({ signOut: () => Promise.resolve() }),
 }));
 
+// The drawer's Notifications row opens the phone's notification centre, whose
+// bell state reads the host binding; these rows are not under test here.
+vi.mock("@/hooks/notifications/use-open-mobile-notification-center", () => ({
+  useOpenMobileNotificationCenter: () => () => {},
+}));
+
 vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHost: () => ({
     authnBaseUrl: "https://authn.test",
