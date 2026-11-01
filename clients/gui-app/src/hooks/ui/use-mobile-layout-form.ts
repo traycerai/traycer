@@ -1,6 +1,7 @@
 import * as React from "react";
 import {
   MOBILE_PHONE_PORTRAIT_WIDTH_LIMIT_PX,
+  mobileExpandedStripFits,
   resolveMobileLayoutForm,
   type MobileLayoutForm,
   type MobileTileCount,
@@ -91,13 +92,18 @@ function readShellContentWidthServerSnapshot(): number {
   return 0;
 }
 
+export interface MobileLayoutReading extends MobileLayoutForm {
+  /** Whether the expanded strip fits, so that the person's choice can draw. */
+  readonly expandedFits: boolean;
+}
+
 /**
  * The form the phone shell draws right now, with `openTiles` open. A surface
  * that needs to know whether a second tile would fit asks with 2.
  */
 export function useMobileLayoutForm(
   openTiles: MobileTileCount,
-): MobileLayoutForm {
+): MobileLayoutReading {
   const contentWidth = React.useSyncExternalStore(
     subscribeToShellContentWidth,
     readShellContentWidth,
@@ -109,10 +115,11 @@ export function useMobileLayoutForm(
     readPhonePortraitServerSnapshot,
   );
   const collapsed = useSideStripCollapsed();
-  return resolveMobileLayoutForm({
+  const form = resolveMobileLayoutForm({
     contentWidth,
     phonePortrait,
     stripPreference: collapsed ? "rail" : "expanded",
     openTiles,
   });
+  return { ...form, expandedFits: mobileExpandedStripFits(contentWidth) };
 }
