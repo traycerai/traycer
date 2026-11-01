@@ -165,6 +165,22 @@ describe("uninstallHost", () => {
     expect(existsSync(stagedDir)).toBe(false);
   });
 
+  it("removes the last-attempt record with the install it describes", async () => {
+    const { uninstallHost } = await import("../uninstall");
+    mkdirSync(installDirFor(ENV), { recursive: true });
+    const recordPath = join(hostHomeFor(ENV), "update-last-attempt.json");
+    writeFileSync(recordPath, "{}");
+
+    await uninstallHost({
+      environment: ENV,
+      purgeChannelRuntime: false,
+      verifyMutationCapability: testMutationVerifier,
+      discardAttemptRecord: null,
+    });
+
+    expect(existsSync(recordPath)).toBe(false);
+  });
+
   it("removes staged/ under --all too (purgeChannelRuntime does not gate staged-dir removal)", async () => {
     const { uninstallHost } = await import("../uninstall");
     mkdirSync(installDirFor(ENV), { recursive: true });

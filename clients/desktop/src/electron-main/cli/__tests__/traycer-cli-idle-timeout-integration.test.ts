@@ -136,6 +136,29 @@ describe("streamTraycerCliJson idle budget against a real subprocess", () => {
     expect(elapsed).toBeGreaterThan(2_500);
   }, 30_000);
 
+  it("tells the CLI the app is behind it, so a lock it takes can say so", async () => {
+    const script = `#!/usr/bin/env node
+process.stdout.write(JSON.stringify({
+  type: "result",
+  status: "ok",
+  data: { initiator: process.env.TRAYCER_HOST_UPDATE_INITIATOR },
+}) + "\\n");
+`;
+    const path = join(scriptDir, "fake-cli.mjs");
+    writeFileSync(path, script, "utf8");
+    chmodSync(path, 0o755);
+
+    const result = await streamTraycerCliJson<{ initiator: string }>({
+      args: ["host", "download", "--automatic"],
+      onEvent: () => undefined,
+      env: null,
+      idleTimeoutMs: 5_000,
+      signal: null,
+    });
+
+    expect(result.data.initiator).toBe("desktop");
+  }, 30_000);
+
   it("kills a child that stops reporting, once the budget elapses", async () => {
     writeFakeCli({
       tickMs: 100,
