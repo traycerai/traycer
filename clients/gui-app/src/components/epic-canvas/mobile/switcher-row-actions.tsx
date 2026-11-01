@@ -34,6 +34,7 @@ import { useEpicExportArtifacts } from "@/hooks/epic/use-epic-export-artifacts-m
 import { useEpicDeleteArtifact } from "@/hooks/epic/use-epic-node-mutations";
 import type { ArtifactExportFormat } from "@/lib/artifacts/artifact-export";
 import { useTerminalKillFor } from "@/hooks/terminal/use-terminal-kill-for-mutation";
+import { useDeletedArtifactsAvailable } from "@/hooks/epic/use-deleted-artifacts-available";
 import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
@@ -185,6 +186,7 @@ function SwitcherRowActionsBody(
   const deleteArtifact = useEpicDeleteArtifact(nodeId);
   const exportArtifacts = useEpicExportArtifacts();
   const artifact = useArtifactById(nodeId);
+  const restoreAvailable = useDeletedArtifactsAvailable(sessionHostId);
   // The sentence the sidebar row gives for the same tree, and subscribed to
   // its ANSWER as the sidebar rows are. `useShallow` is required, not
   // decorative: the selector mints a fresh object each call.
@@ -195,6 +197,7 @@ function SwitcherRowActionsBody(
             tree: state.tree,
             kind: "artifact",
             nodeIds: [nodeId],
+            restoreAvailable,
           })
         : describeTreeDeleteDisclosure({
             tree: state.tree,

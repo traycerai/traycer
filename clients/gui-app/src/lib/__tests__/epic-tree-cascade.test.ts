@@ -81,7 +81,25 @@ describe("describeTreeDeleteDisclosure", () => {
     tree: TreeSlice,
     nodeIds: readonly string[],
   ): TreeDeleteDisclosure {
-    return describeTreeDeleteDisclosure({ tree, kind: "artifact", nodeIds });
+    return describeTreeDeleteDisclosure({
+      tree,
+      kind: "artifact",
+      nodeIds,
+      restoreAvailable: false,
+    });
+  }
+
+  /** The same, where the host serves Deleted artifacts. */
+  function restorableArtifactDelete(
+    tree: TreeSlice,
+    nodeIds: readonly string[],
+  ): TreeDeleteDisclosure {
+    return describeTreeDeleteDisclosure({
+      tree,
+      kind: "artifact",
+      nodeIds,
+      restoreAvailable: true,
+    });
   }
 
   function promotionSentence(nested: string, under: string): string {
@@ -269,6 +287,59 @@ describe("describeTreeDeleteDisclosure", () => {
         },
       };
       expect(artifactDelete(tree, ["a"]).cascadeSummary).toBe("1 ticket");
+    });
+  });
+
+  /**
+   * A restore takes one artifact, so nested artifacts are not gone for good and
+   * do not come back with their parent either. The sentence says both, and the
+   * count paragraph is untouched.
+   */
+  describe("where the host can bring artifacts back", () => {
+    const tree = treeFromRecords([
+      makeRecord("leaf", "spec", null),
+      makeRecord("other-leaf", "spec", null),
+      makeRecord("parent", "spec", null),
+      makeRecord("ticket", "ticket", "parent"),
+    ]);
+
+    it("offers the restore for one artifact with nothing under it", () => {
+      expect(restorableArtifactDelete(tree, ["leaf"])).toEqual({
+        description: "You can bring it back from Deleted artifacts.",
+        cascadeSummary: null,
+        cascadeNestedUnder: "it",
+      });
+    });
+
+    it("says nested artifacts come back separately, beside their count", () => {
+      expect(restorableArtifactDelete(tree, ["parent"])).toEqual({
+        description:
+          "You can bring it back from Deleted artifacts. Artifacts nested under it come back separately.",
+        cascadeSummary: "1 ticket",
+        cascadeNestedUnder: "it",
+      });
+    });
+
+    it("says a selection comes back one at a time", () => {
+      expect(
+        restorableArtifactDelete(tree, ["leaf", "other-leaf"]).description,
+      ).toBe("You can bring them back one at a time from Deleted artifacts.");
+      expect(
+        restorableArtifactDelete(tree, ["leaf", "parent"]).description,
+      ).toBe(
+        "You can bring them back one at a time from Deleted artifacts. Artifacts nested under them come back separately.",
+      );
+    });
+
+    /** A row the reader also picked is not nested under anything extra. */
+    it("owes no nested sentence when the selection holds the whole subtree", () => {
+      expect(
+        restorableArtifactDelete(tree, ["parent", "ticket"]).description,
+      ).toBe("You can bring them back one at a time from Deleted artifacts.");
+    });
+
+    it("offers nothing for an empty selection", () => {
+      expect(restorableArtifactDelete(tree, []).description).toBe(UNDONE);
     });
   });
 

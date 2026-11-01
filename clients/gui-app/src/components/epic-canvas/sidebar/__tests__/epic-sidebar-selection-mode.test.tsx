@@ -134,6 +134,8 @@ interface TestState {
   chatRecordListAuthoritative: boolean;
   /** The terminal twin: `epic.listTuiAgents` has answered. */
   tuiAgentRecordListAuthoritative: boolean;
+  /** Whether the session's host serves Deleted artifacts. */
+  deletedArtifactsAvailable: boolean;
   activeArtifactId: string | null;
   openTileContentIds: ReadonlySet<string>;
   activePanelId: "chats" | "artifacts";
@@ -259,6 +261,7 @@ const testState = vi.hoisted<TestState>(() => ({
   snapshotLoaded: true,
   chatRecordListAuthoritative: true,
   tuiAgentRecordListAuthoritative: true,
+  deletedArtifactsAvailable: false,
   activeArtifactId: null,
   openTileContentIds: new Set<string>(),
   activePanelId: "chats",
@@ -1040,6 +1043,10 @@ vi.mock("@/hooks/epic/use-chat-archive-support", () => ({
   useChatArchiveSupportState: () => testState.archiveSupport,
 }));
 
+vi.mock("@/hooks/epic/use-deleted-artifacts-available", () => ({
+  useDeletedArtifactsAvailable: () => testState.deletedArtifactsAvailable,
+}));
+
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
   useHostSupportsMethod: () => testState.archiveSupport === true,
   useHostMethodSupport: () => testState.archiveSupport,
@@ -1442,6 +1449,7 @@ describe("epic sidebar selection mode", () => {
     testState.snapshotLoaded = true;
     testState.chatRecordListAuthoritative = true;
     testState.tuiAgentRecordListAuthoritative = true;
+    testState.deletedArtifactsAvailable = false;
     testState.activeArtifactId = null;
     testState.openTileContentIds = new Set<string>();
     testState.activePanelId = "chats";
@@ -3425,6 +3433,34 @@ describe("epic sidebar selection mode", () => {
   });
 
   /**
+   * Both routes, because each reads the host's restore support through its
+   * own hook, and the row menu and select mode must not disagree about it.
+   */
+  it("offers the restore from both routes where the host serves it", async () => {
+    seedArtifactTree();
+    testState.activePanelId = "artifacts";
+    testState.deletedArtifactsAvailable = true;
+    const expected =
+      "You can bring it back from Deleted artifacts. Artifacts nested under it come back separately.";
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    fireEvent.click(dropdownItem("delete-spec-root"));
+    expect(
+      within(await screen.findByTestId("confirm-destructive-dialog")).getByText(
+        expected,
+      ),
+    ).toBeTruthy();
+    cleanup();
+
+    openArtifactDeleteDialog(["spec-root"]);
+    expect(
+      within(await screen.findByTestId("confirm-destructive-dialog")).getByText(
+        expected,
+      ),
+    ).toBeTruthy();
+  });
+
+  /**
    * The delete acts on the RECORDS, not on the view, so a promoted agent the
    * archive filter is hiding is still promoted and still counted. Understating
    * it would be the panel's filter quietly deciding what the reader is told
@@ -5122,6 +5158,7 @@ describe("chat row archive", () => {
     testState.snapshotLoaded = true;
     testState.chatRecordListAuthoritative = true;
     testState.tuiAgentRecordListAuthoritative = true;
+    testState.deletedArtifactsAvailable = false;
     testState.activeArtifactId = null;
     testState.openTileContentIds = new Set<string>();
     testState.activePanelId = "chats";

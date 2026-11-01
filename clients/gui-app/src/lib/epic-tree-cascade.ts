@@ -187,6 +187,12 @@ export type TreeDeleteDisclosureInput =
       readonly kind: "artifact";
       /** Read as a set, so a repeated id cannot count a child twice. */
       readonly nodeIds: readonly string[];
+      /**
+       * Whether this host serves Deleted artifacts, the gate the tile and its
+       * menu item read (`useDeletedArtifactsAvailable`). Without it nothing
+       * deleted here can be brought back, so the dialog offers no restore.
+       */
+      readonly restoreAvailable: boolean;
     };
 
 /**
@@ -232,13 +238,11 @@ export function describeTreeDeleteDisclosure(
   const nodeIds = new Set(input.nodeIds);
   const nestedUnder = nodeIds.size === 1 ? "it" : "them";
   const nested = describeNestedRows(input, nodeIds.size, nestedUnder);
-  // The one place the undone sentence is joined to anything. Two call sites
+  const cost = describeDeleteCost(input, nodeIds.size);
+  // The one place the opening sentence is joined to anything. Two call sites
   // each joining it their own way is what let the dialogs drift apart.
   return {
-    description:
-      nested.sentence === null
-        ? DELETE_UNDONE
-        : `${DELETE_UNDONE} ${nested.sentence}`,
+    description: nested.sentence === null ? cost : `${cost} ${nested.sentence}`,
     cascadeSummary: nested.cascadeSummary,
     cascadeNestedUnder: nestedUnder,
   };
@@ -247,13 +251,32 @@ export function describeTreeDeleteDisclosure(
 const DELETE_UNDONE = "This action cannot be undone.";
 
 /**
+ * The opening sentence: what the delete costs the rows the reader picked.
+ *
+ * An agent's delete is final. An artifact's is not while its host serves
+ * Deleted artifacts: the delete leaves one tombstone per artifact and a restore
+ * takes one artifact, which is why a selection comes back "one at a time".
+ */
+function describeDeleteCost(
+  input: TreeDeleteDisclosureInput,
+  selectedCount: number,
+): string {
+  if (input.kind === "agent" || !input.restoreAvailable) return DELETE_UNDONE;
+  if (selectedCount === 0) return DELETE_UNDONE;
+  return selectedCount === 1
+    ? "You can bring it back from Deleted artifacts."
+    : "You can bring them back one at a time from Deleted artifacts.";
+}
+
+/**
  * What is owed about the rows nested under a selection: a sentence for the
  * description, a count for the cascade paragraph, or neither.
  *
- * At most one of the two is ever set. A promoted agent is not destroyed, so it
- * must never reach the cascade paragraph ("This will also delete…"); and a
- * cascade count is a phrase the dialog puts in its own sentence, so it is not
- * composed here.
+ * A promoted agent is not destroyed, so it must never reach the cascade
+ * paragraph ("This will also delete…"), and a cascade count is a phrase the
+ * dialog puts in its own sentence, so it is not composed here. An artifact arm
+ * can set both: the count, and, where the opening sentence offers a restore,
+ * the caveat that the restore does not bring nested artifacts with it.
  */
 interface NestedRowsDisclosure {
   readonly sentence: string | null;
@@ -272,11 +295,15 @@ function describeNestedRows(
 ): NestedRowsDisclosure {
   if (selectedCount === 0) return NOTHING_NESTED;
   if (input.kind === "artifact") {
+    const cascadeSummary = formatCascadeSummary(
+      computeSelectionCascadeCounts(input.tree, input.nodeIds),
+    );
     return {
-      sentence: null,
-      cascadeSummary: formatCascadeSummary(
-        computeSelectionCascadeCounts(input.tree, input.nodeIds),
-      ),
+      sentence:
+        input.restoreAvailable && cascadeSummary !== null
+          ? `Artifacts nested under ${nestedUnder} come back separately.`
+          : null,
+      cascadeSummary,
     };
   }
   // "Any" rather than a number, and the sentence is owed even where the tree

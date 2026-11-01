@@ -89,6 +89,7 @@ interface TestState {
    * because the substitution resolver refuses to serve them. */
   cloudCollaboratorChatIds: ReadonlySet<string>;
   chatRecordListAuthoritative: boolean;
+  tuiAgentRecordListAuthoritative: boolean;
   /**
    * The verdict `useCloudChatHasCloudAuthorization()` answers - whether this session
    * may SPEND the account's cloud capability. `false` models `unverified`: the
@@ -123,6 +124,7 @@ const testState = vi.hoisted<TestState>(() => ({
   cloudChatIds: new Set<string>(),
   cloudCollaboratorChatIds: new Set<string>(),
   chatRecordListAuthoritative: true,
+  tuiAgentRecordListAuthoritative: true,
   cloudAuthorized: true,
   canvasStore: {
     renameTab: vi.fn(),
@@ -230,6 +232,8 @@ vi.mock("@/lib/epic-selectors", () => ({
   useEpicArtifactRecords: () => testState.records,
   useEpicChatRecordListAuthoritative: () =>
     testState.chatRecordListAuthoritative,
+  useEpicTuiAgentRecordListAuthoritative: () =>
+    testState.tuiAgentRecordListAuthoritative,
   useEpicLastFocusedArtifactId: () => null,
   useEpicSnapshotLoaded: () => true,
   useEpicTitle: () => "",
@@ -403,6 +407,7 @@ function resetStores(): void {
   testState.cloudChatIds = new Set();
   testState.cloudCollaboratorChatIds = new Set();
   testState.chatRecordListAuthoritative = true;
+  testState.tuiAgentRecordListAuthoritative = true;
   testState.cloudAuthorized = true;
   vi.mocked(testState.canvasStore.renameTab).mockClear();
   tileNavigationMocks.openTile.mockClear();
@@ -1506,6 +1511,76 @@ describe("useEpicRouteSynchronization", () => {
         sameIdOtherEpic.instanceId,
         otherHostChat.instanceId,
       ]);
+    });
+  });
+
+  it("does not close a same-host terminal agent until its own list is authoritative", async () => {
+    testState.autoOpenTarget = null;
+    testState.tuiAgentRecordListAuthoritative = false;
+    const unansweredAgent: EpicCanvasTileRef = {
+      id: "tui-list-unanswered",
+      instanceId: "inst-tui-list-unanswered",
+      type: "terminal-agent",
+      name: "Terminal-agent list unanswered",
+      hostId: "host-1",
+    };
+    const removedSpec: EpicCanvasTileRef = {
+      id: "removed-spec",
+      instanceId: "inst-removed-spec",
+      type: "spec",
+      name: "Removed spec",
+      hostId: "host-1",
+    };
+    testState.canvasRoot = {
+      kind: "pane",
+      id: "group-1",
+      tabInstanceIds: [unansweredAgent.instanceId, removedSpec.instanceId],
+      activeTabId: unansweredAgent.instanceId,
+      previewTabId: null,
+      activationHistory: [unansweredAgent.instanceId],
+    };
+    testState.canvasTiles = {
+      [unansweredAgent.instanceId]: unansweredAgent,
+      [removedSpec.instanceId]: removedSpec,
+    };
+
+    const intent: EpicRouteFocusIntent = {
+      epicId: EPIC_ID,
+      tabId: TAB_ID,
+      focusedAt: undefined,
+      focusArtifactId: undefined,
+      focusThreadId: undefined,
+      focusPaneId: undefined,
+      focusTileInstanceId: undefined,
+    };
+    const { rerender } = renderHook(
+      (props: EpicRouteFocusIntent) => useEpicRouteSynchronization(props),
+      { initialProps: intent },
+    );
+
+    // The sweep ran: the spec closing proves the agent was judged and kept.
+    await waitFor(() => {
+      expect(testState.canvasStore.closeCanvasTab).toHaveBeenCalledWith(
+        TAB_ID,
+        "group-1",
+        removedSpec.instanceId,
+      );
+    });
+    expect(testState.canvasStore.closeCanvasTab).not.toHaveBeenCalledWith(
+      TAB_ID,
+      "group-1",
+      unansweredAgent.instanceId,
+    );
+
+    testState.tuiAgentRecordListAuthoritative = true;
+    rerender({ ...intent });
+
+    await waitFor(() => {
+      expect(testState.canvasStore.closeCanvasTab).toHaveBeenCalledWith(
+        TAB_ID,
+        "group-1",
+        unansweredAgent.instanceId,
+      );
     });
   });
 

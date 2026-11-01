@@ -66,6 +66,7 @@ import {
 } from "@/hooks/host/use-surface-host-pin";
 import { isBrowsable } from "@/lib/worktree/worktree-row-browsable";
 import { useCanvasHostId } from "@/components/epic-canvas/hooks/use-canvas-host-id";
+import { useDeletedArtifactsAvailable } from "@/hooks/epic/use-deleted-artifacts-available";
 import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
 import {
   describeBlockedChatWrites,
@@ -1561,6 +1562,7 @@ function SidebarBulkDeleteController(props: {
   const deleteChat = useEpicDeleteChatInBatch();
   const deleteTerminalAgent = useEpicDeleteTuiAgentInBatch();
   const sessionHostId = useEpicSessionHostId();
+  const restoreAvailable = useDeletedArtifactsAvailable(sessionHostId);
   const chatsById = useChatsByIdForWriteRoute();
   const recordById = useMemo(
     () => new Map(liveRecords.map((record) => [record.id, record])),
@@ -1797,8 +1799,13 @@ function SidebarBulkDeleteController(props: {
           nodeIds,
           nestedAgentsKnown,
         })
-      : describeTreeDeleteDisclosure({ tree, kind: "artifact", nodeIds });
-  }, [nestedAgentsKnown, panelId, pendingDeleteIds, tree]);
+      : describeTreeDeleteDisclosure({
+          tree,
+          kind: "artifact",
+          nodeIds,
+          restoreAvailable,
+        });
+  }, [nestedAgentsKnown, panelId, pendingDeleteIds, restoreAvailable, tree]);
 
   return (
     <ConfirmDestructiveDialog

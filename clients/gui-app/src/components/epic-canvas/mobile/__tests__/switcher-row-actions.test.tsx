@@ -100,6 +100,12 @@ vi.mock("@/hooks/epic/use-epic-record-mutation-client", () => ({
   useEpicRecordMutationClient: () => () => null,
 }));
 
+const deletedArtifacts = vi.hoisted(() => ({ available: false }));
+
+vi.mock("@/hooks/epic/use-deleted-artifacts-available", () => ({
+  useDeletedArtifactsAvailable: () => deletedArtifacts.available,
+}));
+
 const EPIC_ID = "epic-switcher-row-actions";
 const VIEWER_ID = "viewer-switcher-row-actions";
 const NODE_ID = "agent-shared";
@@ -219,6 +225,7 @@ afterEach(() => {
   __getOpenEpicRegistryForTests().disposeAll();
   handle.store.getState().dispose();
   vi.clearAllMocks();
+  deletedArtifacts.available = false;
 });
 
 function Wrapper(props: { readonly children: ReactNode }): ReactNode {
@@ -421,8 +428,7 @@ describe("artifact export", () => {
 /**
  * The switcher reads the disclosure the sidebar reads, so these expect the
  * sidebar's own sentences (`epic-sidebar-selection-mode.test.tsx`) for the same
- * trees. The tree comes out of the real projector over the seeded slices, which
- * is the only place the family rule lives.
+ * trees. The tree comes out of the real projector over the seeded slices.
  */
 describe("delete disclosure", () => {
   const CHILD_AGENT_ID = "agent-child";
@@ -519,10 +525,38 @@ describe("delete disclosure", () => {
     );
   });
 
+  it("offers the restore in the sidebar's sentence where the host serves it", () => {
+    deletedArtifacts.available = true;
+    seedTree(
+      [
+        artifactProjection({ id: ARTIFACT_NODE_ID, kind: "spec" }),
+        artifactProjection({
+          id: "ticket-child",
+          kind: "ticket",
+          parentId: ARTIFACT_NODE_ID,
+        }),
+      ],
+      [],
+      [],
+    );
+
+    const dialog = openDeleteDialog("artifact", ARTIFACT_NODE_ID);
+
+    expect(
+      within(dialog).getByText(
+        "You can bring it back from Deleted artifacts. Artifacts nested under it come back separately.",
+      ),
+    ).toBeTruthy();
+    expect(within(dialog).getByTestId("confirm-cascade-meta").textContent).toBe(
+      "This will also delete 1 ticket nested under it.",
+    );
+  });
+
   /**
-   * The projector promotes a chat whose `parentId` corruptly names an artifact
-   * to the root, and the delete leaves it standing. The switcher used to walk
-   * the raw `parentId` and promise to delete it.
+   * The delete leaves a chat standing when its `parentId` corruptly names the
+   * artifact. The switcher used to walk the raw `parentId` and promise to
+   * delete it. This pins the count at the consumer: the family rule itself is
+   * what the next case reads, since a chat is not an artifact kind either way.
    */
   it("promises no delete of an agent whose parent corruptly names the artifact", () => {
     seedTree(
@@ -534,6 +568,30 @@ describe("delete disclosure", () => {
     const dialog = openDeleteDialog("artifact", ARTIFACT_NODE_ID);
 
     expect(within(dialog).getByText(UNDONE)).toBeTruthy();
+    expect(within(dialog).queryByTestId("confirm-cascade-meta")).toBeNull();
+  });
+
+  /**
+   * The family rule: nothing walks through the chat, so the artifact beyond it
+   * is promoted to the root and survives. A walk through it would count a row
+   * the delete keeps.
+   */
+  it("promises no delete of an artifact reached only through a corrupt agent parent", () => {
+    seedTree(
+      [
+        artifactProjection({ id: ARTIFACT_NODE_ID, kind: "spec" }),
+        artifactProjection({
+          id: "ticket-beyond-chat",
+          kind: "ticket",
+          parentId: CHAT_ID,
+        }),
+      ],
+      [],
+      [chatProjection(ARTIFACT_NODE_ID)],
+    );
+
+    const dialog = openDeleteDialog("artifact", ARTIFACT_NODE_ID);
+
     expect(within(dialog).queryByTestId("confirm-cascade-meta")).toBeNull();
   });
 
