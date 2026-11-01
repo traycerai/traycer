@@ -134,9 +134,8 @@ describe("in a phone-layout-only bundle", () => {
   });
 
   it("cannot be moved off it by a resize", () => {
-    // No rotation reaches this in the shipped app - iOS is portrait-locked on
-    // iPad too - but a WKWebView still resizes for the keyboard and for the
-    // status-bar height, and neither may swap the shell.
+    // A rotation resizes it, and so do the keyboard and the status-bar height;
+    // none of them may swap the shell.
     setPhoneLayoutOnly(true);
     render(<Probe />);
 

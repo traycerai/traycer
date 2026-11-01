@@ -65,11 +65,12 @@ export function MobileNavDrawerSurface(
 ): ReactNode {
   const { open, onOpenChange, children } = props;
   const dragControls = useDragControls();
-  // 0 is fully closed, `width` fully open. The wrapper carries the -100% that
+  // 0 is fully closed, `travel` fully open. The wrapper carries the -100% that
   // parks the panel off screen, so this value never has to be seeded from a
   // measurement to render correctly on the very first frame.
   const x = useMotionValue(0);
   const layerRef = useRef<HTMLDivElement | null>(null);
+  const parkRef = useRef<HTMLDivElement | null>(null);
   const panelRef = useRef<HTMLDivElement | null>(null);
   const settleRef = useRef<AnimationPlaybackControls | null>(null);
   // The endpoint the running settle is travelling to, or null when none is.
@@ -85,8 +86,8 @@ export function MobileNavDrawerSurface(
   const motionDraggingRef = useRef(false);
   const releaseTeardownRef = useRef<(() => void) | null>(null);
   const openAtGestureStartRef = useRef(false);
-  const widthRef = useRef(0);
-  const [width, setWidth] = useState(0);
+  const travelRef = useRef(0);
+  const [travel, setTravel] = useState(0);
   // True from the moment a gesture or a programmatic settle takes the panel off
   // a resting position until it reaches the next one.
   const [inFlight, setInFlight] = useState(false);
@@ -128,7 +129,7 @@ export function MobileNavDrawerSurface(
   const settle = useCallback(
     (toOpen: boolean): void => {
       settleRef.current?.stop();
-      const target = toOpen ? widthRef.current : 0;
+      const target = toOpen ? travelRef.current : 0;
       if (x.get() === target) {
         settleRef.current = null;
         settleTargetRef.current = null;
@@ -161,15 +162,17 @@ export function MobileNavDrawerSurface(
 
   // Measured, never assumed: the panel is fluid-width, and the same build runs
   // on a phone and on a tablet. A rotation can resize it under a resting panel
-  // OR under one mid-settle, and both have to end up at the width that now
+  // OR under one mid-settle, and both have to end up at the travel that now
   // exists - a settle still aimed at the old one would strand the panel short
-  // of its endpoint with nothing left to move it.
+  // of its endpoint with nothing left to move it. The park is what is measured:
+  // it is the panel's width plus the left inset, so a turn that only moves the
+  // sensor housing to the other side is seen too.
   useLayoutEffect(() => {
-    const node = panelRef.current;
+    const node = parkRef.current;
     if (node === null) return;
     const sync = (): void => {
-      widthRef.current = node.offsetWidth;
-      setWidth(node.offsetWidth);
+      travelRef.current = node.offsetWidth;
+      setTravel(node.offsetWidth);
       if (gestureRef.current) return;
       const inFlightTarget = settleTargetRef.current;
       if (inFlightTarget !== null) {
@@ -180,7 +183,7 @@ export function MobileNavDrawerSurface(
     };
     sync();
     const observer = new ResizeObserver(sync);
-    observer.observe(node);
+    observer.observe(node, { box: "border-box" });
     return () => {
       observer.disconnect();
     };
@@ -301,7 +304,7 @@ export function MobileNavDrawerSurface(
       settle(
         resolvesToOpen({
           positionPx: x.get(),
-          widthPx: widthRef.current,
+          widthPx: travelRef.current,
           velocityPxPerS: info.velocity.x,
           openAtGestureStart: openAtGestureStartRef.current,
           // Once the engine has adopted a gesture it reports cancellation
@@ -325,7 +328,7 @@ export function MobileNavDrawerSurface(
       // settle picks the panel up where it actually is. The drag engine reads
       // that same live value as its origin, so seeding is the whole handoff.
       const seeded = x.get() - travelPx;
-      x.jump(Math.min(Math.max(seeded, 0), widthRef.current));
+      x.jump(Math.min(Math.max(seeded, 0), travelRef.current));
       dragControls.start(event);
       // The classifier already required travel, so neither outcome here can be
       // a tap - both simply put the panel back on a side.
@@ -360,7 +363,7 @@ export function MobileNavDrawerSurface(
   // opacity, so half a drawer is half a scrim and a spring-back takes the
   // darkening with it. A degenerate range before the first measurement would
   // make the transform undefined rather than merely wrong.
-  const scrimOpacity = useTransform(x, [0, Math.max(width, 1)], [0, 1]);
+  const scrimOpacity = useTransform(x, [0, Math.max(travel, 1)], [0, 1]);
 
   // Interactive whenever the panel is settled open; also whenever it is moving,
   // so a spring in flight can be caught and dragged the other way. Inert only
@@ -428,8 +431,16 @@ export function MobileNavDrawerSurface(
           viewport rather than the app root's padding box, so nothing above has
           reserved the status-bar strip on its behalf - the panel starts below
           the bar because this says where it starts, and its own `h-full` then
-          resolves against the shortened park. */}
-      <div className="absolute top-safe-top bottom-0 left-safe-left w-3/4 -translate-x-full sm:max-w-sm">
+          resolves against the shortened park.
+
+          The left inset is padding of the park rather than an offset of it, so
+          the -100% carries it too: closed, the panel ends at the screen's edge
+          instead of painting under the inset, and open it travels the park's
+          whole width and comes to rest clear of the inset. */}
+      <div
+        ref={parkRef}
+        className="absolute top-safe-top bottom-0 left-0 box-content w-3/4 -translate-x-full pl-safe-left sm:max-w-sm"
+      >
         <m.div
           ref={panelRef}
           role="dialog"
@@ -450,7 +461,7 @@ export function MobileNavDrawerSurface(
           // both keeps claiming near-vertical drags and starts refusing fast
           // diagonal ones the app means to accept.
           dragListener={false}
-          dragConstraints={{ left: 0, right: width }}
+          dragConstraints={{ left: 0, right: travel }}
           // Rubber-band only at the closed stop, where the give happens off
           // screen. Elasticity at the open stop would pull the panel past its
           // own edge and open a gap at the screen edge behind it.

@@ -266,6 +266,10 @@ function useResubscribeOnNextSend(input: {
  * session connects; without it nothing is drawn until then, for a thread
  * with no reply yet whose box follows its post.
  *
+ * `header` is what the list shows above its first row, scrolling with the
+ * rows, and above the spinner while it connects: a thread's post. A channel's
+ * setup history comes through `surface`.
+ *
  * A channel or thread draws, under each reply of the bot and under a post it
  * failed to answer, the receipt of the turn behind it (Tracy Bots T86), as
  * the bound host names the turns (`bot.turn.locate`); the receipt opens the
@@ -283,15 +287,24 @@ export function BotChatTranscript(props: {
   readonly surface: BotTranscriptSurface | null;
   readonly resolveMember: BotMemberResolver;
   readonly showConnecting: boolean;
+  readonly header: ReactNode;
   /** A message the list lands on once it loads; `null` keeps where it opens. */
   readonly landOn: BotTranscriptLanding | null;
 }): ReactNode {
-  const { botId, chatId, hostId, title, instanceId, surface, resolveMember } =
-    props;
+  const {
+    botId,
+    chatId,
+    hostId,
+    title,
+    instanceId,
+    surface,
+    resolveMember,
+    header,
+  } = props;
   const handle = useChatSessionHandleForContainer(botId, chatId, hostId, true);
   if (handle === null) {
     if (!props.showConnecting) return null;
-    return (
+    const connecting = (
       <div
         className="flex flex-1 items-center justify-center py-10 text-muted-foreground"
         aria-busy="true"
@@ -302,6 +315,13 @@ export function BotChatTranscript(props: {
           testId={undefined}
           variant={undefined}
         />
+      </div>
+    );
+    if (header === null) return connecting;
+    return (
+      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto pt-3">
+        {header}
+        {connecting}
       </div>
     );
   }
@@ -316,6 +336,7 @@ export function BotChatTranscript(props: {
         instanceId={instanceId}
         surface={surface}
         resolveMember={resolveMember}
+        header={header}
         landOn={props.landOn}
       />
     </TileErrorBoundary>
@@ -365,6 +386,7 @@ function BotChatTranscriptBody(props: {
   readonly instanceId: string;
   readonly surface: BotTranscriptSurface | null;
   readonly resolveMember: BotMemberResolver;
+  readonly header: ReactNode;
   readonly landOn: BotTranscriptLanding | null;
 }): ReactNode {
   const {
@@ -376,6 +398,7 @@ function BotChatTranscriptBody(props: {
     instanceId,
     surface,
     resolveMember,
+    header,
     landOn,
   } = props;
   const { state, messages } = useBotSessionMessages({
@@ -560,7 +583,7 @@ function BotChatTranscriptBody(props: {
   const transcriptWindow = isWindowedTranscript(state)
     ? state.transcriptWindow
     : null;
-  const channelHistory = surface?.kind === "channel" ? surface.history : null;
+  const listHeader = surface?.kind === "channel" ? surface.history : header;
   const intro = channelIntro(
     surface,
     state.snapshotLoaded,
@@ -591,9 +614,9 @@ function BotChatTranscriptBody(props: {
           className="flex min-h-0 flex-1 flex-col"
         >
           {intro !== null ? (
-            <BotChannelOpening history={channelHistory} intro={intro} />
+            <BotChannelOpening history={listHeader} intro={intro} />
           ) : (
-            <ChatTimelineHeaderContext value={channelHistory}>
+            <ChatTimelineHeaderContext value={listHeader}>
               <TasklessMarkdownLinkProvider
                 tabId={instanceId}
                 tabHostId={hostId}
