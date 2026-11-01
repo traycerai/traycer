@@ -51,7 +51,10 @@ const host = vi.hoisted(() => ({
   support: true as boolean | null,
   reachability: "reachable",
   leaseStatus: null as string | null,
+  /** The notification-serving host's stream. */
   stream: null as MockWsStreamClient<StreamFrameEnvelope> | null,
+  /** The active host's stream, a different host's. */
+  activeStream: null as MockWsStreamClient<StreamFrameEnvelope> | null,
   setupBotId: "",
 }));
 
@@ -82,8 +85,17 @@ vi.mock("@/lib/host/stream-runtime-context", async (importOriginal) => ({
   ...(await importOriginal<
     typeof import("@/lib/host/stream-runtime-context")
   >()),
-  useStreamHostId: () => (host.stream === null ? null : "host-1"),
-  useWsStreamClient: () => host.stream,
+  useStreamHostId: () => (host.activeStream === null ? null : "host-active"),
+  useWsStreamClient: () => host.activeStream,
+}));
+vi.mock("@/hooks/host/use-host-directory-entry", () => ({
+  useHostDirectoryEntry: () => null,
+}));
+vi.mock("@/lib/host/stream-auth-revalidator", () => ({
+  useStreamAuthRevalidator: () => null,
+}));
+vi.mock("@/hooks/host/use-host-stream-client-for", () => ({
+  useHostStreamClientFor: () => host.stream,
 }));
 vi.mock("@/hooks/agent/use-host-reachability", () => ({
   useHostReachability: () => ({ status: host.reachability }),
@@ -294,6 +306,7 @@ beforeEach(() => {
   host.reachability = "reachable";
   host.leaseStatus = null;
   host.stream = null;
+  host.activeStream = null;
   host.setupBotId = SETUP_BOT_ID;
   signIn("user-a");
 });
@@ -367,6 +380,16 @@ describe("<StandaloneBotsBridge /> and a change to the bots elsewhere", () => {
     }
   }
 
+  class UnsupportedStream extends MockWsStreamClient<StreamFrameEnvelope> {
+    override getMethodSupport(): "unsupported" {
+      return "unsupported";
+    }
+
+    override subscribeMethodSupport(): () => void {
+      return () => undefined;
+    }
+  }
+
   /** The only bots surface mounted: the bridge and a closed picker. */
   function mountOnlyBridge(
     answers: { bots: BotListResponse },
@@ -418,6 +441,33 @@ describe("<StandaloneBotsBridge /> and a change to the bots elsewhere", () => {
     await waitFor(() => {
       expect(titleText()).toBe("Tracy · traycerai");
     });
+  });
+
+  it("hears the change on the serving host when the active host is another that does not answer the method", async () => {
+    const activeStream = new UnsupportedStream();
+    host.activeStream = activeStream;
+    const answers: { bots: BotListResponse } = {
+      bots: {
+        bots: [
+          tracyRecord(PERSONAL_MAIN_BOT_ID, "env-me"),
+          tracyRecord(TEAM_MAIN_BOT_ID, "env-team"),
+        ],
+        mainBotIds: { "env-me": PERSONAL_MAIN_BOT_ID },
+      },
+    };
+    const { ringBell } = mountOnlyBridge(answers, TEAM_MAIN_BOT_ID);
+    await waitFor(() => {
+      expect(useStandaloneBotsStore.getState().settled).toBe(true);
+    });
+    expect(titleText()).toBe("Tracy");
+
+    answers.bots = BOTH_BOTS;
+    ringBell();
+
+    await waitFor(() => {
+      expect(titleText()).toBe("Tracy · traycerai");
+    });
+    expect(activeStream.getSession("bot.listChanged", {})).toBeUndefined();
   });
 
   it("publishes a setup that changes while the lists do not", async () => {

@@ -68,7 +68,7 @@ vi.mock("@/hooks/bots/use-environment-list-query", () => ({
   }),
 }));
 vi.mock("@/hooks/bots/use-bot-list-changed-subscription", () => ({
-  useBotListChangedSubscriptionForApp: () => undefined,
+  useBotListChangedSubscriptionForHost: () => undefined,
 }));
 vi.mock("@/hooks/bots/use-reread-environment-list-on-focus", () => ({
   useRereadEnvironmentListOnFocus: () => undefined,

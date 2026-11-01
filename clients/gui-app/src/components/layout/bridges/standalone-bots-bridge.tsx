@@ -1,6 +1,6 @@
 import { useEffect, useMemo } from "react";
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
-import { useBotListChangedSubscriptionForApp } from "@/hooks/bots/use-bot-list-changed-subscription";
+import { useBotListChangedSubscriptionForHost } from "@/hooks/bots/use-bot-list-changed-subscription";
 import { useBotListQuery } from "@/hooks/bots/use-bot-list-query";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
 import { useRereadEnvironmentListOnFocus } from "@/hooks/bots/use-reread-environment-list-on-focus";
@@ -49,8 +49,11 @@ export function StandaloneBotsBridge(): null {
   const viewerUserId = useCloudChatViewerId();
   useRereadEnvironmentListOnFocus(supported);
   // With Show Tracy off and neither Home nor a bot tab open, nothing else keeps
-  // the list current when a main bot is created or archived elsewhere.
-  useBotListChangedSubscriptionForApp(supported);
+  // the list current when a main bot is created or archived elsewhere. On the
+  // host that serves the list: the active host may be another, and one that
+  // does not answer the method would silently leave the list stale.
+  const hostKey = hostId ?? UNKNOWN_HOST_PLACEHOLDER;
+  useBotListChangedSubscriptionForHost(hostKey, supported);
   const environments = useEnvironmentListQuery(client, supported);
   const bots = useBotListQuery(client, supported);
   const environmentData = environments.data;
@@ -75,7 +78,6 @@ export function StandaloneBotsBridge(): null {
   const setups = teamSetups.setups;
   const readsSettled =
     hostId === null || support === false || (supported && teamSetups.settled);
-  const hostKey = hostId ?? UNKNOWN_HOST_PLACEHOLDER;
   const reachability = useHostReachability(hostKey);
   const directoryWait = useBoundedHostLoad({
     hostId: hostKey,
