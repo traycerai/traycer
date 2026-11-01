@@ -60,6 +60,7 @@ import { PublishedChatSourceProvider } from "@/lib/chats/published-chat-source-p
 import {
   PUBLISHED_COPY_NOTICE,
   publishedChatLockReason,
+  REPLICA_COPY_NOTICE,
   replicaChatLockReason,
   type PublishedCopyRefresh,
 } from "@/components/epic-canvas/renderers/published-chat-lock-reason";
@@ -253,7 +254,7 @@ function usePublishedChatOwner(
     node.ownerHostId,
     reachability.status === "reachable",
   );
-  const endRead = useSandboxEndRead(sandboxState.kind === "pending");
+  const endRead = useSandboxEndRead(epicId, sandboxState.kind === "pending");
   useOfflineOwnerRecoveryRead(
     node.ownerHostId,
     reachability,
@@ -319,9 +320,10 @@ function copyOwnerLabel(
 function copyReadOnlyNotice(
   owner: PublishedChatOwner,
   copyNotice: string,
+  endReadNotice: string,
 ): string | null {
   const { line, composer } = owner.sandbox;
-  if (owner.endRead) return PUBLISHED_COPY_NOTICE;
+  if (owner.endRead) return endReadNotice;
   if (composer.kind === "wake") return null;
   if (line?.place === "slot") return line.text;
   if (line?.state.kind === "unreachable")
@@ -581,6 +583,7 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
                 ...owner.lockFacts,
                 unreadableCount: replicaConversion.unreadableCount,
               }),
+              REPLICA_COPY_NOTICE,
             )}
           />
         </PublishedSandboxStateLine>
@@ -654,6 +657,7 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
                 publishedAt: applied.publishedAt,
                 refresh: publishedCopyRefresh(state),
               }),
+              PUBLISHED_COPY_NOTICE,
             )}
           />
         </PublishedSandboxStateLine>

@@ -25,11 +25,13 @@ export type PublishedCopyRefresh =
   | { readonly kind: "refused"; readonly title: string };
 
 /**
- * What a copy says while its owner's state is being read: the copy, and no
+ * What each copy says while its owner's state is being read: the copy, and no
  * claim about the host until that read answers.
  */
 export const PUBLISHED_COPY_NOTICE =
   "Showing the last published copy of this agent.";
+export const REPLICA_COPY_NOTICE =
+  "Showing this device's synced copy of this agent.";
 
 /**
  * The locked composer's reason, in one sentence a reader can act on.

@@ -102,7 +102,7 @@ export function useLiveChatSandboxState(
     (!ownerReachable || (stream.hasContent && stream.status !== "open"));
   const reachable = !atRest && !disconnected;
   const state = useChatSandboxState(epicId, hostId, reachable);
-  const endRead = useSandboxEndRead(state.kind === "pending");
+  const endRead = useSandboxEndRead(epicId, state.kind === "pending");
   const sandbox = list.data?.sandboxes.find((row) => row.hostId === hostId);
   const known =
     state.kind === "none" ? sandbox !== undefined : state.kind !== "destroyed";

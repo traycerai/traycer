@@ -1,10 +1,5 @@
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
-import {
-  QueryClient,
-  QueryClientProvider,
-  queryOptions,
-  useQuery,
-} from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatServing } from "@traycer/protocol/host/chat-serving/index";
@@ -72,7 +67,15 @@ import { useLiveChatSandboxState } from "@/hooks/sandboxes/use-live-chat-sandbox
 import { useSandboxList } from "@/hooks/sandboxes/use-sandbox-list-query";
 import { resolveChatSandbox } from "@/lib/sandboxes/chat-sandbox-state";
 import { sandboxQueryKeys } from "@/lib/query-keys";
-import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
+import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
+import type { ListTaskHostsResponse } from "@traycer/protocol/host/task-host-summary";
+import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
+import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
+import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
+import { EpicSessionHostClientContext } from "@/lib/registries/epic-session-registry";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useEndedSandboxHostsStore } from "@/stores/sandboxes/ended-sandbox-hosts-store";
 
@@ -391,28 +394,44 @@ describe("a live chat's sandbox lifecycle reconciliation", () => {
         queries: { retry: false, gcTime: 0, staleTime: Infinity },
       },
     });
-    const wrapper = ({ children }: { children: ReactNode }) => (
-      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
-    );
-    // The task's hosts as the chat's own surface keeps them: one active read.
+    // The task's hosts through the Epic session's host client, as the chat's
+    // own surface reads them: a real request whose answer the test holds.
     let taskHostsReads = 0;
-    let taskHostsAnswer: Promise<number> = Promise.resolve(0);
+    let taskHostsAnswer: Promise<ListTaskHostsResponse> = Promise.resolve({
+      hosts: [],
+    });
+    const sessionClient = new HostClient<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      schedulingPolicy: hostRpcSchedulingPolicy,
+      invalidator: createHostQueryInvalidator(queryClient),
+      findHostById: (hostId) =>
+        hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
+      messenger: new MockHostMessenger<HostRpcRegistry>({
+        registry: hostRpcRegistry,
+        requestId: () => "req-task-hosts",
+        handlers: {
+          "epic.listTaskHosts": () => {
+            taskHostsReads += 1;
+            return taskHostsAnswer;
+          },
+        },
+      }),
+    });
+    sessionClient.setRequestContext(
+      createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
+    );
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={queryClient}>
+        <EpicSessionHostClientContext
+          value={sessionClient.createRequester(mockLocalHostEntry)}
+        >
+          {children}
+        </EpicSessionHostClientContext>
+      </QueryClientProvider>
+    );
+    // The chat's own read of the task's hosts is mounted by the end-read hook.
     const { result, rerender } = renderHook(
-      () => {
-        useQuery(
-          queryOptions({
-            queryKey: hostQueryKeys.methodScope(
-              "session-host",
-              "epic.listTaskHosts",
-            ),
-            queryFn: () => {
-              taskHostsReads += 1;
-              return taskHostsAnswer;
-            },
-          }),
-        );
-        return useLiveChatSandboxState("epic", "chat", HOST, true);
-      },
+      () => useLiveChatSandboxState("epic", "chat", HOST, true),
       { wrapper },
     );
     await waitFor(() => expect(result.current.state.kind).toBe("resting"));
@@ -424,10 +443,10 @@ describe("a live chat's sandbox lifecycle reconciliation", () => {
     );
     const readsBeforeLeaving = taskHostsReads;
 
-    let answerTaskHosts: (value: number) => void = () => {
+    let answerTaskHosts: (value: ListTaskHostsResponse) => void = () => {
       throw new Error("the task hosts read has not started");
     };
-    taskHostsAnswer = new Promise<number>((resolve) => {
+    taskHostsAnswer = new Promise<ListTaskHostsResponse>((resolve) => {
       answerTaskHosts = resolve;
     });
     binding.auth.listSandboxes.mockResolvedValue({
@@ -461,7 +480,7 @@ describe("a live chat's sandbox lifecycle reconciliation", () => {
     } as const;
     sources.task = { kind: "ended", ended };
     await act(async () => {
-      answerTaskHosts(1);
+      answerTaskHosts({ hosts: [] });
       await taskHostsAnswer;
     });
     rerender();
