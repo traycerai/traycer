@@ -319,9 +319,8 @@ export const EXPECTED_CLI_ERROR_CODES: ReadonlySet<CliErrorCode> =
     // The rest of `cli upgrade`'s refusals that report a state of the
     // INSTALL or of the caller's request, each with a remedy the person
     // carries out. What stays captured is every arm where the feed or the
-    // installer is the thing that failed: DOWNLOAD_FAILED (the transfer),
-    // REPLACE_FAILED (publication over the live binary) and
-    // FINALIZE_HELPER_FAILED (the detached helper never ran).
+    // installer is the thing that failed: DOWNLOAD_FAILED (the transfer) and
+    // REPLACE_FAILED (publication over the live binary).
     //
     // The rolling feed serves exactly one build, so `--target` naming any
     // other version is an assertion that was simply wrong - the feed is
