@@ -695,6 +695,7 @@ describe("createBytesOnlyInstallLifecycle forwarding, through the real commit", 
       onCommitted: () => {},
       verifyMutationCapability: async () => undefined,
       onWillSwap: null,
+      targetRegistryEntry: null,
       storeFormatFloor: ungatedStoreFormatFloorEvidence("host apply", false),
       onSwapCommitted: null,
     });
