@@ -745,9 +745,9 @@ describe("gateWindowsTaskRun: the write-free verb's own door", () => {
 
   // The REFUSE path's own field classification: `/Run` refuses only when the
   // read ATTRIBUTED the task to another account (`other-owner`), and the
-  // sibling PERMIT-path test above pins the INFO line's fields for the
-  // unconfirmed probes - nothing did the same here. Table-driven over the
-  // probes that produce `other-owner`, so a new one is covered automatically.
+  // sibling PERMIT-path test above pins the INFO line's fields for one
+  // unconfirmed probe - nothing did the same for this path. One row per
+  // probe that produces `other-owner`; a new one is one more row.
   it('the REFUSE path\'s INFO line is {task, verb: "run", reason: "other-owner", probe}, by probe, naming no account', async () => {
     const cases: readonly {
       readonly query: ScheduledTaskXmlQuery;
@@ -805,6 +805,7 @@ describe("gateWindowsTaskRun: the write-free verb's own door", () => {
       });
       const infos = logged.lines.filter((line) => line.level === "info");
       expect(infos).toHaveLength(1);
+      expect(infos[0]?.message).toContain("not changing it");
       expect(JSON.parse(infos[0]?.fields ?? "null")).toEqual({
         task: windowsTaskName(label),
         verb: "run",
