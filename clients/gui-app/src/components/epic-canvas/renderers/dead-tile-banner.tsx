@@ -61,6 +61,16 @@ export type DeadTileOwnerKind = "terminal" | "agent";
  * live-only by construction; the owner's machine is the only place it can be
  * started.
  *
+ * `record-unavailable` - this agent has no record on this device: the epic
+ * session's agent list keeps failing, or it answered without this agent and the
+ * agent is bound to another host. That list is the SESSION host's, which need
+ * not be this tile's, so the banner names no host. A delete the record plane
+ * announced never lands here: `ActiveTabBody` shows the tile as deleted. Short
+ * of that, the list cannot tell a late replica from an agent that is gone or
+ * was never created, and a `revoked` retraction says nothing about whether it
+ * exists and stops any row arriving this session. So the banner claims none of
+ * them, and promises no retry.
+ *
  * `sandbox-stopped` - the bound host is a sandbox someone stopped. Its PTYs
  * ended with it, and Start is the remedy, so a terminal or a terminal
  * agent says that instead of calling the host unreachable.
@@ -71,6 +81,7 @@ export type DeadTileOwnerKind = "terminal" | "agent";
 export type DeadTileReason =
   | "host-unreachable"
   | "not-running-remotely"
+  | "record-unavailable"
   | "sandbox-stopped"
   | "sandbox-destroyed";
 
@@ -89,12 +100,37 @@ function terminalDeadTileMessage(
     );
     return `This agent is not running on ${named} right now, and it can only be started on that computer. The agent and its transcript are kept there — closing this tab only removes it from the canvas.`;
   }
+  if (reason === "record-unavailable") {
+    return "Couldn't load this agent. Closing this tab only removes it from the canvas.";
+  }
   if (reason === "sandbox-stopped") {
     return `${hostLabelAtSentenceStart(hostLabel)} is stopped. Start it to use this terminal again.`;
   }
   return ownerKind === "agent"
     ? `${quotedHostReference(hostLabel, true)} is unreachable, so this agent is unavailable until that host is back. The agent and its transcript are kept — closing this tab only removes it from the canvas.`
     : `${quotedHostReference(hostLabel, true)} is unreachable. This terminal is permanently closed.`;
+}
+
+function agentReportCopy(reason: DeadTileReason): {
+  readonly title: string;
+  readonly message: string;
+} {
+  if (reason === "not-running-remotely") {
+    return {
+      title: "Agent is not running on its host",
+      message: "The agent has no running session on the host it is bound to.",
+    };
+  }
+  if (reason === "record-unavailable") {
+    return {
+      title: "Agent could not be loaded",
+      message: "The agent's record is not available on this device.",
+    };
+  }
+  return {
+    title: "Agent host is unreachable",
+    message: "The agent's bound host is unreachable.",
+  };
 }
 
 export interface TerminalDeadTileBannerProps {
@@ -141,14 +177,7 @@ export function TerminalDeadTileBanner(
           context={createReportIssueContext(
             props.ownerKind === "agent"
               ? {
-                  title:
-                    props.reason === "not-running-remotely"
-                      ? "Agent is not running on its host"
-                      : "Agent host is unreachable",
-                  message:
-                    props.reason === "not-running-remotely"
-                      ? "The agent has no running session on the host it is bound to."
-                      : "The agent's bound host is unreachable.",
+                  ...agentReportCopy(props.reason),
                   code: null,
                   source: "Agent",
                 }

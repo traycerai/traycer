@@ -831,6 +831,13 @@ export function useEpicTuiAgentRecordListAuthoritative(): boolean {
   return useEpicStore((s) => s.tuiAgentRecordListAuthoritative);
 }
 
+/** The list has failed and has not answered since. */
+export function useEpicTuiAgentRecordListFailed(): boolean {
+  return useEpicStore(
+    (s) => s.tuiAgentRecordListFailed && !s.tuiAgentRecordListAuthoritative,
+  );
+}
+
 export function useEpicSnapshotFetchError(): SnapshotFetchError | null {
   return useEpicStore((s) => s.snapshotFetchError);
 }
@@ -2800,6 +2807,17 @@ export function useEpicChatRetraction(
       return s.chatRetractions[chatId];
     }
     return null;
+  });
+}
+
+export function useEpicTuiAgentRetraction(
+  tuiAgentId: string | null,
+): ChatRecordRemovalReason | null {
+  return useEpicStore((s) => {
+    if (tuiAgentId === null) return null;
+    return Object.hasOwn(s.tuiAgentRetractions, tuiAgentId)
+      ? s.tuiAgentRetractions[tuiAgentId]
+      : null;
   });
 }
 

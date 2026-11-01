@@ -57,6 +57,7 @@ vi.mock("@/lib/epic-selectors", () => ({
   useEpicChatRecordListAuthoritative: () => true,
   useEpicTuiAgentRecordListAuthoritative: () => true,
   useEpicChatRetraction: () => null,
+  useEpicTuiAgentRetraction: () => null,
   useEpicTabDisplayTitle: (node: { readonly name: string }) => node.name,
   useEpicLiveArtifactTitleGenerating: () => false,
   useEpicPermissionRole: () => "owner",

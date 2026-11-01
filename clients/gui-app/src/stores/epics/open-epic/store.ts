@@ -396,6 +396,15 @@ export interface OpenEpicState {
    * epic session starts from false in its own store.
    */
   readonly tuiAgentRecordListAuthoritative: boolean;
+  /**
+   * `epic.listTuiAgents` ran out its retries this session. A latch rather than
+   * the query's own error state, because a query with no data drops back to
+   * `pending` on every poll, and a surface reading that would flip each time.
+   * It says nothing once the list has answered, so read it through
+   * `useEpicTuiAgentRecordListFailed`. Main-thread, like `chatRecordHeads`:
+   * only surfaces read it and the worker's projection never needs it.
+   */
+  readonly tuiAgentRecordListFailed: boolean;
   /** Projected ingest counters - see `EpicRecordsProjection`. */
   /** Projected adapter arm - see `EpicControlProjection`. */
   readonly installedArm: EpicAdapterArm | null;
@@ -725,6 +734,7 @@ export interface OpenEpicState {
   markChatRecordListAuthoritative: () => void;
   /** The terminal twin of {@link OpenEpicState.markChatRecordListAuthoritative}. */
   markTuiAgentRecordListAuthoritative: () => void;
+  markTuiAgentRecordListFailed: () => void;
   /**
    * Applies ONE `host.chatRecords.subscribe` delta - the push half of the same
    * record table {@link OpenEpicState.applyChatRecords} fills from the poll.
@@ -2045,6 +2055,7 @@ export function createOpenEpicStore(
           // field's own note on why the head is a main-thread plane. Empty
           // until a list answer or a delta carries one.
           chatRecordHeads: EMPTY_CHAT_RECORD_HEADS,
+          tuiAgentRecordListFailed: false,
           ingestFenceIdentity: mintedIngestFenceIdentity,
           lastFocusedArtifactId: null,
           lastFocusedThreadId: null,
@@ -2198,6 +2209,10 @@ export function createOpenEpicStore(
               kind: "mark-tui-agent-records-authoritative",
               payload: {},
             });
+          },
+          markTuiAgentRecordListFailed: () => {
+            if (get().tuiAgentRecordListFailed) return;
+            set({ tuiAgentRecordListFailed: true });
           },
           applyConfirmedChatMutation: (mutation) => {
             runtime.command({
@@ -2669,6 +2684,7 @@ export function createOpenEpicStore(
       kind: "mark-tui-agent-records-not-authoritative",
       payload: {},
     });
+    store.setState({ tuiAgentRecordListFailed: false });
     // Re-derive the record slices from the RETAINED raw rows, then re-project.
     // The slices are built for one owner (a `byId` keyed on `chatId` can hold
     // no more), so a user switch has to rebuild them rather than merely
