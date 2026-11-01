@@ -1153,6 +1153,7 @@ export type AttemptPruneRejection =
   | AttemptMutationRejection
   | "not-terminal"
   | "not-expired"
+  | "not-failed"
   | "expectation-mismatch"
   | "remove-failed";
 
@@ -1183,7 +1184,43 @@ export interface PruneTerminalAttemptRecordOptions {
 export async function pruneTerminalAttemptRecord(
   options: PruneTerminalAttemptRecordOptions,
 ): Promise<AttemptPruneOutcome> {
-  const leaseOutcome = acquireAttemptMutationLease(options.handle);
+  return removeRetainedRecord(options.handle, options.expected, (record) =>
+    isTerminalRetentionExpired(record, options.nowMs) ? null : "not-expired",
+  );
+}
+
+export interface RetireFailedAttemptRecordOptions {
+  readonly handle: UpdateAttemptLockHandle;
+  /** The exact retained failure a committed install has just replaced. */
+  readonly expected: HostUpdateAttemptIdentity;
+}
+
+/**
+ * Drop a retained `failed` record because a later install moved the host past
+ * it.
+ *
+ * The apply Desktop runs commits bytes without creating an attempt, so nothing
+ * overwrites the failure the way a newer attempt would: the record went on
+ * saying the update failed, over a host already on a newer version, until
+ * retention expired it. Only `failed` goes. A `complete` record contradicts
+ * nothing, and a nonterminal one still has work to finish.
+ */
+export async function retireFailedAttemptRecord(
+  options: RetireFailedAttemptRecordOptions,
+): Promise<AttemptPruneOutcome> {
+  return removeRetainedRecord(options.handle, options.expected, (record) =>
+    record.phase === "failed" ? null : "not-failed",
+  );
+}
+
+async function removeRetainedRecord(
+  handle: UpdateAttemptLockHandle,
+  expected: HostUpdateAttemptIdentity,
+  refusal: (
+    record: HostUpdateAttemptRecord,
+  ) => "not-expired" | "not-failed" | null,
+): Promise<AttemptPruneOutcome> {
+  const leaseOutcome = acquireAttemptMutationLease(handle);
   if (leaseOutcome.kind !== "leased") {
     return rejectedPruneWithoutRead(
       leaseOutcome.kind === "not-issued"
@@ -1194,26 +1231,25 @@ export async function pruneTerminalAttemptRecord(
 
   const { lease } = leaseOutcome;
   try {
-    const preOwnership = await ownershipRejection(options.handle);
+    const preOwnership = await ownershipRejection(handle);
     if (preOwnership !== null) return rejectedPruneWithoutRead(preOwnership);
 
     const canonical = await readRecordAtPath(lease.recordPath);
     if (canonical.kind !== "valid") {
       return { kind: "rejected", reason: "record-fail-closed", canonical };
     }
-    if (
-      !sameAttemptIdentity(attemptIdentityOf(canonical.value), options.expected)
-    ) {
+    if (!sameAttemptIdentity(attemptIdentityOf(canonical.value), expected)) {
       return { kind: "rejected", reason: "expectation-mismatch", canonical };
     }
     if (canonical.value.execution !== "terminal") {
       return { kind: "rejected", reason: "not-terminal", canonical };
     }
-    if (!isTerminalRetentionExpired(canonical.value, options.nowMs)) {
-      return { kind: "rejected", reason: "not-expired", canonical };
+    const refused = refusal(canonical.value);
+    if (refused !== null) {
+      return { kind: "rejected", reason: refused, canonical };
     }
 
-    const postOwnership = await ownershipRejection(options.handle);
+    const postOwnership = await ownershipRejection(handle);
     if (postOwnership !== null) {
       return { kind: "rejected", reason: postOwnership, canonical };
     }

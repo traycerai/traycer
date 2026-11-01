@@ -1,4 +1,7 @@
 import {
+  HOST_UPDATE_INITIATOR_DESKTOP,
+  HOST_UPDATE_INITIATOR_ENV_VAR,
+  retireFailedAttemptWithCapability,
   supervisorRelaunchInstalledIdentityOf,
   verifyUpdateMutationCapability,
   withLifecycleTeardownContender,
@@ -13,8 +16,10 @@ import {
 } from "@traycer-clients/shared/host-update";
 import type {
   HostUpdateAttemptRecord,
+  LockMetadata,
   UpdateMutationCapabilityAdoption,
 } from "@traycer-clients/shared/host-update";
+import type { ILogger } from "../logger";
 import { readHostInstallRecord } from "../manifest/host-install";
 import type { Environment } from "../runner/environment";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
@@ -32,7 +37,9 @@ import { hostHomeDir } from "../store/paths";
  *
  * This is intentionally a shadow bridge: it never creates or advances a
  * schema-v2 attempt record. A nonterminal record is instead surfaced as a
- * conflict until the schema-v2 executor owns the legacy operation.
+ * conflict until the schema-v2 executor owns the legacy operation. The one
+ * write it may make retires a `failed` record its own committed install has
+ * moved past (`retireFailedAttemptWithCapability`).
  */
 export interface WithCliUpdateContenderOptions {
   readonly environment: Environment;
@@ -129,7 +136,7 @@ export async function withCliUpdateExecutionSegment<T>(
   const outcome = await withUpdateContender(
     {
       hostHomeDir: home,
-      reason: options.reason,
+      reason: lockReasonOf(options.reason),
       waitMs: options.waitMs,
       pollIntervalMs: options.pollIntervalMs,
       admission: options.admission,
@@ -138,6 +145,49 @@ export async function withCliUpdateExecutionSegment<T>(
   );
 
   return unwrapContenderOutcome(options, outcome);
+}
+
+const DESKTOP_LOCK_REASON_PREFIX = `${HOST_UPDATE_INITIATOR_DESKTOP}:`;
+
+/** The lock carries a reason and a pid, so the reason is what can say who. */
+function lockReasonOf(reason: string): string {
+  return process.env[HOST_UPDATE_INITIATOR_ENV_VAR] ===
+    HOST_UPDATE_INITIATOR_DESKTOP
+    ? `${DESKTOP_LOCK_REASON_PREFIX}${reason}`
+    : reason;
+}
+
+/** The desktop's own in-process holders, named `host-controller-*`. */
+function heldByDesktop(reason: string): boolean {
+  return (
+    reason.startsWith(DESKTOP_LOCK_REASON_PREFIX) ||
+    reason.startsWith("host-controller-") ||
+    reason.startsWith("desktop-")
+  );
+}
+
+function workOf(reason: string): string {
+  if (reason.endsWith("host-download")) return "downloading a host update";
+  if (reason.endsWith("host-apply")) return "installing a host update";
+  if (reason.endsWith("host-update")) return "updating the host";
+  return "changing the host";
+}
+
+/**
+ * Who holds the update lock and what they are doing, as the start of a
+ * sentence. A `null` holder is a lock whose record could not be read.
+ */
+export function describeUpdateLockHolder(holder: LockMetadata | null): string {
+  if (holder === null) return "Another Traycer process is changing the host";
+  const who = heldByDesktop(holder.reason)
+    ? "The Traycer app"
+    : "Another Traycer command";
+  return `${who} is ${workOf(holder.reason)}`;
+}
+
+/** The refusal every update-lock loser reports, named once. */
+export function updateLockBusyMessage(holder: LockMetadata | null): string {
+  return `${describeUpdateLockHolder(holder)}, so this did not run. Let it finish, or watch 'traycer host status'.`;
 }
 
 /**
@@ -347,7 +397,7 @@ function unwrapContenderOutcome<T>(
     case "held-in-process":
       throw cliError({
         code: CLI_ERROR_CODES.CLI_LOCK_BUSY,
-        message: "another host update contender is in progress",
+        message: updateLockBusyMessage(outcome.holder),
         details: { reason: options.reason, holder: outcome.holder },
         exitCode: 75,
       });
@@ -414,6 +464,28 @@ function describeNonterminalAttempt(record: HostUpdateAttemptRecord): string {
   return record.execution === "parked"
     ? `${where}; it is parked with no updater running - run 'traycer host update' to resume it, which also starts the host if none is running; if it exits reporting that the installed host changed, the stale record is retired and 'traycer host ensure' starts the host`
     : `${where}; wait for the running update to finish, or run 'traycer host update' to recover it if it was interrupted`;
+}
+
+/**
+ * Retire the failure a committed install has replaced. Best-effort, and after
+ * the commit: the bytes are in, so a record that will not go must not turn that
+ * into a failed apply.
+ */
+export async function retireFailedAttemptAfterInstall(
+  capability: UpdateMutationCapability,
+  options: WithCliUpdateContenderOptions,
+  logger: ILogger,
+): Promise<void> {
+  try {
+    await retireFailedAttemptWithCapability(
+      capability,
+      options.hostHomeDir ?? hostHomeDir(options.environment),
+    );
+  } catch (err) {
+    logger.info("Host apply left a failed update attempt record in place", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 }
 
 function cliLockOptions(

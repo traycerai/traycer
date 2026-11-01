@@ -42,6 +42,7 @@ import {
   commitAttemptMutation,
   commitExecutorOnlyAttemptMutation,
   pruneTerminalAttemptRecord,
+  retireFailedAttemptRecord,
   readUpdateAttemptRecord,
   type AttemptCommitOutcome,
   type AttemptMutationIntent,
@@ -3095,6 +3096,97 @@ describe("readUpdateAttemptRecord - Windows reparse-point races (Windows fallbac
       expect(read.kind).toBe("unreadable");
     },
   );
+});
+
+describe("retireFailedAttemptRecord", () => {
+  it("removes a failed record, and only the one it named", async () => {
+    const dir = await freshDir();
+    const handle = await acquireHandle(dir, "segment");
+    const created = await commitAttemptMutation({
+      handle,
+      intent: { kind: "create", request: baseCreateRequest({}) },
+    });
+    if (created.kind !== "committed") throw new Error("expected committed");
+    const failed = await commitAttemptMutation({
+      handle,
+      intent: {
+        kind: "advance",
+        held: created.identity,
+        advance: {
+          phase: "failed",
+          continuation: null,
+          progress: null,
+          error: { code: "x", message: "y", phase: "downloading" },
+          claimRefresh: null,
+          verification: null,
+          nowIso: "2026-01-01T00:01:00.000Z",
+        },
+      },
+    });
+    if (failed.kind !== "committed") throw new Error("expected committed");
+
+    const stale = await retireFailedAttemptRecord({
+      handle,
+      expected: created.identity,
+    });
+    expect(stale).toMatchObject({
+      kind: "rejected",
+      reason: "expectation-mismatch",
+    });
+    await expect(stat(updateAttemptRecordPath(dir))).resolves.toBeDefined();
+
+    expect(
+      await retireFailedAttemptRecord({ handle, expected: failed.identity }),
+    ).toEqual({ kind: "pruned" });
+    await expect(stat(updateAttemptRecordPath(dir))).rejects.toThrow();
+  });
+
+  it("refuses a complete record and leaves it", async () => {
+    const dir = await freshDir();
+    await writeFile(
+      updateAttemptRecordPath(dir),
+      `${JSON.stringify({
+        schemaVersion: 2,
+        attemptId: "attempt-1",
+        generation: 1,
+        sequence: 2,
+        trigger: "manual",
+        targetVersion: "1.2.3",
+        phase: "complete",
+        execution: "terminal",
+        continuation: null,
+        progress: null,
+        startedAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:01:00.000Z",
+        completedAt: "2026-01-01T00:01:00.000Z",
+        error: null,
+      })}\n`,
+    );
+    const handle = await acquireHandle(dir, "segment");
+
+    expect(
+      await retireFailedAttemptRecord({
+        handle,
+        expected: { attemptId: "attempt-1", generation: 1, sequence: 2 },
+      }),
+    ).toMatchObject({ kind: "rejected", reason: "not-failed" });
+    await expect(stat(updateAttemptRecordPath(dir))).resolves.toBeDefined();
+  });
+
+  it("refuses a live attempt and leaves it", async () => {
+    const dir = await freshDir();
+    const handle = await acquireHandle(dir, "segment");
+    const created = await commitAttemptMutation({
+      handle,
+      intent: { kind: "create", request: baseCreateRequest({}) },
+    });
+    if (created.kind !== "committed") throw new Error("expected committed");
+
+    expect(
+      await retireFailedAttemptRecord({ handle, expected: created.identity }),
+    ).toMatchObject({ kind: "rejected", reason: "not-terminal" });
+    await expect(stat(updateAttemptRecordPath(dir))).resolves.toBeDefined();
+  });
 });
 
 describe("pruneTerminalAttemptRecord", () => {

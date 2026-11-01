@@ -1,6 +1,15 @@
 import type { ApplyHostOutcome } from "../installer/apply";
 import { NO_INSTALL_PHASE_HOOKS } from "../installer/install";
-import { withCliUpdateContender } from "../host/update-contender";
+import {
+  errorFacts,
+  outcomeOfThrow,
+  writeHostUpdateLastAttempt,
+  type HostUpdateAttemptOutcome,
+} from "../host/update-last-attempt";
+import {
+  retireFailedAttemptAfterInstall,
+  withCliUpdateContender,
+} from "../host/update-contender";
 import type { WithCliUpdateContenderOptions } from "../host/update-contender";
 import { resolveAttemptAdoptionFromNonce } from "../host/update-adoption";
 import { refuseUpdateOverUnstartableService } from "../host/update-service-unstartable";
@@ -10,7 +19,11 @@ import type { HostStartOrigin } from "../host/lifecycle-origin";
 import { readHostHeldVersion } from "@traycer/protocol/config/installation";
 import { readHostInstallRecord } from "../manifest/host-install";
 import { createRegistryYankLookup } from "../registry/client";
-import type { CommandFn, CommandResult } from "../runner/runner";
+import type {
+  CommandContext,
+  CommandFn,
+  CommandResult,
+} from "../runner/runner";
 
 // `traycer host apply [--force] [--no-service]` - promotes the single-slot
 // staged tree over the current install (Host Update Layer Redesign Tech
@@ -99,146 +112,232 @@ export interface HostApplyArgs {
 
 export function buildHostApplyCommand(args: HostApplyArgs): CommandFn {
   return async (ctx): Promise<CommandResult> => {
-    ctx.runtime.logger.info("Host apply command started", {
-      environment: ctx.runtime.environment,
-      force: args.force,
-      noService: args.noService,
-      acceptStoreFormatLoss: args.acceptStoreFormatLoss,
-    });
-    // Before the lock, the busy gate or the stop: an apply whose stop and
-    // restart go through a service this account could not start again.
-    // `--respect-hold` is the desktop's launch-time apply and nothing else, an
-    // AUTOMATIC path: it parks over a disabled task, or over another account's
-    // task under a host started through it, exactly as `host update` does. An
-    // explicit apply (no `--respect-hold`) is refused over the second, and
-    // goes on over the first: it swaps, keeps the task disabled and says so.
-    // Over another account's task with no host of this account's running
-    // through it, either apply goes on and says so (`preSwapWarning`).
-    // `--no-service` touches no service at all.
-    const preSwapWarning = args.noService
-      ? null
-      : await refuseUpdateOverUnstartableService(
-          ctx.runtime.environment,
-          ctx.runtime.logger,
-          args.respectHold ? "host apply --respect-hold" : "host apply",
-        );
-    const adoption = await resolveAttemptAdoptionFromNonce(
-      hostHomeDir(ctx.runtime.environment),
-      args.attemptAdoption,
-      Date.now(),
-    );
-    // ONE options value for acquisition and revalidation: two literals that
-    // must stay identical are how admission policies drift.
-    const contenderOptions: WithCliUpdateContenderOptions = {
-      environment: ctx.runtime.environment,
-      reason: "host-apply",
-      waitMs: 30_000,
-      pollIntervalMs: 100,
-      admission: "legacy-update-shadow",
-      adoption,
+    // Set once the update lock is won, which is what separates an apply that
+    // never started from one that failed.
+    const progress = { started: false };
+    const home = hostHomeDir(ctx.runtime.environment);
+    const facts = {
+      command: "host apply" as const,
+      initiator:
+        args.lifecycleOrigin === "desktop"
+          ? ("desktop" as const)
+          : ("manual" as const),
+      attemptId: null,
     };
-    const outcome = await withCliUpdateContender(
-      contenderOptions,
-      async (capability) => {
-        // Finding 3: the authoritative hold check for an IMPLICIT apply, made
-        // HERE under the CLI mutation lock rather than trusting the desktop's
-        // earlier preflight. A terminal downgrade that set the hold while the
-        // launch apply was still staging is serialized behind this same lock,
-        // so by the time we read the install record it reflects that downgrade
-        // - and we no-op instead of reverting it. An explicit apply
-        // (`respectHold: false`) skips this and always applies.
-        if (args.respectHold) {
-          const held = await readHostHeldVersion(ctx.runtime.environment);
-          if (held !== null) {
-            const installed = await readHostInstallRecord(
+    try {
+      const reported = await runHostApply(ctx, args, progress);
+      await writeHostUpdateLastAttempt(
+        home,
+        { ...facts, ...lastAttemptOf(reported) },
+        ctx.runtime.logger,
+      );
+      const activation = activationOf(reported);
+      ctx.runtime.logger.info("Host apply command completed", {
+        environment: ctx.runtime.environment,
+        outcome: reported.outcome,
+        activation,
+      });
+      return {
+        // Additive sibling on the existing payload: every field callers already
+        // read is untouched, and `activation` collapses the three fields that
+        // answer "what happened to the service after the swap?" into one - the
+        // question exit 0 does NOT answer here. See the success-contract note
+        // above, and `activationOf` for why it is not called "converged".
+        data: { ...reported, activation },
+        human: humanSummary(reported),
+        exitCode: 0,
+      };
+    } catch (err) {
+      await writeHostUpdateLastAttempt(
+        home,
+        {
+          ...facts,
+          outcome: outcomeOfThrow(err, progress.started),
+          targetVersion: null,
+          ...errorFacts(err),
+        },
+        ctx.runtime.logger,
+      );
+      throw err;
+    }
+  };
+}
+
+function lastAttemptOf(reported: ApplyHostOutcome): {
+  readonly outcome: HostUpdateAttemptOutcome;
+  readonly targetVersion: string | null;
+  readonly code: string | null;
+  readonly message: string | null;
+} {
+  switch (reported.outcome) {
+    case "applied":
+      if (reported.postSwapError !== null) {
+        return {
+          outcome: "failed",
+          targetVersion: reported.record.version,
+          code: null,
+          message: reported.postSwapError,
+        };
+      }
+      return {
+        outcome: reported.runningActivated ? "complete" : "applied",
+        targetVersion: reported.record.version,
+        code: null,
+        message: null,
+      };
+    case "no-op":
+      return {
+        outcome: "no-op",
+        targetVersion: reported.installedVersion,
+        code: null,
+        message: null,
+      };
+    default:
+      return {
+        outcome: "refused",
+        targetVersion: null,
+        code: null,
+        message: reported.outcome,
+      };
+  }
+}
+
+async function runHostApply(
+  ctx: CommandContext,
+  args: HostApplyArgs,
+  progress: { started: boolean },
+): Promise<ApplyHostOutcome> {
+  ctx.runtime.logger.info("Host apply command started", {
+    environment: ctx.runtime.environment,
+    force: args.force,
+    noService: args.noService,
+    acceptStoreFormatLoss: args.acceptStoreFormatLoss,
+  });
+  // Before the lock, the busy gate or the stop: an apply whose stop and
+  // restart go through a service this account could not start again.
+  // `--respect-hold` is the desktop's launch-time apply and nothing else, an
+  // AUTOMATIC path: it parks over a disabled task, or over another account's
+  // task under a host started through it, exactly as `host update` does. An
+  // explicit apply (no `--respect-hold`) is refused over the second, and
+  // goes on over the first: it swaps, keeps the task disabled and says so.
+  // Over another account's task with no host of this account's running
+  // through it, either apply goes on and says so (`preSwapWarning`).
+  // `--no-service` touches no service at all.
+  const preSwapWarning = args.noService
+    ? null
+    : await refuseUpdateOverUnstartableService(
+        ctx.runtime.environment,
+        ctx.runtime.logger,
+        args.respectHold ? "host apply --respect-hold" : "host apply",
+      );
+  const adoption = await resolveAttemptAdoptionFromNonce(
+    hostHomeDir(ctx.runtime.environment),
+    args.attemptAdoption,
+    Date.now(),
+  );
+  // ONE options value for acquisition and revalidation: two literals that
+  // must stay identical are how admission policies drift.
+  const contenderOptions: WithCliUpdateContenderOptions = {
+    environment: ctx.runtime.environment,
+    reason: "host-apply",
+    waitMs: 30_000,
+    pollIntervalMs: 100,
+    admission: "legacy-update-shadow",
+    adoption,
+  };
+  const outcome = await withCliUpdateContender(
+    contenderOptions,
+    async (capability) => {
+      progress.started = true;
+      // Finding 3: the authoritative hold check for an IMPLICIT apply, made
+      // HERE under the CLI mutation lock rather than trusting the desktop's
+      // earlier preflight. A terminal downgrade that set the hold while the
+      // launch apply was still staging is serialized behind this same lock,
+      // so by the time we read the install record it reflects that downgrade
+      // - and we no-op instead of reverting it. An explicit apply
+      // (`respectHold: false`) skips this and always applies.
+      if (args.respectHold) {
+        const held = await readHostHeldVersion(ctx.runtime.environment);
+        if (held !== null) {
+          const installed = await readHostInstallRecord(
+            ctx.runtime.environment,
+          );
+          // Match on the install INSTANCE (`installId`), not the version, so
+          // a later reinstall of the same version is never mistaken for the
+          // held one.
+          if (installed !== null && installed.installId === held.installId) {
+            // A hold protects a deliberate choice from client PREFERENCE,
+            // never from curation: a held host the registry has since YANKED
+            // is not viable, so the hold is void and the apply proceeds. The
+            // lookup fails open (offline / malformed / timed out reads as
+            // not yanked), the same bias as `viability`'s yank check - a
+            // network blip keeps the hold rather than reverting it.
+            const yanked = await createRegistryYankLookup(
               ctx.runtime.environment,
-            );
-            // Match on the install INSTANCE (`installId`), not the version, so
-            // a later reinstall of the same version is never mistaken for the
-            // held one.
-            if (installed !== null && installed.installId === held.installId) {
-              // A hold protects a deliberate choice from client PREFERENCE,
-              // never from curation: a held host the registry has since YANKED
-              // is not viable, so the hold is void and the apply proceeds. The
-              // lookup fails open (offline / malformed / timed out reads as
-              // not yanked), the same bias as `viability`'s yank check - a
-              // network blip keeps the hold rather than reverting it.
-              const yanked = await createRegistryYankLookup(
-                ctx.runtime.environment,
-              ).isVersionYanked(installed.version);
-              if (!yanked) {
-                ctx.runtime.logger.info(
-                  "Host apply skipped: installed host is the held one",
-                  {
-                    environment: ctx.runtime.environment,
-                    version: held.version,
-                  },
-                );
-                return {
-                  outcome: "no-op" as const,
-                  installedVersion: installed.version,
-                };
-              }
-              ctx.runtime.logger.warn(
-                "Host apply overriding the version hold: the held host is yanked",
-                { environment: ctx.runtime.environment, version: held.version },
+            ).isVersionYanked(installed.version);
+            if (!yanked) {
+              ctx.runtime.logger.info(
+                "Host apply skipped: installed host is the held one",
+                {
+                  environment: ctx.runtime.environment,
+                  version: held.version,
+                },
               );
+              return {
+                outcome: "no-op" as const,
+                installedVersion: installed.version,
+              };
             }
+            ctx.runtime.logger.warn(
+              "Host apply overriding the version hold: the held host is yanked",
+              { environment: ctx.runtime.environment, version: held.version },
+            );
           }
         }
-        // No version-hold WRITE follows a committed apply: an apply is always
-        // a FORWARD move (the stage is only ever newer than the install),
-        // which the hold model treats as inert via the consulting gate
-        // (`held !== installed`) rather than by deleting the record - so there
-        // is nothing to clear and no clear/ABA race. The `respectHold` guard
-        // above is this command's only hold interaction.
-        return applyHostWithAttempt(
+      }
+      // No version-hold WRITE follows a committed apply: an apply is always
+      // a FORWARD move (the stage is only ever newer than the install),
+      // which the hold model treats as inert via the consulting gate
+      // (`held !== installed`) rather than by deleting the record - so there
+      // is nothing to clear and no clear/ABA race. The `respectHold` guard
+      // above is this command's only hold interaction.
+      const applied = await applyHostWithAttempt(
+        capability,
+        contenderOptions,
+        args.lifecycleOrigin,
+        {
+          environment: ctx.runtime.environment,
+          force: args.force,
+          noService: args.noService,
+          expectedStageFingerprint: args.expectedStageFingerprint,
+          expectedStagedVersion: null,
+          acceptStoreFormatLoss: args.acceptStoreFormatLoss,
+          onProgress: (info) => ctx.progress(info),
+          onWillCommitStaged: null,
+          onWillDisruptHost: null,
+          // `host apply` advances no attempt record of its own: Desktop
+          // drives its own lane around this call and reads the outcome.
+          hooks: NO_INSTALL_PHASE_HOOKS,
+        },
+      );
+      if (applied.outcome === "applied" && applied.postSwapError === null) {
+        await retireFailedAttemptAfterInstall(
           capability,
           contenderOptions,
-          args.lifecycleOrigin,
-          {
-            environment: ctx.runtime.environment,
-            force: args.force,
-            noService: args.noService,
-            expectedStageFingerprint: args.expectedStageFingerprint,
-            expectedStagedVersion: null,
-            acceptStoreFormatLoss: args.acceptStoreFormatLoss,
-            onProgress: (info) => ctx.progress(info),
-            onWillCommitStaged: null,
-            onWillDisruptHost: null,
-            // `host apply` advances no attempt record of its own: Desktop
-            // drives its own lane around this call and reads the outcome.
-            hooks: NO_INSTALL_PHASE_HOOKS,
-          },
+          ctx.runtime.logger,
         );
-      },
-    );
-    // The swap ran over another account's task with no host of this
-    // account's behind it: the lifecycle had no registration of its own to
-    // refuse, so the pre-claim read's warning is the one the result carries.
-    const reported: ApplyHostOutcome =
-      outcome.outcome === "applied" &&
-      outcome.postSwapWarning === null &&
-      preSwapWarning !== null
-        ? { ...outcome, postSwapWarning: preSwapWarning }
-        : outcome;
-    const activation = activationOf(reported);
-    ctx.runtime.logger.info("Host apply command completed", {
-      environment: ctx.runtime.environment,
-      outcome: reported.outcome,
-      activation,
-    });
-    return {
-      // Additive sibling on the existing payload: every field callers already
-      // read is untouched, and `activation` collapses the three fields that
-      // answer "what happened to the service after the swap?" into one - the
-      // question exit 0 does NOT answer here. See the success-contract note
-      // above, and `activationOf` for why it is not called "converged".
-      data: { ...reported, activation },
-      human: humanSummary(reported),
-      exitCode: 0,
-    };
-  };
+      }
+      return applied;
+    },
+  );
+  // The swap ran over another account's task with no host of this
+  // account's behind it: the lifecycle had no registration of its own to
+  // refuse, so the pre-claim read's warning is the one the result carries.
+  return outcome.outcome === "applied" &&
+    outcome.postSwapWarning === null &&
+    preSwapWarning !== null
+    ? { ...outcome, postSwapWarning: preSwapWarning }
+    : outcome;
 }
 
 /**

@@ -11,6 +11,7 @@ import {
   discardAttemptRecordForUninstall,
   pruneTerminalAttemptRecord,
   readUpdateAttemptRecord,
+  retireFailedAttemptRecord,
   type AttemptCommitOutcome,
   type AttemptDiscardOutcome,
   type AttemptMutationIntent,
@@ -604,6 +605,31 @@ export async function discardAttemptRecordWithCapability(
     );
   }
   return discardAttemptRecordForUninstall({ handle: state.handle });
+}
+
+/**
+ * Retire a retained failure once an install has committed past it
+ * (`retireFailedAttemptRecord`).
+ *
+ * Restricted to `legacy-update-shadow`: the apply that holds it wrote no
+ * attempt of its own, so this is the one thing that can stop the old failure
+ * contradicting the host. An executor has no use for it, because its own claim
+ * replaces the record. An adopted capability has no handle and retires nothing.
+ */
+export async function retireFailedAttemptWithCapability(
+  capability: UpdateMutationCapability,
+  hostHomeDir: string,
+): Promise<void> {
+  const state = heldCapabilityState(capability);
+  if (state === null || state.admission !== "legacy-update-shadow") return;
+  const live = await verifyUpdateMutationCapability(capability, hostHomeDir);
+  if (live.kind !== "live") return;
+  const record = await readUpdateAttemptRecord(state.hostHomeDir);
+  if (record.kind !== "valid") return;
+  await retireFailedAttemptRecord({
+    handle: state.handle,
+    expected: attemptIdentityOf(record.value),
+  });
 }
 
 /**
