@@ -29,6 +29,13 @@ const catalogue = vi.hoisted(() => ({
 
 // The cloud catalogue: which agents sandboxes run. It offers the picked agent
 // unless a test says otherwise.
+vi.mock("@/hooks/sandboxes/use-sandbox-traycer-models-query", () => ({
+  useSandboxTraycerModels: () => ({
+    data: [],
+    isPending: false,
+    fetchStatus: "idle",
+  }),
+}));
 vi.mock("@/hooks/sandboxes/use-sandbox-catalogue-query", () => ({
   useSandboxCatalogue: () => ({ data: catalogue.data }),
 }));
