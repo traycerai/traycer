@@ -37,6 +37,7 @@ import {
 } from "@/components/epic-canvas/renderers/browser-sessions-context";
 
 interface ForkCreateRequest {
+  readonly title: string;
   readonly forkSource: {
     readonly interviewBlockId: string | null;
   };
@@ -48,12 +49,14 @@ const loadingSurfaceTestState = vi.hoisted(() => ({
 const workspaceSelectorTestState = vi.hoisted<{
   hostIds: string[];
   ownerIds: string[];
+  ownerLabels: string[];
   inFlightWorktreeIntent: WorktreeIntent | null;
   isOwnerActive: boolean | null;
   hasActiveTurn: boolean | null;
 }>(() => ({
   hostIds: [],
   ownerIds: [],
+  ownerLabels: [],
   inFlightWorktreeIntent: null,
   isOwnerActive: null,
   hasActiveTurn: null,
@@ -71,6 +74,19 @@ const forkCreateTestState = vi.hoisted(() => ({
 }));
 const cloudChatListTestState = vi.hoisted(() => ({
   knownChatIds: new Set<string>(),
+  titles: new Map<string, string>(),
+}));
+// The environment arm: a team host's own stream, the one source a creator's
+// untitled stand-in gets its generated title from.
+const armChatsTestState = vi.hoisted(
+  (): { rows: ReadonlyArray<CloudChatSummary> } => ({ rows: [] }),
+);
+vi.mock("@/hooks/environment/use-environment-arms", async (importActual) => ({
+  ...(await importActual<
+    typeof import("@/hooks/environment/use-environment-arms")
+  >()),
+  useEnvironmentArmChats: (taskId: string) =>
+    taskId.length === 0 ? [] : armChatsTestState.rows,
 }));
 // The tile's own next-step/compact/implement-plan sends read this catalog to
 // clamp a sticky `auto` permission to what the selected harness row actually
@@ -118,6 +134,7 @@ vi.mock(
       readonly surface: {
         readonly hostId: string;
         readonly ownerId: string;
+        readonly ownerLabel: string;
         readonly bindingResolved: boolean;
         readonly inFlightWorktreeIntent: WorktreeIntent | null;
         readonly isOwnerActive: boolean;
@@ -126,6 +143,7 @@ vi.mock(
     }) => {
       workspaceSelectorTestState.hostIds.push(props.surface.hostId);
       workspaceSelectorTestState.ownerIds.push(props.surface.ownerId);
+      workspaceSelectorTestState.ownerLabels.push(props.surface.ownerLabel);
       workspaceSelectorTestState.inFlightWorktreeIntent =
         props.surface.inFlightWorktreeIntent;
       workspaceSelectorTestState.isOwnerActive = props.surface.isOwnerActive;
@@ -574,7 +592,7 @@ vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importActual) => ({
           ownerHostId: HOST_ID,
           createdAt: 1,
           visibility: "task",
-          title: null,
+          title: cloudChatListTestState.titles.get(chatId) ?? null,
           isTitleEditedByUser: false,
           parentChatId: null,
           isArchived: false,
@@ -1678,6 +1696,45 @@ function renderSwitchableChatTile() {
   };
 }
 
+/** The seeded chat with its stored title and host set, as a record held on that host. */
+function seedDocWithChatOn(input: {
+  readonly title: string;
+  readonly hostId: string;
+}) {
+  return (doc: Y.Doc): void => {
+    seedDocWithChat(doc);
+    const chats = doc.getMap("epic").get("chats");
+    if (!(chats instanceof Y.Map)) throw new Error("expected chats map");
+    const record: unknown = chats.get(CHAT_ARTIFACT.id);
+    if (!(record instanceof Y.Map)) throw new Error("expected chat record");
+    record.set("title", input.title);
+    record.set("hostId", input.hostId);
+  };
+}
+
+function armTitledRow(title: string): CloudChatSummary {
+  return {
+    identity: {
+      taskId: EPIC_ID,
+      chatId: CHAT_ARTIFACT.id,
+      ownerUserId: "env-pool",
+    },
+    ownerHostId: HOST_ID,
+    createdAt: 1,
+    visibility: "task",
+    title,
+    isTitleEditedByUser: false,
+    parentChatId: null,
+    isArchived: false,
+    runSettingsSummary: null,
+    metadataUpdatedAt: 2,
+    headSha256: null,
+    publishedAt: null,
+    throughRecordSeq: null,
+    isOwnedByViewer: false,
+  };
+}
+
 function chatTileTestTree(
   queryClient: QueryClient,
   chatVisible: boolean,
@@ -1957,7 +2014,10 @@ describe("<ChatTile />", () => {
     useInitialChatHandoffStore.getState().resetForTests();
     useWorktreeIntentStagingStore.getState().resetForTests();
     resetFocusedComposerControlsForTests();
+    workspaceSelectorTestState.ownerLabels.length = 0;
     cloudChatListTestState.knownChatIds.clear();
+    cloudChatListTestState.titles.clear();
+    armChatsTestState.rows = [];
     harnessCatalogTestState.harnesses = [];
     resetNegotiatedManifests();
   });
@@ -7797,12 +7857,12 @@ describe("<ChatTile />", () => {
     }
 
     async function announcedAfterCompletedTurn(input: {
-      readonly liveTitle: string;
+      readonly seed: (doc: Y.Doc) => void;
       readonly stateTitle: string;
     }): Promise<string> {
       harness.teardown();
       chatHarness.teardown();
-      harness.install(seedDocWithChatTitle(input.liveTitle), "editor");
+      harness.install(input.seed, "editor");
       chatHarness.install("owner", []);
       const queryClient = new QueryClient({
         defaultOptions: { queries: { retry: false, gcTime: 0 } },
@@ -7852,7 +7912,7 @@ describe("<ChatTile />", () => {
       // finished responding." here: the loaded ref name is "New agent" while
       // the store holds "Real Title", so the exact-text assertion goes red.
       const text = await announcedAfterCompletedTurn({
-        liveTitle: "Real Title",
+        seed: seedDocWithChatTitle("Real Title"),
         stateTitle: "State Title",
       });
       expect(text).toBe("Real Title finished responding.");
@@ -7860,7 +7920,7 @@ describe("<ChatTile />", () => {
 
     it("falls back to the chat state title when the live title is empty", async () => {
       const text = await announcedAfterCompletedTurn({
-        liveTitle: "",
+        seed: seedDocWithChatTitle(""),
         stateTitle: "State Title",
       });
       expect(text).toBe("State Title finished responding.");
@@ -7868,10 +7928,229 @@ describe("<ChatTile />", () => {
 
     it('falls back to the loaded tile name, a saved "Untitled agent" read as New agent, when both titles are empty', async () => {
       const text = await announcedAfterCompletedTurn({
-        liveTitle: "",
+        seed: seedDocWithChatTitle(""),
         stateTitle: "",
       });
       expect(text).toBe("New agent finished responding.");
+    });
+
+    function seedDocWithoutChatRecord(doc: Y.Doc): void {
+      seedDocWithChat(doc);
+      const chats = doc.getMap("epic").get("chats");
+      if (!(chats instanceof Y.Map)) throw new Error("expected chats map");
+      chats.delete(CHAT_ARTIFACT.id);
+    }
+
+    function seedDocWithUntitledChatOn(hostId: string, title: string) {
+      return (doc: Y.Doc): void => {
+        seedDocWithChatTitle(title)(doc);
+        const chats = doc.getMap("epic").get("chats");
+        if (!(chats instanceof Y.Map)) throw new Error("expected chats map");
+        const record: unknown = chats.get(CHAT_ARTIFACT.id);
+        if (!(record instanceof Y.Map)) throw new Error("expected chat record");
+        record.set("hostId", hostId);
+      };
+    }
+
+    function titledCloudRow(input: {
+      readonly title: string;
+      readonly ownerUserId: string;
+      readonly ownedByViewer: boolean;
+    }): CloudChatSummary {
+      return {
+        identity: {
+          taskId: EPIC_ID,
+          chatId: CHAT_ARTIFACT.id,
+          ownerUserId: input.ownerUserId,
+        },
+        ownerHostId: HOST_ID,
+        createdAt: 1,
+        visibility: "task",
+        title: input.title,
+        isTitleEditedByUser: false,
+        parentChatId: null,
+        isArchived: false,
+        runSettingsSummary: null,
+        metadataUpdatedAt: 2,
+        headSha256: null,
+        publishedAt: null,
+        throughRecordSeq: null,
+        isOwnedByViewer: input.ownedByViewer,
+      };
+    }
+
+    it("announces the cloud list's title when the record is absent and the tab shows that title", async () => {
+      cloudChatListTestState.knownChatIds.add(CHAT_ARTIFACT.id);
+      cloudChatListTestState.titles.set(CHAT_ARTIFACT.id, "Cloud title");
+
+      const text = await announcedAfterCompletedTurn({
+        seed: seedDocWithoutChatRecord,
+        stateTitle: "",
+      });
+
+      expect(text).toBe("Cloud title finished responding.");
+    });
+
+    it("announces the arm row's title when the record is present and untitled", async () => {
+      armChatsTestState.rows = [
+        titledCloudRow({
+          title: "Arm title",
+          ownerUserId: "env-pool",
+          ownedByViewer: false,
+        }),
+      ];
+
+      const text = await announcedAfterCompletedTurn({
+        seed: seedDocWithUntitledChatOn(HOST_ID, ""),
+        stateTitle: "",
+      });
+
+      expect(text).toBe("Arm title finished responding.");
+    });
+
+    it("does not take the title of a record held on another host than the tab", async () => {
+      const text = await announcedAfterCompletedTurn({
+        seed: seedDocWithUntitledChatOn("other-host", "Other host title"),
+        stateTitle: "",
+      });
+
+      expect(text).toBe("New agent finished responding.");
+    });
+
+    it("says New agent for an untitled chat, then empties the region when the title lands through the projection", async () => {
+      const text = await announcedAfterCompletedTurn({
+        seed: seedDocWithChatTitle(""),
+        stateTitle: "",
+      });
+      expect(text).toBe("New agent finished responding.");
+
+      const handle = __getOpenEpicRegistryForTests().get(EPIC_ID);
+      if (handle === null) throw new Error("expected open epic handle");
+      await act(async () => {
+        await handle.store
+          .getState()
+          .renameArtifact(CHAT_ARTIFACT.id, "Generated title");
+      });
+      await settleLegendList();
+
+      expect(liveRegionText()).toBe("");
+    });
+  });
+
+  describe("an agent named the way its tab names it", () => {
+    async function renderOnRecord(title: string): Promise<void> {
+      harness.teardown();
+      chatHarness.teardown();
+      harness.install(seedDocWithChatOn({ title, hostId: HOST_ID }), "editor");
+      chatHarness.install("owner", []);
+      // The snapshot an untitled agent's tile carries once it is loaded.
+      renderChatTileWithNode({ ...CHAT_ARTIFACT, name: "New agent" });
+      await waitForChatTileLoaded();
+      const callbacks = chatHarness.callbacks();
+      // The session's own copy of the chat is untitled too.
+      const untitledSession: ChatStreamCallbacks = {
+        ...callbacks,
+        onSnapshot: (frame) => {
+          callbacks.onSnapshot({
+            ...frame,
+            snapshot: {
+              ...frame.snapshot,
+              chat: { ...frame.snapshot.chat, title: "" },
+            },
+          });
+        },
+      };
+      act(() => {
+        emitChatSnapshotWithMessages({
+          callbacks: untitledSession,
+          access: "owner",
+          queueItems: [],
+          settings: null,
+          messages: [hostUserMessage(), nextStepsAssistantMessage()],
+          activeTurn: null,
+        });
+      });
+      await screen.findByText("Implementation is complete.");
+    }
+
+    async function openFork(): Promise<HTMLInputElement> {
+      fireEvent.click(screen.getByTestId("assistant-fork-chat"));
+      const input = await screen.findByLabelText("Fork agent title");
+      if (!(input instanceof HTMLInputElement)) {
+        throw new Error("expected fork title input");
+      }
+      return input;
+    }
+
+    function sendBareSideChat(): void {
+      act(() => {
+        useComposerDraftStore.getState().replaceDraft(
+          CHAT_ARTIFACT.id,
+          {
+            type: "doc",
+            content: [
+              { type: "paragraph", content: [{ type: "text", text: "/btw" }] },
+            ],
+          },
+          null,
+        );
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    }
+
+    function lastSideChatTitle(): string {
+      const call = forkCreateTestState.mutate.mock.calls.at(-1);
+      if (call === undefined) throw new Error("expected a side chat create");
+      return call[0].title;
+    }
+
+    it("labels the workspace selector's owner with the arm row's title for an untitled record", async () => {
+      armChatsTestState.rows = [armTitledRow("Arm title")];
+
+      await renderOnRecord("");
+
+      expect(workspaceSelectorTestState.ownerLabels.at(-1)).toBe("Arm title");
+    });
+
+    it("labels the workspace selector's owner New agent when nothing is titled", async () => {
+      await renderOnRecord("");
+
+      expect(workspaceSelectorTestState.ownerLabels.at(-1)).toBe("New agent");
+    });
+
+    it("leaves the fork title empty when nothing is titled, never seeding Fork - New agent", async () => {
+      await renderOnRecord("");
+
+      const input = await openFork();
+
+      expect(input.value).toBe("");
+      expect(input.getAttribute("placeholder")).toBe("New agent");
+    });
+
+    it("seeds the fork title from the arm row's title", async () => {
+      armChatsTestState.rows = [armTitledRow("Arm title")];
+      await renderOnRecord("");
+
+      const input = await openFork();
+
+      expect(input.value).toBe("Fork - Arm title");
+    });
+
+    it("starts a side chat from an untitled agent with an empty source title", async () => {
+      await renderOnRecord("");
+
+      sendBareSideChat();
+
+      expect(lastSideChatTitle()).toBe("");
+    });
+
+    it("starts a side chat named after the arm row's title", async () => {
+      armChatsTestState.rows = [armTitledRow("Arm title")];
+      await renderOnRecord("");
+
+      sendBareSideChat();
+
+      expect(lastSideChatTitle()).toBe("Side - Arm title");
     });
   });
 
