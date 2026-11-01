@@ -165,6 +165,7 @@ import {
   CLOUD_ENTITY_READ_RETRY_BASE_MS,
   resetCloudEntityReadDriver,
 } from "@/lib/notifications/cloud-entity-read-driver";
+import { usePublishPresentedBotConversation } from "@/hooks/notifications/use-publish-presented-bot-conversation";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { makeOpenableNodeRef } from "@/stores/epics/canvas/types";
 
@@ -780,6 +781,100 @@ describe("cloud-mode view consumption", () => {
  * `Math.random` is stubbed so the jitter window is deterministic; the clock is
  * faked so a five-minute cap does not mean a five-minute test.
  */
+describe("cloud-mode consumption of a presented bot conversation", () => {
+  const BOT_ID = EPIC_ID;
+  const CHANNEL_ID = CHAT_ID;
+  const OTHER_CHANNEL_ID = SIBLING_CHAT_ID;
+
+  function PresentedConversation(props: {
+    readonly conversationId: string | null;
+  }): null {
+    usePublishPresentedBotConversation(BOT_ID, null, props.conversationId);
+    return null;
+  }
+
+  /** A bot post: a cloud row from the bot's bound host, not the serving one. */
+  function botPost(entryId: string, chatId: string) {
+    return cloudRow({
+      entryId,
+      originHostId: OTHER_HOST_ID,
+      severity: "done",
+      chatId,
+    });
+  }
+
+  it("consumes a post for the presented channel, marks the host entity once, and leaves another channel's post unread", async () => {
+    renderProvider();
+    applyCloudSnapshot([], 1);
+    render(<PresentedConversation conversationId={CHANNEL_ID} />);
+    await waitFor(() => {
+      expect(calls.hostMarkRead).toEqual([
+        { kind: "entity", entity: { epicId: BOT_ID, chatId: CHANNEL_ID } },
+      ]);
+    });
+
+    const posts = [
+      botPost("entry-channel", CHANNEL_ID),
+      botPost("entry-other", OTHER_CHANNEL_ID),
+    ];
+    applyCloudSnapshot(posts, 2);
+    await waitFor(() => {
+      expect(calls.cloudMarkRead).toEqual(["entry-channel"]);
+    });
+    expect(readAtFor("entry-channel")).not.toBeNull();
+    expect(readAtFor("entry-other")).toBeNull();
+
+    applyCloudSnapshot(posts, 3);
+    expect(calls.cloudMarkRead).toEqual(["entry-channel"]);
+    expect(calls.hostMarkRead).toHaveLength(1);
+  });
+
+  it("leaves a post unread once the channel is withdrawn, and consumes it when the person comes back", async () => {
+    renderProvider();
+    const { rerender } = render(
+      <PresentedConversation conversationId={null} />,
+    );
+    applyCloudSnapshot([botPost("entry-channel", CHANNEL_ID)], 1);
+    expect(calls.cloudMarkRead).toEqual([]);
+    expect(calls.hostMarkRead).toEqual([]);
+
+    rerender(<PresentedConversation conversationId={CHANNEL_ID} />);
+
+    await waitFor(() => {
+      expect(calls.cloudMarkRead).toEqual(["entry-channel"]);
+    });
+  });
+
+  it("does not pass through the canvas's chat when the channel switches", async () => {
+    renderProvider();
+    focusChat("epic-behind", "chat-behind", mockLocalHostEntry.hostId);
+    await waitFor(() => {
+      expect(calls.hostMarkRead.length).toBeGreaterThan(0);
+    });
+    const { rerender } = render(
+      <PresentedConversation conversationId={CHANNEL_ID} />,
+    );
+    await waitFor(() => {
+      expect(calls.hostMarkRead.at(-1)).toEqual({
+        kind: "entity",
+        entity: { epicId: BOT_ID, chatId: CHANNEL_ID },
+      });
+    });
+    calls.hostMarkRead.length = 0;
+
+    rerender(<PresentedConversation conversationId={OTHER_CHANNEL_ID} />);
+
+    await waitFor(() => {
+      expect(calls.hostMarkRead).toEqual([
+        {
+          kind: "entity",
+          entity: { epicId: BOT_ID, chatId: OTHER_CHANNEL_ID },
+        },
+      ]);
+    });
+  });
+});
+
 describe("cloud-mode view-consumption teardown", () => {
   /**
    * The retry timer re-arms on every failure, so a persistently failing server

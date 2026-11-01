@@ -88,7 +88,7 @@ import {
   type BotSessionActivity,
 } from "@/hooks/bots/use-bot-activity";
 import { useNotificationIndicators } from "@/hooks/notifications/use-notification-indicators-query";
-import { useNotificationMarkEntityRead } from "@/hooks/notifications/use-notification-mark-entity-read-mutation";
+import { usePublishPresentedBotConversation } from "@/hooks/notifications/use-publish-presented-bot-conversation";
 import { indicatorHasUnread } from "@/stores/notifications/notification-indicator-state";
 import {
   botMemberName,
@@ -114,7 +114,6 @@ import { cn } from "@/lib/utils";
 
 const EMPTY_THREADS: ReadonlyArray<BotThreadSummary> = [];
 const NO_EPIC_IDS: ReadonlyArray<string> = [];
-const NO_CHAT_IDS: ReadonlyArray<string> = [];
 
 /**
  * Whether the person is in this window: it is on screen and has focus, the
@@ -678,26 +677,29 @@ export function BotChannelView(props: {
     threadAnchorKinds,
     threadList.isError,
   ]);
-  useReadThreadWhilePresented({
+  const presentedThreadId = useReadThreadWhilePresented({
     client,
     botId,
     thread: openThread,
-    isUnread,
     readCursors,
     shown: threadOpen,
   });
   const [channelSection, setChannelSection] = useState<HTMLElement | null>(
     null,
   );
-  useReadChannelWhilePresented({
+  const presentedChannelId = useReadChannelWhilePresented({
     client,
-    hostId,
     botId,
     channelId,
     readCursors,
     threadOpen: railOpen,
     section: channelSection,
   });
+  usePublishPresentedBotConversation(
+    botId,
+    presentedThreadId,
+    presentedChannelId,
+  );
 
   const anchorSenderLabel = useCallback(
     (senderUserId: string | null): string =>
@@ -1254,49 +1256,22 @@ function useDisplayed(element: HTMLElement | null): boolean {
 }
 
 /**
- * Marks the channel read while the person can see it: a direct reply that
- * answered their post lights the channel's unread mark, as a verdict lights
- * its thread's, and the channel transcript presented in the pane on
- * screen, in a window they are in, has been read.
+ * Advances the channel's read cursor while the person can see it: the channel
+ * transcript presented in the pane on screen, in a window they are in, has been
+ * read. The channel it presents, or `null`.
  */
 function useReadChannelWhilePresented(args: {
   readonly client: HostClient<HostRpcRegistry> | null;
-  readonly hostId: string;
   readonly botId: string;
   readonly channelId: string | null;
   readonly readCursors: BotReadCursorReadResponse | undefined;
   readonly threadOpen: boolean;
   /** The channel's section: beside an open thread a container query hides it on a narrow pane, which only its size tells. */
   readonly section: HTMLElement | null;
-}): void {
-  const { client, hostId, botId, channelId, threadOpen, section } = args;
+}): string | null {
+  const { client, botId, channelId, threadOpen, section } = args;
   const displayed = useDisplayed(section);
-  const chatIds = useMemo(
-    () => (channelId === null ? NO_CHAT_IDS : [channelId]),
-    [channelId],
-  );
-  const chatEpicIds = useMemo(
-    () => (channelId === null ? {} : { [channelId]: botId }),
-    [botId, channelId],
-  );
-  const indicators = useNotificationIndicators({
-    hostId,
-    epicIds: NO_EPIC_IDS,
-    chatIds,
-    chatEpicIds,
-    enabled: channelId !== null,
-  });
   const presented = usePresented(!threadOpen || displayed);
-  const state =
-    channelId !== null && Object.hasOwn(indicators.chats, channelId)
-      ? indicators.chats[channelId]
-      : null;
-  const unread = state !== null && indicatorHasUnread(state);
-  const { mutate: markRead } = useNotificationMarkEntityRead(client);
-  useEffect(() => {
-    if (!presented || channelId === null || !unread) return;
-    markRead({ epicId: botId, chatId: channelId });
-  }, [botId, channelId, markRead, presented, unread]);
   useAdvanceWhilePresented({
     client,
     botId,
@@ -1304,31 +1279,25 @@ function useReadChannelWhilePresented(args: {
     readCursors: args.readCursors,
     presented,
   });
+  return presented ? channelId : null;
 }
 
 /**
- * Marks the open thread read while the person can see it: its panel is shown
- * in the pane on screen, in a window they are in. An unread thread kept open
- * elsewhere stays unread until they come back to it.
+ * Advances the open thread's read cursor while the person can see it: its panel
+ * is shown in the pane on screen, in a window they are in. The thread it
+ * presents, or `null`.
  */
 function useReadThreadWhilePresented(args: {
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly botId: string;
   readonly thread: BotThreadSummary | null;
-  readonly isUnread: (threadId: string) => boolean;
   readonly readCursors: BotReadCursorReadResponse | undefined;
   /** The thread panel is rendered. */
   readonly shown: boolean;
-}): void {
-  const { client, botId, thread, isUnread, shown } = args;
+}): string | null {
+  const { client, botId, thread, shown } = args;
   const presented = usePresented(shown);
   const threadId = thread?.threadId ?? null;
-  const unread = threadId !== null && isUnread(threadId);
-  const { mutate: markRead } = useNotificationMarkEntityRead(client);
-  useEffect(() => {
-    if (!presented || threadId === null || !unread) return;
-    markRead({ epicId: botId, chatId: threadId });
-  }, [botId, markRead, presented, threadId, unread]);
   useAdvanceWhilePresented({
     client,
     botId,
@@ -1336,6 +1305,7 @@ function useReadThreadWhilePresented(args: {
     readCursors: args.readCursors,
     presented,
   });
+  return presented ? threadId : null;
 }
 
 /**
