@@ -1447,11 +1447,27 @@ registry-backed presence words and the local service words ("Running" /
 two a person can act on. It DELEGATES to `deriveHostPresence`
 (`panels/my-hosts-model.ts`) rather than re-deriving it.
 
+`reported-reachable`'s `detail` says only what the ACCOUNT reported ("Your
+account last heard from this host."). It deliberately does NOT add whether
+anything here has dialled the host, in either direction, because the three ways
+the lease step declines are indistinguishable from here: `connecting` is both
+`deriveLease`'s fall-through - derived for every registered host once the
+authority attaches - and what a host reads while a dial or a re-dial is in
+flight. Two sentences are therefore ruled out. "Nothing has connected to it
+from here yet." was false for any host this app had dialled and lost and was
+re-dialling (a dirty drop on a non-effective host leaves no live session and a
+refusal streak short of `CONFIRMED_DEATH_REFUSAL_STREAK`, so the lease rests at
+`connecting`); "Connecting to it now." would be false for the resting case
+instead, and that one is the common one, since every registered host holds a
+`connecting` lease until something reports. What carries "not verified from
+here" is the label, the idle tone and the absent dot - the reason this state
+exists at all.
+
 The precedence across the two is one chain, and each step outranks the next for
 a stated reason: **local process read** (a direct read of the service on this
 box) -> **live session** (an open E2E connection is firsthand proof) ->
 `status.connectivity` (the cloud's relay-attachment answer, and the only one
-available for a host this client has never dialled).
+available when neither of those has a verdict).
 
 `connectivity` is the ONE cloud liveness signal. It replaced a heartbeat lease
 plus a separate relay-attach bit, and with them the states that existed only to

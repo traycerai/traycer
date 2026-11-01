@@ -44,7 +44,7 @@ import {
  * "Offline". A remote host that is off simply reads `offline`.
  *
  * `reported-reachable` is the state that exists because the honest answer for
- * a never-dialled host is neither "Online" nor "Offline". See
+ * a host this app has no verdict about is neither "Online" nor "Offline". See
  * `deriveHostPresence`.
  */
 export type HostHealthState =
@@ -79,7 +79,7 @@ export interface HostHealth {
 
 export const HOST_HEALTH_TONE: Record<HostHealthState, HostHealthTone> = {
   online: "live",
-  // Not a fault and not a claim: nothing has reached this machine from here,
+  // Not a fault and not a claim: nothing here has a verdict on this machine,
   // so it gets the same muted treatment as a host that is simply not running.
   "reported-reachable": "idle",
   // A restart we asked for or expect is not a failure in progress.
@@ -148,8 +148,8 @@ export interface DeriveHostHealthOptions {
  *      experience of the host, and it is why a host can read `Offline` here
  *      while the cloud still holds a `connectable` lease for it (the
  *      window, now narrowed by real evidence instead of waited out).
- *   3. **The cloud DTO** — the only thing known about a host nothing has
- *      dialled, and deliberately the weakest.
+ *   3. **The cloud DTO** — the only thing known about a host neither of the
+ *      steps above has a verdict on, and deliberately the weakest.
  *
  * Steps 2 and 3 are a FALL-THROUGH, not a switch. The lease step returns
  * `null` for "no verdict yet" so an unattached authority or a host still
@@ -325,8 +325,9 @@ function leaseHealth(options: DeriveHostHealthOptions): HostHealth | null {
 }
 
 /**
- * The weakest answer: what the account's registry says, for a host nothing has
- * dialled. Reached only when the two firsthand steps above declined.
+ * The weakest answer: what the account's registry says, for a host this app has
+ * reached no verdict about. Reached only when the two firsthand steps above
+ * declined.
  */
 function registryHealth(options: DeriveHostHealthOptions): HostHealth {
   const { item, hasLiveSession, nowMs } = options;
@@ -357,16 +358,23 @@ function registryHealth(options: DeriveHostHealthOptions): HostHealth {
         live: presence.showLiveDot,
       };
     case "reported-reachable":
-      // The account heard from this host within the lease TTL and nothing
-      // here has spoken to it, so the row says what is true — that the report
-      // exists — instead of asserting a liveness no layer in this app has
-      // observed. The moment anything dials it, the lease answers above and
-      // this arm stops being reached.
+      // The account heard from this host within the lease TTL and this app has
+      // reached no verdict of its own, so the row says what is true — that the
+      // report exists — instead of asserting a liveness no layer here has
+      // observed. The label, the idle tone and the absent dot are what carry
+      // "not verified from here"; that is the whole reason this state was
+      // coined instead of Online or Offline.
+      //
+      // It asserts nothing about whether anything has DIALLED the host, in
+      // either direction, because the three ways `leaseHealth` declines are
+      // indistinguishable from here: `connecting` is both `deriveLease`'s
+      // fall-through, derived for every registered host once the authority
+      // attaches, and what a host reads while a dial or a re-dial is in
+      // flight. SETTINGS.md records the two sentences this ruled out.
       return {
         state: "reported-reachable",
         label: "Reported reachable",
-        detail:
-          "Your account last heard from this host. Nothing has connected to it from here yet.",
+        detail: "Your account last heard from this host.",
         tone: HOST_HEALTH_TONE["reported-reachable"],
         live: false,
       };
