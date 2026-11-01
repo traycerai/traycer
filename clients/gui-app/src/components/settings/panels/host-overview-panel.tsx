@@ -1923,11 +1923,12 @@ export function HostOverviewPanel(props: {
       usable={usable}
       hostName={displayName}
       // The account's record, so it reads with or without a route. "Online
-      // now" follows the header's own live evidence, on the scope's clock.
+      // now" is the account's own reach, derived from that record; the
+      // timestamp is worded on the scope's clock.
       about={
         registryItem === null
           ? null
-          : { item: registryItem, live: host.health.live, nowMs: scope.nowMs }
+          : { item: registryItem, nowMs: scope.nowMs }
       }
       installInfoDegrade={installInfoDegrade}
       record={
