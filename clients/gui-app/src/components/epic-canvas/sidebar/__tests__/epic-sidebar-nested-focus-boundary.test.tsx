@@ -621,6 +621,16 @@ vi.mock("@/lib/epic-selectors", () => ({
     };
   },
   useEpicArtifactRecords: () => testState.records,
+  // The bulk-delete controller mounts beside the panel body and asks whether
+  // the chat record list has answered, to decide whether its dialog may state
+  // a nested-agent COUNT or must name the consequence without one. Settled
+  // here: this suite is about where focus lands after a delete, and the
+  // disclosure's own two readings are covered in
+  // `epic-sidebar-selection-mode.test.tsx`. Both answers route focus
+  // identically, so the value cannot decide an assertion below - what matters
+  // is that the real `describeTreeDeleteDisclosure` runs rather than being
+  // mocked away.
+  useEpicChatRecordListAuthoritative: () => true,
   useEpicFileArtifactViewer: () => null,
   useEpicArtifactStatus: (artifactId: string) =>
     testState.tree.nodeById[artifactId]?.status ?? null,
