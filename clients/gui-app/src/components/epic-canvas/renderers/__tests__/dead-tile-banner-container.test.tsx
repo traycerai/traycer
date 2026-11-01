@@ -19,7 +19,21 @@ import type { TaskSandboxHost } from "@/hooks/epic/use-task-sandbox-end";
 import type { SandboxConfigurations } from "@/hooks/sandboxes/use-sandbox-configurations";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
+import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
+import { recordNegotiatedHostMethods } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import {
+  hostRpcRegistry,
+  type HostRpcRegistry,
+} from "@traycer/protocol/host/index";
+import type { CollaboratorEntry } from "@traycer/protocol/host/epic/unary-schemas";
+import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
+import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
+import {
+  __getOpenEpicRegistryForTests,
+  EpicSessionHostClientContext,
+} from "@/lib/registries/epic-session-registry";
 import type { PermissionRole } from "@traycer/protocol/host/epic/unary-schemas";
 import type { EnvironmentListResponse } from "@traycer/protocol/host/environment/contracts";
 import {
@@ -135,8 +149,16 @@ vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => "host-test",
 }));
 
+// The directory the clone target is named from; empty unless a case seeds it.
+const directoryList = vi.hoisted((): { rows: HostDirectoryEntry[] } => ({
+  rows: [],
+}));
+
 vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
-  useHostDirectoryList: () => ({ data: [], fetchStatus: "success" }),
+  useHostDirectoryList: () => ({
+    data: directoryList.rows,
+    fetchStatus: "success",
+  }),
 }));
 
 vi.mock("@/hooks/host/use-effective-host-id", () => ({
@@ -257,6 +279,37 @@ function seedChatOwnedBy(ownerUserId: string): (doc: Y.Doc) => void {
 // Distinct ids make every test's session its own.
 let epicSeq = 0;
 let activeHarness: TestEpicHarness | null = null;
+// The Epic session's client, answering `epic.listCollaborators` with
+// `collaboratorEntries`; absent unless a case installs it.
+let collaboratorClient: HostClient<HostRpcRegistry> | null = null;
+let collaboratorEntries: CollaboratorEntry[] = [];
+
+/** Installs a REAL client over a recording messenger as the session's. */
+function installCollaboratorClient(queryClient: QueryClient): void {
+  const messenger = new MockHostMessenger<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    requestId: () => "req-1",
+    handlers: {
+      "epic.listCollaborators": () => ({
+        collaborators: collaboratorEntries,
+        collaboratorsAvailable: true,
+      }),
+    },
+  });
+  const client = new HostClient<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    schedulingPolicy: hostRpcSchedulingPolicy,
+    invalidator: createHostQueryInvalidator(queryClient),
+    findHostById: (hostId) =>
+      hostId === "host-test" ? remoteEntry("host-test", null) : null,
+    messenger,
+  });
+  client.setRequestContext(
+    createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
+  );
+  recordNegotiatedHostMethods("host-test", ["epic.listCollaborators"]);
+  collaboratorClient = client;
+}
 
 function renderContainer(input: {
   readonly ownerUserId: string;
@@ -281,6 +334,7 @@ function renderContainer(input: {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
   });
+  if (collaboratorEntries.length > 0) installCollaboratorClient(queryClient);
   return render(
     <TestRouterProvider>
       <QueryClientProvider client={queryClient}>
@@ -298,17 +352,24 @@ function renderContainer(input: {
           }
         >
           <TestEpicSessionWrapper epicId={epicId}>
-            <ChatDeadTileBannerContainer
-              epicId={epicId}
-              tabId="tab-1"
-              chatId={CHAT_ID}
-              sourceHostId="owner-host-1"
-              hostLabel="owner-host-1"
-              reason={input.reason}
-              showsPublishedCopy={input.showsPublishedCopy}
-              testId="banner-under-test"
-              sourceOwnerUserId={input.providedOwnerUserId}
-            />
+            <EpicSessionHostClientContext
+              value={
+                collaboratorClient?.createRequesterForHostId("host-test") ??
+                null
+              }
+            >
+              <ChatDeadTileBannerContainer
+                epicId={epicId}
+                tabId="tab-1"
+                chatId={CHAT_ID}
+                sourceHostId="owner-host-1"
+                hostLabel="owner-host-1"
+                reason={input.reason}
+                showsPublishedCopy={input.showsPublishedCopy}
+                testId="banner-under-test"
+                sourceOwnerUserId={input.providedOwnerUserId}
+              />
+            </EpicSessionHostClientContext>
           </TestEpicSessionWrapper>
         </RunnerHostProvider>
       </QueryClientProvider>
@@ -353,6 +414,10 @@ afterEach(() => {
   };
   sandboxHookSources.hostEntry = null;
   sandboxHookSources.sampledNow = 0;
+  directoryList.rows = [];
+  collaboratorClient?.dispose();
+  collaboratorClient = null;
+  collaboratorEntries = [];
   resetHostConnectionRegistryForTest();
 });
 
@@ -427,6 +492,73 @@ describe("ChatDeadTileBannerContainer - ownership + role resolution", () => {
       'Clone this agent to continue while "owner-host-1" is offline; the original stays there.',
     );
     expect(text).not.toContain("belongs to another collaborator");
+  });
+
+  it("says the active host when nothing names the host a clone lands on", async () => {
+    renderContainer({
+      ownerUserId: COLLABORATOR_USER_ID,
+      providedOwnerUserId: COLLABORATOR_USER_ID,
+      permissionRole: "editor",
+      showsPublishedCopy: true,
+      reason: "host-offline",
+    });
+    await settleEpicSession();
+
+    expect(screen.getByTestId("banner-under-test").textContent).toContain(
+      "Cloning creates your own agent on the active host.",
+    );
+  });
+
+  it("names the active host a clone lands on once the directory labels it", async () => {
+    directoryList.rows = [remoteEntry("host-test", null)];
+    renderContainer({
+      ownerUserId: COLLABORATOR_USER_ID,
+      providedOwnerUserId: COLLABORATOR_USER_ID,
+      permissionRole: "editor",
+      showsPublishedCopy: true,
+      reason: "host-offline",
+    });
+    await settleEpicSession();
+
+    expect(screen.getByTestId("banner-under-test").textContent).toContain(
+      "Cloning creates your own agent on label-host-test.",
+    );
+  });
+
+  it("names the collaborator the task's list names, in the real container", async () => {
+    collaboratorEntries = [
+      {
+        role: "editor",
+        accessType: "direct",
+        environmentId: null,
+        grantedAt: 1,
+        grantedBy: VIEWER_USER_ID,
+        user: {
+          userId: COLLABORATOR_USER_ID,
+          profile: {
+            displayName: "Ada Lovelace",
+            email: "",
+            avatarUrl: "",
+            handle: "",
+          },
+        },
+        team: null,
+      },
+    ];
+    renderContainer({
+      ownerUserId: COLLABORATOR_USER_ID,
+      providedOwnerUserId: COLLABORATOR_USER_ID,
+      permissionRole: "editor",
+      showsPublishedCopy: true,
+      reason: "host-offline",
+    });
+    await settleEpicSession();
+
+    await waitFor(() => {
+      expect(screen.getByTestId("banner-under-test").textContent).toContain(
+        "This agent belongs to Ada Lovelace and runs on their computer, which isn't connected here.",
+      );
+    });
   });
 
   it("never claims a published copy the mounting surface is not showing", async () => {
