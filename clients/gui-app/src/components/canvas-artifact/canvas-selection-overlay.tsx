@@ -535,7 +535,7 @@ function CanvasSelectionPaint(props: {
         >
           {props.actionControls}
           <CanvasSelectionAction
-            key={`${props.selection.servedSha256}:${props.selection.element.marker ?? props.selection.element.selector}:${props.selection.textRange?.start ?? ""}:${props.selection.textRange?.end ?? ""}`}
+            key={`${props.selection.servedSha256}:${props.selection.element.tid ?? ""}:${props.selection.element.marker ?? props.selection.element.selector}:${props.selection.textRange?.start ?? ""}:${props.selection.textRange?.end ?? ""}`}
             scope={props.scope}
             selection={props.selection}
             captureRect={props.captureRect}
