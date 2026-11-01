@@ -331,6 +331,26 @@ export const SESSION_SILENCE_TIMEOUT_MS = 20_000;
 export const SESSION_LIVENESS_PROBE_TIMEOUT_MS = 5_000;
 
 /**
+ * How long a session that negotiated resume keeps reading as ready after
+ * `host_detached`. Sized to cover about two thirds of measured heals (median
+ * 2 s); a host that stays away reaches the down edge, and the announcement
+ * behind it, this much later than one that cannot resume.
+ */
+export const RESUME_MASK_MS = 5_000;
+
+/**
+ * How long a sent RESUME waits for the host's. One round trip plus a slow host;
+ * past it a rebuild is cheaper than waiting.
+ */
+export const RESUME_ACK_MS = 5_000;
+
+/**
+ * How long a host keeps a session for a client that may resume it. Past this a
+ * detached client rebuilds rather than send a RESUME that could only fail.
+ */
+export const RESUME_HOLD_MS = 60_000;
+
+/**
  * Bounded terminal-stream tombstone frontier, mirroring the host's invariant
  * (R-2 / `r2-host-stream-tombstone`): once a stream fails or closes, its
  * streamId is remembered so a relay-delayed genuine frame for that same

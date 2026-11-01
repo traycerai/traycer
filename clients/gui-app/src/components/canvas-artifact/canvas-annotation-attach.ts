@@ -11,7 +11,10 @@ import {
 } from "@/lib/composer/composer-image-preparation";
 import { putImage } from "@/lib/composer/landing-image-store";
 import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
-import type { CanvasSelection } from "./canvas-selection-store";
+import {
+  useCanvasSelectionStore,
+  type CanvasSelection,
+} from "./canvas-selection-store";
 
 export function canvasAnnotationElement(
   selection: CanvasSelection,
@@ -70,8 +73,59 @@ function canvasSourceRange(
   };
 }
 
-interface WindowCaptureBridge {
+export interface WindowCaptureBridge {
   captureRegion(rect: CanvasBox): Promise<ArrayBuffer | null>;
+}
+
+/**
+ * Two frames: one for React to commit the hidden chrome, one for the
+ * compositor to present it. A hidden window paints no frames at all, so the
+ * wait gives up as soon as the document is or becomes hidden: the capture
+ * then fails fast instead of hanging until the window is shown again.
+ */
+function nextPresentedFrame(): Promise<void> {
+  return new Promise((resolve) => {
+    if (document.visibilityState === "hidden") {
+      resolve();
+      return;
+    }
+    const settle = (): void => {
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      resolve();
+    };
+    const onVisibilityChange = (): void => {
+      if (document.visibilityState === "hidden") settle();
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    requestAnimationFrame(() => requestAnimationFrame(settle));
+  });
+}
+
+/**
+ * Screenshot a region of the app window with nothing of ours painted over the
+ * board. The desktop captures the window as composited, so the selection
+ * outline, its handles and the action bar would otherwise be cut into the
+ * crop with the element. The caller has already waited for its own popover
+ * to leave the screen; this hides the overlay's chrome for the one frame
+ * the capture needs and restores it whatever the capture does.
+ *
+ * The rectangle is measured after that frame, not before: the board can be
+ * dragged while the picker closes, and a rectangle measured at the pick
+ * would then crop the old place.
+ */
+export async function captureCanvasRegionWithoutChrome(
+  bridge: WindowCaptureBridge,
+  captureRect: () => CanvasBox | null,
+): Promise<ArrayBuffer | null> {
+  useCanvasSelectionStore.getState().setCapturing(true);
+  try {
+    await nextPresentedFrame();
+    const rect = captureRect();
+    if (rect === null) return null;
+    return await bridge.captureRegion(rect);
+  } finally {
+    useCanvasSelectionStore.getState().setCapturing(false);
+  }
 }
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -99,19 +153,29 @@ export async function attachCanvasAnnotation(input: {
   readonly record: CanvasAnnotationRecord;
   readonly crop: ImageBytes | null;
 }): Promise<CanvasAnnotationRecord> {
-  let record = input.record;
-  if (input.crop !== null) {
-    const prepared = await prepareComposerImageBytesOrRefuse(
-      createComposerImagePreparationSession(),
-      input.crop,
-      `canvas-selection-${record.annotationId}.png`,
-      "image/png",
-    );
-    if (prepared.kind === "refused")
-      throw new Error("The selected region could not be attached.");
-    const imageHash = await putImage(prepared.image.bytes);
-    record = { ...record, imageHash, imageFileName: prepared.image.fileName };
-  }
+  const record = await prepareCanvasAnnotationCrop(input.record, input.crop);
   useComposerDraftStore.getState().addBrowserAnnotation(input.chatId, record);
   return record;
+}
+
+/**
+ * Puts the crop into this window's image store and points the record at it.
+ * The record is then ready for any composer: an existing chat's sidecar, or
+ * the new-conversation modal's.
+ */
+export async function prepareCanvasAnnotationCrop(
+  record: CanvasAnnotationRecord,
+  crop: ImageBytes | null,
+): Promise<CanvasAnnotationRecord> {
+  if (crop === null) return record;
+  const prepared = await prepareComposerImageBytesOrRefuse(
+    createComposerImagePreparationSession(),
+    crop,
+    `canvas-selection-${record.annotationId}.png`,
+    "image/png",
+  );
+  if (prepared.kind === "refused")
+    throw new Error("The selected region could not be attached.");
+  const imageHash = await putImage(prepared.image.bytes);
+  return { ...record, imageHash, imageFileName: prepared.image.fileName };
 }

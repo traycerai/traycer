@@ -53,6 +53,7 @@ function makeStore(modelSlug: string, permission: PermissionMode) {
     reasoningFallback: "model-default",
     seedKey: "mobile-toolbar-test",
     values: {
+      ultracode: false,
       permission,
       selection: { harnessId: "claude", modelSlug, profileId: null },
       reasoning: "",
@@ -61,6 +62,7 @@ function makeStore(modelSlug: string, permission: PermissionMode) {
     onSettingsChange: null,
     tuiOnly: false,
     chatLineCarriesAutoMode: null,
+    ultracodeCarried: false,
     hostId: null,
   });
 }
@@ -186,7 +188,7 @@ describe("ComposerMobileToolbar", () => {
     expect(onSubmit).toHaveBeenCalled();
   });
 
-  // G6: this row used to render the bare `ComposerMicButton` /
+  // This row used to render the bare `ComposerMicButton` /
   // `ComposerMicPreparing` components directly, bypassing `ComposerMicSlot`'s
   // own `useRegionShown("mic")` read entirely. Routing through the slot is
   // what makes Layout's Microphone Shown switch reach the phone toolbar.

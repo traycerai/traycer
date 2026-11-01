@@ -16,9 +16,12 @@ import { useBotListQuery } from "@/hooks/bots/use-bot-list-query";
 import { useBotListChangedSubscriptionForApp } from "@/hooks/bots/use-bot-list-changed-subscription";
 import { useHostEnvironmentBindings } from "@/hooks/bots/use-host-environment-bindings-query";
 import { useEnvironmentHostLists } from "@/hooks/bots/use-environment-host-lists-query";
+import { useTeamSetups } from "@/hooks/bots/use-team-setups";
+import { useArrangedBotsModel } from "@/hooks/bots/use-arranged-bots-model";
 import {
   buildHomeBotsModel,
   EMPTY_HOME_BOTS_MODEL,
+  type HomeBotsGroup,
 } from "@/lib/home-bots/bots-model";
 import { HomeBotsGroupCard } from "@/components/home/bots/home-bots-group";
 import { useDashboardPageOpener } from "@/components/settings/host-scope/use-dashboard-page-opener";
@@ -32,6 +35,16 @@ const HEADING_CLASS_NAME = "tracking-[0.08em] uppercase";
 const EMPTY_ENVIRONMENTS: ReadonlyArray<EnvironmentDescriptor> = [];
 const EMPTY_BOTS: ReadonlyArray<BotRecord> = [];
 const NO_MACHINES: ReadonlySet<string> = new Set();
+
+/** The groups once both lists have answered; `null` before, as
+ * `useTeamSetups` reads it. */
+function answeredGroups(
+  groups: ReadonlyArray<HomeBotsGroup>,
+  environmentsAnswered: boolean,
+  botsAnswered: boolean,
+): ReadonlyArray<HomeBotsGroup> | null {
+  return environmentsAnswered && botsAnswered ? groups : null;
+}
 
 /**
  * The bots band on Home (Tracy Bots): every environment the reader belongs
@@ -118,17 +131,29 @@ export function HomeBotsSection(): ReactNode {
     return byEnvironmentId;
   }, [environmentHosts.hostsByEnvironmentId]);
   const botList = bots.data?.bots ?? EMPTY_BOTS;
-  const model = useMemo(
-    () =>
-      environments.data === undefined && bots.data === undefined
-        ? EMPTY_HOME_BOTS_MODEL
-        : buildHomeBotsModel({
-            environments: environmentList,
-            bots: botList,
-            mainBotIds: bots.data?.mainBotIds ?? null,
-          }),
-    [bots.data, environmentList, environments.data, botList],
+  // In the order the person gave the channel column, so the two agree.
+  const model = useArrangedBotsModel(
+    useMemo(
+      () =>
+        environments.data === undefined && bots.data === undefined
+          ? EMPTY_HOME_BOTS_MODEL
+          : buildHomeBotsModel({
+              environments: environmentList,
+              bots: botList,
+              mainBotIds: bots.data?.mainBotIds ?? null,
+            }),
+      [bots.data, environmentList, environments.data, botList],
+    ),
   );
+  const teamSetups = useTeamSetups({
+    client,
+    hostId,
+    groups: answeredGroups(
+      model.groups,
+      environments.data !== undefined,
+      bots.data !== undefined,
+    ),
+  });
 
   // The handshake has not answered yet: nothing to say either way, and a band
   // that flashes "unavailable" before every connect is worse than a late one.
@@ -183,6 +208,11 @@ export function HomeBotsSection(): ReactNode {
             environmentBindings={bindings}
             client={client}
             hostId={hostId}
+            setup={
+              teamSetups.setups.find(
+                (setup) => setup.environmentId === group.environmentId,
+              ) ?? null
+            }
           />
         ))}
         <CreateTeamCard environments={environments.data.environments} />

@@ -1,5 +1,6 @@
 import { use, useCallback, type MouseEvent, type ReactNode } from "react";
 import { Lock } from "lucide-react";
+import { m } from "motion/react";
 import { v4 as uuidv4 } from "uuid";
 import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
 import { cn } from "@/lib/utils";
@@ -39,6 +40,7 @@ import {
   BASE_PAD_LEFT,
   INDENT_PX,
   useNodeIconDisplay,
+  useTreeRowMotion,
 } from "@/components/epic-canvas/sidebar/epic-sidebar-tree-shared";
 
 /**
@@ -167,6 +169,11 @@ export function EpicSidebarCloudChatRow(
   // closes. On the TAP path only, exactly as the local row does it: the
   // promote-on-double-click path does not call it there either.
   const surface = useChatTreeSurface();
+  // The row moves exactly as a local row does when the rows around it come
+  // and go. A plain `<li>` here snapped to its new place while its local
+  // neighbours slid, so a collapse above it drew the sliding rows straight
+  // through this one.
+  const motion = useTreeRowMotion();
 
   // Whether this tab is showing THIS row's chat - in either of the two forms a
   // click below can open it. A live open is an ordinary record-backed chat
@@ -251,7 +258,10 @@ export function EpicSidebarCloudChatRow(
   const ownerLabel = ownerReachability.hostLabel;
   const lockCopy = lockedRowCopy(ownerLabel, sandboxLine);
   return (
-    <li
+    <m.li
+      layout={motion.layout}
+      exit={motion.exit}
+      transition={motion.transition}
       role="treeitem"
       aria-selected={isActive}
       // Absent on a leaf: an absent `aria-expanded` is what tells a screen
@@ -346,7 +356,7 @@ export function EpicSidebarCloudChatRow(
         depth={props.depth}
         selectionMode={props.selectionMode}
       />
-    </li>
+    </m.li>
   );
 }
 
@@ -434,13 +444,6 @@ function CloudRowIdleTime(props: { readonly publishedAt: number }): ReactNode {
   );
 }
 
-/**
- * What a locked row says about its owner.
- *
- * A row is locked exactly when its owning host is unreachable, so there is one
- * thing to say and one wording for it. The longer explanation lives on the
- * surface the row opens; a tooltip states the fact.
- */
 /** The row's accessible name: its title, then each state its glyphs show. */
 function cloudRowAriaLabel(
   title: string,
@@ -453,6 +456,12 @@ function cloudRowAriaLabel(
   return `${title}${lock}${reach}`;
 }
 
+/**
+ * What a locked row says about its owner.
+ *
+ * The longer explanation lives on the surface the row opens; a tooltip states
+ * the fact.
+ */
 function lockedRowCopy(
   ownerLabel: string,
   sandboxLine: string | null,

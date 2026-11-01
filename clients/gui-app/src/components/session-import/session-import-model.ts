@@ -350,8 +350,8 @@ function applyScanGroup(
         sessionImportSelectionKey(candidate.harness, candidate.nativeSessionId),
       ),
   );
-  // Everything importable arrives pre-selected, missing folders included
-  // (spec §5): those still import, just without a workspace. Two
+  // Everything importable arrives pre-selected, missing folders included:
+  // those still import, just without a workspace. Two
   // exceptions: a provider the user has switched out of the import - its
   // rows are not on screen, so ticking them would import work the user
   // cannot see - and a missing folder landing under a Deleted Folders
@@ -647,7 +647,6 @@ export function candidateDisplayTitle(
     : prompt;
 }
 
-/** "Claude Code" / "Codex" - what the user calls the CLI they ran. */
 /**
  * The sentence a provider failure leads with.
  *
@@ -674,6 +673,7 @@ export function sessionImportProviderFailureLead(
     : `Couldn’t read ${name} sessions.`;
 }
 
+/** "Claude Code" / "Codex" - what the user calls the CLI they ran. */
 export function harnessDisplayName(harness: GuiHarnessId): string {
   const providerId = guiHarnessIdToProviderId(harness);
   return providerId === null ? harness : providerDisplayName(providerId);

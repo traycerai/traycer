@@ -431,7 +431,7 @@ export function NotificationsPopover(
 
   // Full, unfiltered occurrence order is the identity source for live-arrival
   // detection, so a Recent filter can never blind the arrival set to a row it
-  // currently hides (see "N-new" in the technical plan).
+  // currently hides.
   const fullOccurrenceOrder = useMergedNotificationOccurrenceEntries();
   const hasLoadedHostNotifications = fullOccurrenceOrder.some((entry) =>
     entry.feedId.startsWith("host:"),
@@ -1270,7 +1270,7 @@ function useWithoutNeedsYouRows(
   }, [feedIds, items]);
 }
 
-/** The Notifications drawer's first group: every prompt waiting on the person (D10). */
+/** The Notifications drawer's first group: every prompt waiting on the person. */
 function NeedsYouGroup(props: {
   readonly items: ReadonlyArray<NeedsYouItemData>;
   readonly onActivate: (row: MergedNotificationRow) => void;

@@ -37,6 +37,7 @@ function queuedItem(queueItemId: string, messageId: string): ChatQueuedItem {
     },
     sender: { type: "user", userId: "u1" },
     settings: {
+      ultracode: false,
       harnessId: "claude",
       model: "claude-opus-5",
       permissionMode: "supervised",

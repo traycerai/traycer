@@ -443,7 +443,7 @@ function HomeSurface(props: HomeSurfaceProps) {
  *
  * Two host scopes, and the name is now historical: `fixed` addresses a
  * caller-supplied host with an inert picker, and what used to be the "active"
- * scope is the composer's window-keyed SURFACE PIN (selection model §2), which
+ * scope is the composer's window-keyed SURFACE PIN, which
  * resolves to `pin ?? effective` and follows the effective host only until the
  * user names one. Neither scope writes the app-wide selection any more.
  */
@@ -473,7 +473,7 @@ type ActiveHostWorkspaceControlsProps = {
   readonly hostScope: HostWorkspaceControlsHostScope;
   readonly disabled: boolean;
   /**
-   * A composer's sandbox staging (sandboxes redesign D9): the picker offers
+   * A composer's sandbox staging (the sandboxes redesign): the picker offers
    * New sandbox rows, a pick only stages, and the consequences block renders
    * under the row. `null` for a surface that does not create work on a new
    * host (the fork dialogs, the terminal-agent launcher).
@@ -487,8 +487,8 @@ export function ActiveHostWorkspaceControls(
   const directoryList = useHostDirectoryList();
   const disabled = props.disabled;
   const directoryEntries = directoryList.data ?? [];
-  // The composer is PLACEMENT, and placement is a per-surface pin (redesign
-  // P1.2, selection model §2/§54) - not the app-wide selection, which is
+  // The composer is PLACEMENT, and placement is a per-surface pin
+  // rather than the app-wide selection, which is
   // Settings ▸ Activate's alone now. A scope that NAMES a host (`fixed`, or
   // #1227's dialog-local `selected`) wins outright; the follow arm resolves
   // the composer's own pin - `pin ?? effective` - and the picker below writes
@@ -500,7 +500,7 @@ export function ActiveHostWorkspaceControls(
     directoryEntries.find((entry) => entry.hostId === activeHostId) ?? null;
   // "Local" is the neutral pre-directory default, and it is only honest while
   // this surface is FOLLOWING: a pin naming a host the directory does not
-  // carry is a real unavailable state (D6), not a slow first paint.
+  // carry is a real unavailable state, not a slow first paint.
   const hostLabel =
     activeEntry?.label ??
     (scopeHostId === null && !composerPin.isPinned ? "Local" : "Unavailable");
@@ -513,7 +513,7 @@ export function ActiveHostWorkspaceControls(
   // `honoredSelection`, not `selection`: a deposed pin still NAMES the dead
   // host in `selection` (sticky return), but must not READ through it - the
   // chip auto-follows, and the rows must describe the machine the chip shows
-  // (the same F3 rule `use-composer-placement.ts` applies).
+  // (the same rule `use-composer-placement.ts` applies).
   const pinResolvedHostClient = useHostClientForHostId(
     composerPin.honoredSelection,
   );
@@ -596,7 +596,7 @@ export function ActiveHostWorkspaceControls(
       props.hostScope.onSelect(hostId);
       return;
     }
-    // Writes THIS surface's pin and nothing else. Before P1.2 this called
+    // Writes THIS surface's pin and nothing else. Before the redesign this called
     // `binding.directory.selectById(hostId)` - moving the whole app to place
     // one chat, which is the defect the surface-pin model exists to end.
     // Restore the target host's remembered workspace BEFORE publishing the
@@ -641,7 +641,7 @@ export function ActiveHostWorkspaceControls(
           listsFailed={hostOptions.listsFailed}
           onRetryLists={hostOptions.retryLists}
           composer={stagingComposer(staging)}
-          // `pin`, not `bind`: since P1.2 a pick here writes this composer's
+          // `pin`, not `bind`: a pick here writes this composer's
           // surface pin and never rebinds the window. (The two intents gate
           // rows identically; only `view` differs.)
           intent="pin"
@@ -2074,7 +2074,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
   const bindingEntries = surface.binding?.entries ?? EMPTY_BINDING_ENTRIES;
   // ANTI-REVERT — render THIS owner's binding entries ONLY; never an epic-wide
   // base set. Basing the picker on an epic-wide source made each chat show every
-  // sibling chat's folders. T2's host seam guarantees every chat / terminal-
+  // sibling chat's folders. The host seam guarantees every chat / terminal-
   // agent always has a non-empty, owner-scoped binding, so rendering it directly
   // is now both correct AND leak-free. Do NOT reintroduce an epic-wide source
   // or merge here.

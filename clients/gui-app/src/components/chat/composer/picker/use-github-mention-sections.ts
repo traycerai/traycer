@@ -485,7 +485,7 @@ export function useGithubMentionSections(
  * it was about to match arrived.
  *
  * Inside a section only that section's catalog matters - and `checking` covers
- * a background refetch behind rows already on screen, which core flows asks to
+ * a background refetch behind rows already on screen, which has to
  * render exactly like Artifacts (header spinner AND `Checking…` stamp).
  */
 function sectionActivity(input: {

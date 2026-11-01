@@ -5,7 +5,7 @@ import type { HostRpcRegistry } from "@/lib/host";
 /**
  * Where a composer surface's initial `ChatRunSettings` came from, replacing
  * the six-positional-params + `seedIsAuthoritative` boolean every
- * `useComposerToolbarStore` caller used to thread separately (S11):
+ * `useComposerToolbarStore` caller used to thread separately:
  *
  * - `none`: no seed at all (a brand-new node with nothing to carry forward).
  * - `fallback`: a picker default - a persisted fallback store

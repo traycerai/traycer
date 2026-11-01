@@ -8,7 +8,7 @@ import {
 } from "@traycer/protocol/host/fallback-policy";
 
 /**
- * Ticket 05, clause 7: the Test a model button's `patterns`-gated presence,
+ * The Test a model button's `patterns`-gated presence,
  * open/close, and focus return - through the REAL `FallbackPolicyEditor`, the
  * same rendering the earlier suites in this directory use.
  *

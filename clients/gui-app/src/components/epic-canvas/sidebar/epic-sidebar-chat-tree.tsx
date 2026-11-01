@@ -253,6 +253,7 @@ import {
   chatRowClassName,
   revealSidebarNode,
   useNodeIconDisplay,
+  useTreeRowMotion,
 } from "./epic-sidebar-tree-shared";
 import { ChatRowLeadingIconSlot, ChatRowView } from "./chat-row-view";
 import { TreeGroupGuide } from "./epic-sidebar-tree-guide";
@@ -2178,7 +2179,7 @@ const CHAT_ROW_ARCHIVE_ABSENT: ChatRowArchiveDecision = Object.freeze({
  * This matters most exactly when the feature is newest: until the host RPC
  * ships, NO host advertises the method, so without this split every row in
  * every sidebar would pay for a status resolution that is then discarded. It
- * also preserves T1's constraint that the open-chat session read is "paid by
+ * also preserves the constraint that the open-chat session read is "paid by
  * those few rows rather than by every row".
  */
 function ChatNodeShell(props: ChatNodeShellProps) {
@@ -2217,7 +2218,7 @@ function ChatNodeShellArchivable(props: ChatNodeShellProps) {
 function ChatNodeShellBody(
   props: ChatNodeShellProps & { readonly decision: ChatRowArchiveDecision },
 ) {
-  const shouldReduceMotion = useReducedMotion() === true;
+  const motion = useTreeRowMotion();
   const {
     epicId,
     tabId,
@@ -2285,7 +2286,7 @@ function ChatNodeShellBody(
       // Names no host, exactly like the panel's own `+`: the modal resolves
       // this Epic's placement memory (last created chat's host, else the
       // session's host) with the picker live. The PARENT row's owner host is
-      // deliberately not passed - naming it would freeze the picker (§55) and
+      // deliberately not passed - naming it would freeze the picker and
       // a child is not required to live on its parent's machine.
       hostId: null,
     });
@@ -2326,9 +2327,9 @@ function ChatNodeShellBody(
 
   return (
     <m.li
-      layout={shouldReduceMotion ? false : "position"}
-      exit={shouldReduceMotion ? undefined : { opacity: 0, x: -8 }}
-      transition={{ duration: 0.16, ease: "easeOut" }}
+      layout={motion.layout}
+      exit={motion.exit}
+      transition={motion.transition}
       role="treeitem"
       aria-selected={isActive}
       aria-expanded={hasChildren ? expanded : undefined}

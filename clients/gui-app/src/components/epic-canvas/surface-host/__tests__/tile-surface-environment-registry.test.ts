@@ -91,9 +91,8 @@ function environment(
       },
     },
     services: {
-      // Slice 2 has no real session wiring yet - a synthetic handle is the
-      // deliberate fixture seam the design calls for (real host/session
-      // integration is slice 5).
+      // There is no real session wiring here - a synthetic handle is the
+      // deliberate fixture seam the design calls for.
       openEpicHandle:
         {} as ReadyTileSurfaceEnvironment["services"]["openEpicHandle"],
       hostClient: null,
@@ -631,7 +630,7 @@ describe("tile surface environment registry", () => {
     expect(getTileSurfaceMembership().has("chat-1")).toBe(true);
 
     // Simulate the registry module initializing (or being reset) while
-    // membership is already non-empty - the "normal shape" the review
+    // membership is already non-empty - the "normal shape" the suite
     // flagged, since the canvas/tabs stores are synchronously hydrated
     // before this module's own module-load-time snapshot runs.
     resetTileSurfaceEnvironmentRegistryForTesting();

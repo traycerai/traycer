@@ -247,7 +247,7 @@ interface LeftPanelStore {
   /**
    * Per-section collapse, for a panel that is one of a STACKED PAIR and only
    * then (L-166). A collapsed section hands its space to its partner, so the
-   * sidebar body is never empty because of it - which is the defect R5R-01
+   * sidebar body is never empty because of it - which is the defect
    * found when the body drew one section and still read this flag. A panel
    * standing alone is never collapsible and draws no chevron; "collapse the
    * sidebar" has one owner in {@link LeftPanelStore.mainCollapsedByTabId}.
@@ -517,7 +517,7 @@ function filterActiveByEpic<T>(
  * The nine rail regions' show/hide, for this store's OWN activation guard.
  *
  * A read, deliberately not a write: the rail's shape belongs to the layout
- * store and `lib/layout/rail-view.ts` owns the writers (G1-09). What this
+ * store and `lib/layout/rail-view.ts` owns the writers. What this
  * store still needs to know is which panels a user has switched off, because
  * it must not make one of them the active panel.
  */

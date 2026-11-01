@@ -137,7 +137,8 @@ export interface CanvasArtifactEditorProps {
   /** The committed manifest's paths; see {@link canvasPageItems}. */
   readonly boardFiles: ReadonlySet<string> | null;
   readonly frameEvents: CanvasFrameEvents | null;
-  readonly liveFrameLimit: number;
+  readonly liveSlotBudget: number;
+  readonly boardByteLengths: Readonly<Record<string, number>> | null;
 }
 function canvasToolAllowed(
   tool: CanvasTool | null,
@@ -322,7 +323,8 @@ export function CanvasArtifactEditor({
   sourceForBoard,
   boardFiles,
   frameEvents,
-  liveFrameLimit,
+  liveSlotBudget,
+  boardByteLengths,
   viewOnly,
   onAddError,
 }: CanvasArtifactEditorProps) {
@@ -380,8 +382,13 @@ export function CanvasArtifactEditor({
   useEffect(() => {
     const stage = stageRef.current;
     if (stage === null) return;
-    const measure = (): void =>
-      setSize({ width: stage.clientWidth, height: stage.clientHeight });
+    const measure = (): void => {
+      const width = stage.clientWidth;
+      const height = stage.clientHeight;
+      // A hidden pane measures zero. Preserve its view so revealing it does
+      // not evict boards before ResizeObserver delivers its visible size.
+      if (width > 0 && height > 0) setSize({ width, height });
+    };
     const observer = new ResizeObserver(measure);
     observer.observe(stage);
     measure();
@@ -401,13 +408,14 @@ export function CanvasArtifactEditor({
     setSizing,
     rememberBoard,
     liveBoards,
+    onBoardStatus,
     renderedBoards,
     shownViewport,
   } = useCanvasPresentation({
     snapshot,
     items,
-    boardFiles,
-    liveFrameLimit,
+    boardByteLengths,
+    liveSlotBudget,
     size,
     viewport,
     settledViewport,
@@ -540,6 +548,19 @@ export function CanvasArtifactEditor({
       flow?.screenToFlowPosition(point) ?? point,
     [flow],
   );
+  const settleTimer = useRef<number | null>(null);
+  const cancelWheelSettlement = useCallback((): void => {
+    if (settleTimer.current !== null) window.clearTimeout(settleTimer.current);
+    settleTimer.current = null;
+  }, []);
+  useEffect(() => cancelWheelSettlement, [cancelWheelSettlement]);
+  const settleAfterWheel = useCallback((): void => {
+    if (settleTimer.current !== null) window.clearTimeout(settleTimer.current);
+    settleTimer.current = window.setTimeout(() => {
+      settleTimer.current = null;
+      if (flow !== null) setSettledViewport(flow.getViewport());
+    }, 200);
+  }, [flow]);
   const centerBoard = useCallback(
     (path: string): void => {
       const board = snapshot.boards[path];
@@ -549,12 +570,13 @@ export function CanvasArtifactEditor({
       const frame = boardFrame(board);
       // A move on the current page glides so the eye can follow it; a page
       // switch remounts the boards, so there is nothing to animate through.
+      cancelWheelSettlement();
       void flow?.setCenter(frame.x + frame.w / 2, frame.y + frame.h / 2, {
         zoom: Math.min(1, viewport.zoom),
         duration: boardPage === page ? 300 : 0,
       });
     },
-    [snapshot, flow, viewport.zoom, page],
+    [snapshot, flow, viewport.zoom, page, cancelWheelSettlement],
   );
   const stopPlay = useCallback((): void => {
     if (playingBoard === null) return;
@@ -579,6 +601,7 @@ export function CanvasArtifactEditor({
       // Point pins live outside every board, so a fullscreen board cannot
       // show one: leave fullscreen before revealing the spot.
       setChosenPage(pageId);
+      cancelWheelSettlement();
       const zoom = Math.min(1, viewport.zoom);
       if (activeFullscreen !== null) {
         closeFullscreen();
@@ -603,6 +626,7 @@ export function CanvasArtifactEditor({
       snapshot.pages,
       page,
       stopPlay,
+      cancelWheelSettlement,
       viewport.zoom,
       size,
       activeFullscreen,
@@ -623,6 +647,7 @@ export function CanvasArtifactEditor({
       if (boardPage !== page) stopPlay();
       setChosenPage(boardPage);
       const frame = boardFrame(board);
+      cancelWheelSettlement();
       void flow.fitBounds(
         { x: frame.x, y: frame.y, width: frame.w, height: frame.h },
         { padding: 0.15, duration: 200 },
@@ -634,6 +659,7 @@ export function CanvasArtifactEditor({
       snapshot.pages,
       page,
       stopPlay,
+      cancelWheelSettlement,
       flow,
       rememberBoard,
       activeFullscreen,
@@ -729,26 +755,19 @@ export function CanvasArtifactEditor({
       const ratio = zoom / current.zoom;
       const x = point.x - bounds.left;
       const y = point.y - bounds.top;
+      settleAfterWheel();
       void flow.setViewport({
         x: x - (x - current.x) * ratio,
         y: y - (y - current.y) * ratio,
         zoom,
       });
     },
-    [activeFullscreen, flow],
+    [activeFullscreen, flow, settleAfterWheel],
   );
   // Wheel panning is our own handler, not xyflow's panOnScroll: each event's
   // delta is capped so momentum tails cannot sling the canvas, while the
   // uncapped per-pixel gain stays 1. One feel everywhere — the same path takes
   // the playing board's forwarded fall-through gestures.
-  const settleTimer = useRef<number | null>(null);
-  useEffect(
-    () => () => {
-      if (settleTimer.current !== null)
-        window.clearTimeout(settleTimer.current);
-    },
-    [],
-  );
   const panBy = useCallback(
     (dx: number, dy: number): void => {
       // A fullscreen board's fall-through gesture scrolls the stage that
@@ -766,16 +785,11 @@ export function CanvasArtifactEditor({
         y: current.y - cap(dy),
         zoom: current.zoom,
       };
+      settleAfterWheel();
       void flow.setViewport(next);
       setViewport(next);
-      if (settleTimer.current !== null)
-        window.clearTimeout(settleTimer.current);
-      settleTimer.current = window.setTimeout(() => {
-        settleTimer.current = null;
-        setSettledViewport(flow.getViewport());
-      }, 200);
     },
-    [flow, activeFullscreen],
+    [flow, activeFullscreen, settleAfterWheel],
   );
   useEffect(() => {
     const stage = stageRef.current;
@@ -829,7 +843,10 @@ export function CanvasArtifactEditor({
           );
         frameEvents?.onBridge(path, bridge);
       },
-      onStatus: (path, status) => frameEvents?.onStatus(path, status),
+      onStatus: (path, status) => {
+        onBoardStatus(path, status);
+        frameEvents?.onStatus(path, status);
+      },
       onEditPointer: (path, point) => {
         if (!readOnly) frameEvents?.onEditPointer(path, point);
       },
@@ -873,6 +890,7 @@ export function CanvasArtifactEditor({
     }),
     [
       frameEvents,
+      onBoardStatus,
       readOnly,
       onAddError,
       snapshot.boards,
@@ -1071,7 +1089,9 @@ export function CanvasArtifactEditor({
     if (!canvasToolAllowed(next, frameEvents)) return;
     event.preventDefault();
     event.stopPropagation();
-    chooseTool(next);
+    // C toggles comment mode, so a held key's repeats would flip it back and forth.
+    if (next === "comment" && event.repeat) return;
+    chooseTool(next === "comment" && commenting ? "select" : next);
   };
   return (
     <CanvasNodeContext.Provider value={actions}>
@@ -1098,7 +1118,11 @@ export function CanvasArtifactEditor({
                 setSpaceHeld(false);
             }}
             onKeyDownCapture={(event) => {
-              if (activeFullscreen !== null || commenting) return;
+              if (
+                activeFullscreen !== null ||
+                (commenting && event.code !== "KeyC")
+              )
+                return;
               if (isCanvasTextInput(event.target, event.currentTarget)) return;
               if (event.code === "Escape") {
                 escapeCanvas(event);
@@ -1205,13 +1229,21 @@ export function CanvasArtifactEditor({
                     zoomOnScroll={false}
                     zoomOnDoubleClick={false}
                     deleteKeyCode={null}
+                    onMoveStart={(event) => {
+                      // xyflow also starts moves with a synthetic {sync:true}
+                      // when controlled state catches up. Only input owns this.
+                      if (event instanceof Event) cancelWheelSettlement();
+                    }}
                     onMove={(_event, value) => {
                       if (activeFullscreen === null) setViewport(value);
                     }}
                     onMoveEnd={(_event, value) => {
                       if (activeFullscreen !== null) return;
                       setViewport(value);
-                      setSettledViewport(value);
+                      // Programmatic wheel moves fire end on every tick.
+                      // Animated moves still settle here when their glide ends.
+                      if (settleTimer.current === null)
+                        setSettledViewport(value);
                     }}
                     onNodeDragStop={(_event, node, dragged) =>
                       !readOnly &&
@@ -1292,9 +1324,6 @@ export function CanvasArtifactEditor({
                         {toolsHidden ? null : (
                           <CanvasToolbar
                             viewOnly={readOnly}
-                            commentsEnabled={
-                              frameEvents?.commentsEnabled === true
-                            }
                             tool={tool}
                             onTool={chooseTool}
                             pages={
@@ -1348,12 +1377,15 @@ export function CanvasArtifactEditor({
                             canZoomIn: viewport.zoom < 4,
                             canZoomOut: viewport.zoom > 0.05,
                             onZoomIn: () => {
+                              cancelWheelSettlement();
                               void flow?.zoomIn();
                             },
                             onZoomOut: () => {
+                              cancelWheelSettlement();
                               void flow?.zoomOut();
                             },
                             onFit: () => {
+                              cancelWheelSettlement();
                               void flow?.fitView({
                                 nodes: [
                                   ...items.boards.map(([path]) => ({
@@ -1368,6 +1400,7 @@ export function CanvasArtifactEditor({
                               });
                             },
                             onZoom: (zoom) => {
+                              cancelWheelSettlement();
                               void flow?.zoomTo(zoom);
                             },
                           }}

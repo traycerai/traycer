@@ -2,7 +2,7 @@ import type { SegmentOption } from "@/components/layout-editor/regions/region-gr
 
 /**
  * Which of one provider's limits its readings draw, now a section of the
- * provider's page in Settings. Everything here is about ONE provider (C-23).
+ * provider's page in Settings. Everything here is about ONE provider.
  */
 export const USAGE_PROVIDER_LEVEL = {
   /** The section's one heading: the row's label is the section's name. */

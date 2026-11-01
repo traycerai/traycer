@@ -155,7 +155,7 @@ vi.mock("@/hooks/notifications/use-notification-host", () => ({
 vi.mock("@/lib/host", () => ({
   useHostBinding: () => null,
   useHostClient: () => hostState.appWideClient ?? hostState.client,
-  // The SPINE, a separate export since redesign P2.1.
+  // The SPINE, a separate export.
   useHostRuntimeClient: () => hostState.client,
   useAuthService: () => mockAuth,
 }));
@@ -499,15 +499,15 @@ class MockStreamSession implements IStreamSession {
   }
 
   emitOpen(): void {
-    this.statusChangeHandler?.("open", null, null);
+    this.statusChangeHandler?.("open", null, null, null);
   }
 
   emitStatus(status: "connecting" | "open" | "closed" | "reconnecting"): void {
-    this.statusChangeHandler?.(status, null, null);
+    this.statusChangeHandler?.(status, null, null, null);
   }
 
   emitClosed(reason: StreamCloseReason): void {
-    this.statusChangeHandler?.("closed", reason, null);
+    this.statusChangeHandler?.("closed", reason, null, null);
   }
 }
 
@@ -798,7 +798,7 @@ function createHostClient(
     createRequestContextFixture({ origin: "renderer", bearerToken: "token" }),
   );
   // Post-slot the window holds a requester PINNED to a host id rather than a
-  // client carrying an active slot (redesign P4.1 Leg D; P4.2 deletes
+  // client carrying an active slot (P4.2 deletes
   // `bind()`). It resolves the same row this factory always bound, so every
   // request below still addresses `mockLocalHostEntry` - including while
   // `hostState.id` names some other host, which is exactly what the bound slot
@@ -1083,7 +1083,7 @@ function indicatorKey(
 }
 
 /**
- * T28: mixed feed mode now also requires `host.notifications.list@2.2` and
+ * Mixed feed mode now also requires `host.notifications.list@2.2` and
  * `host.notifications.markAllRead@1.1` on the SERVING host, read through the
  * real negotiated-manifest registry (`useHostNegotiatedMethodVersions`),
  * not through the `@/lib/host/stream-runtime-context` mock above - that mock
@@ -1499,7 +1499,7 @@ describe("<NotificationsSessionProvider />", () => {
   });
 
   it("keeps mixed mode withheld when both stream minors are complete but the unary partition methods have not negotiated", async () => {
-    // T28's other half: the stream axis above can be fully negotiated and
+    // The other half: the stream axis above can be fully negotiated and
     // mixed mode must STILL stay withheld until `host.notifications.list@2.2`
     // and `host.notifications.markAllRead@1.1` are also known, because those
     // are what license `home: "local"` on the two UNARY calls
@@ -2559,7 +2559,7 @@ describe("<NotificationsSessionProvider />", () => {
     expect(collabEntryBefore.id).toBe("collab-host-switch");
   });
 
-  // THE SINGLE-OWNERSHIP PIN (redesign P4.1 / connection-registry §6).
+  // THE SINGLE-OWNERSHIP PIN (redesign P4.1).
   //
   // The acceptance is "exactly one reconnection policy per transport kind",
   // and this provider is the single wiring point that makes it true: it
@@ -5685,7 +5685,7 @@ describe("<NotificationsSessionProvider />", () => {
 
   describe("agent activity after a pinned-version refusal (capability regain)", () => {
     it("reopens agent.activity.subscribe once the negotiated version recovers, on the SAME client, host and unverified principal", async () => {
-      // The R2 dispatch class's last member, on the one surface where the
+      // The local-only activity lane, on the one surface where the
       // selector is pinned at the DISPATCH edge rather than merely read at
       // render: a local-only activity lane subscribes through
       // `subscribeAtVersion(..., @1.2, ...)`, and the host PROCESS behind a

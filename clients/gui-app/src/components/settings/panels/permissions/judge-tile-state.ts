@@ -143,8 +143,8 @@ export function shownJudgePick(
  * `runnable(last)` is {@link judgeWarningCause} over the last pick with
  * `blocked: null`: it sees provider state, the harness roster, the model
  * offered and the account offered. Two findings it cannot make before the
- * save, and the save's echo corrects both in one round trip (the class of the
- * critique's F12): the host's own `unsupported-harness` verdict, which the
+ * save, and the save's echo corrects both in one round trip:
+ * the host's own `unsupported-harness` verdict, which the
  * host computes only for the STORED selection; and a model the machine no
  * longer offers, which is known only once that provider's models load - the
  * card does not wait on a per-provider model read before it can be clicked.

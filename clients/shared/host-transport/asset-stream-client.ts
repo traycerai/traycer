@@ -134,8 +134,8 @@ export class AssetStreamClient<
     this.session.onServerFrame((envelope, binaryPayload) => {
       this.handleServerFrame(envelope, binaryPayload);
     });
-    this.session.onStatusChange((status, reason) => {
-      if (status === "reconnecting") {
+    this.session.onStatusChange((status, reason, _retryCause, continuity) => {
+      if (status === "reconnecting" && continuity !== "held") {
         // Only the PARTIAL payload is attempt-scoped - `chunks`/
         // `receivedBytes` reset so the retry's budget/sequence checks
         // start clean. `header` is deliberately RETAINED (not nulled) as

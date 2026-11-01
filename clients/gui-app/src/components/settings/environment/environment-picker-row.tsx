@@ -31,7 +31,7 @@ function rowClassName(hasVerb: boolean, disabled: boolean): string {
 /**
  * One row of the Environment dropdown: a name, an optional badge, the line
  * under it, and an optional verb that continues that line. Shared by the picker's own rows
- * and the rows its slots fill (P1's team rows), so every row reads the same.
+ * and the rows its slots fill (the team rows), so every row reads the same.
  * A radio item inside the picker's radio group, keyed by
  * `environmentPickValue`, so the current pick is checked by the menu itself.
  */

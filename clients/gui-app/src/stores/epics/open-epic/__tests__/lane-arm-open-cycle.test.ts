@@ -112,6 +112,8 @@ interface LaneRig {
    * it counts, so both halves are driven.
    */
   readonly reconnectControlLane: () => void;
+  readonly holdControlLane: () => void;
+  readonly continueControlLane: () => void;
   /**
    * A transport drop and return on the RECORDS lane ALONE - the
    * `ownsControlCycle: false` half of the same event, never touching the
@@ -248,8 +250,8 @@ function openLaneRig(options: LaneRigOptions): LaneRig {
     // documents: the control replica clears the open-cycle freshness on every
     // transport-status transition, so opening afterwards would wipe what the
     // snapshot established and this suite would fail for the wrong reason.
-    statusCallbacks.onConnectionStatus("open", null);
-    stateCallbacks.onConnectionStatus("open", null);
+    statusCallbacks.onConnectionStatus("open", null, null, null);
+    stateCallbacks.onConnectionStatus("open", null, null, null);
     statusCallbacks.onSnapshot(
       // `statusRole` is optional on `LaneRigOptions` (defaults the pre-existing
       // suites did not have to change); the fallback moves here since
@@ -270,7 +272,7 @@ function openLaneRig(options: LaneRigOptions): LaneRig {
     if (stateCallbacks === null) {
       throw new Error("the state lane factory was not invoked");
     }
-    stateCallbacks.onConnectionStatus("open", null);
+    stateCallbacks.onConnectionStatus("open", null, null, null);
     stateCallbacks.onSnapshot(stateSnapshot());
   }
 
@@ -297,16 +299,30 @@ function openLaneRig(options: LaneRigOptions): LaneRig {
     if (statusCallbacks === null) {
       throw new Error("the status lane factory was not invoked");
     }
-    statusCallbacks.onConnectionStatus("reconnecting", null);
-    statusCallbacks.onConnectionStatus("open", null);
+    statusCallbacks.onConnectionStatus("reconnecting", null, null, null);
+    statusCallbacks.onConnectionStatus("open", null, null, null);
+  }
+
+  function holdControlLane(): void {
+    if (statusCallbacks === null) {
+      throw new Error("the status lane factory was not invoked");
+    }
+    statusCallbacks.onConnectionStatus("reconnecting", null, null, "held");
+  }
+
+  function continueControlLane(): void {
+    if (statusCallbacks === null) {
+      throw new Error("the status lane factory was not invoked");
+    }
+    statusCallbacks.onConnectionStatus("open", null, null, "continued");
   }
 
   function reconnectStateLane(): void {
     if (stateCallbacks === null) {
       throw new Error("the state lane factory was not invoked");
     }
-    stateCallbacks.onConnectionStatus("reconnecting", null);
-    stateCallbacks.onConnectionStatus("open", null);
+    stateCallbacks.onConnectionStatus("reconnecting", null, null, null);
+    stateCallbacks.onConnectionStatus("open", null, null, null);
   }
 
   function emitMigrationProgress(progress: {
@@ -356,6 +372,8 @@ function openLaneRig(options: LaneRigOptions): LaneRig {
     openLanes,
     openStateLane,
     reconnectControlLane,
+    holdControlLane,
+    continueControlLane,
     reconnectStateLane,
     emitMigrationProgress,
     emitPermissionChanged,
@@ -638,6 +656,38 @@ function recordingWorkspaceContext(): {
     reads: () => reads,
   };
 }
+
+describe("a held control lane keeps the write proof", () => {
+  it("delivers writes after a held reconnect and a continued open with no new snapshot, but not after a plain reconnect", async () => {
+    const rig = openLaneRig({ unaries: absentLaneUnaries(), migration: null });
+    rig.openLanes();
+    await settle(rig.handle);
+
+    rig.holdControlLane();
+    rig.continueControlLane();
+    await settle(rig.handle);
+    await rig.handle.store.getState().enqueueWriteCommand({
+      kind: "update-epic-title",
+      title: "after a continued open",
+      updatedAt: 1000,
+    });
+    await settle(rig.handle);
+    expect(rig.received).toHaveLength(1);
+
+    rig.holdControlLane();
+    rig.reconnectControlLane();
+    await settle(rig.handle);
+    await rig.handle.store.getState().enqueueWriteCommand({
+      kind: "update-epic-title",
+      title: "after the hold ended",
+      updatedAt: 2000,
+    });
+    await settle(rig.handle);
+    expect(rig.received).toHaveLength(1);
+
+    rig.handle.dispose();
+  });
+});
 
 describe("a lane-selected session reads its workspace context", () => {
   it("projects repos, folders and mapping into snapshotMeta at open", async () => {

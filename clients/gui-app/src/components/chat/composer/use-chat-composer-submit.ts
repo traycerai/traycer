@@ -1,4 +1,3 @@
-import { sniffImageMimeType } from "@/lib/attachments/image-mime-signature";
 import {
   use,
   useCallback,
@@ -41,14 +40,12 @@ import {
   prepareDraftImageInlining,
 } from "@/lib/drafts/draft-image-inlining";
 import { draftImageByteTargetForHost } from "@/lib/drafts/draft-image-byte-target";
-import { bytesToBase64 } from "@/lib/composer/image-base64";
 import {
-  getImageBytes,
-  sessionImageBytes,
-} from "@/lib/composer/landing-image-store";
+  resolveAnnotationImageAtoms,
+  type AnnotationImageAtom,
+} from "@/lib/composer/annotation-image-atoms";
 import type { BrowserAnnotationRecord } from "@/lib/browser-view/annotation/browser-annotation-record";
 import type { ChatSendRestore } from "@/stores/chats/chat-session-store";
-import { v4 as uuidv4 } from "uuid";
 import {
   buildAttachmentsFromJSONContent,
   buildSubmittedChatJSONContent,
@@ -153,7 +150,7 @@ interface UseChatComposerSubmitArgs {
   readonly queueEditTargetId: string | null;
   /**
    * Whether THIS chat's live stream can materialize a hash-only draft image at
-   * send (T1's `chat.subscribe` 1.12 capability). The gate is per-session and
+   * send (`chat.subscribe` 1.12 capability). The gate is per-session and
    * not app-wide: one host can serve one chat on a bridging stream and another
    * on a 1.9 one.
    *
@@ -577,6 +574,7 @@ export function useChatComposerSubmit(
           permission: toolbar.permission,
           reasoning: toolbar.reasoning,
           serviceTier: toolbar.serviceTier,
+          ultracode: toolbar.ultracode,
         });
         const submittedContent = appendImageAttachmentAtoms(
           buildSubmittedChatJSONContent(
@@ -1285,53 +1283,4 @@ function isEmptyComposerSubmit(input: {
     !containsImageAtoms(input.editorContent) &&
     input.annotationRecords.length === 0
   );
-}
-
-type AnnotationImageAtom = {
-  readonly id: string;
-  readonly fileName: string;
-  readonly mimeType: string;
-  readonly size: number | null;
-  readonly b64content: string;
-  readonly hash: string;
-};
-
-async function resolveAnnotationImageAtoms(
-  records: ReadonlyArray<BrowserAnnotationRecord>,
-): Promise<ReadonlyArray<AnnotationImageAtom> | null> {
-  const atoms: AnnotationImageAtom[] = [];
-  for (const record of records) {
-    if (record.imageHash === null || record.imageFileName === null) continue;
-    const sessionBytes = sessionImageBytes(record.imageHash);
-    const bytes =
-      sessionBytes ??
-      // An IndexedDB open/transaction failure is "the crop is not available",
-      // the same outcome as a missing key - and it must reach the caller as
-      // `null` rather than a rejection, which nothing above awaits with a
-      // `catch` and which would silently abandon the submit with no toast.
-      (await getImageBytes(record.imageHash).catch((error: unknown) => {
-        appLogger.error(
-          "[chat-composer] annotation image read failed",
-          { imageHash: record.imageHash },
-          error,
-        );
-        return undefined;
-      })) ??
-      null;
-    if (bytes === null) return null;
-    atoms.push({
-      id: uuidv4(),
-      fileName: record.imageFileName,
-      // SNIFFED, not assumed. A crop is a PNG when the browser view captures
-      // it, and it is not one after a stash round trip: the stash canonicalizes
-      // a large PNG to WebP and re-points the record at those bytes. Labelling
-      // WebP bytes `image/png` was wrong in the atom, in the media type and in
-      // the data URL a preview builds from them.
-      mimeType: sniffImageMimeType(bytes) ?? "image/png",
-      size: bytes.byteLength,
-      b64content: bytesToBase64(bytes),
-      hash: record.imageHash,
-    });
-  }
-  return atoms;
 }

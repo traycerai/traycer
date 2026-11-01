@@ -9,7 +9,7 @@ import {
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 
 /**
- * Widened rather than given a new parameter (guardrail G9): the ~50+
+ * Widened rather than given a new parameter: the ~50+
  * existing callers all pass a plain {@link ReportIssueContext} and are
  * untouched. A caller with a structured private cause to attach can pass a
  * {@link ReportIssueDraftContext} instead - `showReportableToast` branches

@@ -2,7 +2,7 @@
 // resolves this machine's host id, reads the LIVE `host.status` leg over a
 // real client, reads the DURABLE-RECORD leg off `useRunnerHostControllerStatusQuery()`
 // via `recordObservationFromLocalAttempt`, and combines the two through
-// `preferLiveOverRecord` into one `FleetUpdateView` (Ticket 07 §5.2.7 — the
+// `preferLiveOverRecord` into one `FleetUpdateView` (the
 // host-down window).
 //
 // This is a PRODUCTION-WIRING witness, not a pure-module test: it drives the
@@ -315,7 +315,7 @@ describe("useLocalHostUpdateOperation — F1 host-down window (Ticket 07 §5.2.7
       expect(result.current.view.targetVersion).toBe("2.5.0");
       expect(result.current.hostId).toBe(LOCAL_HOST_ID);
 
-      // R2 fix-round-2 pin: the record's observation time must be stamped by
+      // The record's observation time must be stamped by
       // the CONTROLLER query that actually read it, never by the live
       // `host.status` query. In this fixture `host.status` throws and never
       // succeeds, so its `dataUpdatedAt` is `0` — the previous source, which
@@ -338,7 +338,7 @@ describe("useLocalHostUpdateOperation — F1 host-down window (Ticket 07 §5.2.7
    * in `useLocalHostUpdateOperation` (its own real implementation already
    * returns `null` whenever `facts === null`) — in a throwaway copy of the
    * test above. Chose a mocked leaf over editing the production hook file
-   * directly: this worktree is shared with the agent doing the Ticket 07
+   * directly: this worktree is shared with the agent doing the
    * production wiring, and it was mid-edit on this exact file during this
    * session, so a live on-disk ablation risked colliding with that work.
    * The throwaway file was deleted immediately after confirming the result;
@@ -368,7 +368,7 @@ describe("useLocalHostUpdateOperation — F1 host-down window (Ticket 07 §5.2.7
 });
 
 /**
- * The 1s renderer-tick clock (Ticket 06 D13), exercised on the REAL hook. The
+ * The 1s renderer-tick clock (D13), exercised on the REAL hook. The
  * suite above fakes only `Date` (`toFake: ["Date"]`) because it never needs to
  * drive a timer; this pin needs the 1s `useNowMs` interval to actually fire on
  * a deadline it controls, so it fakes every timer instead
@@ -489,7 +489,7 @@ describe("useLocalHostUpdateOperation — the 1s renderer tick ages the live-res
  * `restarting` never appears at all.
  *
  * This is the WIRE slot's, and it needs the opposite fixture: a host that
- * ANSWERS, slowly. Falsifies `clock: { wireNowMs: nowMs, … }` here — F3
+ * ANSWERS, slowly. Falsifies `clock: { wireNowMs: nowMs, … }` here — the same defect
  * re-introduced one file over from where it was found.
  */
 describe("useLocalHostUpdateOperation — the WIRE leg's freshness is its own read's instant (C-H3)", () => {

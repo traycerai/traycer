@@ -56,7 +56,7 @@ import type { RateLimitProviderId } from "@/lib/rate-limit-providers";
  * arrangement it changed nothing about is returned as itself. Identity is the
  * only thing a selector subscribed to one arrangement field compares, so
  * rebuilding the arrays on every call made a no-op write re-render the whole
- * status bar (G1-14).
+ * status bar.
  */
 export function normalizeArrangement(
   arrangement: LayoutArrangement,
@@ -342,7 +342,7 @@ function persistedIds<Id extends string>(
  *
  * "Known" is `TOOLBAR_REGION_IDS`, so an id this build retired - `agent`,
  * deleted by L-136 - is dropped here rather than migrated away, and the
- * remaining members keep their stored order (P5).
+ * remaining members keep their stored order.
  */
 function persistedCluster(
   value: unknown,
@@ -379,7 +379,7 @@ function persistedWindowKeys(value: unknown): ReadonlyArray<string> {
 
 /**
  * One provider's picks: the key list and nothing else, since an empty list IS
- * Automatic (R1-15). A record written before the field was dropped carries an
+ * Automatic. A record written before the field was dropped carries an
  * `automatic` boolean; it is ignored rather than rejected, because the only
  * thing it ever said was whether the list was empty, which the list says. The
  * store is unreleased, so there is no migration to write.
@@ -521,7 +521,7 @@ function persistedBarHost(value: unknown, fallback: BarHost): BarHost {
  * A stored list that survives as NOTHING - an empty array, or ten entries
  * this build has no case for - falls back to the shipped rail rather than to
  * `normalizeRail`'s answer for `[]`, which is all ten panels with no dividers
- * at all and is not a grouping anybody chose (G1-22).
+ * at all and is not a grouping anybody chose.
  */
 function persistedRail(value: unknown): ReadonlyArray<RailEntry> {
   if (!Array.isArray(value)) return DEFAULT_RAIL;

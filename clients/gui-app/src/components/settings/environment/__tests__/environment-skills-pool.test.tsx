@@ -14,7 +14,7 @@ import { poolEntry } from "@traycer-clients/shared/host-client/__tests__/routing
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { resetNegotiatedManifests } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type { MockHandlerMap } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
-import type { EnvironmentSkill } from "@traycer/protocol/host/environment/configuration-contracts";
+import type { EnvironmentSkillV11 } from "@traycer/protocol/host/environment/configuration-contracts";
 import { EnvironmentSkillsPage } from "@/components/settings/environment/environment-skills";
 import type { HostRpcRegistry } from "@/lib/host";
 import {
@@ -69,13 +69,18 @@ afterEach(() => {
 });
 
 const LIST = { major: 1, minor: 0 };
+const LIST_V11 = { major: 1, minor: 1 };
 
-const REVIEW: EnvironmentSkill = {
+const REVIEW: EnvironmentSkillV11 = {
   name: "review",
   description: "Review a change.",
   origin: "room",
   edited: false,
   offFor: [],
+  policy: "evolve",
+  version: null,
+  updateAvailable: false,
+  upstream: null,
 };
 
 function unsupported(method: string): HostRpcError {
@@ -107,14 +112,16 @@ function handlersWithNoHost(
 describe("The Skills page on a build with a server pool and no host running the team", () => {
   it("lists the team's skills from the pool, with no host pick and no Preview", async () => {
     negotiateMethodsOn(POOL_HOST_ID, {
-      "environment.configuration.skills.list": LIST,
+      "environment.configuration.skills.list": LIST_V11,
     });
     const harness = mountTeamPageOnPoolBuild(
       poolSource("editor"),
       handlersWithNoHost(() => ({
         outcome: "listed" as const,
         revision: "rev-1",
+        policyRevision: null,
         skills: [REVIEW],
+        deletedBundled: [],
       })),
     );
     useSelectionAuthorityStore.getState().reset();
@@ -146,14 +153,16 @@ describe("The Skills page on a build with a server pool and no host running the 
 
   it("removes a skill through the pool with no host, once the pool advertises the removal", async () => {
     negotiateMethodsOn(POOL_HOST_ID, {
-      "environment.configuration.skills.list": LIST,
+      "environment.configuration.skills.list": LIST_V11,
       "environment.configuration.skills.remove": LIST,
     });
     const harness = mountTeamPageOnPoolBuild(poolSource("editor"), {
       ...handlersWithNoHost(() => ({
         outcome: "listed" as const,
         revision: "rev-1",
+        policyRevision: null,
         skills: [REVIEW],
+        deletedBundled: [],
       })),
       "environment.configuration.skills.remove": () => ({
         outcome: "removed" as const,
@@ -186,7 +195,9 @@ describe("The Skills page on a build with a server pool and no host running the 
       handlersWithNoHost(() => ({
         outcome: "listed" as const,
         revision: "rev-1",
+        policyRevision: null,
         skills: [REVIEW],
+        deletedBundled: [],
       })),
     );
     render(<EnvironmentSkillsPage />, { wrapper: harness.Wrapper });
@@ -201,7 +212,7 @@ describe("The Skills page on a build with a server pool and no host running the 
 
   it("says the read failed, with Retry, when the pool answers E_HOST_UNSUPPORTED, and Retry reads again", async () => {
     negotiateMethodsOn(POOL_HOST_ID, {
-      "environment.configuration.skills.list": LIST,
+      "environment.configuration.skills.list": LIST_V11,
     });
     let old = true;
     const harness = mountTeamPageOnPoolBuild(
@@ -211,7 +222,9 @@ describe("The Skills page on a build with a server pool and no host running the 
         return {
           outcome: "listed" as const,
           revision: "rev-1",
+          policyRevision: null,
           skills: [REVIEW],
+          deletedBundled: [],
         };
       }),
     );

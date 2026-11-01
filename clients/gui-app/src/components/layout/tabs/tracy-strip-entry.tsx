@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { Bot } from "lucide-react";
+import { BotMutedGlyph } from "@/components/bots/bot-muted-glyph";
 import { useEpicDndStore } from "@/components/epic-canvas/dnd/dnd-store";
 import { Badge } from "@/components/ui/badge";
 import { HoverCard } from "@/components/ui/hover-card";
@@ -27,15 +28,23 @@ export const TRACY_ENTRY_LABEL = "Tracy";
 
 /**
  * The entry's glyph, in every strip placement, wearing the bot's unread count
- * on its top-right corner; the bare glyph at zero, and where the host does
- * not count.
+ * on its top-right corner and the muted mark on its bottom-right while the
+ * person set the channel to Nothing; the bare glyph at zero, and where the
+ * host does not count.
  */
 export function TracyEntryIcon(props: {
   readonly className: string | undefined;
   readonly unreadCount: number | null;
+  readonly muted: boolean;
 }): ReactNode {
-  const { className, unreadCount } = props;
-  if (unreadCount === null || unreadCount <= 0) {
+  const { className, unreadCount, muted } = props;
+  const mutedMark = muted ? (
+    <BotMutedGlyph
+      className="absolute right-0 bottom-0 translate-x-1/2 translate-y-1/4 rounded-full bg-background"
+      testId="tracy-entry-muted"
+    />
+  ) : null;
+  if ((unreadCount === null || unreadCount <= 0) && !muted) {
     return (
       <Bot
         className={cn("size-4 shrink-0", className)}
@@ -51,18 +60,21 @@ export function TracyEntryIcon(props: {
         aria-hidden="true"
         data-testid="tracy-entry-icon"
       />
-      <Badge
-        variant="destructive"
-        size="xs"
-        aria-hidden
-        data-testid="tracy-entry-unread-count"
-        className={cn(
-          SIDE_STRIP_NAV_TILE_COUNT_CLASS,
-          "translate-x-1/2 -translate-y-1/2 tabular-nums",
-        )}
-      >
-        {formatUnreadCount(unreadCount)}
-      </Badge>
+      {mutedMark}
+      {unreadCount === null || unreadCount <= 0 ? null : (
+        <Badge
+          variant="destructive"
+          size="xs"
+          aria-hidden
+          data-testid="tracy-entry-unread-count"
+          className={cn(
+            SIDE_STRIP_NAV_TILE_COUNT_CLASS,
+            "translate-x-1/2 -translate-y-1/2 tabular-nums",
+          )}
+        >
+          {formatUnreadCount(unreadCount)}
+        </Badge>
+      )}
     </span>
   );
 }
@@ -138,6 +150,7 @@ export function TracyStripSlot(props: {
           <TracyEntryIcon
             className="relative z-20"
             unreadCount={signals.unreadCount}
+            muted={signals.muted}
           />
           <span
             className={cn(

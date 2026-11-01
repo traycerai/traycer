@@ -15,12 +15,6 @@ import {
 import { startVisibleInterval } from "@/lib/dom/visible-interval";
 
 /**
- * A live claim on this panel's code. The server enforces ONE live code per
- * user (minting atomically supersedes the previous unclaimed record, and is
- * refused while a claim is being decided), so the displayed code is the only
- * code that can ever report a claim — no multi-code bookkeeping exists.
- */
-/**
  * What the approver can say about the claim's match code. `shown` is the
  * two digits the phone is displaying. `not-presented` is the server saying
  * the phone declined to show one — a legitimate older app, or a leaked-QR
@@ -33,6 +27,12 @@ export type LiveMatchCode =
   | { readonly kind: "not-presented" }
   | { readonly kind: "unavailable" };
 
+/**
+ * A live claim on this panel's code. The server enforces ONE live code per
+ * user (minting atomically supersedes the previous unclaimed record, and is
+ * refused while a claim is being decided), so the displayed code is the only
+ * code that can ever report a claim — no multi-code bookkeeping exists.
+ */
 export interface LiveClaim {
   readonly code: string;
   readonly address: string | null;

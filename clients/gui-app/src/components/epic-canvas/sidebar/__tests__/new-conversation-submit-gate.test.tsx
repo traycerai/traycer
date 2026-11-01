@@ -62,6 +62,7 @@ interface GateCreateChatRequest {
 
 /** The toolbar slices the modal reads; the catalog is the new host's answer. */
 interface ToolbarMockState {
+  readonly ultracode: boolean;
   readonly values: {
     readonly selection: {
       readonly harnessId: string;
@@ -222,6 +223,7 @@ vi.mock("@/hooks/auth/use-registered-hosts-query", async (importOriginal) => {
 });
 
 const TOOLBAR_DEFAULTS = vi.hoisted((): ToolbarMockState => ({
+  ultracode: false,
   values: {
     selection: {
       harnessId: "claude",
@@ -299,7 +301,7 @@ vi.mock("@/lib/host/runtime", () => ({
   }),
 }));
 
-// P1.2: the body resolves its placement through this hook and refuses to
+// The body resolves its placement through this hook and refuses to
 // create when it is unusable. This suite is about the SUBMIT GATE, not
 // placement, so it presents a usable one addressing the stub client's host.
 vi.mock("@/hooks/host/use-composer-placement", () => {
@@ -819,7 +821,7 @@ describe("NewConversationModalBody direct submit gate", () => {
     expect(testState.createChat).toHaveBeenCalledTimes(1);
   });
 
-  // Finding 3: pure path-resolution must also hold submit open.
+  // Pure path-resolution must also hold submit open.
   it("blocks the actual new-conversation submit path while file-path resolution is pending", () => {
     testState.resolvingPaths = true;
     const view = render(

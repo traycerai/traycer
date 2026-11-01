@@ -75,7 +75,7 @@ import { nextFrames } from "../support/fixtures.ts";
 
 // THE TASK SURFACE'S SHELL: THE SHEETS, THE FLIP, THE MOVES, THE JOINED TAB,
 // THE RAIL'S PULSE, THE STRIP'S TOP BLOCK AND ITS RESIZE, THE OVERLAYS, THE
-// LIVE AGENTS AND THE RAIL GROUPS (staging round 1, F2, F6, F7, F9, D3, D9, G3).
+// LIVE AGENTS AND THE RAIL GROUPS (staging round 1, F9, D3, D9, G3).
 //
 // `layout-editor-canvas.html` with `surface=epic` mounts the real app column,
 // the real strip, the real sidebar panel and a real hosted chat body, and this
@@ -87,7 +87,7 @@ import { nextFrames } from "../support/fixtures.ts";
 //
 // What each claim is, and which of them only a browser can decide:
 //
-//   flip.    Staging round 1, F2: moving the panel to the other side left the
+//   flip.    Moving the panel to the other side left the
 //            chat drawn over the panel. A chat body is not inside the content
 //            sheet - the `StableTileSurfaceHost` plane paints it at the rect
 //            its slot reports, and the geometry coordinator only re-reads
@@ -110,7 +110,7 @@ import { nextFrames } from "../support/fixtures.ts";
 //            row is scrolled part out.
 //   pulse.   A row going into waiting pulses; the ring reaches 8px past its
 //            row and is painted past the last row at the list's scrolled edge.
-//   top.     F1: the rail is one centred column - expand, Notifications, All
+//   top.     The rail is one centred column - expand, Notifications, All
 //            tasks, New Task, a divider, Home, the tiles, the avatar - with an
 //            even rhythm and no badge spilling past its tile, and the
 //            expanded top block aligns New Task with Home.
@@ -122,7 +122,7 @@ import { nextFrames } from "../support/fixtures.ts";
 //            window, the drawer flush with the sheets.
 //   live agents. The first indent step of the active task's live agents starts
 //            one 16px step past the task's own title.
-//   groups.  G3: while the editor customizes the rail the stacked pair's icon
+//   groups.  While the editor customizes the rail the stacked pair's icon
 //            counts its members inside its own box, a click on the bottom
 //            member's row rings the group icon, Enter toggles that row once
 //            per press, Space grab-and-drop leaves it selected, and a divider
@@ -210,7 +210,7 @@ async function eventually(
 // --- flip: the panel and the chat body across a live side change ------------
 
 /**
- * F2: the panel sits flush on `side` against the content frame, the hosted
+ * The panel sits flush on `side` against the content frame, the hosted
  * chat body is on its slot inside the content frame, and it does not touch the
  * panel. Read off one `readShell` so a moving layout cannot be sampled twice.
  */
@@ -1126,7 +1126,7 @@ function badgeProblems(read: StripTopRead): string[] {
 }
 
 /**
- * F1: the rail is one column - every part centred on the rail's axis, the nav
+ * The rail is one column - every part centred on the rail's axis, the nav
  * tiles 32px and evenly apart, the divider midway between New Task and Home,
  * Home spaced from the first tile as the tiles are from each other, the
  * Notifications mark on its glyph's corner and no badge spilling past its
@@ -1218,13 +1218,13 @@ function rowKitProblems(read: StripTopRead): string[] {
   return problems;
 }
 
-/** F7 expanded: New Task is the Home row's box, its icon and label level with Home's, and every meter is placed inside its row. */
+/** Expanded: New Task is the Home row's box, its icon and label level with Home's, and every meter is placed inside its row. */
 function expandedTopProblems(read: StripTopRead): string[] {
   return [...newTaskProblems(read), ...rowKitProblems(read)];
 }
 
 /**
- * One strip configuration of F1/F7: `edge` with the panel on the strip's own
+ * One strip configuration: `edge` with the panel on the strip's own
  * side (so the active tile joins it, D3), the rail or the expanded top block,
  * with a task waiting so there is a mark to place. Geometry is read once (in
  * the light theme); what a theme can change - the divider's contrast - in both.
@@ -1778,7 +1778,7 @@ const SIDEBAR_PANELS =
   '[data-layout-inspector] [role="group"][aria-label="Sidebar panels"]';
 
 /**
- * G3: while the editor customizes the rail the stacked pair's icon paints its
+ * While the editor customizes the rail the stacked pair's icon paints its
  * member count inside its own box; a click on the bottom member's row (it has
  * no icon of its own once stacked, so the row is its click target) rings the
  * GROUP's icon; Enter on the focused row toggles its selection once per press;
@@ -1792,7 +1792,7 @@ async function assertGroupIconAndKeys(page: Page): Promise<void> {
     dock: "right",
     session: true,
   });
-  // Opens the Sidebar area (T3/T4's two-level form) with no row selected, so
+  // Opens the Sidebar area (the two-level form) with no row selected, so
   // the Panels list exists in the document to be read.
   await probe(page, 'openAreaOf("railAgents")');
   await waitUntil(

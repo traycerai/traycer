@@ -216,6 +216,7 @@ import {
 import type {
   StreamCloseReason,
   StreamConnectionStatus,
+  StreamContinuity,
 } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import { buildAttachmentsFromJSONContent } from "@/lib/composer/tiptap-json-content";
@@ -273,6 +274,7 @@ import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol"
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import type { RestoreResultEntry } from "@traycer/protocol/persistence/epic/checkpoint-manifests";
 import type {
+  ChatRunSettingsPreUltracode,
   PermissionMode,
   TokenUsage,
 } from "@traycer/protocol/persistence/epic/foundation";
@@ -344,6 +346,7 @@ export type ChatStreamClientHandle = Pick<
       // `auto`, and collapsing the two would veto the mode across every
       // fixture that predates it.
       | "autoPermissionModeProtocolSupported"
+      | "ultracodeProtocolSupported"
       // Optional, and absent reads as `null`, for the same reason.
       | "queuePauseReasonProtocolSupported"
     >
@@ -432,8 +435,12 @@ export interface ConfirmedManualFallbackAction {
    */
   readonly userMessageId: string;
   readonly turnId: string;
-  /** Where a switch went. `null` for `retry` and `wait_once`, which stay put. */
-  readonly target: ChatRunSettings | null;
+  /**
+   * Where a switch went, as reported by the frozen fallback unary. This
+   * announcement metadata carries no assertion about the chat's saved request.
+   * `null` for `retry` and `wait_once`, which stay put.
+   */
+  readonly target: ChatRunSettingsPreUltracode | null;
   /**
    * Monotonic per store instance - the consumer's dedupe key.
    *
@@ -1405,6 +1412,7 @@ export interface ChatSessionState {
    * chat composer has to hold both and this is the half only a session knows.
    */
   readonly autoPermissionModeProtocolSupported: boolean | null;
+  readonly ultracodeProtocolSupported: boolean;
   /**
    * Whether THIS tab's negotiated `chat.subscribe` line publishes the queue's
    * `pausedReason` (`@1.18`), or `null` while the session cannot say.
@@ -1595,7 +1603,7 @@ export interface ChatSessionState {
   readonly lastFailedAttempt: LastFailedAttempt | undefined;
   /**
    * The last CONFIRMED fallback result for the current incident
-   * (`chat.subscribe@1.10`, D215/D218), or `undefined` when there is none.
+   * (`chat.subscribe@1.10`, D215), or `undefined` when there is none.
    *
    * Same derived-per-frame contract, same assign-straight-across rule and same
    * BY-VALUE read as the three above. What is different is what a reader may
@@ -2020,17 +2028,17 @@ export interface ChatSessionState {
    */
   refreshMissingWorktreePaths: (update: MissingWorktreePathsUpdate) => void;
 
-  /**
-   * Re-subscribe after a fatal close. Tears down the existing stream and opens
-   * a fresh `chat.subscribe`, clearing `fatalClose` and `snapshotLoaded`. Drives
-   * the tile error state's retry affordance.
-   */
   /** See the implementation - names the ordinal a pending jump is waiting on. */
   requestTranscriptOrdinal: (ordinal: number | null) => void;
   /** See the implementation - names the ordinal a find index read needs. */
   requestFindReadOrdinal: (ordinal: number | null) => void;
   /** See the implementation - holds a row hydrated for a surface that shows it. */
   holdTranscriptOrdinal: (ordinal: number) => () => void;
+  /**
+   * Re-subscribe after a fatal close. Tears down the existing stream and opens
+   * a fresh `chat.subscribe`, clearing `fatalClose` and `snapshotLoaded`. Drives
+   * the tile error state's retry affordance.
+   */
   retry: () => void;
   /**
    * {@link retry}, escalated to a transport re-dial first when - and only
@@ -2575,6 +2583,7 @@ function chatRunSettingsEqual(a: ChatRunSettings, b: ChatRunSettings): boolean {
     reasoningEffort: a.reasoningEffort === b.reasoningEffort,
     serviceTier: a.serviceTier === b.serviceTier,
     agentMode: a.agentMode === b.agentMode,
+    ultracode: a.ultracode === b.ultracode,
     // `??` guards a pre-profile queued item (the field is missing, not
     // `null`, on an old serialized `ChatRunSettings`) so it still compares
     // equal to a fresh ambient commit instead of spuriously restamping.
@@ -2708,15 +2717,6 @@ function appendErrorNotice(
 }
 
 /**
- * Re-stage the worktree intent a `send`/`editUserMessage` pending captured,
- * unless the user has staged a newer selection since (revision guard). Shared
- * by the rejection ack and the reconnect sweep: an edit dropped before its ack
- * (connection lost mid-flight) never runs the rejection path, so without this
- * its staged selection would stay cleared and the next resend would silently
- * run against the prior binding - the exact silent-local-run the restore exists
- * to prevent.
- */
-/**
  * The two fields a revision-guarded re-stage needs. Structural rather than
  * tied to `PendingChatAction`, because the binding has to survive past the
  * accepted ack that drops the action - `PendingUserMessage` carries the same
@@ -2772,42 +2772,6 @@ function backgroundStopSlices(
   };
 }
 
-/**
- * Decide the slot between claimants that a reconnect killed together.
- *
- * The restored PROMPT is terminal, and terminal either way. If it carried a
- * worktree, that worktree is staged with it; if it was deliberately sent
- * WITHOUT one, the slot stays empty - that is its dispatch state, and it is
- * just as much a decision. What must not happen is a lower-priority claimant
- * filling the gap: an unrelated action's binding attaching itself to this
- * prompt is the wrong-binding hazard, and a prompt sent with no worktree is
- * exactly where it used to slip in, because a null claim looked like no claim.
- *
- * Only when NO prompt came back do the swept actions get their bindings, which
- * is the case the sweep's own reasoning was written for.
- */
-/**
- * The statement a rejected action earns.
- *
- * A rejected SEND that could not claim the restoration slot is a dead send
- * neither restored nor stated - the same hole the settle passes closed in
- * rounds 1-4, on the one surface that kept a reason-only notice. It routes
- * through the SAME builder they use rather than a parallel one, so it inherits
- * the inlined text and every qualification clause automatically; a second
- * notice shape here would drift from those the moment either changed.
- *
- * Everything else - a non-send, a send that DID claim the slot, an action with
- * no content - keeps the host's reason, which is the whole story for it.
- */
-/**
- * The send a rejection is about to state as UNRECOVERABLE, or `null` when this
- * rejection is not one.
- *
- * Shared by the notice and by the `lastCopyPrompts` record beside it, so
- * "which rejections are last copies" is decided once. Two copies of this
- * condition would drift, and the failure mode is silent: a notice with no
- * document behind it looks exactly like a notice.
- */
 /** Drop one last-copy document. `Record` spread is additive, so this is a doing. */
 function withoutLastCopyPrompt(
   prompts: Readonly<Record<string, UnrecoverableSendPrompt>>,
@@ -2842,6 +2806,15 @@ function recordLastCopyPrompt(
   };
 }
 
+/**
+ * The send a rejection is about to state as UNRECOVERABLE, or `null` when this
+ * rejection is not one.
+ *
+ * Shared by the notice and by the `lastCopyPrompts` record beside it, so
+ * "which rejections are last copies" is decided once. Two copies of this
+ * condition would drift, and the failure mode is silent: a notice with no
+ * document behind it looks exactly like a notice.
+ */
 function rejectionLastCopySend(input: {
   readonly frame: {
     readonly reason: string | null;
@@ -2871,6 +2844,20 @@ function rejectionLastCopySend(input: {
   };
 }
 
+/**
+ * The statement a rejected action earns.
+ *
+ * A rejected SEND that could not claim the restoration slot is a dead send
+ * neither restored nor stated - the same hole the settle passes closed in
+ * rounds 1-4, on the one surface that kept a reason-only notice. It routes
+ * through the SAME builder they use rather than a parallel one, so it inherits
+ * the inlined text and every qualification clause automatically; a second
+ * notice shape here would drift from those the moment either changed.
+ *
+ * Everything else - a non-send, a send that DID claim the slot, an action with
+ * no content - keeps the host's reason, and a non-displaced send with an
+ * account adds `deadSendAccountClauses` to it.
+ */
 function rejectionNotice(input: {
   readonly frame: {
     readonly reason: string | null;
@@ -3227,6 +3214,20 @@ function restorationSlotHeldByOther(
   return restoration !== null && restoration.clientActionId !== clientActionId;
 }
 
+/**
+ * Decide the slot between claimants that a reconnect killed together.
+ *
+ * The restored PROMPT is terminal, and terminal either way. If it carried a
+ * worktree, that worktree is staged with it; if it was deliberately sent
+ * WITHOUT one, the slot stays empty - that is its dispatch state, and it is
+ * just as much a decision. What must not happen is a lower-priority claimant
+ * filling the gap: an unrelated action's binding attaching itself to this
+ * prompt is the wrong-binding hazard, and a prompt sent with no worktree is
+ * exactly where it used to slip in, because a null claim looked like no claim.
+ *
+ * Only when NO prompt came back do the swept actions get their bindings, which
+ * is the case the sweep's own reasoning was written for.
+ */
 function restoreOneWorktreeIntent(
   restoredPrompt: StagedWorktreeIntentSource | null,
   sweptClaimants: ReadonlyArray<SweptWorktreeClaimant | undefined>,
@@ -5540,8 +5541,8 @@ export function createChatSessionStoreWithNotificationDependencies(
      * write the host made.
      *
      * Counting EVERY write, rather than only the ones the client dropped, is
-     * what makes that implication hold - and it is the correction a cold review
-     * forced twice. An earlier version compared the held copy's
+     * what makes that implication hold. An earlier version
+     * compared the held copy's
      * `blocksVersion` before and after the fold to spot a write that overtook a
      * catch-up. That reading is a per-SEAT baseline, so one answer installing a
      * body reset it and the next answer read "unchanged" and discharged the
@@ -7026,7 +7027,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         //
         // This event is also a whole-transcript RESIDENCY claim, not merely a
         // decode buffer: `applyAuthoritativeSnapshot` retains both arrays in the
-        // replica. T5's process-wide accountant must charge that complete cost;
+        // replica. The process-wide accountant must charge that complete cost;
         // this line has no ordinal/range mechanism with which to evict part of
         // it and later recover it.
         applyAuthoritativeSnapshot(
@@ -7116,18 +7117,6 @@ export function createChatSessionStoreWithNotificationDependencies(
       requestReplacement: () => {},
     });
 
-    /**
-     * Hand a stalled recovery back to the composer, loudly - the ordinary
-     * refusal outcome, reached late.
-     *
-     * Every exit from recovery that is not a dispatched retry comes here: the
-     * resolver found nothing, the session was torn down, or `sendAction`
-     * refused because the connection is no longer open. Without it the
-     * prompt's only record was an async closure, and a reconnect during
-     * recovery lost it outright - no pending action, no queue row, no
-     * restoration, and for a QUEUED send not even an optimistic echo, because
-     * queued sends never get one.
-     */
     /**
      * Action ids whose follow-up `errorNotice` must still be swallowed, and
      * the timer that stops swallowing.
@@ -7402,14 +7391,13 @@ export function createChatSessionStoreWithNotificationDependencies(
 
     /**
      * The worktree half of a recovery's account, from evidence that OUTLIVED
-     * the staging store's own record of it. See `HashOnlyRecoveryState.sweptRefs`.
+     * the staging store's own record of it. See `stickySweptByAction`.
      */
     const recoverySweepAccount = (
       recovery: HashOnlyRecoveryState,
     ): WorktreeSweepAccount =>
       sweepAccountForIntent(recovery.worktreeIntent, recovery.clientActionId);
 
-    /** One answer to "what has been swept from this staging", for every speaker. */
     /**
      * Deletion facts this consumer has OBSERVED about its own frozen intent,
      * keyed by the action that owns them, and never retracted.
@@ -7454,6 +7442,7 @@ export function createChatSessionStoreWithNotificationDependencies(
       return merged;
     };
 
+    /** One answer to "what has been swept from this staging", for every speaker. */
     const sweepAccountForIntent = (
       intent: WorktreeIntent | null,
       clientActionId: string,
@@ -7479,12 +7468,6 @@ export function createChatSessionStoreWithNotificationDependencies(
       return { survivors, swept, superseded: false };
     };
 
-    /**
-     * Returns the prompts this pass could NOT put in the restoration slot -
-     * the ones whose only remaining trace is a notice's text. A caller that is
-     * tearing the store down must hand those off durably; see
-     * {@link handOffUnrecordedPromptToStash}.
-     */
     /**
      * Capture deletion facts for every live consumer, before anything can
      * clear them.
@@ -7603,6 +7586,16 @@ export function createChatSessionStoreWithNotificationDependencies(
       // two cases are the same case.
     };
 
+    /**
+     * Hand a stalled recovery back to the composer, loudly - the ordinary
+     * refusal outcome, reached late.
+     *
+     * A torn-down session or a refused `sendAction` comes here. Without it the
+     * prompt's only record was an async closure, and a reconnect during
+     * recovery lost it outright - no pending action, no queue row, no
+     * restoration, and for a QUEUED send not even an optimistic echo, because
+     * queued sends never get one.
+     */
     const abandonHashOnlyRecovery = (
       recovery: HashOnlyRecoveryState,
       reason: string,
@@ -9002,7 +8995,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         // its own pick would otherwise steal a slot that dispatch still needs,
         // and revive a choice the user superseded when they staged the newer
         // one. The restoration paths deliberately do NOT match on owner - they
-        // hand back a prompt, and round 10 proved the last consumer is not
+        // hand back a prompt, and the last consumer is not
         // necessarily the one whose prompt returns.
         //
         // Owning the mark is necessary but NOT sufficient, because the two
@@ -10097,8 +10090,8 @@ export function createChatSessionStoreWithNotificationDependencies(
           // reached this client ahead of the frame (a snapshot serialized in
           // the host's journal-then-broadcast gap) has already retired its
           // record exactly, and retiring "the earliest for this checkpoint"
-          // here would take a second attempt's record instead (Codex on
-          // ad9f99fb8). Otherwise retire ONE record, the earliest accepted,
+          // here would take a second attempt's record instead
+          // Otherwise retire ONE record, the earliest accepted,
           // which is the attempt the host reached first; a second attempt
           // accepted behind it keeps its own record until its own completion.
           const answered = consumeSettledRestoreCompletion(
@@ -10170,9 +10163,12 @@ export function createChatSessionStoreWithNotificationDependencies(
               )),
         }));
       },
-      onConnectionStatus: (status, reason, retryCause) => {
+      onConnectionStatus: (status, reason, retryCause, continuity) => {
         if (disposed) return;
-        if (status === "reconnecting" || status === "closed") {
+        if (
+          continuity !== "held" &&
+          (status === "reconnecting" || status === "closed")
+        ) {
           if (sendTimings.enabled) {
             for (const action of Object.values(get().pendingActions)) {
               if (action.action === "send" && action.messageId !== null)
@@ -10257,7 +10253,11 @@ export function createChatSessionStoreWithNotificationDependencies(
           // and dropping them on a click would put the reader back on the
           // spinner they just escaped.
           const resolvePreSnapshotRetries = () => {
-            if (state.snapshotLoaded || status !== "reconnecting") {
+            if (
+              state.snapshotLoaded ||
+              status !== "reconnecting" ||
+              continuity === "held"
+            ) {
               return state.preSnapshotRetries;
             }
             return countPreSnapshotRetry(
@@ -10283,6 +10283,9 @@ export function createChatSessionStoreWithNotificationDependencies(
               resolveInterviewDeliveryRetryProtocolSupported(),
             autoPermissionModeProtocolSupported:
               resolveAutoPermissionModeProtocolSupported(),
+            ultracodeProtocolSupported:
+              status === "open" &&
+              streamClient?.ultracodeProtocolSupported?.() === true,
             queuePauseReasonProtocolSupported:
               resolveQueuePauseReasonProtocolSupported(),
             fatalClose: resolveFatalClose(),
@@ -10334,6 +10337,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         status: StreamConnectionStatus,
         reason: StreamCloseReason | null,
         retryCause: FatalErrorDetails | null,
+        continuity: StreamContinuity,
       ): void => {
         if (!streamGuard.isCurrent(streamGeneration)) return;
         // A RETRYABLE fatalError is the transport saying "not now" - the client
@@ -10368,7 +10372,7 @@ export function createChatSessionStoreWithNotificationDependencies(
               );
           }
         }
-        callbacks.onConnectionStatus(status, reason, retryCause);
+        callbacks.onConnectionStatus(status, reason, retryCause, continuity);
       };
       return {
         onSnapshot: (frame) => {
@@ -10457,9 +10461,9 @@ export function createChatSessionStoreWithNotificationDependencies(
         // Nothing can interleave in the gap: construction runs to completion in
         // one task, so the only thing this reorders against is the rest of that
         // construction, and the epoch bump inside is counted either way.
-        onConnectionStatus: (status, reason, retryCause) => {
+        onConnectionStatus: (status, reason, retryCause, continuity) => {
           if (storeReady) {
-            applyConnectionStatus(status, reason, retryCause);
+            applyConnectionStatus(status, reason, retryCause, continuity);
             return;
           }
           queueMicrotask(() => {
@@ -10469,7 +10473,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             // on, and running it would trade a synchronous throw for an
             // unhandled one in a microtask.
             if (!storeReady) return;
-            applyConnectionStatus(status, reason, retryCause);
+            applyConnectionStatus(status, reason, retryCause, continuity);
           });
         },
       };
@@ -10555,6 +10559,7 @@ export function createChatSessionStoreWithNotificationDependencies(
       // `null`, not `false` - no session has answered yet, so the catalog line
       // decides alone rather than the mode being vetoed before a handshake.
       autoPermissionModeProtocolSupported: null,
+      ultracodeProtocolSupported: false,
       queuePauseReasonProtocolSupported: null,
       turnInProgress: undefined,
       sendWouldQueue: undefined,
@@ -10714,6 +10719,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           draftBlobBridgeSupported: false,
           interviewDeliveryRetryProtocolSupported: false,
           autoPermissionModeProtocolSupported: null,
+          ultracodeProtocolSupported: false,
           queuePauseReasonProtocolSupported: null,
           fatalClose: null,
           snapshotLoaded: false,
@@ -12440,7 +12446,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         // registry disposes whatever the predicate says. A longer timer is not
         // a handoff. So before this store goes, anything that exists ONLY here
         // is installed as a closed start-page draft - the app's durable,
-        // user-visible home for an unsent prompt (D01/D03), which outlives the
+        // user-visible home for an unsent prompt, which outlives the
         // session and has its own UI, the composer's Drafts control, for
         // finding and reopening it.
         //
@@ -12493,6 +12499,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           draftBlobBridgeSupported: false,
           interviewDeliveryRetryProtocolSupported: false,
           autoPermissionModeProtocolSupported: null,
+          ultracodeProtocolSupported: false,
           queuePauseReasonProtocolSupported: null,
         });
       },
@@ -13767,31 +13774,6 @@ function withoutRecordKeyGeneric<T>(
 }
 
 /**
- * A refused hash-only send that this client is quietly recovering, held in the
- * store for exactly as long as the recovery runs.
- *
- * It exists because the recovery has an await in the middle of it, and during
- * that await the send must still be SOMETHING. The first version kept it only
- * in an async closure, which meant that for the length of a byte resolution the
- * prompt had no pending action, no queue row, no restoration slot and - for a
- * QUEUED send, which never gets an optimistic echo - no presence at all. A
- * reconnect in that window lost the message outright, and the GC root collector
- * (which walks pending actions, pending users and the restoration slot) could
- * release the very bytes the retry was waiting for.
- *
- * So this is custody: the store owns the send until the retry is dispatched or
- * it is handed back. Everything `sendMessage` would otherwise re-read from
- * ambient state at dispatch time is frozen here instead, because the ambient
- * values belong to whatever the user is doing NOW, not to this send.
- */
-/**
- * What `sendMessage` takes. NAMED because three consumers had hand-typed their
- * own copy of it - `useChatActions`, its test's store fake, and the composer
- * submit hook's local slice - and a copy is only correct until this one moves.
- * The last time it did, a copy that had drifted stayed green under compile and
- * went red only when someone ran the file.
- */
-/**
  * True while an AUTH IDENTITY teardown is disposing sessions.
  *
  * The durable handoff must never cross accounts. A handed-off prompt becomes a
@@ -13862,6 +13844,13 @@ export function disposingForIdentityTeardown(run: () => void): void {
   }
 }
 
+/**
+ * What `sendMessage` takes. NAMED because three consumers had hand-typed their
+ * own copy of it - `useChatActions`, its test's store fake, and the composer
+ * submit hook's local slice - and a copy is only correct until this one moves.
+ * The last time it did, a copy that had drifted stayed green under compile and
+ * went red only when someone ran the file.
+ */
 export interface SendChatSessionMessageInput {
   readonly content: JsonContent;
   readonly sender: UserMessageSender;
@@ -13871,6 +13860,24 @@ export interface SendChatSessionMessageInput {
   readonly restore: ChatSendRestore;
 }
 
+/**
+ * A refused hash-only send that this client is quietly recovering, held in the
+ * store for exactly as long as the recovery runs.
+ *
+ * It exists because the recovery has an await in the middle of it, and during
+ * that await the send must still be SOMETHING. The first version kept it only
+ * in an async closure, which meant that for the length of a byte resolution the
+ * prompt had no pending action, no queue row, no restoration slot and - for a
+ * QUEUED send, which never gets an optimistic echo - no presence at all. A
+ * reconnect in that window lost the message outright, and the GC root collector
+ * (which walks pending actions, pending users and the restoration slot) could
+ * release the very bytes the retry was waiting for.
+ *
+ * So this is custody: the store owns the send until the retry is dispatched or
+ * it is handed back. Everything `sendMessage` would otherwise re-read from
+ * ambient state at dispatch time is frozen here instead, because the ambient
+ * values belong to whatever the user is doing NOW, not to this send.
+ */
 interface HashOnlyRecoveryState {
   readonly sentAt: number;
   /** The settled action this replaces, still owning its queue row until dispatch. */
@@ -14151,7 +14158,7 @@ function refusalCauseOf(
  * `status: "rejected"` becomes `refused` rather than `null`, deliberately. The
  * menu has to tell "the host declined this hold" from "no hold was ever asked
  * for": the first puts "Couldn't pause the countdown." on the chooser's footer
- * - no cause, since a refusal proves no advancement (D220) - the second is the
+ * - no cause, since a refusal proves no advancement - the second is the
  * ordinary closed state, and collapsing them would make a refusal look like a
  * menu that simply never opened.
  */

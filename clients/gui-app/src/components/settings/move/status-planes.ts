@@ -1,5 +1,5 @@
 /**
- * `environment.status@1.1` fields P5 reads: `planes`, `returnedFromTeam`,
+ * `environment.status@1.1` fields read here: `planes`, `returnedFromTeam`,
  * and `stoppedAt` when the host sends it. A 1.0 answer has no `planes`; the
  * caller draws no cohort or dated line (E4 greys that row).
  */

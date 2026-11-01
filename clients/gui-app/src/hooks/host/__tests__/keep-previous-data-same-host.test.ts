@@ -45,7 +45,7 @@ describe("keepPreviousDataForSameHost", () => {
 });
 
 /**
- * Wiring pins: each D1 hook must pass its live hostId into this helper. A
+ * Wiring pins: each such hook must pass its live hostId into this helper. A
  * regression that deletes `placeholderData` or wires bare `keepPreviousData`
  * fails here (source-level) and in the per-hook host-switch integration tests.
  *

@@ -253,7 +253,6 @@ function tileContentId(ref: TileIdentity): string {
   return ref.id;
 }
 
-/** The bound host of a tile kind that has one; null for the rest. */
 /**
  * The identity a tab is deduped and looked up by: content id plus bound host,
  * for the kinds that have one. Deliberately structural - callers that hold a
@@ -268,6 +267,7 @@ export interface TileIdentity {
   readonly hostId?: string | null;
 }
 
+/** The bound host of a tile kind that has one; null for the rest. */
 function tileHostId(ref: TileIdentity): string | null {
   return ref.hostId ?? null;
 }
@@ -1852,15 +1852,6 @@ export function updateSnapshotDiffTilePayload(
   );
 }
 
-/**
- * Rewrite a comm-graph tile's WHOLE view value: the mode, the office view
- * choice, and the camera those two decide.
- *
- * Every field is compared, the two office choices included. They are not
- * decoration on a viewport write - they are the reason this action exists
- * beside {@link updateCommGraphTileCamera}, and a compare that skipped them
- * would report "nothing changed" for a pick that only switched views.
- */
 /** Two office cameras that say the same thing, `null` (unframed) included. */
 function sameOfficeCamera(
   a: CommGraphTileCamera | null,
@@ -1870,6 +1861,15 @@ function sameOfficeCamera(
   return a.x === b.x && a.y === b.y && a.zoom === b.zoom;
 }
 
+/**
+ * Rewrite a comm-graph tile's WHOLE view value: the mode, the office view
+ * choice, and the camera those two decide.
+ *
+ * Every field is compared, the two office choices included. They are not
+ * decoration on a viewport write - they are the reason this action exists
+ * beside {@link updateCommGraphTileCamera}, and a compare that skipped them
+ * would report "nothing changed" for a pick that only switched views.
+ */
 export function updateCommGraphTileView(
   state: EpicCanvasState,
   tileId: string,
@@ -1891,10 +1891,10 @@ export function updateCommGraphTileView(
         // the camera frames is read as a no-op and dropped - which is exactly
         // the shape of the reset on a tile whose camera is already neutral.
         ref.view.officeCameraView === view.officeCameraView &&
-        // And the EIGHTH, by the same argument one field over. Since D68 the
-        // office's framing lives here rather than in `x`/`y`/`zoom`, so every
-        // writer that neutralises it - a view pick or a Settings default
-        // that moved - now changes THIS and often nothing
+        // And the EIGHTH, by the same argument one field over. Since the
+        // split the office's framing lives here rather than in `x`/`y`/`zoom`,
+        // so every writer that neutralises it - a view pick or a Settings
+        // default that moved - now changes THIS and often nothing
         // else. Compared by value, not by identity: these writers build a
         // fresh object each time, and an identity compare would call every
         // one of them a change even when the numbers are the ones already
@@ -1919,7 +1919,7 @@ export function updateCommGraphTileView(
  * even `null`, which would quietly erase the framing record on every debounced
  * pan. Two writers, two paths, each saying only what it knows.
  *
- * Since D68 the separation is in the DATA and not only in the entry points:
+ * The split put the separation in the DATA and not only in the entry points:
  * this one writes `officeCamera` and `officeCameraView`, and the graph's
  * writes `x`, `y`, `zoom`. Neither can reach the other's fields, so a Graph
  * detour cannot move the office's framing and a pan on the floor cannot move
@@ -1975,7 +1975,7 @@ export function updateCommGraphTileOfficeCamera(
  * renderer last rendered, so a pan landing after a pick - which is exactly
  * what a debounced pan does - would put the old view back.
  *
- * Since D68 this is the GRAPH's camera alone. It already wrote only these
+ * Since the split this is the GRAPH's camera alone. It already wrote only these
  * three fields, so the split cost it no change - but that is now load-bearing
  * rather than incidental: a graph pan during a detour must leave the office's
  * framing exactly where the office left it.

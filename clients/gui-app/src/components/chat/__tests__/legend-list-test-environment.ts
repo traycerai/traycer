@@ -11,7 +11,7 @@ const BROWSER_FRAME_MS = 16;
 /**
  * Optional override for the scroll container's `scrollHeight` (not list-item
  * shells). Default is a large constant so virtualization has work to do.
- * Ticket 18 pin B needs a realistic max-scroll so following-end does not park
+ * Pin B needs a realistic max-scroll so following-end does not park
  * at the inflated 36_000px ceiling (which makes every near send look "far"
  * under the 1.5-viewport animated split). Call with `null` to restore default.
  */
@@ -289,7 +289,7 @@ export function installLegendListViewportMetrics(): void {
   // the `scrollTo` call still catch it. The shared browser clock advances
   // these frames and LegendList's timers together.
   //
-  // Deliberately NO synthetic `scroll` event: ticket 19's capture-phase
+  // Deliberately NO synthetic `scroll` event: the capture-phase
   // classifier and the scroll-only reader-departure detection both key off
   // `scroll`, and a frame-delayed dispatch can land after the library's
   // ownership window has closed - reading as an OS-scrollbar-drag departure

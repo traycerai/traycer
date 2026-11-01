@@ -987,6 +987,7 @@ export function accumulateEvent(
           agentMessageReceipt: null,
           artifact: null,
           agentMessageDelivery: null,
+          botSendReceipt: null,
           mcpApp: null,
           blockId: event.blockId,
           status: "streaming",
@@ -1030,6 +1031,9 @@ export function accumulateEvent(
           // event that carries it moves the state; one without it keeps it.
           agentMessageDelivery:
             event.agentMessageDelivery ?? existing.agentMessageDelivery,
+          // The post a bot's send wrote: identity the completion established,
+          // kept by a re-completion without it.
+          botSendReceipt: event.botSendReceipt ?? existing.botSendReceipt,
           // The host's artifact and MCP App stamps: identity
           // the completion established, kept by a re-completion without them.
           artifact: event.artifact ?? existing.artifact,
@@ -1069,6 +1073,7 @@ export function accumulateEvent(
           agentMessageReceipt: event.agentMessageReceipt ?? null,
           artifact: event.artifact ?? null,
           agentMessageDelivery: event.agentMessageDelivery ?? null,
+          botSendReceipt: event.botSendReceipt ?? null,
           mcpApp: event.mcpApp ?? null,
           progress: null,
           backgroundOutput: event.backgroundOutput ?? null,
@@ -1092,6 +1097,7 @@ export function accumulateEvent(
           parentBlockId: resolveParentBlockId(event, existing),
           timestamp: event.timestamp,
           agentMessageSend: event.agentMessageSend ?? existing.agentMessageSend,
+          botSendReceipt: event.botSendReceipt ?? existing.botSendReceipt,
           backgroundOutput: event.backgroundOutput ?? existing.backgroundOutput,
           startedAt: event.backgroundStartedAt ?? existing.startedAt,
           endedAt: event.timestamp,
@@ -1110,6 +1116,7 @@ export function accumulateEvent(
           agentMessageReceipt: null,
           artifact: null,
           agentMessageDelivery: null,
+          botSendReceipt: event.botSendReceipt ?? null,
           mcpApp: null,
           blockId: event.blockId,
           status: "errored",

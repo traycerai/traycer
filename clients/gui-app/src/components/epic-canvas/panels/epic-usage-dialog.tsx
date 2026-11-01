@@ -72,13 +72,13 @@ const COARSE_POINTER_TRIGGER =
   "pointer-coarse:before:absolute pointer-coarse:before:inset-x-0 pointer-coarse:before:-inset-y-2.5";
 
 /**
- * The scoped epic panel ticket 12 replaces the ambient cost badge with:
+ * The scoped epic panel replaces the ambient cost badge with:
  * headline (`UsageCostFigure`), harness split, curated stat tiles, a
  * per-day trend chart, and a by-chat/agent breakdown, with window options
  * 7/30/90 - variant B of the usage-dialog redesign (48rem mini-dashboard
  * in a fixed frame; states swap inside it, never resize it). Cost is
  * on-demand by construction - the query is only `enabled` while the dialog
- * is open, so there is nothing ambient left to silently revert (fixup-01's
+ * is open, so there is nothing ambient left to silently revert (the badge's
  * failure mode). `poll: false` matches every other actively-viewed usage
  * surface (Settings' `UsageSummaryPanel`).
  */

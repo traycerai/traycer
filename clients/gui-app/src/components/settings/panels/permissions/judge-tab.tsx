@@ -416,7 +416,7 @@ function JudgeTiles(props: JudgeTilesProps): ReactNode {
   // What choosing the second tile does in each row: nothing when it is
   // already chosen, bring the last pick back when it can run, and open the
   // picker when there is none or it cannot. In Picked, a switch still
-  // waiting is itself this tile's choice (flow 1: it lands even if the panel
+  // waiting is itself this tile's choice (it lands even if the panel
   // closed meanwhile), and clicking the tile again is not a new one, so it
   // survives; so it does opening the picker. Any tile choice clears the line
   // a dropped switch left behind.
@@ -667,6 +667,7 @@ function PickTileContent(
       </ChoiceTileDescription>
       {state.row === "loading" ? null : (
         <HarnessModelPicker
+          withUltracode={false}
           store={picker.toolbar.store}
           maxModeContext={maxModeContext}
           // No Fast setting to carry; the effort footer per

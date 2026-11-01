@@ -380,8 +380,8 @@ describe("useAddBrowserAction", () => {
     });
 
     // Nothing on the canvas yet - the pip path never reserves a placeholder,
-    // and it never touches `prepareOpenTab` at all (see R8/out-of-scope note:
-    // pip keeps the pre-ticket openTab-then-onSuccess flow verbatim). Nor has
+    // and it never touches `prepareOpenTab` at all. The pip path
+    // keeps the earlier openTab-then-onSuccess flow verbatim. Nor has
     // anything converted to pip yet, and `onOpened` has not fired - unlike the
     // pending/split path, this path only calls it after the host answers.
     expect(openBrowserTiles()).toHaveLength(0);

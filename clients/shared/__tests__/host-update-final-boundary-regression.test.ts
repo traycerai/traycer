@@ -106,7 +106,7 @@ describe("host update final actuator regression boundaries", () => {
     const bootout = sliceFrom(
       loginItem,
       "async function bootoutStaleAgent(",
-      "export function runLaunchctlBootout(",
+      "export async function runLaunchctlBootout(",
     );
     const settingsGuard = sliceFrom(
       loginItem,

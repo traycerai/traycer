@@ -1,5 +1,5 @@
 /**
- * R6F3 (P1): the image-failure fallback used a null resolver to try to induce
+ * R6F3: the image-failure fallback used a null resolver to try to induce
  * the "strip images" path - which does not work for an INLINE (`b64content`)
  * image, whose bytes ride in the node and are never asked of a resolver at
  * all. So the null-resolver rebuild put the same oversized bytes right back
@@ -76,6 +76,7 @@ const OWNER_ID = "owner-r6f3";
 const HOST_ID = "host-r6f3";
 
 const SETTINGS: ChatRunSettings = {
+  ultracode: false,
   harnessId: "codex",
   model: "gpt-5-codex",
   permissionMode: "supervised",
@@ -143,7 +144,7 @@ function createHarness(): Harness {
 }
 
 function emitOwnerSnapshot(callbacks: ChatStreamCallbacks): void {
-  callbacks.onConnectionStatus("open", null, null);
+  callbacks.onConnectionStatus("open", null, null, null);
   const chat: Chat = {
     id: CHAT_ID,
     parentId: null,

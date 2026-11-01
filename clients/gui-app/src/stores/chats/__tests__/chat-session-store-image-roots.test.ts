@@ -1,7 +1,7 @@
 /**
  * A separate file from `chat-session-store.test.ts` (another agent's file at
  * time of writing) so both can land without touching the same lines. Covers
- * T3's byte-custody roots: `pendingActions[*].restore.content`,
+ * The byte-custody roots: `pendingActions[*].restore.content`,
  * `pendingUserMessages[*].restore.content` and `failedSendRestoration.content`
  * keep an image hash live in `landingLiveImageRootHashes()` for as long as the
  * send is outstanding or its restoration is what the composer will get back.
@@ -30,6 +30,7 @@ const OWNER_ID = "owner-roots";
 const IMAGE_HASH = "a".repeat(64);
 
 const SETTINGS: ChatRunSettings = {
+  ultracode: false,
   harnessId: "codex",
   model: "gpt-5-codex",
   permissionMode: "supervised",
@@ -101,7 +102,7 @@ function createHarness(): Harness {
 
 /** A minimal open, owned, idle snapshot - just enough for `sendMessage` to accept. */
 function emitOwnerSnapshot(callbacks: ChatStreamCallbacks): void {
-  callbacks.onConnectionStatus("open", null, null);
+  callbacks.onConnectionStatus("open", null, null, null);
   const chat: Chat = {
     id: CHAT_ID,
     parentId: null,

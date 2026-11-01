@@ -96,7 +96,7 @@ export function buildUsageChartOption(input: {
     series: scale.order.map((seriesKey) => {
       const colorVar = scale.colorVar(seriesKey);
       // Draw nothing for a series that contributes nothing - whether the
-      // LEGEND hid it or its data is genuinely all zero (ticket 19: an
+      // LEGEND hid it or its data is genuinely all zero (an
       // unpriced grok turn contributed $0, yet its stacked boundary line
       // traced the TOP of claude's mass in grok's color, so a $0 harness
       // read as owning the whole total). The series stays in the option

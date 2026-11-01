@@ -11,12 +11,12 @@ import { displayTitle } from "@/lib/display-title";
 /**
  * Phase-1 (client-local) owner-scoped teardown snapshot.
  *
- * Synthesizes the T2 `WorktreeBusyHolder` shape so `TeardownDisclosure` does
+ * Synthesizes the `WorktreeBusyHolder` shape so `TeardownDisclosure` does
  * not know where the list came from. When the host-authoritative
  * `listHolders` minor lands (path-scoped with optional owner filter), only
  * this provider changes.
  *
- * Known gaps vs the T6 inventory, acceptable at gesture time because they
+ * Known gaps vs the inventory, acceptable at gesture time because they
  * are not a user-stoppable thing here, or cannot be proven from GUI state:
  * - host-only `active-run-cwd` marks after a partial rebind
  * - grace-window PTYs (no live session in the terminal store)

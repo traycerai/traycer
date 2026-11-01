@@ -19,8 +19,8 @@ const pluginMocks = vi.hoisted(() => ({
 }));
 
 // Icons suite never switches scope; stub the shared hook so host/QueryClient
-// infrastructure for workspace resolution is not pulled in (F5 wired the real
-// scope hook into this tab). Factory uses a dynamic import because `vi.mock`
+// infrastructure for workspace resolution is not pulled in (the real
+// scope hook is wired into this tab). Factory uses a dynamic import because `vi.mock`
 // is hoisted above static imports.
 vi.mock("@/components/settings/panels/use-provider-native-scope", async () => {
   const { GLOBAL_ONLY_NATIVE_SCOPE } =

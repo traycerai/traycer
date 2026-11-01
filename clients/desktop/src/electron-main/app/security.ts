@@ -346,12 +346,13 @@ function installSandboxFrameGuard(webContents: WebContents): void {
  * midi, etc. Notifications are surfaced through our IPC-driven native path, so
  * the web Notification permission is also denied to avoid permission-prompt UI.
  *
- * `media` is the one exception: voice dictation needs `getUserMedia({audio})`,
- * so we allow it for **audio only** (camera/video stays denied). The macOS TCC
- * prompt is gated by `NSMicrophoneUsageDescription` + the audio-input
- * entitlement; this handler is the Chromium-layer gate.
+ * `media` is the one exception: dictation into the composer and talking to
+ * your bots by voice both need `getUserMedia({audio})`, so we allow it for
+ * **audio only** (camera/video stays denied). The macOS TCC prompt is gated by
+ * `NSMicrophoneUsageDescription` + the audio-input entitlement; this handler is
+ * the Chromium-layer gate.
  *
- * That audio allowance is load-bearing beyond dictation: Chromium's WebRTC port
+ * That audio allowance is load-bearing beyond the microphone: Chromium's WebRTC port
  * allocator consults this same permission CHECK, and a denial makes it gather
  * from one wildcard-bound socket with mDNS-obfuscated candidates instead of
  * real per-interface ones - which removes the VPN/tailnet host candidate the
@@ -433,7 +434,7 @@ export function installPermissionHandlers(target: Session): void {
         );
       }
       if (permission === "media") {
-        // Mic-only (dictation). Fail closed: allow ONLY audio, denying camera
+        // Mic-only (dictation and voice). Fail closed: allow ONLY audio, denying camera
         // and the optional/unknown `mediaType` (Electron types it optional, so a
         // `!== "video"` check would grant on `undefined`).
         return details.mediaType === "audio";

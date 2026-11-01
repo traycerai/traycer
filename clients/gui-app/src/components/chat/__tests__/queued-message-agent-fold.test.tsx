@@ -52,6 +52,7 @@ vi.mock("@/lib/links/open-link", () => ({
 }));
 
 const SETTINGS: ChatRunSettings = {
+  ultracode: false,
   harnessId: "codex",
   model: "codex-test",
   permissionMode: "supervised",

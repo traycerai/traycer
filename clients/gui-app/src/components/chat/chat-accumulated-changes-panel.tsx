@@ -4,7 +4,10 @@ import type {
   CheckpointArtifactTag,
   CheckpointFileOperation,
 } from "@traycer/protocol/persistence/epic/checkpoint-manifests";
-import { StaticEpicNodeIcon } from "@/components/epic-canvas/epic-node-tab-icon";
+import {
+  FileArtifactIcon,
+  StaticEpicNodeIcon,
+} from "@/components/epic-canvas/epic-node-tab-icon";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import {
@@ -541,15 +544,22 @@ function ArtifactAccumulatedHeaderView(
   const { operation, additions, deletions, display } = props;
   return (
     <>
-      <StaticEpicNodeIcon
-        type={display.displayKind}
-        className="size-4 shrink-0 text-muted-foreground/80"
-      />
+      {display.displayKind === "file" ? (
+        <FileArtifactIcon
+          viewer={display.fileViewer}
+          className="size-4 shrink-0 text-muted-foreground/80"
+        />
+      ) : (
+        <StaticEpicNodeIcon
+          type={display.displayKind}
+          className="size-4 shrink-0 text-muted-foreground/80"
+        />
+      )}
       {/* The same two tokens the FILE branch beside this one draws (L-171):
           the verb on the dock's row text, the title on the code ramp, because
           it occupies the row slot a path occupies. This branch was `text-ui-sm`
           throughout - a 1.875px step inside one typeface at one weight, which
-          is exactly the size step the ruling is about (R6H-03). */}
+          is exactly the size step the ruling is about. */}
       <span
         className={cn(
           "shrink-0 font-medium text-foreground/85",

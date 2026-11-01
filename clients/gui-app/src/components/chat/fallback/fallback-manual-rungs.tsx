@@ -123,7 +123,7 @@ export function FallbackManualRungActions({
  * {@link FallbackManualRungActions} for a caller that names the chat itself:
  * a bot's channel, whose rows are not the failed session's transcript, offers
  * the actions of its trunk or a thread's session for the post that session
- * failed on (Tracy Bots T86).
+ * failed on.
  */
 export function ManualRungActions({
   turnId,
@@ -169,7 +169,7 @@ export function ManualRungActions({
   // (no turn identity, so no `turnId` prop) never reaches this component at
   // all, which is the correct answer rather than a missing one.
   if (attempt.turnId !== turnId) return null;
-  // A sign-out is NOT gated here (spec Flow 4): the host's `eligibleRungs`
+  // A sign-out is NOT gated here: the host's `eligibleRungs`
   // governs, and Retry leads as it does for any cause other than a rate limit
   // or billing stop. Signing in does not rewrite this attempt's recorded
   // cause, so a gate on it would leave the turn with no way to be retried once
@@ -177,7 +177,7 @@ export function ManualRungActions({
   // the recovery a sign-out calls for.
   //
   // A viewer of someone else's chat has no standing to steer it, now or after
-  // a reconnect, so the actions are not drawn at all (spec Flow 4) - greying
+  // a reconnect, so the actions are not drawn at all - greying
   // them with "Reconnecting…" would promise something that is not coming.
   if (standing === "viewer") return null;
 
@@ -292,7 +292,7 @@ function useChatPersistedSettings(input: {
  * changes - a spent quota, an unpaid bill - that is very unlikely to do
  * anything, and the engine agrees: `rate_limit` and `billing` get no transient
  * retry either, only the outage-shaped failures do. So after those two the
- * switch leads and the wait is its alternative (spec Flow 4); after anything
+ * switch leads and the wait is its alternative; after anything
  * else Retry leads.
  *
  * Whether the switch is OFFERED is the host's `eligibleRungs` alone, and a
@@ -406,7 +406,7 @@ function ManualRungAffordances({
   //
   // A card of this attempt answers inline while one is on screen - the
   // refusal note below - and the announcer speaks only once none is left.
-  // Never a toast (spec Flow 4).
+  // Never a toast.
   const runManualRung = useFailedTurnRunManualRung(
     client,
     chatId,
@@ -597,7 +597,7 @@ function waitExplanationFor(
 
 /**
  * Why the last press did not run, and what to do next - where the buttons are
- * (spec Flow 4: "a toast never carries a refusal").
+ * ("a toast never carries a refusal").
  *
  * A live region, because the sentence REPLACES what the press was expected to
  * do: a screen-reader user who pressed Retry hears the answer to that press -

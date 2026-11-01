@@ -1052,7 +1052,9 @@ async function serviceDefinitionIssues(
   const state: ServiceDefinitionState = await refresher.inspect(
     serviceLabelFor(environment),
   );
-  if (state.kind === "stale") {
+  // A stale stop budget does not change how the host is launched, so it does
+  // not affect parking; the supervisor's own start refreshes it.
+  if (state.kind === "stale" && state.form !== "exit-timeout") {
     return [
       {
         code: DOCTOR_ISSUE_CODES.HOST_SERVICE_DEFINITION_STALE,
@@ -1921,24 +1923,18 @@ async function probeHostCredentialNeedsReauth(
       title: "Host credential needs re-authorization",
       message:
         `This host's own delegated credential was rejected in a way refreshing cannot repair (${reason}, recorded ${recordedAt}), ` +
-        "so the host stopped using it. Until it is replaced, work the host does on your behalf - opening Tasks, notifications, shared artifacts - can fail with sign-in-looking errors that signing in again does not fix. " +
-        "To replace it, open the Traycer desktop app while signed in as this host's owner and let it connect: a connected owner client provisions a new credential on its own, with nothing to confirm and nothing to run here.",
-      // NEITHER a fix action NOR a terminal command, and for the same reason:
-      // nothing on a command line repairs this. A connected owner client mints
-      // the replacement silently, so the instruction has to live in the
-      // MESSAGE - which is why the message carries it explicitly. With both
-      // action fields null, this text is the entire recovery path the CLI
-      // report and Desktop's issue card have to offer; a message that only
-      // rules out signing in again leaves the reader with a dead end.
-      //
-      // `terminalCommand` was `traycer login`, which reads as a repair and is
-      // not one: signing the HUMAN in again does not provision the HOST's
-      // delegated credential, which is the whole distinction this issue
-      // exists to draw. Desktop's failure card renders "Open in Terminal"
-      // whenever this is non-null (`host-doctor-issue-card.tsx`), so leaving
-      // it set offered a button that could only look like it had failed.
+        "so the host stopped using it. Until it is replaced, work the host does on your behalf - opening Tasks, notifications, shared artifacts - can fail with sign-in-looking errors. " +
+        "To replace it, sign in as this host's owner while the host is running: run `traycer login` on this machine, or open the Traycer desktop app and let it connect. Either one provisions a new credential.",
+      // `traycer login` IS a repair here, but only for a RUNNING host: after
+      // storing the sign-in it hands the host on this machine a fresh
+      // delegated credential (`provisionRunningHostCredential`), exactly as a
+      // connected Desktop does. That condition is why the message names it -
+      // with the host stopped, login signs the human in and leaves the host
+      // as it was. Desktop's failure card renders "Open in Terminal" for a
+      // non-null command (`host-doctor-issue-card.tsx`), and on a machine
+      // without Desktop that button is the whole recovery path.
       fixAction: null,
-      terminalCommand: null,
+      terminalCommand: `traycer login`,
       details: {
         markerPath,
         reason,
@@ -2000,8 +1996,8 @@ async function probeAuthDirectory(
  * The INDETERMINATE answer: doctor could not look, and says so.
  *
  * Deliberately not `HOST_CREDENTIAL_NEEDS_REAUTH`. That code asserts a burn
- * and names a repair - open the app and let it re-provision - which does
- * nothing for a directory the host cannot read. Reporting it here would send
+ * and names a repair - sign in while the host runs and let a client
+ * re-provision it - which does nothing for a directory the host cannot read. Reporting it here would send
  * someone to fix a credential over a filesystem permission, and the fix they
  * were told to apply would appear not to work.
  */
@@ -2142,11 +2138,12 @@ async function probeHostIdentityNeedsReauth(
       message:
         `The host identity in ${identityDirPath} is paused: a credential refresh was rejected without a revoke (${marker.reason}, since ${marker.since}), so the host stopped re-enrolling and its remote plane - relay attach, cloud-linked Tasks, anything that needs this machine reachable from outside - stays down until the pause lifts. ` +
         "It lifts on its own as soon as a user bearer NEWER than that marker reaches the shared CLI credentials file: run `traycer login` on this machine, or sign in from the Traycer app here, and the host re-enrolls itself. " +
-        "This is NOT the host's own delegated credential (HOST_CREDENTIAL_NEEDS_REAUTH), which a connected owner client re-provisions and signing in again does not repair. If both are reported they are two separate faults, each needing its own repair. " +
+        "This is NOT the host's own delegated credential (HOST_CREDENTIAL_NEEDS_REAUTH), which signing in as the host's owner while the host is running replaces. If both are reported they are two separate faults, each needing its own repair. " +
         "Scope: this is the DEFAULT identity home. A host that acquired a dev-pool identity home resolves a different one in-process, so its own `host.doctor` is the authority on whether this marker is the one it is holding.",
       fixAction: null,
-      // Unlike the auth plane, a sign-in IS the repair here: the pause watches
-      // the CLI login file for a bearer issued after the marker. Desktop
+      // A sign-in IS the repair here: the pause watches the CLI login file for
+      // a bearer issued after the marker - whether or not the host is running,
+      // which is where this differs from the auth plane's repair. Desktop
       // renders "Open in Terminal" for a non-null command, and here that
       // button does the thing the card describes.
       terminalCommand: `traycer login`,

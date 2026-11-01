@@ -103,6 +103,7 @@ function closeFatally(callbacks: ChatStreamCallbacks): void {
       },
     },
     null,
+    null,
   );
 }
 

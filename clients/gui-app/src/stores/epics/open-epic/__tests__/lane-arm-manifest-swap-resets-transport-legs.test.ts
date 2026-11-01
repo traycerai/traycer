@@ -167,7 +167,7 @@ describe("a manifest-driven arm swap resets the transport legs", () => {
     rig.setSupport("unsupported");
     rig.runtime.start();
     // A host the legacy arm serves negotiated no durability pair.
-    rig.legacyCallbacks().onConnectionStatus("open", null, false);
+    rig.legacyCallbacks().onConnectionStatus("open", null, false, null);
     expect(rig.projection().hostTransportStatus).toBe("open");
     expect(rig.projection().recordsTransportStatus).toBe("open");
 
@@ -187,8 +187,8 @@ describe("a manifest-driven arm swap resets the transport legs", () => {
     expect(rig.projection().hasConnectedOnce).toBe(false);
 
     // The replacement sessions report for themselves.
-    rig.statusCallbacks().onConnectionStatus("open", null);
-    rig.stateCallbacks().onConnectionStatus("open", null);
+    rig.statusCallbacks().onConnectionStatus("open", null, null, null);
+    rig.stateCallbacks().onConnectionStatus("open", null, null, null);
     expect(rig.projection().hostTransportStatus).toBe("open");
     expect(rig.projection().recordsTransportStatus).toBe("open");
   });

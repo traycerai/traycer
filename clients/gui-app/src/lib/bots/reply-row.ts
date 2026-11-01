@@ -8,15 +8,14 @@ import type { ChatMessage } from "@/stores/composer/chat-store";
 /**
  * The rendered row that carries a persisted message (Tracy Bots).
  *
- * A user row's `conversationRequest.resolvedByMessageId` names the REPLY'S
- * MESSAGE id, but the transcript scrolls by RENDERED ROW key, and an
- * assistant row's key is not its message id: a row with no turn is keyed
- * `assistant:ts:<timestamp>`, and a multi-record turn renders as one row
- * carrying every record's id in `turnMessageIds` with the last record's id
- * as `persistentMessageId`. So the jump resolves the message to the row that
- * renders it, and only then asks the list to land there. `null` when no
- * rendered row carries it - the reply is outside the hydrated window and
- * has to be located and loaded first.
+ * A landing names a MESSAGE id, but the transcript scrolls by RENDERED ROW
+ * key, and an assistant row's key is not its message id: a row with no turn
+ * is keyed `assistant:ts:<timestamp>`, and a multi-record turn renders as
+ * one row carrying every record's id in `turnMessageIds` with the last
+ * record's id as `persistentMessageId`. So the jump resolves the message to
+ * the row that renders it, and only then asks the list to land there. `null`
+ * when no rendered row carries it - the message is outside the hydrated
+ * window and has to be located and loaded first.
  */
 export function replyRowIdFor(
   messages: ReadonlyArray<ChatMessage>,
@@ -30,25 +29,25 @@ export function replyRowIdFor(
 }
 
 /**
- * Whether the reply `replyMessageId` renders in the row right after the post
- * `postMessageId`, where the reader sees the answer without a jump. `false`
- * when either is not in the rendered rows.
+ * The card of the send that wrote the post `postId` (Tracy Bots T94): the
+ * rendered row that carries its tool call, and the call's block, by the post
+ * its `botSendReceipt` names. `null` when no rendered row carries it.
  */
-export function replyFollowsPost(
+export function sendCardFor(
   messages: ReadonlyArray<ChatMessage>,
-  postMessageId: string,
-  replyMessageId: string,
-): boolean {
-  const postIndex = messages.findIndex(
-    (message) => message.persistentMessageId === postMessageId,
-  );
-  if (postIndex === -1) return false;
-  const next = messages.at(postIndex + 1);
-  if (next === undefined) return false;
-  return (
-    next.persistentMessageId === replyMessageId ||
-    next.turnMessageIds?.includes(replyMessageId) === true
-  );
+  postId: string,
+): { readonly rowId: string; readonly blockId: string } | null {
+  for (const message of messages) {
+    for (const segment of message.segments) {
+      if (
+        segment.kind === "tool" &&
+        segment.botSendReceipt?.messageId === postId
+      ) {
+        return { rowId: message.id, blockId: segment.id };
+      }
+    }
+  }
+  return null;
 }
 
 /**
@@ -152,6 +151,8 @@ function loadedOriginRow(
         : { announcement: post.announcement }),
       // A question's thread opens on its card, settled as the channel shows it.
       ...(post.question === undefined ? {} : { question: post.question }),
+      // A surface post's thread opens on its card, resolved as the channel shows it.
+      ...(post.surface === undefined ? {} : { surface: post.surface }),
     };
   }
   const userId = post.sender.type === "user" ? post.sender.userId : null;

@@ -136,7 +136,7 @@ describe("/epics route guard", () => {
 });
 
 /**
- * T3: the `/epics` loader's History first-page prefetch moved from
+ * The `/epics` loader's History first-page prefetch moved from
  * `auth.status !== "signed-in"` to `!admitsLocalPlane(auth.status)`.
  * `beforeLoad` already admits `unverified` onto this route via
  * `requireSignedIn` (= `admitsLocalPlane`), so before the fix that cohort

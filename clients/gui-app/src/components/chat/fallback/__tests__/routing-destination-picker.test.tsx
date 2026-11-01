@@ -38,6 +38,8 @@ import {
   describeFallbackOutcome,
   describeManualRungRefusal,
 } from "@/components/chat/fallback/fallback-copy";
+import { BotIdentityContext } from "@/components/bots/bot-identity-context";
+import { BotSettingsOpenerContext } from "@/components/bots/bot-settings-opener-context";
 import {
   DEFAULT_LAYOUT_SNAPSHOT,
   useLayoutStore,
@@ -63,6 +65,7 @@ import {
   ATTEMPT_MESSAGE_ID,
   ATTEMPT_TURN_ID,
   CHOOSING_PENDING,
+  chooser,
   FAILED,
   FAILED_PROFILE,
   HOLD_PENDING,
@@ -175,6 +178,11 @@ vi.mock(
         typeof import("@/components/chat/fallback/fallback-identity")
       >(),
     ),
+);
+vi.mock("@/hooks/bots/use-bot-mutations", async (importOriginal) =>
+  (await import("./routing-picker-kit")).botMutationsModule(
+    await importOriginal<typeof import("@/hooks/bots/use-bot-mutations")>(),
+  ),
 );
 vi.mock("@/stores/tabs/use-system-tab-modal", async () =>
   (await import("./routing-picker-kit")).systemTabModalModule(),
@@ -1874,6 +1882,224 @@ describe("RoutingDestinationPicker", () => {
     });
   });
 
+  describe("a bot's failed turn: Switch writes the bot's row, then retries", () => {
+    const BOT_TITLE = "Tracy";
+
+    /** The error row's chooser inside a bot tab whose bot is `botId`. */
+    function mountInBotTab(input: {
+      readonly botId: string;
+      readonly opener: (() => void) | null;
+    }) {
+      return render(
+        <BotIdentityContext
+          value={{ botId: input.botId, title: BOT_TITLE, owner: null }}
+        >
+          <BotSettingsOpenerContext value={input.opener}>
+            {chooser(failedTurn(["retry", "switch"]), true)}
+          </BotSettingsOpenerContext>
+        </BotIdentityContext>,
+      );
+    }
+
+    function switchAndRetry(): HTMLElement {
+      const dialog = screen.getByRole("dialog", { name: "Select model" });
+      return within(dialog).getByRole("button", { name: "Switch and retry" });
+    }
+
+    const RETRY = {
+      clientId: TAB_CLIENT_ID,
+      method: "chat.fallback.runManualRung",
+      variables: {
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        rung: "retry",
+        target: null,
+        userMessageId: ATTEMPT_MESSAGE_ID,
+        turnId: ATTEMPT_TURN_ID,
+      },
+    };
+
+    it("writes the picked tuple to the bot's row, and sends retry only once the host took it - never switch", async () => {
+      kit.deferResponses = true;
+      mountInBotTab({ botId: EPIC_ID, opener: null });
+      await open();
+
+      fireEvent.click(option(/Claude Opus 4/));
+      fireEvent.click(switchAndRetry());
+
+      const write = {
+        clientId: TAB_CLIENT_ID,
+        method: "bot.updateRunSettings",
+        variables: {
+          botId: EPIC_ID,
+          harness: FAILED.harnessId,
+          model: "claude-opus-4",
+          effort: null,
+          profile: FAILED_PROFILE,
+        },
+      };
+      expect(kit.mutations).toEqual([write]);
+
+      act(() => {
+        kit.pendingResponses[0]();
+      });
+      await waitFor(() => {
+        expect(kit.mutations).toEqual([write, RETRY]);
+      });
+
+      act(() => {
+        kit.pendingResponses[1]();
+      });
+      await waitFor(() => {
+        expect(
+          screen.queryByRole("dialog", { name: "Select model" }),
+        ).toBeNull();
+      });
+    });
+
+    it("a refused write states the host's sentence under the footer and sends no retry", async () => {
+      const sentence = "This bot isn't served by this host.";
+      kit.botWriteRefusal = sentence;
+      mountInBotTab({ botId: EPIC_ID, opener: null });
+      await open();
+
+      fireEvent.click(option(/Claude Opus 4/));
+      fireEvent.click(switchAndRetry());
+
+      await waitFor(() => {
+        expect(statusLines()).toContain(sentence);
+      });
+      expect(kit.mutations.map((call) => call.method)).toEqual([
+        "bot.updateRunSettings",
+      ]);
+      expect(screen.getByRole("dialog", { name: "Select model" })).toBeTruthy();
+    });
+
+    it("finishes a confirmed Switch and retry after the surface unmounts mid-write", async () => {
+      kit.deferResponses = true;
+      const view = mountInBotTab({ botId: EPIC_ID, opener: null });
+      await open();
+      fireEvent.click(option(/Claude Opus 4/));
+      fireEvent.click(switchAndRetry());
+      expect(kit.pendingResponses).toHaveLength(1);
+
+      // The thread panel or the tab closes with the write in flight.
+      view.unmount();
+      act(() => {
+        kit.pendingResponses[0]();
+      });
+
+      await waitFor(() => {
+        expect(kit.mutations.map((call) => call.method)).toEqual([
+          "bot.updateRunSettings",
+          "chat.fallback.runManualRung",
+        ]);
+      });
+      expect(kit.mutations[1]).toEqual(RETRY);
+    });
+
+    it("writes the effort picked, where a listed destination names it as the model's default", async () => {
+      useLayoutStore
+        .getState()
+        .setRegionValues("model", { reasoningControl: "list" });
+      // Haiku's catalog default is "high"; the host lists it with a null
+      // effort, which the pick at "high" matches.
+      kit.listData = listingOf({
+        failedTuple: FAILED,
+        profileTargets: [],
+        modelTargets: [
+          modelTargetOf({
+            groupId: "grp-h",
+            target: {
+              ...FAILED,
+              model: "claude-haiku-4",
+              reasoningEffort: null,
+            },
+          }),
+        ],
+      });
+      mountInBotTab({ botId: EPIC_ID, opener: null });
+      await open();
+
+      fireEvent.click(option(/Claude Haiku 4/));
+      await chooseEffort("High");
+      fireEvent.click(switchAndRetry());
+
+      expect(kit.mutations[0]).toEqual({
+        clientId: TAB_CLIENT_ID,
+        method: "bot.updateRunSettings",
+        variables: {
+          botId: EPIC_ID,
+          harness: "claude",
+          model: "claude-haiku-4",
+          effort: "high",
+          profile: FAILED_PROFILE,
+        },
+      });
+    });
+
+    it("the footer says the bot's model moves for all its chats, and Bot settings opens the tab's settings", async () => {
+      const opener = vi.fn<() => void>();
+      mountInBotTab({ botId: EPIC_ID, opener });
+      const dialog = await open();
+
+      expect(
+        within(dialog).getByText(
+          "Changes Tracy's model for all its chats, then retries this answer.",
+        ),
+      ).toBeTruthy();
+      expect(within(dialog).queryByText(/^Replays on /)).toBeNull();
+
+      fireEvent.click(
+        within(dialog).getByRole("button", { name: "Bot settings" }),
+      );
+
+      expect(opener).toHaveBeenCalledTimes(1);
+      expect(kit.mutations).toEqual([]);
+      await waitFor(() => {
+        expect(
+          screen.queryByRole("dialog", { name: "Select model" }),
+        ).toBeNull();
+      });
+    });
+
+    it("draws no Bot settings link where the surface has no settings to open", async () => {
+      mountInBotTab({ botId: EPIC_ID, opener: null });
+      const dialog = await open();
+
+      expect(
+        within(dialog).queryByRole("button", { name: "Bot settings" }),
+      ).toBeNull();
+    });
+
+    it("an agent chat inside a bot tab keeps Switch and the switch rung", async () => {
+      const opener = vi.fn<() => void>();
+      mountInBotTab({ botId: "bot-other", opener });
+      const dialog = await open();
+
+      expect(
+        within(dialog).queryByRole("button", { name: "Bot settings" }),
+      ).toBeNull();
+      fireEvent.click(option(/Claude Opus 4/));
+      fireEvent.click(footerConfirm());
+
+      expect(kit.mutations).toEqual([
+        {
+          clientId: TAB_CLIENT_ID,
+          method: "chat.fallback.runManualRung",
+          variables: {
+            epicId: EPIC_ID,
+            chatId: CHAT_ID,
+            rung: "switch",
+            target: { ...FAILED, model: "claude-opus-4" },
+            userMessageId: ATTEMPT_MESSAGE_ID,
+            turnId: ATTEMPT_TURN_ID,
+          },
+        },
+      ]);
+    });
+  });
+
   describe("the trigger", () => {
     it("renders a ReactNode label inside the trigger button", () => {
       mountTrigger(failedTurn(["switch"]), {
@@ -2246,6 +2472,7 @@ describe("RoutingDestinationPicker", () => {
         purpose: "setting",
         seedKey: "direct-picker-seed",
         values: {
+          ultracode: false,
           permission: DEFAULT_PERMISSION,
           selection: {
             harnessId: "claude",
@@ -2258,6 +2485,7 @@ describe("RoutingDestinationPicker", () => {
         onSettingsChange: null,
         tuiOnly: false,
         chatLineCarriesAutoMode: null,
+        ultracodeCarried: false,
         hostId: null,
         reasoningFallback: "model-default",
       });
@@ -2277,6 +2505,7 @@ describe("RoutingDestinationPicker", () => {
         <TooltipProvider>
           <TabHostProvider hostId={TAB_HOST_ID}>
             <HarnessModelPicker
+              withUltracode={false}
               store={store}
               maxModeContext={{ kind: "none" }}
               withServiceTier={false}

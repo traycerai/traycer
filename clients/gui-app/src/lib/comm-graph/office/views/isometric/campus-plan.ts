@@ -1,12 +1,12 @@
 /**
  * CAMPUS: low buildings on grass, one room per TEAM, seen from the corner.
  *
- * A room is a team of the partition (D38): one cabin per lead-and-members
+ * A room is a team of the partition: one cabin per lead-and-members
  * team, the host's HQ in a cabin of its own, and one bullpen per district for
  * everybody the partition calls a solo. It is not a lineage subtree, and that
  * distinction is the whole view. The recording's 309-agent epic is one root
  * with thirty teams under it, so "a room per subtree" built ONE 55 x 55 room
- * holding all 309 desks: geometry the spec's numbers liked and a picture that
+ * holding all 309 desks: geometry the numbers liked and a picture that
  * showed the user no team at all.
  *
  * Sizing still belongs to the room rather than to the Floor's packer. A team's
@@ -124,7 +124,7 @@ const ROOM_SPLIT = 9;
 
 // ---- The civic quarter ------------------------------------------------- //
 //
-// Four rooms, and only two of them are new furniture. C7 makes the HELP DESK the
+// Four rooms, and only two of them are new furniture. The HELP DESK is the
 // reception the courtyard already has, and Campus's WAITING ROOM is the
 // courtyard's bench row - the campus's public room is its courtyard, so the
 // bench somebody strolls to is the bench somebody waits on. That leaves a SICK
@@ -143,7 +143,7 @@ const SICKBAY_ROWS = 3;
 /** `bed-iso` is two tiles across, exactly as `desk-iso` is. */
 const BED_WIDTH_TILES = 2;
 /**
- * The records hut, as wide as its OWN PLATE. C5's archive is a door, so its
+ * The records hut, as wide as its OWN PLATE. The archive is a door, so its
  * plate is `ARCHIVE_SIGN_WIDTH_TILES` rather than the room's span - and a hut
  * narrower than its own label would hang that label over its neighbour.
  */
@@ -191,7 +191,7 @@ interface CampusRoomPlan extends IsoBlockSpec {
   /**
    * The room's identity, and the `roomId` every desk in it carries.
    *
-   * SYNTHETIC on purpose (D16). A team is named by its lead, so a room keyed
+   * SYNTHETIC on purpose. A team is named by its lead, so a room keyed
    * on the lead's bare agent id is a room that changes identity the day the
    * lead is archived and the second member takes over - and a room whose
    * second cabin would have no id at all. `<teamId>/room/<n>`, `<hq>/hq` and
@@ -445,7 +445,7 @@ interface RoomBuildArgs {
   readonly placed: IsoPlacedBlock;
   readonly floorIndex: number;
   readonly hostId: string | null;
-  /** The world's own origin, so a desk can say where it is painted (D53). */
+  /** The world's own origin, so a desk can say where it is painted. */
   readonly origin: IsoOrigin;
 }
 
@@ -469,7 +469,7 @@ function buildRoom(args: RoomBuildArgs): RoomBuild {
   // the partition's order renumbers every index after it, and a seat named by
   // one is a seat that changes name because somebody else showed up. Campus
   // re-packs, so it has no seat book to invalidate - but the name is free to
-  // get right, and the same defect on City was this fixup's F1.
+  // get right, and City had the same defect.
   const seatGroup = [hostId ?? ISO_SEAT_ID_NONE, plan.roomId].join("/");
   const desks: OfficeDesk[] = [];
   for (const [index, agent] of plan.occupants.entries()) {
@@ -548,7 +548,7 @@ function buildRoom(args: RoomBuildArgs): RoomBuild {
   };
   return {
     room: {
-      // A room id, not an agent id (D16): every desk's `roomId` resolves here.
+      // A room id, not an agent id: every desk's `roomId` resolves here.
       rootAgentId: plan.roomId,
       name: plan.name,
       bounds,
@@ -664,7 +664,7 @@ interface CampusCivic {
  *
  * `Sick bay` is a cabin of beds, `Records` a hut with a door, `Benches` the
  * courtyard's bench row, and `Front desk` the counter that was already there -
- * C7, which makes the help desk the reception rather than a second counter
+ * the help desk is the reception rather than a second counter
  * beside it.
  */
 function buildCampusCivic(args: CampusCivicArgs): CampusCivic {
@@ -707,7 +707,7 @@ function buildCampusCivic(args: CampusCivicArgs): CampusCivic {
     );
   }
 
-  // ---- Records: a hut whose door is the whole room (C5) ---------------- //
+  // ---- Records: a hut whose door is the whole room ---------------- //
   const recordsId = civicRoomIdOf(hostId, "archive");
   const hut = args.records;
   for (let col = hut.col; col < hut.col + hut.cols; col += 1) {
@@ -753,7 +753,7 @@ function buildCampusCivic(args: CampusCivicArgs): CampusCivic {
     );
   }
 
-  // ---- Front desk: the reception, re-read as a civic room (C7) --------- //
+  // ---- Front desk: the reception, re-read as a civic room --------- //
   const deskId = civicRoomIdOf(hostId, "help-desk");
   const counter = courtyard.receptionTile;
   // THE DOOR IS ONE STEP OFF THE ENTRANCE, not the entrance itself. The
@@ -824,7 +824,7 @@ function buildCampusCivic(args: CampusCivicArgs): CampusCivic {
       // here to draw. Not the same claim as the desk's below: this one is open
       // AND unblocked, which is why blockedness looked like an answer.
       enclosure: "open",
-      // Nobody is collected from a bench (C6).
+      // Nobody is collected from a bench.
       kerbTile: null,
     },
     {
@@ -842,7 +842,7 @@ function buildCampusCivic(args: CampusCivicArgs): CampusCivic {
       hostId,
       hostScope: "host",
       // OPEN, AND THIS IS THE ONE THE PAINTER GOT WRONG. These bounds ARE the
-      // existing reception counter (C7): two tiles of solid furniture, blocked
+      // existing reception counter: two tiles of solid furniture, blocked
       // exactly as a wall is blocked, in the middle of an open gate. Reading
       // blockedness alone put two wall pieces along the counter's top and one
       // down its side, round a desk you are meant to walk up to.
@@ -869,7 +869,7 @@ function buildCampusCivic(args: CampusCivicArgs): CampusCivic {
       // in from that column, on the same row. The opening in the first column
       // is what keeps the wall from running into the way out.
       enclosure: "walled",
-      // Nothing drives to the archive (C6).
+      // Nothing drives to the archive.
       kerbTile: null,
     },
   ];
@@ -1027,7 +1027,7 @@ export function planCampus(input: OfficePlanInput): OfficeLayout {
   const world = planWorld(input);
   const grid: IsoGrid = isoBlankGrid(world.cols, world.rows);
   // The whole world is measured before a desk is placed, which is what lets a
-  // seat carry the projected box it is painted in (D53) rather than a
+  // seat carry the projected box it is painted in rather than a
   // rectangle of tiles the painter never draws to.
   const origin: IsoOrigin = {
     rows: world.rows,
@@ -1062,8 +1062,8 @@ export function planCampus(input: OfficePlanInput): OfficeLayout {
     // THE COURTYARD IS NOT LETTERED TWICE. Campus's waiting room IS this
     // courtyard's bench row, and the civic plate already names the place and
     // carries the live count - so the amenity's own "Courtyard" label is a
-    // second name for one place, and it is the one that gives way. C7's economy
-    // applied to labels rather than to counters. City keeps its park's label,
+    // second name for one place, and it is the one that gives way. The same economy
+    // applies to labels as to counters. City keeps its park's label,
     // because there the waiting room is the shelter at the kerb and the park is
     // only a park.
     const annexed = builds[floorIndex].build.courtyard.areaSign.signTile;

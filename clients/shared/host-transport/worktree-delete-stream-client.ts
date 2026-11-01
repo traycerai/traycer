@@ -9,8 +9,7 @@ import type { WorktreeEntryScripts } from "@traycer/protocol/host/worktree-schem
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type {
   IStreamSession,
-  StreamCloseReason,
-  StreamConnectionStatus,
+  StatusChangeHandler,
   StreamFrameEnvelope,
 } from "./i-stream-session";
 import type { IStreamClient } from "./i-stream-client";
@@ -45,10 +44,7 @@ export interface WorktreeDeleteStreamCallbacks {
    * Connection-status changes. `reason` is non-null only on the `closed`
    * transition (e.g. an unreachable host, or a fatal handshake error).
    */
-  readonly onConnectionStatus: (
-    status: StreamConnectionStatus,
-    reason: StreamCloseReason | null,
-  ) => void;
+  readonly onConnectionStatus: StatusChangeHandler;
 }
 
 export interface WorktreeDeleteStreamClientOptions {
@@ -91,8 +87,8 @@ export class WorktreeDeleteStreamClient {
     this.session.onServerFrame((envelope, binaryPayload) => {
       this.handleServerFrame(envelope, binaryPayload);
     });
-    this.session.onStatusChange((status, reason) => {
-      this.callbacks.onConnectionStatus(status, reason);
+    this.session.onStatusChange((status, reason, retryCause, continuity) => {
+      this.callbacks.onConnectionStatus(status, reason, retryCause, continuity);
     });
   }
 

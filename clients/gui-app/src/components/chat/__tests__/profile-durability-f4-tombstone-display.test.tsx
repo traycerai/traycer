@@ -12,7 +12,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 
 /**
- * F4 (durability audit), tombstone-display surface: a user message's
+ * Tombstone-display surface: a user message's
  * `sessionAnchor.labelSnapshot` is a snapshot taken at anchor-mint time - it
  * can carry whatever hostile content a profile label held back then, and
  * `chat-message-user-body.tsx` renders it verbatim as

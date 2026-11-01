@@ -133,7 +133,7 @@ export function useEpicArtifactRecords(
  * two - only the presence lookup differs.
  *
  * `isCloudKnown` is the same shape, added for the SAME-host counterpart of
- * the cross-host exemption above (chat-sync-v2 ticket 36): a chat can be
+ * the cross-host exemption above: a chat can be
  * bound to THIS device's active host and still have no local record - a
  * leased identity that never adopted its rows - which is a different chat
  * than one this host's registry has genuinely tombstoned. `epic.listCloudChats`
@@ -237,13 +237,6 @@ export function useActiveEpicArtifactId(
 }
 
 /**
- * Same active-tile resolution and filtering as
- * {@link makeSelectActiveEpicArtifactId}, but returns the ref itself rather
- * than just its id - callers that need to discriminate the active tile's
- * kind (e.g. "chat" vs "terminal-agent" for support-context capture) would
- * otherwise have to re-walk the pane tree.
- */
-/**
  * The tile showing in `tabId`'s ACTIVE pane, or `null`. The one place the
  * active-pane walk lives, shared by every selector below it - the rules for
  * "which tile is the user looking at" must not be able to drift between the
@@ -279,6 +272,13 @@ export function useActiveTileRef(
   return useEpicCanvasStore(selector);
 }
 
+/**
+ * Same active-tile resolution and filtering as
+ * {@link makeSelectActiveEpicArtifactId}, but returns the ref itself rather
+ * than just its id - callers that need to discriminate the active tile's
+ * kind (e.g. "chat" vs "terminal-agent" for support-context capture) would
+ * otherwise have to re-walk the pane tree.
+ */
 export function makeSelectActiveEpicArtifactRef(tabId: string | undefined) {
   return (state: EpicCanvasStore): EpicCanvasTileRef | null => {
     const active = activeTileRef(state, tabId);

@@ -8,6 +8,7 @@ import { ChordCaptureCore } from "@/components/settings/controls/chord-capture-c
 import {
   ACTION_IDS,
   ACTION_META,
+  isActionAvailable,
   type ActionId,
 } from "@/lib/keybindings/actions";
 import { formatModifierChordForDisplay } from "@/lib/keybindings/chord";
@@ -52,16 +53,19 @@ export function KeybindingsSettingsPanel() {
   // row for a surface this build has not got - the same reason the command
   // palette omits it. `app.tabs.vertical.collapse` likewise, while this
   // window's tabs are at the top and there is no strip to collapse.
+  // An action this app cannot run (Talk, while the voice layer is
+  // unreleased) has no row either.
   const primaryActionIds = ACTION_IDS.filter(
     (id) =>
       !SUB_LEADER_ACTION_SET.has(id) &&
       (homeTabEnabled || id !== "app.home.open") &&
-      (verticalTabs || id !== "app.tabs.vertical.collapse"),
+      (verticalTabs || id !== "app.tabs.vertical.collapse") &&
+      isActionAvailable(id),
   );
 
   // Lifted (rather than owned by `SummonHotkeyRow`) so the "Reset all to
   // defaults" button below can share the exact same in-flight mutation - one
-  // request at a time, and the row's pending-disable (R3) also covers a
+  // request at a time, and the row's pending-disable also covers a
   // reset triggered from here.
   const { bridge: summonBridge, status: summonStatus } = useSummonHotkey();
   const summonMutation: SummonHotkeyMutation = useMutation({
@@ -288,7 +292,7 @@ interface SummonHotkeyRowProps {
 function SummonHotkeyRow(props: SummonHotkeyRowProps) {
   const { status, mutation } = props;
   const bindings = useKeybindingStore((s) => s.bindings);
-  // Local, capture-session-scoped: a blocked ENABLE attempt (R1) is a
+  // Local, capture-session-scoped: a blocked ENABLE attempt is a
   // distinct event from the OS `rejected` status and from a capture-time
   // conflict (which `ChordCaptureCore` already renders itself) - it needs
   // its own message slot, cleared on the next attempt.

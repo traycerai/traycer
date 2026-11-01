@@ -1,5 +1,5 @@
 /**
- * R9F3 (P2): a hash-only retry's SECOND refusal - its send's terminal
+ * R9F3: a hash-only retry's SECOND refusal - its send's terminal
  * statement - now builds its worktree account from the transferred sticky
  * evidence via `rejectionSweepFor`/`sweepAccountForIntent`, not the live
  * per-slot partition (`worktreePartition`).
@@ -61,6 +61,7 @@ const OWNER_ID = "owner-r9f3";
 const HOST_ID = "host-r9f3";
 
 const SETTINGS: ChatRunSettings = {
+  ultracode: false,
   harnessId: "codex",
   model: "gpt-5-codex",
   permissionMode: "supervised",
@@ -154,7 +155,7 @@ function createHarness(): Harness {
 }
 
 function emitOwnerSnapshot(callbacks: ChatStreamCallbacks): void {
-  callbacks.onConnectionStatus("open", null, null);
+  callbacks.onConnectionStatus("open", null, null, null);
   const chat: Chat = {
     id: CHAT_ID,
     parentId: null,
@@ -357,7 +358,7 @@ describe("R9F3: a retry's SECOND refusal reads the sticky host-level sweep, not 
 
     // The host sweeps A's path while the retry is outstanding. The
     // consumer-observing subscription folds it into the retry's sticky
-    // record (R9F2) as this fires, AND updates the per-slot record for the
+    // record as this fires, AND updates the per-slot record for the
     // same key.
     useWorktreeIntentStagingStore
       .getState()

@@ -58,7 +58,7 @@ export function useTuiOpenerItems(ctx: CommandContext): OpenerInterfaceItems {
           hostId: agent.hostId,
         },
         // TUI agents carry a real hostId and can be host-mismatched too, but
-        // badging them is outside T22's scope (chats/terminals/artifacts
+        // badging them is outside the current scope (chats/terminals/artifacts
         // only) - flagged back as a follow-up.
         null,
       );

@@ -300,6 +300,7 @@ function buildHostClient(hostId: string): HostClient<HostRpcRegistry> {
 const TAB_HOST_CLIENT = buildHostClient(TAB_HOST_ID);
 
 const SETTINGS_SEED: ChatRunSettings = {
+  ultracode: false,
   harnessId: "claude",
   model: "claude-opus-4-7",
   permissionMode: "supervised",

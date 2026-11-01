@@ -89,6 +89,7 @@ export interface ComposerToolbarCatalogScope {
    * the mode this composer actually sends.
    */
   readonly chatLineCarriesAutoMode: boolean | null;
+  readonly ultracodeCarried: boolean;
   /**
    * The pin key a sandbox may be staged under for this composer, or `null` on
    * a surface that stages none. While one is staged the send runs on that
@@ -121,7 +122,7 @@ export interface ComposerToolbarCatalogScope {
  * palette's "Switch model" / "Switch provider" items dispatch against this
  * composer.
  *
- * `seedSource` (S11: replaces the old positional `settingsSeed` +
+ * `seedSource` (replaces the old positional `settingsSeed` +
  * `client` + `seedIsAuthoritative` trio) decides both WHAT seeds the store
  * and WHETHER a dead `profileId` may be silently corrected to ambient - the
  * load-bearing distinction that keeps this validation from fighting the
@@ -155,6 +156,7 @@ export function useComposerToolbarStore(
     hostId,
     tuiOnly,
     chatLineCarriesAutoMode,
+    ultracodeCarried,
     stagedSurfaceKey,
     sendsToRestingSandbox,
   } = catalog;
@@ -190,6 +192,7 @@ export function useComposerToolbarStore(
         selection: defaultSelection,
         reasoning: defaultReasoning,
         serviceTier: defaultServiceTier,
+        ultracode: false,
       }),
     [
       defaultPermission,
@@ -213,6 +216,7 @@ export function useComposerToolbarStore(
       tuiOnly,
       hostId,
       chatLineCarriesAutoMode,
+      ultracodeCarried,
     }),
   );
   // The store's `onSettingsChange` is ALWAYS this recording wrapper, even when
@@ -245,7 +249,7 @@ export function useComposerToolbarStore(
   }, [store, recordingOnSettingsChange]);
   // Re-seed when the seed identity changes (applySeed no-ops on a matching
   // key, so default-value churn never clobbers user edits). A LAYOUT effect,
-  // not a passive one: ticket 07 round 2's transition-window gap - a seed
+  // not a passive one: the transition-window gap - a seed
   // whose `profileId` flips (e.g. `resolveSeededProfileId` clearing a stale
   // pin once `providers.list` settles) must land in the store before the
   // browser paints, so a submit triggered by the very next user interaction
@@ -305,6 +309,7 @@ export function useComposerToolbarStore(
       modelsLoaded,
       tuiOnly,
       chatLineCarriesAutoMode,
+      ultracodeCarried,
       keepsUnavailablePick,
     });
   }, [
@@ -316,6 +321,7 @@ export function useComposerToolbarStore(
     harnessId,
     tuiOnly,
     chatLineCarriesAutoMode,
+    ultracodeCarried,
     keepsUnavailablePick,
   ]);
 
@@ -361,6 +367,7 @@ interface ComposerToolbarDefaults {
   readonly selection: HarnessModelSelection;
   readonly reasoning: ReasoningLevel;
   readonly serviceTier: ServiceTier;
+  readonly ultracode: boolean;
 }
 
 /**
@@ -406,6 +413,7 @@ function chatRunSettingsSeedKey(settingsSeed: ChatRunSettings | null): string {
     settingsSeed.reasoningEffort ?? "",
     settingsSeed.serviceTier ?? "",
     settingsSeed.profileId ?? "",
+    settingsSeed.ultracode ? "true" : "false",
   ].join("\u0000");
 }
 
@@ -419,5 +427,6 @@ function valuesFromSettingsSeed(
     selection: selectionFromChatRunSettings(settingsSeed),
     reasoning: reasoningFromChatRunSettings(settingsSeed),
     serviceTier: serviceTierFromChatRunSettings(settingsSeed),
+    ultracode: settingsSeed.ultracode,
   };
 }

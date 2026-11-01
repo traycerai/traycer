@@ -5,7 +5,7 @@ import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
 
 /**
- * Settings ▸ Environment ▸ Members: the picked team's members (P2's page).
+ * Settings ▸ Environment ▸ Members: the picked team's members.
  * The row is offered only under a team; a remembered path under Personal
  * shows the page with nothing in it.
  */

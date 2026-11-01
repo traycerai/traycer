@@ -4,7 +4,7 @@
  * hash-only node TODAY (the other is queue-edit) - the edit composer is seeded
  * from the SENT message's own `structuredContent`, whose images are already
  * epic attachments. Proving those travel bare, unconditionally, is the
- * regression guard for "no user-visible behaviour change" this ticket promises.
+ * regression guard for "no user-visible behaviour change".
  *
  * ## The default here is BRIDGE DOWN
  *
@@ -120,6 +120,7 @@ const ADDED_IMAGE_HASH = "b".repeat(64);
 const IMAGE_BYTES = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
 
 const SETTINGS: ChatRunSettings = {
+  ultracode: false,
   harnessId: "codex",
   model: "gpt-5-codex",
   permissionMode: "supervised",
@@ -560,7 +561,7 @@ describe("performEditSubmit (via revertOnEdit.onDontRevert)", () => {
     expect(typeof atoms[0]?.b64content).toBe("string");
   });
 
-  // F4 (batch-1 review): the hash list is captured ONCE, before the await. If
+  // F4: the hash list is captured ONCE, before the await. If
   // a second hash-only image appears in the live document while the first is
   // still resolving, the final re-read includes it but the byte map does not
   // - so it is sent bare despite this client being able to resolve it. The
@@ -764,7 +765,7 @@ describe("performEditSubmit (via revertOnEdit.onDontRevert)", () => {
     expect(editUserMessage).not.toHaveBeenCalled();
   });
 
-  // F2 (batch-1 review): cancel-and-reopen of the SAME message is a NEW
+  // Cancel-and-reopen of the SAME message is a NEW
   // editing session even though `targetMessageId` is unchanged. Before the
   // fix, only `targetMessageId` was checked, so the stale job's read would
   // land and submit the newly reopened edit's content under the OLD job's

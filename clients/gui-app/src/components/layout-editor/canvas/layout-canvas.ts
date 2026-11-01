@@ -55,7 +55,7 @@ import { useSettingsStore } from "@/stores/settings/settings-store";
  * the pointer is on, and the one ring that travels between selections.
  *
  * Pointer resolution lives on `document` in the capture phase rather than on
- * the column, because the edit firewall (ticket 07) sits on the column and
+ * the column, because the edit firewall sits on the column and
  * stops immediate propagation there: a capture listener one level up reads the
  * gesture before the firewall swallows it, whatever order the two mount in.
  *
@@ -77,8 +77,7 @@ export function useLayoutCanvas(column: HTMLElement | null): void {
     // move that changes the hovered region, each filter keystroke, each
     // selection change while the pointer rests on a region - and building the
     // label means building the whole 22-region value set to read one region's
-    // state word (G1-04's rule, which `layout-form.tsx` follows in this
-    // same commit). The label changes only when the pointer moves to another
+    // state word. The label changes only when the pointer moves to another
     // region, the layout is written, or a fact a state word reads changes
     // (Voice input, which the mic's "Turn on" verb writes from right here), so
     // those are the things this remembers.
@@ -103,7 +102,7 @@ export function useLayoutCanvas(column: HTMLElement | null): void {
       return label;
     };
 
-    // Fixed chrome the canvas names without it being a setting (C4): the
+    // Fixed chrome the canvas names without it being a setting: the
     // Message queue says it is always there, and a press on it selects nothing.
     let cue: HTMLElement | null = null;
     const setCue = (next: HTMLElement | null): void => {
@@ -454,8 +453,8 @@ function chipPlacement(regionId: RegionId): HoverChipPlacement {
 }
 
 /**
- * What the chip says: the region's name AND the state it is in right now
- * (C-05) - "Browsers · Shown", "Minimap · Right".
+ * What the chip says: the region's name AND the state it is in right now -
+ * "Browsers · Shown", "Minimap · Right".
  *
  * The name alone made the chip a label for something the pointer was already
  * on. The state word is the answer to the question hovering asks, and it is

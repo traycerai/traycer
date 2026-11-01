@@ -30,7 +30,7 @@ import { NewConversationModalBody } from "../new-conversation-modal";
 import { NewConversationTransientContext } from "../new-conversation-transient-context";
 
 /**
- * F2: the in-Epic new-conversation modal shares the landing composer's
+ * The in-Epic new-conversation modal shares the landing composer's
  * placement SEMANTICS (one chip, one frozen submit client, one refusal),
  * resolved for its EPIC (`useEpicConversationPlacement`: per-Epic pin - the
  * Epic's last created chat's host - ?? the session's host ?? effective).
@@ -158,12 +158,12 @@ const testState = vi.hoisted(() => ({
     readonly sessionHostId: string | null;
   }>,
   /**
-   * The workspace-controls element the body was handed (Codex T-50). The
+   * The workspace-controls element the body was handed. The
    * ComposerBody mock renders only the banner, so the picker's `hostScope`
    * is read off the element's props rather than through a render.
    */
   workspaceControlsElements: [] as unknown[],
-  /** The pin the latest-conversation seed was read for (Codex T-50). */
+  /** The pin the latest-conversation seed was read for. */
   latestSeedPins: [] as unknown[],
 }));
 
@@ -283,6 +283,7 @@ vi.mock("@/hooks/sandboxes/use-staged-send-sign-in-check", () => ({
 vi.mock("@/components/home/hooks/use-composer-toolbar-store", async () => {
   const { createStore } = await import("zustand/vanilla");
   const store = createStore(() => ({
+    ultracode: false,
     selection: { harnessId: "claude", modelSlug: "sonnet", profileId: null },
     values: {
       selection: { harnessId: "claude", modelSlug: "sonnet", profileId: null },
@@ -361,7 +362,7 @@ vi.mock("@/hooks/composer/use-composer-paste", async () => {
   return {
     ...actual,
     useComposerPaste: stubPasteResult,
-    // The modal calls `useComposerHashPaste` (T4's hash-only adapter), not
+    // The modal calls `useComposerHashPaste` (the hash-only adapter), not
     // `useComposerPaste` above - without this the real hook ran underneath.
     useComposerHashPaste: stubPasteResult,
   };
@@ -528,7 +529,7 @@ describe("new-conversation modal shares the composer's placement semantics", () 
     );
   });
 
-  // A pin never sets `namedHostDead` (D6): by the time `useComposerPlacement`
+  // A pin never sets `namedHostDead`: by the time `useComposerPlacement`
   // resolves, a pinned host that died has already auto-followed to the
   // effective host - `resolvedHostId` names the LIVE host, and the create
   // must land there instead of being refused.
@@ -594,7 +595,7 @@ describe("new-conversation modal shares the composer's placement semantics", () 
     expect(noticeText()).toContain("Build Box");
   });
 
-  // Codex review finding: a §54 refusal names the placement it refused, so
+  // A placement refusal names the placement it refused, so
   // ANY change of the RESOLVED host retires it - a derivation move or the
   // picker writing a new pin. A surviving alert would keep naming a placement
   // this modal has already left.
@@ -789,7 +790,7 @@ describe("new-conversation modal shares the composer's placement semantics", () 
   });
 
   it("asks the per-EPIC placement for THIS epic with the session's host as its default", () => {
-    // Codex #1243 T-48: the modal used to resolve the landing composer's
+    // The modal used to resolve the landing composer's
     // window-keyed pin ?? effective, so a new agent in an Epic served from B
     // landed on wherever the window's landing chip pointed. The placement now
     // resolves per Epic with the session's host as the default tier; this
@@ -807,7 +808,7 @@ describe("new-conversation modal shares the composer's placement semantics", () 
   });
 
   it("keeps the workspace picker selectable on the RESOLVED host and seeds from it", () => {
-    // Codex #1243 T-50: the request is unnamed (`hostId: null`) and the
+    // The request is unnamed (`hostId: null`) and the
     // placement resolves it to host-a through the Epic's tiers. The picker
     // and the seed used to key on the raw request field, so they browsed and
     // seeded from the app-wide host while the create went to host-a. An
@@ -854,7 +855,7 @@ describe("new-conversation modal shares the composer's placement semantics", () 
     expect(testState.recordPlacement).toHaveBeenCalledWith("host-a");
   });
 
-  // Codex review finding: `clearForAllHosts` reaches every host's copy of the
+  // `clearForAllHosts` reaches every host's copy of the
   // slot, so the "was anything staged" check that decides whether to toast
   // must reach just as far. The narrower `readStagedWorktreeIntent` (scoped to
   // the RESOLVED bucket) reported "nothing staged" here even though the clear

@@ -47,6 +47,11 @@ export const RPC_ERROR_CODES = [
   // The caller's OWN agent lives on another host; the message names it, so
   // telling the caller where to go discloses nothing across accounts.
   "E_AGENT_NOT_LOCAL",
+  // The host needed the cloud to answer the call and the cloud gave no
+  // verdict (a transport failure, a timeout, a 5xx). RETRYABLE (503): it says
+  // nothing about the target, so it must not read as E_AGENT_NOT_FOUND. Same
+  // additive degrade story as E_INVALID_ARGUMENT.
+  "E_CLOUD_UNREACHABLE",
   // A HOME-partitioned request (`clearAll@1.1`'s `home: "local"`) arrived
   // while this host could not read local-home membership. RETRYABLE (503) and
   // deliberately NOT collapsed into a generic failure: the alternative to

@@ -15,7 +15,7 @@ import {
 
 /**
  * Controllable open-epic handle: desktop EpicSessionProvider intentionally
- * supplies null during ownership/session acquisition (Ticket-08 cold path).
+ * supplies null during ownership/session acquisition (the cold path).
  */
 const openEpicHandleState = vi.hoisted(() => ({
   handle: null as { readonly epicId: string } | null,

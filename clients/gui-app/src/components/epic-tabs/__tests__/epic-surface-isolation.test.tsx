@@ -109,7 +109,7 @@ const activeHostClient = vi.hoisted(() => {
     // effective host through an id-pinned requester now that the active slot is
     // gone, so a hand-rolled client that does not answer this throws on the
     // first render that reaches the hook - here, transitively, via the sidebar
-    // rail. Added under an explicit grant rather than by P4.2's own sweep so
+    // rail. Added under an explicit grant rather than by the redesign's own sweep so
     // this file keeps one writer; the line belongs to their class and their
     // census, and is attributed there.
     //
@@ -124,7 +124,7 @@ const activeHostClient = vi.hoisted(() => {
 });
 
 // ONE hoisted opener, not a fresh closure per render. This suite is the one
-// that hung for over nine minutes during P2.4 — a synchronous render loop
+// that hung for over nine minutes — a synchronous render loop
 // starves the event loop, so `--testTimeout` cannot fire and the run simply
 // stops terminating — and an unstable opener is exactly the dep churn that
 // feeds that shape. The mechanism was fixed at its owner (the provider's
@@ -192,15 +192,15 @@ vi.mock("@/lib/host/runtime", async (importOriginal) => {
     useHostBinding: () => ({ hostClient: activeHostClient }),
     useHostClient: () => activeHostClient,
     // An `importOriginal` spread hands back the REAL spine hook, which throws
-    // outside a provider; `useHostRuntimeClient` is a separate export since
-    // redesign P2.1 and must be overridden explicitly.
+    // outside a provider; `useHostRuntimeClient` is a separate export
+    // and must be overridden explicitly.
     useHostRuntimeClient: () => activeHostClient,
     useHostDirectory: () => hostDirectory,
   };
 });
 
 // `EpicSessionProvider` resolves its host through the selection authority's
-// derived pointer (selection model §1), whose store only a mounted kernel
+// derived pointer, whose store only a mounted kernel
 // bridge writes - no component test mounts one. Seed it with the same id
 // `activeHostClient.getActiveHostId()` answers, so both scopes agree.
 vi.mock("@/hooks/host/use-effective-host-id", () => ({
@@ -433,7 +433,7 @@ describe("<EpicSurface /> split isolation", () => {
 
     act(() => {
       streams.forEach((stream) => {
-        stream.callbacks.onConnectionStatus("open", null, true);
+        stream.callbacks.onConnectionStatus("open", null, true, null);
         stream.callbacks.onSnapshot(
           snapshotMeta(stream.epicId),
           Y.encodeStateAsUpdate(new Y.Doc()),

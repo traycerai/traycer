@@ -310,7 +310,12 @@ export function createLegacyEpicStreamAdapter(
           },
         });
       },
-      onConnectionStatus: (status, reason, durabilityStatusNegotiated) => {
+      onConnectionStatus: (
+        status,
+        reason,
+        durabilityStatusNegotiated,
+        continuity,
+      ) => {
         if (!accepts(generation)) return;
         // Reported through BOTH seams, and deliberately. `reportStatus` is what
         // an observer of the adapter reads; the control event is what the
@@ -320,12 +325,14 @@ export function createLegacyEpicStreamAdapter(
         // socket move.
         host?.reportStatus({
           connection: status,
+          continuity,
           closeReason: status === "closed" ? reason : null,
         });
         host?.emit({
           plane: "control",
           event: {
             kind: "transport-status",
+            continuity,
             status,
             reason,
             durabilityStatusNegotiated,

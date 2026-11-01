@@ -50,6 +50,22 @@ import type {
   SandboxVerbFetchResult,
   TraycerModelsFetchResult,
 } from "@traycer-clients/shared/host-client/sandbox-control";
+import {
+  SLACK_SETTINGS_UNAVAILABLE_IN_STAGING,
+  type SlackAppFailure,
+  type SlackAppInstallUrlResult,
+  type SlackAppManifestResult,
+  type SlackAppReadResult,
+  type SlackAppWriteResult,
+} from "@traycer-clients/shared/host-client/slack-app";
+import type { SlackAppRegisterRequest } from "@traycer/protocol/host/slack-app";
+import type {
+  VoiceAvailabilityFetchResult,
+  VoiceSessionEndFetchResult,
+  VoiceSessionMintFetchResult,
+  VoiceSessionMintRequest,
+} from "@traycer-clients/shared/host-client/voice-sessions";
+import type { VoiceRouteFetchResult } from "@traycer-clients/shared/host-client/voice-router";
 import type {
   EnvironmentProvidersFetchResult,
   SandboxGrantsFetchResult,
@@ -61,6 +77,12 @@ import {
   fetchEnvironmentInvitations,
   acceptEnvironmentInvitation,
 } from "@traycer-clients/shared/auth/environment-invitations";
+import {
+  claimCreditOfferViaHttp,
+  listCreditOffersViaHttp,
+  type ClaimCreditOfferFetchResult,
+  type ListCreditOffersFetchResult,
+} from "@traycer-clients/shared/auth/credit-offers";
 import type {
   EnvironmentInvitationsListResponse,
   EnvironmentInvitationsAcceptResponse,
@@ -125,9 +147,9 @@ import {
   writeProvisionalSessionSnapshot,
 } from "./provisional-session-snapshot";
 
-// Legacy encrypted-localStorage token slots (the pre-§3 desktop store). Two
+// Legacy encrypted-localStorage token slots (the old desktop store). Two
 // separate string slots — NOT one JSON blob — matching the retired
-// `desktop-runner-host` keys. The write path is gone (§3); §6 reads these one
+// `desktop-runner-host` keys. The write path is gone; a migration reads these one
 // last time via the generic `secureStorage` seam to migrate the pair onto the
 // shared file, then wipes them.
 const LEGACY_ACCESS_TOKEN_KEY = "traycer.token";
@@ -481,18 +503,15 @@ export type LiveRevalidationOutcome =
   | { readonly kind: "superseded" };
 
 /**
- * The result of applying a same-user `rotate` outcome to the live session:
- *   - `rotated`    → the lease was rotated in place to `token`;
- *   - `signed-out` → a terminal outcome cleared the UI session (file kept);
- *   - `transient`  → a `lock-busy`/`refresh-network` retry; state untouched.
- */
-/**
  * What a live same-user rotation did. These name the fate of the REQUEST that
  * triggered the rotation, which since `unverified` arrived is no longer the
  * same thing as the fate of the session:
  *
  *  - `rotated`        - a fresh pair is live; re-drive the request.
  *  - `signed-out`     - the UI session was cleared; the request cannot proceed.
+ *                       The credentials file is kept: only explicit user intent
+ *                       destroys it, and every automatic path clears the UI
+ *                       session alone - see `clearUiSession`.
  *  - `credential-dead`- the refresh token is terminally rejected, so the request
  *                       cannot proceed EITHER, but the session was demoted to
  *                       `unverified` rather than cleared and the local plane is
@@ -546,40 +565,6 @@ function linkResultForTokenApplication(
   }
 }
 
-/**
- * GUI-owned auth service. Drives the sign-in flow through the shell-owned
- * runner host and projects the current authenticated session into:
- *
- *   - the Zustand auth store (status / profile / context metadata only -
- *     never the raw bearer string), and
- *   - a `RequestContextProvider` boundary that host/runtime/shared-core
- *     consumers subscribe to. The provider is the SOLE runtime auth surface
- *     past the boundary; the legacy `getToken()` / `onTokenChange(...)`
- *     pair has been retired in favour of `RequestContext` snapshots.
- *
- * Every token that lands in the GUI - rehydrated from the token store at
- * `start()` or delivered via `onAuthCallback` - is validated against AuthnV3
- * before being projected as `signed-in`. The validation/refresh helper
- * returns the FULL `AuthenticatedUser` so the minted `RequestContext`
- * carries the same identity shape that host-minted contexts already carry.
- *
- * Interactive sign-in is the OAuth 2.0 Device Authorization Grant (RFC 8628):
- * `signIn()` opens the browser to the device-approval page and the shell's
- * main-process controller polls `/device/token`; the terminal `authorized`
- * result converges on the same `applyTokenInternal` tail as a rehydrated token.
- *
- * Two distinct failure paths drive distinct `lastError` codes so the UI
- * copy can match the flow the user was actually in:
- *
- *   1. `start()`-time stored-token rehydration failure →
- *      `AUTH_ERROR_SESSION_EXPIRED` ("Session expired - sign in again").
- *      The validation helper has already attempted refresh before
- *      returning a terminal failure, so startup clears the stored token
- *      and asks the user to sign in again.
- *   2. The device-flow poll path - a minted token that AuthnV3 then `rejected`
- *      (or a `network-error`) surfaces `AUTH_ERROR_SIGN_IN_FAILED` ("Sign-in
- *      failed - please try again") and clears any persisted token.
- */
 /** The session a terminal verdict loss is about; see `onCloudAuthorizationRevoked`. */
 export interface RevokedCloudAuthorization {
   /** The bearer the cloud rejected - the fence a copy held elsewhere applies. */
@@ -592,6 +577,40 @@ export interface RevokedCloudAuthorization {
   readonly revocation: "user-epoch" | null;
 }
 
+/**
+ * GUI-owned auth service. Drives the sign-in flow through the shell-owned
+ * runner host and projects the current authenticated session into:
+ *
+ *   - the Zustand auth store (status / profile / context metadata only -
+ *     never the raw bearer string), and
+ *   - a `RequestContextProvider` boundary that host/runtime/shared-core
+ *     consumers subscribe to. The provider is the SOLE runtime auth surface
+ *     past the boundary; the legacy `getToken()` / `onTokenChange(...)`
+ *     pair has been retired in favour of `RequestContext` snapshots.
+ *
+ * Interactive tokens are validated against AuthnV3 before being projected
+ * as `signed-in`; startup may project a stored session provisionally from
+ * its cached identity before validation. The validation/refresh helper
+ * returns the FULL `AuthenticatedUser` so the minted `RequestContext`
+ * carries the same identity shape that host-minted contexts already carry.
+ *
+ * Interactive sign-in is the OAuth 2.0 Device Authorization Grant (RFC 8628):
+ * `signIn()` opens the browser to the device-approval page and the shell's
+ * main-process controller polls `/device/token`; the terminal `authorized`
+ * result is finalized through `applyTokenInternal`.
+ *
+ * Two distinct failure paths drive distinct `lastError` codes so the UI
+ * copy can match the flow the user was actually in:
+ *
+ *   1. `start()`-time stored-token rehydration failure →
+ *      `AUTH_ERROR_SESSION_EXPIRED` ("Session expired - sign in again"),
+ *      or `AUTH_ERROR_SIGNED_OUT_EVERYWHERE` for a user-epoch revoke.
+ *      Startup preserves the credentials file and attempts to hold the
+ *      local plane through an `unverified` session.
+ *   2. The device-flow poll path - a minted token that AuthnV3 then `rejected`
+ *      (or a `network-error`) surfaces `AUTH_ERROR_SIGN_IN_FAILED` ("Sign-in
+ *      failed - please try again") without clearing persisted credentials.
+ */
 export class AuthService {
   private readonly runnerHost: IRunnerHost;
   private readonly tokenStore: AuthTokenStore;
@@ -655,7 +674,7 @@ export class AuthService {
   private currentSubscription: SubscriptionStatus | null = null;
   private lastError: string | null = null;
   private callbackDisposable: Disposable | null = null;
-  // §4 owned-watcher subscription (tokenStore.subscribe); disposed on dispose().
+  // Owned-watcher subscription (tokenStore.subscribe); disposed on dispose().
   private tokenStoreChangeDisposable: Disposable | null = null;
   private pendingTimeoutHandle: number | null = null;
   private currentRevalidation: Promise<LiveRevalidationOutcome | null> | null =
@@ -676,7 +695,7 @@ export class AuthService {
   // (sign-in, sign-out, or any other rotation) naturally clears this by no
   // longer matching.
   private unrepairableSessionsBearer: string | null = null;
-  // §4 reconcile worker: single-flight + trailing re-run so overlapping watcher
+  // Reconcile worker: single-flight + trailing re-run so overlapping watcher
   // events never interleave applies. Never writes, never spends.
   private currentReconcile: Promise<void> | null = null;
   private reconcileQueued = false;
@@ -749,12 +768,12 @@ export class AuthService {
   private sessionRecoveryDelayMs: number = SESSION_RECOVERY_INITIAL_DELAY_MS;
   private sessionRecoveryAttempt: number = 0;
   // Single-flight for the ASYNC probe, distinct from `sessionRecoveryTimer`
-  // which only covers the WAIT before it (cold review P2-6). The timer nulls
+  // which only covers the WAIT before it. The timer nulls
   // itself the instant it fires, so between that and the probe settling there
   // is a window - three `withAuthNetworkRetry` attempts wide - in which the
   // loop looks idle to anything that checks the timer. A wake landing there
   // would start a second, concurrent probe, and repeated wakes would keep
-  // doing so, which is how the ticket's "18 calls in minute one, 5.7/min at
+  // doing so, which is how the "18 calls in minute one, 5.7/min at
   // cap" stopped being a ceiling.
   private sessionRecoveryInFlight: boolean = false;
   // A wake that arrived DURING a probe. The probe re-arms from the floor when
@@ -1034,7 +1053,7 @@ export class AuthService {
     // file-authoritative token with a staler projection. Symmetric with the
     // reconcile path's post-validate currentBearer no-op.
     const bearerBefore = this.currentBearer;
-    // Access-only validation (§3): the cross-window snapshot is a UI projection,
+    // Access-only validation: the cross-window snapshot is a UI projection,
     // not a token write. A stale projected bearer is handled by the local rotate
     // path; here we only mint the local UI session for the same identity.
     const outcome = await this.validateToken(inboundToken);
@@ -1077,7 +1096,7 @@ export class AuthService {
     this.callbackDisposable = this.runnerHost.onAuthCallback(() => {
       this.handleReturnSignal();
     });
-    // §4: subscribe to the owned credentials-file watcher. Events are a hint;
+    // Subscribe to the owned credentials-file watcher. Events are a hint;
     // the reconcile worker re-reads the store (disk is truth) and never spends.
     // Subscribe before the first get so a change that lands during rehydration
     // is not missed (the reconcile generation fence drops any race with start).
@@ -1088,7 +1107,7 @@ export class AuthService {
     }
 
     try {
-      // §6: one-time migration of the legacy per-window localStorage token pair
+      // One-time migration of the legacy per-window localStorage token pair
       // onto the shared file, BEFORE the first file read so the rehydrate below
       // adopts the migrated session. Bounded + single-flighted in main; on any
       // fault it declines and leaves the legacy slots for a later launch. Never
@@ -1363,8 +1382,8 @@ export class AuthService {
   }
 
   /**
-   * §6 migration pre-step. Reads the legacy per-window localStorage token pair
-   * (retired in §3) one last time and hands it to the main store, which
+   * Migration pre-step. Reads the legacy per-window localStorage token pair
+   * (retired) one last time and hands it to the main store, which
    * reconciles it onto the shared file and single-flights across windows. The
    * legacy slots are wiped only on an outcome that consolidated or discarded the
    * pair (`shouldWipeLegacyCredentials`); `retryable`/`commit-failed` keeps them
@@ -1424,7 +1443,7 @@ export class AuthService {
 
   /**
    * The one spend-capable re-establishment path for a stored-but-stale session,
-   * shared by startup rehydration, the background recovery loop, and the §4
+   * shared by startup rehydration, the background recovery loop, and the
    * reconcile (via recovery) when the file's access token no longer validates.
    * Runs the locked `rotate` (the one spend, under the file lock in main), then
    * either mints a fresh signed-in session from the rotated/adopted pair or
@@ -1436,7 +1455,7 @@ export class AuthService {
    * sign-out destroys it (settled decision / H1).
    *
    * Stand-down invariant: every caller enters with NO live bearer, so a
-   * bearer observed after any await means a competing path (the §4 watcher
+   * bearer observed after any await means a competing path (the watcher
    * adopting an externally-written session mid-flight) already established a
    * session - one that may belong to a DIFFERENT user and does not bump the
    * identity generation the `stillWanted` fences watch. Applying or clearing
@@ -1693,7 +1712,7 @@ export class AuthService {
    * true for a token revoked an hour ago.
    *
    * WHY THIS IS A METHOD AND NOT A GUARD AT EACH CALLER: eight of the nine
-   * callers were unreachable before this ticket. Admitting the local plane
+   * callers were unreachable before this change. Admitting the local plane
    * mounted the app shell (`root-route-components.tsx#isStandalone`) and the
    * settings surfaces (`settings-layout.tsx`) under `unverified`, which is what
    * put `devices-sessions-panel`, the hosts panel and
@@ -1844,7 +1863,7 @@ export class AuthService {
     }
     // A probe is already running. Record the intent and let it re-arm from the
     // floor when it settles - starting a second one here is exactly the overlap
-    // P2-6 names, and the running probe is already asking the question this
+    // we need to avoid, and the running probe is already asking the question this
     // event wants asked.
     if (this.sessionRecoveryInFlight) {
       this.sessionRecoveryRerunRequested = true;
@@ -2244,7 +2263,7 @@ export class AuthService {
     this.discardActiveAttempt();
     // The single file-destroying path in the app (the other is `traycer logout`).
     // `delete()` rejects if the delete cannot land; a failed sign-out must stay
-    // signed in and surface, never falsely report signed-out (§5).
+    // signed in and surface, never falsely report signed-out.
     const deleteError = await this.tokenStore.delete().then(
       () => null,
       (error: unknown) => error ?? new Error("sign-out delete rejected"),
@@ -2886,8 +2905,8 @@ export class AuthService {
     // else. This method cannot READ its bearer from that accessor - the repair
     // path below needs the whole `LiveSessionAuthority` to fence its rotation
     // on - but it is a cloud product read like the eight that do, and the
-    // panel that drives it mounts under `unverified` since this ticket
-    // admitted the settings surfaces.
+    // panel that drives it mounts under `unverified` since the settings
+    // surfaces were admitted.
     //
     // Refusing here also keeps an unverified session out of the REPAIR, which
     // spends a single-use refresh rotation. That spend belongs to the recovery
@@ -3072,14 +3091,14 @@ export class AuthService {
 
   /**
    * "Update now" / auto-update policy toggle / "Apply now — ends N sessions"
-   * (Remote Host Support §13, T16): `PATCH /api/v3/hosts/:hostId` via the
+   * (T16): `PATCH /api/v3/hosts/:hostId` via the
    * runner host (run in Electron main for CORS, mirroring
    * {@link fetchRegisteredHosts}). Never returns `null` when there is no cloud
    * bearer: it throws, because a mutation has no empty state to render the way
    * the read path does, so its refusal has to be loud enough to reach the user.
    *
    * TWO states reach that throw and only one of them is a caller bug. Signed-out
-   * is — nothing should offer this. `unverified` is NOT: this ticket admits the
+   * is — nothing should offer this. `unverified` is NOT: the app admits the
    * settings surfaces without a `/api/v3/user` verdict, so the hosts panel
    * genuinely mounts for someone holding a token nothing has confirmed, and the
    * button is genuinely pressable. The copy already says the right thing to
@@ -3121,6 +3140,7 @@ export class AuthService {
    * bearer, the way a list has an empty state to render; the writes throw, for
    * the reason {@link updateHostVersionPolicy} gives.
    */
+
   /** `IRunnerHost.sandboxControlUnavailableReason`, for a caller to say why. */
   sandboxControlUnavailableReason(): string | null {
     const reason = this.runnerHost.sandboxControlUnavailableReason;
@@ -3179,6 +3199,68 @@ export class AuthService {
       return { kind: "unauthorized" };
     }
     return this.runnerHost.getTraycerModels(bearer);
+  }
+
+  /**
+   * The voice routes, with the cloud bearer: whether this deployment offers
+   * voice, the SDP exchange that opens a session on the person's own
+   * account, and its end. A shell that cannot reach traycer-server at all
+   * (`sandboxControlUnavailableReason`) reads as not available and as the
+   * dormant mint, so Talk hides there too.
+   */
+  async getVoiceAvailability(): Promise<VoiceAvailabilityFetchResult> {
+    if (this.sandboxControlUnavailableReason() !== null) {
+      return { kind: "ok", available: false };
+    }
+    const bearer = this.cloudBearer();
+    if (bearer === null) {
+      return { kind: "unauthorized" };
+    }
+    return this.runnerHost.getVoiceAvailability(bearer);
+  }
+
+  async mintVoiceSession(
+    request: VoiceSessionMintRequest,
+  ): Promise<VoiceSessionMintFetchResult> {
+    if (this.sandboxControlUnavailableReason() !== null) {
+      return { kind: "dormant" };
+    }
+    const bearer = this.cloudBearer();
+    if (bearer === null) {
+      return { kind: "unauthorized" };
+    }
+    return this.runnerHost.mintVoiceSession(bearer, request);
+  }
+
+  async endVoiceSession(
+    voiceSessionId: string,
+  ): Promise<VoiceSessionEndFetchResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) {
+      return { kind: "unauthorized" };
+    }
+    return this.runnerHost.endVoiceSession(bearer, voiceSessionId);
+  }
+
+  /**
+   * The voice router's one model call, with the cloud bearer, billed to the
+   * person's own account. A shell that cannot reach traycer-server reads as
+   * a transport failure: the voice asks the person to repeat.
+   */
+  async routeVoiceUtterance(
+    requestBody: string,
+  ): Promise<VoiceRouteFetchResult> {
+    if (this.sandboxControlUnavailableReason() !== null) {
+      return {
+        kind: "network-error",
+        detail: "no server for the voice router",
+      };
+    }
+    const bearer = this.cloudBearer();
+    if (bearer === null) {
+      return { kind: "unauthorized" };
+    }
+    return this.runnerHost.routeVoiceUtterance(bearer, requestBody);
   }
 
   async createSandbox(
@@ -3285,6 +3367,67 @@ export class AuthService {
       throw new Error("Sign in to start Automations.");
     }
     return this.runnerHost.openSandboxAutomation(bearer, target);
+  }
+
+  /**
+   * The floor under every Slack app call: a build that cannot reach
+   * traycer-server at all (the signal the sandbox floor reads,
+   * `IRunnerHost.sandboxControlUnavailableReason`: staging mobile, whose
+   * server is behind IAP) sends none of them.
+   */
+  private slackAppRefusal(): SlackAppFailure | null {
+    return this.runnerHost.sandboxControlUnavailableReason === null
+      ? null
+      : { kind: "unavailable", reason: SLACK_SETTINGS_UNAVAILABLE_IN_STAGING };
+  }
+
+  /**
+   * A bot's Slack app, on traycer-server with the person's bearer (its
+   * members only; the server refuses anyone else). Signed out, each answers
+   * `unauthorized` without a request.
+   */
+  async readSlackApp(botId: string): Promise<SlackAppReadResult> {
+    const refusal = this.slackAppRefusal();
+    if (refusal !== null) return refusal;
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "unauthorized" };
+    return this.runnerHost.readSlackApp(bearer, botId);
+  }
+
+  async getSlackAppManifest(botId: string): Promise<SlackAppManifestResult> {
+    const refusal = this.slackAppRefusal();
+    if (refusal !== null) return refusal;
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "unauthorized" };
+    return this.runnerHost.getSlackAppManifest(bearer, botId);
+  }
+
+  async registerSlackApp(
+    request: SlackAppRegisterRequest,
+  ): Promise<SlackAppWriteResult> {
+    const refusal = this.slackAppRefusal();
+    if (refusal !== null) return refusal;
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "unauthorized" };
+    return this.runnerHost.registerSlackApp(bearer, request);
+  }
+
+  async mintSlackAppInstallUrl(
+    botId: string,
+  ): Promise<SlackAppInstallUrlResult> {
+    const refusal = this.slackAppRefusal();
+    if (refusal !== null) return refusal;
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "unauthorized" };
+    return this.runnerHost.mintSlackAppInstallUrl(bearer, botId);
+  }
+
+  async disconnectSlackApp(botId: string): Promise<SlackAppWriteResult> {
+    const refusal = this.slackAppRefusal();
+    if (refusal !== null) return refusal;
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "unauthorized" };
+    return this.runnerHost.disconnectSlackApp(bearer, botId);
   }
 
   /** Explicit invitation access when the serving tier predates the host methods. */
@@ -3432,7 +3575,7 @@ export class AuthService {
     const currentUserId = ctx.identity.userId;
     const currentToken = this.currentBearer;
     const credentialGeneration = this.getCredentialGeneration();
-    // Access-only (§3): validate the live bearer without spending. A stale bearer
+    // Access-only: validate the live bearer without spending. A stale bearer
     // comes back `rejected`, and the spend routes through the locked `rotate`.
     const outcome = await this.validateToken(currentToken);
     if (!this.isIdentityCurrent(generation)) {
@@ -3588,7 +3731,7 @@ export class AuthService {
   // Rotate the live credential lease in place onto `bearerToken` - observably
   // silent on the provider, so host-runtime / cache state survives - and re-arm
   // the refresh scheduler. The single point every same-user adoption goes through
-  // (locked-rotate outcomes and the §4 reconcile worker).
+  // (locked-rotate outcomes and the reconcile worker).
   private rotateLiveBearer(userId: string, bearerToken: string): void {
     // NO server-time sample here, deliberately. This is the generic
     // lease-adoption helper, and MOST of what it adopts is not freshly minted:
@@ -3707,7 +3850,7 @@ export class AuthService {
   /**
    * The ordinary mid-session expiry: a signed-in user editing local work whose
    * refresh authn rejects with a verdict about the TOKEN. This arm used to
-   * `clearUiSession()`, which is cold-review P1-4 - it produced a real
+   * `clearUiSession()` - it produced a real
    * `signed-out`, redirecting the shell out from under the work and firing
    * `useAuthIdentityTransition`'s destructive arm (which PURGES account-scoped
    * persisted state; reading positions are deleted from disk). The
@@ -3771,7 +3914,7 @@ export class AuthService {
   /**
    * UI-only sign-out: abort the live context + project signed-out WITHOUT
    * touching the shared credentials file (only explicit user intent destroys it,
-   * settled decision). Used by every automatic failure path; the §4 watch
+   * settled decision). Used by every automatic failure path; the watch
    * re-adopts if a sibling rotation later lands.
    */
   private clearUiSession(): void {
@@ -3811,7 +3954,7 @@ export class AuthService {
   }
 
   /**
-   * §4 reconcile worker trigger. Single-flight with a trailing re-run so
+   * Reconcile worker trigger. Single-flight with a trailing re-run so
    * overlapping watcher events collapse to one re-read after the in-flight
    * reconcile settles. Never writes, never spends.
    */
@@ -4592,6 +4735,40 @@ export class AuthService {
   }
 
   /**
+   * Settings ▸ Credits: the credit offers the signed-in user can see. The raw
+   * bearer stays inside this auth boundary, and a refusal is a result kind
+   * the panel renders as no list, never a sign-out.
+   */
+  async listCreditOffers(
+    signal: AbortSignal,
+  ): Promise<ListCreditOffersFetchResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) {
+      return { kind: "unauthorized" };
+    }
+    return listCreditOffersViaHttp(
+      this.runnerHost.authnBaseUrl,
+      bearer,
+      signal,
+    );
+  }
+
+  /** Claims one credit offer for the signed-in user. */
+  async claimCreditOffer(
+    campaignId: string,
+  ): Promise<ClaimCreditOfferFetchResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) {
+      return { kind: "unauthorized" };
+    }
+    return claimCreditOfferViaHttp(
+      this.runnerHost.authnBaseUrl,
+      bearer,
+      campaignId,
+    );
+  }
+
+  /**
    * An interactive sign-in owns the session: one of this window's attempts, or
    * a sibling window's `signing-in` projected here, which starts no attempt of
    * ours. Read fresh after every await - the projection can land during one.
@@ -4814,7 +4991,7 @@ export class AuthService {
    * preserve the same identity shape that host-minted contexts already
    * carry.
    *
-   * Access-only (§3): validates the bearer without spending. A stale/expired
+   * Access-only: validates the bearer without spending. A stale/expired
    * token returns `rejected`; the refresh spend is owned exclusively by the
    * locked `rotate` path, never here.
    *
@@ -5125,7 +5302,7 @@ export class AuthService {
    * announcement — but not because nothing reads it there. This comment used
    * to claim "no synchronous listener path reads auth state from there", and
    * that claim is FALSE. It is stated as a correction rather than deleted
-   * because it is the specific artifact that let a real defect survive review:
+   * because it is the specific artifact that let a real defect through:
    *
    *   `setSignedIn` announces synchronously -> `HostRuntime` ->
    *   `directory.refreshForEra(era)` -> the auth-bound fetcher ->
@@ -5166,7 +5343,7 @@ export class AuthService {
    * Projects a terminal sign-in FAILURE. UI-only: the credentials file is NOT
    * touched (only explicit sign-out destroys it). The paths that reach here
    * failed validation BEFORE any `signIn` wrote the file, so there is nothing to
-   * clean up; a pre-existing file is left for the §4 watch / next launch to
+   * clean up; a pre-existing file is left for the watch / next launch to
    * reconcile (H1: an automatic failure never deletes the shared file).
    */
   private applyFailure(error: string): void {
@@ -5416,56 +5593,12 @@ export class AuthService {
   }
 
   /**
-   * Demote a session that IS currently verified down to `unverified`, keeping
-   * the local plane alive.
-   *
-   * The one caller is a terminal, server-issued CREDENTIAL verdict on the live
-   * rotation path (`applyLiveRotateOutcome`'s `refresh-rejected-credential`):
-   * authn has said this refresh token is dead, which is a fact about the token
-   * and not about the person or their disk. Before this existed that arm called
-   * `clearUiSession()`, producing a real `signed-out` - which redirected the
-   * shell out from under someone editing local work AND made
-   * `useAuthIdentityTransition` run its destructive arm, purging account-scoped
-   * persisted state (reading positions are deleted from disk outright). That
-   * was cold-review P1-4.
-   *
-   * Deliberately bypasses {@link applyUnverifiedSession}'s live-session guard
-   * rather than weakening it, because the two callers mean opposite things by
-   * the same state: "we hold no verdict yet" versus "the verdict we held has
-   * been revoked". Only the second may demote, and naming it here is what stops
-   * a future edit from relaxing the guard for everyone to reach this case.
-   *
-   * The bearer stays the one in hand: its access token is still valid for its
-   * own TTL (the rejection was of the REFRESH token), and it is the credential
-   * the host is already serving this machine's local epics on. Nulling it is not
-   * an option in the way it looks: `extractBearerForOpenFrame` THROWS on a null
-   * or empty bearer, so a bearerless `unverified` session cannot open the host
-   * WebSocket at all and the local plane never connects. The retained bearer is
-   * what the plane runs on, not a leftover of the dead one.
-   *
-   * KNOWN GAP, recorded rather than papered over. The two paths that reach this
-   * arm leave the retained bearer in different conditions and nothing here
-   * distinguishes them:
-   *
-   *  - REACTIVE (`revalidateCurrentContextOnce`): `/api/v3/user` rejected this
-   *    access token BEFORE the rotate, so it is known-dead.
-   *  - PROACTIVE (the refresh scheduler): the access token was never rejected;
-   *    only its refresh token was, so it stays usable until its own TTL.
-   *
-   * Both are held identically, which means the reactive case retains a secret a
-   * server has already refused. The fix is NOT `null` (see above) but a
-   * present-but-unconfirmed representation that readers can tell apart from a
-   * live bearer - today `currentBearer` has no such third state, and every
-   * cloud caller gates on `=== null`. Out of scope here; it wants its own
-   * ticket rather than an inline invention.
-   */
-  /**
    * Demote the LIVE session on a terminal server verdict, taking the identity
    * from the live profile rather than the credentials file.
    *
    * Shared by every live-path intake that can land on a terminal verdict, which
-   * is the point: three of them existed and only one held the plane. Each was a
-   * separate reviewer finding, and they were the same defect — an intake path
+   * is the point: three of them existed and only one held the plane. Each was
+   * found separately, and they were the same defect — an intake path
    * that reaches a rejection and leaves the store `signed-in` on a credential
    * the server has refused. Adding a fourth caller should mean calling this,
    * not re-deriving it.
@@ -5501,6 +5634,49 @@ export class AuthService {
     return true;
   }
 
+  /**
+   * Demote a session that IS currently verified down to `unverified`, keeping
+   * the local plane alive.
+   *
+   * The case this exists for is a terminal, server-issued CREDENTIAL verdict on
+   * the live rotation path (`applyLiveRotateOutcome`'s
+   * `refresh-rejected-credential`):
+   * authn has said this refresh token is dead, which is a fact about the token
+   * and not about the person or their disk. Before this existed that arm called
+   * `clearUiSession()`, producing a real `signed-out` - which redirected the
+   * shell out from under someone editing local work AND made
+   * `useAuthIdentityTransition` run its destructive arm, purging account-scoped
+   * persisted state (reading positions are deleted from disk outright). That
+   * was the defect.
+   *
+   * Deliberately bypasses {@link applyUnverifiedSession}'s live-session guard
+   * rather than weakening it, because the two callers mean opposite things by
+   * the same state: "we hold no verdict yet" versus "the verdict we held has
+   * been revoked". Only the second may demote, and naming it here is what stops
+   * a future edit from relaxing the guard for everyone to reach this case.
+   *
+   * The bearer stays the one in hand: it is the credential
+   * the host is already serving this machine's local epics on. Nulling it is not
+   * an option in the way it looks: `extractBearerForOpenFrame` THROWS on a null
+   * or empty bearer, so a bearerless `unverified` session cannot open the host
+   * WebSocket at all and the local plane never connects. The retained bearer is
+   * what the plane runs on, not a leftover of the dead one.
+   *
+   * KNOWN GAP, recorded rather than papered over. The two paths that reach this
+   * arm leave the retained bearer in different conditions and nothing here
+   * distinguishes them:
+   *
+   *  - REACTIVE (`revalidateCurrentContextOnce`): `/api/v3/user` rejected this
+   *    access token BEFORE the rotate, so it is known-dead.
+   *  - PROACTIVE (the refresh scheduler): the access token was never rejected;
+   *    only its refresh token was, so it stays usable until its own TTL.
+   *
+   * Both are held identically, which means the reactive case retains a secret a
+   * server has already refused. The fix is NOT `null` (see above) but a
+   * present-but-unconfirmed representation that readers can tell apart from a
+   * live bearer - today `currentBearer` has no such third state. Out of scope
+   * here; it wants its own ticket rather than an inline invention.
+   */
   private demoteVerifiedSessionToUnverified(
     session: {
       readonly token: string;
@@ -5534,7 +5710,7 @@ export class AuthService {
     // projects: `retired` means the identity is gone and PURGES account-scoped
     // state (reading positions are deleted from disk). Nothing about a refused
     // refresh token says the account is gone, and the person may sign straight
-    // back in. This keeps cold-review P1-4's ruling - a server verdict must not
+    // back in. This keeps the ruling - a server verdict must not
     // destroy local state - on the shell where the rest of that fix (holding
     // the plane) has nothing to act on.
     const projected = this.shellServesLocalPlane()
@@ -5561,7 +5737,7 @@ export class AuthService {
     //
     // `retireAllRemoteSessions` force-closes entries a consumer still HOLDS,
     // which is the property this call site needs and the one it did not have
-    // until this ticket: an open tab is exactly such a holder. Local-host
+    // until this change: an open tab is exactly such a holder. Local-host
     // sessions are untouched by construction - that cache holds remote
     // sessions only, so the plane `unverified` exists to protect is out of its
     // reach.
@@ -5676,7 +5852,7 @@ export class AuthService {
     // requests and resets the messenger. On a cold start that costs nothing -
     // there is no context yet. On a DEMOTION it tears down the host runtime
     // serving the very local work this state exists to protect, which is the
-    // ticket's own line - "refresh-token rejection must not abort in-progress
+    // rule - "refresh-token rejection must not abort in-progress
     // local access" - broken by the mechanism meant to honour it.
     //
     // A same-user demotion is a credential change, not an identity change, so
@@ -5867,11 +6043,6 @@ export class AuthService {
 }
 
 /**
- * Maps a terminal (non-`authorized`) device-flow result to the stable error id
- * the device surface renders. `error` (invalid grant / exhausted retries) reuses
- * the generic sign-in-failed copy.
- */
-/**
  * The credentials pair a `rotate` outcome hands back to adopt: present for
  * `applied`/`superseded`/`commit-failed`, `null` for the terminal/transient
  * outcomes that carry no pair (`deleted`/`user-mismatch`/`tombstoned`/
@@ -5944,10 +6115,15 @@ function refreshRejectedLoss(
  */
 function identityFromUser(user: AuthenticatedUser): StoredCredentialsIdentity {
   // Single source of truth for the projection lives in shared auth-validation
-  // (the §6 migration probe stamps the same shape from main).
+  // (the migration probe stamps the same shape from main).
   return credentialsIdentityFromAuthenticatedUser(user);
 }
 
+/**
+ * Maps a terminal (non-`authorized`) device-flow result to the stable error id
+ * the device surface renders. `error` (invalid grant / exhausted retries) reuses
+ * the generic sign-in-failed copy.
+ */
 function deviceFailureError(
   result: Exclude<DeviceFlowResult, { kind: "authorized" }>,
 ): string {

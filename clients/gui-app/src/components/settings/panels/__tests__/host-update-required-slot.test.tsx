@@ -36,8 +36,8 @@ import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-st
  *
  * The store is seeded through the real chain (`applyKernelSnapshot` + `reset`)
  * rather than by mocking `useHostLease`: mutating what a hook EMITS cannot
- * reach a suite that fakes the hook's output, which is exactly how sealed probe
- * P2 measured a coverage separation instead of a defect.
+ * reach a suite that fakes the hook's output, which is exactly how a sealed probe
+ * measured a coverage separation instead of a defect.
  */
 
 const INCOMPATIBLE: HostLeaseSnapshot = {
@@ -128,7 +128,7 @@ describe("<HostUpdateRequiredSlot />", () => {
 
   /**
    * The lease is looked up BY ID. Seeded with another host's incompatibility,
-   * this row has no verdict of its own and must not borrow one — the P12 shape,
+   * this row has no verdict of its own and must not borrow one,
    * at the surface that would show a button because of it.
    */
   it("does not borrow another host's incompatibility", () => {
@@ -145,7 +145,7 @@ describe("<HostUpdateRequiredSlot />", () => {
     fireEvent.click(screen.getByTestId("host-scope-update-host"));
 
     // `{ force: true }` IS the modal's `forceProvisioning`: same mutation, same
-    // `runnerMutationKeys.hostConvergeReady()` key, so P3.1's progress
+    // `runnerMutationKeys.hostConvergeReady()` key, so the modal's progress
     // narration already covers a click made from here.
     expect(convergeMock.mutate).toHaveBeenCalledTimes(1);
     expect(convergeMock.mutate.mock.calls[0]?.[0]).toEqual({ force: true });

@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useChatCloneOnHostSwitch } from "@/components/epic-canvas/renderers/use-chat-clone-on-host-switch";
 
 /**
- * F5: the dead-tile Clone must target the host resolved when the button was
+ * The dead-tile Clone must target the host resolved when the button was
  * pressed, and must bind its create mutation to that host BEFORE the async
  * settings resolution the clone runs.
  *

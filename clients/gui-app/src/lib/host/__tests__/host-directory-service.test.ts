@@ -1647,7 +1647,7 @@ describe("HostDirectoryService", () => {
     });
 
     /**
-     * Regression (Codex P1 on OSS #913): the FIRST launch of the build that
+     * Regression: the FIRST launch of the build that
      * introduced the persisted key has nothing stored, and that launch is
      * exactly the reinstall this guard exists for - the host is down, so no
      * snapshot seeds it either. Without the shell's durable pid metadata the
@@ -1689,7 +1689,7 @@ describe("HostDirectoryService", () => {
     });
 
     /**
-     * Regression (Codex P2 on OSS #913): seeding introduced an await BEFORE
+     * Regression: seeding introduced an await BEFORE
      * the local-host subscription is installed, so a provider unmounting or
      * swapping its runner mid-flight can `dispose()` while nothing is
      * registered. Resuming past that point would install a listener no
@@ -1732,7 +1732,7 @@ describe("HostDirectoryService", () => {
     });
 
     /**
-     * Regression (CodeRabbit P2 on OSS #913): the host can be re-enrolled while
+     * Regression: the host can be re-enrolled while
      * the renderer is not running. Treating the persisted value as
      * authoritative would neutralise the OBSOLETE twin while this machine's
      * current registry entry stayed remote-kind and relay-dialable.

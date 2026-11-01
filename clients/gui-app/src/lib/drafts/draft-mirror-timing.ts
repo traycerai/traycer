@@ -1,7 +1,7 @@
 /**
  * Host-upsert debounce. Cloud publication coalesces separately on the host
- * (~15–30s, decision log #10); this interval is the same-host live path
- * ("within one debounce interval" in the client-plan acceptance).
+ * (~15–30s, decision #10); this interval is the same-host live path
+ * ("within one debounce interval").
  */
 export const DRAFT_UPSERT_DEBOUNCE_MS = 500;
 export const DRAFT_UPSERT_MAX_WAIT_MS = 2_000;

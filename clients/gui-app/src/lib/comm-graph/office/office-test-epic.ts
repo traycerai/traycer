@@ -332,7 +332,7 @@ function withStatus(
  *
  * All at once on purpose: the interesting case is not one crash, it is
  * `count` claims resolved in one pass against a ward that may hold fewer -
- * which is what proves C2's cap and C3's arrival order. Recovering one at a
+ * which is what proves the cap and the arrival order. Recovering one at a
  * time is the other half: each freed bed must go to the earliest agent still
  * waiting for one, and a recovered agent must walk home.
  */
@@ -360,7 +360,7 @@ export function outbreakScript(
  * `count` is the number that WAIT, and a caller picks it above
  * `civicCapacityFor(floorSize).chairs` so the overflow is real. The last step
  * frees exactly one chair, because "who gets the chair that just came free" is
- * the question C3 answers and two at once would not distinguish an ordered
+ * the arrival-order question, and two at once would not distinguish an ordered
  * queue from a lucky sort.
  */
 export function waitingScript(

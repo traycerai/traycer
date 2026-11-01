@@ -63,7 +63,7 @@ const FOOT_ROWS = 2;
 // The hall is ONE storey for ONE host set, so its four rooms are the hall's:
 // a medbay band under the last tier, a gallery block in the side aisle the
 // tiers never reach, the front desk that was already standing in the lounge,
-// and a records door at the back. THE HALL HAS NO STREET AND NEVER WILL (C6) -
+// and a records door at the back. THE HALL HAS NO STREET AND NEVER WILL -
 // nothing drives into an amphitheatre - so every one of the four names a null
 // kerb, and the medbay is marked by a siren light rather than by an ambulance.
 
@@ -104,10 +104,10 @@ export interface MissionControlFrozen {
    *
    * The oblique views have said this per STOREY since they shipped
    * (`obliqueReserveLabelSeatId`), and this view did not: it lettered every
-   * free console, which on one bank of the screenshot in feedback round 1 was
+   * free console, which on one bank of the screenshot was
    * seven identical greyed words in a row. That was camouflaged while the word
-   * sat on the console art - it was unreadable, which is what the round
-   * actually complained about - and moving it onto the floor where it CAN be
+   * sat on the console art - it was unreadable, which is what the complaint
+   * was actually about - and moving it onto the floor where it CAN be
    * read is what makes the repetition worth fixing at the same time.
    *
    * The seat nearest the centre of its tier, so the label lands where the eye
@@ -2119,7 +2119,7 @@ interface HallCivic {
  * The hall's four civic rooms, their furniture and their plates.
  *
  * The two that were already standing take their record and nothing else: the
- * front desk IS the lounge's reception counter (C7), and the archive is a door
+ * front desk IS the lounge's reception counter, and the archive is a door
  * at the back of the hall. The medbay and the gallery are new furniture, and
  * both are laid where the amphitheatre has room by construction rather than by
  * luck - the band under the last tier, and the two columns `originColFor`'s
@@ -2214,7 +2214,7 @@ function buildHallCivic(packing: Packing, agents: number): HallCivic {
       // dispatch desk is a counter and Records is a door. A hall has walls; its
       // areas do not.
       enclosure: "open",
-      // NOTHING DRIVES INTO AN AMPHITHEATRE (C6). The hall plans no road, so
+      // NOTHING DRIVES INTO AN AMPHITHEATRE. The hall plans no road, so
       // there is no tile a kerb could name.
       kerbTile: null,
     },
@@ -2281,7 +2281,7 @@ function buildHallCivic(packing: Packing, agents: number): HallCivic {
       bounds: { col: archiveDoor.col, row: archiveDoor.row, cols: 1, rows: 1 },
       doorTile: archiveDoor,
       // ENDING AT THE DOOR, running LEFTWARDS to get there. The plate is four
-      // tiles wide because C5's archive is a door and one tile holds no word, and
+      // tiles wide because the archive is a door and one tile holds no word, and
       // this door is in the back-RIGHT corner of the hall - three columns from
       // the wall - so four tiles rightwards would run off the plan. The oblique
       // views hang the same plate the other way round for the same reason: their
@@ -2332,7 +2332,7 @@ function buildHallCivic(packing: Packing, agents: number): HallCivic {
       // count its frontage could have carried twice over.
       //
       // THE ARCHIVE IS THE ONE FIXED PLATE, and wider than the archive at that,
-      // because C5 makes it a DOOR - one tile, which holds no word. Every other
+      // because it is a DOOR - one tile, which holds no word. Every other
       // room here is a room and is measured as one, the way the oblique plazas
       // already do it.
       widthTiles:
@@ -2445,7 +2445,7 @@ export function planMissionControl(input: OfficePlanInput): OfficeLayout {
     areaSigns,
     amenities,
     civic: civic.rooms,
-    // THE HALL HAS NO STREET AND NEVER WILL (C6): nothing drives into an
+    // THE HALL HAS NO STREET AND NEVER WILL: nothing drives into an
     // amphitheatre, so the medbay is marked by a siren light rather than by an
     // ambulance and all four rooms name a null kerb.
     road: null,

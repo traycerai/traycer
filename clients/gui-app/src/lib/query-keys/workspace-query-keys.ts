@@ -1,7 +1,7 @@
 /**
  * Query key builders for workspace host data that is fed by a stream rather
  * than fetched. Prefixed with `hostQueryKeys.scope(hostId)` so a host scope
- * invalidation drops them with everything else on that host (ADR-0006).
+ * invalidation drops them with everything else on that host.
  */
 
 import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";

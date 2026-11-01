@@ -34,7 +34,7 @@ import {
  * card header it is a flex item beside a name that IS allowed to shrink, and
  * the stamp must not be the thing that collapses.
  *
- * It is also the Timestamps region (audit R3): Layout > Chat > Timestamps
+ * It is also the Timestamps region: Layout > Chat > Timestamps
  * takes it out, together with the ` · ` that joins it to a sender label when
  * `separated`, so a hidden stamp never leaves a dangling separator.
  */

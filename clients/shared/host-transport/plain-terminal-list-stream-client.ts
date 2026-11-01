@@ -12,8 +12,7 @@ import {
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type {
   IStreamSession,
-  StreamCloseReason,
-  StreamConnectionStatus,
+  StatusChangeHandler,
   StreamFrameEnvelope,
 } from "./i-stream-session";
 import type { IHostStreamClient } from "./host-stream-client";
@@ -25,10 +24,7 @@ export interface PlainTerminalListStreamCallbacks {
       { readonly kind: "state" }
     >,
   ) => void;
-  readonly onConnectionStatus: (
-    status: StreamConnectionStatus,
-    reason: StreamCloseReason | null,
-  ) => void;
+  readonly onConnectionStatus: StatusChangeHandler;
 }
 
 export interface PlainTerminalListStreamClientOptions {
@@ -62,16 +58,17 @@ export class PlainTerminalListStreamClient {
     this.session.onServerFrame((envelope, binaryPayload) => {
       this.handleServerFrame(envelope, binaryPayload);
     });
-    this.session.onStatusChange((status, reason) => {
+    this.session.onStatusChange((status, reason, retryCause, continuity) => {
       if (
-        status === "connecting" ||
-        status === "reconnecting" ||
-        status === "closed"
+        continuity !== "held" &&
+        (status === "connecting" ||
+          status === "reconnecting" ||
+          status === "closed")
       ) {
         this.v1TerminalsByIdentity.clear();
         this.v1Initialized = false;
       }
-      this.callbacks.onConnectionStatus(status, reason);
+      this.callbacks.onConnectionStatus(status, reason, retryCause, continuity);
     });
   }
 

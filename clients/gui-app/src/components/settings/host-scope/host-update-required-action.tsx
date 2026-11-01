@@ -9,7 +9,7 @@ import { hostUpdateActionApplies } from "@/lib/host/window-narration";
  * a retry and not a wait.
  *
  * It sits in its own file because more than one surface has to offer it, and
- * a second copy of the button is how the two would drift. The window modal has offered it since P3.1
+ * a second copy of the button is how the two would drift. The window modal already offers it
  * (`window-host-modal-update-host`); Settings' hosts list is the second
  * surface, added here because a person who opens Settings to look at a host
  * the modal told them to update should not find a row that names the problem
@@ -19,7 +19,7 @@ import { hostUpdateActionApplies } from "@/lib/host/window-narration";
  *
  *   - **the app is the outdated leg.** Updating the host cannot fix a client
  *     that is itself behind, so the action would be a button that can only
- *     fail — the F8 "Retry now" class this epic deleted. `hostUpdateActionApplies`
+ *     fail — the "Retry now" class this epic deleted. `hostUpdateActionApplies`
  *     is the canonical rule and is CALLED rather than restated, so this surface
  *     and the modal cannot disagree about it.
  *   - **the app does not manage this machine.** Force-provisioning is the

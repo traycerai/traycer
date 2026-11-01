@@ -75,7 +75,7 @@ const testState = vi.hoisted(() => {
       vi.fn<
         (signal: AbortSignal) => Promise<readonly ListTaskLight[] | null>
       >(),
-    // T5a/T5b: `isCloudPagePending` and `completeness` are the two NEW
+    // `isCloudPagePending` and `completeness` are the two NEW
     // fields `useCloudEpicTasksQuery` exposes so `useHistoryQuery` can pass
     // them through as `cloudPagePending` / the union `data.completeness`.
     // Independent from `isFetching`/`response`: the producer this models is
@@ -86,7 +86,7 @@ const testState = vi.hoisted(() => {
     completenessOverride: null as ListTasksCompleteness | null,
     initialLegRefused: false,
     // Otherwise-hardcoded `false` in the mock below, so a test asserting the
-    // T18 refusal's `isPending: false` has something to distinguish it from -
+    // refusal's `isPending: false` has something to distinguish it from -
     // without this, `query.isPending` never varies and that assertion would
     // pass whether or not the hook's own `!initialLegRefused && ...` guard
     // existed at all.
@@ -94,7 +94,7 @@ const testState = vi.hoisted(() => {
     // The serving query has no answer, and the replica's cached page stands
     // in for it: `query.isPending` stays true while `firstPagePending` is not.
     presentsCachedPage: false,
-    // T12: the `enabled` argument `useEpicGetTaskContexts` was actually
+    // The `enabled` argument `useEpicGetTaskContexts` was actually
     // called with, most-recent last. The mock below otherwise ignores it (it
     // always returns `taskContexts` regardless), so asserting on the mock's
     // RESULT would pass whether or not `useHistoryQuery` gated the spend on
@@ -163,7 +163,7 @@ vi.mock("@/hooks/epics/use-cloud-epic-tasks-query", () => ({
       initialLegRefused: testState.initialLegRefused,
       isCloudPagePending: testState.isCloudPagePending,
       // The UNION statement, deliberately independent of `query.data`'s own
-      // `completeness` above (T5b) - `useHistoryQuery` must read this field,
+      // `completeness` above - `useHistoryQuery` must read this field,
       // not `tasksQuery.data.completeness`, for the exposed `data.completeness`.
       completeness: testState.completenessOverride,
     };
@@ -303,7 +303,7 @@ describe("useHistoryQuery", () => {
     // `useEpicGetTaskContexts` is gated on `authorizesCloudCapability`, read
     // off the REAL store (not mocked in this file) - default to `signed-in`
     // so every pre-existing test here keeps exercising the id-fetched union
-    // exactly as before. The T12 test below overrides this per case.
+    // exactly as before. The test below overrides this per case.
     useAuthStore.setState({ status: "signed-in" });
   });
 
@@ -944,7 +944,7 @@ describe("useHistoryQuery", () => {
   });
 
   describe("cloud page pending", () => {
-    // T5a: `cloudPagePending` is passed through from `isCloudPagePending`,
+    // `cloudPagePending` is passed through from `isCloudPagePending`,
     // independent of `isFetching` and of whether `tasks`/`items` are empty.
     // The producer this models is the host resolver's caller-owned-tombstone
     // arm - a `{tasks: [], hasMore: false}` page for an account nobody has
@@ -1066,7 +1066,7 @@ describe("useHistoryQuery", () => {
   });
 
   describe("completeness union", () => {
-    // T5b: `data.completeness` must be the union `useCloudEpicTasksQuery`
+    // `data.completeness` must be the union `useCloudEpicTasksQuery`
     // computes across the first page AND every retained "Show more" tail
     // (`unionCompleteness`/`mergeCompleteness` in
     // `hooks/epics/use-cloud-epic-tasks-query.ts`), never the first page's
@@ -1370,7 +1370,7 @@ describe("useHistoryQuery", () => {
     });
   });
 
-  // T12: `epic.getTaskContexts` is a CLOUD spend for the ids an id-fetched
+  // `epic.getTaskContexts` is a CLOUD spend for the ids an id-fetched
   // worktree/PR match surfaces. `currentUserId` is the WIDENED identity
   // (`unverified` resolves one too, so History keeps rendering this
   // machine's own epics), so it cannot double as this batch's authorization -
@@ -1387,7 +1387,7 @@ describe("useHistoryQuery", () => {
     expect(testState.taskContextsEnabledCalls.at(-1)).toBe(true);
   });
 
-  // T18: `useCloudEpicTasksQuery`'s `initialLegRefused` maps to a SETTLED
+  // `useCloudEpicTasksQuery`'s `initialLegRefused` maps to a SETTLED
   // empty result, not `undefined` (which every render site here treats as
   // still loading). Ahead of the `tasksQuery.data === undefined` guard in the
   // `data` memo for exactly that reason - the refusal PRODUCES that

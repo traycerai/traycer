@@ -201,8 +201,8 @@ function openLaneRig(options: LaneRigOptions): LaneRig {
     if (statusCallbacks === null || stateCallbacks === null) {
       throw new Error("the lane factories were not invoked");
     }
-    statusCallbacks.onConnectionStatus("open", null);
-    stateCallbacks.onConnectionStatus("open", null);
+    statusCallbacks.onConnectionStatus("open", null, null, null);
+    stateCallbacks.onConnectionStatus("open", null, null, null);
   }
 
   function deliverStatusSnapshot(authorityEpoch: string): void {

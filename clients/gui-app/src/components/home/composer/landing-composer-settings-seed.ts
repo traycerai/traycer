@@ -5,5 +5,8 @@ export function landingComposerSettingsSeedForDraft(
   draftSettings: ChatRunSettings | null,
   globalLastRunSettings: ChatRunSettings | null,
 ): ChatRunSettings | null {
-  return draftId === null ? globalLastRunSettings : draftSettings;
+  if (draftId !== null) return draftSettings;
+  return globalLastRunSettings === null
+    ? null
+    : { ...globalLastRunSettings, ultracode: false };
 }

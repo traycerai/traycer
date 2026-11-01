@@ -7,7 +7,7 @@ import { contentFingerprint } from "@/lib/text-hash";
 
 /**
  * Builds a stable cache key for a diff patch: scope, plus a length-and-two-
- * seeded-hashes fingerprint of the patch (ADR-0002's shape). Whitespace is
+ * seeded-hashes fingerprint of the patch. Whitespace is
  * normalized before hashing.
  *
  * The fingerprint itself lives in `@/lib/text-hash` so the codebase carries
