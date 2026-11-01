@@ -237,6 +237,7 @@ import {
   useRemoteSessionPollReadiness,
   type HostReachability,
 } from "@/hooks/agent/use-host-reachability";
+import { useCollaboratorDisplayName } from "@/hooks/epics/use-collaborator-display-name";
 import { useHostLease } from "@/hooks/host/use-host-lease";
 import {
   useChatServing,
@@ -249,6 +250,7 @@ import {
 } from "@/hooks/epic/use-epic-chat-mutations";
 import {
   useChatCloneOnHostSwitch,
+  useChatCloneTargetLabel,
   type ChatCloneOnHostSwitch,
 } from "@/components/epic-canvas/renderers/use-chat-clone-on-host-switch";
 import { CloneProfileRecovery } from "@/components/epic-canvas/renderers/clone-profile-recovery";
@@ -1063,6 +1065,8 @@ function ChatDeadTileBannerWithOffer(
     environmentOwned,
   });
   const continues = continueOffer.eligible && props.reason === "host-offline";
+  const ownerName = useCollaboratorDisplayName(props.epicId, sourceOwnerUserId);
+  const cloneTargetLabel = useChatCloneTargetLabel();
   // A sandbox's footer under the chat says its state.
   if (sandbox.line?.place === "footer") return null;
   const stateLine = chatSandboxStateLine(
@@ -1095,6 +1099,8 @@ function ChatDeadTileBannerWithOffer(
         hostLabel={props.hostLabel}
         reason={continues ? "sandbox-removed" : props.reason}
         ownedByViewer={ownedByViewer}
+        ownerName={ownerName}
+        cloneTargetLabel={cloneTargetLabel}
         environmentOwned={environmentOwned}
         cloneAllowed={props.cloneAllowed}
         showsPublishedCopy={props.showsPublishedCopy}
