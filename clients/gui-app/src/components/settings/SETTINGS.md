@@ -7197,12 +7197,18 @@ computer`. A team's host draws no card. The move sheet names the moving computer
       host id. Rows: Host ID (shortened, with copy; Copy host ID stays in the
       `⋯` menu too), Added to account (`createdAt`), Last seen, Last reported
       version (`status.appVersion`) and Platform (`formatPlatform` plus the
-      architecture, as the header words it). Last seen reads "Online now"
-      while the header's live evidence holds (`health.live`); otherwise
-      `status.lastSeenAt` on the header's own ladder and clock
-      (`formatElapsed`, `scope.nowMs`), so the two never disagree on one
-      screen. A host the account has no record of gets no group, as it gets
-      no Danger zone.
+      architecture, as the header words it). Last seen is `status.lastSeenAt`
+      on the header's own ladder and clock (`formatElapsed`, `scope.nowMs`),
+      always, with no tone of its own - a timestamp is not a status word, and
+      the row has no second wording. It used to read "Online now" while the
+      header's live evidence held (`health.live`), whose strongest source is
+      the local process read: a host serving this computer while its relay
+      uplink is down therefore claimed an account check-in no other device
+      could see. Nothing on the record supports a second wording either -
+      `connectivity: "connectable"` is a lease read up to its TTL old, which
+      `deriveHostPresence` words "Reported reachable" and deliberately not
+      "Online", and which no surface renders directly. A host the account has
+      no record of gets no group, as it gets no Danger zone.
     - **Install record** (`host-settings-installation-details.tsx`) is shown
       open - it was a collapsed "Installation details" disclosure - and reads
       `host.getInstallationInfo`: Version, Build (only when it differs),
