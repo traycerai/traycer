@@ -168,6 +168,12 @@ for (const width of [1400, 1100, 900, 800, 768]) {
         .toBeLessThanOrEqual(width);
       expect((await boxOf(control)).x).toBeGreaterThanOrEqual(0);
     }
+    // Tabs fill the row, so Waiting is its glyph: the name is gone, not cut.
+    const waiting = await boxOf(page.getByTestId("voice-strip-waiting"));
+    expect(rightOf(waiting)).toBeLessThanOrEqual(width);
+    const nameBox = await boxOf(page.getByTestId("voice-strip-waiting-box"));
+    const name = await boxOf(page.getByTestId("voice-strip-waiting-name"));
+    expect(name.y).toBeGreaterThanOrEqual(nameBox.y + nameBox.height);
     // Each control takes the pointer: nothing lies over it.
     for (const control of [page.getByTestId("voice-strip-mute"), end]) {
       const box = await boxOf(control);
@@ -188,3 +194,18 @@ for (const width of [1400, 1100, 900, 800, 768]) {
     expect(actions.x).toBeGreaterThanOrEqual(rightOf(zone));
   });
 }
+
+test("with room to spare Waiting keeps its name", async ({ page }) => {
+  await open(page, "placement=top");
+  await page.evaluate(() => window.__voiceTopRowProbe?.goLive());
+  const nameBox = await boxOf(page.getByTestId("voice-strip-waiting-box"));
+  const name = await boxOf(page.getByTestId("voice-strip-waiting-name"));
+  expect(name.y).toBe(nameBox.y);
+  expect(rightOf(name)).toBeLessThanOrEqual(rightOf(nameBox));
+  // The whole focus line fits, so nothing is held back with room to spare.
+  const zone = await boxOf(page.getByTestId("app-header-centre-zone"));
+  expect(zone.x + zone.width / 2).toBeCloseTo(
+    await middleOf(page.locator("main")),
+    0,
+  );
+});

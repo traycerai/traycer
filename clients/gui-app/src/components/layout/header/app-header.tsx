@@ -187,7 +187,8 @@ function trailingSpacerClass(
  * the zone, so a long strip of tabs pushes the zone right rather than losing
  * width to it. The zone starts at its minimum (Talk, or the strip's controls)
  * and grows to the whole strip with the room left over, so the tabs keep their
- * width before the focus line and Waiting keep theirs. Measured because that gap depends on how wide the tabs
+ * width before the focus line and Waiting keep theirs. Its grow weight only says
+ * it fills before the trailing drag spacer, which takes what its cap leaves. Measured because that gap depends on how wide the tabs
  * are, which CSS cannot subtract from half the header. Direct children of
  * `<header>`, for the drag-region reason given in `DesktopAppHeader`.
  */
@@ -235,7 +236,7 @@ function HeaderCentreZone(props: {
       <div
         ref={zoneRef}
         data-testid="app-header-centre-zone"
-        className="relative z-10 flex max-w-max min-w-min flex-1 items-center self-stretch px-2"
+        className="relative z-10 flex max-w-max min-w-min flex-[1000_1_0%] items-center self-stretch px-2"
         style={props.framelessDesktop ? NO_DRAG_STYLE : undefined}
       >
         <VoiceTopRowControl />

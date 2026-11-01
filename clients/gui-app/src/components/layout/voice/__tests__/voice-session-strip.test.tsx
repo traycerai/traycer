@@ -175,6 +175,15 @@ describe("VoiceSessionStrip", () => {
     );
   });
 
+  it("names the destination in the state word's tooltip, where the focus line can be hidden", async () => {
+    goLive(makeDriver());
+
+    await userEvent.hover(screen.getByTestId("voice-strip-state"));
+
+    const tooltip = await screen.findByRole("tooltip");
+    expect(tooltip.textContent).toContain("Personal › Tracy");
+  });
+
   it("mutes through the driver, then reads Muted and Unmute", async () => {
     const driver = goLive(makeDriver());
 

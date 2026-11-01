@@ -158,6 +158,23 @@ window.__voiceTopRowProbe = {
         anchorMessageId: null,
         anchorThread: null,
       },
+      queue: [
+        {
+          id: "fixture-waiting",
+          kind: "reply",
+          botId: "fixture-bot",
+          hostId: "fixture-host",
+          threadId: null,
+          chatId: "fixture-chat",
+          messageId: null,
+          surfaceId: null,
+          title: "A reply",
+          author: null,
+          line: "A reply",
+          at: 0,
+          state: "queued",
+        },
+      ],
     });
   },
   openTabs: (count) => {

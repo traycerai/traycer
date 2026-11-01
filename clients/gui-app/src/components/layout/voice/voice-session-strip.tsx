@@ -55,9 +55,9 @@ export function VoiceSessionStrip(): ReactNode {
       className="relative flex min-w-0 self-stretch text-ui-xs text-muted-foreground"
     >
       {/* The middle column has no floor, so the state and the controls are this
-          grid's minimum width: the top row can take the focus line and Waiting
-          away, and never a control. */}
-      <div className="grid min-w-0 grid-cols-[auto_minmax(0,max-content)_auto] items-center">
+          grid's minimum width, with Waiting's glyph: the top row can take the focus
+          line and Waiting's name away, and never a control. */}
+      <div className="grid min-w-0 grid-cols-[auto_minmax(0,max-content)_auto_auto] items-center">
         <div className="flex items-center gap-3">
           <span
             aria-hidden="true"
@@ -68,17 +68,20 @@ export function VoiceSessionStrip(): ReactNode {
               listening && state.inputActive && "animate-pulse",
             )}
           />
-          <span
-            role="status"
-            data-testid="voice-strip-state"
-            className="shrink-0 font-medium text-foreground"
-          >
-            {stateLabel(state.phase, state.muted, state.pausedForDictation)}
-          </span>
+          <StateWord
+            word={stateLabel(
+              state.phase,
+              state.muted,
+              state.pausedForDictation,
+            )}
+            focus={state.focus}
+          />
           <ResumeAfterDictation />
         </div>
         <div className="flex min-w-0 items-center gap-3 overflow-hidden not-empty:pl-3">
           {state.focus === null ? null : <FocusLine focus={state.focus} />}
+        </div>
+        <div className="grid items-center not-empty:pl-3">
           <VoiceWaitingControl />
         </div>
         <div className="flex items-center gap-3 pl-3">
@@ -185,6 +188,56 @@ function stateLabel(
   return muted ? "Muted" : "Listening";
 }
 
+function destinationLine(
+  environmentLabel: string | null,
+  botTitle: string,
+  threadLabel: string | null,
+): string {
+  return [environmentLabel, botTitle, threadLabel]
+    .filter((part) => part !== null)
+    .join(" › ");
+}
+
+/**
+ * The state word, whose tooltip names the destination: the focus line is the
+ * first thing the top row takes away, and this is where it stays reachable.
+ */
+function StateWord(props: {
+  readonly word: string;
+  readonly focus: VoiceFocus | null;
+}): ReactNode {
+  const word = (
+    <span
+      role="status"
+      data-testid="voice-strip-state"
+      className="shrink-0 font-medium text-foreground"
+    >
+      {props.word}
+    </span>
+  );
+  if (props.focus === null) return word;
+  return <DestinationTooltip focus={props.focus}>{word}</DestinationTooltip>;
+}
+
+function DestinationTooltip(props: {
+  readonly focus: VoiceFocus;
+  readonly children: ReactNode;
+}): ReactNode {
+  const { environmentLabel, botTitle, threadLabel } = useVoiceFocusLabel(
+    props.focus,
+  );
+  return (
+    <TooltipWrapper
+      label={destinationLine(environmentLabel, botTitle, threadLabel)}
+      side="bottom"
+      sideOffset={undefined}
+      align={undefined}
+    >
+      {props.children}
+    </TooltipWrapper>
+  );
+}
+
 /**
  * Where the next post goes: environment › bot › thread, with Change, which
  * opens the bot's tab so the person can pick another channel or thread.
@@ -195,9 +248,7 @@ function FocusLine(props: { readonly focus: VoiceFocus }): ReactNode {
   const { environmentLabel, botTitle, threadLabel } = useVoiceFocusLabel(focus);
   // The first thing the strip gives up when the top row is short of room, so
   // the tabs keep theirs; the tooltip still names the whole destination.
-  const destination = [environmentLabel, botTitle, threadLabel]
-    .filter((part) => part !== null)
-    .join(" › ");
+  const destination = destinationLine(environmentLabel, botTitle, threadLabel);
   return (
     <TooltipWrapper
       label={destination}
