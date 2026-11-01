@@ -64,9 +64,10 @@ export type DeadTileOwnerKind = "terminal" | "agent";
  * `record-unavailable` - this agent has no record on this device: the epic
  * session's agent list keeps failing, or it answered without this agent and the
  * agent is bound to another host. That list is the SESSION host's, which need
- * not be this tile's, so the banner names no host. The agent may be alive,
- * deleted or never created, and a replica arrives on the feed's schedule with
- * nothing to say it is late rather than gone, so the banner claims none of them.
+ * not be this tile's, so the banner names no host. A delete the record plane
+ * announced never lands here: `ActiveTabBody` shows the tile as deleted. Short
+ * of that, that list cannot tell a late replica from an agent that is gone or
+ * was never created, so the banner claims none of them.
  *
  * `sandbox-stopped` - the bound host is a sandbox someone stopped. Its PTYs
  * ended with it, and Start is the remedy, so a terminal or a terminal

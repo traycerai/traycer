@@ -2815,6 +2815,17 @@ export function useChatById(id: string | null): ChatProjection | null {
  * A single per-id scalar, so a retraction of one chat re-renders only the tab
  * rendering that chat.
  */
+export function useEpicTuiAgentRetraction(
+  tuiAgentId: string | null,
+): ChatRecordRemovalReason | null {
+  return useEpicStore((s) => {
+    if (tuiAgentId === null) return null;
+    return Object.hasOwn(s.tuiAgentRetractions, tuiAgentId)
+      ? s.tuiAgentRetractions[tuiAgentId]
+      : null;
+  });
+}
+
 export function useEpicChatRetraction(
   chatId: string | null,
 ): ChatRecordRemovalReason | null {

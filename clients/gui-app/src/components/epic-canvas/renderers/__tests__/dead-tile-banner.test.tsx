@@ -78,6 +78,25 @@ describe("<TerminalDeadTileBanner />", () => {
     expect(text).not.toContain("permanently closed");
   });
 
+  it("reports a terminal agent with no record without naming a host or a cause", () => {
+    render(
+      <TerminalDeadTileBanner
+        reason="record-unavailable"
+        hostLabel="mac-mini"
+        ownerKind="agent"
+        destroyedLine={null}
+        onClose={() => undefined}
+        testId="terminal-agent-tile-1"
+      />,
+    );
+
+    const report = screen.getByTestId("report-context");
+    expect(report.getAttribute("data-title")).toBe("Agent could not be loaded");
+    expect(report.getAttribute("data-message")).toBe(
+      "The agent's record is not available on this device.",
+    );
+  });
+
   it("says who destroyed the sandbox and when, for a terminal or a terminal agent, never a fault", () => {
     for (const ownerKind of ["terminal", "agent"] as const) {
       render(

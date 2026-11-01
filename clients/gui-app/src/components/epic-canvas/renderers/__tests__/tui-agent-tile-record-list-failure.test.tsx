@@ -350,10 +350,13 @@ describe("<TuiAgentTile /> with a record list that keeps failing", () => {
 
     expect(listCalls.value).toBe(3);
     expect(screen.queryByText(SKELETON)).toBeNull();
-    const banner = screen.getByTestId(BANNER_TEST_ID).textContent;
-    expect(banner).toContain("Couldn't load this agent");
-    // The failing list is the session host's, which need not be this tile's.
-    expect(banner).not.toContain("Test host");
+    // Whole, so a promise or a host name creeping back reddens this: the
+    // failing list is the session host's, which need not be this tile's.
+    expect(
+      screen.queryByText(
+        "Couldn't load this agent. Traycer keeps trying. Closing this tab only removes it from the canvas.",
+      ),
+    ).not.toBeNull();
     expect(screen.queryByText(SETUP_CARD)).not.toBeNull();
     expect(handle.store.getState().tuiAgentRecordListAuthoritative).toBe(false);
   });

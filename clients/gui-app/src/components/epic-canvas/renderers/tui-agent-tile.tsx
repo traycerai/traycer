@@ -396,8 +396,8 @@ function sleepsUntilRequested(input: {
  * deleted, so the tile stays open. A list that answered without an agent bound
  * to ANOTHER host cannot either, because that record is host-authoritative, so
  * the route sweep never closes that tile: a late replica and a create that
- * failed over there look the same from here. A skeleton in either case would
- * wait forever with nothing to say why. A same-host agent missing from an
+ * failed over there look the same to the session's list. A skeleton in either
+ * case would wait forever with nothing to say why. A same-host agent missing from an
  * answered list is not here: the sweep closes it, or the tile shows it deleted.
  * Nor is an agent still being created, whose record does not exist yet: the
  * wait there is the setup the notice is showing.
