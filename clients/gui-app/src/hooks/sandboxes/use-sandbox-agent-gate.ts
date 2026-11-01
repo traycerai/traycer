@@ -11,6 +11,7 @@ import type {
 } from "@/components/home/composer/composer-host-notice";
 import { useConfigurationProvidersOpener } from "@/hooks/sandboxes/use-open-configuration-providers";
 import { useSandboxHostConfiguration } from "@/hooks/sandboxes/use-on-team-sandbox";
+import { useRestingSandboxHost } from "@/hooks/sandboxes/use-resting-sandbox-host";
 import { useSandboxCatalogue } from "@/hooks/sandboxes/use-sandbox-catalogue-query";
 import { useSandboxTraycerModels } from "@/hooks/sandboxes/use-sandbox-traycer-models-query";
 import {
@@ -111,20 +112,27 @@ export function useSandboxAgentGate(
   const harnesses = useGuiHarnessesQueryForClient(input.client, activity);
   const providers = useProvidersListForClient(input.client, activity);
   const offeredAgents = useSandboxCatalogue(watching).data?.offeredAgents;
+  const restingHost = useRestingSandboxHost(input.hostId);
   const providersOpener = useConfigurationProvidersOpener(
     input.active && configuration !== null && configuration.kind === "team",
   );
   if (configuration === null || input.harnessId === null) return NOT_BLOCKED;
   const label = configurationLabel(stageConfigurationCopy(configuration));
   const openProviders = providersOpener(configuration);
+  const readiness = requestedAgentReadiness(
+    input.harnessId,
+    harnesses.data?.harnesses,
+    providers.data?.providers,
+    opencodeLine,
+  );
+  // No read of its own ends this: only a stage reaches a sandbox at rest
+  // (`RestingHostStage`), and it lands once the sandbox list is read.
+  if (readiness.kind === "waiting" && restingHost !== null) {
+    return CHECKING_OFFERED_AGENTS;
+  }
   return sandboxAgentGateFor({
     harnessId: input.harnessId,
-    readiness: requestedAgentReadiness(
-      input.harnessId,
-      harnesses.data?.harnesses,
-      providers.data?.providers,
-      opencodeLine,
-    ),
+    readiness,
     offeredAgents,
     setupFailedAction:
       openProviders === null

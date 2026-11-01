@@ -10,6 +10,7 @@ import type { HostClient } from "@traycer-clients/shared/host-client/host-client
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { HostRpcRegistry } from "@/lib/host";
 
+import { modelDisplayLabel } from "@/components/home/data/landing-options";
 import type {
   PermissionMode,
   HarnessModelSelection,
@@ -334,6 +335,21 @@ export function useComposerToolbarStore(
         !returnedSandboxRestoredOn(stagedSurfaceKey),
     });
   }, [paneVisible, restingRunHost, store, sandboxRunTarget, stagedSurfaceKey]);
+  // The name a chip keeps for this pick once no list holds it.
+  useEffect(() => {
+    const remember = (state: ComposerToolbarStoreState): void => {
+      if (state.selectedModel === null) return;
+      useComposerHarnessMemoryStore
+        .getState()
+        .recordModelName(
+          state.selection.harnessId,
+          state.selection.modelSlug,
+          modelDisplayLabel(state.selectedModel),
+        );
+    };
+    remember(store.getState());
+    return store.subscribe(remember);
+  }, [store]);
   useEffect(() => {
     store.getState().setCatalog({
       hostId,

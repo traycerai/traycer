@@ -62,6 +62,7 @@ import { useSurfaceHostSelectionStore } from "@/stores/host/surface-host-selecti
 import {
   handoffOwnerLive,
   holdHandoffOwner,
+  leaveStagedSandbox,
   readStagedSandbox,
   stagedCreateNeedsFreshKey,
   stagedSandboxRested,
@@ -287,6 +288,8 @@ export function useStagedSandboxSend(input: {
   readonly claimsSend: boolean;
   /** What the line calls taking the stage off, for this surface's host. */
   readonly chooseAnotherHostLabel: string;
+  /** The host `chooseAnotherHostLabel` names. */
+  readonly fallbackHostId: string | null;
 }): StagedSandboxSend {
   const {
     surfaceKey,
@@ -295,6 +298,7 @@ export function useStagedSandboxSend(input: {
     ownerId,
     claimsSend,
     chooseAnotherHostLabel,
+    fallbackHostId,
   } = input;
   const stage = useStagedSandbox(surfaceKey ?? "");
   const verb = useSandboxVerb(stage?.createdSandboxId ?? "");
@@ -422,7 +426,7 @@ export function useStagedSandboxSend(input: {
             onKeepWaiting: () => runFromLine(false),
             onCancel: () => useStagedSandboxStore.getState().cancel(surfaceKey),
             onChooseAnotherHost: () =>
-              useStagedSandboxStore.getState().clear(surfaceKey),
+              leaveStagedSandbox(surfaceKey, fallbackHostId),
             chooseAnotherHostLabel,
             onRetryCreation: () => runFromLine(true),
             onRetry: () => runFromLine(stagedCreateNeedsFreshKey(stage)),

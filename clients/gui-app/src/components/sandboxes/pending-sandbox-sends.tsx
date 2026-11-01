@@ -3102,6 +3102,7 @@ function usePendingGiveBackLabel(
   const destinationPin = toDrafts ? startPagePin : taskPin;
   return useStageFallbackHostLine(
     destinationStage === null ? destinationPin.resolvedHostId : null,
+    null,
   );
 }
 

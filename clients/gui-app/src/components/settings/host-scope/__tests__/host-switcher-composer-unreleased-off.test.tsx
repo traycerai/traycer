@@ -47,6 +47,7 @@ const COMPOSER: HostSwitcherComposerMode = {
   newRows: [],
   rememberedConfigurationKey: null,
   stagedConfigurationKey: null,
+  hostPickRequests: 0,
   stagedLabel: null,
   stagedBusy: false,
   onPickHost: () => undefined,

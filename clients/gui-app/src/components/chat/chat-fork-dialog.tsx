@@ -39,6 +39,7 @@ import { useFocusedPaneModalOpen } from "@/components/epic-tabs/pane-visibility-
 import { useComposerToolbarStore } from "@/components/home/hooks/use-composer-toolbar-store";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
+import { RestingHostStage } from "@/components/composer/resting-host-stage";
 import { useStageFallbackHostLine } from "@/hooks/sandboxes/use-stage-fallback-host-line";
 import { useTeamSandboxHarnessBlocked } from "@/hooks/sandboxes/use-team-sandbox-harness-blocked";
 import { TEAM_SANDBOX_HARNESS_UNAVAILABLE } from "@/lib/sandboxes/team-sandbox-harness";
@@ -106,7 +107,9 @@ import {
   pickedRunSettings,
 } from "@/lib/sandboxes/pending-sandbox-send";
 import {
+  leaveStagedSandbox,
   readStagedSandbox,
+  stagedHostId,
   useStagedSandbox,
   useStagedSandboxStore,
   type StagedSandboxTarget,
@@ -647,7 +650,10 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
     (s) => s.values.selection.modelSlug,
   );
   const chipModel = useStore(toolbarStore, chipModelName);
-  const chooseAnotherHostLabel = useStageFallbackHostLine(selectedHostId);
+  const chooseAnotherHostLabel = useStageFallbackHostLine(
+    selectedHostId,
+    stagedHostId(forkStage),
+  );
   const stagedSignInCheck = useStagedSendSignInCheck({
     harnessId: pickedHarnessId,
     modelSlug: pickedModelSlug,
@@ -657,7 +663,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
     onChooseModel: (offeredAgents) =>
       forkModelPickerRef.current?.("traycer", offeredAgents),
     onChooseAnotherHost: () =>
-      useStagedSandboxStore.getState().clear(forkSurfaceKey),
+      leaveStagedSandbox(forkSurfaceKey, selectedHostId),
   });
   const stagedCheck =
     forkStage === null ? null : stagedSignInCheck.check(forkStage);
@@ -1297,6 +1303,15 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
               placeholder={sourceUntitled ? "Untitled agent" : ""}
             />
           </label>
+          <RestingHostStage
+            surfaceKey={activeWorkspaceTarget === null ? null : forkSurfaceKey}
+            hostId={selectedHostId}
+            named={false}
+            surfaceHoldsSandbox={
+              activeWorkspaceTarget !== null &&
+              activeWorkspaceTarget.stagedSandbox !== null
+            }
+          />
           <section className="flex min-w-0 flex-col gap-2">
             <div className="px-0 py-0 font-sans text-overline font-medium uppercase text-muted-foreground/70">
               Harness

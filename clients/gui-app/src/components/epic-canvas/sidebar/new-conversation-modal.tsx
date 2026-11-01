@@ -192,8 +192,11 @@ import {
 } from "@/components/composer/use-staged-sandbox-send";
 import { useStagedWorkspaceGate } from "@/components/composer/use-staged-workspace-gate";
 import {
+  leaveStagedSandbox,
   ownerGoneOnUnmount,
   readStagedSandbox,
+  stagedHostId,
+  useStagedSandbox,
   useStagedSandboxStore,
   useStagedTerminalLaunch,
   type StagedSandbox,
@@ -853,6 +856,20 @@ export function NewConversationModalHeader(props: {
   );
 }
 
+/** The stage's way off this modal; a named host has no other to choose. */
+function chooseAnotherHostAction(
+  namedHostId: string | null,
+  surfaceKey: string,
+  resolvedHostId: string | null,
+  dismissHostNotice: () => void,
+): (() => void) | undefined {
+  if (namedHostId !== null) return undefined;
+  return () => {
+    leaveStagedSandbox(surfaceKey, resolvedHostId);
+    dismissHostNotice();
+  };
+}
+
 export function NewConversationModalBody(props: {
   readonly epicId: string;
   readonly tabId: string;
@@ -1290,7 +1307,10 @@ export function NewConversationModalBody(props: {
     (state) => state.values.selection.modelSlug,
   );
   const chipModel = useStore(toolbarStore, chipModelName);
-  const chooseAnotherHostLabel = useStageFallbackHostLine(resolvedHostId);
+  const chooseAnotherHostLabel = useStageFallbackHostLine(
+    resolvedHostId,
+    stagedHostId(useStagedSandbox(newConversationSurfaceKey(epicId))),
+  );
   const pickedHarnessId = useStore(
     toolbarStore,
     (state) => state.values.selection.harnessId,
@@ -1314,10 +1334,12 @@ export function NewConversationModalBody(props: {
     stagedAhead: workspaceGate.stagedAhead,
     stagedSurfaceKey: stagingSurfaceKey(sandboxStaging),
     onOpenTerminalInstead: openTerminalInstead,
-    onChooseAnotherHost: () => {
-      useStagedSandboxStore.getState().clear(newConversationSurfaceKey(epicId));
-      dismissHostNotice();
-    },
+    onChooseAnotherHost: chooseAnotherHostAction(
+      hostId,
+      newConversationSurfaceKey(epicId),
+      resolvedHostId,
+      () => dismissHostNotice(),
+    ),
   });
   const canSubmit =
     canMutate &&
@@ -1396,6 +1418,7 @@ export function NewConversationModalBody(props: {
     watchOwner: ownerGoneOnUnmount,
   });
   const stagedSend = useStagedSandboxSend({
+    fallbackHostId: resolvedHostId,
     surfaceKey: stagingSurfaceKey(sandboxStaging),
     terminal: stagedTerminal,
     taskId: epicId,
@@ -2542,7 +2565,7 @@ export function NewConversationModalBody(props: {
         surfaceKey={stagingSurfaceKey(sandboxStaging)}
         hostId={resolvedHostId}
         named={hostId !== null}
-        draftHoldsSandbox={draftHoldsSandbox}
+        surfaceHoldsSandbox={draftHoldsSandbox}
       />
       <ComposerBody
         pickerStore={pickerStore}
@@ -2821,7 +2844,7 @@ function usePlacementAgentGates(input: {
   readonly stagedAhead: boolean;
   readonly stagedSurfaceKey: string | null;
   readonly onOpenTerminalInstead: () => void;
-  readonly onChooseAnotherHost: () => void;
+  readonly onChooseAnotherHost: (() => void) | undefined;
 }): {
   readonly hint: string | null;
   readonly blocked: boolean;

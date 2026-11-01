@@ -1,3 +1,4 @@
+import { useWakingSandboxHost } from "@/hooks/sandboxes/use-waking-sandbox-host";
 import {
   useCallback,
   useEffect,
@@ -272,6 +273,7 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
   // rather than silently submitted to `createAgent.create`. The catalog reads
   // through the same fixed client, so the fork offers this host's harnesses
   // and models.
+  const wakingHost = useWakingSandboxHost(hostId);
   const toolbarStore = useComposerToolbarStore(
     null,
     fallbackSeedSource(settingsSeed, hostClient),
@@ -284,7 +286,7 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
       chatLineCarriesAutoMode: null,
       ultracodeCarried: false,
       stagedSurfaceKey: null,
-      restingSandbox: null,
+      restingSandbox: wakingHost,
     },
   );
   const createAgent = useCreateTuiAgentForClient(hostClient, hostId);

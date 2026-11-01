@@ -3,25 +3,26 @@ import {
   useRestingHostStage,
   type RestingHostStageInput,
 } from "@/components/composer/use-sandbox-staging";
-import { useRestingSandboxHost } from "@/hooks/sandboxes/use-resting-sandbox-host";
+import { useSandboxHostNotAnswering } from "@/hooks/sandboxes/use-resting-sandbox-host";
 
 interface RestingHostStageProps extends RestingHostStageInput {
   /**
-   * The draft holds a returned sandbox, which is where its Send goes. A child
-   * effect runs before its parent's, so this stage would otherwise land first
-   * and keep the draft's own from restoring.
+   * The surface has a sandbox of its own to stage, which is where its Send
+   * goes: a draft's returned one, or a chip's pick. A child effect runs before
+   * its parent's, so this stage would otherwise land first and keep that one
+   * from going on.
    */
-  readonly draftHoldsSandbox: boolean;
+  readonly surfaceHoldsSandbox: boolean;
 }
 
 /**
- * `useRestingHostStage` while the host rests and the draft has no sandbox of
- * its own; nothing is read otherwise.
+ * `useRestingHostStage` while the host is a sandbox that isn't answering and
+ * the surface has no sandbox of its own; nothing is read otherwise.
  */
 export function RestingHostStage(props: RestingHostStageProps): ReactNode {
-  const { draftHoldsSandbox, ...stage } = props;
-  const resting = useRestingSandboxHost(stage.hostId);
-  if (resting === null || draftHoldsSandbox) return null;
+  const { surfaceHoldsSandbox, ...stage } = props;
+  const notAnswering = useSandboxHostNotAnswering(stage.hostId);
+  if (!notAnswering || surfaceHoldsSandbox) return null;
   return <RestingHostStageEffect {...stage} />;
 }
 

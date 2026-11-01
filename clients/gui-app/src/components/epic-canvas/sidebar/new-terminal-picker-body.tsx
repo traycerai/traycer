@@ -350,8 +350,12 @@ function useTerminalStagedLaunch(input: {
     }),
     [input.epicId, onLaunch, surfaceKey],
   );
-  const chooseAnotherHostLabel = useStageFallbackHostLine(input.resolvedHostId);
+  const chooseAnotherHostLabel = useStageFallbackHostLine(
+    input.resolvedHostId,
+    null,
+  );
   const stagedSend = useStagedSandboxSend({
+    fallbackHostId: input.resolvedHostId,
     surfaceKey,
     terminal: stagedTerminal,
     taskId: input.epicId,

@@ -1,4 +1,6 @@
 import { createStore, type StoreApi } from "zustand/vanilla";
+import { unnamedModelLabel } from "@/lib/sandboxes/sandbox-strings";
+import { rememberedModelName } from "@/stores/composer/composer-harness-memory-store";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import {
   modelMatchIsCovered,
@@ -550,11 +552,19 @@ export function createComposerToolbarStore(
   });
 }
 
-/** The model's name as the toolbar's chip shows it. */
+/**
+ * The model's name as the toolbar's chip shows it, whether or not a list holds
+ * it now: a slug never reaches the screen. Empty with no pick to name.
+ */
 export function chipModelName(state: ComposerToolbarState): string {
-  return state.selectedModel === null
-    ? state.selection.modelSlug
-    : modelDisplayLabel(state.selectedModel);
+  if (state.selectedModel !== null) {
+    return modelDisplayLabel(state.selectedModel);
+  }
+  const { harnessId, modelSlug } = state.selection;
+  if (modelSlug.length === 0) return "";
+  return (
+    rememberedModelName(harnessId, modelSlug) ?? unnamedModelLabel(harnessId)
+  );
 }
 
 export function settingsFromDerived(

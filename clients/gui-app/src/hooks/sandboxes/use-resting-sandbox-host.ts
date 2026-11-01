@@ -1,9 +1,13 @@
 import { useCallback, useMemo, useSyncExternalStore } from "react";
+import type { HostSandboxState } from "@traycer/protocol/host/host-status";
 import {
   readHostDirectoryEntry,
   subscribeHostRowChanged,
 } from "@traycer-clients/shared/host-client/host-connection-registry";
-import { isRemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
+import {
+  hostUnavailability,
+  isRemoteHostDirectoryEntry,
+} from "@traycer-clients/shared/host-client/remote-fetcher";
 import {
   wakeVerbFor,
   type SandboxWakeVerb,
@@ -16,11 +20,17 @@ export interface RestingSandboxHost {
   readonly verb: SandboxWakeVerb;
 }
 
+/** The verb a sandbox already on its way up got there by. */
+function comingUpVerb(state: HostSandboxState | null): SandboxWakeVerb | null {
+  if (state === "resuming") return "resume";
+  return state === "starting" ? "start" : null;
+}
+
 /**
- * The sandbox `hostId` names while it rests, from the person's host directory;
- * `null` for any other host, and while the directory cannot say. Read through
- * the context-free registry, since a picker also renders where no host runtime
- * is mounted.
+ * The sandbox `hostId` names while it rests or is on its way up, from the
+ * person's host directory; `null` for any other host, and while the directory
+ * cannot say. Read through the context-free registry, since a picker also
+ * renders where no host runtime is mounted.
  */
 export function useRestingSandboxHost(
   hostId: string | null,
@@ -40,6 +50,7 @@ export function useRestingSandboxHost(
     if (entry.sandbox === null) return null;
     const verb =
       wakeVerbFor(entry.sandbox.state) ??
+      comingUpVerb(entry.sandbox.state) ??
       (entry.sandbox.frozen ? "resume" : null);
     return verb === null ? null : `${verb}${SEPARATOR}${entry.label}`;
   }, [hostId]);
@@ -56,3 +67,28 @@ export function useRestingSandboxHost(
 }
 
 const SEPARATOR = "\u0000";
+
+/**
+ * Whether `hostId` is a sandbox this client cannot reach right now, whatever
+ * the reason: what decides that a surface needs to read its row at all.
+ */
+export function useSandboxHostNotAnswering(hostId: string | null): boolean {
+  const subscribe = useCallback(
+    (callback: () => void) =>
+      hostId === null
+        ? () => undefined
+        : subscribeHostRowChanged(hostId, callback),
+    [hostId],
+  );
+  const getSnapshot = useCallback((): boolean => {
+    if (hostId === null) return false;
+    const entry = readHostDirectoryEntry(hostId);
+    return (
+      entry !== null &&
+      isRemoteHostDirectoryEntry(entry) &&
+      entry.sandbox !== null &&
+      hostUnavailability(entry) !== null
+    );
+  }, [hostId]);
+  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+}

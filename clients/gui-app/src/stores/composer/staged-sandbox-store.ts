@@ -16,6 +16,7 @@ import type {
   StageShape,
 } from "@/lib/sandboxes/sandbox-stage-model";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { useHostPickRequestStore } from "@/stores/composer/host-pick-request-store";
 import {
   createPendingStageStorage,
   requestPendingStageRetry,
@@ -596,4 +597,29 @@ export function useStagedTerminalLaunch(
 
 export function readStagedSandbox(surfaceKey: string): StagedSandbox | null {
   return useStagedSandboxStore.getState().bySurface[surfaceKey] ?? null;
+}
+
+/** The host a stage wakes or was created on, while it has one. */
+export function stagedHostId(stage: StagedSandbox | null): string | null {
+  if (stage === null) return null;
+  return stage.target.kind === "existing"
+    ? stage.target.hostId
+    : stage.createdHostId;
+}
+
+/**
+ * A stage's fallback action: takes it off the surface, for the host the chip
+ * falls back to. A stage on that very host goes nowhere by that, since the
+ * surface stages the sandbox it sits on, so the host picker opens instead.
+ */
+export function leaveStagedSandbox(
+  surfaceKey: string,
+  fallbackHostId: string | null,
+): void {
+  const stage = readStagedSandbox(surfaceKey);
+  if (stage !== null && stagedHostId(stage) === fallbackHostId) {
+    useHostPickRequestStore.getState().request(surfaceKey);
+    return;
+  }
+  useStagedSandboxStore.getState().clear(surfaceKey);
 }

@@ -22,6 +22,7 @@ import { runnerQueryKeys } from "@/lib/query-keys/runner-mutation-keys";
 import { resolveDesktopPlatform } from "@/lib/windows/desktop-capabilities";
 import {
   buildHostScopeOptions,
+  withSandboxWakeWaits,
   type HostScopeOption,
 } from "@/components/settings/host-scope/host-scope-model";
 import {
@@ -30,6 +31,7 @@ import {
   sandboxSummariesUnread,
 } from "@/components/settings/host-scope/host-scope-status";
 import { useSandboxList } from "@/hooks/sandboxes/use-sandbox-list-query";
+import { useSandboxWakeReportStore } from "@/stores/sandboxes/sandbox-wake-report-store";
 
 /** The cadence relative-time labels in the host pickers refresh at. */
 const HOST_OPTION_LABEL_TICK_MS = 60_000;
@@ -272,25 +274,32 @@ export function useHostOptions(): HostOptions {
   // list that did not come back.
   const sandboxListQuery = useSandboxList();
   const sandboxes = sandboxListQuery.data?.sandboxes ?? null;
+  const answeredWakes = useSandboxWakeReportStore(
+    (state) => state.answeredWakes,
+  );
 
   const hosts = useMemo(
     () =>
-      buildHostScopeOptions({
-        directory: directory ?? [],
-        registry: registry?.hosts ?? [],
-        localHostId,
-        activeHostId,
-        localService,
-        localPlatform,
-        hasLiveSession,
-        leases,
-        authorityAttached,
-        localHostSettingUp,
-        localHostTerminalRunNote,
-        sandboxes,
-        nowMs,
-      }),
+      withSandboxWakeWaits(
+        buildHostScopeOptions({
+          directory: directory ?? [],
+          registry: registry?.hosts ?? [],
+          localHostId,
+          activeHostId,
+          localService,
+          localPlatform,
+          hasLiveSession,
+          leases,
+          authorityAttached,
+          localHostSettingUp,
+          localHostTerminalRunNote,
+          sandboxes,
+          nowMs,
+        }),
+        answeredWakes,
+      ),
     [
+      answeredWakes,
       directory,
       registry,
       localHostId,

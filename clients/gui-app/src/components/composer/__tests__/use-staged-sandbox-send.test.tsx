@@ -331,6 +331,7 @@ function Harness(props: {
     ownerId: null,
     claimsSend: false,
     chooseAnotherHostLabel: "Use This computer",
+    fallbackHostId: null,
   });
   const runner = useStagedSandboxRunner();
   useEffect(() => {
@@ -1107,6 +1108,7 @@ function DraftComposer(props: {
     ownerId: props.draftId,
     claimsSend: false,
     chooseAnotherHostLabel: "Use This computer",
+    fallbackHostId: null,
   });
   useStagedSandboxHandoff({
     surfaceKey: SURFACE,
@@ -1460,6 +1462,7 @@ describe("useStagedSandboxSend's refused resubmit", () => {
         ownerId: null,
         claimsSend: false,
         chooseAnotherHostLabel: "Use This computer",
+        fallbackHostId: null,
       });
       useStagedSandboxHandoff({
         surfaceKey: SURFACE,
@@ -1838,6 +1841,7 @@ function TabComposer(props: {
     ownerId: props.tabId,
     claimsSend: true,
     chooseAnotherHostLabel: "Use This computer",
+    fallbackHostId: null,
   });
   useStagedSandboxHandoff({
     surfaceKey: SURFACE,

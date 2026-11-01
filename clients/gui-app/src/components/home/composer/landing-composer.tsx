@@ -61,6 +61,7 @@ import {
 } from "@/stores/composer/composer-toolbar-store";
 import { useProviderPackGateForClient } from "@/hooks/providers/use-provider-pack-gate";
 import { ComposerStagedSurfaceKeyProvider } from "@/components/composer/composer-staged-sandbox-context";
+import { RestingHostStage } from "@/components/composer/resting-host-stage";
 import { useStageFallbackHostLine } from "@/hooks/sandboxes/use-stage-fallback-host-line";
 import { useSandboxAgentGate } from "@/hooks/sandboxes/use-sandbox-agent-gate";
 import { useStagedSendSignInCheck } from "@/hooks/sandboxes/use-staged-send-sign-in-check";
@@ -113,7 +114,10 @@ import {
 } from "@/components/composer/use-staged-sandbox-send";
 import { useStagedWorkspaceGate } from "@/components/composer/use-staged-workspace-gate";
 import {
+  leaveStagedSandbox,
   readStagedSandbox,
+  stagedHostId,
+  useStagedSandbox,
   useStagedSandboxStore,
   useStagedTerminalLaunch,
   type HandoffOwnerWatch,
@@ -183,6 +187,11 @@ function landingComposerCanSubmit(args: {
     args.workspaceCanStart &&
     args.hasSubmittableContent
   );
+}
+
+/** Retained drafts share the window's surface: only the active one acts. */
+function activeSurfaceKey(surfaceKey: string, active: boolean): string | null {
+  return active ? surfaceKey : null;
 }
 
 /**
@@ -376,7 +385,15 @@ export function LandingComposer(props: LandingComposerProps) {
   );
   // The window's pin key, which a staged sandbox is staged under.
   const composerSurfaceKey = useComposerSurfaceHostKey();
-  useLandingReturnedSandbox(composerSurfaceKey, draftId, activityEnabled);
+  const draftHoldsSandbox = useLandingReturnedSandbox(
+    composerSurfaceKey,
+    draftId,
+    activityEnabled,
+  );
+  const restingStageSurfaceKey = activeSurfaceKey(
+    composerSurfaceKey,
+    activityEnabled,
+  );
   const settingsSeed = useMemo(
     () =>
       landingComposerSettingsSeedForDraft(
@@ -588,7 +605,10 @@ export function LandingComposer(props: LandingComposerProps) {
     (s) => s.values.selection.modelSlug,
   );
   const chipModel = useStore(toolbarStore, chipModelName);
-  const chooseAnotherHostLabel = useStageFallbackHostLine(resolvedHostId);
+  const chooseAnotherHostLabel = useStageFallbackHostLine(
+    resolvedHostId,
+    stagedHostId(useStagedSandbox(composerSurfaceKey)),
+  );
   const stagedSignInCheck = useStagedSendSignInCheck({
     harnessId: pickedHarnessId,
     modelSlug: pickedModelSlug,
@@ -597,7 +617,7 @@ export function LandingComposer(props: LandingComposerProps) {
     chooseAnotherHostLabel,
     onOpenTerminalInstead: openStagedTerminal,
     onChooseAnotherHost: () => {
-      useStagedSandboxStore.getState().clear(composerSurfaceKey);
+      leaveStagedSandbox(composerSurfaceKey, resolvedHostId);
       dismissHostNotice();
     },
   });
@@ -707,6 +727,7 @@ export function LandingComposer(props: LandingComposerProps) {
     watchOwner: watchStagedOwner,
   });
   const stagedSend = useStagedSandboxSend({
+    fallbackHostId: resolvedHostId,
     surfaceKey: composerSurfaceKey,
     // No epic before the send: the landing panel's terminals follow the
     // composer's host, which phase 2 pins to the new one.
@@ -1156,6 +1177,12 @@ export function LandingComposer(props: LandingComposerProps) {
 
   return (
     <ComposerStagedSurfaceKeyProvider surfaceKey={composerSurfaceKey}>
+      <RestingHostStage
+        surfaceKey={restingStageSurfaceKey}
+        hostId={resolvedHostId}
+        named={false}
+        surfaceHoldsSandbox={draftHoldsSandbox}
+      />
       <ComposerBody
         pickerStore={pickerStore}
         editorRef={editorRef}

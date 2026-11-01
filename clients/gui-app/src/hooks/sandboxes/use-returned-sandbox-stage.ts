@@ -86,13 +86,14 @@ function landingReturnedSandbox(
 
 /**
  * The landing composer: stages its open draft's returned sandbox. Only the
- * `active` one acts: retained drafts share the window's surface.
+ * `active` one acts: retained drafts share the window's surface. Answers
+ * whether the draft holds one: that is where its Send goes.
  */
 export function useLandingReturnedSandbox(
   surfaceKey: string,
   draftId: string | null,
   active: boolean,
-): void {
+): boolean {
   const userId = useAuthStore((state) => state.contextMetadata?.userId ?? null);
   const returned = useStoreWithEqualityFn(
     useLandingDraftStore,
@@ -113,6 +114,7 @@ export function useLandingReturnedSandbox(
       useLandingDraftStore.getState().setDraftReturnedSandbox(draftId, null);
   }, [draftId]);
   useReturnedSandboxStage(active ? surfaceKey : null, returned, read, forget);
+  return active && returned !== null;
 }
 
 /**

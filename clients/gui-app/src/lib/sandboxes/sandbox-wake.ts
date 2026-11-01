@@ -19,6 +19,7 @@ import type { HostDirectoryService } from "@/lib/host";
 import { getHostBindingSnapshot } from "@/lib/host/runtime";
 import { queryClient } from "@/lib/query-client";
 import { authQueryKeys, sandboxMutationKeys } from "@/lib/query-keys";
+import { sandboxListQueryOptions } from "@/hooks/sandboxes/use-sandbox-list-query";
 import { signedInUserId } from "@/lib/sandboxes/sandbox-account-fence";
 import { formatCreditsRequired } from "@/lib/sandboxes/sandbox-pricing";
 import {
@@ -79,6 +80,12 @@ type SandboxFactsRead =
   | { readonly kind: "unread" }
   | { readonly kind: "listed"; readonly facts: SandboxDialFacts | null };
 
+/** What a wake reads the sandbox list through. */
+interface SandboxWakeReads {
+  readonly client: QueryClient;
+  readonly auth: AuthService;
+}
+
 /**
  * The account a wake started under is no longer the one signed in. The wake
  * stops there: its next read would run under the new account's bearer, and
@@ -103,18 +110,25 @@ function assertStillSignedIn(startedBy: string | null): void {
  * One list read for the wake, fenced on both sides. The account is checked
  * before the read, so a read is never sent under another account's bearer.
  * It is checked again after, because a switch can land while the read is in
- * flight.
+ * flight. Read through the shared query: every surface showing this sandbox
+ * follows the wake from these reads, not from the directory's next tick.
  */
 async function readSandboxFacts(
-  auth: AuthService,
+  wake: SandboxWakeReads,
   hostId: string,
   startedBy: string | null,
 ): Promise<SandboxFactsRead> {
   assertStillSignedIn(startedBy);
-  const result = await auth.listSandboxes();
+  const response = await wake.client
+    .fetchQuery({
+      ...sandboxListQueryOptions(wake.auth, startedBy, true),
+      staleTime: 0,
+      retry: false,
+    })
+    .catch(() => null);
   assertStillSignedIn(startedBy);
-  if (result.kind !== "ok") return { kind: "unread" };
-  const row = result.response.sandboxes.find((s) => s.hostId === hostId);
+  if (response === null) return { kind: "unread" };
+  const row = response.sandboxes.find((s) => s.hostId === hostId);
   return {
     kind: "listed",
     facts:
@@ -124,20 +138,52 @@ async function readSandboxFacts(
   };
 }
 
+/**
+ * Keeps reading the list while a lifecycle verb holds its request, which can
+ * be minutes: the row moves long before the verb answers.
+ */
+function readWhileVerbIsHeld(
+  request: Promise<unknown>,
+  read: () => Promise<SandboxFactsRead>,
+): void {
+  let held = true;
+  const release = (): void => {
+    held = false;
+  };
+  void request.then(release, release);
+  const follow = async (): Promise<void> => {
+    await sleep(WAKE_POLL_INTERVAL_MS);
+    while (held) {
+      await read();
+      await sleep(WAKE_POLL_INTERVAL_MS);
+    }
+  };
+  // A rejection is the account fence: the wake itself reports that.
+  void follow().catch(() => undefined);
+}
+
 function startWakeAttempt(
-  auth: AuthService,
+  reads: SandboxWakeReads,
   hostId: string,
   startedBy: string | null,
   gesture: SandboxVerbGesture | null,
 ): SandboxWakeAttempt {
   let verbRequest: Promise<unknown> = Promise.resolve();
   const outcome = wakeSandboxHost(
-    auth,
+    reads,
     hostId,
     startedBy,
     (sandboxId, verb, timeoutMs) => {
-      const request = auth.runSandboxVerb(sandboxId, verb, gesture, timeoutMs);
+      const request = reads.auth.runSandboxVerb(
+        sandboxId,
+        verb,
+        gesture,
+        timeoutMs,
+      );
       verbRequest = request;
+      readWhileVerbIsHeld(request, () =>
+        readSandboxFacts(reads, hostId, startedBy),
+      );
       return request;
     },
   );
@@ -151,12 +197,12 @@ function startWakeAttempt(
 }
 
 async function wakeSandboxHost(
-  auth: AuthService,
+  reads: SandboxWakeReads,
   hostId: string,
   startedBy: string | null,
   wake: EnsureSandboxAwakeDeps["wake"],
 ): Promise<SandboxWakeOutcome> {
-  const first = await readSandboxFacts(auth, hostId, startedBy);
+  const first = await readSandboxFacts(reads, hostId, startedBy);
   // The directory already said this host is a sandbox, so a failed first
   // read is a failure to retry, never "it no longer exists".
   if (first.kind === "unread") {
@@ -170,7 +216,7 @@ async function wakeSandboxHost(
     initial: first.facts,
     wake,
     readFacts: async () => {
-      const read = await readSandboxFacts(auth, hostId, startedBy);
+      const read = await readSandboxFacts(reads, hostId, startedBy);
       // A failed poll says nothing about the sandbox: keep waiting on what
       // was last known rather than calling it gone.
       if (read.kind === "unread") return last;
@@ -199,7 +245,7 @@ function startBudget(ms: number): SandboxWakeBudget {
 }
 
 async function runSharedWake(
-  auth: AuthService,
+  reads: SandboxWakeReads,
   hostId: string,
   startedBy: string | null,
   gesture: SandboxVerbGesture | null,
@@ -209,7 +255,7 @@ async function runSharedWake(
   if (running !== undefined) {
     return { outcome: await running, joined: true };
   }
-  const attempt = startWakeAttempt(auth, hostId, startedBy, gesture);
+  const attempt = startWakeAttempt(reads, hostId, startedBy, gesture);
   wakesInFlight.set(key, attempt.outcome);
   void attempt.settled.then(() => {
     if (wakesInFlight.get(key) === attempt.outcome) {
@@ -356,7 +402,8 @@ function runSandboxWake(input: {
   const startedBy = signedInUserId();
   const observer = new QueryMutationObserver<SandboxWakeRun>(client, {
     mutationKey: sandboxMutationKeys.wake(hostId),
-    mutationFn: () => runSharedWake(auth, hostId, startedBy, gesture),
+    mutationFn: () =>
+      runSharedWake({ client, auth }, hostId, startedBy, gesture),
     onSuccess: (run) => {
       if (run.joined || signedInUserId() !== startedBy) return;
       void directory.refresh();
