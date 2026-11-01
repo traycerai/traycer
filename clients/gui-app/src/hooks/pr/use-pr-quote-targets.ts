@@ -44,13 +44,13 @@ export function usePrQuoteTargets(args: {
       ...chats.map((chat) => ({
         id: chat.id,
         kind: "chat" as const,
-        title: displayTitle(chat.title, "chat"),
+        title: displayTitle(chat.title, "agent"),
         updatedAt: chat.updatedAt,
       })),
       ...agents.map((agent) => ({
         id: agent.id,
         kind: "terminal-agent" as const,
-        title: displayTitle(agent.title, "terminal-agent"),
+        title: displayTitle(agent.title, "agent"),
         updatedAt: agent.updatedAt,
       })),
     ];

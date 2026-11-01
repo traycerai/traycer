@@ -42,9 +42,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { NEW_AGENT_TITLE } from "@/lib/display-title";
 import {
-  useEpicTabAwaitingFirstTitle,
   useEpicTabDisplayTitle,
   useEpicLiveArtifactTitleGenerating,
   useRegisteredEpicNodeArchived,
@@ -614,23 +612,17 @@ function useTabRenameControl(args: {
     isTerminalTab && terminalTabUsesLegacyReads(terminalControl)
       ? resolvedHostClient
       : null;
-  const titleNode = tabTitleNode(tab);
   const fallbackDisplayTitle = useEpicTabDisplayTitle(
-    titleNode,
+    tabTitleNode(tab),
     epicId,
     terminalHostClient,
   );
   useRecordTitleWriteThrough(tab, epicId, viewTabId, fallbackDisplayTitle);
-  const awaitingFirstTitle = useEpicTabAwaitingFirstTitle(titleNode, epicId);
-  const resolvedTitle =
+  const displayTitle =
     browserPresentation?.title ??
     (terminalControl?.mode === "capable" || terminalControl?.mode === "unknown"
       ? terminalControl.displayTitle
       : fallbackDisplayTitle);
-  // "New agent" is painted only. The snapshot above and the rename below both
-  // read the resolved title: the label is true for a first Send's few
-  // seconds, and stored it would outlive a title that never comes.
-  const displayTitle = awaitingFirstTitle ? NEW_AGENT_TITLE : resolvedTitle;
   const canRename = canRenameCanvasTab(tab, canRenameTabs, terminalControl);
   const renameTerminal = useTerminalRenameFor(terminalHostClient);
   const { mutate: renameTerminalMutate } = renameTerminal;
@@ -649,7 +641,7 @@ function useTabRenameControl(args: {
     onRename(groupId, tab.instanceId, next);
   };
   const rename = useInlineRename({
-    value: resolvedTitle,
+    value: displayTitle,
     canEdit: canRename,
     onCommit: handleRename,
   });
@@ -661,7 +653,7 @@ function useTabRenameControl(args: {
  * strip resolved live. The snapshot is written once at open, which for a chat
  * is before its title is generated, and only an explicit rename touched it
  * afterwards: so every reader that has no live source (the drag overlay chip,
- * the strip before the projection hydrates) kept announcing "Untitled agent"
+ * the strip before the projection hydrates) kept announcing "New agent"
  * for the tile's life. Written through the same rename action an explicit
  * rename uses, held to the tile's own host, and only when the live answer is
  * a different non-empty title - the hook falls back to the snapshot itself,

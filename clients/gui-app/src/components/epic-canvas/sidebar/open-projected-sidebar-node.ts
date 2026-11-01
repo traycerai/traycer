@@ -119,7 +119,7 @@ function resolveProjectedSidebarNode(
       id: chat.id,
       type: "chat",
       // Durable Agent node: an untitled Chat-interface Agent renders as
-      // "Untitled agent". `type` remains the structural interface discriminator.
+      // "New agent". `type` remains the structural interface discriminator.
       name: displayTitle(chat.title, "agent"),
       hostId: chat.hostId ?? fallbackHostId,
     };
@@ -130,7 +130,7 @@ function resolveProjectedSidebarNode(
       id: agent.id,
       type: "terminal-agent",
       // Durable Agent node: an untitled Terminal-interface Agent renders as
-      // "Untitled agent"; `type` stays the interface discriminator.
+      // "New agent"; `type` stays the interface discriminator.
       name: displayTitle(agent.title, "agent"),
       hostId: agent.hostId,
     };

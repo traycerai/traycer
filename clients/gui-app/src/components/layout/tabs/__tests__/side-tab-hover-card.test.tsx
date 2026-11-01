@@ -237,7 +237,7 @@ describe("SideTabHoverCardBody", () => {
 
     expect(
       screen.getByTestId("side-tab-hover-card-agents").textContent,
-    ).toContain("Untitled agent");
+    ).toContain("New agent");
   });
 
   it("shows no agent list, warm or cold, when there is nothing live", () => {

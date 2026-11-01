@@ -69,11 +69,17 @@ describe("snapshotOwnerTeardownHolders", () => {
 
   it("names an untitled owner as This agent", () => {
     expect(teardownOwnerDisplayName("")).toBe("This agent");
-    expect(teardownOwnerDisplayName("Untitled agent")).toBe("This agent");
-    expect(teardownOwnerDisplayName("Untitled chat")).toBe("This agent");
+    for (const label of [
+      "New agent",
+      "Untitled agent",
+      "Untitled chat",
+      "Untitled terminal agent",
+    ]) {
+      expect(teardownOwnerDisplayName(label)).toBe("This agent");
+    }
     expect(
       snapshotOwnerTeardownHolders(
-        input({ ownerLabel: "Untitled agent", hasActiveTurn: true }),
+        input({ ownerLabel: "New agent", hasActiveTurn: true }),
       )[0]?.label,
     ).toMatch(/^This agent is working/);
   });

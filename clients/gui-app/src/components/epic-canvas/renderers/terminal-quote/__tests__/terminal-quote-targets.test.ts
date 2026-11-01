@@ -249,6 +249,6 @@ describe("resolveTerminalQuoteChatTargets", () => {
         lastFocusedChatId: null,
         terminalHostId: TERMINAL_HOST,
       })[0]?.title,
-    ).toBe("Untitled agent");
+    ).toBe("New agent");
   });
 });

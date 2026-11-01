@@ -229,7 +229,7 @@ describe("new chat command actions", () => {
     expect(createChat.calls[0].request).toMatchObject({
       epicId: EPIC_ID,
       parentId: null,
-      // Chats are created with an empty stored title; the "Untitled chat"
+      // Chats are created with an empty stored title; the "New agent"
       // fallback is applied at render, not baked into the create request.
       title: "",
     });
@@ -632,9 +632,9 @@ describe("new chat command actions", () => {
       expect.objectContaining({
         id: "host-chat",
         type: "chat",
-        // Empty stored title renders the "Untitled chat" fallback as the
+        // Empty stored title renders the "New agent" fallback as the
         // node's snapshot name - never the "New chat" placeholder.
-        name: "Untitled agent",
+        name: "New agent",
         hostId: "test-host",
       }),
     );

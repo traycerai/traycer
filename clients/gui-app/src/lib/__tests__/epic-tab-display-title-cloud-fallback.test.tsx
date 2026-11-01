@@ -166,10 +166,11 @@ function createFixture(rows: readonly CloudChatSummary[]): Fixture {
 }
 
 // The tile as the canvas persisted it: opened before the title was generated,
-// so its snapshot name is the render fallback, and bound to the chat's host.
+// and bound to the chat's host. Its name is the fallback a saved tile loads
+// with.
 const tile = {
   id: CHAT_ID,
-  name: "Untitled agent",
+  name: "New agent",
   type: "chat",
   hostId: mockLocalHostEntry.hostId,
 };
@@ -209,7 +210,7 @@ describe("useEpicTabDisplayTitle cloud-list fallback", () => {
     const rendered = renderTitle(fixture);
 
     // Before the list answers the snapshot is all there is.
-    expect(rendered.result.current).toBe("Untitled agent");
+    expect(rendered.result.current).toBe("New agent");
     await waitFor(() => {
       expect(rendered.result.current).toBe(CLOUD_TITLE);
     });
@@ -271,7 +272,7 @@ describe("useEpicTabDisplayTitle cloud-list fallback", () => {
       await Promise.resolve();
     });
     expect(fixture.requests.value).toBe(0);
-    expect(rendered.result.current).toBe("Untitled agent");
+    expect(rendered.result.current).toBe("New agent");
   });
   it("a team host's chat, held as the creator's untitled stand-in, takes the arm row's title", () => {
     const fixture = createFixture([]);

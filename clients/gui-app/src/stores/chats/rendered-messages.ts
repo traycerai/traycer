@@ -83,6 +83,7 @@ import {
   buildAttachmentsFromJSONContent,
   extractPlainTextFromComposerJSONContent,
 } from "@/lib/composer/tiptap-json-content";
+import { displayTitle } from "@/lib/display-title";
 import { isRenderableSubAgentBlock } from "@/lib/chat/subagent-blocks";
 import {
   isTransientLiveAssistantMessageId,
@@ -1995,7 +1996,7 @@ function buildForkedChatLinkMessages(
     const source = forkedChatLinkRowSource(event);
     if (source === null) return [];
     const { sourceChatId, sourceHostId } = source;
-    const sourceChatTitle = source.sourceChatTitle ?? "Untitled agent";
+    const sourceChatTitle = source.sourceChatTitle ?? displayTitle("", "agent");
     const id = forkedChatLinkRowId(event.eventId);
     return [
       {

@@ -354,8 +354,8 @@ describe("initial chat handoff route coordinator", () => {
           id: CHAT_ID,
           type: "chat",
           // No chat projected yet (projectedChatTitle null) → the node opens
-          // with the "Untitled agent" render fallback, never "New chat".
-          name: "Untitled agent",
+          // with the "New agent" render fallback, never "New chat".
+          name: "New agent",
           hostId: HOST_ID,
         }),
       );

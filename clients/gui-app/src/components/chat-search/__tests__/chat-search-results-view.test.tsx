@@ -828,7 +828,7 @@ describe("ChatSearchMessageRow: chat-title chip", () => {
     ).toBeTruthy();
   });
 
-  it("falls back to 'Untitled chat' for an empty chat title", () => {
+  it("falls back to 'New agent' for an empty chat title", () => {
     render(
       <ChatSearchMessageRow
         hit={messageHit({ messageId: "m1", text: "snippet text" })}
@@ -840,6 +840,6 @@ describe("ChatSearchMessageRow: chat-title chip", () => {
       />,
     );
 
-    expect(screen.getByText("Untitled chat")).toBeTruthy();
+    expect(screen.getByText("New agent")).toBeTruthy();
   });
 });

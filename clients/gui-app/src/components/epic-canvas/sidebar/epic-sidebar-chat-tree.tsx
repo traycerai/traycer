@@ -161,14 +161,12 @@ import {
   clearSidebarNodeRevealRequest,
   useSidebarNodeRevealRequest,
 } from "@/stores/epics/sidebar-node-reveal-store";
-import { NEW_AGENT_TITLE } from "@/lib/display-title";
 import {
   useAncestorIds,
   useEpicAgentRoleClaims,
   useEpicAgentSessionFacet,
   useEpicAgentActivityTiers,
   type AgentActivityTier,
-  useEpicChatAwaitingFirstTitle,
   useEpicChatIds,
   useEpicChatIdsNamedByCloudRows,
   useEpicConnectionStatus,
@@ -1735,13 +1733,6 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
   ]);
 
   const ownerHostId = useEpicNodeHostId(nodeId);
-  // Painted only: the rename seed and the tile a click opens keep `nodeName`,
-  // so "New agent" never reaches a stored title or a tab snapshot.
-  const awaitingFirstTitle = useEpicChatAwaitingFirstTitle(
-    artifactType === "chat" ? nodeId : null,
-    epicId,
-    ownerHostId,
-  );
   const sessionHostId = useEpicSessionHostId();
   const mutationHostId = ownerHostId ?? sessionHostId;
   // Gated on the host the archive will be SENT to: a live stand-in when the
@@ -1898,7 +1889,7 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
       return;
     }
     // The seed left as it was is not a rename, even if the title landed
-    // mid-edit: for an untitled agent it is the "Untitled agent" fallback, and
+    // mid-edit: for an untitled agent it is the "New agent" fallback, and
     // committing it would store that over the real title.
     if (trimmed === nodeName || trimmed === renameSeedRef.current.trim()) {
       setIsRenaming(false);
@@ -2085,8 +2076,7 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
       tabId={tabId}
       nodeId={nodeId}
       ownerHostId={ownerHostId}
-      nodeName={awaitingFirstTitle ? NEW_AGENT_TITLE : nodeName}
-      renameTargetName={nodeName}
+      nodeName={nodeName}
       artifactType={artifactType}
       depth={depth}
       expansion={expansion}
@@ -2163,7 +2153,6 @@ interface ChatNodeShellProps {
   readonly updatedAt: number;
   readonly openableType: OpenableEpicNodeKind | null;
   readonly isRenaming: boolean;
-  readonly renameTargetName: string;
   readonly renameInputRef: React.RefObject<HTMLInputElement | null>;
   readonly renameValue: string;
   readonly onRenameValueChange: (value: string) => void;
@@ -2265,7 +2254,6 @@ function ChatNodeShellBody(
     isDisconnected,
     updatedAt,
     isRenaming,
-    renameTargetName,
     renameInputRef,
     renameValue,
     onRenameValueChange,
@@ -2386,7 +2374,7 @@ function ChatNodeShellBody(
             onRenameValueChange={onRenameValueChange}
             onBlur={onCommitRename}
             onKeyDown={onRenameKeyDown}
-            renameTargetName={renameTargetName}
+            nodeName={nodeName}
             nodeId={nodeId}
             isArchived={archiveRow.isArchived}
           />
@@ -2839,7 +2827,7 @@ interface ChatRenameRowProps {
   readonly onRenameValueChange: (value: string) => void;
   readonly onBlur: () => void;
   readonly onKeyDown: (event: KeyboardEvent<HTMLInputElement>) => void;
-  readonly renameTargetName: string;
+  readonly nodeName: string;
   readonly nodeId: string;
   readonly isArchived: boolean;
 }
@@ -2855,7 +2843,7 @@ function ChatRenameRow(props: ChatRenameRowProps) {
     onRenameValueChange,
     onBlur,
     onKeyDown,
-    renameTargetName,
+    nodeName,
     nodeId,
   } = props;
   // Scaffold parity with the display row: the same chevron spacer and leading
@@ -2896,7 +2884,7 @@ function ChatRenameRow(props: ChatRenameRowProps) {
             onBlur={onBlur}
             onKeyDown={onKeyDown}
             className="min-w-0 flex-1 border-0 bg-transparent text-ui-sm text-foreground outline-none focus:ring-1 focus:ring-ring rounded px-1"
-            aria-label={`Rename ${renameTargetName}`}
+            aria-label={`Rename ${nodeName}`}
             data-testid={`epic-sidebar-rename-input-${nodeId}`}
           />
         </div>
