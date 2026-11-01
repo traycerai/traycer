@@ -160,6 +160,7 @@ afterEach(() => {
   surface.remember.mockClear();
   surface.replaceOwnedRoute.mockClear();
   surface.overlayActive = false;
+  rerenders.tick = 0;
   router.pathname = "/epics";
   useSettingsEnvironmentPickStore.setState({
     pick: null,
@@ -670,19 +671,32 @@ describe("a team the environment list no longer carries", () => {
       },
     });
     // The page renders again IN PLACE, which is the only re-render this case
-    // can mean. Two cheaper-looking ways of doing it measure something else:
-    // `rerender` with one shared element is skipped outright, because React
-    // bails out of a child whose element is the same object, and the count then
-    // holds without the page having rendered at all; `rerender` with a fresh
-    // element UNMOUNTS and remounts the subtree, which tears down the read's
-    // observer and builds a new one, and a new observer on a stale entry
-    // refetches by design (`refetchOnMount`, zero `staleTime` here). That is a
-    // request the page is right to make and not the one under test, so counting
-    // it reads TanStack's contract as this page's regression.
+    // can mean. Both ways of doing it through `view.rerender` measured
+    // something other than the effect:
     //
-    // Re-rendering from inside the mounted tree keeps the observer and the
-    // effect, so the count below is evidence about the effect's dependencies —
-    // which is what "does not ask again" claims.
+    // One shared element is skipped outright, because React bails out of a
+    // child whose element is the same object and no context it reads changed.
+    // The count then holds without the page having rendered at all.
+    //
+    // A FRESH element, measured HERE, tore the read's observers down and built
+    // new ones (`observerRemoved` to `obs=0` on both routes, then
+    // `observerAdded`), and a new observer on a stale entry refetches by
+    // design — `refetchOnMount`, and this harness sets no `staleTime`. A second
+    // request then arrived from the client's own queue, drained after the first
+    // settled (`HostRequestCoordinator.drain`, no `queryFn` in its stack).
+    // Both are requests nothing asked this page for, and whether they landed
+    // before the assertion was a race.
+    //
+    // That is what happened at THIS site, and not a property of the API: the
+    // `cannot reuse one entry's answer…` case below also rerenders with fresh
+    // elements, and its evidence survives them — a remount there would reset
+    // `answeredQuestion`, so its RED on the old code could not have failed the
+    // way it did. What differs between the two sites is not pinned down, which
+    // is the reason this case no longer depends on either shape.
+    //
+    // Rendering from inside the mounted tree keeps the observer and the effect,
+    // so the count below is evidence about the effect's dependencies — which is
+    // what "does not ask again" claims.
     render(
       <HeldValueHostRuntime>
         <MountedPage />

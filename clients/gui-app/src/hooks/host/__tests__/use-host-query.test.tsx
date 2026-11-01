@@ -1861,10 +1861,20 @@ describe("useHostQueryEntryHash", () => {
       },
     });
     // The app's client, so the hash is spelled by the app's own
-    // `queryKeyHashFn` rather than TanStack's default.
+    // `queryKeyHashFn` rather than TanStack's default. MERGED and not replaced:
+    // `setDefaultOptions` assigns over the whole object, so passing only these
+    // three would drop `hashAppQueryKey` and leave the case reading TanStack's
+    // hash through a client chosen for not using it.
     const queryClient = createAppQueryClient();
+    const appDefaults = queryClient.getDefaultOptions();
     queryClient.setDefaultOptions({
-      queries: { retry: false, gcTime: Infinity, staleTime: Infinity },
+      ...appDefaults,
+      queries: {
+        ...appDefaults.queries,
+        retry: false,
+        gcTime: Infinity,
+        staleTime: Infinity,
+      },
     });
     const spine = new HostClient<HostRpcRegistry>({
       registry: hostRpcRegistry,
