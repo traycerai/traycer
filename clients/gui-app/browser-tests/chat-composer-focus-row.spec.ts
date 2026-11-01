@@ -13,6 +13,9 @@ const SEND = '[data-testid="toolbar-item-send"] button';
 const GRABBER = "[data-composer-grabber]";
 const DRAFT_GRABBER = "[data-composer-draft-grabber]";
 const EXPANDED = "[data-composer-expanded]";
+const SHEET = "[data-composer-shell]";
+const ONE_PIXEL_PNG =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
 
 function pickers(page: Page): Locator {
   return page.locator(
@@ -197,15 +200,60 @@ test.describe("the pull zone on the row", () => {
     await expect(page.locator("[data-composer-focus-row]")).toHaveCount(0);
   });
 
-  test("opens the sheet on a pull from just above the draft's first line, across the edge's zone", async ({
+  test("opens the sheet on a pull from just above the draft's first line, across the edge's zone, and lets it go on release", async ({
     page,
   }) => {
     // One pull: it starts in the draft's zone and crosses the edge's on the
-    // way up.
+    // way up. Opening the sheet takes the row, and the draft's zone with it,
+    // away mid-pull: the release still has to end the pull.
     const firstLineTop = await typeDraft(page);
     const editor = await boxOf(page.locator(EDITOR));
     await pullFrom(page, editor.x + editor.width / 2, firstLineTop - 1, -40);
     await expect(page.locator(EXPANDED)).toBeVisible();
+    await page.waitForFunction("document.getAnimations().length === 0");
+
+    await expect(page.locator(SHEET)).not.toHaveAttribute(
+      "data-composer-pulling",
+    );
+    const sheet = await boxOf(page.locator(SHEET));
+    const slot = await boxOf(page.locator("[data-composer-sheet-slot]"));
+    expect(Math.abs(sheet.y - slot.y)).toBeLessThan(0.5);
+
+    const zone = await boxOf(page.locator(GRABBER));
+    await pullFrom(page, zone.x + zone.width / 2, zone.y + zone.height / 2, 40);
+    await expect(page.locator(EXPANDED)).toHaveCount(0);
+  });
+
+  test("leaves an attachment's thumbnail to the thumbnail, to its top edge", async ({
+    page,
+  }) => {
+    await openComposer(page, "?focus-row");
+    await page.locator(EDITOR).click();
+    await page.locator(EDITOR).evaluate((editor, png) => {
+      const bytes = Uint8Array.from(atob(png), (char) => char.charCodeAt(0));
+      const data = new DataTransfer();
+      data.items.add(new File([bytes], "probe.png", { type: "image/png" }));
+      editor.dispatchEvent(
+        new ClipboardEvent("paste", {
+          clipboardData: data,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    }, ONE_PIXEL_PNG);
+    const open = page.getByRole("button", { name: /^Open / });
+    await expect(open).toBeVisible();
+    await nextFrames(page, 2);
+
+    const hits = await open.evaluate((button) => {
+      const { top, left, right } = button.getBoundingClientRect();
+      return [left + 4, (left + right) / 2, right - 4].flatMap((x) =>
+        [top + 0.5, top + 1.5].map((y) =>
+          button.contains(document.elementFromPoint(x, y)),
+        ),
+      );
+    });
+    expect(hits).toEqual([true, true, true, true, true, true]);
   });
 
   test("keeps the sheet open across a blur and the next focus, and closes it on a pull down", async ({

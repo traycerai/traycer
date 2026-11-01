@@ -91,14 +91,16 @@ interface Pull {
 }
 
 interface ComposerPull {
-  readonly onPointerDown: (event: PointerEvent<HTMLDivElement>) => void;
-  readonly onPointerMove: (event: PointerEvent<HTMLDivElement>) => void;
-  readonly onPointerUp: (event: PointerEvent<HTMLDivElement>) => void;
-  readonly onPointerCancel: (event: PointerEvent<HTMLDivElement>) => void;
-}
-
-function sheetOf(zone: HTMLElement): HTMLElement | null {
-  return zone.closest<HTMLElement>("[data-composer-shell]");
+  /** On every zone: a press there starts the pull. */
+  readonly start: {
+    readonly onPointerDown: (event: PointerEvent<HTMLDivElement>) => void;
+  };
+  /** On the sheet, which holds the pull's pointer until it lifts. */
+  readonly carry: {
+    readonly onPointerMove: (event: PointerEvent<HTMLDivElement>) => void;
+    readonly onPointerUp: (event: PointerEvent<HTMLDivElement>) => void;
+    readonly onPointerCancel: (event: PointerEvent<HTMLDivElement>) => void;
+  };
 }
 
 /**
@@ -107,15 +109,18 @@ function sheetOf(zone: HTMLElement): HTMLElement | null {
  * or closed by how far the pull went. A tap or a wobble does nothing, so a
  * thumb landing on a zone never opens anything. Every zone that starts one
  * shares this one pull, so the zones are one control: a press in any of them
- * starts the same pull, and pointer capture keeps it on the zone it started
- * in, whatever it crosses. `preventDefault` on the press keeps the editor
- * focused so the keyboard does not dip mid-gesture.
+ * starts the same pull, and the sheet captures its pointer, so it carries the
+ * pull whatever the finger crosses and whichever zone the layout it opens
+ * takes away. `preventDefault` on the press keeps the editor focused so the
+ * keyboard does not dip mid-gesture.
  */
 function useComposerPull(expansion: ComposerExpansion | null): ComposerPull {
   const pull = useRef<Pull | null>(null);
 
   const onPointerDown = (event: PointerEvent<HTMLDivElement>): void => {
-    const sheet = sheetOf(event.currentTarget);
+    const sheet = event.currentTarget.closest<HTMLElement>(
+      "[data-composer-shell]",
+    );
     // A sheet still holding its top is mid-pull or settling shut: not a
     // moment to start another pull from.
     if (
@@ -126,7 +131,7 @@ function useComposerPull(expansion: ComposerExpansion | null): ComposerPull {
       return;
     }
     event.preventDefault();
-    event.currentTarget.setPointerCapture(event.pointerId);
+    sheet.setPointerCapture(event.pointerId);
     pull.current = {
       startY: event.clientY,
       grip: event.clientY - sheet.getBoundingClientRect().top,
@@ -134,14 +139,9 @@ function useComposerPull(expansion: ComposerExpansion | null): ComposerPull {
     };
   };
   const onPointerMove = (event: PointerEvent<HTMLDivElement>): void => {
-    const sheet = sheetOf(event.currentTarget);
-    const origin = sheet?.parentElement;
-    if (
-      expansion === null ||
-      pull.current === null ||
-      sheet === null ||
-      !origin
-    ) {
+    const sheet = event.currentTarget;
+    const origin = sheet.parentElement;
+    if (expansion === null || pull.current === null || origin === null) {
       return;
     }
     const { startY, grip, wasOpen } = pull.current;
@@ -154,8 +154,8 @@ function useComposerPull(expansion: ComposerExpansion | null): ComposerPull {
     sheet.style.setProperty(SHEET_TOP, `${Math.min(0, top)}px`);
   };
   const onPointerEnd = (event: PointerEvent<HTMLDivElement>): void => {
-    const sheet = sheetOf(event.currentTarget);
-    if (expansion === null || pull.current === null || sheet === null) return;
+    const sheet = event.currentTarget;
+    if (expansion === null || pull.current === null) return;
     const { startY, wasOpen } = pull.current;
     pull.current = null;
     if (sheet.style.getPropertyValue(SHEET_TOP) === "") return;
@@ -174,10 +174,12 @@ function useComposerPull(expansion: ComposerExpansion | null): ComposerPull {
   };
 
   return {
-    onPointerDown,
-    onPointerMove,
-    onPointerUp: onPointerEnd,
-    onPointerCancel: onPointerEnd,
+    start: { onPointerDown },
+    carry: {
+      onPointerMove,
+      onPointerUp: onPointerEnd,
+      onPointerCancel: onPointerEnd,
+    },
   };
 }
 
@@ -188,8 +190,9 @@ function useComposerPull(expansion: ComposerExpansion | null): ComposerPull {
  * the zone is the gap under the transcript's jump pill and the row's dead
  * strip down to Send's top, which sits higher in the row than the draft's
  * first line; `ComposerDraftGrabber` carries it down to that line over the
- * draft's side. It is hidden from assistive technology;
- * `ComposerExpandButton` is its accessible twin.
+ * draft's side. An attachment's chips sit at the row's top instead, so over
+ * them the zone ends at the card's edge. It is hidden from assistive
+ * technology; `ComposerExpandButton` is its accessible twin.
  */
 function ComposerGrabber({
   pull,
@@ -204,9 +207,11 @@ function ComposerGrabber({
       data-composer-grabber=""
       className={cn(
         "absolute inset-x-0 z-30 touch-none",
-        focusRow ? "-top-1.5 h-2.25" : "-top-2 h-6",
+        focusRow
+          ? "-top-1.5 h-2.25 group-has-[[data-composer-attachment-rail]:not(:empty)]/composer-shell:h-1.5"
+          : "-top-2 h-6",
       )}
-      {...pull}
+      {...pull.start}
     />
   );
 }
@@ -228,7 +233,7 @@ function ComposerDraftGrabber({
       aria-hidden
       data-composer-draft-grabber=""
       className="absolute inset-x-0 top-0 z-30 hidden h-2 touch-none peer-empty:block"
-      {...pull}
+      {...pull.start}
     />
   );
 }
@@ -356,8 +361,9 @@ function ComposerAreaImpl({
         data-composer-shell=""
         data-composer-expanded={expanded ? "" : undefined}
         data-composer-focus-row={focusRow ? "" : undefined}
+        {...pull.carry}
         className={cn(
-          "relative rounded-lg bg-foreground/3 ring-1 ring-border ring-inset focus-within:ring-ring/30",
+          "group/composer-shell relative rounded-lg bg-foreground/3 ring-1 ring-border ring-inset focus-within:ring-ring/30",
           focusRow && "flex items-center",
           // The sheet fills the SURFACE the card sits on, by taking the box
           // of the slot above (`useComposerSheetPin`). The slot is `fixed`, so

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { use, type ReactNode } from "react";
+import { use, useState, type ReactNode } from "react";
 
 import { createComposerPickerStore } from "@/components/chat/composer/picker/composer-picker-store";
 import type { ComposerExpansion } from "@/components/home/composer/composer-shell";
@@ -459,11 +459,24 @@ describe("ComposerShell focus layout", () => {
       HTMLElement.prototype.setPointerCapture = vi.fn();
     });
 
-    function renderRow(expansion: ComposerExpansion): void {
-      render(
+    /** The row with its owner's state, so opening the sheet re-renders it. */
+    function RowWithOwner(props: {
+      readonly onExpandedChange: (expanded: boolean) => void;
+    }): ReactNode {
+      const [expanded, setExpanded] = useState(false);
+      return (
         <ComposerFocusLayoutContext value>
-          {shellWith(expansion, FITTING_EDITOR)}
-        </ComposerFocusLayoutContext>,
+          {shellWith(
+            {
+              expanded,
+              onExpandedChange: (next) => {
+                props.onExpandedChange(next);
+                setExpanded(next);
+              },
+            },
+            FITTING_EDITOR,
+          )}
+        </ComposerFocusLayoutContext>
       );
     }
 
@@ -471,9 +484,9 @@ describe("ComposerShell focus layout", () => {
       return document.querySelector("[data-composer-draft-grabber]");
     }
 
-    it("is the edge's pull: hidden from assistive technology, and one pull opens the sheet once", () => {
-      const expansion = makeExpansion(false);
-      renderRow(expansion);
+    it("is the edge's pull: hidden from assistive technology, and one pull opens the sheet once and ends on release", () => {
+      const onExpandedChange = vi.fn();
+      render(<RowWithOwner onExpandedChange={onExpandedChange} />);
       const zone = draftZone();
       if (zone === null) throw new Error("no draft zone");
       expect(zone.getAttribute("aria-hidden")).toBe("true");
@@ -483,10 +496,15 @@ describe("ComposerShell focus layout", () => {
       fireEvent.pointerMove(zone, { clientY: 40, pointerId: 1 });
       // What follows the finger is the card, as from the edge's zone.
       expect(shell().hasAttribute("data-composer-pulling")).toBe(true);
-      fireEvent.pointerUp(zone, { clientY: 40, pointerId: 1 });
+      // The sheet took the row, and the zone with it; the sheet holds the
+      // pointer, so the release reaches it.
+      expect(draftZone()).toBeNull();
+      fireEvent.pointerUp(shell(), { clientY: 40, pointerId: 1 });
 
-      expect(expansion.onExpandedChange).toHaveBeenCalledTimes(1);
-      expect(expansion.onExpandedChange).toHaveBeenCalledWith(true);
+      expect(shell().hasAttribute("data-composer-pulling")).toBe(false);
+      expect(shell().style.getPropertyValue("--composer-sheet-top")).toBe("");
+      expect(onExpandedChange).toHaveBeenCalledTimes(1);
+      expect(onExpandedChange).toHaveBeenCalledWith(true);
     });
 
     it("is not drawn off the row", () => {
