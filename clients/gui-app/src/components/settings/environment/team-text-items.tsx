@@ -151,7 +151,7 @@ export function TeamTextItems(props: {
         />
       ))}
       {rows.length === 0 && pending === null ? (
-        <p className="text-ui-sm text-muted-foreground">No variables yet.</p>
+        <p className="text-ui-sm text-muted-foreground">No variables.</p>
       ) : null}
       {canEdit ? (
         <TeamTextItemEditor

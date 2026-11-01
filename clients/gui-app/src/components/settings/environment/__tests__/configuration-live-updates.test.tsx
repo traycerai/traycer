@@ -612,10 +612,10 @@ describe("a Variables page while its own write is in flight", () => {
     return answer;
   }
 
-  it("shows Adding on a disabled draft from Add until the read lists the variable, never 'No variables yet'", async () => {
+  it("shows Adding on a disabled draft from Add until the read lists the variable, never 'No variables'", async () => {
     const world = freshWorld();
     const harness = mountVariables(world, TEAM_ENV);
-    await screen.findByText("No variables yet.");
+    await screen.findByText("No variables.");
     const answer = holdWrite(
       harness,
       world,
@@ -650,7 +650,7 @@ describe("a Variables page while its own write is in flight", () => {
         true,
       );
     }
-    expect(screen.queryByText("No variables yet.")).toBeNull();
+    expect(screen.queryByText("No variables.")).toBeNull();
 
     // Accepted, but the host's read does not list it yet: still Adding.
     await act(async () => {
@@ -660,7 +660,7 @@ describe("a Variables page while its own write is in flight", () => {
     expect(within(pendingDraft()).getByRole("status").textContent).toContain(
       "NEW_VAR · Adding",
     );
-    expect(screen.queryByText("No variables yet.")).toBeNull();
+    expect(screen.queryByText("No variables.")).toBeNull();
 
     // Another read observes it: a real row replaces the draft, which empties.
     world.items = [{ ...variable("NEW_VAR", 3), value: { value: "one" } }];
@@ -718,7 +718,7 @@ describe("a Variables page while its own write is in flight", () => {
     expect(within(row()).getByRole("status").textContent).toContain(
       "OLD_VAR · Removing",
     );
-    expect(screen.queryByText("No variables yet.")).toBeNull();
+    expect(screen.queryByText("No variables.")).toBeNull();
 
     world.items = [];
     world.revision = "11";
@@ -726,6 +726,6 @@ describe("a Variables page while its own write is in flight", () => {
     await vi.waitFor(() => {
       expect(screen.queryByLabelText("OLD_VAR value")).toBeNull();
     });
-    expect(await screen.findByText("No variables yet.")).toBeTruthy();
+    expect(await screen.findByText("No variables.")).toBeTruthy();
   });
 });

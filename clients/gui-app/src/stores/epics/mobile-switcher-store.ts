@@ -1,8 +1,9 @@
 import { create } from "zustand";
 
 /**
- * Open state of the mobile tab-switcher sheet, keyed by the epic tab it belongs
- * to, alongside which tabs currently have a sheet mounted to open.
+ * Open state of the mobile tab-switcher sheet, or of the menu that stands in for
+ * it where the width rule draws one, keyed by the epic tab it belongs to,
+ * alongside which tabs currently have a switcher mounted to open.
  *
  * A store rather than local view state because the two ends live on opposite
  * sides of the epic session boundary: the trigger sits in the mobile app header

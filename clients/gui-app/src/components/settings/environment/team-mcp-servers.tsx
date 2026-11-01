@@ -55,7 +55,7 @@ export function TeamMcpItems(props: {
     <div className="flex flex-col gap-3">
       <ConfigurationWriteFeedback issue={issue} />
       {query.data.length === 0 ? (
-        <p className="text-ui-sm text-muted-foreground">No MCP servers yet.</p>
+        <p className="text-ui-sm text-muted-foreground">No MCP servers.</p>
       ) : null}
       {query.data.map((item) => (
         <TeamMcpItem

@@ -12,6 +12,7 @@ import type { GuiAgentModelOption } from "@traycer/protocol/host/agent/gui/unary
 import type { HostRpcRegistry } from "@/lib/host";
 import { usePaneVisible } from "@/components/epic-tabs/pane-visibility-context";
 import { useHostQueries } from "@/hooks/host/use-host-queries";
+import { useInstalledAppLevel2Form } from "@/hooks/ui/use-installed-app-level2-form";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { BotAvatar } from "@/components/bots/bot-avatars";
@@ -19,9 +20,11 @@ import {
   BotIdentityContext,
   type BotIdentity,
 } from "@/components/bots/bot-identity-context";
-import { BotChannelSidebar } from "@/components/bots/bot-channel-sidebar";
+import {
+  BotChannelColumn,
+  BotChannelTitle,
+} from "@/components/bots/bot-channel-level2";
 import { BotMessageComposerUnavailable } from "@/components/bots/bot-message-composer";
-import { BotResizablePane } from "@/components/bots/bot-resizable-pane";
 import { MainBotBadge } from "@/components/bots/main-bot-badge";
 import { ChatBotAppPost } from "@/components/chat/chat-bot-message";
 import type { TeamSetup } from "@/hooks/bots/use-team-setups";
@@ -86,6 +89,7 @@ export function TeamSetupChannel(props: {
   ) {
     setSettled(true);
   }
+  const level2 = useInstalledAppLevel2Form(1);
   const identity = useMemo(
     (): BotIdentity => ({
       botId: setup.botId,
@@ -97,20 +101,12 @@ export function TeamSetupChannel(props: {
   return (
     <BotIdentityContext value={identity}>
       <div className="@container flex h-full min-h-0" data-testid="bot-tab">
-        <BotResizablePane
-          pane="sidebar"
-          edge="right"
-          label="Resize channels"
-          className="hidden min-h-0 w-(--bot-pane-width) max-w-[40%] shrink-0 flex-col border-r border-canvas-border/70 @3xl:flex"
-          handleClassName=""
-          testId="bot-channel-sidebar-pane"
-        >
-          <BotChannelSidebar
-            activeBotId={setup.botId}
-            hostId={hostId}
-            threadsView={null}
-          />
-        </BotResizablePane>
+        <BotChannelColumn
+          level2={level2}
+          activeBotId={setup.botId}
+          hostId={hostId}
+          threadsView={null}
+        />
         <section
           aria-label={setup.title}
           data-testid="team-setup-channel"
@@ -118,12 +114,13 @@ export function TeamSetupChannel(props: {
         >
           <header className="flex shrink-0 items-center gap-2 px-4 pt-3 pb-2">
             <BotAvatar size="sm" />
-            <h1
-              className="min-w-0 truncate text-ui-md font-bold text-foreground"
-              data-testid="bot-tab-title"
-            >
-              {setup.title}
-            </h1>
+            <BotChannelTitle
+              level2={level2}
+              title={setup.title}
+              activeBotId={setup.botId}
+              hostId={hostId}
+              threadsView={null}
+            />
             <MainBotBadge testId="bot-tab-main" tone="muted" />
           </header>
           {/* The post sits at the bottom, as a channel's newest row does; its

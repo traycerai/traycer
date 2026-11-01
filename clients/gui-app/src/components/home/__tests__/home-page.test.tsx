@@ -14,6 +14,7 @@ import type { ComposerPromptEditorHandle } from "@/components/chat/composer/comp
 import { createComposerEditorIncarnation } from "@/lib/composer/composer-editor-incarnation";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { MobileStripFormContext } from "@/components/layout/tabs/mobile-strip-form-context";
 import { useMobileNavStore } from "@/stores/layout/mobile-nav-store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import { draftRuntimeRegistry } from "@/stores/home/draft-runtime-registry";
@@ -73,6 +74,7 @@ type ComposerCommit = {
 const homeMocks = vi.hoisted(() => ({
   navigate: vi.fn(),
   openSettings: vi.fn(),
+  openHistory: vi.fn(),
   systemModalOpen: false,
   request: vi.fn<(method: string, payload: unknown) => Promise<unknown>>(),
   getActiveHostId: vi.fn(() => "host-home"),
@@ -440,7 +442,7 @@ vi.mock(
 vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
   useSystemTabModalActions: () => ({
     openSettings: homeMocks.openSettings,
-    openHistory: vi.fn(),
+    openHistory: homeMocks.openHistory,
     close: vi.fn(),
     setSection: vi.fn(),
   }),
@@ -545,6 +547,7 @@ describe("<HomePage />", () => {
       effectiveHostId: TEST_HOST_ID,
     });
     homeMocks.openSettings.mockReset();
+    homeMocks.openHistory.mockReset();
     useSettingsSearchStore.setState({
       query: "",
       pendingReveal: null,
@@ -664,7 +667,7 @@ describe("<HomePage />", () => {
       </QueryClientProvider>,
     );
 
-    // The hamburger drawer already carries "Recent tasks" + "View all" off the
+    // The hamburger drawer already carries "Recent tasks" + "All tasks" off the
     // same useHistoryQuery, so the inline copy is pure duplication here.
     expect(screen.queryByTestId("current-tasks-section")).toBeNull();
     expect(screen.getByTestId("home-hero")).not.toBeNull();
@@ -689,6 +692,27 @@ describe("<HomePage />", () => {
     // Same drawer the header hamburger opens - that is where "Recent tasks"
     // lives once the Current tasks section is dropped at this width.
     expect(useMobileNavStore.getState().open).toBe(true);
+    queryClient.clear();
+  });
+
+  it("opens History itself from the View history link where the strip replaces the drawer", () => {
+    homeMocks.isMobile = true;
+    useMobileNavStore.setState({ open: false });
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MobileStripFormContext.Provider value="rail">
+          <HomePage />
+        </MobileStripFormContext.Provider>
+      </QueryClientProvider>,
+    );
+
+    fireEvent.click(screen.getByTestId("home-view-history"));
+
+    expect(homeMocks.openHistory).toHaveBeenCalledTimes(1);
+    expect(useMobileNavStore.getState().open).toBe(false);
     queryClient.clear();
   });
 

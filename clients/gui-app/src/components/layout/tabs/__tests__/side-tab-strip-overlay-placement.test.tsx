@@ -593,7 +593,7 @@ describe("header overlays outside a column keep today's placement (D7)", () => {
     renderHarness(
       <>
         <HeaderNotificationsBell />
-        <HeaderIdentity showAppSettings={false} />
+        <HeaderIdentity showAppSettings={false} hostsSignOutConfirm={false} />
       </>,
     );
 
