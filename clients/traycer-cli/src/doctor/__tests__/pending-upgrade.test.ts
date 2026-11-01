@@ -83,6 +83,7 @@ function writeManifest(
 }
 
 function makePendingManifest(opts: {
+  readonly installedVersion: string;
   readonly version: string;
   readonly stagedBinaryPath: string;
   readonly liveBinaryPath: string;
@@ -90,7 +91,7 @@ function makePendingManifest(opts: {
   readonly reason: "binary-locked" | "awaiting-service-restart";
 }) {
   return {
-    version: "1.4.0",
+    version: opts.installedVersion,
     installedAt: "2026-04-01T00:00:00Z",
     binaryPath: opts.liveBinaryPath,
     source: opts.source,
@@ -136,6 +137,7 @@ describe("readPendingCliUpgrade", () => {
     writeManifest(
       "production",
       makePendingManifest({
+        installedVersion: "1.4.0",
         version: "1.5.0",
         stagedBinaryPath,
         liveBinaryPath,
@@ -190,6 +192,7 @@ describe("finalizePendingCliUpgrade", () => {
     writeManifest(
       "production",
       makePendingManifest({
+        installedVersion: "1.4.0",
         version: "1.5.0",
         stagedBinaryPath,
         liveBinaryPath,
@@ -212,6 +215,55 @@ describe("finalizePendingCliUpgrade", () => {
     expect(reread.pendingUpgrade.version).toBe("1.5.0");
   });
 
+  // Everything about this record is finalisable - the staged file is on disk
+  // and the live path is writable - and the swap is still refused, because
+  // the staged version is BELOW the installed one. The population that holds
+  // such a record is real: before `cli upgrade` carried a downgrade floor it
+  // staged the feed's last stable over an installed prerelease whenever the
+  // live binary was locked, and this function would then have published the
+  // older build on the next `host restart`. The record is read from a file,
+  // so the floor belongs on this side too, not only where it is written.
+  it("declines to publish a staged version BELOW the installed one, leaving the live binary and the record alone", async () => {
+    const liveBinaryPath = join(workHome, "bin", "traycer");
+    const stagedBinaryPath = join(workHome, "bin", "traycer-1.5.1");
+    mkdirSync(join(workHome, "bin"), { recursive: true });
+    writeFileSync(liveBinaryPath, "live-bytes-1.5.2-rc.2");
+    writeFileSync(stagedBinaryPath, "staged-bytes-1.5.1");
+    writeManifest(
+      "production",
+      makePendingManifest({
+        installedVersion: "1.5.2-rc.2",
+        version: "1.5.1",
+        stagedBinaryPath,
+        liveBinaryPath,
+        source: "manual",
+        reason: "binary-locked",
+      }),
+    );
+    const { finalizePendingCliUpgrade } =
+      await import("../../commands/cli-upgrade");
+    const outcome = await finalizePendingCliUpgrade({
+      environment: "production",
+    });
+    expect(outcome.status).toBe("installed-newer");
+    if (outcome.status === "installed-newer") {
+      expect(outcome.stagedVersion).toBe("1.5.1");
+      expect(outcome.installedVersion).toBe("1.5.2-rc.2");
+      expect(outcome.livePath).toBe(liveBinaryPath);
+    }
+    // Nothing was published: the live binary still holds its own bytes, and
+    // the staged file is still where it was (not consumed by a rename).
+    expect(readFileSync(liveBinaryPath, "utf8")).toBe("live-bytes-1.5.2-rc.2");
+    expect(existsSync(stagedBinaryPath)).toBe(true);
+
+    // The record is retained - superseded, not false - so Doctor can still
+    // report that someone asked for this version.
+    const manifestPath = join(workHome, ".traycer", "cli", "manifest.json");
+    const reread = JSON.parse(readFileSync(manifestPath, "utf8"));
+    expect(reread.version).toBe("1.5.2-rc.2");
+    expect(reread.pendingUpgrade.version).toBe("1.5.1");
+  });
+
   it("swaps the staged binary in place, clears pendingUpgrade, and updates the install record", async () => {
     const liveBinaryPath = join(workHome, "bin", "traycer");
     const stagedBinaryPath = join(workHome, "bin", "traycer-1.5.0");
@@ -221,6 +273,7 @@ describe("finalizePendingCliUpgrade", () => {
     writeManifest(
       "production",
       makePendingManifest({
+        installedVersion: "1.4.0",
         version: "1.5.0",
         stagedBinaryPath,
         liveBinaryPath,
@@ -278,6 +331,7 @@ describe("finalizePendingCliUpgrade", () => {
     writeManifest(
       "production",
       makePendingManifest({
+        installedVersion: "1.4.0",
         version: "1.5.0",
         stagedBinaryPath,
         liveBinaryPath,

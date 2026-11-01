@@ -264,6 +264,75 @@ describe("runner Sentry capture", () => {
     expect(process.exitCode).toBe(1);
   });
 
+  // The rest of the updater's user-controlled refusals, swept once against
+  // the same classifier. Each reports a state of the install or of the
+  // request - a version the rolling feed never had, no recorded install, a
+  // package manager that owns the binary, another updater already holding the
+  // work, a bookkeeping write the next run finishes - and each is resolved by
+  // the person, from the message. None of them means the feed or the installer
+  // failed, which is the only thing this set exists to let through, so none of
+  // them may consume a Sentry event. Pinned over the group because they differ
+  // in what they tell the caller and not in how the runner answers.
+  it.each([
+    {
+      key: "CLI_UPGRADE_TARGET_UNAVAILABLE" as const,
+      expected: "E_CLI_UPGRADE_TARGET_UNAVAILABLE",
+      message:
+        "cli upgrade: --target 1.4.9 is not available. The CLI release feed publishes assets for exactly one build (1.5.1).",
+    },
+    {
+      key: "CLI_UPGRADE_NO_MANIFEST" as const,
+      expected: "E_CLI_UPGRADE_NO_MANIFEST",
+      message:
+        "cli upgrade: no CLI install manifest found for this environment.",
+    },
+    {
+      key: "CLI_UPGRADE_PACKAGE_MANAGER_OWNED" as const,
+      expected: "E_CLI_UPGRADE_PACKAGE_MANAGER_OWNED",
+      message:
+        "cli upgrade: CLI is installed via homebrew; self-upgrade is disabled to keep package-manager ownership intact.",
+    },
+    {
+      key: "HOST_UPDATE_CONCURRENT_LEGACY_UPDATER" as const,
+      expected: "E_HOST_UPDATE_CONCURRENT_LEGACY_UPDATER",
+      message: "host update: a legacy updater is holding the update marker",
+    },
+    {
+      key: "HOST_UPDATE_RECORD_NOT_CONCLUDED" as const,
+      expected: "E_HOST_UPDATE_RECORD_NOT_CONCLUDED",
+      message:
+        "host update: 1.5.1 is installed and the host is running it. The update itself is done - only the completion write for the attempt record was refused.",
+    },
+  ])(
+    "does not capture the user-controlled refusal $expected",
+    async ({ key, expected, message }) => {
+      const { CLI_ERROR_CODES, CliError } = await import("../errors");
+
+      await runThrowing(
+        new CliError({
+          code: CLI_ERROR_CODES[key],
+          message,
+          details: null,
+          exitCode: 1,
+        }),
+      );
+
+      expect(sentryMocks.captureException).not.toHaveBeenCalled();
+      expect(sentryMocks.addBreadcrumb).toHaveBeenCalledTimes(1);
+      const crumb = sentryMocks.addBreadcrumb.mock.calls[0][0] as Breadcrumb;
+      expect(crumb.data.code).toBe(expected);
+
+      const terminal = terminalEnvelope();
+      expect(terminal?.status).toBe("error");
+      const reported = terminal?.error as Record<string, unknown>;
+      expect(reported.code).toBe(expected);
+      // The remedy the person acts on is in the message, so it has to reach
+      // the caller intact even though nothing was reported.
+      expect(reported.message).toBe(message);
+      expect(process.exitCode).toBe(1);
+    },
+  );
+
   it("leaves a breadcrumb naming the skipped code", async () => {
     const { CLI_ERROR_CODES, CliError } = await import("../errors");
 

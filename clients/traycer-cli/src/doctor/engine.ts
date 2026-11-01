@@ -28,6 +28,10 @@ import {
   pendingUpgradeFinalisable,
   readPendingCliUpgrade,
 } from "../commands/cli-upgrade";
+// The SAME predicate `finalizePendingCliUpgrade` declines a publication
+// with, so the card and the publish path cannot disagree about whether a
+// staged record will ever be applied.
+import { wouldDowngradeCli } from "../upgrade/downgrade-floor";
 import {
   markerDescribesUpgrade,
   readPostFinalizeMarker,
@@ -763,6 +767,59 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
           reason: pendingUpgrade.pending.reason,
           currentVersion: pendingUpgrade.currentVersion,
           binaryPath: pendingUpgrade.binaryPath,
+          finalizeMarker: finalizeMarkerDetail(finalizeMarker),
+          serviceStartError: pendingMarkerServiceStartError,
+        },
+      });
+    } else if (
+      wouldDowngradeCli({
+        installedVersion: pendingUpgrade.currentVersion,
+        candidateVersion: pendingUpgrade.pending.version,
+      })
+    ) {
+      // STALE: the staged binary is below the installed version, so the
+      // swap will never happen - `finalizePendingCliUpgrade` reads the same
+      // ordering and declines it. Reported from the record AND the
+      // ordering, because the record alone said "restart to finalise",
+      // which on this state was advice to perform a downgrade.
+      //
+      // Doctor REPORTS and does not clear it. `readPendingCliUpgrade` is
+      // the read-only path by construction, this surface's whole contract
+      // is to describe what is on disk, and the rule `cli upgrade` applies
+      // is itself a refusal rather than a cleanup - so "clear it here"
+      // would invent a mutation that no other surface performs. The record
+      // also remains the only evidence that someone asked for this
+      // version, which the `staged-binary-missing` branch above preserves
+      // for the same reason.
+      //
+      // No `fixAction`: the Desktop button is `host-restart`, which is
+      // exactly what must not be offered here, and the bridge does not
+      // proxy `cli upgrade` - the same constraint the missing-binary branch
+      // states. The terminal command is the explicit two-flag form, so a
+      // reader who DID want that version has the way through.
+      issues.push({
+        code: DOCTOR_ISSUE_CODES.CLI_UPGRADE_PENDING,
+        severity: "warning",
+        title: `CLI upgrade staged but superseded (${pendingUpgrade.pending.version})`,
+        message:
+          `cli upgrade staged ${pendingUpgrade.pending.version} at ` +
+          `${pendingUpgrade.pending.stagedBinaryPath}, but the installed cli is ` +
+          `${pendingUpgrade.currentVersion}, which is newer. The swap will not be ` +
+          `applied. Run 'traycer cli upgrade --target ${pendingUpgrade.pending.version} ` +
+          `--allow-downgrade' to install ${pendingUpgrade.pending.version} anyway.` +
+          (pendingMarkerServiceStartError === null
+            ? ""
+            : ` The finalize helper also could not restart the host service: ${pendingMarkerServiceStartError}`),
+        fixAction: null,
+        terminalCommand: `traycer cli upgrade --target ${pendingUpgrade.pending.version} --allow-downgrade`,
+        details: {
+          stagedVersion: pendingUpgrade.pending.version,
+          stagedBinaryPath: pendingUpgrade.pending.stagedBinaryPath,
+          stagedAt: pendingUpgrade.pending.stagedAt,
+          reason: pendingUpgrade.pending.reason,
+          currentVersion: pendingUpgrade.currentVersion,
+          binaryPath: pendingUpgrade.binaryPath,
+          source: pendingUpgrade.source,
           finalizeMarker: finalizeMarkerDetail(finalizeMarker),
           serviceStartError: pendingMarkerServiceStartError,
         },

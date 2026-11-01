@@ -166,6 +166,7 @@ function stageDoctorMocksWithStartAt(startedAt: string) {
 }
 
 function writePendingManifest(opts: {
+  readonly installedVersion: string;
   readonly version: string;
   readonly stagedBinaryPath: string;
   readonly liveBinaryPath: string;
@@ -182,7 +183,7 @@ function writePendingManifest(opts: {
     join(cliDir, "manifest.json"),
     JSON.stringify(
       {
-        version: "1.4.0",
+        version: opts.installedVersion,
         installedAt: "2026-04-01T00:00:00Z",
         binaryPath: opts.liveBinaryPath,
         source: "manual",
@@ -207,6 +208,7 @@ describe("runDoctor pending CLI upgrade surface", () => {
     const stagedBinaryPath = join(workHome, "bin", "traycer-1.5.0");
     mkdirSync(join(workHome, "bin"), { recursive: true });
     writePendingManifest({
+      installedVersion: "1.4.0",
       version: "1.5.0",
       stagedBinaryPath,
       liveBinaryPath,
@@ -233,12 +235,58 @@ describe("runDoctor pending CLI upgrade surface", () => {
     });
   });
 
+  // The staged binary is present and finalisable, so every disk-shaped
+  // check above passes - what disqualifies this record is the ORDERING
+  // alone. Before the downgrade floor existed, `cli upgrade` could stage the
+  // feed's last stable over an installed prerelease while the live binary was
+  // locked, and this card then told the reader to restart the host to finalise
+  // a swap that `finalizePendingCliUpgrade` now declines. The card has to read
+  // the same ordering the publish path reads, or Doctor advertises a repair
+  // that silently does nothing.
+  it("reports a pending version BELOW the installed one as superseded, with the two-flag way through and no host-restart fix", async () => {
+    stageDoctorMocks();
+    const liveBinaryPath = join(workHome, "bin", "traycer");
+    const stagedBinaryPath = join(workHome, "bin", "traycer-1.5.1");
+    mkdirSync(join(workHome, "bin"), { recursive: true });
+    writePendingManifest({
+      installedVersion: "1.5.2-rc.2",
+      version: "1.5.1",
+      stagedBinaryPath,
+      liveBinaryPath,
+      stagedExists: true,
+    });
+
+    const { runDoctor } = await import("../engine");
+    const result = await runDoctor({
+      environment: "production",
+      portConflictDeps: null,
+    });
+    const issue = result.issues.find((i) => i.code === "CLI_UPGRADE_PENDING");
+    expect(issue).toBeDefined();
+    expect(issue?.severity).toBe("warning");
+    expect(issue?.title).toBe("CLI upgrade staged but superseded (1.5.1)");
+    // The repair the record alone would have offered, withheld: `host-restart`
+    // is the Desktop button, and pressing it here finalises nothing.
+    expect(issue?.fixAction).toBeNull();
+    expect(issue?.terminalCommand).toBe(
+      "traycer cli upgrade --target 1.5.1 --allow-downgrade",
+    );
+    expect(issue?.message).toContain("the installed cli is 1.5.2-rc.2");
+    expect(issue?.details).toMatchObject({
+      stagedVersion: "1.5.1",
+      stagedBinaryPath,
+      currentVersion: "1.5.2-rc.2",
+      binaryPath: liveBinaryPath,
+    });
+  });
+
   it("emits CLI_UPGRADE_PENDING with null fixAction when staged binary is missing", async () => {
     stageDoctorMocks();
     const liveBinaryPath = join(workHome, "bin", "traycer");
     const stagedBinaryPath = join(workHome, "bin", "traycer-1.5.0-missing");
     mkdirSync(join(workHome, "bin"), { recursive: true });
     writePendingManifest({
+      installedVersion: "1.4.0",
       version: "1.5.0",
       stagedBinaryPath,
       liveBinaryPath,
@@ -317,6 +365,7 @@ describe("runDoctor pending CLI upgrade surface", () => {
     const stagedBinaryPath = join(workHome, "bin", "traycer-1.5.0");
     mkdirSync(join(workHome, "bin"), { recursive: true });
     writePendingManifest({
+      installedVersion: "1.4.0",
       version: "1.5.0",
       stagedBinaryPath,
       liveBinaryPath,
@@ -368,6 +417,7 @@ describe("runDoctor pending CLI upgrade surface", () => {
     const stagedBinaryPath = join(workHome, "bin", "traycer-1.5.0");
     mkdirSync(join(workHome, "bin"), { recursive: true });
     writePendingManifest({
+      installedVersion: "1.4.0",
       version: "1.5.0",
       stagedBinaryPath,
       liveBinaryPath,
@@ -417,6 +467,7 @@ describe("runDoctor pending CLI upgrade surface", () => {
     const stagedBinaryPath = join(workHome, "bin", "traycer-1.5.0");
     mkdirSync(join(workHome, "bin"), { recursive: true });
     writePendingManifest({
+      installedVersion: "1.4.0",
       version: "1.5.0",
       stagedBinaryPath,
       liveBinaryPath,
@@ -475,6 +526,7 @@ describe("runDoctor pending CLI upgrade surface", () => {
     const stagedBinaryPath = join(workHome, "bin", "traycer-1.6.0");
     mkdirSync(join(workHome, "bin"), { recursive: true });
     writePendingManifest({
+      installedVersion: "1.4.0",
       version: "1.6.0",
       stagedBinaryPath,
       liveBinaryPath,
@@ -523,6 +575,7 @@ describe("runDoctor pending CLI upgrade surface", () => {
     const stagedBinaryPath = join(workHome, "bin", "traycer-1.5.0-missing");
     mkdirSync(join(workHome, "bin"), { recursive: true });
     writePendingManifest({
+      installedVersion: "1.4.0",
       version: "1.5.0",
       stagedBinaryPath,
       liveBinaryPath,
@@ -835,6 +888,7 @@ describe("runDoctor pending CLI upgrade surface", () => {
     const pendingStagedPath = join(workHome, "bin", "traycer-1.6.0");
     mkdirSync(join(workHome, "bin"), { recursive: true });
     writePendingManifest({
+      installedVersion: "1.4.0",
       version: "1.6.0",
       stagedBinaryPath: pendingStagedPath,
       liveBinaryPath,

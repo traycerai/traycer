@@ -316,6 +316,32 @@ export const EXPECTED_CLI_ERROR_CODES: ReadonlySet<CliErrorCode> =
     // the caller asked for is a typed outcome the command answers for, and
     // the person resolves it by re-running with `--allow-downgrade`.
     CLI_ERROR_CODES.CLI_UPGRADE_NOT_NEWER,
+    // The rest of `cli upgrade`'s refusals that report a state of the
+    // INSTALL or of the caller's request, each with a remedy the person
+    // carries out. What stays captured is every arm where the feed or the
+    // installer is the thing that failed: DOWNLOAD_FAILED (the transfer),
+    // REPLACE_FAILED (publication over the live binary) and
+    // FINALIZE_HELPER_FAILED (the detached helper never ran).
+    //
+    // The rolling feed serves exactly one build, so `--target` naming any
+    // other version is an assertion that was simply wrong - the feed is
+    // healthy and still publishing.
+    CLI_ERROR_CODES.CLI_UPGRADE_TARGET_UNAVAILABLE,
+    // No recorded install to upgrade. An environment state, and the message
+    // already names `cli re-anchor` as the way out.
+    CLI_ERROR_CODES.CLI_UPGRADE_NO_MANIFEST,
+    // A package manager owns this binary, so self-upgrade is refused by
+    // design and the message names that manager's own upgrade command.
+    // Nothing is broken; the ownership contract is being honoured.
+    CLI_ERROR_CODES.CLI_UPGRADE_PACKAGE_MANAGER_OWNED,
+    // Another updater already owns the work - the legacy-updater twin of
+    // HOST_UPDATE_ATTEMPT_ACTIVE above. Contention is a schedule, not a
+    // fault.
+    CLI_ERROR_CODES.HOST_UPDATE_CONCURRENT_LEGACY_UPDATER,
+    // The update SUCCEEDED; only the attempt record's completion write was
+    // refused, and the next run concludes the record. Reporting a run that
+    // delivered exactly what was asked would be reporting its bookkeeping.
+    CLI_ERROR_CODES.HOST_UPDATE_RECORD_NOT_CONCLUDED,
     CLI_ERROR_CODES.HOST_CLIENT_FLOOR_UNMET,
     CLI_ERROR_CODES.HOST_STORE_FORMAT_FLOOR,
     CLI_ERROR_CODES.AGENT_NOT_FOUND,

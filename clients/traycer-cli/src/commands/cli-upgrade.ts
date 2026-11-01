@@ -983,6 +983,18 @@ export type FinalizePendingCliUpgradeOutcome =
       readonly livePath: string;
       readonly errorMessage: string;
     }
+  // The staged binary is BELOW the installed version, so publishing it
+  // would move the CLI backwards. Nothing was attempted and nothing went
+  // wrong: the record is superseded. See the guard in
+  // `finalizePendingCliUpgrade` for why the manifest is read as untrusted
+  // input here rather than trusted to be ordered.
+  | {
+      readonly status: "installed-newer";
+      readonly stagedVersion: string;
+      readonly installedVersion: string;
+      readonly stagedBinaryPath: string;
+      readonly livePath: string;
+    }
   // Publication genuinely failed (full disk, unwritable install dir,
   // digest mismatch on a cross-filesystem copy). Reported rather than
   // thrown: `host restart` stops the service BEFORE calling this and
@@ -1064,18 +1076,43 @@ export async function finalizePendingCliUpgrade(opts: {
       livePath: manifest.binaryPath,
     };
   }
-  // No downgrade floor is re-asked here, and that is a conclusion rather
-  // than an omission: every writer of this manifest keeps a pending
-  // record's version ABOVE the installed one. `cli upgrade` stages only
-  // above it (see the downgrade contract at the top of this file),
-  // `writeMarkSource` - which `cli mark-source` and `cli re-anchor` both
-  // go through - clears `pendingUpgrade` outright, `clearPendingUpgrade`
-  // promotes the pending version and clears it, and desktop records a
-  // pending upgrade only on the path where its bundled build is NEWER
-  // than the install. So a staged binary below the installed version is
-  // not a state this manifest reaches, and a guard for it here would be
-  // an unreachable branch.
+  // The same floor `cli upgrade` applies when it STAGES, re-asked here
+  // where the bytes are actually published.
   //
+  // This guard was removed once, on the argument that no writer of this
+  // manifest produces a pending record below the installed version - which
+  // is true of our writers and is the WRONG TEST for this function. What
+  // runs here reads a FILE and publishes an executable from what it says,
+  // so the question is what the input can express, not what today's
+  // writers emit. A JSON record below the install is expressible, and a
+  // concrete population already holds one: every machine where a pre-fix
+  // `cli upgrade` staged the feed's older stable over a prerelease while
+  // the binary was locked wrote exactly that record. Treating the manifest
+  // as untrusted input is validation, not a branch for an impossible state.
+  //
+  // `pendingUpgrade` is RETAINED, like every other outcome here that does
+  // not swap: the record is superseded, not false, and Doctor's card reads
+  // the same ordering to say so (see `CLI_UPGRADE_PENDING`).
+  if (
+    wouldDowngradeCli({
+      installedVersion: manifest.version,
+      candidateVersion: pending.version,
+    })
+  ) {
+    logger.info("CLI pending upgrade is below the installed version", {
+      environment: opts.environment,
+      currentVersion: manifest.version,
+      pendingVersion: pending.version,
+    });
+    return {
+      status: "installed-newer",
+      stagedVersion: pending.version,
+      installedVersion: manifest.version,
+      stagedBinaryPath: pending.stagedBinaryPath,
+      livePath: manifest.binaryPath,
+    };
+  }
+
   // A publication failure must not escape as an exception - see the
   // `publish-failed` variant for why the restart path cannot survive one.
   let swap: ReplaceResult;
