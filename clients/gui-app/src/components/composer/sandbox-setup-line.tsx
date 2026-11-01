@@ -241,14 +241,26 @@ export function SandboxSetupLine(props: {
       />
     );
   }
+  if (stage.phase === "staged" || stage.startedAt === null) return null;
   // A sandbox that rested on its own is said by its state footer, never by
-  // a create still on its way.
-  if (
-    stage.phase === "staged" ||
-    stage.startedAt === null ||
-    stagedSandboxRested(stage, props.facts.sandboxResting)
-  )
-    return null;
+  // a create still on its way. A send this window can't give back stays
+  // here, with the person's way to wake it.
+  if (stagedSandboxRested(stage, props.facts.sandboxResting)) {
+    return props.withdrawalAllowed === false ? (
+      <div
+        role="status"
+        className="flex w-full min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1 text-ui-xs"
+        data-testid="sandbox-rested-held-line"
+      >
+        <span className="text-foreground/85">{MESSAGE_STILL_PENDING}</span>
+        <LineButton
+          label={RETRY}
+          testId="sandbox-rested-held-retry"
+          onClick={actions.onRetry}
+        />
+      </div>
+    ) : null;
+  }
   return (
     <SandboxProgressLine
       stage={stage}
@@ -579,13 +591,18 @@ function isTakingLonger(
   failure: StagedSandboxFailure | null,
   elapsedSeconds: number,
 ): boolean {
-  if (failure !== null) return failure.kind === "timed-out";
+  if (failure !== null) return waitEnded(failure);
   return elapsedSeconds * 1000 >= STAGED_TAKING_LONGER_MS;
 }
 
-/** The run is still going: no failure, or only the budget ran out. */
+/** The run stopped waiting with nothing wrong with the sandbox. */
+function waitEnded(failure: StagedSandboxFailure): boolean {
+  return failure.kind === "timed-out" || failure.kind === "rested";
+}
+
+/** The run is still going: no failure, or only the wait ended. */
 function stillWaiting(failure: StagedSandboxFailure | null): boolean {
-  return failure === null || failure.kind === "timed-out";
+  return failure === null || waitEnded(failure);
 }
 
 function progressTitle(view: ProgressView, name: string): string {
@@ -807,7 +824,7 @@ function ProgressBranchButtons(props: {
       </>
     );
   }
-  if (failure?.kind === "timed-out") {
+  if (failure !== null && waitEnded(failure)) {
     return (
       <>
         <LineButton

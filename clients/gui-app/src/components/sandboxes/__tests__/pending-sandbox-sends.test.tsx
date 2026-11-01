@@ -5874,6 +5874,66 @@ describe("a send whose sandbox left awake on its own after the create timed out"
   });
 });
 
+describe("a rested send this window cannot give back", () => {
+  const FRESH = Date.now() + 60_000;
+
+  function rowIn(state: SandboxSummary["state"]): SandboxSummary {
+    return sandboxSummaryFixture({
+      id: SANDBOX_ID,
+      hostId: SANDBOX_HOST,
+      state,
+      guestConfigured: true,
+    });
+  }
+
+  it.each([
+    ["a recorded rest at booting", "booting", { kind: "rested" }],
+    [
+      "a timed-out wait at applying",
+      "applying",
+      { kind: "timed-out", step: "applying" },
+    ],
+  ] as const)(
+    "keeps the send and says it is pending, with a Retry that wakes the sandbox once, under %s",
+    async (_label, step, failure) => {
+      // No Web Locks here: this window owns the send but is not exclusive.
+      expect(navigator.locks).toBeUndefined();
+      seed({
+        ...SEEDED,
+        target: RESUME_TARGET,
+        send: { request: { kind: "chat", parentId: null, placement: null } },
+        phase: "creating",
+        created: true,
+      });
+      useStagedSandboxStore
+        .getState()
+        .report(SURFACE, { step, stepAt: Date.now(), failure });
+      mocks.listReadAt = FRESH;
+      mocks.sandboxes = [rowIn("suspended")];
+      mocks.listSandboxes.mockResolvedValue(listAnswers([rowIn("awake")]));
+      mocks.wake.mockResolvedValue({ kind: "awake" });
+      answerHost(SANDBOX_HOST, CODEX_READY);
+      mount();
+
+      const held = await screen.findByTestId("sandbox-rested-held-line");
+      expect(held.textContent).toContain("Your message is still pending.");
+      expect(screen.queryByTestId("sandbox-setup-line")).toBeNull();
+      expect(document.body.textContent).not.toContain("compute is charged");
+      expect(
+        usePendingSandboxSendStore.getState().sends[SEND_ID],
+      ).toBeDefined();
+      expect(mocks.wake).not.toHaveBeenCalled();
+
+      fireEvent.click(within(held).getByTestId("sandbox-rested-held-retry"));
+
+      await waitFor(() => {
+        expect(mocks.wake).toHaveBeenCalledTimes(1);
+      });
+      expect(mocks.wake).toHaveBeenCalledWith(SANDBOX_HOST, "send");
+    },
+  );
+});
+
 describe("a send held on settings that didn't apply, once its sandbox leaves awake", () => {
   const FRESH = Date.now() + 60_000;
   let restoreLocks: () => void = () => undefined;

@@ -1061,6 +1061,34 @@ describe("runStagedSandbox on a resting sandbox", () => {
     });
   });
 
+  it("wakes once for a live Send, and a Suspend made while it waits ends the wait instead of undoing it", async () => {
+    useStagedSandboxStore.getState().stage(surfaceKey, RESTING);
+    const { wake, deps } = harness(
+      {
+        lists: [
+          listOf(
+            sandboxSummaryFixture({
+              id: "sbx_resting",
+              hostId: "host-resting",
+              state: "suspended",
+            }),
+          ),
+        ],
+        entries: [{ ...DIALABLE, hostId: "host-resting" }],
+      },
+      true,
+    );
+
+    await run(false, deps);
+
+    expect(wake).toHaveBeenCalledTimes(1);
+    expect(wake).toHaveBeenCalledWith("host-resting", "send");
+    expect(stageOf()).toMatchObject({
+      phase: "creating",
+      failure: { kind: "rested" },
+    });
+  });
+
   it("does not wake a sandbox that rested on its own after its settings step began", async () => {
     const store = useStagedSandboxStore.getState();
     store.stage(surfaceKey, PERSONAL_NEW);

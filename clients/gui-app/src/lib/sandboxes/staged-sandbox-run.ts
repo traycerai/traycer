@@ -55,7 +55,6 @@ import {
   handoffOwnerLive,
   readStagedSandbox,
   refusedBeforeCreate,
-  stagedSandboxRested,
   useStagedSandboxStore,
   type StagedSandbox,
   type StagedSandboxFailure,
@@ -169,7 +168,7 @@ export async function runStagedSandbox(
     );
     if (started === null) return;
     await settle(
-      { surfaceKey, clientRequestId, started, deps, resume: request.resume },
+      { surfaceKey, clientRequestId, started, deps },
       readStagedSandbox(surfaceKey)?.startedAt ?? deps.now(),
     );
   } finally {
@@ -534,7 +533,6 @@ interface SandboxSettlement {
   readonly clientRequestId: string;
   readonly started: StartedSandbox;
   readonly deps: StagedSandboxRunDeps;
-  readonly resume: boolean;
 }
 
 /**
@@ -568,18 +566,16 @@ async function settleRow(
 ): Promise<"waiting" | "finished"> {
   const { surfaceKey, clientRequestId, started, deps } = input;
   if (row?.state === "suspended" || row?.state === "stopped") {
-    // One that rested on its own during this wait stays at rest: its send
-    // goes back, and the composer stages it to wake on the next one.
-    const stage = readStagedSandbox(surfaceKey);
-    if (stage === null || stagedSandboxRested(stage, true)) return "finished";
-    // A reload is nobody's gesture, so its run wakes nothing either, and the
-    // stage records the rest it found: its step cannot say whether a wake
-    // landed before the app closed.
-    if (input.resume) {
+    // A run wakes once, for the person's action that started it: only at
+    // `creating` has it not woken anything yet, which is how Cancel retains
+    // an already-created sandbox after it rested. Any later rest is the
+    // sandbox's, or someone's Suspend, and a reload keeps the step it found
+    // and is nobody's gesture: the stage records the rest, its send goes
+    // back, and a composer stages it to wake on the next one.
+    if (readStagedSandbox(surfaceKey)?.step !== "creating") {
       fail(surfaceKey, { kind: "rested" });
       return "finished";
     }
-    // Cancel/reload can retain an already-created sandbox after it rested.
     const awake = await wakeCurrentStage(
       surfaceKey,
       clientRequestId,
