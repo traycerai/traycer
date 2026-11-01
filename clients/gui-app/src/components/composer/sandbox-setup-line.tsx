@@ -24,8 +24,6 @@ import {
   COULDNT_VERIFY_BALANCE,
   KEEP_WAITING,
   MESSAGE_STILL_PENDING,
-  NOTHING_BILLED_NEVER_WOKE,
-  NOTHING_CHARGED_FOR_WAKE,
   OPEN_TERMINAL,
   OPEN_TERMINAL_INSTEAD,
   RESUMING_SANDBOX,
@@ -736,17 +734,8 @@ function FailureSentence(props: {
   readonly sandboxAwake: boolean | null;
 }): ReactNode {
   if (props.failure?.kind === "failed") {
-    // A sandbox that failed after it woke was charged while it was awake.
-    if (stepAfterWake(props.failure.step)) {
-      return <p className="m-0">{COMPUTE_CHARGED_WHILE_AWAKE}</p>;
-    }
-    return (
-      <p className="m-0">
-        {props.resuming
-          ? NOTHING_CHARGED_FOR_WAKE
-          : `${NOTHING_BILLED_NEVER_WOKE}. ${MESSAGE_STILL_PENDING}`}
-      </p>
-    );
+    if (props.resuming || stepAfterWake(props.failure.step)) return null;
+    return <p className="m-0">{MESSAGE_STILL_PENDING}</p>;
   }
   if (props.failure?.kind === "settings" && props.sandboxAwake !== false) {
     return <p className="m-0">{COMPUTE_CHARGED_WHILE_AWAKE}</p>;

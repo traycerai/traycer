@@ -579,9 +579,6 @@ export function couldntStartLine(name: string): string {
 export function couldntResumeLine(name: string): string {
   return `Couldn't resume ${name}`;
 }
-export const NOTHING_BILLED_NEVER_WOKE =
-  "Nothing was billed for a sandbox that never woke";
-export const NOTHING_CHARGED_FOR_WAKE = "Nothing was charged for this wake.";
 export const MESSAGE_STILL_PENDING = "Your message is still pending.";
 export const RETRY_CREATION = "Retry creation";
 export const CANCEL_THE_MESSAGE = "Cancel the message";
