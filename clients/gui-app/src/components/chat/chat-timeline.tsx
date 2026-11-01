@@ -15,6 +15,7 @@ import {
   type MaintainVisibleContentPositionConfig,
   type OnViewableItemsChangedInfo,
 } from "@legendapp/list/react";
+import { appLogger } from "@/lib/logger";
 import { cn } from "@/lib/utils";
 import { ChatEmptyState } from "@/components/chat/chat-empty-state";
 import { ChatBotPresentationContext } from "@/components/chat/chat-bot-presentation-context";
@@ -127,6 +128,16 @@ export interface ChatTimelineInitialScrollAnchor {
 interface ChatTimelineItemSizeInfo {
   readonly size: number;
   readonly itemData: TranscriptListRow;
+}
+
+/**
+ * The part of the patched `onItemSizeOscillation` payload this component
+ * reads, declared locally for the same reason as `ChatTimelineItemSizeInfo`.
+ */
+interface ChatTimelineItemSizeOscillationInfo {
+  readonly itemKey: string;
+  readonly itemData: TranscriptListRow;
+  readonly sizes: ReadonlyArray<number>;
 }
 
 export interface ChatTimelineProps {
@@ -415,6 +426,31 @@ export const ChatTimeline = memo(function ChatTimeline({
     [followLatch, onItemSizeChanged, rowHeightMemory],
   );
 
+  // The patched list pins a row whose measured height keeps flipping between
+  // commits instead of re-measuring it until React gives up and the tile
+  // crashes, and reports it once per measurement pass. A streaming row can
+  // repeat that every token, so the log names each row once: which row it is
+  // and the heights it flipped between, never its text.
+  const loggedOscillatingRowKeysRef = useRef(new Set<string>());
+  const handleItemSizeOscillation = useCallback(
+    (info: ChatTimelineItemSizeOscillationInfo) => {
+      const loggedKeys = loggedOscillatingRowKeysRef.current;
+      if (loggedKeys.has(info.itemKey)) return;
+      loggedKeys.add(info.itemKey);
+      const row = info.itemData;
+      appLogger.warn(
+        "[transcript] a row's height never settled; its size is pinned for this pass",
+        {
+          itemKey: info.itemKey,
+          messageId: row.kind === "hydrated" ? row.model.id : null,
+          rowKind: row.kind === "hydrated" ? row.model.role : row.kind,
+          sizes: info.sizes,
+        },
+      );
+    },
+    [],
+  );
+
   const handleMetricsChange = useCallback(
     (metrics: { readonly headerSize: number; readonly footerSize: number }) => {
       followLatch.followEndIfPermitted();
@@ -579,6 +615,7 @@ export const ChatTimeline = memo(function ChatTimeline({
             keySequenceChanged,
           )}
           onItemSizeChanged={handleItemSizeChanged}
+          onItemSizeOscillation={handleItemSizeOscillation}
           onScroll={handleScroll}
           onMetricsChange={handleMetricsChange}
           onViewableItemsChanged={handleViewableItemsChanged}
