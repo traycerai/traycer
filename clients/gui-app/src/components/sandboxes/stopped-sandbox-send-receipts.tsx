@@ -20,10 +20,7 @@ import {
   useTaskHasNoChats,
 } from "@/hooks/sandboxes/use-rested-task-message-line";
 import { resolveChatSandbox } from "@/lib/sandboxes/chat-sandbox-state";
-import {
-  stageIsReturnedSandbox,
-  type StoredReturnedSandbox,
-} from "@/lib/sandboxes/returned-sandbox";
+import type { StoredReturnedSandbox } from "@/lib/sandboxes/returned-sandbox";
 import {
   useSandboxList,
   sandboxListReadSentAt,
@@ -343,13 +340,7 @@ function ReturnedSendReceipt(props: {
     useTaskHasNoChats(receipt.epicId) &&
     receipt.returned.kind === "task" &&
     props.tabId !== null;
-  const currentPicks = stoppedReceiptPicks(
-    receipt.epicId,
-    pins,
-    receipt.kind === "stopped"
-      ? withoutReturnedStage(receipt.epicId, stages, taskReturned)
-      : stages,
-  );
+  const currentPicks = stoppedReceiptPicks(receipt.epicId, pins, stages);
   const readAt = sandboxListReadSentAt(sandboxList.data);
   const sandboxId =
     receipt.kind === "cancelled" || receipt.kind === "recovered"
@@ -357,12 +348,7 @@ function ReturnedSendReceipt(props: {
       : receipt.sandboxId;
   const picksChanged =
     receipt.kind !== "recovered" &&
-    (Object.keys(currentPicks).length !== Object.keys(receipt.picks).length ||
-      Object.entries(currentPicks).some(
-        ([key, pick]) =>
-          pick.pin !== receipt.picks[key]?.pin ||
-          pick.target !== receipt.picks[key]?.target,
-      ));
+    receiptPicksMoved(receipt, currentPicks, taskReturned);
   const row = sandboxList.data?.sandboxes.find(
     (sandbox) => sandbox.id === sandboxId,
   );
@@ -532,21 +518,37 @@ function stoppedReceiptLine(
 
 /**
  * The composer stages a message's own sandbox as it shows the draft: that is
- * no pick of the person's, so it leaves a Stop's line up.
+ * no pick of the person's, so a Stop's line stays up. The same on both sides:
+ * the sandbox may already have been staged there when the Stop landed. A Stop
+ * only returns a created sandbox, so the sandbox's id names it.
  */
-function withoutReturnedStage(
-  epicId: string,
-  stages: Readonly<Partial<Record<string, StagedSandbox>>>,
+function receiptPicksMoved(
+  receipt: StoppedSandboxSendReceipt,
+  current: StoppedSandboxSendReceipt["picks"],
   returned: StoredReturnedSandbox | null,
-): Readonly<Partial<Record<string, StagedSandbox>>> {
-  const key = newConversationSurfaceKey(epicId);
-  if (
-    returned === null ||
-    !stageIsReturnedSandbox(stages[key] ?? null, returned)
-  )
-    return stages;
-  const { [key]: _returned, ...others } = stages;
-  return others;
+): boolean {
+  const taskKey = newConversationSurfaceKey(receipt.epicId);
+  function pickedTarget(
+    key: string,
+    target: StagedSandbox["target"] | undefined,
+  ): StagedSandbox["target"] | undefined {
+    const isOwnSandbox =
+      target?.kind === "existing" &&
+      returned?.target.kind === "existing" &&
+      target.sandboxId === returned.target.sandboxId;
+    return receipt.kind === "stopped" && key === taskKey && isOwnSandbox
+      ? undefined
+      : target;
+  }
+  return (
+    Object.keys(current).length !== Object.keys(receipt.picks).length ||
+    Object.entries(current).some(
+      ([key, pick]) =>
+        pick.pin !== receipt.picks[key]?.pin ||
+        pickedTarget(key, pick.target) !==
+          pickedTarget(key, receipt.picks[key]?.target),
+    )
+  );
 }
 
 /** A list read after the receipt shows its sandbox has moved on. */

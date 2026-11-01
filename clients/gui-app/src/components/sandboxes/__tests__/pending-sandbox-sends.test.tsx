@@ -8871,6 +8871,58 @@ describe("choosing Stop on an unclaimed send", () => {
       ).toBeUndefined();
     });
 
+    it("keeps the line when the composer already held a stage on this sandbox before the Stop landed", async () => {
+      openTask(true, []);
+      useStagedSandboxStore
+        .getState()
+        .stage(newConversationSurfaceKey("epic-1"), START_TARGET);
+      await chooseStopAndConfirmRest();
+
+      expectAddAgentReceipt();
+      expect(
+        useStoppedSandboxSendReceiptStore.getState().receipts[SEND_ID],
+      ).toBeDefined();
+    });
+
+    it("keeps the saved-in-drafts line when an occupied composer already held its earlier stage on this sandbox", async () => {
+      const occupiedContent: JsonContent = {
+        type: "doc",
+        content: [
+          {
+            type: "paragraph",
+            content: [{ type: "text", text: "keep my replacement" }],
+          },
+        ],
+      };
+      openTask(true, []);
+      // Seeded: an earlier give-back left the composer's content, its returned
+      // sandbox and the stage the composer made from it.
+      useNewConversationModalStore
+        .getState()
+        .setContent("epic-1", occupiedContent);
+      useNewConversationModalStore.getState().setReturnedSandbox("epic-1", {
+        target: START_TARGET,
+        clientRequestId: null,
+      });
+      useStagedSandboxStore
+        .getState()
+        .stage(newConversationSurfaceKey("epic-1"), START_TARGET);
+      await chooseStopAndConfirmRest();
+
+      const line = screen.getByTestId("sandbox-stopped-line");
+      expect(line.textContent).toContain(SAVED_DRAFT_RECEIPT);
+      expect(
+        within(line).getByRole("button", { name: "Open draft" }),
+      ).toBeDefined();
+      expect(within(line).getByRole("button", { name: "Start" })).toBeDefined();
+      expect(
+        within(line).getByRole("button", { name: "Choose another host" }),
+      ).toBeDefined();
+      expect(
+        useStoppedSandboxSendReceiptStore.getState().receipts[SEND_ID],
+      ).toBeDefined();
+    });
+
     it("clears a cancelled receipt when the composer stages the message's own sandbox", async () => {
       openTask(true, []);
       useNewConversationModalStore
