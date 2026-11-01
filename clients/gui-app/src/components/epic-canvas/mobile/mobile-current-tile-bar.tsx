@@ -11,6 +11,8 @@ import {
 } from "@/components/epic-canvas/canvas/browser-tab-presentation";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { ContentMinimapButton } from "@/components/minimap/content-minimap-button";
+import { MobileLevel2MenuTrigger } from "@/components/layout/shell/mobile-level2";
+import type { MobileLevel2Form } from "@/lib/layout/mobile-layout-form";
 import { useChatStreamSyncState } from "@/hooks/chats/use-chat-stream-sync-state";
 import { usePublishSurfaceSync } from "@/hooks/sync/use-publish-surface-sync";
 import { useStreamSyncingSpell } from "@/hooks/sync/use-stream-syncing-spell";
@@ -31,18 +33,23 @@ import type {
 interface MobileCurrentTileBarProps {
   readonly epicId: string;
   readonly tile: EpicCanvasTileRef;
+  readonly level2: MobileLevel2Form;
 }
 
 /**
- * Slim bar under the mobile header naming the tile on screen: live icon, the
- * display title, and - for a tile whose content has an outline - the minimap
- * button at the trailing edge. Switching tabs is the header's switcher
- * trigger, so this bar carries no BETWEEN-tile navigation; the minimap moves
- * within the tile already on screen.
+ * The row naming the tile on screen: live icon, the display title, and - for a
+ * tile whose content has an outline - the minimap button at the trailing edge.
+ * It is also what reports a chat's stream to the app shell, so it renders in
+ * every form of level 2.
  *
- * The title is a label, never a control: a tap on this bar is almost always a
- * reach for the tile below it. Renaming a tile lives in the switcher row's
- * actions menu.
+ * In the `bar` form it is the tile bar: switching tabs is the header's switcher
+ * trigger, so it carries no BETWEEN-tile navigation; the minimap moves within
+ * the tile already on screen, and the title is a label, never a control: a tap
+ * on this bar is almost always a reach for the tile below it. Renaming a tile
+ * lives in the switcher row's actions menu.
+ *
+ * Beside the column it is the pane's header and still a label. In the `menu`
+ * form the icon and title are the trigger of the `MobileTileMenu` around it.
  *
  * Icon + title reuse the exact desktop tab-strip resolution (`TabIcon`,
  * `useEpicTabDisplayTitle`), including the terminal bound-host client so a
@@ -117,7 +124,7 @@ function MobileCurrentTileBarBody(
     readonly terminalControl: TerminalTabControl | null;
   },
 ) {
-  const { epicId, tile, browserPresentation, terminalControl } = props;
+  const { epicId, tile, level2, browserPresentation, terminalControl } = props;
   const isTerminal = tile.type === "terminal";
   // Terminal titles resolve against the tab's bound host; `null` for every
   // other kind (mirrors the tab strip). `useHostClientForHostId(null)` returns
@@ -191,27 +198,50 @@ function MobileCurrentTileBarBody(
     wake: isChat ? chatSync.wake : null,
   });
 
+  const icon = (
+    <TabIcon
+      epicId={epicId}
+      tab={tile}
+      titleGenerationPending={titleGenerationPending}
+      browserPresentation={browserPresentation}
+    />
+  );
+  const title = (
+    <span
+      data-testid="mobile-current-tile-title"
+      className="min-w-0 flex-1 truncate text-ui-sm font-medium text-foreground"
+    >
+      {displayTitle}
+    </span>
+  );
+
   return (
     <div
       data-mobile-shell-touch-scope=""
       className="shrink-0 border-b border-canvas-border/70 bg-canvas"
     >
       <div
-        data-testid="mobile-current-tile-bar"
+        data-testid={
+          level2 === "bar"
+            ? "mobile-current-tile-bar"
+            : "mobile-tile-pane-header"
+        }
         className="flex min-h-11 w-full items-center gap-2 px-3"
       >
-        <TabIcon
-          epicId={epicId}
-          tab={tile}
-          titleGenerationPending={titleGenerationPending}
-          browserPresentation={browserPresentation}
-        />
-        <span
-          data-testid="mobile-current-tile-title"
-          className="min-w-0 flex-1 truncate text-ui-sm font-medium text-foreground"
-        >
-          {displayTitle}
-        </span>
+        {level2 === "menu" ? (
+          <MobileLevel2MenuTrigger
+            testId="mobile-tile-menu-trigger"
+            className="mr-auto"
+          >
+            {icon}
+            {title}
+          </MobileLevel2MenuTrigger>
+        ) : (
+          <>
+            {icon}
+            {title}
+          </>
+        )}
         <ContentMinimapButton tileInstanceId={tile.instanceId} />
       </div>
     </div>
