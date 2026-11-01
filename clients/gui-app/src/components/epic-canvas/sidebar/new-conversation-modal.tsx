@@ -1137,12 +1137,13 @@ export function NewConversationModalBody(props: {
     },
   );
   // A stage's kept pick goes to this modal's draft, as its own emit does,
-  // and skips the harness memory the emit also records.
-  useEffect(() => {
+  // and skips the harness memory the emit also records. A layout effect: the
+  // toolbar's catalog push that keeps the pick is a passive effect of the same
+  // commit, and must find this installed.
+  useLayoutEffect(() => {
     toolbarStore.setState({
       onShownPickKept: (settings) => setSettings(epicId, settings),
     });
-    return () => toolbarStore.setState({ onShownPickKept: null });
   }, [epicId, setSettings, toolbarStore]);
   const harnessId = useStore(
     toolbarStore,

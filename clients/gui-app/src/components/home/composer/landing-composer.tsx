@@ -414,16 +414,19 @@ export function LandingComposer(props: LandingComposerProps) {
     },
   );
   // A stage's kept pick goes to this draft only, never to the host's
-  // last-run settings that seed every other draft.
-  useEffect(() => {
-    if (draftId === null) return;
+  // last-run settings that seed every other draft. A layout effect: the
+  // toolbar's catalog push that keeps the pick is a passive effect of the same
+  // commit, and must find this installed.
+  useLayoutEffect(() => {
     toolbarStore.setState({
-      onShownPickKept: (settings) => {
-        setDraftSettings(draftId, settings);
-        authority.noteEdit();
-      },
+      onShownPickKept:
+        draftId === null
+          ? null
+          : (settings) => {
+              setDraftSettings(draftId, settings);
+              authority.noteEdit();
+            },
     });
-    return () => toolbarStore.setState({ onShownPickKept: null });
   }, [authority, draftId, setDraftSettings, toolbarStore]);
   const harnessId = useStore(toolbarStore, (s) => s.selection.harnessId);
   const profileId = useStore(toolbarStore, (s) => s.selection.profileId);
