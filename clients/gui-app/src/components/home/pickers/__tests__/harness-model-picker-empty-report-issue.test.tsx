@@ -61,6 +61,7 @@ describe("<ModelRowsState /> catalog and model failure report actions", () => {
     renderRowsState({
       catalogLoading: false,
       catalogError: true,
+      restingModelPrompt: null,
       hostUnavailableLabel: null,
       hasQuery: false,
       activeProvider: null,
@@ -79,6 +80,7 @@ describe("<ModelRowsState /> catalog and model failure report actions", () => {
     renderRowsState({
       catalogLoading: false,
       catalogError: true,
+      restingModelPrompt: null,
       hostUnavailableLabel: null,
       hasQuery: false,
       activeProvider: null,
@@ -109,6 +111,7 @@ describe("<ModelRowsState /> catalog and model failure report actions", () => {
     renderRowsState({
       catalogLoading: false,
       catalogError: true,
+      restingModelPrompt: null,
       hostUnavailableLabel: null,
       hasQuery: false,
       activeProvider: null,
@@ -149,6 +152,7 @@ describe("<ModelRowsState /> catalog and model failure report actions", () => {
     renderRowsState({
       catalogLoading: false,
       catalogError: false,
+      restingModelPrompt: null,
       hostUnavailableLabel: null,
       hasQuery: false,
       activeProvider: provider,
@@ -189,6 +193,7 @@ describe("<ModelRowsState /> catalog and model failure report actions", () => {
     renderRowsState({
       catalogLoading: false,
       catalogError: false,
+      restingModelPrompt: null,
       hostUnavailableLabel: null,
       hasQuery: false,
       activeProvider: null,
@@ -208,6 +213,7 @@ describe("<ModelRowsState /> catalog and model failure report actions", () => {
     renderRowsState({
       catalogLoading: true,
       catalogError: false,
+      restingModelPrompt: null,
       hostUnavailableLabel: null,
       hasQuery: false,
       activeProvider: null,
@@ -232,6 +238,7 @@ describe("<ModelRowsState /> catalog and model failure report actions", () => {
     renderRowsState({
       catalogLoading: false,
       catalogError: false,
+      restingModelPrompt: null,
       hostUnavailableLabel: null,
       hasQuery: false,
       activeProvider: provider,
@@ -250,6 +257,7 @@ describe("<ModelRowsState /> catalog and model failure report actions", () => {
     renderRowsState({
       catalogLoading: false,
       catalogError: true,
+      restingModelPrompt: null,
       hostUnavailableLabel: "This device is starting",
       hasQuery: false,
       activeProvider: null,

@@ -8,6 +8,15 @@ import { guiHarnessIdToProviderId } from "@/lib/provider-ordering";
 import { ProviderSetupManualCommand } from "@/components/home/pickers/harness-model-picker-auth-line";
 import { ProviderSetupTerminalAction } from "@/components/home/pickers/provider-setup-terminal-action";
 import { useProviderTerminalLoginScopeSupported } from "@/hooks/providers/use-provider-terminal-login-scope-support";
+import type { RestingSandboxHost } from "@/hooks/sandboxes/use-resting-sandbox-host";
+import { useIsMutatingOf } from "@/hooks/use-mutation-state-of";
+import { useHostBinding } from "@/lib/host";
+import { sandboxMutationKeys } from "@/lib/query-keys";
+import { startSandboxWake } from "@/lib/sandboxes/sandbox-wake";
+import {
+  wakeSandboxLabel,
+  wakeToChooseModelLine,
+} from "@/lib/sandboxes/sandbox-strings";
 import {
   providerSetupActionPlacement,
   providerSetupPreparingLabel,
@@ -21,6 +30,7 @@ import type {
   ProviderCliState,
   ProviderId,
 } from "@traycer/protocol/host/provider-schemas";
+import { useQueryClient } from "@tanstack/react-query";
 import { KeyRound, SquareTerminal } from "lucide-react";
 import type { ReactNode } from "react";
 
@@ -56,6 +66,8 @@ function PickerStateRow(props: PickerStateRowProps) {
 interface ModelRowsStateProps {
   readonly catalogLoading: boolean;
   readonly catalogError: boolean;
+  /** The resting sandbox to wake for a list; `null` with a list to show. */
+  readonly restingModelPrompt: RestingSandboxHost | null;
   readonly hostUnavailableLabel: string | null;
   readonly hasQuery: boolean;
   readonly activeProvider: GuiHarnessCatalogEntry | null;
@@ -74,9 +86,7 @@ interface ModelRowsStateProps {
 
 export function ModelRowsState(props: ModelRowsStateProps): ReactNode | null {
   const {
-    catalogLoading,
     catalogError,
-    hostUnavailableLabel,
     hasQuery,
     activeProvider,
     activeProviderState,
@@ -87,25 +97,8 @@ export function ModelRowsState(props: ModelRowsStateProps): ReactNode | null {
     onClosePicker,
   } = props;
 
-  if (hostUnavailableLabel !== null && rowsCount === 0) {
-    return (
-      <PickerStateRow
-        icon={undefined}
-        label={hostUnavailableLabel}
-        action={undefined}
-      />
-    );
-  }
-
-  if (catalogLoading && rowsCount === 0) {
-    return (
-      <PickerStateRow
-        icon={<MutedAgentSpinner />}
-        label="Loading models"
-        action={undefined}
-      />
-    );
-  }
+  const noRowsState = rowsCount === 0 ? hostStateRow(props) : null;
+  if (noRowsState !== null) return noRowsState;
 
   if (catalogError) {
     return (
@@ -199,6 +192,66 @@ export function ModelRowsState(props: ModelRowsStateProps): ReactNode | null {
   }
 
   return null;
+}
+
+// With no rows to show, what the host's own state says instead of them.
+function hostStateRow(
+  props: Pick<
+    ModelRowsStateProps,
+    "hostUnavailableLabel" | "catalogLoading" | "restingModelPrompt"
+  >,
+): ReactNode | null {
+  if (props.hostUnavailableLabel !== null) {
+    return (
+      <PickerStateRow
+        icon={undefined}
+        label={props.hostUnavailableLabel}
+        action={undefined}
+      />
+    );
+  }
+  if (props.catalogLoading) {
+    return (
+      <PickerStateRow
+        icon={<MutedAgentSpinner />}
+        label="Loading models"
+        action={undefined}
+      />
+    );
+  }
+  return props.restingModelPrompt === null ? null : (
+    <RestingModelPrompt host={props.restingModelPrompt} />
+  );
+}
+
+// A resting sandbox with no model list anywhere: only waking it gives one.
+function RestingModelPrompt(props: {
+  readonly host: RestingSandboxHost;
+}): ReactNode {
+  const { host } = props;
+  const queryClient = useQueryClient();
+  const binding = useHostBinding();
+  const waking =
+    useIsMutatingOf({ mutationKey: sandboxMutationKeys.wake(host.hostId) }) > 0;
+  return (
+    <PickerStateRow
+      label={wakeToChooseModelLine(host.name, host.verb)}
+      icon={undefined}
+      action={
+        <Button
+          size="sm"
+          variant="secondary"
+          disabled={waking}
+          onClick={() => {
+            void startSandboxWake(queryClient, binding, host.hostId, null);
+          }}
+        >
+          {waking ? <MutedAgentSpinner /> : null}
+          {wakeSandboxLabel(host.verb)}
+        </Button>
+      }
+    />
+  );
 }
 
 // Scope-aware empty copy. A query that matches nothing names the harness it

@@ -186,6 +186,7 @@ export function ModalFixture() {
                 behavior: "auto",
               }}
               catalogHarnessesError={false}
+              restingModelPrompt={null}
               activeProvider={HARNESS}
               onHoverRow={() => undefined}
               onActiveRow={() => undefined}

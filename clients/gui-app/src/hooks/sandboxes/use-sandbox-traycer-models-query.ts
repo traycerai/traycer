@@ -35,6 +35,9 @@ function sandboxTraycerModelsQueryOptions(
     },
     enabled,
     staleTime: TRAYCER_MODELS_STALE_MS,
+    // A surface that stops reading keeps the last list: going idle only
+    // detaches it, and a resting sandbox's picker has no other list to show.
+    gcTime: Infinity,
   });
 }
 

@@ -182,6 +182,8 @@ import { ActiveHostWorkspaceControls } from "@/components/home/host-workspace-se
 import {
   stagingSurfaceKey,
   useInTaskSandboxStagingSurface,
+  useRestingHostStage,
+  useUnstagedNamedHost,
 } from "@/components/composer/use-sandbox-staging";
 import {
   useStagedSandboxHandoff,
@@ -1123,6 +1125,7 @@ export function NewConversationModalBody(props: {
     resolvedHostId,
     "epic.createChat",
   );
+  const unstagedHostId = useUnstagedNamedHost(hostId, resolvedHostId);
   const toolbarStore = useComposerToolbarStore(
     null,
     fallbackSeedSource(draftSettings, hostClient),
@@ -1134,10 +1137,10 @@ export function NewConversationModalBody(props: {
       chatLineCarriesAutoMode: null,
       ultracodeCarried,
       // The key `useInTaskSandboxStagingSurface` stages under below; a named
-      // host stages nothing.
+      // host stages nothing unless it rests.
       stagedSurfaceKey:
-        hostId === null ? newConversationSurfaceKey(epicId) : null,
-      sendsToRestingSandbox: false,
+        unstagedHostId === null ? newConversationSurfaceKey(epicId) : null,
+      restingSandbox: null,
     },
   );
   // A stage's kept pick goes to this modal's draft, as its own emit does,
@@ -1256,9 +1259,14 @@ export function NewConversationModalBody(props: {
   const sandboxStaging = useInTaskSandboxStagingSurface(
     epicId,
     newConversationSurfaceKey(epicId),
-    hostId,
+    unstagedHostId,
     openTerminalInstead,
   );
+  useRestingHostStage({
+    surfaceKey: stagingSurfaceKey(sandboxStaging),
+    hostId: resolvedHostId,
+    named: hostId !== null,
+  });
   useNewConversationReturnedSandbox(epicId, hostId);
   const workspaceGate = useStagedWorkspaceGate(
     stagingSurfaceKey(sandboxStaging),

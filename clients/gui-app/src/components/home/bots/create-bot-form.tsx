@@ -163,7 +163,7 @@ export function CreateBotForm(props: {
       chatLineCarriesAutoMode: null,
       ultracodeCarried: false,
       stagedSurfaceKey: null,
-      sendsToRestingSandbox: false,
+      restingSandbox: null,
     },
   );
   const modelSlug = useStore(toolbarStore, (s) => s.selection.modelSlug);

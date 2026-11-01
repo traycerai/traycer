@@ -28,6 +28,7 @@ import type {
   ProviderProfile,
 } from "@traycer/protocol/host/provider-schemas";
 import type { ProfileRowAdmission } from "@/components/providers/provider-profile-model";
+import type { RestingSandboxHost } from "@/hooks/sandboxes/use-resting-sandbox-host";
 import type { GuiHarnessCatalogEntry } from "@/hooks/harnesses/use-gui-harness-catalog";
 import type { ProviderPackPreparing } from "@/components/providers/provider-pack-readiness";
 import type { HarnessModelRow } from "@/components/home/data/harness-model-search";
@@ -115,6 +116,8 @@ export interface HarnessModelPickerPanelBodyProps {
     behavior: "auto";
   };
   readonly catalogHarnessesError: boolean;
+  /** The resting sandbox to wake for a model list; `null` with one to show. */
+  readonly restingModelPrompt: RestingSandboxHost | null;
   readonly activeProvider: GuiHarnessCatalogEntry | null;
   readonly onHoverRow: (rowId: string) => void;
   readonly onActiveRow: (rowId: string) => void;
@@ -293,6 +296,7 @@ export function HarnessModelPickerPanelBody(
     hoveredRowId,
     initialTopMostItemIndex,
     catalogHarnessesError,
+    restingModelPrompt,
     activeProvider,
     onHoverRow,
     onActiveRow,
@@ -444,6 +448,7 @@ export function HarnessModelPickerPanelBody(
               initialTopMostItemIndex={initialTopMostItemIndex}
               catalogLoading={catalogHarnessesLoading}
               catalogError={catalogHarnessesError}
+              restingModelPrompt={restingModelPrompt}
               hostUnavailableLabel={hostUnavailableLabel}
               activeProvider={activeProvider}
               activeProviderState={activeProviderState}

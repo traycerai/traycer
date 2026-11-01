@@ -46,6 +46,10 @@ import {
 import { useTeamSandboxHarnessGate } from "@/hooks/sandboxes/use-team-sandbox-harness-blocked";
 import { returnedSandboxRestoredOn } from "@/lib/sandboxes/returned-sandbox";
 import { useSandboxHostConfiguration } from "@/hooks/sandboxes/use-on-team-sandbox";
+import {
+  useRestingSandboxHost,
+  type RestingSandboxHost,
+} from "@/hooks/sandboxes/use-resting-sandbox-host";
 import { useSandboxTraycerModels } from "@/hooks/sandboxes/use-sandbox-traycer-models-query";
 import { useStagedSandboxStore } from "@/stores/composer/staged-sandbox-store";
 
@@ -100,11 +104,13 @@ export interface ComposerToolbarCatalogScope {
    */
   readonly stagedSurfaceKey: string | null;
   /**
-   * Whether this composer's send wakes the resting sandbox its chat is bound
-   * to. The send runs there, not on `hostId`, so the toolbar keeps the chat's
-   * own pick, as it does for a staged sandbox.
+   * The resting sandbox a chat's next message wakes, which need not be
+   * `hostId`, the tab's host; `null` for any other composer. Its send runs
+   * there, so the toolbar keeps the chat's own pick, as it does for a staged
+   * sandbox. A composer whose own host rests, or whose stage does, says so
+   * through the directory instead.
    */
-  readonly sendsToRestingSandbox: boolean;
+  readonly restingSandbox: RestingSandboxHost | null;
 }
 
 /**
@@ -160,7 +166,7 @@ export function useComposerToolbarStore(
     chatLineCarriesAutoMode,
     ultracodeCarried,
     stagedSurfaceKey,
-    sendsToRestingSandbox,
+    restingSandbox,
   } = catalog;
   const activityEnabled = useSurfaceActivity();
   const paneVisible = usePaneVisible();
@@ -271,7 +277,18 @@ export function useComposerToolbarStore(
     (s) =>
       stagedSurfaceKey !== null && s.bySurface[stagedSurfaceKey] !== undefined,
   );
-  const sandboxRunTarget = sandboxRunTargetOf(staged, sendsToRestingSandbox);
+  const stagedExistingHostId = useStagedSandboxStore((s) => {
+    const stage =
+      stagedSurfaceKey === null ? undefined : s.bySurface[stagedSurfaceKey];
+    return stage?.target.kind === "existing" ? stage.target.hostId : null;
+  });
+  // A stage is where the send runs, so this host's rest says nothing then. A
+  // stage's New sandbox has nothing to wake yet.
+  const restingDirectoryHost = useRestingSandboxHost(
+    staged ? stagedExistingHostId : hostId,
+  );
+  const restingRunHost = restingSandbox ?? restingDirectoryHost;
+  const sandboxRunTarget = sandboxRunTargetOf(staged, restingRunHost !== null);
   const harnessesQuery = useGuiHarnessesQueryForClient(hostClient, {
     enabled: activityEnabled,
     subscribed: activityEnabled,
@@ -309,13 +326,14 @@ export function useComposerToolbarStore(
   useEffect(() => {
     store.setState({
       sandboxRunTarget,
+      restingRunHost,
       stageKeepsShownPick:
         paneVisible &&
         sandboxRunTarget === "staged" &&
         stagedSurfaceKey !== null &&
         !returnedSandboxRestoredOn(stagedSurfaceKey),
     });
-  }, [paneVisible, store, sandboxRunTarget, stagedSurfaceKey]);
+  }, [paneVisible, restingRunHost, store, sandboxRunTarget, stagedSurfaceKey]);
   useEffect(() => {
     store.getState().setCatalog({
       hostId,
@@ -416,10 +434,10 @@ function useToolbarModelsData(input: {
 
 function sandboxRunTargetOf(
   staged: boolean,
-  sendsToRestingSandbox: boolean,
+  resting: boolean,
 ): ComposerToolbarStoreState["sandboxRunTarget"] {
-  if (sendsToRestingSandbox) return "resting";
-  return staged ? "staged" : null;
+  if (staged) return "staged";
+  return resting ? "resting" : null;
 }
 
 function chatRunSettingsSeedKey(settingsSeed: ChatRunSettings | null): string {
