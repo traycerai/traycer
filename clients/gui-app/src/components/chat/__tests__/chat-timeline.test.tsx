@@ -389,6 +389,17 @@ describe("ChatTimeline", () => {
     expect(screen.queryByTestId("chat-timeline")).toBeNull();
   });
 
+  it("draws the header it is given in place of the empty state while the list has no row", () => {
+    const { container } = renderTimeline({
+      messages: [],
+      header: <div data-testid="timeline-header-probe" />,
+    });
+
+    expect(screen.getByTestId("timeline-header-probe")).not.toBeNull();
+    expect(screen.queryByText("Start the conversation")).toBeNull();
+    expect(mountedMessageRows(container).length).toBe(0);
+  });
+
   it("sets data-message-id and role-specific contain-intrinsic-size classes on row wrappers", async () => {
     const messages: ReadonlyArray<ChatMessageModel> = [
       makeMessage(0, "user"),

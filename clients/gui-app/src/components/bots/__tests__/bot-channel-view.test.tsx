@@ -244,6 +244,7 @@ vi.mock("@/components/bots/bot-chat-transcript", () => ({
   BotChatTranscript: (props: {
     chatId: string;
     surface: BotTranscriptSurface | null;
+    header: ReactNode;
     landOn: BotTranscriptLanding | null;
   }) => {
     const surface = props.surface;
@@ -258,6 +259,7 @@ vi.mock("@/components/bots/bot-chat-transcript", () => ({
             : ""
         }
       >
+        {props.header}
         {surface !== null && surface.kind === "channel"
           ? mocks.postIds.map((postId) => (
               <PostStub

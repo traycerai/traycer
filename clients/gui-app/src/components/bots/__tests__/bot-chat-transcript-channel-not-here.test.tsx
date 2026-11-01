@@ -186,6 +186,7 @@ function mountTranscript(surface: BotTranscriptSurface): {
         surface={surface}
         resolveMember={UNRESOLVED_BOT_MEMBERS}
         showConnecting
+        header={null}
         landOn={null}
       />
     </QueryClientProvider>

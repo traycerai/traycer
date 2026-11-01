@@ -1,7 +1,7 @@
+import { useSideStripDrawnCollapsed } from "@/components/layout/tabs/mobile-strip-form-context";
 import { useTabStripPlacement } from "@/components/layout/tabs/use-tab-strip-placement";
 import { useArrangementValue } from "@/lib/layout-overrides";
 import { liveAgentsInStrip } from "@/lib/layout/layout-arrangement";
-import { useSideStripCollapsed } from "@/stores/layout/side-tab-strip-store";
 import { useLayoutEditorStore } from "@/stores/layout/layout-editor-store";
 
 /**
@@ -12,7 +12,7 @@ import { useLayoutEditorStore } from "@/stores/layout/layout-editor-store";
  */
 export function useStripAgentsMode(): "live" | "preview" | null {
   const placement = useTabStripPlacement();
-  const collapsed = useSideStripCollapsed();
+  const collapsed = useSideStripDrawnCollapsed();
   const view = useArrangementValue("sideStripView");
   const pointed = useLayoutEditorStore(
     (state) =>
@@ -28,7 +28,7 @@ export function useStripAgentsMode(): "live" | "preview" | null {
 /** Whether this window's strip lists live agents at all (D9). */
 export function useLiveAgentsInStrip(): boolean {
   const placement = useTabStripPlacement();
-  const collapsed = useSideStripCollapsed();
+  const collapsed = useSideStripDrawnCollapsed();
   const view = useArrangementValue("sideStripView");
   return liveAgentsInStrip(placement, collapsed, view);
 }

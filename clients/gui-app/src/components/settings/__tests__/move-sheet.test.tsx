@@ -132,6 +132,7 @@ function mountReaching(
       applied: [],
     })),
     state: "ready",
+    thisComputerUnread: false,
     collisions: [],
     retry: runningPersonalMock.retry,
     reread: () => undefined,
@@ -377,6 +378,7 @@ describe("<MoveSheet />", () => {
       {
         hosts: [],
         state: "loading",
+        thisComputerUnread: false,
         collisions: [],
         retry: () => undefined,
         reread: () => undefined,
@@ -399,6 +401,7 @@ describe("<MoveSheet />", () => {
       {
         hosts: [],
         state: "failed",
+        thisComputerUnread: false,
         collisions: [],
         retry,
         reread: () => undefined,
