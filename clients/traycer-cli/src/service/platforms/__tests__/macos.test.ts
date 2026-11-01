@@ -9,7 +9,14 @@ import {
 } from "vitest";
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { existsSync, mkdtempSync } from "node:fs";
-import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  readFile,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { setTimeout as realSleep } from "node:timers/promises";
@@ -1157,6 +1164,43 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       "print",
       "kickstart",
     ]);
+  });
+
+  it("accepts a concurrent installer's job when launchd prints the same plist through a symlink", async () => {
+    const calls: RecordedCall[] = [];
+    createdPlistPath = join(tempPlistDir, `${label.id}.plist`);
+    const aliasDir = `${tempPlistDir}-alias`;
+    await symlink(tempPlistDir, aliasDir);
+    try {
+      const printed = join(aliasDir, `${label.id}.plist`);
+      const runner: ProcessRunner = async (command, args) => {
+        calls.push({ command, args });
+        if (args[0] === "bootstrap") {
+          throw buildLaunchctlError({
+            command,
+            cmdArgs: args,
+            stderr: REFUSED_BOOTSTRAP_STDERR,
+            stdout: "",
+            exitCode: 5,
+          });
+        }
+        if (args[0] === "print") {
+          return { stdout: `path = ${printed}\n`, stderr: "", exitCode: 0 };
+        }
+        return buildSuccessResult();
+      };
+
+      await expect(
+        createMacosController(drainingBootouts(runner)).install({
+          label,
+          cli: { command: "/usr/local/bin/traycer", args: [] },
+          enableLinger: false,
+        }),
+      ).resolves.toBeUndefined();
+      expect(calls.at(-1)?.args[0]).toBe("kickstart");
+    } finally {
+      await rm(aliasDir, { force: true });
+    }
   });
 
   it("fails an install whose reload lost the label to a job loaded from another plist, and starts nothing", async () => {

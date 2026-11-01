@@ -305,9 +305,10 @@ export interface ServiceController {
 /**
  * The job a command's closing line names: the one the service manager runs
  * for this label, which on a Desktop-managed Mac is Desktop's agent, not the
- * CLI label. Read after the action and before its lock is released, so no
- * other command can have moved the job. A read that fails falls back to the
- * label rather than failing an action that already happened.
+ * CLI label. Best effort: read after the action and before its lock is
+ * released, so no other CLI command can have moved the job, though Desktop
+ * registers outside that lock. A read that fails names the label rather than
+ * failing an action that already happened.
  */
 export async function serviceJobIdFor(
   controller: Pick<ServiceController, "hostStartAdoptionLabel">,

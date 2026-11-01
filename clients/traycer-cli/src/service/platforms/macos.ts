@@ -1,5 +1,13 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { chmod, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  readFile,
+  realpath,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname } from "node:path";
 import {
@@ -1423,7 +1431,9 @@ async function reloadRegisteredService(
           exitCode: 1,
         });
       }
-      if (postRaceOwnership.path === options.manifestPath) return;
+      if (await loadedFromManifest(postRaceOwnership, options.manifestPath)) {
+        return;
+      }
       throw cliError({
         code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
         message: `service install: label '${options.labelId}' was loaded from ${postRaceOwnership.path ?? "an unknown path"} after the CLI's own bootout, not from ${options.manifestPath}, so the host would not run what this install wrote. Stop whatever loaded it, then re-run 'traycer host service install'.`,
@@ -1447,6 +1457,25 @@ async function reloadRegisteredService(
       },
       exitCode: 1,
     });
+  }
+}
+
+// Whether launchd loaded the job from this manifest. Compared as files, not
+// spellings, because a symlinked home names one plist two ways. A path that is
+// missing, or cannot be resolved, is not evidence that it is this manifest.
+async function loadedFromManifest(
+  ownership: Extract<LaunchdOwnership, { kind: "cli-or-other" }>,
+  manifestPath: string,
+): Promise<boolean> {
+  if (ownership.path === null) return false;
+  try {
+    const [loaded, manifest] = await Promise.all([
+      realpath(ownership.path),
+      realpath(manifestPath),
+    ]);
+    return loaded === manifest;
+  } catch {
+    return false;
   }
 }
 
