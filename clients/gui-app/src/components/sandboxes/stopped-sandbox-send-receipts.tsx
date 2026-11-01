@@ -20,6 +20,7 @@ import {
 } from "@/hooks/sandboxes/use-sandbox-list-query";
 import { useSandboxOperationFailure } from "@/hooks/sandboxes/use-sandbox-operation-failure";
 import type { HostSandboxState } from "@traycer/protocol/host/host-status";
+import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
 import { useSandboxOperation } from "@/hooks/sandboxes/use-sandbox-operation";
 import { useSandboxVerb } from "@/hooks/sandboxes/use-sandbox-verb-mutation";
 import {
@@ -157,10 +158,11 @@ function StoppedReceipt(props: {
   const { receipt, tabId } = props;
   if (receipt.kind === "stopped")
     return <StoppedReceiptOwner receipt={receipt} tabId={tabId} />;
-  // A rest is nobody's gesture: it is said in its task, never in a toast.
-  if (receipt.kind === "rested")
+  // A sandbox's own state is nobody's gesture: it is said in its task, never
+  // in a toast.
+  if (receipt.kind === "rested" || receipt.kind === "ended")
     return tabId === null ? null : (
-      <RestedReceipt receipt={receipt} tabId={tabId} />
+      <SandboxStateReceipt receipt={receipt} tabId={tabId} />
     );
   return (
     <ReturnedSendReceipt
@@ -173,28 +175,32 @@ function StoppedReceipt(props: {
 }
 
 /** The sandbox's own line, by the resolver its chat would consult. */
-function RestedReceipt(props: {
+function SandboxStateReceipt(props: {
   readonly receipt: Extract<
     StoppedSandboxSendReceipt,
-    { readonly kind: "rested" }
+    { readonly kind: "rested" | "ended" }
   >;
   readonly tabId: string;
 }): ReactNode {
   const { receipt } = props;
   const state = useChatSandboxState(receipt.epicId, receipt.hostId, false);
   const { line } = resolveChatSandbox(state, RECEIPT_VIEWER);
+  let sandboxLine: ReactNode = null;
+  // A state not known here says nothing of this task: the receipt's sentence does.
+  if (line !== null && state.kind !== "pending") {
+    sandboxLine =
+      line.place === "footer" ? (
+        <ChatSandboxFooter line={line} />
+      ) : (
+        <span>{line.text}</span>
+      );
+  }
   return (
     <ReturnedSendReceipt
       receipt={receipt}
       tabId={props.tabId}
       startSandbox={null}
-      sandboxLine={
-        line?.place === "footer" ? (
-          <ChatSandboxFooter line={line} />
-        ) : (
-          <span>{line?.text}</span>
-        )
-      }
+      sandboxLine={sandboxLine}
     />
   );
 }
@@ -269,7 +275,7 @@ function ReturnedSendReceipt(props: {
     readonly pending: boolean;
     readonly failure: ReactNode;
   } | null;
-  /** Said in place of the receipt's sentence: a rested sandbox's own line. */
+  /** Said in place of the receipt's sentence: the sandbox's own line. */
   readonly sandboxLine: ReactNode;
 }): ReactNode {
   const { receipt, sandboxLine } = props;
@@ -319,14 +325,7 @@ function ReturnedSendReceipt(props: {
         pick.pin !== receipt.picks[key]?.pin ||
         pick.target !== receipt.picks[key]?.target,
     ) ||
-    (receipt.kind !== "cancelled" &&
-      !sandboxList.isError &&
-      readAt !== null &&
-      readAt > receipt.confirmedAt &&
-      (row === undefined ||
-        (receipt.kind === "stopped"
-          ? FINISHED_RECEIPT_STATES.has(row.state)
-          : !RESTED_RECEIPT_STATES.has(row.state))));
+    (!sandboxList.isError && rowOutlivedReceipt(receipt, row, readAt));
   useEffect(() => {
     if (obsolete) dismissReceipt(receipt.id);
   }, [obsolete, receipt.id]);
@@ -434,6 +433,20 @@ function ReturnedSendReceipt(props: {
     });
   }, [content, props.tabId, obsolete, receipt.id]);
   return obsolete || props.tabId === null ? null : content;
+}
+
+/** A list read after the receipt shows its sandbox has moved on. */
+function rowOutlivedReceipt(
+  receipt: StoppedSandboxSendReceipt,
+  row: SandboxSummary | undefined,
+  readAt: number | null,
+): boolean {
+  if (receipt.kind !== "stopped" && receipt.kind !== "rested") return false;
+  if (readAt === null || readAt <= receipt.confirmedAt) return false;
+  if (row === undefined) return true;
+  return receipt.kind === "stopped"
+    ? FINISHED_RECEIPT_STATES.has(row.state)
+    : !RESTED_RECEIPT_STATES.has(row.state);
 }
 
 function returnedMessagePresent(

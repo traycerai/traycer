@@ -108,7 +108,7 @@ import {
 } from "@/stores/epics/new-conversation-modal-store";
 import {
   recordCancelledSandboxSend,
-  recordRestedSandboxSend,
+  recordSandboxStateSend,
   recordStoppedSandboxSend,
 } from "@/stores/sandboxes/stopped-sandbox-send-receipt-store";
 import { startSandboxWake } from "@/lib/sandboxes/sandbox-wake";
@@ -1205,8 +1205,9 @@ function clearPendingSandboxFailure(surfaceKey: string): void {
 
 /**
  * A new agent's message withdrawn because its sandbox rests goes back to its
- * task's composer, still on that sandbox, and the task says the sandbox's
- * state where its setup line was. Nothing opens: a rest is nobody's gesture.
+ * task's composer, still on that sandbox; one whose sandbox ended goes back
+ * without it. Either way the task says the sandbox's state where its setup
+ * line was. Nothing opens: neither is anybody's gesture.
  */
 function returnWatchedSend(
   send: PendingSandboxSend,
@@ -1226,20 +1227,19 @@ function returnWatchedSend(
     returnPendingSandboxSendOnItsSandbox(send.id);
     return;
   }
-  if (
-    send.request.kind !== "chat" ||
-    stage === null ||
-    restingVerb(rowState) === null
-  ) {
+  if (send.request.kind !== "chat" || stage === null) {
     returnPendingSandboxSend(send.id);
     return;
   }
-  const returned = returnPendingSandboxSendToSandbox(
-    send.id,
-    returnedSandboxPick(send, stage, rowState),
-  );
+  const resting = restingVerb(rowState) !== null;
+  const returned = resting
+    ? returnPendingSandboxSendToSandbox(
+        send.id,
+        returnedSandboxPick(send, stage, rowState),
+      )
+    : returnPendingSandboxSend(send.id);
   if (!Object.hasOwn(usePendingSandboxSendStore.getState().sends, send.id))
-    recordRestedSandboxSend(send, stage, returned);
+    recordSandboxStateSend(send, stage, returned, resting ? "rested" : "ended");
 }
 
 /**

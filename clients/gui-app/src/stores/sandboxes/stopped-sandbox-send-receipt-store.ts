@@ -33,7 +33,7 @@ type ReceiptOutcome =
       readonly confirmedAt: number;
     }
   | {
-      readonly kind: "rested";
+      readonly kind: "rested" | "ended";
       readonly sandboxId: string;
       readonly hostId: string;
       readonly confirmedAt: number;
@@ -106,18 +106,19 @@ export function recordStoppedSandboxSend(
 }
 
 /**
- * A send whose sandbox rested on its own went back to its task's composer:
- * the task says the sandbox's state where the setup line was, as its chat
- * would, and nothing else.
+ * A send its sandbox's own state ended went back: the task says that state
+ * where the setup line was, as its chat would. `rested` lasts as long as the
+ * rest; `ended` is final.
  */
-export function recordRestedSandboxSend(
+export function recordSandboxStateSend(
   send: PendingSandboxSend,
   stage: StagedSandbox,
   returned: ReturnedPendingSandboxSend,
+  kind: "rested" | "ended",
 ): void {
   if (stage.createdSandboxId === null || stage.createdHostId === null) return;
   recordReturnedSandboxSend(send, returned, {
-    kind: "rested",
+    kind,
     sandboxId: stage.createdSandboxId,
     hostId: stage.createdHostId,
     confirmedAt: Date.now(),
