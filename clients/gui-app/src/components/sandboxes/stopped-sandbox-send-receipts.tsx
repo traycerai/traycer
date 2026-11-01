@@ -11,6 +11,8 @@ import { useShallow } from "zustand/react/shallow";
 import { toast } from "sonner";
 import { CommandPaletteRouterContext } from "@/components/command-palette/command-palette-context";
 import { ChatSandboxFooter } from "@/components/chat/chat-sandbox-footer";
+import { chatSandboxStateLine } from "@/components/epic-canvas/renderers/chat-sandbox-state-line";
+import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { Button } from "@/components/ui/button";
 import { useChatSandboxState } from "@/hooks/sandboxes/use-chat-sandbox-state";
 import { resolveChatSandbox } from "@/lib/sandboxes/chat-sandbox-state";
@@ -193,10 +195,20 @@ function SandboxStateReceipt(props: {
     // composer is in plain sight.
     const inDrafts =
       receipt.kind === "rested" && receipt.returned.kind === "landing-draft";
+    const slot = chatSandboxStateLine(line, null);
     sandboxLine = (
       <>
         {line.place === "footer" ? <ChatSandboxFooter line={line} /> : null}
-        {line.place === "slot" && !inDrafts ? <span>{line.text}</span> : null}
+        {slot === null || inDrafts ? null : (
+          <>
+            <span>{slot.line}</span>
+            {/* The strip sits above the tiles: its actions bind the host a
+                chat of this sandbox would. */}
+            <TabHostProvider hostId={receipt.hostId}>
+              {slot.actions}
+            </TabHostProvider>
+          </>
+        )}
         {inDrafts ? <span>{restedDraftLine(line.text)}</span> : null}
       </>
     );

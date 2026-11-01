@@ -2282,11 +2282,21 @@ function PendingDispatchItem(props: {
     agentReady: true,
     modelReady: true,
   });
+  const stored = pendingSendState(send, "none");
+  const facts = pendingSandboxSendFacts(props.id, environment);
   const { view } = transitionPendingSend(
-    pendingSendState(send, "none"),
+    stored,
     sandboxObservation(props.dispatch.blocker ?? "none", environment),
-    pendingSandboxSendFacts(props.id, environment),
+    facts,
   );
+  // The view can run ahead of the stored record, which is what a Retry asks.
+  const retryable =
+    view.canRetry &&
+    transitionPendingSend(
+      stored,
+      "request-dispatch-retry",
+      facts,
+    ).effects.includes("request-dispatch-retry");
   if (stage !== null && (view.line === "waiting" || view.line === "creating"))
     return <PendingStagedSendItem send={send} tabId={props.tabId} />;
   return (
@@ -2324,7 +2334,7 @@ function PendingDispatchItem(props: {
             failure={view.line}
           />
         ) : null}
-        {view.canRetry ? (
+        {retryable ? (
           <Button
             type="button"
             variant="link"

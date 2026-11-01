@@ -181,15 +181,18 @@ export async function runStagedSandbox(
  * The new sandbox this key already made, if any. It is read, never created
  * again: a repeat or a resume after a reload waits on that row, and a row
  * that failed or is gone stops the wait rather than naming the key a second
- * time.
+ * time. So is an existing sandbox a resumed run finds it had already woken:
+ * it is read for what it is now, never woken for a reload.
  */
 function sandboxAlreadyMade(
   stage: StagedSandbox,
   fresh: boolean,
+  resume: boolean,
 ): StartedSandbox | null {
   if (
     fresh ||
-    stage.target.kind !== "new" ||
+    (stage.target.kind !== "new" &&
+      !(resume && stagedSandboxRested(stage, true))) ||
     stage.createdSandboxId === null ||
     stage.createdHostId === null
   ) {
@@ -307,7 +310,7 @@ async function startStagedRun(
   fresh: boolean,
   deps: StagedSandboxRunDeps,
 ): Promise<StartedSandbox | null> {
-  const made = sandboxAlreadyMade(stage, fresh);
+  const made = sandboxAlreadyMade(stage, fresh, run.resume);
   if (made === null) return startTarget(run, stage.target, deps);
   if (
     stage.target.kind === "new" &&
