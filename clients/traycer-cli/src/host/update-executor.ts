@@ -32,6 +32,7 @@ import {
 } from "@traycer-clients/shared/host-update/contender";
 import { hostHomeDir } from "../store/paths";
 import {
+  updateLockBusyMessage,
   withCliAttemptMutation,
   withCliExecutorRecoveryEvidence,
   type WithCliAttemptExecutorOptions,
@@ -225,7 +226,7 @@ function unwrapExecutorContenderOutcome<T>(
     case "held-in-process":
       throw cliError({
         code: CLI_ERROR_CODES.CLI_LOCK_BUSY,
-        message: "another host update contender is in progress",
+        message: updateLockBusyMessage(outcome.holder),
         details: { reason: options.reason, holder: outcome.holder },
         exitCode: 75,
       });

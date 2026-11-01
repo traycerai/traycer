@@ -8,6 +8,8 @@ import { hostUpdateFailureMessage } from "@traycer-clients/shared/host-update/st
 import {
   attemptIdentityOf,
   isParkedPhase,
+  probeAttemptHolder,
+  writeHostUpdateLastAttempt,
   decideLegacyMarkerConcurrency,
   isTerminalPhase,
   readUpdateAttemptRecord,
@@ -21,6 +23,9 @@ import {
   type HostUpdateAttemptProgress,
   type HostUpdateAttemptRead,
   type HostUpdateAttemptRecord,
+  type AttemptHolderEvidence,
+  type HostUpdateAttemptOutcome,
+  type HostUpdateLastAttempt,
   type HostUpdateTrigger,
   type UpdateMutationCapability,
   decideHostStampPolicy,
@@ -85,10 +90,13 @@ import {
   type ExecutorSegmentOutcome,
 } from "./update-executor";
 import {
+  describeUpdateLockHolder,
+  updateLockBusyMessage,
   withCliAttemptMutation,
   type WithCliAttemptExecutorOptions,
   type WithCliUpdateContenderOptions,
 } from "./update-contender";
+import { errorFacts, outcomeOfThrow } from "./update-last-attempt";
 import {
   applyHostWithAttempt,
   relaunchHostAfterRestartWithAttempt,
@@ -172,6 +180,14 @@ export interface HostUpdateRunArgs {
   readonly environment: Environment;
   readonly logger: ILogger;
   readonly onProgress: (info: ProgressInfo) => void;
+  /**
+   * Said once, before the wait, when another update holds the lock. A separate
+   * channel from `onProgress` because a person who passed `--no-progress` is
+   * still owed the reason their command is sitting there.
+   */
+  readonly onUpdateLockWait: (notice: string) => void;
+  /** `null` is the real budget; a test pin, like `verifyBudgetMs`. */
+  readonly lockWaitMs: number | null;
   /** `null` stages the latest registry version; an explicit value is a pin. */
   readonly versionRequest: string | null;
   readonly allowDowngrade: boolean;
@@ -301,6 +317,11 @@ const TRIGGER_ENV_VAR = "TRAYCER_HOST_UPDATE_TRIGGER";
 
 const CONTENDER_WAIT_MS = 30_000;
 const CONTENDER_POLL_INTERVAL_MS = 100;
+/**
+ * Slower than the lock's own poll: each reading proves the holder alive, which
+ * is a `tasklist` spawn on Windows, and a person is the only one waiting.
+ */
+const LOCK_WAIT_POLL_INTERVAL_MS = 1_000;
 
 /** The evidence loop's own budget, matching the health probe it replaces. */
 // Shared with the supervisor's start admission, which sizes its wait against
@@ -426,6 +447,14 @@ export async function runHostUpdate(
   // mean for an exit that decides its reason from what the first one already
   // answered (exits 10→11 are precisely that sequence).
   const settlement = createDispatchSettlement(ack, logger);
+  // Every exit below passes through one of the two writes at the foot of this
+  // function, so the last-attempt record cannot miss an arm.
+  const attempt: RunAttemptFacts = {
+    home,
+    initiator: trigger,
+    targetVersion: args.versionRequest,
+    claimedAttemptId: null,
+  };
   try {
     // Inside the try, so exits 2 and 3 answer their dispatcher like every
     // other refusal. Nothing has been read or written at this point.
@@ -435,6 +464,9 @@ export async function runHostUpdate(
     // Parsed ONCE, here, beside the intent it qualifies: both are argv
     // authority, and both must be refused before anything is read or written.
     const expectedIdentity = parseBoundExpectedIdentity(args, intent);
+    // Ahead of the service read and the plan, which can take a slow machine
+    // minutes: a person whose update cannot start hears why before any of it.
+    await waitOutUpdateLock(args);
     // Every `host update` is an automatic path, whatever its trigger (the
     // reconciler's detached run included): over a service this account could
     // not start again - disabled by its owner, or another account's task under
@@ -449,6 +481,9 @@ export async function runHostUpdate(
       "host update",
     );
     const plan = await resolvePlan(args, intent, selection);
+    attempt.targetVersion = planTargetVersion(plan) ?? attempt.targetVersion;
+    // Again: the plan is not instant, and an update can start inside it.
+    await waitOutUpdateLock(args);
     const segment = await runLocalAttemptExecutorSegment(
       {
         platform: currentInstallPlatform(),
@@ -473,6 +508,7 @@ export async function runHostUpdate(
         faults: NO_UPDATE_EXECUTOR_FAULTS,
       },
       async (claim) => {
+        attempt.claimedAttemptId = claim.identity.attemptId;
         await settlement.claimed(claim);
       },
       async (capability, claim, complete, advance) =>
@@ -490,11 +526,164 @@ export async function runHostUpdate(
           preSwapWarning,
         }),
     );
-    return await projectSegment({ args, settlement, selection, segment });
+    const outcome = await projectSegment({
+      args,
+      settlement,
+      selection,
+      segment,
+    });
+    await recordReturnedAttempt(args, attempt, outcome);
+    return outcome;
   } catch (err) {
     await settlement.refused(refusedAckReason(err));
+    // A busy host parks by throwing, so the record is read here too.
+    const phase = await claimedPhase(attempt);
+    await writeHostUpdateLastAttempt(
+      home,
+      {
+        ...attemptFields(attempt),
+        outcome:
+          outcomeOfPhase(phase) ??
+          outcomeOfThrow(
+            err,
+            attempt.claimedAttemptId !== null && phase !== "superseded",
+          ),
+        ...errorFacts(err),
+      },
+      logger,
+    );
     throw err;
   }
+}
+
+// ---------------------------------------------------------------------------
+// The update lock at entry, and the record of how the run ended
+// ---------------------------------------------------------------------------
+
+/**
+ * Say who holds the update lock, then wait out the same bounded budget the
+ * lock acquisition has.
+ *
+ * Why it waits at all rather than exiting: a loser used to queue for this
+ * budget inside the acquisition, and a short holder - a `host ensure` at app
+ * launch, a restart - frees the lock well inside it, so the update still runs.
+ * What changes is that the wait happens here, in front of the work, after a
+ * word, and not behind a plan that had already spent its minutes. Only a
+ * holder that needs longer than the budget is refused; the plan's own time no
+ * longer counts toward it.
+ *
+ * Read-only on purpose: a holder that died reads as `no-holder`, and breaking
+ * its lock stays the acquisition's job. `indeterminate` is left to the
+ * acquisition too, which has the arbitration to judge it.
+ */
+async function waitOutUpdateLock(args: HostUpdateRunArgs): Promise<void> {
+  const home = hostHomeDir(args.environment);
+  const probe = (): Promise<AttemptHolderEvidence> =>
+    probeAttemptHolder({ hostHomeDir: home, nowMs: Date.now(), cacheTtlMs: 0 });
+  const first = await probe();
+  if (first.kind !== "holder-live") return;
+  const budgetMs = args.lockWaitMs ?? CONTENDER_WAIT_MS;
+  const notice = `${describeUpdateLockHolder(first.holder)}. Waiting up to ${String(Math.ceil(budgetMs / 1_000))} seconds for it to finish; you can also watch 'traycer host status'.`;
+  args.logger.info("Host update found the update lock held", {
+    environment: args.environment,
+    holderReason: first.holder.reason,
+  });
+  args.onUpdateLockWait(notice);
+  const deadline = Date.now() + budgetMs;
+  let holder = first.holder;
+  while (Date.now() < deadline) {
+    await delay(Math.min(LOCK_WAIT_POLL_INTERVAL_MS, deadline - Date.now()));
+    const current = await probe();
+    if (current.kind !== "holder-live") return;
+    holder = current.holder;
+  }
+  throw cliError({
+    code: CLI_ERROR_CODES.CLI_LOCK_BUSY,
+    message: updateLockBusyMessage(holder),
+    details: { reason: "host-update", holder },
+    exitCode: 75,
+  });
+}
+
+interface RunAttemptFacts {
+  readonly home: string;
+  readonly initiator: HostUpdateTrigger;
+  /** The request, then the plan's target once there is one. */
+  targetVersion: string | null;
+  claimedAttemptId: string | null;
+}
+
+function attemptFields(
+  attempt: RunAttemptFacts,
+): Pick<
+  HostUpdateLastAttempt,
+  "command" | "initiator" | "targetVersion" | "attemptId"
+> {
+  return {
+    command: "host update",
+    initiator: attempt.initiator,
+    targetVersion: attempt.targetVersion,
+    attemptId: attempt.claimedAttemptId,
+  };
+}
+
+async function claimedPhase(
+  attempt: RunAttemptFacts,
+): Promise<HostUpdateAttemptPhase | null> {
+  if (attempt.claimedAttemptId === null) return null;
+  const read = await readUpdateAttemptRecord(attempt.home);
+  return read.kind === "valid" &&
+    read.value.attemptId === attempt.claimedAttemptId
+    ? read.value.phase
+    : null;
+}
+
+/**
+ * What the record says a thrown run came to, or `null` when it does not settle
+ * it, which `superseded` does not: `outcomeOfThrow` decides that one.
+ */
+function outcomeOfPhase(
+  phase: HostUpdateAttemptPhase | null,
+): HostUpdateAttemptOutcome | null {
+  if (phase === null) return null;
+  if (isParkedPhase(phase)) return "parked";
+  return phase === "complete" || phase === "failed" ? phase : null;
+}
+
+/**
+ * What a returned run came to. A park never returns: every park here throws.
+ * A release with work still owed is a refusal, at exit 0, and only
+ * `nothing-to-do` means nothing was. `foreignRuntimeVersion` is a run that
+ * left a developer's build alone, which started nothing.
+ */
+function returnedOutcome(
+  outcome: HostUpdateRunOutcome,
+): Pick<HostUpdateLastAttempt, "outcome" | "code"> {
+  if (outcome.releasedReason === null) {
+    return outcome.foreignRuntimeVersion === null
+      ? { outcome: "complete", code: null }
+      : { outcome: "no-op", code: null };
+  }
+  return baseDispatchAckReason(outcome.releasedReason) === "nothing-to-do"
+    ? { outcome: "no-op", code: null }
+    : { outcome: "refused", code: outcome.releasedReason };
+}
+
+async function recordReturnedAttempt(
+  args: HostUpdateRunArgs,
+  attempt: RunAttemptFacts,
+  outcome: HostUpdateRunOutcome,
+): Promise<void> {
+  await writeHostUpdateLastAttempt(
+    attempt.home,
+    {
+      ...attemptFields(attempt),
+      ...returnedOutcome(outcome),
+      targetVersion: attempt.targetVersion ?? outcome.legacy.version,
+      message: null,
+    },
+    args.logger,
+  );
 }
 
 // ---------------------------------------------------------------------------

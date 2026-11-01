@@ -54,6 +54,7 @@ import {
   isTerminalRetentionExpired,
   probeAttemptHolder,
   RECOMMENDED_ATTEMPT_STALENESS_MS,
+  writeHostUpdateLastAttempt,
   type HostUpdateAttemptIdentity,
   type HostUpdateAttemptRecord,
   type UpdateMutationCapability,
@@ -4858,17 +4859,7 @@ export class HostController {
             // stale against a terminal downgrade that raced the staging
             // window). A `manual` "Update now" is explicit and always applies.
             const respectHold = trigger === "launch";
-            if (await this.isPackagedMacOwned()) {
-              return this.applyStagedPackagedMac(
-                eligibleStage.fingerprint,
-                respectHold,
-              );
-            }
-            return this.applyStagedCliOwned(
-              force,
-              eligibleStage.fingerprint,
-              respectHold,
-            );
+            return this.applyEligibleStage(force, eligibleStage, respectHold);
           });
           if (outcome.kind !== "stage-fingerprint-mismatch") return outcome;
         }
@@ -4878,6 +4869,49 @@ export class HostController {
             "The staged host changed while the update was being applied. Retry to apply the current stage.",
         };
       },
+    );
+  }
+
+  private async applyEligibleStage(
+    force: boolean,
+    stage: { readonly version: string; readonly fingerprint: string },
+    respectHold: boolean,
+  ): Promise<MutationOutcome<ApplyStagedOk>> {
+    const outcome = (await this.isPackagedMacOwned())
+      ? await this.applyStagedPackagedMac(stage.fingerprint, respectHold)
+      : await this.applyStagedCliOwned(force, stage.fingerprint, respectHold);
+    await this.concludeLastAttempt(stage.version, outcome);
+    return outcome;
+  }
+
+  /**
+   * The CLI's `host apply` recorded the bytes going in. Whether their host came
+   * up is known only here: the packaged-macOS restart is Desktop's own, and
+   * readiness is waited for by nothing else. Every other outcome is one the
+   * command has already recorded truthfully.
+   */
+  private async concludeLastAttempt(
+    targetVersion: string,
+    outcome: MutationOutcome<ApplyStagedOk>,
+  ): Promise<void> {
+    const applied =
+      outcome.kind === "ok" &&
+      outcome.value.applied &&
+      outcome.value.runningActivated;
+    if (!applied && outcome.kind !== "installed-not-converged") return;
+    await writeHostUpdateLastAttempt(
+      this.layout.rootDir,
+      {
+        command: "host apply",
+        initiator: "desktop",
+        targetVersion,
+        attemptId: null,
+        code: null,
+        outcome: applied ? "complete" : "failed",
+        message:
+          outcome.kind === "installed-not-converged" ? outcome.message : null,
+      },
+      log,
     );
   }
 
@@ -5155,16 +5189,11 @@ export class HostController {
                 // passes `promoteReadyStage: false`, so this branch never runs
                 // implicitly, and a known-ready update at launch goes through the
                 // reconcile's own `applyStaged("launch")` guarded by --respect-hold.
-                const applied = (await this.isPackagedMacOwned())
-                  ? await this.applyStagedPackagedMac(
-                      eligibleStage.fingerprint,
-                      false,
-                    )
-                  : await this.applyStagedCliOwned(
-                      force,
-                      eligibleStage.fingerprint,
-                      false,
-                    );
+                const applied = await this.applyEligibleStage(
+                  force,
+                  eligibleStage,
+                  false,
+                );
                 if (applied.kind === "stage-fingerprint-mismatch") {
                   return applied;
                 }
