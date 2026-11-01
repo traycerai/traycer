@@ -13,6 +13,13 @@ import { useState, type ReactNode } from "react";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import { ChatExpansionTestProviders } from "@/components/chat/__tests__/chat-expansion-test-providers";
 import { deriveA2AReceivedCollapsibleKey } from "@/components/chat/chat-collapsible-key";
+import {
+  ONE_MAIN_BOT_MODEL,
+  TEAM_MAIN_BOT_ID,
+  TWO_MAIN_BOTS_MODEL,
+} from "@/lib/home-bots/__tests__/standalone-bots-fixtures";
+import { EMPTY_HOME_BOTS_MODEL } from "@/lib/home-bots/bots-model";
+import { useStandaloneBotsStore } from "@/stores/bots/standalone-bots-store";
 import { UserMessageBody } from "@/components/chat/chat-message-user-body";
 import { CHAT_TIMELINE_SCROLLER_MOVED_EVENT } from "@/components/chat/chat-timeline-follow-latch";
 import type { SetupWorkspaceState } from "@/components/chat/segments/setup-card-segment";
@@ -1450,6 +1457,30 @@ describe("<UserMessageBody /> agent messages", () => {
       expect(
         useChatTranscriptJumpStore.getState().requestsByChatId[key]?.target,
       ).toEqual({ kind: "receipt", messageId: message.id });
+    });
+
+    it("places a team's bot sender by its environment on the chip only when two main bots are visible", () => {
+      peerMocks.byId[CROSS_ID] = {
+        epicId: TEAM_MAIN_BOT_ID,
+        agentId: CROSS_ID,
+        hostId: "host-2",
+        title: "Tracy",
+        surface: "gui",
+        bot: { botId: TEAM_MAIN_BOT_ID, title: "Tracy" },
+      };
+      useStandaloneBotsStore.setState({ model: TWO_MAIN_BOTS_MODEL });
+      const { unmount } = render(
+        <UserMessageBody actions={null} message={crossMessage(null)} />,
+      );
+      expect(
+        screen.getByRole("button", { name: "Tracy · traycerai" }),
+      ).toBeTruthy();
+      unmount();
+
+      useStandaloneBotsStore.setState({ model: ONE_MAIN_BOT_MODEL });
+      render(<UserMessageBody actions={null} message={crossMessage(null)} />);
+      expect(screen.getByRole("button", { name: "Tracy" })).toBeTruthy();
+      useStandaloneBotsStore.setState({ model: EMPTY_HOME_BOTS_MODEL });
     });
 
     it("opens a cross-task terminal sender without parking a jump", () => {

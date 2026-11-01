@@ -60,6 +60,7 @@ import {
   omitImageAtomsByHash,
 } from "@/lib/composer/image-atoms";
 import { useA2AMessagePeer } from "@/hooks/agent/use-a2a-message-peer";
+import { useStandaloneBotName } from "@/hooks/bots/use-standalone-bot-name";
 import { useChatTranscriptJumpStore } from "@/stores/chats/chat-transcript-jump-store";
 import { cn } from "@/lib/utils";
 import { collapseToSingleLine } from "@/lib/text/format-single-line";
@@ -261,6 +262,10 @@ function AgentMessageDisplayView({
     agentMessage?.senderTitle ??
     agentSenderInfo.senderTitle ??
     `${agentSenderInfo.agentId.slice(0, 8)}…`;
+  const senderChipName = useStandaloneBotName(
+    sender?.bot?.botId ?? null,
+    senderName,
+  );
   const expectReply =
     agentMessage?.reply.expectsReply ?? agentSenderInfo.expectReply;
 
@@ -298,7 +303,7 @@ function AgentMessageDisplayView({
       <span className="flex min-w-0 flex-1 items-center gap-1.5 text-ui-sm">
         <span className="shrink-0 text-muted-foreground">from</span>
         <AgentHeaderLink
-          name={senderName}
+          name={senderChipName}
           onOpen={sender !== null ? openSenderTab : null}
         />
         {expectReply ? <ReplyExpectedIcon /> : null}

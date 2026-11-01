@@ -19,6 +19,7 @@ import { MenuCommandListener } from "@/components/layout/bridges/menu-command-li
 import { ChatSessionWakeRetryController } from "@/components/layout/bridges/chat-session-wake-retry-controller";
 import { PreventSleepController } from "@/components/layout/bridges/prevent-sleep-controller";
 import { NotificationEmissionController } from "@/components/layout/bridges/notification-emission-controller";
+import { StandaloneBotsBridge } from "@/components/layout/bridges/standalone-bots-bridge";
 import { NotificationFocusBridge } from "@/components/layout/bridges/notification-focus-bridge";
 import { SystemTabModalHost } from "@/components/layout/dialogs/system-tab-modal-host";
 import { ProfileSyncModalHost } from "@/components/settings/panels/profile-sync/profile-sync-modal-host";
@@ -115,6 +116,7 @@ export function RootComponent() {
           whoever wrote it; see `HostLifecycleModeSetAnalytics`. */}
       <HostLifecycleAnalyticsBridge />
       <NotificationEmissionController />
+      <StandaloneBotsBridge />
       {/* This is the permanent route -> layout authority. It must observe
           commits while HostReadyGate swaps its children; only materialization
           is hydration-gated inside the controller.

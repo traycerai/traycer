@@ -31,6 +31,7 @@ import {
   notificationEntityMatchesPresence,
 } from "@/lib/notifications/notification-entity";
 import { occurrenceKeyForNotification } from "@/lib/notifications/notification-occurrence";
+import { notificationRowBotId } from "@/lib/notifications/notification-row-bot-id";
 import { useCloudNotificationsStore } from "@/stores/notifications/cloud-notifications-store";
 import { useHostNotificationsStore } from "@/stores/notifications/host-notifications-store";
 import {
@@ -50,6 +51,8 @@ import {
   type NotificationChimeEventType,
 } from "@/lib/notifications/notification-chime";
 import { useSettingsStore } from "@/stores/settings/settings-store";
+import { standaloneBotName } from "@/lib/home-bots/standalone-bot-name";
+import { useStandaloneBotsStore } from "@/stores/bots/standalone-bots-store";
 
 export interface NotificationDisplayTarget {
   readonly showNotification: NotificationShow;
@@ -747,7 +750,11 @@ function buildNotificationToastContent(
     "done";
   if (rows.length === 1) {
     return {
-      title: first.title,
+      title: standaloneBotName(
+        useStandaloneBotsStore.getState().model,
+        notificationRowBotId(first),
+        first.title,
+      ),
       body: first.body,
       row: first,
       payload: first.payload,
