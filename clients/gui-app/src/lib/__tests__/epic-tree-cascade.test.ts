@@ -1,9 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  computeDescendantCounts,
   describeTreeDeleteDisclosure,
-  formatCascadeSummary,
-  type DescendantCounts,
   type TreeDeleteDisclosure,
 } from "@/lib/epic-tree-cascade";
 import type { EpicTreeRecord } from "@/lib/epic-selectors";
@@ -63,217 +60,10 @@ function treeFromRecords(records: ReadonlyArray<EpicTreeRecord>): TreeSlice {
   return { rootIds, childrenByParent, nodeById };
 }
 
-describe("computeDescendantCounts", () => {
-  it("returns all zeros when root has no children", () => {
-    const records = [makeRecord("root", "spec", null)];
-    const counts = computeDescendantCounts(records, "root");
-    expect(counts).toEqual({
-      spec: 0,
-      ticket: 0,
-      story: 0,
-      review: 0,
-      html: 0,
-      canvas: 0,
-      file: 0,
-      chat: 0,
-      "terminal-agent": 0,
-    });
-  });
-
-  it("counts direct children by type", () => {
-    const records = [
-      makeRecord("root", "spec", null),
-      makeRecord("t1", "ticket", "root"),
-      makeRecord("t2", "ticket", "root"),
-      makeRecord("c1", "chat", "root"),
-    ];
-    const counts = computeDescendantCounts(records, "root");
-    expect(counts).toEqual({
-      spec: 0,
-      ticket: 2,
-      story: 0,
-      review: 0,
-      html: 0,
-      canvas: 0,
-      file: 0,
-      chat: 1,
-      "terminal-agent": 0,
-    });
-  });
-
-  it("counts nested descendants recursively", () => {
-    const records = [
-      makeRecord("root", "spec", null),
-      makeRecord("child-spec", "spec", "root"),
-      makeRecord("grandchild-ticket", "ticket", "child-spec"),
-      makeRecord("grandchild-story", "story", "child-spec"),
-    ];
-    const counts = computeDescendantCounts(records, "root");
-    expect(counts).toEqual({
-      spec: 1,
-      ticket: 1,
-      story: 1,
-      review: 0,
-      html: 0,
-      canvas: 0,
-      file: 0,
-      chat: 0,
-      "terminal-agent": 0,
-    });
-  });
-
-  it("does not count nodes outside the subtree", () => {
-    const records = [
-      makeRecord("root", "spec", null),
-      makeRecord("other", "spec", null),
-      makeRecord("child", "ticket", "root"),
-      makeRecord("other-child", "ticket", "other"),
-    ];
-    const counts = computeDescendantCounts(records, "root");
-    expect(counts).toEqual({
-      spec: 0,
-      ticket: 1,
-      story: 0,
-      review: 0,
-      html: 0,
-      canvas: 0,
-      file: 0,
-      chat: 0,
-      "terminal-agent": 0,
-    });
-  });
-});
-
-describe("formatCascadeSummary", () => {
-  it("returns null when all counts are zero", () => {
-    const counts: DescendantCounts = {
-      spec: 0,
-      ticket: 0,
-      story: 0,
-      review: 0,
-      html: 0,
-      canvas: 0,
-      file: 0,
-      chat: 0,
-      "terminal-agent": 0,
-    };
-    expect(formatCascadeSummary(counts)).toBeNull();
-  });
-
-  it("returns a single type string without 'and'", () => {
-    const counts: DescendantCounts = {
-      spec: 3,
-      ticket: 0,
-      story: 0,
-      review: 0,
-      html: 0,
-      canvas: 0,
-      file: 0,
-      chat: 0,
-      "terminal-agent": 0,
-    };
-    expect(formatCascadeSummary(counts)).toBe("3 specs");
-  });
-
-  it("uses singular form for count 1", () => {
-    const counts: DescendantCounts = {
-      spec: 1,
-      ticket: 0,
-      story: 1,
-      review: 0,
-      html: 0,
-      canvas: 0,
-      file: 0,
-      chat: 0,
-      "terminal-agent": 0,
-    };
-    expect(formatCascadeSummary(counts)).toBe("1 spec and 1 story");
-  });
-
-  it("joins two types with 'and'", () => {
-    const counts: DescendantCounts = {
-      spec: 2,
-      ticket: 0,
-      story: 0,
-      review: 0,
-      html: 0,
-      canvas: 0,
-      file: 0,
-      chat: 1,
-      "terminal-agent": 0,
-    };
-    expect(formatCascadeSummary(counts)).toBe("2 specs and 1 agent");
-  });
-
-  it("joins three or more types with Oxford comma", () => {
-    const counts: DescendantCounts = {
-      spec: 1,
-      ticket: 2,
-      story: 0,
-      review: 1,
-      html: 0,
-      canvas: 0,
-      file: 0,
-      chat: 3,
-      "terminal-agent": 0,
-    };
-    expect(formatCascadeSummary(counts)).toBe(
-      "1 spec, 2 tickets, 1 review, and 3 agents",
-    );
-  });
-
-  it("summarizes a mixed Chat/Terminal selection as one agent count", () => {
-    const counts: DescendantCounts = {
-      spec: 0,
-      ticket: 0,
-      story: 0,
-      review: 0,
-      html: 0,
-      canvas: 0,
-      file: 0,
-      chat: 1,
-      "terminal-agent": 1,
-    };
-    // Agent is the durable entity; Chat/Terminal are only its interfaces, so
-    // the summary must not split them into "1 chat and 1 terminal agent".
-    expect(formatCascadeSummary(counts)).toBe("2 agents");
-  });
-
-  it("uses the singular agent noun for a lone terminal-interface agent", () => {
-    const counts: DescendantCounts = {
-      spec: 0,
-      ticket: 0,
-      story: 0,
-      review: 0,
-      html: 0,
-      canvas: 0,
-      file: 0,
-      chat: 0,
-      "terminal-agent": 1,
-    };
-    expect(formatCascadeSummary(counts)).toBe("1 agent");
-  });
-
-  it("uses 'stories' plural for story", () => {
-    const counts: DescendantCounts = {
-      spec: 0,
-      ticket: 0,
-      story: 2,
-      review: 0,
-      html: 0,
-      canvas: 0,
-      file: 0,
-      chat: 0,
-      "terminal-agent": 0,
-    };
-    expect(formatCascadeSummary(counts)).toBe("2 stories");
-  });
-});
-
 describe("describeTreeDeleteDisclosure", () => {
   const UNDONE = "This action cannot be undone.";
 
-  /** The one function, for agent rows whose nested chats have all arrived. */
+  /** The one function, for agent rows whose nested agents have all arrived. */
   function agentDelete(
     tree: TreeSlice,
     nodeIds: readonly string[],
@@ -282,7 +72,7 @@ describe("describeTreeDeleteDisclosure", () => {
       tree,
       kind: "agent",
       nodeIds,
-      nestedChatsKnown: true,
+      nestedAgentsKnown: true,
     });
   }
 
@@ -291,7 +81,25 @@ describe("describeTreeDeleteDisclosure", () => {
     tree: TreeSlice,
     nodeIds: readonly string[],
   ): TreeDeleteDisclosure {
-    return describeTreeDeleteDisclosure({ tree, kind: "artifact", nodeIds });
+    return describeTreeDeleteDisclosure({
+      tree,
+      kind: "artifact",
+      nodeIds,
+      restoreAvailable: false,
+    });
+  }
+
+  /** The same, where the host serves Deleted artifacts. */
+  function restorableArtifactDelete(
+    tree: TreeSlice,
+    nodeIds: readonly string[],
+  ): TreeDeleteDisclosure {
+    return describeTreeDeleteDisclosure({
+      tree,
+      kind: "artifact",
+      nodeIds,
+      restoreAvailable: true,
+    });
   }
 
   function promotionSentence(nested: string, under: string): string {
@@ -385,50 +193,47 @@ describe("describeTreeDeleteDisclosure", () => {
   });
 
   describe("artifacts a delete takes with it", () => {
-    /**
-     * One differential case against the record-based walk, over an
-     * artifact-only subtree - what the family-separated projector can actually
-     * emit, and what the mobile switcher summarises for the same artifact.
-     *
-     * The expected string is a LITERAL, not `formatCascadeSummary` applied to
-     * the other walk: deriving it from the shared formatter would pass both
-     * sides on a bug inside the formatter, which has its own cases above.
-     */
-    it("summarises one artifact as the record-based walk does", () => {
-      const records = [
+    it("counts every depth of the subtree, and nothing outside it", () => {
+      const tree = treeFromRecords([
         makeRecord("root", "spec", null),
         makeRecord("child-spec", "spec", "root"),
         makeRecord("g-ticket", "ticket", "child-spec"),
         makeRecord("g-story", "story", "child-spec"),
-      ];
+        makeRecord("other", "spec", null),
+        makeRecord("other-ticket", "ticket", "other"),
+      ]);
 
-      expect(artifactDelete(treeFromRecords(records), ["root"])).toEqual({
+      expect(artifactDelete(tree, ["root"])).toEqual({
         description: UNDONE,
         cascadeSummary: "1 spec, 1 ticket, and 1 story",
         cascadeNestedUnder: "it",
       });
-      expect(
-        formatCascadeSummary(computeDescendantCounts(records, "root")),
-      ).toBe("1 spec, 1 ticket, and 1 story");
     });
 
-    /**
-     * Where the two walks DIVERGE, and deliberately: the record walk reads raw
-     * `parentId` with no family rule, so a chat whose parent names an artifact
-     * counts as that artifact's descendant there. The projector promotes that
-     * pairing to the root instead, so the tree walk cannot see it - which is
-     * why `treeFromRecords` refuses to build one.
-     */
-    it("cannot reach an agent through an artifact, where the record walk can", () => {
-      const records = [
-        makeRecord("root", "spec", null),
-        makeRecord("c1", "chat", "root"),
-      ];
+    it("owes no count for an artifact with nothing under it", () => {
+      const tree = treeFromRecords([makeRecord("root", "spec", null)]);
+      expect(artifactDelete(tree, ["root"]).cascadeSummary).toBeNull();
+    });
 
-      expect(
-        formatCascadeSummary(computeDescendantCounts(records, "root")),
-      ).toBe("1 agent");
-      expect(() => treeFromRecords(records)).toThrow("cross-family");
+    it.each([
+      ["2 specs", ["spec", "spec"]],
+      ["1 story", ["story"]],
+      ["2 stories", ["story", "story"]],
+      ["2 pages", ["html", "html"]],
+      ["2 canvases", ["canvas", "canvas"]],
+      ["1 spec and 1 story", ["spec", "story"]],
+      [
+        "1 spec, 2 tickets, and 1 review",
+        ["spec", "ticket", "ticket", "review"],
+      ],
+    ] as const)("words the subtree as %s", (summary, childTypes) => {
+      const tree = treeFromRecords([
+        makeRecord("root", "spec", null),
+        ...childTypes.map((type, index) =>
+          makeRecord(`child-${String(index)}`, type, "root"),
+        ),
+      ]);
+      expect(artifactDelete(tree, ["root"]).cascadeSummary).toBe(summary);
     });
 
     /** "ALSO delete" is what the selection does not already name. */
@@ -486,8 +291,61 @@ describe("describeTreeDeleteDisclosure", () => {
   });
 
   /**
-   * The chat record plane can leave a persisted chat child out of the tree for
-   * a window, so a number read off it would be low. The sentence then names
+   * A restore takes one artifact, so nested artifacts are not gone for good and
+   * do not come back with their parent either. The sentence says both, and the
+   * count paragraph is untouched.
+   */
+  describe("where the host can bring artifacts back", () => {
+    const tree = treeFromRecords([
+      makeRecord("leaf", "spec", null),
+      makeRecord("other-leaf", "spec", null),
+      makeRecord("parent", "spec", null),
+      makeRecord("ticket", "ticket", "parent"),
+    ]);
+
+    it("offers the restore for one artifact with nothing under it", () => {
+      expect(restorableArtifactDelete(tree, ["leaf"])).toEqual({
+        description: "You can bring it back from Deleted artifacts.",
+        cascadeSummary: null,
+        cascadeNestedUnder: "it",
+      });
+    });
+
+    it("says nested artifacts come back separately, beside their count", () => {
+      expect(restorableArtifactDelete(tree, ["parent"])).toEqual({
+        description:
+          "You can bring it back from Deleted artifacts. Artifacts nested under it come back separately.",
+        cascadeSummary: "1 ticket",
+        cascadeNestedUnder: "it",
+      });
+    });
+
+    it("says a selection comes back one at a time", () => {
+      expect(
+        restorableArtifactDelete(tree, ["leaf", "other-leaf"]).description,
+      ).toBe("You can bring them back one at a time from Deleted artifacts.");
+      expect(
+        restorableArtifactDelete(tree, ["leaf", "parent"]).description,
+      ).toBe(
+        "You can bring them back one at a time from Deleted artifacts. Artifacts nested under them come back separately.",
+      );
+    });
+
+    /** A row the reader also picked is not nested under anything extra. */
+    it("owes no nested sentence when the selection holds the whole subtree", () => {
+      expect(
+        restorableArtifactDelete(tree, ["parent", "ticket"]).description,
+      ).toBe("You can bring them back one at a time from Deleted artifacts.");
+    });
+
+    it("offers nothing for an empty selection", () => {
+      expect(restorableArtifactDelete(tree, []).description).toBe(UNDONE);
+    });
+  });
+
+  /**
+   * The agent record planes can leave a persisted child out of the tree for a
+   * window, so a number read off it would be low. The sentence then names
    * the consequence and states none - it never tells the reader a child does
    * not exist, and it never refuses the delete.
    *
@@ -498,7 +356,7 @@ describe("describeTreeDeleteDisclosure", () => {
    * nothing about it - see the artifact cases above, which state their exact
    * count with no flag to set.
    */
-  describe("while the nested chats have not all arrived", () => {
+  describe("while the nested agents have not all arrived", () => {
     function pendingAgentDelete(
       tree: TreeSlice,
       nodeIds: readonly string[],
@@ -507,7 +365,7 @@ describe("describeTreeDeleteDisclosure", () => {
         tree,
         kind: "agent",
         nodeIds,
-        nestedChatsKnown: false,
+        nestedAgentsKnown: false,
       });
     }
 
