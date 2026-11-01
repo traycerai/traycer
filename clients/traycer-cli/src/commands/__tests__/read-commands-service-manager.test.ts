@@ -62,6 +62,11 @@ const mocks = vi.hoisted(() => {
           : "00:00\n";
         return { stdout, stderr: "", exitCode: 0 };
       }
+      // The PATH check's two reads, which must differ for it to report.
+      if (args.includes("--version")) {
+        const version = command.includes("elsewhere") ? "1.0.0" : "1.5.2";
+        return { stdout: `${version}\n`, stderr: "", exitCode: 0 };
+      }
       // The task-definition read's own "no such task".
       if (command === "powershell") {
         return { stdout: "", stderr: "", exitCode: 2 };
@@ -194,6 +199,7 @@ import {
 } from "../../store/paths";
 import { hostDoctorCommand } from "../host-doctor";
 import { hostStatusCommand } from "../host-status";
+import { wellKnownCliBinaryPath } from "../../store/well-known-cli";
 import { serviceStatusCommand } from "../service-status";
 
 const label = serviceLabelFor("production");
@@ -289,6 +295,7 @@ afterEach(() => {
   setWindowsStartEvidenceDepsForTests(null);
   setWindowsTaskUserSidReaderForTests(null);
   usePlatform(realPlatform);
+  vi.unstubAllEnvs();
 });
 
 const gui = `gui/${process.getuid?.() ?? 0}`;
@@ -423,3 +430,35 @@ describe.each([
     });
   },
 );
+
+// The rows above have no slot, so the doctor's PATH check spawns nothing there.
+it("host doctor adds exactly two version reads with another CLI ahead of the slot", async () => {
+  usePlatform("darwin");
+  const slot = wellKnownCliBinaryPath("production");
+  const other = join(homedir(), "elsewhere/traycer");
+  for (const cli of [slot, other]) {
+    mkdirSync(dirname(cli), { recursive: true });
+    writeFileSync(cli, "", { mode: 0o755 });
+  }
+  vi.stubEnv("PATH", dirname(other));
+  const files = homeFiles();
+
+  const result = await hostDoctorCommand(makeCtx());
+
+  expect(result.data).toMatchObject({
+    issues: expect.arrayContaining([
+      expect.objectContaining({
+        code: DOCTOR_ISSUE_CODES.CLI_SHADOWED_ON_PATH,
+      }),
+    ]),
+  });
+  expect(mocks.calls.toSorted()).toEqual(
+    [
+      ...launchdLookups,
+      ...launchdLookups,
+      `${other} --version`,
+      `${slot} --version`,
+    ].toSorted(),
+  );
+  expect(homeFiles()).toEqual(files);
+});

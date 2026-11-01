@@ -105,6 +105,12 @@ export const DOCTOR_ISSUE_CODES = {
   // it fails with ENOENT, and the only existing repair runs at the app's
   // next *successful* launch - a state users cannot self-diagnose.
   CLI_SLOT_BINARY_DANGLING: "CLI_SLOT_BINARY_DANGLING",
+  // A bare `traycer` runs a different version from the CLI this environment
+  // manages: a stale Homebrew formula ahead of it, or another channel's CLI.
+  // Every command typed there uses that version, and nothing else says so,
+  // because the host version a command prints is not the CLI's. Warning, not
+  // error: the managed CLI and the host are fine.
+  CLI_SHADOWED_ON_PATH: "CLI_SHADOWED_ON_PATH",
   // Windows-only: ~/.traycer/cli/credentials inherits permissive
   // default Windows ACLs (POSIX mode 0o600 is ignored on Windows).
   // Doctor surfaces this so VDI/shared-machine users can lock the
