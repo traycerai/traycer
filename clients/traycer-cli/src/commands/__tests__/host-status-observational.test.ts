@@ -16,6 +16,7 @@ import type { BootstrapLogEntry } from "../../host/bootstrap-log";
 import type {
   HostUpdateAttemptRead,
   HostUpdateAttemptRecord,
+  HostUpdateLastAttempt,
 } from "@traycer-clients/shared/host-update";
 import { encodeInstallGeneration } from "@traycer-clients/shared/host-version/install-generation";
 import type { HostInstallRecord } from "../../manifest/host-install";
@@ -440,7 +441,9 @@ describe("hostStatusCommand - observational (CLI-001)", () => {
       outcome: "complete",
       message: null,
     } as const;
-    const write = (attempt: typeof failure | typeof update): Promise<void> =>
+    const write = (
+      attempt: Omit<HostUpdateLastAttempt, "recordedAt">,
+    ): Promise<void> =>
       writeHostUpdateLastAttempt(hostHomeDir("production"), attempt, {
         info: vi.fn(),
       });
@@ -465,6 +468,23 @@ describe("hostStatusCommand - observational (CLI-001)", () => {
       expect(result.human).toContain("Last download");
       expect(result.human).toContain("connection reset");
     });
+
+    it.each(["refused", "parked", "failed"] as const)(
+      "stays after an update that ended %s",
+      async (outcome) => {
+        vi.useFakeTimers({
+          now: Date.parse("2026-11-01T07:00:00.000Z"),
+          toFake: ["Date"],
+        });
+        await write(failure);
+        vi.setSystemTime(Date.parse("2026-11-01T08:00:00.000Z"));
+        await write({ ...update, outcome });
+
+        const result = await hostStatusCommand(makeCtx(makeRuntime({})));
+
+        expect(result.human).toContain("Last download");
+      },
+    );
 
     it("goes quiet once an update has run since", async () => {
       vi.useFakeTimers({

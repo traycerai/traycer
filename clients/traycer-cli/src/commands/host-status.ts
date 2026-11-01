@@ -78,7 +78,7 @@ interface HostStatusOutput {
    * `updateAttempt` above is only ever one still standing.
    */
   readonly lastUpdateAttempt: HostUpdateLastAttempt | null;
-  /** Why the last download did not get through, unless an update has since. */
+  /** Why the last download did not get through, until an update has since. */
   readonly lastDownloadFailure: HostUpdateLastAttempt | null;
   /**
    * Who holds the update lock right now and what they are doing, or `null`
@@ -214,6 +214,7 @@ export const hostStatusCommand: CommandFn = async (
     lastDownloadFailure:
       lastDownloadFailure !== null &&
       lastUpdateAttempt !== null &&
+      UPDATE_OUTCOMES_THAT_GOT_THROUGH.has(lastUpdateAttempt.outcome) &&
       Date.parse(lastUpdateAttempt.recordedAt) >=
         Date.parse(lastDownloadFailure.recordedAt)
         ? null
@@ -355,6 +356,10 @@ function renderHumanStatus(
   lines.push(c.dim("Run with --json for the full structured payload."));
   return lines.join("\n");
 }
+
+/** A download failure is old news after these; after the rest it still matters. */
+const UPDATE_OUTCOMES_THAT_GOT_THROUGH: ReadonlySet<HostUpdateAttemptOutcome> =
+  new Set(["complete", "applied", "no-op"]);
 
 const LAST_UPDATE_OUTCOME_LABELS: Record<HostUpdateAttemptOutcome, string> = {
   complete: "updated",

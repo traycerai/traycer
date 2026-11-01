@@ -344,8 +344,8 @@ export type FleetUpdateViewKind =
    *
    * The CLI leaves the record alone on that path rather than stamping `failed`
    * (the rule `AttemptRecordWriter.supersede()` established for its own sibling
-   * case: never stamp `failed` over a host verified healthy at the target),
-   * which is exactly what leaves this state observable — an
+   * case, a target another actor outgrew: nothing failed, so `failed` is not
+   * stamped), which is exactly what leaves this state observable — an
    * untouched verify-side record beside a healthy host at the target IS the
    * signal. A stamped `failed` would have destroyed it.
    *

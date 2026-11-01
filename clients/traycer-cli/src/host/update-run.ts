@@ -698,6 +698,8 @@ function concludeAttempt(
   }
   attempt.concluded = concludedRecordOf(segment);
   attempt.claimedAttemptId ??= attempt.concluded?.attemptId ?? null;
+  attempt.targetVersion =
+    attempt.concluded?.targetVersion ?? attempt.targetVersion;
 }
 
 /**
@@ -2026,8 +2028,8 @@ class AttemptRecordWriter {
    * `failed` here is exactly what round 14 removed: nothing failed, and the
    * CLI clears a `failed` only when its target is the running version, so it
    * would stand until some later update happened to do work. A current host
-   * stops reporting it once it runs that target or newer; an older host does
-   * not.
+   * stops reporting it once it runs a newer version; an older host only once
+   * it runs that target.
    *
    * Carries the same `held` identity discipline as every other advance - it
    * goes through `barrier` and the segment's own closure - so a segment whose
@@ -2337,9 +2339,9 @@ async function revalidateInstallIdentity(
   // corrupted handoff. Thrown rather than written, so `writeFailure` ends the
   // attempt `superseded` with the marker withdrawn - a `failed {install-
   // changed}` naming 2.0.0 over a host at 3.0.0 is exactly the red banner
-  // round 14 removed, and a host older than the at-or-newer rule never clears
-  // it. An implicit request has nothing to be outgrown and keeps the terminal
-  // below.
+  // round 14 removed, and a host that reports a failure until it runs that
+  // exact target never clears it. An implicit request has nothing to be
+  // outgrown and keeps the terminal below.
   if (live !== null) {
     const outgrown = installedVersionMismatch(
       requestedVersion(input.args),

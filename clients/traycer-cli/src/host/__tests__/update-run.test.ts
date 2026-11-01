@@ -4931,9 +4931,8 @@ describe("ported: activation debt (installed-up-to-date short-circuit)", () => {
     mocks.disk.current = {
       state: "failed",
       error: "an older run failed",
-      // NAMES the observed version. `clearStaleFailedMarker` applies the same
-      // string rule the host's `isStaleUpdateProgress` does: a `failed` is
-      // stale when the version it names IS the one now running.
+      // NAMES the observed version. `clearStaleFailedMarker` clears a `failed`
+      // only when the version it names IS the one now running.
       targetVersion: "2.0.0",
       updatedAt: "2026-01-01T00:00:00.000Z",
       writerId: null,
@@ -6270,6 +6269,26 @@ describe("acceptance: cells with no legacy ancestor", () => {
     });
   });
 
+  it("a recovery that failed names the attempt's version, not the host's", async () => {
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    const crashed = await crashAtRestarting("2.0.0");
+    await seedInstalled("3.0.0");
+    world.latest = "3.0.0";
+    world.runningVersion = "3.0.0";
+
+    await runUpdate({
+      intent: "activate",
+      expectAttempt: crashed.attemptId,
+    });
+
+    expect(await readHostUpdateLastAttempt(currentHome.value)).toMatchObject({
+      outcome: "failed",
+      attemptId: crashed.attemptId,
+      targetVersion: "2.0.0",
+    });
+  });
+
   it("an attempt closed on the way to nothing-to-do is not this run's outcome", async () => {
     await seedInstalled("1.0.0");
     world.runningVersion = "1.0.0";
@@ -7002,7 +7021,7 @@ describe("ported: the explicit request's version binding (#1752 round 14)", () =
     // a non-failure terminal the GUI's live projection maps to `idle` and its
     // record leg drops - and this run's own `updating` marker is withdrawn by
     // CONDITIONAL delete. A `failed` here would name 2.0.0 over a host at
-    // 3.0.0, and no stale rule clears a `failed` whose target is not running.
+    // 3.0.0, and this CLI clears a `failed` only when its target is running.
     await seedInstalled("1.0.0");
     world.runningVersion = "1.0.0";
     mocks.downloadAndStageHostInSegment.mockImplementation(

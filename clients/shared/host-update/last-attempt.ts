@@ -97,32 +97,35 @@ function escapedForPattern(text: string): string {
 }
 
 /**
- * This account's home wherever it is, and its name wherever a path or domain
- * puts it. An empty or root home names nothing, and `replaceAll("", ...)` would
- * shred the text before any pattern could read it.
+ * What of an error's text may be kept: no credential and no account name.
+ *
+ * In this order. A bare name is stripped last, and only where a path, a domain
+ * or a mailbox puts it: anywhere else it can be a word the message needs, a
+ * home called `traycer` being the plain case, and a mark left early would stop
+ * the email and home patterns matching.
  */
-function withoutThisAccount(text: string): string {
+function recordableText(text: string): string {
   const home = homedir();
   const name = basename(home);
-  if (home.length <= 1 || name.length <= 1) return text;
-  return text
-    .replace(
+  // An empty or root home names nothing, and `replaceAll("", ...)` would shred
+  // the text.
+  const known = home.length > 1 && name.length > 1;
+  let redacted = redactSensitiveText(text.slice(0, MAX_SCANNED_TEXT_LENGTH));
+  if (known) {
+    redacted = redacted.replace(
       new RegExp(`${escapedForPattern(home)}(?![^\\\\/\\s"':,)])`, "gi"),
       "~",
-    )
-    .replace(
-      new RegExp(`(?<![\\w.-])${escapedForPattern(name)}(?![\\w.-])`, "gi"),
-      "[redacted]",
     );
-}
-
-/** What of an error's text may be kept: no credential and no account name. */
-function recordableText(text: string): string {
-  const redacted = withoutThisAccount(
-    redactSensitiveText(text.slice(0, MAX_SCANNED_TEXT_LENGTH)),
-  )
+  }
+  redacted = redacted
     .replace(HOME_DIRECTORY_PATTERN, "$1[redacted]")
     .replace(EMAIL_PATTERN, "[redacted]");
+  if (known) {
+    redacted = redacted.replace(
+      new RegExp(`(?<=[\\\\/~@])${escapedForPattern(name)}(?![\\w-])`, "gi"),
+      "[redacted]",
+    );
+  }
   return redacted.length <= MAX_RECORDED_TEXT_LENGTH
     ? redacted
     : `${redacted.slice(0, MAX_RECORDED_TEXT_LENGTH)}...`;

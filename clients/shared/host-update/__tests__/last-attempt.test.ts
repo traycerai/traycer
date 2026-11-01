@@ -164,6 +164,31 @@ describe("writeHostUpdateLastAttempt", () => {
       ],
       ["behind a domain", "/data/alice", "CORP\\alice", "CORP\\[redacted]"],
       ["on another path", "/data/alice", "/mnt/alice/x", "/mnt/[redacted]/x"],
+      ["at a sentence end", "/data/alice", "/srv/alice.", "/srv/[redacted]."],
+      [
+        "as a mailbox",
+        "/data/alice",
+        "from alice@example.com, refused",
+        "from [redacted], refused",
+      ],
+      [
+        "as a mail domain too",
+        "/data/alice",
+        "from alice@alice-consulting.com",
+        "from [redacted]",
+      ],
+      [
+        "and a home named like a root",
+        "/data/home",
+        "/home/bob/.traycer",
+        "/[redacted]/[redacted]/.traycer",
+      ],
+      [
+        "as a word a message needs",
+        "/data/traycer",
+        "run 'traycer host install' first",
+        "run 'traycer host install' first",
+      ],
     ])("%s", async (_name, path, message, expected) => {
       homeIs(path);
       expect(await recorded(message)).toBe(expected);
