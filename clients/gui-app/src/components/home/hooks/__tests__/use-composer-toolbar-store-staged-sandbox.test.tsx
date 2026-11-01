@@ -26,8 +26,8 @@ const host = vi.hoisted(() => {
       | undefined,
     /** The cloud read failed (no data, not pending). */
     cloudError: false,
-    /** Whether the cloud read is in flight (false while paused offline). */
-    cloudFetching: false,
+    /** The cloud read's fetch state: in flight, paused offline, or not running. */
+    cloudFetchStatus: "fetching",
     /** Whether the composer's host is a sandbox host. */
     sandboxHost: false,
     /** The terminal surface's capability rule. */
@@ -104,7 +104,8 @@ vi.mock("@/hooks/sandboxes/use-sandbox-traycer-models-query", () => ({
     return {
       data,
       isPending: data === undefined && !host.cloudError,
-      isFetching: host.cloudFetching,
+      isFetching: host.cloudFetchStatus === "fetching",
+      fetchStatus: host.cloudFetchStatus,
       isError: host.cloudError,
     };
   },
@@ -291,7 +292,7 @@ beforeEach(() => {
   host.offeredAgents = undefined;
   host.cloudTraycer = undefined;
   host.cloudError = false;
-  host.cloudFetching = false;
+  host.cloudFetchStatus = "fetching";
   host.sandboxHost = false;
   host.tuiOnly = false;
   host.codexSlugs = ["gpt-6-astra"];
@@ -554,7 +555,7 @@ describe("the staged gate's model check against the sandbox's list read", () => 
   it("holds the check and Send behind the checking notice while the read is paused offline", async () => {
     // Paused: no data, not in flight, not failed.
     host.cloudTraycer = undefined;
-    host.cloudFetching = false;
+    host.cloudFetchStatus = "paused";
     host.cloudError = false;
     const { gate, stage } = stagedGate();
 
@@ -565,6 +566,30 @@ describe("the staged gate's model check against the sandbox's list read", () => 
     };
     expect(gate.check(stage)).toMatchObject(checking);
     expect(await gate.beforeSend(stage)).toMatchObject(checking);
+  });
+
+  it("holds the check and Send behind the checking notice while the read is in flight", async () => {
+    host.cloudTraycer = undefined;
+    host.cloudFetchStatus = "fetching";
+    const { gate, stage } = stagedGate();
+
+    const checking = {
+      kind: "mirror",
+      pending: true,
+      message: CHECKING_SANDBOX_AGENTS,
+    };
+    expect(gate.check(stage)).toMatchObject(checking);
+    expect(await gate.beforeSend(stage)).toMatchObject(checking);
+  });
+
+  it("lets a read nothing will run pass instead of holding Send", async () => {
+    // A disabled query: no data, still pending, and not fetching or paused.
+    host.cloudTraycer = undefined;
+    host.cloudFetchStatus = "idle";
+    const { gate, stage } = stagedGate();
+
+    expect(gate.check(stage)).toBeNull();
+    expect(await gate.beforeSend(stage)).toBeNull();
   });
 
   it("lets a failed read pass, as the check cannot tell", async () => {
@@ -632,6 +657,67 @@ describe("a stage's model hold on a sandbox host", () => {
     );
 
     expect(chip(store.getState()).model).toBe("gpt-6-astra");
+  });
+});
+
+describe("a stage arriving on a sandbox host that already keeps picks", () => {
+  it("keeps the healed Traycer model on screen when the cloud list holds the saved one", async () => {
+    host.sandboxHost = true;
+    host.cloudTraycer = [
+      { slug: "traycer-saved" },
+      { slug: "traycer-default" },
+    ];
+    const saved: ChatRunSettings = {
+      ...PICK,
+      harnessId: "traycer",
+      model: "traycer-saved",
+      reasoningEffort: null,
+    };
+    const { result } = renderLandingToolbar(null, saved);
+    const store = result.current;
+    // The host's own list lacks the saved model, so the chip shows the default.
+    await waitFor(() =>
+      expect(chip(store.getState()).model).toBe("traycer-default"),
+    );
+
+    act(() => {
+      useStagedSandboxStore.getState().stage(SURFACE, newTarget("linux", 2));
+    });
+    await waitFor(() =>
+      expect(store.getState().sandboxRunTarget).toBe("staged"),
+    );
+
+    await waitFor(() =>
+      expect(store.getState().values.selection.modelSlug).toBe(
+        "traycer-default",
+      ),
+    );
+    expect(chip(store.getState()).model).toBe("traycer-default");
+    expect(sent(store.getState()).model).toBe("traycer-default");
+  });
+
+  it("keeps the healed Codex model on screen when the saved slug is unlisted", async () => {
+    host.sandboxHost = true;
+    host.harnesses = host.available(true, true);
+    const saved: ChatRunSettings = { ...PICK, model: "codex-saved" };
+    const { result } = renderLandingToolbar(null, saved);
+    const store = result.current;
+    await waitFor(() =>
+      expect(chip(store.getState()).model).toBe("gpt-6-astra"),
+    );
+
+    act(() => {
+      useStagedSandboxStore.getState().stage(SURFACE, newTarget("linux", 2));
+    });
+    await waitFor(() =>
+      expect(store.getState().sandboxRunTarget).toBe("staged"),
+    );
+
+    await waitFor(() =>
+      expect(store.getState().values.selection.modelSlug).toBe("gpt-6-astra"),
+    );
+    expect(chip(store.getState()).model).toBe("gpt-6-astra");
+    expect(sent(store.getState()).model).toBe("gpt-6-astra");
   });
 });
 

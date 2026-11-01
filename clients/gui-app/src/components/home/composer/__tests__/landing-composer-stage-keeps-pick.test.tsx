@@ -127,6 +127,9 @@ vi.mock("@/hooks/sandboxes/use-sandbox-traycer-models-query", () => ({
       data,
       isPending: data === undefined,
       isFetching: host.cloudFetching,
+      fetchStatus: host.cloudFetching
+        ? ("fetching" as const)
+        : ("idle" as const),
       isError: false,
     };
   },

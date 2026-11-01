@@ -122,8 +122,8 @@ export interface ComposerToolbarCatalog {
    * the model the person chose with one they did not; the surface holds the
    * send until the install is done (the pack gate) and refuses a harness that
    * cannot run there (`useSandboxAgentGate`). Only the terminal surface's
-   * capability rule still applies. A stage turning it on keeps the pick
-   * shown at that moment, a reroute included (`shownPickValues`).
+   * capability rule still applies. A stage arriving keeps the pick shown at
+   * that moment, a reroute or a healed model included (`shownPickValues`).
    */
   readonly keepsUnavailablePick: boolean;
 }
@@ -764,9 +764,8 @@ function shownPickValues(
   const shown = state.selection;
   if (
     !state.stageKeepsShownPick ||
+    state.modelHeld ||
     catalog.hostId !== state.catalog.hostId ||
-    state.catalog.keepsUnavailablePick ||
-    !catalog.keepsUnavailablePick ||
     sameShownPick(shown, state.values.selection) ||
     sameShownPick(shown, kept.selection)
   )
