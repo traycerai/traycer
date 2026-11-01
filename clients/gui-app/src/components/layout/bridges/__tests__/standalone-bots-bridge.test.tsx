@@ -88,14 +88,28 @@ vi.mock("@/lib/host/stream-runtime-context", async (importOriginal) => ({
   useStreamHostId: () => (host.activeStream === null ? null : "host-active"),
   useWsStreamClient: () => host.activeStream,
 }));
-vi.mock("@/hooks/host/use-host-directory-entry", () => ({
-  useHostDirectoryEntry: () => null,
-}));
+vi.mock("@/hooks/host/use-host-directory-entry", async () => {
+  const { mockLocalHostEntry } =
+    await import("@traycer-clients/shared/host-client/mock/mock-host-directory");
+  const entries = ["host-1", "host-active"].map((hostId) => ({
+    ...mockLocalHostEntry,
+    hostId,
+  }));
+  return {
+    useHostDirectoryEntry: (hostId: string | null) =>
+      entries.find((entry) => entry.hostId === hostId) ?? null,
+  };
+});
 vi.mock("@/lib/host/stream-auth-revalidator", () => ({
   useStreamAuthRevalidator: () => null,
 }));
 vi.mock("@/hooks/host/use-host-stream-client-for", () => ({
-  useHostStreamClientFor: () => host.stream,
+  useHostStreamClientFor: (target: { hostId: string } | null) => {
+    if (target?.hostId === "host-1") {
+      return host.stream;
+    }
+    return target?.hostId === "host-active" ? host.activeStream : null;
+  },
 }));
 vi.mock("@/hooks/agent/use-host-reachability", () => ({
   useHostReachability: () => ({ status: host.reachability }),
