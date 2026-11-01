@@ -1013,6 +1013,7 @@ function ManualSwitchTrigger(props: {
 }
 
 interface ChatRenderState {
+  taskTitle: string;
   messages: ReadonlyArray<ChatMessageModel>;
   baselineEpoch: number;
   hydrationSequence: number;
@@ -1071,7 +1072,7 @@ function chatScene(
         style={{ height: VIEWPORT_HEIGHT_PX, width: VIEWPORT_WIDTH_PX }}
       >
         <ChatMessagesWithDrillIn
-          taskTitle="Fallback integration chat"
+          taskTitle={state.taskTitle}
           taskId={CHAT_ID}
           epicId={EPIC_ID}
           hostId={state.hostId}
@@ -1103,6 +1104,7 @@ function renderChat(
 ) {
   const client = queryClient ?? createTestQueryClient();
   const state: ChatRenderState = {
+    taskTitle: "Fallback integration chat",
     messages: [],
     baselineEpoch,
     hydrationSequence: 0,
@@ -1395,6 +1397,32 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
     // release this test's warm session so the NEXT test's `registerHarness`
     // factory actually runs instead of silently returning a stale handle.
     disposeAllChatSessions();
+  });
+
+  it("still speaks a host notice that lands in the same commit as a rename", async () => {
+    const harness = createHarness();
+    registerHarness(harness);
+    const baselineEpoch = bootstrap(harness, undefined, undefined, undefined);
+    const chat = renderChat(baselineEpoch, undefined);
+    expect(liveRegionText()).toBe("");
+
+    const noticeMessage = assistantNoticeMessage({
+      id: "notice-renamed",
+      segment: providerNoticeSegment({
+        id: "seg-renamed",
+        noticeKind: "fallback_applied",
+        title: "Switched providers",
+        details: [{ label: "To", value: TARGET_IDENTITY }],
+      }),
+    });
+    const commits = await captureLiveRegionCommits(() => {
+      chat.rerenderWith({
+        messages: [noticeMessage],
+        taskTitle: "Renamed chat",
+      });
+    });
+
+    expect(countSentenceOccurrences(commits, "Switched providers")).toBe(1);
   });
 
   it("speaks hold -> choosing -> switching -> a host notice -> a return offer, once per semantic transition, before any scroll or focus theft", async () => {

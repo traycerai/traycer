@@ -67,6 +67,8 @@ vi.mock("@/hooks/agent/use-agent-stop-controls", () => ({
 // A sleeping agent on this host whose idle reap freed its PTY.
 vi.mock("@/lib/epic-selectors", () => ({
   useOpenEpicId: () => "epic-test",
+  // The tab's resolver; no live title in this suite, so the snapshot name.
+  useEpicTabDisplayTitle: (node: { readonly name: string }) => node.name,
   useEpicTerminalAgent: (): TuiAgentProjection => ({
     id: "agent-1",
     docResident: false,
