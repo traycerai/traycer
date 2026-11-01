@@ -1178,7 +1178,7 @@ describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
     expect(
       screen.queryByRole("button", { name: CHECK_BUTTON_NAME }),
     ).toBeNull();
-    // F3: with the button absent the label must keep the band's ORIGINAL
+    // With the button absent the label must keep the band's ORIGINAL
     // layout — every host older than this release, for as long as it stays
     // older.
     //
@@ -1219,7 +1219,7 @@ describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
     expect(
       screen.getByRole("button", { name: CHECK_BUTTON_NAME }),
     ).toBeTruthy();
-    // F3: with the button present the label clusters right; the switch never
+    // With the button present the label clusters right; the switch never
     // moves, only the label's text does.
     const label = screen
       .getByRole("switch", { name: "Auto-download updates" })
@@ -1497,14 +1497,14 @@ describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
 
       await user.click(screen.getByRole("button", { name: CHECK_BUTTON_NAME }));
 
-      // F4: what the panel actually sent, not just what happens after.
+      // What the panel actually sent, not just what happens after.
       expect(mocks.checkMutate.mock.calls[0]?.[0]).toEqual({
         packId: "opencode",
       });
 
       const notice = screen.getByTestId("provider-pack-discovery-check-notice");
       expect(notice.textContent).toBe(expected);
-      // F5: `kind` decides the visible class; a version that always answers
+      // `kind` decides the visible class; a version that always answers
       // "info" would pass every case above while the two failure sentences
       // render in muted grey.
       expect(notice.className).toContain(
@@ -1554,7 +1554,7 @@ describe("<ProviderPackVersionManagerPanel /> install-state surfaces", () => {
     });
 
     // Permanent mount, empty before the click - asserted here as well as in
-    // the outcome table so each table pins the F2 contract on its own: the
+    // the outcome table so each table pins the contract on its own: the
     // post-click query below would find a conditionally mounted region too.
     expect(screen.getByRole("status").textContent).toBe("");
 

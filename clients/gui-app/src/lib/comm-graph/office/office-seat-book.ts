@@ -81,7 +81,7 @@ export type OfficeSeatWant = "desk" | "bed" | "lounge";
  * with nowhere to sit is a floor that is too small, so it goes into
  * `needsCapacity` and the next layout makes room.
  *
- * `"none"` is the civic answer, and it is C2 - CAPACITY IS THE CAP. A floor
+ * `"none"` is the civic answer: CAPACITY IS THE CAP. A floor
  * with two beds and three crashed agents is not a floor that needs a third
  * bed; it is a floor where one agent stays at its desk with its glyph up until
  * a bed comes free. Letting civic demand reach `needsCapacity` would re-plan
@@ -401,7 +401,7 @@ export class OfficeSeatBook {
     }
     const seat = this.firstFreeSeat(layout, agentId, preference);
     if (seat === null) {
-      // C2: a civic claim that finds nothing is the cap doing its job, not a
+      // A civic claim that finds nothing is the cap doing its job, not a
       // floor that owes anybody a seat. See `OfficeSeatShortfall`.
       if (preference.shortfall === "plan") this.claimShortfall.add(agentId);
       return null;
@@ -524,7 +524,7 @@ export class OfficeSeatBook {
       // was actually found for, so an agent the ward had no room for fell
       // through to the wake loop below and took a reserve desk - and with
       // every reserve taken, a desk shortfall, and the next sync re-planning
-      // the storey. C2 says the ward's size IS the answer: an agent that finds
+      // the storey. The ward's size IS the answer: an agent that finds
       // it full keeps the seat it has. `shortfall: "none"` says so for the
       // claim; this says so for what happens next.
       civic.add(agentId);
@@ -532,7 +532,7 @@ export class OfficeSeatBook {
         roomId: null,
         floorIndex: seat.floorIndex,
         wants,
-        // C2 on a scrub as much as live: a ward that was full at the cursor
+        // On a scrub as much as live: a ward that was full at the cursor
         // stays full, and the overflow is at its desk rather than in
         // `needsCapacity` asking for a bigger one.
         shortfall: "none",

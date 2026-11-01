@@ -29,7 +29,7 @@ import {
   type GuiAgentModelOption,
 } from "@traycer/protocol/host/agent/gui/unary-schemas";
 import { z } from "zod";
-import { composeRequestAbort } from "../auth/request-abort";
+import { composeRequestAbort, untilAborted } from "../auth/request-abort";
 
 /**
  * The raw calls to traycer-server's sandbox control plane (`/api/sandboxes`)
@@ -256,31 +256,36 @@ async function callWithSignal(
 ): Promise<RawCall> {
   let response: Response;
   try {
-    response = await fetch(url, {
-      method: init.method,
-      headers,
-      body: init.body,
+    response = await untilAborted(
+      fetch(url, { method: init.method, headers, body: init.body, signal }),
       signal,
-    });
+    );
   } catch (error: unknown) {
-    return {
-      kind: "network-error",
-      detail:
-        error instanceof Error
-          ? `the request never completed (${error.name})`
-          : "the request never completed",
-    };
+    return neverCompleted(error);
   }
   let body: unknown = null;
   try {
     // An empty or non-JSON body (a proxy's HTML page, a 204) reads as `null`
     // rather than throwing before the status is classified.
-    const text = await response.text();
+    const text = await untilAborted(response.text(), signal);
     body = text.length === 0 ? null : JSON.parse(text);
-  } catch {
+  } catch (error: unknown) {
+    // A body that never arrived before the deadline is not an empty answer:
+    // the request did not complete, whatever its status said.
+    if (signal.aborted) return neverCompleted(error);
     body = null;
   }
   return { kind: "response", status: response.status, body };
+}
+
+function neverCompleted(error: unknown): RawCall {
+  return {
+    kind: "network-error",
+    detail:
+      error instanceof Error
+        ? `the request never completed (${error.name})`
+        : "the request never completed",
+  };
 }
 
 /** Classifies a non-2xx answer. */

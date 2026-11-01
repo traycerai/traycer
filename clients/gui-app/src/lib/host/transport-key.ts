@@ -156,7 +156,7 @@ export function isLocalHostBootingEntry(
 /**
  * Canonical identity a long-lived REMOTE-AWARE stream OWNER - the app-wide
  * `HostStreamProvider`, the durable chat/terminal registries, and the epic
- * session mount - rebuilds on (R-1: closing the S1 rotation gap). Mode-aware:
+ * session mount - rebuilds on (R-1: closing the rotation gap). Mode-aware:
  *
  *  - `remote`: `hostId + userId + publicKey + relay attach identity
  *    (websocketUrl)`, mirroring the `RemoteSessionIdentity` the shared

@@ -25,7 +25,7 @@ import { hostLabelAtSentenceStart } from "@/hooks/agent/use-host-reachability";
  * **Component state.** A full unmount also destroyed every draft a panel held
  * — a hook being written, a pasted API key, an open dialog — on any TRANSIENT
  * same-host disconnect (host restart, sleep, relay blip). That produced a
- * review-round-per-editor stream of per-surface retention stores; the hidden
+ * per-editor stream of per-surface retention stores; the hidden
  * `<Activity>` retires the whole class, because React preserves the subtree's
  * state while it is hidden. The Activity is keyed by the host, so a REAL host
  * switch still discards everything: a draft belongs to one machine's files

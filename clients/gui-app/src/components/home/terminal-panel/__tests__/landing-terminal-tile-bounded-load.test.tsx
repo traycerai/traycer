@@ -65,9 +65,9 @@ beforeEach(() => {
 afterEach(cleanup);
 
 /**
- * S5, the landing panel's terminal mirror of the canvas tiles' bounded
+ * The landing panel's terminal mirror of the canvas tiles' bounded
  * pre-bootstrap wait. Same wordless-skeleton-for-both-states defect the
- * canvas terminal tiles had (audit S5), fixed the same way, and asserted the
+ * canvas terminal tiles had, fixed the same way, and asserted the
  * same way: on the rendered SENTENCE, never on the absence of a spinner.
  */
 describe("<LandingTerminalTile /> S5 bounded pre-bootstrap wait", () => {

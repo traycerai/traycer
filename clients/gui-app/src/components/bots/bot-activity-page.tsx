@@ -57,7 +57,7 @@ import { navigateToTabIntent } from "@/lib/tab-navigation";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import type {
   BotOpenThread,
-  BotOpenTurn,
+  BotTurnOpen,
 } from "@/stores/bots/bot-open-thread-store";
 import type { ChatSessionStoreHandle } from "@/stores/chats/chat-session-store";
 
@@ -66,7 +66,7 @@ const noop = (): void => undefined;
 const noStop = (): string | null => null;
 
 /**
- * A bot's Activity page (Tracy Bots T86, decision 115): one page for the
+ * A bot's Activity page (Tracy Bots, decision 115): one page for the
  * bot, across its trunk and every thread, live and of this week. A row is
  * here when the bot started the thing or owns it (`bot-activity-model.ts`),
  * in four sections: what runs now, a stopped answer first; its tasks and
@@ -95,8 +95,8 @@ export function BotActivityPage(props: {
   readonly threads: ReadonlyArray<BotThreadSummary> | null;
   /** Opens a post's thread beside the channel, in Messages. */
   readonly onOpenPost: (open: BotOpenThread) => void;
-  /** Opens a check-in's turn beside the channel, in Messages. */
-  readonly onOpenTurn: (open: BotOpenTurn) => void;
+  /** Opens a check-in's turn: its session, in place of the channel. */
+  readonly onOpenTurn: BotTurnOpen;
 }): ReactNode {
   const {
     botId,
@@ -152,7 +152,13 @@ export function BotActivityPage(props: {
         ) : (
           <ul className="flex flex-col gap-1">
             {summary.stopped.map((stopped) => (
-              <li key={stoppedKey(stopped)}>
+              <li
+                key={
+                  stopped.target.kind === "trunk"
+                    ? "stopped:trunk"
+                    : `stopped:${stopped.target.threadId}`
+                }
+              >
                 <StoppedRow
                   botId={botId}
                   hostId={hostId}
@@ -165,7 +171,13 @@ export function BotActivityPage(props: {
               </li>
             ))}
             {summary.running.map((row) => (
-              <li key={runningKey(row)}>
+              <li
+                key={
+                  row.kind === "task"
+                    ? `task:${row.taskId}`
+                    : `chat:${row.chatId}`
+                }
+              >
                 <RunningRow
                   botId={botId}
                   hostId={hostId}
@@ -230,16 +242,6 @@ function ActivitySection(props: {
 
 function EmptyLine(props: { readonly text: string }): ReactNode {
   return <p className="py-1 text-ui-xs text-muted-foreground">{props.text}</p>;
-}
-
-function stoppedKey(stopped: BotStoppedSession): string {
-  return stopped.target.kind === "trunk"
-    ? "stopped:trunk"
-    : `stopped:${stopped.target.threadId}`;
-}
-
-function runningKey(row: BotRunningRow): string {
-  return row.kind === "task" ? `task:${row.taskId}` : `chat:${row.chatId}`;
 }
 
 /** Where a session of the bot answers: the channel, or one of its threads. */
@@ -412,7 +414,7 @@ function StoppedOpen(props: {
               onOpenPost({
                 anchorMessageId: anchor.messageId,
                 announcement: anchor.startsThread || open.announcement,
-                answer: open.answer,
+                anchorKind: open.anchorKind,
                 sent: null,
               })
             }

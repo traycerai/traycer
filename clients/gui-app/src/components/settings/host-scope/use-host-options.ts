@@ -256,8 +256,8 @@ export function useHostOptions(): HostOptions {
 
   // The authority's own verdicts, and the flag that says whether it has
   // reached any. These are what make every row below say the same thing the
-  // tiles say: `use-host-lease.ts` has carried the rule as a doc comment since
-  // P3.3 - all status UI derives from the lease vocabulary, no surface reads
+  // tiles say: `use-host-lease.ts` has carried the rule as a doc comment:
+  // all status UI derives from the lease vocabulary, no surface reads
   // sockets, probe caches or the cloud DTO directly - and until this read
   // existed, Settings and the pickers were the sentence's counterexample.
   //

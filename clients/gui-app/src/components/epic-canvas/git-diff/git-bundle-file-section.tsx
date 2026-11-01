@@ -147,8 +147,8 @@ interface BundleFileSectionBodyProps {
 
 function BundleFileSectionBody(props: BundleFileSectionBodyProps): ReactNode {
   const bundleFindRegistration = useBundleDiffFindRegistrationContext();
-  // `.svg` is never `isBinary` to git (image-preview decision log, decision
-  // #5) but still has no searchable diff text once it routes to the image
+  // `.svg` is never `isBinary` to git but still has no
+  // searchable diff text once it routes to the image
   // view, so it shares the same "binary" find-coverage state as a true
   // binary image - see `gitImageDiffRouting` for the routing decision
   // itself, shared with the single-file diff tile.
@@ -179,8 +179,8 @@ function BundleFileSectionBody(props: BundleFileSectionBodyProps): ReactNode {
   if (routeToImageDiff) {
     const sides = gitImageDiffSides(props.file);
     const revisionKey = gitImageDiffRevisionKey(props.file, props.headSha);
-    // `ImageDiffView` owns its own bounded height in `compact` mode (Codex
-    // re-review, #3773048701 / #3773298843) - it needs both sides' decoded
+    // `ImageDiffView` owns its own bounded height in `compact` mode
+    // - it needs both sides' decoded
     // dimensions to size itself snugly, which only it has access to (this
     // bundle row never fetches the asset itself), so there is no wrapper
     // height to apply here.

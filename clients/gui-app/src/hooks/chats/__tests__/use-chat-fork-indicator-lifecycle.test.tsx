@@ -31,8 +31,8 @@ function requireHostClient(): HostClient<HostRpcRegistry> {
 }
 
 // Both layers, and BOTH hooks on each: an `importActual` spread hands back
-// the REAL spine hook (`useHostRuntimeClient`, a separate export since
-// redesign P2.1), which throws outside a provider.
+// the REAL spine hook (`useHostRuntimeClient`, a separate export),
+// which throws outside a provider.
 vi.mock("@/lib/host", async (importActual) => {
   const actual = await importActual<typeof import("@/lib/host")>();
   return {

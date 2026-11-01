@@ -7,7 +7,7 @@ import { TILE_CONTENT_BUDGET_MS } from "@/lib/host/bounded-load-budgets";
 /**
  * What a surface waiting on host data should show. TOTAL by construction:
  * there is no arm that means "keep spinning indefinitely", which is the whole
- * point (audit S3/S4 - `enabled:false` leaves `isPending` true, `data`
+ * point (`enabled:false` leaves `isPending` true, `data`
  * undefined and `error` null forever, a shape every caller reads as "still
  * loading" because it is indistinguishable from one).
  */

@@ -319,7 +319,7 @@ describe("agentActivityPlaneCoversHost", () => {
     });
     expect(agentActivityPlaneCoversHost(HOST_A)).toBe(true);
 
-    noteAgentActivityConnectionStatus(HOST_A, "closed", null);
+    noteAgentActivityConnectionStatus(HOST_A, "closed", null, null);
 
     // `host-a`, the union's own former host, reads uncovered rather than
     // stale now that the connection that attested it is gone.

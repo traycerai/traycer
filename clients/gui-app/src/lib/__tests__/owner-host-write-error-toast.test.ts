@@ -794,7 +794,7 @@ describe("batch notice spec (traycerai/traycer#2546, round 10): one test per row
     ]);
   });
 
-  // Row 3 as amended in round 11: one counted write whose outcome is
+  // Row 3 as amended: one counted write whose outcome is
   // unknown - a lost answer, a keyed retry failure, or an abort after send.
   it.each([
     ["a lost answer", sentAndDropped],

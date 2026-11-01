@@ -97,7 +97,7 @@ export const FALLBACK_SETTINGS_SECTION_ID =
 /**
  * What a section BELONGS to — the organising idea of the whole surface.
  *
- * One rule, said beside the map (the environments core flows' Settings map):
+ * One rule, said beside the map:
  * if it varies by computer it sits under the host picker; if it is a
  * configuration's (Personal's, a team's) it sits under Environment; if it is
  * about your account rather than your settings it sits under Account; the rest
@@ -453,7 +453,7 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     icon: Cloud,
     group: ENVIRONMENT_PAGES_GROUP,
   },
-  // A team's members (P2's page). Offered only while a team is picked
+  // A team's members. Offered only while a team is picked
   // (`environmentSectionShown`).
   {
     id: "members",
@@ -572,11 +572,6 @@ export const RETIRED_SETTINGS_SECTION_IDS: ReadonlySet<SettingsSectionId> =
   new Set(["machine-setup", "agent-definitions", "browser-agent-access"]);
 
 /**
- * The page that now holds a retired section, where one does: a remembered
- * section or a link that names it opens that page, as its route redirects
- * there.
- */
-/**
  * The pages of the features this build does not ship (`unreleased-features.ts`):
  * sandboxes and their credits, a team's members, the environment's secrets,
  * the environment-wide MCP servers and Skills pages (each provider's own tab
@@ -594,6 +589,11 @@ export const UNRELEASED_SETTINGS_SECTION_IDS: ReadonlySet<SettingsSectionId> =
     "machine-setup",
   ]);
 
+/**
+ * The page that now holds a retired section, where one does: a remembered
+ * section or a link that names it opens that page, as its route redirects
+ * there.
+ */
 export const RETIRED_SECTION_REPLACEMENTS: Readonly<
   Partial<Record<SettingsSectionId, SettingsSectionId>>
 > = {

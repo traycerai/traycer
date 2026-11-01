@@ -10,8 +10,8 @@ import { startSandboxWake } from "@/lib/sandboxes/sandbox-wake";
 /**
  * Wakes a tile's sandbox host. Mounted only for a tile that was OPENED in this
  * session (`SandboxWakeOnTileOpen` gates on the open provenance), never for
- * one a layout restored: opening a tab is the inbound action the core flows
- * name, while a restore (or a session's reconnect loop) waking every sandbox a
+ * one a layout restored: opening a tab is the inbound action that wakes it,
+ * while a restore (or a session's reconnect loop) waking every sandbox a
  * canvas ever showed would keep forgotten machines awake on the meter.
  *
  * Fires at most once per mount, decided on the host's FIRST directory entry:

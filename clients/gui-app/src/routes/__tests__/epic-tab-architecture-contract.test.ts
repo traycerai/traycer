@@ -34,7 +34,7 @@ function matchingFiles(pattern: RegExp): readonly string[] {
 }
 
 describe("epic tab architecture contracts", () => {
-  // Cold review #5 / #9: route render adapters must not re-assert layout via
+  // Route render adapters must not re-assert layout via
   // synchronizeExternalRef; missing/stale Epic resolution must go through the
   // enveloped activateTabIntent seam (not a raw un-enveloped navigate).
   it("Epic and Draft route adapters do not call synchronizeExternalRef", () => {

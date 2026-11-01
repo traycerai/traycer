@@ -356,6 +356,7 @@ function renderPicker(): RenderedPicker {
     reasoningFallback: "model-default",
     seedKey: "team-rail-test",
     values: {
+      ultracode: false,
       permission: "supervised",
       selection: {
         harnessId: "codex",
@@ -368,6 +369,7 @@ function renderPicker(): RenderedPicker {
     onSettingsChange: null,
     tuiOnly: false,
     chatLineCarriesAutoMode: null,
+    ultracodeCarried: false,
     hostId: HOST_ID,
   });
   const selections: HarnessModelSelection[] = [];
@@ -380,6 +382,7 @@ function renderPicker(): RenderedPicker {
     <SurfaceActivityProvider active>
       <TooltipProvider delayDuration={0}>
         <HarnessModelPicker
+          withUltracode={false}
           labelDisplay="responsive"
           store={store}
           maxModeContext={{ kind: "none" }}

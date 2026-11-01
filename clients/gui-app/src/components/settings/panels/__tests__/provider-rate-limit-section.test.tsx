@@ -558,6 +558,26 @@ describe("ProviderRateLimitForProvider", () => {
     expect(document.querySelectorAll(".opacity-60").length).toBe(0);
   });
 
+  it("says the CLI isn't signed in for a not_signed_in reason", () => {
+    mocks.data = envelope({
+      provider: "claude-code",
+      available: false,
+      reason: "not_signed_in",
+    });
+    render(
+      <ProviderRateLimitForProvider
+        providerId="claude-code"
+        profileId={null}
+        usageUpdatedAt={null}
+        fetchEligible
+      />,
+    );
+
+    expect(
+      screen.getByText("Usage limits unavailable - the CLI isn't signed in"),
+    ).toBeTruthy();
+  });
+
   it("maps a rateLimitReachedType token to a destructive badge", () => {
     mocks.data = envelope(CODEX_RATE_LIMITS);
     render(

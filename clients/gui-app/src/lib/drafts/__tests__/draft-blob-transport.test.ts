@@ -632,7 +632,7 @@ describe("draft blob transport", () => {
     expect(localReadMocks.putImageBytesAtHash).not.toHaveBeenCalled();
   });
 
-  // ─── T5's once-per-host upload memo ─────────────────────────────────────
+  // ─── The once-per-host upload memo ─────────────────────────────────────
 
   it("two concurrent first uploads of one digest issue ONE request", async () => {
     // Pre-T5, `putDraftBlobs` had no join/start dedupe at all - every call
@@ -909,7 +909,7 @@ describe("draft blob transport", () => {
     expect(isDraftBlobUnbridgeable(HOST, hash)).toBe(false);
   });
 
-  // ─── T7: bounded concurrency, progress and the withheld-method fence ───
+  // ─── Bounded concurrency, progress and the withheld-method fence ───
 
   it("uploads at most DRAFT_BLOB_UPLOAD_CONCURRENCY digests at once, and all of them", async () => {
     // Seven distinct images so at least one wave of the pool has to wait for
@@ -1427,7 +1427,7 @@ describe("draft blob transport", () => {
 });
 
 /**
- * PORTED with the keyed dispatch (§8 of the merge resolution). Every OTHER fake
+ * PORTED with the keyed dispatch. Every OTHER fake
  * in this file answers both members identically - which is what keeps those
  * cases about digests, retries and epochs - so none of them can observe WHICH
  * member a dispatch used. That observation lives here and nowhere else.

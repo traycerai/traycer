@@ -10,7 +10,7 @@ import { usePendingSetPinnedEpicIds } from "@/hooks/epic/use-epic-set-pinned-mut
 import { epicMutationKeys } from "@/lib/query-keys";
 
 /**
- * `eccc40b12` - the pending-epics guard (lane 9 evidence, §3.5).
+ * `eccc40b12` - the pending-epics guard.
  * `isSetEpicPinnedVariables` runs over `unknown` mutation-cache variables and
  * deliberately does NOT require `isLocalHome`, even though every real
  * dispatch now carries it: this runs over variables ALREADY scoped by

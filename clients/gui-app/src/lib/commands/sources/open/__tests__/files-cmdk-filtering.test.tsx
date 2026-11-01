@@ -1,6 +1,6 @@
 /**
  * Drives the Files opener result rows through the REAL `<Command>` filtering
- * pipeline (`filter={paletteFilter}`) to prove the fixup: when cmdk filtering is
+ * pipeline (`filter={paletteFilter}`) to prove the fix: when cmdk filtering is
  * disabled for a Files host-result sub-page, a non-subsequence/typo live query
  * neither hides the host-ranked rows (host Fuse order is preserved) nor the
  * typed notice/truncation rows. The companion `shouldFilter` case shows cmdk

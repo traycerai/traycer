@@ -3,6 +3,7 @@ import {
   HOST_START_ADOPTION_ACK_WAIT_MS,
   HOST_START_ADOPTION_MAX_AGE_MS,
   HOST_START_ADOPTION_SPAWN_EDGE_BOUND_MS,
+  LAUNCHCTL_BOOTOUT_WAIT_TIMEOUT_MS,
   LAUNCHCTL_CALL_TIMEOUT_MS,
   LAUNCHCTL_INSTALL_SPAWN_EDGE_BOUND_MS,
   LAUNCHCTL_RECYCLE_TIMEOUT_MS,
@@ -98,26 +99,26 @@ describe("host-start adoption window — composition", () => {
     expect(HOST_START_ADOPTION_MAX_AGE_MS).toBe(
       HOST_START_ADOPTION_SPAWN_EDGE_BOUND_MS + SUPERVISOR_LAUNCH_MARGIN_MS,
     );
-    expect(HOST_START_ADOPTION_MAX_AGE_MS).toBe(175_250);
+    expect(HOST_START_ADOPTION_MAX_AGE_MS).toBe(224_000);
   });
 
-  it("HOST_START_ADOPTION_SPAWN_EDGE_BOUND_MS is the max of all eight named bounds, and Windows install's controller-return bound is the one that wins", () => {
+  it("HOST_START_ADOPTION_SPAWN_EDGE_BOUND_MS is the max of all eight named bounds, and the macOS install's bound is the one that wins", () => {
     expect(HOST_START_ADOPTION_SPAWN_EDGE_BOUND_MS).toBe(
       Math.max(...NAMED_SPAWN_EDGE_BOUNDS.map(([, value]) => value)),
     );
-    expect(HOST_START_ADOPTION_SPAWN_EDGE_BOUND_MS).toBe(135_250);
+    expect(HOST_START_ADOPTION_SPAWN_EDGE_BOUND_MS).toBe(184_000);
     expect(HOST_START_ADOPTION_SPAWN_EDGE_BOUND_MS).toBe(
-      WINDOWS_INSTALL_CONTROLLER_RETURN_BOUND_MS,
+      LAUNCHCTL_INSTALL_SPAWN_EDGE_BOUND_MS,
     );
   });
 
   it("value pins for every named bound", () => {
-    expect(LAUNCHCTL_INSTALL_SPAWN_EDGE_BOUND_MS).toBe(90_000); // macOS install
+    expect(LAUNCHCTL_INSTALL_SPAWN_EDGE_BOUND_MS).toBe(184_000); // macOS install
     expect(WINDOWS_INSTALL_SPAWN_EDGE_BOUND_MS).toBe(125_000); // Windows install (R4: through the create budget)
-    expect(SYSTEMCTL_INSTALL_SPAWN_EDGE_BOUND_MS).toBe(62_000); // Linux install
-    expect(SYSTEMCTL_JOB_TIMEOUT_MS).toBe(52_000); // Linux job
+    expect(SYSTEMCTL_INSTALL_SPAWN_EDGE_BOUND_MS).toBe(72_000); // Linux install
+    expect(SYSTEMCTL_JOB_TIMEOUT_MS).toBe(62_000); // Linux job
     expect(WINDOWS_RUN_SPAWN_EDGE_BOUND_MS).toBe(45_000); // Windows run
-    expect(LAUNCHCTL_RECYCLE_TIMEOUT_MS).toBe(40_000); // macOS recycle
+    expect(LAUNCHCTL_RECYCLE_TIMEOUT_MS).toBe(67_000); // macOS recycle
     expect(LAUNCHCTL_CALL_TIMEOUT_MS).toBe(10_000); // call
     expect(WINDOWS_INSTALL_CONTROLLER_RETURN_BOUND_MS).toBe(135_250); // Windows install controller-return
   });
@@ -136,11 +137,14 @@ describe("host-start adoption window — composition", () => {
     expect(SUPERVISOR_SPAWN_ACK_MARGIN_MS).toBe(10_000);
   });
 
-  it("the macOS install bound is composed of six launchctl-call timeouts plus the install kickstart", () => {
-    // bootout, bootstrap (edge 1), print, bootout, bootstrap (edge 2), print:
-    // six LAUNCHCTL_CALL_TIMEOUT_MS, then the install kickstart itself (edge 3).
+  it("the macOS install bound is two bootout waits, four launchctl-call timeouts and the install kickstart", () => {
+    // bootout-and-drain wait, bootstrap (edge 1), print, bootout-and-drain wait, bootstrap
+    // (edge 2), print: two LAUNCHCTL_BOOTOUT_WAIT_TIMEOUT_MS and four
+    // LAUNCHCTL_CALL_TIMEOUT_MS, then the install kickstart itself (edge 3).
     expect(LAUNCHCTL_INSTALL_SPAWN_EDGE_BOUND_MS).toBe(
-      6 * LAUNCHCTL_CALL_TIMEOUT_MS + 30_000,
+      2 * LAUNCHCTL_BOOTOUT_WAIT_TIMEOUT_MS +
+        4 * LAUNCHCTL_CALL_TIMEOUT_MS +
+        30_000,
     );
   });
 
@@ -164,7 +168,7 @@ describe("host-start adoption window — composition", () => {
     expect(SYSTEMCTL_INSTALL_SPAWN_EDGE_BOUND_MS).toBe(
       10_000 + SYSTEMCTL_JOB_TIMEOUT_MS,
     );
-    expect(SYSTEMCTL_INSTALL_SPAWN_EDGE_BOUND_MS).toBe(62_000);
+    expect(SYSTEMCTL_INSTALL_SPAWN_EDGE_BOUND_MS).toBe(72_000);
   });
 
   it.each(NAMED_SPAWN_EDGE_BOUNDS)(
@@ -196,7 +200,7 @@ describe("host-start adoption window — the lease-end invariant", () => {
   // the latest a lease can still legitimately be waited on is
   // (controller-return time) + `HOST_START_ADOPTION_ACK_WAIT_MS`. That must
   // never exceed `HOST_START_ADOPTION_MAX_AGE_MS + SUPERVISOR_SPAWN_ACK_MARGIN_MS`
-  // (185_250, R4) - the safety cap the doc comment names directly ("a lease
+  // (234_000) - the safety cap the doc comment names directly ("a lease
   // can outlive the window, by at most SUPERVISOR_SPAWN_ACK_MARGIN_MS").
   //
   // What the rows below model, mirroring `HOST_START_ADOPTION_MAX_AGE_MS`'s
@@ -213,43 +217,42 @@ describe("host-start adoption window — the lease-end invariant", () => {
   //     the safe direction (a proof consumed after the window reads as
   //     expired and takes ordinary admission), which is exactly why the
   //     timer model deliberately does not widen a row to cover it.
-  //   - R4: the Windows install row now reaches the cap exactly - it is the
-  //     bound that sizes the window - not the macOS install row. Untimed
-  //     local work (file writes, each child's exit after its timeout fires)
-  //     is outside every row, so that call ends at <= 185.25s plus that
-  //     fs/exit latency - a safe-direction late admission, the same way the
-  //     adopted-capability excess above is.
+  //   - The macOS install row reaches the cap exactly - it is the bound that
+  //     sizes the window, since its bootout-and-drain wait can run to the job's
+  //     whole `ExitTimeOut` (twice, on the reload race). Untimed local work
+  //     (file writes, each child's exit after its timeout fires) is outside
+  //     every row, so that call ends at <= 234s plus that fs/exit latency - a
+  //     safe-direction late admission, the same way the adopted-capability
+  //     excess above is.
   const LEASE_END_CAP_MS =
     HOST_START_ADOPTION_MAX_AGE_MS + SUPERVISOR_SPAWN_ACK_MARGIN_MS;
 
-  it("the lease-end cap is 185_250 (R4), i.e. the window plus the spawn-ack margin", () => {
-    expect(LEASE_END_CAP_MS).toBe(185_250);
+  it("the lease-end cap is 234_000, i.e. the window plus the spawn-ack margin", () => {
+    expect(LEASE_END_CAP_MS).toBe(234_000);
   });
 
-  it("Windows install: the create-budget controller-return bound plus the ack wait is the cap itself — the EQUALITY case (R4)", () => {
+  it("Windows install: the create-budget controller-return bound plus the ack wait, now UNDER the cap", () => {
     // A failed verify polls once more, then queries Last Run Result, before
     // the controller call returns (`WINDOWS_START_SPAWN_POLL_MS` +
     // `WINDOWS_SCHTASKS_QUERY_TIMEOUT_MS`), on top of the create-budget-gated
     // spawn-edge bound - `WINDOWS_INSTALL_CONTROLLER_RETURN_BOUND_MS` names
-    // that sum directly. Lease end = that bound + ACK_WAIT_MS, which is
-    // exactly window + ack margin, since this is now the bound the window is
-    // sized by.
+    // that sum directly. Lease end = that bound + ACK_WAIT_MS. It sized the
+    // window until the macOS install's bootout-and-drain wait outgrew it.
     const windowsInstallLeaseEndMs =
       WINDOWS_INSTALL_CONTROLLER_RETURN_BOUND_MS +
       HOST_START_ADOPTION_ACK_WAIT_MS;
     expect(windowsInstallLeaseEndMs).toBe(185_250);
-    expect(windowsInstallLeaseEndMs).toBe(LEASE_END_CAP_MS);
+    expect(windowsInstallLeaseEndMs).toBeLessThan(LEASE_END_CAP_MS);
   });
 
-  it("macOS install: the kickstart-timeout controller return plus the ack wait, now UNDER the cap (R4)", () => {
+  it("macOS install: the kickstart-timeout controller return plus the ack wait is the cap itself — the EQUALITY case", () => {
     // On macOS, `installService`'s controller call returns right at the
     // spawn-edge bound - no extra query step - so the lease end is exactly
-    // bound + ACK_WAIT_MS. R4 widened the window past this row: it no longer
-    // reaches the cap, Windows install does (the row above).
+    // bound + ACK_WAIT_MS, and this is the bound the window is sized by.
     const macosInstallLeaseEndMs =
       LAUNCHCTL_INSTALL_SPAWN_EDGE_BOUND_MS + HOST_START_ADOPTION_ACK_WAIT_MS;
-    expect(macosInstallLeaseEndMs).toBe(140_000);
-    expect(macosInstallLeaseEndMs).toBeLessThan(LEASE_END_CAP_MS);
+    expect(macosInstallLeaseEndMs).toBe(234_000);
+    expect(macosInstallLeaseEndMs).toBe(LEASE_END_CAP_MS);
   });
 
   it("Windows start/relaunchAfterRestart: the same poll-then-query-before-return shape off the run bound — lease end 105_250 (unchanged by R4)", () => {
@@ -301,10 +304,10 @@ describe("host-start adoption window — the lease-end invariant", () => {
   // point, so both cancel the lease at the throw instead of extending it -
   // only a Windows throw after `/Run` is marked committed.
 
-  it("Linux install: the controller call returns at the spawn-edge bound - no post-launch step any more - so lease end is bound + ACK_WAIT_MS = 112_000 (unchanged by R4)", () => {
+  it("Linux install: the controller call returns at the spawn-edge bound - no post-launch step any more - so lease end is bound + ACK_WAIT_MS = 122_000 (unchanged by R4)", () => {
     // Linger used to run AFTER `enable --now` and inside the controller
     // call's own return time, pushing the Linux install's post-launch cost
-    // to 62s (the spawn-edge bound) + 30s (linger) + 50s (ack wait) = 142s,
+    // to 72s (the spawn-edge bound) + 30s (linger) + 50s (ack wait) = 152s,
     // over the (pre-R4) 140_000ms cap. Moving linger BEFORE the install edge
     // (see linux.ts `installService`'s doc comment) took it off the grant's
     // clock entirely, so the controller call now returns exactly at
@@ -313,7 +316,7 @@ describe("host-start adoption window — the lease-end invariant", () => {
     // query-before-return shape Windows has.
     const linuxInstallLeaseEndMs =
       SYSTEMCTL_INSTALL_SPAWN_EDGE_BOUND_MS + HOST_START_ADOPTION_ACK_WAIT_MS;
-    expect(linuxInstallLeaseEndMs).toBe(112_000);
+    expect(linuxInstallLeaseEndMs).toBe(122_000);
     expect(linuxInstallLeaseEndMs).toBeLessThanOrEqual(LEASE_END_CAP_MS);
   });
 
@@ -328,7 +331,7 @@ describe("host-start adoption window — the lease-end invariant", () => {
     expect(macosStartLeaseEndMs).toBeLessThanOrEqual(LEASE_END_CAP_MS);
   });
 
-  it("macOS restart / relaunchAfterRestart (kickstart -k): the recycle timeout off the edge — lease end 90_000 (unchanged by R4)", () => {
+  it("macOS restart / relaunchAfterRestart (kickstart -k): the recycle timeout off the edge — lease end 117_000", () => {
     // A Desktop-managed restart's cooperative stand-down
     // (`restartDesktopManagedHost` ~:1946) is pre-edge, same as the ownership
     // probe above. `recycleJob` (~:2054) is `kickstart -k`, bounded by
@@ -338,18 +341,18 @@ describe("host-start adoption window — the lease-end invariant", () => {
     // one).
     const macosRestartLeaseEndMs =
       LAUNCHCTL_RECYCLE_TIMEOUT_MS + HOST_START_ADOPTION_ACK_WAIT_MS;
-    expect(macosRestartLeaseEndMs).toBe(90_000);
+    expect(macosRestartLeaseEndMs).toBe(117_000);
     expect(macosRestartLeaseEndMs).toBeLessThanOrEqual(LEASE_END_CAP_MS);
   });
 
-  it("Linux start / restart / relaunchAfterRestart: one systemctl job off the edge — lease end 102_000 (unchanged by R4)", () => {
+  it("Linux start / restart / relaunchAfterRestart: one systemctl job off the edge — lease end 112_000 (unchanged by R4)", () => {
     // `startService` and `restartService` (linux.ts) each issue exactly one
     // systemctl job after their spawn edge, bounded by
     // `SYSTEMCTL_JOB_TIMEOUT_MS`; `relaunchAfterRestart` picks one of the two,
     // never both, so one row covers all three.
     const linuxJobLeaseEndMs =
       SYSTEMCTL_JOB_TIMEOUT_MS + HOST_START_ADOPTION_ACK_WAIT_MS;
-    expect(linuxJobLeaseEndMs).toBe(102_000);
+    expect(linuxJobLeaseEndMs).toBe(112_000);
     expect(linuxJobLeaseEndMs).toBeLessThanOrEqual(LEASE_END_CAP_MS);
   });
 
@@ -456,14 +459,14 @@ describe("host-start adoption window — the lease-end invariant", () => {
     },
   );
 
-  it("the maximum lease end over every published controller call equals LEASE_END_CAP_MS, with Windows install as the equality case (R4)", () => {
+  it("the maximum lease end over every published controller call equals LEASE_END_CAP_MS, with macOS install as the equality case", () => {
     const maxLeaseEndMs = Math.max(
       ...LEASE_END_ROWS.map(([, , leaseEndMs]) => leaseEndMs),
     );
     expect(maxLeaseEndMs).toBe(LEASE_END_CAP_MS);
-    const [windowsInstallName, , windowsInstallLeaseEndMs] = LEASE_END_ROWS[0];
-    expect(windowsInstallName).toBe("Windows install");
-    expect(windowsInstallLeaseEndMs).toBe(maxLeaseEndMs);
+    const [macosInstallName, , macosInstallLeaseEndMs] = LEASE_END_ROWS[1];
+    expect(macosInstallName).toBe("macOS install");
+    expect(macosInstallLeaseEndMs).toBe(maxLeaseEndMs);
   });
 });
 
@@ -478,7 +481,7 @@ describe("host-start adoption window — why the pre-edge Windows restart cost i
   // This is not a residual risk the window happens to tolerate - it is WHY a
   // window could be derived at all. A Windows restart's pre-edge cost alone
   // (240_000ms: `/End` plus four scans and three kills) is already larger
-  // than the window (175_250ms, R4), so if the grant were published before
+  // than the window (224_000ms), so if the grant were published before
   // that ladder - as it was before this fix - no window wide enough to admit
   // the real worst case could exist without becoming absurdly large. Moving
   // the publish point to the edge is what makes the pre-edge cost irrelevant

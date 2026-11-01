@@ -45,7 +45,7 @@ export interface BootstrapLogDisclosureProps {
  * actually in progress. Composing it beside the failure diagnostics is how
  * the failed arm gets the log without the "Starting local Traycer Host…" lie,
  * and it keeps `LocalHostLoadingContent`'s one-purpose rule intact rather than
- * regrowing the second face P3.4 deleted.
+ * regrowing the second face the redesign deleted.
  */
 export function BootstrapLogDisclosure(
   props: BootstrapLogDisclosureProps,
@@ -136,7 +136,7 @@ export function LocalHostBodyShell(props: {
 
 export interface LocalHostLoadingContentProps {
   /**
-   * The shared host-progress view (F19's one copy table), not a raw lane
+   * The shared host-progress view (one copy table), not a raw lane
    * event. Built by the caller so this body and Settings ▸ Host read the same
    * table: they used to phrase the same install two different ways, one keyed
    * on the progress stage and one on the mutation kind.
@@ -154,7 +154,7 @@ export interface LocalHostLoadingContentProps {
  * Deliberately has no outer chrome (no `min-h-svh` wrapper, no `<AppHeader>`,
  * no `<Card>`) so its caller provides its own bounded layout.
  *
- * ONE PURPOSE, since P3.4: this describes a start that is still in progress,
+ * ONE PURPOSE: this describes a start that is still in progress,
  * and nothing else. It used to take a `stage` and grow a second face on
  * `"slow"` - its own "taking longer than expected" copy, its own Retry, and
  * the failed-attempt summary. Every caller of that arm is gone: the modal

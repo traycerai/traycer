@@ -81,7 +81,7 @@ afterEach(() => {
 // unmounted-modal route (where that binding is gone, and the drafts list is
 // deleting a row whose modal was never opened this session) is NOT closed by
 // the notify-before-remove reorder: it is `deleteNewChatDraftRow`'s explicit
-// client routing in T04. The second case below pins that limit.
+// client routing. The second case below pins that limit.
 describe("new-chat clearDraft routes its host delete with the epic host bound (critique C2)", () => {
   it("sends drafts.delete for the patch's draft id, and the host stops listing the row", async () => {
     const log: HostLog = { deletes: [], rows: [] };
@@ -145,7 +145,7 @@ describe("new-chat clearDraft routes its host delete with the epic host bound (c
     await new Promise((resolve) => setTimeout(resolve, 10));
     expect(log.deletes).toEqual([]);
     // The local row is gone either way - it is the HOST row that survives,
-    // which is why `deleteNewChatDraftRow` (T04) sends the delete on the
+    // which is why `deleteNewChatDraftRow` sends the delete on the
     // owner host's client itself rather than relying on this notice.
     expect(
       useNewConversationModalStore.getState().draftPatchesByEpicId[EPIC_ID],

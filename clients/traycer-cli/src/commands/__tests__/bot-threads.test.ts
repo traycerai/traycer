@@ -64,6 +64,7 @@ const THREADS = [
       senderUserId: "user-1",
       sentAt: Date.UTC(2026, 9, 23, 13, 58, 0),
       resolvedAt: null,
+      excerpt: null,
     },
     replyCount: 3,
     lastReplyAt: Date.UTC(2026, 9, 23, 14, 2, 11),

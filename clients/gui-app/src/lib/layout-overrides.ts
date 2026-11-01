@@ -33,7 +33,7 @@ import { cn } from "@/lib/utils";
  * aside) - so one spread per region IS the merge, and there is no second level
  * for an inner override to drop.
  *
- * ## The passivity contract (D11) - the part that is easy to get wrong
+ * ## The passivity contract - the part that is easy to get wrong
  *
  * An override changes what a mounted component DRAWS. It does not, and must
  * not, change whether one exists. So what may be wrapped is a VISUAL LEAF:
@@ -191,7 +191,7 @@ export function useRegionDensity(
  * There is deliberately no whole-arrangement hook: every reader wants one or
  * two fields, and subscribing to the object made a dock reorder or a divider
  * drag re-render the rate-limit segment hook, the profile-selection hook, the
- * visibility menu and the header popover (G1-14).
+ * visibility menu and the header popover.
  */
 export function useArrangementValue<Key extends keyof LayoutArrangement>(
   key: Key,
@@ -245,7 +245,7 @@ export interface ReadingWidthStyle {
 /**
  * The content column the transcript, every lower surface of the composer and
  * an artifact's body share. One answer for all of them, because a chat and
- * the document read beside it must agree on their measure (audit R2).
+ * the document read beside it must agree on their measure.
  *
  * `comfortable` is a literal, build-time Tailwind class - the compiler has to
  * see it ahead of time. `wide` is a user-chosen px value with no such static

@@ -22,6 +22,7 @@ import type {
 import { resolveClonedChatSettings } from "../resolve-cloned-chat-settings";
 
 const BASE_SETTINGS: ChatRunSettings = {
+  ultracode: false,
   harnessId: "claude",
   model: "sonnet-4.5",
   permissionMode: "supervised",
@@ -386,7 +387,7 @@ describe("resolveClonedChatSettings", () => {
   });
 });
 
-// JOB 3 (Codex ivFes, P1): `permissionModeForTarget` runs before the profile
+// JOB 3: `permissionModeForTarget` runs before the profile
 // remap, clamping `auto` against the TARGET's own harness catalog rather than
 // letting it ride through to a create the target host would refuse outright.
 describe("resolveClonedChatSettings clamps auto against the target catalog", () => {
@@ -499,7 +500,7 @@ describe("resolveClonedChatSettings clamps auto against the target catalog", () 
     });
   });
 
-  // THE REGRESSION this ticket exists for: `permissionModeForTarget` used to
+  // THE REGRESSION under test: `permissionModeForTarget` used to
   // read the target row with a bare `targetRow.supportedPermissionModes
   // .includes("auto")`. An EMPTY array is a harness that answered and
   // declared no constraint (the host's own
@@ -528,7 +529,7 @@ describe("resolveClonedChatSettings clamps auto against the target catalog", () 
     });
   });
 
-  // FIX 2 (P1): the sibling of the case above, WITHOUT
+  // FIX 2: the sibling of the case above, WITHOUT
   // `targetHostKnowsAutoMode()`. The row is exactly as unconstrained - an
   // empty `supportedPermissionModes` `harnessHonorsPermissionMode` treats
   // identically either way - so the only thing that differs is the target
@@ -558,7 +559,7 @@ describe("resolveClonedChatSettings clamps auto against the target catalog", () 
     });
   });
 
-  // JOB 2 (Codex, P1): the sibling of the case above, under the MIXED
+  // JOB 2: the sibling of the case above, under the MIXED
   // catalog that used to be asserted the other way. `settings.harnessId` is
   // `claude`, and the target's `claude` row offers no `auto` - the presence
   // of `codex`'s `auto` elsewhere in the catalog is not evidence about the
@@ -680,7 +681,7 @@ describe("resolveClonedChatSettings clamps auto against the target catalog", () 
   });
 });
 
-// FIX 1 (P1): the demotion chain used to be applied ONE step and unchecked -
+// FIX 1: the demotion chain used to be applied ONE step and unchecked -
 // `auto` became `auto_accept_edits` on a `["full_access"]` row and went to
 // `epic.createChat` as a tuple that host refuses outright. Now every rung of
 // `demotionChain()` is checked against the target row in turn, and only when

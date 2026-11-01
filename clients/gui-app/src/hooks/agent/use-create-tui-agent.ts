@@ -158,7 +158,7 @@ export interface CreateTuiAgentInput {
   readonly title: string;
   /**
    * Explicit placement for the placeholder tile, or `null` to let the
-   * conversation tile-placement setting decide (C3, C8). Only the in-pane
+   * conversation tile-placement setting decide. Only the in-pane
    * PaneOpener names a pane.
    */
   readonly placement: ExplicitTilePlacement | null;
@@ -206,8 +206,7 @@ export interface CreateTuiAgentInput {
   readonly terminalAgentArgs: string | null;
   /**
    * Which of the harness's logged-in profiles (subscriptions) to launch this
-   * agent on. `null` = the ambient/host login. See the multi-profile decision
-   * log.
+   * agent on. `null` = the ambient/host login.
    */
   readonly profileId: string | null;
 }
@@ -296,8 +295,7 @@ export function useCreateTuiAgentForClient(
       try {
         // Preflight cross-profile fork admission BEFORE anything else -
         // including the placeholder tile and worktree/binding work below -
-        // so a rejection leaves NOTHING created (tech plan governing
-        // client-side ordering). See
+        // so a rejection leaves NOTHING created. See
         // `resolveForkProfilePreflightTarget` for when this actually applies.
         const preflightTarget = resolveForkProfilePreflightTarget(
           input,

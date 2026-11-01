@@ -27,7 +27,7 @@ vi.mock("@/lib/drafts/draft-mirror-coordinator", () => ({
 }));
 
 /**
- * Finding 1: an edited queued prompt in custody is held by this store alone
+ * An edited queued prompt in custody is held by this store alone
  * from the moment the composer clears. Disposal must hand it off, eviction
  * must wait for it, and a text already handed back must not be handed off a
  * second time.
@@ -41,6 +41,7 @@ const QUEUE_ITEM_ID = "queue-item-1";
 const MESSAGE_ID = "queued-message-1";
 
 const SETTINGS: ChatRunSettings = {
+  ultracode: false,
   harnessId: "codex",
   model: "gpt-5-codex",
   permissionMode: "supervised",
@@ -196,7 +197,7 @@ function emitSnapshot(
 
 function openWithQueuedRow(): Harness {
   const harness = createHarness();
-  harness.callbacks().onConnectionStatus("open", null, null);
+  harness.callbacks().onConnectionStatus("open", null, null, null);
   emitSnapshot(harness, [queuedRow(ORIGINAL)]);
   return harness;
 }
@@ -283,8 +284,8 @@ describe("an edited queued prompt in custody at disposal (finding 1)", () => {
     // The connection dies with the edit unanswered; the reconnect snapshot
     // still shows the original, so the text is handed back and the record is
     // retained to watch for the host.
-    harness.callbacks().onConnectionStatus("closed", null, null);
-    harness.callbacks().onConnectionStatus("open", null, null);
+    harness.callbacks().onConnectionStatus("closed", null, null, null);
+    harness.callbacks().onConnectionStatus("open", null, null, null);
     emitSnapshot(harness, [queuedRow(ORIGINAL)]);
     const state = harness.handle.store.getState();
     expect(state.queueEditRecords[editActionId]?.contentReturned).toBe(true);
@@ -323,8 +324,8 @@ describe("eviction waits for an edited queued prompt held only by this store (fi
   it("does not hold the session for a record whose text was already returned and taken", () => {
     harness = openWithQueuedRow();
     const { editActionId } = submitEdit(harness, SETTINGS);
-    harness.callbacks().onConnectionStatus("closed", null, null);
-    harness.callbacks().onConnectionStatus("open", null, null);
+    harness.callbacks().onConnectionStatus("closed", null, null, null);
+    harness.callbacks().onConnectionStatus("open", null, null, null);
     emitSnapshot(harness, [queuedRow(ORIGINAL)]);
     // The returned text sits in the restoration slot: that, not the record, is
     // what holds the session now.

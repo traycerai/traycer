@@ -152,6 +152,7 @@ import { readSupervisorRelaunchInstalledIdentity } from "../host/update-contende
 import { SUPERVISOR_ADMISSION_WAIT_MS } from "../host/update-budget";
 import { RELAUNCH_BACKOFF_MS } from "../host/relaunch-schedule";
 import { createCliLogger, errorFromUnknown, type ILogger } from "../logger";
+import { refreshServiceDefinitionAtSupervisorStart } from "./service-refresh";
 
 // `traycer host start` is the long-running supervisor invoked by the OS
 // service manager (launchd, systemd-user, or Windows Scheduled Task). The
@@ -789,6 +790,16 @@ export interface RunHostStartDeps extends ResolveHostStartTargetDeps {
   // and a count that supervisor left open is still sent. Best-effort; must
   // never throw.
   readonly resumeCrashReports: (environment: Environment) => Promise<void>;
+  // Called once by a supervisor its service manager started, before anything
+  // else: brings that service's own definition to the current form, so a job
+  // an older CLI registered gets today's launcher and stop budget without a
+  // re-registration. Definition-only, and must never throw. The default
+  // writes the real service definition, so every test harness injects it.
+  readonly refreshServiceDefinitionAtStart: (
+    environment: Environment,
+    serviceLabel: string,
+    logger: ILogger,
+  ) => Promise<void>;
   // The lifecycle policy's park rule and the supervisor's `supervisor.json` /
   // `supervisor-run.json`. The defaults read and WRITE the real host home, so
   // a test that runs a labelled start, or reaches an admitted spawn, must
@@ -954,6 +965,13 @@ const defaultRunDeps: RunHostStartDeps = {
   maxRelaunches: MAX_CONSECUTIVE_RELAUNCHES,
   reportHostCrash: reportHostCrashToSentry,
   resumeCrashReports: resumeHostCrashReports,
+  // Resolved at call time, like the lifecycle members below.
+  refreshServiceDefinitionAtStart: (environment, serviceLabel, logger) =>
+    refreshServiceDefinitionAtSupervisorStart(
+      environment,
+      serviceLabel,
+      logger,
+    ),
   lifecycle: {
     readPolicy: readHostLifecyclePolicy,
     readPresence: readDesktopPresence,
@@ -1137,6 +1155,20 @@ export async function runHostStart(
       supervisorPid,
     });
     return deps.exit(0);
+  }
+
+  // The definition this supervisor was started from may predate this CLI: a
+  // job registered by an older one keeps its old stop budget (launchd
+  // `ExitTimeOut`, systemd `TimeoutStopSec`) until something rewrites it, and
+  // a person on a pinned or update-free install never re-registers. Only a
+  // service start, and only its own label: an interactive start was not
+  // launched by the definition, and Desktop's ships in its bundle.
+  if (serviceStarted && serviceLabel !== null) {
+    await deps.refreshServiceDefinitionAtStart(
+      opts.environment,
+      serviceLabel,
+      logger,
+    );
   }
 
   // Pick up the crash-report throttle state the previous supervisor left, so a

@@ -187,7 +187,7 @@ describe("GithubMentionFilterPopover", () => {
   it("tracks the dot to the PUBLISHED selection, not the raw store", () => {
     // The store holds a repository the scope no longer contains, so the
     // section reconciles it away and its list is unfiltered. The dot has to
-    // agree with the LIST: core flows calls it "the tell that a filter is
+    // agree with the LIST: it is "the tell that a filter is
     // active", and a dot lit over an unfiltered list is simply a lie.
     useGithubMentionFilterStore.getState().setFilter({
       epicId: "epic-1",

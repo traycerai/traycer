@@ -45,7 +45,7 @@ function unwrapUpdateHostVersionPolicyResult(
 
 /**
  * "Update now" / auto-update policy toggle / "Apply now — ends N sessions"
- * (Remote Host Support §13, T16): `PATCH /api/v3/hosts/:hostId`, scoped to
+ * (T16): `PATCH /api/v3/hosts/:hostId`, scoped to
  * one host (mirrors `HostRow` being keyed by `host.hostId`, so a fresh hook
  * instance is bound per row). All three affordances share this single
  * mutation — they differ only in which tri-state field of

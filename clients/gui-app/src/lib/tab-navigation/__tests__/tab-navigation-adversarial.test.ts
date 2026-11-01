@@ -1,5 +1,5 @@
 /**
- * Adversarial navigation verification (frozen provenance-design §9).
+ * Adversarial navigation verification.
  *
  * Net-new race/ledger tests only — no production edits. Drives the real
  * controller, coordinator, and stores; fakes only the navigate promise /
@@ -1860,7 +1860,7 @@ describe("adversarial navigation: coordinator ledger & structural restore", () =
     // tab-command-coordinator.ts), so this racer wins BEFORE this
     // activation's own resolution call ever runs - its own resolution then
     // finds a stale `expectedCurrentEpicId` and rejects at that precondition.
-    // This is the pre-commit window (closed since round 1/2), not the
+    // This is the pre-commit window (now closed), not the
     // round-3 window - see the pin below this one for a listener that races
     // the commit itself via a raw `useEpicCanvasStore.subscribe`. Both are
     // real, both must hold: this one still exercises "must not silently
@@ -1868,7 +1868,7 @@ describe("adversarial navigation: coordinator ledger & structural restore", () =
     // (which drive a call that eventually places its source), this one
     // deliberately throws and never places anything -
     // `expectLedgerReleased()` below is the applicable contract here,
-    // matching "fresh source failure preserves T2 error precedence".
+    // preserving error precedence for a fresh source failure.
     const unsubscribeRace = tabCommandCoordinator.subscribe(() => {
       const current = useEpicCanvasStore.getState().tabsById[phase.tabId];
       if (current?.epicId === "phase-race") {

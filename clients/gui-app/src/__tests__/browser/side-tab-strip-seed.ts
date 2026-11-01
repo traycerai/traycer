@@ -126,7 +126,7 @@ export function seedSideStripTabs(sessionTab: boolean): void {
 /**
  * An unread renderer-local failure on `Delta migration`, which the strip's
  * indicator selector folds into that tab's `unreadFailure` and the row kit
- * turns into the failed badge on its tile (S-17, S-35).
+ * turns into the failed badge on its tile.
  */
 function seedFailureBadge(): void {
   const notifications = useAppLocalNotificationsStore.getState();

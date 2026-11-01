@@ -98,6 +98,11 @@ export const CLI_ERROR_CODES = {
   // the command again can repeat whatever it did, such as delivering the same
   // message to an agent twice. The message says to check before re-sending.
   HOST_REQUEST_OUTCOME_UNKNOWN: "E_HOST_REQUEST_OUTCOME_UNKNOWN",
+  // The host answered, but the call needed the cloud and the cloud gave the
+  // host no verdict (mirrors the host's typed `E_CLOUD_UNREACHABLE`). Says
+  // nothing about the target; running the command again once the network is
+  // back is safe.
+  CLOUD_UNREACHABLE: "E_CLOUD_UNREACHABLE",
   // A running host reported (or, fail-safe, was assumed to have) work in
   // progress, so the CLI refused to reinstall/restart it. The desktop maps
   // this to its "host busy" flow (surface the host, run the renderer's
@@ -291,6 +296,7 @@ export const EXPECTED_CLI_ERROR_CODES: ReadonlySet<CliErrorCode> =
     CLI_ERROR_CODES.HOST_NOT_RUNNING,
     CLI_ERROR_CODES.HOST_UNREACHABLE,
     CLI_ERROR_CODES.HOST_REQUEST_OUTCOME_UNKNOWN,
+    CLI_ERROR_CODES.CLOUD_UNREACHABLE,
     CLI_ERROR_CODES.HOST_BUSY,
     CLI_ERROR_CODES.HOST_UPDATE_ATTEMPT_ACTIVE,
     CLI_ERROR_CODES.HOST_NOT_SERVICE_RUN,

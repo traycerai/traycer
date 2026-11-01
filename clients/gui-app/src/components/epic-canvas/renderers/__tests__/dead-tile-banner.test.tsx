@@ -240,7 +240,7 @@ describe("<ChatDeadTileBanner />", () => {
     }
   });
 
-  // ticket 35: a reachable host can still have nothing to serve for this
+  // A reachable host can still have nothing to serve for this
   // chat (`chat.subscribe` terminated CHAT_NOT_VISIBLE) - "is offline" would
   // be false here, so this variant must say something else while keeping
   // the same Clone offer and two-Agents disclosure.
@@ -272,7 +272,7 @@ describe("<ChatDeadTileBanner />", () => {
     expect(text).toContain("mac-mini");
   });
 
-  // tickets 47/48: the same "not here" answer, from the host this device is
+  // The same "not here" answer, from the host this device is
   // CONNECTED to. Both sentences above would print the reader's own machine
   // as somewhere their history is unavailable / stays bound to - the copy
   // that sent two live debugging sessions after a healthy host on
@@ -438,7 +438,7 @@ describe("<ChatDeadTileBanner />", () => {
       expect(screen.queryByRole("button", { name: "Clone agent" })).toBeNull();
     });
 
-    // Cold-review finding: the first cut claimed "showing the last published
+    // The first cut claimed "showing the last published
     // copy" unconditionally, but the live tile mounts this banner above a
     // load state or a cached live session - the claim must follow the
     // mounting surface's presentation, not the reason.
@@ -465,7 +465,7 @@ describe("<ChatDeadTileBanner />", () => {
       expect(screen.getByRole("button", { name: "Clone agent" })).toBeTruthy();
     });
 
-    // Cold-review finding: `chat-not-visible` / `chat-not-on-this-host` are
+    // `chat-not-visible` / `chat-not-on-this-host` are
     // picked only after a reachable host ANSWERED, so the foreign sentence
     // must keep the missing-history fact there - "isn't connected" would
     // invert the evidence.

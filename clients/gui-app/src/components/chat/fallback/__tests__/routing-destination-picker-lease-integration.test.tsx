@@ -6,6 +6,7 @@ import {
   screen,
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { Mock } from "vitest";
 import type { Chat } from "@traycer/protocol/persistence/epic/schemas";
 import type { PendingFallback } from "@traycer/protocol/host/agent/gui/subscribe";
@@ -222,7 +223,7 @@ function emitSnapshot(
   callbacks: ChatStreamCallbacks,
   pending: PendingFallback | undefined,
 ): void {
-  callbacks.onConnectionStatus("open", null, null);
+  callbacks.onConnectionStatus("open", null, null, null);
   callbacks.onSnapshot({
     kind: "snapshot",
     hasBinaryPayload: false,
@@ -339,7 +340,12 @@ function ChooserHarness({
 }
 
 function renderChooser(handle: ChatSessionStoreHandle) {
-  return render(<ChooserHarness handle={handle} />);
+  // The chooser's bot write is a Query mutation, built on every chooser.
+  return render(
+    <QueryClientProvider client={new QueryClient()}>
+      <ChooserHarness handle={handle} />
+    </QueryClientProvider>,
+  );
 }
 
 /** The trigger toggles the popover: the same click opens and closes it. */
@@ -546,7 +552,7 @@ describe("B1: the routing chooser over the real lease, five ticket cases", () =>
     // DOWN - `emitTurnState`, not `emitSnapshot`, so nothing silently repairs
     // `connectionStatus` before the reacquire effect's own `hold()` attempt.
     act(() => {
-      callbacks.onConnectionStatus("reconnecting", null, null);
+      callbacks.onConnectionStatus("reconnecting", null, null, null);
     });
     act(() => {
       emitTurnState(callbacks, fallbackDto({ state: "hold", revision: 3 }));
@@ -558,7 +564,7 @@ describe("B1: the routing chooser over the real lease, five ticket cases", () =>
 
     // The stream comes back and the host resends the timed hold.
     act(() => {
-      callbacks.onConnectionStatus("open", null, null);
+      callbacks.onConnectionStatus("open", null, null, null);
     });
     act(() => {
       emitTurnState(callbacks, fallbackDto({ state: "hold", revision: 4 }));
@@ -681,7 +687,7 @@ describe("B-RECONNECT: the reacquire effect re-asks per frame, not per lease-nul
     });
 
     act(() => {
-      callbacks.onConnectionStatus("reconnecting", null, null);
+      callbacks.onConnectionStatus("reconnecting", null, null, null);
     });
     act(() => {
       emitSnapshot(callbacks, fallbackDto({ state: "hold", revision: 3 }));
@@ -721,7 +727,7 @@ describe("B-RECONNECT: the reacquire effect re-asks per frame, not per lease-nul
     // and FAILS to send (`canSendAction` reads `connectionStatus === "open"`)
     // - the lease slot stays `null`.
     act(() => {
-      callbacks.onConnectionStatus("reconnecting", null, null);
+      callbacks.onConnectionStatus("reconnecting", null, null, null);
     });
     act(() => {
       emitTurnState(callbacks, fallbackDto({ state: "hold", revision: 3 }));
@@ -739,7 +745,7 @@ describe("B-RECONNECT: the reacquire effect re-asks per frame, not per lease-nul
 
     // Now the connection genuinely recovers and the retry succeeds.
     act(() => {
-      callbacks.onConnectionStatus("open", null, null);
+      callbacks.onConnectionStatus("open", null, null, null);
     });
     act(() => {
       emitTurnState(callbacks, fallbackDto({ state: "hold", revision: 5 }));
@@ -763,7 +769,7 @@ describe("B-RECONNECT: the reacquire effect re-asks per frame, not per lease-nul
     expect(spy.calls()).toBe(1);
 
     act(() => {
-      callbacks.onConnectionStatus("reconnecting", null, null);
+      callbacks.onConnectionStatus("reconnecting", null, null, null);
     });
     act(() => {
       emitSnapshot(callbacks, fallbackDto({ state: "choosing", revision: 3 }));

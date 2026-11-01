@@ -14,7 +14,12 @@ import {
   markCommandSettled,
   markCommandStarted,
 } from "./exit";
-import { createOutput, type Output, type ProgressInfo } from "./output";
+import {
+  createOutput,
+  keepConsoleOffStdout,
+  type Output,
+  type ProgressInfo,
+} from "./output";
 import {
   type RawRunnerFlags,
   readonlyEnv,
@@ -71,6 +76,9 @@ export async function runCommand(
   flags: RawRunnerFlags,
 ): Promise<void> {
   const runtime = resolveRuntimeContext(flags, readonlyEnv());
+  if (runtime.json) {
+    keepConsoleOffStdout();
+  }
   const output = createOutput(runtime);
   const ctx: CommandContext = {
     runtime,

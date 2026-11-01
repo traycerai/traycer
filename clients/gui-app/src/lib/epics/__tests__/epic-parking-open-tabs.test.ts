@@ -11,7 +11,7 @@ import { PARK_HIDDEN_EPIC_AFTER_MS } from "@/stores/replica-memory/retention-pro
 import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 
-// Oracle for `lib/epics/epic-parking-open-tabs.ts`, which the risk review
+// Oracle for `lib/epics/epic-parking-open-tabs.ts`, which the risk analysis
 // names by file as having no test of its own: "epic-parking-open-tabs.ts
 // import-order constraint." `epic-parking.test.ts` drives this module's test
 // seam (`__syncEpicParkingOpenTabsForTests`) constantly, but always as a

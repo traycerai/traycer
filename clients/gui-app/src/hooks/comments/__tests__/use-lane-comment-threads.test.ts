@@ -232,7 +232,7 @@ describe("resolveArtifactCommentThreads", () => {
     expect(result.threads).not.toBeNull();
   });
 
-  // D.9 - CONTROL, green both sides. The retained-rows pin above only uses a
+  // CONTROL, green both sides. The retained-rows pin above only uses a
   // NON-EMPTY array, so nothing holds the EMPTY case - and `[]` is exactly
   // what a `laneThreads.length > 0` "simplification" of the third arm would
   // turn into `null`, silently converting "this artifact has no threads"

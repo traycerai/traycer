@@ -159,6 +159,7 @@ vi.mock("@dnd-kit/sortable", () => ({
 }));
 
 const SETTINGS: ChatRunSettings = {
+  ultracode: false,
   harnessId: "codex",
   model: "codex-test",
   permissionMode: "supervised",
@@ -2495,7 +2496,7 @@ describe("<QueuedMessagePanel /> with a carried front row from the real store", 
       pinnedUserProviderHandle: null,
       lastDeliveredRolesDigest: null,
     };
-    stream.onConnectionStatus("open", null, null);
+    stream.onConnectionStatus("open", null, null, null);
     stream.onSnapshot({
       kind: "snapshot",
       hasBinaryPayload: false,

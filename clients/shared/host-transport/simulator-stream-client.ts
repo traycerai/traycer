@@ -7,8 +7,7 @@ import {
 } from "@traycer/protocol/host/simulator/stream-contracts";
 import type {
   IStreamSession,
-  StreamCloseReason,
-  StreamConnectionStatus,
+  StatusChangeHandler,
   StreamFrameEnvelope,
 } from "./i-stream-session";
 import type { IHostStreamClient } from "./host-stream-client";
@@ -25,10 +24,7 @@ export interface SimulatorStreamCallbacks {
     frame: SimulatorStreamServerFrame,
     videoBytes: Uint8Array | null,
   ) => void;
-  readonly onConnectionStatus: (
-    status: StreamConnectionStatus,
-    reason: StreamCloseReason | null,
-  ) => void;
+  readonly onConnectionStatus: StatusChangeHandler;
 }
 
 export type SimulatorStreamClientOptions = SimulatorStreamOpenRequest & {
@@ -60,8 +56,8 @@ export class SimulatorStreamClient {
     this.session.onServerFrame((envelope, binaryPayload) => {
       this.handleServerFrame(envelope, binaryPayload);
     });
-    this.session.onStatusChange((status, reason) => {
-      this.callbacks.onConnectionStatus(status, reason);
+    this.session.onStatusChange((status, reason, retryCause, continuity) => {
+      this.callbacks.onConnectionStatus(status, reason, retryCause, continuity);
     });
   }
 

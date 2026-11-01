@@ -37,8 +37,8 @@ export const CONTAINS_MIN_LENGTH = 3;
 
 /**
  * Whether a pattern is `*` alone (or only stars, which match the same way):
- * every model the provider lists. The spec names that row "Any Codex model"
- * (§How patterns work) - a bare `*` in mono does not tell a reader the row
+ * every model the provider lists. That row reads "Any Codex model"
+ * - a bare `*` in mono does not tell a reader the row
  * claims the whole provider, which with the seed is why every one of its
  * models shows as owned somewhere else.
  */
@@ -214,7 +214,7 @@ function pickerPatternFor(text: string): string | null {
  * onto the model below it, and Enter would then pick that model instead of
  * saying why the pattern cannot be used.
  *
- * The order is the Enter rule (spec §Wireframe 2): text that EXACTLY equals a
+ * The order is the Enter rule: text that EXACTLY equals a
  * model's ID or name puts that model first; otherwise the pattern leads - a
  * typed `*` builds it as written, and a plain word of three or more characters
  * becomes "Any model containing …". The catalog follows in the provider's own

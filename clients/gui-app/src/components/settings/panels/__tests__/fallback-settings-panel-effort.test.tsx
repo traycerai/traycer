@@ -18,7 +18,7 @@ import {
 import type { AgentReasoningEffortOption } from "@traycer/protocol/host/index";
 
 /**
- * F20 - the Effort control. Every collaborator this panel reaches through is
+ * The Effort control. Every collaborator this panel reaches through is
  * mocked at the same seams `fallback-settings-panel.test.tsx` uses, EXCEPT
  * `useFallbackCatalogOptions`, which this file is exempt from stubbing to
  * `{ modelsFor: () => [], effortsFor: () => [] }` for: rendering what the

@@ -75,7 +75,7 @@ vi.mock("@/hooks/notifications/use-notification-host", () => ({
 vi.mock("@/lib/host", () => ({
   useHostBinding: () => ({ hostClient: requireHostClient(), directory }),
   useHostClient: () => requireHostClient(),
-  // The SPINE, a separate export since redesign P2.1.
+  // The SPINE, a separate export.
   useHostRuntimeClient: () => requireHostClient(),
   useAuthService: () => mockAuth,
 }));
@@ -434,7 +434,7 @@ beforeEach(() => {
   resetCloudEntityReadDriver();
   feedSupport.value = "supported";
   hostState.client = createHostClient();
-  // T28: mixed mode also requires `host.notifications.list@2.2`,
+  // Mixed mode also requires `host.notifications.list@2.2`,
   // `host.notifications.markAllRead@1.1` and
   // `host.notifications.indicatorState@1.1` negotiated on the SERVING host
   // (always `mockLocalHostEntry` here, per `useReactiveLocalHostEntry`
@@ -1081,7 +1081,7 @@ describe("local-mode view consumption", () => {
   });
 
   /**
-   * T28's other half, at the integration layer this file owns: the stream
+   * The other half, at the integration layer this file owns: the stream
    * axis above (`feedSupport.value = "unsupported"`) is not the only way
    * local mode is reached. Per-floor and wrong-major arithmetic on
    * `useNotificationFeedModeFor` itself is already covered directly in

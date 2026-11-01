@@ -291,7 +291,7 @@ describe("computeStableChatTimelineRows", () => {
   });
 
   /**
-   * F14: the `turnId` comparator (`CHAT_MESSAGE_FIELD_UNCHANGED.turnId`) was
+   * The `turnId` comparator (`CHAT_MESSAGE_FIELD_UNCHANGED.turnId`) was
    * untested - zero occurrences of `turnId` anywhere in this file before this
    * block. It is the field that decides whether a row whose ONLY change is
    * turn identity gets a fresh reference handed to LegendList.
@@ -339,7 +339,7 @@ describe("computeStableChatTimelineRows", () => {
     expect(afterSameTurn).toBe(state);
   });
 
-  // F11's projection seam (`withManualRungAnchor`) writes this field on the
+  // The projection seam (`withManualRungAnchor`) writes this field on the
   // ROW, so it needs the same positive/control pair `turnId` above got - the
   // compile-exhaustive field table forced its addition, but nothing had
   // exercised it as a comparator yet.
@@ -496,6 +496,42 @@ describe("computeStableChatTimelineRows", () => {
     };
     const afterSettled = computeStableChatTimelineRows([settled], afterSame);
     expect(afterSettled.result[0]).toBe(settled);
+  });
+
+  // A surface's resolution lands on the bot's post as a new surface, the
+  // post's text as it was: the card under it must draw the resolution.
+  it("treats a resolution landing on a bot post's surface as a real change, and the same surface as no change at all", () => {
+    const open: ChatMessage = {
+      ...makeMessage(0, "assistant"),
+      surface: {
+        kind: "approval",
+        epicId: "task-1",
+        hostId: "host-task",
+        chatId: "chat-agent",
+        approvalId: "approval-1",
+        resolution: null,
+      },
+    };
+    const state = computeStableChatTimelineRows(
+      [open],
+      EMPTY_STABLE_CHAT_TIMELINE_ROWS_STATE,
+    );
+    const afterSame = computeStableChatTimelineRows([{ ...open }], state);
+    expect(afterSame).toBe(state);
+
+    const resolved: ChatMessage = {
+      ...open,
+      surface: {
+        kind: "approval",
+        epicId: "task-1",
+        hostId: "host-task",
+        chatId: "chat-agent",
+        approvalId: "approval-1",
+        resolution: { state: "allowed", by: null, at: 2 },
+      },
+    };
+    const afterResolved = computeStableChatTimelineRows([resolved], afterSame);
+    expect(afterResolved.result[0]).toBe(resolved);
   });
 });
 

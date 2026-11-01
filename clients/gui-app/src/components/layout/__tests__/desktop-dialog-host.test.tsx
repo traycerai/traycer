@@ -154,7 +154,7 @@ const snapshot: DesktopSupportSnapshot = {
 
 const EPIC_A = { id: "e-a", name: "A", draft: false };
 
-// A faithful-enough stand-in for `support:buildPublicDraft` (ticket 09/07):
+// A faithful-enough stand-in for `support:buildPublicDraft`:
 // echoes the form back the way the real builder would with no
 // `privateDiagnostics.cause` (these tests never attach one) - the derived
 // title falls back to the user's own intent text (unmodified, since these
@@ -354,6 +354,14 @@ function createBaseRunnerHost(): IRunnerHost {
       Promise.resolve({ kind: "unauthorized" as const }),
     openSandboxAutomation: () =>
       Promise.resolve({ kind: "unauthorized" as const }),
+    readSlackApp: () => Promise.resolve({ kind: "unauthorized" as const }),
+    getSlackAppManifest: () =>
+      Promise.resolve({ kind: "unauthorized" as const }),
+    registerSlackApp: () => Promise.resolve({ kind: "unauthorized" as const }),
+    mintSlackAppInstallUrl: () =>
+      Promise.resolve({ kind: "unauthorized" as const }),
+    disconnectSlackApp: () =>
+      Promise.resolve({ kind: "unauthorized" as const }),
     getSandboxGrants: () => Promise.resolve({ kind: "unauthorized" as const }),
     getTeamEnvironment: () =>
       Promise.resolve({ kind: "unauthorized" as const }),
@@ -416,7 +424,21 @@ function createBaseRunnerHost(): IRunnerHost {
     onLocalHostChange: () => ({ dispose: () => undefined }),
     onLocalHostUnresponsive: () => ({ dispose: () => undefined }),
     onSystemResumed: () => ({ dispose: () => undefined }),
+    onSystemSuspended: () => ({ dispose: () => undefined }),
+    onVoiceTrayAction: () => ({ dispose: () => undefined }),
     onNetworkPathChanged: () => ({ dispose: () => undefined }),
+    getVoiceAvailability: () =>
+      Promise.resolve({ kind: "ok" as const, available: false }),
+    mintVoiceSession: () => Promise.resolve({ kind: "dormant" as const }),
+    endVoiceSession: () =>
+      Promise.resolve({ kind: "ok" as const, closedAt: null }),
+    routeVoiceUtterance: () =>
+      Promise.resolve({
+        kind: "network-error" as const,
+        detail: "no router in this test",
+      }),
+    setVoiceSessionLive: () => Promise.resolve(),
+    setVoiceSessionIndicator: () => Promise.resolve(),
     requestHostRespawn: () => Promise.resolve({ kind: "restarted" as const }),
     forceRestartUnresponsiveHost: () =>
       Promise.resolve({ kind: "restarted" as const }),
@@ -820,7 +842,7 @@ describe("<DesktopDialogHost />", () => {
   // type-chip routing, all four delivery states, confirmation persistence,
   // preview flow) lives in report-issue-capture-dialog.test.tsx - these are
   // wire-level smoke tests proving the store <-> dialog <-> support bridge
-  // round trip still works after the ticket 07 rewrite.
+  // round trip still works after the rewrite.
 
   it("opens a true manual report with type chips and an empty intent field", async () => {
     useDesktopDialogStore.getState().openReportIssue();

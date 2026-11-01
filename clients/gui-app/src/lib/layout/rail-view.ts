@@ -34,7 +34,7 @@ import { useLayoutStore } from "@/stores/layout/layout-store";
  * the layout store from inside a zustand action. That API lied about
  * ownership - a reader of the panel store believed it held rail shape - and
  * one of them, "clear every override", looped nine separate writes, which is
- * nine renders and, once a gesture is recorded, nine undo steps (G1-09).
+ * nine renders and, once a gesture is recorded, nine undo steps.
  *
  * The two WRITERS go through `recordGesture`, like every other writer of the
  * same values (`inspector/region-control-io.ts`, `region-quick-verbs.tsx`).
@@ -58,7 +58,7 @@ import { useLayoutStore } from "@/stores/layout/layout-store";
  * column, the sample workspace's copy of it and the inspector's own picture.
  *
  * Served here because this module is the rail's own ancestor seam - what it
- * answers is which panels EXIST and in what order, and D11 keeps a specimen's
+ * answers is which panels EXIST and in what order, and the contract keeps a specimen's
  * preview out of a read that decides a mount.
  */
 export function useLayoutRail(): ReadonlyArray<RailEntry> {
@@ -135,9 +135,9 @@ export function unstackRailMember(panelId: LeftPanelId): void {
 }
 
 /**
- * The per-epic sidebar's side (S-06), written from the rail's own "Move
- * sidebar to..." menu item (S-32) through `writeArrangementField`, the
- * surface placements' one writer (D14).
+ * The per-epic sidebar's side, written from the rail's own "Move
+ * sidebar to..." menu item through `writeArrangementField`, the
+ * surface placements' one writer.
  */
 export function setSidebarSide(side: EdgeSide): void {
   writeArrangementField("sidebarSide", side);

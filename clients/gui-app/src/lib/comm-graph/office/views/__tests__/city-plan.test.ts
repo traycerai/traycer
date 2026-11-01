@@ -287,7 +287,7 @@ interface CityRoofFacts {
   /** The painted `block-top` box: where the user sees this building's roof. */
   readonly box: OfficeRect;
   readonly depth: number;
-  /** D53: the plan's own `hitBox` for this seat - the box a click resolves to. */
+  /** The plan's own `hitBox` for this seat - the box a click resolves to. */
   readonly hitBox: OfficeRect;
 }
 
@@ -485,19 +485,7 @@ function rectsOverlap(left: OfficeRect, right: OfficeRect): boolean {
   );
 }
 
-/**
- * A real City scene holding two buildings whose PAINTED roofs overlap, with
- * the nearer and the farther of the two picked out.
- *
- * Measured fixture: `one-team(3)` with activity 100/190/280 gives all three
- * of `team-lead`, `member-0` and `agent-root` seven storeys - the cap, which
- * this activity level is chosen to hit for all of them - whose roofs land at
- * `(120,120)` and `(136,128)` for the first two - a 16 x 8 overlap, with
- * `member-0` one lot nearer. The overlap is asserted rather than assumed, so
- * a plan that moved this geometry fails the cases below loudly instead of
- * making them vacuous.
- */
-/** One seat's painted roof and its D53 `hitBox`, or `null` if it draws none. */
+/** One seat's painted roof and its `hitBox`, or `null` if it draws none. */
 function cityRoofFactsOf(
   layout: OfficeLayout,
   agentId: string,
@@ -525,7 +513,7 @@ function cityRoofFactsOf(
   );
   if (roof === undefined || roof.drawable.kind !== "sprite") return null;
   const size = officeSpriteSize(roof.drawable.sprite);
-  // D53: the plan's own declared hitBox for this seat, which is what the
+  // The plan's own declared hitBox for this seat, which is what the
   // scene actually resolves a click against - not a box restated from
   // `hitTiles`, which is the gap the skipped case used to name.
   if (seat.hitBox === null) {
@@ -556,6 +544,18 @@ function firstOverlappingPair(
   return null;
 }
 
+/**
+ * A real City scene holding two buildings whose PAINTED roofs overlap, with
+ * the nearer and the farther of the two picked out.
+ *
+ * Measured fixture: `one-team(3)` with activity 100/190/280 gives all three
+ * of `team-lead`, `member-0` and `agent-root` fourteen storeys - the cap, which
+ * this activity level is chosen to hit for all of them - whose roofs land at
+ * `(312,120)` and `(328,128)` for the first two - a 16 x 8 overlap, with
+ * `member-0` one lot nearer. The overlap is asserted rather than assumed, so
+ * a plan that moved this geometry fails the cases below loudly instead of
+ * making them vacuous.
+ */
 function overlappingCityRoofs(): {
   readonly scene: OfficeScene;
   readonly layout: OfficeLayout;
@@ -605,7 +605,7 @@ function overlappingCityRoofs(): {
 /**
  * The view contract's invariants against one City layout. Restated rather
  * than shared with `campus-plan.test.ts` because these two files must stand
- * alone (see the ticket).
+ * alone.
  */
 function checkContract(
   layout: OfficeLayout,
@@ -1328,7 +1328,7 @@ describe("planCity", () => {
     );
 
     // 2. `hitTest` genuinely distinguishes the two buildings by their own
-    // D53 `hitBox` - each queried at a point that lands in ONLY that
+    // `hitBox` - each queried at a point that lands in ONLY that
     // building's box, so a lookup that answered from the other seat's box
     // (or from neither) would fail loudly rather than by coincidence.
     const nearerOnlyPoint = {
@@ -1448,8 +1448,8 @@ describe("planCity", () => {
       if (seat.civicRoomId !== null) continue;
       const occupantId = occupantBySeatId.get(seat.seatId) ?? null;
 
-      // Occupied, not sheeted, `openRequests: 3` - the state the ticket
-      // measures the union against.
+      // Occupied, not sheeted, `openRequests: 3` - the state the union is
+      // measured against.
       const boxes = spriteBoxesOf(layout, seat, stateFor(occupantId, false));
       const mast = boxes.find((entry) => entry.name === "spire");
       const nonMast = boxes.filter((entry) => entry.name !== "spire");
@@ -2423,7 +2423,7 @@ describe("planCity", () => {
   });
 
   it("I1: culls seats AND spots by their own PROJECTED box, not a raw tile viewport", () => {
-    // T2 F1: `chunkKeysOfBox(this.seatBox(seat))`/`chunkKeysOfBox(this.spotBox(spot))`
+    // F1: `chunkKeysOfBox(this.seatBox(seat))`/`chunkKeysOfBox(this.spotBox(spot))`
     // file a seat/spot under the chunks its own PROJECTED box covers. Real
     // City at 1,000 agents, over three populated windows - the chunk-
     // boundary corner this case originally shipped with (which contains only
@@ -2498,7 +2498,7 @@ describe("planCity", () => {
   });
 
   it("I1: a spot query's reads follow the VISIBLE AREA, not the size of the world", () => {
-    // R3's read-budget half, measured across two world SIZES rather than
+    // The read-budget check, measured across two world SIZES rather than
     // against one world's own whole-world query.
     //
     // A single-district City cannot show this. `triage(1000)` on one host
@@ -2548,7 +2548,7 @@ describe("planCity", () => {
   });
 
   it("I2: hitTest resolves an overlap to whichever region the world stream drew LAST", () => {
-    // T2 F4: `worldHitRegions` sorts by `compareDepthOrder` and returns the
+    // F4: `worldHitRegions` sorts by `compareDepthOrder` and returns the
     // regions in REVERSE - front-most first - so `hitTest` (which takes the
     // first match) always answers with whatever the world stream actually
     // painted last at that pixel, and never with whichever seat happens to
@@ -2667,7 +2667,7 @@ describe("planCity", () => {
   });
 
   it("I2: a moving walker painted over a building resolves the pointer to the walker, not the roof", () => {
-    // T2 F4 continued: the roof-v-roof case above never moves either of its
+    // F4 continued: the roof-v-roof case above never moves either of its
     // two owners, so it cannot exercise the CHARACTER half of
     // `worldHitRegions` - a walker's own hit-region depth could be wrong
     // while building-vs-building order stays right. Real idle City
@@ -2683,7 +2683,7 @@ describe("planCity", () => {
     // walker's entry is later in `frame.world` (index 69 vs 64), so it
     // genuinely paints after the building. There is no production
     // raster/opaque-pixel export reachable here to check true per-pixel
-    // overlap (T5's own probe needed a snapshot-only helper for that), so
+    // overlap (the probe needed a snapshot-only helper for that), so
     // this checks sprite-BOX overlap plus "front-most entry in the stream at
     // the chosen point" - an honest substitute, not the real pixel test.
     const epic = makeTestEpic("triage", 12, 1);
@@ -2712,7 +2712,7 @@ describe("planCity", () => {
   });
 
   it("I4: an unoccupied City reserve lot is painted at lod 1 and 2, and drawn as nothing at lod 0", () => {
-    // T2 F8: the chunk index's `reserves` bucket keeps a spare, unassigned
+    // F8: the chunk index's `reserves` bucket keeps a spare, unassigned
     // seat visible to the painter with `agentId: null` rather than dropping
     // it - City always packs at least one spare lot per team, so a real
     // plan already exercises this.
@@ -2879,7 +2879,7 @@ describe("planCity's civic quarter", () => {
       // The rooms' own seat lists are the same seats.
       expect(ward.seatIds.length).toBe(beds.length);
       expect(stop.seatIds.length).toBe(chairs.length);
-      // A counter is stood at, not sat on (C5, C7).
+      // A counter is stood at, not sat on.
       expect(shed.seatIds).toEqual([]);
       expect(roomOf(byKind, "help-desk").seatIds).toEqual([]);
 
@@ -2912,7 +2912,7 @@ describe("planCity's civic quarter", () => {
       for (const chair of chairs) {
         expect(chair.chairTile.row).toBe(stop.bounds.row + 1);
       }
-      // AND A DOOR ON THE SHED'S LAST ROW, which is the whole archive (C5).
+      // AND A DOOR ON THE SHED'S LAST ROW, which is the whole archive.
       expect(
         propTiles(layout, "warehouse-door-iso").has(
           `${String(shed.doorTile.col)},${String(shed.doorTile.row)}`,
@@ -2925,7 +2925,7 @@ describe("planCity's civic quarter", () => {
   it("re-signs the park's own reception as the police station, and keeps the park", () => {
     const { layout, byKind } = quarterOf(309);
     const desk = roomOf(byKind, "help-desk");
-    // C7: THE COUNTER THAT WAS ALREADY THERE. The district's reception sprite
+    // THE COUNTER THAT WAS ALREADY THERE. The district's reception sprite
     // stands on the room's own first tile, so this is a re-reading of the park's
     // furniture and not a second counter beside it.
     expect(

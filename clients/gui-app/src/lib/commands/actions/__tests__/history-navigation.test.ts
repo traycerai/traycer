@@ -1244,7 +1244,7 @@ describe("goBack / goForward — preview-reopen closed sub-tabs", () => {
     expect(requirePreviewTabId(tabId)).toBe(SPEC_A.instanceId);
   });
 
-  // ---- Same-host cloud-known exemption (chat-sync-v2 ticket 42) ----------
+  // ---- Same-host cloud-known exemption -----------------------------------
   //
   // A chat can be bound to THIS device's active host and still have no local
   // record: a leased identity that never adopted its rows. Before this, the

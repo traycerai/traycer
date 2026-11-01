@@ -483,7 +483,7 @@ export function useHostCompatibilityProbeForClient(
  *
  * `probedOnSessionId` NAMES THE SESSION THE VERDICT WAS PRODUCED ON, captured
  * as the probe resolved (see `compatAnchorAtSuccess`) rather than looked up
- * here. This closed the named interim that shipped with P1.3: while every
+ * here. This closed the named interim that shipped with the redesign: while every
  * verdict was null-anchored the authority's session-generation freshness rule
  * (mechanism 6) degraded to latest-received-wins, so a slow probe on an old
  * session reporting AFTER a probe on the current one won purely by arrival

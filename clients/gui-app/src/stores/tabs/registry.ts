@@ -123,7 +123,7 @@ export function tabSurfaceDescriptor(
 }
 
 // ---------------------------------------------------------------------------
-// Per-concern dispatch functions (spec D28 - all switches live here)
+// Per-concern dispatch functions (all switches live here)
 // ---------------------------------------------------------------------------
 
 /**

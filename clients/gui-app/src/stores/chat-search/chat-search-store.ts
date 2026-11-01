@@ -77,8 +77,8 @@ export interface ChatSearchState {
 
 const INITIAL = {
   open: false,
-  // User-triggered search is the cross-task surface the spec grants
-  // `all-accessible-tasks` to; "this task" is the narrowing.
+  // User-triggered search defaults to `all-accessible-tasks`;
+  // "this task" is the narrowing.
   scope: "all-accessible-tasks",
   roleFilter: "any",
   datePreset: "any",

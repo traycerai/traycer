@@ -39,6 +39,36 @@ export function useBotActivity(botId: string): BotActivity | null {
 }
 
 /**
+ * What can be said of a bot's activity now, with why when nothing can:
+ * `live`, a reading from a stream that can still move; `pending`, none yet
+ * (no tab, no first snapshot, a host that cannot read the room) and one may
+ * come; `closed`, the stream closed for good or the bot is gone, and none
+ * will. The same subscription `useBotActivity` reads, for a caller that
+ * must not take "not yet" for "never".
+ */
+export type BotActivityReading =
+  | { readonly kind: "live"; readonly activity: BotActivity }
+  | { readonly kind: "pending" }
+  | { readonly kind: "closed" };
+
+export function useBotActivityReading(botId: string): BotActivityReading {
+  const hostId = useBotTabsStore(
+    (state) => lookupBotTab(state.tabs, botId)?.hostId ?? null,
+  );
+  const subscription = useBotSubscriptionForHost({
+    botId,
+    hostId: hostId ?? "",
+    enabled: hostId !== null,
+  });
+  if (hostId === null) return { kind: "pending" };
+  if (subscription.error !== null || subscription.deleted) {
+    return { kind: "closed" };
+  }
+  const activity = liveActivityOf(subscription);
+  return activity === null ? { kind: "pending" } : { kind: "live", activity };
+}
+
+/**
  * A subscription's activity while it can still move: `null` once the
  * stream closed for good or the bot is gone, since no frame will update the
  * last snapshot the cache keeps. A reconnect is not a close and keeps it.

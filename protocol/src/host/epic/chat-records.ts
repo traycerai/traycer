@@ -1,3 +1,4 @@
+import { chatRunSettingsSchema } from "@traycer/protocol/persistence/epic/foundation";
 import { z } from "zod";
 import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-stream-rpc";
 import { cloudChatVisibilitySchema } from "@traycer/protocol/host/epic/cloud-chat";
@@ -18,7 +19,7 @@ import {
 // legacy record with it would fail the read outright.
 import {
   agentModeSchema,
-  chatRunSettingsSchema,
+  chatRunSettingsSchemaPreUltracode,
   chatRunSettingsSchemaPreCommandCode,
   guiHarnessIdSchema,
   permissionModeSchemaPreAuto,
@@ -629,7 +630,7 @@ export type GetChatRunSettingsRequest = z.infer<
 
 export const getChatRunSettingsResponseSchema = lazySchema(() =>
   z.object({
-    settings: chatRunSettingsSchema.nullable(),
+    settings: chatRunSettingsSchemaPreUltracode.nullable(),
   }),
 );
 export type GetChatRunSettingsResponse = z.infer<
@@ -661,7 +662,7 @@ export type GetChatRunSettingsBatchRequest = z.infer<
 export const getChatRunSettingsBatchEntrySchema = lazySchema(() =>
   z.object({
     chatId: z.string().min(1),
-    settings: chatRunSettingsSchema.nullable(),
+    settings: chatRunSettingsSchemaPreUltracode.nullable(),
   }),
 );
 export type GetChatRunSettingsBatchEntry = z.infer<
@@ -722,7 +723,7 @@ export const chatRunSettingsHarnessIdSchemaV10 = lazySchema(() =>
 
 /**
  * Frozen `epic.getChatRunSettings@1.0` settings tuple. Hand-copied off
- * `chatRunSettingsSchema` rather than `.extend()`ed from it, so a field added to
+ * `chatRunSettingsSchemaPreUltracode` rather than `.extend()`ed from it, so a field added to
  * the persisted tuple cannot leak onto this released line - the same discipline
  * `providerLoginCapabilitySchemaV10` and `guiHarnessOptionBaseShapeV70` follow,
  * and for the same reason: pinning only the id over a LIVE body is a half
@@ -803,7 +804,7 @@ const chatRunSettingsHarnessIdSchemaV20 = lazySchema(() =>
 
 /**
  * Frozen `epic.getChatRunSettings@2.0` settings tuple. Hand-copied off
- * `chatRunSettingsSchema` for the same reason the V10 copy is: pinning only
+ * `chatRunSettingsSchemaPreUltracode` for the same reason the V10 copy is: pinning only
  * the id over a LIVE body is a half freeze.
  */
 export const chatRunSettingsSchemaV20 = lazySchema(() =>
@@ -1389,3 +1390,43 @@ export const hostChatRecordsSubscribeV14 = defineStreamRpcContract({
   serverFrameSchema: hostChatRecordsSubscribeServerFrameSchemaV14,
   clientFrameSchema: hostChatRecordsSubscribeClientFrameSchemaV10,
 });
+
+export const getChatRunSettingsResponseSchemaV41 = lazySchema(() =>
+  getChatRunSettingsResponseSchema.extend({
+    settings: chatRunSettingsSchema.nullable(),
+  }),
+);
+export type GetChatRunSettingsResponseV41 = z.infer<
+  typeof getChatRunSettingsResponseSchemaV41
+>;
+export const getChatRunSettingsBatchEntrySchemaV21 = lazySchema(() =>
+  getChatRunSettingsBatchEntrySchema.extend({
+    settings: chatRunSettingsSchema.nullable(),
+  }),
+);
+export const getChatRunSettingsBatchResponseSchemaV21 = lazySchema(() =>
+  getChatRunSettingsBatchResponseSchema.extend({
+    entries: z.array(getChatRunSettingsBatchEntrySchemaV21),
+  }),
+);
+export type GetChatRunSettingsBatchResponseV21 = z.infer<
+  typeof getChatRunSettingsBatchResponseSchemaV21
+>;
+
+export function projectChatRunSettingsResponseBeforeUltracode(
+  response: GetChatRunSettingsResponseV41,
+): GetChatRunSettingsResponse {
+  if (response.settings === null) return response;
+  const { ultracode: _ultracode, ...settings } = response.settings;
+  return { settings };
+}
+export function projectChatRunSettingsBatchResponseBeforeUltracode(
+  response: GetChatRunSettingsBatchResponseV21,
+): GetChatRunSettingsBatchResponse {
+  return {
+    entries: response.entries.map((entry) => ({
+      chatId: entry.chatId,
+      ...projectChatRunSettingsResponseBeforeUltracode(entry),
+    })),
+  };
+}

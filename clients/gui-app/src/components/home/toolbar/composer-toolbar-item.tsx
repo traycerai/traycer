@@ -15,7 +15,7 @@ import type { ToolbarRegionId } from "@/lib/layout/region-id";
  * Every prop any of the four toolbar items could need, in one shape: since an
  * item may sit in either cluster after a reorder, both `ComposerToolbarLeft`
  * and `ComposerToolbarRight` render through the same `renderToolbarItem`
- * and so both need the full set, not just the half each drew before D13's
+ * and so both need the full set, not just the half each drew before the
  * clusters existed.
  */
 export interface ComposerToolbarItemsProps {
@@ -48,7 +48,7 @@ export interface ComposerToolbarItemsProps {
  * (`LayoutClusterContextMenu`) and resolves the region from the element the
  * pointer was over, because a Radix root per item cost twenty-eight mounted
  * roots on a four-tile canvas for a gesture used a handful of times a session
- * (L-19, G3-10).
+ * (L-19).
  */
 export function renderToolbarItem(
   id: ToolbarRegionId,

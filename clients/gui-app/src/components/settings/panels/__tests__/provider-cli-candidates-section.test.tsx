@@ -1246,7 +1246,7 @@ describe("ProviderCliCandidatesSection: one subject per column, one status per r
   });
 
   it("shows only the highest-priority status when several are true at once", () => {
-    // R3. A failed install, a substitution and differing sessions are all true
+    // A failed install, a substitution and differing sessions are all true
     // here. The row shows ONE line: a second would reintroduce the crowding
     // the whole revision removes, so the session count is deliberately starved.
     renderSection(
@@ -1273,7 +1273,7 @@ describe("ProviderCliCandidatesSection: one subject per column, one status per r
   });
 
   it("reports the version the Managed row will actually run, never the one that failed", () => {
-    // R1. Showing the unreachable target as "the version" is what let an
+    // Showing the unreachable target as "the version" is what let an
     // Active badge sit beside a version nothing could start. The column is
     // total: every row reports what it runs, with no exception for this one.
     renderSection(

@@ -16,6 +16,9 @@ import {
   botListRequestSchema,
   botListResponseSchema,
   botListResponseSchemaV10,
+  botMemorySubscribeClientFrameSchema,
+  botMemorySubscribeOpenRequestSchema,
+  botMemorySubscribeServerFrameSchema,
   botOpenRequestSchema,
   botOpenResponseSchema,
   botReadRequestSchema,
@@ -27,6 +30,8 @@ import {
   botSubscribeServerFrameSchemaV11,
   botSubscribeServerFrameSchemaV12,
   botSubscribeServerFrameSchemaV13,
+  botSubscribeServerFrameSchemaV14,
+  botSubscribeServerFrameSchemaV15,
   botUpdateResponseSchema,
   botUpdateRunSettingsRequestSchema,
   botUpdateDirectiveRequestSchema,
@@ -35,6 +40,14 @@ import {
   botNotificationLevelReadResponseSchema,
   botNotificationLevelSetRequestSchema,
   botNotificationLevelSetResponseSchema,
+  botThreadFollowReadRequestSchema,
+  botThreadFollowReadResponseSchema,
+  botThreadFollowSetRequestSchema,
+  botThreadFollowSetResponseSchema,
+  botReadCursorReadRequestSchema,
+  botReadCursorReadResponseSchema,
+  botReadCursorAdvanceRequestSchema,
+  botReadCursorAdvanceResponseSchema,
   botUpdateTitleRequestSchema,
 } from "./schemas";
 import {
@@ -49,6 +62,7 @@ import {
   botTurnLocateResponseSchema,
   botThreadListResponseSchema,
   botThreadListResponseSchemaV10,
+  botThreadListResponseSchemaV11,
 } from "./conversation-schemas";
 import {
   botOnboardingChooseRequestSchema,
@@ -57,7 +71,13 @@ import {
   botOnboardingCompleteResponseSchema,
   botOnboardingReadRequestSchema,
   botOnboardingReadResponseSchema,
+  botOnboardingReadResponseSchemaV10,
+  botOnboardingReadResponseSchemaV11,
 } from "./onboarding-schemas";
+import {
+  botSurfaceActRequestSchema,
+  botSurfaceActResponseSchema,
+} from "./surface-schemas";
 import {
   botNotificationsStopRequestSchema,
   botNotificationsStopResponseSchema,
@@ -164,6 +184,45 @@ export const botNotificationLevelSetV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: botNotificationLevelSetRequestSchema,
   responseSchema: botNotificationLevelSetResponseSchema,
+});
+
+/**
+ * `bot.threadFollow.read@1.0` / `.set@1.0` (decision 137): the caller's
+ * follow state per thread of a bot, kept in the cloud and proxied by any
+ * host, as the notification levels are.
+ */
+export const botThreadFollowReadV10 = defineRpcContract({
+  method: "bot.threadFollow.read",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: botThreadFollowReadRequestSchema,
+  responseSchema: botThreadFollowReadResponseSchema,
+});
+
+export const botThreadFollowSetV10 = defineRpcContract({
+  method: "bot.threadFollow.set",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: botThreadFollowSetRequestSchema,
+  responseSchema: botThreadFollowSetResponseSchema,
+});
+
+/**
+ * `bot.readCursor.read@1.0` / `.advance@1.0` (decision 139): how far the
+ * caller has read each of a bot's conversations, kept in the cloud and
+ * proxied by any host, beside each conversation's newest row as the host
+ * knows it. The cursor drives bold; the mailbox keeps the bell.
+ */
+export const botReadCursorReadV10 = defineRpcContract({
+  method: "bot.readCursor.read",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: botReadCursorReadRequestSchema,
+  responseSchema: botReadCursorReadResponseSchema,
+});
+
+export const botReadCursorAdvanceV10 = defineRpcContract({
+  method: "bot.readCursor.advance",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: botReadCursorAdvanceRequestSchema,
+  responseSchema: botReadCursorAdvanceResponseSchema,
 });
 
 export const botDeleteV10 = defineRpcContract({
@@ -280,7 +339,7 @@ export const botThreadListV11 = defineRpcContract({
   method: "bot.thread.list",
   schemaVersion: { major: 1, minor: 1 } as const,
   requestSchema: botThreadListRequestSchema,
-  responseSchema: botThreadListResponseSchema,
+  responseSchema: botThreadListResponseSchemaV11,
 });
 export const botThreadListUpgradeV10ToV11 = defineUpgradePath<
   typeof botThreadListV10,
@@ -290,6 +349,34 @@ export const botThreadListUpgradeV10ToV11 = defineUpgradePath<
   to: botThreadListV11.schemaVersion,
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => ({ ...response, threadAnchors: null }),
+});
+
+/**
+ * `bot.thread.list@1.2` (voice VT3b): each anchor carries its post's excerpt
+ * (`anchor.excerpt`), so a client names a thread it has not loaded. A 1.1
+ * host holds none.
+ */
+export const botThreadListV12 = defineRpcContract({
+  method: "bot.thread.list",
+  schemaVersion: { major: 1, minor: 2 } as const,
+  requestSchema: botThreadListRequestSchema,
+  responseSchema: botThreadListResponseSchema,
+});
+export const botThreadListUpgradeV11ToV12 = defineUpgradePath<
+  typeof botThreadListV11,
+  typeof botThreadListV12
+>({
+  from: botThreadListV11.schemaVersion,
+  to: botThreadListV12.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({
+    ...response,
+    threads: response.threads.map((thread) => ({
+      ...thread,
+      anchor:
+        thread.anchor === null ? null : { ...thread.anchor, excerpt: null },
+    })),
+  }),
 });
 
 /**
@@ -351,7 +438,55 @@ export const botOnboardingReadV10 = defineRpcContract({
   method: "bot.onboarding.read",
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: botOnboardingReadRequestSchema,
+  responseSchema: botOnboardingReadResponseSchemaV10,
+});
+
+/**
+ * `bot.onboarding.read@1.1` (T67): the team's main bot while it is still to
+ * be set up. A `1.0` host offers no setup.
+ */
+export const botOnboardingReadV11 = defineRpcContract({
+  method: "bot.onboarding.read",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: botOnboardingReadRequestSchema,
+  responseSchema: botOnboardingReadResponseSchemaV11,
+});
+export const botOnboardingReadUpgradeV10ToV11 = defineUpgradePath<
+  typeof botOnboardingReadV10,
+  typeof botOnboardingReadV11
+>({
+  from: botOnboardingReadV10.schemaVersion,
+  to: botOnboardingReadV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({ ...response, setup: null }),
+});
+
+/**
+ * `bot.onboarding.read@1.2` (T67b): the setup stays once the team's main bot
+ * exists, `live`, with how the team's host came. A `1.1` setup is a main bot
+ * still to be set up; a `1.1` caller is served `null` once it is live
+ * (`WITHIN_MAJOR_RESPONSE_PROJECTIONS` on the host).
+ */
+export const botOnboardingReadV12 = defineRpcContract({
+  method: "bot.onboarding.read",
+  schemaVersion: { major: 1, minor: 2 } as const,
+  requestSchema: botOnboardingReadRequestSchema,
   responseSchema: botOnboardingReadResponseSchema,
+});
+export const botOnboardingReadUpgradeV11ToV12 = defineUpgradePath<
+  typeof botOnboardingReadV11,
+  typeof botOnboardingReadV12
+>({
+  from: botOnboardingReadV11.schemaVersion,
+  to: botOnboardingReadV12.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({
+    ...response,
+    setup:
+      response.setup === null
+        ? null
+        : { ...response.setup, state: "needs_host", arrival: null },
+  }),
 });
 
 export const botOnboardingChooseV10 = defineRpcContract({
@@ -433,8 +568,47 @@ export const botSubscribeV14 = defineStreamRpcContract({
   method: "bot.subscribe",
   schemaVersion: { major: 1, minor: 4 } as const,
   openRequestSchema: botSubscribeOpenRequestSchema,
+  serverFrameSchema: botSubscribeServerFrameSchemaV14,
+  clientFrameSchema: botSubscribeClientFrameSchema,
+});
+
+/**
+ * `bot.subscribe@1.5` (T89): each task entry carries what its agents wait on
+ * a person for (`inputNeeded`), and the snapshot this subscriber's own
+ * answers and decisions still on their way to a task's host
+ * (`surfaceActions`). A 1.4 subscriber's snapshot carries neither.
+ */
+export const botSubscribeV15 = defineStreamRpcContract({
+  method: "bot.subscribe",
+  schemaVersion: { major: 1, minor: 5 } as const,
+  openRequestSchema: botSubscribeOpenRequestSchema,
+  serverFrameSchema: botSubscribeServerFrameSchemaV15,
+  clientFrameSchema: botSubscribeClientFrameSchema,
+});
+
+/**
+ * `bot.subscribe@1.6` (T71): a failed turn's reason may offer
+ * `update-provider`, which updates the provider's command-line tool on the
+ * bot's host. A 1.5 subscriber's frames carry `none` in its place.
+ */
+export const botSubscribeV16 = defineStreamRpcContract({
+  method: "bot.subscribe",
+  schemaVersion: { major: 1, minor: 6 } as const,
+  openRequestSchema: botSubscribeOpenRequestSchema,
   serverFrameSchema: botSubscribeServerFrameSchema,
   clientFrameSchema: botSubscribeClientFrameSchema,
+});
+
+/**
+ * `bot.surface.act@1.0` (T89): a member answers a task agent's question, or
+ * decides its tool approval, from the card under a bot's post. Optional: a
+ * host that predates it advertises nothing and the card offers Open.
+ */
+export const botSurfaceActV10 = defineRpcContract({
+  method: "bot.surface.act",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: botSurfaceActRequestSchema,
+  responseSchema: botSurfaceActResponseSchema,
 });
 
 /**
@@ -450,4 +624,18 @@ export const botListChangedV10 = defineStreamRpcContract({
   openRequestSchema: botListChangedOpenRequestSchema,
   serverFrameSchema: botListChangedServerFrameSchema,
   clientFrameSchema: botListChangedClientFrameSchema,
+});
+
+/**
+ * `bot.memory.subscribe@1.0` (T87) - what a bot knows: the entries of the
+ * environment's memory pool tagged the bot or `all`, whole, on open and
+ * after every change to the pool. Read-only: nothing on the stream changes
+ * an entry; the bot writes them through its memory tool.
+ */
+export const botMemorySubscribeV10 = defineStreamRpcContract({
+  method: "bot.memory.subscribe",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  openRequestSchema: botMemorySubscribeOpenRequestSchema,
+  serverFrameSchema: botMemorySubscribeServerFrameSchema,
+  clientFrameSchema: botMemorySubscribeClientFrameSchema,
 });

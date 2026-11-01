@@ -10,7 +10,7 @@
  *
  * IN CHUNKS, not as one world. The whole-world bitmap this replaced was the
  * largest allocation the office made and the only one that scaled with the
- * epic: the review measured 55 MiB for a thousand agents in one root and 101
+ * epic: 55 MiB was measured for a thousand agents in one root and 101
  * MiB for a thousand roots, with no cap in sight above that. A chunk is a
  * fixed 512 x 512 sprite pixels - a megabyte of RGBA - and a canvas holds at
  * most `OFFICE_STATIC_CHUNK_BUDGET` of them, so the ceiling is 24 MB however

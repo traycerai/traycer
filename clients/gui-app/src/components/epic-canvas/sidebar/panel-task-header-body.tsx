@@ -3,7 +3,7 @@ import { SIDE_TAB_TITLE_CLASS } from "@/components/layout/tabs/side-strip/side-s
 import { cn } from "@/lib/utils";
 
 /**
- * The panel sheet's task header row (D12): the task's chip and its title. The
+ * The panel sheet's task header row: the task's chip and its title. The
  * live panel fills it from the task's tab; the layout editor's miniature draws
  * the same row for its picture of a task.
  *

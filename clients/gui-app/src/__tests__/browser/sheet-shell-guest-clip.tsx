@@ -340,7 +340,7 @@ function wrapperElement(registrationId: string): HTMLElement {
   return el;
 }
 
-/** wrapper -> clipper (tile stage clip) -> sheetClipper (D2 sheet-corner clip) -> host. */
+/** wrapper -> clipper (tile stage clip) -> sheetClipper (sheet-corner clip) -> host. */
 function sheetClipperElement(registrationId: string): HTMLElement {
   const clipper = wrapperElement(registrationId).parentElement;
   const sheetClipper = clipper?.parentElement ?? null;

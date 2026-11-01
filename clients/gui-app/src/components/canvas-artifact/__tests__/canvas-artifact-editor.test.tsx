@@ -53,6 +53,16 @@ interface ResizeFrame {
 }
 type ResizeEnd = (event: MouseEvent, frame: ResizeFrame) => void;
 
+type FlowViewport = {
+  readonly x: number;
+  readonly y: number;
+  readonly zoom: number;
+};
+type MoveHandler = (
+  event: MouseEvent | TouchEvent | null,
+  viewport: FlowViewport,
+) => void;
+
 interface MockFlowProps {
   readonly nodes: CanvasFlowNode[];
   readonly nodeTypes: Readonly<
@@ -61,12 +71,11 @@ interface MockFlowProps {
   readonly onNodeDragStop: DragStop;
   readonly onNodesChange: (changes: NodeChange<CanvasFlowNode>[]) => void;
   readonly noPanClassName?: string;
-  readonly viewport: {
-    readonly x: number;
-    readonly y: number;
-    readonly zoom: number;
-  };
+  readonly viewport: FlowViewport;
   readonly onInit: (flow: FakeFlowInstance) => void;
+  readonly onMove?: MoveHandler;
+  readonly onMoveStart?: MoveHandler;
+  readonly onMoveEnd?: MoveHandler;
   readonly children: ReactNode;
 }
 
@@ -86,25 +95,33 @@ interface FakeFlowInstance {
   readonly zoomTo: (zoom: number) => void;
   readonly setCenter: (x: number, y: number, options: object) => void;
   readonly fitView: (options: FitViewOptions) => void;
+  readonly getViewport: () => FlowViewport;
+  readonly setViewport: (viewport: FlowViewport) => Promise<boolean>;
 }
 
 // xyflow measures a real layout and owns pointer dragging and resizing,
 // neither of which jsdom has. The mock keeps what the editor is responsible
 // for: it renders the nodes the editor produced through the editor's own node
-// renderers, and it hands the test the three callbacks xyflow would call: the
-// node changes it streams while a gesture is in flight, the drag-stop, and
-// each node's resize-end (the resizer learns its node from context, as the
-// real one does).
+// renderers, and it hands the test the callbacks xyflow would call: the node
+// changes it streams while a gesture is in flight, the drag-stop, each node's
+// resize-end (the resizer learns its node from context, as the real one
+// does), and the move lifecycle. `setViewport` mirrors xyflow's own
+// behavior for a programmatic set: it fires `onMove` then `onMoveEnd`
+// synchronously with the new viewport, which is what lets the editor's own
+// "programmatic wheel moves fire end on every tick" comment hold in a test.
 interface FlowCapture {
   nodes: CanvasFlowNode[];
   dragStop: DragStop | null;
   onNodesChange: MockFlowProps["onNodesChange"] | null;
   noPanClassName: string | undefined;
-  viewport: MockFlowProps["viewport"] | null;
+  viewport: FlowViewport | null;
   resizeEnds: Map<string, ResizeEnd>;
   zoomTo: Mock<(zoom: number) => void>;
   setCenter: Mock<(x: number, y: number, options: object) => void>;
   fitView: Mock<(options: FitViewOptions) => void>;
+  onMove: MoveHandler | null;
+  onMoveStart: MoveHandler | null;
+  onMoveEnd: MoveHandler | null;
 }
 const flow: FlowCapture = vi.hoisted(() => ({
   nodes: [],
@@ -116,6 +133,9 @@ const flow: FlowCapture = vi.hoisted(() => ({
   zoomTo: vi.fn<(zoom: number) => void>(),
   setCenter: vi.fn<(x: number, y: number, options: object) => void>(),
   fitView: vi.fn<(options: FitViewOptions) => void>(),
+  onMove: null,
+  onMoveStart: null,
+  onMoveEnd: null,
 }));
 
 vi.mock("@xyflow/react", async () => {
@@ -131,6 +151,12 @@ vi.mock("@xyflow/react", async () => {
             zoomTo: flow.zoomTo,
             setCenter: flow.setCenter,
             fitView: flow.fitView,
+            getViewport: () => flow.viewport ?? { x: 0, y: 0, zoom: 1 },
+            setViewport: (next) => {
+              flow.onMove?.(null, next);
+              flow.onMoveEnd?.(null, next);
+              return Promise.resolve(true);
+            },
           }),
         [onInit],
       );
@@ -139,6 +165,9 @@ vi.mock("@xyflow/react", async () => {
       flow.onNodesChange = props.onNodesChange;
       flow.noPanClassName = props.noPanClassName;
       flow.viewport = props.viewport;
+      flow.onMove = props.onMove ?? null;
+      flow.onMoveStart = props.onMoveStart ?? null;
+      flow.onMoveEnd = props.onMoveEnd ?? null;
       return (
         <div role="group" aria-label="Canvas pane">
           {props.nodes.map((node) => {
@@ -227,7 +256,8 @@ function editorElement(
       sourceForBoard={sourceForBoard}
       boardFiles={null}
       frameEvents={frameEvents}
-      liveFrameLimit={0}
+      liveSlotBudget={0}
+      boardByteLengths={null}
     />
   );
 }
@@ -342,6 +372,10 @@ afterEach(() => {
   flow.zoomTo.mockClear();
   flow.setCenter.mockClear();
   flow.fitView.mockClear();
+  flow.viewport = null;
+  flow.onMove = null;
+  flow.onMoveStart = null;
+  flow.onMoveEnd = null;
 });
 
 async function openZoomMenu(user: UserEvent) {
@@ -1435,7 +1469,8 @@ describe("CanvasArtifactEditor zoom menu", () => {
           sourceForBoard={sourceForBoard}
           boardFiles={null}
           frameEvents={null}
-          liveFrameLimit={2}
+          liveSlotBudget={2}
+          boardByteLengths={null}
         />
       </TooltipProvider>,
     );
@@ -1480,5 +1515,349 @@ describe("CanvasArtifactEditor reading order jump", () => {
     // Checkout is 640 x 480 at (1400, 0).
     expect(flow.setCenter).toHaveBeenCalledWith(1720, 240, expect.anything());
     expect(screen.queryByRole("list", { name: "Canvas pages" })).toBeNull();
+  });
+});
+
+describe("CanvasArtifactEditor wheel settling", () => {
+  // Far enough apart that neither ever falls in the other's distance tier by
+  // accident; the exact numbers are chosen so one wheel tick (capped at 80px)
+  // already flips which board is nearest the viewport centre (see the
+  // comment at each `it` for the arithmetic that was checked by hand).
+  const NEAR = "boards/near.html";
+  const FAR = "boards/far.html";
+  const wheelFile: CanvasFixtureFile = {
+    pages: [{ id: "page-1", name: "Flow" }],
+    boards: {
+      [NEAR]: { x: 0, y: 0, w: 100, h: 100 },
+      [FAR]: { x: 1200, y: 0, w: 100, h: 100 },
+    },
+    notes: {},
+    order: [NEAR, FAR],
+  };
+
+  beforeEach(() => {
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe(): void {}
+        disconnect(): void {}
+      },
+    );
+    vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(800);
+    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(600);
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  function mountWheelEditor(): Mounted {
+    const store = storeFromFixture(wheelFile);
+    const sourceForBoard = vi.fn<(path: string) => SandboxSource | null>(
+      () => null,
+    );
+    render(
+      <TooltipProvider>
+        <CanvasArtifactEditor
+          artifactId={ARTIFACT_ID}
+          store={store}
+          awareness={null}
+          user={{ name: "Ada", color: "#112233" }}
+          sourceForBoard={sourceForBoard}
+          boardFiles={null}
+          frameEvents={null}
+          liveSlotBudget={1}
+          boardByteLengths={null}
+        />
+      </TooltipProvider>,
+    );
+    return { store, sourceForBoard };
+  }
+
+  // The native wheel listener lives on the stage div that holds ReactFlow,
+  // one level inside the "Canvas" labelled application region - not on that
+  // region itself, which only owns keyboard and focus handling.
+  function stageElement(): HTMLElement {
+    const pane = screen.getByRole("group", { name: "Canvas pane" });
+    const stage = pane.parentElement?.parentElement;
+    if (stage === null || stage === undefined)
+      throw new Error("could not find the canvas stage");
+    return stage;
+  }
+
+  it("keeps the near board live at mount, before any gesture", () => {
+    const { sourceForBoard } = mountWheelEditor();
+    expect(sourceForBoard).toHaveBeenCalledWith(NEAR);
+    expect(sourceForBoard).not.toHaveBeenCalledWith(FAR);
+  });
+
+  it("does not re-settle the live set on every wheel pan tick, only once the gesture settles", () => {
+    const { sourceForBoard } = mountWheelEditor();
+    const stage = stageElement();
+
+    // One capped (80px) horizontal tick already moves the viewport centre
+    // from (566.67, 333.33) to (700, 333.33) - nearer FAR's centre (1250, 50)
+    // than NEAR's (50, 50) by squared distance (382777 vs 502777).
+    fireEvent.wheel(stage, { deltaX: 4000, deltaY: 0 });
+    expect(sourceForBoard).not.toHaveBeenCalledWith(FAR);
+
+    act(() => {
+      vi.advanceTimersByTime(199);
+    });
+    expect(sourceForBoard).not.toHaveBeenCalledWith(FAR);
+
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(sourceForBoard).toHaveBeenCalledWith(FAR);
+  });
+
+  it("restarts the settle timer on each further tick instead of settling mid-gesture", () => {
+    const { sourceForBoard } = mountWheelEditor();
+    const stage = stageElement();
+
+    fireEvent.wheel(stage, { deltaX: 4000, deltaY: 0 });
+    act(() => {
+      vi.advanceTimersByTime(150);
+    });
+    // A second tick before the first settles must push the deadline out
+    // again, not let the first timer land on top of the new position.
+    fireEvent.wheel(stage, { deltaX: 4000, deltaY: 0 });
+    act(() => {
+      vi.advanceTimersByTime(150);
+    });
+    expect(sourceForBoard).not.toHaveBeenCalledWith(FAR);
+
+    act(() => {
+      vi.advanceTimersByTime(50);
+    });
+    expect(sourceForBoard).toHaveBeenCalledWith(FAR);
+  });
+
+  it("does not re-settle the live set on every wheel zoom tick either", () => {
+    const { sourceForBoard } = mountWheelEditor();
+    const stage = stageElement();
+
+    // A maximal zoom-out tick (deltaY clamped to 240) pivoted at the
+    // viewport's own origin shrinks the zoom to ~0.292 and moves the centre
+    // to (1219.85, 860.7) - nearer FAR (657942) than NEAR (2025624).
+    fireEvent.wheel(stage, { deltaY: 4000, ctrlKey: true });
+    expect(sourceForBoard).not.toHaveBeenCalledWith(FAR);
+
+    act(() => {
+      vi.advanceTimersByTime(200);
+    });
+    expect(sourceForBoard).toHaveBeenCalledWith(FAR);
+  });
+
+  it("cancels the pending settle on a genuine move-start, so that move's own end settles immediately", () => {
+    const { sourceForBoard } = mountWheelEditor();
+    const stage = stageElement();
+
+    fireEvent.wheel(stage, { deltaX: 4000, deltaY: 0 });
+    expect(sourceForBoard).not.toHaveBeenCalledWith(FAR);
+    const panned = flow.viewport;
+    if (panned === null) throw new Error("the canvas never panned");
+
+    act(() => {
+      // xyflow reports a real drag starting with a non-null event.
+      flow.onMoveStart?.(new MouseEvent("mousedown"), panned);
+      flow.onMoveEnd?.(new MouseEvent("mouseup"), panned);
+    });
+
+    // Settled immediately, with no 200ms wait.
+    expect(sourceForBoard).toHaveBeenCalledWith(FAR);
+  });
+
+  it("leaves the pending settle running for a programmatic (null-event) move-start", () => {
+    const { sourceForBoard } = mountWheelEditor();
+    const stage = stageElement();
+
+    fireEvent.wheel(stage, { deltaX: 4000, deltaY: 0 });
+    const panned = flow.viewport;
+    if (panned === null) throw new Error("the canvas never panned");
+
+    act(() => {
+      flow.onMoveStart?.(null, panned);
+      flow.onMoveEnd?.(null, panned);
+    });
+    expect(sourceForBoard).not.toHaveBeenCalledWith(FAR);
+
+    act(() => {
+      vi.advanceTimersByTime(200);
+    });
+    expect(sourceForBoard).toHaveBeenCalledWith(FAR);
+  });
+
+  it("leaves the pending settle running for xyflow's synthetic {sync: true} move-start", () => {
+    // xyflow's own controlled-viewport sync also starts a move, with a
+    // plain `{ sync: true }` object standing in for the event - not an
+    // Event instance, and not null either, so a guard that only excludes
+    // `null` would wrongly treat it as a real gesture. The library's
+    // declared type is `MouseEvent | TouchEvent | null`, so this call goes
+    // through Reflect.apply to hand the handler a shape outside that type.
+    const { sourceForBoard } = mountWheelEditor();
+    const stage = stageElement();
+
+    fireEvent.wheel(stage, { deltaX: 4000, deltaY: 0 });
+    const panned = flow.viewport;
+    if (panned === null) throw new Error("the canvas never panned");
+    const onMoveStart = flow.onMoveStart;
+    const onMoveEnd = flow.onMoveEnd;
+    if (onMoveStart === null || onMoveEnd === null)
+      throw new Error("the canvas never wired its move handlers");
+
+    act(() => {
+      Reflect.apply(onMoveStart, undefined, [{ sync: true }, panned]);
+      Reflect.apply(onMoveEnd, undefined, [{ sync: true }, panned]);
+    });
+    expect(sourceForBoard).not.toHaveBeenCalledWith(FAR);
+
+    act(() => {
+      vi.advanceTimersByTime(200);
+    });
+    expect(sourceForBoard).toHaveBeenCalledWith(FAR);
+  });
+
+  it("cancels the pending settle when the zoom menu is used mid-gesture", () => {
+    const { sourceForBoard } = mountWheelEditor();
+    const stage = stageElement();
+
+    fireEvent.wheel(stage, { deltaX: 4000, deltaY: 0 });
+    fireEvent.pointerDown(screen.getByRole("button", { name: /, zoom$/ }), {
+      button: 0,
+      ctrlKey: false,
+    });
+    fireEvent.click(screen.getByRole("menuitem", { name: /^Fit to screen$/ }));
+    expect(sourceForBoard).not.toHaveBeenCalledWith(FAR);
+
+    act(() => {
+      vi.advanceTimersByTime(200);
+    });
+    // fitView is a bare mock with no viewport side effect in this harness,
+    // so the cancelled wheel settle must not have fired on its own.
+    expect(sourceForBoard).not.toHaveBeenCalledWith(FAR);
+  });
+});
+
+describe("CanvasArtifactEditor hidden-pane geometry", () => {
+  let resizeCallback: (() => void) | null = null;
+  let width = 800;
+  let height = 600;
+
+  beforeEach(() => {
+    width = 800;
+    height = 600;
+    resizeCallback = null;
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        constructor(callback: () => void) {
+          resizeCallback = callback;
+        }
+        observe(): void {}
+        disconnect(): void {}
+      },
+    );
+    vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(
+      () => width,
+    );
+    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockImplementation(
+      () => height,
+    );
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  // The real (800x600) viewport centres on canvas (566.67, 333.33); a
+  // collapsed (0x0) one degenerates to a point at its corner, canvas
+  // (-100, -166.67) - both computed from INITIAL_VIEW {x:60,y:100,zoom:0.6}.
+  // A sits on the corner, C sits on the centre, and B sits equidistant
+  // between the two (verified by hand: A-to-centre and C-to-corner are both
+  // ~700,000 squared units away, versus B's ~174,000 from either point) - so
+  // the real size selects {B, C} and a naively-trusted 0x0 would select
+  // {B, A} instead. B is the board this test watches for an unwanted
+  // eviction/re-request; A is the board a missing size guard would wrongly
+  // bring live.
+  const A = "boards/a.html";
+  const B = "boards/b.html";
+  const C = "boards/c.html";
+  const geometryFile: CanvasFixtureFile = {
+    pages: [{ id: "page-1", name: "Flow" }],
+    boards: {
+      [A]: { x: -150, y: -220, w: 100, h: 100 },
+      [B]: { x: 183, y: 33, w: 100, h: 100 },
+      [C]: { x: 520, y: 285, w: 100, h: 100 },
+    },
+    notes: {},
+    order: [A, B, C],
+  };
+
+  function mountGeometryEditor(): Mounted {
+    const store = storeFromFixture(geometryFile);
+    const sourceForBoard = vi.fn<(path: string) => SandboxSource | null>(
+      () => null,
+    );
+    render(
+      <TooltipProvider>
+        <CanvasArtifactEditor
+          artifactId={ARTIFACT_ID}
+          store={store}
+          awareness={null}
+          user={{ name: "Ada", color: "#112233" }}
+          sourceForBoard={sourceForBoard}
+          boardFiles={null}
+          frameEvents={null}
+          liveSlotBudget={2}
+          boardByteLengths={null}
+        />
+      </TooltipProvider>,
+    );
+    return { store, sourceForBoard };
+  }
+
+  it("keeps the real-size selection resident through a hide, a stale 0x0 remeasure on reveal, and the real remeasure after", () => {
+    const { sourceForBoard } = mountGeometryEditor();
+    // Before the first ResizeObserver measurement ever lands, `size` starts
+    // at {0, 0} like any other render - there is no prior real size for
+    // the guard to preserve yet, so A is expectedly requested once during
+    // that very first paint. What matters from here on is that the editor
+    // settles on {B, C} and stays there.
+    expect(sourceForBoard).toHaveBeenCalledWith(B);
+    expect(sourceForBoard).toHaveBeenCalledWith(C);
+    sourceForBoard.mockClear();
+
+    // The pane is hidden with display:none, which jsdom's layout has no
+    // notion of; the only observable effect here is the size this editor
+    // measures collapsing to 0x0. Unguarded, this would select {B, A} -
+    // evicting C and requesting A.
+    width = 0;
+    height = 0;
+    act(() => {
+      resizeCallback?.();
+    });
+    expect(sourceForBoard).not.toHaveBeenCalled();
+
+    // Revealed, but the observer's own first callback still catches the
+    // pane mid-layout at 0x0 - a stale reading that must not be trusted
+    // either.
+    act(() => {
+      resizeCallback?.();
+    });
+    expect(sourceForBoard).not.toHaveBeenCalled();
+
+    // The real post-layout measurement finally arrives, back to the exact
+    // size at mount: the same two boards stay resident, nothing is evicted
+    // or re-requested.
+    width = 800;
+    height = 600;
+    act(() => {
+      resizeCallback?.();
+    });
+    expect(sourceForBoard).not.toHaveBeenCalled();
   });
 });

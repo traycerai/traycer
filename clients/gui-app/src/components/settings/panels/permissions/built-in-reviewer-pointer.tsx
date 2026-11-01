@@ -98,7 +98,7 @@ function pointerSentence(rows: ReadonlyArray<GuiHarnessOption>): string {
 }
 
 /**
- * Whose reviewer a provider's own is, as the spec says it: Claude Code's is
+ * Whose reviewer a provider's own is: Claude Code's is
  * Claude's; any other provider's is its own.
  */
 function reviewerOwner(row: GuiHarnessOption): string {

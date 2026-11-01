@@ -21,7 +21,7 @@ import {
 /**
  * `useHostClient()` is the app-wide host client: the SELECTION LAYER's
  * `effectiveHostId` resolved through `createRequesterForHostId` (redesign
- * P2.1, then P4.2 deleted the runtime client's privileged active slot
+ * P4.2 deleted the runtime client's privileged active slot
  * entirely).
  *
  * The spine is substituted at the provider seam so these cases can drive

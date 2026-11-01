@@ -6,6 +6,7 @@ import type {
 import { decideSteerSettings } from "@/lib/chats/decide-steer-settings";
 
 const SETTINGS: ChatRunSettings = {
+  ultracode: false,
   harnessId: "codex",
   model: "gpt-5-codex",
   permissionMode: "supervised",

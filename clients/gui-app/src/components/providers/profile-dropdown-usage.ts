@@ -83,7 +83,7 @@ function envelopeFromDetail(
 }
 
 /**
- * Adapts T2's cache/refresh state to T1's canonical picker projection. The
+ * Adapts the cache/refresh state to the canonical picker projection. The
  * adapter deliberately carries no independent percentage or severity rules:
  * live-window selection, most-constrained choice, and semantic classification
  * all remain owned by `projectProfileUsage`.

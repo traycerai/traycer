@@ -60,7 +60,7 @@ const EMPTY_RATE_LIMIT_REQUESTS: ReadonlyArray<
 /**
  * Combines a target host's cache-only rate-limit envelopes with each
  * profile's cheap host summary (`rateLimitStatus`, `usageUpdatedAt`) into
- * the stable per-profile comparison-state contract T3 renders, and exposes
+ * the stable per-profile comparison-state contract for the picker, and exposes
  * one explicit refresh per profile.
  *
  * Cache-only observation: every envelope query mounts with

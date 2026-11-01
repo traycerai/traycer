@@ -14,7 +14,7 @@
  * which parks each `body/materialize` individually and drives the bridge whose
  * ledger is wrong directly. Ablate the fix there, not here.
  *
- * ## The defect this describes (epic-sync-overhaul finding 11)
+ * ## The defect this describes
  *
  * A tile takes TWO body leases - `useEpicArtifactFragment` and
  * `useEpicArtifactBodyAwareness` each call `useEpicArtifactBodyLease` - and the

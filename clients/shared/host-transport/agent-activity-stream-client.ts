@@ -9,8 +9,7 @@ import {
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type {
   IStreamSession,
-  StreamCloseReason,
-  StreamConnectionStatus,
+  StatusChangeHandler,
   StreamFrameEnvelope,
 } from "./i-stream-session";
 import type { IHostStreamClient } from "./host-stream-client";
@@ -26,10 +25,7 @@ export interface AgentActivityStreamCallbacks {
     byEpic: AgentActivityByEpic,
     cloudSyncStatus: AgentActivityCloudSyncStatus | null,
   ) => void;
-  readonly onConnectionStatus: (
-    status: StreamConnectionStatus,
-    reason: StreamCloseReason | null,
-  ) => void;
+  readonly onConnectionStatus: StatusChangeHandler;
 }
 
 /**
@@ -106,8 +102,13 @@ export class AgentActivityStreamClient {
     this.session.onServerFrame((envelope) => {
       this.handleServerFrame(envelope);
     });
-    this.session.onStatusChange((status, reason) => {
-      this.options.callbacks.onConnectionStatus(status, reason);
+    this.session.onStatusChange((status, reason, retryCause, continuity) => {
+      this.options.callbacks.onConnectionStatus(
+        status,
+        reason,
+        retryCause,
+        continuity,
+      );
     });
   }
 

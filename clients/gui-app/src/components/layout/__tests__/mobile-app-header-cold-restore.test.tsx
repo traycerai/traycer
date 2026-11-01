@@ -198,7 +198,7 @@ function registerCommittableSession(title: string): {
   // honest replacement for forcing the projected `epic` slice directly.
   handle.doc.getMap("epic").set("title", title);
   handle.doc.getMap("epic").set("updatedAt", 1);
-  captured.value.onConnectionStatus("open", null, false);
+  captured.value.onConnectionStatus("open", null, false, null);
   captured.value.onSnapshot(
     {
       schemaVersion: "1.0",

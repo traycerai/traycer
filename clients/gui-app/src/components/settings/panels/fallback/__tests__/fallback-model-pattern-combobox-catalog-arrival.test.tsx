@@ -61,14 +61,14 @@ function props(
 }
 
 /**
- * R7 (review round 1): the provider's catalog ANSWERS while the picker is
+ * The provider's catalog ANSWERS while the picker is
  * already open on an exact-pick row.
  *
  * Opened cold, the picker cannot tell `gpt-5.6-terra` is a model - there is
  * no catalog to find it in - so the stored value becomes the query and the
  * highlight lands on the only option there is, the "contains" pattern. When
  * the catalog lands the exact model moves to the top, and the Enter rule
- * (spec §Wireframe 2: an exact ID puts that model first, so Enter picks it)
+ * (an exact ID puts that model first, so Enter picks it)
  * has to hold: Enter saves the SLUG, never `*gpt-5.6-terra*`, which would
  * silently turn a one-model row into a pattern.
  */

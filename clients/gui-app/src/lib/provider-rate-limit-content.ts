@@ -1,5 +1,6 @@
 import type {
   ProviderRateLimits,
+  RateLimitChatCredential,
   RateLimitUnavailableReason,
 } from "@traycer/protocol/host";
 import type { ProviderRateLimitQueryState } from "@/components/settings/panels/provider-rate-limit-views";
@@ -131,6 +132,7 @@ const RATE_LIMIT_UNAVAILABLE_REASON_LABELS: Record<
   connection_failed: "couldn't connect to the provider",
   sdk_incompatible: "this SDK version doesn't support usage limits",
   rate_limits_not_available: "not available for this account",
+  not_signed_in: "the CLI isn't signed in",
   insufficient_permissions:
     "this account doesn't have permission to view usage",
   // Transient - the CLI's own usage-HTTP fetch failed (timeout, a 401 with a
@@ -147,11 +149,87 @@ export function formatUnavailableReason(
   return RATE_LIMIT_UNAVAILABLE_REASON_LABELS[reason];
 }
 
+/** One run of a chat-credential notice; `code` runs name a setting or variable. */
+export interface ChatCredentialNoticePart {
+  readonly text: string;
+  readonly code: boolean;
+}
+
+const CLOUD_PROVIDER_NAMES: Readonly<Record<string, string>> = {
+  bedrock: "Amazon Bedrock",
+  vertex: "Google Vertex AI",
+  foundry: "Microsoft Foundry",
+};
+
+const NO_PLAN_LIMITS =
+  ", not your Claude plan, so there are no plan limits to show.";
+
+/**
+ * What every surface says, in place of "Usage limits unavailable", when the
+ * host reports that chats on this account use a credential other than the
+ * plan. Parts rather than a string so a surface that can style the variable
+ * name does; `chatCredentialNoticeText` joins them for the ones that cannot.
+ */
+export function formatChatCredentialNotice(
+  credential: RateLimitChatCredential,
+): ReadonlyArray<ChatCredentialNoticePart> {
+  const text = (value: string): ChatCredentialNoticePart => ({
+    text: value,
+    code: false,
+  });
+  const code = (value: string): ChatCredentialNoticePart => ({
+    text: value,
+    code: true,
+  });
+  switch (credential.kind) {
+    case "api-key":
+      if (credential.source === "apiKeyHelper") {
+        return [
+          text("Chats here are billed to the key from your "),
+          code("apiKeyHelper"),
+          text(NO_PLAN_LIMITS),
+        ];
+      }
+      if (credential.source === "/login managed key") {
+        return [
+          text(
+            `Chats here are billed to your Anthropic Console key${NO_PLAN_LIMITS}`,
+          ),
+        ];
+      }
+      return [
+        text("Chats here are billed to "),
+        code(credential.source),
+        text(NO_PLAN_LIMITS),
+      ];
+    case "token":
+      return [
+        text("Chats here sign in with "),
+        code(credential.source),
+        text(" instead of your Claude login."),
+      ];
+    case "cloud-provider":
+      return [
+        text(
+          `Chats here run on ${CLOUD_PROVIDER_NAMES[credential.source] ?? credential.source}, so there are no plan limits to show.`,
+        ),
+      ];
+  }
+}
+
+export function chatCredentialNoticeText(
+  credential: RateLimitChatCredential,
+): string {
+  return formatChatCredentialNotice(credential)
+    .map((part) => part.text)
+    .join("");
+}
+
 /**
  * The header popover's per-provider display state - richer than
  * `resolveProviderRateLimitViewState` (which the Settings card uses) because
  * this surface distinguishes cold-load from degraded from never-fetched-error,
- * each with its own treatment (Core Flows: skeleton bars / dimmed stale reading
+ * each with its own treatment (skeleton bars / dimmed stale reading
  * / plain-language error + retry):
  *
  * - `cold`: no data has ever arrived and no fetch has failed yet -> skeleton.
@@ -169,6 +247,8 @@ export type PopoverProviderRateLimitState =
       readonly kind: "unavailable";
       readonly provider: ProviderRateLimits["provider"];
       readonly reason: RateLimitUnavailableReason;
+      /** The credential chats use instead of the plan, when the host named one. */
+      readonly chatCredential: RateLimitChatCredential | null;
     }
   | {
       readonly kind: "ready";
@@ -228,6 +308,7 @@ export function resolvePopoverProviderRateLimitState(
       kind: "unavailable",
       provider: data.provider,
       reason: data.reason,
+      chatCredential: data.chatCredential ?? null,
     };
   }
   // A last-known-good snapshot is present, either fresh (`data` came straight
@@ -236,7 +317,7 @@ export function resolvePopoverProviderRateLimitState(
   // below reports which transient reason it's standing in for). `props.isError`
   // covers the other degrade path: the query's own most recent (background)
   // fetch attempt threw (TanStack retaining old data across that exception) -
-  // Core Flows' degraded state, shown dimmed rather than replaced, generic
+  // the degraded state, shown dimmed rather than replaced, generic
   // copy since a thrown exception has no specific wire reason to report.
   const reason = envelopeDegradedReason(envelope);
   return {
@@ -269,8 +350,8 @@ export function titleCaseFromToken(value: string): string {
 
 /**
  * A provider's plan/tier label, where one is fetched - the header popover
- * shows this as a chip next to the provider name (Core Flows: "where the
- * provider reports one"). Codex (`planType`), Claude Code (`subscriptionType`),
+ * shows this as a chip next to the provider name, where the
+ * provider reports one. Codex (`planType`), Claude Code (`subscriptionType`),
  * Grok (`subscriptionTier`) and Antigravity (`planName`) report a plan/tier;
  * OpenRouter, Kilo Code,
  * Hugging Face and Cursor have no analogous field, so they always resolve to

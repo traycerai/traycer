@@ -8,7 +8,7 @@ import { createContext, use } from "react";
  *
  * - **Density.** A 380px instrument panel and a full-width settings page do not
  *   read at the same type scale, and a page that mixed the two read as a panel
- *   pasted into a form (P-4).
+ *   pasted into a form.
  * - **Where a deeper level opens.** In the dock it is a screen with a back row;
  *   on the page it expands in place, which is L-89 satisfied by never leaving
  *   the page at all (L-95).

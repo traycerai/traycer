@@ -9,7 +9,7 @@ import {
   type FleetUpdateView,
 } from "@/lib/host/fleet-update/fleet-update-view";
 
-// G10(b): `restarting` and `reconnecting` — the two views `phaseKind` produces
+// `restarting` and `reconnecting` — the two views `phaseKind` produces
 // from the SAME host phase depending on this client's own connectivity vantage
 // — must earn the identical cadence. That equality is what makes
 // `use-fleet-update-views.ts`'s cadence probe legitimate in pinning

@@ -306,6 +306,8 @@ export const kit = {
     } | null;
   },
   mutationFails: false,
+  // The host's sentence refusing a bot-row write; `null` takes the write.
+  botWriteRefusal: null as string | null,
   deferResponses: false,
   pendingResponses: [] as Array<() => void>,
   // What the two publishers received.
@@ -341,6 +343,7 @@ export function resetKit(): void {
   kit.mutations = [];
   kit.mutationResult = { outcome: "applied", detail: null };
   kit.mutationFails = false;
+  kit.botWriteRefusal = null;
   kit.deferResponses = false;
   kit.pendingResponses = [];
   kit.confirmed = [];
@@ -798,6 +801,47 @@ export function hostScopedMutationModule() {
             return;
           }
           deliver();
+        },
+        isPending: pending,
+      };
+    },
+  };
+}
+
+/**
+ * `@/hooks/bots/use-bot-mutations`: the bot-row write a bot's chat sends
+ * before its retry, recorded into the same `mutations` as the verbs so a
+ * suite reads the order, and rejected with `botWriteRefusal` as the error's
+ * message when set. Its promise settles whether or not the caller is still
+ * mounted, as TanStack's `mutateAsync` does. `deferResponses` holds its
+ * answer like theirs.
+ */
+export function botMutationsModule<T extends object>(actual: T) {
+  return {
+    ...actual,
+    useBotUpdateRunSettingsMutation: (client: KitClient | null) => {
+      const [pending, setPending] = useState(false);
+      return {
+        mutateAsync: (variables: Record<string, unknown>) => {
+          kit.mutations.push({
+            clientId: idOf(client),
+            method: "bot.updateRunSettings",
+            variables,
+          });
+          setPending(true);
+          return new Promise<void>((resolve, reject) => {
+            const deliver = (): void => {
+              setPending(false);
+              const refusal = kit.botWriteRefusal;
+              if (refusal === null) resolve();
+              else reject(new Error(refusal));
+            };
+            if (kit.deferResponses) {
+              kit.pendingResponses.push(deliver);
+              return;
+            }
+            deliver();
+          });
         },
         isPending: pending,
       };

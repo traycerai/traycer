@@ -11,7 +11,7 @@ import {
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type {
   IStreamSession,
-  StreamCloseReason,
+  StatusChangeHandler,
   StreamConnectionStatus,
   StreamFrameEnvelope,
 } from "./i-stream-session";
@@ -73,10 +73,7 @@ export interface TerminalStreamCallbacks {
       { readonly kind: "sessionUpdated" }
     >,
   ) => void;
-  readonly onConnectionStatus: (
-    status: StreamConnectionStatus,
-    reason: StreamCloseReason | null,
-  ) => void;
+  readonly onConnectionStatus: StatusChangeHandler;
 }
 
 export interface TerminalStreamClientOptions {
@@ -142,9 +139,9 @@ export class TerminalStreamClient {
     this.session.onServerFrame((envelope, binaryPayload) => {
       this.handleServerFrame(envelope, binaryPayload);
     });
-    this.session.onStatusChange((status, reason) => {
+    this.session.onStatusChange((status, reason, retryCause, continuity) => {
       this.status = status;
-      this.callbacks.onConnectionStatus(status, reason);
+      this.callbacks.onConnectionStatus(status, reason, retryCause, continuity);
       // After the consumer's own open handling, which re-reports its size: a
       // view coming on screen must have its real grid on the host before it
       // starts counting toward the shared one.
@@ -180,9 +177,13 @@ export class TerminalStreamClient {
     this.sendViewerFrame(frame);
   }
 
-  private sendViewerFrame(frame: TerminalViewerFrame): void {
+  supportsViewerFrames(): boolean {
     const version = this.session.getNegotiatedSchemaVersion();
-    if (version === null || version.major !== 1 || version.minor < 7) return;
+    return version !== null && version.major === 1 && version.minor >= 7;
+  }
+
+  private sendViewerFrame(frame: TerminalViewerFrame): void {
+    if (!this.supportsViewerFrames()) return;
     this.session.sendClientFrame(frame, null);
   }
 

@@ -10,6 +10,7 @@ import {
 } from "@/components/providers/profile-usage-sidecar-position";
 import { waitForAnchorReady } from "@/components/providers/profile-usage-sidecar-anchor-readiness";
 import { MeterRow } from "@/components/settings/panels/traycer-subscription-views";
+import { chatCredentialNoticeText } from "@/lib/provider-rate-limit-content";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { Kbd } from "@/components/ui/kbd";
@@ -246,6 +247,15 @@ function ProfileUsageDetail({
         />
       );
     case "unavailable":
+      if (projection.chatCredential !== null) {
+        return (
+          <ProfileUsageEmptyState
+            title="Usage unavailable"
+            body={chatCredentialNoticeText(projection.chatCredential)}
+            tone="warning"
+          />
+        );
+      }
       return (
         <ProfileUsageEmptyState
           title={

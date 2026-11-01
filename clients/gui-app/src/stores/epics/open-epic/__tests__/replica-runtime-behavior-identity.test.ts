@@ -306,7 +306,7 @@ describe("replica runtime behaviour identity - epic.subscribe@1 scripted sequenc
     // snapshot - materializes the room hot once an editor takes a lease.
     const donor = new Y.Doc();
     seedRootArtifactWithArtifactRoom(donor, "art-1", "artifact-room-0");
-    streamHandle().callbacks.onConnectionStatus("open", null, false);
+    streamHandle().callbacks.onConnectionStatus("open", null, false, null);
     streamHandle().callbacks.onSnapshot(
       buildMeta("editor", donor),
       Y.encodeStateAsUpdate(donor),
@@ -324,7 +324,12 @@ describe("replica runtime behaviour identity - epic.subscribe@1 scripted sequenc
     // Go offline and make a local edit to the room body - this sets the
     // room's own dirty watermark, which `hasRoomDivergence()` folds into the
     // published `isDirty` even though the ROOT doc has nothing unsynced.
-    streamHandle().callbacks.onConnectionStatus("reconnecting", null, false);
+    streamHandle().callbacks.onConnectionStatus(
+      "reconnecting",
+      null,
+      false,
+      null,
+    );
     fragmentDoc.transact(() => {
       fragmentDoc.getMap("offline").set("k", "v");
     });
@@ -435,7 +440,7 @@ describe("replica runtime behaviour identity - epic.subscribe@1 scripted sequenc
 
     const donor = new Y.Doc();
     donor.getMap("epic").set("title", "hello");
-    streamHandle().callbacks.onConnectionStatus("open", null, false);
+    streamHandle().callbacks.onConnectionStatus("open", null, false, null);
     streamHandle().callbacks.onSnapshot(
       buildMeta("editor", donor),
       Y.encodeStateAsUpdate(donor),
@@ -502,7 +507,7 @@ describe("replica runtime behaviour identity - epic.subscribe@1 scripted sequenc
     const donor = new Y.Doc();
     donor.getMap("epic").set("title", "Detach test epic");
     seedRootArtifact(donor, "art-1");
-    streamHandle().callbacks.onConnectionStatus("open", null, false);
+    streamHandle().callbacks.onConnectionStatus("open", null, false, null);
     streamHandle().callbacks.onSnapshot(
       buildMeta("editor", donor),
       Y.encodeStateAsUpdate(donor),
@@ -571,7 +576,7 @@ describe("replica runtime behaviour identity - epic.subscribe@1 scripted sequenc
 
     const donor = new Y.Doc();
     donor.getMap("epic").set("title", "Authoritative roundtrip epic");
-    streamHandle().callbacks.onConnectionStatus("open", null, false);
+    streamHandle().callbacks.onConnectionStatus("open", null, false, null);
     streamHandle().callbacks.onSnapshot(
       buildMeta("editor", donor),
       Y.encodeStateAsUpdate(donor),

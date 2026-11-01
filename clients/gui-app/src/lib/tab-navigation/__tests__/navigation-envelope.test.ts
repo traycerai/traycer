@@ -1,5 +1,5 @@
 /**
- * T3 TabNavigationController envelope lifecycle.
+ * TabNavigationController envelope lifecycle.
  *
  * Drives the controller directly via `activateTabIntent` /
  * `tabNavigationController.observeLocation` — no production edits, no
@@ -552,7 +552,7 @@ describe("TabNavigationController envelope lifecycle", () => {
     expect(getTabNavigationDiagnostics().pendingTokenCount).toBe(0);
   });
 
-  // Cold review #2: snapshot must precede new-draft creation/activation so a
+  // Snapshot must precede new-draft creation/activation so a
   // rejected navigate restores Settings (or Epic), not the draft just minted.
   it("rejecting newDraftTabIntent from Settings restores the true pre-creation selection", async () => {
     const nav = makeDeferredNavigate();
@@ -583,7 +583,7 @@ describe("TabNavigationController envelope lifecycle", () => {
     expect(focusedRefKey()?.startsWith("draft:")).toBe(true);
 
     await nav.reject(1);
-    // Restore also runs the legacy compat projection (round 4): focus lands
+    // Restore also runs the legacy compat projection: focus lands
     // back on Settings, and the just-created draft is no longer the active
     // source-projection draft, without crashing.
     expect(focusedRefKey()).toBe("settings:settings");
@@ -855,7 +855,7 @@ describe("TabNavigationController envelope lifecycle", () => {
     expect(focusedRefKey()).toBe(tabRefKey(b.ref));
   });
 
-  // Cold review #1: settle must not retire a superseded token before its
+  // Settle must not retire a superseded token before its
   // delayed history entry can still commit and be repaired.
   it("superseded token remains repairable when its promise settles before delayed commit", async () => {
     const a = openEpic("epic-a", "A");
@@ -896,7 +896,7 @@ describe("TabNavigationController envelope lifecycle", () => {
     expect(focusedRefKey()).toBe(tabRefKey(a.ref));
   });
 
-  // Cold review #1: newer intent must supersede acknowledged-but-unsettled,
+  // Newer intent must supersede acknowledged-but-unsettled,
   // and a later commit of that superseded token must repair — not re-apply B.
   it("newer intent supersedes acknowledged unsettled token; later same/second-key commits repair", () => {
     const a = openEpic("epic-a", "A");
@@ -1036,7 +1036,7 @@ describe("TabNavigationController envelope lifecycle", () => {
     expect(focusedRefKey()).toBe(tabRefKey(a.ref));
   });
 
-  // Cold review #3: repair must rebuild the exact latest authoritative route,
+  // Repair must rebuild the exact latest authoritative route,
   // not the stale committing pathname (Settings subsections).
   it("stale Settings general commit repairs to exact /settings/providers when providers is authoritative", () => {
     const nav = makeDeferredNavigate();
@@ -1088,7 +1088,7 @@ describe("TabNavigationController envelope lifecycle", () => {
     );
   });
 
-  // F2 (closure): open-epic-from-list must resolve/create INSIDE the controller,
+  // Open-epic-from-list must resolve/create INSIDE the controller,
   // after its snapshot, so a rejected navigation restores the genuine prior tab
   // - not the just-opened epic.
   it("rejecting an open-epic-from-list navigation restores the genuine prior tab", async () => {
@@ -1122,7 +1122,7 @@ describe("TabNavigationController envelope lifecycle", () => {
     expect(focusedRefKey()).toBe(tabRefKey(prior.ref));
   });
 
-  // F3 (closure): repair must replay the EXACT committed route - including the
+  // Repair must replay the EXACT committed route - including the
   // committed search (overlay-cleared / canonically normalized) - not a
   // freshly-derived tabRouteOptions(intent) that reintroduces stale search.
   it("stale superseded commit repairs to the exact committed search, not a stale one", () => {
@@ -1181,7 +1181,7 @@ describe("TabNavigationController envelope lifecycle", () => {
     expect(repairCall.to).toBe("/settings/providers");
   });
 
-  // F6 (closure, most serious): an envelope-free external PUSH must supersede a
+  // An envelope-free external PUSH must supersede a
   // still-PENDING internal token, so a late internal commit repairs to the
   // external authority instead of acknowledging - URL and layout must agree.
   it("external PUSH supersedes a pending internal token; late internal commit repairs (no URL/layout divergence)", () => {
@@ -1489,9 +1489,9 @@ describe("empty focus / startup preservation", () => {
     resetStores();
   });
 
-  // Cold review #6: startup / same-location layout sync may preserve empty
+  // Startup / same-location layout sync may preserve empty
   // focus; later envelope-free PUSH/REPLACE is real external navigation and
-  // must focus the backing member (Core Flow 4).
+  // must focus the backing member.
   it.each([
     { action: "PUSH" as const, key: "key-empty-push" },
     { action: "REPLACE" as const, key: "key-empty-replace" },
@@ -1968,7 +1968,7 @@ describe("activateTabIntent / navigateToTabIntent seam", () => {
     expect(focusedRefKey()).toBe(tabRefKey(a.ref));
   });
 
-  // Cold review #7: re-activating the already-active ordinary tab must replace
+  // Re-activating the already-active ordinary tab must replace
   // (same as within-split), not push a dead same-href history step.
   it("re-activating the active ordinary tab uses replace and does not push history", () => {
     const a = openEpic("epic-a", "A");
@@ -2012,17 +2012,16 @@ describe("activateTabIntent / navigateToTabIntent seam", () => {
   });
 });
 
-// T10 Area 3: a new desktop window opened via
-// `deps.bridge.requestNew(tab.route)` for a History/Settings tab boots with
-// a truly EMPTY layout (`resetStores()` below matches that exactly) and an
-// initial router location equal to the source tab's route. That is
-// architecturally identical to any other cold external navigation this
-// controller already resolves - `resolveExternalSystem` (reached through
-// the same `observeLocation` classification `TabNavigationRouteBridge` uses
-// at boot) materializes the system tab and focuses it. These tests prove
-// that path exists and stays wired for history/settings specifically -
-// "copy" new-window semantics need no new production code, only this
-// coverage.
+// A new desktop window opened via `deps.bridge.requestNew(tab.route)` for
+// a History/Settings tab boots with a truly EMPTY layout (`resetStores()`
+// below matches that exactly) and an initial router location equal to the
+// source tab's route. That is architecturally identical to any other cold
+// external navigation this controller already resolves -
+// `resolveExternalSystem` (reached through the same `observeLocation`
+// classification `TabNavigationRouteBridge` uses at boot) materializes
+// the system tab and focuses it. These tests prove that path exists and
+// stays wired for history/settings specifically - "copy" new-window
+// semantics need no new production code, only this coverage.
 describe("T10 Area 3: external boot into a system-tab route (new-window copy)", () => {
   beforeEach(async () => {
     resetStores();

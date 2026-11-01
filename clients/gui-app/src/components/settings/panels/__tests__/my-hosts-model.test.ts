@@ -42,7 +42,7 @@ function deriveLocal(status: HostStatusDTO): DtoPresenceView {
 
 describe("deriveHostPresence", () => {
   /**
-   * F26, at the exact line that produced the overclaim.
+   * At the exact line that produced the overclaim.
    *
    * This test used to read "renders Online with a live dot for connectable"
    * and assert `showLiveDot: true`. It was pinning a violation of the
@@ -145,11 +145,11 @@ describe("deriveHostPresence", () => {
     });
   });
 
-  // The "remote-host connection-issue sub-state (R4-B5)" suite lived here: a
+  // The "remote-host connection-issue sub-state" suite lived here: a
   // `connectable` host whose per-viewer probe reported `failing` rendered
   // "Reachable, connection issue (checked 2m ago)". Deleted with its subject
   // in P3.4 — the probe that would have written that verdict was never built
-  // (audit F9: a store with a getter and no writer), so the arm was
+  // (a store with a getter and no writer), so the arm was
   // unreachable and these three tests only ever proved that a hand-supplied
   // input produced a hand-written label. Nothing user-visible is uncovered by
   // their removal, because nothing user-visible could reach the state.

@@ -74,7 +74,7 @@ export function HeaderBarCluster(): ReactNode {
  *
  * `display: contents` generates no box, so `getBoundingClientRect()` answers
  * 0,0,0,0 and the travelling ring collapsed to a 6px dot at the top-left of
- * the window while the hover outline had nothing to paint on (C-06). A session
+ * the window while the hover outline had nothing to paint on. A session
  * needs a real box here and the header needs none of its own, so this is the
  * mic slot's pattern: the region's children keep laying out in the header's
  * own cluster at rest, and become a box of their own exactly while the editor
@@ -172,7 +172,7 @@ export function HeaderResourceRegion(props: {
 // behind its own verdict gate - and on a desktop-width header this bell is
 // the ONLY entry point to those lanes, so gating it on the cloud verdict left
 // locally served failures, approvals and agent activity accumulating with no
-// way to see or act on them. Found in review.
+// way to see or act on them.
 export function HeaderNotificationsBell(): ReactNode {
   const admitted = useAuthStore((state) => admitsLocalPlane(state.status));
   if (!admitted) {

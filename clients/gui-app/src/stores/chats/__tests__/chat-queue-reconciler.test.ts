@@ -42,6 +42,7 @@ const CONTENT_2: JsonContent = {
 const SENDER = { type: "user" as const, userId: "user-1" };
 
 const SETTINGS = {
+  ultracode: false,
   harnessId: "codex" as const,
   model: "gpt-5-codex",
   permissionMode: "supervised" as const,
@@ -1649,7 +1650,7 @@ describe("chat-queue-reconciler", () => {
     });
   });
 
-  // R13 `-A8bJ`: everything the notice says ABOUT the draft has to be said
+  // `-A8bJ`: everything the notice says ABOUT the draft has to be said
   // before the draft, because the draft is the one part whose extent the
   // notice does not control. It is verbatim user text of unbounded shape,
   // rendered pre-wrapped, and the user's next gesture is to select it - so a

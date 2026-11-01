@@ -11,7 +11,7 @@ import {
 
 /**
  * The task's 26x22 monogram chip, in the tab colour or the task's own hue:
- * the rail tile's content, and the epic panel's header (D12).
+ * the rail tile's content, and the epic panel's header.
  */
 export function MonogramChip(props: {
   readonly tile: SideTabTile;

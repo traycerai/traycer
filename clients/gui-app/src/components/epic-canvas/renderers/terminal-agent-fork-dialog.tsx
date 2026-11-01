@@ -128,7 +128,7 @@ function lockNonSourceProfiles(
  *      rather than failing open while pending or after an RPC failure.
  *   3. Bulk admission resolved - the server's per-profile verdicts.
  * Plain-fork intent on a capable host falls through to `EMPTY_FORK_ADMISSION`
- * (picker stays fully open) - sound per the T5 review: submit-time preflight
+ * (picker stays fully open) - submit-time preflight
  * plus the authoritative `prepareLaunch` guard both still apply there.
  */
 function resolveDialogAdmission(input: {
@@ -165,8 +165,8 @@ function resolveDialogAdmission(input: {
 }
 
 /**
- * `"fork"` is today's plain sibling-session fork. `"continue"` is the T5
- * intent flag riding the SAME dialog (tech plan UX package): title/CTA copy
+ * `"fork"` is today's plain sibling-session fork. `"continue"` is the
+ * intent flag riding the SAME dialog: title/CTA copy
  * change and the profile strip gets emphasis + bulk-admission row disabling,
  * but the submit path, workspace handling, and every other mechanism are
  * identical - this is a presentation flag, not a second dialog.
@@ -282,6 +282,7 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
       tuiOnly: true,
       // Terminal agents have no `chat.subscribe` stream at all.
       chatLineCarriesAutoMode: null,
+      ultracodeCarried: false,
       stagedSurfaceKey: null,
       sendsToRestingSandbox: false,
     },
@@ -354,8 +355,8 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
     sourceHarnessProfiles,
     providersSettled,
   );
-  // Only continue mode proactively disables unshared rows (tech plan UX
-  // package scopes bulk-admission picker behavior to continue mode); a
+  // Only continue mode proactively disables unshared rows (bulk-admission
+  // picker behavior is scoped to continue mode); a
   // manual cross-profile pick in plain fork mode still gets caught by
   // `use-create-tui-agent.ts`'s own preflight at submit time, surfaced via
   // the rejection alert below - it just isn't pre-disabled in the picker.
@@ -440,8 +441,8 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
     capabilityLockExemptProfileId,
   });
 
-  // Live default title (tech plan UX package: "profile-changed default
-  // title"): reactive to the CURRENT picker selection, not frozen at
+  // Live default title (the profile-changed default
+  // title): reactive to the CURRENT picker selection, not frozen at
   // open-time, so switching profiles in the strip updates the title for as
   // long as the user hasn't typed their own.
   const defaultTitle =
@@ -581,7 +582,7 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
     );
     const toolbar = toolbarStore.getState();
     const submittedProfileId = toolbar.selection.profileId;
-    // Claude cross-profile disclosure moment (tech plan UX package): the
+    // Claude cross-profile disclosure moment: the
     // forked session's TodoWrite/rewind state is provider-account-scoped and
     // does not follow a profile switch. Gated to Claude - the only harness
     // this feature admits cross-profile forks for at all.
@@ -627,7 +628,7 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
             harness: target.sourceAgent.harnessId,
           });
           // No trivial persisted field exists to drive a tile-side one-time
-          // notice (tech plan UX package's documented fallback), so the
+          // notice, so the
           // cross-profile lossiness disclosure fires as a toast here instead.
           if (crossProfileClaudeFork) {
             toast(
@@ -770,6 +771,7 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
                 </div>
                 <div className="flex min-w-0 items-center gap-2 rounded-md">
                   <HarnessModelPicker
+                    withUltracode={false}
                     maxModeContext={{ kind: "none" }}
                     labelDisplay="responsive"
                     key={terminalForkModelPickerKey(target)}
@@ -908,6 +910,7 @@ function terminalForkButtonLabel(intent: TerminalAgentForkIntent): string {
 
 function terminalForkSettingsSeed(agent: ForkableTuiAgent): ChatRunSettings {
   return {
+    ultracode: false,
     harnessId: agent.harnessId,
     model: agent.model ?? "",
     permissionMode: "supervised",
@@ -925,7 +928,7 @@ function terminalForkSettingsSeed(agent: ForkableTuiAgent): ChatRunSettings {
 }
 
 /**
- * Tech plan UX package's "profile-changed default title":
+ * The "profile-changed default title":
  * `Continue · {profileLabel} - {sourceTitle}` once the picker's live
  * selection differs from the source's own profile, else the plain
  * `Fork - {sourceTitle}`. `profileLabel === null` is the caller's signal for

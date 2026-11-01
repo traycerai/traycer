@@ -205,7 +205,7 @@ describe("canonicalChord", () => {
 });
 
 describe("modifier-only chord matching (digit actions)", () => {
-  // T4 (profile shortcuts): confirms the debate's verified finding -
+  // Profile shortcuts: this confirms the debate's verified finding -
   // `matchDigitAction`'s generic mask matching already handles a mod+shift
   // chord like any other combination, so `model.profile.byDigit` needed no
   // dispatch-layer changes, only a new bound action.

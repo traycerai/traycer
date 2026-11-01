@@ -9,7 +9,7 @@ import type { ProviderProfileLoginFlowCodePaste } from "./use-provider-profile-l
 /**
  * Auto-restart notice, shared verbatim by the add-profile dialog, the
  * Settings reauth panel, and the in-chat banner's waiting step - rendered
- * at the top of the step (visual-flow fixup: it previously sat squeezed
+ * at the top of the step (it previously sat squeezed
  * between the paste field's label and its input, easy to miss).
  */
 export function CodePasteRestartNotice({
@@ -26,11 +26,11 @@ export function CodePasteRestartNotice({
 }
 
 /** Trailing characters left visible after masking, matching Claude's own
- *  paste-code UI (code-paste decision log's "Secrecy" row). */
+ *  paste-code UI. */
 const MASK_VISIBLE_SUFFIX_LENGTH = 4;
 
-/** Mirrors the CLI's own client-side check (code-paste decision log's
- *  "Client-side validation" row): trimmed text must contain `#` with
+/** Mirrors the CLI's own client-side check:
+ *  trimmed text must contain `#` with
  *  non-empty parts on both sides. */
 function isValidPastedCode(code: string): boolean {
   const hashIndex = code.indexOf("#");

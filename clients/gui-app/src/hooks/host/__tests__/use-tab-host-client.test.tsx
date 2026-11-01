@@ -63,8 +63,8 @@ vi.mock("@/lib/host", async (importOriginal) => ({
 }));
 
 // `useHostRuntimeClient` is the SPINE a host id resolves against;
-// `useHostClient` is the effective host already resolved through it
-// (redesign P2.1). Every case here passes an explicit tab host id, so the
+// `useHostClient` is the effective host already resolved through it.
+// Every case here passes an explicit tab host id, so the
 // following-client mirror keeps the mock's shape honest rather than serving a
 // case.
 vi.mock("@/lib/host/runtime", async (importOriginal) => ({
@@ -217,8 +217,8 @@ describe("useTabHostClient", () => {
     directoryState.data = [mockLocalHostEntry, TAB_HOST];
 
     // The hook's header has always promised this ("Must be called inside
-    // <TabHostProvider>"); P2.2 made `useTabHostId` enforce it, and nothing
-    // pinned it. It matters more since P2.1: `useHostClientForHostId(null)`
+    // <TabHostProvider>"); `useTabHostId` now enforces it, and nothing
+    // pinned it. It matters more now: `useHostClientForHostId(null)`
     // now resolves the EFFECTIVE host rather than handing back the raw spine,
     // so an unwrapped tile consumer would no longer fail obviously - it would
     // get a perfectly working client for the wrong host and address it for

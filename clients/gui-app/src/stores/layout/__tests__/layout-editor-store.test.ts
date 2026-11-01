@@ -22,7 +22,7 @@ import {
  *
  * Read off the store's own map rather than through a helper exported only for
  * this: the map IS the public shape (`preferredRegionInstance` takes it), and
- * a second accessor with no production caller was dead weight (G1-12).
+ * a second accessor with no production caller was dead weight.
  */
 function instancesOf(
   regionId: RegionInstance["regionId"],
@@ -684,7 +684,7 @@ describe("session-scoped fields", () => {
  * `dirty` is the only thing Discard is gated on, and until this landed it had
  * no test anywhere - a boolean five call sites had to keep in step, whose
  * failure mode is a permanently disabled or permanently enabled button and
- * nothing red to say so (G2-08). It is now derived by the session's one
+ * nothing red to say so. It is now derived by the session's one
  * layout-store watcher, so these five cases are five inputs to one mechanism
  * rather than five copies of it.
  */

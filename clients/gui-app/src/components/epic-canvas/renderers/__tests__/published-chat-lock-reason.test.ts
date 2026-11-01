@@ -11,7 +11,7 @@ import { formatAbsoluteDateTime } from "@/lib/relative-time";
  * copy gets, and it has to survive being read on the machine it is talking
  * about. `PublishedChatTile` reaches this surface for a foreign owner (the
  * sidebar's locked row, a cross-host chat) AND for this device's own
- * connected host (tickets 47/48: the host answered `CHAT_NOT_VISIBLE` about
+ * connected host (the host answered `CHAT_NOT_VISIBLE` about
  * itself, so the canvas substituted the published copy) - and the
  * foreign-owner sentence, read in that second case, tells the user their own
  * machine "lives on" somewhere else and is not available "from this device".

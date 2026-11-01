@@ -237,7 +237,7 @@ function requestPolicy(
     authSource: null,
     replicaSet: null,
     tdsVersion: engine === "tds" ? "7.4" : null,
-    // The consent time is the broker's acceptance row for the request's
+    // The consent time is the broker's record of the request's
     // `plaintextConsent`; a time sent here is never stored.
     plaintextConsentAt: null,
     members: [],

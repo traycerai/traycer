@@ -13,7 +13,7 @@ import { hrefPathname } from "@/lib/routes";
  * the entry's source is gone. Everything else is KEPT, including `/`,
  * `/onboarding`, `/draft/new`, `/epics`, `/settings*`, overlay routes, and any
  * unknown / unparseable href. This is the destroy-only-what-a-store-proves-dead
- * rule from the tech plan (§3.2): pruning must never make valid back/forward
+ * rule: pruning must never make valid back/forward
  * targets disappear.
  *
  * Two route shapes are prunable, read from the SAME stores the route
@@ -28,7 +28,7 @@ import { hrefPathname } from "@/lib/routes";
  *   when `resolveTabIdForEpic(epicId)` finds no sibling tab (top-level
  *   entries) - a nested target never salvages onto a sibling.
  * - `/draft/$draftId` — dead when `draftId` is absent OR closed. A closed
- *   start-task draft is retained in the store (T10) but is not a strip
+ *   start-task draft is retained in the store but is not a strip
  *   source; Back onto `/draft/:id` would landing-correct. `/draft/new` is a
  *   distinct route and is always kept.
  *

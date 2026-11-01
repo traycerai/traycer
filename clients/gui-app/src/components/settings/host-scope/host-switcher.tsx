@@ -141,7 +141,7 @@ interface HostSwitcherActionPresentation {
 }
 
 /**
- * The composer and new-terminal pickers' mode (sandboxes redesign D9): the
+ * The composer and new-terminal pickers' mode (the sandboxes redesign): the
  * person's computers under `Yours`, the sandboxes they started or kept in one
  * collapsed group, a New sandbox row per configuration with a gear, and
  * `Manage sandboxes in Settings` at the foot. A pick here only STAGES: no
@@ -301,8 +301,9 @@ export function HostSwitcher(props: {
   readonly selected: HostScopeOption | null;
   readonly activeHostId: string | null;
   readonly onSelect: (hostId: string) => void;
-  /** How this list ends — see `HostSwitcherAction`. */
   /**
+   * How this list ends — see `HostSwitcherAction`.
+   *
    * `null` for a surface with nowhere to send host management - the onboarding
    * tour renders outside the app shell, so the Settings overlay it would open
    * has no surface to appear on, and a row that does nothing is worse than no

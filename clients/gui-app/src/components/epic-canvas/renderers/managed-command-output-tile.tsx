@@ -1,5 +1,5 @@
 /**
- * The output window (`UI.md` §4): a read-only view of one managed command's
+ * The output window: a read-only view of one managed command's
  * log. Deliberately NOT a terminal - managed commands are spawned over pipes
  * with no PTY, so there are no escape sequences to emulate and the lines arrive
  * already framed. A text view is truer and cheaper than an xterm.
@@ -192,7 +192,7 @@ export interface ManagedCommandOutputTileProps {
 export function ManagedCommandOutputTile(props: ManagedCommandOutputTileProps) {
   const { epicId, node } = props;
   const reachability = useHostReachability(node.hostId);
-  // Same bounded, worded wait the terminal tiles get (audit S5): a bare
+  // Same bounded, worded wait the terminal tiles get: a bare
   // spinner said nothing about which host it was waiting on and had no end.
   const hostLoad = useBoundedHostLoad({
     hostId: node.hostId,
@@ -222,7 +222,7 @@ export function ManagedCommandOutputTile(props: ManagedCommandOutputTileProps) {
   // Below the availability gate, not instead of it: the gate answers for
   // the HOST (unreachable / starting, in the shared shell vocabulary); this
   // bounds the remaining load window so a reachable host's slow read can
-  // never hold the tile on a bare skeleton (the F4 class).
+  // never hold the tile on a bare skeleton.
   if (hostLoad.kind !== "ready") {
     return (
       <TileHostLoadState

@@ -340,7 +340,7 @@ const ENGINE_LABEL: Readonly<Record<SandboxDatabaseEngine, string>> = {
 /**
  * The version of the plaintext-through-the-gateway disclosure the add forms
  * show today: the version of the consent lines below. A create that carries
- * the consent records this version on its acceptance row.
+ * the consent records this version with the acceptance.
  */
 export const SANDBOX_PLAINTEXT_DISCLOSURE_VERSION = 1;
 

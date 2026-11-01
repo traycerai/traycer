@@ -45,6 +45,7 @@ function proxied() {
             event.status.status,
             event.status.reason,
             event.status.retryCause,
+            event.status.continuity,
           );
           return;
         default:

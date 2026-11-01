@@ -18,7 +18,7 @@ interface SideHomeRowProps {
 }
 
 /**
- * Home in the vertical strip, inside Home's own menu (L-19, S-32): the same
+ * Home in the vertical strip, inside Home's own menu (L-19): the same
  * pairing as the top strip's `HomeStripSlot`. It is not a strip tab, so it
  * has no drag, no close and no Alt-digit.
  */

@@ -4,7 +4,11 @@ import {
 } from "@traycer-clients/shared/keybindings/chord-core";
 import type { BrowserViewReservedChord } from "@traycer-clients/shared/platform/browser-view";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
-import { ACTION_META, type ActionId } from "@/lib/keybindings/actions";
+import {
+  ACTION_META,
+  effectiveBinding,
+  type ActionId,
+} from "@/lib/keybindings/actions";
 import { parseModifierChord } from "@/lib/keybindings/chord";
 import { ignoreError } from "./ignore-error";
 import { DESKTOP_MENU_ITEMS } from "@/lib/windows/desktop-menu-items";
@@ -68,7 +72,7 @@ import {
  * rebound Find cannot borrow a shared token's exemption.
  *
  * The LANDING rows ride the same mechanism and keep their surface gate, which
- * on the streamed side is what round 7's rule asks for - the gate is in this
+ * on the streamed side is what the rule asks for - the gate is in this
  * function, so a canvas-armed tile is never offered them and its ⌘J stays the
  * page's. The plain APP-FORWARDED rows are surface-independent on both halves
  * alike, because the palette and epic/tab navigation have handlers wherever
@@ -105,6 +109,9 @@ const APP_FORWARDED_ACTIONS: readonly ActionId[] = [
   "tab.prev",
   "epic.next",
   "epic.prev",
+  // Talk starts and ends a voice session from wherever the person is,
+  // browsing included. Forwarded only in a build that has it.
+  "voice.talk.toggle",
 ];
 
 const NATIVE_ONLY_FORWARDED_ACTIONS: readonly ActionId[] = [
@@ -130,7 +137,7 @@ export function isNativeOnlyBrowserAction(action: ActionId): boolean {
  * (`landing-terminal-panel.tsx`), minus the ones a browser-scoped row already
  * claims - `tab.new` (⌘T) and `tab.close` (⌘W), which belong to the tile - and
  * minus the ones {@link APP_FORWARDED_ACTIONS} already covers surface-
- * independently (`tab.next` / `tab.prev`). Round 13 added three of them and
+ * independently (`tab.next` / `tab.prev`). Three of them were added and
  * the omission of the other three was invisible for exactly the reason a
  * mechanism-shaped rule always is: nothing compares this list against the
  * panel's registrations. `forwards every chord the panel registers under the
@@ -244,7 +251,9 @@ function deriveReservedBrowserChords(
     ? [...sharedActions, ...NATIVE_ONLY_FORWARDED_ACTIONS]
     : sharedActions;
   const forwarded = actions.flatMap((action): BrowserViewReservedChord[] => {
-    const chord = bindings[action];
+    // An action this build does not have reserves nothing, whatever a
+    // profile from another build stored for it.
+    const chord = effectiveBinding(bindings, action);
     if (chord === null) return [];
     // Filtered per TOKEN rather than per action, which only matters once an
     // action reserves more than one: a leader whose ⌘3 collides with a
