@@ -123,7 +123,7 @@ const STATE_LINE: Record<HostSandboxState, string> = {
   starting: "Starting. Booting from its disk.",
   destroying: "Destroying. Its disk is being deleted.",
   destroyed: "Destroyed. Its disk is gone and nothing more is billed.",
-  failed: "Failed to start. Nothing is billed for a sandbox that never woke.",
+  failed: "Failed to start.",
   released: "Suspended, files kept. The next shell starts it.",
 };
 
@@ -288,7 +288,7 @@ export function sandboxStateLine(
   if (frozen) return sandboxFrozenLine(summary?.frozenAt ?? null);
   if (state === null) return "Sandbox";
   if (state === "failed" && summary !== null && summary.failureCode !== null) {
-    return `${sandboxFailedToStart(summary.failureCode)}. Nothing is billed for a sandbox that never woke.`;
+    return `${sandboxFailedToStart(summary.failureCode)}.`;
   }
   // The control plane clears the code only when the row next wakes, so on a
   // stopped row it is a start (or stop) that did not complete: a rolled-back

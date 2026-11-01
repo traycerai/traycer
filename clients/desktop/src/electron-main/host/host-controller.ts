@@ -54,9 +54,12 @@ import {
   isTerminalRetentionExpired,
   probeAttemptHolder,
   RECOMMENDED_ATTEMPT_STALENESS_MS,
+  readHostUpdateLastAttempt,
+  writeHostUpdateLastAttempt,
   type HostUpdateAttemptIdentity,
   type HostUpdateAttemptRecord,
   type UpdateMutationCapability,
+  type HostUpdateLastAttempt,
 } from "@traycer-clients/shared/host-update";
 import type { HostUpdateAttemptPhase } from "@traycer/protocol/config/host-update-attempt";
 import { hostUpdateFailureMessage } from "@traycer-clients/shared/host-update/store-format-refusal-copy";
@@ -4710,6 +4713,11 @@ export class HostController {
             "[host-controller] download lane failed (silent - fail-open)",
             { message },
           );
+          await this.recordSilentCliFailure(
+            "host download",
+            explicitVersion ?? this.latestVersionCache,
+            err,
+          );
           this.downloadStatus =
             this.downloadStatus === null
               ? null
@@ -4858,17 +4866,7 @@ export class HostController {
             // stale against a terminal downgrade that raced the staging
             // window). A `manual` "Update now" is explicit and always applies.
             const respectHold = trigger === "launch";
-            if (await this.isPackagedMacOwned()) {
-              return this.applyStagedPackagedMac(
-                eligibleStage.fingerprint,
-                respectHold,
-              );
-            }
-            return this.applyStagedCliOwned(
-              force,
-              eligibleStage.fingerprint,
-              respectHold,
-            );
+            return this.applyEligibleStage(force, eligibleStage, respectHold);
           });
           if (outcome.kind !== "stage-fingerprint-mismatch") return outcome;
         }
@@ -4881,11 +4879,99 @@ export class HostController {
     );
   }
 
-  private async applyStagedCliOwned(
+  private async applyEligibleStage(
     force: boolean,
-    expectedStageFingerprint: string,
+    stage: { readonly version: string; readonly fingerprint: string },
     respectHold: boolean,
   ): Promise<MutationOutcome<ApplyStagedOk>> {
+    let outcome: MutationOutcome<ApplyStagedOk>;
+    try {
+      outcome = (await this.isPackagedMacOwned())
+        ? await this.applyStagedPackagedMac(stage, respectHold)
+        : await this.applyStagedCliOwned(force, stage, respectHold);
+    } catch (err) {
+      // The lane turns this into `failed` only after it has left here.
+      await this.concludeLastAttempt(
+        stage.version,
+        { kind: "failed", message: describeError(err), errorCode: null },
+        false,
+      );
+      throw err;
+    }
+    await this.concludeLastAttempt(
+      stage.version,
+      outcome,
+      outcome.kind === "ok" &&
+        outcome.value.applied &&
+        outcome.value.runningActivated,
+    );
+    return outcome;
+  }
+
+  /**
+   * The CLI's `host apply` recorded the bytes going in. What came of them is
+   * known only here: the packaged-macOS restart is Desktop's own, and readiness
+   * is waited for by nothing else. A host seen running settles it. Anything else
+   * is news only to a record still waiting on it: what the command already
+   * settled, a refusal or a no-op, stays.
+   */
+  private async concludeLastAttempt(
+    targetVersion: string,
+    outcome: MutationOutcome<unknown>,
+    hostRunning: boolean,
+  ): Promise<void> {
+    const concluded = concludedOutcome(outcome, hostRunning);
+    if (concluded === null) return;
+    if (concluded !== "complete") {
+      const recorded = await readHostUpdateLastAttempt(this.layout.rootDir);
+      if (!awaitsConclusion(recorded, targetVersion)) return;
+    }
+    await writeHostUpdateLastAttempt(
+      this.layout.rootDir,
+      {
+        command: "host apply",
+        initiator: "desktop",
+        targetVersion,
+        attemptId: null,
+        code: null,
+        outcome: concluded,
+        message: outcome.kind === "ok" ? null : outcome.message,
+      },
+      log,
+    );
+  }
+
+  /**
+   * A child that died before its terminal line recorded nothing, and its
+   * failure is known only here. One that reported, by error code, recorded it.
+   */
+  private async recordSilentCliFailure(
+    command: "host apply" | "host download",
+    targetVersion: string | null,
+    err: unknown,
+  ): Promise<void> {
+    if (err instanceof TraycerCliError && err.code !== null) return;
+    await writeHostUpdateLastAttempt(
+      this.layout.rootDir,
+      {
+        command,
+        initiator: "desktop",
+        targetVersion,
+        attemptId: null,
+        code: null,
+        outcome: "failed",
+        message: describeError(err),
+      },
+      log,
+    );
+  }
+
+  private async applyStagedCliOwned(
+    force: boolean,
+    stage: { readonly version: string; readonly fingerprint: string },
+    respectHold: boolean,
+  ): Promise<MutationOutcome<ApplyStagedOk>> {
+    const expectedStageFingerprint = stage.fingerprint;
     const prePid = (await readRunningHostIdentity(this.layout))?.pid ?? null;
     let raw: unknown;
     try {
@@ -4911,6 +4997,7 @@ export class HostController {
           unstartable,
         );
       }
+      await this.recordSilentCliFailure("host apply", stage.version, err);
       await this.reloadAfterServiceCycleFailure();
       return this.classifyApplyLikeError(err, "retry-with-force");
     }
@@ -4990,9 +5077,10 @@ export class HostController {
   }
 
   private async applyStagedPackagedMac(
-    expectedStageFingerprint: string,
+    stage: { readonly version: string; readonly fingerprint: string },
     respectHold: boolean,
   ): Promise<MutationOutcome<ApplyStagedOk>> {
+    const expectedStageFingerprint = stage.fingerprint;
     let raw: unknown;
     try {
       raw = await this.streamBundled<unknown>([
@@ -5006,6 +5094,7 @@ export class HostController {
     } catch (err) {
       // `--no-service` never busy-checks CLI-side, so any error here is a
       // genuine apply failure, not a pre-commit busy signal.
+      await this.recordSilentCliFailure("host apply", stage.version, err);
       return this.classifyApplyLikeError(err, "retry-with-force");
     }
     const result = parseApplyResult(raw);
@@ -5155,16 +5244,11 @@ export class HostController {
                 // passes `promoteReadyStage: false`, so this branch never runs
                 // implicitly, and a known-ready update at launch goes through the
                 // reconcile's own `applyStaged("launch")` guarded by --respect-hold.
-                const applied = (await this.isPackagedMacOwned())
-                  ? await this.applyStagedPackagedMac(
-                      eligibleStage.fingerprint,
-                      false,
-                    )
-                  : await this.applyStagedCliOwned(
-                      force,
-                      eligibleStage.fingerprint,
-                      false,
-                    );
+                const applied = await this.applyEligibleStage(
+                  force,
+                  eligibleStage,
+                  false,
+                );
                 if (applied.kind === "stage-fingerprint-mismatch") {
                   return applied;
                 }
@@ -5187,7 +5271,25 @@ export class HostController {
               return this.activateInstalledCliOwned(force);
             },
           );
-          if (outcome.kind !== "stage-fingerprint-mismatch") return outcome;
+          if (outcome.kind !== "stage-fingerprint-mismatch") {
+            // An activation that went busy finishes on a later try like this
+            // one, which is the only word its apply's record ever gets.
+            const installed = await readDesktopHostInstallRecord(this.layout);
+            const recorded = await readHostUpdateLastAttempt(
+              this.layout.rootDir,
+            );
+            if (
+              installed !== null &&
+              awaitsConclusion(recorded, installed.version)
+            ) {
+              await this.concludeLastAttempt(
+                installed.version,
+                outcome,
+                outcome.kind === "ok" && outcome.value.activated,
+              );
+            }
+            return outcome;
+          }
         }
         return {
           kind: "deferred",
@@ -6763,6 +6865,37 @@ export class HostController {
     }
     return outcome;
   }
+}
+
+/** What an apply or activation came to, or `null` when it says nothing new. */
+function concludedOutcome(
+  outcome: MutationOutcome<unknown>,
+  hostRunning: boolean,
+): "complete" | "parked" | "failed" | null {
+  switch (outcome.kind) {
+    case "ok":
+      return hostRunning ? "complete" : null;
+    case "busy":
+    case "deferred":
+      return "parked";
+    case "failed":
+    case "installed-not-converged":
+      return "failed";
+    case "stage-fingerprint-mismatch":
+      return null;
+  }
+}
+
+/** A `host apply` of this version whose bytes have not been seen running. */
+function awaitsConclusion(
+  recorded: HostUpdateLastAttempt | null,
+  targetVersion: string,
+): boolean {
+  return (
+    recorded?.command === "host apply" &&
+    recorded.targetVersion === targetVersion &&
+    (recorded.outcome === "applied" || recorded.outcome === "parked")
+  );
 }
 
 function describeError(err: unknown): string {

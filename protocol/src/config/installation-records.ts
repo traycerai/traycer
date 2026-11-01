@@ -234,6 +234,12 @@ export const cliInstallSourceSchema = lazySchema(() =>
 );
 export type CliInstallSource = z.infer<typeof cliInstallSourceSchema>;
 
+// THE WIRE SHAPE, and it is frozen. This schema is the `cliManifest` of
+// `host.getInstallationInfo`, a released host->client slot at @1.0 and @1.1,
+// so a property added here diverges from every released peer at an
+// already-released version - a default does not save it, because a released
+// peer's payload simply never carries the key. Growth that only a local
+// reader needs belongs on the on-disk schema below, never here.
 export const cliPendingUpgradeSchema = lazySchema(() =>
   z.object({
     version: z.string(),
@@ -243,6 +249,35 @@ export const cliPendingUpgradeSchema = lazySchema(() =>
   }),
 );
 export type CliPendingUpgrade = z.infer<typeof cliPendingUpgradeSchema>;
+
+// THE ON-DISK SHAPE. Same file, read only by the process that owns it, so it
+// may carry fields the wire does not. `readStoredCliInstallManifestAtPath`
+// uses this one; the wire response keeps the frozen schema above and zod
+// drops the extra key on its way out, which is the downgrade bridge the
+// compatibility gate asks for rather than a new major of a released method.
+//
+// `allowDowngrade`: whether the person asked for THIS version by name with
+// `--allow-downgrade`. It has to be persisted because the publish happens in
+// a later process - staging defers the swap when the live binary is locked,
+// and by the time `host restart` publishes it, the only thing left of the
+// request is this file. Without the bit, a consented downgrade and a
+// pre-floor accidental one (an older `cli upgrade` that staged the feed's
+// stable over an installed prerelease) are the same two versions in the same
+// two fields, and no publisher can honour one while refusing the other.
+//
+// Defaulted rather than required, which covers both writers that omit it: an
+// older CLI that predates the field, and desktop's reconcile, which stages
+// only when its bundled build is NEWER and so has no downgrade to consent
+// to. FALSE is the safe direction - an unconsented backwards publish is the
+// defect, and a consented one the person can always ask for again.
+export const cliPendingUpgradeOnDiskSchema = lazySchema(() =>
+  cliPendingUpgradeSchema.extend({
+    allowDowngrade: z.boolean().default(false),
+  }),
+);
+export type CliPendingUpgradeOnDisk = z.infer<
+  typeof cliPendingUpgradeOnDiskSchema
+>;
 
 /** The persisted per-slot CLI manifest; package-manager fallbacks stay CLI-owned. */
 export const storedCliInstallManifestSchema = lazySchema(() =>
@@ -256,4 +291,14 @@ export const storedCliInstallManifestSchema = lazySchema(() =>
 );
 export type StoredCliInstallManifest = z.infer<
   typeof storedCliInstallManifestSchema
+>;
+
+/** The same manifest as read from disk, with the fields only its owner needs. */
+export const storedCliInstallManifestOnDiskSchema = lazySchema(() =>
+  storedCliInstallManifestSchema.extend({
+    pendingUpgrade: cliPendingUpgradeOnDiskSchema.nullable().default(null),
+  }),
+);
+export type StoredCliInstallManifestOnDisk = z.infer<
+  typeof storedCliInstallManifestOnDiskSchema
 >;

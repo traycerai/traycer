@@ -18,6 +18,7 @@ import type {
   ReasoningLevel,
   ServiceTier,
 } from "@/components/home/data/landing-options";
+import { usePaneVisible } from "@/components/epic-tabs/pane-visibility-context";
 import { useSurfaceActivity } from "@/components/home/composer/surface-activity-hooks";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import {
@@ -43,6 +44,7 @@ import {
   serviceTierFromChatRunSettings,
 } from "@/lib/composer/chat-run-settings";
 import { useTeamSandboxHarnessGate } from "@/hooks/sandboxes/use-team-sandbox-harness-blocked";
+import { returnedSandboxRestoredOn } from "@/lib/sandboxes/returned-sandbox";
 import { useSandboxHostConfiguration } from "@/hooks/sandboxes/use-on-team-sandbox";
 import { useSandboxTraycerModels } from "@/hooks/sandboxes/use-sandbox-traycer-models-query";
 import { useStagedSandboxStore } from "@/stores/composer/staged-sandbox-store";
@@ -161,6 +163,7 @@ export function useComposerToolbarStore(
     sendsToRestingSandbox,
   } = catalog;
   const activityEnabled = useSurfaceActivity();
+  const paneVisible = usePaneVisible();
   const defaultPermission = useSettingsStore((s) => s.defaultPermission);
   const defaultSelection = useSettingsStore((s) => s.defaultSelection);
   const defaultReasoning = useSettingsStore((s) => s.defaultReasoning);
@@ -297,9 +300,22 @@ export function useComposerToolbarStore(
   const modelsLoaded = modelsData !== undefined;
   const keepsUnavailablePick =
     useSandboxHostConfiguration(hostId) !== null || sandboxRunTarget !== null;
+  // Before the catalog push below: a stage's push reads these to keep the pick
+  // on screen. Read here, not in render: a restore marks its stage after
+  // writing it, and the mark lives outside React. Only a composer on screen
+  // has a shown pick: retained drafts share the window's surface, and one
+  // showing nothing keeps its own. On screen, not focused: a split's other
+  // side is unfocused and still showing.
   useEffect(() => {
-    store.setState({ sandboxRunTarget });
-  }, [store, sandboxRunTarget]);
+    store.setState({
+      sandboxRunTarget,
+      stageKeepsShownPick:
+        paneVisible &&
+        sandboxRunTarget === "staged" &&
+        stagedSurfaceKey !== null &&
+        !returnedSandboxRestoredOn(stagedSurfaceKey),
+    });
+  }, [paneVisible, store, sandboxRunTarget, stagedSurfaceKey]);
   useEffect(() => {
     store.getState().setCatalog({
       hostId,
@@ -323,6 +339,8 @@ export function useComposerToolbarStore(
     chatLineCarriesAutoMode,
     ultracodeCarried,
     keepsUnavailablePick,
+    // The push re-derives a stage's model hold on its own when only this moved.
+    sandboxRunTarget,
   ]);
 
   // The palette commits too, so it is held to the same team-sandbox rule as the

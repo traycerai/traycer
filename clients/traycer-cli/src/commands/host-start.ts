@@ -48,6 +48,7 @@ import {
   findCrashReportSince,
   isWindowsSessionEndExit,
   prepareCrashReportsDir,
+  StderrCaptureBuffer,
 } from "../host/crash-diagnostics";
 import {
   CRASH_REPORT_SCAN_TIMEOUT_MS,
@@ -444,6 +445,9 @@ const RESTART_OWED_EXIT_CODE = 77;
  * (`persistChildExit`).
  */
 const WINDOWS_REQUESTED_KILL_EXIT_CODE = 0xffffffff;
+
+/** Enough for the line's steps; the marker stays one short line regardless. */
+const FORCED_SHUTDOWN_MARKER_MAX_CHARS = 1_000;
 
 /**
  * A stop announced itself while this supervisor sat in the admission wait.
@@ -2430,9 +2434,10 @@ export async function runHostStart(
         // `host download` holds the update-attempt execution segment across its
         // whole transfer (documented in CONTENDER_INVENTORY.md; the inner
         // cli-lock is already narrow). If the host child crashes during that
-        // window, the supervisor's relaunch takes `waitMs: 0` and is refused
-        // `busy` - mutual exclusion on the attempt lock is unconditional on
-        // admission, decided before `dispositionFor` is ever consulted. Exiting
+        // window, the supervisor's relaunch waits `SUPERVISOR_ADMISSION_WAIT_MS`
+        // and is refused `busy` if the transfer outlasts it - mutual exclusion
+        // on the attempt lock is unconditional on admission, decided before
+        // `dispositionFor` is ever consulted. Exiting
         // 0 then tells the service manager the job finished successfully, and
         // the shipped LaunchAgent sets `KeepAlive.SuccessfulExit = false`
         // (inject-host-launch-agent.cjs), which means launchd relaunches on a
@@ -3009,6 +3014,17 @@ export async function runHostStart(
         stderrEnded,
       });
       disposeAttemptStderr(child.stderr);
+      // The relaunch below is the same either way; this only says it followed
+      // a teardown that did not finish.
+      const forcedShutdown = stderrTee.capture.forcedShutdownLine();
+      if (forcedShutdown !== null) {
+        logger.warn("Host child did not finish its shutdown", {
+          environment: opts.environment,
+          exitCode: ending.code,
+          attemptId,
+          forcedShutdown,
+        });
+      }
       // Same forgiveness rule the abnormal path applies below, and it has to be
       // applied HERE too because this branch never reaches it. A host that
       // consumed part of the budget, then ran past `SUSTAINED_UPTIME_RESET_MS`,
@@ -4334,6 +4350,45 @@ async function persistChildExit(input: {
       });
     }
     return outcome;
+  }
+  // A forced stop keeps the code its intent chose, so only its own line tells
+  // it from a clean one. Recorded as `killed`, the phase of a host that was
+  // ended rather than one that finished; it stays not `abnormal`, so what
+  // happens next is exactly what a clean exit gets: no relaunch and no crash
+  // budget. The line goes on the marker because it names the step that hung.
+  const forcedShutdown =
+    code === 0 ? input.stderrTee.capture.forcedShutdownLine() : null;
+  if (forcedShutdown !== null) {
+    logger.warn("Host child did not finish its shutdown", {
+      environment,
+      exitCode: code,
+      attemptId,
+      forcedShutdown,
+    });
+    return persistTerminalMarker({
+      deps,
+      logger,
+      environment,
+      phase: "killed",
+      fields: markerFields(
+        attemptId,
+        supervisorPid,
+        {
+          shell: undefined,
+          args: undefined,
+          bundle,
+          exitCode: code,
+          signal: undefined,
+          error: StderrCaptureBuffer.toSingleLine(
+            forcedShutdown,
+            FORCED_SHUTDOWN_MARKER_MAX_CHARS,
+          ),
+        },
+        null,
+      ),
+      exitCode: 0,
+      abnormal: false,
+    });
   }
   if (code === null || code === 0) {
     logger.info("Host child exited cleanly", {

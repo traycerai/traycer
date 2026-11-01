@@ -116,9 +116,6 @@ function creatorName(input: SandboxDetailsInput): string | null {
 /** What starts Automations: its row is made by the first shell opened on it. */
 const AUTOMATIONS_STARTER = "the first shell";
 
-const NOTHING_BILLED_NEVER_WOKE =
-  "Nothing is billed for a sandbox that never woke";
-
 function starter(input: SandboxDetailsInput): string | null {
   if (input.summary.kind === "automation") return AUTOMATIONS_STARTER;
   if (input.summary.burst) return "An agent";
@@ -206,7 +203,7 @@ function statusRows(input: SandboxDetailsInput): SandboxDetailsRow[] {
   if (summary.state === "failed") {
     rows.push({
       label: "Failed",
-      value: `${sandboxFailedToStart(summary.failureCode)} · ${NOTHING_BILLED_NEVER_WOKE}`,
+      value: sandboxFailedToStart(summary.failureCode),
     });
   }
   if (summary.guestConfigured === false) {
@@ -310,9 +307,7 @@ function historyEntryEvent(
   const ended = entry.state === "destroying" || entry.state === "destroyed";
   const cost = formatSandboxCost(entry.millicredits);
   let span: readonly (string | null)[];
-  if (entry.state === "failed") {
-    span = [cause, NOTHING_BILLED_NEVER_WOKE];
-  } else if (ended) {
+  if (entry.state === "failed" || ended) {
     span = [cause];
   } else if (entry.untilAt === null) {
     span = [cause, resting ? "resting from then" : "awake from then"];

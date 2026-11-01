@@ -98,6 +98,7 @@ import {
   useEpicAttachmentClient,
   useEpicAttachEnvironment,
 } from "@/hooks/epic/use-epic-attach-environment-mutation";
+import { useStageFallbackHostLine } from "@/hooks/sandboxes/use-stage-fallback-host-line";
 import { useHostOwnerTeamId } from "@/hooks/sandboxes/use-on-team-sandbox";
 import { useResolvedWorkspaceFolders } from "@/hooks/workspace/use-resolved-workspace-folders-query";
 import {
@@ -225,7 +226,10 @@ import {
   type ComposerMode,
 } from "@/components/home/data/landing-options";
 import { useComposerToolbarStore } from "@/components/home/hooks/use-composer-toolbar-store";
-import { catalogSettledFor } from "@/stores/composer/composer-toolbar-store";
+import {
+  catalogSettledFor,
+  chipModelName,
+} from "@/stores/composer/composer-toolbar-store";
 import { fallbackSeedSource } from "@/lib/composer/composer-seed-source";
 import type { TerminalAgentLaunch } from "@/components/home/hooks/use-landing-composer-actions";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -1136,6 +1140,15 @@ export function NewConversationModalBody(props: {
       sendsToRestingSandbox: false,
     },
   );
+  // A stage's kept pick goes to this modal's draft, as its own emit does,
+  // and skips the harness memory the emit also records. A layout effect: the
+  // toolbar's catalog push that keeps the pick is a passive effect of the same
+  // commit, and must find this installed.
+  useLayoutEffect(() => {
+    toolbarStore.setState({
+      onShownPickKept: (settings) => setSettings(epicId, settings),
+    });
+  }, [epicId, setSettings, toolbarStore]);
   const harnessId = useStore(
     toolbarStore,
     (state) => state.selection.harnessId,
@@ -1269,6 +1282,12 @@ export function NewConversationModalBody(props: {
     draftId: null,
   });
   const attachmentPending = isAttachmentIngestPending(paste);
+  const pickedModelSlug = useStore(
+    toolbarStore,
+    (state) => state.values.selection.modelSlug,
+  );
+  const chipModel = useStore(toolbarStore, chipModelName);
+  const chooseAnotherHostLabel = useStageFallbackHostLine(resolvedHostId);
   const pickedHarnessId = useStore(
     toolbarStore,
     (state) => state.values.selection.harnessId,
@@ -1285,6 +1304,9 @@ export function NewConversationModalBody(props: {
     hostId: resolvedHostId,
     harnessId,
     pickedHarnessId,
+    pickedModelSlug,
+    chipModel,
+    chooseAnotherHostLabel,
     active: chatComposerActive,
     stagedAhead: workspaceGate.stagedAhead,
     stagedSurfaceKey: stagingSurfaceKey(sandboxStaging),
@@ -1377,6 +1399,7 @@ export function NewConversationModalBody(props: {
     ownerId: tabId,
     // The draft is the epic's, so any tab's body holds the one that sent.
     claimsSend: true,
+    chooseAnotherHostLabel,
   });
   const composerDisabledHint =
     mutationDisabledHint(permissionRole, isDisconnected, "make changes") ??
@@ -2609,7 +2632,7 @@ function useStagedTaskAttachment(input: {
   const attachClient = useEpicAttachmentClient(
     input.sessionClient ?? input.placementClient,
   );
-  const attachEnvironment = useEpicAttachEnvironment(attachClient);
+  const attachEnvironment = useEpicAttachEnvironment(attachClient, "modal");
   const attachEnvironmentAsync = attachEnvironment.mutateAsync;
   const stageAttachmentRef = useRef<StagedSandbox | null>(null);
   // A team's sandbox can serve this task only after the person's own host
@@ -2782,6 +2805,9 @@ function usePlacementAgentGates(input: {
   readonly hostId: string | null;
   readonly harnessId: GuiHarnessId | null;
   readonly pickedHarnessId: GuiHarnessId | null;
+  readonly pickedModelSlug: string;
+  readonly chipModel: string;
+  readonly chooseAnotherHostLabel: string;
   readonly active: boolean;
   readonly stagedAhead: boolean;
   readonly stagedSurfaceKey: string | null;
@@ -2805,7 +2831,10 @@ function usePlacementAgentGates(input: {
   });
   const stagedSignInCheck = useStagedSendSignInCheck({
     harnessId: input.pickedHarnessId,
+    modelSlug: input.pickedModelSlug,
+    modelName: input.chipModel,
     active: active && stagedAhead,
+    chooseAnotherHostLabel: input.chooseAnotherHostLabel,
     onOpenTerminalInstead: input.onOpenTerminalInstead,
     onChooseAnotherHost: input.onChooseAnotherHost,
   });

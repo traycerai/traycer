@@ -33,6 +33,7 @@ function presentationFor(value: ServiceTier, selectedModel: ModelOption) {
   return deriveHarnessModelPickerPresentation({
     selection: SELECTION,
     models: [],
+    stagedModelName: "",
     reasoningFooter: null,
     serviceTierFooter: { selectedModel, value, onChange: vi.fn() },
     harnessesPending: false,

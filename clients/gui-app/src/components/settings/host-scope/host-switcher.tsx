@@ -36,6 +36,7 @@ import {
   groupComposerHostOptions,
   groupHostOptions,
   hostOptionKindLabel,
+  hostRowTitle,
   hostRowSurfaceState,
   hostOptionStatusWord,
   isHostOptionSelectable,
@@ -65,7 +66,6 @@ import {
   NO_MATCH_ELSEWHERE_LINE,
   SANDBOXES_YOU_STARTED_LABEL,
   SEARCH_HOSTS_PLACEHOLDER,
-  THIS_COMPUTER,
   YOURS_GROUP_LABEL,
   collapsedConfigurationsLabel,
   configurationLabel,
@@ -96,19 +96,6 @@ function hostSwitcherLabel(
   return name === null
     ? `${subject}: none selected`
     : `${subject}: ${name}${status === null ? "" : `, ${status}`}`;
-}
-
-/**
- * What a host is called on the chip and its row. The composer and in-task
- * pickers call the machine this app runs on `This computer`, its own name
- * moving to the row's sub-line, so it reads beside the sandbox rows; every
- * other list names it, and so does a build without sandboxes
- * (`unreleased-features.ts`).
- */
-function hostRowTitle(host: HostScopeOption, composer: boolean): string {
-  return composer && host.isLocalMachine && UNRELEASED_FEATURES_ENABLED
-    ? THIS_COMPUTER
-    : host.name;
 }
 
 export type HostSwitcherActionKind = "add-host" | "manage-hosts";

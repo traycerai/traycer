@@ -68,6 +68,12 @@ vi.mock(
   }),
 );
 
+// Reads the task's sandbox through a host runtime this harness doesn't mount,
+// and it is no part of what the canvas seeds or measures.
+vi.mock("@/components/sandboxes/rested-task-message-line", () => ({
+  RestedTaskMessageLine: () => null,
+}));
+
 vi.mock("@/lib/epic-selectors", () => ({
   useEpicHasArtifactRecords: () => false,
 }));

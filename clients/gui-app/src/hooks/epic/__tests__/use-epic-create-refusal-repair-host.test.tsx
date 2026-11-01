@@ -383,6 +383,26 @@ describe("a second refusal for the same host while the dialog is mounted", () =>
     expect(description).not.toContain(REBIND_REFUSAL.remedy);
     expect(description).not.toContain(REFUSAL_A.message);
   });
+
+  /**
+   * The rebind warning used to go in `cascadeSummary`, which the confirm dialog
+   * wraps in "This will also delete … nested under it" - so the warning rendered
+   * as a claim about deleting a paragraph of prose. It belongs in the
+   * description, where it reads as the sentence it is.
+   */
+  it("states the rebind warning as prose, not as a cascade count", () => {
+    openLocalStoreRepair({ hostId: PLACEMENT_HOST_ID, refusal: REFUSAL_A });
+    render(createElement(LocalStoreRepairDialogHost));
+
+    const dialog = screen.getByRole("dialog");
+    expect(dialog.textContent).toContain(
+      "Rebinding claims this data directory for this host.",
+    );
+    expect(dialog.textContent).not.toContain("This will also delete");
+    expect(dialog.querySelector('[data-testid="confirm-cascade-meta"]')).toBe(
+      null,
+    );
+  });
 });
 
 describe("a missing-attachment-bytes refusal retries once under the same idempotency key", () => {

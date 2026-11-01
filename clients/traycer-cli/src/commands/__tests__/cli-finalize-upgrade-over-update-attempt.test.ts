@@ -255,6 +255,8 @@ function sampleCliManifestWithPendingUpgrade(): CliInstallManifest {
       stagedBinaryPath: "/tmp/traycer-cli.staged",
       stagedAt: "2026-01-01T00:00:00.000Z",
       reason: "awaiting-service-restart",
+      // 2.1.0 over 1.9.0 - an upgrade, so there is no consent in play.
+      allowDowngrade: false,
     },
   };
 }

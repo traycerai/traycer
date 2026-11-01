@@ -50,6 +50,7 @@ import {
   stageVerifiedSource,
 } from "./install";
 import { hashFileSha256 } from "./sha256";
+import { installedFloorVersion } from "../host/store-format-floor";
 import { refuseOlderHostWhileDataMoved } from "./moved-data-root-guard";
 import { invalidateAsideDir } from "./aside-dirs";
 import { renameWithRetry } from "./rename-retry";
@@ -1020,14 +1021,14 @@ export async function resolveUpdatePlan(
   if (request.intent === "activate") return { kind: "activate", identity };
 
   if (request.intent === "continue") {
-    // A park can outlive a move of the data folder (the migration does not
-    // look at update attempts), and its target can be below the install (a
-    // downgrade park) or a registry build over a `local-*` one. A park whose
-    // swap already happened targets the installed version and passes.
+    // A park can meet this guard after its CLI was replaced by one that needs
+    // a newer host. That floor reads no install, so it refuses a park whose
+    // swap already happened too. The install floor is judged here as well, and
+    // a target at the installed version passes it.
     refuseOlderHostWhileDataMoved({
       command: "host update",
       environment: opts.environment,
-      installedVersion: installed.version,
+      installedVersion: installedFloorVersion(installed),
       targetVersion: request.targetVersion,
     });
     if (!request.needsTransfer) {
@@ -1095,7 +1096,7 @@ export async function resolveUpdatePlan(
       refuseOlderHostWhileDataMoved({
         command: "host update",
         environment: opts.environment,
-        installedVersion: installed.version,
+        installedVersion: installedFloorVersion(installed),
         targetVersion,
       });
       return { kind: "downgrade", targetVersion, identity };
@@ -1132,7 +1133,7 @@ export async function resolveUpdatePlan(
   refuseOlderHostWhileDataMoved({
     command: "host update",
     environment: opts.environment,
-    installedVersion: installed.version,
+    installedVersion: installedFloorVersion(installed),
     targetVersion,
   });
   if (

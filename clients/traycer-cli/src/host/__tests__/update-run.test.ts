@@ -1,6 +1,7 @@
+import { spawnSync } from "node:child_process";
 import { rmSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   afterAll,
@@ -535,9 +536,13 @@ vi.mock("../update-recovery-evidence", async (importOriginal) => {
 });
 
 import {
+  acquireUpdateAttemptLock,
+  readHostUpdateLastAttempt,
   readUpdateAttemptRecord,
+  updateAttemptLockPath,
   updateAttemptRecordPath,
   type HostUpdateAttemptRecord,
+  type UpdateAttemptLockHandle,
 } from "@traycer-clients/shared/host-update";
 import { encodeInstallGeneration } from "@traycer-clients/shared/host-version/install-generation";
 import {
@@ -566,6 +571,8 @@ import {
 } from "../../manifest/host-staged";
 import { hostStagedDir } from "../../store/paths";
 import { CLI_ERROR_CODES, CliError, cliError } from "../../runner/errors";
+import { probeAttemptHolder } from "@traycer-clients/shared/host-update";
+import { describeUpdateLockHolder } from "../update-contender";
 import { SERVICE_KEPT_DISABLED_WARNING } from "../../service/registration-owner";
 import { SERVICE_TASK_NOT_OWNED_MESSAGE } from "../../service/platforms/windows-task-gate";
 import type { ILogger } from "../../logger";
@@ -578,6 +585,7 @@ import type {
   RunningEvidenceDiagnosis,
 } from "../update-recovery-evidence";
 import type { HostPidMetadata } from "../pid-metadata";
+import { withBoundedWaitProgress } from "../../runner/bounded-wait-progress";
 
 const ENVIRONMENT = "production";
 const roots: string[] = [];
@@ -842,6 +850,7 @@ interface RunOverrides {
   readonly registryClient?: RegistryClient | null;
   readonly env?: Readonly<Record<string, string | undefined>>;
   readonly onProgress?: (info: ProgressInfo) => void;
+  readonly onUpdateLockWait?: (notice: string) => void;
 }
 
 let logger: ILogger;
@@ -851,6 +860,8 @@ function runArgs(overrides: RunOverrides): HostUpdateRunArgs {
     environment: ENVIRONMENT,
     logger,
     onProgress: overrides.onProgress ?? ((): void => {}),
+    onUpdateLockWait: overrides.onUpdateLockWait ?? ((): void => {}),
+    lockWaitMs: 40,
     versionRequest: overrides.versionRequest ?? null,
     allowDowngrade: overrides.allowDowngrade ?? false,
     force: overrides.force ?? false,
@@ -4920,9 +4931,8 @@ describe("ported: activation debt (installed-up-to-date short-circuit)", () => {
     mocks.disk.current = {
       state: "failed",
       error: "an older run failed",
-      // NAMES the observed version. `clearStaleFailedMarker` applies the same
-      // string rule the host's `isStaleUpdateProgress` does: a `failed` is
-      // stale when the version it names IS the one now running.
+      // NAMES the observed version. `clearStaleFailedMarker` clears a `failed`
+      // only when the version it names IS the one now running.
       targetVersion: "2.0.0",
       updatedAt: "2026-01-01T00:00:00.000Z",
       writerId: null,
@@ -6216,6 +6226,108 @@ describe("acceptance: cells with no legacy ancestor", () => {
     expect(mocks.disk.current).toBeNull();
   });
 
+  it("a recovery that settled the attempt failed is recorded failed, not refused", async () => {
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    const crashed = await crashAtRestarting("2.0.0");
+    await seedInstalled("3.0.0");
+    world.latest = "3.0.0";
+    world.runningVersion = "3.0.0";
+
+    const outcome = await runUpdate({
+      intent: "continue",
+      expectAttempt: crashed.attemptId,
+    }).catch((err: unknown) => err);
+
+    const settled = await requireRecord();
+    expect(settled.phase).toBe("failed");
+    expect(await readHostUpdateLastAttempt(currentHome.value)).toMatchObject({
+      outcome: "failed",
+      attemptId: crashed.attemptId,
+      targetVersion: "2.0.0",
+      message: settled.error?.message,
+    });
+    expect(outcome).toMatchObject({ releasedReason: "recovered-failed" });
+  });
+
+  it("a recovery that settled the attempt failed with no host running still says so", async () => {
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    const crashed = await crashAtRestarting("2.0.0");
+    await seedInstalled("3.0.0");
+    world.latest = "3.0.0";
+    world.runningVersion = null;
+
+    await expect(
+      runUpdate({ intent: "continue", expectAttempt: crashed.attemptId }),
+    ).rejects.toMatchObject({ code: CLI_ERROR_CODES.HOST_NOT_RUNNING });
+
+    expect((await requireRecord()).phase).toBe("failed");
+    expect(await readHostUpdateLastAttempt(currentHome.value)).toMatchObject({
+      outcome: "failed",
+      attemptId: crashed.attemptId,
+    });
+  });
+
+  it("a recovery that settled the attempt complete still says so when the host is then gone", async () => {
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    const crashed = await crashAtRestarting("2.0.0");
+    world.runningVersion = "2.0.0";
+    mocks.readHostPidMetadata.mockImplementation(async () =>
+      (await readRecord())?.phase === "complete" ? null : pidMetadata("2.0.0"),
+    );
+
+    await expect(
+      runUpdate({ intent: "continue", expectAttempt: crashed.attemptId }),
+    ).rejects.toMatchObject({ code: CLI_ERROR_CODES.HOST_NOT_RUNNING });
+
+    expect(await readHostUpdateLastAttempt(currentHome.value)).toMatchObject({
+      outcome: "complete",
+      attemptId: crashed.attemptId,
+    });
+  });
+
+  it("a recovery that failed names the attempt's version, not the host's", async () => {
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    const crashed = await crashAtRestarting("2.0.0");
+    await seedInstalled("3.0.0");
+    world.latest = "3.0.0";
+    world.runningVersion = "3.0.0";
+
+    await runUpdate({
+      intent: "activate",
+      expectAttempt: crashed.attemptId,
+    });
+
+    expect(await readHostUpdateLastAttempt(currentHome.value)).toMatchObject({
+      outcome: "failed",
+      attemptId: crashed.attemptId,
+      targetVersion: "2.0.0",
+    });
+  });
+
+  it("an attempt closed on the way to nothing-to-do is not this run's outcome", async () => {
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    await crashAtRestarting("2.0.0");
+    await seedInstalled("3.0.0");
+    world.latest = "3.0.0";
+    world.runningVersion = "3.0.0";
+
+    const outcome = await runUpdate({});
+
+    expect(outcome.releasedReason).toBe("nothing-to-do-stale-attempt-closed");
+    expect((await requireRecord()).phase).toBe("failed");
+    expect(await readHostUpdateLastAttempt(currentHome.value)).toMatchObject({
+      outcome: "no-op",
+      targetVersion: "3.0.0",
+      attemptId: null,
+      message: null,
+    });
+  });
+
   it("Q26: an `updating` marker is LEFT ALONE when the closed record settled `failed`", async () => {
     // THE ROW THAT CHANGED SIDES, and it is the reason arm 2 is keyed on the
     // record rather than the reason string (cold review C).
@@ -6928,7 +7040,7 @@ describe("ported: the explicit request's version binding (#1752 round 14)", () =
     // a non-failure terminal the GUI's live projection maps to `idle` and its
     // record leg drops - and this run's own `updating` marker is withdrawn by
     // CONDITIONAL delete. A `failed` here would name 2.0.0 over a host at
-    // 3.0.0, and no stale rule clears a `failed` whose target is not running.
+    // 3.0.0, and this CLI clears a `failed` only when its target is running.
     await seedInstalled("1.0.0");
     world.runningVersion = "1.0.0";
     mocks.downloadAndStageHostInSegment.mockImplementation(
@@ -8733,6 +8845,20 @@ describe("runHostUpdate over a service registration its owner disabled", () => {
     ).toBeGreaterThan(0);
   });
 
+  it("records the deferral as a park with no attempt", async () => {
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    mocks.ownServiceDisabled.mockResolvedValue({ kind: "disabled" });
+
+    await expect(runUpdate({})).rejects.toBeInstanceOf(CliError);
+
+    expect(await readHostUpdateLastAttempt(currentHome.value)).toMatchObject({
+      outcome: "parked",
+      code: CLI_ERROR_CODES.SERVICE_REGISTRATION_DISABLED,
+      attemptId: null,
+    });
+  });
+
   it("refuses again on every run while it stays disabled, and applies once it is enabled (the release)", async () => {
     await seedInstalled("1.0.0");
     await seedStaged("2.0.0");
@@ -8845,5 +8971,469 @@ describe("runHostUpdate over a service registration its owner disabled", () => {
       code: "service-start-failed",
       phase: "verifying",
     });
+  });
+});
+
+describe("runHostUpdate - the update lock at entry", () => {
+  const DESKTOP_DOWNLOAD = "The Traycer app is downloading a host update";
+
+  async function holdLock(reason: string): Promise<UpdateAttemptLockHandle> {
+    const held = await acquireUpdateAttemptLock({
+      hostHomeDir: currentHome.value,
+      reason,
+      waitMs: 0,
+      pollIntervalMs: 25,
+    });
+    if (held.kind !== "acquired") throw new Error("the lock was not free");
+    return held.handle;
+  }
+
+  it("a lock held before the command started: the word comes first, nothing is planned, and the refusal names the holder", async () => {
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    const handle = await holdLock("desktop:host-download");
+    const notices: string[] = [];
+    try {
+      // An unreachable registry: a plan that ran would end on ITS error, so
+      // the code below proves the plan never started.
+      await expect(
+        runUpdate({
+          registryClient: unreachableRegistry(),
+          onUpdateLockWait: (notice) => notices.push(notice),
+        }),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.CLI_LOCK_BUSY,
+        exitCode: 75,
+        message: expect.stringContaining(DESKTOP_DOWNLOAD),
+      });
+    } finally {
+      await handle.release();
+    }
+    expect(notices).toEqual([expect.stringContaining(DESKTOP_DOWNLOAD)]);
+    expect(notices[0]).toContain("traycer host status");
+    expect(mocks.downloadAndStageHostInSegment).not.toHaveBeenCalled();
+    expect(mocks.applyHostWithAttempt).not.toHaveBeenCalled();
+  });
+
+  it("a refused run leaves the holder's record alone and answers its dispatcher", async () => {
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    mocks.applyHostWithAttempt.mockRejectedValue(busyError());
+    await expect(runUpdate({})).rejects.toBeInstanceOf(CliError);
+    const before = await readFile(
+      updateAttemptRecordPath(currentHome.value),
+      "utf8",
+    );
+
+    const handle = await holdLock("host-update");
+    try {
+      await expect(
+        runUpdate({ ackNonce: "nonce-abcdefgh" }),
+      ).rejects.toMatchObject({ code: CLI_ERROR_CODES.CLI_LOCK_BUSY });
+    } finally {
+      await handle.release();
+    }
+
+    expect(
+      await readFile(updateAttemptRecordPath(currentHome.value), "utf8"),
+    ).toBe(before);
+    await expectAck("nonce-abcdefgh", {
+      kind: "no-attempt",
+      reason: "refused-e-cli-lock-busy",
+    });
+  });
+
+  it("a holder that lets go during the wait: the update runs, and the word came before the transfer", async () => {
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    const handle = await holdLock("host-ensure");
+    const order: string[] = [];
+    const { downloadAndStageHostInSegment } = mocks;
+    const transfer = downloadAndStageHostInSegment.getMockImplementation();
+    downloadAndStageHostInSegment.mockImplementation(
+      async (...callArgs: readonly unknown[]) => {
+        order.push("transfer");
+        return transfer?.(...callArgs);
+      },
+    );
+
+    await runUpdate({
+      onUpdateLockWait: () => {
+        order.push("word");
+        void handle.release();
+      },
+    });
+
+    expect(order).toEqual(["word", "transfer"]);
+    expect((await requireRecord()).phase).toBe("complete");
+  });
+
+  it("an update that starts during the plan is announced before the claim waits on it", async () => {
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    const registry = fakeRegistry();
+    let handle: UpdateAttemptLockHandle | null = null;
+    const notices: string[] = [];
+
+    await expect(
+      runUpdate({
+        registryClient: {
+          ...registry,
+          fetchManifest: async () => {
+            handle = await holdLock("desktop:host-apply");
+            return registry.fetchManifest();
+          },
+        },
+        onUpdateLockWait: (notice) => notices.push(notice),
+      }),
+    ).rejects.toMatchObject({ code: CLI_ERROR_CODES.CLI_LOCK_BUSY });
+
+    await (handle as UpdateAttemptLockHandle | null)?.release();
+    expect(notices).toEqual([
+      expect.stringContaining("The Traycer app is installing a host update"),
+    ]);
+  });
+
+  it("a lock left by a dead process is no contender: no word, and the update runs", async () => {
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    const dead = spawnSync(process.execPath, ["-e", ""]);
+    await writeFile(
+      updateAttemptLockPath(currentHome.value),
+      JSON.stringify({
+        pid: dead.pid,
+        reason: "host-update",
+        startedAt: "2026-01-01T00:00:00.000Z",
+        hostname: hostname(),
+        token: "dead-holder",
+      }),
+    );
+    const onUpdateLockWait = vi.fn();
+
+    await runUpdate({ onUpdateLockWait });
+
+    expect(onUpdateLockWait).not.toHaveBeenCalled();
+    expect((await requireRecord()).phase).toBe("complete");
+  });
+
+  it("the command says it past --no-progress in a terminal, and on the progress stream in JSON", async () => {
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    world.latest = "1.0.0";
+    const args = {
+      allowDowngrade: false,
+      force: false,
+      acceptStoreFormatLoss: false,
+      ackNonce: null,
+      intent: null,
+      expectAttempt: null,
+      expectGeneration: null,
+      expectSequence: null,
+    };
+
+    const handle = await holdLock("desktop:host-download");
+    const terminal = shellContext();
+    const humanRequired = vi.fn(() => {
+      void handle.release();
+    });
+    await buildHostUpdateCommand(args)({
+      ...terminal,
+      output: { ...terminal.output, humanRequired },
+    });
+    expect(humanRequired).toHaveBeenCalledWith(
+      expect.stringContaining(DESKTOP_DOWNLOAD),
+    );
+
+    const again = await holdLock("desktop:host-download");
+    const base = shellContext();
+    const reported: (string | null)[] = [];
+    await withBoundedWaitProgress(
+      (info) => {
+        reported.push(info.message);
+        void again.release();
+      },
+      () =>
+        buildHostUpdateCommand(args)({
+          ...base,
+          runtime: { ...base.runtime, json: true },
+        }),
+    );
+    expect(reported).toEqual([expect.stringContaining(DESKTOP_DOWNLOAD)]);
+  });
+});
+
+describe("runHostUpdate - every exit records the attempt", () => {
+  const last = () => readHostUpdateLastAttempt(currentHome.value);
+
+  it("an update that finished names its attempt, target and initiator", async () => {
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    await runUpdate({ env: { TRAYCER_HOST_UPDATE_TRIGGER: "automatic" } });
+    expect(await last()).toEqual({
+      command: "host update",
+      initiator: "automatic",
+      outcome: "complete",
+      targetVersion: "2.0.0",
+      attemptId: (await requireRecord()).attemptId,
+      code: null,
+      message: null,
+      recordedAt: expect.any(String),
+    });
+  });
+
+  it("a run with nothing to do says so", async () => {
+    await seedInstalled("2.0.0");
+    world.runningVersion = "2.0.0";
+    await runUpdate({});
+    expect(await last()).toMatchObject({
+      outcome: "no-op",
+      initiator: "manual",
+      targetVersion: "2.0.0",
+      attemptId: null,
+    });
+  });
+
+  it("a bound run refused over a moved park says so, and is never 'nothing to do'", async () => {
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    mocks.applyHostWithAttempt.mockRejectedValueOnce(busyError());
+    await expect(runUpdate({})).rejects.toBeInstanceOf(CliError);
+    const { attemptId, generation } = await requireRecord();
+
+    await runUpdate({
+      intent: "continue",
+      expectAttempt: attemptId,
+      expectGeneration: String(generation + 1),
+      expectSequence: "1",
+    });
+
+    expect(await last()).toMatchObject({
+      outcome: "refused",
+      code: "refused-attempt-moved",
+    });
+  });
+
+  it("a host left on a developer's build started nothing, so it is no update", async () => {
+    await seedInstalled("2.0.0");
+    world.runningVersion = "1.0.0";
+    mocks.beforeAttemptMutation.mockImplementation((reason: string) => {
+      if (reason === "host-update-activate") {
+        world.runningVersion = "staging.1750000000.abc1234";
+      }
+    });
+    await runUpdate({ versionRequest: "2.0.0" });
+    expect(await last()).toMatchObject({ outcome: "no-op" });
+  });
+
+  it("a run that parked on a busy host is parked, not failed", async () => {
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    mocks.applyHostWithAttempt.mockRejectedValue(busyError());
+    await expect(runUpdate({})).rejects.toBeInstanceOf(CliError);
+    expect(await last()).toMatchObject({
+      outcome: "parked",
+      code: CLI_ERROR_CODES.HOST_BUSY,
+      targetVersion: "2.0.0",
+      attemptId: (await requireRecord()).attemptId,
+    });
+  });
+
+  it("a failure after the claim is failed, and carries what went wrong", async () => {
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    mocks.applyHostWithAttempt.mockRejectedValue(new Error("the swap broke"));
+    await expect(runUpdate({})).rejects.toThrow("the swap broke");
+    expect((await requireRecord()).phase).toBe("failed");
+    expect(await last()).toMatchObject({
+      outcome: "failed",
+      code: null,
+      message: "the swap broke",
+    });
+  });
+
+  it("a request the host has already passed is refused, not failed", async () => {
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    mocks.downloadAndStageHostInSegment.mockImplementation(
+      async (options: { readonly beforeExtract: () => Promise<void> }) => {
+        await options.beforeExtract();
+        await seedInstalled("3.0.0");
+        world.runningVersion = "3.0.0";
+        return {
+          outcome: "discarded" as const,
+          reason: "not-newer-than-installed" as const,
+          targetVersion: "2.0.0",
+        };
+      },
+    );
+    await expect(runUpdate({ versionRequest: "2.0.0" })).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_UPDATE_NOT_NEWER,
+    });
+    expect((await requireRecord()).phase).toBe("superseded");
+    expect(await last()).toMatchObject({
+      outcome: "refused",
+      code: CLI_ERROR_CODES.HOST_UPDATE_NOT_NEWER,
+    });
+  });
+
+  it("an update another actor delivered while it was parked is complete", async () => {
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    world.latest = "2.0.0";
+    mocks.applyHostWithAttempt.mockRejectedValueOnce(busyError());
+    await expect(runUpdate({})).rejects.toBeInstanceOf(CliError);
+    const { attemptId } = await requireRecord();
+    mocks.applyHostWithAttempt.mockImplementationOnce(async () => {
+      await seedInstalled("2.0.0");
+      world.runningVersion = "2.0.0";
+      await seedStaged(null);
+      return { outcome: "no-op" as const };
+    });
+
+    await runUpdate({
+      intent: "continue",
+      expectAttempt: attemptId,
+      versionRequest: "2.0.0",
+    });
+
+    expect((await requireRecord()).phase).toBe("superseded");
+    expect(await last()).toMatchObject({ outcome: "complete", attemptId });
+  });
+
+  it("a host verified at the target is updated even if the record could not say so, and the next run concludes it", async () => {
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    mocks.refuseCompletion = "durability-unverified";
+    await expect(runUpdate({})).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_UPDATE_RECORD_NOT_CONCLUDED,
+    });
+    expect(await last()).toMatchObject({
+      outcome: "complete",
+      code: CLI_ERROR_CODES.HOST_UPDATE_RECORD_NOT_CONCLUDED,
+      message: expect.stringContaining("the next run will conclude"),
+    });
+    const { attemptId } = await requireRecord();
+
+    mocks.deadWriterIds.add("test-writer");
+    mocks.refuseCompletion = null;
+    const outcome = await runUpdate({});
+
+    expect(outcome.releasedReason).toBe("recovered-complete");
+    expect(await last()).toMatchObject({
+      outcome: "complete",
+      code: "recovered-complete",
+      attemptId,
+      targetVersion: "2.0.0",
+    });
+  });
+
+  it("reports the version it claimed, when an install landed after the plan", async () => {
+    await seedInstalled("2.0.0");
+    world.runningVersion = "1.0.0";
+    mocks.readHostPidMetadata.mockImplementationOnce(async () => {
+      await seedInstalled("3.0.0");
+      return pidMetadata("1.0.0");
+    });
+    await runUpdate({}).catch(() => null);
+    expect((await requireRecord()).targetVersion).toBe("3.0.0");
+    expect(await last()).toMatchObject({ targetVersion: "3.0.0" });
+  });
+
+  it("a mistyped request is refused before anything is read", async () => {
+    await expect(runUpdate({ versionRequest: "" })).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.INVALID_ARGUMENT,
+    });
+    expect(await last()).toMatchObject({
+      outcome: "refused",
+      code: CLI_ERROR_CODES.INVALID_ARGUMENT,
+      attemptId: null,
+    });
+  });
+
+  it("a dispatch nonce this build cannot honour is refused and recorded", async () => {
+    await expect(
+      runUpdate({ ackNonce: "not a legal nonce", versionRequest: "2.0.0" }),
+    ).rejects.toThrow("nonce");
+    expect(await last()).toMatchObject({
+      outcome: "refused",
+      targetVersion: "2.0.0",
+      attemptId: null,
+      message: expect.stringContaining("nonce"),
+    });
+  });
+
+  it("the executor's own lock says the app is behind it", async () => {
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    world.latest = "2.0.0";
+    let holder = "";
+    mocks.applyHostWithAttempt.mockImplementationOnce(async () => {
+      const probe = await probeAttemptHolder({
+        hostHomeDir: currentHome.value,
+        nowMs: Date.now(),
+        cacheTtlMs: 0,
+      });
+      holder =
+        probe.kind === "holder-live"
+          ? describeUpdateLockHolder(probe.holder)
+          : probe.kind;
+      await seedInstalled("2.0.0");
+      world.runningVersion = "2.0.0";
+      await seedStaged(null);
+      return { outcome: "no-op" as const };
+    });
+    vi.stubEnv("TRAYCER_HOST_UPDATE_INITIATOR", "desktop");
+    try {
+      await runUpdate({});
+    } finally {
+      vi.unstubAllEnvs();
+    }
+    expect(holder).toBe("The Traycer app is updating the host");
+  });
+
+  it("a plan that cannot be made is refused, with the requested target", async () => {
+    await seedInstalled("1.0.0");
+    await expect(
+      runUpdate({
+        versionRequest: "2.0.0",
+        registryClient: unreachableRegistry(),
+      }),
+    ).rejects.toThrow();
+    expect(await last()).toMatchObject({
+      outcome: "refused",
+      targetVersion: "2.0.0",
+      attemptId: null,
+    });
+  });
+
+  it("a claim the executor rejects is refused", async () => {
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    const cohort = await import("../update-executor-cohort");
+    const spy = vi
+      .spyOn(cohort, "decideUpdateExecutorCohort")
+      .mockReturnValue({ kind: "shadow", reason: "disabled" });
+    try {
+      await expect(runUpdate({})).rejects.toBeInstanceOf(CliError);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(await last()).toMatchObject({
+      outcome: "refused",
+      code: CLI_ERROR_CODES.HOST_UPDATE_ATTEMPT_ACTIVE,
+      targetVersion: "2.0.0",
+    });
+  });
+
+  it("the record that cannot be written never fails the update", async () => {
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    await mkdir(join(currentHome.value, "update-last-attempt.json"));
+    await runUpdate({});
+    expect((await requireRecord()).phase).toBe("complete");
+    expect(logger.info).toHaveBeenCalledWith(
+      "Host update could not record its outcome",
+      expect.objectContaining({ outcome: "complete" }),
+    );
   });
 });

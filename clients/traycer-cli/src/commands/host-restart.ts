@@ -14,6 +14,7 @@ import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import type { CommandFn, CommandResult } from "../runner/runner";
 import {
   createServiceController,
+  serviceJobIdFor,
   serviceLabelFor,
   type ServiceController,
   type ServiceLabel,
@@ -226,6 +227,7 @@ export function buildHostRestartCommand(args: HostRestartArgs): CommandFn {
             // admitted activation flow either way.
             return {
               kind: "deferred-for-parked-activation" as const,
+              jobId: await serviceJobIdFor(controller, label),
               record: contenderContext.activeAttempt,
               parkMatchesInstall,
               attestation: await attestInstallRuntime(ctx.runtime.environment),
@@ -263,6 +265,7 @@ export function buildHostRestartCommand(args: HostRestartArgs): CommandFn {
           );
           return {
             kind: "stopped-for-parked-activation" as const,
+            jobId: await serviceJobIdFor(controller, label),
             record: contenderContext.activeAttempt,
             parkMatchesInstall,
             attestation: await attestInstallRuntime(ctx.runtime.environment),
@@ -292,6 +295,7 @@ export function buildHostRestartCommand(args: HostRestartArgs): CommandFn {
         );
         return {
           kind: "restarted" as const,
+          jobId: await serviceJobIdFor(controller, label),
           result,
           attestation: await attestInstallRuntime(ctx.runtime.environment),
         };
@@ -329,10 +333,10 @@ export function buildHostRestartCommand(args: HostRestartArgs): CommandFn {
         runtimeWasNull: locked.attestation.runtimeWasNull,
       },
       human: restarted
-        ? humanForRestart(label.id, locked.result)
+        ? humanForRestart(locked.jobId, locked.result)
         : deferredForParkedActivation
-          ? `left service '${label.id}' untouched because a packaged update is waiting for its explicit activation${recovery === null ? "" : `: ${recovery}`}`
-          : `stopped service '${label.id}' without relaunch because a packaged update is waiting for its explicit activation; the host is now down${recovery === null ? "" : `: ${recovery}`}`,
+          ? `left service '${locked.jobId}' untouched because a packaged update is waiting for its explicit activation${recovery === null ? "" : `: ${recovery}`}`
+          : `stopped service '${locked.jobId}' without relaunch because a packaged update is waiting for its explicit activation; the host is now down${recovery === null ? "" : `: ${recovery}`}`,
       exitCode: 0,
     };
   };
@@ -517,11 +521,8 @@ async function restartWithActuators(
   };
 }
 
-function humanForRestart(
-  labelId: string,
-  result: RestartFinalizeResult,
-): string {
-  const base = `requested restart for service '${labelId}'`;
+function humanForRestart(jobId: string, result: RestartFinalizeResult): string {
+  const base = `requested restart for service '${jobId}'`;
   const reconcilePrefix = describeMarkerReconcile(result.markerReconcile);
   if (result.helper !== null && result.helper.status === "armed") {
     return `${reconcilePrefix}${base}; cli upgrade live binary held by current CLI process - armed finalize helper (pid=${
@@ -539,6 +540,8 @@ function humanForRestart(
       return `${reconcilePrefix}${base}; cli upgrade ${outcome.stagedBinaryPath} still locked (${outcome.errorMessage}) - pending state retained`;
     case "staged-binary-missing":
       return `${reconcilePrefix}${base}; cli upgrade staged binary for ${outcome.stagedVersion} missing at ${outcome.stagedBinaryPath} - re-run 'traycer cli upgrade'`;
+    case "installed-newer":
+      return `${reconcilePrefix}${base}; staged cli ${outcome.stagedVersion} was not installed because the cli is already at ${outcome.installedVersion} - live binary unchanged`;
     case "publish-failed":
       // The host was relaunched regardless - the restart the user asked
       // for is not forfeited because a staged CLI swap could not be

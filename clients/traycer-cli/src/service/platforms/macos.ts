@@ -1,5 +1,13 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { chmod, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  readFile,
+  realpath,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname } from "node:path";
 import {
@@ -658,7 +666,7 @@ type TakeoverLabelProbe =
   | { readonly kind: "indeterminate"; readonly cause: string }
   | {
       readonly kind: "loaded";
-      readonly ownership: Exclude<LaunchdOwnership, { kind: "not-loaded" }>;
+      readonly ownership: LoadedLaunchdOwnership;
       // launchd's pid for the job whatever its ownership (`LaunchdOwnership`
       // carries one only for `cli-or-other`), so a bootout of either label is
       // checked against the PROCESS afterwards, not only the label.
@@ -1187,11 +1195,10 @@ async function installService(
   );
   // Reload pattern: only `bootout` when there is actually an existing
   // registration to remove, then bootstrap the freshly-written plist.
-  // launchctl's `bootstrap` rejects a re-load with mixed error shapes -
-  // sometimes a clean "already loaded" message (exit 37), and sometimes
-  // EIO / "Input/output error" (exit 5) when the on-disk plist conflicts
-  // with the version launchd already holds. The EIO branch was breaking
-  // the Settings → Re-register path.
+  // launchd refuses a `bootstrap` of a job it still holds with EALREADY (37),
+  // and `launchctl` reports that as `Bootstrap failed: 5: Input/output
+  // error`, which names no cause. The EIO branch was breaking the Settings →
+  // Re-register path.
   //
   // Probing with `launchctl print` first instead of unconditionally
   // calling bootout has two benefits over a blanket
@@ -1209,7 +1216,7 @@ async function installService(
   //      then fail bootstrap, leaving the user completely
   //      unregistered).
   //
-  // `isBenignBootstrapFailure` below stays as defence-in-depth for the
+  // `jobHoldingRefusedBootstrap` below stays as defence-in-depth for the
   // race where another process re-bootstraps between our probe and our
   // bootstrap call.
   if (ownership.kind !== "not-loaded") {
@@ -1263,7 +1270,12 @@ async function installService(
     });
   } catch (cause) {
     if (isServiceMutationAuthorityError(cause)) throw cause;
-    if (!isBenignBootstrapFailure(cause)) {
+    const raceOwnership = await jobHoldingRefusedBootstrap(
+      cause,
+      serviceTarget,
+      run,
+    );
+    if (raceOwnership === null) {
       throw cliError({
         code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
         message: `launchctl bootstrap failed for ${options.label.id}: ${describeCause(cause)}`,
@@ -1281,6 +1293,7 @@ async function installService(
       guiTarget,
       serviceTarget,
       manifestPath,
+      raceOwnership,
       run,
     });
   }
@@ -1324,6 +1337,8 @@ interface ReloadRegisteredServiceOptions {
   readonly guiTarget: string;
   readonly serviceTarget: string;
   readonly manifestPath: string;
+  // Who holds the label now, as read right after the refused bootstrap.
+  readonly raceOwnership: LoadedLaunchdOwnership;
   readonly run: ProcessRunner;
 }
 
@@ -1334,14 +1349,11 @@ async function reloadRegisteredService(
   options: ReloadRegisteredServiceOptions,
 ): Promise<void> {
   // The competing registrar that won the race this reload exists to fix
-  // may be Desktop's SMAppService, not another CLI process - re-probe
-  // ownership right before mutating. Booting out an SMAppService-owned job
-  // would corrupt the BTM state Desktop manages, exactly what
-  // `installService`'s own upfront refusal exists to prevent.
-  const raceOwnership = await inspectLaunchdOwnership(
-    options.serviceTarget,
-    options.run,
-  );
+  // may be Desktop's SMAppService, not another CLI process - the probe that
+  // found it decides before anything is mutated. Booting out an
+  // SMAppService-owned job would corrupt the BTM state Desktop manages,
+  // exactly what `installService`'s own upfront refusal exists to prevent.
+  const { raceOwnership } = options;
   if (raceOwnership.kind === "smappservice") {
     throw cliError({
       code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
@@ -1386,7 +1398,7 @@ async function reloadRegisteredService(
     );
   } catch (cause) {
     if (isServiceMutationAuthorityError(cause)) throw cause;
-    // A second "already loaded" after our own explicit bootout means a
+    // A job loaded again after our own explicit bootout means a
     // concurrent registrar won the reload race - and it bootstrapped the
     // same freshly regenerated on-disk plist this process just wrote (every
     // path that bootstraps this label rewrites the manifest first). The
@@ -1400,12 +1412,14 @@ async function reloadRegisteredService(
     // grabbing the label in the window between our own bootout and this
     // bootstrap attempt - re-verify before accepting the failure as benign,
     // since kickstart-ing "the winner's definition" would otherwise
-    // kickstart Desktop's SMAppService-owned job.
-    if (isBenignBootstrapFailure(cause)) {
-      const postRaceOwnership = await inspectLaunchdOwnership(
-        options.serviceTarget,
-        options.run,
-      );
+    // kickstart Desktop's SMAppService-owned job. A winner loaded from any
+    // path but this manifest is outside that rewrite, so it is no success.
+    const postRaceOwnership = await jobHoldingRefusedBootstrap(
+      cause,
+      options.serviceTarget,
+      options.run,
+    );
+    if (postRaceOwnership !== null) {
       if (postRaceOwnership.kind === "smappservice") {
         throw cliError({
           code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
@@ -1417,7 +1431,18 @@ async function reloadRegisteredService(
           exitCode: 1,
         });
       }
-      return;
+      if (await loadedFromManifest(postRaceOwnership, options.manifestPath)) {
+        return;
+      }
+      throw cliError({
+        code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+        message: `service install: label '${options.labelId}' was loaded from ${postRaceOwnership.path ?? "an unknown path"} after the CLI's own bootout, not from ${options.manifestPath}, so the host would not run what this install wrote. Stop whatever loaded it, then re-run 'traycer host service install'.`,
+        details: {
+          label: options.labelId,
+          loadedPath: postRaceOwnership.path,
+        },
+        exitCode: 1,
+      });
     }
     // A genuine second-bootstrap failure leaves the label fully
     // deregistered (the bootout above already succeeded) - launchd has no
@@ -1433,6 +1458,54 @@ async function reloadRegisteredService(
       exitCode: 1,
     });
   }
+}
+
+// Whether launchd loaded the job from this manifest. Compared as files, not
+// spellings, because a symlinked home names one plist two ways. A path that is
+// missing, or cannot be resolved, is not evidence that it is this manifest.
+async function loadedFromManifest(
+  ownership: Extract<LaunchdOwnership, { kind: "cli-or-other" }>,
+  manifestPath: string,
+): Promise<boolean> {
+  if (ownership.path === null) return false;
+  try {
+    const [loaded, manifest] = await Promise.all([
+      realpath(ownership.path),
+      realpath(manifestPath),
+    ]);
+    return loaded === manifest;
+  } catch {
+    return false;
+  }
+}
+
+// Who holds the label when launchd refused a `bootstrap`, or `null` when
+// nothing does and the refusal is the bootstrap's own failure. launchd's
+// answer to a job it already holds is EALREADY (37), which `launchctl` prints
+// as `Bootstrap failed: 5: Input/output error`, so neither the exit code nor
+// the message says whether a job is in the way: only asking launchd does. A
+// timeout or a failed spawn says nothing about the refusal, and a probe
+// that cannot answer is no evidence either; both leave the bootstrap's error
+// standing.
+async function jobHoldingRefusedBootstrap(
+  cause: unknown,
+  serviceTarget: string,
+  run: ProcessRunner,
+): Promise<LoadedLaunchdOwnership | null> {
+  if (
+    !(cause instanceof ProcessRunError) ||
+    cause instanceof ProcessSpawnError ||
+    cause instanceof ProcessTimeoutError
+  ) {
+    return null;
+  }
+  const ownership = await inspectLaunchdOwnership(serviceTarget, run).catch(
+    (probeCause: unknown): LaunchdOwnership => {
+      if (isServiceMutationAuthorityError(probeCause)) throw probeCause;
+      return { kind: "not-loaded" };
+    },
+  );
+  return ownership.kind === "not-loaded" ? null : ownership;
 }
 
 // Ownership of a launchd label from the CLI's point of view.
@@ -1454,6 +1527,8 @@ type LaunchdOwnership =
       // false}`, or the throttle window between crashes).
       readonly pid: number | null;
     };
+
+type LoadedLaunchdOwnership = Exclude<LaunchdOwnership, { kind: "not-loaded" }>;
 
 // Probe launchd for who currently owns this label. `launchctl print`
 // exits 0 when loaded; non-zero means not loaded. Tolerate non-zero so a
@@ -1714,30 +1789,6 @@ async function bootoutAndWait(
     });
   }
   return notDrained("the job was still loaded when the wait ran out");
-}
-
-// launchctl returns "Service is already loaded" / "Bootstrap failed:
-// 37: ... (already loaded)" when the agent is already registered. We
-// classify these as *recoverable races* (not success): the caller must
-// bootout + bootstrap the on-disk plist before kickstart, because
-// kickstart alone runs launchd's cached definition. Everything else
-// (permission denied, malformed plist, missing program, ...) surfaces
-// as a real failure immediately.
-//
-// Detection is intentionally string-shape-tolerant rather than exit-code-
-// pinned: launchctl has changed exit codes between macOS releases and
-// the stderr line is the more stable signal.
-function isBenignBootstrapFailure(cause: unknown): boolean {
-  if (!(cause instanceof ProcessRunError)) return false;
-  const haystack = `${cause.stderr}\n${cause.stdout}`.toLowerCase();
-  if (
-    haystack.includes("already loaded") ||
-    haystack.includes("service is already") ||
-    haystack.includes("already bootstrapped")
-  ) {
-    return true;
-  }
-  return false;
 }
 
 async function uninstallService(
@@ -2821,12 +2872,20 @@ async function stopService(
   if (before.kind === "read" && !publishedHostProcessGone(before.metadata)) {
     onHostAddressed?.();
   }
-  await run("launchctl", ["kill", "TERM", `${guiDomain()}/${label.id}`], {
-    env: undefined,
-    cwd: undefined,
-    timeoutMs: LAUNCHCTL_CALL_TIMEOUT_MS,
-    tolerateNonZeroExit: true,
-  });
+  const signal = await run(
+    "launchctl",
+    ["kill", "TERM", `${guiDomain()}/${label.id}`],
+    {
+      env: undefined,
+      cwd: undefined,
+      timeoutMs: LAUNCHCTL_CALL_TIMEOUT_MS,
+      tolerateNonZeroExit: true,
+    },
+  );
+  // Tolerated, and the wait below still runs: a host whose supervisor is
+  // already gone may be on its way out. But a refused signal is not a sent
+  // one, so what follows reports the job it asked and what launchd answered.
+  const signalOutcome = describeStopSignal(label.id, signal);
   // Nothing was published, so there is no exit to confirm and no host this
   // stop could have failed to take effect on.
   if (before.kind === "absent") return;
@@ -2850,12 +2909,13 @@ async function stopService(
     if (after.kind === "absent") return;
     throw cliError({
       code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
-      message: `host pid metadata at ${hostPidMetadataPath(label.environment)} could not be read (${before.cause}), so the host's exit could not be confirmed within ${STOP_EXIT_TIMEOUT_MS}ms of SIGTERM; stop-not-confirmed. Re-run the command; if it persists and the host is still serving, re-run with --force to escalate to SIGKILL.`,
+      message: `host pid metadata at ${hostPidMetadataPath(label.environment)} could not be read (${before.cause}), so the host's exit could not be confirmed within ${STOP_EXIT_TIMEOUT_MS}ms ${signalOutcome.summary}; stop-not-confirmed. Re-run the command; if it persists and the host is still serving, re-run with --force to escalate to SIGKILL.`,
       details: {
         label: label.id,
         record: hostPidMetadataPath(label.environment),
         cause: before.cause,
         timeoutMs: STOP_EXIT_TIMEOUT_MS,
+        signalDelivered: signalOutcome.delivered,
       },
       exitCode: 1,
     });
@@ -2872,15 +2932,43 @@ async function stopService(
   if (!exited) {
     throw cliError({
       code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
-      message: `host (pid=${before.metadata.pid}) did not exit within ${STOP_EXIT_TIMEOUT_MS}ms of SIGTERM; stop did not take effect. Re-run with --force to escalate to SIGKILL.`,
+      message: `host (pid=${before.metadata.pid}) did not exit within ${STOP_EXIT_TIMEOUT_MS}ms ${signalOutcome.summary}; stop did not take effect. Re-run with --force to escalate to SIGKILL.`,
       details: {
         label: label.id,
         pid: before.metadata.pid,
         timeoutMs: STOP_EXIT_TIMEOUT_MS,
+        signalDelivered: signalOutcome.delivered,
       },
       exitCode: 1,
     });
   }
+}
+
+// What became of a `launchctl kill`. A positive exit is launchctl's own
+// refusal. The runner reports -1 when launchctl was killed or never ran, which
+// says nothing about whether the signal landed, so `delivered` is null there.
+function describeStopSignal(
+  labelId: string,
+  result: RunResult,
+): { readonly delivered: boolean | null; readonly summary: string } {
+  if (result.exitCode === 0) {
+    return { delivered: true, summary: `of SIGTERM to job '${labelId}'` };
+  }
+  if (result.exitCode < 0) {
+    return {
+      delivered: null,
+      summary: `of asking launchd to signal job '${labelId}', which gave no answer, so whether SIGTERM was sent is unknown`,
+    };
+  }
+  const answer = result.stderr.trim() || result.stdout.trim();
+  const refusal =
+    answer.length > 0
+      ? `exit ${result.exitCode}: ${answer}`
+      : `exit ${result.exitCode}`;
+  return {
+    delivered: false,
+    summary: `of asking launchd to signal job '${labelId}', which it refused (${refusal}), so no SIGTERM was sent`,
+  };
 }
 
 // Outcome mapping for the CLI-owned force escalation. Mirrors

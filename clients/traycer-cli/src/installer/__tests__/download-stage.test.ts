@@ -2291,6 +2291,40 @@ describe("downloadAndStageHost", () => {
       expect(snapshotTree(hostHomeFor(ENV))).toEqual(before);
     });
 
+    it("install: an installed PRERELEASE above the registry's stable latest is a no-op, never a silent downgrade", async () => {
+      // The host-side sibling of the `cli upgrade` downgrade floor: a feed
+      // that publishes stable builds only is NOT an upper bound, so a box on
+      // 1.5.2-rc.1 sits above a `latest` of 1.5.1 and must not be staged
+      // backwards onto it. The cases above reach the same no-op from EQUAL
+      // versions; this one reaches it from strictly-above, which is the
+      // shape a release-candidate machine is actually in and the one an
+      // `installedVsTarget` reading narrowed to `equal` would stage.
+      await writeInstall("1.5.2-rc.1", {});
+      const before = snapshotTree(hostHomeFor(ENV));
+
+      const plan = await resolveUpdatePlan({
+        environment: ENV,
+        request: {
+          intent: "install",
+          versionRequest: null,
+          allowDowngrade: false,
+        },
+        onProgress: noopProgress,
+        registryClient: fakeRegistryClient({
+          latest: "1.5.1",
+          versions: [
+            { version: "1.5.0", yanked: false },
+            { version: "1.5.1", yanked: false },
+          ],
+          downloadGate: null,
+          onDownloadStart: null,
+        }),
+      });
+
+      expect(plan).toMatchObject({ kind: "no-op", targetVersion: "1.5.1" });
+      expect(snapshotTree(hostHomeFor(ENV))).toEqual(before);
+    });
+
     it("install: an IMPLICIT latest at or above the installed record IS the no-op - the binding is the explicit request's alone", async () => {
       await writeInstall("1.5.0", {});
       const before = snapshotTree(hostHomeFor(ENV));
@@ -2623,6 +2657,68 @@ describe("downloadAndStageHost", () => {
       expect(await readHostStagedRecord(ENV)).toBeNull();
     });
 
+    it("refuses a registry target over an install recorded as the source-tree sentinel", async () => {
+      await writeInstall("0.0.0-dev", {});
+      dataRootMock.movedRoot = join(sandboxRoot, "moved-data");
+
+      await expect(
+        resolveUpdatePlan({
+          environment: ENV,
+          request: {
+            intent: "install",
+            versionRequest: null,
+            allowDowngrade: false,
+          },
+          onProgress: noopProgress,
+          registryClient: registry("1.5.0"),
+        }),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.HOST_UPDATE_NOT_NEWER,
+      });
+    });
+
+    it("plans an upgrade over a side-loaded install its runtime version orders", async () => {
+      await writeInstall("local-host-20261017", {
+        runtimeVersion: "1.0.0",
+        source: { kind: "local-file", value: "dl/host.tar.gz" },
+      });
+      dataRootMock.movedRoot = join(sandboxRoot, "moved-data");
+
+      const plan = await resolveUpdatePlan({
+        environment: ENV,
+        request: {
+          intent: "install",
+          versionRequest: null,
+          allowDowngrade: false,
+        },
+        onProgress: noopProgress,
+        registryClient: registry("1.5.0"),
+      });
+
+      expect(plan).toMatchObject({ targetVersion: "1.5.0" });
+    });
+
+    it("plans an explicit downgrade to the runtime version of a local install recorded under a newer one", async () => {
+      await writeInstall("2.0.0", {
+        runtimeVersion: "1.0.0",
+        source: { kind: "local-file", value: "dl/host.tar.gz" },
+      });
+      dataRootMock.movedRoot = join(sandboxRoot, "moved-data");
+
+      const plan = await resolveUpdatePlan({
+        environment: ENV,
+        request: {
+          intent: "install",
+          versionRequest: "1.0.0",
+          allowDowngrade: true,
+        },
+        onProgress: noopProgress,
+        registryClient: registry("2.0.0"),
+      });
+
+      expect(plan).toMatchObject({ kind: "downgrade", targetVersion: "1.0.0" });
+    });
+
     it("still plans an upgrade to a comparable newer target", async () => {
       await writeInstall("1.0.0", {});
       dataRootMock.movedRoot = join(sandboxRoot, "moved-data");
@@ -2659,7 +2755,10 @@ describe("downloadAndStageHost", () => {
         }),
       ).rejects.toMatchObject({
         code: CLI_ERROR_CODES.HOST_UPDATE_NOT_NEWER,
-        message: expect.stringContaining("needs host 3.0.0"),
+        // The host's dispatch contract reads this phrase to latch a park.
+        message: expect.stringMatching(
+          /Traycer's data folder was moved to .*needs host 3\.0\.0/,
+        ),
       });
       expect(await readHostStagedRecord(ENV)).toBeNull();
     });
@@ -2734,7 +2833,30 @@ describe("downloadAndStageHost", () => {
         }),
       ).rejects.toMatchObject({
         code: CLI_ERROR_CODES.HOST_UPDATE_NOT_NEWER,
+        // The host's dispatch contract reads this phrase to latch the park.
+        message: expect.stringContaining("Traycer's data folder was moved to"),
       });
+    });
+
+    it("continue: resumes a park at a side-loaded install's runtime version", async () => {
+      await writeInstall("local-host-20261017", {
+        runtimeVersion: "1.2.0",
+        source: { kind: "local-file", value: "dl/host.tar.gz" },
+      });
+      dataRootMock.movedRoot = join(sandboxRoot, "moved-data");
+
+      const plan = await resolveUpdatePlan({
+        environment: ENV,
+        request: {
+          intent: "continue",
+          targetVersion: "1.2.0",
+          needsTransfer: false,
+        },
+        onProgress: noopProgress,
+        registryClient: unreachableRegistryClient(),
+      });
+
+      expect(plan).toMatchObject({ kind: "resume", targetVersion: "1.2.0" });
     });
 
     it("continue: a park already at the installed version resumes unchanged", async () => {
