@@ -21,6 +21,7 @@ const ROLES: ReadonlyArray<readonly [string, ChatSandboxViewer]> = [
       canEdit: true,
       ownedByViewer: true,
       environmentOwned: false,
+      staysReadable: true,
     },
   ],
   [
@@ -30,6 +31,7 @@ const ROLES: ReadonlyArray<readonly [string, ChatSandboxViewer]> = [
       canEdit: true,
       ownedByViewer: false,
       environmentOwned: true,
+      staysReadable: true,
     },
   ],
   [
@@ -39,6 +41,7 @@ const ROLES: ReadonlyArray<readonly [string, ChatSandboxViewer]> = [
       canEdit: true,
       ownedByViewer: false,
       environmentOwned: false,
+      staysReadable: true,
     },
   ],
   [
@@ -48,6 +51,7 @@ const ROLES: ReadonlyArray<readonly [string, ChatSandboxViewer]> = [
       canEdit: false,
       ownedByViewer: true,
       environmentOwned: false,
+      staysReadable: true,
     },
   ],
 ];
@@ -118,6 +122,18 @@ describe("resolveChatSandbox", () => {
       expect(view.composer).toEqual({ kind: "line" });
     },
   );
+
+  it("drops the promise from the unknown line where no read shows a copy", () => {
+    const view = resolveChatSandbox(
+      { kind: "pending", name: "e2e-sbx-p1" },
+      { ...ROLES[0][1], staysReadable: false },
+    );
+
+    expect(view.line).toMatchObject({
+      place: "slot",
+      text: "e2e-sbx-p1 isn't available.",
+    });
+  });
 
   it("leaves an unknown state whose host answers, and a person's host, to the surface's own path", () => {
     const answered = { ...ROLES[0][1], reachable: true };

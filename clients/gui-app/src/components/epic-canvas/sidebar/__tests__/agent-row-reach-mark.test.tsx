@@ -669,7 +669,7 @@ describe("the Agents tree's local rows: the reach mark comes from reach alone", 
       screen.getByTestId("epic-sidebar-tree-lock-chat-offline"),
     ).toBeTruthy();
     expect(localRowLabel("chat-offline")).toBe(
-      "Chat chat-offline, e2e-sbx-p1 isn't available — this chat stays readable.",
+      "Chat chat-offline, e2e-sbx-p1 isn't available.",
     );
   });
 
@@ -772,6 +772,24 @@ describe("an owner host the directory does not list", () => {
       .queryAllByRole("tooltip")
       .map((element) => element.textContent);
   }
+
+  it("says a sandbox owner's line alone in the lock's tooltip of a row with no published head", async () => {
+    hostState.view.current = hostsView([
+      {
+        ...hostRow("host-offline", "same_principal", VIEWER),
+        label: "e2e-sbx-p1",
+      },
+    ]);
+    hostState.reachability.set("host-offline", "unreachable");
+    renderLocalPanel();
+
+    const tooltips = await hoverTooltip(
+      screen.getByTestId("epic-sidebar-tree-lock-chat-offline"),
+    );
+
+    expect(tooltips).toContain("e2e-sbx-p1 isn't available.");
+    expect(tooltips.join("\n")).not.toContain("Opens read-only");
+  });
 
   it("says the Agents tree row is on the host, in its name and its lock's tooltip", async () => {
     hostState.view.current = hostsView([

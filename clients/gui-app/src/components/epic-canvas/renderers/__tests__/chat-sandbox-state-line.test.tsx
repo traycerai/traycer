@@ -128,6 +128,7 @@ function FailedChatLine(props: { readonly summary: SandboxSummary }) {
       canEdit: true,
       ownedByViewer: true,
       environmentOwned: true,
+      staysReadable: true,
     },
   );
   const line = chatSandboxStateLine(view.line, null);
@@ -325,6 +326,7 @@ function MovingChatLine(props: {
       canEdit: true,
       ownedByViewer: true,
       environmentOwned: true,
+      staysReadable: true,
     },
   );
   const line = chatSandboxStateLine(view.line, null);

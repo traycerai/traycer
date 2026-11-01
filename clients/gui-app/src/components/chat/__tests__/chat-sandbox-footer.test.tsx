@@ -83,6 +83,7 @@ function lineOf(state: ChatSandboxState): ChatSandboxLine | null {
     canEdit: true,
     ownedByViewer: true,
     environmentOwned: false,
+    staysReadable: true,
   }).line;
 }
 

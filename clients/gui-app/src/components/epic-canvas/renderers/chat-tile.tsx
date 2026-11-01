@@ -670,17 +670,20 @@ function ChatTileForChat(props: ChatTileProps) {
   const ownerReachability = useHostReachability(tabHostId);
   const ownerLease = useHostLease(tabHostId);
   const ownerSessionReady = useRemoteSessionPollReadiness(tabHostId);
-  const { state: sandboxState, reachable: ownerReachable } =
-    useLiveChatSandboxState(
-      epicId,
-      node.id,
-      tabHostId,
-      chatPreContentStrip(
-        ownerReachability.status,
-        ownerLease,
-        ownerSessionReady,
-      ) === "none",
-    );
+  const {
+    state: sandboxState,
+    reachable: ownerReachable,
+    staysReadable,
+  } = useLiveChatSandboxState(
+    epicId,
+    node.id,
+    tabHostId,
+    chatPreContentStrip(
+      ownerReachability.status,
+      ownerLease,
+      ownerSessionReady,
+    ) === "none",
+  );
   const copyFacts = useChatOwnerCopyFacts(
     chatRecord?.userId ?? null,
     tabHostId,
@@ -691,6 +694,7 @@ function ChatTileForChat(props: ChatTileProps) {
     ...copyFacts,
     reachable: ownerReachable,
     canEdit,
+    staysReadable,
   });
   const sandboxAvailability = chatSandboxAvailability(sandbox, ownerReachable);
   const lease = useHostLease(servingHostId);
@@ -754,6 +758,7 @@ function ChatTileForChat(props: ChatTileProps) {
           testId={`chat-dead-tile-${node.id}`}
           // The frame's value, which the body under this strip reads too.
           cloneAllowed={preContentFrame.cloneAllowed}
+          staysReadable={staysReadable}
         />
       );
     }
@@ -892,6 +897,7 @@ export function SubstitutedCatchingUpBanner(props: {
     canEdit: false,
     ownedByViewer: false,
     environmentOwned: false,
+    staysReadable: true,
   });
   if (view.line !== null) return null;
   return <ChatCatchingUpBanner reason={props.reason} testId={props.testId} />;
@@ -945,7 +951,14 @@ export function ChatDeadTileBannerContainer(
   props: ChatDeadTileBannerContainerProps,
 ): ReactNode {
   const cloneAllowed = useChatCloneAllowed();
-  return <ChatDeadTileBannerWithOffer {...props} cloneAllowed={cloneAllowed} />;
+  // Over a copy a sandbox's line is the copy's; otherwise no read here settled.
+  return (
+    <ChatDeadTileBannerWithOffer
+      {...props}
+      cloneAllowed={cloneAllowed}
+      staysReadable
+    />
+  );
 }
 
 function useDeadTileSourceOwner(props: DeadTileOfferSource): string | null {
@@ -1029,6 +1042,7 @@ function useDeadTileCloneOffer(props: DeadTileOfferSource) {
 function ChatDeadTileBannerWithOffer(
   props: ChatDeadTileBannerContainerProps & {
     readonly cloneAllowed: boolean;
+    readonly staysReadable: boolean;
   },
 ): ReactNode {
   const {
@@ -1064,6 +1078,7 @@ function ChatDeadTileBannerWithOffer(
     canEdit: props.cloneAllowed,
     ownedByViewer,
     environmentOwned,
+    staysReadable: props.staysReadable,
   });
   const taskHosts = useTaskHostsView(props.epicId);
   const sourceEntry = useHostDirectoryEntry(props.sourceHostId);

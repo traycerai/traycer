@@ -685,9 +685,14 @@ describe("ChatDeadTileBannerContainer - the sandbox's own state", () => {
       "e2e-sbx-stop3 was destroyed on Oct 27 at 06:21 by Dana. Its files are gone; this chat stays readable.Continue on another hostDetails",
     );
     await userEvent.click(screen.getByRole("button", { name: "Details" }));
-    expect(
-      (await screen.findByTestId("task-sandbox-end-details")).textContent,
-    ).not.toContain("UTC");
+    const details = (await screen.findByTestId("task-sandbox-end-details"))
+      .textContent;
+    expect(details).not.toContain("UTC");
+    // Details reads no chat, so it promises none, over a tile that does.
+    expect(details).toContain(
+      "e2e-sbx-stop3 was destroyed on Oct 27 at 06:21 by Dana. Its files are gone.",
+    );
+    expect(details).not.toContain("stays readable");
   });
 
   it("draws nothing over a copy of a destroyed sandbox's chat: the copy's footer states the end", async () => {

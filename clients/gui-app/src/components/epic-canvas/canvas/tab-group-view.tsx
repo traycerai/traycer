@@ -33,6 +33,10 @@ import {
   useChatServing,
   useChatServingHostId,
 } from "@/lib/chats/chat-serving-witness";
+import {
+  CHAT_INDEX_UNAVAILABLE_CODE,
+  CHAT_NOT_VISIBLE_CODE,
+} from "@/lib/chats/chat-session-close-codes";
 import { useExistingChatSessionFatalClose } from "@/lib/registries/chat-session-registry";
 import {
   cloudChatListAuthorizesRecordSweep,
@@ -574,24 +578,6 @@ export interface ActiveTabBodyProps {
   readonly globallyActive: boolean;
 }
 
-// Mirrors `ChatSessionAccessError`'s code on the host
-// (`traycer-host/src/domain/chat/chat-session-manager.ts`) - deliberately
-// the SAME code for "this chat does not exist" and "you are not its owner"
-// (an enumeration-oracle guard: a non-owner probing chat ids must not be
-// able to tell the two apart). Matching on it here does not weaken that -
-// both causes get the identical substitution below, exactly as the wire
-// already refuses to distinguish them.
-const CHAT_SESSION_NOT_VISIBLE_CODE = "CHAT_NOT_VISIBLE";
-
-/**
- * The pool's `chat.subscribe` refusal for a chat at rest its index cannot open
- * (not yet indexed, or parked: `reason` is `unindexed` or `parked`). The
- * pool serves the whole-download pair (`epic.resolveCloudChatHead`,
- * `epic.readCloudChatPart`) for exactly this case, so the tab reads the
- * published copy through the pool instead.
- */
-const CHAT_INDEX_UNAVAILABLE_CODE = "CHAT_INDEX_UNAVAILABLE";
-
 /**
  * The revoked banner's clone handler. Module-level so it is reference-stable,
  * and a no-op because that banner declares `offersClone: false` and therefore
@@ -876,7 +862,9 @@ function usePublishedChatFallbackRef(args: {
     activeTab.hostId,
   );
   const fatalCode = isChat ? (fatalClose?.code ?? null) : null;
-  const confirmedAbsent = fatalCode === CHAT_SESSION_NOT_VISIBLE_CODE;
+  // Both causes the code stands for get the identical substitution, exactly
+  // as the wire refuses to distinguish them.
+  const confirmedAbsent = fatalCode === CHAT_NOT_VISIBLE_CODE;
   const wantsCloudChatFallback = isChat && isSameHost && liveArtifact === null;
   // The Epic SESSION's client - the same one the sidebar's tree fetches this
   // list on, so the TanStack cache is shared rather than split by host, and

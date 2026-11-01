@@ -3,6 +3,7 @@ import { readProcessHostRpcTierPlan } from "@traycer-clients/shared/host-client/
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
 import {
   publishEnvironmentArmScope,
+  publishEnvironmentChatArmsAbsent,
   type EnvironmentArmMethod,
 } from "@/hooks/environment/use-environment-arms";
 import { usePoolTierStreamClient } from "@/hooks/host/use-pool-tier";
@@ -99,5 +100,12 @@ function PoolEnvironmentArmScope(): null {
     publishEnvironmentArmScope(scope);
     return () => publishEnvironmentArmScope(null);
   }, [scope]);
+  const chatArmsAbsent =
+    environments.isFetched &&
+    (chats === "unsupported" || (chats === "supported" && scope === null));
+  useEffect(() => {
+    publishEnvironmentChatArmsAbsent(chatArmsAbsent);
+    return () => publishEnvironmentChatArmsAbsent(false);
+  }, [chatArmsAbsent]);
   return null;
 }
