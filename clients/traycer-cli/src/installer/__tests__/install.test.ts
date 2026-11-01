@@ -306,6 +306,7 @@ import {
 import {
   readHostInstallRecord,
   writeHostInstallRecord,
+  type HostInstallRecord,
 } from "../../manifest/host-install";
 import { createCliLogger } from "../../logger";
 import { config } from "../../config";
@@ -1695,7 +1696,7 @@ describe("stageHostInstallSource while the data folder is moved", () => {
 
   async function writeInstalled(
     version: string,
-    runtimeVersion: string | null,
+    overrides: Partial<HostInstallRecord>,
   ): Promise<void> {
     const installDir = installDirFor(ENV);
     mkdirSync(installDir, { recursive: true });
@@ -1704,7 +1705,7 @@ describe("stageHostInstallSource while the data folder is moved", () => {
     await writeHostInstallRecord(ENV, {
       installId: null,
       version,
-      runtimeVersion,
+      runtimeVersion: null,
       platform: currentInstallPlatform(),
       arch: currentInstallArch(),
       installedAt: new Date().toISOString(),
@@ -1715,6 +1716,7 @@ describe("stageHostInstallSource while the data folder is moved", () => {
       sizeBytes: 1,
       executablePath,
       executableSha256: null,
+      ...overrides,
     });
   }
 
@@ -1731,7 +1733,7 @@ describe("stageHostInstallSource while the data folder is moved", () => {
   }
 
   it("refuses an older registry source over the install before any download or owned temp dir", async () => {
-    await writeInstalled("2.0.0", null);
+    await writeInstalled("2.0.0", {});
     let downloads = 0;
     mocks.registryClient = registryFor("1.0.0", () => {
       downloads += 1;
@@ -1753,7 +1755,10 @@ describe("stageHostInstallSource while the data folder is moved", () => {
   });
 
   it("orders a side-loaded install by its runtime version, not its label", async () => {
-    await writeInstalled("local-host.tar.gz-2026-11-01T07-54-28-844Z", "1.0.0");
+    await writeInstalled("local-host.tar.gz-2026-11-01T07-54-28-844Z", {
+      runtimeVersion: "1.0.0",
+      source: { kind: "local-file", value: "dl/host.tar.gz" },
+    });
     mocks.registryClient = registryFor("1.0.0", () => undefined);
 
     const staged = await stageHostInstallSource({

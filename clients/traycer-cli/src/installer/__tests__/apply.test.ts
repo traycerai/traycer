@@ -525,6 +525,7 @@ describe("applyHost", () => {
     it("judges a side-loaded install by its runtime version and clears the identical archive", async () => {
       await writeInstall("local-host.tar.gz-2026-11-01T07-54-28-844Z", {
         runtimeVersion: "1.3.0-rc.4",
+        source: { kind: "local-file", value: "dl/host.tar.gz" },
         archiveSha256: "a".repeat(64),
       });
       await writeStaged("1.4.0", {
@@ -1139,6 +1140,25 @@ describe("applyHost", () => {
         "local-host-20261017",
       );
       expect(mocks.lifecycleCalls).toHaveLength(0);
+    });
+
+    it("applies a staged build over a side-loaded install its runtime version orders", async () => {
+      dataRootMock.movedRoot = join(sandboxRoot, "moved-data");
+      await writeInstall("local-host-20261017", {
+        runtimeVersion: "1.0.0",
+        source: { kind: "local-file", value: "dl/host.tar.gz" },
+      });
+      await writeStaged("2.0.0", {});
+
+      const result = await applyHost({
+        environment: ENV,
+        force: false,
+        noService: false,
+        expectedStageFingerprint: null,
+        onProgress: () => {},
+      });
+
+      expect(result.outcome).toBe("applied");
     });
 
     it("control: the same stage applies when the data folder is the default one", async () => {

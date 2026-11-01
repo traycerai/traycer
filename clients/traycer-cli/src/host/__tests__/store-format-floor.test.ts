@@ -1323,6 +1323,42 @@ describe("assertStoreFormatFloorAfterStop", () => {
   };
   const ESTABLISHED: SwapQuiescence = { established: true };
 
+  it.each([
+    [
+      "an unplaced target",
+      "1.9.0",
+      "1.3.0-rc.4",
+      "its chat store format is unknown",
+    ],
+    [
+      "nothing installed",
+      "1.2.0",
+      null,
+      "no installed build vouches for this machine's chat stores",
+    ],
+  ])(
+    "names what the formats could not settle with %s",
+    async (_case, targetVersion, installedVersion, verdict) => {
+      const refusal = assertStoreFormatFloorAfterStop({
+        environment: "production",
+        targetIdentity: "local-archive",
+        surveyRoots: singleChatStoreSurveyRoot(hostHome),
+        targetVersion,
+        declaredStoreFormats: null,
+        publishedStoreFormats: null,
+        installedVersion,
+        installedStoreFormats: null,
+        provenance: NO_PROVENANCE,
+        observeQuiescence: async () => NOT_ESTABLISHED,
+        acceptStoreFormatLoss: false,
+        site: "host install",
+        logger: fakeLogger(),
+      });
+
+      await expect(refusal).rejects.toThrow(verdict);
+    },
+  );
+
   it("asks for no quiescence over the identical archive, a move no writer can spoil", async () => {
     const logger = fakeLogger();
     const observeQuiescence = vi.fn(async () => NOT_ESTABLISHED);

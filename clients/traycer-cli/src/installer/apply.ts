@@ -17,6 +17,7 @@ import { refuseDesktopDisruptionOfForegroundRun } from "../host/foreground-host-
 import type { HostStartOrigin } from "../host/lifecycle-origin";
 import {
   assertHostStoreFormatFloor,
+  installedFloorVersion,
   installedProvenanceOf,
   isSameArchive,
   storeFormatFloorBuildVersion,
@@ -320,10 +321,7 @@ export async function applyHost(
       actualStagedVersion: staged.version,
     };
   }
-  const installedBuildVersion = storeFormatFloorBuildVersion(
-    installed.runtimeVersion,
-    installed.version,
-  );
+  const installedBuildVersion = installedFloorVersion(installed);
   // The one stage reconcile keeps that is not strictly newer is one it
   // cannot order against the install (a registry build over `local-*`,
   // staged by `host download`): not promoted while the data folder is moved.

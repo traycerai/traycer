@@ -114,7 +114,10 @@ interface InstalledFixture {
   readonly archiveSha256: string;
 }
 
-/** The record and tree `host install --from` leaves on disk. */
+/**
+ * The record and tree `host install --from` leaves on disk. A record with no
+ * `runtimeVersion` beside a versioned sidecar is what an older CLI left.
+ */
 async function writeSideLoadedInstall(
   fixture: InstalledFixture,
 ): Promise<void> {
@@ -426,17 +429,47 @@ describe("host install --release over a side-loaded install", () => {
       version: "1.5.1",
       storeFormats: { chatDb: 20 },
       archiveSha256: TARGET_SHA,
-      sidecar: { version: "1.5.1", storeFormats: { chatDb: 20 } },
+      sidecar: { version: "1.5.1" },
     });
     manifestReadTimesOut();
 
     const refusal = await refusalOf("1.5.1");
 
+    expect(downloadStarts).toHaveBeenCalledTimes(1);
     expect(refusal.message).toContain("it reads chat store format 20");
     await expect(readHostInstallRecord(ENV)).resolves.toMatchObject({
       version: INSTALLED_LABEL,
     });
   });
+
+  it.each([
+    ["off the ladder", "staging.1783550586518.bb8c937d9"],
+    ["above the install", "1.5.9"],
+  ])(
+    "judges a deferred target by its catalog version when the archive's stamp is %s",
+    async (_shape, stamp) => {
+      await writeSideLoadedInstall({
+        runtimeVersion: RC2,
+        sidecar: RC2_SIDECAR,
+        archiveSha256: INSTALLED_SHA,
+      });
+      await writeStampedChatDb("epic-at-22", 22);
+      publish({
+        version: "1.5.1",
+        storeFormats: { chatDb: 20 },
+        archiveSha256: TARGET_SHA,
+        sidecar: { version: stamp, storeFormats: { chatDb: 20 } },
+      });
+      manifestReadTimesOut();
+
+      const refusal = await refusalOf("1.5.1");
+
+      expect(refusal.message).toContain(
+        "refusing to install host 1.5.1 over the installed",
+      );
+      expect(refusal.message).toContain("it reads chat store format 20");
+    },
+  );
 
   it("lets a byte-identical archive through whatever the stores say", async () => {
     // Nothing else can clear this: no runtime version, no sidecar, and a store
@@ -502,7 +535,7 @@ describe("host install --release over a side-loaded install", () => {
     const refusal = await refusalOf(RC2);
 
     expect(refusal.message).toBe(
-      `host install: refusing to install host ${RC2} over the installed ${INSTALLED_LABEL} (from a local archive) - this CLI cannot tell which chat store format ${RC2} reads (its registry entry publishes none, its archive declares none, and it is newer than the versions this CLI has a built-in answer for), so it cannot be shown that those chats survive the swap. Install a host that can read them instead, or rerun with --accept-store-format-loss to install it anyway, which may lose access to those chats.`,
+      `host install: refusing to install host ${RC2} over the installed ${INSTALLED_LABEL} (from a local archive) - this CLI cannot tell which chat store format ${RC2} reads (its registry entry publishes none, its archive declares no usable format, and it is newer than the versions this CLI has a built-in answer for), so it cannot be shown that those chats survive the swap. Install a host that can read them instead, or rerun with --accept-store-format-loss to install it anyway, which may lose access to those chats.`,
     );
   });
 
@@ -522,8 +555,35 @@ describe("host install --release over a side-loaded install", () => {
 
     const refusal = await refusalOf(RC2);
 
+    expect(refusal.details).toMatchObject({
+      installedRecordVersion: INSTALLED_LABEL,
+      installedRuntimeVersion: null,
+      installedSource: "local-file",
+      targetEntryRead: true,
+    });
     expect(refusal.message).toBe(
-      `host install: refusing to install host ${RC2} over the installed ${INSTALLED_LABEL} (from a local archive) - 1 epic on this machine could not be read (epic-unreadable: chat.db could not be read), so it cannot be shown that those chats survive the swap. The installed side gave no answer either: its record says ${INSTALLED_LABEL}, no runtime version, from a local archive, and its files declare no store format. Install a host that can read them instead, or rerun with --accept-store-format-loss to install it anyway, which may lose access to those chats.`,
+      `host install: refusing to install host ${RC2} over the installed ${INSTALLED_LABEL} (from a local archive) - 1 epic on this machine could not be read (epic-unreadable: chat.db could not be read), so it cannot be shown that those chats survive the swap. The installed side gave no answer either: its record says ${INSTALLED_LABEL}, no runtime version, from a local archive, and its files declare no usable store format. Install a host that can read them instead, or rerun with --accept-store-format-loss to install it anyway, which may lose access to those chats.`,
+    );
+  });
+
+  it("says what the record does name when its runtime version places nothing", async () => {
+    await writeSideLoadedInstall({
+      runtimeVersion: RC2,
+      sidecar: null,
+      archiveSha256: INSTALLED_SHA,
+    });
+    writeUnreadableChatDb("epic-unreadable");
+    publish({
+      version: RC2,
+      storeFormats: { chatDb: 22 },
+      archiveSha256: TARGET_SHA,
+      sidecar: RC2_SIDECAR,
+    });
+
+    const refusal = await refusalOf(RC2);
+
+    expect(refusal.message).toContain(
+      `its record says ${INSTALLED_LABEL}, runtime version ${RC2}, from a local archive`,
     );
   });
 });

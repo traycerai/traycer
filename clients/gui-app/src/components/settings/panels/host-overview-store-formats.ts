@@ -408,7 +408,9 @@ function installedVersionOperand(input: HostStoreFormatOffer): string | null {
 /**
  * The installed side as the CLI will place it: the RECORD's version and the
  * declaration the installed tree carries, through the same resolver the CLI
- * uses (`readInstalledFloorOperands` → `resolveHostStoreFormats`).
+ * uses (`readInstalledFloorOperands` → `resolveHostStoreFormats`). A local
+ * install with no declaration is the exception: the CLI resolves its runtime
+ * version, which `host.status` does not report.
  *
  * Deliberately the record rather than this build's own `chatDb.current`, for
  * both provenances. The two disagree in exactly the states where the record is

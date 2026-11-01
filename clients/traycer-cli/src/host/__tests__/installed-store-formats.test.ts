@@ -151,6 +151,35 @@ describe("readInstalledFloorOperands", () => {
     });
   });
 
+  it.each([
+    ["a build stamp", "1.5.2.1783550586518.bb8c937d9"],
+    ["the source-tree sentinel", "0.0.0-dev"],
+  ])(
+    "keeps a local install's record version over %s",
+    async (_case, runtimeVersion) => {
+      mocks.readHostInstallRecordMock.mockResolvedValue(
+        sampleRecord({
+          runtimeVersion,
+          source: { kind: "local-file", value: "dl/traycer-host.tar.gz" },
+        }),
+      );
+
+      await expect(
+        readInstalledFloorOperands("production", fakeLogger()),
+      ).resolves.toMatchObject({ version: "1.7.2" });
+    },
+  );
+
+  it("keeps a registry install's catalog version over its runtime stamp", async () => {
+    mocks.readHostInstallRecordMock.mockResolvedValue(
+      sampleRecord({ runtimeVersion: "1.7.2-build.5" }),
+    );
+
+    await expect(
+      readInstalledFloorOperands("production", fakeLogger()),
+    ).resolves.toMatchObject({ version: "1.7.2" });
+  });
+
   it("still returns the version, with storeFormats: null and a warn, when the record's executablePath is missing", async () => {
     // The regression this pins: `dirname(record.executablePath)` throws a
     // TypeError for an `undefined` path - not something `HostInstallRecord`'s

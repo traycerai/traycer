@@ -1103,6 +1103,7 @@ describe("provisionHost - --force does not bypass the store-format floor", () =>
     expect(mocks.gateStoreFormatFloorMock).toHaveBeenCalledTimes(1);
     expect(mocks.gateStoreFormatFloorMock.mock.calls[0]?.[0]).toMatchObject({
       targetVersion: "1.2.0",
+      installedProvenance: { recordVersion: expect.any(String) },
       site: "host ensure",
     });
     expect(stageHostInstallSourceMock).not.toHaveBeenCalled();

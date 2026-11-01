@@ -43,10 +43,11 @@ import {
   type StoreFloorProvenance,
   type StoreFloorTargetIdentity,
   assertStoreFormatFloorAtCommit,
+  commitFloorTargetVersion,
+  installedFloorVersion,
   installedProvenanceOf,
   isSameArchive,
   stagedOrEvidencedStoreFormats,
-  storeFormatFloorBuildVersion,
   type StoreFormatFloorEvidence,
   type TargetRegistryEntry,
 } from "../host/store-format-floor";
@@ -356,12 +357,7 @@ export async function stageHostInstallSource(
       command: "host install",
       environment: opts.environment,
       installedVersion:
-        installed === null
-          ? null
-          : storeFormatFloorBuildVersion(
-              installed.runtimeVersion,
-              installed.version,
-            ),
+        installed === null ? null : installedFloorVersion(installed),
       targetVersion: plan.resolved.entry.version,
     });
   }
@@ -844,6 +840,7 @@ interface CommitFloorOperands {
   /** From both records' `source.kind`: see `StoreFloorTargetIdentity`. */
   readonly targetIdentity: StoreFloorTargetIdentity;
   readonly surveyRoots: ChatStoreSurveyRoots;
+  readonly targetVersion: string;
   readonly declaredStoreFormats: HostStoreFormats | null;
   readonly installedVersion: string | null;
   readonly installedStoreFormats: HostStoreFormats | null;
@@ -884,10 +881,7 @@ async function assertFloorAfterStopOrRestore(
       environment: opts.environment,
       targetIdentity: operands.targetIdentity,
       surveyRoots: operands.surveyRoots,
-      targetVersion: storeFormatFloorBuildVersion(
-        opts.runtimeVersion,
-        opts.version,
-      ),
+      targetVersion: operands.targetVersion,
       declaredStoreFormats: operands.declaredStoreFormats,
       installedVersion: operands.installedVersion,
       installedStoreFormats: operands.installedStoreFormats,
@@ -897,7 +891,7 @@ async function assertFloorAfterStopOrRestore(
       publishedStoreFormats: stagedOrEvidencedStoreFormats(
         opts.targetRegistryEntry,
         opts.storeFormatFloor,
-        storeFormatFloorBuildVersion(opts.runtimeVersion, opts.version),
+        operands.targetVersion,
       ),
       observeQuiescence: () =>
         observeSwapQuiescence(opts.environment, operands.surveyRoots, logger),
@@ -955,18 +949,18 @@ export async function commitInstallFromSource(
     // Resolved once for both checks: on dev this can span a run slot AND the
     // pooled identity homes, and the two checks must judge the same machine.
     surveyRoots: await resolveChatStoreSurveyRoots(opts.environment),
+    targetVersion: commitFloorTargetVersion(
+      opts.targetRegistryEntry,
+      opts.runtimeVersion,
+      opts.version,
+    ),
     declaredStoreFormats: await readDeclarationOfInstalledTree(
       opts.executablePath,
       opts.environment,
       logger,
     ),
     installedVersion:
-      previous === null
-        ? null
-        : storeFormatFloorBuildVersion(
-            previous.runtimeVersion,
-            previous.version,
-          ),
+      previous === null ? null : installedFloorVersion(previous),
     installedStoreFormats:
       previous === null
         ? null

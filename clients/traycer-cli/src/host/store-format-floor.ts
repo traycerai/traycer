@@ -1,6 +1,7 @@
 /**
  * The store-format FLOOR GATE: the one refusal every CLI path that can land
- * OLDER host bytes runs before it downloads, stops or swaps anything.
+ * OLDER host bytes runs before it stops or swaps anything, and before it
+ * downloads anything wherever it can already place the target.
  *
  * ## Why a gate at all
  *
@@ -70,6 +71,7 @@
 import {
   NEWEST_TASK_STORE_FORMAT,
   decideStoreFormatFloor,
+  isReleasedHostVersion,
   resolveHostStoreFormats,
   storeFloorApplicability,
   storeFloorClearedByFormats,
@@ -235,8 +237,8 @@ export interface StoreFormatFloorInput {
    */
   readonly declaredStoreFormats: HostStoreFormats | null;
   /**
-   * The installed build's version (`storeFormatFloorBuildVersion`), or `null`
-   * when nothing is installed. `null` still evaluates: a data directory
+   * The installed build's version (`installedFloorVersion`), or `null` when
+   * nothing is installed. `null` still evaluates: a data directory
    * outlives the install that wrote it (the uninstaller deliberately keeps
    * user data), so "no host installed" is exactly the state in which a
    * downgrade is most likely to be attempted.
@@ -634,7 +636,7 @@ function describeIndeterminate(
       input.provenance.targetEntry === null
         ? ""
         : "its registry entry publishes none, ";
-    return `this CLI cannot tell which chat store format ${input.targetVersion} reads (${entry}its archive declares none, and it is newer than the versions this CLI has a built-in answer for)`;
+    return `this CLI cannot tell which chat store format ${input.targetVersion} reads (${entry}its archive declares no usable format, and it is newer than the versions this CLI has a built-in answer for)`;
   }
   return `${countedEpics(verdict.failures.length)} on this machine could not be read (${describeFailures(verdict.failures)})`;
 }
@@ -666,7 +668,7 @@ function describeUnplacedInstalled(
       : `runtime version ${record.runtimeVersion}`;
   const source =
     record.sourceKind === "registry" ? "the registry" : "a local archive";
-  return ` The installed side gave no answer either: its record says ${record.recordVersion}, ${runtime}, from ${source}, and its files declare no store format.`;
+  return ` The installed side gave no answer either: its record says ${record.recordVersion}, ${runtime}, from ${source}, and its files declare no usable store format.`;
 }
 
 function countedEpics(count: number): string {
@@ -812,9 +814,9 @@ export interface StoreFormatFloorEvidence {
 }
 
 /**
- * The version the floor judges a tree by, landing or installed: the ARCHIVE's
- * own `version.json` stamp when it declares one, else the version the install
- * record carries.
+ * The version the floor judges a tree by when no registry entry names it: the
+ * ARCHIVE's own `version.json` stamp when it declares one, else the version the
+ * install record carries.
  *
  * The two are different strings for one shape of install, and only one of them
  * describes the bytes. `host install --from ./host-v1.2.0.tar.gz` records
@@ -836,6 +838,46 @@ export function storeFormatFloorBuildVersion(
   recordVersion: string,
 ): string {
   return declaredRuntimeVersion ?? recordVersion;
+}
+
+/**
+ * The version the floor judges a commit by.
+ *
+ * With a registry entry, the catalog version: the bytes passed that entry's
+ * digest, so it is the string the registry vouches for, and the ladder tests
+ * need one. An archive stamp need not be SemVer, and a stamp that sorted above
+ * the install, or off the ladder, would stand aside on a target whose entry
+ * names an older format. Without an entry, the tree's own stamp.
+ */
+export function commitFloorTargetVersion(
+  targetEntry: TargetRegistryEntry | null,
+  declaredRuntimeVersion: string | null,
+  committingVersion: string,
+): string {
+  return targetEntry === null
+    ? storeFormatFloorBuildVersion(declaredRuntimeVersion, committingVersion)
+    : committingVersion;
+}
+
+/**
+ * The version the floor judges an install record by.
+ *
+ * A local install's `version` is a label, or the CLI's own version under
+ * `host ensure`, so its runtime stamp names the build - when that stamp is a
+ * release. A build stamp or the source-tree sentinel places on no ladder, and
+ * the sentinel would even sort below every release. A registry install's
+ * `version` is already the catalog's, and it is what the version shortcuts
+ * compare.
+ */
+export function installedFloorVersion(
+  record: Pick<HostInstallRecord, "version" | "runtimeVersion" | "source">,
+): string {
+  const { runtimeVersion } = record;
+  return record.source.kind === "local-file" &&
+    runtimeVersion !== null &&
+    isReleasedHostVersion(runtimeVersion)
+    ? runtimeVersion
+    : record.version;
 }
 
 /** The floor's view of an install record. */
@@ -882,8 +924,9 @@ export async function assertStoreFormatFloorAtCommit(args: {
    * The archive's own `version.json` stamp, or `null` when it declares none.
    *
    * Takes precedence over `committingVersion` as the version this check
-   * judges (`storeFormatFloorBuildVersion`), because a record version can be
-   * derived from a local filename while this one is read from the tree.
+   * judges unless a registry entry names the bytes
+   * (`commitFloorTargetVersion`), because a record version can be derived from
+   * a local filename while this one is read from the tree.
    */
   readonly declaredRuntimeVersion: string | null;
   /**
@@ -902,7 +945,8 @@ export async function assertStoreFormatFloorAtCommit(args: {
   readonly evidence: StoreFormatFloorEvidence;
   readonly logger: ILogger;
 }): Promise<void> {
-  const targetVersion = storeFormatFloorBuildVersion(
+  const targetVersion = commitFloorTargetVersion(
+    args.provenance.targetEntry,
     args.declaredRuntimeVersion,
     args.committingVersion,
   );
@@ -1059,7 +1103,7 @@ export async function assertStoreFormatFloorAfterStop(args: {
   readonly targetIdentity: StoreFloorTargetIdentity;
   /** See `StoreFormatFloorInput.surveyRoots`. */
   readonly surveyRoots: ChatStoreSurveyRoots;
-  /** Already resolved through {@link storeFormatFloorBuildVersion}. */
+  /** Already resolved through {@link commitFloorTargetVersion}. */
   readonly targetVersion: string;
   readonly declaredStoreFormats: HostStoreFormats | null;
   readonly installedVersion: string | null;
@@ -1192,7 +1236,10 @@ function quiescenceFormatsVerdict(
   installed: HostStoreFormatsKnowledge | null,
 ): string {
   if (target.kind !== "known") return "its chat store format is unknown";
-  return installed?.kind === "known"
+  if (installed === null) {
+    return "no installed build vouches for this machine's chat stores";
+  }
+  return installed.kind === "known"
     ? "it reads an older chat store format"
     : "its chat store format cannot be compared with the installed build's";
 }
@@ -1235,10 +1282,11 @@ function quiescenceRefusal(
  * place the version it had.
  *
  * `clearedVersion: null` is a statement, not a placeholder: the commit tail
- * reads it as "nothing was pre-cleared", resolves the target through the fixed
- * table, and refuses anything the table cannot vouch for. That is the point -
- * a path that cannot name its target in advance must be MORE conservative at
- * the swap, not exempt from the check.
+ * reads it as "nothing was pre-cleared", resolves the target from the staged
+ * entry, the archive's declaration and the fixed table, and refuses anything
+ * none of them can place. That is the point - a path that cannot name its
+ * target in advance must be MORE conservative at the swap, not exempt from the
+ * check.
  */
 export function ungatedStoreFormatFloorEvidence(
   site: StoreFormatFloorSite,
@@ -1283,7 +1331,7 @@ export async function gateStoreFormatFloor(args: {
   /**
    * Whether the target is a REGISTRY version whose manifest entry may publish
    * its store formats. False for a local archive or this build's own bundled
-   * host: those have no entry to read, so the resolution is the fixed table
+   * host: those have no entry to read, so this gate has only the fixed table
    * and asking the network would be a round trip that cannot answer.
    */
   readonly consultRegistry: boolean;

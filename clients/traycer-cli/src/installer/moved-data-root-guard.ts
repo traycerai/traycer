@@ -30,7 +30,7 @@ export function movedDataRoot(): string | null {
  * Two floors, both judged before any transfer, staging or swap:
  *
  *  - the installed build's version (`installedVersion`, from
- *    `storeFormatFloorBuildVersion`, `null` when nothing is installed): a
+ *    `installedFloorVersion`, `null` when nothing is installed): a
  *    target must be at or above it. One this cannot order (a `local-*` record
  *    with no runtime version) is refused, because nothing proves the target is
  *    not such an older build. The same version re-installed passes;
