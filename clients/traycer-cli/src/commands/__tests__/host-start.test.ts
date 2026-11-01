@@ -2390,6 +2390,77 @@ function withLifecyclePlatform(
   };
 }
 
+describe("runHostStart - a host that forced its shutdown", () => {
+  // Verbatim what traycer-internal's `host-shutdown.ts` writes.
+  const forcedLine =
+    "host-shutdown-forced reason=watchdog pending=host close (30000ms), before-terminals phase (30000ms), notification room comm-graph-sync-worker (12044ms)";
+
+  async function runChildExit(
+    chunks: readonly string[],
+    code: number,
+  ): Promise<Recorded> {
+    const exec = "/opt/traycer/host/install/traycer-host";
+    const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const stderr = new PassThrough();
+    Object.assign(child, { stderr });
+    const originalSpawn = deps.spawn;
+    if (originalSpawn === undefined) {
+      throw new Error("test spawn dependency missing");
+    }
+    await runUntilExit(
+      () =>
+        runHostStart(
+          { environment: "production", cwd: null },
+          {
+            ...deps,
+            spawn: (command, args, options) => {
+              const spawned = originalSpawn(command, args, options);
+              setImmediate(() => {
+                for (const chunk of chunks) {
+                  stderr.write(Buffer.from(chunk));
+                }
+                stderr.end();
+                child.emit("exit", code, null);
+              });
+              return spawned;
+            },
+          },
+        ),
+      recorded,
+    );
+    return recorded;
+  }
+
+  function terminalMarkers(recorded: Recorded): readonly unknown[] {
+    return recorded.markers.filter((marker) => marker.phase !== "starting");
+  }
+
+  it("records exit 0 with the line as killed, naming it, and stands down with no crash", async () => {
+    const recorded = await runChildExit(
+      ["(node:1) some warning\n", `${forcedLine}\n`],
+      0,
+    );
+
+    expect(terminalMarkers(recorded)).toEqual([
+      expect.objectContaining({
+        phase: "killed",
+        fields: expect.objectContaining({ exitCode: 0, error: forcedLine }),
+      }),
+    ]);
+    expect(recorded.crashReports).toEqual([]);
+    expect(recorded.spawnCalls).toHaveLength(1);
+    expect(recorded.exited).toBe(0);
+  });
+
+  it("keeps a clean exit clean, phrase in the middle of a line included", async () => {
+    const recorded = await runChildExit([`warning: saw ${forcedLine}\n`], 0);
+
+    expect(terminalMarkers(recorded)).toEqual([
+      expect.objectContaining({ phase: "exited" }),
+    ]);
+  });
+});
+
 describe("runHostStart - Windows requested-kill arm", () => {
   const exec = "/opt/traycer/host/install/traycer-host";
   const WIN32_KILL_EXIT_CODE = 0xffffffff;
