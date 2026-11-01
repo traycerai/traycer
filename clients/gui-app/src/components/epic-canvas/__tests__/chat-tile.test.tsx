@@ -586,7 +586,11 @@ import {
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { agentGuiListHarnessesV91 } from "@traycer/protocol/host/agent/gui/contracts";
-import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
+import {
+  sandboxOperationFixture,
+  sandboxSummaryFixture,
+} from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
+import { useSandboxWakeReportStore } from "@/stores/sandboxes/sandbox-wake-report-store";
 import type { TaskSandboxHost } from "@/hooks/epic/use-task-sandbox-end";
 import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
 import { usePendingSandboxSendStore } from "@/stores/sandboxes/pending-sandbox-send-store";
@@ -1751,8 +1755,12 @@ function registerWaitingChatHandoff(): void {
   store.markWaitingChat(scope);
 }
 
+/** Later than the fixture's wake: the host connected, then went quiet. */
+const CONNECTED_ACTIVITY_AT = 1_791_000_020_000;
+
 describe("<ChatTile />", () => {
   beforeEach(() => {
+    useSandboxWakeReportStore.setState({ answeredWakes: {} });
     installLegendListViewportMetrics();
     installLegendListTestClock();
     window.localStorage.clear();
@@ -2466,7 +2474,11 @@ describe("<ChatTile />", () => {
 
   it("keeps an unconfirmed send and its delivery check beside a resting sandbox footer", async () => {
     taskSandboxTestState.sandboxes = [
-      sandboxSummaryFixture({ hostId: HOST_ID, displayName: "resting-box" }),
+      sandboxSummaryFixture({
+        hostId: HOST_ID,
+        displayName: "resting-box",
+        lastActivityAt: CONNECTED_ACTIVITY_AT,
+      }),
     ];
     sandboxCatalogueTestState.catalogue = {
       providers: [],
@@ -2529,7 +2541,11 @@ describe("<ChatTile />", () => {
       },
     ];
     taskSandboxTestState.sandboxes = [
-      sandboxSummaryFixture({ hostId: HOST_ID, displayName: "stopping-box" }),
+      sandboxSummaryFixture({
+        hostId: HOST_ID,
+        displayName: "stopping-box",
+        lastActivityAt: CONNECTED_ACTIVITY_AT,
+      }),
     ];
     useSelectionAuthorityStore.setState({
       attached: true,
@@ -2541,9 +2557,10 @@ describe("<ChatTile />", () => {
     chatHarness.installDeferred();
     renderChatTile();
     await advanceLegendListTime(0);
-
     expect(
-      screen.getAllByText("stopping-box is running, but Traycer can’t connect"),
+      screen.getAllByText(
+        /^stopping-box is running, but Traycer can’t connect/,
+      ),
     ).toHaveLength(1);
     expect(document.body.textContent).not.toContain("is offline");
     expect(screen.queryByTestId("chat-composer-reconnecting")).toBeNull();
@@ -2569,6 +2586,46 @@ describe("<ChatTile />", () => {
     });
     expect(document.body.textContent).not.toContain("is offline");
     expect(screen.queryByText(/isn't available/)).toBeNull();
+  });
+
+  it("says Resuming · pending, not that Traycer can't connect, for an awake sandbox whose host has not reported", async () => {
+    directoryListTestState.entries = [
+      {
+        hostId: HOST_ID,
+        label: "waking-box",
+        kind: "remote",
+        websocketUrl: "wss://sbx.example.com/rpc",
+        version: "1.0.0",
+        transportDialability: "dialable",
+      },
+    ];
+    taskSandboxTestState.sandboxes = [
+      sandboxSummaryFixture({
+        hostId: HOST_ID,
+        displayName: "waking-box",
+        operation: sandboxOperationFixture({
+          fromState: "suspended",
+          state: "awake",
+          cause: "wake",
+        }),
+      }),
+    ];
+    useSelectionAuthorityStore.setState({
+      attached: true,
+      leases: [
+        { hostId: HOST_ID, status: "dead", dead: { reason: "offline" } },
+      ],
+    });
+    chatHarness.teardown();
+    chatHarness.installDeferred();
+    renderChatTile();
+    await advanceLegendListTime(0);
+
+    expect(screen.getAllByText("Resuming waking-box · pending")).toHaveLength(
+      1,
+    );
+    expect(document.body.textContent).not.toContain("Traycer can’t connect");
+    expect(screen.getByRole("button", { name: "Stop" })).toBeTruthy();
   });
 
   it("keeps an ordinary host's reconnect status when the sandbox carrier is absent", async () => {

@@ -34,8 +34,23 @@ vi.mock("@/lib/host", async (importOriginal) => ({
 }));
 vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHost: () => ({ signInUrl: "https://example.test" }),
+  useRunnerHostOrNull: () => ({ signInUrl: "https://example.test" }),
 }));
 vi.mock("@/lib/host/fleet-refresh", () => ({ requestFleetRefresh: vi.fn() }));
+// The stop dialog's session list reads the Needs-you feed and tile opening;
+// neither is under test here.
+vi.mock("@tanstack/react-router", () => ({ useNavigate: () => vi.fn() }));
+vi.mock("@/hooks/home-focus/use-focus-model", async () => {
+  const { EMPTY_FOCUS_MODEL } =
+    await import("@/lib/home-focus/build-focus-model");
+  return { useFocusModel: () => EMPTY_FOCUS_MODEL };
+});
+vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
+  useEpicTileNavigation: () => ({ openTile: vi.fn() }),
+}));
+vi.mock("@/lib/notifications", () => ({
+  routeNotificationForHost: () => false,
+}));
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => null,
 }));
@@ -282,5 +297,68 @@ describe("a failed sandbox's chat actions", () => {
       ),
     );
     expect(binding.auth.createSandbox).not.toHaveBeenCalled();
+  });
+});
+
+function MovingChatLine(props: {
+  readonly summary: SandboxSummary;
+  readonly state: "resuming" | "starting";
+}) {
+  const view = resolveChatSandbox(
+    { kind: "moving", sandbox: props.summary, state: props.state },
+    {
+      reachable: false,
+      canEdit: true,
+      ownedByViewer: true,
+      environmentOwned: true,
+    },
+  );
+  const line = chatSandboxStateLine(view.line, null);
+  return (
+    <div>
+      {line?.line}
+      {line?.actions}
+    </div>
+  );
+}
+
+describe("a moving sandbox's chat actions", () => {
+  function mountMoving(
+    summary: SandboxSummary,
+    state: "resuming" | "starting",
+  ) {
+    return render(
+      <QueryClientProvider client={client}>
+        <MovingChatLine summary={summary} state={state} />
+      </QueryClientProvider>,
+    );
+  }
+
+  it("offers Stop on the pending line of an awake row, and the stop dialog runs the stop", async () => {
+    const summary = sandboxSummaryFixture({ state: "awake" });
+    const binding = mocks.binding;
+    if (binding === null) throw new Error("expected the signed-in binding");
+    mountMoving(summary, "resuming");
+    expect(screen.getByText("Resuming build-box · pending")).toBeTruthy();
+
+    await userEvent.click(screen.getByRole("button", { name: "Stop" }));
+    const dialog = await screen.findByTestId("sandbox-confirm-stop");
+    expect(binding.auth.runSandboxVerb).not.toHaveBeenCalled();
+    await userEvent.click(
+      within(dialog).getByTestId("sandbox-confirm-stop-action"),
+    );
+
+    await waitFor(() => expect(binding.auth.runSandboxVerb).toHaveBeenCalled());
+    expect(binding.auth.runSandboxVerb.mock.calls[0]?.slice(0, 2)).toEqual([
+      summary.id,
+      "stop",
+    ]);
+  });
+
+  it("offers no Stop on the same line while the row is still resuming", () => {
+    mountMoving(sandboxSummaryFixture({ state: "resuming" }), "resuming");
+
+    expect(screen.getByText("Resuming build-box · pending")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
   });
 });

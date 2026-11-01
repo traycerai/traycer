@@ -2344,7 +2344,7 @@ describe("PublishedChatTile - the sandbox's own state", () => {
     sandboxSurface.state = {
       kind: "unreachable",
       sandbox: ROW,
-      lastSeenAt: null,
+      lastContactAt: null,
     };
     signInAsOwner();
     mountCopy();

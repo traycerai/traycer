@@ -1,4 +1,4 @@
-import { renderHook } from "@testing-library/react";
+import { cleanup, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
@@ -9,7 +9,12 @@ import {
 } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
 import type { TaskSandboxHost } from "@/hooks/epic/use-task-sandbox-end";
 import type { SandboxConfigurations } from "@/hooks/sandboxes/use-sandbox-configurations";
-import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
+import {
+  sandboxOperationFixture,
+  sandboxSummaryFixture,
+} from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
+import { resolveChatSandbox } from "@/lib/sandboxes/chat-sandbox-state";
+import { useSandboxWakeReportStore } from "@/stores/sandboxes/sandbox-wake-report-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
 /**
@@ -27,6 +32,8 @@ const sources = vi.hoisted(
     sandboxes: SandboxSummary[] | null;
     configurations: SandboxConfigurations;
     entry: HostDirectoryEntry | null;
+    /** Whether the relay holds a ready session to the host. */
+    readySession: boolean;
   } => ({
     task: { kind: "other" },
     sandboxes: [],
@@ -36,6 +43,7 @@ const sources = vi.hoisted(
       complete: true,
     },
     entry: null,
+    readySession: false,
   }),
 );
 
@@ -59,6 +67,9 @@ vi.mock(
 );
 vi.mock("@/hooks/host/use-host-directory-entry", () => ({
   useHostDirectoryEntry: () => sources.entry,
+}));
+vi.mock("@/hooks/agent/use-host-reachability", () => ({
+  useRemoteSessionPollReadiness: () => sources.readySession,
 }));
 
 import { useChatSandboxState } from "@/hooks/sandboxes/use-chat-sandbox-state";
@@ -99,6 +110,8 @@ beforeEach(() => {
     complete: true,
   };
   sources.entry = null;
+  sources.readySession = false;
+  useSandboxWakeReportStore.setState({ answeredWakes: {} });
   useAuthStore.setState({
     status: "signed-in",
     profile: { userId: VIEWER, userName: "V", email: "v@example.com" },
@@ -107,6 +120,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  cleanup();
   useAuthStore.setState(useAuthStore.getInitialState(), true);
 });
 
@@ -227,7 +241,22 @@ describe("useChatSandboxState", () => {
     expect(stateOf(false)).toEqual({ kind: "none" });
   });
 
-  it("reads an awake sandbox the transport cannot reach as unreachable, with when the directory last saw it", () => {
+  it("reads an awake sandbox the transport cannot reach as unreachable, with when its host last reported", () => {
+    sources.sandboxes = [
+      row({
+        state: "awake",
+        lastActivityAt: NOW - 7 * 60_000 - 20_000,
+      }),
+    ];
+    sources.entry = remoteEntry(HOST, null);
+
+    expect(stateOf(false)).toMatchObject({
+      kind: "unreachable",
+      lastContactAt: NOW - 7 * 60_000 - 20_000,
+    });
+  });
+
+  it("says no last contact when the host never reported, whatever the directory last saw", () => {
     sources.sandboxes = [row({ state: "awake" })];
     const base = remoteEntry(HOST, null);
     const seen: RemoteHostDirectoryEntry = {
@@ -241,17 +270,7 @@ describe("useChatSandboxState", () => {
 
     expect(stateOf(false)).toMatchObject({
       kind: "unreachable",
-      lastSeenAt: NOW - 7 * 60_000 - 20_000,
-    });
-  });
-
-  it("says no last sighting when the directory has none, and nothing at all while reachable", () => {
-    sources.sandboxes = [row({ state: "awake" })];
-    sources.entry = remoteEntry(HOST, null);
-
-    expect(stateOf(false)).toMatchObject({
-      kind: "unreachable",
-      lastSeenAt: null,
+      lastContactAt: null,
     });
     expect(stateOf(true)).toEqual({ kind: "none" });
   });
@@ -283,5 +302,187 @@ describe("useChatSandboxState", () => {
       configuration: { kind: "personal" },
       wakeChangesPayer: false,
     });
+  });
+});
+
+describe("an awake sandbox until its host first reports", () => {
+  const WAKE = 1_791_000_010_000;
+  const offline = (lastSeenAt: number | null): RemoteHostDirectoryEntry => {
+    const base = remoteEntry(HOST, null);
+    return {
+      ...base,
+      remoteStatus: {
+        ...base.remoteStatus,
+        connectivity: "offline",
+        lastSeenAt:
+          lastSeenAt === null ? null : new Date(lastSeenAt).toISOString(),
+      },
+    };
+  };
+  const resumed = (overrides: Partial<SandboxSummary>): SandboxSummary =>
+    row({
+      state: "awake",
+      lastTransitionAt: WAKE,
+      operation: sandboxOperationFixture({
+        fromState: "suspended",
+        state: "awake",
+        cause: "wake",
+      }),
+      ...overrides,
+    });
+
+  /** The chat's view of the row, kept mounted across list and directory moves. */
+  function mountChat(transport: { reachable: boolean }) {
+    const view = renderHook(() => {
+      const state = useChatSandboxState("epic-1", HOST, transport.reachable);
+      return {
+        state,
+        view: resolveChatSandbox(state, {
+          reachable: transport.reachable,
+          canEdit: true,
+          ownedByViewer: true,
+          environmentOwned: false,
+        }),
+      };
+    });
+    return view;
+  }
+
+  it("reads Resuming · pending, not unreachable, with no sign the host ever reported", () => {
+    sources.sandboxes = [resumed({})];
+    sources.entry = offline(null);
+
+    const { result } = mountChat({ reachable: false });
+
+    expect(result.current.state).toMatchObject({
+      kind: "moving",
+      state: "resuming",
+    });
+    expect(result.current.view.composer.kind).toBe("line");
+    expect(result.current.view.line).toMatchObject({
+      place: "slot",
+      text: "Resuming e2e-sbx · pending",
+    });
+  });
+
+  it.each([
+    [
+      "a Start",
+      sandboxOperationFixture({
+        fromState: "stopped",
+        state: "awake",
+        cause: "wake",
+      }),
+    ],
+    ["a first create", null],
+  ] as const)("reads Starting · pending after %s", (_name, operation) => {
+    sources.sandboxes = [resumed({ operation })];
+    sources.entry = offline(null);
+
+    const { result } = mountChat({ reachable: false });
+
+    expect(result.current.state).toMatchObject({
+      kind: "moving",
+      state: "starting",
+    });
+    expect(result.current.view.line?.text).toBe("Starting e2e-sbx · pending");
+  });
+
+  it("keeps the move it watched when the row turns awake with no operation", () => {
+    sources.sandboxes = [row({ state: "resuming", lastTransitionAt: WAKE })];
+    sources.entry = offline(null);
+    const { result, rerender } = mountChat({ reachable: false });
+    expect(result.current.view.line?.text).toBe("Resuming e2e-sbx · pending");
+
+    sources.sandboxes = [
+      row({ state: "awake", lastTransitionAt: WAKE + 1, operation: null }),
+    ];
+    rerender();
+
+    expect(result.current.state).toMatchObject({
+      kind: "moving",
+      state: "resuming",
+    });
+    expect(result.current.view.line?.text).toBe("Resuming e2e-sbx · pending");
+  });
+
+  it("reads can't connect when the host answered in this wake and then stopped", () => {
+    sources.sandboxes = [resumed({})];
+    sources.entry = offline(null);
+    sources.readySession = true;
+    const transport = { reachable: true };
+    const { result, rerender } = mountChat(transport);
+    expect(result.current.state).toMatchObject({ kind: "none" });
+
+    sources.readySession = false;
+    transport.reachable = false;
+    rerender();
+
+    expect(result.current.state).toMatchObject({ kind: "unreachable" });
+    expect(result.current.view.line?.text).toBe(
+      "e2e-sbx is running, but Traycer can’t connect",
+    );
+  });
+
+  it("forgets the previous wake's answer when the row wakes again", () => {
+    sources.sandboxes = [resumed({})];
+    sources.entry = offline(null);
+    sources.readySession = true;
+    const transport = { reachable: true };
+    const { result, rerender } = mountChat(transport);
+    sources.readySession = false;
+    transport.reachable = false;
+    rerender();
+    expect(result.current.state.kind).toBe("unreachable");
+
+    sources.sandboxes = [resumed({ lastTransitionAt: WAKE + 60_000 })];
+    rerender();
+
+    expect(result.current.state).toMatchObject({
+      kind: "moving",
+      state: "resuming",
+    });
+  });
+
+  describe("on a device that never watched the wake", () => {
+    it("reads unreachable when the host reported activity after the wake", () => {
+      sources.sandboxes = [resumed({ lastActivityAt: WAKE + 1 })];
+      sources.entry = offline(null);
+
+      expect(
+        mountChat({ reachable: false }).result.current.state,
+      ).toMatchObject({ kind: "unreachable", lastContactAt: WAKE + 1 });
+    });
+
+    it.each([
+      ["no report at all", {}],
+      ["only a report from before the wake", { lastActivityAt: WAKE - 1 }],
+    ] as const)(
+      "waits on %s, a later directory sighting changing nothing",
+      (_name, overrides) => {
+        sources.sandboxes = [resumed(overrides)];
+        sources.entry = offline(WAKE + 60_000);
+
+        expect(
+          mountChat({ reachable: false }).result.current.state,
+        ).toMatchObject({
+          kind: "moving",
+          state: "resuming",
+        });
+      },
+    );
+  });
+
+  it.each([
+    ["a failed guest configuration", { guestConfigured: false }, "unreachable"],
+    ["a frozen sandbox", { frozen: true }, "resting"],
+    ["an Automations pod", { kind: "automation" }, "unreachable"],
+  ] as const)("never waits for %s", (_name, overrides, kind) => {
+    sources.sandboxes = [resumed(overrides)];
+    sources.entry = offline(null);
+
+    expect(mountChat({ reachable: false }).result.current.state.kind).toBe(
+      kind,
+    );
   });
 });

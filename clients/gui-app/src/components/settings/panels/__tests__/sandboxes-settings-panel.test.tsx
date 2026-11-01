@@ -51,8 +51,10 @@ import type {
   UserSandboxCost,
 } from "@traycer/protocol/host/sandbox-control";
 import type { SandboxAutomationOpened } from "@/hooks/sandboxes/use-sandbox-automation-open-mutation";
+import { hostStatusV110 } from "@traycer/protocol/host/status/contracts";
 import type { SandboxSessionReport } from "@/lib/sandboxes/sandbox-row-lines";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { useSandboxWakeReportStore } from "@/stores/sandboxes/sandbox-wake-report-store";
 import { useLandingPanelStore } from "@/stores/home/landing-panel-store";
 import { useSurfaceHostSelectionStore } from "@/stores/host/surface-host-selection-store";
 import {
@@ -72,6 +74,24 @@ import {
   SANDBOXES_CANT_BE_CREATED,
 } from "@/lib/sandboxes/sandbox-strings";
 import { useSandboxShapeMemoryStore } from "@/stores/composer/sandbox-shape-memory-store";
+
+const HOST_STATUS = hostStatusV110.responseSchema.parse({
+  ready: true,
+  hostVersion: "1.2.3",
+  protocolVersion: { major: 1, minor: 0 },
+  busy: false,
+  busySessionCount: 0,
+  busyBreakdown: null,
+  updateProgress: null,
+  updateOperation: null,
+  updateTransaction: null,
+  storeFormats: null,
+  install: null,
+  processMemory: null,
+  crossHostMessaging: null,
+  sessions: { agents: [], terminals: [] },
+  updatesExternallyManaged: null,
+});
 
 const CATALOGUE: SandboxCatalogue = {
   providers: [
@@ -134,7 +154,8 @@ const mocks = vi.hoisted(() => ({
   catalogue: null as SandboxCatalogue | null,
   report: { kind: "unknown" } as SandboxSessionReport,
   sessionFailed: false,
-  resumePending: false,
+  /** Whether the host has answered a status read for this wake. */
+  hasReported: true,
   realSessions: false,
   costs: null as UserSandboxCost | null,
   /** `GET /api/sandboxes/automation`; `null` while it has not answered. */
@@ -254,7 +275,7 @@ vi.mock(
           : {
               report: mocks.report,
               failed: mocks.sessionFailed,
-              resumePending: mocks.resumePending,
+              hasReported: mocks.hasReported,
             };
       },
     };
@@ -540,8 +561,9 @@ describe("<SandboxesSettingsPanel />", () => {
     mocks.catalogue = null;
     mocks.report = { kind: "unknown" };
     mocks.sessionFailed = false;
-    mocks.resumePending = false;
+    mocks.hasReported = true;
     mocks.realSessions = false;
+    useSandboxWakeReportStore.setState({ answeredWakes: {} });
     host.status.mockClear();
     mocks.costs = null;
     mocks.automation = null;
@@ -2022,7 +2044,7 @@ describe("<SandboxesSettingsPanel />", () => {
   it("keeps Resume pending through the awake ACK until the host reports", () => {
     const sandbox = row("sbx-resume", { state: "resuming" });
     mocks.sandboxes = [sandbox];
-    mocks.resumePending = true;
+    mocks.hasReported = false;
     // A previous wake's count must not accompany this pending line.
     mocks.report = { kind: "stale", count: 4, at: Date.now() };
     const panel = renderUi(<SandboxesSettingsPanel />);
@@ -2038,7 +2060,7 @@ describe("<SandboxesSettingsPanel />", () => {
     panel.rerender(<SandboxesSettingsPanel />);
     expect(clock()).toBe("Resuming · pending");
 
-    mocks.resumePending = false;
+    mocks.hasReported = true;
     mocks.sessionFailed = false;
     mocks.report = liveSessionReport({ agents: [], terminals: [] }, false);
     panel.rerender(<SandboxesSettingsPanel />);
@@ -2049,66 +2071,181 @@ describe("<SandboxesSettingsPanel />", () => {
     ).toBe("0 sessions running");
 
     // Lifecycle state changes always take over from the pending wake.
-    mocks.resumePending = false;
+    mocks.hasReported = false;
     mocks.sandboxes = [{ ...sandbox, state: "stopped" }];
     panel.rerender(<SandboxesSettingsPanel />);
     expect(clock()).toContain("Stopped");
   });
 
-  it("yields an unanswered Resume to the lifecycle-confirmed unreachable line", async () => {
-    useAuthStore.setState({
-      status: "signed-in",
-      contextMetadata: { userId: "u-viewer", username: "viewer" },
-    });
-    mocks.realSessions = true;
-    const binding = createFakeSandboxBinding();
-    mocks.binding = binding;
-    const resuming = row("sbx-resume-unreachable", { state: "resuming" });
-    const awake = { ...resuming, state: "awake" } satisfies SandboxSummary;
-    const online = sandboxHostEntry(resuming.hostId, null);
-    mocks.entry = online;
-    const confirmation = Promise.withResolvers<SandboxListFetchResult>();
-    binding.auth.listSandboxes
-      .mockResolvedValueOnce({
-        kind: "ok",
-        response: { sandboxes: [resuming] },
-      })
-      .mockResolvedValueOnce({ kind: "ok", response: { sandboxes: [awake] } })
-      .mockReturnValue(confirmation.promise);
+  it("keeps Starting pending, past the awake ACK, until the host reports", () => {
+    const sandbox = row("sbx-start", { state: "starting" });
+    mocks.sandboxes = [sandbox];
+    mocks.hasReported = false;
+    const panel = renderUi(<SandboxesSettingsPanel />);
+    const clock = (): string =>
+      within(rowOf(sandbox.id)).getByTestId("sandboxes-row-clock").textContent;
+    expect(clock()).toBe("Starting · pending");
+
+    mocks.sandboxes = [{ ...sandbox, state: "awake" }];
+    panel.rerender(<SandboxesSettingsPanel />);
+    expect(clock()).toBe("Starting · pending");
+    expect(
+      within(rowOf(sandbox.id)).queryByTestId("sandboxes-row-sessions"),
+    ).toBeNull();
+
+    mocks.hasReported = true;
+    panel.rerender(<SandboxesSettingsPanel />);
+    expect(clock()).toContain("Awake");
+  });
+
+  it("keeps a watched Resume naming Resume when the row turns awake with no operation", () => {
+    const sandbox = row("sbx-no-op", { state: "resuming", operation: null });
+    mocks.sandboxes = [sandbox];
+    mocks.hasReported = false;
+    const panel = renderUi(<SandboxesSettingsPanel />);
+    const clock = (): string =>
+      within(rowOf(sandbox.id)).getByTestId("sandboxes-row-clock").textContent;
+    expect(clock()).toBe("Resuming · pending");
+    mocks.sandboxes = [{ ...sandbox, state: "awake" }];
+    panel.rerender(<SandboxesSettingsPanel />);
+    expect(clock()).toBe("Resuming · pending");
+  });
+
+  it("keeps a Resume this row sent waiting past a connectable directory when the list skips to awake", async () => {
+    const resting = row("sbx-sent", { state: "suspended" });
+    mocks.sandboxes = [resting];
+    mocks.hasReported = false;
+    mocks.entry = sandboxHostEntry(resting.hostId, null);
     const page = hostPage();
     const panel = renderUi(<SandboxesSettingsPanel />);
     const clock = (): string =>
-      within(rowOf(resuming.id)).getByTestId("sandboxes-row-clock").textContent;
-    await waitFor(() => expect(host.status).toHaveBeenCalledTimes(1));
-    expect(clock()).toBe("Resuming · pending");
+      within(rowOf(resting.id)).getByTestId("sandboxes-row-clock").textContent;
+    expect(clock()).toContain("Suspended");
 
-    await act(() =>
-      page.queryClient.invalidateQueries({
-        queryKey: sandboxQueryKeys.list(binding.auth, "u-viewer"),
-      }),
-    );
-    expect(clock()).toBe("Resuming · pending");
-
-    const offline: RemoteHostDirectoryEntry = {
-      ...online,
-      transportDialability: "not-dialable",
-      remoteStatus: { ...online.remoteStatus, connectivity: "offline" },
-    };
-    mocks.entry = offline;
-    panel.rerender(<SandboxesSettingsPanel />);
-    await waitFor(() =>
-      expect(binding.auth.listSandboxes).toHaveBeenCalledTimes(3),
-    );
-    // Losing the host alone does not replace the pending lifecycle line.
-    expect(clock()).toBe("Resuming · pending");
-    await act(async () => {
-      confirmation.resolve({ kind: "ok", response: { sandboxes: [awake] } });
-      await confirmation.promise;
+    const reply = Promise.withResolvers<void>();
+    const mutation = page.queryClient
+      .getMutationCache()
+      .build(page.queryClient, {
+        mutationKey: sandboxMutationKeys.verb(resting.id),
+        mutationFn: () => reply.promise,
+        onMutate: () => ({ userId: null }),
+      });
+    let completion = Promise.resolve();
+    act(() => {
+      completion = mutation.execute("resume");
     });
-    // host.status is still unanswered; the fresh lifecycle read owns this verdict.
-    await waitFor(() =>
-      expect(clock()).toBe("Running, but Traycer can't connect"),
-    );
+    await waitFor(() => expect(mutation.state.status).toBe("pending"));
+
+    mocks.sandboxes = [{ ...resting, state: "awake" }];
+    panel.rerender(<SandboxesSettingsPanel />);
+    expect(clock()).toBe("Resuming · pending");
+
+    await act(async () => {
+      reply.resolve();
+      await completion;
+    });
+  });
+
+  it.each([
+    ["a failed guest configuration", { guestConfigured: false }],
+    ["a frozen sandbox", { frozen: true, frozenAt: 1_791_000_020_000 }],
+    ["an Automations pod", { kind: "automation" }],
+  ] as const)("never holds the pending line for %s", (_name, overrides) => {
+    const sandbox = row("sbx-no-wait", { state: "awake", ...overrides });
+    mocks.sandboxes = [sandbox];
+    mocks.hasReported = false;
+    renderUi(<SandboxesSettingsPanel />);
+    expect(
+      within(rowOf(sandbox.id)).getByTestId("sandboxes-row-clock").textContent,
+    ).not.toMatch(/pending/);
+  });
+
+  describe("a resumed host that has not reported, then goes offline", () => {
+    async function mountResumedRow(answerFirst: boolean) {
+      useAuthStore.setState({
+        status: "signed-in",
+        contextMetadata: { userId: "u-viewer", username: "viewer" },
+      });
+      mocks.realSessions = true;
+      if (answerFirst) {
+        host.status.mockImplementationOnce(() =>
+          Promise.resolve(HOST_STATUS as never),
+        );
+      }
+      const binding = createFakeSandboxBinding();
+      mocks.binding = binding;
+      const resuming = row("sbx-resume-unreachable", { state: "resuming" });
+      const awake = { ...resuming, state: "awake" } satisfies SandboxSummary;
+      const online = sandboxHostEntry(resuming.hostId, null);
+      mocks.entry = online;
+      const confirmation = Promise.withResolvers<SandboxListFetchResult>();
+      binding.auth.listSandboxes
+        .mockResolvedValueOnce({
+          kind: "ok",
+          response: { sandboxes: [resuming] },
+        })
+        .mockResolvedValueOnce({
+          kind: "ok",
+          response: { sandboxes: [awake] },
+        })
+        .mockReturnValue(confirmation.promise);
+      const page = hostPage();
+      const panel = renderUi(<SandboxesSettingsPanel />);
+      const clock = (): string =>
+        within(rowOf(resuming.id)).getByTestId("sandboxes-row-clock")
+          .textContent;
+      await waitFor(() => expect(host.status).toHaveBeenCalledTimes(1));
+      await act(() =>
+        page.queryClient.invalidateQueries({
+          queryKey: sandboxQueryKeys.list(binding.auth, "u-viewer"),
+        }),
+      );
+      const offline: RemoteHostDirectoryEntry = {
+        ...online,
+        transportDialability: "not-dialable",
+        remoteStatus: { ...online.remoteStatus, connectivity: "offline" },
+      };
+      return { binding, panel, clock, offline, awake, confirmation };
+    }
+
+    it("stays on the pending line when the host never answered", async () => {
+      const view = await mountResumedRow(false);
+      expect(view.clock()).toBe("Resuming · pending");
+      mocks.entry = view.offline;
+      view.panel.rerender(<SandboxesSettingsPanel />);
+      expect(view.clock()).toBe("Resuming · pending");
+      // A host that has not reported is not missing, so nothing reads the
+      // lifecycle again to confirm it.
+      expect(view.binding.auth.listSandboxes).toHaveBeenCalledTimes(2);
+      await act(async () => {
+        view.confirmation.resolve({
+          kind: "ok",
+          response: { sandboxes: [view.awake] },
+        });
+        await view.confirmation.promise;
+      });
+      expect(view.clock()).toBe("Resuming · pending");
+    });
+
+    it("reads can't connect once the host answered first and then stopped", async () => {
+      const view = await mountResumedRow(true);
+      await waitFor(() => expect(view.clock()).toContain("Awake"));
+      mocks.entry = view.offline;
+      view.panel.rerender(<SandboxesSettingsPanel />);
+      await waitFor(() =>
+        expect(view.binding.auth.listSandboxes).toHaveBeenCalledTimes(3),
+      );
+      await act(async () => {
+        view.confirmation.resolve({
+          kind: "ok",
+          response: { sandboxes: [view.awake] },
+        });
+        await view.confirmation.promise;
+      });
+      await waitFor(() =>
+        expect(view.clock()).toBe("Running, but Traycer can't connect"),
+      );
+    });
   });
 
   it.each(["destroying", "awake", "destroyed"] as const)(
