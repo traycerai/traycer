@@ -16,7 +16,10 @@ import {
 } from "@/stores/epics/open-epic/test-support/open-store-for-test";
 import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
+import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
 import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
+import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import type { ChatProjection } from "@/stores/epics/open-epic/types";
 import type { ChatStreamSyncState } from "@/hooks/chats/use-chat-stream-sync-state";
 import {
   SURFACE_SYNC_RANK,
@@ -44,8 +47,15 @@ vi.mock("@/lib/epic-selectors", async (importOriginal) => ({
 }));
 // The title hook's cloud-list arm (a TanStack query) - this suite mounts no
 // QueryClient, and no tile here is a chat the projection lacks a record for.
+const cloudList = vi.hoisted(
+  (): { rows: readonly CloudChatSummary[] | null } => ({
+    rows: null,
+  }),
+);
 vi.mock("@/hooks/chats/use-cloud-chat-queries", () => ({
-  useCloudChatList: () => ({ data: undefined }),
+  useCloudChatList: () => ({
+    data: cloudList.rows === null ? undefined : { chats: cloudList.rows },
+  }),
 }));
 
 /**
@@ -265,6 +275,8 @@ describe("<MobileCurrentTileBar trailing={null} />", () => {
   });
   afterEach(() => {
     cleanup();
+    useEpicCanvasStore.getState().clearAllTitleGenerationPending();
+    cloudList.rows = null;
     mocks.handle.current?.dispose();
     mocks.handle.current = null;
   });
@@ -296,6 +308,83 @@ describe("<MobileCurrentTileBar trailing={null} />", () => {
     expect(title.tagName).toBe("SPAN");
     fireEvent.click(title);
     expect(screen.queryByRole("textbox")).toBeNull();
+  });
+
+  it("paints New agent while the chat's first title is awaited, then the title in place", () => {
+    useEpicCanvasStore.getState().markChatTitlePending(CHAT_TILE.id, "");
+    render(
+      <MobileCurrentTileBar
+        epicId="epic-1"
+        tile={CHAT_TILE}
+        level2="bar"
+        trailing={null}
+      />,
+    );
+    expect(screen.getByTestId("mobile-current-tile-title").textContent).toBe(
+      "New agent",
+    );
+
+    const generated: ChatProjection = {
+      id: CHAT_TILE.id,
+      title: "Generated title",
+      parentId: null,
+      createdAt: 0,
+      updatedAt: Date.now() + 1_000,
+      userId: "viewer-1",
+      ownedByViewer: true,
+      hostId: "host-A",
+      isTitleEditedByUser: false,
+      docResident: false,
+      settings: null,
+      archivedAt: null,
+    };
+    act(() => {
+      mocks.handle.current?.store.setState({
+        chats: { allIds: [CHAT_TILE.id], byId: { [CHAT_TILE.id]: generated } },
+      });
+    });
+
+    expect(screen.getByTestId("mobile-current-tile-title").textContent).toBe(
+      "Generated title",
+    );
+  });
+
+  it("shows the cloud list's title, not New agent, for a chat the projection has no record of", () => {
+    cloudList.rows = [
+      {
+        identity: {
+          taskId: "epic-1",
+          chatId: CHAT_TILE.id,
+          ownerUserId: "viewer-1",
+        },
+        ownerHostId: "host-A",
+        createdAt: 1,
+        visibility: "task",
+        title: "Cloud title",
+        isTitleEditedByUser: false,
+        parentChatId: null,
+        isArchived: false,
+        runSettingsSummary: null,
+        metadataUpdatedAt: 2,
+        headSha256: null,
+        publishedAt: null,
+        throughRecordSeq: null,
+        isOwnedByViewer: true,
+      },
+    ];
+    useEpicCanvasStore.getState().markChatTitlePending(CHAT_TILE.id, "");
+    render(
+      <MobileCurrentTileBar
+        epicId="epic-1"
+        tile={CHAT_TILE}
+        level2="bar"
+        trailing={null}
+      />,
+    );
+
+    expect(screen.getByTestId("mobile-current-tile-title").textContent).toBe(
+      "Cloud title",
+    );
   });
 
   describe("a terminal tile", () => {

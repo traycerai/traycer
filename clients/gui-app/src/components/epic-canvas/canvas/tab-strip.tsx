@@ -42,7 +42,9 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { NEW_AGENT_TITLE } from "@/lib/display-title";
 import {
+  useEpicTabAwaitingFirstTitle,
   useEpicTabDisplayTitle,
   useEpicLiveArtifactTitleGenerating,
   useRegisteredEpicNodeArchived,
@@ -574,6 +576,15 @@ function TerminalTabItem(
   );
 }
 
+function tabTitleNode(tab: EpicCanvasTileRef) {
+  return {
+    id: tab.id,
+    name: tab.name,
+    type: tab.type,
+    hostId: tabHostId(tab),
+  };
+}
+
 function useTabRenameControl(args: {
   readonly tab: EpicCanvasTileRef;
   readonly epicId: string;
@@ -603,22 +614,23 @@ function useTabRenameControl(args: {
     isTerminalTab && terminalTabUsesLegacyReads(terminalControl)
       ? resolvedHostClient
       : null;
+  const titleNode = tabTitleNode(tab);
   const fallbackDisplayTitle = useEpicTabDisplayTitle(
-    {
-      id: tab.id,
-      name: tab.name,
-      type: tab.type,
-      hostId: tabHostId(tab),
-    },
+    titleNode,
     epicId,
     terminalHostClient,
   );
   useRecordTitleWriteThrough(tab, epicId, viewTabId, fallbackDisplayTitle);
-  const displayTitle =
+  const awaitingFirstTitle = useEpicTabAwaitingFirstTitle(titleNode, epicId);
+  const resolvedTitle =
     browserPresentation?.title ??
     (terminalControl?.mode === "capable" || terminalControl?.mode === "unknown"
       ? terminalControl.displayTitle
       : fallbackDisplayTitle);
+  // "New agent" is painted only. The snapshot above and the rename below both
+  // read the resolved title: the label is true for a first Send's few
+  // seconds, and stored it would outlive a title that never comes.
+  const displayTitle = awaitingFirstTitle ? NEW_AGENT_TITLE : resolvedTitle;
   const canRename = canRenameCanvasTab(tab, canRenameTabs, terminalControl);
   const renameTerminal = useTerminalRenameFor(terminalHostClient);
   const { mutate: renameTerminalMutate } = renameTerminal;
@@ -637,7 +649,7 @@ function useTabRenameControl(args: {
     onRename(groupId, tab.instanceId, next);
   };
   const rename = useInlineRename({
-    value: displayTitle,
+    value: resolvedTitle,
     canEdit: canRename,
     onCommit: handleRename,
   });
@@ -787,9 +799,8 @@ function TabItemBody(
     });
   const isArchived = useRegisteredEpicNodeArchived(epicId, tab.id);
   const titleGenerationPending = useEpicLiveArtifactTitleGenerating(
-    tab.type === "chat" ? tab.id : null,
+    tabTitleNode(tab),
     epicId,
-    tabHostId(tab),
   );
   const setRef = useMemo(
     () => mergeRefs<HTMLElement>(domRef, dragRef, dropRef),

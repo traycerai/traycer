@@ -20,7 +20,9 @@ import { useStreamSyncingSpell } from "@/hooks/sync/use-stream-syncing-spell";
 import { SURFACE_SYNC_RANK } from "@/stores/sync/surface-sync-store";
 import { NO_STREAM_SYNCING_SPELL } from "@/lib/sync/stream-syncing-state";
 import "@/components/layout/shell/mobile-shell-touch-targets.css";
+import { NEW_AGENT_TITLE } from "@/lib/display-title";
 import {
+  useEpicTabAwaitingFirstTitle,
   useEpicTabDisplayTitle,
   useEpicLiveArtifactTitleGenerating,
 } from "@/lib/epic-selectors";
@@ -141,24 +143,28 @@ function MobileCurrentTileBarBody(
     isTerminal && terminalTabUsesLegacyReads(terminalControl)
       ? resolvedHostClient
       : null;
+  const titleNode = {
+    id: tile.id,
+    name: tile.name,
+    type: tile.type,
+    hostId: tile.hostId,
+  };
   const fallbackDisplayTitle = useEpicTabDisplayTitle(
-    {
-      id: tile.id,
-      name: tile.name,
-      type: tile.type,
-      hostId: tile.hostId,
-    },
+    titleNode,
     epicId,
     terminalHostClient,
   );
   const titleGenerationPending = useEpicLiveArtifactTitleGenerating(
-    tile.type === "chat" ? tile.id : null,
+    titleNode,
     epicId,
-    tile.hostId,
   );
+  const awaitingFirstTitle = useEpicTabAwaitingFirstTitle(titleNode, epicId);
   const displayTitle =
     browserPresentation?.title ??
-    terminalTabDisplayTitle(terminalControl, fallbackDisplayTitle);
+    terminalTabDisplayTitle(
+      terminalControl,
+      awaitingFirstTitle ? NEW_AGENT_TITLE : fallbackDisplayTitle,
+    );
 
   // A chat is the one tile kind whose own stream can be away while its content
   // stays on screen with nothing said about it. Terminals already overlay

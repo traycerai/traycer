@@ -33,6 +33,7 @@ import {
 import { TabStrip } from "@/components/epic-canvas/canvas/tab-strip";
 import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { findOpenTileInTab } from "@/stores/epics/canvas/canvas-selectors";
 import type { SplitDirection } from "@/stores/epics/canvas/types";
 import { TestEpicSessionWrapper } from "./test-epic-session";
 import { createEpicSessionTestHarness } from "./test-epic-session-harness";
@@ -128,6 +129,20 @@ vi.mock("@/hooks/environment/use-environment-arms", () => ({
     taskId.length === 0 ? [] : armRows.value,
 }));
 
+// The viewer's cloud list: the one source of a title for a chat the
+// projection holds no record of. Everything else in the module stays real.
+const cloudListRows = vi.hoisted(
+  (): { value: readonly CloudChatSummary[] } => ({
+    value: [],
+  }),
+);
+vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/chats/use-cloud-chat-queries")
+  >()),
+  useCloudChatList: () => ({ data: { chats: cloudListRows.value } }),
+}));
+
 // Intentionally do not mock ChatProgressIcon: title-generation composition
 // must exercise real running / notification / idle-default precedence.
 
@@ -146,6 +161,8 @@ const TAB = {
 };
 
 const harness = createEpicSessionTestHarness(EPIC_ID);
+const onRenameSpy =
+  vi.fn<(groupId: string, tabId: string, next: string) => void>();
 let queryClient: QueryClient;
 
 function seedDocWithChat(doc: Y.Doc): void {
@@ -208,12 +225,85 @@ function renderTabStrip(tab: typeof TAB, canRenameTabs: boolean): void {
             onCloseAll: onMenuGroup,
             onSplit: onMenuSplit,
             onRevealInSidebar,
-            onRename: () => undefined,
+            onRename: onRenameSpy,
           }}
         />
       </TestEpicSessionWrapper>
     </QueryClientProvider>,
   );
+}
+
+/**
+ * Opens `TAB` as a real tile in the real canvas store under `VIEW_TAB_ID`, so
+ * the strip's snapshot write-through has a persisted `name` to move. Returns
+ * the tile as the canvas holds it.
+ */
+function seedChatTile(name: string): typeof TAB {
+  const ref = { ...TAB, name };
+  const canvasStore = useEpicCanvasStore.getState();
+  canvasStore.openEpicTabWithId(VIEW_TAB_ID, EPIC_ID, "Epic");
+  canvasStore.openTileInTab(VIEW_TAB_ID, ref);
+  const found = findOpenTileInTab(VIEW_TAB_ID, ref);
+  if (found === null) throw new Error("expected the seeded chat tile");
+  return { ...ref, instanceId: found.instanceId };
+}
+
+function persistedTileName(instanceId: string): string | null {
+  const canvas = useEpicCanvasStore.getState().canvasByTabId[VIEW_TAB_ID];
+  return canvas?.tilesByInstanceId[instanceId]?.name ?? null;
+}
+
+/**
+ * Reopens the session with a chat that has no title yet, so nothing titled
+ * ever reaches the strip's snapshot write-through.
+ */
+function installUntitledChat(): void {
+  harness.teardown();
+  harness.install((doc) => {
+    seedDocWithChat(doc);
+    const chats = doc.getMap<unknown>("epic").get("chats");
+    if (!(chats instanceof Y.Map)) throw new Error("expected chats map");
+    const chat: unknown = chats.get(CHAT_ID);
+    if (!(chat instanceof Y.Map)) throw new Error("expected chat map");
+    chat.set("title", "");
+  }, "owner");
+}
+
+/** Reopens the session with no projection record for the chat at all. */
+function installAbsentChat(): void {
+  harness.teardown();
+  harness.install((doc) => {
+    seedDocWithChat(doc);
+    const chats = doc.getMap<unknown>("epic").get("chats");
+    if (!(chats instanceof Y.Map)) throw new Error("expected chats map");
+    chats.delete(CHAT_ID);
+  }, "owner");
+}
+
+function cloudRow(title: string | null): CloudChatSummary {
+  return {
+    identity: { taskId: EPIC_ID, chatId: CHAT_ID, ownerUserId: "viewer-1" },
+    ownerHostId: TAB.hostId,
+    createdAt: 1,
+    visibility: "task",
+    title,
+    isTitleEditedByUser: false,
+    parentChatId: null,
+    isArchived: false,
+    runSettingsSummary: null,
+    metadataUpdatedAt: 2,
+    headSha256: null,
+    publishedAt: null,
+    throughRecordSeq: null,
+    isOwnedByViewer: true,
+  };
+}
+
+/** The send marks the first title pending once the untitled chat is held. */
+function awaitFirstTitle(): void {
+  act(() => {
+    useEpicCanvasStore.getState().markChatTitlePending(CHAT_ID, "");
+  });
 }
 
 async function flushEpicSnapshot(): Promise<void> {
@@ -285,6 +375,9 @@ describe("TabStrip title", () => {
     harness.teardown();
     useEpicCanvasStore.getState().clearAllTitleGenerationPending();
     armRows.value = [];
+    cloudListRows.value = [];
+    onRenameSpy.mockReset();
+    useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   });
 
   it("renders projected artifact titles over the canvas tab's opening name", async () => {
@@ -651,5 +744,221 @@ describe("TabStrip title", () => {
       `tab-title-input-${TAB.instanceId}`,
     );
     await waitFor(() => expect(document.activeElement).toBe(input));
+  });
+
+  it("paints New agent while the first title is awaited and never stores it in the tile snapshot", async () => {
+    installUntitledChat();
+    const tile = seedChatTile("Untitled agent");
+    renderTabStrip(tile, true);
+    await flushEpicSnapshot();
+    awaitFirstTitle();
+
+    await waitFor(() => {
+      expect(screen.getAllByRole("tab", { name: "New agent" })).toHaveLength(1);
+    });
+    expect(
+      screen.queryAllByRole("tab", { name: "Untitled agent" }),
+    ).toHaveLength(0);
+    expect(persistedTileName(tile.instanceId)).toBe("Untitled agent");
+
+    const handle = __getOpenEpicRegistryForTests().get(EPIC_ID);
+    if (handle === null) throw new Error("expected open epic handle");
+    await act(async () => {
+      await handle.store.getState().renameArtifact(CHAT_ID, "Generated title");
+    });
+
+    await waitFor(() => {
+      expect(
+        screen.getAllByRole("tab", { name: "Generated title" }),
+      ).toHaveLength(1);
+    });
+    expect(screen.queryAllByRole("tab", { name: "New agent" })).toHaveLength(0);
+    await waitFor(() => {
+      expect(persistedTileName(tile.instanceId)).toBe("Generated title");
+    });
+  });
+
+  it("goes back to Untitled agent when the first-title mark ends with no title, and the snapshot never held New agent", async () => {
+    installUntitledChat();
+    const tile = seedChatTile("Untitled agent");
+    renderTabStrip(tile, true);
+    await flushEpicSnapshot();
+    awaitFirstTitle();
+    await waitFor(() => {
+      expect(screen.getAllByRole("tab", { name: "New agent" })).toHaveLength(1);
+    });
+
+    act(() => {
+      useEpicCanvasStore.getState().clearChatTitlePending(CHAT_ID);
+    });
+
+    await waitFor(() => {
+      expect(
+        screen.getAllByRole("tab", { name: "Untitled agent" }),
+      ).toHaveLength(1);
+    });
+    expect(screen.queryAllByRole("tab", { name: "New agent" })).toHaveLength(0);
+    expect(persistedTileName(tile.instanceId)).toBe("Untitled agent");
+  });
+
+  it("keeps a titled chat's title under a pending mark", async () => {
+    const tile = seedChatTile("New chat");
+    useEpicCanvasStore.getState().markChatTitlePending(CHAT_ID, "New chat");
+    renderTabStrip(tile, true);
+    await flushEpicSnapshot();
+
+    expect(screen.getAllByRole("tab", { name: "New chat" })).toHaveLength(1);
+    expect(screen.queryAllByRole("tab", { name: "New agent" })).toHaveLength(0);
+    expect(
+      screen.getByTestId(`tab-title-generating-${tile.instanceId}`),
+    ).toBeTruthy();
+  });
+
+  it("seeds Edit Title with the resolved title, not New agent, and commits nothing when left unchanged", async () => {
+    installUntitledChat();
+    const tile = seedChatTile("Untitled agent");
+    renderTabStrip(tile, true);
+    await flushEpicSnapshot();
+    awaitFirstTitle();
+    await waitFor(() => {
+      expect(screen.getAllByRole("tab", { name: "New agent" })).toHaveLength(1);
+    });
+
+    fireEvent.contextMenu(screen.getByTestId(`tab-item-${tile.instanceId}`));
+    fireEvent.click(await screen.findByText("Edit Title"));
+    const input = await screen.findByTestId(
+      `tab-title-input-${tile.instanceId}`,
+    );
+    if (!(input instanceof HTMLInputElement)) throw new Error("expected input");
+    expect(input.value).toBe("Untitled agent");
+
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    expect(onRenameSpy).not.toHaveBeenCalled();
+    expect(persistedTileName(tile.instanceId)).toBe("Untitled agent");
+  });
+
+  describe("a title landing while Edit Title is open on an awaited chat", () => {
+    async function startEditWhileAwaiting(): Promise<{
+      readonly tile: typeof TAB;
+      readonly input: HTMLInputElement;
+    }> {
+      installUntitledChat();
+      const tile = seedChatTile("Untitled agent");
+      renderTabStrip(tile, true);
+      await flushEpicSnapshot();
+      awaitFirstTitle();
+      await waitFor(() => {
+        expect(screen.getAllByRole("tab", { name: "New agent" })).toHaveLength(
+          1,
+        );
+      });
+      fireEvent.contextMenu(screen.getByTestId(`tab-item-${tile.instanceId}`));
+      fireEvent.click(await screen.findByText("Edit Title"));
+      const input = await screen.findByTestId(
+        `tab-title-input-${tile.instanceId}`,
+      );
+      if (!(input instanceof HTMLInputElement))
+        throw new Error("expected input");
+      expect(input.value).toBe("Untitled agent");
+      const handle = __getOpenEpicRegistryForTests().get(EPIC_ID);
+      if (handle === null) throw new Error("expected open epic handle");
+      await act(async () => {
+        await handle.store
+          .getState()
+          .renameArtifact(CHAT_ID, "Generated title");
+      });
+      await waitFor(() => {
+        expect(persistedTileName(tile.instanceId)).toBe("Generated title");
+      });
+      return { tile, input };
+    }
+
+    it("commits nothing when the seed is left untouched, and the snapshot keeps the landed title", async () => {
+      const { tile, input } = await startEditWhileAwaiting();
+
+      fireEvent.keyDown(input, { key: "Enter" });
+
+      expect(onRenameSpy).not.toHaveBeenCalled();
+      expect(persistedTileName(tile.instanceId)).toBe("Generated title");
+    });
+
+    it("still commits a name the person typed", async () => {
+      const { tile, input } = await startEditWhileAwaiting();
+
+      fireEvent.change(input, { target: { value: "My own name" } });
+      fireEvent.keyDown(input, { key: "Enter" });
+
+      expect(onRenameSpy).toHaveBeenCalledExactlyOnceWith(
+        GROUP_ID,
+        tile.instanceId,
+        "My own name",
+      );
+    });
+  });
+
+  describe("a chat the projection holds no record of", () => {
+    it("keeps New agent while the cloud list has no row for it", async () => {
+      installAbsentChat();
+      const tile = seedChatTile("Untitled agent");
+      renderTabStrip(tile, true);
+      await flushEpicSnapshot();
+      awaitFirstTitle();
+
+      await waitFor(() => {
+        expect(screen.getAllByRole("tab", { name: "New agent" })).toHaveLength(
+          1,
+        );
+      });
+      expect(persistedTileName(tile.instanceId)).toBe("Untitled agent");
+      expect(
+        screen.getByTestId(`tab-title-generating-${tile.instanceId}`),
+      ).toBeTruthy();
+    });
+
+    it("shows the cloud list's title, not New agent, under a held mark", async () => {
+      installAbsentChat();
+      cloudListRows.value = [cloudRow("Cloud title")];
+      const tile = seedChatTile("Untitled agent");
+      renderTabStrip(tile, true);
+      await flushEpicSnapshot();
+      awaitFirstTitle();
+
+      await waitFor(() => {
+        expect(persistedTileName(tile.instanceId)).toBe("Cloud title");
+      });
+      expect(screen.getAllByRole("tab", { name: "Cloud title" })).toHaveLength(
+        1,
+      );
+      expect(screen.queryAllByRole("tab", { name: "New agent" })).toHaveLength(
+        0,
+      );
+      expect(screen.queryByLabelText("Close New agent")).toBeNull();
+    });
+
+    it("stops the title spinner and releases the mark once the cloud list supplies the title", async () => {
+      installAbsentChat();
+      cloudListRows.value = [cloudRow("Cloud title")];
+      const tile = seedChatTile("Untitled agent");
+      renderTabStrip(tile, true);
+      await flushEpicSnapshot();
+      awaitFirstTitle();
+
+      await waitFor(() => {
+        expect(persistedTileName(tile.instanceId)).toBe("Cloud title");
+      });
+      expect(
+        screen.queryByTestId(`tab-title-generating-${tile.instanceId}`),
+      ).toBeNull();
+      // The purge is deferred to a microtask, so wait for it.
+      await waitFor(() => {
+        expect(
+          Object.hasOwn(
+            useEpicCanvasStore.getState().pendingChatTitles,
+            CHAT_ID,
+          ),
+        ).toBe(false);
+      });
+    });
   });
 });
