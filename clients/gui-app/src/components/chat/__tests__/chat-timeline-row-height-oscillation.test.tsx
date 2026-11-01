@@ -10,7 +10,7 @@
  * row that only flipped a few times lands on its real size.
  */
 import { cleanup, render } from "@testing-library/react";
-import { createRef, useState, type RefObject } from "react";
+import { Activity, createRef, useState, type RefObject } from "react";
 import {
   afterEach,
   beforeEach,
@@ -263,6 +263,47 @@ describe("ChatTimeline row height oscillation", () => {
 
 type Row = { readonly id: string; readonly text: string };
 
+const PINNED_ROW_KEY = "row-2";
+
+function bareRows(targetText: string): Row[] {
+  return Array.from({ length: 5 }, (_unused, index) => ({
+    id: `row-${index}`,
+    text: index === 2 ? targetText : `row ${index}`,
+  }));
+}
+
+function BareList({
+  listRef,
+  className,
+  targetText,
+}: {
+  readonly listRef: RefObject<LegendListRef | null>;
+  readonly className: string | undefined;
+  readonly targetText: string;
+}) {
+  return (
+    <LegendList<Row>
+      ref={listRef}
+      className={className}
+      data={bareRows(targetText)}
+      estimatedItemSize={90}
+      keyExtractor={(item) => item.id}
+      recycleItems={false}
+      renderItem={({ item }) => <div data-index={item.id}>{item.text}</div>}
+    />
+  );
+}
+
+/** Sizes every row from the text it shows. */
+function measureBareRowsByText(): void {
+  reshapeMeasurements((element, rect) => {
+    const shell = rowShellOf(element);
+    return shell === null
+      ? rect
+      : withSize(rect, rect.width, heightForText(shell.textContent));
+  });
+}
+
 const NARROW_LIST_CLASS = "narrow-cross-axis-list";
 const NARROW_ROW_WIDTH = 300;
 const WIDE_ROW_WIDTH = 900;
@@ -306,20 +347,11 @@ describe("LegendList pinned row measurement", () => {
       );
     });
     const listRef = createRef<LegendListRef | null>();
-    const rows = (targetText: string): Row[] =>
-      Array.from({ length: 5 }, (_unused, index) => ({
-        id: `row-${index}`,
-        text: index === 2 ? targetText : `row ${index}`,
-      }));
     const list = (targetText: string) => (
-      <LegendList<Row>
-        ref={listRef}
+      <BareList
+        listRef={listRef}
         className={NARROW_LIST_CLASS}
-        data={rows(targetText)}
-        estimatedItemSize={90}
-        keyExtractor={(item) => item.id}
-        recycleItems={false}
-        renderItem={({ item }) => <div data-index={item.id}>{item.text}</div>}
+        targetText={targetText}
       />
     );
 
@@ -333,8 +365,69 @@ describe("LegendList pinned row measurement", () => {
     // Rejected on the scrolling axis (back to a height this pass already
     // saw), while carrying the widest row the list has measured.
     view.rerender(list("short and wide"));
-    expect(mounted.getState().sizes.get("row-2")).toBe(TALL_HEIGHT);
+    expect(mounted.getState().sizes.get(PINNED_ROW_KEY)).toBe(TALL_HEIGHT);
 
     expect(contentMinWidth(mounted)).toBe(`${WIDE_ROW_WIDTH}px`);
+  });
+
+  it("leaves nothing scheduled once a list with a pinned row unmounts", async () => {
+    measureBareRowsByText();
+    const listRef = createRef<LegendListRef | null>();
+    const list = (targetText: string) => (
+      <BareList
+        listRef={listRef}
+        className={undefined}
+        targetText={targetText}
+      />
+    );
+
+    const view = render(list("short"));
+    await settleLegendList();
+    const mounted = requireList(listRef);
+    view.rerender(list("short, revised"));
+    view.rerender(list("tall"));
+    view.rerender(list("short, final"));
+    expect(mounted.getState().sizes.get(PINNED_ROW_KEY)).toBe(TALL_HEIGHT);
+    expect(vi.getTimerCount()).toBeGreaterThan(0);
+
+    view.unmount();
+
+    // Nothing the list scheduled outlives it, so nothing can reach the
+    // disposed list once the clock moves on.
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("measures a pinned row again when its hidden list is shown", async () => {
+    measureBareRowsByText();
+    const listRef = createRef<LegendListRef | null>();
+    // Hiding tears the list's effects down and showing mounts them again over
+    // the same list state, which is what a chain left behind would survive.
+    const list = (targetText: string, mode: "visible" | "hidden") => (
+      <Activity mode={mode}>
+        <BareList
+          listRef={listRef}
+          className={undefined}
+          targetText={targetText}
+        />
+      </Activity>
+    );
+
+    const view = render(list("short", "visible"));
+    await settleLegendList();
+    view.rerender(list("short, revised", "visible"));
+    view.rerender(list("tall", "visible"));
+    view.rerender(list("short, final", "visible"));
+    expect(requireList(listRef).getState().sizes.get(PINNED_ROW_KEY)).toBe(
+      TALL_HEIGHT,
+    );
+
+    view.rerender(list("short, final", "hidden"));
+    await settleLegendList();
+    view.rerender(list("short, final", "visible"));
+    await settleLegendList();
+
+    expect(requireList(listRef).getState().sizes.get(PINNED_ROW_KEY)).toBe(
+      SHORT_HEIGHT,
+    );
   });
 });
