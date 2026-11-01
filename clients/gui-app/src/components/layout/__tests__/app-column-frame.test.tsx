@@ -5,7 +5,10 @@ import {
   AppColumnFrame,
   type AppColumnFrameProps,
 } from "@/components/layout/app-column-frame";
-import type { AppColumnChrome } from "@/components/layout/header/app-title-band-kind";
+import {
+  PHONE_SHELL_STRIP_CHROME,
+  type AppColumnChrome,
+} from "@/components/layout/header/app-title-band-kind";
 import { SheetJoinScope } from "@/components/layout/tabs/sheet-join";
 import { usePublishSheetJoin } from "@/components/layout/tabs/sheet-join-context";
 import type { SheetJoinPane } from "@/components/layout/tabs/side-strip/side-tab-join";
@@ -106,6 +109,16 @@ describe("AppColumnFrame", () => {
     expect(surfaceFrame().classList.contains("md:task-surface-frame")).toBe(
       true,
     );
+  });
+
+  it("seats the phone shell's header in the content column beside the strip, not above the row", () => {
+    const column = renderFrame(PHONE_SHELL_STRIP_CHROME);
+
+    const strip = screen.getByTestId("strip-slot");
+    const header = screen.getByTestId("header-slot");
+    expect(column.firstElementChild).not.toBe(header);
+    expect(strip.nextElementSibling?.contains(header)).toBe(true);
+    expect(precedes(header, screen.getByRole("main"))).toBe(true);
   });
 
   it("puts a right strip after <main>, and still frames the surface plainly", () => {
