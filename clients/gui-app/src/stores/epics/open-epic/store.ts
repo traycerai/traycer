@@ -386,6 +386,16 @@ export interface OpenEpicState {
    * older host's doc projection is its authoritative record table.
    */
   readonly chatRecordListAuthoritative: boolean;
+  /**
+   * Whether `epic.listTuiAgents` has produced an answer this session: the
+   * terminal twin of {@link OpenEpicState.chatRecordListAuthoritative}, with
+   * the same contract. Until it is true a persisted terminal agent can be
+   * absent from the tree. A transient failure leaves it false, and
+   * `E_HOST_UNSUPPORTED` marks it true, because such a host's doc projection
+   * is its authoritative record table. Withdrawn on a viewer switch; a new
+   * epic session starts from false in its own store.
+   */
+  readonly tuiAgentRecordListAuthoritative: boolean;
   /** Projected adapter arm - see `EpicControlProjection`. */
   readonly installedArm: EpicAdapterArm | null;
   /**
@@ -713,6 +723,8 @@ export interface OpenEpicState {
   peekChatIngestSeq: () => number;
   /** Marks the record list authoritative after success or unsupported. */
   markChatRecordListAuthoritative: () => void;
+  /** The terminal twin of {@link OpenEpicState.markChatRecordListAuthoritative}. */
+  markTuiAgentRecordListAuthoritative: () => void;
   /**
    * Applies ONE `host.chatRecords.subscribe` delta - the push half of the same
    * record table {@link OpenEpicState.applyChatRecords} fills from the poll.
@@ -2173,6 +2185,12 @@ export function createOpenEpicStore(
               payload: {},
             });
           },
+          markTuiAgentRecordListAuthoritative: () => {
+            runtime.command({
+              kind: "mark-tui-agent-records-authoritative",
+              payload: {},
+            });
+          },
           applyConfirmedChatMutation: (mutation) => {
             runtime.command({
               kind: "apply-confirmed-chat-mutation",
@@ -2637,6 +2655,10 @@ export function createOpenEpicStore(
     runtime.currentUser(nextUserId);
     runtime.command({
       kind: "mark-chat-records-not-authoritative",
+      payload: {},
+    });
+    runtime.command({
+      kind: "mark-tui-agent-records-not-authoritative",
       payload: {},
     });
     // Re-derive the record slices from the RETAINED raw rows, then re-project.

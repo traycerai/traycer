@@ -149,7 +149,6 @@ import {
   useEpicActiveAgentIds,
   useAncestorIds,
   useEpicArtifactRecords,
-  useEpicChatRecordListAuthoritative,
   useEpicConnectionStatus,
   useEpicPermissionRole,
   useEpicNodeHostIds,
@@ -161,7 +160,11 @@ import {
   type EpicTuiAgentProjection,
   type EpicTreeRecord,
 } from "@/lib/epic-selectors";
-import { describeTreeDeleteDisclosure } from "@/lib/epic-tree-cascade";
+import {
+  describeTreeDeleteDisclosure,
+  selectNestedAgentsKnown,
+} from "@/lib/epic-tree-cascade";
+import { useEpicStore } from "@/hooks/use-epic-store";
 import { isEditableRole, mutationDisabledHint } from "@/lib/epic-permissions";
 import { useEpicExportArtifacts } from "@/hooks/epic/use-epic-export-artifacts-mutation";
 import {
@@ -1540,7 +1543,7 @@ function SidebarBulkDeleteController(props: {
   const selection = useSidebarBulkSelection();
   const liveRecords = useEpicArtifactRecords();
   const tree = useEpicTreeIndex();
-  const nestedChatsKnown = useEpicChatRecordListAuthoritative();
+  const nestedAgentsKnown = useEpicStore(selectNestedAgentsKnown);
   const navigateNested = useEpicNestedFocusNavigation();
   const closeCanvasTab = useEpicCanvasStore((s) => s.closeCanvasTab);
   const markArtifactSelfDeleted = useEpicCanvasStore(
@@ -1792,10 +1795,10 @@ function SidebarBulkDeleteController(props: {
           tree,
           kind: "agent",
           nodeIds,
-          nestedChatsKnown,
+          nestedAgentsKnown,
         })
       : describeTreeDeleteDisclosure({ tree, kind: "artifact", nodeIds });
-  }, [nestedChatsKnown, panelId, pendingDeleteIds, tree]);
+  }, [nestedAgentsKnown, panelId, pendingDeleteIds, tree]);
 
   return (
     <ConfirmDestructiveDialog
