@@ -102,6 +102,19 @@ export interface MembersDetailsSubject {
   readonly roleLabel: string | null;
 }
 
+/**
+ * A role change picked in a row whose check has not answered yet. Its confirm
+ * is deferred until the answer lands, so for that while the row is the only
+ * place the pick exists: `running` names the role being checked, since the
+ * select still shows the one the member holds, and `cancelLabel` names what
+ * the control beside it drops.
+ */
+export interface PendingRoleCheck {
+  readonly userId: string;
+  readonly running: string;
+  readonly cancelLabel: string;
+}
+
 export function isTeamRole(value: string): value is TeamRole {
   return value === "admin" || value === "editor" || value === "viewer";
 }

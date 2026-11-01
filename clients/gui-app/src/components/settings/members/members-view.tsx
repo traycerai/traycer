@@ -25,6 +25,7 @@ import {
   RETRY_LABEL,
   acceptedPeopleCount,
   addPlanOnDashboardLabel,
+  cancelRoleChangeAriaLabel,
   demotionWhatKeepsWorking,
   isRoleDemotion,
   memberDisplayName,
@@ -33,6 +34,7 @@ import {
   membersHeaderLine,
   membersReadFailed,
   planRequiredRefusal,
+  roleCheckRunning,
 } from "@/components/settings/members/copy";
 import {
   seatsManagementUrl,
@@ -45,6 +47,7 @@ import type {
   MembersReadState,
   MembersRemoveOutcome,
   MembersSetRoleOutcome,
+  PendingRoleCheck,
   PlanUnlinkPreviewModel,
   PreviewState,
   RemovePreviewModel,
@@ -117,19 +120,45 @@ function previewState<Preview>(
  * consequence appended to it after focus has entered is one a screen reader is
  * never told, and the plan lead can only be written once the rows are known.
  *
- * Answered is read from the query, not from `previewState`, which cannot tell
- * an answer from a re-read in flight — both are `loading` there, so a Retry
- * would close the dialog its own button is in. Until the answer lands the pick
- * has no dialog to show for it, so the row it came from says so.
+ * Answered is `isFetched`, the count of reads this entry has completed, and
+ * neither `previewState` nor the live `data`/`isError` pair can stand in for
+ * it. Both say `loading` while a re-read is in flight, and a retry after a
+ * REFUSED first read un-errors the entry on its way out: the fetch dispatch
+ * spreads `{error: null, status: 'pending'}` whenever there is no data
+ * (query-core `fetchState`), so `isError` goes false with `data` still
+ * undefined and the dialog would close under its own Retry button. The
+ * completion count only ever grows, so an answered question stays answered.
+ *
+ * It names a question this gesture asked, not a leftover, because the preview
+ * query is read with `gcTime: 0` and `enabled` only while a dialog names the
+ * member (`use-environment-members-remove-preview-query.ts`): a pick starts
+ * cold. A later `gcTime` here would hand a new pick an older answer, so the
+ * two belong together.
+ *
+ * Until the answer lands the pick has no dialog to show for it, so the row it
+ * came from says so, and offers to take it back.
  */
 function demotionGate(
   query: UseQueryResult<EnvironmentMembersRemovePreviewResponse, HostRpcError>,
-  member: MembersListMember | null,
-): { readonly open: boolean; readonly checkingUserId: string | null } {
-  const answered = query.data !== undefined || query.isError;
+  demotion: PendingDemotion | null,
+): {
+  readonly open: boolean;
+  readonly checking: PendingRoleCheck | null;
+} {
+  const answered = query.isFetched;
   return {
-    open: answered && member !== null,
-    checkingUserId: answered ? null : targetUserId(member),
+    open: answered && demotion !== null,
+    checking:
+      answered || demotion === null
+        ? null
+        : {
+            userId: demotion.member.userId,
+            running: roleCheckRunning(demotion.nextRole),
+            cancelLabel: cancelRoleChangeAriaLabel(
+              memberDisplayName(demotion.member),
+              demotion.nextRole,
+            ),
+          },
   };
 }
 
@@ -367,7 +396,7 @@ export function MembersView(props: {
       whatKeepsWorking: demotionWhatKeepsWorking(),
     }),
   );
-  const demotionDialog = demotionGate(demotionQuery, demoting);
+  const demotionDialog = demotionGate(demotionQuery, demotion);
 
   const membersReady = membersRead === "ready";
   // Dismissed here: hidden at once, before the read that carries the seen
@@ -397,12 +426,24 @@ export function MembersView(props: {
     setDemotionRefusal(null);
   };
 
+  // Every opener of a question in this view retires a demotion still waiting
+  // on its check, Remove and Revoke through here and Invite below. Its confirm
+  // is deferred until the answer lands, so without this the answer mounts a
+  // second modal over the dialog this gesture just opened — and on the same
+  // member, a confirmed removal would leave a confirm asking to change the
+  // role of someone who is gone.
   const openRemove = (member: MembersListMember): void => {
+    closeDemotion();
     setRemoveRefusal(null);
     setRemoveTarget({
       kind: member.inviteState === "pending" ? "pending-invite" : "accepted",
       member,
     });
+  };
+
+  const openInvite = (): void => {
+    closeDemotion();
+    setInviteOpen(true);
   };
 
   /**
@@ -500,7 +541,7 @@ export function MembersView(props: {
         {viewerIsAdmin && membersReady ? (
           <Button
             type="button"
-            onClick={() => setInviteOpen(true)}
+            onClick={openInvite}
             data-testid="members-invite"
           >
             {INVITE_LABEL}
@@ -538,7 +579,8 @@ export function MembersView(props: {
           peopleCount={peopleCount}
           legacyMembers={legacyMembers}
           rowDetails={rowDetails}
-          checkingRoleUserId={demotionDialog.checkingUserId}
+          checkingRole={demotionDialog.checking}
+          onCancelRoleChange={closeDemotion}
           onRoleChange={openRoleChange}
           onRemove={openRemove}
           onRetry={onRetryMembers}

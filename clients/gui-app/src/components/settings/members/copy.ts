@@ -461,6 +461,23 @@ export function demotionConfirmLabel(nextRole: TeamRole): string {
   return `Change to ${ROLE_WORDS[nextRole]}`;
 }
 
+/**
+ * The row's tell while a picked demotion's check is still out. It names the
+ * role, because the select still shows the role the person HAS: without it the
+ * row says only that something is being checked.
+ */
+export function roleCheckRunning(nextRole: TeamRole): string {
+  return `Checking ${ROLE_WORDS[nextRole]}…`;
+}
+
+/** The row's way out of that wait, named for what it drops. */
+export function cancelRoleChangeAriaLabel(
+  memberName: string,
+  nextRole: TeamRole,
+): string {
+  return `Cancel the change to ${ROLE_WORDS[nextRole]} for ${memberName}`;
+}
+
 export function planUnlinkTitle(planLabel: string, teamName: string): string {
   return `Unlink ${planLabel} from ${teamName}`;
 }

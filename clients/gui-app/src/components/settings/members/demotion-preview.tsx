@@ -128,7 +128,13 @@ export function DemotionPreviewDialog(props: {
             </div>
           </DialogDescription>
         </DialogHeader>
-        {preview.status === "failed" ? (
+        {/* Mounted while the read it offers is in flight as well, not only
+            when it has failed. The caller does not open this dialog before the
+            first answer, so `loading` here is this Retry's own request: the
+            line still says what happened, and the button that started the
+            request keeps its place and goes quiet, rather than the control and
+            the explanation vanishing together until the read lands. */}
+        {preview.status === "failed" || preview.status === "loading" ? (
           <div className="flex flex-wrap items-center gap-2">
             <p
               className="max-w-[72ch] text-ui-sm text-destructive"
@@ -137,7 +143,20 @@ export function DemotionPreviewDialog(props: {
             >
               {demotionPreviewFailed(props.memberName)}
             </p>
-            <Button type="button" variant="outline" onClick={props.onRetry}>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={props.onRetry}
+              disabled={preview.status === "loading"}
+            >
+              {preview.status === "loading" ? (
+                <AgentSpinningDots
+                  className={undefined}
+                  testId="members-demotion-retry-busy"
+                  variant={undefined}
+                  tone="inherit"
+                />
+              ) : null}
               {RETRY_LABEL}
             </Button>
           </div>

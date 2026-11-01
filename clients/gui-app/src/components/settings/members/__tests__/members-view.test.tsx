@@ -26,8 +26,9 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import userEvent, { type UserEvent } from "@testing-library/user-event";
 import type { ReactNode } from "react";
+import type { QueryClient } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import type {
   EnvironmentMembersInviteResponse,
@@ -129,6 +130,8 @@ function renderView(options: {
   >;
   readonly onNoticeSeen: Mock<() => void>;
   readonly onRetryMembers: Mock<() => void>;
+  /** The real client the view reads through, for settling assertions. */
+  readonly queryClient: QueryClient;
 } {
   const harness = mountTeamPage(
     { kind: "host" },
@@ -177,7 +180,13 @@ function renderView(options: {
       </RunnerHostContext.Provider>
     </harness.Wrapper>,
   );
-  return { onSetRole, onRemove, onNoticeSeen, onRetryMembers };
+  return {
+    onSetRole,
+    onRemove,
+    onNoticeSeen,
+    onRetryMembers,
+    queryClient: harness.queryClient,
+  };
 }
 
 const BASE = {
@@ -199,19 +208,21 @@ function rowOf(userId: string): HTMLElement {
   return row;
 }
 
-/**
- * Previews the test answers by hand, one per member. `delivered` says the
- * answer has left the host boundary, so a case that expects an answer to
- * change nothing can wait for it before asserting that nothing changed.
- */
-function deferredPreviews(): {
+interface DeferredPreviews {
   readonly answer: PreviewAnswer;
   readonly resolve: (
     userId: string,
     preview: EnvironmentMembersRemovePreviewResponse,
   ) => void;
   readonly delivered: (userId: string) => boolean;
-} {
+}
+
+/**
+ * Previews the test answers by hand, one per member. `delivered` says the
+ * answer has left the host boundary, so a case that expects an answer to
+ * change nothing can wait for it before asserting that nothing changed.
+ */
+function deferredPreviews(): DeferredPreviews {
   const pending = new Map<
     string,
     (preview: EnvironmentMembersRemovePreviewResponse) => void
@@ -234,6 +245,32 @@ function deferredPreviews(): {
     },
     delivered: (userId) => delivered.has(userId),
   };
+}
+
+/**
+ * Answer a held preview and wait for the read it belongs to to be over, so a
+ * case asserting that a late answer changes nothing is asserting it after the
+ * answer. Three witnesses, because no one of them holds in every case: the
+ * host boundary says the bytes left; the client's own `isFetching` says the
+ * query that asked for them is no longer running, which is trivially true once
+ * a withdrawn pick's query has been reaped; and the flush is last rather than
+ * instead, since a count of microtasks I picked is not a completion signal.
+ */
+async function settled(
+  previews: DeferredPreviews,
+  queryClient: QueryClient,
+  userId: string,
+): Promise<void> {
+  await waitFor(() => {
+    expect(() => {
+      previews.resolve(userId, { ...PREVIEW, linkedPlan: "Claude Max" });
+    }).not.toThrow();
+  });
+  await waitFor(() => expect(previews.delivered(userId)).toBe(true));
+  await waitFor(() => expect(queryClient.isFetching()).toBe(0));
+  await act(async () => {
+    await Promise.resolve();
+  });
 }
 
 describe("MembersView", () => {
@@ -530,7 +567,14 @@ function describedAtFirstAppearance(): {
         : (document.getElementById(describedBy)?.textContent ?? "");
   };
   const observer = new MutationObserver(read);
-  observer.observe(document.body, { childList: true, subtree: true });
+  // Attributes too: the reading must not depend on `aria-describedby` landing
+  // in the same commit as the dialog node, or a later commit would be read as
+  // an empty description and fail the case for the wrong reason.
+  observer.observe(document.body, {
+    attributes: true,
+    childList: true,
+    subtree: true,
+  });
   return { text: () => first, stop: () => observer.disconnect() };
 }
 
@@ -547,9 +591,15 @@ describe("MembersView demotion announcement", () => {
     await user.click(screen.getByRole("combobox", { name: "Role for Priya" }));
     await user.click(await screen.findByRole("option", { name: "Viewer" }));
 
-    await screen.findByTestId("members-demotion-preview-table");
-    appearance.stop();
-    const described = appearance.text();
+    let described: string | null = null;
+    try {
+      await screen.findByTestId("members-demotion-preview-table");
+      described = appearance.text();
+    } finally {
+      // Bounded whatever happens above: an observer left on `document.body`
+      // outlives this case and reads the next one's dialogs.
+      appearance.stop();
+    }
     expect(described).not.toBeNull();
     expect(described).toContain(
       "Priya can no longer change Acme's settings. They can still see them.",
@@ -594,7 +644,7 @@ describe("MembersView demotion announcement", () => {
   it("drops a pending demotion when the person picks another role instead", async () => {
     const user = userEvent.setup();
     const previews = deferredPreviews();
-    const { onSetRole } = renderView({
+    const { onSetRole, queryClient } = renderView({
       ...BASE,
       viewerRole: "admin",
       members: [ADMIN, SECOND_ADMIN, EDITOR],
@@ -618,15 +668,7 @@ describe("MembersView demotion announcement", () => {
     );
     expect(screen.queryByTestId("members-demotion-preview")).toBeNull();
 
-    await waitFor(() => {
-      expect(() => {
-        previews.resolve("u-editor", { ...PREVIEW, linkedPlan: "Claude Max" });
-      }).not.toThrow();
-    });
-    await waitFor(() => expect(previews.delivered("u-editor")).toBe(true));
-    await act(async () => {
-      await Promise.resolve();
-    });
+    await settled(previews, queryClient, "u-editor");
     // The answer belongs to a question nobody is asking any more, so it opens
     // nothing. Asserted before the row's own tell on purpose: dropping the
     // demotion is what both depend on, and this is the consequence that would
@@ -634,6 +676,169 @@ describe("MembersView demotion announcement", () => {
     expect(screen.queryByTestId("members-demotion-preview")).toBeNull();
     expect(
       within(rowOf("u-editor")).queryByTestId("members-role-checking"),
+    ).toBeNull();
+  });
+
+  // The window the deferral opened leaves the row live, so every other opener
+  // in this view is a gesture that can land a confirm on top of the dialog it
+  // just opened. One case per opener, because the rule has to be written at
+  // each of them: `openRemove` serves Remove AND Revoke, and Invite is its own.
+  it.each([
+    {
+      opener: "Remove",
+      press: async (user: UserEvent) => {
+        await user.click(
+          within(rowOf("u-editor")).getByRole("button", { name: "Remove" }),
+        );
+      },
+      opened: "members-remove-preview",
+    },
+    {
+      opener: "Revoke",
+      press: async (user: UserEvent) => {
+        await user.click(screen.getByRole("button", { name: "Revoke" }));
+      },
+      opened: "members-revoke-dialog",
+    },
+    {
+      opener: "Invite",
+      press: async (user: UserEvent) => {
+        await user.click(screen.getByTestId("members-invite"));
+      },
+      opened: "members-invite-dialog",
+    },
+    {
+      // Details is opened inside the row's own entry, which this view does not
+      // own, so the row withdraws the pick when anything in its action group
+      // is pressed. The harness's entry is a plain button, which is the whole
+      // claim: a press in that group, whatever it opens.
+      opener: "Details",
+      press: async (user: UserEvent) => {
+        await user.click(
+          within(rowOf("u-editor")).getByRole("button", { name: "Details" }),
+        );
+      },
+      opened: null,
+    },
+  ])(
+    "drops a pending demotion when the person presses $opener instead",
+    async ({ press, opened }) => {
+      const user = userEvent.setup();
+      const previews = deferredPreviews();
+      const { queryClient } = renderView({
+        ...BASE,
+        viewerRole: "admin",
+        members: [ADMIN, SECOND_ADMIN, EDITOR, PENDING],
+        preview: previews.answer,
+      });
+      await user.click(
+        screen.getByRole("combobox", { name: "Role for Priya" }),
+      );
+      await user.click(await screen.findByRole("option", { name: "Viewer" }));
+      await waitFor(() =>
+        expect(
+          within(rowOf("u-editor")).getByTestId("members-role-checking"),
+        ).toBeTruthy(),
+      );
+
+      await press(user);
+      if (opened !== null) await screen.findByTestId(opened);
+
+      await settled(previews, queryClient, "u-editor");
+      expect(screen.queryByTestId("members-demotion-preview")).toBeNull();
+    },
+  );
+
+  // The select is controlled on the role the member HOLDS, so picking that
+  // role again fires nothing: without a control of its own, the only way out
+  // of this window would be promoting the person to a role nobody chose.
+  it("withdraws a pending demotion from the row's own Cancel", async () => {
+    const user = userEvent.setup();
+    const previews = deferredPreviews();
+    const { onSetRole, queryClient } = renderView({
+      ...BASE,
+      viewerRole: "admin",
+      members: [ADMIN, SECOND_ADMIN, EDITOR],
+      preview: previews.answer,
+    });
+    await user.click(screen.getByRole("combobox", { name: "Role for Priya" }));
+    await user.click(await screen.findByRole("option", { name: "Viewer" }));
+
+    const tell = await waitFor(() =>
+      within(rowOf("u-editor")).getByTestId("members-role-checking"),
+    );
+    // It names the role being checked, which the select cannot: that still
+    // shows the role Priya holds.
+    expect(tell.textContent).toContain("Checking viewer…");
+    await user.click(
+      within(tell).getByRole("button", {
+        name: "Cancel the change to viewer for Priya",
+      }),
+    );
+
+    expect(
+      within(rowOf("u-editor")).queryByTestId("members-role-checking"),
+    ).toBeNull();
+    await settled(previews, queryClient, "u-editor");
+    expect(screen.queryByTestId("members-demotion-preview")).toBeNull();
+    expect(onSetRole).not.toHaveBeenCalled();
+  });
+
+  // The Retry lives in the dialog, so the dialog has to survive its own
+  // request. A refused FIRST read has no data, and the query's fetch dispatch
+  // un-errors an entry in that state, so a gate reading `isError` closes the
+  // dialog under the button that was just pressed.
+  it("keeps the dialog up while a refused read is being tried again", async () => {
+    const user = userEvent.setup();
+    const previews = deferredPreviews();
+    let refusals = 0;
+    renderView({
+      ...BASE,
+      viewerRole: "admin",
+      members: [ADMIN, SECOND_ADMIN, EDITOR],
+      preview: (userId) => {
+        refusals += 1;
+        return refusals === 1
+          ? Promise.reject(new Error("unreachable"))
+          : previews.answer(userId);
+      },
+    });
+    await user.click(screen.getByRole("combobox", { name: "Role for Priya" }));
+    await user.click(await screen.findByRole("option", { name: "Viewer" }));
+
+    const dialog = await screen.findByTestId("members-demotion-preview");
+    await within(dialog).findByTestId("members-demotion-preview-failed");
+
+    await user.click(within(dialog).getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(refusals).toBe(2));
+
+    // Still up, with the second read in flight: its confirm off, and the line
+    // and the button that started the request still in place rather than
+    // unmounted with the failed status they were keyed on.
+    expect(screen.getByTestId("members-demotion-preview")).toBeTruthy();
+    expect(
+      screen.getByTestId<HTMLButtonElement>("members-demotion-confirm")
+        .disabled,
+    ).toBe(true);
+    expect(
+      within(dialog).getByTestId("members-demotion-preview-failed").textContent,
+    ).toContain("Couldn't load what changing Priya's role interrupts");
+    expect(
+      within(dialog).getByRole<HTMLButtonElement>("button", { name: "Retry" })
+        .disabled,
+    ).toBe(true);
+    expect(
+      within(dialog).getByTestId("members-demotion-retry-busy"),
+    ).toBeTruthy();
+
+    await waitFor(() => {
+      expect(() => {
+        previews.resolve("u-editor", { ...PREVIEW, linkedPlan: "Claude Max" });
+      }).not.toThrow();
+    });
+    await within(dialog).findByTestId("members-demotion-preview-table");
+    expect(
+      within(dialog).queryByTestId("members-demotion-preview-failed"),
     ).toBeNull();
   });
 });
