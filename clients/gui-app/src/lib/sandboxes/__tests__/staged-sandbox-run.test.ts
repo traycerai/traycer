@@ -43,6 +43,7 @@ import {
   useStagedSandboxStore,
   type StagedSandboxTarget,
 } from "@/stores/composer/staged-sandbox-store";
+import { sandboxListQueryOptions } from "@/hooks/sandboxes/use-sandbox-list-query";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 import { refusal } from "@/hooks/sandboxes/__tests__/sandbox-binding-fixture";
 import { createFakeRunnerHost } from "../../../../__tests__/create-fake-runner-host";
@@ -398,6 +399,54 @@ describe("runStagedSandbox through the query cache", () => {
     ).toEqual([
       { sandboxes: [row({ state: "awake", guestConfigured: true })] },
     ]);
+  });
+
+  it("does not let a first list read still in flight, begun before a wake, read its old row as a rest", async () => {
+    useStagedSandboxStore.getState().stage(surfaceKey, RESTING);
+    const { auth, wake, deps } = harness(
+      { entries: [{ ...DIALABLE, hostId: "host-resting" }] },
+      true,
+    );
+    const rowOf = (state: SandboxSummary["state"]) =>
+      sandboxSummaryFixture({
+        id: "sbx_resting",
+        hostId: "host-resting",
+        state,
+        guestConfigured: true,
+      });
+    // The first-ever read is held open; every later one answers awake. The
+    // key hashes the auth's own state, which drifts as the fake runner host
+    // reports events, so pin it to one value for the run's reads to join.
+    Object.defineProperty(auth, "toJSON", { value: () => "scripted-auth" });
+    let release: (result: SandboxListFetchResult) => void = () => undefined;
+    let reads = 0;
+    auth.listSandboxes = () => {
+      reads += 1;
+      if (reads > 1) return Promise.resolve(listOf(rowOf("awake")));
+      return new Promise((resolve) => {
+        release = resolve;
+      });
+    };
+    void deps.queryClient.prefetchQuery(
+      sandboxListQueryOptions(auth, deps.userId, true),
+    );
+    expect(reads).toBe(1);
+
+    // The read begun before the wake answers with its old row at the moment
+    // the wait asks for a fresh one: joined, it would read as a rest.
+    const { queryClient } = deps;
+    const original = queryClient.fetchQuery.bind(queryClient);
+    vi.spyOn(queryClient, "fetchQuery").mockImplementation((options) => {
+      const pending = original(options);
+      release(listOf(rowOf("suspended")));
+      return pending;
+    });
+
+    await run(false, deps);
+
+    expect(wake).toHaveBeenCalledTimes(1);
+    expect(stageOf().failure).toBeNull();
+    expect(stageOf().phase).toBe("handoff");
   });
 
   it("refreshes the directory and the lists when the create is refused", async () => {

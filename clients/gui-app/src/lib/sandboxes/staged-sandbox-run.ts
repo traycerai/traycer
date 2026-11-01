@@ -239,8 +239,16 @@ async function wakeCurrentStage(
   );
   // A newer request owns settlement. Supersession is not a failed wake.
   if (observed === "unknown") return false;
-  if (!awake) fail(surfaceKey, stagedWakeFailure(answered));
-  return awake;
+  if (!awake) {
+    fail(surfaceKey, stagedWakeFailure(answered));
+    return false;
+  }
+  // A list read still on its way predates the wake: the wait must not join
+  // it, or its old row reads as a rest.
+  await deps.queryClient.cancelQueries({
+    queryKey: sandboxListQueryOptions(deps.auth, deps.userId, true).queryKey,
+  });
+  return true;
 }
 
 function stagedWakeFailure(

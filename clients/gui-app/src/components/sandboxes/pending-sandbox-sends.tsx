@@ -1156,6 +1156,12 @@ function useWatchedSandboxRow(
   useEffect(() => {
     if (send === null || decision === null) return;
     projectSandboxBlocker(surfaceKey, decision.state.blocker, row.failure);
+    if (
+      environment.stageRested &&
+      !decision.effects.includes("return-message") &&
+      pendingSandboxSendFacts(send.id, environment).host === "resting"
+    )
+      projectSandboxRest(surfaceKey, stage);
     if (decision.effects.includes("open-terminal"))
       clearPendingSandboxFailure(surfaceKey);
     if (decision.effects.includes("end-host")) {
@@ -1283,6 +1289,21 @@ function projectSandboxBlocker(
   )
     return;
   useStagedSandboxStore.getState().report(surfaceKey, { failure });
+}
+
+/**
+ * A send this window can't give back keeps the person's way to wake its
+ * sandbox: a stopped stage, which Retry runs again. A failure already on the
+ * stage has its own remedy.
+ */
+function projectSandboxRest(
+  surfaceKey: string,
+  stage: StagedSandbox | null,
+): void {
+  if (stage === null || stage.failure !== null) return;
+  useStagedSandboxStore
+    .getState()
+    .report(surfaceKey, { phase: "creating", failure: { kind: "rested" } });
 }
 
 /**
