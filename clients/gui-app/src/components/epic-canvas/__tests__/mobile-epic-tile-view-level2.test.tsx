@@ -30,6 +30,7 @@ const EPIC_ID = "epic-1";
 vi.mock("@/lib/epic-selectors", () => ({
   useEpicArtifact: (id: string) => ({ id }),
   useEpicChatRecordListAuthoritative: () => true,
+  useEpicTuiAgentRecordListAuthoritative: () => true,
   useEpicChatRetraction: () => null,
   useEpicTabDisplayTitle: (node: { readonly name: string }) => node.name,
   useEpicLiveArtifactTitleGenerating: () => false,
