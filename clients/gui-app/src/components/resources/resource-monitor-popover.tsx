@@ -45,7 +45,7 @@ import type {
 } from "@traycer/protocol/host/resources/subscribe";
 import type { TaskLight } from "@traycer/protocol/host/epic/unary-schemas";
 import type { EpicNodeRecord } from "@/lib/artifacts/node-display";
-import { displayTitle } from "@/lib/display-title";
+import { agentTileName, displayTitle } from "@/lib/display-title";
 import {
   useRegisteredEpicAgentSessionCounts,
   useRegisteredEpicLiveAgents,
@@ -4959,7 +4959,9 @@ function ownerLabel(
   }
   if (liveArtifactTitle !== null) return liveArtifactTitle;
   if (ref !== null) return ref.name;
-  if (record !== null) return record.name;
+  // A saved tree record skips the tile parse, so a terminal Agent's old
+  // fallback is still spelled the way the build that saved it spelled it.
+  if (record !== null) return agentTileName(record.name);
   return ownerKindLabel(snapshot.owner.kind);
 }
 
