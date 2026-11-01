@@ -13,6 +13,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import electronLog from "electron-log";
 import { sandboxHome } from "../../__tests__/sandbox-home";
+import { exitedChildPid } from "./child-pid-test-support";
 
 // Host Update Layer Redesign Tech Plan - Ticket: "Desktop main: HostController
 // two-lane scheduler + policy cutover". This is the ticket's own verification
@@ -641,23 +642,6 @@ function writePidMetadata(
         : { processStartIdentity: fields.processStartIdentity }),
     }),
   );
-}
-
-/**
- * A pid that names no process: a child spawned and waited out, so the kernel
- * has reaped it before the record naming it is read. The busy gate's liveness
- * check runs the real, unmocked `process.kill(pid, 0)`, which answers ESRCH
- * for it - a hardcoded "probably free" pid would be a live process on the
- * machine that happened to reach it first.
- */
-async function exitedChildPid(): Promise<number> {
-  const child = spawn(process.execPath, ["-e", ""], { stdio: "ignore" });
-  const { pid } = child;
-  if (pid === undefined) throw new Error("spawning a child yielded no pid");
-  await new Promise<void>((resolve) => {
-    child.once("exit", () => resolve());
-  });
-  return pid;
 }
 
 function removePidMetadata(environment: "production" | "dev"): void {

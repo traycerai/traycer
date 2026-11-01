@@ -454,6 +454,19 @@ export type HostBusyVerdict = "no-host" | "idle" | "busy";
  * `busy` and `idle` are otherwise unchanged. Only a publisher PROVABLY gone
  * answers `no-host`; a live pid, a probe that could not answer, and a record
  * with no identity stamp all still dial the endpoint and keep the fail-safe.
+ * The RECORD read keeps the polarity it always had - a `pid.json` that is
+ * absent, torn or malformed reads as `no-host`, where the CLI's gate holds
+ * that case apart as `unverifiable` and refuses. That asymmetry is older than
+ * this gate and untouched here.
+ *
+ * Not `readPublishedHostPresence` (`./host-endpoint-reachability`), which
+ * answers a question of the same shape and is the one desktop reachability
+ * authority: it needs an endpoint-reachability probe this gate is not given,
+ * and its `absent` rests on `getPublishedProcessIdentityVerdict`, which never
+ * compares the stamp under an indeterminate liveness read. The verdict here
+ * has to be the CLI's, because the two gates guard the same teardown on
+ * different platforms and a host neither of them would restart must not
+ * depend on which one asked.
  */
 export async function probeHostBusyVerdict(
   layout: HostFsLayout,

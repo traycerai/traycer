@@ -1,4 +1,3 @@
-import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -8,7 +7,8 @@ import { sandboxHome } from "../../__tests__/sandbox-home";
 // Only the HTTP check is replaced - its two outcomes here are the ones the
 // real probe produces for a loopback endpoint (a refused connection folded
 // into `true`, an explicit `{busy:false}` as `false`), and standing in for it
-// is what lets a test name an endpoint without binding a port to it.
+// is what lets a test name an endpoint without binding a port to it. The
+// liveness gate under test runs the real, unmocked kernel reads.
 vi.mock(
   "@traycer-clients/shared/host-client/host-activity-probe",
   async (importOriginal) => {
@@ -23,15 +23,10 @@ vi.mock(
 import { probeHostActivityBusy } from "@traycer-clients/shared/host-client/host-activity-probe";
 import { getHostFsLayout } from "../host-paths";
 import { probeHostBusyVerdict } from "../host-state";
-
-// `probeHostBusyVerdict`: "may this host be torn down?" for the desktop-held
-// lock sections around a packaged-macOS SMAppService cycle. A pid.json whose
-// publisher is provably gone - a force-killed host leaves exactly that - is
-// no host at all, and must not be dialed: its endpoint refuses the connection,
-// which `probeHostActivityBusy` folds into `busy` by design, and a cycle that
-// reads busy here never reaches the registration that would start a host.
+import { exitedChildPid, liveChild } from "./child-pid-test-support";
 
 let workHome: string;
+const cleanups: (() => void)[] = [];
 
 beforeEach(() => {
   workHome = mkdtempSync(join(tmpdir(), "traycer-busy-verdict-"));
@@ -40,44 +35,50 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  while (cleanups.length > 0) cleanups.pop()?.();
   rmSync(workHome, { recursive: true, force: true });
 });
 
-function writePidMetadata(pid: number): void {
+const WEBSOCKET_URL = "ws://127.0.0.1:43210/rpc";
+
+function writePidMetadata(
+  pid: number,
+  processStartIdentity: string | null,
+): void {
   const layout = getHostFsLayout("production");
   mkdirSync(dirname(layout.pidMetadataFile), { recursive: true });
   writeFileSync(
     layout.pidMetadataFile,
     JSON.stringify({
       hostId: "host-1",
-      websocketUrl: "ws://127.0.0.1:43210/rpc",
+      websocketUrl: WEBSOCKET_URL,
       version: "1.7.0",
       pid,
       startedAt: "2026-01-01T00:00:00.000Z",
+      ...(processStartIdentity === null ? {} : { processStartIdentity }),
     }),
   );
 }
 
 /**
- * A pid that names no process: a child spawned and waited out, so the kernel
- * has reaped it before the record naming it is read. The liveness gate runs
- * the real, unmocked `process.kill(pid, 0)`, which answers ESRCH for it -
- * a hardcoded "probably free" pid would be a different machine's live process
- * on a bad day.
+ * A well-formed creation stamp for THIS platform that no process can have.
+ * The tag has to be the running platform's or the comparison is `unknown`
+ * however the payloads differ - which is the reading a record that travelled
+ * between machines must get, and the wrong one for proving a mismatch fires.
  */
-async function exitedChildPid(): Promise<number> {
-  const child = spawn(process.execPath, ["-e", ""], { stdio: "ignore" });
-  const { pid } = child;
-  if (pid === undefined) throw new Error("spawning a child yielded no pid");
-  await new Promise<void>((resolve) => {
-    child.once("exit", () => resolve());
-  });
-  return pid;
+function foreignStartIdentityForThisPlatform(): string {
+  return `${process.platform}:not-the-stamp-of-any-live-process`;
 }
 
+// `probeHostBusyVerdict`: "may this host be torn down?" for the desktop-held
+// lock sections around a packaged-macOS SMAppService cycle. A pid.json whose
+// publisher is provably gone - a force-killed host leaves exactly that - is no
+// host at all, and must not be dialed: its endpoint refuses the connection,
+// which `probeHostActivityBusy` folds into `busy` by design, and a cycle that
+// reads busy here never reaches the registration that would start a host.
 describe("probeHostBusyVerdict", () => {
   it("is no-host for a record whose process has exited, and asks its endpoint nothing", async () => {
-    writePidMetadata(await exitedChildPid());
+    writePidMetadata(await exitedChildPid(), null);
 
     await expect(
       probeHostBusyVerdict(getHostFsLayout("production")),
@@ -85,8 +86,30 @@ describe("probeHostBusyVerdict", () => {
     expect(probeHostActivityBusy).not.toHaveBeenCalled();
   });
 
+  it("is no-host for a LIVE pid the record's creation stamp does not name - a recycled pid is not our host", async () => {
+    const child = liveChild();
+    cleanups.push(child.stop);
+    writePidMetadata(child.pid, foreignStartIdentityForThisPlatform());
+
+    await expect(
+      probeHostBusyVerdict(getHostFsLayout("production")),
+    ).resolves.toBe("no-host");
+    expect(probeHostActivityBusy).not.toHaveBeenCalled();
+  });
+
+  it("is busy for a LIVE pid whose recorded stamp is not a stamp at all - an unreadable claim is not a mismatch", async () => {
+    const child = liveChild();
+    cleanups.push(child.stop);
+    writePidMetadata(child.pid, "whatever the host wrote here");
+    vi.mocked(probeHostActivityBusy).mockResolvedValue(true);
+
+    await expect(
+      probeHostBusyVerdict(getHostFsLayout("production")),
+    ).resolves.toBe("busy");
+  });
+
   it("is busy for a LIVE process whose endpoint cannot be probed - the fail-safe", async () => {
-    writePidMetadata(process.pid);
+    writePidMetadata(process.pid, null);
     vi.mocked(probeHostActivityBusy).mockResolvedValue(true);
 
     await expect(
@@ -95,14 +118,12 @@ describe("probeHostBusyVerdict", () => {
   });
 
   it("is idle for a LIVE process whose host reports no work in progress", async () => {
-    writePidMetadata(process.pid);
+    writePidMetadata(process.pid, null);
     vi.mocked(probeHostActivityBusy).mockResolvedValue(false);
 
     await expect(
       probeHostBusyVerdict(getHostFsLayout("production")),
     ).resolves.toBe("idle");
-    expect(probeHostActivityBusy).toHaveBeenCalledWith(
-      "ws://127.0.0.1:43210/rpc",
-    );
+    expect(probeHostActivityBusy).toHaveBeenCalledWith(WEBSOCKET_URL);
   });
 });
