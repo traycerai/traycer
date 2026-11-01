@@ -97,10 +97,11 @@ interface Pull {
  * nothing, so a thumb landing on the edge never opens anything. The zone
  * covers the card's top padding and a little above it, never the first line
  * of the draft. On the focus layout's one row there is no top padding to cover,
- * so the zone sits wholly above the card, clear of the editor and Send. Pointer
- * capture keeps the pull on this element once it starts; `preventDefault` on
- * the press keeps the editor focused so the keyboard does not dip mid-gesture. It is hidden from assistive technology;
- * `ComposerExpandButton` is its accessible twin.
+ * so the zone is the gap under the transcript's jump pill and the card's edge,
+ * down to just above Send and the draft's first line. Pointer capture keeps the
+ * pull on this element once it starts; `preventDefault` on the press keeps the
+ * editor focused so the keyboard does not dip mid-gesture. It is hidden from
+ * assistive technology; `ComposerExpandButton` is its accessible twin.
  */
 function ComposerGrabber({
   expanded,
@@ -163,7 +164,7 @@ function ComposerGrabber({
       data-composer-grabber=""
       className={cn(
         "absolute inset-x-0 z-30 touch-none",
-        focusRow ? "-top-3 h-3" : "-top-2 h-6",
+        focusRow ? "-top-1.5 h-2" : "-top-2 h-6",
       )}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}

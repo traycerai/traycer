@@ -99,15 +99,20 @@ test("draws the pickers again without the row", async ({ page }) => {
 });
 
 test.describe("the pull zone on the row", () => {
-  test("sits above the card, clear of the editor and Send", async ({
-    page,
-  }) => {
+  test("ends above Send and the draft's first line", async ({ page }) => {
     await openComposer(page, "?focus-row");
+    await page.locator(EDITOR).click();
+    await page.keyboard.insertText("a draft");
+    await nextFrames(page, 2);
     const zone = await boxOf(page.locator(GRABBER));
-    const editor = await boxOf(page.locator(EDITOR));
     const send = await boxOf(page.locator(SEND));
-    expect(zone.y + zone.height).toBeLessThanOrEqual(editor.y);
-    expect(zone.y + zone.height).toBeLessThanOrEqual(send.y);
+    const firstLineTop = await page.locator(EDITOR).evaluate((editor) => {
+      const range = document.createRange();
+      range.selectNodeContents(editor);
+      return range.getBoundingClientRect().top;
+    });
+    expect(zone.y + zone.height).toBeLessThanOrEqual(send.y + 0.5);
+    expect(zone.y + zone.height).toBeLessThanOrEqual(firstLineTop + 0.5);
   });
 
   test("leaves every edge of Send to Send", async ({ page }) => {
@@ -152,5 +157,36 @@ test.describe("the pull zone on the row", () => {
     await page.mouse.up();
     await expect(page.locator("[data-composer-expanded]")).toBeVisible();
     await expect(page.locator("[data-composer-focus-row]")).toHaveCount(0);
+  });
+});
+
+test.describe("the transcript's jump pill over the row", () => {
+  // The iPhone 17's 194 above the keyboard, with the transcript scrolled back.
+  test.use({ viewport: { width: 874, height: 194 }, hasTouch: true });
+
+  async function showPill(page: Page): Promise<Locator> {
+    await openComposer(page, "?focus-row");
+    await page.mouse.move(300, 70);
+    await page.mouse.wheel(0, -200);
+    const pill = page.getByRole("button", { name: "Scroll to end" });
+    await expect(pill).toBeVisible();
+    await nextFrames(page, 2);
+    return pill;
+  }
+
+  test("is clear of the pull zone", async ({ page }) => {
+    const pill = await showPill(page);
+    const zone = await boxOf(page.locator(GRABBER));
+    const box = await boxOf(pill);
+    expect(box.y + box.height).toBeLessThanOrEqual(zone.y + 0.5);
+  });
+
+  test("takes a touch at its bottom edge", async ({ page }) => {
+    const pill = await showPill(page);
+    const box = await boxOf(pill);
+    await page.touchscreen.tap(box.x + box.width / 2, box.y + box.height - 3);
+    await expect
+      .poll(() => page.evaluate(() => window.__followDriver?.probe().distance))
+      .toBeLessThan(2);
   });
 });
