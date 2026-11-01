@@ -1640,6 +1640,84 @@ describe("<ToolSegment /> streaming heartbeat", () => {
     expect(screen.queryByText(/^\d+s$/)).toBeNull();
   });
 
+  it.each([
+    ["the host's receipt", 20_000, "0s"],
+    ["an earlier native start", 14_000, "6s"],
+    ["a native start ahead of the clock", 25_000, "0s"],
+  ] as const)(
+    "counts the live elapsed time from %s",
+    (_name, startedAt, expected) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(20_000);
+      render(
+        <ToolSegment
+          headerFindUnitId={null}
+          id="elapsed-anchor-tool"
+          toolName="mcp__fetch"
+          {...inputProps("mcp__fetch", { url: "https://example.com" })}
+          error={null}
+          agentMessageSend={null}
+          managedCommand={null}
+          agentMessageReceipt={null}
+          agentMessageDelivery={null}
+          botSendReceipt={null}
+          isStreaming
+          endState={null}
+          stopped={false}
+          progress={null}
+          backgroundOutput={null}
+          backgroundTask={false}
+          startedAt={startedAt}
+          durationMs={null}
+          variant="row"
+        />,
+      );
+
+      expect(screen.getByText(expected)).toBeTruthy();
+    },
+  );
+
+  it.each([
+    ["receipt", 1_700_000_100_000],
+    ["native start", 1_700_000_040_000],
+  ] as const)(
+    "stamps a sent A2A message with the tool's %s time",
+    (_name, startedAt) => {
+      render(
+        <ToolSegment
+          headerFindUnitId={null}
+          id={`a2a-send-stamp-${startedAt}`}
+          toolName="traycer_a2a/traycer_send_message"
+          {...inputProps("traycer_a2a/traycer_send_message", {})}
+          error={null}
+          agentMessageSend={{
+            receiverAgentId: "agent-receiver-1",
+            message: "Please inspect the failing test.",
+            responseId: "response-1",
+            expectReply: false,
+          }}
+          managedCommand={null}
+          agentMessageReceipt={null}
+          agentMessageDelivery={null}
+          botSendReceipt={null}
+          isStreaming={false}
+          endState={null}
+          stopped={false}
+          progress={null}
+          backgroundOutput={null}
+          backgroundTask={false}
+          startedAt={startedAt}
+          durationMs={null}
+          variant="card"
+        />,
+      );
+
+      expect(
+        screen.getByTestId("chat-message-timestamp").getAttribute("datetime"),
+      ).toBe(new Date(startedAt).toISOString());
+    },
+  );
+
   it("shows a 'stopped' badge for an interrupted call and 'superseded' for a steered one", () => {
     const { rerender } = render(
       <ToolSegment
