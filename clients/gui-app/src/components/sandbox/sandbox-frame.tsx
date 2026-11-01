@@ -113,13 +113,15 @@ export interface SandboxPageNavigation {
   /** The page to show; the frame loads it when it is not already showing. */
   readonly path: string;
   /**
-   * Bumped by each Back or Home, so asking again for the page the frame last
-   * showed still reloads it after the frame wandered off to a missing page.
+   * Bumped by each Back, Home or retry, so asking again for the page the frame
+   * last showed still reloads it after the frame wandered off to a missing
+   * page, or after a read of that very page failed.
    */
   readonly visit: number;
   /** The frame now shows this page, whoever moved it there. */
   readonly onNavigate: (path: string) => void;
   readonly onPageMissing: () => void;
+  readonly onPageUnreachable: () => void;
 }
 
 /** A page path relative to `treePath`, `../` included, as a tree path. */
@@ -484,6 +486,13 @@ export function SandboxFrame(props: SandboxFrameProps) {
     showingPageRef.current = null;
     props.pageNavigation?.onPageMissing();
   });
+  // Clearing the ref is what makes the retry work: the stand-in is showing at
+  // the page's own address, so asking for that page again only reloads the
+  // frame once this no longer counts as the page already showing.
+  const onPageUnreachable = useEffectEvent(() => {
+    showingPageRef.current = null;
+    props.pageNavigation?.onPageUnreachable();
+  });
   const onBridge = useEffectEvent((bridge: SandboxBridgeHost | null) =>
     props.onBridge?.(bridge),
   );
@@ -671,6 +680,7 @@ export function SandboxFrame(props: SandboxFrameProps) {
                       treePath: inputs.source.treePath,
                       onNavigate: onPageNavigate,
                       onPageMissing,
+                      onPageUnreachable,
                     },
             }
           : {
