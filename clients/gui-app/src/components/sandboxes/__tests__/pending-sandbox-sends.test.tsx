@@ -107,7 +107,11 @@ import {
 } from "@/stores/composer/staged-sandbox-store";
 import { useInitialChatHandoffStore } from "@/stores/epics/initial-chat-handoff-store";
 import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
-import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
+import {
+  emptyLandingDraftWorkspaceSnapshot,
+  useLandingDraftStore,
+} from "@/stores/home/landing-draft-store";
+import { useLandingReturnedSandbox } from "@/hooks/sandboxes/use-returned-sandbox-stage";
 import { landingLiveImageRootHashes } from "@/lib/composer/landing-image-budget";
 import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
 import {
@@ -119,6 +123,7 @@ import {
 import { useStoppedSandboxSendReceiptStore } from "@/stores/sandboxes/stopped-sandbox-send-receipt-store";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import {
+  composerSurfaceKey,
   newConversationSurfaceKey,
   useSurfaceHostSelectionStore,
 } from "@/stores/host/surface-host-selection-store";
@@ -136,10 +141,7 @@ import {
 } from "../pending-sandbox-sends";
 import { registerChatCloneOpener } from "@/lib/chats/chat-clone-registry";
 import { registerActiveModelPicker } from "@/lib/commands/active-model-picker-registry";
-import {
-  StoppedSandboxSendReceiptStrip,
-  StoppedSandboxSendReceipts,
-} from "../stopped-sandbox-send-receipts";
+import { StoppedSandboxSendReceiptStrip } from "../stopped-sandbox-send-receipts";
 import { stagedRunActive } from "@/lib/sandboxes/staged-sandbox-run";
 import { TileCanvas } from "@/components/epic-canvas/canvas/tile-canvas";
 import type { SplitPaneComponentProps } from "@/components/epic-canvas/canvas/split-container";
@@ -3209,7 +3211,7 @@ describe("a send recovered without its message going back to a task", () => {
     restoreLocks();
   });
 
-  /** The driver and the app's receipts, as a window with no task open has them. */
+  /** The driver, which carries the app's receipts, as a window with no task open has it. */
   function mountDriverWithReceipts(): void {
     const client = new QueryClient({
       defaultOptions: { queries: { retry: false, gcTime: 0 } },
@@ -3218,7 +3220,6 @@ describe("a send recovered without its message going back to a task", () => {
       <RunnerHostContext.Provider value={RUNNER_HOST}>
         <QueryClientProvider client={client}>
           <PendingSandboxSendsDriver />
-          <StoppedSandboxSendReceipts />
         </QueryClientProvider>
       </RunnerHostContext.Provider>,
     );
@@ -3246,7 +3247,7 @@ describe("a send recovered without its message going back to a task", () => {
     expect(
       useStoppedSandboxSendReceiptStore.getState().receipts[SEND_ID],
     ).toMatchObject({
-      kind: "cancelled",
+      kind: "recovered",
       epicId: "epic-1",
       userId: "user-1",
       returned: { kind: "landing-draft", draftId: draft.id },
@@ -3288,6 +3289,97 @@ describe("a send recovered without its message going back to a task", () => {
     expect(
       useStoppedSandboxSendReceiptStore.getState().receipts[SEND_ID],
     ).toBeUndefined();
+  });
+
+  it("keeps the recovered line when the boot restores another draft's sandbox as a composer stage, and Open draft still opens its draft", async () => {
+    seed({
+      ...SEEDED,
+      send: { epicConfirmed: false },
+      phase: "creating",
+      created: false,
+    });
+    await reloadPendingSandboxStores();
+    mountDriverWithReceipts();
+    const toastId = `sandbox-stopped:${SEND_ID}`;
+    await waitFor(() => {
+      expect(toastSpies.activeReceiptToasts.has(toastId)).toBe(true);
+    });
+    await sendRecovered();
+    const [draft] = useLandingDraftStore.getState().drafts;
+
+    // Another open draft names a sandbox, and the landing composer stages it.
+    useLandingDraftStore.getState().installLandingDraft({
+      id: "other-draft",
+      content: MESSAGE_CONTENT,
+      selection: null,
+      lastTouchedAt: Date.now(),
+      settings: PICKED_SETTINGS,
+      composerMode: "chat",
+      workspace: emptyLandingDraftWorkspaceSnapshot(),
+      closed: false,
+      returnedSandbox: { target: NEW_TARGET, clientRequestId: null },
+      durability: "saved",
+    });
+    const composerSurface = composerSurfaceKey(null);
+    renderHook(() =>
+      useLandingReturnedSandbox(composerSurface, "other-draft", true),
+    );
+    await waitFor(() => {
+      expect(readStagedSandbox(composerSurface)).toMatchObject({
+        target: NEW_TARGET,
+      });
+    });
+
+    expect(
+      useStoppedSandboxSendReceiptStore.getState().receipts[SEND_ID],
+    ).toBeDefined();
+    expect(toastSpies.activeReceiptToasts.has(toastId)).toBe(true);
+    const shown = toastSpies.activeReceiptToasts.get(toastId);
+    if (shown === undefined) throw new Error("expected the receipt's toast");
+    const view = render(shown.content);
+    fireEvent.click(
+      within(view.container).getByRole("button", { name: "Open draft" }),
+    );
+    expect(useLandingDraftStore.getState().activeDraftId).toBe(draft.id);
+  });
+
+  it("dismisses a cancelled receipt when a composer stage appears", async () => {
+    const restoreCreate = deferred<SandboxCreateFetchResult>();
+    seed({ ...SEEDED, phase: "creating", created: false });
+    mocks.createSandbox.mockReturnValue(restoreCreate.promise);
+    mount();
+    act(() => {
+      useStagedSandboxStore.getState().report(SURFACE, {
+        failure: { kind: "timed-out", step: "creating" },
+      });
+    });
+    const cancel = await screen.findByRole("button", {
+      name: "Cancel the message",
+    });
+    await waitFor(() => expect(cancel).not.toHaveProperty("disabled", true));
+    fireEvent.click(cancel);
+    // The task is open, so its strip says it.
+    await screen.findByTestId("sandbox-stopped-line");
+    expect(
+      useStoppedSandboxSendReceiptStore.getState().receipts[SEND_ID],
+    ).toMatchObject({ kind: "cancelled" });
+
+    act(() => {
+      useStagedSandboxStore
+        .getState()
+        .stage(composerSurfaceKey(null), NEW_TARGET);
+    });
+
+    await waitFor(() => {
+      expect(
+        useStoppedSandboxSendReceiptStore.getState().receipts[SEND_ID],
+      ).toBeUndefined();
+    });
+    expect(screen.queryByTestId("sandbox-stopped-line")).toBeNull();
+    await act(async () => {
+      restoreCreate.resolve(CREDITS_REFUSED);
+      await restoreCreate.promise;
+    });
   });
 
   it("adds no receipt for a confirmed send whose message went to Drafts because the composer was occupied", async () => {

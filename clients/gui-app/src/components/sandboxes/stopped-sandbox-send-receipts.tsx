@@ -319,7 +319,18 @@ function ReturnedSendReceipt(props: {
   const sandboxList = useSandboxList();
   const currentPicks = stoppedReceiptPicks(receipt.epicId, pins, stages);
   const readAt = sandboxListReadSentAt(sandboxList.data);
-  const sandboxId = receipt.kind === "cancelled" ? null : receipt.sandboxId;
+  const sandboxId =
+    receipt.kind === "cancelled" || receipt.kind === "recovered"
+      ? null
+      : receipt.sandboxId;
+  const picksChanged =
+    receipt.kind !== "recovered" &&
+    (Object.keys(currentPicks).length !== Object.keys(receipt.picks).length ||
+      Object.entries(currentPicks).some(
+        ([key, pick]) =>
+          pick.pin !== receipt.picks[key]?.pin ||
+          pick.target !== receipt.picks[key]?.target,
+      ));
   const row = sandboxList.data?.sandboxes.find(
     (sandbox) => sandbox.id === sandboxId,
   );
@@ -338,12 +349,7 @@ function ReturnedSendReceipt(props: {
         (receipt.returned.kind === "landing-draft" ||
           send.epicId === receipt.epicId),
     ) ||
-    Object.keys(currentPicks).length !== Object.keys(receipt.picks).length ||
-    Object.entries(currentPicks).some(
-      ([key, pick]) =>
-        pick.pin !== receipt.picks[key]?.pin ||
-        pick.target !== receipt.picks[key]?.target,
-    ) ||
+    picksChanged ||
     (!sandboxList.isError && rowOutlivedReceipt(receipt, row, readAt));
   useEffect(() => {
     if (obsolete) dismissReceipt(receipt.id);

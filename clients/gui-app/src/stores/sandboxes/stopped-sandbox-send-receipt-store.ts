@@ -26,6 +26,7 @@ type RestoredMessage =
 
 type ReceiptOutcome =
   | { readonly kind: "cancelled" }
+  | { readonly kind: "recovered" }
   | {
       readonly kind: "stopped";
       readonly sandboxId: string;
@@ -131,6 +132,18 @@ export function recordCancelledSandboxSend(
   returned: ReturnedPendingSandboxSend,
 ): void {
   recordReturnedSandboxSend(send, returned, { kind: "cancelled" });
+}
+
+/**
+ * Recovery returns a message with nobody at the keyboard, so unlike a Cancel
+ * no pick that arrives later answers it: a boot restores a draft's stage on
+ * its own.
+ */
+export function recordRecoveredSandboxSend(
+  send: PendingSandboxSend,
+  returned: ReturnedPendingSandboxSend,
+): void {
+  recordReturnedSandboxSend(send, returned, { kind: "recovered" });
 }
 
 function recordReturnedSandboxSend(

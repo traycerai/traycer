@@ -107,6 +107,7 @@ import {
 } from "@/stores/epics/new-conversation-modal-store";
 import {
   recordCancelledSandboxSend,
+  recordRecoveredSandboxSend,
   recordSandboxStateSend,
   recordStoppedSandboxSend,
 } from "@/stores/sandboxes/stopped-sandbox-send-receipt-store";
@@ -498,7 +499,7 @@ function usePendingSendRecovery(
         send.ended !== true &&
         returned.kind === "landing-draft"
       )
-        recordCancelledSandboxSend(send, returned);
+        recordRecoveredSandboxSend(send, returned);
     }
     if (plan.effects.includes("rehydrate"))
       void usePendingSandboxSendStore.persist.rehydrate();
