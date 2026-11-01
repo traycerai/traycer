@@ -4,6 +4,7 @@
  */
 import { useState, type ReactNode } from "react";
 import type { AutoJudgeRecentEntry } from "@traycer/protocol/host/auto-mode/contracts";
+import { displayTitle } from "@/lib/display-title";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useAutoJudgeRecentQuery } from "@/hooks/auto-mode/use-auto-judge-recent-query";
@@ -319,7 +320,7 @@ function ActivityRow(props: {
     >
       <div role="cell" className="min-w-0 text-ui-xs text-muted-foreground">
         <DecisionTime at={entry.at} />
-        <div className="truncate">{title ?? "Untitled conversation"}</div>
+        <div className="truncate">{displayTitle(title ?? "", "agent")}</div>
       </div>
       <div role="cell" className="min-w-0">
         <div className="text-ui-xs text-muted-foreground">{entry.toolName}</div>

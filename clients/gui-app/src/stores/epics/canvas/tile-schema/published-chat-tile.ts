@@ -14,6 +14,7 @@
  * matches on id and nothing else.
  */
 import { v4 as uuidv4 } from "uuid";
+import { agentTileName, displayTitle } from "@/lib/display-title";
 import type { DesktopJsonValue } from "@/lib/windows/types";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { TILE_KIND_PUBLISHED_CHAT } from "../tile-kinds";
@@ -21,7 +22,7 @@ import type { PublishedChatTileRef } from "../types";
 import type { TileSchema } from "./index";
 import { readTileInstanceId } from "./instance-id";
 
-export const PUBLISHED_CHAT_TILE_FALLBACK_NAME = "Untitled chat";
+export const PUBLISHED_CHAT_TILE_FALLBACK_NAME = displayTitle("", "agent");
 
 /**
  * The tile id for one published chat.
@@ -82,7 +83,9 @@ function parsePublishedChatTileRef(
   return {
     id: publishedChatTileId({ taskId, ownerUserId, chatId }),
     instanceId: readTileInstanceId(value.instanceId),
-    name: readNonEmptyString(value.name) ?? PUBLISHED_CHAT_TILE_FALLBACK_NAME,
+    name: agentTileName(
+      readNonEmptyString(value.name) ?? PUBLISHED_CHAT_TILE_FALLBACK_NAME,
+    ),
     type: TILE_KIND_PUBLISHED_CHAT,
     hostId: readNonEmptyString(value.hostId) ?? UNKNOWN_HOST_PLACEHOLDER,
     taskId,

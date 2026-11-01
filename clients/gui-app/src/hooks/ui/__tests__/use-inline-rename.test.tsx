@@ -120,11 +120,11 @@ describe("useInlineRename", () => {
     installAnimationFrameMock();
     const onCommit = vi.fn();
     const { rerender } = render(
-      <InlineRenameHarness value="Untitled agent" onCommit={onCommit} />,
+      <InlineRenameHarness value="New agent" onCommit={onCommit} />,
     );
     fireEvent.click(screen.getByRole("button", { name: /edit/i }));
     const input = getRenameInput();
-    expect(input.value).toBe("Untitled agent");
+    expect(input.value).toBe("New agent");
 
     rerender(<InlineRenameHarness value="Landed title" onCommit={onCommit} />);
     fireEvent.keyDown(getRenameInput(), { key: "Enter" });

@@ -4285,6 +4285,28 @@ describe("useRenderedMessages fork link integration", () => {
     expect(segment.viewTabId).toBe("tab-1");
   });
 
+  it("names a fork source whose title was never recorded New agent", () => {
+    const { result } = renderRenderedMessages({
+      messages: [userMessage("m1")],
+      events: [
+        forkEvent({
+          eventId: "fork-untitled",
+          timestamp: 2500,
+          metadata: {
+            sourceChatId: "source-chat-1",
+            sourceHostId: "source-host-1",
+          },
+        }),
+      ],
+    });
+
+    const segment = result.current[1].segments[0];
+    if (segment.kind !== "forked-chat-link") {
+      throw new Error("expected forked-chat-link");
+    }
+    expect(segment.sourceChatTitle).toBe("New agent");
+  });
+
   it("skips malformed chat.forked metadata", () => {
     const { result } = renderRenderedMessages({
       messages: [userMessage("m1")],

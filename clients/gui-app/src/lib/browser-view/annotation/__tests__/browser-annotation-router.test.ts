@@ -130,13 +130,13 @@ describe("resolveAnnotationRoute", () => {
       },
     },
     {
-      name: "empty title is Untitled agent",
+      name: "empty title is New agent",
       orderedChatIds: ["chat-untitled"],
       preferredChatId: null,
       lastFocusedChatId: null,
       chats: { "chat-untitled": chat("", HOST_ID) },
       expected: {
-        targets: [{ chatId: "chat-untitled", label: "Untitled agent" }],
+        targets: [{ chatId: "chat-untitled", label: "New agent" }],
         defaultChatId: "chat-untitled",
       },
     },

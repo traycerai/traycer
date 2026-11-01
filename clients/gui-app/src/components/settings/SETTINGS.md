@@ -4792,7 +4792,7 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
       as `Bash`, which would allow every command of that tool.
     - A conversation is named by its LIVE title when this window has it open
       (`hooks/chats/use-visible-chats.ts`), else by the title the host
-      recorded, else "Untitled conversation".
+      recorded, else "New agent".
   - **What the card says when the judge does not decide** is the other end of
     this page, and lives in the chat rather than in Settings
     (`chat/segments/approval-card-disclosure.ts`, rendered by

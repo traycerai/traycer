@@ -38,7 +38,6 @@ vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
 }));
 
 vi.mock("@/stores/epics/canvas/store", () => ({
-  useHasPendingChatTitle: () => false,
   useIsActiveEpicArtifact: () => false,
   useIsActiveTile: () => false,
 }));

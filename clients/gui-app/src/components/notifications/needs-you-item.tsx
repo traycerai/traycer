@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { displayTitle } from "@/lib/display-title";
 import { StatusGlyph } from "@/components/notifications/status-glyph";
 import {
   APPROVAL_TONE,
@@ -32,7 +33,7 @@ export function NeedsYouItem(props: {
   const context =
     item.agentTitle === null
       ? item.taskTitle
-      : `${item.taskTitle} · ${item.agentTitle}`;
+      : `${item.taskTitle} · ${displayTitle(item.agentTitle, "agent")}`;
   return (
     <button
       type="button"

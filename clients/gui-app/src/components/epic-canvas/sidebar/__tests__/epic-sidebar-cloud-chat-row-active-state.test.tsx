@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   act,
@@ -91,9 +92,11 @@ afterEach(() => {
   reachability.status = "reachable";
 });
 
-function renderRow(tabId: string, chat: CloudChatSummary): HTMLElement {
-  render(
-    <QueryClientProvider client={new QueryClient()}>
+const rowClient = new QueryClient();
+
+function rowTree(tabId: string, chat: CloudChatSummary): ReactNode {
+  return (
+    <QueryClientProvider client={rowClient}>
       <EpicSidebarCloudChatRow
         chat={chat}
         childEntries={NO_CHILDREN}
@@ -102,8 +105,12 @@ function renderRow(tabId: string, chat: CloudChatSummary): HTMLElement {
         depth={0}
         selectionMode={false}
       />
-    </QueryClientProvider>,
+    </QueryClientProvider>
   );
+}
+
+function renderRow(tabId: string, chat: CloudChatSummary): HTMLElement {
+  render(rowTree(tabId, chat));
   return screen.getByTestId(`epic-sidebar-cloud-item-${CHAT.identity.chatId}`);
 }
 
@@ -179,7 +186,54 @@ describe("EpicSidebarCloudChatRow active state (real canvas store)", () => {
 describe("EpicSidebarCloudChatRow first-title label (real canvas store)", () => {
   const UNTITLED: CloudChatSummary = { ...CHAT, title: null };
 
-  it("paints New agent for a title-less row under a mark, while the tile it opens says Untitled agent", () => {
+  function openedTileNames(tabId: string): ReadonlyArray<string | undefined> {
+    const canvas = useEpicCanvasStore.getState().canvasByTabId[tabId];
+    return Object.values(canvas?.tilesByInstanceId ?? {}).map(
+      (tile) => tile?.name,
+    );
+  }
+
+  it("paints New agent for a title-less row, mark or none, and opens a tile of the same name", () => {
+    const tabId = useEpicCanvasStore
+      .getState()
+      .openEpicTab(CHAT.identity.taskId, "Epic");
+    act(() => {
+      useEpicCanvasStore
+        .getState()
+        .markChatTitlePending(CHAT.identity.chatId, "");
+    });
+
+    const row = renderRow(tabId, UNTITLED);
+
+    expect(row.getAttribute("aria-label")).toContain("New agent");
+    expect(row.textContent).toContain("New agent");
+    fireEvent.click(row);
+    expect(openedTileNames(tabId)).toEqual(["New agent"]);
+  });
+
+  it("paints New agent for a title-less row no window marked, then takes the title in the same single row", () => {
+    const tabId = useEpicCanvasStore
+      .getState()
+      .openEpicTab(CHAT.identity.taskId, "Epic");
+    const { rerender } = render(rowTree(tabId, UNTITLED));
+    const row = screen.getByTestId(
+      `epic-sidebar-cloud-item-${CHAT.identity.chatId}`,
+    );
+
+    expect(row.getAttribute("aria-label")).toContain("New agent");
+    expect(row.textContent).not.toContain("Untitled");
+
+    rerender(rowTree(tabId, CHAT));
+
+    expect(
+      screen.getAllByTestId(`epic-sidebar-cloud-item-${CHAT.identity.chatId}`),
+    ).toHaveLength(1);
+    expect(row.getAttribute("aria-label")).toContain("Walkthrough");
+    expect(row.textContent).not.toContain("New agent");
+  });
+
+  it("paints New agent for a locked row whose owner is out of reach, and opens a published tile of the same name", () => {
+    reachability.status = "unreachable";
     const tabId = useEpicCanvasStore
       .getState()
       .openEpicTab(CHAT.identity.taskId, "Epic");
@@ -195,41 +249,8 @@ describe("EpicSidebarCloudChatRow first-title label (real canvas store)", () => 
     expect(row.textContent).toContain("New agent");
     fireEvent.click(row);
     const canvas = useEpicCanvasStore.getState().canvasByTabId[tabId];
-    expect(
-      Object.values(canvas?.tilesByInstanceId ?? {}).map((tile) => tile?.name),
-    ).toEqual(["Untitled agent"]);
-  });
-
-  it("says Untitled agent once the mark is gone", () => {
-    const tabId = useEpicCanvasStore
-      .getState()
-      .openEpicTab(CHAT.identity.taskId, "Epic");
-    const row = renderRow(tabId, UNTITLED);
-
-    expect(row.getAttribute("aria-label")).toContain("Untitled agent");
-    expect(row.textContent).not.toContain("New agent");
-  });
-
-  it("paints Untitled agent, not New agent, for a title-less row under a mark whose owner is out of reach, and opens a published tile of the same name", () => {
-    reachability.status = "unreachable";
-    const tabId = useEpicCanvasStore
-      .getState()
-      .openEpicTab(CHAT.identity.taskId, "Epic");
-    act(() => {
-      useEpicCanvasStore
-        .getState()
-        .markChatTitlePending(CHAT.identity.chatId, "");
-    });
-
-    const row = renderRow(tabId, UNTITLED);
-
-    expect(row.getAttribute("aria-label")).toContain("Untitled agent");
-    expect(row.textContent).toContain("Untitled agent");
-    expect(row.textContent).not.toContain("New agent");
-    fireEvent.click(row);
-    const canvas = useEpicCanvasStore.getState().canvasByTabId[tabId];
     const tiles = Object.values(canvas?.tilesByInstanceId ?? {});
-    expect(tiles.map((tile) => tile?.name)).toEqual(["Untitled agent"]);
+    expect(tiles.map((tile) => tile?.name)).toEqual(["New agent"]);
     expect(tiles.map((tile) => tile?.id)).not.toEqual([CHAT.identity.chatId]);
   });
 

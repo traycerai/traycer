@@ -21,6 +21,7 @@
 import { useMemo, useState, type KeyboardEvent, type ReactNode } from "react";
 import { v4 as uuidv4 } from "uuid";
 import { toast } from "sonner";
+import { displayTitle } from "@/lib/display-title";
 import { CommandGroup } from "@/components/ui/command";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { PaletteItemRow } from "@/components/command-palette/palette-item-row";
@@ -267,10 +268,7 @@ function SearchRun({
         id: resolved.id,
         instanceId: uuidv4(),
         type: resolved.kind,
-        name:
-          resolved.title.length > 0
-            ? resolved.title
-            : `Untitled ${resolved.kind}`,
+        name: displayTitle(resolved.title, resolved.kind),
         hostId: defaultHostId,
       },
       dedupe: false,

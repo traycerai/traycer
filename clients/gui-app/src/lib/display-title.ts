@@ -12,7 +12,7 @@
  * Two fallback tiers:
  *
  * 1. **Plain kind-label fallback** - `displayTitle(title, kind)` returns the
- *    raw title when non-empty, else the per-kind `"Untitled <kind>"` literal.
+ *    raw title when non-empty, else the per-kind literal.
  *    Use it at surfaces that only carry the raw title + kind.
  *
  * 2. **Source-aware fallback** - `epicDisplayTitle` / `chatDisplayTitle` derive
@@ -22,8 +22,8 @@
  *    stored title still renders a meaningful label.
  *
  * A Terminal-interface Agent uses the plain `displayTitle(title, "agent")`
- * fallback like any other durable Agent: an untitled one is an "Untitled
- * agent", NOT its harness/provider label. Harness identity is secondary
+ * fallback like any other durable Agent: an untitled one is a "New agent",
+ * NOT its harness/provider label. Harness identity is secondary
  * interface metadata (rendered as a badge where a surface exposes it via
  * `TUI_AGENT_HARNESS_LABELS`), never the Agent's title fallback.
  *
@@ -45,24 +45,32 @@ import { createEpicName } from "@/lib/epic-name";
 export type DisplayTitleKind = EpicNodeKind | "epic" | "phase" | "agent";
 
 /**
- * Per-kind "Untitled <kind>" labels. Note `terminal-agent` renders as
- * "Untitled terminal agent" (spaced, not the hyphenated kind), not
- * `Untitled terminal-agent`.
+ * What an Agent reads as while it has no title, on every surface and whichever
+ * interface it is reached through. A first Send takes seconds to bring a title
+ * back, and "Untitled" reads like a fault for all of them.
+ *
+ * A stored empty title cannot say whether one is on its way: nothing durable
+ * records that, and a mark held in one window is absent from a reload, another
+ * window or another device. So an Agent whose title never comes (never sent a
+ * message, or its title run failed) keeps this label for good.
+ */
+const NEW_AGENT_TITLE = "New agent";
+
+/**
+ * Per-kind "Untitled <kind>" labels, with the three Agent kinds on
+ * {@link NEW_AGENT_TITLE}.
  *
  * `agent` is the fallback for surfaces that address the durable **Agent**
- * rather than one of its interfaces - an untitled Agent is an "Untitled agent"
- * whether it is interacted with through Chat or Terminal. The narrower
- * `chat` / `terminal-agent` literals remain for interface-specific surfaces and
- * for historical titles: a record whose stored title literally reads
- * "Untitled chat" keeps that text, because the system cannot tell a synthetic
- * fallback baked into data apart from a title a user chose.
+ * rather than one of its interfaces. The narrower `chat` / `terminal-agent`
+ * keys reach the same label, so a surface holding only a record's kind cannot
+ * name a fresh Agent any other way.
  */
 const UNTITLED_LABELS: Readonly<Record<DisplayTitleKind, string>> = {
   epic: "Untitled task",
   phase: "Untitled phase",
-  agent: "Untitled agent",
-  chat: "Untitled chat",
-  "terminal-agent": "Untitled terminal agent",
+  agent: NEW_AGENT_TITLE,
+  chat: NEW_AGENT_TITLE,
+  "terminal-agent": NEW_AGENT_TITLE,
   terminal: "Untitled terminal",
   spec: "Untitled spec",
   ticket: "Untitled ticket",
@@ -73,14 +81,36 @@ const UNTITLED_LABELS: Readonly<Record<DisplayTitleKind, string>> = {
   file: "Untitled file",
 };
 
+/** The fallback the host still writes into notification rows. */
+const BAKED_AGENT_FALLBACK = "Untitled agent";
+
 /**
- * What the tab and the tree call an Agent while its first title is being
- * generated (`useEpicChatAwaitingFirstTitle`). Render-only and outside
- * `UNTITLED_LABELS` on purpose: an Agent whose title never comes keeps the
- * "Untitled agent" fallback, so this label must never reach a snapshot, a
- * tree record or a stored title.
+ * Every fallback a saved Agent tile may carry. A tile's `name` is a snapshot, so
+ * one saved by an older build still holds that build's spelling.
  */
-export const NEW_AGENT_TITLE = "New agent";
+const AGENT_FALLBACK_NAMES: ReadonlySet<string> = new Set([
+  NEW_AGENT_TITLE,
+  BAKED_AGENT_FALLBACK,
+  "Untitled chat",
+  "Untitled terminal agent",
+]);
+
+/**
+ * Whether a snapshot's name is an Agent's fallback rather than its title, under
+ * any spelling a tile may still carry. A record whose stored title literally
+ * reads one of these is indistinguishable from it.
+ */
+export function isAgentFallbackName(name: string): boolean {
+  return AGENT_FALLBACK_NAMES.has(name);
+}
+
+/**
+ * A saved Agent tile's name as it loads: a fallback under any spelling becomes
+ * today's. A real title on the record still wins at render.
+ */
+export function agentTileName(name: string): string {
+  return isAgentFallbackName(name) ? untitledLabel("agent") : name;
+}
 
 /** User-facing literal for an empty epic title. Single-sourced from the map. */
 export const UNTITLED_EPIC_TITLE = UNTITLED_LABELS.epic;
@@ -125,12 +155,16 @@ function untitledLabel(kind: DisplayTitleKind): string {
 
 /**
  * The title to render for a node: the raw title when non-empty, else the
- * per-kind "Untitled <kind>" fallback. Use at surfaces that only have the raw
- * title + kind; prefer the source-aware helpers below where the record's
- * derivation source is available.
+ * per-kind fallback. Use at surfaces that only have the raw title + kind; prefer
+ * the source-aware helpers below where the record's derivation source is
+ * available. Under the `agent` kind {@link BAKED_AGENT_FALLBACK} counts as no
+ * title, which is how a host-written notification row reaches the current label.
  */
 export function displayTitle(title: string, kind: DisplayTitleKind): string {
-  return title.length > 0 ? title : untitledLabel(kind);
+  if (title.length === 0) return untitledLabel(kind);
+  return kind === "agent" && title === BAKED_AGENT_FALLBACK
+    ? untitledLabel(kind)
+    : title;
 }
 
 /**
@@ -149,11 +183,11 @@ export function epicDisplayTitle(epic: {
 
 /**
  * Source-aware chat title: the raw title when non-empty, else a slice of the
- * first user message when one is available, else "Untitled chat".
+ * first user message when one is available, else "New agent".
  *
  * `firstUserMessage` is `null` at the light render surfaces (sidebar tree, tab
  * strip) that do not carry chat messages. Those surfaces fall back to
- * "Untitled chat"; surfaces that have messages pass the derived slice.
+ * "New agent"; surfaces that have messages pass the derived slice.
  */
 export function chatDisplayTitle(chat: {
   readonly title: string;

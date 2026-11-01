@@ -425,11 +425,21 @@ describe("ActivityTab", () => {
       expect(screen.getByText("Fix the build")).not.toBeNull();
     });
 
-    it("falls back to Untitled conversation when neither knows a title", () => {
+    it("falls back to New agent when neither knows a title", () => {
       recent.entries = [entry({ chatTitle: null })];
       defaultTab();
 
-      expect(screen.getByText("Untitled conversation")).not.toBeNull();
+      expect(screen.getByText("New agent")).not.toBeNull();
+    });
+
+    it("shows New agent, not a blank cell, for an open chat whose title is empty and a null recorded title", () => {
+      visibleChats.current = new Map([
+        ["chat-1", { title: "", workspace: { remote: null, branch: null } }],
+      ]);
+      recent.entries = [entry({ chatTitle: null })];
+      defaultTab();
+
+      expect(screen.getByText("New agent")).not.toBeNull();
     });
   });
 

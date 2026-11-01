@@ -280,7 +280,7 @@ describe("epicAgentMentionEntriesFromEpic", () => {
     expect(entries.map((entry) => entry.label)).toEqual(["Claude run"]);
   });
 
-  it("falls back to 'Untitled agent' for untitled Agents on BOTH interfaces", () => {
+  it("falls back to 'New agent' for untitled Agents on BOTH interfaces", () => {
     const [chatEntry, terminalEntry] = epicAgentMentionEntriesFromEpic(
       chatsSlice([chat("c1", "", null, 0)]),
       terminalAgentsSlice([
@@ -297,9 +297,9 @@ describe("epicAgentMentionEntriesFromEpic", () => {
     );
 
     // The picker addresses the durable Agent, so the fallback is
-    // interface-agnostic - not "Untitled chat" / the harness label.
-    expect(chatEntry.label).toBe("Untitled agent");
-    expect(terminalEntry.label).toBe("Untitled agent");
+    // interface-agnostic - not the harness label.
+    expect(chatEntry.label).toBe("New agent");
+    expect(terminalEntry.label).toBe("New agent");
     expect(chatEntry.epicTitle).toBe("Untitled task");
     expect(chatEntry.description).toBe("Untitled task");
   });

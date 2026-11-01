@@ -20,9 +20,7 @@ import { useStreamSyncingSpell } from "@/hooks/sync/use-stream-syncing-spell";
 import { SURFACE_SYNC_RANK } from "@/stores/sync/surface-sync-store";
 import { NO_STREAM_SYNCING_SPELL } from "@/lib/sync/stream-syncing-state";
 import "@/components/layout/shell/mobile-shell-touch-targets.css";
-import { NEW_AGENT_TITLE } from "@/lib/display-title";
 import {
-  useEpicTabAwaitingFirstTitle,
   useEpicTabDisplayTitle,
   useEpicLiveArtifactTitleGenerating,
 } from "@/lib/epic-selectors";
@@ -158,13 +156,9 @@ function MobileCurrentTileBarBody(
     titleNode,
     epicId,
   );
-  const awaitingFirstTitle = useEpicTabAwaitingFirstTitle(titleNode, epicId);
   const displayTitle =
     browserPresentation?.title ??
-    terminalTabDisplayTitle(
-      terminalControl,
-      awaitingFirstTitle ? NEW_AGENT_TITLE : fallbackDisplayTitle,
-    );
+    terminalTabDisplayTitle(terminalControl, fallbackDisplayTitle);
 
   // A chat is the one tile kind whose own stream can be away while its content
   // stays on screen with nothing said about it. Terminals already overlay

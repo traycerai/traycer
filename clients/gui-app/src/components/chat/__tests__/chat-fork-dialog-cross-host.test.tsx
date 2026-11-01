@@ -1592,14 +1592,14 @@ describe("ChatForkDialog cross-host routing", () => {
     );
   });
 
-  it('untitled source: empty input, "Untitled agent" placeholder, submit enabled, sends title ""', async () => {
+  it('untitled source: empty input, "New agent" placeholder, submit enabled, sends title ""', async () => {
     renderDialog(forkTarget({ sourceChatTitle: "" }), ignoreOpenChange);
 
     const input = screen.getByRole<HTMLInputElement>("textbox", {
       name: "Fork agent title",
     });
     expect(input.value).toBe("");
-    expect(input.getAttribute("placeholder")).toBe("Untitled agent");
+    expect(input.getAttribute("placeholder")).toBe("New agent");
     // No fillTitle() here on purpose: an untitled source must not need one.
     expect(forkButton().disabled).toBe(false);
 
