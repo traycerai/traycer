@@ -1109,10 +1109,10 @@ export type HostChatRecordsSubscribeServerFrameV10 = z.infer<
 // `epic.subscribe@1.1` precedent - a client that negotiated @1.0 never
 // receives the new kinds; the host gates emission on the negotiated version.
 //
-// `tuiRemove` reuses the chat removal-reason vocabulary. Today a TUI row can
-// only ever say `deleted` (the rows are structurally owner-only, so there is
-// no entitlement to revoke), but the enum is shared rather than narrowed so
-// a future sharing surface cannot fork the vocabulary.
+// `tuiRemove` reuses the chat removal-reason vocabulary: `deleted` is a tombstone,
+// and `revoked` withdraws a replica this viewer no longer sees and says nothing
+// about whether the agent still exists. The enum is shared rather than narrowed
+// so a future sharing surface cannot fork the vocabulary.
 export const hostChatRecordsSubscribeServerFrameSchemaV11 = lazySchema(() =>
   z
     .discriminatedUnion("kind", [
