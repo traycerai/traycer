@@ -700,6 +700,17 @@ describe("sandboxListHeader", () => {
       }),
     ).toBe("1 sandbox · $0.02 today (UTC day)");
   });
+
+  it("keeps the sandbox count beside Automations when there is one", () => {
+    expect(
+      sandboxListHeader({
+        rows,
+        unstartedAutomations: true,
+        todayMc: null,
+        todayYoursMc: null,
+      }),
+    ).toBe("1 sandbox and Automations");
+  });
 });
 
 describe("sandboxRegionLabel", () => {
