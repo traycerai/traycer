@@ -529,6 +529,10 @@ export function stoppedSandboxLine(
 export function returnedSandboxMessageLine(savedInDrafts: boolean): string {
   return `Your message wasn't sent; ${savedInDrafts ? "it's saved in your drafts." : "it's back in the composer."}`;
 }
+/** A rest's give-back the composer had no room for, after its state line. */
+export function restedDraftLine(restingLine: string): string {
+  return `${restingLine}. ${returnedSandboxMessageLine(true)}`;
+}
 export function couldntStopLine(name: string): string {
   return `Couldn't stop ${name}`;
 }

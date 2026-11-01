@@ -319,7 +319,7 @@ const GRID: Readonly<Record<string, Readonly<Record<string, Cell>>>> = {
     "late-accept": ["W.host", "", "i"],
     "stop-result": ["W.host", "", "i"],
     "stop-failed": ["W.host", "", "i"],
-    rest: ["W.host", "poll+wake", "a"],
+    rest: ["W.host", "poll", "a"],
     awake: ["W.none", "prepare", "a"],
     "terminal-row": ["E", "end-host", "a"],
     frozen: ["W.credits", "poll", "a"],
@@ -371,7 +371,7 @@ const GRID: Readonly<Record<string, Readonly<Record<string, Cell>>>> = {
     "late-accept": ["W.model", "", "i"],
     "stop-result": ["W.model", "", "i"],
     "stop-failed": ["W.model", "", "i"],
-    rest: ["W.model", "poll+wake", "a"],
+    rest: ["W.model", "poll", "a"],
     awake: ["W.model", "fetch-model+poll", "a"],
     "terminal-row": ["E", "end-host", "a"],
     frozen: ["W.credits", "poll", "a"],
@@ -683,7 +683,7 @@ const GRID: Readonly<Record<string, Readonly<Record<string, Cell>>>> = {
     "late-accept": ["W.none", "", "i"],
     "stop-result": ["W.none", "", "i"],
     "stop-failed": ["W.none", "", "i"],
-    rest: ["W.host", "poll+wake", "a"],
+    rest: ["W.host", "poll", "a"],
     awake: ["W.none", "prepare", "a"],
     "terminal-row": ["E", "end-host", "a"],
     frozen: ["W.credits", "poll", "a"],
@@ -787,7 +787,7 @@ const GRID: Readonly<Record<string, Readonly<Record<string, Cell>>>> = {
     "late-accept": ["A", "record-receipt", "a"],
     "stop-result": ["S.none", "", "i"],
     "stop-failed": ["S.none", "", "i"],
-    rest: ["S.host", "poll+wake", "a"],
+    rest: ["Q.none", "poll+uncertain", "a"],
     awake: ["S.none", "poll+dispatch", "a"],
     "terminal-row": ["E", "end-host", "a"],
     frozen: ["S.credits", "poll", "a"],
@@ -839,7 +839,7 @@ const GRID: Readonly<Record<string, Readonly<Record<string, Cell>>>> = {
     "late-accept": ["A", "record-receipt", "a"],
     "stop-result": ["S.host", "", "i"],
     "stop-failed": ["S.host", "", "i"],
-    rest: ["S.host", "poll+wake", "a"],
+    rest: ["Q.host", "poll+uncertain", "a"],
     awake: ["S.none", "poll+dispatch", "a"],
     "terminal-row": ["E", "end-host", "a"],
     frozen: ["S.credits", "poll", "a"],
@@ -2031,7 +2031,7 @@ describe("guard: model availability is the last readiness fact", () => {
     },
   );
 
-  it("wakes after a pending default-model read loses its host, then prepares once the read resolves", () => {
+  it("never wakes after a pending default-model read loses its host, and prepares once the read resolves", () => {
     const reading = observe("W.none", "observe", { modelUnavailable: false });
     expect(reading.state.blocker).toBe("model");
     const disconnected = run(reading.state, "observe", {
@@ -2043,13 +2043,8 @@ describe("guard: model availability is the last readiness fact", () => {
       "rest",
       factsFor("W.model", "rest"),
     );
-    expect(resting.effects).toEqual(["poll", "wake"]);
-    const waking = run(resting.state, "observe", {
-      ...factsFor("W.model", "rest"),
-      wakeInFlight: true,
-    });
-    expect(waking.effects).toEqual(["poll"]);
-    const resolved = run(waking.state, "awake", {
+    expect(resting.effects).toEqual(["poll"]);
+    const resolved = run(resting.state, "awake", {
       ...factsFor("W.model", "awake"),
       modelReady: true,
     });
@@ -2777,17 +2772,63 @@ describe("a resting sandbox wakes only for work that can proceed there", () => {
     },
   );
 
-  it("Retry releases a refusal for one wake, then resumes delivery on the awake row", () => {
+  it("Retry on a waiting refusal at rest wakes nothing and keeps polling", () => {
     const facts = factsFor("W.notsent", "rest");
     const retried = run(stateOf("chat", "W.notsent"), "retry", facts);
+    expect(retried.effects).not.toContain("wake");
+    expect(retried.effects).toContain("poll");
+  });
+});
+
+describe("a claimed request whose sandbox rests", () => {
+  const restingFacts = (rowId: string): PendingSendFacts => ({
+    ...defaultFacts(rowId),
+    host: "resting",
+  });
+
+  it.each(["S.none", "S.host"])(
+    "%s becomes uncertain at rest and wakes nothing",
+    (rowId) => {
+      const transition = run(
+        stateOf("chat", rowId),
+        "observe",
+        restingFacts(rowId),
+      );
+      expect(transition.state.phase).toBe("uncertain");
+      expect(sortedEffects(transition)).toEqual(["poll", "uncertain"]);
+    },
+  );
+
+  it.each([
+    ["a wake already in flight", { wakeInFlight: true }],
+    ["a request in flight", { inFlight: true }],
+    ["a frozen account", { frozen: true }],
+  ] as const)("is left alone under %s", (_label, overlay) => {
+    const transition = run(stateOf("chat", "S.none"), "observe", {
+      ...restingFacts("S.none"),
+      ...overlay,
+    });
+    expect(transition.state.phase).toBe("sending");
+    expect(transition.effects).not.toContain("uncertain");
+  });
+
+  it("only the person's Retry wakes it, once", () => {
+    const uncertain = run(
+      stateOf("chat", "S.none"),
+      "observe",
+      restingFacts("S.none"),
+    );
+    const observed = run(uncertain.state, "observe", restingFacts("Q.none"));
+    expect(observed.effects).not.toContain("wake");
+
+    const retried = run(uncertain.state, "retry", restingFacts("Q.none"));
     expect(retried.effects).toEqual(["retry", "poll", "wake"]);
+
     const waking = run(retried.state, "observe", {
-      ...facts,
+      ...restingFacts("Q.none"),
       wakeInFlight: true,
     });
-    expect(waking.effects).toEqual(["poll"]);
-    const awake = run(waking.state, "awake", { ...facts, host: "awake" });
-    expect(awake.effects).toEqual(["prepare"]);
+    expect(waking.effects).not.toContain("wake");
   });
 });
 

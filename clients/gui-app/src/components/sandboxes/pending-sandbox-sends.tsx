@@ -57,7 +57,6 @@ import {
   useNewHostActions,
   useSetupLineFacts,
   useStagedSandboxRunner,
-  useStagedSandboxWaker,
   type StagedSandboxRunner,
 } from "@/components/composer/use-staged-sandbox-send";
 import {
@@ -1154,13 +1153,11 @@ function useWatchedSandboxRow(
           sandboxObservation(stageBlocker(stage), environment),
           pendingSandboxSendFacts(send.id, environment),
         );
-  const wake = useStagedSandboxWaker();
   useEffect(() => {
     if (send === null || decision === null) return;
     projectSandboxBlocker(surfaceKey, decision.state.blocker, row.failure);
     if (decision.effects.includes("open-terminal"))
       clearPendingSandboxFailure(surfaceKey);
-    if (decision.effects.includes("wake")) wake(surfaceKey);
     if (decision.effects.includes("end-host")) {
       if (
         usePendingSandboxSendStore
@@ -1178,16 +1175,7 @@ function useWatchedSandboxRow(
     ) {
       returnWatchedSend(send, stage, rowState);
     }
-  }, [
-    decision,
-    environment,
-    row.failure,
-    rowState,
-    send,
-    stage,
-    surfaceKey,
-    wake,
-  ]);
+  }, [decision, environment, row.failure, rowState, send, stage, surfaceKey]);
   return {
     failed: row.failure !== null,
     ready: row.ready,

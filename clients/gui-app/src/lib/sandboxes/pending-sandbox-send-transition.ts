@@ -136,7 +136,7 @@ export interface PendingSendFacts {
   readonly wakeInFlight: boolean;
   readonly epicConfirmed: boolean;
   readonly stageStatus: "missing" | "staged" | "creating" | "handoff";
-  /** The stage's sandbox rested on its own while the stage waited on it. */
+  /** The stage's sandbox rested on its own while its delivery waited. */
   readonly stageRested: boolean;
 }
 /** Missing observations grant no authority and authorize no network operation. */
@@ -643,9 +643,28 @@ function observe(
 }
 
 /**
- * A Stop ends once the row proves the rest. Whatever else held the wait, a
- * sandbox that rested on its own ends it too: the message goes back, and the
- * next send wakes it, never this one.
+ * A claimed request's sandbox is at rest and nothing is on its way: only the
+ * person's Retry wakes it.
+ */
+function claimResting(
+  state: PendingSendState,
+  facts: PendingSendFacts,
+): boolean {
+  return (
+    state.phase === "sending" &&
+    facts.host === "resting" &&
+    !facts.frozen &&
+    !facts.wakeInFlight &&
+    !facts.inFlight &&
+    hostCanAdvance(state)
+  );
+}
+
+/**
+ * A Stop ends once the row proves the rest. Whatever else held the delivery,
+ * a sandbox that rested on its own ends it too: the message goes back, and
+ * only the person's next message or Resume wakes it. A request that may
+ * already be running cannot go back, so it says so and waits for its Retry.
  */
 function endedAtRest(
   state: PendingSendState,
@@ -661,6 +680,12 @@ function endedAtRest(
     withdrawalAllowed(state, facts)
   )
     return withdraw(state, facts);
+  if (claimResting(state, facts))
+    return result(
+      { ...state, phase: "uncertain" },
+      ["uncertain", "poll"],
+      facts,
+    );
   return null;
 }
 
@@ -683,22 +708,14 @@ function heldOnPerson(
   return result(state, ["poll"], facts);
 }
 
-/** Reaching a live host can wake, poll or replay; it cannot erase a latched blocker. */
+/** Reaching a live host can poll or replay; it cannot erase a latched blocker. */
 function reachableHost(
   state: PendingSendState,
   facts: PendingSendFacts,
 ): PendingSendTransition {
   if (facts.host === "resting") {
-    const effects: PendingSendEffect[] = ["poll"];
-    if (
-      !facts.wakeInFlight &&
-      !facts.inFlight &&
-      hostCanAdvance(state) &&
-      (state.phase === "waiting" || state.phase === "sending")
-    )
-      effects.push("wake");
     const blocker = state.blocker === "none" ? "host" : state.blocker;
-    return result({ ...state, blocker }, effects, facts);
+    return result({ ...state, blocker }, ["poll"], facts);
   }
   if (!facts.clientReady && claimed(state)) return missingClient(state, facts);
   if (facts.host !== "awake" || !facts.clientReady)
@@ -747,7 +764,9 @@ function retry(
   };
   // Retry requests a new model read; the previous negative cache entry cannot
   // refuse that read before it starts. All earlier readiness gates still apply.
-  const plan = observe(next, { ...facts, modelUnavailable: false });
+  const plan = claimResting(next, facts)
+    ? result({ ...next, blocker: "host" }, ["poll", "wake"], facts)
+    : observe(next, { ...facts, modelUnavailable: false });
   // A strip's fresh list may still be loading. It can hold dispatch without
   // preventing an explicitly requested catalog refresh on the named host.
   return result(

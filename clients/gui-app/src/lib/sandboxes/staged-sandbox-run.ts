@@ -133,7 +133,7 @@ export async function runStagedSandbox(
   if (
     stage === null ||
     stage.phase === "handoff" ||
-    !pendingSandboxStageRunAllowed(surfaceKey, "unknown")
+    !pendingSandboxStageRunAllowed(surfaceKey)
   )
     return;
   // A wake failure still names a usable sandbox, even when the original
@@ -196,59 +196,6 @@ function sandboxAlreadyMade(
     return null;
   }
   return { sandboxId: stage.createdSandboxId, hostId: stage.createdHostId };
-}
-
-/**
- * Wakes a handed-off stage's sandbox that rested while its action waited.
- * The original send or terminal ask remains the wake's gesture. Under the
- * same stage and key, back to its wake step on the line, then the wait.
- */
-export async function rewakeStagedSandbox(
-  surfaceKey: string,
-  deps: StagedSandboxRunDeps,
-): Promise<void> {
-  const stage = readStagedSandbox(surfaceKey);
-  if (
-    stage === null ||
-    !pendingSandboxStageRunAllowed(surfaceKey, "resting") ||
-    stage.phase !== "handoff" ||
-    stage.clientRequestId === null ||
-    stage.createdSandboxId === null ||
-    stage.createdHostId === null ||
-    running.has(surfaceKey)
-  ) {
-    return;
-  }
-  const { clientRequestId } = stage;
-  const started = {
-    sandboxId: stage.createdSandboxId,
-    hostId: stage.createdHostId,
-  };
-  const now = deps.now();
-  // The line's clock restarts with the wake: the wait it times is this one.
-  useStagedSandboxStore.getState().report(surfaceKey, {
-    phase: "creating",
-    startedAt: now,
-    step: "booting",
-    stepAt: now,
-    failure: null,
-  });
-  running.set(surfaceKey, clientRequestId);
-  try {
-    if (
-      !(await wakeCurrentStage(
-        surfaceKey,
-        clientRequestId,
-        started.hostId,
-        deps,
-      ))
-    ) {
-      return;
-    }
-    await settle({ surfaceKey, clientRequestId, started, deps }, now);
-  } finally {
-    if (running.get(surfaceKey) === clientRequestId) running.delete(surfaceKey);
-  }
 }
 
 interface StartedSandbox {
@@ -318,7 +265,7 @@ function stillCurrent(surfaceKey: string, clientRequestId: string): boolean {
     stage !== null &&
     stage.phase === "creating" &&
     stage.clientRequestId === clientRequestId &&
-    pendingSandboxStageRunAllowed(surfaceKey, "unknown")
+    pendingSandboxStageRunAllowed(surfaceKey)
   );
 }
 

@@ -29,7 +29,6 @@ import { AuthService } from "@/lib/auth/auth-service";
 import { HostDirectoryService } from "@/lib/host";
 import {
   createFailure,
-  rewakeStagedSandbox,
   runStagedSandbox,
   settleVerdict,
   STAGED_CREATE_BUDGET_MS,
@@ -1002,31 +1001,6 @@ describe("runStagedSandbox on a resting sandbox", () => {
     });
   });
 
-  it("re-wakes a staged landing terminal with the open-terminal gesture", async () => {
-    const store = useStagedSandboxStore.getState();
-    store.stage(surfaceKey, PERSONAL_NEW);
-    store.begin(surfaceKey, false, 1_000_000, false);
-    store.report(surfaceKey, {
-      phase: "handoff",
-      createdSandboxId: SANDBOX_ID,
-      createdHostId: NEW_HOST_ID,
-      openTerminal: true,
-    });
-    const { wake, deps } = harness(
-      { lists: [listOf(row({ state: "awake", guestConfigured: true }))] },
-      true,
-    );
-
-    await rewakeStagedSandbox(surfaceKey, deps);
-
-    expect(wake).toHaveBeenCalledWith(NEW_HOST_ID, "open-terminal");
-    expect(readStagedSandbox(surfaceKey)).toBeNull();
-    expect(useLandingPanelStore.getState().terminalRequest).toMatchObject({
-      surfaceKey,
-      hostId: NEW_HOST_ID,
-    });
-  });
-
   it("fails on the wake step when the wake did not bring it up", async () => {
     useStagedSandboxStore.getState().stage(surfaceKey, RESTING);
     const { auth, deps } = harness({}, false);
@@ -1329,44 +1303,6 @@ describe("runStagedSandbox for a pending send that holds a durable Stop", () => 
     expect(stageOf().phase).toBe("handoff");
   });
 
-  it.each([true, false])(
-    "ignores a wake answered %s whose boundary was superseded: no handoff, and no synthetic wake failure",
-    async (answered) => {
-      await pendingOwnerWith(false);
-      const store = useStagedSandboxStore.getState();
-      store.stage(surfaceKey, RESTING);
-      store.begin(surfaceKey, false, 1_000_000, false);
-      store.report(surfaceKey, {
-        phase: "handoff",
-        createdSandboxId: "sbx_resting",
-        createdHostId: "host-resting",
-      });
-      const { wake, deps } = harness(
-        { entries: [{ ...DIALABLE, hostId: "host-resting" }] },
-        true,
-      );
-      // A newer observation boundary lands while the old wake is still answering.
-      wake.mockImplementation(() => {
-        usePendingSandboxSendStore.setState((state) => ({
-          sends: {
-            ...state.sends,
-            [SEND]: {
-              ...state.sends[SEND],
-              observationRequestedAt: Date.now() + 60_000,
-            },
-          },
-        }));
-        return Promise.resolve(answered);
-      });
-
-      await rewakeStagedSandbox(surfaceKey, deps);
-
-      expect(wake).toHaveBeenCalledTimes(1);
-      expect(stageOf().phase).not.toBe("handoff");
-      expect(stageOf().failure).toBeNull();
-    },
-  );
-
   it("does not start a run, wake or create for a stage whose pending send holds a Stop", async () => {
     await pendingOwnerWith(true);
     useStagedSandboxStore.getState().stage(surfaceKey, RESTING);
@@ -1411,46 +1347,6 @@ describe("runStagedSandbox for a pending send that holds a durable Stop", () => 
     expect(
       usePendingSandboxSendStore.getState().sends[SEND]?.stopRequested,
     ).toBe(true);
-  });
-
-  it("does not re-wake a handed-off stage whose pending send holds a Stop", async () => {
-    await pendingOwnerWith(false);
-    useStagedSandboxStore.getState().stage(surfaceKey, RESTING);
-    const { wake, deps } = harness(
-      {
-        lists: [
-          listOf(
-            sandboxSummaryFixture({
-              id: "sbx_resting",
-              hostId: "host-resting",
-              state: "awake",
-              guestConfigured: true,
-            }),
-          ),
-        ],
-        entries: [{ ...DIALABLE, hostId: "host-resting" }],
-      },
-      true,
-    );
-    await run(false, deps);
-    expect(stageOf().phase).toBe("handoff");
-    expect(wake).toHaveBeenCalledTimes(1);
-
-    // Without a Stop the resting stage is woken again.
-    await rewakeStagedSandbox(surfaceKey, deps);
-    expect(wake).toHaveBeenCalledTimes(2);
-    expect(stageOf().phase).toBe("handoff");
-
-    usePendingSandboxSendStore.setState((state) => ({
-      sends: {
-        ...state.sends,
-        [SEND]: { ...state.sends[SEND], stopRequested: true },
-      },
-    }));
-    await rewakeStagedSandbox(surfaceKey, deps);
-
-    expect(wake).toHaveBeenCalledTimes(2);
-    expect(stageOf().phase).toBe("handoff");
   });
 });
 

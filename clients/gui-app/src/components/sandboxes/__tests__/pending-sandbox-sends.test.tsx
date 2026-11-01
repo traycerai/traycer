@@ -2042,7 +2042,8 @@ describe("a send waiting for the requested agent on its sandbox", () => {
     },
   );
 
-  it("wakes once to finish a pack install, then delivers when the requested agent is ready", async () => {
+  it("brings the message back and wakes nothing when the sandbox rests while a pack installs", async () => {
+    onTestFinished(installImmediateExclusiveLocks());
     seed(SEEDED);
     answerHost(SANDBOX_HOST, CODEX_DOWNLOADING);
     mount();
@@ -2055,59 +2056,16 @@ describe("a send waiting for the requested agent on its sandbox", () => {
     });
     mocks.listSandboxes.mockResolvedValue(listAnswers([awake]));
     answerSandboxRows([{ ...awake, state: "suspended" }], Date.now() + 120_000);
+
     await waitFor(() => {
-      expect(readStagedSandbox(SURFACE)?.phase).toBe("handoff");
-      expect(stagedRunActive(SURFACE)).toBe(false);
-      expect(mocks.wake).toHaveBeenCalledTimes(1);
+      expect(usePendingSandboxSendStore.getState().sends).toEqual({});
     });
-    expect(createChatCalls()).toEqual([]);
-
-    answerSandboxRows([awake], Date.now() + 120_001);
-    answerHost(SANDBOX_HOST, CODEX_READY);
-    await waitForCreateChats(1);
-    expect(mocks.wake).toHaveBeenCalledTimes(1);
-    expect(mocks.createSandbox).not.toHaveBeenCalled();
-  });
-
-  it("keeps a refusal at rest until Retry wakes it once and delivers the saved message", async () => {
-    seed(SEEDED);
-    useStagedSandboxStore.getState().report(SURFACE, {
-      failure: { kind: "not-sent" },
-    });
-    answerHost(SANDBOX_HOST, CODEX_READY);
-    const awake = sandboxSummaryFixture({
-      id: SANDBOX_ID,
-      hostId: SANDBOX_HOST,
-      state: "awake",
-    });
-    const fresh = Date.now() + 120_000;
-    answerSandboxRows([{ ...awake, state: "suspended" }], fresh);
-    mocks.listSandboxes.mockResolvedValue(listAnswers([awake]));
-    const wake = deferred<{ readonly kind: "awake" } | null>();
-    mocks.wake.mockReturnValue(wake.promise);
-    mount();
-    const line = await screen.findByTestId("sandbox-refusal-line");
     expect(mocks.wake).not.toHaveBeenCalled();
     expect(createChatCalls()).toEqual([]);
-
-    fireEvent.click(within(line).getByRole("button", { name: "Retry" }));
-    await waitFor(() => {
-      expect(mocks.wake).toHaveBeenCalledTimes(1);
-    });
-    answerSandboxRows([awake], fresh + 1);
-    await act(async () => {
-      wake.resolve({ kind: "awake" });
-      await wake.promise;
-    });
-    await waitForCreateChats(1);
-    await waitFor(() => {
-      expect(stagedRunActive(SURFACE)).toBe(false);
-    });
-    expect(createChatCalls()[0].input.initialMessage).toMatchObject({
-      content: MESSAGE_CONTENT,
-    });
-    expect(mocks.wake).toHaveBeenCalledTimes(1);
     expect(mocks.createSandbox).not.toHaveBeenCalled();
+    expect(
+      useNewConversationModalStore.getState().draftPatchesByEpicId["epic-1"],
+    ).toMatchObject({ content: MESSAGE_CONTENT });
   });
 
   it("delivers the requested agent after its Personal provider is repaired, without a manual retry or a second sandbox", async () => {
@@ -3201,16 +3159,10 @@ describe("a send whose sandbox rests while it waits for the agent", () => {
   }
 
   it.each(["suspended", "stopped"] as const)(
-    "wakes a %s sandbox once, under the same key, and delivers only when the agent is ready",
+    "brings the message back past handoff when a %s sandbox rests, and wakes nothing",
     async (state) => {
+      onTestFinished(installImmediateExclusiveLocks());
       seed({ ...SEEDED, phase: "handoff", created: true });
-      const keyBefore = readStagedSandbox(SURFACE)?.clientRequestId;
-      let finishWake: () => void = () => undefined;
-      mocks.wake.mockReturnValue(
-        new Promise((resolve) => {
-          finishWake = () => resolve({ kind: "awake" });
-        }),
-      );
       mocks.listReadAt = FRESH;
       mocks.sandboxes = [rowIn(state)];
       mocks.listSandboxes.mockResolvedValue(listAnswers([rowIn("awake")]));
@@ -3218,36 +3170,19 @@ describe("a send whose sandbox rests while it waits for the agent", () => {
       mount();
 
       await waitFor(() => {
-        expect(readStagedSandbox(SURFACE)).toMatchObject({
-          phase: "creating",
-          step: "booting",
-          failure: null,
-        });
+        expect(usePendingSandboxSendStore.getState().sends).toEqual({});
       });
-      expect(mocks.wake).toHaveBeenCalledTimes(1);
-      expect(mocks.wake).toHaveBeenCalledWith(SANDBOX_HOST, "send");
-      expect(readStagedSandbox(SURFACE)?.clientRequestId).toBe(keyBefore);
-
-      await act(async () => {
-        finishWake();
-        await Promise.resolve();
-      });
-      answerSandboxRows([rowIn("awake")], FRESH + 1);
-      await waitFor(() => {
-        expect(readStagedSandbox(SURFACE)?.phase).toBe("handoff");
-      });
-      // Awake again, the requested agent is still being prepared.
+      expect(mocks.wake).not.toHaveBeenCalled();
       expect(createChatCalls()).toEqual([]);
-
-      answerHost(SANDBOX_HOST, CODEX_READY);
-
-      await waitForCreateChats(1);
-      expect(mocks.wake).toHaveBeenCalledTimes(1);
       expect(mocks.createSandbox).not.toHaveBeenCalled();
+      expect(
+        useNewConversationModalStore.getState().draftPatchesByEpicId["epic-1"],
+      ).toMatchObject({ content: MESSAGE_CONTENT });
     },
   );
 
-  it("re-wakes a terminal request from a legacy handoff with the open-terminal gesture", async () => {
+  it("cancels a terminal request from a legacy handoff whose sandbox rests, waking nothing", async () => {
+    onTestFinished(installImmediateExclusiveLocks());
     seed({
       send: { request: { kind: "terminal" }, text: "" },
       target: NEW_TARGET,
@@ -3259,24 +3194,14 @@ describe("a send whose sandbox rests while it waits for the agent", () => {
     mocks.listReadAt = FRESH;
     mocks.sandboxes = [rowIn("suspended")];
     mocks.listSandboxes.mockResolvedValue(listAnswers([rowIn("awake")]));
-    mocks.wake.mockImplementation((hostId, gesture) =>
-      Promise.resolve({ kind: "awake" as const }).then((result) => {
-        if (hostId === SANDBOX_HOST && gesture === "open-terminal") {
-          mocks.sandboxes = [rowIn("awake")];
-        }
-        return result;
-      }),
-    );
     answerHost(SANDBOX_HOST, CODEX_DOWNLOADING);
     mount();
 
     await waitFor(() => {
-      expect(mocks.wake).toHaveBeenCalledWith(SANDBOX_HOST, "open-terminal");
+      expect(usePendingSandboxSendStore.getState().sends).toEqual({});
     });
-    await waitFor(() => {
-      expect(mocks.openTile).toHaveBeenCalledTimes(1);
-    });
-    expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+    expect(mocks.wake).not.toHaveBeenCalled();
+    expect(mocks.openTile).not.toHaveBeenCalled();
   });
 
   it.each(["no row", "a stale awake row"] as const)(
@@ -3293,8 +3218,6 @@ describe("a send whose sandbox rests while it waits for the agent", () => {
       mocks.listReadAt = 0;
       mocks.sandboxes = staleProjection === "no row" ? [] : [rowIn("awake")];
       mocks.listSandboxes.mockResolvedValue(listAnswers([rowIn("awake")]));
-      const wake = deferred<{ readonly kind: "awake" }>();
-      mocks.wake.mockReturnValue(wake.promise);
       answerHost(SANDBOX_HOST, CODEX_DOWNLOADING);
       mount();
 
@@ -3310,17 +3233,7 @@ describe("a send whose sandbox rests while it waits for the agent", () => {
         usePendingSandboxSendStore.getState().sends[SEND_ID],
       ).toBeDefined();
 
-      answerSandboxRows([rowIn("suspended")], Date.now() + 60_000);
-      await waitFor(() => {
-        expect(mocks.wake).toHaveBeenCalledWith(SANDBOX_HOST, "open-terminal");
-      });
-      expect(mocks.openTile).not.toHaveBeenCalled();
-
       answerSandboxRows([rowIn("awake")], Date.now() + 60_000);
-      await act(async () => {
-        wake.resolve({ kind: "awake" });
-        await wake.promise;
-      });
 
       await waitFor(() => {
         expect(mocks.openTile).toHaveBeenCalledTimes(1);
@@ -3343,40 +3256,24 @@ describe("a send whose sandbox rests while it waits for the agent", () => {
     expect(readStagedSandbox(SURFACE)?.phase).toBe("handoff");
   });
 
-  it("ends the send when the sandbox it woke is reported failed, delivering nothing", async () => {
+  it("ends the send when its sandbox is reported failed past handoff, delivering nothing", async () => {
     seed({ ...SEEDED, phase: "handoff", created: true });
     mocks.listReadAt = FRESH;
-    mocks.sandboxes = [rowIn("suspended")];
-    mocks.listSandboxes.mockResolvedValue(
-      listAnswers([
-        sandboxSummaryFixture({
-          id: SANDBOX_ID,
-          hostId: SANDBOX_HOST,
-          state: "failed",
-          failureCode: "PROVIDER_CREATE_FAILED",
-        }),
-      ]),
-    );
+    mocks.sandboxes = [
+      sandboxSummaryFixture({
+        id: SANDBOX_ID,
+        hostId: SANDBOX_HOST,
+        state: "failed",
+        failureCode: "PROVIDER_CREATE_FAILED",
+      }),
+    ];
     answerHost(SANDBOX_HOST, CODEX_READY);
     mount();
 
     await waitFor(() => {
-      expect(mocks.wake).toHaveBeenCalledWith(SANDBOX_HOST, "send");
-    });
-    answerSandboxRows(
-      [
-        sandboxSummaryFixture({
-          id: SANDBOX_ID,
-          hostId: SANDBOX_HOST,
-          state: "failed",
-          failureCode: "PROVIDER_CREATE_FAILED",
-        }),
-      ],
-      FRESH + 1,
-    );
-    await waitFor(() => {
       expect(usePendingSandboxSendStore.getState().sends).toEqual({});
     });
+    expect(mocks.wake).not.toHaveBeenCalled();
     expectSendRecovered("chat");
   });
 });
@@ -3397,41 +3294,34 @@ describe("a message for an existing chat whose sandbox rests", () => {
     ["suspended", RESUME_TARGET],
     ["stopped", START_TARGET],
   ] as const)(
-    "wakes a %s sandbox exactly once, then dispatches the one message to the same chat and creates no chat",
+    "returns the message to the chat's composer when a %s sandbox rests past handoff: no wake, no dispatch, no new chat",
     async (state, target) => {
-      seed({
-        ...SEEDED,
-        target,
-        send: { request: MESSAGE_REQUEST },
-        phase: "handoff",
-        created: true,
-      });
-      mocks.wake.mockResolvedValue({ kind: "awake" });
-      mocks.listReadAt = FRESH;
-      mocks.sandboxes = [rowIn(state)];
-      mocks.listSandboxes.mockResolvedValue(listAnswers([rowIn("awake")]));
-      answerHost(SANDBOX_HOST, CODEX_READY);
-      mount();
+      const restoreLocks = installImmediateExclusiveLocks();
+      try {
+        seed({
+          ...SEEDED,
+          target,
+          send: { request: MESSAGE_REQUEST },
+          phase: "handoff",
+          created: true,
+        });
+        mocks.listReadAt = FRESH;
+        mocks.sandboxes = [rowIn(state)];
+        answerHost(SANDBOX_HOST, CODEX_READY);
+        mountInChat();
 
-      await waitFor(() => {
-        expect(mocks.wake).toHaveBeenCalledTimes(1);
-      });
-      expect(mocks.wake).toHaveBeenCalledWith(SANDBOX_HOST, "send");
-      answerSandboxRows([rowIn("awake")], FRESH + 1);
-
-      await waitFor(() => {
+        await waitFor(() => {
+          expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+        });
         expect(
-          usePendingSandboxSendStore.getState().sends[SEND_ID]?.dispatch?.input,
-        ).toMatchObject({ chatId: "existing-chat", hostId: SANDBOX_HOST });
-      });
-      // The message goes through the ordinary send of the chat that exists:
-      // no second chat, no second pending record, no second wake.
-      expect(createChatCalls()).toEqual([]);
-      expect(Object.keys(usePendingSandboxSendStore.getState().sends)).toEqual([
-        SEND_ID,
-      ]);
-      expect(mocks.wake).toHaveBeenCalledTimes(1);
-      expect(mocks.createSandbox).not.toHaveBeenCalled();
+          useComposerDraftStore.getState().drafts["existing-chat"]?.content,
+        ).toEqual(MESSAGE_CONTENT);
+        expect(mocks.wake).not.toHaveBeenCalled();
+        expect(createChatCalls()).toEqual([]);
+        expect(mocks.createSandbox).not.toHaveBeenCalled();
+      } finally {
+        restoreLocks();
+      }
     },
   );
 
@@ -3607,27 +3497,19 @@ describe("a message for an existing chat whose sandbox rests", () => {
       handoffHold.held = null;
     });
 
-    it("returns the message to the chat's composer with the exact receipt and never sends", async () => {
+    it("returns the message to the chat's composer on its own when the sandbox rests, and never sends", async () => {
       const restoreLocks = installImmediateExclusiveLocks();
       try {
         seedWaking();
         mountInChat();
 
-        fireEvent.click(
-          await screen.findByRole("button", { name: "Cancel the message" }),
-        );
-
         await waitFor(() =>
           expect(usePendingSandboxSendStore.getState().sends).toEqual({}),
         );
         expect(
-          screen.getByText(
-            "Your message wasn't sent; it's back in the composer.",
-          ),
-        ).toBeDefined();
-        expect(
           useComposerDraftStore.getState().drafts["existing-chat"]?.content,
         ).toEqual(MESSAGE_CONTENT);
+        expect(mocks.wake).not.toHaveBeenCalled();
         expect(createChatCalls()).toEqual([]);
       } finally {
         restoreLocks();
@@ -3994,41 +3876,6 @@ describe("a message for an existing chat whose sandbox rests", () => {
       expect(createChatCalls()).toEqual([]);
     });
   });
-
-  it("holds a no-credit wake as one pending message with the credits refusal line, and never wakes or creates twice", async () => {
-    seed({
-      ...SEEDED,
-      target: RESUME_TARGET,
-      send: { request: MESSAGE_REQUEST },
-      phase: "handoff",
-      created: true,
-    });
-    mocks.wake.mockResolvedValue({
-      kind: "credit-gate",
-      shortfallMc: 120,
-      burnMcPerHour: null,
-    });
-    mocks.listReadAt = FRESH;
-    mocks.sandboxes = [rowIn("suspended")];
-    mocks.listSandboxes.mockResolvedValue(listAnswers([rowIn("suspended")]));
-    answerHost(SANDBOX_HOST, CODEX_READY);
-    mountInChat();
-
-    await waitFor(() => {
-      expect(readStagedSandbox(SURFACE)?.failure).toMatchObject({
-        kind: "credits",
-      });
-    });
-    expect(screen.getByTestId("sandbox-refusal-line")).toBeDefined();
-    expect(Object.keys(usePendingSandboxSendStore.getState().sends)).toEqual([
-      SEND_ID,
-    ]);
-    expect(createChatCalls()).toEqual([]);
-    await act(async () => {
-      await Promise.resolve();
-    });
-    expect(mocks.wake).toHaveBeenCalledTimes(1);
-  });
 });
 
 describe("a send whose message carries images, delivered on its sandbox", () => {
@@ -4252,7 +4099,8 @@ describe("a fork waiting on its sandbox", () => {
     ).toEqual(FORK_REQUEST);
   });
 
-  it("keeps a fork wake classified as a send", async () => {
+  it("withdraws a fork whose sandbox rests past handoff and wakes nothing", async () => {
+    onTestFinished(installImmediateExclusiveLocks());
     const request = {
       kind: "fork" as const,
       parentId: null,
@@ -4280,8 +4128,9 @@ describe("a fork waiting on its sandbox", () => {
     mount();
 
     await waitFor(() => {
-      expect(mocks.wake).toHaveBeenCalledWith(SANDBOX_HOST, "send");
+      expect(usePendingSandboxSendStore.getState().sends).toEqual({});
     });
+    expect(mocks.wake).not.toHaveBeenCalled();
     expect(createChatCalls()).toEqual([]);
   });
 
@@ -4966,12 +4815,6 @@ describe("cancelling a refused pending message", () => {
             .setContent("epic-1", OCCUPIED_NEW_CHAT_CONTENT);
         mount();
         const line = await screen.findByTestId("sandbox-refusal-line");
-        const resting = sandboxSummaryFixture({
-          id: SANDBOX_ID,
-          hostId: SANDBOX_HOST,
-          state: "suspended",
-        });
-        answerSandboxRows([resting], Date.now() + 120_000);
         fireEvent.click(
           within(line).getByRole("button", { name: "Cancel the message" }),
         );
@@ -4979,6 +4822,13 @@ describe("cancelling a refused pending message", () => {
           expect(usePendingSandboxSendStore.getState().sends).toEqual({}),
         );
         expect(readStagedSandbox(SURFACE)).toBeNull();
+        // The sandbox rests after the cancel: the receipt stays the cancel's.
+        const resting = sandboxSummaryFixture({
+          id: SANDBOX_ID,
+          hostId: SANDBOX_HOST,
+          state: "suspended",
+        });
+        answerSandboxRows([resting], Date.now() + 120_000);
         const receipt = occupied
           ? "Your message wasn't sent; it's saved in your drafts."
           : "Your message wasn't sent; it's back in the composer.";
@@ -5883,7 +5733,26 @@ describe("a send whose sandbox left awake on its own after the create timed out"
     ]);
     const line = await screen.findByTestId("sandbox-stopped-line");
     expect(line.textContent).toContain("Couldn't start build-box");
+    expect(line.textContent).not.toContain("nothing was charged");
     expect(line.textContent).not.toContain("wasn't sent");
+  });
+
+  it("says a stopped sandbox's draft line in the stopped form when the composer is occupied", async () => {
+    useNewConversationModalStore
+      .getState()
+      .setContent("epic-1", OCCUPIED_NEW_CHAT_CONTENT);
+    await mountTimedOut();
+
+    answerSandboxRows([rowIn("stopped")], FRESH + 1);
+
+    const line = await screen.findByTestId("sandbox-stopped-line");
+    expect(line.textContent).toContain(
+      "build-box is stopped. Your message wasn't sent; it's saved in your drafts.",
+    );
+    expect(line.textContent).not.toContain("is suspended");
+    expect(
+      within(line).getByRole("button", { name: "Open draft" }),
+    ).toBeDefined();
   });
 
   it("falls back to the receipt's sentence when the sandbox is absent from the list and the task names no end", async () => {
@@ -6180,7 +6049,12 @@ describe("a send held on settings that didn't apply, once its sandbox leaves awa
     expect(line.textContent).toContain(
       "build-box is suspended · your next message resumes it",
     );
-    expect(line.textContent).not.toContain("wasn't sent");
+    expect(line.textContent).toContain(
+      "build-box is suspended. Your message wasn't sent; it's saved in your drafts.",
+    );
+    expect(
+      within(line).getByRole("button", { name: "Open draft" }),
+    ).toBeDefined();
   });
 
   it("keeps the resting sandbox on the message's draft when the task's composer holds another message", async () => {
@@ -6756,13 +6630,26 @@ describe("a durable dispatch claim and its sandbox's lifecycle", () => {
   });
 
   it.each(byKind(RESTING))(
-    "wakes a %s sandbox for a saved %s claim whose stage is missing, before any create, then replays its exact input once awake",
+    "never wakes a %s sandbox of a saved %s claim on its own: it reads as uncertain, and only Retry wakes it, then replays its exact input once awake",
     async (kind, state) => {
       const input = await seedClaim(kind, "sending", SANDBOX_ID);
       answerSandboxRows([rowIn(state)], FRESH);
       answerHost(SANDBOX_HOST, CODEX_READY);
       mount();
 
+      const retry = await screen.findByTestId("pending-sandbox-dispatch-retry");
+      expect(
+        screen.getByTestId("pending-sandbox-dispatch").textContent,
+      ).toContain("Couldn't confirm the agent was created.");
+      await waitFor(() => {
+        expect(
+          usePendingSandboxSendStore.getState().sends[SEND_ID]?.dispatch,
+        ).toMatchObject({ status: "uncertain", input });
+      });
+      expect(mocks.wake).not.toHaveBeenCalled();
+      expect(createChatCalls()).toEqual([]);
+
+      fireEvent.click(retry);
       await waitFor(() => {
         expect(mocks.wake).toHaveBeenCalledWith(SANDBOX_HOST, "send");
       });
@@ -7059,7 +6946,7 @@ describe("a durable dispatch claim and its sandbox's lifecycle", () => {
   );
 
   it.each(KINDS)(
-    "issues the newer request's own wake when a superseded %s wake fails and a fresh read still shows the sandbox resting",
+    "issues the newer request's own wake on Retry when a superseded %s wake fails and a fresh read still shows the sandbox resting",
     async (kind) => {
       const { input, wake } = await startClaimedWake(kind);
       const superseding = Date.now() + 60_000;
@@ -7079,9 +6966,13 @@ describe("a durable dispatch claim and its sandbox's lifecycle", () => {
         wake.resolve(null);
         await wake.promise;
       });
-      // A read sent after the newer boundary: still resting.
+      // A read sent after the newer boundary: still resting. Nothing wakes
+      // it on its own; the person's Retry does.
       mocks.listReadSentAt = superseding + 1;
       answerSandboxRows([rowIn("suspended")], FRESH + 1);
+      fireEvent.click(
+        await screen.findByTestId("pending-sandbox-dispatch-retry"),
+      );
 
       // The old flag must not hold the newer intent's wake back.
       await waitFor(() => {
@@ -7371,7 +7262,7 @@ describe("a durable dispatch claim and its sandbox's lifecycle", () => {
     }
 
     it.each(KINDS)(
-      "lets only the owner of a %s claim wake its resting sandbox",
+      "lets only the owner of a %s claim wake its resting sandbox, and only by Retry",
       async (kind) => {
         const input = await seedClaim(kind, "sending", SANDBOX_ID);
         answerSandboxRows([rowIn("suspended")], FRESH);
@@ -7392,6 +7283,16 @@ describe("a durable dispatch claim and its sandbox's lifecycle", () => {
         });
         userSignedIn();
         mount();
+        const retry = await screen.findByTestId(
+          "pending-sandbox-dispatch-retry",
+        );
+        await waitFor(() => {
+          expect(
+            usePendingSandboxSendStore.getState().sends[SEND_ID]?.dispatch,
+          ).toMatchObject({ status: "uncertain" });
+        });
+        expect(mocks.wake).not.toHaveBeenCalled();
+        fireEvent.click(retry);
         await waitFor(() => {
           expect(mocks.wake).toHaveBeenCalledWith(SANDBOX_HOST, "send");
         });

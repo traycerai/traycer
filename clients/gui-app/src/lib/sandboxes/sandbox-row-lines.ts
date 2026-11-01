@@ -780,7 +780,6 @@ export function sandboxFailedChatLine(summary: SandboxSummary): string {
   return joinParts(
     `Couldn't start ${summary.displayName} at ${formatSandboxTime(summary.lastTransitionAt)}`,
     sandboxSupportReference(summary.failureCode),
-    "nothing was charged",
   );
 }
 

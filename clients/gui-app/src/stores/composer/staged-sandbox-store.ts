@@ -205,22 +205,22 @@ export function stagedCreateNeedsFreshKey(stage: StagedSandbox): boolean {
 }
 
 /**
- * The stage's sandbox rested on its own while the stage waited on it: it had
- * woken (the settings step is reported only once its row reads awake) and is
- * listed suspended or stopped now. Nobody asked for that rest, so nothing
- * wakes it and the wait is over. A send, Keep waiting or Retry starts the
- * wait again from its first step, and a handed-off stage's re-wake from its
- * wake step, so their own wakes never read as one. Settings that didn't apply
- * keep their own line, which says the sandbox's state.
+ * The stage's sandbox rested on its own while its delivery waited: it had
+ * woken (the settings step is reported only once its row reads awake, and a
+ * handoff only once it is ready) and is listed suspended or stopped now.
+ * Nobody asked for that rest, so nothing wakes it and the delivery is over.
+ * A send, Keep waiting or Retry starts the wait again from its first step, so
+ * its own wake never reads as one. Settings that didn't apply keep their own
+ * line, which says the sandbox's state.
  */
 export function stagedSandboxRested(
   stage: StagedSandbox,
   resting: boolean,
 ): boolean {
+  if (!resting || stage.failure?.kind === "settings") return false;
+  if (stage.phase === "handoff") return true;
   return (
-    resting &&
     stage.phase === "creating" &&
-    stage.failure?.kind !== "settings" &&
     (stage.step === "applying" || stage.step === "delivering")
   );
 }

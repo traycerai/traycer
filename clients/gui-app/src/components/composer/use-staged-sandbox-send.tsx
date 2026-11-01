@@ -52,7 +52,6 @@ import {
 import { sandboxShapeLabel } from "@/lib/sandboxes/sandbox-strings";
 import { startSandboxWake } from "@/lib/sandboxes/sandbox-wake";
 import {
-  rewakeStagedSandbox,
   runStagedSandbox,
   type StagedRunRequest,
   type StagedSandboxRunDeps,
@@ -123,21 +122,6 @@ export function useStagedSandboxRunner(): StagedSandboxRunner {
     (surfaceKey, fresh, request) => {
       if (deps === null) return;
       void runStagedSandbox(surfaceKey, fresh, request, deps);
-    },
-    [deps],
-  );
-}
-
-/**
- * Wakes a handed-off stage's sandbox that rested while its send waited
- * (`rewakeStagedSandbox`), with this window's account and host directory.
- */
-export function useStagedSandboxWaker(): (surfaceKey: string) => void {
-  const deps = useStagedSandboxRunDeps();
-  return useCallback(
-    (surfaceKey) => {
-      if (deps === null) return;
-      void rewakeStagedSandbox(surfaceKey, deps);
     },
     [deps],
   );

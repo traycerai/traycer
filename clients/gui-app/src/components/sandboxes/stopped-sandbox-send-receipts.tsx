@@ -25,6 +25,7 @@ import { useSandboxOperation } from "@/hooks/sandboxes/use-sandbox-operation";
 import { useSandboxVerb } from "@/hooks/sandboxes/use-sandbox-verb-mutation";
 import {
   CHOOSE_ANOTHER_HOST,
+  restedDraftLine,
   returnedSandboxMessageLine,
   stoppedSandboxLine,
 } from "@/lib/sandboxes/sandbox-strings";
@@ -188,12 +189,17 @@ function SandboxStateReceipt(props: {
   let sandboxLine: ReactNode = null;
   // A state not known here says nothing of this task: the receipt's sentence does.
   if (line !== null && state.kind !== "pending") {
-    sandboxLine =
-      line.place === "footer" ? (
-        <ChatSandboxFooter line={line} />
-      ) : (
-        <span>{line.text}</span>
-      );
+    // Only a message put away in Drafts needs saying: one back in the
+    // composer is in plain sight.
+    const inDrafts =
+      receipt.kind === "rested" && receipt.returned.kind === "landing-draft";
+    sandboxLine = (
+      <>
+        {line.place === "footer" ? <ChatSandboxFooter line={line} /> : null}
+        {line.place === "slot" && !inDrafts ? <span>{line.text}</span> : null}
+        {inDrafts ? <span>{restedDraftLine(line.text)}</span> : null}
+      </>
+    );
   }
   return (
     <ReturnedSendReceipt
