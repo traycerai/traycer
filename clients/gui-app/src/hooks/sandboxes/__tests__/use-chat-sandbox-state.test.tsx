@@ -256,7 +256,7 @@ describe("useChatSandboxState", () => {
     });
   });
 
-  it("says no last contact when the host never reported, whatever the directory last saw", () => {
+  it("says no last contact when the host answered but never reported, whatever the directory last saw", () => {
     sources.sandboxes = [row({ state: "awake" })];
     const base = remoteEntry(HOST, null);
     const seen: RemoteHostDirectoryEntry = {
@@ -267,12 +267,22 @@ describe("useChatSandboxState", () => {
       },
     };
     sources.entry = seen;
+    // A session this device saw answer: the first-hand word that ends the wait.
+    sources.readySession = true;
+    const transport = { reachable: true };
+    const view = renderHook(() =>
+      useChatSandboxState("epic-1", HOST, transport.reachable),
+    );
+    expect(view.result.current).toEqual({ kind: "none" });
 
-    expect(stateOf(false)).toMatchObject({
+    sources.readySession = false;
+    transport.reachable = false;
+    view.rerender();
+
+    expect(view.result.current).toMatchObject({
       kind: "unreachable",
       lastContactAt: null,
     });
-    expect(stateOf(true)).toEqual({ kind: "none" });
   });
 
   it("says a team wake changes the payer only when another member paid for the last wake", () => {
@@ -435,7 +445,17 @@ describe("an awake sandbox until its host first reports", () => {
     rerender();
     expect(result.current.state.kind).toBe("unreachable");
 
-    sources.sandboxes = [resumed({ lastTransitionAt: WAKE + 60_000 })];
+    sources.sandboxes = [
+      resumed({
+        lastTransitionAt: WAKE + 60_000,
+        operation: sandboxOperationFixture({
+          at: WAKE + 60_000,
+          fromState: "suspended",
+          state: "awake",
+          cause: "wake",
+        }),
+      }),
+    ];
     rerender();
 
     expect(result.current.state).toMatchObject({
@@ -484,5 +504,132 @@ describe("an awake sandbox until its host first reports", () => {
     expect(mountChat({ reachable: false }).result.current.state.kind).toBe(
       kind,
     );
+  });
+});
+
+describe("an awake wait across wake identity, rollback and surfaces", () => {
+  const WAKE = 1_791_000_010_000;
+  const woke = (overrides: Partial<SandboxSummary>): SandboxSummary =>
+    row({
+      state: "awake",
+      lastTransitionAt: WAKE,
+      lastActivityAt: WAKE,
+      operation: sandboxOperationFixture({
+        at: WAKE,
+        fromState: "suspended",
+        state: "awake",
+        cause: "wake",
+      }),
+      ...overrides,
+    });
+  const view = (transport: { reachable: boolean }) =>
+    renderHook(() => useChatSandboxState("epic-1", HOST, transport.reachable));
+
+  it("preserves a witnessed answer through an aborted busy suspend", () => {
+    const rollback = WAKE + 60_000;
+    sources.sandboxes = [
+      row({ state: "awake", lastTransitionAt: WAKE, lastActivityAt: WAKE }),
+    ];
+    sources.readySession = true;
+    const transport = { reachable: true };
+    const mounted = view(transport);
+    expect(mounted.result.current.kind).toBe("none");
+
+    sources.sandboxes = [
+      row({
+        state: "suspending",
+        lastTransitionAt: rollback - 1,
+        lastActivityAt: WAKE,
+      }),
+    ];
+    mounted.rerender();
+    // The guest answers busy: the row returns to awake, stamping activity and
+    // transition alike, and the session then goes away.
+    sources.readySession = false;
+    transport.reachable = false;
+    sources.sandboxes = [
+      row({
+        state: "awake",
+        lastTransitionAt: rollback,
+        lastActivityAt: rollback,
+        operation: sandboxOperationFixture({
+          fromState: "awake",
+          state: "awake",
+          cause: "idle",
+        }),
+      }),
+    ];
+    mounted.rerender();
+
+    expect(mounted.result.current.kind).toBe("unreachable");
+  });
+
+  it("does not latch a previous wake's cached directory connectivity", () => {
+    const cached = remoteEntry(HOST, null);
+    sources.entry = cached;
+    sources.sandboxes = [woke({})];
+    const mounted = renderHook(() => {
+      const state = useChatSandboxState("epic-1", HOST, false);
+      return resolveChatSandbox(state, {
+        reachable: false,
+        canEdit: true,
+        ownedByViewer: true,
+        environmentOwned: false,
+      }).line?.text;
+    });
+    const refreshed: RemoteHostDirectoryEntry = {
+      ...cached,
+      remoteStatus: { ...cached.remoteStatus, connectivity: "offline" },
+    };
+    sources.entry = refreshed;
+    mounted.rerender();
+
+    expect(mounted.result.current).toBe("Resuming e2e-sbx · pending");
+  });
+
+  it("releases a passive published surface when its healthy owner becomes connectable", () => {
+    sources.entry = null;
+    sources.sandboxes = [
+      row({ state: "resuming", lastTransitionAt: WAKE - 1 }),
+    ];
+    const transport = { reachable: false };
+    const mounted = view(transport);
+    sources.sandboxes = [
+      row({ state: "awake", lastTransitionAt: WAKE, lastActivityAt: WAKE }),
+    ];
+    mounted.rerender();
+    // This copy is served by another host and does not dial the owner.
+    sources.entry = remoteEntry(HOST, null);
+    transport.reachable = true;
+    mounted.rerender();
+
+    expect(mounted.result.current.kind).toBe("none");
+  });
+
+  it("remembers a ready session observed before the awake list answer", () => {
+    // One wake keeps one identity from `resuming` through `awake`.
+    sources.sandboxes = [
+      row({
+        state: "resuming",
+        lastTransitionAt: WAKE - 1,
+        operation: sandboxOperationFixture({
+          at: WAKE,
+          fromState: "suspended",
+          state: "resuming",
+          cause: "wake",
+        }),
+      }),
+    ];
+    const transport = { reachable: false };
+    const mounted = view(transport);
+    sources.readySession = true;
+    transport.reachable = true;
+    mounted.rerender();
+    sources.readySession = false;
+    transport.reachable = false;
+    sources.sandboxes = [woke({})];
+    mounted.rerender();
+
+    expect(mounted.result.current.kind).toBe("unreachable");
   });
 });

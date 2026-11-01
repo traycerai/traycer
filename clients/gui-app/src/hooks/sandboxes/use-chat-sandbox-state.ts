@@ -17,8 +17,8 @@ import { sandboxReportedAt } from "@/lib/sandboxes/sandbox-row-lines";
 import { useSandboxWakeWait } from "@/hooks/sandboxes/use-sandbox-wake-wait";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
-/** A chat's reach to its host is its tile's to say; the list shows the wake. */
-const CHAT_WAKE_SURFACE = { hostAnswered: false, wakeSent: false };
+/** A chat's reach to its host is `reachable`; the list shows the wake. */
+const CHAT_WAKE_SURFACE = { hostAnswered: null, wakeSent: false };
 
 /**
  * Sandbox state precedes generic transport reachability on every chat copy:
@@ -64,9 +64,9 @@ export function useChatSandboxState(
     };
   }
   if (sandbox.state === "awake") {
-    if (wakeWait !== null) return { kind: "moving", sandbox, state: wakeWait };
-    return reachable
-      ? { kind: "none" }
+    if (reachable) return { kind: "none" };
+    return wakeWait !== null
+      ? { kind: "moving", sandbox, state: wakeWait }
       : {
           kind: "unreachable",
           sandbox,

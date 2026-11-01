@@ -10,6 +10,12 @@ import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
 import type { EnvironmentListResponseV11 } from "@traycer/protocol/host/environment/contracts";
+import {
+  SandboxSetupLine,
+  type SandboxSetupLineActions,
+} from "@/components/composer/sandbox-setup-line";
+import type { StagedSandbox } from "@/stores/composer/staged-sandbox-store";
+import { useSandboxWakeReportStore } from "@/stores/sandboxes/sandbox-wake-report-store";
 import { chatSandboxStateLine } from "@/components/epic-canvas/renderers/chat-sandbox-state-line";
 import {
   createFakeSandboxBinding,
@@ -36,6 +42,10 @@ vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHost: () => ({ signInUrl: "https://example.test" }),
   useRunnerHostOrNull: () => ({ signInUrl: "https://example.test" }),
 }));
+vi.mock("@/hooks/sandboxes/use-configuration-billing-url", () => ({
+  useConfigurationBillingUrl: () => "https://example.test/billing",
+}));
+vi.mock("@/lib/links/open-link", () => ({ useOpenLink: () => vi.fn() }));
 vi.mock("@/lib/host/fleet-refresh", () => ({ requestFleetRefresh: vi.fn() }));
 // The stop dialog's session list reads the Needs-you feed and tile opening;
 // neither is under test here.
@@ -95,6 +105,7 @@ beforeEach(() => {
     contextMetadata: { userId: "test-user", username: "test-member" },
   });
   useSandboxDetailsStore.setState({ sandboxId: null });
+  useSandboxWakeReportStore.setState({ setupStops: {} });
 });
 
 afterEach(() => {
@@ -360,5 +371,99 @@ describe("a moving sandbox's chat actions", () => {
 
     expect(screen.getByText("Resuming build-box · pending")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
+  });
+});
+
+describe("only one Stop on screen", () => {
+  const ACTIONS: SandboxSetupLineActions = {
+    onKeepWaiting: vi.fn(),
+    onCancel: vi.fn(),
+    onChooseAnotherHost: null,
+    chooseAnotherHostLabel: "Use This computer",
+    onRetryCreation: vi.fn(),
+    onRetry: vi.fn(),
+    onSendAgain: vi.fn(),
+    onChangeShape: null,
+    onRetryApplying: null,
+    onRepairSetup: null,
+    onStop: vi.fn(),
+    onOpenTerminal: null,
+  };
+
+  function heldSend(sandboxId: string): StagedSandbox {
+    const now = Date.now();
+    return {
+      target: {
+        kind: "new",
+        configuration: { kind: "personal" },
+        shape: {
+          os: "linux",
+          cpus: 2,
+          memoryMb: 4096,
+          diskMb: null,
+          region: "us-east",
+          idleMinutes: 30,
+          destroyAfterRestingMinutes: 10_080,
+        },
+        name: "build-box",
+        wakeString: null,
+      },
+      phase: "creating",
+      clientRequestId: "req-1",
+      ownerId: null,
+      createdSandboxId: sandboxId,
+      createdHostId: "host-sbx-1",
+      startedAt: now,
+      step: "creating",
+      stepAt: now,
+      failure: null,
+      terminalLaunch: null,
+      openTerminal: false,
+      sendTaken: true,
+    };
+  }
+
+  function SetupAndStateLines(props: {
+    readonly summary: SandboxSummary;
+    readonly withdrawalAllowed: boolean;
+  }) {
+    return (
+      <QueryClientProvider client={client}>
+        <SandboxSetupLine
+          stage={heldSend(props.summary.id)}
+          name="build-box"
+          facts={{
+            costLine: "",
+            regionLabel: "US East",
+            shapeLabel: "2 vCPU · 4 GB",
+            smallerShapeAffordable: false,
+            offeredAgents: null,
+            sandboxAwake: true,
+            sandboxStoppable: true,
+            sandboxResting: false,
+          }}
+          actions={ACTIONS}
+          withdrawalAllowed={props.withdrawalAllowed}
+        />
+        <MovingChatLine summary={props.summary} state="resuming" />
+      </QueryClientProvider>
+    );
+  }
+
+  it("shows the setup line's Stop alone, then the pending line's when the setup line drops its own", () => {
+    const summary = sandboxSummaryFixture({ state: "awake" });
+    const view = render(
+      <SetupAndStateLines summary={summary} withdrawalAllowed />,
+    );
+    expect(screen.getAllByRole("button", { name: "Stop" })).toHaveLength(1);
+    expect(screen.getByTestId("sandbox-setup-stop")).toBeTruthy();
+
+    // A send that can no longer be withdrawn drops the setup line's Stop.
+    view.rerender(
+      <SetupAndStateLines summary={summary} withdrawalAllowed={false} />,
+    );
+
+    expect(screen.queryByTestId("sandbox-setup-stop")).toBeNull();
+    expect(screen.getAllByRole("button", { name: "Stop" })).toHaveLength(1);
   });
 });

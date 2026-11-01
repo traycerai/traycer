@@ -482,3 +482,36 @@ describe("a live tile's wait for a sandbox it watched wake", () => {
     expect(live.result.current.view.line).toBeNull();
   });
 });
+
+describe("a live tile's wait against a fatal chat close", () => {
+  it("yields an unanswered awake wait to a fatal chat close after the session disappears", async () => {
+    sources.hasContent = false;
+    sources.readySession = false;
+    const live = setup(listed("resuming", false));
+    await waitFor(() =>
+      expect(live.result.current.listedState).toBe("resuming"),
+    );
+    // The session and the refusal arrive while the list still says resuming.
+    sources.readySession = true;
+    live.rerender();
+    sources.readySession = false;
+    sources.fatalClose = {
+      code: "chat-refused",
+      reason: "The host refused this chat.",
+      incompatibleMethods: null,
+      upgradeGuidance: null,
+    };
+    sources.status = "closed";
+    await act(() => {
+      live.queryClient.setQueryData(
+        sandboxQueryKeys.list(live.binding.auth, VIEWER),
+        listed("awake", false),
+      );
+      return Promise.resolve();
+    });
+    live.rerender();
+    await waitFor(() => expect(live.result.current.listedState).toBe("awake"));
+
+    expect(live.result.current.state.kind).not.toBe("moving");
+  });
+});

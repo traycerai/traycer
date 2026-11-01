@@ -60,6 +60,7 @@ import { useSurfaceHostSelectionStore } from "@/stores/host/surface-host-selecti
 import {
   agentSessionFixture,
   liveSessionReport,
+  sandboxOperationFixture,
   sandboxSummaryFixture,
   terminalSessionFixture,
 } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
@@ -2158,6 +2159,49 @@ describe("<SandboxesSettingsPanel />", () => {
     expect(
       within(rowOf(sandbox.id)).getByTestId("sandboxes-row-clock").textContent,
     ).not.toMatch(/pending/);
+  });
+
+  it("reads can't connect, not pending, for a row awake again after an aborted suspend with the host offline", async () => {
+    useAuthStore.setState({
+      status: "signed-in",
+      contextMetadata: { userId: "u-viewer", username: "viewer" },
+    });
+    mocks.realSessions = true;
+    const binding = createFakeSandboxBinding();
+    mocks.binding = binding;
+    // The suspend started from awake and was rolled back: the host never left.
+    const rolledBack = row("sbx-rolled-back", {
+      state: "awake",
+      operation: sandboxOperationFixture({
+        fromState: "awake",
+        state: "awake",
+        cause: "idle",
+      }),
+    });
+    const online = sandboxHostEntry(rolledBack.hostId, null);
+    mocks.entry = online;
+    // Each read answers with its own response, as the server does.
+    binding.auth.listSandboxes.mockImplementation(() =>
+      Promise.resolve({ kind: "ok", response: { sandboxes: [rolledBack] } }),
+    );
+    hostPage();
+    const panel = renderUi(<SandboxesSettingsPanel />);
+    const clock = (): string =>
+      within(rowOf(rolledBack.id)).getByTestId("sandboxes-row-clock")
+        .textContent;
+    await waitFor(() => expect(clock()).toContain("Awake"));
+
+    const offline: RemoteHostDirectoryEntry = {
+      ...online,
+      transportDialability: "not-dialable",
+      remoteStatus: { ...online.remoteStatus, connectivity: "offline" },
+    };
+    mocks.entry = offline;
+    panel.rerender(<SandboxesSettingsPanel />);
+
+    await waitFor(() =>
+      expect(clock()).toBe("Running, but Traycer can't connect"),
+    );
   });
 
   describe("a resumed host that has not reported, then goes offline", () => {

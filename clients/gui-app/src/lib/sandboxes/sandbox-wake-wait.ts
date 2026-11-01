@@ -5,9 +5,9 @@ export type SandboxWakeWait = "resuming" | "starting";
 
 /** What can show a host has reported since its row turned awake. */
 export interface SandboxWakeEvidence {
-  /** A ready session here, or the relay holding the host's own leg. */
+  /** The host answers now, by a session here or the relay's word. */
   readonly answers: boolean;
-  /** The `lastTransitionAt` of the wake this device last saw it answer in. */
+  /** The {@link sandboxWakeId} this device last saw it answer in. */
   readonly answeredWake: number | null;
 }
 
@@ -40,15 +40,22 @@ export function sandboxWakeWait(
     return summary.state;
   }
   if (summary.state !== "awake") return null;
-  const wake = summary.lastTransitionAt;
+  // A suspend or stop that came back to awake: the host never left.
+  if (summary.operation?.fromState === "awake") return null;
   if (
     evidence.answers ||
-    evidence.answeredWake === wake ||
-    (summary.lastActivityAt !== null && summary.lastActivityAt > wake)
+    evidence.answeredWake === sandboxWakeId(summary) ||
+    (summary.lastActivityAt !== null &&
+      summary.lastActivityAt > summary.lastTransitionAt)
   ) {
     return null;
   }
   return sandboxWakeMove(summary);
+}
+
+/** One wake, the same while the row is moving and once it lands awake. */
+export function sandboxWakeId(summary: SandboxSummary): number {
+  return summary.operation?.at ?? summary.lastTransitionAt;
 }
 
 /** How the row came awake; a row with no wake on record was just created. */
