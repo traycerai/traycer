@@ -67,8 +67,10 @@ export type DeadTileOwnerKind = "terminal" | "agent";
  * agent is bound to another host. That list is the SESSION host's, which need
  * not be this tile's, so the banner names no host. A delete the record plane
  * announced never lands here: `ActiveTabBody` shows the tile as deleted. Short
- * of that, that list cannot tell a late replica from an agent that is gone or
- * was never created, so the banner claims none of them.
+ * of that, the list cannot tell a late replica from an agent that is gone or
+ * was never created, and a `revoked` retraction says nothing about whether it
+ * exists and stops any row arriving this session. So the banner claims none of
+ * them, and promises no retry.
  *
  * `sandbox-stopped` - the bound host is a sandbox someone stopped. Its PTYs
  * ended with it, and Start is the remedy, so a terminal or a terminal
@@ -100,7 +102,7 @@ function terminalDeadTileMessage(
     return `This agent is not running on ${named} right now, and it can only be started on that computer. The agent and its transcript are kept there — closing this tab only removes it from the canvas.`;
   }
   if (reason === "record-unavailable") {
-    return "Couldn't load this agent. Traycer keeps trying. Closing this tab only removes it from the canvas.";
+    return "Couldn't load this agent. Closing this tab only removes it from the canvas.";
   }
   if (reason === "sandbox-stopped") {
     return `${hostLabelAtSentenceStart(hostLabel)} is stopped. Start it to use this terminal again.`;

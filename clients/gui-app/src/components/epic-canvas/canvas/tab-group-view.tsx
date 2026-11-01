@@ -959,11 +959,11 @@ function usePublishedChatFallbackRef(args: {
  * exists (the deleted-node body, with its Close), a REVOKED one still exists
  * and is simply not this viewer's to read any more.
  *
- * A terminal agent answers `deleted` alone: its rows are owner-only, so nothing
- * can revoke one, and the revoked surface is chat-shaped. Other tabs answer
- * `null` without the store ever being asked about them. Extracted from
- * `ActiveTabBody` rather than inlined for the same reason
- * `resolveChatFallbackDecision` is - that function mixes hook calls with
+ * A terminal agent answers `deleted` alone: `revoked` says nothing about whether
+ * the agent exists, and the revoked surface is chat-shaped, so that tile keeps
+ * its own banner. Other tabs answer `null` without the store ever being asked
+ * about them. Extracted from `ActiveTabBody` rather than inlined for the same
+ * reason `resolveChatFallbackDecision` is - that function mixes hook calls with
  * branching and sits one conditional under this repo's lint ceiling.
  */
 function useTabRetraction(

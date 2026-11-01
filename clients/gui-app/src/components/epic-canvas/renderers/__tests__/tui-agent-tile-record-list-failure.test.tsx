@@ -354,7 +354,7 @@ describe("<TuiAgentTile /> with a record list that keeps failing", () => {
     // failing list is the session host's, which need not be this tile's.
     expect(
       screen.queryByText(
-        "Couldn't load this agent. Traycer keeps trying. Closing this tab only removes it from the canvas.",
+        "Couldn't load this agent. Closing this tab only removes it from the canvas.",
       ),
     ).not.toBeNull();
     expect(screen.queryByText(SETUP_CARD)).not.toBeNull();
