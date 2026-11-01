@@ -32,8 +32,7 @@ export function installShellForm(width: number): ShellFormHarness {
   document.body.appendChild(root);
   const originalInnerWidth = window.innerWidth;
   const state = { width, portrait: false };
-  root.getBoundingClientRect = () =>
-    ({ width: state.width, height: 800 }) as DOMRect;
+  root.getBoundingClientRect = () => new DOMRect(0, 0, state.width, 800);
   Object.defineProperty(window.screen, "orientation", {
     configurable: true,
     value: {

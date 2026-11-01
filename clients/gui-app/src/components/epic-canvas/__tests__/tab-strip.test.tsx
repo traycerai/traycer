@@ -425,24 +425,30 @@ describe("<TabStrip />", () => {
     // the host has answered.
     liveTitlesById.set(CHAT_TAB.id, "Requested title");
     const release = markRenameInFlight("epic-1", CHAT_TAB.id);
-    renderTabStripForTab(
-      openedUntitled,
-      {
-        onClose: () => undefined,
-        onPromotePreview: () => undefined,
-        onOpenBlankTab: () => undefined,
-        onSplit: undefined,
-      },
-      [],
-    );
-    const snapshotName = () =>
-      useEpicCanvasStore.getState().canvasByTabId[VIEW_TAB_ID]
-        ?.tilesByInstanceId[CHAT_TAB.instanceId]?.name;
-    expect(snapshotName()).toBe("Untitled agent");
+    try {
+      renderTabStripForTab(
+        openedUntitled,
+        {
+          onClose: () => undefined,
+          onPromotePreview: () => undefined,
+          onOpenBlankTab: () => undefined,
+          onSplit: undefined,
+        },
+        [],
+      );
+      const snapshotName = () =>
+        useEpicCanvasStore.getState().canvasByTabId[VIEW_TAB_ID]
+          ?.tilesByInstanceId[CHAT_TAB.instanceId]?.name;
+      expect(snapshotName()).toBe("Untitled agent");
 
-    act(() => release());
+      act(() => release());
 
-    expect(snapshotName()).toBe("Requested title");
+      expect(snapshotName()).toBe("Requested title");
+    } finally {
+      // Idempotent: a no-op after the release above, frees the mark when an
+      // assertion fails first.
+      release();
+    }
   });
 
   it("leaves a terminal tile's name snapshot to the terminal rename path", () => {

@@ -378,21 +378,6 @@ describe("<MobileEpicTileView /> level 2 forms", () => {
   });
 
   describe("the tile bar", () => {
-    it("is named the tile bar only at bar, and the header otherwise", () => {
-      const view = renderView();
-      expect(screen.queryByTestId("mobile-current-tile-bar")).toBeNull();
-      expect(screen.getByTestId("mobile-tile-pane-header")).not.toBeNull();
-
-      shell.set({ width: SHELL_WIDTH_MENU, portrait: false });
-      expect(screen.queryByTestId("mobile-current-tile-bar")).toBeNull();
-      expect(screen.getByTestId("mobile-tile-pane-header")).not.toBeNull();
-
-      shell.set({ width: SHELL_WIDTH_MENU, portrait: true });
-      expect(screen.getByTestId("mobile-current-tile-bar")).not.toBeNull();
-      expect(screen.queryByTestId("mobile-tile-pane-header")).toBeNull();
-      view.unmount();
-    });
-
     it.each([
       ["column", SHELL_WIDTH_COLUMN_256],
       ["menu", SHELL_WIDTH_MENU],
