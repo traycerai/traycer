@@ -7,7 +7,6 @@ import {
   within,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { useState } from "react";
 import type { ReactElement, ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProviderLoginCapability } from "@traycer/protocol/host/provider-schemas";
@@ -56,14 +55,11 @@ vi.mock("@/hooks/providers/use-providers-login-ownership", () => ({
 
 import { ProviderReauthBanner } from "@/components/chat/composer/provider-reauth-banner";
 
-// ONE client per mounted wrapper, for the reason spelled out in
-// `provider-reauth-banner.test.tsx`: this banner reads a condition-polled
-// method, and a client rebuilt on each render gives the next one a coordinator
-// that cannot recognize the branded interval the live observer still holds.
 function QueryWrapper({ children }: { readonly children: ReactNode }) {
-  const [queryClient] = useState(() => new QueryClient());
   return (
-    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    <QueryClientProvider client={new QueryClient()}>
+      {children}
+    </QueryClientProvider>
   );
 }
 

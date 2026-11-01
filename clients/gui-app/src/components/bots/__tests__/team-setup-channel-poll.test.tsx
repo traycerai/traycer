@@ -26,6 +26,11 @@ import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-polic
 import { createAppQueryClient } from "@/lib/query-client";
 import { PaneVisibilityContext } from "@/components/epic-tabs/pane-visibility-context";
 import { TeamSetupChannel } from "@/components/bots/team-setup-channel";
+import {
+  installShellForm,
+  SHELL_WIDTH_COLUMN_256,
+  SHELL_WIDTH_MENU,
+} from "../../../../__tests__/mobile-level2-form-harness";
 
 // The channel list beside the post reads every bot and team on its own; it
 // is not what this file is about.
@@ -193,5 +198,26 @@ describe("TeamSetupChannel on-screen poll", () => {
     view.setVisible(true);
     await elapse(ON_SCREEN_INTERVAL_MS);
     expect(harness.reads()).toBe(2);
+  });
+});
+
+describe("TeamSetupChannel level 2 in the installed app", () => {
+  it("draws the bots as the column at 256, and as a picker under the bot's name without one", () => {
+    const shell = installShellForm(SHELL_WIDTH_COLUMN_256);
+    try {
+      rig().mount(true);
+      expect(screen.getByTestId("bot-channel-sidebar-pane").style.width).toBe(
+        "256px",
+      );
+      expect(screen.queryByTestId("bot-channel-picker-trigger")).toBeNull();
+
+      shell.set({ width: SHELL_WIDTH_MENU, portrait: false });
+      expect(screen.queryByTestId("bot-channel-sidebar-pane")).toBeNull();
+      expect(screen.getByTestId("bot-channel-picker-trigger").textContent).toBe(
+        "Tracy",
+      );
+    } finally {
+      shell.dispose();
+    }
   });
 });

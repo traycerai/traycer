@@ -4,7 +4,11 @@ import { TabBodySelectedContext } from "@/components/epic-canvas/canvas/tab-body
 import { PaneOpener } from "@/components/epic-canvas/canvas/pane-opener";
 import { MobileCurrentTileBar } from "@/components/epic-canvas/mobile/mobile-current-tile-bar";
 import { MobileTerminalKeyBar } from "@/components/epic-canvas/mobile/mobile-terminal-key-bar";
+import { MobileEmptyPaneLevel2 } from "@/components/epic-canvas/mobile/mobile-empty-pane-level2";
 import { MobileTabSwitcherMount } from "@/components/epic-canvas/mobile/mobile-tab-switcher-mount";
+import { MobileTileColumn } from "@/components/epic-canvas/mobile/mobile-tile-column";
+import { MobileTileMenu } from "@/components/epic-canvas/mobile/mobile-tile-menu";
+import { useMobileTileLevel2Form } from "@/components/epic-canvas/mobile/use-mobile-tile-level2-form";
 import { selectMobileTile } from "@/components/epic-canvas/mobile/mobile-tile-selection";
 import { usePaneVisible } from "@/components/epic-tabs/pane-visibility-context";
 import { MobileDrawerTaskPaintReporter } from "@/components/layout/shell/mobile-drawer-history-gate";
@@ -31,8 +35,9 @@ interface MobileEpicTileViewProps {
 }
 
 /**
- * Phone (<768px) epic view: renders exactly ONE canvas tile full-screen in
- * place of the desktop split canvas. Mounted only from the `useIsMobileViewport()`
+ * Phone (<768px) epic view: renders exactly ONE canvas tile in place of the
+ * desktop split canvas, with level 2 (the task's tiles) in the form the width
+ * rule answers. Mounted only from the `useIsMobileViewport()`
  * branch in `TileCanvasLive` (non-null root), so the desktop tiling layer is
  * never built here. The tile is chosen by {@link selectMobileTile}, which reads
  * but never writes the split tree.
@@ -53,6 +58,7 @@ export function MobileEpicTileView(props: MobileEpicTileViewProps) {
   const { epicId, tabId } = props;
   const canvas = useEpicCanvas(tabId);
   const selection = useMemo(() => selectMobileTile(canvas), [canvas]);
+  const level2 = useMobileTileLevel2Form();
   // Must be called before the empty-pane early return (hooks are
   // unconditional); it is 0 everywhere except an overlay-keyboard browser.
   const keyboardInset = useVirtualKeyboardInset();
@@ -99,15 +105,20 @@ export function MobileEpicTileView(props: MobileEpicTileViewProps) {
   // the last tab). Desktop renders the inline `PaneOpener` for this; do the
   // same on mobile instead of a blank dead-end. `PaneOpener` is fully fluid
   // (flex column, no fixed widths), so it is usable at phone width as-is. The
-  // switcher mounts alongside it: on an empty pane the sheet's create row is
-  // how the user gets a tab back, so the header trigger has to stay live.
+  // switcher mounts alongside it: on an empty pane the list's create row is how
+  // the user gets a tab back, so it has to stay reachable.
   if (selection === null) {
     const emptyPanePainted = paneVisible && epicSnapshotLoaded;
     return (
       <>
         <MobileDrawerTaskPaintReporter ready={emptyPanePainted} />
-        <MobileEmptyEpicPane epicId={epicId} tabId={tabId} root={canvas.root} />
-        <MobileTabSwitcherMount epicId={epicId} tabId={tabId} />
+        <MobileEmptyPaneLevel2 epicId={epicId} tabId={tabId}>
+          <MobileEmptyEpicPane
+            epicId={epicId}
+            tabId={tabId}
+            root={canvas.root}
+          />
+        </MobileEmptyPaneLevel2>
       </>
     );
   }
@@ -125,24 +136,28 @@ export function MobileEpicTileView(props: MobileEpicTileViewProps) {
     !isEpicArtifactKind(selection.ref.type);
 
   return (
-    <div
-      className="flex h-full min-h-0 w-full flex-col bg-canvas"
-      data-testid="mobile-epic-tile-view"
-      // iOS Safari overlays the soft keyboard instead of resizing the page,
-      // which would hide the key bar behind it. The measured inset pads the
-      // covered strip, lifting the bar to the visible bottom and shrinking
-      // the terminal through the normal resize sync. Browser-only: the
-      // installed app also overlays (iOS `resize: none`), but there the
-      // shell's safe-height tokens already subtract `--keyboard-inset`, so
-      // padding here again would double it.
-      style={
-        !isMobileApp() && isTerminalTile && keyboardInset > 0
-          ? { paddingBottom: keyboardInset }
-          : undefined
-      }
-    >
-      <MobileDrawerTaskPaintReporter ready={tileChromePainted} />
-      {/* No bar here. The Epic's stream reports upward and the app shell renders
+    // The row is drawn in every form, and the column holds its own slot in it,
+    // so a rotation that changes the form does not remount the tile.
+    <div className="flex h-full min-h-0 w-full bg-canvas">
+      <MobileTileColumn epicId={epicId} tabId={tabId} level2={level2} />
+      <div
+        className="flex h-full min-h-0 min-w-0 flex-1 flex-col"
+        data-testid="mobile-epic-tile-view"
+        // iOS Safari overlays the soft keyboard instead of resizing the page,
+        // which would hide the key bar behind it. The measured inset pads the
+        // covered strip, lifting the bar to the visible bottom and shrinking
+        // the terminal through the normal resize sync. Browser-only: the
+        // installed app also overlays (iOS `resize: none`), but there the
+        // shell's safe-height tokens already subtract `--keyboard-inset`, so
+        // padding here again would double it.
+        style={
+          !isMobileApp() && isTerminalTile && keyboardInset > 0
+            ? { paddingBottom: keyboardInset }
+            : undefined
+        }
+      >
+        <MobileDrawerTaskPaintReporter ready={tileChromePainted} />
+        {/* No bar here. The Epic's stream reports upward and the app shell renders
           the only one, so a hand-off between surfaces changes what it says
           rather than which element is saying it.
 
@@ -151,36 +166,43 @@ export function MobileEpicTileView(props: MobileEpicTileViewProps) {
           is not by itself a decision to show anything. Whether a report is
           ever presented is the strip's call, and it gates on `isMobileApp()`
           so the row stays absent on desktop exactly as it always has been. */}
-      <MobileCurrentTileBar epicId={epicId} tile={selection.ref} />
-      <div className="relative min-h-0 flex-1">
-        <TabBodySelectedContext.Provider value>
-          <ActiveTabBody
-            activeTab={selection.ref}
+        <MobileTileMenu epicId={epicId} tabId={tabId} drawn={level2 === "menu"}>
+          <MobileCurrentTileBar
             epicId={epicId}
-            groupId={selection.paneId}
-            tabId={tabId}
-            selected
-            // The single visible mobile tile IS the epic's active surface, so
-            // it is always globally active (drives focused-composer
-            // registration). Unlike desktop it is not gated on `activePaneId`,
-            // which can lag the shown tile in the fallback-pane case. This is a
-            // pure render prop - no store write - so flipping back to desktop
-            // re-derives activation from the real `activePaneId`.
-            globallyActive
+            tile={selection.ref}
+            level2={level2}
           />
-        </TabBodySelectedContext.Provider>
-      </div>
-      {/* Terminal TUIs are driven by keys phone keyboards don't have; the key
+        </MobileTileMenu>
+        <div className="relative min-h-0 flex-1">
+          <TabBodySelectedContext.Provider value>
+            <ActiveTabBody
+              activeTab={selection.ref}
+              epicId={epicId}
+              groupId={selection.paneId}
+              tabId={tabId}
+              selected
+              // The single visible mobile tile IS the epic's active surface, so
+              // it is always globally active (drives focused-composer
+              // registration). Unlike desktop it is not gated on `activePaneId`,
+              // which can lag the shown tile in the fallback-pane case. This is a
+              // pure render prop - no store write - so flipping back to desktop
+              // re-derives activation from the real `activePaneId`.
+              globallyActive
+            />
+          </TabBodySelectedContext.Provider>
+        </div>
+        {/* Terminal TUIs are driven by keys phone keyboards don't have; the key
           bar injects them. Rendered as a shrink-0 sibling so its height comes
           out of the terminal box above, which drives the existing
           ResizeObserver -> host resize sync automatically. */}
-      {isTerminalTile ? (
-        <MobileTerminalKeyBar
-          instanceId={selection.ref.instanceId}
-          keyboardOpen={keyboardInset > 0 || nativeKeyboardOpen}
-        />
-      ) : null}
-      <MobileTabSwitcherMount epicId={epicId} tabId={tabId} />
+        {isTerminalTile ? (
+          <MobileTerminalKeyBar
+            instanceId={selection.ref.instanceId}
+            keyboardOpen={keyboardInset > 0 || nativeKeyboardOpen}
+          />
+        ) : null}
+        <MobileTabSwitcherMount epicId={epicId} tabId={tabId} />
+      </div>
     </div>
   );
 }

@@ -42,24 +42,6 @@ vi.mock("@/lib/host", async (importOriginal) => ({
   useOptionalHostClient: () => null,
 }));
 
-// Getting started asks which computer this window IS, and where that
-// computer's settings stand against Personal - both answered through a host
-// runtime this executor does not stand up, exactly as the scope above is.
-// Mocked at the same boundary the panel's own suite uses, and answering as a
-// window with no computer of its own: the move contributes its words to the
-// page rather than owning an anchor, so no target here depends on the card,
-// and that answer is also the one that hides it.
-vi.mock("@/components/settings/move/this-computer", () => ({
-  useThisComputer: () => ({
-    hostId: null,
-    hostName: "this computer",
-    client: null,
-  }),
-}));
-vi.mock("@/components/settings/move/use-this-computers-move", () => ({
-  useThisComputersMove: () => "unknown",
-}));
-
 vi.mock("@/hooks/epics/use-cloud-epic-tasks-query", () => ({
   useCloudEpicTasksQuery: () => ({ tasks: [] }),
 }));
@@ -78,6 +60,20 @@ vi.mock("@/lib/sandboxes/staged-sandbox-in-window", async (importOriginal) => {
     useStagedSandboxInThisWindow: () => null,
   };
 });
+
+// This computer and where its settings stand: the move card's own boundary.
+// This anchor-only suite mounts no host runtime, so the window has no computer
+// of its own and the move card has nothing to report.
+vi.mock("@/components/settings/move/this-computer", () => ({
+  useThisComputer: () => ({
+    hostId: null,
+    hostName: "this computer",
+    client: null,
+  }),
+}));
+vi.mock("@/components/settings/move/use-this-computers-move", () => ({
+  useThisComputersMove: () => "unknown",
+}));
 
 vi.mock("@/lib/links/open-link", () => ({
   useOpenLink: () => () => Promise.resolve(),
