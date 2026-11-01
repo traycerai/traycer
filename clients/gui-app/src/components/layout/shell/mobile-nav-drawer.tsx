@@ -46,13 +46,7 @@ import {
   openPhaseMigrationIntent,
 } from "@/lib/tab-navigation";
 import { useRegionShown } from "@/lib/layout-overrides";
-import { botTabIntent } from "@/lib/tab-navigation/intents";
-import {
-  lookupBotTab,
-  rebindUnreachableBotTab,
-  useBotTabsStore,
-} from "@/stores/bots/bot-tabs-store";
-import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
+import { openTracyEntry } from "@/lib/bots/open-bot-channel";
 import { useConnectableHostIds } from "@/hooks/host/use-connectable-host-ids";
 import { useTracyEntryItemId } from "@/stores/bots/tracy-entry";
 import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
@@ -264,12 +258,7 @@ export function MobileNavDrawer(): ReactNode {
           </Button>
         ) : null}
         {UNRELEASED_FEATURES_ENABLED ? (
-          <MobileNavTracyRow
-            onOpen={(botId) => {
-              close();
-              activateTabIntent(navigate, botTabIntent(botId), undefined);
-            }}
-          />
+          <MobileNavTracyRow onOpened={close} />
         ) : null}
         <Button
           type="button"
@@ -386,46 +375,37 @@ function MobileNavNotificationsRow(props: {
 
 /**
  * The fixed Tracy entry, beneath Home, as the strip draws it beside Home. It
- * opens as the strip's entry does: a restored tab whose host this client can
- * no longer dial first moves to this window's host.
+ * opens as the strip's entry does: the surface on the channel it shows, a
+ * restored surface whose host this client can no longer dial first moving
+ * to this window's host.
  */
 function MobileNavTracyRow(props: {
-  readonly onOpen: (botId: string) => void;
+  readonly onOpened: () => void;
 }): ReactNode {
-  const { onOpen } = props;
+  const { onOpened } = props;
   const itemId = useTracyEntryItemId();
-  const record = useBotTabsStore((state) =>
-    state.fixedBotId === null
-      ? null
-      : lookupBotTab(state.tabs, state.fixedBotId),
-  );
-  const hostId = useEffectiveHostId();
+  const navigate = useNavigate();
   const connectable = useConnectableHostIds();
-  if (itemId === null || record === null) return null;
+  if (itemId === null) return null;
   return (
     <MobileNavTracyButton
-      botId={record.botId}
-      onOpen={(botId) => {
-        if (hostId !== null) {
-          rebindUnreachableBotTab(
-            botId,
-            hostId,
-            connectable.resolved
-              ? (id) => connectable.hostIds.includes(id)
-              : null,
-          );
-        }
-        onOpen(botId);
+      onOpen={() => {
+        onOpened();
+        openTracyEntry(
+          navigate,
+          connectable.resolved
+            ? (id) => connectable.hostIds.includes(id)
+            : null,
+        );
       }}
     />
   );
 }
 
 function MobileNavTracyButton(props: {
-  readonly botId: string;
-  readonly onOpen: (botId: string) => void;
+  readonly onOpen: () => void;
 }): ReactNode {
-  const signals = useTracyEntrySignals(props.botId);
+  const signals = useTracyEntrySignals();
   return (
     <Button
       type="button"
@@ -435,7 +415,7 @@ function MobileNavTracyButton(props: {
       data-unread={signals.unread ? "" : undefined}
       aria-label={labelWithUnreadCount(TRACY_ENTRY_LABEL, signals.unreadCount)}
       onClick={() => {
-        props.onOpen(props.botId);
+        props.onOpen();
       }}
     >
       <TracyEntryIcon

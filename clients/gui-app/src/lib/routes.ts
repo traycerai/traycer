@@ -24,15 +24,22 @@ export function draftPathname(draftId: string): string {
   return `/draft/${draftId}`;
 }
 
-export function botRoute(botId: string): NavigateOptions {
-  return {
-    to: "/bot/$botId",
-    params: { botId },
-  };
+const TRACY_PATH = "/bot";
+
+/**
+ * The Tracy surface's route: the selected channel's `/bot/{botId}`, or `/bot`
+ * for the surface with no channel. Never a placeholder bot id.
+ */
+export function tracyRoute(botId: string | null): NavigateOptions {
+  return botId === null
+    ? { to: "/bot" }
+    : { to: "/bot/$botId", params: { botId } };
 }
 
-export function botPathname(botId: string): string {
-  return `/bot/${encodeURIComponent(botId)}`;
+export function tracyPathname(botId: string | null): string {
+  return botId === null
+    ? TRACY_PATH
+    : `${TRACY_PATH}/${encodeURIComponent(botId)}`;
 }
 
 const BOT_ROUTE_RE = /^\/bot\/([^/]+)\/?$/;
@@ -51,6 +58,18 @@ export function readBotIdFromPath(pathname: string): string | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * Whether `pathname` is one of the Tracy surface's: `/bot`, or a channel's
+ * `/bot/{botId}`. A deeper or malformed `/bot/...` path is not.
+ */
+export function isTracyPath(pathname: string): boolean {
+  return (
+    pathname === TRACY_PATH ||
+    pathname === `${TRACY_PATH}/` ||
+    readBotIdFromPath(pathname) !== null
+  );
 }
 
 const DEFAULT_EPIC_SEARCH = {

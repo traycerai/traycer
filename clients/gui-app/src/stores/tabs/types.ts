@@ -97,15 +97,16 @@ export type HeaderTab = { readonly appearance?: HeaderTabAppearance | null } & (
       readonly canOpenInNewWindow: boolean;
     }
   /**
-   * A bot tab (Tracy Bots): `id` is the bot id. Unlike the epic variant's
-   * projected `hostId`, this one IS the binding - the host the tab was opened
-   * against, held by the bot-tabs store for the tab's life and handed to the
-   * surface's `TabHostProvider`.
+   * The one Tracy surface of the window (decision 150). Unlike the epic
+   * variant's projected `hostId`, this one IS the binding - the host the
+   * surface store holds and hands to the surface's `TabHostProvider`.
+   * `botId` is the selected channel, `null` for none; `route` follows it.
    */
   | {
-      readonly kind: "bot";
-      readonly id: string;
+      readonly kind: "tracy";
+      readonly id: "tracy";
       readonly hostId: string;
+      readonly botId: string | null;
       readonly route: string;
       readonly name: string;
       readonly icon: TabIcon | null;
@@ -198,7 +199,7 @@ export interface TabSurfaceCapabilities {
     readonly owner:
       | "epic-canvas"
       | "landing-draft"
-      | "bot-tabs"
+      | "tracy-surface"
       | "tabs-store"
       | "none";
     readonly eviction: "reconstruct";

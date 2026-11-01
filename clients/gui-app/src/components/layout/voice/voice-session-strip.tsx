@@ -1,13 +1,11 @@
 import type { ReactNode } from "react";
-import { useNavigate } from "@tanstack/react-router";
 import { Captions, Mic, MicOff } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import { Button } from "@/components/ui/button";
 import { useVoiceFocusLabel } from "@/hooks/voice/use-voice-focus-label";
 import { VoiceEndedLine } from "@/components/layout/voice/voice-ended-line";
 import { VoiceWaitingControl } from "@/components/layout/voice/voice-waiting-control";
-import { navigateToTabIntent } from "@/lib/tab-navigation";
-import { botTabIntent } from "@/lib/tab-navigation/intents";
+import { useOpenBotChannel } from "@/hooks/bots/use-open-bot-channel";
 import { cn } from "@/lib/utils";
 import {
   useVoiceSessionStore,
@@ -191,7 +189,7 @@ function stateLabel(
  */
 function FocusLine(props: { readonly focus: VoiceFocus }): ReactNode {
   const { focus } = props;
-  const navigate = useNavigate();
+  const openBotChannel = useOpenBotChannel();
   const { environmentLabel, botTitle, threadLabel } = useVoiceFocusLabel(focus);
   return (
     <span
@@ -216,9 +214,7 @@ function FocusLine(props: { readonly focus: VoiceFocus }): ReactNode {
         variant="link"
         size="inline"
         data-testid="voice-strip-change"
-        onClick={() =>
-          navigateToTabIntent(navigate, botTabIntent(focus.botId), undefined)
-        }
+        onClick={() => openBotChannel(focus.botId, null)}
       >
         Change
       </Button>

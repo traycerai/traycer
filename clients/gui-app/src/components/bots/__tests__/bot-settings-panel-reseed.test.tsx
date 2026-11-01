@@ -188,6 +188,7 @@ function panel(bot: BotRecord): ReactNode {
           channelId={null}
           environmentBots={null}
           onClose={vi.fn()}
+          onDeleted={vi.fn()}
         />
       </QueryClientProvider>
     </StrictMode>

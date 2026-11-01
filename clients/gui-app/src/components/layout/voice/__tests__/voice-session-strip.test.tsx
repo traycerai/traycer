@@ -10,8 +10,9 @@ import {
 import { act, cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { WithTestQueryClient } from "@/__tests__/with-test-query-client";
+import { botTabIntent } from "@/lib/tab-navigation/intents";
 import { useBotOpenThreadStore } from "@/stores/bots/bot-open-thread-store";
-import { useBotTabsStore } from "@/stores/bots/bot-tabs-store";
+import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
 import {
   useVoiceSessionStore,
   type VoiceFocus,
@@ -29,7 +30,18 @@ const FOCUS: VoiceFocus = {
 };
 
 vi.mock("@tanstack/react-router", () => ({ useNavigate: () => vi.fn() }));
-vi.mock("@/lib/tab-navigation", () => ({ navigateToTabIntent: vi.fn() }));
+const navigation = vi.hoisted(() => ({
+  activateTabIntent: vi.fn<(intent: unknown) => void>(),
+}));
+vi.mock("@/lib/tab-navigation", () => ({
+  activateTabIntent: (_navigate: unknown, intent: unknown) => {
+    navigation.activateTabIntent(intent);
+    return true;
+  },
+}));
+vi.mock("@/hooks/host/use-connectable-host-ids", () => ({
+  useConnectableHostIds: () => ({ hostIds: ["host-a"], resolved: true }),
+}));
 vi.mock("@/hooks/host/use-effective-host-id", () => ({
   useEffectiveHostId: () => "host-a",
 }));
@@ -72,9 +84,10 @@ function makeDriver(): FakeDriver {
 
 beforeEach(() => {
   useVoiceSessionStore.setState(initial, true);
-  useBotTabsStore
-    .getState()
-    .openBotTab({ botId: BOT_ID, hostId: "host-a", title: "Tracy" });
+  navigation.activateTabIntent.mockReset();
+  useTracySurfaceStore.setState(useTracySurfaceStore.getInitialState(), true);
+  useTracySurfaceStore.getState().openSurface("host-a");
+  useTracySurfaceStore.getState().selectChannel(BOT_ID);
 });
 
 afterEach(() => {
@@ -109,6 +122,16 @@ describe("VoiceSessionStrip", () => {
     );
     expect(screen.getByTestId("voice-strip-focus").textContent).toContain(
       "Personal›Tracy",
+    );
+  });
+
+  it("brings the surface to the focused bot's channel from Change", async () => {
+    goLive(makeDriver());
+
+    await userEvent.click(screen.getByTestId("voice-strip-change"));
+
+    expect(navigation.activateTabIntent).toHaveBeenCalledWith(
+      botTabIntent(BOT_ID),
     );
   });
 

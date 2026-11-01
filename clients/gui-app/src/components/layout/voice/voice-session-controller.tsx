@@ -46,8 +46,7 @@ import { voiceQueryKeys } from "@/lib/query-keys";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { appLogger, describeLogError } from "@/lib/logger";
 import { useChatSessionHandleForContainer } from "@/lib/registries/chat-session-registry";
-import { activateTabIntent, navigateToTabIntent } from "@/lib/tab-navigation";
-import { botTabIntent } from "@/lib/tab-navigation/intents";
+import { openBotChannel } from "@/lib/bots/open-bot-channel";
 import { mainBotOf } from "@/lib/bots/bot-main";
 import { watchAudioLevel, type AudioLevelWatch } from "@/lib/voice/audio-level";
 import {
@@ -111,7 +110,10 @@ import {
   type BotRail,
 } from "@/stores/bots/bot-open-thread-store";
 import { useBotTabLandingStore } from "@/stores/bots/bot-tab-landing-store";
-import { lookupBotTab, useBotTabsStore } from "@/stores/bots/bot-tabs-store";
+import {
+  tracySurfaceHostId,
+  useTracySurfaceStore,
+} from "@/stores/bots/tracy-surface-store";
 import { selectHostFocusedRef } from "@/stores/tabs/selectors";
 import { useTabsStore } from "@/stores/tabs/store";
 import {
@@ -127,7 +129,7 @@ import {
  * another thread (or the channel) of the bot whose tab is active.
  */
 interface VoiceNavigation {
-  /** The bot whose tab was active when the voice moved; `null` for none. */
+  /** The channel the focused surface showed when the voice moved; `null` for none. */
   readonly fromBotId: string | null;
   readonly toBotId: string;
   /** The anchor the voice opens in the target's rail; `null` for its channel. */
@@ -256,10 +258,7 @@ export function VoiceSessionController(): ReactNode {
   useEffect(() => {
     mainBotRef.current = mainBot;
   }, [mainBot]);
-  const selectedBotId = useTabsStore((state) => {
-    const ref = selectHostFocusedRef(state);
-    return ref !== null && ref.kind === "bot" ? ref.id : null;
-  });
+  const selectedBotId = useFocusedTracyChannel().botId;
   const destinationKnown = selectedBotId !== null || mainBot !== null;
   useEffect(() => {
     useVoiceSessionStore.getState().setDestinationKnown(destinationKnown);
@@ -267,9 +266,7 @@ export function VoiceSessionController(): ReactNode {
 
   const botTitle = useCallback(
     (botId: string): string =>
-      bots.data?.bots.find((bot) => bot.botId === botId)?.title ??
-      lookupBotTab(useBotTabsStore.getState().tabs, botId)?.title ??
-      "the bot",
+      bots.data?.bots.find((bot) => bot.botId === botId)?.title ?? "the bot",
     [bots.data],
   );
   const botTitleRef = useRef(botTitle);
@@ -543,8 +540,7 @@ export function VoiceSessionController(): ReactNode {
       decide: (request) => decideRef.current(request),
       recheck: (tuple) => tupleHolds(recheckRef.current(), tuple),
       navigate: (target) => {
-        const from = selectHostFocusedRef(useTabsStore.getState());
-        const fromBotId = from !== null && from.kind === "bot" ? from.id : null;
+        const fromBotId = focusedTracyChannel();
         // Recorded for a move within the active bot too: its rail changes at
         // once, and the new anchor is the voice's, not the person's.
         const navigation: VoiceNavigation = {
@@ -1421,14 +1417,41 @@ function isPermissionRefusal(error: unknown): boolean {
 }
 
 /**
- * Whether the app shows a routed destination now: its bot's tab is the
- * active one, with its rail on the thread named (or on no thread for the
- * channel).
+ * The channel the Tracy surface shows while it is the focused tab, and the
+ * surface's host; `null`s while another tab is focused.
+ */
+function useFocusedTracyChannel(): {
+  readonly botId: string | null;
+  readonly hostId: string | null;
+} {
+  const focused = useTabsStore(
+    (state) => selectHostFocusedRef(state)?.kind === "tracy",
+  );
+  const botId = useTracySurfaceStore((state) => state.botId);
+  const hostId = useTracySurfaceStore((state) =>
+    state.open ? state.hostId : null,
+  );
+  return focused ? { botId, hostId } : { botId: null, hostId: null };
+}
+
+/**
+ * The channel the Tracy surface shows while it is the focused tab; `null`
+ * while another tab is, or the surface has no channel.
+ */
+function focusedTracyChannel(): string | null {
+  const focused = selectHostFocusedRef(useTabsStore.getState());
+  return focused?.kind === "tracy"
+    ? useTracySurfaceStore.getState().botId
+    : null;
+}
+
+/**
+ * Whether the app shows a routed destination now: the Tracy surface is the
+ * focused tab on its bot's channel, with its rail on the thread named (or on
+ * no thread for the channel).
  */
 function showsDestination(target: BoundTarget): boolean {
-  const active = selectHostFocusedRef(useTabsStore.getState());
-  if (active === null || active.kind !== "bot") return false;
-  if (active.id !== target.tuple.botId) return false;
+  if (focusedTracyChannel() !== target.tuple.botId) return false;
   const expected =
     target.tuple.threadId === null ? null : target.focus.anchorMessageId;
   return railAnchorOf(target.tuple.botId) === expected;
@@ -1449,9 +1472,9 @@ function conversationIdOf(
 }
 
 /**
- * The default destination with no bot tab selected: the personal main bot's
- * channel, whose tab opens on this window's host (as the fixed entry opens
- * it) and comes to the front. `null` with no main bot known, or no host.
+ * The default destination with no channel selected: the Tracy surface on the
+ * personal main bot's channel, brought to the front (opened on this window's
+ * host if it was closed). `null` with no main bot known, or no host.
  */
 function openMainBot(
   main: BotRecord | null,
@@ -1459,13 +1482,14 @@ function openMainBot(
   navigate: UseNavigateResult<string>,
 ): VoiceFocus | null {
   if (main === null || hostId === null) return null;
-  useBotTabsStore
-    .getState()
-    .openBotTab({ botId: main.botId, hostId, title: main.title });
-  navigateToTabIntent(navigate, botTabIntent(main.botId), undefined);
+  openBotChannel(navigate, main.botId, {
+    landing: null,
+    isConnectable: null,
+    onRejected: null,
+  });
   return {
     botId: main.botId,
-    hostId,
+    hostId: tracySurfaceHostId() ?? hostId,
     threadId: null,
     anchorMessageId: null,
     anchorThread: null,
@@ -1480,9 +1504,9 @@ function openMainBot(
 const voiceRailWrites = new Map<string, number>();
 
 /**
- * Opens a routed destination as the person would: the bot's tab (on the
- * host it is bound to, or the target's), its rail on the thread named or
- * on the channel, and the tab brought to the front. Resolves with what
+ * Opens a routed destination as the person would: the Tracy surface on the
+ * bot's channel, its rail on the thread named or on the channel, and the
+ * surface brought to the front. Resolves with what
  * `decide` makes of the navigation's outcome, called as it settles: `false`
  * for a refusal, or a route navigation that failed (the tab navigation
  * puts the previous tab back right after). A move that does not land puts
@@ -1493,7 +1517,7 @@ function openTarget(
   navigate: UseNavigateResult<string>,
   decide: (settled: boolean) => boolean,
 ): Promise<boolean> {
-  const { botId, hostId, threadId } = target.tuple;
+  const { botId, threadId } = target.tuple;
   const anchorMessageId = target.focus.anchorMessageId;
   const rails = useBotOpenThreadStore.getState();
   const previousRail = Object.hasOwn(rails.byBotId, botId)
@@ -1512,9 +1536,6 @@ function openTarget(
   rails.setRail(botId, rail);
   const write = (voiceRailWrites.get(botId) ?? 0) + 1;
   voiceRailWrites.set(botId, write);
-  useBotTabsStore
-    .getState()
-    .openBotTab({ botId, hostId, title: target.botTitle });
   return new Promise<boolean>((resolve) => {
     let settled = false;
     const settle = (outcome: boolean): void => {
@@ -1545,7 +1566,9 @@ function openTarget(
       );
       return run;
     };
-    const accepted = activateTabIntent(watched, botTabIntent(botId), {
+    const accepted = openBotChannel(watched, botId, {
+      landing: null,
+      isConnectable: null,
       onRejected: () => settle(false),
     });
     if (!accepted) settle(false);
@@ -1553,21 +1576,21 @@ function openTarget(
 }
 
 /**
- * The app's selection as a focus: the active bot tab and what its rail
- * holds, or `null` when no bot tab is active. Read once, outside React, at
- * session start.
+ * The app's selection as a focus: the channel the focused Tracy surface
+ * shows, on the surface's host, and what its rail holds; `null` while
+ * another tab is focused or the surface has no channel. Read once, outside
+ * React, at session start.
  */
 function readSelection(): VoiceFocus | null {
-  const ref = selectHostFocusedRef(useTabsStore.getState());
-  if (ref === null || ref.kind !== "bot") return null;
-  const tab = lookupBotTab(useBotTabsStore.getState().tabs, ref.id);
-  if (tab === null) return null;
+  const botId = focusedTracyChannel();
+  const hostId = tracySurfaceHostId();
+  if (botId === null || hostId === null) return null;
   const { byBotId } = useBotOpenThreadStore.getState();
-  const rail = Object.hasOwn(byBotId, ref.id) ? byBotId[ref.id] : null;
+  const rail = Object.hasOwn(byBotId, botId) ? byBotId[botId] : null;
   const thread = rail !== null && rail.kind === "thread" ? rail : null;
   // The thread list is not read here: the selection sync, mounted with the
   // session, resolves the anchor against it.
-  return focusOf(ref.id, tab.hostId, thread, null);
+  return focusOf(botId, hostId, thread, null);
 }
 
 /**
@@ -1598,22 +1621,18 @@ function VoiceSelectionSync(props: {
     onResolved,
     voiceSwitch,
   } = props;
-  const focusedRef = useTabsStore(selectHostFocusedRef);
-  const activeBotId = focusedRef?.kind === "bot" ? focusedRef.id : null;
-  const tab = useBotTabsStore((state) =>
-    activeBotId === null ? null : lookupBotTab(state.tabs, activeBotId),
-  );
+  const { botId: activeBotId, hostId } = useFocusedTracyChannel();
   const rail = useBotRail(activeBotId ?? "");
   const thread = rail?.kind === "thread" ? rail : null;
-  const client = useHostClientForHostId(tab?.hostId ?? null);
+  const client = useHostClientForHostId(hostId);
   const threads = useBotThreadListQuery(client, activeBotId ?? "", {
     enabled: activeBotId !== null && thread !== null && thread.sent === null,
   });
   const listed = threads.data?.threads ?? null;
 
   useEffect(() => {
-    if (activeBotId === null || tab === null) return;
-    const selection = focusOf(activeBotId, tab.hostId, thread, listed);
+    if (activeBotId === null || hostId === null) return;
+    const selection = focusOf(activeBotId, hostId, thread, listed);
     const navigation = voiceNavigationRef.current;
     if (navigation !== null) {
       voiceNavigationRef.current = null;
@@ -1652,11 +1671,11 @@ function VoiceSelectionSync(props: {
     applySelection(selection, { onManualChange, onCardMove }, onResolved);
   }, [
     activeBotId,
+    hostId,
     listed,
     onCardMove,
     onManualChange,
     onResolved,
-    tab,
     thread,
     voiceNavigationRef,
     voiceSwitch,

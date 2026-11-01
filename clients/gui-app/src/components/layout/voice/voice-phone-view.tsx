@@ -1,5 +1,4 @@
 import { useEffect, type KeyboardEvent, type ReactNode } from "react";
-import { useNavigate } from "@tanstack/react-router";
 import { AudioLines, Captions, Mic, MicOff, X } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import { Button } from "@/components/ui/button";
@@ -8,8 +7,7 @@ import { VoiceEndedLine } from "@/components/layout/voice/voice-ended-line";
 import { ResumeAfterDictation } from "@/components/layout/voice/voice-session-strip";
 import { VoiceWaitingControl } from "@/components/layout/voice/voice-waiting-control";
 import { useVoiceFocusLabel } from "@/hooks/voice/use-voice-focus-label";
-import { navigateToTabIntent } from "@/lib/tab-navigation";
-import { botTabIntent } from "@/lib/tab-navigation/intents";
+import { useOpenBotChannel } from "@/hooks/bots/use-open-bot-channel";
 import { cn } from "@/lib/utils";
 import {
   useVoiceSessionStore,
@@ -149,7 +147,7 @@ function PhoneFocusLine(props: {
   readonly onOpened: () => void;
 }): ReactNode {
   const { focus, onOpened } = props;
-  const navigate = useNavigate();
+  const openBotChannel = useOpenBotChannel();
   const { environmentLabel, botTitle, threadLabel } = useVoiceFocusLabel(focus);
   return (
     <Button
@@ -160,7 +158,7 @@ function PhoneFocusLine(props: {
       className="min-w-0 flex-1 flex-col items-start"
       onClick={() => {
         onOpened();
-        navigateToTabIntent(navigate, botTabIntent(focus.botId), undefined);
+        openBotChannel(focus.botId, null);
       }}
     >
       <span className="w-full truncate text-left text-ui-sm text-foreground">

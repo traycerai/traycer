@@ -1,9 +1,9 @@
 /**
  * The bot's live activity: `bot.subscribe`'s snapshot
  * carries the whole `activity`, and each `activity` frame replaces or removes
- * one entry. The real `useBotActivity` reads it from the host the bot's tab
- * is bound to (the real bot-tabs store), outside any tab as the Tracy entry
- * does, through the real shared subscription over a stub session the test
+ * one entry. The real `useBotActivity` reads it from the host the Tracy
+ * surface is bound to (the real surface store), outside the surface as the
+ * Tracy entry does, through the real shared subscription over a stub session the test
  * scripts; only the host's stream client is the stub's.
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -23,7 +23,7 @@ import {
   replyingSessionOf,
   useBotActivity,
 } from "@/hooks/bots/use-bot-activity";
-import { useBotTabsStore } from "@/stores/bots/bot-tabs-store";
+import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
 import { StubHostStreamClient, StubSession } from "./bot-subscribe-stub-stream";
 
 const stream = vi.hoisted(() => ({
@@ -50,6 +50,9 @@ vi.mock("@/hooks/bots/use-bot-subscription", async (importOriginal) => {
 
 const BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
 const HOST_ID = "host-1";
+
+/** The channel the reader asks about; `null` for none. */
+let readBotId: string | null = BOT_ID;
 
 const REPLYING: BotSessionActivity = {
   state: "replying",
@@ -117,7 +120,7 @@ function mount(): {
   let seen: BotActivity | null = null;
 
   function Reader(): ReactNode {
-    seen = useBotActivity(BOT_ID);
+    seen = useBotActivity(readBotId);
     return null;
   }
 
@@ -130,15 +133,14 @@ function mount(): {
 }
 
 beforeEach(() => {
-  useBotTabsStore
-    .getState()
-    .openBotTab({ botId: BOT_ID, hostId: HOST_ID, title: "Tracy" });
+  readBotId = BOT_ID;
+  useTracySurfaceStore.getState().openSurface(HOST_ID);
 });
 
 afterEach(() => {
   cleanup();
   __resetBotSubscriptionsForTesting();
-  useBotTabsStore.setState({ tabs: {} });
+  useTracySurfaceStore.setState(useTracySurfaceStore.getInitialState(), true);
   stream.client = null;
 });
 
@@ -233,8 +235,16 @@ describe("useBotActivity", () => {
     expect(tab.current()).toBeNull();
   });
 
-  it("reads nothing while the bot has no tab, and opens no stream", () => {
-    useBotTabsStore.setState({ tabs: {} });
+  it("reads nothing while the surface is closed, and opens no stream", () => {
+    useTracySurfaceStore.getState().closeSurface();
+    const tab = mount();
+
+    expect(tab.current()).toBeNull();
+    expect(stream.client?.opened).toEqual([]);
+  });
+
+  it("reads nothing for no channel, and opens no stream", () => {
+    readBotId = null;
     const tab = mount();
 
     expect(tab.current()).toBeNull();
