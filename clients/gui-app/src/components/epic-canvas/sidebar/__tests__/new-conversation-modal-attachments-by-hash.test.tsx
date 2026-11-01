@@ -447,7 +447,10 @@ const stubHostClient = {
   getRequestContext: () => null,
   getRequestContextUserId: () => null,
 };
-vi.mock("@/lib/host", () => ({ useHostClient: () => stubHostClient }));
+vi.mock("@/lib/host", () => ({
+  useHostClient: () => stubHostClient,
+  useHostBinding: () => null,
+}));
 vi.mock("@/lib/host/runtime", () => ({
   useHostClient: () => stubHostClient,
   // The create stamps `sentFromHostId` from the directory's local host at
@@ -476,6 +479,7 @@ vi.mock("@/hooks/use-epic-store", () => ({
   }),
 }));
 vi.mock("@/providers/use-runner-host", () => ({
+  useRunnerHostOrNull: () => null,
   useRunnerHost: () => ({
     fileDrops: {
       resolveDroppedFilePaths: () => Promise.resolve([]),
