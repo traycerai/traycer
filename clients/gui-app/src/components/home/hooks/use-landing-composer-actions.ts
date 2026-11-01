@@ -1666,35 +1666,34 @@ export function useLandingComposerActions(
       const giveBack = (): LandingGiveBack | null => {
         if (!sameAccount() || !handed.isCurrent()) return null;
         const returned = handed.giveBack();
-        if (returned?.kind === "opened") {
-          openLandingDraft(navigate, returned.draftId);
-        }
-        return returned;
-      };
-      // The composer holds the person's next message: saved, not opened.
-      const tellSavedInDrafts = (returned: LandingGiveBack | null): void => {
-        if (returned?.kind !== "saved") return;
+        if (returned === null) return null;
         const { draftId } = returned;
+        if (returned.kind === "opened") {
+          openLandingDraft(navigate, draftId);
+          return returned;
+        }
+        // The composer holds the person's next message: saved, not opened.
         toast(returnedSandboxMessageLine(true), {
           action: {
             label: "Open draft",
             onClick: () => openLandingDraft(navigate, draftId),
           },
         });
+        return returned;
       };
       const refused = (): void => {
         if (!sameAccount()) return;
         unmarkEpicCreatedThisSession(epicId);
-        tellSavedInDrafts(giveBack());
+        giveBack();
       };
       const attachRefused = (error: unknown): void => {
         // The account moved on, or the person took the message back: nothing
         // here is theirs to hear about.
         if (!sameAccount() || !handed.isCurrent()) return;
-        const refusal = classifySendRefusal(error);
-        const returned = giveBack();
-        if (refusal.kind !== "silent") tellSavedInDrafts(returned);
-        const line = landingAttachRefusalLine(refusal, returned);
+        const line = landingAttachRefusalLine(
+          classifySendRefusal(error),
+          giveBack(),
+        );
         if (line !== null) toastSendRefusal(error, line);
         if (!isAttachPromotionPending(error)) return;
         void discardCreatedIfEmpty({ epicId, hostId }).then((discarded) => {
@@ -1790,9 +1789,9 @@ export function useLandingComposerActions(
 
 /**
  * What a landing Send refused at its attachment says, given where its message
- * went (`returned`), or `null` to say nothing. Saved in Drafts, the Drafts
- * line says so. With nothing returned, no line may claim the message is back,
- * or offer another Send of it.
+ * went (`returned`), or `null` to say nothing. Saved in Drafts, `giveBack`'s
+ * own line says so. With nothing returned, no line may claim the message is
+ * back, or offer another Send of it.
  */
 function landingAttachRefusalLine(
   refusal: SendRefusal,

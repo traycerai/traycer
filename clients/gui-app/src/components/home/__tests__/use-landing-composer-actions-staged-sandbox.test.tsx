@@ -52,7 +52,14 @@ import { setSystemTabModalApi } from "@/stores/tabs/system-tab-modal-bridge";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { useWorkspaceFoldersStore } from "@/stores/workspace/workspace-folders-store";
 import { useWorktreeIntentStagingStore } from "@/stores/worktree/worktree-intent-staging-store";
-import { returnPendingSandboxSend } from "@/lib/sandboxes/pending-sandbox-send";
+import {
+  returnPendingSandboxSend,
+  returnPendingSandboxSendToSandbox,
+} from "@/lib/sandboxes/pending-sandbox-send";
+import {
+  recordCancelledSandboxSend,
+  useStoppedSandboxSendReceiptStore,
+} from "@/stores/sandboxes/stopped-sandbox-send-receipt-store";
 import {
   readStagedSandbox,
   useStagedSandboxStore,
@@ -408,6 +415,7 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
         [],
       );
     toastLog.length = 0;
+    useStoppedSandboxSendReceiptStore.setState({ receipts: {}, strips: {} });
     landingMocks.request.mockReset();
     landingMocks.createTerminalAgent.mockReset();
     landingMocks.navigate.mockReset();
@@ -1360,7 +1368,12 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
    * stage), nowhere (its pending stage is gone), or back to the person who
    * took it back.
    */
-  type MessageFate = "composer" | "drafts" | "nowhere" | "taken-back";
+  type MessageFate =
+    | "composer"
+    | "drafts"
+    | "nowhere"
+    | "taken-back"
+    | "cancelled";
 
   /** Refuses the held attachment and returns every toast that came after. */
   async function toastsFromRefusal(
@@ -1382,12 +1395,28 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
     if (fate === "taken-back") {
       returnPendingSandboxSend(onlyPendingSend().id);
     }
+    if (fate === "cancelled") {
+      // The setup line's Cancel: the message goes to Drafts on its sandbox
+      // while the attachment is held, and the cancellation keeps its receipt.
+      const send = onlyPendingSend();
+      const returned = returnPendingSandboxSendToSandbox(send.id, {
+        kind: "stage",
+        target: TEAM_TARGET,
+        clientRequestId: null,
+      });
+      if (
+        !Object.hasOwn(usePendingSandboxSendStore.getState().sends, send.id)
+      ) {
+        recordCancelledSandboxSend(send, returned);
+      }
+    }
     const shownBefore = toastLog.length;
     await refuseAttach(error);
     // A task still being set up is rolled back unless the Send was taken back:
     // its delete is the last thing that can follow.
     if (
       fate !== "taken-back" &&
+      fate !== "cancelled" &&
       PROMOTION_PENDING_CODES.some((code) => code === error.code)
     ) {
       await waitFor(() => {
@@ -1481,9 +1510,9 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
       }),
     ],
   ] as const)(
-    "puts the message in Drafts without a word when the attachment is silent and the composer holds a newer message (%s)",
+    "says only that the message is saved in Drafts when the attachment is silent and the composer holds a newer message (%s)",
     async (_label, error) => {
-      expect(await toastsFromRefusal("drafts", error)).toEqual([]);
+      expect(await toastsFromRefusal("drafts", error)).toEqual([DRAFTS_TOAST]);
       expect(useLandingDraftStore.getState().drafts).toHaveLength(1);
       expect(useLandingDraftStore.getState().drafts[0]).toMatchObject({
         content: MESSAGE_CONTENT,
@@ -1520,6 +1549,50 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
       expect(useLandingDraftStore.getState().drafts).toEqual([]);
     },
   );
+
+  it("adds no second toast to a refusal after the person cancelled the Send into Drafts", async () => {
+    expect(await toastsFromRefusal("cancelled", attachBusy())).toEqual([]);
+    // The cancellation's own receipt says the message is in Drafts: the
+    // setup line renders `returnedSandboxMessageLine` from this record.
+    const receipts = Object.values(
+      useStoppedSandboxSendReceiptStore.getState().receipts,
+    );
+    expect(receipts).toHaveLength(1);
+    expect(receipts[0]).toMatchObject({
+      kind: "cancelled",
+      returned: { kind: "landing-draft" },
+    });
+    expect(useLandingDraftStore.getState().drafts).toHaveLength(1);
+    expect(useLandingDraftStore.getState().drafts[0]).toMatchObject({
+      content: MESSAGE_CONTENT,
+      returnedSandbox: { target: TEAM_TARGET },
+    });
+    // The Send was withdrawn, so the refusal rolled nothing back.
+    expect(landingMocks.deleteRequest).not.toHaveBeenCalled();
+  });
+
+  it("says nothing, saves no draft and leaves the pending send alone when the account changed and the composer held a newer message", async () => {
+    const { refuseAttach, queryClient } = await startSendWithHeldAttach();
+    const sendBefore = onlyPendingSend();
+    useStagedSandboxStore.getState().stage(SURFACE, NEW_TARGET);
+    act(() => {
+      useAuthStore
+        .getState()
+        .setSignedIn(
+          { userId: "other-user", userName: "Other", email: "o@example.com" },
+          { userId: "other-user", username: "Other" },
+          [],
+        );
+    });
+    const shownBefore = toastLog.length;
+    await refuseAttach(attachBusy());
+    await refusalSettled(queryClient);
+    expect(toastLog.slice(shownBefore)).toEqual([]);
+    expect(useLandingDraftStore.getState().drafts).toEqual([]);
+    expect(onlyPendingSend()).toEqual(sendBefore);
+    expect(landingMocks.deleteRequest).not.toHaveBeenCalled();
+    queryClient.clear();
+  });
 
   it("keeps a retryable attestation a plain notice, with the host's raw reason shown nowhere", async () => {
     const shown = await toastsFromRefusal(
