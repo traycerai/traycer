@@ -825,6 +825,65 @@ describe("a history-reported unused setting", () => {
     expect(document.body.textContent).not.toMatch(/\bnull\b/);
   });
 
+  describe("with several keys stored for one agent", () => {
+    const KEYS = ["claude:KEY_ONE", "claude:KEY_TWO", "claude:KEY_THREE"];
+    const keyRows = (hostId: string, hostName: string) =>
+      KEYS.map((key) => ({ ...unusedHost(key), hostId, hostName }));
+
+    function mountKeys(): TeamPageHarness {
+      return mountTeamPage(poolSource("admin"), {
+        "environment.history": () =>
+          history({
+            hostStates: [
+              ...keyRows("host-sbx", "Build box"),
+              ...keyRows("host-sbx-2", "Test box"),
+            ],
+          }),
+      });
+    }
+
+    it("shows one line per host, because the host is what tells two sandboxes apart", async () => {
+      const harness = mountKeys();
+      openDrawer(harness, { kind: "chip", key: "" }, "Settings delivery");
+
+      const rows = await screen.findAllByText(/not used on sandboxes/);
+      expect(rows.map((row) => row.textContent)).toEqual([
+        "Claude Code key · not used on sandboxes",
+        "Claude Code key · not used on sandboxes",
+      ]);
+      expect(screen.getAllByText(/Build box/)).toHaveLength(1);
+      expect(screen.getAllByText(/Test box/)).toHaveLength(1);
+    });
+
+    it("keeps every reported key and host in the diagnostics export", async () => {
+      const harness = mountKeys();
+      const user = userEvent.setup();
+      openDrawer(harness, { kind: "chip", key: "" }, "Settings delivery");
+      await screen.findAllByText(/not used on sandboxes/);
+
+      await user.click(
+        await screen.findByRole("tab", { name: "Export diagnostics" }),
+      );
+      await user.click(
+        screen.getByRole("button", { name: "Save diagnostics" }),
+      );
+      const exported = await savedExport();
+
+      expect(exported).toMatchObject({
+        status: {
+          hosts: [
+            { hostId: "host-sbx", reason: "claude:KEY_ONE" },
+            { hostId: "host-sbx", reason: "claude:KEY_TWO" },
+            { hostId: "host-sbx", reason: "claude:KEY_THREE" },
+            { hostId: "host-sbx-2", reason: "claude:KEY_ONE" },
+            { hostId: "host-sbx-2", reason: "claude:KEY_TWO" },
+            { hostId: "host-sbx-2", reason: "claude:KEY_THREE" },
+          ],
+        },
+      });
+    });
+  });
+
   it("keeps the raw key in the diagnostics export for support", async () => {
     const harness = mountUnused("claude:ANTHROPIC_API_KEY");
     const user = userEvent.setup();
@@ -911,7 +970,7 @@ describe("a sandbox's unused settings", () => {
     return harness;
   }
 
-  it("lists each unused key as a named row under the sandbox, never printing the variable or a reason", async () => {
+  it("names an unused agent under the sandbox, never printing the variable or a reason", async () => {
     const harness = mountChip(null, status);
     openDrawer(harness, { kind: "chip", key: "" }, "Settings delivery");
 
@@ -924,6 +983,27 @@ describe("a sandbox's unused settings", () => {
       /ANTHROPIC_API_KEY|permission_denied/,
     );
     expect(harness.paramsOf("environment.status")).toHaveLength(1);
+  });
+
+  it("shows one line for an agent with several keys stored, however many the host reports", async () => {
+    const item = (key: string) => ({ ...status.items[0], key });
+    const harness = mountChip(
+      null,
+      environmentStatusResponseSchemaV11.parse({
+        ...status,
+        items: [
+          item("claude:KEY_ONE"),
+          item("claude:KEY_TWO"),
+          item("claude:KEY_THREE"),
+        ],
+      }),
+    );
+    openDrawer(harness, { kind: "chip", key: "" }, "Settings delivery");
+
+    const rows = await screen.findAllByText(/not used on sandboxes/);
+    expect(rows.map((row) => row.textContent)).toEqual([
+      "Claude Code key · not used on sandboxes",
+    ]);
   });
 
   describe("the recovery for a sandbox whose settings did not apply", () => {
