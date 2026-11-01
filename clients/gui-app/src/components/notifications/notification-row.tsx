@@ -22,6 +22,8 @@ import {
 } from "@/components/notifications/notification-indicator-tones";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { NotificationRowBotAvatar } from "@/components/notifications/notification-bots";
+import { useStandaloneBotName } from "@/hooks/bots/use-standalone-bot-name";
+import { notificationRowBotId } from "@/lib/notifications/notification-row-bot-id";
 import { SecretGrantRequestCard } from "@/components/notifications/secret-grant-request-card";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import {
@@ -304,9 +306,13 @@ function NotificationRowMain(props: {
   readonly originUnavailability: HostUnavailability | null;
   readonly onActivate: (row: MergedNotificationRow) => void;
 }): ReactNode {
+  const title = useStandaloneBotName(
+    notificationRowBotId(props.row),
+    props.row.title,
+  );
   const body = (
     <NotificationRowBody
-      title={props.row.title}
+      title={title}
       body={props.row.body}
       isRead={props.isRead}
     />

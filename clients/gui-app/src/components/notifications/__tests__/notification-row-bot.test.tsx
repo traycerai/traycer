@@ -7,8 +7,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import type { BotListResponse } from "@traycer/protocol/host/bot/schemas";
+import type { EnvironmentDescriptor } from "@traycer/protocol/host/environment/contracts";
 import type { MergedNotificationRow } from "@/stores/notifications/merged-notifications";
 import { avatarShape } from "@/components/bots/__tests__/avatar-shape";
+import {
+  EMPTY_DIRECTORY_STATE,
+  PERSONAL_MAIN_BOT_ID,
+  TEAM_MAIN_BOT_ID,
+  tracyRecord,
+} from "@/lib/home-bots/__tests__/standalone-bots-fixtures";
+import { useStandaloneBotsStore } from "@/stores/bots/standalone-bots-store";
 import { creatureMark, drawCreatureMark } from "@/lib/bots/creature-mark";
 
 const BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
@@ -17,6 +25,7 @@ const mocks = vi.hoisted(() => ({
   row: null as MergedNotificationRow | null,
   bots: undefined as BotListResponse | undefined,
   listEnabled: [] as boolean[],
+  environments: [] as EnvironmentDescriptor[],
 }));
 
 vi.mock("@/stores/notifications/merged-notifications", async (importActual) => {
@@ -37,6 +46,7 @@ vi.mock("@/hooks/host/use-reactive-local-host-entry", () => ({
 }));
 vi.mock("@/hooks/agent/use-host-reachability", () => ({
   useRemoteSessionPollReadiness: () => false,
+  useHostReachability: () => ({ status: "reachable" }),
 }));
 vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHostOrNull: () => null,
@@ -51,15 +61,31 @@ vi.mock("@/hooks/host/use-host-supports-method", () => ({
   useHostMethodSupport: (_hostId: string | null, method: string) =>
     method === "bot.list",
 }));
+vi.mock("@/hooks/bots/use-environment-list-query", () => ({
+  useEnvironmentListQuery: () => ({
+    data: { environments: mocks.environments },
+    isFetched: true,
+  }),
+}));
+vi.mock("@/hooks/bots/use-bot-list-changed-subscription", () => ({
+  useBotListChangedSubscriptionForHost: () => undefined,
+}));
+vi.mock("@/hooks/bots/use-reread-environment-list-on-focus", () => ({
+  useRereadEnvironmentListOnFocus: () => undefined,
+}));
+vi.mock("@/hooks/bots/use-team-setups", () => ({
+  useTeamSetups: () => ({ settled: true, setups: [] }),
+}));
 vi.mock("@/hooks/bots/use-bot-list-query", () => ({
   useBotListQuery: (_client: unknown, enabled: boolean) => {
     mocks.listEnabled.push(enabled);
-    return { data: enabled ? mocks.bots : undefined };
+    return { data: enabled ? mocks.bots : undefined, isFetched: enabled };
   },
 }));
 
 import { NotificationRow } from "@/components/notifications/notification-row";
 import { NotificationBotsProvider } from "@/components/notifications/notification-bots";
+import { StandaloneBotsBridge } from "@/components/layout/bridges/standalone-bots-bridge";
 
 function verdictRow(epicId: string): MergedNotificationRow {
   return {
@@ -127,7 +153,93 @@ beforeEach(() => {
     mainBotIds: {},
   };
 });
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  useStandaloneBotsStore.setState(EMPTY_DIRECTORY_STATE);
+});
+
+function environment(
+  environmentId: string,
+  label: string,
+  ownerKind: EnvironmentDescriptor["ownerKind"],
+): EnvironmentDescriptor {
+  return {
+    environmentId,
+    ownerKind,
+    ownerId: `owner-${environmentId}`,
+    roomId: `room-${environmentId}`,
+    label,
+  };
+}
+
+/** A row of the bot's conversation, as the merged feed projects one. */
+function conversationRow(botId: string): MergedNotificationRow {
+  return {
+    ...verdictRow(botId),
+    title: "Tracy",
+    payload: {
+      kind: "chat",
+      epicId: botId,
+      chatId: "thread-1",
+      bot: { botId, threadId: "thread-1", messageId: "message-1" },
+    },
+  };
+}
+
+describe("<NotificationRow /> title and the environment", () => {
+  function titleOf(row: MergedNotificationRow): string | null {
+    render(<StandaloneBotsBridge />);
+    const entry = renderRow(row);
+    return within(entry).getByTestId("notification-title").textContent;
+  }
+
+  const PERSONAL = environment("env-me", "Personal", "user");
+  const TEAM = environment("env-team", "traycerai", "organization");
+
+  function seeBothMainBots(): void {
+    mocks.environments = [PERSONAL, TEAM];
+    mocks.bots = {
+      bots: [
+        tracyRecord(PERSONAL_MAIN_BOT_ID, "env-me"),
+        tracyRecord(TEAM_MAIN_BOT_ID, "env-team"),
+      ],
+      mainBotIds: {
+        "env-me": PERSONAL_MAIN_BOT_ID,
+        "env-team": TEAM_MAIN_BOT_ID,
+      },
+    };
+  }
+
+  it("places a team's bot by its environment when two main bots are visible", () => {
+    seeBothMainBots();
+
+    expect(titleOf(conversationRow(TEAM_MAIN_BOT_ID))).toBe(
+      "Tracy · traycerai",
+    );
+  });
+
+  it("never suffixes the personal bot", () => {
+    seeBothMainBots();
+
+    expect(titleOf(conversationRow(PERSONAL_MAIN_BOT_ID))).toBe("Tracy");
+  });
+
+  it("keeps a team's bot to its name when it is the only main bot", () => {
+    mocks.environments = [TEAM];
+    mocks.bots = {
+      bots: [tracyRecord(TEAM_MAIN_BOT_ID, "env-team")],
+      mainBotIds: { "env-team": TEAM_MAIN_BOT_ID },
+    };
+
+    expect(titleOf(conversationRow(TEAM_MAIN_BOT_ID))).toBe("Tracy");
+  });
+
+  it("leaves a row about a task's chat alone", () => {
+    seeBothMainBots();
+
+    expect(titleOf(verdictRow(TEAM_MAIN_BOT_ID))).toBe("Tracy answered");
+  });
+});
 
 describe("<NotificationRow /> about a bot", () => {
   it("shows the bot's squircle picture in place of the glyph", () => {

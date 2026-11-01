@@ -10,6 +10,7 @@ import {
   MobileLevel2MenuTrigger,
 } from "@/components/layout/shell/mobile-level2";
 import { Popover } from "@/components/ui/popover";
+import { useStandaloneBotName } from "@/hooks/bots/use-standalone-bot-name";
 import type { MobileLevel2Form } from "@/lib/layout/mobile-layout-form";
 
 function stayOpen(): void {}
@@ -139,6 +140,8 @@ function BotChannelPicker(props: {
   const { title, activeBotId, hostId, threadsView } = props;
   const [open, setOpen] = useState(false);
   const close = (): void => setOpen(false);
+  // The list that shows the environment is closed while this is read.
+  const name = useStandaloneBotName(activeBotId, title);
   // Threads is a row of the list like any channel, so choosing it closes too.
   const pickerThreadsView = useMemo(
     (): BotThreadsViewState | null =>
@@ -159,7 +162,7 @@ function BotChannelPicker(props: {
         testId="bot-channel-picker-trigger"
         className={undefined}
       >
-        <span className="min-w-0 truncate">{title}</span>
+        <span className="min-w-0 truncate">{name}</span>
       </MobileLevel2MenuTrigger>
       <MobileLevel2MenuContent
         label="Channels"

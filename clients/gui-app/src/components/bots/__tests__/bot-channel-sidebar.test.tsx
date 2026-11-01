@@ -28,6 +28,9 @@ import {
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { EMPTY_DIRECTORY_STATE } from "@/lib/home-bots/__tests__/standalone-bots-fixtures";
+import { buildHomeBotsModel } from "@/lib/home-bots/bots-model";
+import { useStandaloneBotsStore } from "@/stores/bots/standalone-bots-store";
 import {
   afterEach,
   beforeEach,
@@ -658,6 +661,28 @@ describe("<BotChannelSidebar /> read-cursor bold", () => {
 });
 
 describe("<BotChannelSidebar /> main bot", () => {
+  it("draws no environment beside a bot's name while two main bots are visible", () => {
+    mocks.state.mainBotIds = {
+      "env-me": "bot-notes",
+      "env-team": "bot-release",
+    };
+    useStandaloneBotsStore.setState({
+      directory: {
+        model: buildHomeBotsModel({
+          environments: mocks.state.environments,
+          bots: mocks.state.bots,
+          mainBotIds: mocks.state.mainBotIds,
+        }),
+        setups: [],
+      },
+      settled: true,
+    });
+    mount("bot-release", null);
+
+    expect(row("bot-release").textContent).toBe("release-bot");
+    useStandaloneBotsStore.setState(EMPTY_DIRECTORY_STATE);
+  });
+
   it("stars the environment's main bot after its name and no other channel", () => {
     mocks.state.mainBotIds = { "env-team": "bot-triage" };
     mount("bot-release", null);

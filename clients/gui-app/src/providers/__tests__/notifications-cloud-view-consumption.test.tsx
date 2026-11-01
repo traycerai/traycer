@@ -80,6 +80,10 @@ vi.mock("@/lib/host", () => ({
   useAuthService: () => mockAuth,
 }));
 
+vi.mock("@/hooks/bots/use-bot-list-changed-subscription", () => ({
+  useBotListChangedSubscriptionForHost: () => undefined,
+}));
+
 // Feed-mode capability still reads the app-wide stream binding.
 vi.mock("@/lib/host/stream-runtime-context", () => ({
   useStreamMethodSupport: () => feedSupport.value,
