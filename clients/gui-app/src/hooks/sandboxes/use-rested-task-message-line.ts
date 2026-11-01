@@ -8,7 +8,7 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
 
 /** False until the task's snapshot has loaded: chats not read yet are not none. */
-function useTaskHasNoChats(epicId: string): boolean {
+export function useTaskHasNoChats(epicId: string): boolean {
   const handle = getOpenEpicRegistry().get(epicId);
   const subscribe = useCallback(
     (listener: () => void) =>

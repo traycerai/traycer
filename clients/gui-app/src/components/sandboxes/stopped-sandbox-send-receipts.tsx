@@ -15,8 +15,15 @@ import { chatSandboxStateLine } from "@/components/epic-canvas/renderers/chat-sa
 import { TabHostContext } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { Button } from "@/components/ui/button";
 import { useChatSandboxState } from "@/hooks/sandboxes/use-chat-sandbox-state";
-import { useRestedTaskMessageLine } from "@/hooks/sandboxes/use-rested-task-message-line";
+import {
+  useRestedTaskMessageLine,
+  useTaskHasNoChats,
+} from "@/hooks/sandboxes/use-rested-task-message-line";
 import { resolveChatSandbox } from "@/lib/sandboxes/chat-sandbox-state";
+import {
+  stageIsReturnedSandbox,
+  type StoredReturnedSandbox,
+} from "@/lib/sandboxes/returned-sandbox";
 import {
   useSandboxList,
   sandboxListReadSentAt,
@@ -30,15 +37,22 @@ import {
   CHOOSE_ANOTHER_HOST,
   restedDraftLine,
   returnedSandboxMessageLine,
+  stoppedAddAgentLine,
   stoppedSandboxLine,
 } from "@/lib/sandboxes/sandbox-strings";
 import { draftTabIntent } from "@/lib/tab-navigation";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import { useStagedSandboxStore } from "@/stores/composer/staged-sandbox-store";
+import {
+  type StagedSandbox,
+  useStagedSandboxStore,
+} from "@/stores/composer/staged-sandbox-store";
 import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
 import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
-import { useSurfaceHostSelectionStore } from "@/stores/host/surface-host-selection-store";
+import {
+  newConversationSurfaceKey,
+  useSurfaceHostSelectionStore,
+} from "@/stores/host/surface-host-selection-store";
 import { usePendingSandboxSendStore } from "@/stores/sandboxes/pending-sandbox-send-store";
 
 import {
@@ -321,7 +335,21 @@ function ReturnedSendReceipt(props: {
     state.drafts.some((draft) => draft.id === returnedDraftId),
   );
   const sandboxList = useSandboxList();
-  const currentPicks = stoppedReceiptPicks(receipt.epicId, pins, stages);
+  const taskReturned = useNewConversationModalStore(
+    (state) =>
+      state.draftPatchesByEpicId[receipt.epicId]?.returnedSandbox ?? null,
+  );
+  const inAddAgent =
+    useTaskHasNoChats(receipt.epicId) &&
+    receipt.returned.kind === "task" &&
+    props.tabId !== null;
+  const currentPicks = stoppedReceiptPicks(
+    receipt.epicId,
+    pins,
+    receipt.kind === "stopped"
+      ? withoutReturnedStage(receipt.epicId, stages, taskReturned)
+      : stages,
+  );
   const readAt = sandboxListReadSentAt(sandboxList.data);
   const sandboxId =
     receipt.kind === "cancelled" || receipt.kind === "recovered"
@@ -358,6 +386,18 @@ function ReturnedSendReceipt(props: {
   useEffect(() => {
     if (obsolete) dismissReceipt(receipt.id);
   }, [obsolete, receipt.id]);
+  // Reopens the composer and keeps this line, unlike `openDraft`: the Stop's
+  // actions are still the person's.
+  const openAddAgent = useCallback((): void => {
+    if (receipt.returned.kind !== "task" || props.tabId === null) return;
+    useNewConversationModalOpenStore.getState().open({
+      epicId: receipt.epicId,
+      tabId: props.tabId,
+      placement: receipt.returned.placement,
+      parentId: receipt.returned.parentId,
+      hostId: null,
+    });
+  }, [receipt, props.tabId]);
   const openDraft = useCallback((): void => {
     if ((useAuthStore.getState().profile?.userId ?? null) !== receipt.userId)
       return;
@@ -384,10 +424,7 @@ function ReturnedSendReceipt(props: {
         {sandboxLine ?? (
           <span>
             {receipt.kind === "stopped"
-              ? stoppedSandboxLine(
-                  receipt.name,
-                  receipt.returned.kind === "landing-draft",
-                )
+              ? stoppedReceiptLine(receipt, inAddAgent)
               : returnedSandboxMessageLine(
                   receipt.returned.kind === "landing-draft",
                 )}
@@ -411,6 +448,16 @@ function ReturnedSendReceipt(props: {
           ) : null}
           {startSandbox === null ? null : (
             <>
+              {inAddAgent ? (
+                <Button
+                  type="button"
+                  variant="link"
+                  size="inline-xs"
+                  onClick={openAddAgent}
+                >
+                  Add agent
+                </Button>
+              ) : null}
               <Button
                 type="button"
                 variant="link"
@@ -436,7 +483,15 @@ function ReturnedSendReceipt(props: {
         {startSandbox?.failure}
       </div>
     ),
-    [receipt, openDraft, startSandbox, props.tabId, sandboxLine],
+    [
+      receipt,
+      openDraft,
+      openAddAgent,
+      inAddAgent,
+      startSandbox,
+      props.tabId,
+      sandboxLine,
+    ],
   );
   const onToastDismissRef = useRef<(() => void) | undefined>(undefined);
   useEffect(() => {
@@ -462,6 +517,36 @@ function ReturnedSendReceipt(props: {
     });
   }, [content, props.tabId, obsolete, receipt.id]);
   return obsolete || props.tabId === null ? null : content;
+}
+
+function stoppedReceiptLine(
+  receipt: Extract<StoppedSandboxSendReceipt, { readonly kind: "stopped" }>,
+  inAddAgent: boolean,
+): string {
+  if (inAddAgent) return stoppedAddAgentLine(receipt.name);
+  return stoppedSandboxLine(
+    receipt.name,
+    receipt.returned.kind === "landing-draft",
+  );
+}
+
+/**
+ * The composer stages a message's own sandbox as it shows the draft: that is
+ * no pick of the person's, so it leaves a Stop's line up.
+ */
+function withoutReturnedStage(
+  epicId: string,
+  stages: Readonly<Partial<Record<string, StagedSandbox>>>,
+  returned: StoredReturnedSandbox | null,
+): Readonly<Partial<Record<string, StagedSandbox>>> {
+  const key = newConversationSurfaceKey(epicId);
+  if (
+    returned === null ||
+    !stageIsReturnedSandbox(stages[key] ?? null, returned)
+  )
+    return stages;
+  const { [key]: _returned, ...others } = stages;
+  return others;
 }
 
 /** A list read after the receipt shows its sandbox has moved on. */
