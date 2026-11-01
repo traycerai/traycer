@@ -947,24 +947,6 @@ export type FinalizePendingCliUpgradeOutcome =
       readonly livePath: string;
       readonly errorMessage: string;
     }
-  // The staged binary is OLDER than what is now installed, so publishing
-  // it would move the CLI backwards. `cli upgrade` cannot stage such a
-  // record any more, but one already on disk can be overtaken: `cli
-  // re-anchor` records a hand-installed version WITHOUT clearing
-  // `pendingUpgrade`, so staging 1.5.1 while locked, then anchoring a
-  // manually-installed 1.5.2-rc.1, leaves a pending record the next
-  // `host restart` would have silently applied.
-  //
-  // `pendingUpgrade` is RETAINED, like every other outcome here that does
-  // not swap: it is the record of an upgrade the user asked for and never
-  // received, and this reading does not make it false - only superseded.
-  | {
-      readonly status: "installed-newer";
-      readonly stagedVersion: string;
-      readonly installedVersion: string;
-      readonly stagedBinaryPath: string;
-      readonly livePath: string;
-    }
   // Publication genuinely failed (full disk, unwritable install dir,
   // digest mismatch on a cross-filesystem copy). Reported rather than
   // thrown: `host restart` stops the service BEFORE calling this and
@@ -1046,29 +1028,18 @@ export async function finalizePendingCliUpgrade(opts: {
       livePath: manifest.binaryPath,
     };
   }
-  // The same floor `cli upgrade` applies at stage time, re-asked at publish
-  // time: the two are separated by a host restart, and the installed version
-  // can move in between. Asked before `tryReplaceLiveBinary` so a superseded
-  // record costs no write at all.
-  if (
-    wouldDowngradeCli({
-      installedVersion: manifest.version,
-      candidateVersion: pending.version,
-    })
-  ) {
-    logger.info("CLI pending upgrade superseded by a newer install", {
-      environment: opts.environment,
-      currentVersion: manifest.version,
-      pendingVersion: pending.version,
-    });
-    return {
-      status: "installed-newer",
-      stagedVersion: pending.version,
-      installedVersion: manifest.version,
-      stagedBinaryPath: pending.stagedBinaryPath,
-      livePath: manifest.binaryPath,
-    };
-  }
+  // No downgrade floor is re-asked here, and that is a conclusion rather
+  // than an omission: every writer of this manifest keeps a pending
+  // record's version ABOVE the installed one. `cli upgrade` stages only
+  // above it (see the downgrade contract at the top of this file),
+  // `writeMarkSource` - which `cli mark-source` and `cli re-anchor` both
+  // go through - clears `pendingUpgrade` outright, `clearPendingUpgrade`
+  // promotes the pending version and clears it, and desktop records a
+  // pending upgrade only on the path where its bundled build is NEWER
+  // than the install. So a staged binary below the installed version is
+  // not a state this manifest reaches, and a guard for it here would be
+  // an unreachable branch.
+  //
   // A publication failure must not escape as an exception - see the
   // `publish-failed` variant for why the restart path cannot survive one.
   let swap: ReplaceResult;

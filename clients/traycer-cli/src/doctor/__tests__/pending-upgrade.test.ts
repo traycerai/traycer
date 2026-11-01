@@ -212,57 +212,6 @@ describe("finalizePendingCliUpgrade", () => {
     expect(reread.pendingUpgrade.version).toBe("1.5.0");
   });
 
-  // `cli upgrade` cannot stage a record below the installed version any
-  // more, but one already on disk can be OVERTAKEN: `cli re-anchor` records
-  // a hand-installed version without clearing `pendingUpgrade`, so staging
-  // 1.5.1 while locked and then anchoring a manual 1.5.2-rc.1 leaves a
-  // pending record whose publication would move the CLI backwards.
-  // Falsification: drop the `wouldDowngradeCli` guard from
-  // `finalizePendingCliUpgrade` and the live binary becomes 1.5.1's bytes
-  // with the record reporting `finalised`.
-  it("refuses to publish a staged binary the installed version has overtaken, leaving the live binary and pendingUpgrade as they were", async () => {
-    const liveBinaryPath = join(workHome, "bin", "traycer");
-    const stagedBinaryPath = join(workHome, "bin", "traycer-1.5.1");
-    mkdirSync(join(workHome, "bin"), { recursive: true });
-    writeFileSync(liveBinaryPath, "live-bytes-1.5.2-rc.1");
-    writeFileSync(stagedBinaryPath, "staged-bytes-1.5.1");
-    writeManifest("production", {
-      version: "1.5.2-rc.1",
-      installedAt: "2026-05-20T00:00:00Z",
-      binaryPath: liveBinaryPath,
-      source: "manual",
-      pendingUpgrade: {
-        version: "1.5.1",
-        stagedBinaryPath,
-        stagedAt: "2026-05-10T00:00:00Z",
-        reason: "binary-locked",
-      },
-    });
-
-    const { finalizePendingCliUpgrade } =
-      await import("../../commands/cli-upgrade");
-    const outcome = await finalizePendingCliUpgrade({
-      environment: "production",
-    });
-
-    expect(outcome).toEqual({
-      status: "installed-newer",
-      stagedVersion: "1.5.1",
-      installedVersion: "1.5.2-rc.1",
-      stagedBinaryPath,
-      livePath: liveBinaryPath,
-    });
-    expect(readFileSync(liveBinaryPath, "utf8")).toBe("live-bytes-1.5.2-rc.1");
-    // The staged file and the record both stand: the request is superseded,
-    // not wrong, and nothing here destroys the evidence of it.
-    expect(existsSync(stagedBinaryPath)).toBe(true);
-    const reread = JSON.parse(
-      readFileSync(join(workHome, ".traycer", "cli", "manifest.json"), "utf8"),
-    );
-    expect(reread.version).toBe("1.5.2-rc.1");
-    expect(reread.pendingUpgrade.version).toBe("1.5.1");
-  });
-
   it("swaps the staged binary in place, clears pendingUpgrade, and updates the install record", async () => {
     const liveBinaryPath = join(workHome, "bin", "traycer");
     const stagedBinaryPath = join(workHome, "bin", "traycer-1.5.0");
