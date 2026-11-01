@@ -33,6 +33,7 @@ import {
   epicNodeRecency,
   useEpicArtifactRecords,
   useEpicChatRecordListAuthoritative,
+  useEpicTuiAgentRecordListAuthoritative,
   useEpicLastFocusedArtifactId,
   useEpicSnapshotLoaded,
 } from "@/lib/epic-selectors";
@@ -522,6 +523,8 @@ export function useEpicRouteSynchronization(
   // a committed re-point both flip together, never one before the other.
   const activeHostId = useCanvasHostId();
   const chatRecordListAuthoritative = useEpicChatRecordListAuthoritative();
+  const tuiAgentRecordListAuthoritative =
+    useEpicTuiAgentRecordListAuthoritative();
 
   // Close any open tab whose underlying record was removed (sidebar delete,
   // server-side cascade, or remote delete by another collaborator). The
@@ -553,8 +556,9 @@ export function useEpicRouteSynchronization(
   //
   // Only the chat verdict is withheld, though, not the sweep. Artifacts are
   // doc-shared and a same-host terminal agent is this host's own record, so
-  // their absence from the projection is evidence of deletion whatever the
-  // cloud list can or cannot say - and an unverified user deleting a record
+  // once its own list has answered, absence from the projection is evidence
+  // of deletion whatever the cloud list can or cannot say - and an unverified
+  // user deleting a record
   // in a local-homed epic used to leave its tile open and stale until a
   // verdict returned. The sweep therefore runs for an unauthorized session
   // with chat absence marked NON-authoritative: `isTileRefRecordLive` keeps
@@ -590,6 +594,7 @@ export function useEpicRouteSynchronization(
       hasLiveRecord,
       isCloudKnown,
       recordListAuthorizesChatAbsence: chatAbsenceAuthoritative,
+      recordListAuthorizesTuiAgentAbsence: tuiAgentRecordListAuthoritative,
     };
     const pendingClosedInstances = new Set(
       Object.values(useEpicCanvasStore.getState().closedTilePayloadsByTabId)
@@ -633,6 +638,7 @@ export function useEpicRouteSynchronization(
     snapshotLoaded,
     recordSweepRuns,
     chatAbsenceAuthoritative,
+    tuiAgentRecordListAuthoritative,
     canvas,
     records,
     cloudChats.data,

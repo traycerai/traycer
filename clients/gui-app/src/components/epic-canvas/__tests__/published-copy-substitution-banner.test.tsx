@@ -66,6 +66,7 @@ vi.mock("@/lib/epic-selectors", async (importOriginal) => ({
   useEpicPermissionRole: () => "owner",
   useEpicSnapshotLoaded: () => true,
   useEpicChatRecordListAuthoritative: () => true,
+  useEpicTuiAgentRecordListAuthoritative: () => true,
 }));
 
 vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => ({
