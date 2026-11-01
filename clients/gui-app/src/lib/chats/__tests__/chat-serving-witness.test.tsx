@@ -21,6 +21,8 @@ import {
   sandboxFacts,
 } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
 import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
+import type { TaskHostRow } from "@traycer/protocol/host/task-host-summary";
+import type { TaskHostsView } from "@/hooks/epic/use-task-hosts-view";
 import type { ChatServing } from "@traycer/protocol/host/chat-serving/index";
 import {
   ChatServingWitnessContext,
@@ -40,8 +42,13 @@ const state = vi.hoisted(
   (): {
     entry: HostDirectoryEntry | null;
     armChats: readonly CloudChatSummary[];
-  } => ({ entry: null, armChats: [] }),
+    taskHosts: TaskHostsView;
+  } => ({ entry: null, armChats: [], taskHosts: { kind: "none" } }),
 );
+
+vi.mock("@/hooks/epic/use-task-hosts-view", () => ({
+  useTaskHostsView: () => state.taskHosts,
+}));
 
 vi.mock("@/hooks/host/use-host-directory-entry", () => ({
   useHostDirectoryEntry: () => state.entry,
@@ -179,6 +186,7 @@ describe("a chat's serving witness across the chat reaching the environment arm"
     cleanup();
     state.entry = null;
     state.armChats = [];
+    state.taskHosts = { kind: "none" };
     readings.length = 0;
   });
 
@@ -337,5 +345,107 @@ describe("a chat's serving witness across the chat reaching the environment arm"
     });
     expect(peers.at(-1)).toBe(CHAT.hostId);
     witness.dispose();
+  });
+});
+
+function taskRow(kind: "team" | "user"): TaskHostRow {
+  return {
+    hostId: CHAT.hostId,
+    label: "gone-sandbox",
+    principal: { kind, id: "principal-1" },
+    reach: "same_principal",
+    sandboxEnd: null,
+  };
+}
+
+/** The peer and the settled flag a chat reads, once the pool says at rest. */
+function readPeer(): { readonly peer: string; readonly settled: boolean } {
+  const client = new StatusDrivableClient(true);
+  const witness = new PoolChatServingWitness();
+  witness.setStreamClient(client);
+  const seen: { peer: string; settled: boolean }[] = [];
+  function Probe(): ReactNode {
+    seen.push({
+      peer: useChatServingHostId(CHAT),
+      settled: useChatServingSettled(CHAT),
+    });
+    return null;
+  }
+  render(
+    <ChatServingWitnessContext.Provider value={witness}>
+      <Probe />
+    </ChatServingWitnessContext.Provider>,
+    { wrapper },
+  );
+  act(() => {
+    client.drivable[0]?.emit(
+      servingFrame({
+        ownerHostId: CHAT.hostId,
+        state: "at-rest",
+        catchingUp: null,
+      }),
+      null,
+    );
+  });
+  witness.dispose();
+  const last = seen.at(-1);
+  if (last === undefined) throw new Error("the probe did not render");
+  return last;
+}
+
+describe("a chat whose host left the directory", () => {
+  afterEach(() => {
+    cleanup();
+    state.entry = null;
+    state.armChats = [];
+    state.taskHosts = { kind: "none" };
+  });
+
+  it("stays on the pool when the task's hosts name a team sandbox", () => {
+    state.entry = null;
+    state.taskHosts = { kind: "hosts", hosts: [taskRow("team")] };
+    expect(readPeer()).toEqual({ peer: POOL_HOST_ID, settled: true });
+  });
+
+  it("waits for the pool's first state before settling on a team sandbox", () => {
+    state.entry = null;
+    state.taskHosts = { kind: "hosts", hosts: [taskRow("team")] };
+    const client = new StatusDrivableClient(true);
+    const witness = new PoolChatServingWitness();
+    witness.setStreamClient(client);
+    const settledReadings: boolean[] = [];
+    function Probe(): ReactNode {
+      settledReadings.push(useChatServingSettled(CHAT));
+      return null;
+    }
+    render(
+      <ChatServingWitnessContext.Provider value={witness}>
+        <Probe />
+      </ChatServingWitnessContext.Provider>,
+      { wrapper },
+    );
+    expect(settledReadings.at(-1)).toBe(false);
+    witness.dispose();
+  });
+
+  it.each([
+    ["a person's host", { kind: "hosts", hosts: [taskRow("user")] }],
+    ["no row for it", { kind: "none" }],
+    ["hosts not yet answered", { kind: "pending" }],
+  ] as const)("stays on its own host when the task names %s", (_name, view) => {
+    state.entry = null;
+    state.taskHosts = view;
+    expect(readPeer()).toEqual({ peer: CHAT.hostId, settled: true });
+  });
+
+  it("lets a directory row win over the task's row, either way", () => {
+    state.entry = remoteEntry(CHAT.hostId, sandboxFacts(null));
+    state.taskHosts = { kind: "hosts", hosts: [taskRow("team")] };
+    expect(readPeer().peer).toBe(CHAT.hostId);
+    cleanup();
+
+    state.entry = remoteEntry(CHAT.hostId, sandboxFacts("team-1"));
+    state.taskHosts = { kind: "hosts", hosts: [taskRow("user")] };
+    expect(readPeer().peer).toBe(POOL_HOST_ID);
   });
 });

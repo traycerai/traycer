@@ -1,5 +1,10 @@
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  QueryClient,
+  QueryClientProvider,
+  queryOptions,
+  useQuery,
+} from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatServing } from "@traycer/protocol/host/chat-serving/index";
@@ -67,6 +72,7 @@ import { useLiveChatSandboxState } from "@/hooks/sandboxes/use-live-chat-sandbox
 import { useSandboxList } from "@/hooks/sandboxes/use-sandbox-list-query";
 import { resolveChatSandbox } from "@/lib/sandboxes/chat-sandbox-state";
 import { sandboxQueryKeys } from "@/lib/query-keys";
+import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useEndedSandboxHostsStore } from "@/stores/sandboxes/ended-sandbox-hosts-store";
 
@@ -370,5 +376,91 @@ describe("a live chat's sandbox lifecycle reconciliation", () => {
     expect(result.current.view.line).toBeNull();
     expect(binding.auth.listSandboxes).toHaveBeenCalledTimes(1);
     expect(binding.directory.refresh).not.toHaveBeenCalled();
+  });
+  it("re-reads the task's hosts when the row leaves the list, and holds a pending state reachable until they answer", async () => {
+    sources.serving = { ownerHostId: HOST, state: "at-rest", catchingUp: null };
+    sources.task = { kind: "sandbox", name: "test-box" };
+    const binding = createFakeSandboxBinding();
+    sources.binding = binding;
+    binding.auth.listSandboxes.mockResolvedValue({
+      kind: "ok",
+      response: listed("stopped"),
+    });
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false, gcTime: 0, staleTime: Infinity },
+      },
+    });
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    );
+    // The task's hosts as the chat's own surface keeps them: one active read.
+    let taskHostsReads = 0;
+    let taskHostsAnswer: Promise<number> = Promise.resolve(0);
+    const { result, rerender } = renderHook(
+      () => {
+        useQuery(
+          queryOptions({
+            queryKey: hostQueryKeys.methodScope(
+              "session-host",
+              "epic.listTaskHosts",
+            ),
+            queryFn: () => {
+              taskHostsReads += 1;
+              return taskHostsAnswer;
+            },
+          }),
+        );
+        return useLiveChatSandboxState("epic", "chat", HOST, true);
+      },
+      { wrapper },
+    );
+    await waitFor(() => expect(result.current.state.kind).toBe("resting"));
+    await waitFor(() => expect(taskHostsReads).toBeGreaterThanOrEqual(2));
+    const readsBeforeLeaving = taskHostsReads;
+    expect(binding.auth.listSandboxes).toHaveBeenCalledTimes(2);
+
+    let answerTaskHosts: (value: number) => void = () => {
+      throw new Error("the task hosts read has not started");
+    };
+    taskHostsAnswer = new Promise<number>((resolve) => {
+      answerTaskHosts = resolve;
+    });
+    binding.auth.listSandboxes.mockResolvedValue({
+      kind: "ok",
+      response: { sandboxes: [] },
+    });
+    act(() => {
+      queryClient.setQueryData(sandboxQueryKeys.list(binding.auth, VIEWER), {
+        sandboxes: [],
+      });
+    });
+    rerender();
+
+    await waitFor(() => expect(taskHostsReads).toBe(readsBeforeLeaving + 1));
+    // The task names the sandbox, the list no longer does, and its end is in
+    // flight: no line before the answer, and not an unreachable host.
+    expect(result.current).toMatchObject({
+      state: { kind: "pending", name: "test-box" },
+      reachable: true,
+    });
+
+    const ended = {
+      name: "test-box",
+      end: {
+        state: "destroyed",
+        destroyedAt: Date.UTC(2026, 9, 28, 12),
+        cause: "resting",
+        actor: null,
+        idleMinutes: null,
+      },
+    } as const;
+    sources.task = { kind: "ended", ended };
+    await act(async () => {
+      answerTaskHosts(1);
+      await taskHostsAnswer;
+    });
+    rerender();
+    expect(result.current.state).toEqual({ kind: "destroyed", ended });
   });
 });

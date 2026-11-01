@@ -19,7 +19,10 @@ import { useLayoutEffect, type ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
 import type { ChatServing } from "@traycer/protocol/host/chat-serving/index";
-import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import {
+  POOL_HOST_ID,
+  type HostDirectoryEntry,
+} from "@traycer-clients/shared/host-client/host-directory";
 import type {
   ChatServingKey,
   ChatServingVerdict,
@@ -163,6 +166,8 @@ interface TestState {
   readonly directoryEntries: Map<string, HostDirectoryEntry>;
   /** Whether this process's tier plan names a pool (a team build). */
   poolConfigured: boolean;
+  /** The rows the environment arm answers for a chat the pool serves. */
+  armChats: readonly CloudChatSummary[];
 }
 
 const testState = vi.hoisted((): TestState => ({
@@ -184,6 +189,11 @@ const testState = vi.hoisted((): TestState => ({
   tuiAgentRetractionById: new Map(),
   directoryEntries: new Map(),
   poolConfigured: false,
+  armChats: [],
+}));
+
+vi.mock("@/hooks/environment/use-environment-arms", () => ({
+  useEnvironmentArmChats: () => testState.armChats,
 }));
 
 // This suite renders without a host runtime, which the real hook requires:
@@ -434,7 +444,7 @@ vi.mock("@/components/epic-canvas/renderers/epic-node-tile", async () => {
   const React = await import("react");
   const { usePaneCloseAutoFocusGuard } =
     await import("@/components/epic-tabs/pane-visibility-context");
-  function MockTile(props: { readonly id: string }) {
+  function MockTile(props: { readonly id: string; readonly hostId: string }) {
     const closeAutoFocusGuard = usePaneCloseAutoFocusGuard(undefined);
     React.useEffect(() => {
       testState.mounts.set(props.id, (testState.mounts.get(props.id) ?? 0) + 1);
@@ -449,7 +459,7 @@ vi.mock("@/components/epic-canvas/renderers/epic-node-tile", async () => {
     }, [closeAutoFocusGuard, props.id]);
 
     return (
-      <div data-testid={`tile-${props.id}`}>
+      <div data-testid={`tile-${props.id}`} data-host-id={props.hostId}>
         <button
           type="button"
           {...paneActivationDeferProps}
@@ -490,7 +500,7 @@ vi.mock("@/components/epic-canvas/renderers/epic-node-tile", async () => {
 
   return {
     EpicNodeTile: ({ node }: { readonly node: EpicCanvasTileRef }) => (
-      <MockTile id={node.id} />
+      <MockTile id={node.id} hostId={node.hostId} />
     ),
   };
 });
@@ -2728,6 +2738,147 @@ describe("<TabGroupView /> published-copy fallback follows the chat's serving wi
     });
     expect(
       container.querySelector(`[data-testid="tile-${PUBLISHED_COPY_TILE_ID}"]`),
+    ).toBeNull();
+  });
+});
+
+describe("<TabGroupView /> published-copy fallback for a destroyed sandbox's chat", () => {
+  const POOL_CHAT_OWNER = "arm-owner";
+
+  function armRow(ownerUserId: string): CloudChatSummary {
+    return {
+      identity: { taskId: "epic-1", chatId: CHAT.id, ownerUserId },
+      ownerHostId: CHAT.hostId,
+      createdAt: 1,
+      visibility: "task",
+      title: null,
+      isTitleEditedByUser: false,
+      parentChatId: null,
+      isArchived: false,
+      runSettingsSummary: null,
+      metadataUpdatedAt: 1,
+      headSha256: null,
+      publishedAt: null,
+      throughRecordSeq: null,
+      isOwnedByViewer: false,
+    };
+  }
+
+  beforeEach(() => {
+    testState.poolConfigured = true;
+    testState.sessionHostId = "host-B";
+  });
+
+  afterEach(() => {
+    cleanup();
+    testState.mounts.clear();
+    testState.unmounts.clear();
+    testState.missingArtifactIds.clear();
+    testState.unreachableHostIds.clear();
+    testState.fatalCloseCodeByChatId.clear();
+    testState.directoryEntries.clear();
+    testState.armChats = [];
+    testState.poolConfigured = false;
+    testState.sessionHostId = null;
+    useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    useTabsStore.setState(useTabsStore.getInitialState(), true);
+    tabCommandCoordinator.resetReconciliationForTesting();
+    resetChatRemoteDeletionRegistryForTesting();
+    resetTileSurfaceMembershipForTesting();
+    resetTileSurfaceEnvironmentRegistryForTesting();
+  });
+
+  it("reads a team sandbox's pool-served chat with no projection record from the pool, under the environment row's owner, once the index is unavailable", async () => {
+    // The pool serves the chat, as it does after the sandbox's row is gone
+    // (the witness's own suite pins that route); the chat has no projection
+    // record, so the only owner to read its copy under is the environment's.
+    testState.directoryEntries.set(
+      CHAT.hostId,
+      remoteEntry(CHAT.hostId, sandboxFacts("team-1")),
+    );
+    const witness = new FakeServingWitness();
+    witness.set({
+      ownerHostId: CHAT.hostId,
+      state: "at-rest",
+      catchingUp: null,
+    });
+    testState.missingArtifactIds.add(CHAT.id);
+    testState.armChats = [armRow(POOL_CHAT_OWNER)];
+    testState.fatalCloseCodeByChatId.set(CHAT.id, "CHAT_INDEX_UNAVAILABLE");
+    seedCanvas([CHAT], CHAT.instanceId);
+    const { container } = render(
+      <ChatServingWitnessContext.Provider value={witness}>
+        {groupView([CHAT], CHAT.instanceId, true)}
+      </ChatServingWitnessContext.Provider>,
+    );
+
+    const copy = await waitFor(() => {
+      const found = container.querySelector(
+        `[data-testid="tile-published-chat:epic-1:${POOL_CHAT_OWNER}:chat-1"]`,
+      );
+      expect(found).not.toBeNull();
+      return found;
+    });
+    expect(copy?.getAttribute("data-host-id")).toBe(POOL_HOST_ID);
+    expect(
+      container.querySelector(`[data-testid="tile-${CHAT.id}"]`),
+    ).toBeNull();
+  });
+
+  it("keeps the live tile when the environment has no row for the chat to name an owner", async () => {
+    testState.directoryEntries.set(
+      CHAT.hostId,
+      remoteEntry(CHAT.hostId, sandboxFacts("team-1")),
+    );
+    const witness = new FakeServingWitness();
+    witness.set({
+      ownerHostId: CHAT.hostId,
+      state: "at-rest",
+      catchingUp: null,
+    });
+    testState.missingArtifactIds.add(CHAT.id);
+    testState.fatalCloseCodeByChatId.set(CHAT.id, "CHAT_INDEX_UNAVAILABLE");
+    seedCanvas([CHAT], CHAT.instanceId);
+    const { container } = render(
+      <ChatServingWitnessContext.Provider value={witness}>
+        {groupView([CHAT], CHAT.instanceId, true)}
+      </ChatServingWitnessContext.Provider>,
+    );
+
+    await waitFor(() => {
+      expect(
+        container.querySelector(`[data-testid="tile-${CHAT.id}"]`),
+      ).not.toBeNull();
+    });
+    expect(
+      container.querySelector('[data-testid^="tile-published-chat:"]'),
+    ).toBeNull();
+  });
+
+  it("reads a personal sandbox's chat with a projection record from its copy on the reading host, never the pool", async () => {
+    testState.directoryEntries.set(
+      CHAT.hostId,
+      remoteEntry(CHAT.hostId, sandboxFacts(null)),
+    );
+    testState.unreachableHostIds.add(CHAT.hostId);
+    const witness = new FakeServingWitness();
+    seedCanvas([CHAT], CHAT.instanceId);
+    const { container } = render(
+      <ChatServingWitnessContext.Provider value={witness}>
+        {groupView([CHAT], CHAT.instanceId, true)}
+      </ChatServingWitnessContext.Provider>,
+    );
+
+    const copy = await waitFor(() => {
+      const found = container.querySelector(
+        '[data-testid="tile-published-chat:epic-1:user-1:chat-1"]',
+      );
+      expect(found).not.toBeNull();
+      return found;
+    });
+    expect(copy?.getAttribute("data-host-id")).toBe("host-B");
+    expect(
+      container.querySelector(`[data-testid="tile-${CHAT.id}"]`),
     ).toBeNull();
   });
 });

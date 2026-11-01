@@ -9,8 +9,17 @@ import {
 } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
 import type { TaskSandboxHost } from "@/hooks/epic/use-task-sandbox-end";
 import type { SandboxConfigurations } from "@/hooks/sandboxes/use-sandbox-configurations";
-import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
+import {
+  sandboxOperationFixture,
+  sandboxSummaryFixture,
+} from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
+import { taskSandboxEndLine } from "@/lib/sandboxes/task-sandbox-end";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import {
+  recordEndedSandboxHost,
+  recordListedDestroys,
+  useEndedSandboxHostsStore,
+} from "@/stores/sandboxes/ended-sandbox-hosts-store";
 
 /**
  * The classification a chat's footer and send path read, over the real hook.
@@ -99,6 +108,7 @@ beforeEach(() => {
     complete: true,
   };
   sources.entry = null;
+  useEndedSandboxHostsStore.setState({ byHostId: {} });
   useAuthStore.setState({
     status: "signed-in",
     profile: { userId: VIEWER, userName: "V", email: "v@example.com" },
@@ -283,5 +293,123 @@ describe("useChatSandboxState", () => {
       configuration: { kind: "personal" },
       wakeChangesPayer: false,
     });
+  });
+});
+
+describe("useChatSandboxState for a destroy this device saw", () => {
+  // Local time, as every sandbox row states it.
+  const AT = new Date(2026, 9, 28, 1, 27).getTime();
+  const SENTENCE_END = "Its files are gone; this chat stays readable.";
+
+  /** The one sentence the destroyed state gives the chat. */
+  function sentence(): string {
+    const state = stateOf(false);
+    if (state.kind !== "destroyed") {
+      throw new Error(`expected a destroyed state, got ${state.kind}`);
+    }
+    return taskSandboxEndLine(state.ended.name, state.ended.end);
+  }
+
+  function destroying(
+    operation: Parameters<typeof sandboxOperationFixture>[0],
+    rowOverrides: Partial<SandboxSummary>,
+  ): SandboxSummary {
+    return row({
+      operation: sandboxOperationFixture({ at: AT, ...operation }),
+      ...rowOverrides,
+    });
+  }
+
+  it("says a destroy the viewer started was by you, before the server answers", () => {
+    recordEndedSandboxHost(HOST, {
+      name: "e2e-sbx",
+      at: AT,
+      cause: "verb",
+      actor: { userId: VIEWER, displayName: null },
+      idleMinutes: null,
+    });
+
+    expect(sentence()).toBe(
+      `e2e-sbx was destroyed on Oct 28 at 01:27 by you. ${SENTENCE_END}`,
+    );
+  });
+
+  it.each([
+    [
+      "a teammate's destroy by their name",
+      { cause: "verb", actor: { userId: OTHER, displayName: "Dana" } },
+      {},
+      "by Dana",
+    ],
+    [
+      "a destroy by a member the server does not name",
+      { cause: "verb", actor: null },
+      {},
+      "by a member",
+    ],
+    [
+      "the resting pass",
+      { cause: "resting", actor: null },
+      {},
+      "after resting",
+    ],
+    [
+      "a burst sandbox's idle pass with the row's idle minutes",
+      { cause: "burst-idle", actor: null },
+      { idleMinutes: 12 },
+      "after 12 idle minutes",
+    ],
+    [
+      "a payer's lapse",
+      { cause: "day-30", actor: null },
+      {},
+      "after 30 days frozen",
+    ],
+  ] as const)(
+    "says %s from the listed row",
+    (_name, operation, rowFields, cause) => {
+      recordListedDestroys([destroying(operation, rowFields)]);
+
+      expect(sentence()).toBe(
+        `e2e-sbx was destroyed on Oct 28 at 01:27 ${cause}. ${SENTENCE_END}`,
+      );
+    },
+  );
+
+  it("is destroyed whether or not the transport reaches the host, and over a row still listed as destroying", () => {
+    recordEndedSandboxHost(HOST, {
+      name: "e2e-sbx",
+      at: AT,
+      cause: "resting",
+      actor: null,
+      idleMinutes: null,
+    });
+    sources.sandboxes = [row({ state: "destroying" })];
+
+    expect(stateOf(false).kind).toBe("destroyed");
+    expect(stateOf(true).kind).toBe("destroyed");
+  });
+
+  it("gives way to the task's record when it lands, with the same single state", () => {
+    recordEndedSandboxHost(HOST, {
+      name: "e2e-sbx",
+      at: AT,
+      cause: "verb",
+      actor: { userId: VIEWER, displayName: null },
+      idleMinutes: null,
+    });
+    const ended = {
+      name: "e2e-sbx",
+      end: {
+        state: "destroyed",
+        destroyedAt: AT + 60_000,
+        cause: "verb",
+        actor: "Agent Smith",
+        idleMinutes: null,
+      },
+    } as const;
+    sources.task = { kind: "ended", ended };
+
+    expect(stateOf(false)).toEqual({ kind: "destroyed", ended });
   });
 });
