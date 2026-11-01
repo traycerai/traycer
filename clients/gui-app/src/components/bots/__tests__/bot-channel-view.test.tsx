@@ -493,6 +493,7 @@ function mount(options: MountOptions): {
       <TooltipProvider>
         <ChatExpansionTestProviders tileInstanceId="tile-1">
           <BotChannelView
+            tiles={null}
             botId={BOT_ID}
             hostId={HOST_ID}
             boundHostId={mocks.state.binding.hostId}
@@ -589,7 +590,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("<BotChannelView /> channel", () => {
+describe("<BotChannelView tiles={null} /> channel", () => {
   it("posts at the channel's top level on the conversation the bot record names", () => {
     mount({ openThreadPostId: null });
 
@@ -1407,7 +1408,7 @@ describe("<BotChannelView /> channel", () => {
   });
 });
 
-describe("<BotChannelView /> channel read mark", () => {
+describe("<BotChannelView tiles={null} /> channel read mark", () => {
   it("marks the channel read when it is shown unread, and leaves a read one alone", () => {
     mocks.state.chats = { "conversation-channel": indicator(true, false) };
     mount({ openThreadPostId: null });
@@ -1459,7 +1460,7 @@ describe("<BotChannelView /> channel read mark", () => {
   });
 });
 
-describe("<BotChannelView /> read cursor", () => {
+describe("<BotChannelView tiles={null} /> read cursor", () => {
   const OLD_ROW = { messageId: "row-old", seq: 1_000 };
   const NEW_ROW = { messageId: "row-new", seq: 2_000 };
 
@@ -1635,7 +1636,7 @@ describe("<BotChannelView /> read cursor", () => {
   });
 });
 
-describe("<BotChannelView /> channel read mark beside an open thread", () => {
+describe("<BotChannelView tiles={null} /> channel read mark beside an open thread", () => {
   /** The `ResizeObserver`s the view made, to report a size for the channel's section. */
   const observers: FakeResizeObserver[] = [];
 
@@ -1717,7 +1718,7 @@ describe("<BotChannelView /> channel read mark beside an open thread", () => {
   });
 });
 
-describe("<BotChannelView /> open thread", () => {
+describe("<BotChannelView tiles={null} /> open thread", () => {
   beforeEach(() => {
     mocks.state.threads = [
       thread("thread-a", "post-a", {
@@ -1964,7 +1965,7 @@ describe("<BotChannelView /> open thread", () => {
   });
 });
 
-describe("<BotChannelView /> thread list unavailable", () => {
+describe("<BotChannelView tiles={null} /> thread list unavailable", () => {
   it("offers no thread on a host without the thread list", () => {
     mocks.state.threadListSupported = false;
     mocks.state.threadListAnswered = false;
@@ -2001,7 +2002,7 @@ describe("<BotChannelView /> thread list unavailable", () => {
   });
 });
 
-describe("<BotChannelView /> a post whose answer lands in a thread", () => {
+describe("<BotChannelView tiles={null} /> a post whose answer lands in a thread", () => {
   const POSTED: BotOpenThread = {
     anchorMessageId: "post-new",
     announcement: false,

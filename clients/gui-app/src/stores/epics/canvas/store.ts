@@ -69,6 +69,7 @@ import {
 import { evictTileFindUi } from "@/stores/tile-find/tile-find-store";
 import { promoteChatTabPersistenceToDurable } from "@/stores/chats/chat-tab-persistence-eviction";
 import type { ChatTabPersistenceIdentity } from "@/stores/chats/chat-tab-persistence-key";
+import { selectMobileTile } from "@/components/epic-canvas/mobile/mobile-tile-selection";
 import {
   closeAllTabs,
   closeOtherTabs as closeOtherTileTabs,
@@ -81,6 +82,7 @@ import {
   openBlankTabInPane as openBlankTabInPaneCanvas,
   ensureEmptyCanvasPane,
   openTile,
+  evictTileWithoutClosing,
   openTileInBackgroundTab as openTileInBackgroundTabCanvas,
   openTileInPane as openTileInPaneCanvas,
   findPaneTabForRef,
@@ -128,6 +130,7 @@ import {
   makeOpenableNodeRef,
   type EdgeDropPosition,
   type EpicCanvasTileRef,
+  type MobileSecondaryTile,
   type EpicCanvasState,
   type CommGraphTileCamera,
   type CommGraphTileViewState,
@@ -347,6 +350,15 @@ export interface EpicCanvasStore {
     Record<string, ReadonlyArray<EpicNodeRecord> | undefined>
   >;
   readonly selfDeletedArtifactIds: ReadonlySet<string>;
+  /**
+   * The tile the phone shell shows beside its current one, per tab. The first
+   * slot is the canvas's own activation (`selectMobileTile`); this is the second,
+   * kept off `canvasByTabId` so a phone's pair never reaches the persisted
+   * desktop layout. Session-only (not in `partialize`).
+   */
+  readonly mobileSecondaryTileByTabId: Readonly<
+    Record<string, MobileSecondaryTile | undefined>
+  >;
   readonly pendingCreateArtifactIds: ReadonlySet<string>;
   /**
    * Terminal pending-create identities, keyed by canonical
@@ -512,6 +524,15 @@ export interface EpicCanvasStore {
    * stealing focus). Idempotent.
    */
   openTileInBackgroundTab: (tabId: string, node: EpicCanvasTileRef) => void;
+  /**
+   * Fill the phone shell's second slot, or empty it with `null`. A `transient`
+   * tile it held leaves the canvas, unless it is what the slot still names or
+   * the current tile by now.
+   */
+  setMobileSecondaryTile: (
+    tabId: string,
+    next: MobileSecondaryTile | null,
+  ) => void;
   prepareOpenTileInBackgroundTabFocusTargetFromSource: (
     tabId: string,
     node: EpicCanvasTileRef,
@@ -1504,6 +1525,7 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
         mostRecentTabIdByEpicId: {},
         artifactTreeByEpicId: EMPTY_TREES,
         selfDeletedArtifactIds: new Set<string>(),
+        mobileSecondaryTileByTabId: {},
         pendingCreateArtifactIds: new Set<string>(),
         pendingCreateTerminalIdentities: new Set<string>(),
         preAckRootCreatesByEpic: {},
@@ -2138,6 +2160,31 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
               openTileInBackgroundTabCanvas(canvas, node),
             ),
           );
+        },
+
+        setMobileSecondaryTile: (tabId, next) => {
+          set((state) => {
+            const held = state.mobileSecondaryTileByTabId[tabId];
+            const { [tabId]: _replaced, ...others } =
+              state.mobileSecondaryTileByTabId;
+            const slots = next === null ? others : { ...others, [tabId]: next };
+            const canvas = state.canvasByTabId[tabId];
+            if (
+              canvas === undefined ||
+              held === undefined ||
+              !held.transient ||
+              held.instanceId === next?.instanceId ||
+              held.instanceId === selectMobileTile(canvas)?.ref.instanceId
+            ) {
+              return { mobileSecondaryTileByTabId: slots };
+            }
+            return {
+              ...updateTabCanvas(state, tabId, (current) =>
+                evictTileWithoutClosing(current, held.instanceId),
+              ),
+              mobileSecondaryTileByTabId: slots,
+            };
+          });
         },
 
         prepareOpenTileInBackgroundTabFocusTargetFromSource: (

@@ -244,6 +244,7 @@ function mount(): void {
   render(
     <QueryClientProvider client={queryClient}>
       <BotThreadsView
+        level2={null}
         hostId="host-1"
         channelTitle="Tracy"
         onBack={mocks.back}

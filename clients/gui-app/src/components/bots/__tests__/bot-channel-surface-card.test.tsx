@@ -515,6 +515,7 @@ function mountChannel(input: {
         <TooltipProvider>
           <ChatExpansionTestProviders tileInstanceId="tile-1">
             <BotChannelView
+              tiles={null}
               botId={BOT_ID}
               hostId={HOST_ID}
               boundHostId={HOST_ID}
@@ -615,7 +616,7 @@ afterEach(() => {
   mocks.client = null;
 });
 
-describe("<BotChannelView /> a post's surface card: what it shows", () => {
+describe("<BotChannelView tiles={null} /> a post's surface card: what it shows", () => {
   it("draws a question the task's agent waits on: its first line, that it needs an answer, its options, Skip and Open, under the post's text", () => {
     mountChannel({
       rows: [post(QUESTION)],
@@ -760,7 +761,7 @@ describe("<BotChannelView /> a post's surface card: what it shows", () => {
   });
 });
 
-describe("<BotChannelView /> a post's surface card: Open", () => {
+describe("<BotChannelView tiles={null} /> a post's surface card: Open", () => {
   it("opens a question and an approval where their notifications open them, and a parked page as its browser tile, on the task's machine", async () => {
     const user = userEvent.setup();
     const tabId = useEpicCanvasStore.getState().openEpicTab(TASK_ID, "Deploy");
@@ -1022,7 +1023,7 @@ describe("<BotChannelView /> a post's surface card: Open", () => {
   });
 });
 
-describe("<BotChannelView /> a post's surface card: answering and deciding", () => {
+describe("<BotChannelView tiles={null} /> a post's surface card: answering and deciding", () => {
   it("sends the picked option as the answer the task's own card sends, and shows it answered at once when the tab's host records it", async () => {
     const user = userEvent.setup();
     mountChannel({

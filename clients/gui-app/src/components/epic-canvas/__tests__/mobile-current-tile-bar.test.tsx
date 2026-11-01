@@ -259,7 +259,7 @@ function newSession(): OpenedStoreForTest {
   return handle;
 }
 
-describe("<MobileCurrentTileBar />", () => {
+describe("<MobileCurrentTileBar trailing={null} />", () => {
   beforeEach(() => {
     mocks.handle.current = newSession();
   });
@@ -271,7 +271,12 @@ describe("<MobileCurrentTileBar />", () => {
 
   it("shows the current tile title and icon", () => {
     render(
-      <MobileCurrentTileBar epicId="epic-1" tile={SPEC_TILE} level2="bar" />,
+      <MobileCurrentTileBar
+        epicId="epic-1"
+        tile={SPEC_TILE}
+        level2="bar"
+        trailing={null}
+      />,
     );
     const bar = screen.getByTestId("mobile-current-tile-bar");
     expect(bar.textContent).toContain("Life Philosophy");
@@ -280,7 +285,12 @@ describe("<MobileCurrentTileBar />", () => {
 
   it("renders the title as a plain label that a tap never turns into an editor", () => {
     render(
-      <MobileCurrentTileBar epicId="epic-1" tile={CHAT_TILE} level2="bar" />,
+      <MobileCurrentTileBar
+        epicId="epic-1"
+        tile={CHAT_TILE}
+        level2="bar"
+        trailing={null}
+      />,
     );
     const title = screen.getByTestId("mobile-current-tile-title");
     expect(title.tagName).toBe("SPAN");
@@ -306,6 +316,7 @@ describe("<MobileCurrentTileBar />", () => {
           epicId="epic-1"
           tile={TERMINAL_TILE}
           level2="bar"
+          trailing={null}
         />,
       );
       expect(terminalAuthority.tabHostIds.length).toBeGreaterThan(0);
@@ -322,6 +333,7 @@ describe("<MobileCurrentTileBar />", () => {
           epicId="epic-1"
           tile={TERMINAL_TILE}
           level2="bar"
+          trailing={null}
         />,
       );
       expect(screen.getByTestId("mobile-current-tile-title").textContent).toBe(
@@ -340,6 +352,7 @@ describe("<MobileCurrentTileBar />", () => {
           epicId="epic-1"
           tile={TERMINAL_TILE}
           level2="bar"
+          trailing={null}
         />,
       );
       expect(screen.getByTestId("mobile-current-tile-title").textContent).toBe(
@@ -356,6 +369,7 @@ describe("<MobileCurrentTileBar />", () => {
           epicId="epic-1"
           tile={TERMINAL_TILE}
           level2="bar"
+          trailing={null}
         />,
       );
       expect(terminalLegacy.titleReadClients.length).toBeGreaterThan(0);
@@ -391,6 +405,7 @@ describe("<MobileCurrentTileBar />", () => {
 
           tile={input.tile}
           level2="bar"
+          trailing={null}
         />,
       );
     }
@@ -482,7 +497,12 @@ describe("<MobileCurrentTileBar />", () => {
       // A closed surface is no longer a claim about anything; leaving the entry
       // behind would hold the indicator open over a stream nobody is watching.
       const view = render(
-        <MobileCurrentTileBar epicId="epic-1" tile={CHAT_TILE} level2="bar" />,
+        <MobileCurrentTileBar
+          epicId="epic-1"
+          tile={CHAT_TILE}
+          level2="bar"
+          trailing={null}
+        />,
       );
       expect(published()).toBeDefined();
       view.unmount();
@@ -504,7 +524,12 @@ describe("<MobileCurrentTileBar />", () => {
           wake: chatWakeSpy,
         };
         const view = render(
-          <MobileCurrentTileBar epicId="epic-1" tile={aTile} level2="bar" />,
+          <MobileCurrentTileBar
+            epicId="epic-1"
+            tile={aTile}
+            level2="bar"
+            trailing={null}
+          />,
         );
         act(() => {
           vi.advanceTimersByTime(LINK_DOWN_ESCALATION_MS);
@@ -514,7 +539,12 @@ describe("<MobileCurrentTileBar />", () => {
         ).toBe(true);
 
         view.rerender(
-          <MobileCurrentTileBar epicId="epic-1" tile={bTile} level2="bar" />,
+          <MobileCurrentTileBar
+            epicId="epic-1"
+            tile={bTile}
+            level2="bar"
+            trailing={null}
+          />,
         );
         expect(publishedFor(`chat:host-A:${CHAT_TILE.id}`)).toBeUndefined();
         const bEntry = publishedFor(`chat:host-B:${CHAT_TILE.id}`);

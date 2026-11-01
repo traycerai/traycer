@@ -132,6 +132,7 @@ function resolve(input: {
     canvas: input.canvas,
     resolveTargetTabForEpic: (epicId) => `tab-for-${epicId}`,
     singleTileViewport: input.singleTileViewport,
+    mobileSlots: null,
   });
 }
 

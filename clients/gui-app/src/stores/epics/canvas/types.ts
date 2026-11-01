@@ -889,6 +889,16 @@ export type TilesByInstanceId = Readonly<
   Record<string, EpicCanvasTileRef | undefined>
 >;
 
+/**
+ * The tile the phone shell shows beside the current one, by its instance on the
+ * canvas. `transient` is the second tile's own preview: nobody asked to keep it,
+ * so what replaces it takes it off the canvas, as a preview's replacement does.
+ */
+export interface MobileSecondaryTile {
+  readonly instanceId: string;
+  readonly transient: boolean;
+}
+
 export interface EpicCanvasState {
   readonly root: TileLayoutNode | null;
   readonly activePaneId: string | null;

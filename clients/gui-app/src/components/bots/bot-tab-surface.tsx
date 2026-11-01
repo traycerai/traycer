@@ -12,9 +12,12 @@ import type { BotOpenResponse } from "@traycer/protocol/host/bot/schemas";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { TalkControl } from "@/components/layout/voice/talk-control";
-import { useInstalledAppLevel2Form } from "@/hooks/ui/use-installed-app-level2-form";
+import { useInstalledAppTileForm } from "@/hooks/ui/use-installed-app-level2-form";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
-import type { MobileLevel2Form } from "@/lib/layout/mobile-layout-form";
+import type {
+  MobileLevel2Form,
+  MobileTileCount,
+} from "@/lib/layout/mobile-layout-form";
 import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
@@ -831,6 +834,28 @@ function useChannelSetupHistory(input: {
   );
 }
 
+/**
+ * The installed app's form for the tab, both halves `null` everywhere else. The
+ * second tile is what the rail draws beside the channel, and the rail draws only
+ * under Messages.
+ */
+function useBotTabTileForm(
+  place: BotTabPlace,
+  threadListSupported: boolean,
+): {
+  readonly level2: MobileLevel2Form | null;
+  readonly tiles: MobileTileCount | null;
+} {
+  const railDrawn =
+    place.view === "messages" &&
+    place.session === null &&
+    !place.threadsShown &&
+    (place.openMemory !== null ||
+      (threadListSupported && place.openThread !== null));
+  const form = useInstalledAppTileForm(railDrawn ? 2 : 1);
+  return { level2: form?.level2 ?? null, tiles: form?.tiles ?? null };
+}
+
 function BotTabContent(props: {
   readonly botId: string;
   readonly hostId: string;
@@ -977,7 +1002,7 @@ function BotTabContent(props: {
     }),
     [closeSession, tabThreadsView],
   );
-  const level2 = useInstalledAppLevel2Form(1);
+  const { level2, tiles } = useBotTabTileForm(place, threadListSupported);
   const openActivity = useCallback(() => changeView("activity"), [changeView]);
   const activitySummary = useBotActivitySummary({
     botId,
@@ -1066,6 +1091,7 @@ function BotTabContent(props: {
                     hostId={hostId}
                     channelTitle={snapshot.bot.title}
                     onBack={threadsView.onLeave}
+                    level2={level2}
                   />
                 ) : null}
                 {!threadsView.shown &&
@@ -1157,6 +1183,7 @@ function BotTabContent(props: {
                           botNameOf={botNameOf}
                           onOpenActivity={openActivity}
                           setupHistory={setupHistory}
+                          tiles={tiles}
                         />
                       </TabsContent>
                       <TabsContent

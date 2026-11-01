@@ -68,6 +68,30 @@ function trackIfCanvasChanged(
   return target;
 }
 
+/**
+ * No focus to commit: the activation, and so the route, stays on the tile the
+ * person is reading. `openTileInBackgroundTab` keeps the intent's instance id,
+ * which is what the slot then names.
+ */
+function showInMobileSecondary(
+  plan: Extract<TileOpenPlan, { kind: "show-in-mobile-secondary" }>,
+  node: EpicCanvasTileRef,
+  source: AnalyticsSource,
+  store: EpicCanvasStore,
+): void {
+  if (plan.existingInstanceId === null) {
+    store.prepareOpenTileInBackgroundTabFocusTargetFromSource(
+      plan.tabId,
+      node,
+      source,
+    );
+  }
+  store.setMobileSecondaryTile(plan.tabId, {
+    instanceId: plan.existingInstanceId ?? node.instanceId,
+    transient: plan.transient,
+  });
+}
+
 export function executeTileOpen(
   args: ExecuteTileOpenArgs,
 ): NestedFocusTarget | null {
@@ -101,6 +125,12 @@ export function executeTileOpen(
   }
 
   const tabId = plan.tabId;
+
+  if (plan.kind === "show-in-mobile-secondary") {
+    showInMobileSecondary(plan, node, source, store);
+    return null;
+  }
+
   const commit = (
     prepare: () => NestedFocusTarget | null,
   ): NestedFocusTarget | null =>
