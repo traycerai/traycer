@@ -414,10 +414,15 @@ describe("a selected range's action bar", () => {
 
   it("steps aside while a comment draft box is open for the selection, and returns when it closes", async () => {
     // The box carries Send to chat itself, so the bar beside it would show the
-    // same action twice. The selection outlives the box, so the bar comes back.
+    // same action twice. The bar is painted invisible rather than unmounted:
+    // its send remembers which chat it attached to, and the selection outlives
+    // the box, so the bar comes back as it was.
+    const bar = (): Element | null =>
+      document.querySelector("[data-canvas-selection-action]");
     mountOverlay();
     select(LITERAL);
     await screen.findByRole("button", { name: "Send to chat" });
+    expect(bar()?.classList.contains("invisible")).toBe(false);
 
     act(() => {
       useAnchoredDraftStore.getState().setDraft(SCOPE.epicId, {
@@ -437,15 +442,13 @@ describe("a selected range's action bar", () => {
         retargeted: false,
       });
     });
-    expect(screen.queryByRole("button", { name: "Send to chat" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Comment" })).toBeNull();
+    expect(bar()?.classList.contains("invisible")).toBe(true);
 
     act(() => {
       useAnchoredDraftStore.getState().clearDraft(SCOPE.epicId, "draft-1");
     });
-    expect(
-      await screen.findByRole("button", { name: "Send to chat" }),
-    ).toBeDefined();
+    expect(bar()?.classList.contains("invisible")).toBe(false);
+    expect(screen.getByRole("button", { name: "Send to chat" })).toBeDefined();
   });
 });
 

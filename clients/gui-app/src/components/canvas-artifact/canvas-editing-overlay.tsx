@@ -166,9 +166,11 @@ export function CanvasEditingOverlay(props: {
     selection !== null,
   );
   const [dismissed, setDismissed] = useState<string | null>(null);
-  // A comment draft box open for this tile replaces the action bar: the box
-  // offers the same actions, so the two together would show them twice. The
-  // bar returns when the box closes, since the element is still selected.
+  // A comment draft box open for this tile stands in for the action bar: the
+  // box offers the same actions, so the two together would show them twice.
+  // The bar is painted invisible rather than unmounted, so its send keeps
+  // which chat it attached to, and it shows again when the box closes, since
+  // the element is still selected.
   const draftOpen = useAnchoredDraftStore(
     (state) => state.byEpicId[props.scope.epicId]?.tileId === props.tileId,
   );
@@ -232,7 +234,8 @@ export function CanvasEditingOverlay(props: {
         ) : null
       }
       onSelectParent={selectParent}
-      hideAction={request !== null || additional.length > 0 || draftOpen}
+      hideAction={request !== null || additional.length > 0}
+      concealAction={draftOpen}
       hideHandles
     />
   );
