@@ -302,6 +302,25 @@ export interface ServiceController {
 // commands when the post-swap service action (start/restart/install)
 // fails. The host bytes are in place but the OS service didn't come
 // back up cleanly - direct the operator at the doctor.
+/**
+ * The job a command's closing line names: the one the service manager runs
+ * for this label, which on a Desktop-managed Mac is Desktop's agent, not the
+ * CLI label. Best effort: read after the action and before its lock is
+ * released, so no other CLI command can have moved the job, though Desktop
+ * registers outside that lock. A read that fails names the label rather than
+ * failing an action that already happened.
+ */
+export async function serviceJobIdFor(
+  controller: Pick<ServiceController, "hostStartAdoptionLabel">,
+  label: ServiceLabel,
+): Promise<string> {
+  try {
+    return await controller.hostStartAdoptionLabel(label);
+  } catch {
+    return label.id;
+  }
+}
+
 export function formatServiceLifecycleWarning(
   action: "restart" | "start" | "install" | "none",
   error: string,
