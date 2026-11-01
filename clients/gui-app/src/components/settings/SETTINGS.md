@@ -1447,6 +1447,15 @@ registry-backed presence words and the local service words ("Running" /
 two a person can act on. It DELEGATES to `deriveHostPresence`
 (`panels/my-hosts-model.ts`) rather than re-deriving it.
 
+`reported-reachable`'s `detail` is the one place the lease step's REASON for
+declining is visible. It declines three ways, and `connecting` - a dial or a
+re-dial in flight - is one of them, so that arm says "Connecting to it now."
+rather than "Nothing has connected to it from here yet.", which is only true
+of the never-dialled case (`lease: null`, or an authority that has not
+attached). The `state`, label and tone are the same either way: a `connecting`
+lease remains a non-verdict, and the sentence is a fact about this app rather
+than about the host.
+
 The precedence across the two is one chain, and each step outranks the next for
 a stated reason: **local process read** (a direct read of the service on this
 box) -> **live session** (an open E2E connection is firsthand proof) ->
