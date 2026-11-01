@@ -389,10 +389,7 @@ function legacyObservationBoundary(
 }
 
 /** A pending stage's run and each async continuation need the owner's current authority. */
-export function pendingSandboxStageRunAllowed(
-  surfaceKey: string,
-  host: PendingSendFacts["host"],
-): boolean {
+export function pendingSandboxStageRunAllowed(surfaceKey: string): boolean {
   if (!surfaceKey.startsWith(PENDING_SEND_SURFACE_PREFIX)) return true;
   const id = surfaceKey.slice(PENDING_SEND_SURFACE_PREFIX.length);
   const { sends } = usePendingSandboxSendStore.getState();
@@ -404,13 +401,12 @@ export function pendingSandboxStageRunAllowed(
     "observe",
     pendingSandboxSendFacts(id, {
       ...UNKNOWN_PENDING_SEND_FACTS,
-      host,
       observation: { kind: "intent" },
       clientReady: true,
       stageStatus: stage?.phase ?? "missing",
     }),
   );
-  return plan.effects.includes("run-stage") || plan.effects.includes("wake");
+  return plan.effects.includes("run-stage");
 }
 
 /** Core runner rows/results use the same provenance decoder as visible observers. */
@@ -448,7 +444,6 @@ export function holdPendingSandboxStageObservation(
     "observe",
     pendingSandboxSendFacts(id, {
       ...UNKNOWN_PENDING_SEND_FACTS,
-      host: stage?.phase === "handoff" ? "resting" : "unknown",
       observation: { kind: "intent" },
       stageStatus: stage?.phase ?? "missing",
     }),
