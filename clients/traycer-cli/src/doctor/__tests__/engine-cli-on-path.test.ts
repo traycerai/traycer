@@ -80,7 +80,7 @@ describe.skipIf(process.platform === "win32")("doctor, CLI on PATH", () => {
       code: DOCTOR_ISSUE_CODES.CLI_SHADOWED_ON_PATH,
       severity: "warning",
       title: "Another Traycer CLI comes first on PATH",
-      message: `'traycer' runs ${brewBinary} (1.0.0), not the managed CLI at ${managedBinary} (1.5.2-rc.2), so commands typed here use that version. Run 'brew upgrade traycer', or put ${dirname(managedBinary)} first on PATH.`,
+      message: `'traycer' runs ${brewBinary} (1.0.0), not the managed CLI at ${managedBinary} (1.5.2-rc.2). Run 'brew upgrade traycer', or put ${dirname(managedBinary)} first on PATH.`,
       fixAction: null,
       terminalCommand: null,
       details: {
@@ -99,7 +99,7 @@ describe.skipIf(process.platform === "win32")("doctor, CLI on PATH", () => {
     const issue = await pathIssue(`${dirname(staging)}:/usr/bin`);
 
     expect(issue?.message).toBe(
-      `'traycer' runs ${staging} (1.5.2-staging.181.g0e77910), not the managed CLI at ${managedBinary} (1.5.2-rc.2), so commands typed here use that version. Put ${dirname(managedBinary)} first on PATH.`,
+      `'traycer' runs ${staging} (1.5.2-staging.181.g0e77910), not the managed CLI at ${managedBinary} (1.5.2-rc.2). Put ${dirname(managedBinary)} first on PATH.`,
     );
   });
 

@@ -99,7 +99,7 @@ export async function probeCliShadowedOnPath(
       code: DOCTOR_ISSUE_CODES.CLI_SHADOWED_ON_PATH,
       severity: "warning",
       title: "Another Traycer CLI comes first on PATH",
-      message: `'traycer' runs ${pathBinary} (${pathVersion}), not the managed CLI at ${managedBinary} (${managedVersion}), so commands typed here use that version. ${wayOut}`,
+      message: `'traycer' runs ${pathBinary} (${pathVersion}), not the managed CLI at ${managedBinary} (${managedVersion}). ${wayOut}`,
       fixAction: null,
       terminalCommand: null,
       details: { pathBinary, pathVersion, managedBinary, managedVersion },
