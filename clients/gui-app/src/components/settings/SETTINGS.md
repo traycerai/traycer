@@ -1447,14 +1447,18 @@ registry-backed presence words and the local service words ("Running" /
 two a person can act on. It DELEGATES to `deriveHostPresence`
 (`panels/my-hosts-model.ts`) rather than re-deriving it.
 
-`reported-reachable`'s `detail` is the one place the lease step's REASON for
-declining is visible. It declines three ways, and `connecting` - a dial or a
-re-dial in flight - is one of them, so that arm says "Connecting to it now."
-rather than "Nothing has connected to it from here yet.", which is only true
-of the never-dialled case (`lease: null`, or an authority that has not
-attached). The `state`, label and tone are the same either way: a `connecting`
-lease remains a non-verdict, and the sentence is a fact about this app rather
-than about the host.
+`reported-reachable`'s `detail` says only what the ACCOUNT reported ("Your
+account last heard from this host."). It deliberately does NOT add whether
+anything here has dialled the host: the lease step declines three ways and they
+are indistinguishable from the lease, because `connecting` is both
+`deriveLease`'s fall-through - derived for every registered host once the
+authority attaches - and what a host reads while a dial or a re-dial is in
+flight. The detail used to claim "Nothing has connected to it from here yet.",
+which was false for a card shown through a host restart the app was
+mid-reconnect to; a replacement asserting an attempt would be false for the
+resting case instead, which is the common one. What carries "not verified from
+here" is the label, the idle tone and the absent dot - the reason this state
+exists at all.
 
 The precedence across the two is one chain, and each step outranks the next for
 a stated reason: **local process read** (a direct read of the service on this

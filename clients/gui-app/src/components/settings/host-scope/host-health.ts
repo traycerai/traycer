@@ -325,20 +325,6 @@ function leaseHealth(options: DeriveHostHealthOptions): HostHealth | null {
 }
 
 /**
- * Whether this window is connecting to the host right now.
- *
- * The one thing that separates the three ways `leaseHealth` declines. An
- * attached authority holding a `connecting` lease is an attempt in flight —
- * which is a fact about THIS app, not about the host, so it words the
- * registry answer's detail without touching its state, label or tone. A
- * `connecting` lease stays a non-verdict; see {@link leaseHealth}.
- */
-function connectingHere(options: DeriveHostHealthOptions): boolean {
-  const { lease, authorityAttached } = options;
-  return authorityAttached && lease !== null && lease.status === "connecting";
-}
-
-/**
  * The weakest answer: what the account's registry says, for a host this app has
  * reached no verdict about. Reached only when the two firsthand steps above
  * declined.
@@ -375,23 +361,24 @@ function registryHealth(options: DeriveHostHealthOptions): HostHealth {
       // The account heard from this host within the lease TTL and this app has
       // reached no verdict of its own, so the row says what is true — that the
       // report exists — instead of asserting a liveness no layer here has
-      // observed.
+      // observed. The label, the idle tone and the absent dot are what carry
+      // "not verified from here"; that is the whole reason this state was
+      // coined instead of Online or Offline.
       //
-      // The second sentence depends on WHICH of the three ways the lease step
-      // declined got us here, and that is the fix. `connecting` is one of
-      // them, deliberately (see `leaseHealth`): it is the authority's
-      // non-committal state, which is exactly what a host being dialled or
-      // RE-dialled reads while its attempt is in flight. Telling that reader
-      // "nothing has connected to it from here yet" is false, and it was the
-      // sentence a card showed through a host restart it was mid-reconnect to.
-      // A `null` lease or an unattached authority is the never-dialled case
-      // the sentence was written for, and keeps it.
+      // The detail used to add "Nothing has connected to it from here yet.",
+      // and that claim is CUT rather than reworded. It describes only one of
+      // the three ways `leaseHealth` declines, and the lease vocabulary cannot
+      // tell them apart: `connecting` is both the resting state of a host
+      // nothing has dialled (`deriveLease`'s fall-through, derived for every
+      // registered host once the authority attaches) and what a host reads
+      // while a dial or a RE-dial is in flight. So the sentence was false for
+      // a card shown through a host restart this app was mid-reconnect to, and
+      // any replacement asserting an attempt would be false for the resting
+      // case instead — a worse trade, since that one is the common one.
       return {
         state: "reported-reachable",
         label: "Reported reachable",
-        detail: connectingHere(options)
-          ? "Your account last heard from this host. Connecting to it now."
-          : "Your account last heard from this host. Nothing has connected to it from here yet.",
+        detail: "Your account last heard from this host.",
         tone: HOST_HEALTH_TONE["reported-reachable"],
         live: false,
       };

@@ -113,12 +113,6 @@ describe("deriveHostHealth — absence of evidence is not death", () => {
 
     expect(health.state).toBe("reported-reachable");
     expect(health.state).not.toBe("offline");
-    // …and it does not tell the reader nothing has connected from here, which
-    // is false while this very window's attempt is in flight. That sentence is
-    // what a card showed through a host restart it was mid-reconnect to.
-    expect(health.detail).toBe(
-      "Your account last heard from this host. Connecting to it now.",
-    );
   });
 
   it("ignores a lease the authority has not published for this host", () => {
@@ -129,25 +123,31 @@ describe("deriveHostHealth — absence of evidence is not death", () => {
     });
 
     expect(health.state).toBe("reported-reachable");
-    // The never-dialled case the sentence was written for: the authority is
-    // attached and has published nothing, so no attempt is in flight.
-    expect(health.detail).toBe(
-      "Your account last heard from this host. Nothing has connected to it from here yet.",
-    );
   });
 
-  it("keeps the never-dialled sentence for a lease the authority has not attached to yet", () => {
-    // A `connecting` lease that predates the bridge is not an attempt this app
-    // can vouch for, so it must not claim one.
-    const health = deriveHostHealth({
-      ...BASE,
-      lease: lease("connecting"),
-      authorityAttached: false,
-    });
-
-    expect(health.detail).toBe(
-      "Your account last heard from this host. Nothing has connected to it from here yet.",
-    );
+  /**
+   * The detail claims nothing about whether anything has dialled the host,
+   * BECAUSE the three ways this arm is reached are indistinguishable from the
+   * lease and one of them is a dial in flight.
+   *
+   * `connecting` is `deriveLease`'s fall-through, derived for every registered
+   * host once the authority attaches (`transport-evidence.ts`: "with nothing
+   * reporting, every lease reads `connecting`"), AND what a host reads while a
+   * re-dial is in flight - which is the card a host restart produced. One
+   * sentence has to serve both, so it carries only the account's report.
+   */
+  it("says only what the account reported, however the lease step declined", () => {
+    const accountReport = "Your account last heard from this host.";
+    for (const options of [
+      { lease: lease("connecting"), authorityAttached: true },
+      { lease: null, authorityAttached: true },
+      { lease: lease("connecting"), authorityAttached: false },
+      { lease: null, authorityAttached: false },
+    ]) {
+      const health = deriveHostHealth({ ...BASE, ...options });
+      expect(health.state).toBe("reported-reachable");
+      expect(health.detail).toBe(accountReport);
+    }
   });
 });
 
