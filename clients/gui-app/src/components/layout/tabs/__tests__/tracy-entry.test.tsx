@@ -42,6 +42,8 @@ import type { StreamFrameEnvelope } from "@traycer-clients/shared/host-transport
 import type { StreamMethodSupport } from "@traycer-clients/shared/host-transport/ws-stream-client";
 import { MockWsStreamClient } from "@/components/epic-canvas/pr/__tests__/pr-stream-test-fixtures";
 import { GeneralSettingsPanel } from "@/components/settings/panels/general-settings-panel";
+import { setMobileApp } from "@/lib/mobile-app";
+import { KeybindingProvider } from "@/providers/keybinding-provider";
 import { AppColumnFrame } from "@/components/layout/app-column-frame";
 import { PHONE_SHELL_STRIP_CHROME } from "@/components/layout/header/app-title-band-kind";
 import { MobileAppHeader } from "@/components/layout/header/mobile-app-header";
@@ -1499,25 +1501,33 @@ const RAIL_WIDTH_PX = 750;
 const EXPANDED_WIDTH_PX = 1210;
 const DRAWER_WIDTH_PX = 400;
 
-function mountPhoneShell(contentWidthPx: number): void {
+function setRootWidth(contentWidthPx: number): void {
   document.getElementById("root")?.remove();
   const root = document.createElement("div");
   root.id = "root";
   root.getBoundingClientRect = () => new DOMRect(0, 0, contentWidthPx, 402);
   document.body.append(root);
   phoneShell.headerActive = true;
-  mount(
-    "/",
+}
+
+function PhoneShell(): ReactNode {
+  return (
     <MobileStripFormScope>
       <PhoneShellHarness />
-    </MobileStripFormScope>,
+    </MobileStripFormScope>
   );
+}
+
+function mountPhoneShell(contentWidthPx: number): void {
+  setRootWidth(contentWidthPx);
+  mount("/", <PhoneShell />);
 }
 
 describe("the phone shell's strip", () => {
   beforeEach(tracyIsMainBot);
   afterEach(() => {
     document.getElementById("root")?.remove();
+    setMobileApp(false);
   });
 
   it("draws the rail beside the header over a stored expanded choice, with Tracy after Home and no hamburger or bell", async () => {
@@ -1590,5 +1600,42 @@ describe("the phone shell's strip", () => {
 
     fireEvent.click(await screen.findByTestId("side-tab-strip-collapse"));
     expect(useSideTabStripStore.getState().collapsed).toBe(false);
+  });
+
+  it("takes the collapse chord in the installed app at 1210, and has no handler for it at 750", async () => {
+    setMobileApp(true);
+    const pressCollapseChord = (): void => {
+      window.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          code: "KeyS",
+          key: "S",
+          shiftKey: true,
+          altKey: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    };
+    const mountWithKeybindings = async (
+      contentWidthPx: number,
+    ): Promise<void> => {
+      setRootWidth(contentWidthPx);
+      const router = buildRouter("/", <PhoneShell />);
+      render(
+        <KeybindingProvider router={router}>
+          <RouterProvider router={router} />
+        </KeybindingProvider>,
+      );
+      await screen.findByTestId("side-tab-strip");
+    };
+
+    await mountWithKeybindings(RAIL_WIDTH_PX);
+    pressCollapseChord();
+    expect(useSideTabStripStore.getState().collapsed).toBe(false);
+
+    cleanup();
+    await mountWithKeybindings(EXPANDED_WIDTH_PX);
+    pressCollapseChord();
+    expect(useSideTabStripStore.getState().collapsed).toBe(true);
   });
 });

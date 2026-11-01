@@ -19,15 +19,19 @@ export function useMobileStripForm(): MobileStripForm | null {
   return useContext(MobileStripFormContext);
 }
 
-/**
- * Whether the phone shell's width has room for the expanded strip. It decides
- * whether the collapse toggle is offered at all: below that width the stored
- * choice cannot draw, so nothing may flip it.
- */
+/** Whether the phone shell's width has room for the expanded strip. */
 export const MobileExpandedStripFitsContext = createContext(false);
 
-export function useMobileExpandedStripFits(): boolean {
-  return useContext(MobileExpandedStripFitsContext);
+/**
+ * Whether the strip's collapse can do anything in this window. In the phone
+ * shell it cannot below the width the expanded strip needs: the stored choice
+ * could not draw, so nothing may flip it. Everything that offers the collapse
+ * asks this: the toggle, the chord, the palette row, the Settings row.
+ */
+export function useSideStripCollapseOffered(): boolean {
+  const mobileForm = useMobileStripForm();
+  const expandedFits = useContext(MobileExpandedStripFitsContext);
+  return mobileForm === null || expandedFits;
 }
 
 /**

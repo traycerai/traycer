@@ -23,8 +23,8 @@ import { useSideTabStripStore } from "@/stores/layout/side-tab-strip-store";
 import { useTitleBarDraggingSuppressed } from "@/stores/layout/title-bar-drag-store";
 import { useTabsStore } from "@/stores/tabs/store";
 import {
-  useMobileExpandedStripFits,
   useMobileStripForm,
+  useSideStripCollapseOffered,
   useSideStripDrawnCollapsed,
 } from "../mobile-strip-form-context";
 import { useTabStripController } from "../tab-strip-controller";
@@ -79,8 +79,7 @@ export function SideTabStrip(props: {
   const storedWidthPx = useSideTabStripStore((state) => state.widthPx);
   const widthPx =
     mobileForm === null ? storedWidthPx : SIDE_STRIP_DEFAULT_WIDTH_PX;
-  const expandedFits = useMobileExpandedStripFits();
-  const collapseOffered = mobileForm === null || expandedFits;
+  const collapseOffered = useSideStripCollapseOffered();
   const statusBarShown = useStatusBarVisible();
   const variant: SideTabRowVariant = collapsed ? "collapsed" : "expanded";
   const stripRef = useRef<HTMLElement | null>(null);
