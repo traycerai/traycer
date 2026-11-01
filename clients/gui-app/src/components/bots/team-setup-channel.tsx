@@ -12,7 +12,6 @@ import type { GuiAgentModelOption } from "@traycer/protocol/host/agent/gui/unary
 import type { HostRpcRegistry } from "@/lib/host";
 import { usePaneVisible } from "@/components/epic-tabs/pane-visibility-context";
 import { useHostQueries } from "@/hooks/host/use-host-queries";
-import { useInstalledAppLevel2Form } from "@/hooks/ui/use-installed-app-level2-form";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { BotAvatar } from "@/components/bots/bot-avatars";
@@ -20,16 +19,15 @@ import {
   BotIdentityContext,
   type BotIdentity,
 } from "@/components/bots/bot-identity-context";
-import {
-  BotChannelColumn,
-  BotChannelTitle,
-} from "@/components/bots/bot-channel-level2";
+import { BotChannelTitle } from "@/components/bots/bot-channel-level2";
+import type { BotThreadsViewState } from "@/components/bots/bot-channel-sidebar";
 import { BotMessageComposerUnavailable } from "@/components/bots/bot-message-composer";
 import { MainBotBadge } from "@/components/bots/main-bot-badge";
 import { ChatBotAppPost } from "@/components/chat/chat-bot-message";
 import type { TeamSetup } from "@/hooks/bots/use-team-setups";
 import type { BotOnboardingArrival } from "@traycer/protocol/host/bot/onboarding-schemas";
 import type { TeamSetupHistory } from "@/hooks/bots/use-team-setup-history";
+import type { MobileLevel2Form } from "@/lib/layout/mobile-layout-form";
 import { useSandboxCatalogue } from "@/hooks/sandboxes/use-sandbox-catalogue-query";
 import {
   SandboxCreateError,
@@ -57,14 +55,19 @@ import {
  * bot has written nothing. The app draws, in the bot's voice, what the bot is
  * and that the team needs a host, with the ways to get one
  * (`TeamHostOptionsCard`), and the message box is drawn with nothing to send
- * and why. Laid out as a bot's tab is, with the channel sidebar beside it.
+ * and why. Drawn in the Tracy surface's channel pane, beside its column.
  */
 export function TeamSetupChannel(props: {
   readonly setup: TeamSetup;
   readonly client: HostClient<HostRpcRegistry> | null;
+  /** The surface's host, whose bots the title's picker lists. */
   readonly hostId: string;
+  /** The surface's level-2 form, which the title follows. */
+  readonly level2: MobileLevel2Form | null;
+  /** The surface's Threads, a row of the title's picker as of its column. */
+  readonly threadsView: BotThreadsViewState;
 }): ReactNode {
-  const { setup, hostId } = props;
+  const { setup, hostId, level2, threadsView } = props;
   // Re-read on the shared on-screen cadence while the person can see the
   // setup and it still needs a host. The team's host creating the bot rings
   // the team's room, which reaches this channel's bot list only while this
@@ -89,7 +92,6 @@ export function TeamSetupChannel(props: {
   ) {
     setSettled(true);
   }
-  const level2 = useInstalledAppLevel2Form(1);
   const identity = useMemo(
     (): BotIdentity => ({
       botId: setup.botId,
@@ -100,56 +102,48 @@ export function TeamSetupChannel(props: {
   );
   return (
     <BotIdentityContext value={identity}>
-      <div className="@container flex h-full min-h-0" data-testid="bot-tab">
-        <BotChannelColumn
-          level2={level2}
-          activeBotId={setup.botId}
-          hostId={hostId}
-          threadsView={null}
-        />
-        <section
-          aria-label={setup.title}
-          data-testid="team-setup-channel"
-          className="flex min-h-0 min-w-0 flex-1 flex-col md:bg-canvas"
-        >
-          <header className="flex shrink-0 items-center gap-2 px-4 pt-3 pb-2">
-            <BotAvatar size="sm" />
-            <BotChannelTitle
-              level2={level2}
-              title={setup.title}
-              activeBotId={setup.botId}
-              hostId={hostId}
-              threadsView={null}
-            />
-            <MainBotBadge testId="bot-tab-main" tone="muted" />
-          </header>
-          {/* The post sits at the bottom, as a channel's newest row does; its
+      <section
+        aria-label={setup.title}
+        data-testid="team-setup-channel"
+        className="flex min-h-0 min-w-0 flex-1 flex-col md:bg-canvas"
+      >
+        <header className="flex shrink-0 items-center gap-2 px-4 pt-3 pb-2">
+          <BotAvatar size="sm" />
+          <BotChannelTitle
+            level2={level2}
+            title={setup.title}
+            activeBotId={setup.botId}
+            hostId={hostId}
+            threadsView={threadsView}
+          />
+          <MainBotBadge testId="bot-tab-main" tone="muted" />
+        </header>
+        {/* The post sits at the bottom, as a channel's newest row does; its
               top margin, not the column's end alignment, puts it there, so a
               post taller than the pane overflows downward and scrolls from
               its top. */}
-          <div
-            className="flex min-h-0 flex-1 flex-col overflow-y-auto px-2 py-3"
-            data-testid="team-setup-scroller"
-          >
-            <div className="mt-auto min-w-0" data-testid="team-setup-post-slot">
-              <ChatBotAppPost name={setup.title} testId="team-setup-post">
-                <TeamSetupPostBody
-                  live={{
-                    environmentId: setup.environmentId,
-                    teamName: setup.teamName,
-                  }}
-                />
-              </ChatBotAppPost>
-            </div>
+        <div
+          className="flex min-h-0 flex-1 flex-col overflow-y-auto px-2 py-3"
+          data-testid="team-setup-scroller"
+        >
+          <div className="mt-auto min-w-0" data-testid="team-setup-post-slot">
+            <ChatBotAppPost name={setup.title} testId="team-setup-post">
+              <TeamSetupPostBody
+                live={{
+                  environmentId: setup.environmentId,
+                  teamName: setup.teamName,
+                }}
+              />
+            </ChatBotAppPost>
           </div>
-          <BotMessageComposerUnavailable
-            placeholder={`Message ${setup.title}`}
-            label={`Message ${setup.title}`}
-            reason={`${setup.title} can reply once the team has a host.`}
-            testId="team-setup-composer"
-          />
-        </section>
-      </div>
+        </div>
+        <BotMessageComposerUnavailable
+          placeholder={`Message ${setup.title}`}
+          label={`Message ${setup.title}`}
+          reason={`${setup.title} can reply once the team has a host.`}
+          testId="team-setup-composer"
+        />
+      </section>
     </BotIdentityContext>
   );
 }

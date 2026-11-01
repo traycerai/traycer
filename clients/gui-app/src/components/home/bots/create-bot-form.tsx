@@ -17,8 +17,8 @@ import { useHostsAdvertisingMethod } from "@/hooks/host/use-hosts-advertising-me
 import { useBotCreateMutation } from "@/hooks/bots/use-bot-mutations";
 import type { HostEnvironmentBindings } from "@/hooks/bots/use-host-environment-bindings-query";
 import { chooseBotCreateHost } from "@/lib/home-bots/bot-create-host";
-import { useBotTabsStore } from "@/stores/bots/bot-tabs-store";
-import { botTabIntent, settingsTabIntent } from "@/lib/tab-navigation/intents";
+import { openBotChannel } from "@/lib/bots/open-bot-channel";
+import { settingsTabIntent } from "@/lib/tab-navigation/intents";
 import { navigateToTabIntent } from "@/lib/tab-navigation";
 import {
   HostRpcError,
@@ -118,7 +118,7 @@ export function CreateBotForm(props: {
   readonly connectableHostIds: ReadonlyArray<string>;
   /** Each connectable host's environment (`useHostEnvironmentBindings`). */
   readonly environmentBindings: HostEnvironmentBindings;
-  /** Runs once the bot exists and its tab is open. */
+  /** Runs once the bot exists, before the Tracy surface opens on it. */
   readonly onCreated: () => void;
   readonly onCancel: () => void;
 }): ReactNode {
@@ -184,7 +184,6 @@ export function CreateBotForm(props: {
   // every failure that is not a refusal before any write, cleared with the
   // key. While set, a later refusal cannot say the bot was not created.
   const [earlierMayHaveCreated, setEarlierMayHaveCreated] = useState(false);
-  const openBotTab = useBotTabsStore((s) => s.openBotTab);
   const navigate = useNavigate();
   const titleId = useId();
   const directiveId = useId();
@@ -207,8 +206,8 @@ export function CreateBotForm(props: {
     // `mutateAsync`, not per-call `mutate` callbacks: those are dropped once
     // the component unmounts, and a form that is closed (or whose group
     // re-renders away) mid-create would still create the bot and never open
-    // its tab. The continuation below reads no component state - the store
-    // action and the router navigate are both module-level, and writing the
+    // its channel. The continuation below reads no component state - the
+    // opener and the router navigate are both module-level, and writing the
     // key ref or the latch of an unmounted form is a no-op - so it runs
     // whatever happened to the form. A failure is already surfaced by the
     // mutation's own error channel (toast + the inline line); here it only
@@ -229,17 +228,12 @@ export function CreateBotForm(props: {
           // The create is done: the next one this form makes is another bot.
           requestKeyRef.current = null;
           setEarlierMayHaveCreated(false);
-          openBotTab({
-            botId: response.bot.botId,
-            hostId,
-            title: response.bot.title,
-          });
           onCreated();
-          navigateToTabIntent(
-            navigate,
-            botTabIntent(response.bot.botId),
-            undefined,
-          );
+          openBotChannel(navigate, response.bot.botId, {
+            landing: null,
+            isConnectable: null,
+            onRejected: null,
+          });
         },
         (error: unknown) => {
           if (classifyCreateFailure(error) !== "not-created") {

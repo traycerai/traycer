@@ -33,12 +33,9 @@ import {
 } from "@/stores/chats/chat-transcript-jump-store";
 import { selectWorktreeCleanupView } from "@/stores/settings/worktree-cleanup-view-store";
 import { carryViewedHostIntoSettingsScope } from "@/components/settings/host-scope/carry-viewed-host-into-settings";
-import { botTabIntent } from "@/lib/tab-navigation/intents";
-import { lookupBotTab, useBotTabsStore } from "@/stores/bots/bot-tabs-store";
-import {
-  useBotTabLandingStore,
-  type BotTabLanding,
-} from "@/stores/bots/bot-tab-landing-store";
+import { openBotChannel } from "@/lib/bots/open-bot-channel";
+import { tracySurfaceHostId } from "@/stores/bots/tracy-surface-store";
+import type { BotTabLanding } from "@/stores/bots/bot-tab-landing-store";
 
 export type NotificationPayloadKind =
   | "session"
@@ -844,7 +841,8 @@ function parkChatTranscriptJump(
 }
 
 /**
- * A chat row: the bot's tab where the chat is a bot's, else the chat. A bot's
+ * A chat row: the Tracy surface on the bot's channel where the chat is a
+ * bot's, else the chat. A bot's
  * chat never opens as an epic: its container id is the bot id, so the epic
  * route would open a tab named after it.
  */
@@ -864,7 +862,7 @@ function routeChatNotification(
   });
 }
 
-/** A bot's tab to open, and where to land it. */
+/** A bot's channel to open, and where to land it. */
 interface BotOpenTarget {
   readonly botId: string;
   readonly landing: BotTabLanding;
@@ -905,34 +903,27 @@ function botTargetOf(payload: ChatNotificationPayload): BotOpenTarget | null {
   };
 }
 
-/** The host a bot's tab opens on: the open tab's, else the window's. */
-function botTabHostId(
-  botId: string,
-  effectiveHostId: string | null,
-): string | null {
-  return (
-    lookupBotTab(useBotTabsStore.getState().tabs, botId)?.hostId ??
-    effectiveHostId
-  );
-}
-
 /**
  * Whether routing `payload` would open nothing because it is a bot's chat and
- * the window has no device to open the bot's tab on: no tab of the bot is
- * open and there is no effective host.
+ * the window has no device to open the Tracy surface on: the surface is
+ * closed and there is no effective host. An open surface reads any bot's
+ * channel through its own host, whether or not that channel was shown.
  */
 export function isBotChatWithoutDevice(
   payload: NotificationPayload,
   effectiveHostId: string | null,
 ): boolean {
   if (payload.kind !== "chat") return false;
-  const bot = botTargetOf(payload);
-  return bot !== null && botTabHostId(bot.botId, effectiveHostId) === null;
+  return (
+    botTargetOf(payload) !== null &&
+    (tracySurfaceHostId() ?? effectiveHostId) === null
+  );
 }
 
 /**
- * Opens the bot's tab, landed where `target` asks once the tab can: the tab
- * already open keeps its host, and a new one is bound to the window's.
+ * Opens the Tracy surface on the bot's channel, landed where `target` asks
+ * once the channel can: the landing is asked for before the navigation. An
+ * open surface keeps its host, and a closed one is bound to the window's.
  * `false`, with nothing opened, while the window has no host to open it on.
  */
 function routeBotNotification(
@@ -940,17 +931,12 @@ function routeBotNotification(
   target: BotOpenTarget,
   effectiveHostId: string | null,
 ): boolean {
-  const tabs = useBotTabsStore.getState();
-  const existing = lookupBotTab(tabs.tabs, target.botId);
-  const hostId = botTabHostId(target.botId, effectiveHostId);
-  if (hostId === null) return false;
-  // The tab names itself from the bot once it reads it.
-  if (existing === null) {
-    tabs.openBotTab({ botId: target.botId, hostId, title: "Bot" });
-  }
-  useBotTabLandingStore.getState().request(target.botId, target.landing);
-  navigateToTabIntent(navigate, botTabIntent(target.botId), undefined);
-  return true;
+  if ((tracySurfaceHostId() ?? effectiveHostId) === null) return false;
+  return openBotChannel(navigate, target.botId, {
+    landing: target.landing,
+    isConnectable: null,
+    onRejected: null,
+  });
 }
 
 function routeEpicChatNotification(

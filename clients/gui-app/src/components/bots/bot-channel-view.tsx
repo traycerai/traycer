@@ -100,6 +100,7 @@ import {
 } from "@/lib/dom/document-visibility";
 import { isDocumentFocused } from "@/lib/notifications/notification-presence";
 import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
+import { useKeptBoxDraft } from "@/hooks/bots/use-kept-box-draft";
 import type {
   BotOpenMemory,
   BotOpenThread,
@@ -330,6 +331,12 @@ export function BotChannelView(props: {
         appConversationChatId,
       ),
     [appConversationChatId, conversations.data],
+  );
+  // What the channel's box holds unsent, kept under the bot by the channel's
+  // conversation, so it outlives the pane when another channel is shown.
+  const { seed: channelSeed, keptDraft: channelKeptDraft } = useKeptBoxDraft(
+    botId,
+    appConversationChatId,
   );
 
   const {
@@ -785,8 +792,8 @@ export function BotChannelView(props: {
                 failure={sendFailure}
                 edit={edit}
                 onEditEnd={endEdit}
-                seed={null}
-                keptDraft={null}
+                seed={channelSeed}
+                keptDraft={channelKeptDraft}
                 quote={quoteFor(null)}
                 onSent={openPostedThread}
               />

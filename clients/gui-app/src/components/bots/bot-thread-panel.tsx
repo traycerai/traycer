@@ -21,8 +21,6 @@ import {
   BotMessageComposer,
   type BotComposerEdit,
   type BotComposerQuote,
-  type BotComposerSeed,
-  type BotKeptDraft,
 } from "@/components/bots/bot-message-composer";
 import {
   useBotSendFailure,
@@ -59,6 +57,7 @@ import type { BotMemberResolver } from "@/lib/bots/bot-member-names";
 import { threadOriginRow } from "@/lib/bots/reply-row";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
+import { useKeptBoxDraft } from "@/hooks/bots/use-kept-box-draft";
 import type {
   BotSessionOpen,
   BotTurnOpen,
@@ -599,14 +598,8 @@ function ThreadPanelBody(props: ThreadPanelBodyProps): ReactNode {
   // Stable across what the box does to this component's own state, so typing
   // does not hand the replies' list a new header on every key.
   const origin = useMemo(() => <ThreadOrigin {...props} />, [props]);
-  const kept = useBotDraftsStore(
-    (state) => state.threadBoxes[botId]?.[originMessageId] ?? null,
-  );
+  const { kept, seed, keptDraft } = useKeptBoxDraft(botId, originMessageId);
   const seedThreadBox = useBotDraftsStore((state) => state.seedThreadBox);
-  const typeThreadBox = useBotDraftsStore((state) => state.typeThreadBox);
-  const spendThreadBox = useBotDraftsStore((state) => state.spendThreadBox);
-  const seed: BotComposerSeed | null =
-    kept === null ? null : { id: kept.seedId, text: kept.text };
   // A draft Discuss puts in the box is a new message: an edit the box held
   // ends, so the draft replaces nothing.
   const [heldSeedId, setHeldSeedId] = useState(kept?.seedId ?? null);
@@ -614,16 +607,6 @@ function ThreadPanelBody(props: ThreadPanelBodyProps): ReactNode {
     setHeldSeedId(kept?.seedId ?? null);
     if (kept !== null) setEdit(null);
   }
-  const keptDraft = useMemo<BotKeptDraft>(
-    () => ({
-      keep: (text) => typeThreadBox(botId, originMessageId, text),
-      revision: () =>
-        useBotDraftsStore.getState().threadBoxes[botId]?.[originMessageId]
-          ?.revision ?? null,
-      spend: (revision) => spendThreadBox(botId, originMessageId, revision),
-    }),
-    [botId, originMessageId, spendThreadBox, typeThreadBox],
-  );
   const discuss = useCallback(
     (_questionMessageId: string, draft: string) =>
       seedThreadBox(botId, originMessageId, draft),

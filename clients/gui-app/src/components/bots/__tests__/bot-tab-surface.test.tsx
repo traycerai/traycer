@@ -1,12 +1,13 @@
 /**
- * The bot tab's surface (Tracy Bots): the tab asks `bot.open` through its own
+ * The Tracy surface (Tracy Bots): the surface asks `bot.open` through its own
  * host and follows the answer - serving, or paused with a reason - and never
  * names the machine a bot runs on or moves to it.
  * Also: the stream's states, the re-subscribe and re-open when the pane comes
- * back into view, the tab closing when the bot is gone from `bot.list`, and a
- * team's main bot still to be set up (T67): a tab on its id shows the channel
- * where the team is set up, with nothing opened, subscribed or closed (the
- * real hook, over a scripted `bot.onboarding.read`). Its Enable cloud
+ * back into view, the surface forgetting a channel's state and selecting the
+ * default when the bot is gone from `bot.list`, and a team's main bot still
+ * to be set up (T67): a channel on its id shows the channel where the team is
+ * set up, with nothing opened, subscribed or forgotten (the real hook, over a
+ * scripted `bot.onboarding.read`). Its Enable cloud
  * runs the real sandbox reads and create over a scripted control plane.
  * The three views and the bot's session view are replaced by stubs
  * that expose their props, so what the surface PASSES them is what is
@@ -73,6 +74,7 @@ import type {
   BotThreadSummary,
   BotTurnRef,
 } from "@traycer/protocol/host/bot/conversation-schemas";
+import type { TabNavigationIntent } from "@/lib/tab-navigation/intents";
 import type { BotChannelLanding } from "@/components/bots/bot-channel-view";
 import type { BotOpenSession } from "@/components/bots/bot-session-view";
 import type {
@@ -109,6 +111,10 @@ const mocks = vi.hoisted(() => ({
   /** What every configuration's `sandbox_defaults` read answers. */
   sandboxDefaults: { kind: "pending" } as SandboxDefaultsRead,
   resubscribe: vi.fn<() => void>(),
+  /** The router's navigate, which the tab-navigation boundary below ignores. */
+  navigate: vi.fn(),
+  /** Every intent the surface asked the tab-navigation controller to activate. */
+  activateTabIntent: vi.fn<(intent: unknown) => void>(),
   open: vi.fn<(variables: { botId: string }) => void>(),
   openMutation: {
     mutate: (
@@ -149,6 +155,8 @@ const mocks = vi.hoisted(() => ({
     paneVisible: true,
     connectable: { hostIds: [] as string[], resolved: true },
     listedBotIds: undefined as string[] | undefined,
+    /** Titles the list gives its bots; a bot not named is titled by its id. */
+    listTitles: new Map<string, string>(),
     mainBotIds: null as Record<string, string> | null,
     support: null as boolean | null,
     /** Whether the host advertises `bot.onboarding.read`; `null` while unknown. */
@@ -193,6 +201,31 @@ const mocks = vi.hoisted(() => ({
   },
 }));
 
+vi.mock("@tanstack/react-router", () => ({
+  useNavigate: () => mocks.navigate,
+}));
+// The tab-navigation controller is the boundary: it commits a selection when
+// it acknowledges a navigation, which these cases read off the intents asked.
+// The controller accepts and acknowledges at once, as a history push does:
+// a Tracy channel is committed when its navigation lands.
+vi.mock("@/lib/tab-navigation", async (importOriginal) => {
+  const { useTracySurfaceStore: surfaceStore } =
+    await import("@/stores/bots/tracy-surface-store");
+  return {
+    ...(await importOriginal<typeof import("@/lib/tab-navigation")>()),
+    activateTabIntent: (
+      _navigate: unknown,
+      intent: TabNavigationIntent,
+      _options: unknown,
+    ) => {
+      mocks.activateTabIntent(intent);
+      if (intent.kind === "tracy") {
+        surfaceStore.getState().selectChannel(intent.botId);
+      }
+      return true;
+    },
+  };
+});
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
   useHostMethodSupport: (hostId: string | null, method: string) => {
     mocks.supportQueries.push({ hostId, method });
@@ -343,7 +376,7 @@ vi.mock("@/hooks/bots/use-bot-list-query", () => {
           : {
               bots: mocks.state.listedBotIds.map((botId) => ({
                 botId,
-                title: botId,
+                title: mocks.state.listTitles.get(botId) ?? botId,
                 environmentId: "env-team",
                 archivedAt: null,
               })),
@@ -377,7 +410,7 @@ vi.mock("@/hooks/bots/use-bot-mutations", () => ({
 }));
 vi.mock("@/components/bots/bot-channel-sidebar", () => ({
   BotChannelSidebar: (props: {
-    activeBotId: string;
+    activeBotId: string | null;
     hostId: string;
     threadsView: {
       shown: boolean;
@@ -388,7 +421,7 @@ vi.mock("@/components/bots/bot-channel-sidebar", () => ({
   }) => (
     <div
       data-testid="stub-sidebar"
-      data-active-bot-id={props.activeBotId}
+      data-active-bot-id={props.activeBotId ?? "none"}
       data-host-id={props.hostId}
       data-threads-shown={String(props.threadsView?.shown ?? "none")}
     >
@@ -604,6 +637,7 @@ vi.mock("@/components/bots/bot-settings-panel", () => ({
     personal: boolean;
     channelId: string | null;
     onClose: () => void;
+    onDeleted: () => void;
   }) => (
     <div
       data-testid="stub-settings"
@@ -616,6 +650,11 @@ vi.mock("@/components/bots/bot-settings-panel", () => ({
         data-testid="stub-settings-close"
         onClick={props.onClose}
       />
+      <button
+        type="button"
+        data-testid="stub-settings-deleted"
+        onClick={props.onDeleted}
+      />
     </div>
   ),
 }));
@@ -625,11 +664,13 @@ import {
   routeNotificationForHost,
 } from "@/lib/notifications/payload";
 import { BotTabSurface } from "@/components/bots/bot-tab-surface";
-import { lookupBotTab, useBotTabsStore } from "@/stores/bots/bot-tabs-store";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
 import { useBotPaneWidthsStore } from "@/stores/bots/bot-pane-widths-store";
 import { useBotTabLandingStore } from "@/stores/bots/bot-tab-landing-store";
 import { openChatSearchResult } from "@/lib/chat-search/open-chat-search-result";
 import { rowFromHostEntry } from "@/stores/notifications/merged-notifications";
+import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
 import { useBotOpenThreadStore } from "@/stores/bots/bot-open-thread-store";
 import { useTeamCloudCreateStore } from "@/stores/bots/team-cloud-create-store";
 
@@ -773,7 +814,7 @@ function answer(outcome: BotOpenResponse["outcome"]): OpenResult {
 
 let queryClient = new QueryClient();
 
-function surfaceFor(botId: string): ReactNode {
+function surfaceFor(botId: string | null): ReactNode {
   return (
     <StrictMode>
       <QueryClientProvider client={queryClient}>
@@ -796,9 +837,28 @@ function expectNoMachineWording(container: HTMLElement): void {
   expect(screen.queryByTestId("bot-tab-move-here")).toBeNull();
 }
 
-function tabHostIdInStore(): string | null {
-  const record = lookupBotTab(useBotTabsStore.getState().tabs, BOT_ID);
-  return record === null ? null : record.hostId;
+function surfaceHostId(): string | null {
+  return useTracySurfaceStore.getState().hostId;
+}
+
+/**
+ * Whether the surface still keeps `botId`'s per-channel state: the unsent
+ * draft `openSurfaceOn` left in its thread box, which the surface clears when
+ * it forgets the bot.
+ */
+function isKept(botId: string): boolean {
+  return useBotDraftsStore.getState().threadBoxes[botId] !== undefined;
+}
+
+/** The surface open on `botId` with a draft kept for it, as an opener leaves it. */
+function openSurfaceOn(botId: string): void {
+  useTracySurfaceStore.setState({
+    open: true,
+    hostId: TAB_HOST,
+    botId,
+    visitedBotIds: [],
+  });
+  useBotDraftsStore.getState().typeThreadBox(botId, "post-1", "unsent");
 }
 
 beforeEach(() => {
@@ -818,6 +878,7 @@ beforeEach(() => {
   mocks.state.connectable = { hostIds: [TAB_HOST, BOUND_HOST], resolved: true };
   // The bot is listed, in a team that has bots: nothing is to be set up.
   mocks.state.listedBotIds = [BOT_ID];
+  mocks.state.listTitles = new Map([[BOT_ID, "Release Bot"]]);
   mocks.state.mainBotIds = null;
   mocks.state.support = true;
   mocks.state.onboardingSupport = true;
@@ -846,13 +907,12 @@ beforeEach(() => {
   mocks.state.threadsError = false;
   mocks.subscribed.length = 0;
   for (const key of Object.keys(mocks.reads)) delete mocks.reads[key];
-  useBotTabsStore.setState({ tabs: {} });
+  useSelectionAuthorityStore.setState({ effectiveHostId: TAB_HOST });
+  useBotDraftsStore.setState({ answers: {}, threadBoxes: {} });
   useBotOpenThreadStore.setState({ byBotId: {} });
   useTeamCloudCreateStore.setState({ byEnvironmentId: {} });
   __resetAgentActivityStoreForTests();
-  useBotTabsStore
-    .getState()
-    .openBotTab({ botId: BOT_ID, hostId: TAB_HOST, title: "Release Bot" });
+  openSurfaceOn(BOT_ID);
 });
 
 const AUTH_AT_START = useAuthStore.getState();
@@ -913,9 +973,7 @@ function setUpNewTeam(): void {
     { environmentId: "env-new", label: "Newco", ownerKind: "organization" },
   ];
   mocks.state.listedBotIds = [BOT_ID];
-  useBotTabsStore
-    .getState()
-    .openBotTab({ botId: SETUP_BOT_ID, hostId: TAB_HOST, title: "Tracy" });
+  openSurfaceOn(SETUP_BOT_ID);
 }
 
 describe("<BotTabSurface /> a team's main bot still to be set up", () => {
@@ -953,6 +1011,42 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
     expect(channel.textContent).not.toMatch(/github|starter|seat/i);
     expect(screen.queryByTestId("stub-channel")).toBeNull();
     expect(screen.queryByTestId("bot-tab-connecting")).toBeNull();
+  });
+
+  describe("level 2 in the installed app", () => {
+    let shell: ShellFormHarness;
+    beforeEach(() => {
+      shell = installShellForm(SHELL_WIDTH_MENU);
+    });
+    afterEach(() => {
+      shell.dispose();
+    });
+
+    it("offers Threads from the setup channel's title, which replaces the setup until Threads goes back", async () => {
+      const user = userEvent.setup();
+      render(surfaceFor(SETUP_BOT_ID));
+
+      expect(screen.queryByTestId("bot-channel-sidebar-pane")).toBeNull();
+      await user.click(
+        within(screen.getByTestId("team-setup-channel")).getByTestId(
+          "bot-channel-picker-trigger",
+        ),
+      );
+      await user.click(
+        within(await screen.findByTestId("bot-channel-picker")).getByTestId(
+          "stub-sidebar-threads",
+        ),
+      );
+
+      expect(screen.getByTestId("stub-threads")).toBeTruthy();
+      expect(screen.queryByTestId("team-setup-channel")).toBeNull();
+      expect(screen.queryByTestId("bot-channel-picker")).toBeNull();
+
+      await user.click(screen.getByTestId("stub-threads-back"));
+
+      expect(screen.queryByTestId("stub-threads")).toBeNull();
+      expect(screen.getByTestId("team-setup-channel")).toBeTruthy();
+    });
   });
 
   it("draws the machine option's button disabled with a line saying it is not available yet, and a click does nothing", async () => {
@@ -994,10 +1088,7 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
 
     expect(mocks.open).not.toHaveBeenCalled();
     expect(mocks.subscribed).toEqual([]);
-    expect(mocks.useBotListChangedSubscriptionForHost).not.toHaveBeenCalled();
-    expect(
-      lookupBotTab(useBotTabsStore.getState().tabs, SETUP_BOT_ID),
-    ).not.toBeNull();
+    expect(isKept(SETUP_BOT_ID)).toBe(true);
   });
 
   it("shows the connecting state, opening nothing, until the team's read answers, then the setup channel", () => {
@@ -1007,9 +1098,7 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
     expect(screen.getByTestId("bot-tab-connecting")).toBeTruthy();
     expect(screen.queryByTestId("team-setup-channel")).toBeNull();
     expect(mocks.open).not.toHaveBeenCalled();
-    expect(
-      lookupBotTab(useBotTabsStore.getState().tabs, SETUP_BOT_ID),
-    ).not.toBeNull();
+    expect(isKept(SETUP_BOT_ID)).toBe(true);
 
     mocks.reads["env-new"] = {
       setup: NEEDS_HOST_SETUP,
@@ -1036,9 +1125,7 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
       expect(screen.queryByTestId("bot-tab-error")).toBeNull();
       expect(mocks.listRefetch).not.toHaveBeenCalled();
       expect(mocks.open).toHaveBeenCalledWith({ botId: SETUP_BOT_ID });
-      expect(
-        lookupBotTab(useBotTabsStore.getState().tabs, SETUP_BOT_ID),
-      ).toBeNull();
+      expect(isKept(SETUP_BOT_ID)).toBe(false);
     },
   );
 
@@ -1058,9 +1145,7 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
     expect(mocks.open).not.toHaveBeenCalled();
     expect(mocks.subscribed).toEqual([]);
     expect(mocks.readRefetch).not.toHaveBeenCalled();
-    expect(
-      lookupBotTab(useBotTabsStore.getState().tabs, SETUP_BOT_ID),
-    ).not.toBeNull();
+    expect(isKept(SETUP_BOT_ID)).toBe(true);
 
     mocks.readRefetch.mockImplementation(() => {
       mocks.reads["env-new"] = {
@@ -1114,9 +1199,7 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
       expect(screen.queryByTestId("bot-tab-connecting")).toBeNull();
       expect(mocks.open).not.toHaveBeenCalled();
       expect(mocks.subscribed).toEqual([]);
-      expect(
-        lookupBotTab(useBotTabsStore.getState().tabs, SETUP_BOT_ID),
-      ).not.toBeNull();
+      expect(isKept(SETUP_BOT_ID)).toBe(true);
 
       mocks.state.onboardingSupport = true;
       mocks.state.onboardingVersion = { major: 1, minor: 1 };
@@ -1151,9 +1234,7 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
     expect(mocks.open).not.toHaveBeenCalled();
     expect(mocks.subscribed).toEqual([]);
     expect(mocks.environmentsRefetch).not.toHaveBeenCalled();
-    expect(
-      lookupBotTab(useBotTabsStore.getState().tabs, SETUP_BOT_ID),
-    ).not.toBeNull();
+    expect(isKept(SETUP_BOT_ID)).toBe(true);
 
     mocks.environmentsRefetch.mockImplementation(() => {
       setUpNewTeam();
@@ -1167,9 +1248,7 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
 
     expect(screen.getByTestId("team-setup-channel")).toBeTruthy();
     expect(mocks.open).not.toHaveBeenCalled();
-    expect(
-      lookupBotTab(useBotTabsStore.getState().tabs, SETUP_BOT_ID),
-    ).not.toBeNull();
+    expect(isKept(SETUP_BOT_ID)).toBe(true);
   });
 
   /**
@@ -1215,9 +1294,7 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
       expect(mocks.subscribed).toEqual([]);
       expect(mocks.listRefetch).not.toHaveBeenCalled();
       expect(mocks.environmentsRefetch).not.toHaveBeenCalled();
-      expect(
-        lookupBotTab(useBotTabsStore.getState().tabs, SETUP_BOT_ID),
-      ).not.toBeNull();
+      expect(isKept(SETUP_BOT_ID)).toBe(true);
 
       await user.click(within(notice).getByRole("button", { name: "Retry" }));
 
@@ -1249,32 +1326,27 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
     (_name, script) => {
       mocks.reads["env-new"] = { setup: null };
       script();
-      mocks.listRefetch.mockImplementation(() => {
-        mocks.state.listedBotIds = [BOT_ID, SETUP_BOT_ID];
-        mocks.state.list = {
-          dataUpdatedAt: 2_000,
-          errorUpdatedAt: 0,
-          isFetchedAfterMount: true,
-          isFetching: false,
-        };
-      });
       const view = render(surfaceFor(SETUP_BOT_ID));
 
       expect(mocks.listRefetch).toHaveBeenCalled();
       expect(screen.getByTestId("bot-tab-connecting")).toBeTruthy();
       expect(mocks.open).not.toHaveBeenCalled();
-      expect(
-        lookupBotTab(useBotTabsStore.getState().tabs, SETUP_BOT_ID),
-      ).not.toBeNull();
+      expect(isKept(SETUP_BOT_ID)).toBe(true);
 
+      // The re-read answers, now carrying the bot.
+      mocks.state.listedBotIds = [BOT_ID, SETUP_BOT_ID];
+      mocks.state.list = {
+        dataUpdatedAt: 2_000,
+        errorUpdatedAt: 0,
+        isFetchedAfterMount: true,
+        isFetching: false,
+      };
       view.rerender(surfaceFor(SETUP_BOT_ID));
 
       expect(mocks.open).toHaveBeenCalledWith({ botId: SETUP_BOT_ID });
       expect(screen.getByTestId("stub-channel")).toBeTruthy();
       expect(screen.queryByTestId("bot-tab-connecting")).toBeNull();
-      expect(
-        lookupBotTab(useBotTabsStore.getState().tabs, SETUP_BOT_ID),
-      ).not.toBeNull();
+      expect(isKept(SETUP_BOT_ID)).toBe(true);
     },
   );
 
@@ -1329,9 +1401,7 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
     expect(mocks.open).not.toHaveBeenCalled();
     expect(mocks.subscribed).toEqual([]);
     expect(mocks.listRefetch).not.toHaveBeenCalled();
-    expect(
-      lookupBotTab(useBotTabsStore.getState().tabs, SETUP_BOT_ID),
-    ).not.toBeNull();
+    expect(isKept(SETUP_BOT_ID)).toBe(true);
 
     mocks.listRefetch.mockImplementation(() => {
       mocks.state.listedBotIds = [BOT_ID, SETUP_BOT_ID];
@@ -1352,9 +1422,7 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
     expect(mocks.open).toHaveBeenCalledWith({ botId: SETUP_BOT_ID });
     expect(screen.getByTestId("stub-channel")).toBeTruthy();
     expect(mocks.listRefetch).toHaveBeenCalledTimes(1);
-    expect(
-      lookupBotTab(useBotTabsStore.getState().tabs, SETUP_BOT_ID),
-    ).not.toBeNull();
+    expect(isKept(SETUP_BOT_ID)).toBe(true);
   });
 
   it("draws the post in a scroller that starts at the top, with the post at the bottom through its own margin", () => {
@@ -2052,7 +2120,7 @@ describe("<BotTabSurface /> another host serves the bot", () => {
       });
       const { container } = render(surface());
 
-      expect(tabHostIdInStore()).toBe(TAB_HOST);
+      expect(surfaceHostId()).toBe(TAB_HOST);
       expect(
         screen.getByTestId("stub-channel").getAttribute("data-host-id"),
       ).toBe(TAB_HOST);
@@ -2071,7 +2139,7 @@ describe("<BotTabSurface /> another host serves the bot", () => {
     mocks.state.connectable = { hostIds: [], resolved: false };
     render(surface());
 
-    expect(tabHostIdInStore()).toBe(TAB_HOST);
+    expect(surfaceHostId()).toBe(TAB_HOST);
     expect(screen.getByTestId("stub-channel")).toBeTruthy();
   });
 });
@@ -2208,7 +2276,7 @@ describe("<BotTabSurface /> paused", () => {
     await user.click(screen.getByTestId("bot-channel-settings-open"));
     expect(
       screen.getByTestId("stub-settings").getAttribute("data-prop-names"),
-    ).toBe("bot,personal,channelId,environmentBots,onClose");
+    ).toBe("bot,personal,channelId,environmentBots,onClose,onDeleted");
   });
 
   it.each<readonly [string, "user" | "organization", string]>([
@@ -3412,13 +3480,19 @@ describe("<BotTabSurface /> a bot's session in place of its channel", () => {
       },
     );
 
-    // A row can name a host that has since gone; a new bot tab takes the
-    // window's host instead, which routes the bot to wherever it is served.
+    // A row can name a host that has since gone; a surface that opens for it
+    // takes the window's host instead, which routes the bot to wherever it is
+    // served.
     it.each(["a search hit", "a notification"])(
-      "opens the bot's tab on the window's host when %s names a host that is gone",
+      "opens the surface on the window's host when %s names a host that is gone",
       (source) => {
-        // No tab of the bot is open: an open one keeps its own host.
-        useBotTabsStore.setState({ tabs: {} });
+        // The surface is closed: an open one keeps its own host.
+        useTracySurfaceStore.setState({
+          open: false,
+          hostId: null,
+          botId: null,
+          visitedBotIds: [],
+        });
         if (source === "a search hit") {
           openChatSearchResult(
             vi.fn(),
@@ -3458,9 +3532,14 @@ describe("<BotTabSurface /> a bot's session in place of its channel", () => {
           });
         }
 
-        expect(
-          lookupBotTab(useBotTabsStore.getState().tabs, BOT_ID),
-        ).toMatchObject({ hostId: TAB_HOST });
+        expect(useTracySurfaceStore.getState()).toMatchObject({
+          open: true,
+          hostId: TAB_HOST,
+        });
+        expect(mocks.activateTabIntent).toHaveBeenCalledWith({
+          kind: "tracy",
+          botId: BOT_ID,
+        });
         render(surface());
         expect(
           screen.queryByTestId(
@@ -3480,12 +3559,13 @@ describe("<BotTabSurface /> a bot's session in place of its channel", () => {
   });
 });
 
-describe("<BotTabSurface /> tab lifetime", () => {
+describe("<BotTabSurface /> channel lifetime", () => {
   /**
    * The last bot of a team is deleted: the list no longer carries it and its
-   * team has no bot, which is what a team still to be set up looks like. A tab
-   * that showed the bot listed is that bot's, so it closes - it never shows the
-   * setup notice, whatever the host answers about the team's onboarding.
+   * team has no bot, which is what a team still to be set up looks like. A
+   * channel that showed the bot listed is that bot's, so it is forgotten and
+   * the default channel is selected - it never shows the setup notice,
+   * whatever the host answers about the team's onboarding.
    */
   it.each<readonly [string, () => void]>([
     [
@@ -3501,59 +3581,189 @@ describe("<BotTabSurface /> tab lifetime", () => {
       },
     ],
   ])(
-    "closes the tab, never showing the setup notice, when bot.list no longer carries the last bot of its team and %s",
+    "forgets the channel, never showing the setup notice, when bot.list no longer carries the last bot of its team and %s",
     (_name, script) => {
       script();
       const view = render(surface());
       expect(screen.getByTestId("stub-channel")).toBeTruthy();
-      expect(
-        lookupBotTab(useBotTabsStore.getState().tabs, BOT_ID),
-      ).not.toBeNull();
+      expect(isKept(BOT_ID)).toBe(true);
 
       mocks.state.listedBotIds = [];
       view.rerender(surface());
 
-      expect(lookupBotTab(useBotTabsStore.getState().tabs, BOT_ID)).toBeNull();
+      expect(isKept(BOT_ID)).toBe(false);
       expect(screen.queryByTestId("bot-tab-error")).toBeNull();
     },
   );
 
-  it("closes a tab that was never listed when the list carries another bot of its team", () => {
+  it("forgets a channel that was never listed, and selects the default, when the list carries another bot of its team", () => {
     mocks.state.listedBotIds = [OTHER_BOT_ID];
     render(surface());
 
-    expect(lookupBotTab(useBotTabsStore.getState().tabs, BOT_ID)).toBeNull();
+    expect(isKept(BOT_ID)).toBe(false);
+    expect(mocks.activateTabIntent).toHaveBeenCalledWith({
+      kind: "tracy",
+      botId: OTHER_BOT_ID,
+    });
   });
 
-  it("keeps the tab while bot.list carries the bot or has not answered", () => {
+  it("keeps the channel while bot.list carries the bot or has not answered", () => {
     mocks.state.listedBotIds = [BOT_ID, OTHER_BOT_ID];
     const view = render(surface());
-    expect(
-      lookupBotTab(useBotTabsStore.getState().tabs, BOT_ID),
-    ).not.toBeNull();
+    expect(isKept(BOT_ID)).toBe(true);
 
     view.unmount();
     mocks.state.listedBotIds = undefined;
     render(surface());
-    expect(
-      lookupBotTab(useBotTabsStore.getState().tabs, BOT_ID),
-    ).not.toBeNull();
+    expect(isKept(BOT_ID)).toBe(true);
   });
 
-  it("closes the tab on the stream's deleted frame", () => {
+  it("forgets the channel on the stream's deleted frame", () => {
     mocks.state.deleted = true;
+    mocks.state.listedBotIds = [BOT_ID, OTHER_BOT_ID];
     render(surface());
 
-    expect(lookupBotTab(useBotTabsStore.getState().tabs, BOT_ID)).toBeNull();
+    expect(isKept(BOT_ID)).toBe(false);
+    expect(mocks.activateTabIntent).toHaveBeenCalledWith({
+      kind: "tracy",
+      botId: OTHER_BOT_ID,
+    });
   });
 
-  it("keeps bot.list current through the change stream on the tab's own host", () => {
+  it("forgets the channel when the settings panel reports the bot deleted", async () => {
+    const user = userEvent.setup();
+    mocks.state.listedBotIds = [BOT_ID, OTHER_BOT_ID];
+    render(surface());
+    await user.click(screen.getByTestId("bot-channel-settings-open"));
+
+    await user.click(screen.getByTestId("stub-settings-deleted"));
+
+    expect(isKept(BOT_ID)).toBe(false);
+    expect(mocks.activateTabIntent).toHaveBeenCalledWith({
+      kind: "tracy",
+      botId: OTHER_BOT_ID,
+    });
+  });
+
+  it("commits the default channel at once while the surface is out of view, where there is no route to move", () => {
+    mocks.state.paneVisible = false;
+    mocks.state.listedBotIds = [OTHER_BOT_ID];
+    render(surface());
+
+    expect(useTracySurfaceStore.getState().botId).toBe(OTHER_BOT_ID);
+    expect(mocks.activateTabIntent).not.toHaveBeenCalled();
+  });
+
+  it("keeps the column and the previous channel's state across a switch, opening and subscribing to the new channel", () => {
+    mocks.state.listedBotIds = [BOT_ID, OTHER_BOT_ID];
+    const view = render(surface());
+    const column = screen.getByTestId("stub-sidebar");
+
+    useTracySurfaceStore.getState().selectChannel(OTHER_BOT_ID);
+    view.rerender(surfaceFor(OTHER_BOT_ID));
+
+    expect(screen.getByTestId("stub-sidebar")).toBe(column);
+    expect(column.getAttribute("data-active-bot-id")).toBe(OTHER_BOT_ID);
+    expect(mocks.open).toHaveBeenCalledWith({ botId: OTHER_BOT_ID });
+    expect(mocks.subscribed).toContain(OTHER_BOT_ID);
+    expect(isKept(BOT_ID)).toBe(true);
+  });
+
+  it("forgets an inactive visited channel when the list stops carrying it, leaving the selected one alone", () => {
+    mocks.state.listedBotIds = [BOT_ID, OTHER_BOT_ID];
+    const view = render(surface());
+    useTracySurfaceStore.getState().selectChannel(OTHER_BOT_ID);
+    useBotDraftsStore
+      .getState()
+      .typeThreadBox(OTHER_BOT_ID, "post-1", "unsent");
+    view.rerender(surfaceFor(OTHER_BOT_ID));
+    expect(useTracySurfaceStore.getState().visitedBotIds).toEqual([
+      BOT_ID,
+      OTHER_BOT_ID,
+    ]);
+
+    mocks.state.listedBotIds = [OTHER_BOT_ID];
+    view.rerender(surfaceFor(OTHER_BOT_ID));
+
+    expect(isKept(BOT_ID)).toBe(false);
+    expect(isKept(OTHER_BOT_ID)).toBe(true);
+    expect(mocks.activateTabIntent).not.toHaveBeenCalled();
+  });
+
+  it("keeps bot.list current through the change stream on the surface's own host", () => {
     render(surface());
 
     expect(mocks.useBotListChangedSubscriptionForHost).toHaveBeenLastCalledWith(
       TAB_HOST,
       true,
     );
+  });
+});
+
+describe("<BotTabSurface /> with no channel selected", () => {
+  it("selects the default channel once the lists answer, and shows the column meanwhile", () => {
+    mocks.state.listedBotIds = [BOT_ID];
+    render(surfaceFor(null));
+
+    expect(
+      screen.getByTestId("stub-sidebar").getAttribute("data-active-bot-id"),
+    ).toBe("none");
+    expect(mocks.activateTabIntent).toHaveBeenCalledWith({
+      kind: "tracy",
+      botId: BOT_ID,
+    });
+    expect(mocks.open).not.toHaveBeenCalled();
+  });
+
+  it("says there are no bots yet, with the column still drawn, when the team has none", () => {
+    mocks.state.listedBotIds = [];
+    render(surfaceFor(null));
+
+    expect(screen.getByTestId("bot-tab-no-channel").textContent).toBe(
+      "No bots yet. Create one from Home.",
+    );
+    expect(screen.getByTestId("stub-sidebar")).toBeTruthy();
+    expect(mocks.activateTabIntent).not.toHaveBeenCalled();
+    expect(mocks.open).not.toHaveBeenCalled();
+  });
+
+  describe("level 2 in the installed app", () => {
+    let shell: ShellFormHarness;
+    beforeEach(() => {
+      shell = installShellForm(SHELL_WIDTH_MENU);
+    });
+    afterEach(() => {
+      shell.dispose();
+    });
+
+    it("heads the pane with Tracy as the picker, to reach a team still to be set up that the default channel does not see", async () => {
+      mocks.state.listedBotIds = [];
+      mocks.state.environments = [
+        { environmentId: "env-new", label: "Newco", ownerKind: "organization" },
+      ];
+      mocks.reads["env-new"] = { setup: NEEDS_HOST_SETUP };
+      const user = userEvent.setup();
+      const view = render(surfaceFor(null));
+
+      expect(screen.queryByTestId("bot-channel-sidebar-pane")).toBeNull();
+      expect(screen.getByTestId("bot-tab-no-channel")).toBeTruthy();
+      const trigger = screen.getByTestId("bot-channel-picker-trigger");
+      expect(screen.getByTestId("bot-tab-title").contains(trigger)).toBe(true);
+      expect(trigger.textContent).toBe("Tracy");
+
+      await user.click(trigger);
+      const picker = await screen.findByTestId("bot-channel-picker");
+      expect(
+        within(picker).getByTestId("stub-sidebar").dataset.activeBotId,
+      ).toBe("none");
+      await user.click(within(picker).getByTestId("stub-sidebar-pick"));
+      expect(screen.queryByTestId("bot-channel-picker")).toBeNull();
+
+      // The pick navigates to the setup channel, which the route then shows.
+      view.rerender(surfaceFor(SETUP_BOT_ID));
+      expect(screen.getByTestId("team-setup-channel")).toBeTruthy();
+      expect(screen.queryByTestId("bot-tab-no-channel")).toBeNull();
+    });
   });
 });
 

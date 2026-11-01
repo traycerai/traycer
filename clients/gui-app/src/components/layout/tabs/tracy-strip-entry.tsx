@@ -80,18 +80,19 @@ export function TracyEntryIcon(props: {
 }
 
 /**
- * The hover card's body: the bot by its name, and what it is doing while it
- * works, or "Idle" when it is known to be; nothing when its state is not
- * known.
+ * The hover card's body: the channel the surface shows, by its bot's name,
+ * and what the bot is doing while it works, or "Idle" when it is known to
+ * be; nothing when its state is not known.
  */
 export function TracyEntryHoverBody(props: {
-  readonly title: string;
   readonly signals: TracyEntrySignals;
 }): ReactNode {
-  const { title, signals } = props;
+  const { signals } = props;
   return (
     <div data-testid="tracy-entry-hover-body" className="flex flex-col gap-1">
-      <div className="text-ui-sm font-medium text-foreground">{title}</div>
+      <div className="text-ui-sm font-medium text-foreground">
+        {signals.channelTitle ?? TRACY_ENTRY_LABEL}
+      </div>
       {signals.working || signals.idle ? (
         <div className="text-muted-foreground">
           {signals.working ? (signals.step ?? "Replying…") : "Idle"}
@@ -106,7 +107,7 @@ export function TracyEntryHoverBody(props: {
  * the scrolling tabs: the Tracy glyph with the bot's unread count and
  * "Tracy", bold while unread, and how
  * long the bot has been working while it runs a turn; the hover names the
- * bot. Like Home it has no drag,
+ * channel the surface shows. Like Home it has no drag,
  * no close, no menu and no Alt-digit; unlike Home it is a real tab, so it
  * joins the sheet when selected.
  */
@@ -114,7 +115,7 @@ export function TracyStripSlot(props: {
   readonly entry: TracyStripEntry;
 }): ReactNode {
   const { tab, isActive, onActivate } = props.entry;
-  const signals = useTracyEntrySignals(tab.id);
+  const signals = useTracyEntrySignals();
   const dragging = useEpicDndStore((state) => state.activeHeaderTab !== null);
   const joined = useSurfaceJoinPane(
     isActive && !dragging ? { kind: tab.kind, id: tab.id } : null,
@@ -169,7 +170,7 @@ export function TracyStripSlot(props: {
           )}
         </button>
       }
-      content={<TracyEntryHoverBody title={tab.name} signals={signals} />}
+      content={<TracyEntryHoverBody signals={signals} />}
       appearance="preview"
       semantics={{ role: "tooltip" }}
       side="bottom"
