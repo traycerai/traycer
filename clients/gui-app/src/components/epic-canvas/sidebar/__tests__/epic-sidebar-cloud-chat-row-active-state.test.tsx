@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { v4 as uuidv4 } from "uuid";
 import { vi } from "vitest";
@@ -81,14 +87,15 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  useEpicCanvasStore.getState().clearAllTitleGenerationPending();
   reachability.status = "reachable";
 });
 
-function renderRow(tabId: string): HTMLElement {
+function renderRow(tabId: string, chat: CloudChatSummary): HTMLElement {
   render(
     <QueryClientProvider client={new QueryClient()}>
       <EpicSidebarCloudChatRow
-        chat={CHAT}
+        chat={chat}
         childEntries={NO_CHILDREN}
         expansion={LEAF_EXPANSION}
         tabId={tabId}
@@ -126,7 +133,7 @@ describe("EpicSidebarCloudChatRow active state (real canvas store)", () => {
       hostId: CHAT.ownerHostId,
     });
 
-    const row = renderRow(tabId);
+    const row = renderRow(tabId, CHAT);
     expect(rowStateOf(row)).toEqual({ selected: "true", highlighted: true });
   });
 
@@ -148,7 +155,7 @@ describe("EpicSidebarCloudChatRow active state (real canvas store)", () => {
       }),
     );
 
-    const row = renderRow(tabId);
+    const row = renderRow(tabId, CHAT);
     expect(rowStateOf(row)).toEqual({ selected: "true", highlighted: true });
   });
 
@@ -164,7 +171,58 @@ describe("EpicSidebarCloudChatRow active state (real canvas store)", () => {
       hostId: CHAT.ownerHostId,
     });
 
-    const row = renderRow(tabId);
+    const row = renderRow(tabId, CHAT);
     expect(rowStateOf(row)).toEqual({ selected: "false", highlighted: false });
+  });
+});
+
+describe("EpicSidebarCloudChatRow first-title label (real canvas store)", () => {
+  const UNTITLED: CloudChatSummary = { ...CHAT, title: null };
+
+  it("paints New agent for a title-less row under a mark, while the tile it opens says Untitled chat", () => {
+    const tabId = useEpicCanvasStore
+      .getState()
+      .openEpicTab(CHAT.identity.taskId, "Epic");
+    act(() => {
+      useEpicCanvasStore
+        .getState()
+        .markChatTitlePending(CHAT.identity.chatId, "");
+    });
+
+    const row = renderRow(tabId, UNTITLED);
+
+    expect(row.getAttribute("aria-label")).toContain("New agent");
+    expect(row.textContent).toContain("New agent");
+    fireEvent.click(row);
+    const canvas = useEpicCanvasStore.getState().canvasByTabId[tabId];
+    expect(
+      Object.values(canvas?.tilesByInstanceId ?? {}).map((tile) => tile?.name),
+    ).toEqual(["Untitled chat"]);
+  });
+
+  it("says Untitled chat once the mark is gone", () => {
+    const tabId = useEpicCanvasStore
+      .getState()
+      .openEpicTab(CHAT.identity.taskId, "Epic");
+    const row = renderRow(tabId, UNTITLED);
+
+    expect(row.getAttribute("aria-label")).toContain("Untitled chat");
+    expect(row.textContent).not.toContain("New agent");
+  });
+
+  it("keeps a titled row's title under a mark", () => {
+    const tabId = useEpicCanvasStore
+      .getState()
+      .openEpicTab(CHAT.identity.taskId, "Epic");
+    act(() => {
+      useEpicCanvasStore
+        .getState()
+        .markChatTitlePending(CHAT.identity.chatId, "");
+    });
+
+    const row = renderRow(tabId, CHAT);
+
+    expect(row.getAttribute("aria-label")).toContain("Walkthrough");
+    expect(row.textContent).not.toContain("New agent");
   });
 });

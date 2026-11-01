@@ -10,7 +10,13 @@
  * (the `chat-tree-task-hosts-refusal.test.tsx` harness). The arm, a team
  * environment's own stream, is the one source replaced.
  */
-import { cleanup, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import { QueryClientProvider, type QueryClient } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import * as Y from "yjs";
@@ -34,6 +40,8 @@ import {
   EpicSessionHostClientContext,
 } from "@/lib/registries/epic-session-registry";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { findOpenTileInTab } from "@/stores/epics/canvas/canvas-selectors";
+import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
 import {
   openStoreForTest,
@@ -159,7 +167,39 @@ function seedDoc(): Uint8Array {
   return Y.encodeStateAsUpdate(donor);
 }
 
+const TERMINAL_AGENT_ID = "terminal-agent-1";
+
+/** The seed plus one terminal agent whose record holds no title. */
+function seedDocWithTitlelessTerminalAgent(): Uint8Array {
+  const donor = new Y.Doc();
+  Y.applyUpdate(donor, seedDoc());
+  const agents = donor.getMap<unknown>("epic").get("tuiAgents");
+  if (!(agents instanceof Y.Map)) throw new Error("expected tuiAgents map");
+  const agent = new Y.Map<unknown>();
+  agent.set("id", TERMINAL_AGENT_ID);
+  agent.set("harnessId", "codex");
+  agent.set("title", "");
+  agent.set("parentId", null);
+  agent.set("createdAt", 0);
+  agent.set("updatedAt", 0);
+  agent.set("userId", USER_ID);
+  agent.set("hostId", SANDBOX_HOST_ID);
+  agent.set("workspaceFolders", ["/repo"]);
+  agent.set("model", null);
+  agent.set("reasoningEffort", null);
+  agent.set("agentMode", "regular");
+  agent.set("harnessSessionId", null);
+  agent.set("terminalShellCommand", null);
+  agent.set("terminalShellArgs", null);
+  agents.set(TERMINAL_AGENT_ID, agent);
+  return Y.encodeStateAsUpdate(donor);
+}
+
 function createSession(): OpenedStoreForTest {
+  return createSessionFrom(seedDoc());
+}
+
+function createSessionFrom(doc: Uint8Array): OpenedStoreForTest {
   const captured: { value: EpicStreamCallbacks | null } = { value: null };
   const factory: EpicStreamClientFactory = (_id, callbacks) => {
     captured.value = callbacks;
@@ -179,7 +219,7 @@ function createSession(): OpenedStoreForTest {
     writeCommand: null,
   });
   if (captured.value === null) throw new Error("factory not invoked");
-  captured.value.onSnapshot(makeMeta(), seedDoc());
+  captured.value.onSnapshot(makeMeta(), doc);
   return handle;
 }
 
@@ -243,6 +283,8 @@ describe("the Agents tree over a sent team-host chat", () => {
     for (const handle of opened.splice(0)) handle.dispose();
     useAuthStore.setState(useAuthStore.getInitialState(), true);
     armRows.value = [];
+    useEpicCanvasStore.getState().clearAllTitleGenerationPending();
+    useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   });
 
   it("lists it once, under the arm row's title, before its first publication", async () => {
@@ -338,5 +380,174 @@ describe("the Agents tree over a sent team-host chat", () => {
     expect(
       screen.queryByTestId(`epic-sidebar-cloud-item-${CHAT_ID}`),
     ).toBeNull();
+  });
+
+  describe("while the chat's first title is awaited", () => {
+    function renderTree(
+      session: OpenedStoreForTest,
+      queryClient: QueryClient,
+    ): void {
+      const client = createHostClient(queryClient, () =>
+        Promise.resolve({ chats: [] }),
+      );
+      render(
+        <QueryClientProvider client={queryClient}>
+          <TooltipProvider>
+            <EpicSessionContext.Provider value={session}>
+              <EpicSessionHostClientContext.Provider value={client}>
+                <ChatTreePanelBody
+                  epicId={EPIC_ID}
+                  tabId={TAB_ID}
+                  messageHits={CHAT_TREE_MESSAGE_HITS_NONE}
+                />
+              </EpicSessionHostClientContext.Provider>
+            </EpicSessionContext.Provider>
+          </TooltipProvider>
+        </QueryClientProvider>,
+      );
+    }
+
+    async function holdSentChat(session: OpenedStoreForTest): Promise<void> {
+      session.store.getState().beginPendingChatCreation({
+        chatId: CHAT_ID,
+        hostId: SANDBOX_HOST_ID,
+        parentChatId: null,
+        title: "",
+        ownerUserId: USER_ID,
+      });
+      await vi.waitFor(() => {
+        expect(
+          Object.hasOwn(session.store.getState().chats.byId, CHAT_ID),
+        ).toBe(true);
+      });
+    }
+
+    it("names the row New agent, then the title in the same single row", async () => {
+      const queryClient = createAppQueryClient();
+      const session = createSession();
+      opened.push(session);
+      await holdSentChat(session);
+      renderTree(session, queryClient);
+      await vi.waitFor(() => {
+        expect(screen.getByTestId(`epic-sidebar-item-${CHAT_ID}`)).toBeTruthy();
+      });
+      act(() => {
+        useEpicCanvasStore.getState().markChatTitlePending(CHAT_ID, "");
+      });
+
+      await vi.waitFor(() => {
+        expect(
+          screen
+            .getByTestId(`epic-sidebar-item-${CHAT_ID}`)
+            .getAttribute("aria-label"),
+        ).toContain("New agent");
+      });
+      expect(screen.getAllByText("New agent")).toHaveLength(1);
+      expect(screen.queryByText("Untitled agent")).toBeNull();
+
+      // The tree reads its node's title from the tree slice, which the
+      // projection rebuilds alongside the chat record: land both.
+      act(() => {
+        const state = session.store.getState();
+        const held = state.chats.byId[CHAT_ID];
+        const node = state.tree.nodeById[CHAT_ID];
+        session.store.setState({
+          chats: {
+            allIds: [CHAT_ID],
+            byId: {
+              [CHAT_ID]: {
+                ...held,
+                title: "Generated title",
+                updatedAt: Date.now() + 1_000,
+              },
+            },
+          },
+          tree: {
+            ...state.tree,
+            nodeById: {
+              ...state.tree.nodeById,
+              [CHAT_ID]: { ...node, title: "Generated title" },
+            },
+          },
+        });
+      });
+
+      await vi.waitFor(() => {
+        expect(screen.getAllByText("Generated title")).toHaveLength(1);
+      });
+      expect(screen.queryByText("New agent")).toBeNull();
+      expect(
+        screen
+          .getByTestId(`epic-sidebar-item-${CHAT_ID}`)
+          .getAttribute("aria-label"),
+      ).toContain("Generated title");
+      expect(
+        screen.getAllByTestId(`epic-sidebar-item-${CHAT_ID}`),
+      ).toHaveLength(1);
+    });
+
+    it("opens the row's tile and seeds its rename with the raw name, never New agent", async () => {
+      const queryClient = createAppQueryClient();
+      const session = createSession();
+      opened.push(session);
+      await holdSentChat(session);
+      useEpicCanvasStore.getState().openEpicTabWithId(TAB_ID, EPIC_ID, "Epic");
+      renderTree(session, queryClient);
+      await vi.waitFor(() => {
+        expect(screen.getByTestId(`epic-sidebar-item-${CHAT_ID}`)).toBeTruthy();
+      });
+      act(() => {
+        useEpicCanvasStore.getState().markChatTitlePending(CHAT_ID, "");
+      });
+      const row = await screen.findByLabelText(/^New agent/);
+
+      fireEvent.click(row);
+
+      await vi.waitFor(() => {
+        expect(
+          findOpenTileInTab(TAB_ID, { id: CHAT_ID, hostId: SANDBOX_HOST_ID }),
+        ).not.toBeNull();
+      });
+      const canvas = useEpicCanvasStore.getState().canvasByTabId[TAB_ID];
+      const names = Object.values(canvas?.tilesByInstanceId ?? {}).map(
+        (tile) => tile?.name,
+      );
+      expect(names).toEqual(["Untitled agent"]);
+
+      fireEvent.contextMenu(row);
+      fireEvent.click(
+        await screen.findByTestId(`epic-sidebar-context-rename-${CHAT_ID}`),
+      );
+      const input = await screen.findByTestId(
+        `epic-sidebar-rename-input-${CHAT_ID}`,
+      );
+      if (!(input instanceof HTMLInputElement))
+        throw new Error("expected input");
+      expect(input.value).toBe("Untitled agent");
+    });
+
+    it("never labels a terminal agent whose record holds no title", async () => {
+      const queryClient = createAppQueryClient();
+      const session = createSessionFrom(seedDocWithTitlelessTerminalAgent());
+      opened.push(session);
+      act(() => {
+        useEpicCanvasStore
+          .getState()
+          .markChatTitlePending(TERMINAL_AGENT_ID, "");
+      });
+      renderTree(session, queryClient);
+
+      await vi.waitFor(() => {
+        expect(
+          screen.getByTestId(`epic-sidebar-item-${TERMINAL_AGENT_ID}`),
+        ).toBeTruthy();
+      });
+      expect(screen.queryByText("New agent")).toBeNull();
+      expect(
+        screen
+          .getByTestId(`epic-sidebar-item-${TERMINAL_AGENT_ID}`)
+          .getAttribute("aria-label"),
+      ).not.toContain("New agent");
+    });
   });
 });

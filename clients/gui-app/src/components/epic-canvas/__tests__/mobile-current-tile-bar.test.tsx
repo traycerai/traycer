@@ -17,6 +17,8 @@ import {
 import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
 import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
+import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import type { ChatProjection } from "@/stores/epics/open-epic/types";
 import type { ChatStreamSyncState } from "@/hooks/chats/use-chat-stream-sync-state";
 import {
   SURFACE_SYNC_RANK,
@@ -265,6 +267,7 @@ describe("<MobileCurrentTileBar trailing={null} />", () => {
   });
   afterEach(() => {
     cleanup();
+    useEpicCanvasStore.getState().clearAllTitleGenerationPending();
     mocks.handle.current?.dispose();
     mocks.handle.current = null;
   });
@@ -296,6 +299,45 @@ describe("<MobileCurrentTileBar trailing={null} />", () => {
     expect(title.tagName).toBe("SPAN");
     fireEvent.click(title);
     expect(screen.queryByRole("textbox")).toBeNull();
+  });
+
+  it("paints New agent while the chat's first title is awaited, then the title in place", () => {
+    useEpicCanvasStore.getState().markChatTitlePending(CHAT_TILE.id, "");
+    render(
+      <MobileCurrentTileBar
+        epicId="epic-1"
+        tile={CHAT_TILE}
+        level2="bar"
+        trailing={null}
+      />,
+    );
+    expect(screen.getByTestId("mobile-current-tile-title").textContent).toBe(
+      "New agent",
+    );
+
+    const generated: ChatProjection = {
+      id: CHAT_TILE.id,
+      title: "Generated title",
+      parentId: null,
+      createdAt: 0,
+      updatedAt: Date.now() + 1_000,
+      userId: "viewer-1",
+      ownedByViewer: true,
+      hostId: "host-A",
+      isTitleEditedByUser: false,
+      docResident: false,
+      settings: null,
+      archivedAt: null,
+    };
+    act(() => {
+      mocks.handle.current?.store.setState({
+        chats: { allIds: [CHAT_TILE.id], byId: { [CHAT_TILE.id]: generated } },
+      });
+    });
+
+    expect(screen.getByTestId("mobile-current-tile-title").textContent).toBe(
+      "Generated title",
+    );
   });
 
   describe("a terminal tile", () => {
