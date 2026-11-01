@@ -976,7 +976,13 @@ export type HostNotificationEnvironmentApplyFailedPayload = z.infer<
 >;
 
 /**
- * `team.role.changed`: The server no longer writes this kind; readers drop it.
+ * `team.role.changed`: a member's own role moved. The notification center
+ * carries agent states only, and this is its one named exception — a member is
+ * told their role changed the way a task's collaborators are told theirs did —
+ * so the server writes it and readers show it. It announces itself nowhere:
+ * no toast, no chime, no push. No notification hook sees it either: hooks
+ * observe a host's own notification store, and this kind is written only
+ * server-side.
  */
 export const hostNotificationTeamRoleChangedPayloadSchema = lazySchema(() =>
   z
