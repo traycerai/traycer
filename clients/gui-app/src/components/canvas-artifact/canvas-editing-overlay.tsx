@@ -1,4 +1,5 @@
 import { CanvasCommentAction } from "./canvas-comments";
+import { useAnchoredDraftStore } from "@/stores/comments/anchored-draft-store";
 import { useState, useSyncExternalStore } from "react";
 import type { CanvasAnnotationScope } from "./canvas-annotation-action";
 import type {
@@ -117,6 +118,17 @@ function EditingControls(props: {
     </div>
   );
 }
+/** Shift+Enter's target: the selected element's parent, except mid-retype. */
+function selectParentAction(
+  selection: CanvasSelection | null,
+  request: CanvasSelectionFrame["retype"],
+  registry: CanvasFrameRegistry,
+): (() => void) | null {
+  if (selection === null || request !== null) return null;
+  return () => {
+    void selectCanvasParentElement(selection, registry);
+  };
+}
 function boardSelection(
   state: { selection: CanvasSelection | null },
   artifactId: string,
@@ -154,6 +166,12 @@ export function CanvasEditingOverlay(props: {
     selection !== null,
   );
   const [dismissed, setDismissed] = useState<string | null>(null);
+  // A comment draft box open for this tile replaces the action bar: the box
+  // offers the same actions, so the two together would show them twice. The
+  // bar returns when the box closes, since the element is still selected.
+  const draftOpen = useAnchoredDraftStore(
+    (state) => state.byEpicId[props.scope.epicId]?.tileId === props.tileId,
+  );
   const entry = props.registry.get(props.boardPath);
   const request = currentRetype(selection, entry, generation, dismissed);
   const boardDocument = document.data ?? null;
@@ -171,12 +189,7 @@ export function CanvasEditingOverlay(props: {
         onSelectParent={null}
       />
     );
-  const selectParent =
-    selection === null || request !== null
-      ? null
-      : () => {
-          void selectCanvasParentElement(selection, props.registry);
-        };
+  const selectParent = selectParentAction(selection, request, props.registry);
   const controls =
     selection === null ? null : (
       <EditingControls
@@ -219,7 +232,7 @@ export function CanvasEditingOverlay(props: {
         ) : null
       }
       onSelectParent={selectParent}
-      hideAction={request !== null || additional.length > 0}
+      hideAction={request !== null || additional.length > 0 || draftOpen}
       hideHandles
     />
   );

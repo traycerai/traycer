@@ -28,6 +28,7 @@ import {
 import { useNewConversationAnnotationStore } from "@/stores/epics/new-conversation-annotation-store";
 import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
 import type { CanvasBox } from "@/lib/sandbox/canvas-bridge";
+import { useAnchoredDraftStore } from "@/stores/comments/anchored-draft-store";
 import { CanvasEditingOverlay } from "../canvas-editing-overlay";
 import {
   useCanvasSelectionStore,
@@ -323,6 +324,7 @@ beforeEach(() => {
   resetNegotiatedManifests();
   useNewConversationAnnotationStore.setState({ byEpicId: {} });
   useNewConversationModalOpenStore.setState({ request: null });
+  useAnchoredDraftStore.setState({ byEpicId: {} });
 });
 
 afterEach(() => {
@@ -408,6 +410,42 @@ describe("a selected range's action bar", () => {
     ).toBeDefined();
 
     expect(outside.attach).not.toHaveBeenCalled();
+  });
+
+  it("steps aside while a comment draft box is open for the selection, and returns when it closes", async () => {
+    // The box carries Send to chat itself, so the bar beside it would show the
+    // same action twice. The selection outlives the box, so the bar comes back.
+    mountOverlay();
+    select(LITERAL);
+    await screen.findByRole("button", { name: "Send to chat" });
+
+    act(() => {
+      useAnchoredDraftStore.getState().setDraft(SCOPE.epicId, {
+        draftId: "draft-1",
+        tileId: "canvas-tile-1",
+        artifactId: SCOPE.artifactId,
+        artifactType: "canvas",
+        anchor: {
+          kind: "element",
+          artboard: BOARD_PATH,
+          elementId: "t",
+          label: "p",
+        },
+        quotedText: "",
+        rect: { x: 40, y: 100, width: 200, height: 24 },
+        selection: LITERAL,
+        retargeted: false,
+      });
+    });
+    expect(screen.queryByRole("button", { name: "Send to chat" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Comment" })).toBeNull();
+
+    act(() => {
+      useAnchoredDraftStore.getState().clearDraft(SCOPE.epicId, "draft-1");
+    });
+    expect(
+      await screen.findByRole("button", { name: "Send to chat" }),
+    ).toBeDefined();
   });
 });
 
