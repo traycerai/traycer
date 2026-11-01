@@ -149,6 +149,7 @@ import {
   useEpicActiveAgentIds,
   useAncestorIds,
   useEpicArtifactRecords,
+  useEpicChatRecordListAuthoritative,
   useEpicConnectionStatus,
   useEpicPermissionRole,
   useEpicNodeHostIds,
@@ -158,13 +159,9 @@ import {
   type EpicArtifactProjection,
   type EpicChatProjection,
   type EpicTuiAgentProjection,
-  type EpicTreeIndex,
   type EpicTreeRecord,
 } from "@/lib/epic-selectors";
-import {
-  countPromotedAgentChildren,
-  formatAgentDeleteDescription,
-} from "@/lib/epic-tree-cascade";
+import { describeTreeDeleteDisclosure } from "@/lib/epic-tree-cascade";
 import { isEditableRole, mutationDisabledHint } from "@/lib/epic-permissions";
 import { useEpicExportArtifacts } from "@/hooks/epic/use-epic-export-artifacts-mutation";
 import {
@@ -1543,6 +1540,7 @@ function SidebarBulkDeleteController(props: {
   const selection = useSidebarBulkSelection();
   const liveRecords = useEpicArtifactRecords();
   const tree = useEpicTreeIndex();
+  const nestedChatsKnown = useEpicChatRecordListAuthoritative();
   const navigateNested = useEpicNestedFocusNavigation();
   const closeCanvasTab = useEpicCanvasStore((s) => s.closeCanvasTab);
   const markArtifactSelfDeleted = useEpicCanvasStore(
@@ -1779,6 +1777,26 @@ function SidebarBulkDeleteController(props: {
     unmarkArtifactSelfDeleted,
   ]);
 
+  // Memoized for the same reason `blockedDeleteReason` above is: this
+  // controller subscribes to `useEpicArtifactRecords()`, whose identity moves
+  // on every chat-stream token, so an un-memoized walk of the whole
+  // selection's subtree would re-run several times a second while the dialog
+  // is open during a turn.
+  const disclosure = useMemo(() => {
+    const nodeIds = pendingDeleteIds ?? [];
+    // Only the agent arm has a readiness question to ask: an artifact's
+    // subtree is artifacts, which are doc-sourced and have no record plane to
+    // lag behind.
+    return panelId === "chats"
+      ? describeTreeDeleteDisclosure({
+          tree,
+          kind: "agent",
+          nodeIds,
+          nestedChatsKnown,
+        })
+      : describeTreeDeleteDisclosure({ tree, kind: "artifact", nodeIds });
+  }, [nestedChatsKnown, panelId, pendingDeleteIds, tree]);
+
   return (
     <ConfirmDestructiveDialog
       blockedReason={blockedDeleteReason}
@@ -1791,12 +1809,9 @@ function SidebarBulkDeleteController(props: {
         pendingDeleteIds,
         recordById,
       )}
-      description={describeSidebarBulkDeleteDescription(
-        panelId,
-        pendingDeleteIds,
-        tree,
-      )}
-      cascadeSummary={null}
+      description={disclosure.description}
+      cascadeSummary={disclosure.cascadeSummary}
+      cascadeNestedUnder={disclosure.cascadeNestedUnder}
       actionLabel="Delete"
       isPending={deletePending}
       onConfirm={handleConfirmDelete}
@@ -2033,31 +2048,6 @@ function describeSidebarBulkDeleteTitle(
 function panelRowNoun(panelId: LeftPanelId, count: number): string {
   if (panelId === "chats") return count === 1 ? "agent" : "agents";
   return count === 1 ? "artifact" : "artifacts";
-}
-
-/**
- * Deleting an agent removes that one record: the agents nested under it are
- * KEPT, and the tree redraws them at the top level. That is a real
- * consequence, and an agent row's own menu has always disclosed it - so select
- * mode, which deletes the same records, asks the same function for the same
- * sentence. A single selected agent gets it too, which is where the two routes
- * most obviously disagreed.
- */
-function describeSidebarBulkDeleteDescription(
-  panelId: LeftPanelId,
-  ids: readonly string[] | null,
-  tree: EpicTreeIndex,
-): string {
-  const undone = "This action cannot be undone.";
-  if (ids === null || ids.length === 0) return undone;
-  if (panelId === "chats") {
-    return formatAgentDeleteDescription(
-      countPromotedAgentChildren(tree, ids),
-      ids.length,
-    );
-  }
-  if (ids.length < 2) return undone;
-  return `${undone} Nested items under selected rows may also be deleted.`;
 }
 
 function usePanelRootIds(panelId: LeftPanelId): ReadonlyArray<string> {
