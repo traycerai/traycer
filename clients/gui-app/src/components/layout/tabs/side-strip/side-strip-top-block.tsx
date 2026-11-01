@@ -49,7 +49,7 @@ export interface SideStripTopBlockProps {
   readonly onNewTab: () => void;
   /**
    * Collapses the strip to the rail or expands it, easing the width; `null`
-   * draws no toggle, where the phone shell's rail has nothing wider to offer.
+   * draws no toggle, where the phone shell has no room for the expanded strip.
    */
   readonly onToggleCollapsed: (() => void) | null;
   /** How many tabs the rows below list, for the "Tasks" label. */

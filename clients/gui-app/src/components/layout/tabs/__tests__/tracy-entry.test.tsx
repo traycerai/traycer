@@ -45,10 +45,7 @@ import { GeneralSettingsPanel } from "@/components/settings/panels/general-setti
 import { AppColumnFrame } from "@/components/layout/app-column-frame";
 import { PHONE_SHELL_STRIP_CHROME } from "@/components/layout/header/app-title-band-kind";
 import { MobileAppHeader } from "@/components/layout/header/mobile-app-header";
-import {
-  useMobileStripForm,
-  type MobileStripForm,
-} from "@/components/layout/tabs/mobile-strip-form-context";
+import { useMobileStripForm } from "@/components/layout/tabs/mobile-strip-form-context";
 import { MobileStripFormScope } from "@/components/layout/tabs/mobile-strip-form-scope";
 import { useTabStripPlacement } from "@/components/layout/tabs/use-tab-strip-placement";
 import { SideTabStrip } from "@/components/layout/tabs/side-strip/side-tab-strip";
@@ -294,20 +291,10 @@ vi.mock("@/components/auth/user-menu", async (importOriginal) => ({
   UserMenu: () => <span data-testid="foot-account" />,
 }));
 
-// The phone shell's level 1, as the width rule would answer it; the rule has its
-// own suite. Desktop mounts never read it, so the default is the drawer.
-const phoneShell = vi.hoisted(
-  (): { level1: "drawer" | "rail" | "expanded"; headerActive: boolean } => ({
-    level1: "drawer",
-    headerActive: false,
-  }),
-);
-vi.mock("@/hooks/ui/use-mobile-layout-form", () => ({
-  useMobileLayoutForm: () => ({
-    level1: phoneShell.level1,
-    level2: "bar",
-    tiles: 1,
-  }),
+// Whether this window is the phone shell; the width rule itself runs for real
+// against the `#root` width each case sets.
+const phoneShell = vi.hoisted((): { headerActive: boolean } => ({
+  headerActive: false,
 }));
 vi.mock("@/components/layout/header/use-mobile-header-active", () => ({
   useMobileHeaderActive: () => phoneShell.headerActive,
@@ -426,7 +413,6 @@ function resetStores(): void {
     ...useLayoutStore.getState().arrangement,
     tabStripPlacement: "top",
   });
-  phoneShell.level1 = "drawer";
   phoneShell.headerActive = false;
   tabCommandCoordinator.resetReconciliationForTesting();
   __resetBotListChangedSessionsForTesting();
@@ -1508,8 +1494,17 @@ function PhoneShellHarness(): ReactNode {
   );
 }
 
-function mountPhoneShell(level1: "drawer" | MobileStripForm): void {
-  phoneShell.level1 = level1;
+/** Where each form's width lands on the phones and tablets the rule names. */
+const RAIL_WIDTH_PX = 750;
+const EXPANDED_WIDTH_PX = 1210;
+const DRAWER_WIDTH_PX = 400;
+
+function mountPhoneShell(contentWidthPx: number): void {
+  document.getElementById("root")?.remove();
+  const root = document.createElement("div");
+  root.id = "root";
+  root.getBoundingClientRect = () => new DOMRect(0, 0, contentWidthPx, 402);
+  document.body.append(root);
   phoneShell.headerActive = true;
   mount(
     "/",
@@ -1521,9 +1516,12 @@ function mountPhoneShell(level1: "drawer" | MobileStripForm): void {
 
 describe("the phone shell's strip", () => {
   beforeEach(tracyIsMainBot);
+  afterEach(() => {
+    document.getElementById("root")?.remove();
+  });
 
-  it("draws the rail beside the header, whatever the stored width choice, with Tracy after Home and no hamburger or bell", async () => {
-    mountPhoneShell("rail");
+  it("draws the rail beside the header over a stored expanded choice, with Tracy after Home and no hamburger or bell", async () => {
+    mountPhoneShell(RAIL_WIDTH_PX);
 
     const strip = await screen.findByTestId("side-tab-strip");
     expect(strip.getAttribute("data-collapsed")).toBe("true");
@@ -1542,7 +1540,7 @@ describe("the phone shell's strip", () => {
   });
 
   it("draws no strip in the drawer form, and keeps the hamburger and the bell", async () => {
-    mountPhoneShell("drawer");
+    mountPhoneShell(DRAWER_WIDTH_PX);
 
     expect(await screen.findByTestId("mobile-nav-trigger")).not.toBeNull();
     expect(screen.queryByTestId("side-tab-strip")).toBeNull();
@@ -1554,7 +1552,7 @@ describe("the phone shell's strip", () => {
       ...useLayoutStore.getState().arrangement,
       tabStripPlacement: "right",
     });
-    mountPhoneShell("rail");
+    mountPhoneShell(RAIL_WIDTH_PX);
 
     const strip = await screen.findByTestId("side-tab-strip");
     expect(strip.getAttribute("data-edge")).toBe("left");
@@ -1562,7 +1560,7 @@ describe("the phone shell's strip", () => {
 
   it("draws the expanded form at the default width with no resize handle, over a wider stored width", async () => {
     useSideTabStripStore.setState({ widthPx: 400 });
-    mountPhoneShell("expanded");
+    mountPhoneShell(EXPANDED_WIDTH_PX);
 
     const strip = await screen.findByTestId("side-tab-strip");
     expect(strip.getAttribute("data-collapsed")).toBe("false");
@@ -1579,19 +1577,18 @@ describe("the phone shell's strip", () => {
     expect(screen.getByTestId("side-tab-strip-resize-handle")).not.toBeNull();
   });
 
-  it("offers no expand toggle in the rail while the stored choice is expanded", async () => {
-    mountPhoneShell("rail");
+  it("offers the collapse toggle only where the expanded strip fits, so a stored collapse cannot be flipped at 750", async () => {
+    useSideTabStripStore.setState({ collapsed: true });
+    mountPhoneShell(RAIL_WIDTH_PX);
 
     await screen.findByTestId("side-tab-strip");
     expect(screen.queryByTestId("side-tab-strip-collapse")).toBeNull();
-  });
+    expect(useSideTabStripStore.getState().collapsed).toBe(true);
 
-  it("offers the toggle in the rail once the person has collapsed, and a click expands the stored choice", async () => {
-    useSideTabStripStore.setState({ collapsed: true });
-    mountPhoneShell("rail");
+    cleanup();
+    mountPhoneShell(EXPANDED_WIDTH_PX);
 
     fireEvent.click(await screen.findByTestId("side-tab-strip-collapse"));
-
     expect(useSideTabStripStore.getState().collapsed).toBe(false);
   });
 });

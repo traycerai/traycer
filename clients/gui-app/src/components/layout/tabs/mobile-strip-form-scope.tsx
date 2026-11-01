@@ -1,6 +1,9 @@
 import type { ReactNode } from "react";
 import { useMobileHeaderActive } from "@/components/layout/header/use-mobile-header-active";
-import { MobileStripFormContext } from "@/components/layout/tabs/mobile-strip-form-context";
+import {
+  MobileExpandedStripFitsContext,
+  MobileStripFormContext,
+} from "@/components/layout/tabs/mobile-strip-form-context";
 import { useMobileLayoutForm } from "@/hooks/ui/use-mobile-layout-form";
 
 /**
@@ -11,11 +14,13 @@ export function MobileStripFormScope(props: {
   readonly children: ReactNode;
 }): ReactNode {
   const mobileHeaderActive = useMobileHeaderActive();
-  const { level1 } = useMobileLayoutForm(1);
+  const { level1, expandedFits } = useMobileLayoutForm(1);
   const form = mobileHeaderActive && level1 !== "drawer" ? level1 : null;
   return (
     <MobileStripFormContext.Provider value={form}>
-      {props.children}
+      <MobileExpandedStripFitsContext.Provider value={expandedFits}>
+        {props.children}
+      </MobileExpandedStripFitsContext.Provider>
     </MobileStripFormContext.Provider>
   );
 }

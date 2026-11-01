@@ -113,8 +113,18 @@ function setViewport(
   });
 }
 
-const PHONE_PORTRAIT = { level1: "drawer", level2: "bar", tiles: 1 };
-const RAIL_AND_MENU = { level1: "rail", level2: "menu", tiles: 1 };
+const PHONE_PORTRAIT = {
+  level1: "drawer",
+  level2: "bar",
+  tiles: 1,
+  expandedFits: false,
+};
+const RAIL_AND_MENU = {
+  level1: "rail",
+  level2: "menu",
+  tiles: 1,
+  expandedFits: false,
+};
 
 function fireResizeObservers(): void {
   for (const notify of resizeObservers) notify();
@@ -170,6 +180,7 @@ describe("useMobileLayoutForm", () => {
       level1: "rail",
       level2: { column: 256 },
       tiles: 1,
+      expandedFits: false,
     });
 
     root.getBoundingClientRect = () => new DOMRect(0, 0, 594, 402);
@@ -235,6 +246,7 @@ describe("useMobileLayoutForm", () => {
       level1: "expanded",
       level2: { column: 256 },
       tiles: 1,
+      expandedFits: true,
     });
 
     act(() => {
@@ -244,6 +256,7 @@ describe("useMobileLayoutForm", () => {
       level1: "rail",
       level2: { column: 256 },
       tiles: 1,
+      expandedFits: true,
     });
   });
 
@@ -254,6 +267,7 @@ describe("useMobileLayoutForm", () => {
       level1: "rail",
       level2: "menu",
       tiles: 2,
+      expandedFits: false,
     });
   });
 });

@@ -20,6 +20,17 @@ export function useMobileStripForm(): MobileStripForm | null {
 }
 
 /**
+ * Whether the phone shell's width has room for the expanded strip. It decides
+ * whether the collapse toggle is offered at all: below that width the stored
+ * choice cannot draw, so nothing may flip it.
+ */
+export const MobileExpandedStripFitsContext = createContext(false);
+
+export function useMobileExpandedStripFits(): boolean {
+  return useContext(MobileExpandedStripFitsContext);
+}
+
+/**
  * Whether the strip draws collapsed. On desktop that is the person's choice. In
  * the phone shell the form decides, because a stored "expanded" still draws the
  * rail where the expanded strip does not fit. Everything that draws the strip

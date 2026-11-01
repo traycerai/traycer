@@ -72,6 +72,16 @@ export interface MobileLayoutForm {
   readonly tiles: MobileTileCount;
 }
 
+/** The expanded strip takes the row only where it leaves a column and a pane beside it. */
+export function mobileExpandedStripFits(contentWidth: number): boolean {
+  return (
+    contentWidth >=
+    MOBILE_EXPANDED_STRIP_WIDTH_PX +
+      MOBILE_COLUMN_WIDTH_PX +
+      MOBILE_PANE_MIN_WIDTH_PX
+  );
+}
+
 /** Level 2 beside one tile: the widest column that leaves the pane its minimum. */
 function level2BesideOneTile(contentWidth: number): MobileLevel2Form {
   const besidePane = MOBILE_RAIL_WIDTH_PX + MOBILE_PANE_MIN_WIDTH_PX;
@@ -85,8 +95,7 @@ function level2BesideOneTile(contentWidth: number): MobileLevel2Form {
 }
 
 /**
- * The expanded strip takes the row only where it leaves a column and a pane
- * beside it. A second tile needs two panes beside whichever strip draws, and
+ * A second tile needs two panes beside whichever strip draws, and
  * the column makes way for it at every width: while two tiles show, level 2 is
  * the menu. Below the rail and one pane nothing fits beside the content, which
  * is phone portrait's form whatever the orientation.
@@ -101,13 +110,10 @@ export function resolveMobileLayoutForm(
   ) {
     return { level1: "drawer", level2: "bar", tiles: 1 };
   }
-  const expandedFits =
-    contentWidth >=
-    MOBILE_EXPANDED_STRIP_WIDTH_PX +
-      MOBILE_COLUMN_WIDTH_PX +
-      MOBILE_PANE_MIN_WIDTH_PX;
   const level1 =
-    stripPreference === "expanded" && expandedFits ? "expanded" : "rail";
+    stripPreference === "expanded" && mobileExpandedStripFits(contentWidth)
+      ? "expanded"
+      : "rail";
   const level1Width =
     level1 === "expanded"
       ? MOBILE_EXPANDED_STRIP_WIDTH_PX

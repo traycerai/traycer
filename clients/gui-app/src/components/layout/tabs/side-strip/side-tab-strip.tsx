@@ -19,13 +19,11 @@ import type { EdgeSide } from "@/lib/layout/layout-arrangement";
 import { useStatusBarVisible } from "@/lib/layout-overrides";
 import { cn } from "@/lib/utils";
 import { useWindowsBridgeHydrated } from "@/providers/windows-bridge-context";
-import {
-  useSideStripCollapsed,
-  useSideTabStripStore,
-} from "@/stores/layout/side-tab-strip-store";
+import { useSideTabStripStore } from "@/stores/layout/side-tab-strip-store";
 import { useTitleBarDraggingSuppressed } from "@/stores/layout/title-bar-drag-store";
 import { useTabsStore } from "@/stores/tabs/store";
 import {
+  useMobileExpandedStripFits,
   useMobileStripForm,
   useSideStripDrawnCollapsed,
 } from "../mobile-strip-form-context";
@@ -64,7 +62,8 @@ const NO_DRAG_REGION_CLASS = "[-webkit-app-region:no-drag]";
  *
  * In the phone shell the form decides what draws. The expanded strip is always
  * its default width and has no handle, because the width rule budgets exactly
- * that. The rail offers no expand toggle where the form would keep it the rail.
+ * that. Below the width the expanded strip needs there is no collapse toggle or
+ * chord, so a stored choice that cannot draw is never flipped.
  * The foot clears the home indicator when no status bar sits under the strip.
  */
 export function SideTabStrip(props: {
@@ -77,13 +76,11 @@ export function SideTabStrip(props: {
   const persistedStripCount = useTabsStore((state) => state.stripOrder.length);
   const mobileForm = useMobileStripForm();
   const collapsed = useSideStripDrawnCollapsed();
-  const collapsedChoice = useSideStripCollapsed();
   const storedWidthPx = useSideTabStripStore((state) => state.widthPx);
   const widthPx =
     mobileForm === null ? storedWidthPx : SIDE_STRIP_DEFAULT_WIDTH_PX;
-  // The person chose expanded and the form still answers the rail: it does not
-  // fit, so the toggle would do nothing.
-  const expandUnavailable = mobileForm === "rail" && !collapsedChoice;
+  const expandedFits = useMobileExpandedStripFits();
+  const collapseOffered = mobileForm === null || expandedFits;
   const statusBarShown = useStatusBarVisible();
   const variant: SideTabRowVariant = collapsed ? "collapsed" : "expanded";
   const stripRef = useRef<HTMLElement | null>(null);
@@ -91,15 +88,14 @@ export function SideTabStrip(props: {
   const stopWidthEasing = widthEasing.stop;
   // The keyboard's collapse is instant (L-165); only this strip registers it,
   // so the action exists exactly while the tabs are at the side.
-  useEffect(
-    () =>
-      registerDynamicActionHandler("app.tabs.vertical.collapse", () => {
-        stopWidthEasing();
-        const { collapsed, setCollapsed } = useSideTabStripStore.getState();
-        setCollapsed(!collapsed);
-      }),
-    [stopWidthEasing],
-  );
+  useEffect(() => {
+    if (!collapseOffered) return undefined;
+    return registerDynamicActionHandler("app.tabs.vertical.collapse", () => {
+      stopWidthEasing();
+      const { collapsed, setCollapsed } = useSideTabStripStore.getState();
+      setCollapsed(!collapsed);
+    });
+  }, [collapseOffered, stopWidthEasing]);
   const dragClass = useStripDragClass();
   const surfaceRef = useLayoutSurface("topBar");
   const bindStrip = useCallback(
@@ -152,7 +148,7 @@ export function SideTabStrip(props: {
               onHomeTab={controller.onHomeTab}
               tracy={controller.tracy}
               onNewTab={controller.onNewTab}
-              onToggleCollapsed={expandUnavailable ? null : widthEasing.toggle}
+              onToggleCollapsed={collapseOffered ? widthEasing.toggle : null}
               taskCount={controller.tabs.length}
             />
             <TabStripIndicatorScope indicators={controller.indicators}>
