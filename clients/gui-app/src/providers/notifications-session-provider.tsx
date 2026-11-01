@@ -18,6 +18,7 @@ import {
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import { useHostStreamClientBindingFor } from "@/hooks/host/use-host-stream-client-for";
+import { StandaloneBotsBridge } from "@/components/layout/bridges/standalone-bots-bridge";
 import { useHostClientFor } from "@/hooks/host/use-host-client-for";
 import { useRequestContextUserId } from "@/hooks/host/use-request-context-user-id";
 import { remoteAwareOwnerIdentityKey } from "@/lib/host/transport-key";
@@ -321,6 +322,9 @@ export function NotificationsSessionProvider(
       <NotificationFeedModeSettlingContext.Provider
         value={notificationFeedModeSettling}
       >
+        {/* Beside the feeds it names arrivals for, so no arrival waits on a
+            directory nothing is reading. */}
+        <StandaloneBotsBridge />
         <NotificationsSessionBody
           navigate={props.navigate}
           servingHostEntry={servingHostEntry}

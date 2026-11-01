@@ -10,6 +10,7 @@ import {
 } from "@testing-library/react";
 import { useContext, type ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { useStandaloneBotsStore } from "@/stores/bots/standalone-bots-store";
 import * as Y from "yjs";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
@@ -1108,6 +1109,15 @@ function stageNotificationPartitionFloors(): void {
 }
 
 describe("<NotificationsSessionProvider />", () => {
+  it("runs the directory that names a bot's arrivals alongside the feeds", async () => {
+    const before = useStandaloneBotsStore.getState().directory;
+
+    await renderHostNotificationsProvider();
+
+    expect(useStandaloneBotsStore.getState().directory).not.toBe(before);
+    useStandaloneBotsStore.setState({ directory: before, settled: false });
+  });
+
   beforeEach(() => {
     window.localStorage.clear();
     hostState.id = "host-a";
