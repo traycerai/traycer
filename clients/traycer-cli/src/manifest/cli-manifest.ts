@@ -48,7 +48,7 @@ export interface CliPendingUpgrade {
   readonly reason: CliPendingUpgradeReason;
   // The person named this exact version with `--allow-downgrade`. The
   // publisher reads it to tell a consented backwards move from a pre-floor
-  // accidental one; see `cliPendingUpgradeSchema` for why it has to be
+  // accidental one; see `cliPendingUpgradeOnDiskSchema` for why it has to be
   // persisted rather than held in the staging process.
   readonly allowDowngrade: boolean;
 }

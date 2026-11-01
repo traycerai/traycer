@@ -16,6 +16,7 @@ import type { BootstrapLogEntry } from "../../host/bootstrap-log";
 import type {
   HostUpdateAttemptRead,
   HostUpdateAttemptRecord,
+  HostUpdateLastAttempt,
 } from "@traycer-clients/shared/host-update";
 import { encodeInstallGeneration } from "@traycer-clients/shared/host-version/install-generation";
 import type { HostInstallRecord } from "../../manifest/host-install";
@@ -344,6 +345,7 @@ describe("hostStatusCommand - observational (CLI-001)", () => {
       lifecycle: lifecycleSnapshot,
       updateAttempt: null,
       lastUpdateAttempt: null,
+      lastDownloadFailure: null,
       updateLockHolder: null,
     });
     expect(mocks.readHostLifecycleSnapshotMock).toHaveBeenCalledWith(
@@ -420,6 +422,66 @@ describe("hostStatusCommand - observational (CLI-001)", () => {
     } finally {
       await removeHostUpdateLastAttempt(hostHomeDir("production"));
     }
+  });
+
+  describe("the last download", () => {
+    const failure = {
+      command: "host download",
+      initiator: "desktop",
+      outcome: "failed",
+      targetVersion: "1.5.2",
+      attemptId: null,
+      code: null,
+      message: "connection reset",
+    } as const;
+    const update = {
+      ...failure,
+      command: "host update",
+      initiator: "manual",
+      outcome: "complete",
+      message: null,
+    } as const;
+    const write = (
+      attempt: Omit<HostUpdateLastAttempt, "recordedAt">,
+    ): Promise<void> =>
+      writeHostUpdateLastAttempt(hostHomeDir("production"), attempt, {
+        info: vi.fn(),
+      });
+
+    afterEach(async () => {
+      await removeHostUpdateLastAttempt(hostHomeDir("production"));
+    });
+
+    it("shows beside the last update, not over it", async () => {
+      await write({ ...update, outcome: "refused" });
+      await write(failure);
+
+      const result = await hostStatusCommand(makeCtx(makeRuntime({})));
+
+      expect(result.human).toContain("Last update");
+      expect(result.human).toContain("Last download");
+      expect(result.human).toContain("connection reset");
+    });
+
+    it("a no-op says nothing about the bytes that never came", async () => {
+      await write(failure);
+      await write({ ...update, outcome: "no-op" });
+
+      const result = await hostStatusCommand(makeCtx(makeRuntime({})));
+
+      expect(result.human).toContain("Last download");
+    });
+
+    it("does not come back once an update has got past it", async () => {
+      await write(failure);
+      await write(update);
+      await write({ ...update, targetVersion: "1.6.0", outcome: "refused" });
+
+      const result = await hostStatusCommand(makeCtx(makeRuntime({})));
+
+      expect(result.data).toMatchObject({ lastDownloadFailure: null });
+      expect(result.human).not.toContain("Last download");
+    });
   });
 
   it("human output on the not-running branch includes the 'host ensure' hint", async () => {

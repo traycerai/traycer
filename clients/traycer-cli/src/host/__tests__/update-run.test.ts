@@ -571,6 +571,8 @@ import {
 } from "../../manifest/host-staged";
 import { hostStagedDir } from "../../store/paths";
 import { CLI_ERROR_CODES, CliError, cliError } from "../../runner/errors";
+import { probeAttemptHolder } from "@traycer-clients/shared/host-update";
+import { describeUpdateLockHolder } from "../update-contender";
 import { SERVICE_KEPT_DISABLED_WARNING } from "../../service/registration-owner";
 import { SERVICE_TASK_NOT_OWNED_MESSAGE } from "../../service/platforms/windows-task-gate";
 import type { ILogger } from "../../logger";
@@ -4929,9 +4931,8 @@ describe("ported: activation debt (installed-up-to-date short-circuit)", () => {
     mocks.disk.current = {
       state: "failed",
       error: "an older run failed",
-      // NAMES the observed version. `clearStaleFailedMarker` applies the same
-      // string rule the host's `isStaleUpdateProgress` does: a `failed` is
-      // stale when the version it names IS the one now running.
+      // NAMES the observed version. `clearStaleFailedMarker` clears a `failed`
+      // only when the version it names IS the one now running.
       targetVersion: "2.0.0",
       updatedAt: "2026-01-01T00:00:00.000Z",
       writerId: null,
@@ -6225,6 +6226,108 @@ describe("acceptance: cells with no legacy ancestor", () => {
     expect(mocks.disk.current).toBeNull();
   });
 
+  it("a recovery that settled the attempt failed is recorded failed, not refused", async () => {
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    const crashed = await crashAtRestarting("2.0.0");
+    await seedInstalled("3.0.0");
+    world.latest = "3.0.0";
+    world.runningVersion = "3.0.0";
+
+    const outcome = await runUpdate({
+      intent: "continue",
+      expectAttempt: crashed.attemptId,
+    }).catch((err: unknown) => err);
+
+    const settled = await requireRecord();
+    expect(settled.phase).toBe("failed");
+    expect(await readHostUpdateLastAttempt(currentHome.value)).toMatchObject({
+      outcome: "failed",
+      attemptId: crashed.attemptId,
+      targetVersion: "2.0.0",
+      message: settled.error?.message,
+    });
+    expect(outcome).toMatchObject({ releasedReason: "recovered-failed" });
+  });
+
+  it("a recovery that settled the attempt failed with no host running still says so", async () => {
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    const crashed = await crashAtRestarting("2.0.0");
+    await seedInstalled("3.0.0");
+    world.latest = "3.0.0";
+    world.runningVersion = null;
+
+    await expect(
+      runUpdate({ intent: "continue", expectAttempt: crashed.attemptId }),
+    ).rejects.toMatchObject({ code: CLI_ERROR_CODES.HOST_NOT_RUNNING });
+
+    expect((await requireRecord()).phase).toBe("failed");
+    expect(await readHostUpdateLastAttempt(currentHome.value)).toMatchObject({
+      outcome: "failed",
+      attemptId: crashed.attemptId,
+    });
+  });
+
+  it("a recovery that settled the attempt complete still says so when the host is then gone", async () => {
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    const crashed = await crashAtRestarting("2.0.0");
+    world.runningVersion = "2.0.0";
+    mocks.readHostPidMetadata.mockImplementation(async () =>
+      (await readRecord())?.phase === "complete" ? null : pidMetadata("2.0.0"),
+    );
+
+    await expect(
+      runUpdate({ intent: "continue", expectAttempt: crashed.attemptId }),
+    ).rejects.toMatchObject({ code: CLI_ERROR_CODES.HOST_NOT_RUNNING });
+
+    expect(await readHostUpdateLastAttempt(currentHome.value)).toMatchObject({
+      outcome: "complete",
+      attemptId: crashed.attemptId,
+    });
+  });
+
+  it("a recovery that failed names the attempt's version, not the host's", async () => {
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    const crashed = await crashAtRestarting("2.0.0");
+    await seedInstalled("3.0.0");
+    world.latest = "3.0.0";
+    world.runningVersion = "3.0.0";
+
+    await runUpdate({
+      intent: "activate",
+      expectAttempt: crashed.attemptId,
+    });
+
+    expect(await readHostUpdateLastAttempt(currentHome.value)).toMatchObject({
+      outcome: "failed",
+      attemptId: crashed.attemptId,
+      targetVersion: "2.0.0",
+    });
+  });
+
+  it("an attempt closed on the way to nothing-to-do is not this run's outcome", async () => {
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    await crashAtRestarting("2.0.0");
+    await seedInstalled("3.0.0");
+    world.latest = "3.0.0";
+    world.runningVersion = "3.0.0";
+
+    const outcome = await runUpdate({});
+
+    expect(outcome.releasedReason).toBe("nothing-to-do-stale-attempt-closed");
+    expect((await requireRecord()).phase).toBe("failed");
+    expect(await readHostUpdateLastAttempt(currentHome.value)).toMatchObject({
+      outcome: "no-op",
+      targetVersion: "3.0.0",
+      attemptId: null,
+      message: null,
+    });
+  });
+
   it("Q26: an `updating` marker is LEFT ALONE when the closed record settled `failed`", async () => {
     // THE ROW THAT CHANGED SIDES, and it is the reason arm 2 is keyed on the
     // record rather than the reason string (cold review C).
@@ -6937,7 +7040,7 @@ describe("ported: the explicit request's version binding (#1752 round 14)", () =
     // a non-failure terminal the GUI's live projection maps to `idle` and its
     // record leg drops - and this run's own `updating` marker is withdrawn by
     // CONDITIONAL delete. A `failed` here would name 2.0.0 over a host at
-    // 3.0.0, and no stale rule clears a `failed` whose target is not running.
+    // 3.0.0, and this CLI clears a `failed` only when its target is running.
     await seedInstalled("1.0.0");
     world.runningVersion = "1.0.0";
     mocks.downloadAndStageHostInSegment.mockImplementation(
@@ -9197,6 +9300,45 @@ describe("runHostUpdate - every exit records the attempt", () => {
     expect(await last()).toMatchObject({ outcome: "complete", attemptId });
   });
 
+  it("a host verified at the target is updated even if the record could not say so, and the next run concludes it", async () => {
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    mocks.refuseCompletion = "durability-unverified";
+    await expect(runUpdate({})).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_UPDATE_RECORD_NOT_CONCLUDED,
+    });
+    expect(await last()).toMatchObject({
+      outcome: "complete",
+      code: CLI_ERROR_CODES.HOST_UPDATE_RECORD_NOT_CONCLUDED,
+      message: expect.stringContaining("the next run will conclude"),
+    });
+    const { attemptId } = await requireRecord();
+
+    mocks.deadWriterIds.add("test-writer");
+    mocks.refuseCompletion = null;
+    const outcome = await runUpdate({});
+
+    expect(outcome.releasedReason).toBe("recovered-complete");
+    expect(await last()).toMatchObject({
+      outcome: "complete",
+      code: "recovered-complete",
+      attemptId,
+      targetVersion: "2.0.0",
+    });
+  });
+
+  it("reports the version it claimed, when an install landed after the plan", async () => {
+    await seedInstalled("2.0.0");
+    world.runningVersion = "1.0.0";
+    mocks.readHostPidMetadata.mockImplementationOnce(async () => {
+      await seedInstalled("3.0.0");
+      return pidMetadata("1.0.0");
+    });
+    await runUpdate({}).catch(() => null);
+    expect((await requireRecord()).targetVersion).toBe("3.0.0");
+    expect(await last()).toMatchObject({ targetVersion: "3.0.0" });
+  });
+
   it("a mistyped request is refused before anything is read", async () => {
     await expect(runUpdate({ versionRequest: "" })).rejects.toMatchObject({
       code: CLI_ERROR_CODES.INVALID_ARGUMENT,
@@ -9206,6 +9348,47 @@ describe("runHostUpdate - every exit records the attempt", () => {
       code: CLI_ERROR_CODES.INVALID_ARGUMENT,
       attemptId: null,
     });
+  });
+
+  it("a dispatch nonce this build cannot honour is refused and recorded", async () => {
+    await expect(
+      runUpdate({ ackNonce: "not a legal nonce", versionRequest: "2.0.0" }),
+    ).rejects.toThrow("nonce");
+    expect(await last()).toMatchObject({
+      outcome: "refused",
+      targetVersion: "2.0.0",
+      attemptId: null,
+      message: expect.stringContaining("nonce"),
+    });
+  });
+
+  it("the executor's own lock says the app is behind it", async () => {
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    world.latest = "2.0.0";
+    let holder = "";
+    mocks.applyHostWithAttempt.mockImplementationOnce(async () => {
+      const probe = await probeAttemptHolder({
+        hostHomeDir: currentHome.value,
+        nowMs: Date.now(),
+        cacheTtlMs: 0,
+      });
+      holder =
+        probe.kind === "holder-live"
+          ? describeUpdateLockHolder(probe.holder)
+          : probe.kind;
+      await seedInstalled("2.0.0");
+      world.runningVersion = "2.0.0";
+      await seedStaged(null);
+      return { outcome: "no-op" as const };
+    });
+    vi.stubEnv("TRAYCER_HOST_UPDATE_INITIATOR", "desktop");
+    try {
+      await runUpdate({});
+    } finally {
+      vi.unstubAllEnvs();
+    }
+    expect(holder).toBe("The Traycer app is updating the host");
   });
 
   it("a plan that cannot be made is refused, with the requested target", async () => {

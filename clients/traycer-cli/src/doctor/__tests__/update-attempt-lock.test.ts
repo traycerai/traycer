@@ -281,6 +281,7 @@ describe("probeUpdateAttemptLock", () => {
     expect(issue?.severity).toBe("warning");
     expect(issue?.message).toContain(lockPath);
     expect(issue?.message).toContain("pid 4246");
+    expect(issue?.message).toContain("waiting will not clear it");
     expect(issue?.message).toContain("remove the file");
   });
 
