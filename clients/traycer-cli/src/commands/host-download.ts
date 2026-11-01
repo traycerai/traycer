@@ -71,9 +71,9 @@ export function buildHostDownloadCommand(args: HostDownloadArgs): CommandFn {
       );
       throw err;
     }
-    // Only a result with bytes behind it answers the failure: being up to date,
-    // or a download discarded or refused, says nothing about what did not arrive.
-    if (outcome.outcome === "promoted" || outcome.reason === "already-staged") {
+    // Only a stage answers the failure. Finding the host up to date or a stage
+    // already there, or a download discarded or refused, delivered nothing.
+    if (outcome.outcome === "promoted") {
       await clearHostDownloadFailure(home);
     }
     ctx.runtime.logger.info("Host download command completed", {

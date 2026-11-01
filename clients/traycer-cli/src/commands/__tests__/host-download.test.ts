@@ -244,33 +244,28 @@ describe("the record a download leaves", () => {
     message: "connection reset",
   } as const;
 
-  it.each<[string, HostDownloadOutcome]>([
-    [
-      "staged",
-      {
-        outcome: "promoted",
-        stagedVersion: "1.5.0",
-        installedVersion: "1.4.0",
-      },
-    ],
-    [
-      "already staged",
-      {
-        outcome: "short-circuit",
-        reason: "already-staged",
-        targetVersion: "1.5.0",
-        stagedVersion: "1.5.0",
-        installedVersion: "1.4.0",
-      },
-    ],
-  ])("one that ends %s clears the failure before it", async (_name, result) => {
+  it("one that stages clears the failure before it", async () => {
     await writeHostUpdateLastAttempt(home(), failure, { info: vi.fn() });
-    mocks.downloadAndStageHostMock.mockResolvedValue(result);
+    mocks.downloadAndStageHostMock.mockResolvedValue({
+      outcome: "promoted",
+      stagedVersion: "1.5.0",
+      installedVersion: "1.4.0",
+    });
     await download(null);
     expect(await last()).toBeNull();
   });
 
   it.each<[string, HostDownloadOutcome]>([
+    [
+      "already staged",
+      {
+        outcome: "short-circuit",
+        reason: "already-staged",
+        targetVersion: "1.4.0",
+        stagedVersion: "1.4.0",
+        installedVersion: "1.3.0",
+      },
+    ],
     [
       "up to date",
       {

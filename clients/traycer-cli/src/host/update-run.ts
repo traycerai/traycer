@@ -625,7 +625,7 @@ async function waitOutUpdateLock(args: HostUpdateRunArgs): Promise<void> {
 interface RunAttemptFacts {
   readonly home: string;
   readonly initiator: HostUpdateTrigger;
-  /** The request, then the plan's target once there is one. */
+  /** The request, then the plan's, the claim's or the settled attempt's target. */
   targetVersion: string | null;
   claimedAttemptId: string | null;
   /** The interrupted attempt this run settled, when that is what it did. */

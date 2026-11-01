@@ -98,8 +98,8 @@ export interface AcquireUpdateAttemptLockOptions {
   /**
    * How long to wait for the lock.
    *
-   * Bounded, never open-ended: the CLI's contenders wait 30 seconds, so a
-   * short holder still lets them run, and one that needs longer resolves to
+   * Bounded, never open-ended: a contender waits seconds, so a short holder
+   * still lets it run, and one that needs longer resolves to
    * `busy` and the loser refuses rather than queueing behind a segment that
    * may run for minutes.
    */

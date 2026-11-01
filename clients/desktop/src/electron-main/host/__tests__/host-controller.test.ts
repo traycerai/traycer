@@ -4158,6 +4158,62 @@ describe("platform matrix", () => {
       });
     });
 
+    it("an apply that changed nothing stays a no-op over a host it can reach", async () => {
+      const controller = stagedUpdate();
+      vi.mocked(streamBundledTraycerCliJson).mockImplementation(
+        async (opts) => {
+          if (opts.args.includes("apply")) {
+            await writeHostUpdateLastAttempt(
+              getHostFsLayout("production").rootDir,
+              {
+                command: "host apply",
+                initiator: "desktop",
+                outcome: "no-op",
+                targetVersion: null,
+                attemptId: null,
+                code: null,
+                message: null,
+              },
+              { info: vi.fn() },
+            );
+            return { data: { outcome: "no-op", installedVersion: "1.7.0" } };
+          }
+          return { data: {} };
+        },
+      );
+
+      const outcome = await controller.applyStaged("launch", false);
+
+      expect(outcome.kind).toBe("ok");
+      expect(await lastAttempt()).toMatchObject({ outcome: "no-op" });
+    });
+
+    it("an activation that restarted nothing leaves the waiting apply waiting", async () => {
+      const controller = stagedUpdate();
+      await writeHostUpdateLastAttempt(
+        getHostFsLayout("production").rootDir,
+        {
+          command: "host apply",
+          initiator: "desktop",
+          outcome: "parked",
+          targetVersion: "1.7.0",
+          attemptId: null,
+          code: null,
+          message: null,
+        },
+        { info: vi.fn() },
+      );
+      vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
+        data: { restarted: false },
+      });
+
+      await expect(controller.activateInstalled(false, false)).resolves.toEqual(
+        { kind: "ok", value: { activated: false } },
+      );
+
+      expect(await lastAttempt()).toMatchObject({ outcome: "parked" });
+    });
+
     it("an apply of bytes this app activates, whose child died, is recorded here", async () => {
       vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
       const controller = stagedUpdate();
@@ -4196,6 +4252,7 @@ describe("platform matrix", () => {
         command: "host download",
         initiator: "desktop",
         outcome: "failed",
+        targetVersion: "1.8.0",
       });
     });
 

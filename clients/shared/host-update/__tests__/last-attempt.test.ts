@@ -206,6 +206,10 @@ describe("writeHostUpdateLastAttempt", () => {
         "/mnt/<redacted>/x",
       ],
       ["inside a longer path", "/root", "/opt/root/x", "/opt/<redacted>/x"],
+      ["after a dot", "/root", "./root/x", "./<redacted>/x"],
+      ["after a dash", "/root", "from-/root/x", "from-/<redacted>/x"],
+      ["after a tilde", "/data/alice", "~alice/x", "~<redacted>/x"],
+      ["after an at sign", "/data/alice", "team@alice", "team@<redacted>"],
       [
         "inside a URL",
         "/root",
