@@ -431,6 +431,16 @@ describe("ActivityTab", () => {
 
       expect(screen.getByText("New agent")).not.toBeNull();
     });
+
+    it("shows New agent, not a blank cell, for an open chat whose title is empty and a null recorded title", () => {
+      visibleChats.current = new Map([
+        ["chat-1", { title: "", workspace: { remote: null, branch: null } }],
+      ]);
+      recent.entries = [entry({ chatTitle: null })];
+      defaultTab();
+
+      expect(screen.getByText("New agent")).not.toBeNull();
+    });
   });
 
   describe("empty and unsupported", () => {

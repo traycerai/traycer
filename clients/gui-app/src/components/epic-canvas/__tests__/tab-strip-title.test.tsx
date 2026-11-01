@@ -33,6 +33,7 @@ import {
 import { TabStrip } from "@/components/epic-canvas/canvas/tab-strip";
 import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { parseTileRef } from "@/stores/epics/canvas/tile-schema";
 import { findOpenTileInTab } from "@/stores/epics/canvas/canvas-selectors";
 import type { SplitDirection } from "@/stores/epics/canvas/types";
 import { TestEpicSessionWrapper } from "./test-epic-session";
@@ -238,8 +239,11 @@ function renderTabStrip(tab: typeof TAB, canRenameTabs: boolean): void {
  * the strip's snapshot write-through has a persisted `name` to move. Returns
  * the tile as the canvas holds it.
  */
-function seedChatTile(name: string): typeof TAB {
-  const ref = { ...TAB, name };
+function seedChatTile(savedName: string): typeof TAB {
+  // Through the saved-tile parse, as a tile reaches the canvas on a reload.
+  const parsed = parseTileRef({ ...TAB, name: savedName });
+  if (parsed === null) throw new Error("expected the saved chat tile");
+  const ref = { ...TAB, name: parsed.name };
   const canvasStore = useEpicCanvasStore.getState();
   canvasStore.openEpicTabWithId(VIEW_TAB_ID, EPIC_ID, "Epic");
   canvasStore.openTileInTab(VIEW_TAB_ID, ref);

@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { parseTileRef } from "@/stores/epics/canvas/tile-schema";
 import type { SandboxCatalogue } from "@traycer/protocol/host/sandbox-control";
 import { TestRouterProvider } from "@/__tests__/with-test-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -7807,11 +7808,13 @@ describe("<ChatTile />", () => {
         defaultOptions: { queries: { retry: false, gcTime: 0 } },
       });
       // The tile ref keeps its opening-name snapshot, as a chat opened before
-      // its title was generated does.
+      // its title was generated does, loaded through the saved-tile parse.
+      const saved = parseTileRef({ ...CHAT_ARTIFACT, name: REF_NAME });
+      if (saved === null) throw new Error("expected the saved chat tile");
       render(
         chatTileTestTree(queryClient, true, {
           ...CHAT_ARTIFACT,
-          name: REF_NAME,
+          name: saved.name,
         }),
       );
       await waitForChatTileLoaded();
@@ -7845,9 +7848,9 @@ describe("<ChatTile />", () => {
     }
 
     it("announces the projected live title, not the ref's opening-name snapshot", async () => {
-      // Restoring `taskTitle={props.node.name}` announces "Untitled agent
-      // finished responding." here: the ref name is REF_NAME while the store
-      // holds "Real Title", so the exact-text assertion goes red.
+      // Restoring `taskTitle={props.node.name}` announces "New agent
+      // finished responding." here: the loaded ref name is "New agent" while
+      // the store holds "Real Title", so the exact-text assertion goes red.
       const text = await announcedAfterCompletedTurn({
         liveTitle: "Real Title",
         stateTitle: "State Title",
@@ -7863,7 +7866,7 @@ describe("<ChatTile />", () => {
       expect(text).toBe("State Title finished responding.");
     });
 
-    it("falls back to the ref name when both titles are empty", async () => {
+    it('falls back to the loaded tile name, a saved "Untitled agent" read as New agent, when both titles are empty', async () => {
       const text = await announcedAfterCompletedTurn({
         liveTitle: "",
         stateTitle: "",
