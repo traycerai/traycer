@@ -87,7 +87,7 @@ export function useChatsOpenerItems(ctx: CommandContext): OpenerInterfaceItems {
           id: chat.id,
           instanceId: uuidv4(),
           type: "chat",
-          // Read surface: an untitled Agent renders the render-tier "Untitled
+          // Read surface: an untitled Agent renders the render-tier "New
           // agent" fallback, NOT the creation-tier "New chat" default title.
           name: displayTitle(chat.title, "agent"),
           hostId: chat.hostId ?? defaultHostId,

@@ -36,6 +36,7 @@ const testState = vi.hoisted(() => ({
   },
   navigateResults: [] as Array<NestedFocusTarget | null>,
   navigateNested: vi.fn(),
+  liveTitle: null as string | null,
 }));
 
 const exitedHandle = {
@@ -133,6 +134,9 @@ vi.mock("@/hooks/agent/use-agent-stop-controls", () => ({
 
 vi.mock("@/lib/epic-selectors", () => ({
   useOpenEpicId: () => "epic-test",
+  // The tab's resolver: a live title when one exists, else the snapshot name.
+  useEpicTabDisplayTitle: (node: { readonly name: string }) =>
+    testState.liveTitle ?? node.name,
   useEpicTerminalAgent: () => ({
     id: "agent-1",
     harnessId: "claude" as const,
@@ -250,6 +254,7 @@ describe("<TuiAgentTile /> exit close", () => {
       basis: "directory",
       unavailability: null,
     };
+    testState.liveTitle = null;
     resetNavigationSpy();
   });
 
@@ -349,6 +354,47 @@ describe("<TuiAgentTile /> exit close", () => {
     expectTileOpen(fixture.viewTabId, fixture.closingNode.instanceId);
     expect(testState.navigateNested).not.toHaveBeenCalled();
   });
+
+  it.each([
+    [
+      "a live title where the snapshot is the fallback",
+      "Live title",
+      "Live title",
+    ],
+    ["no live title, the fallback snapshot", null, "New agent"],
+  ])(
+    "names the crash notification from the tab's resolver: %s",
+    async (_label, liveTitle, shown) => {
+      testState.liveTitle = liveTitle;
+      exitedHandle.store.setState({
+        exitCode: 1,
+        exitReason: "process-exit",
+      });
+      useAppLocalNotificationsStore.getState().activateIdentity("user-a");
+      const fixture = openAgentFixture(false);
+
+      render(
+        withQueryClient(
+          <TuiAgentTile
+            viewTabId={fixture.viewTabId}
+            node={{ ...fixture.closingNode, name: "New agent" }}
+            tileId={fixture.paneId}
+            isActive
+          />,
+        ),
+      );
+
+      await waitFor(() => {
+        expect(
+          useAppLocalNotificationsStore.getState().orderedIds,
+        ).toHaveLength(1);
+      });
+      const id = useAppLocalNotificationsStore.getState().orderedIds[0];
+      expect(useAppLocalNotificationsStore.getState().byId[id].message).toBe(
+        `${shown} exited unexpectedly.`,
+      );
+    },
+  );
 
   it("closes an inactive exited tile without producing a route-write target", async () => {
     const fixture = openAgentFixture(true);

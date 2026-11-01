@@ -271,7 +271,7 @@ function inputFor(
     fallbackToGlobalMentionRoots: false,
     currentEpicId: "epic-1",
     node: { id: "chat-1", instanceId: "instance-1", name: "Chat" },
-    chatTitle: null,
+    chatTitle: "",
     chatParentId: null,
     messages: [],
     events: [],

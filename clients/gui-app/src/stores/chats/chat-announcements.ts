@@ -924,6 +924,8 @@ interface ChatAnnouncementQueue {
   readonly announcement: RenderedChatAnnouncement | null;
   readonly enqueue: (texts: ReadonlyArray<string>) => void;
   readonly reset: () => void;
+  /** Empties the region, keeping news that has not rendered yet. Speaks nothing. */
+  readonly retire: () => void;
 }
 
 /** Keeps every transition React batches before the live region commits. */
@@ -939,6 +941,10 @@ export function useChatAnnouncementQueue(): ChatAnnouncementQueue {
     generation.current += 1;
     pending.current = [];
     scheduled.current = false;
+    setAnnouncement(null);
+  }, []);
+
+  const retire = useCallback(() => {
     setAnnouncement(null);
   }, []);
 
@@ -981,5 +987,5 @@ export function useChatAnnouncementQueue(): ChatAnnouncementQueue {
     [],
   );
 
-  return { announcement, enqueue, reset };
+  return { announcement, enqueue, reset, retire };
 }
