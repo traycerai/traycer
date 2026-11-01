@@ -156,6 +156,8 @@ interface TestState {
    * fixture in this file.
    */
   readonly chatRetractionByChatId: Map<string, "deleted" | "revoked">;
+  /** The terminal twin, as `useEpicTuiAgentRetraction` reads it. */
+  readonly tuiAgentRetractionById: Map<string, "deleted" | "revoked">;
   /** Directory rows the `useHostDirectoryEntry` mock answers; unlisted hosts
    * answer `null`, as a suite with no host runtime has always seen. */
   readonly directoryEntries: Map<string, HostDirectoryEntry>;
@@ -179,6 +181,7 @@ const testState = vi.hoisted((): TestState => ({
   chatRecordListAuthoritative: true,
   tuiAgentRecordListAuthoritative: true,
   chatRetractionByChatId: new Map(),
+  tuiAgentRetractionById: new Map(),
   directoryEntries: new Map(),
   poolConfigured: false,
 }));
@@ -276,6 +279,10 @@ vi.mock("@/lib/epic-selectors", () => ({
     testState.chatRecordListAuthoritative,
   useEpicTuiAgentRecordListAuthoritative: () =>
     testState.tuiAgentRecordListAuthoritative,
+  useEpicTuiAgentRetraction: (tuiAgentId: string | null) =>
+    tuiAgentId === null
+      ? null
+      : (testState.tuiAgentRetractionById.get(tuiAgentId) ?? null),
   useMaybeEpicTuiAgentHarnessId: () => null,
   useRegisteredEpicActiveAgentIds: () => new Set<string>(),
   useRegisteredEpicNodeArchived: () => false,
@@ -2115,6 +2122,7 @@ describe("<TabGroupView /> published-copy fallback for a same-host chat with no 
 describe("<TabGroupView /> open-tab retraction from the record plane", () => {
   afterEach(() => {
     cleanup();
+    testState.tuiAgentRetractionById.clear();
     testState.mounts.clear();
     testState.unmounts.clear();
     testState.missingArtifactIds.clear();
@@ -2136,6 +2144,70 @@ describe("<TabGroupView /> open-tab retraction from the record plane", () => {
   });
 
   const PUBLISHED_COPY_TILE_ID = "published-chat:epic-1:user-1:chat-1";
+
+  /**
+   * A terminal agent bound to another host, whose absence proves nothing and
+   * whose list has not answered: only a delete the host announced can end it.
+   */
+  function renderRecordlessCrossHostAgent(): {
+    readonly container: HTMLElement;
+    readonly rerenderAfterRetraction: () => void;
+  } {
+    testState.missingArtifactIds.add(TERMINAL_AGENT.id);
+    testState.sessionHostId = "host-B";
+    testState.tuiAgentRecordListAuthoritative = false;
+    seedCanvas([TERMINAL_AGENT], TERMINAL_AGENT.instanceId);
+    const { container, rerender } = render(
+      groupView([TERMINAL_AGENT], TERMINAL_AGENT.instanceId, true),
+    );
+    return {
+      container,
+      rerenderAfterRetraction: () => {
+        rerender(groupView([TERMINAL_AGENT], TERMINAL_AGENT.instanceId, true));
+      },
+    };
+  }
+
+  it("shows a terminal agent the record plane DELETED as deleted, even on another host", async () => {
+    const { container, rerenderAfterRetraction } =
+      renderRecordlessCrossHostAgent();
+    await waitFor(() => {
+      expect(
+        container.querySelector(`[data-testid="tile-${TERMINAL_AGENT.id}"]`),
+      ).not.toBeNull();
+    });
+
+    testState.tuiAgentRetractionById.set(TERMINAL_AGENT.id, "deleted");
+    rerenderAfterRetraction();
+
+    await waitFor(() => {
+      expect(
+        container.querySelector('[data-testid="deleted-node-close"]'),
+      ).not.toBeNull();
+    });
+    expect(
+      container.querySelector(`[data-testid="tile-${TERMINAL_AGENT.id}"]`),
+    ).toBeNull();
+  });
+
+  it("does not put a terminal agent on the chat-shaped revoked surface", async () => {
+    const { container, rerenderAfterRetraction } =
+      renderRecordlessCrossHostAgent();
+
+    testState.tuiAgentRetractionById.set(TERMINAL_AGENT.id, "revoked");
+    rerenderAfterRetraction();
+
+    await waitFor(() => {
+      expect(
+        container.querySelector(`[data-testid="tile-${TERMINAL_AGENT.id}"]`),
+      ).not.toBeNull();
+    });
+    expect(
+      container.querySelector(
+        `[data-testid="chat-dead-tile-${TERMINAL_AGENT.id}"]`,
+      ),
+    ).toBeNull();
+  });
 
   it("routes a DELETED retraction into the existing remote-deleted close flow", async () => {
     // The chat is cloud-known and its host is reachable - the exact shape
