@@ -405,21 +405,32 @@ describe("the dock and the composer on a short viewport under the keyboard", () 
       .getAttribute("data-focus-layout");
   }
 
+  it("spaces nothing against the dock it has given up", () => {
+    renderSurfaces();
+    act(() => {
+      chatSession.setCommands([RUNNING_MONITOR]);
+    });
+    expect(composerTopSpacing()).toBe("connected");
+
+    act(() => screen.getByLabelText("Message").focus());
+    expect(composerTopSpacing()).toBe("normal");
+  });
+
   it("gives the dock up and hands the composer the focus layout while the composer has the focus, and restores both with the keyboard down", () => {
     renderSurfaces();
     act(() => {
       chatSession.setCommands([RUNNING_MONITOR]);
     });
     const dock = screen.getByTestId("chat-lower-dock");
-    expect(dock.closest("[hidden]")).toBeNull();
+    expect(dock.closest("[inert]")).toBeNull();
     expect(focusLayoutOfComposer()).toBe("false");
 
     act(() => screen.getByLabelText("Message").focus());
-    expect(dock.closest("[hidden]")).not.toBeNull();
+    expect(dock.closest("[inert]")).not.toBeNull();
     expect(focusLayoutOfComposer()).toBe("true");
 
     lowerNativeKeyboard();
-    expect(dock.closest("[hidden]")).toBeNull();
+    expect(dock.closest("[inert]")).toBeNull();
     expect(focusLayoutOfComposer()).toBe("false");
   });
 });

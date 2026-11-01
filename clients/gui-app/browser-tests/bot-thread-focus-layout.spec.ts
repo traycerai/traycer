@@ -67,9 +67,7 @@ for (const device of DEVICES) {
       const search = `?thread=${thread}&post=long&keyboard=${String(device.inset)}`;
       const keyboardTop = device.height - device.inset;
 
-      test("the bands fit above the keyboard, the post readable between them", async ({
-        page,
-      }) => {
+      test("the bands fit above the keyboard", async ({ page }) => {
         await openFocused(page, search);
         const { header, composer, send } = await readBands(page);
 
@@ -77,6 +75,11 @@ for (const device of DEVICES) {
         expect(composer.bottom - composer.top).toBeLessThanOrEqual(44.5);
         expect(composer.bottom).toBeLessThanOrEqual(keyboardTop + 0.5);
         expect(send.bottom).toBeLessThanOrEqual(keyboardTop + 0.5);
+      });
+
+      test("the post is readable between them", async ({ page }) => {
+        await openFocused(page, search);
+        const { header, composer } = await readBands(page);
 
         // The measured floor: 194 less two rows leaves 100 and more for reading.
         expect(composer.top - header.bottom).toBeGreaterThanOrEqual(100);
@@ -85,12 +88,14 @@ for (const device of DEVICES) {
         expect(post?.y ?? Number.POSITIVE_INFINITY).toBeLessThan(composer.top);
       });
 
-      test("what the row gives up is not painted, and focus stays in the box", async ({
-        page,
-      }) => {
+      test("what the row gives up is not painted", async ({ page }) => {
         await openFocused(page, search);
         await expect(page.locator(ACTIVITY)).toBeHidden();
         await expect(page.locator(TASKS)).toBeHidden();
+      });
+
+      test("focus stays in the box", async ({ page }) => {
+        await openFocused(page, search);
         await expect(page.locator(INPUT)).toBeFocused();
       });
     });

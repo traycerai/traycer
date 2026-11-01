@@ -540,12 +540,12 @@ export function ChatLowerInteractionSurfaces(
   });
   const activeAgentsVisible =
     stopControls.self !== null && activeAgents.length > 0;
-  const dockShown = props.subagentView === null;
   // With the keyboard up on a short viewport and this chat's composer focused,
-  // only its one row stays over the transcript: the dock gives its height up,
-  // hidden rather than unmounted for the reason below.
+  // only its one row stays over the transcript, so the dock gives its height up
+  // and nothing around the row spaces itself against it.
   const [lowerSurfaces, setLowerSurfaces] = useState<HTMLElement | null>(null);
   const focusLayout = useKeyboardFocusLayoutWithin(lowerSurfaces);
+  const dockShown = dockDrawn(props.subagentView, focusLayout);
   const chrome = useChatDockChrome({
     snapshotLoaded: props.runtime.snapshotLoaded,
     chatId: props.chatId,
@@ -575,7 +575,8 @@ export function ChatLowerInteractionSurfaces(
   } = lowerSurfaceFrame({
     folded: chrome.folded,
     // The dock is not drawn under a subagent's conversation (see
-    // `subagentView`), so none of its members shapes the spacing below it.
+    // `subagentView`) or on the focus layout, so none of its members shapes the
+    // spacing below it.
     openSection: dockShown ? chrome.openSection : null,
     todoHasContent:
       dockShown && props.runtime.snapshotLoaded && props.todo !== null,
@@ -666,11 +667,10 @@ export function ChatLowerInteractionSurfaces(
             layout={approvalLayout}
           />
           {/* Hidden, never unmounted, under a subagent's conversation (see
-            `subagentView`): the dock holds state a remount would lose - which
+            `subagentView`) and on the focus layout: the dock holds state a remount would lose - which
             panel is open, where it is scrolled, the Background rows' own
             memory of their parents. */}
           <div
-            hidden={focusLayout}
             className={cn(dockShown ? "contents" : "hidden")}
             inert={!dockShown}
           >
@@ -767,6 +767,13 @@ export function ChatLowerInteractionSurfaces(
       </div>
     </ChatComposerBannerPortalProvider>
   );
+}
+
+function dockDrawn(
+  subagentView: SubagentDockView | null,
+  focusLayout: boolean,
+): boolean {
+  return subagentView === null && !focusLayout;
 }
 
 function approvalSurfaceVisible(
