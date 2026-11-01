@@ -26,22 +26,28 @@ export function TeamProviderKeys(): ReactNode {
   const [adding, setAdding] = useState(false);
   const keys =
     query.data?.secrets.filter((secret) => secret.kind === "provider") ?? [];
-  // A reader who cannot edit, once the read has ANSWERED. `keys` is `[]` while
-  // it is still out and `[]` again when it failed, and the list's "No secrets."
-  // is a claim about the configuration — on a failed read it would sit beside
-  // the line saying the keys could not be read, contradicting it. The editor's
-  // list says nothing in those states because an empty list is silent; this
-  // one has to be withheld.
-  const viewerNames =
-    query.data === undefined ? null : (
-      <TeamSecretNames
-        secrets={keys.map((secret) => ({
-          id: secret.secretId,
-          name: secret.name,
-          revoked: secret.revoked,
-        }))}
-      />
-    );
+  // A reader who cannot edit, once the latest read SUCCEEDED. The list's
+  // "No secrets." is a claim about the configuration, and there are two states
+  // where `keys` is `[]` without that claim being true: while the first read is
+  // still out, and when a read failed. Neither is "the configuration has no
+  // keys", and on a failure the claim would sit beside the line saying the keys
+  // could not be read, contradicting it.
+  //
+  // `isSuccess` rather than `data !== undefined`, because the two part company
+  // exactly where it matters: a poll or refetch that fails AFTER a successful
+  // read leaves `data` in place and sets the error, so a guard on data would
+  // show the last list — "No secrets." among them — beside that failure line.
+  // The editor's list says nothing in these states because an empty list is
+  // silent; this one makes a statement, so it has to be withheld.
+  const viewerNames = query.isSuccess ? (
+    <TeamSecretNames
+      secrets={keys.map((secret) => ({
+        id: secret.secretId,
+        name: secret.name,
+        revoked: secret.revoked,
+      }))}
+    />
+  ) : null;
   const reread = (): void => {
     void queries.invalidateQueries({
       queryKey: hostQueryKeys.methodScope(

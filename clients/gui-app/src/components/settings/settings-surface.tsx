@@ -5,6 +5,7 @@ import {
   SETTINGS_SECTIONS,
   type SettingsSectionId,
 } from "@/lib/settings-sections";
+import { settingsOwnsPath } from "@/stores/tabs/kinds/settings";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { cn } from "@/lib/utils";
 import "./settings-touch-targets.css";
@@ -13,7 +14,7 @@ import "./settings-touch-targets.css";
 export function SettingsSurface(props: { readonly lastPath: string | null }) {
   const sectionPath = useRouterState({
     select: (state) =>
-      state.location.pathname.startsWith("/settings")
+      settingsOwnsPath(state.location.pathname)
         ? state.location.pathname
         : props.lastPath,
   });

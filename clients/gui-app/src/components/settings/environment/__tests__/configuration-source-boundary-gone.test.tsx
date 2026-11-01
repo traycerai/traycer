@@ -26,6 +26,7 @@ import {
 } from "@/components/settings/environment/team-pick-label";
 import { HeldValueHostRuntime } from "@/components/settings/personal/__tests__/held-value-host-runtime";
 import { PersonalPageFrame } from "@/components/settings/personal/personal-page-frame";
+import { SettingsSurface } from "@/components/settings/settings-surface";
 import { PERSONAL_PICK } from "@/lib/settings-environment-pages";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import { negotiateMethods } from "./mcp-skills-test-support";
@@ -57,7 +58,50 @@ const surface = vi.hoisted(() => ({
   openSettings: vi.fn(),
   setSection: vi.fn(),
   remember: vi.fn(),
+  replaceOwnedRoute: vi.fn(),
   overlayActive: false,
+}));
+
+/**
+ * The route, which is the third presentation and the one `remember` cannot
+ * move: `SettingsSurface` prefers the route wherever Settings owns it. The
+ * real surface is rendered against this state in the arm that owns the route,
+ * so that arm asserts the section DRAWN rather than the call made — with the
+ * effect out of frame, a call cannot be told apart from a no-op.
+ */
+const router = vi.hoisted(() => ({
+  pathname: "/epics",
+  listeners: new Set<() => void>(),
+}));
+vi.mock("@tanstack/react-router", async () => {
+  const { useSyncExternalStore } = await import("react");
+  return {
+    useRouter: () => ({ navigate: vi.fn() }),
+    useRouterState: ({
+      select,
+    }: {
+      select: (state: {
+        readonly location: { readonly pathname: string };
+      }) => unknown;
+    }) =>
+      useSyncExternalStore(
+        (onChange: () => void) => {
+          router.listeners.add(onChange);
+          return () => {
+            router.listeners.delete(onChange);
+          };
+        },
+        () => select({ location: { pathname: router.pathname } }),
+      ),
+  };
+});
+vi.mock("@/components/settings/settings-sidebar", () => ({
+  SettingsSidebar: () => null,
+}));
+vi.mock("@/components/settings/settings-modal-content", () => ({
+  SettingsPanelForSection: (props: { readonly section: string }) => (
+    <div data-section={props.section} data-testid="settings-panel-probe" />
+  ),
 }));
 vi.mock("@/stores/tabs/system-tab-modal-bridge", () => ({
   getSystemTabModalApi: () => ({
@@ -65,6 +109,18 @@ vi.mock("@/stores/tabs/system-tab-modal-bridge", () => ({
       kind === "settings" && surface.overlayActive,
     openSettings: surface.openSettings,
     setSection: surface.setSection,
+    // The bridge's own route move, recorded AND performed: what it does to a
+    // real router is asserted in `stores/tabs/__tests__/use-system-tab-modal`,
+    // against real Settings routes. Here it has to actually move the route, or
+    // the surface below has nothing to redraw from.
+    replaceOwnedSettingsRoute: (section: string) => {
+      surface.replaceOwnedRoute(section);
+      if (!router.pathname.startsWith("/settings")) return;
+      router.pathname = `/settings/${section}`;
+      // Notified, not just mutated: a route the surface never re-rendered for
+      // would let a case pass on a move nobody could see.
+      for (const listener of router.listeners) listener();
+    },
     active: null,
     close: () => undefined,
   }),
@@ -95,7 +151,9 @@ afterEach(() => {
   surface.openSettings.mockClear();
   surface.setSection.mockClear();
   surface.remember.mockClear();
+  surface.replaceOwnedRoute.mockClear();
   surface.overlayActive = false;
+  router.pathname = "/epics";
   useSettingsEnvironmentPickStore.setState({
     pick: null,
     defaultPick: PERSONAL_PICK,
@@ -362,6 +420,57 @@ describe("a team the environment list no longer carries", () => {
     });
   });
 
+  it("stops trusting its answer when the read moves to the other slot", async () => {
+    negotiateMethods({
+      "environment.invitations.list": V10,
+      "environment.invitations.accept": V10,
+    });
+    useSettingsEnvironmentPickStore.setState({
+      pick: { kind: "team", environmentId: "env-a" },
+    });
+    const listed: { current: readonly EnvironmentDescriptorV11[] } = {
+      current: [PERSONAL, team("editor")],
+    };
+    const harness = mountTeamPage(poolSource("editor"), {
+      "environment.list": () => ({ environments: [...listed.current] }),
+      "environment.invitations.list": () => ({ invitations: [INVITATION] }),
+    });
+    render(
+      <HeldValueHostRuntime>
+        <PersonalPageFrame section="secrets">
+          <Probe />
+        </PersonalPageFrame>
+      </HeldValueHostRuntime>,
+      { wrapper: harness.Wrapper },
+    );
+    await screen.findByTestId("probe");
+
+    // Removed and invited back: the host's route answers, so the team stays
+    // and Review is offered.
+    listed.current = [PERSONAL];
+    await harness.queryClient.invalidateQueries({
+      predicate: (query) => query.queryKey.includes("environment.list"),
+    });
+    expect(await screen.findByRole("button", { name: "Review" })).toBeTruthy();
+
+    // Now the serving host stops advertising Accept, which moves the read to
+    // the authn route's slot. That slot holds nothing this session, so the
+    // list the page renders becomes empty — but nothing has ANSWERED there, so
+    // the answer the host's route gave is no longer evidence about what is on
+    // screen, and a removal claimed on it would move a person off a team they
+    // can rejoin and never offer them the Accept.
+    await act(async () => {
+      negotiateMethods({ "environment.invitations.list": V10 });
+      await Promise.resolve();
+    });
+
+    expect(hoisted.toasts).toEqual([]);
+    expect(useSettingsEnvironmentPickStore.getState().pick).toEqual({
+      kind: "team",
+      environmentId: "env-a",
+    });
+  });
+
   it("claims no removal on a read that failed, and asks again no more than once", async () => {
     negotiateMethods({
       "environment.invitations.list": V10,
@@ -422,14 +531,19 @@ describe("a team the environment list no longer carries", () => {
   // surface leaves the person on a panel that renders nothing, with the
   // sidebar row they were standing on gone from under them.
   //
-  // The two arms below are the same removal on the two presentations Settings
-  // has, and they want different commands. With the overlay up, the person is
-  // looking at Settings, and the section it shows is swapped in place. With it
-  // down, Settings is a tab that may be sitting in a split pane nobody is
-  // looking at — so the tab is told where it is and NOTHING is activated,
-  // because `openSettings` would take the partner pane's focus and route for a
-  // membership change the person never asked for.
-  async function removalOnMembers(): Promise<void> {
+  // The three arms below are the same removal on the three presentations
+  // Settings has, and each needs a different move — none of which may activate
+  // anything, because nobody pressed anything and `openSettings` would take a
+  // split partner's focus and route for a membership change in the background.
+  //
+  // With the overlay up, the person is looking at Settings and the section is
+  // swapped in place. With it down and a partner owning the route, Settings is
+  // a tab that may be sitting in a pane nobody is looking at, so the tab is
+  // only told where it is. With it down and Settings OWNING the route, being
+  // told is not enough: the surface prefers the route wherever it owns it, so
+  // the route is replaced — which activates nothing, a surface owning the
+  // route being the focused route owner already.
+  async function removalOnMembers(alongside: ReactNode): Promise<void> {
     negotiateMethods({
       "environment.invitations.list": V10,
       "environment.invitations.accept": V10,
@@ -443,6 +557,7 @@ describe("a team the environment list no longer carries", () => {
     });
     render(
       <HeldValueHostRuntime>
+        {alongside}
         <PersonalPageFrame section="members">
           <Probe />
         </PersonalPageFrame>
@@ -461,7 +576,7 @@ describe("a team the environment list no longer carries", () => {
   it("swaps the section in place when the person is looking at Settings", async () => {
     surface.overlayActive = true;
 
-    await removalOnMembers();
+    await removalOnMembers(null);
 
     expect(surface.setSection).toHaveBeenCalledWith("providers");
     expect(surface.openSettings).not.toHaveBeenCalled();
@@ -470,8 +585,10 @@ describe("a team the environment list no longer carries", () => {
 
   it("moves a background Settings tab without activating it", async () => {
     surface.overlayActive = false;
+    // A split partner owns the route, which is the case `remember` is for.
+    router.pathname = "/epics";
 
-    await removalOnMembers();
+    await removalOnMembers(null);
 
     // Where Settings has to end up: on a page Personal offers.
     expect(surface.remember).toHaveBeenCalledWith("providers");
@@ -479,6 +596,28 @@ describe("a team the environment list no longer carries", () => {
     // whole assertion: `openSettings` focuses the Settings tab and changes the
     // active route, so a split partner would lose both to a membership change
     // in the background.
+    expect(surface.openSettings).not.toHaveBeenCalled();
+    expect(surface.setSection).not.toHaveBeenCalled();
+    // The partner's route is left exactly where it was.
+    expect(router.pathname).toBe("/epics");
+  });
+
+  it("moves the Settings surface that owns the route, without activating anything", async () => {
+    surface.overlayActive = false;
+    // The person is reading Settings ▸ Environment ▸ Members with no overlay
+    // up: Settings owns the route, so its remembered path is ignored.
+    router.pathname = "/settings/members";
+
+    await removalOnMembers(<SettingsSurface lastPath="/settings/members" />);
+
+    // The real surface, resolving the real route. This is what `remember`
+    // alone cannot do, and asserting the command could not tell apart.
+    await waitFor(() =>
+      expect(screen.getByTestId("settings-panel-probe").dataset.section).toBe(
+        "providers",
+      ),
+    );
+    expect(surface.replaceOwnedRoute).toHaveBeenCalledWith("providers");
     expect(surface.openSettings).not.toHaveBeenCalled();
     expect(surface.setSection).not.toHaveBeenCalled();
   });

@@ -165,14 +165,33 @@ export function moveEnvironmentPick(input: {
  * `onGesture` is the command: it opens Settings and focuses it, which is right
  * when a person just pressed something on it.
  *
- * `onServerFact` never activates anything. `navigateToSettingsSection` would,
- * and in a split that takes the partner pane's focus and route — so a
- * membership changing in the background would pull the person off the work
- * they were doing, which is a worse failure than the blank panel this guard
- * exists to prevent. When Settings is the live overlay the section is simply
- * set, which moves what the person is already looking at and activates
- * nothing; otherwise the Settings tab is only told where it is, and the
- * section it draws follows that whenever a split partner owns the route.
+ * `onServerFact` never activates anything, and Settings has three
+ * presentations to reach without doing so. `navigateToSettingsSection` is
+ * wrong for all of them: it routes through `openSettings`, which focuses the
+ * Settings tab, and in a split that takes the partner pane's focus and route —
+ * pulling a person off the work they were doing because a membership changed
+ * in the background, which is a worse failure than the blank panel this guard
+ * exists to prevent.
+ *
+ * - The live overlay: set the section. That moves what the person is already
+ *   looking at and activates nothing.
+ * - A Settings pane that does NOT own the route: remember the path. The
+ *   surface prefers its remembered path exactly while a partner owns the
+ *   route, so remembering is what moves it.
+ * - A Settings surface that DOES own the route: remembering moves nothing,
+ *   because the surface prefers the route wherever it owns it
+ *   (`settings-surface.test.tsx` asserts that both ways round). Its route has
+ *   to be replaced instead — which activates nothing and takes no partner's
+ *   focus, because a surface owning the route is already the focused route
+ *   owner. This is the presentation a person reading Settings ▸ Environment ▸
+ *   Members with no overlay up is in, so it is the likeliest one of the three
+ *   to be standing in when a removal lands.
+ *
+ * Both of the moves that need the router go through the bridge, which is what
+ * the bridge is for: a panel cannot reach for router hooks, because the modal
+ * may be the one hosting it. `replaceOwnedSettingsRoute` is a no-op wherever
+ * Settings does not own the route, so the order below is "remember, and move
+ * the route too if this surface is holding one".
  */
 export const moveEnvironmentSurface = {
   onGesture: (section: SettingsSectionId): void => {
@@ -185,6 +204,9 @@ export const moveEnvironmentSurface = {
       return;
     }
     rememberSettingsTabSection(section);
+    // A no-op unless Settings owns the route. `null` is a cold launch, where
+    // the bridge has published nothing and there is no surface to move.
+    if (api !== null) api.replaceOwnedSettingsRoute(section);
   },
 };
 

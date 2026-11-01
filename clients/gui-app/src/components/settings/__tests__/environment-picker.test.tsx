@@ -80,6 +80,7 @@ vi.mock("@/hooks/environment/use-environment-invitations", () => ({
     reads.invitationReads += 1;
     return { data: { invitations: reads.invitations } };
   },
+  useEnvironmentInvitationsSlot: () => "rpc",
   useEnvironmentInvitationAcceptMutation: () => ({
     isPending: false,
     mutate: (

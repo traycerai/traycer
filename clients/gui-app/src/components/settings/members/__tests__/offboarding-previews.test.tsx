@@ -238,6 +238,29 @@ describe("DemotionPreviewDialog", () => {
     );
   });
 
+  // Everything the announcement has to carry, where there IS a plan to
+  // unlink. Radix announces the description and nothing else beside the title,
+  // so a consequence left outside it is one a screen reader never reaches —
+  // and the plan sentence is the consequence that reaches outside the team.
+  it("describes the dialog with the plan warning too, where a plan is unlinked", () => {
+    renderDemotion({
+      currentRole: "admin",
+      nextRole: "editor",
+      planLabel: "Claude Max",
+    });
+
+    const dialog = screen.getByTestId("members-demotion-preview");
+    const described = document.getElementById(
+      dialog.getAttribute("aria-describedby") ?? "",
+    );
+    expect(described?.textContent).toContain(
+      "Priya can no longer invite people, change roles or edit the approval policy.",
+    );
+    expect(described?.textContent).toContain(
+      "Acme's agents stop using this plan.",
+    );
+  });
+
   it("keeps the confirm off only while the plan check is loading", () => {
     render(
       <DemotionPreviewDialog

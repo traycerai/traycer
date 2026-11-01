@@ -313,6 +313,36 @@ describe("TeamProviderKeys", () => {
 
     expect(await screen.findByTestId("secrets-none")).toBeTruthy();
   });
+
+  // The state the other two do not cover: a read that fails AFTER one
+  // succeeded. TanStack keeps the data it already has and sets the error, so a
+  // guard on "is there data" still shows the last list — "No secrets." among
+  // them — next to the line saying the keys could not be read. What the viewer
+  // is shown has to follow the LATEST settled read, not the newest data.
+  it("withdraws the list from a viewer when a re-read fails", async () => {
+    useSettingsEnvironmentPickStore.setState({
+      pick: { kind: "team", environmentId: "env-a" },
+    });
+    const failing = { current: false };
+    const harness = mountTeamPage(poolSource("viewer"), {
+      "environment.secrets.list": () => {
+        if (failing.current) throw new Error("down");
+        return { secrets: [], removed: [] };
+      },
+      "environment.list": () => environments,
+    });
+    render(<TeamProviderKeys />, { wrapper: harness.Wrapper });
+
+    expect(await screen.findByTestId("secrets-none")).toBeTruthy();
+
+    failing.current = true;
+    await harness.queryClient.invalidateQueries({
+      predicate: (query) => query.queryKey.includes("environment.secrets.list"),
+    });
+
+    expect(await screen.findByText(/Couldn't read .*keys\./)).toBeTruthy();
+    expect(screen.queryByTestId("secrets-none")).toBeNull();
+  });
 });
 
 describe("TeamPermissions", () => {

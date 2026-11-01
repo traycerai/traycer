@@ -14,8 +14,10 @@ import { Button } from "@/components/ui/button";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
 import {
   cancelEnvironmentInvitationReads,
-  countEnvironmentInvitationAnswers,
+  findEnvironmentInvitationEntry,
   useEnvironmentInvitationsQuery,
+  useEnvironmentInvitationsSlot,
+  type InvitationSlot,
 } from "@/hooks/environment/use-environment-invitations";
 import { useHostClient } from "@/lib/host";
 import {
@@ -44,6 +46,29 @@ function noLongerInLine(teamName: string): string {
 function leftToastId(environmentId: string): string {
   return `environment-left:${environmentId}`;
 }
+
+/**
+ * A question the invitations read has answered: which membership answer it was
+ * asked for, and which slot it was asked through. Both have to still hold for
+ * the answer to be evidence about what the page is rendering now.
+ */
+interface AnsweredQuestion {
+  readonly listedAt: number;
+  readonly slot: InvitationSlot;
+}
+
+/**
+ * The cache events that can change WHICH entry a slot's read lands in. Every
+ * other event — `updated` foremost, which is every fetch, success, failure and
+ * invalidation in the app — cannot, so a watcher holding an entry can stop at
+ * an identity test instead of searching the cache again.
+ */
+const RESOLVING_CACHE_EVENTS: ReadonlySet<string> = new Set([
+  "added",
+  "removed",
+  "observerAdded",
+  "observerRemoved",
+]);
 
 /**
  * The team invited them instead, so its settings are an Accept away — as much
@@ -247,6 +272,7 @@ function useGoneConfiguration(input: {
   const { target, listed, settled, listedAt, section } = input;
   const client = useHostClient();
   const invitations = useEnvironmentInvitationsQuery(client);
+  const slot = useEnvironmentInvitationsSlot(client);
   const setPick = useSettingsEnvironmentPickStore((state) => state.setPick);
   // A removed team is in no list, so the label this page read a moment ago is
   // the only thing left that can name it.
@@ -264,8 +290,11 @@ function useGoneConfiguration(input: {
   // none: one question per answer, and only once the list stops carrying the
   // team. The read is account-wide and nothing else has reason to refresh it.
   const question = absent ? listedAt : null;
-  // The membership answer whose question has been answered, once one has.
-  const [answeredQuestion, setAnsweredQuestion] = useState<number | null>(null);
+  // The question that has been answered, once one has — named by the
+  // membership answer it was asked for AND the slot it was asked through,
+  // because an answer is only evidence about the entry it landed in.
+  const [answeredQuestion, setAnsweredQuestion] =
+    useState<AnsweredQuestion | null>(null);
 
   // Asks, and watches for the answer. Three plausible ways of recognising that
   // answer are wrong, and the fourth looks like overkill until you know why.
@@ -286,14 +315,16 @@ function useGoneConfiguration(input: {
   // produces, and nothing recovers from, because a page that cannot be read
   // writes nothing and so has no next membership answer to ask again on.
   //
-  // NOT one slot's own clock or counter. Which slot serves this read follows
-  // host readiness and can move mid-session, and a slot that never fetched
-  // reads as `0`, so a sample taken on one and compared against the other
-  // accepts a cached answer the question predates.
+  // NOT any count that spans both slots. The page renders ONE slot's data, so
+  // an answer in the other is not evidence about what it is rendering: host
+  // readiness can move the serving slot mid-session, and a question answered
+  // before that move would otherwise go on authorising a removal read off the
+  // slot it moved TO, whose cached list predates the question entirely.
   //
-  // It is a COUNT of answers across BOTH slots. The count only rises, and only
-  // on a success, so it cannot tie, a failure is not an answer, and surfacing
-  // another slot's cached data does not raise it.
+  // It is the answer count of the ONE entry the serving slot reads, held
+  // against that entry's own identity. The count cannot tie and a failure does
+  // not raise it; the identity is what keeps the evidence and the data the
+  // same read.
   useEffect(() => {
     if (question === null) return;
     // Cancelled and asked in one step, with nothing awaited in between: the
@@ -310,27 +341,39 @@ function useGoneConfiguration(input: {
     // baseline instead of clearing it — and a cancel could not have undone it,
     // which is why the sample cannot be taken during the render that asks.
     //
-    // This effect re-runs when the serving route moves, because `readInvitations`
-    // is that route's own `refetch`. The new route is then cancelled, sampled
-    // and asked exactly like the first: whatever it had cached is behind the
-    // baseline, and the forced read is what answers.
-    //
     // The answer is watched for rather than read off a render, because the
     // cache is an external system and the answer is an event in it.
     cancelEnvironmentInvitationReads(queryClient);
-    const asked = countEnvironmentInvitationAnswers(queryClient);
-    const watching = queryClient
-      .getQueryCache()
-      .subscribe(() =>
-        setAnsweredQuestion((answered) =>
-          countEnvironmentInvitationAnswers(queryClient) > asked
-            ? question
-            : answered,
-        ),
-      );
+    const cache = queryClient.getQueryCache();
+    let watched = findEnvironmentInvitationEntry(queryClient, slot);
+    let asked = watched === null ? 0 : watched.state.dataUpdateCount;
+    const watching = cache.subscribe((event) => {
+      if (event.query === watched) {
+        if (event.query.state.dataUpdateCount > asked)
+          setAnsweredQuestion({ listedAt: question, slot });
+        return;
+      }
+      // Every other event stops here, which is most of them: the cache
+      // notifies on every action of every query in the app, and only these
+      // four can change WHICH entry the serving slot reads. One does, inside a
+      // slot and so without re-running this effect — the serving host moving
+      // re-keys the RPC read, which leaves the old entry unobserved and the
+      // new one observed. Its own count is the baseline, because an entry
+      // reached this way already existed and may hold an answer from before.
+      //
+      // The entry is NOT collected underneath this: a slot's serving entry is
+      // observed by this page's own hook, and `gcTime` only reaps an entry
+      // with no observers. An explicit removal of these keys (nothing does
+      // one) would leave the question unanswered rather than wrongly answered
+      // — on a page that already says it cannot be read, with the selection
+      // where the person put it.
+      if (!RESOLVING_CACHE_EVENTS.has(event.type)) return;
+      watched = findEnvironmentInvitationEntry(queryClient, slot);
+      asked = watched === null ? 0 : watched.state.dataUpdateCount;
+    });
     void readInvitations({ cancelRefetch: true });
     return watching;
-  }, [question, queryClient, readInvitations]);
+  }, [question, slot, queryClient, readInvitations]);
 
   // Answered once the read has answered AGAIN since the question went out.
   // With nothing in flight at the sample, a later answer can only come from a
@@ -340,8 +383,13 @@ function useGoneConfiguration(input: {
   // ends the asking rather than confirming a removal.
   //
   // The question is named by the membership answer it was asked for, so one
-  // answered for an EARLIER membership answer says nothing about this one.
-  const answered = answeredQuestion !== null && answeredQuestion === listedAt;
+  // answered for an EARLIER membership answer says nothing about this one —
+  // and by the slot it was asked through, so an answer stops being evidence
+  // the moment the page starts rendering the other slot's data.
+  const answered =
+    answeredQuestion !== null &&
+    answeredQuestion.listedAt === listedAt &&
+    answeredQuestion.slot === slot;
 
   // The team that is gone, where one is. Nothing is gone until the read asked
   // for this answer has answered: an invitation the page could not read is

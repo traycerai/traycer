@@ -87,54 +87,75 @@ export function useEnvironmentInvitationsQuery(
   return route.direct ? direct : rpc;
 }
 
+/** Which route's cache slot an invitations read lands in. */
+export type InvitationSlot = "direct" | "rpc";
+
+const INVITATION_SLOTS: readonly InvitationSlot[] = ["rpc", "direct"];
+
 /**
- * Every cache entry an invitations read can land in, in both routes' slots.
- * The two matchers are kept here, beside each other, so "the invitations
- * reads" means one set to everything that cancels them, counts them or waits
- * on them — a caller matching only the slot it happens to be served from
- * would be blind to the other the moment host readiness moved it.
+ * The cache entries one route's invitations read can land in.
+ *
+ * Both slots are named from this one function so that "the invitations reads"
+ * means the same set to everything that cancels them and everything that
+ * watches them. A caller matching only the slot it happens to be served from
+ * would be blind to the other the moment host readiness moved the read, and a
+ * caller that cancelled one set and watched another would wait on an entry
+ * nothing had stopped.
  */
-function invitationReadMatchers(): readonly QueryFilters[] {
-  return [
-    {
-      predicate: (query) =>
-        hostQueryKeys.matchesMethodOnAnyHost(
-          query.queryKey,
-          "environment.invitations.list",
-        ),
-    },
-    { queryKey: authQueryKeys.environmentInvitationsAll() },
-  ];
+function invitationSlotFilters(slot: InvitationSlot): QueryFilters {
+  if (slot === "direct")
+    return { queryKey: authQueryKeys.environmentInvitationsAll() };
+  return {
+    predicate: (query) =>
+      hostQueryKeys.matchesMethodOnAnyHost(
+        query.queryKey,
+        "environment.invitations.list",
+      ),
+  };
+}
+
+/** The slot the invitations read is served from right now. */
+export function useEnvironmentInvitationsSlot(
+  client: HostClient<HostRpcRegistry> | null,
+): InvitationSlot {
+  return useInvitationRoute(client).direct ? "direct" : "rpc";
 }
 
 /**
- * How many times an invitations read has ANSWERED, counted across both
- * routes' slots. It only ever rises, and only on a success: a failure leaves
- * it where it was.
+ * The ONE cache entry the serving route's read lands in, or `null` where the
+ * cache cannot name it.
  *
- * This is the clock-free form of "has the read answered since I asked", and it
- * is clock-free on purpose. `dataUpdatedAt` is `Date.now()` stamped on every
- * success (`query-core`'s `successState`), so two answers of one key inside
- * the same millisecond are indistinguishable and a timestamp comparison reads
- * a confirmed answer as no answer. A count cannot tie.
+ * A caller that has to know whether a read answered SINCE it asked compares
+ * this entry's `dataUpdateCount` before and after. That count is the
+ * clock-free form of the question, and clock-free on purpose: `dataUpdatedAt`
+ * is `Date.now()` stamped on every success, so an ask and its reply inside one
+ * millisecond are indistinguishable on it and the comparison reads a confirmed
+ * answer as no answer. The count rises only in the reducer's success case, so
+ * it cannot tie, a failure is not an answer, and a reverting cancel restores
+ * the pre-fetch count rather than raising it. `setQueryData` also dispatches a
+ * success and so does raise it — nothing writes either invitations key today,
+ * and a caller that starts to would be claiming an answer, so it belongs in
+ * the same read rather than outside it.
  *
- * It spans both slots for the same reason it is a count: the two entries keep
- * independent `dataUpdatedAt` clocks, and an entry that never fetched reports
- * `0`, so comparing a sample taken on one route with a value read on the other
- * — which is what host readiness moving mid-session produces — can accept a
- * cached answer older than the question. A sum over both rises only when some
- * invitations read really answered, whichever slot it landed in.
+ * The entry is found by observation rather than by rebuilding its key.
+ * `useHostQuery` owns the RPC key down to the tier that answers and the viewer
+ * it is partitioned by, so a second construction of it here would match until
+ * that derivation moved and then silently watch nothing. What this page needs
+ * is both narrower and stable: the entry THIS app's reads are attached to.
+ * Both routes' hooks hold an observer on their own slot's entry even while
+ * disabled, and a slot's leftovers from a host or an identity no longer served
+ * hold none. Anything other than exactly one observed entry is not an entry a
+ * caller can reason about, so this says so instead of guessing.
  */
-export function countEnvironmentInvitationAnswers(
+export function findEnvironmentInvitationEntry(
   queryClient: QueryClient,
-): number {
-  const cache = queryClient.getQueryCache();
-  const counted = new Set<Query>();
-  for (const filters of invitationReadMatchers())
-    for (const query of cache.findAll(filters)) counted.add(query);
-  let answers = 0;
-  for (const query of counted) answers += query.state.dataUpdateCount;
-  return answers;
+  slot: InvitationSlot,
+): Query | null {
+  const observed = queryClient
+    .getQueryCache()
+    .findAll(invitationSlotFilters(slot))
+    .filter((query) => query.getObserversCount() > 0);
+  return observed.length === 1 ? observed[0] : null;
 }
 
 /**
@@ -167,8 +188,8 @@ export function countEnvironmentInvitationAnswers(
 export function cancelEnvironmentInvitationReads(
   queryClient: QueryClient,
 ): void {
-  for (const filters of invitationReadMatchers())
-    void queryClient.cancelQueries(filters);
+  for (const slot of INVITATION_SLOTS)
+    void queryClient.cancelQueries(invitationSlotFilters(slot));
 }
 
 /** Accepts one invitation; the team then lists among the person's environments. */

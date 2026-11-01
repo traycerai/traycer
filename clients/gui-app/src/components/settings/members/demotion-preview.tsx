@@ -99,24 +99,30 @@ export function DemotionPreviewDialog(props: {
               props.nextRole,
             )}
           </DialogTitle>
-          {/* What the role loses is the dialog's own description, always:
-              Radix announces `Dialog.Description` with the dialog, so a
-              demotion with no plan to unlink would otherwise be read out as
-              the question alone, without the thing the question is about. It
-              needs no read, so it is here even while the plan check is out. */}
-          <DialogDescription data-testid="members-demotion-loss">
-            {demotionConfirmBody(
-              props.memberName,
-              props.teamName,
-              props.currentRole,
-              props.nextRole,
-            )}
+          {/* Everything the announcement has to carry is the description.
+              Radix announces `Dialog.Description` and nothing else beside the
+              title, so a sentence left outside it is a sentence a screen
+              reader never reaches — and both of these are about the
+              consequence the question is asking to confirm: what the role
+              loses, always, and that the team's agents stop using the plan
+              where this demotion unlinks one. The loss needs no read, so it is
+              here even while the plan check is out; the plan lead waits for the
+              rows, like the table does. */}
+          <DialogDescription asChild>
+            <div className="flex flex-col gap-2">
+              <span data-testid="members-demotion-loss">
+                {demotionConfirmBody(
+                  props.memberName,
+                  props.teamName,
+                  props.currentRole,
+                  props.nextRole,
+                )}
+              </span>
+              {planRows === null ? null : (
+                <span>{planUnlinkLead(props.teamName)}</span>
+              )}
+            </div>
           </DialogDescription>
-          {planRows === null ? null : (
-            <p className="max-w-[72ch] text-ui-sm text-muted-foreground">
-              {planUnlinkLead(props.teamName)}
-            </p>
-          )}
         </DialogHeader>
         {preview.status === "loading" ? (
           <AgentSpinningDots
