@@ -45,6 +45,7 @@ function optionFor(
   registryState: HostListItem["sandboxState"],
   summary: SandboxSummary,
   hasLiveSession: boolean,
+  nowMs: number,
 ): HostScopeOption {
   const registry = [registryRow(registryState)];
   const [option] = buildHostScopeOptions({
@@ -62,7 +63,7 @@ function optionFor(
     localHostSettingUp: false,
     localHostTerminalRunNote: null,
     sandboxes: [summary],
-    nowMs: 0,
+    nowMs,
   });
   return option;
 }
@@ -100,7 +101,7 @@ describe("withSandboxWakeWaits", () => {
   ] as const)(
     "reads an awake sandbox whose host has not reported as $wait, never offline",
     ({ from, wait }) => {
-      const host = optionFor("awake", awakeAfter(from), false);
+      const host = optionFor("awake", awakeAfter(from), false, 0);
       expect(word(host)).toBe("offline");
 
       const [waiting] = withSandboxWakeWaits([host], {});
@@ -112,13 +113,13 @@ describe("withSandboxWakeWaits", () => {
 
   it("reads a host that has answered as awake", () => {
     const summary = awakeAfter("suspended");
-    const answered = optionFor("awake", summary, true);
+    const answered = optionFor("awake", summary, true, 0);
 
     const [live] = withSandboxWakeWaits([answered], {});
     expect(live.sandbox?.state).toBe("awake");
 
     const [recorded] = withSandboxWakeWaits(
-      [optionFor("awake", summary, false)],
+      [optionFor("awake", summary, false, 0)],
       {
         [summary.id]: summary.operation?.at ?? 0,
       },
@@ -131,6 +132,7 @@ describe("withSandboxWakeWaits", () => {
       "suspended",
       sandboxSummaryFixture({ hostId: HOST_ID, state: "suspended" }),
       false,
+      0,
     );
     const personal: HostScopeOption = {
       ...resting,
@@ -154,6 +156,7 @@ describe("a wake the registry has not heard of", () => {
       registry,
       sandboxSummaryFixture({ hostId: HOST_ID, state: row }),
       false,
+      0,
     ).sandbox?.state;
 
   it.each(["suspended", "stopped"] as const)(
@@ -172,5 +175,57 @@ describe("a wake the registry has not heard of", () => {
     expect(sandboxState("suspended", "stopping")).toBe("suspended");
     expect(sandboxState("stopped", "suspended")).toBe("stopped");
     expect(sandboxState("failed", "resuming")).toBe("failed");
+  });
+});
+
+describe("a wake that landed before any list read caught it moving", () => {
+  const LANDED_AT = 1_791_000_020_000;
+  const LAG_MS = 60_000;
+
+  function readAt(
+    summary: SandboxSummary,
+    nowMs: number,
+  ): { readonly state: string | null; readonly word: string | null } {
+    const [waiting] = withSandboxWakeWaits(
+      [optionFor("suspended", summary, false, nowMs)],
+      {},
+    );
+    return { state: waiting.sandbox?.state ?? null, word: word(waiting) };
+  }
+
+  it("reads resuming while the registry's rest can only be the mirror lagging", () => {
+    expect(readAt(awakeAfter("suspended"), LANDED_AT + 1_000)).toEqual({
+      state: "resuming",
+      word: "resuming",
+    });
+    expect(readAt(awakeAfter("suspended"), LANDED_AT + LAG_MS - 1)).toEqual({
+      state: "resuming",
+      word: "resuming",
+    });
+  });
+
+  it("keeps the registry's word once the mirror has had its tick", () => {
+    expect(readAt(awakeAfter("suspended"), LANDED_AT + LAG_MS)).toEqual({
+      state: "suspended",
+      word: "suspended",
+    });
+  });
+
+  it("keeps the registry's word for a row that was awake already, not woken", () => {
+    const summary = sandboxSummaryFixture({
+      hostId: HOST_ID,
+      state: "awake",
+      lastTransitionAt: LANDED_AT,
+      operation: wakeFrom("awake"),
+    });
+
+    expect(readAt(summary, LANDED_AT + 1_000)).toEqual({
+      state: "suspended",
+      word: "suspended",
+    });
+    expect(readAt({ ...summary, operation: null }, LANDED_AT + 1_000)).toEqual({
+      state: "suspended",
+      word: "suspended",
+    });
   });
 });

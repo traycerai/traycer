@@ -759,6 +759,61 @@ describe("a fork dialog on a tab whose host is a sandbox that rests", () => {
     expect(readStagedSandbox(FORK_SURFACE)?.target).toEqual(NEW_SANDBOX);
   });
 
+  describe("Fork on the source's own resting sandbox", () => {
+    const PATHS_NOTICE = /Folder paths don't travel between computers/;
+    const OTHER_SANDBOX: Extract<StagedSandboxTarget, { kind: "existing" }> = {
+      kind: "existing",
+      hostId: "other-sandbox-host",
+      sandboxId: "sbx_other",
+      name: "Other box",
+      configuration: { kind: "personal" },
+      verb: "resume",
+    };
+
+    it("stays same-host: the source's workspace travels with the request", async () => {
+      restOn("suspended");
+      renderResting(null);
+      await waitFor(() =>
+        expect(readStagedSandbox(FORK_SURFACE)?.target).toMatchObject({
+          hostId: TAB_HOST_ID,
+        }),
+      );
+      fillTitle();
+
+      expect(screen.queryByText(PATHS_NOTICE)).toBeNull();
+      fireEvent.click(forkButton());
+
+      await waitFor(() => {
+        expect(dialogMocks.onOpenChange).toHaveBeenCalledWith(false);
+      });
+      expect(onlyPendingSend().request).toMatchObject({
+        kind: "fork",
+        workspace: {
+          workspaceMode: "inherit",
+          worktreeIntent: forkTarget().workspaceSeed.intent,
+        },
+      });
+    });
+
+    it("reads cross-host when it forks onto a different sandbox, and carries no workspace", async () => {
+      restOn("suspended");
+      useStagedSandboxStore.getState().stage(FORK_SURFACE, OTHER_SANDBOX);
+      renderResting(null);
+      await waitFor(() =>
+        expect(readStagedSandbox(FORK_SURFACE)?.target).toEqual(OTHER_SANDBOX),
+      );
+      fillTitle();
+
+      expect(screen.getByText(PATHS_NOTICE)).toBeDefined();
+      fireEvent.click(forkButton());
+
+      await waitFor(() => {
+        expect(dialogMocks.onOpenChange).toHaveBeenCalledWith(false);
+      });
+      expect(onlyPendingSend().request).not.toHaveProperty("workspace");
+    });
+  });
+
   describe("as the wake passes through awake with a host that has not reported", () => {
     async function wakeUnreported(): Promise<void> {
       restOn("suspended");

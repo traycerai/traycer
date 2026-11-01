@@ -300,7 +300,8 @@ export function withSandboxWakeWaits(
     const sandbox = host.sandbox;
     if (sandbox?.state !== "awake" || sandbox.summary === null) return host;
     const wait = sandboxWakeWait(sandbox.summary, {
-      answers: host.connectable,
+      answers:
+        host.connectable || host.item?.status.connectivity === "connectable",
       answeredWake: answeredWakes[sandbox.summary.id] ?? null,
     });
     return wait === null

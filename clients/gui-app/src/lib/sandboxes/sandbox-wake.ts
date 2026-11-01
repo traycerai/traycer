@@ -146,20 +146,14 @@ function readWhileVerbIsHeld(
   request: Promise<unknown>,
   read: () => Promise<SandboxFactsRead>,
 ): void {
-  let held = true;
   const release = (): void => {
-    held = false;
+    clearInterval(timer);
   };
+  const timer = setInterval(() => {
+    // A rejection is the account fence: the wake itself reports that.
+    read().catch(release);
+  }, WAKE_POLL_INTERVAL_MS);
   void request.then(release, release);
-  const follow = async (): Promise<void> => {
-    await sleep(WAKE_POLL_INTERVAL_MS);
-    while (held) {
-      await read();
-      await sleep(WAKE_POLL_INTERVAL_MS);
-    }
-  };
-  // A rejection is the account fence: the wake itself reports that.
-  void follow().catch(() => undefined);
 }
 
 function startWakeAttempt(

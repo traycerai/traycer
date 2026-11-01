@@ -1809,6 +1809,48 @@ describe("a send waiting for the requested agent on its sandbox", () => {
     expect(screen.queryByTestId("pending-sandbox-message")).toBeNull();
   });
 
+  it("creates a fork with the workspace its request carries", async () => {
+    const worktreeIntent = {
+      entries: [
+        {
+          kind: "local" as const,
+          workspacePath: "/repo/source",
+          repoIdentifier: null,
+          isPrimary: true,
+        },
+      ],
+    };
+    seed({
+      ...SEEDED,
+      send: {
+        request: {
+          ...FORK_REQUEST,
+          workspace: { workspaceMode: "inherit", worktreeIntent },
+        },
+      },
+    });
+    answerHost(SANDBOX_HOST, CODEX_READY);
+    mount();
+
+    await waitForCreateChats(1);
+    expect(createChatCalls()[0].input).toMatchObject({
+      workspaceMode: "inherit",
+      worktreeIntent,
+    });
+  });
+
+  it("creates a fork persisted with no workspace folderless", async () => {
+    seed({ ...SEEDED, send: { request: FORK_REQUEST } });
+    answerHost(SANDBOX_HOST, CODEX_READY);
+    mount();
+
+    await waitForCreateChats(1);
+    expect(createChatCalls()[0].input).toMatchObject({
+      workspaceMode: "folderless",
+      worktreeIntent: null,
+    });
+  });
+
   it("keeps the message and sends no create when its durable dispatch claim cannot be written", async () => {
     const originalLocks = Object.getOwnPropertyDescriptor(navigator, "locks");
     Reflect.deleteProperty(navigator, "locks");

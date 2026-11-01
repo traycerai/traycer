@@ -649,6 +649,10 @@ describe("a landing composer with a sandbox staged", () => {
   });
 
   it("leaves a restored stage's draft on its own pick", async () => {
+    // The name a list gave this pick before the stage dropped it.
+    useComposerHarnessMemoryStore
+      .getState()
+      .recordModelName("traycer", "traycer-saved", "Saved Traycer");
     host.renderPicker = true;
     const draftId = useLandingDraftStore.getState().createDraft(TRAYCER_PICK);
     signInAndReturnSandbox(draftId);
@@ -670,7 +674,7 @@ describe("a landing composer with a sandbox staged", () => {
     // The chip says the model Send carries.
     expect(pickedRunSettings(toolbar().getState()).model).toBe("traycer-saved");
     expect(
-      await screen.findByRole("button", { name: /^traycer-saved/ }),
+      await screen.findByRole("button", { name: /^Saved Traycer/ }),
     ).toBeDefined();
     expect(screen.queryByRole("button", { name: /Select model/ })).toBeNull();
   });

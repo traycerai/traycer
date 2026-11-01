@@ -341,14 +341,14 @@ describe("<HarnessModelPicker /> under a staged sandbox", () => {
     expect(screen.queryByRole("button", { name: /Select model/ })).toBeNull();
   });
 
-  it("shows the slug for a pick no list has named", async () => {
+  it("shows a generic name for a pick no list has named", async () => {
     cloud.sandboxHost = true;
     cloud.models = [OTHER];
     useStagedSandboxStore.getState().stage(SURFACE, stagedTarget());
     renderComposer([OTHER], pickOf("trc-unlisted"));
 
     expect(
-      await screen.findByRole("button", { name: /^trc-unlisted/ }),
+      await screen.findByRole("button", { name: /^Traycer model/ }),
     ).toBeTruthy();
     expect(screen.queryByRole("button", { name: /Select model/ })).toBeNull();
   });
