@@ -63,6 +63,17 @@ export const NOISE_HANDSHAKE_TIMEOUT_MS = 15_000;
 /** Budget for the in-channel session `openAck` after `open{bearer}` is sent. */
 export const SESSION_OPEN_ACK_TIMEOUT_MS = 15_000;
 
+/**
+ * The waits before each re-ask for a member credential a mint did not hand
+ * over, on a session that is already `ready`. The asks land about 2, 7, 22, 52
+ * and 112 s after the refusal: an authn that has not yet seen the wake clears
+ * in the first few, and the last clears the mint budget's 60 s window. A new
+ * attach starts the list again.
+ */
+export const MEMBER_CREDENTIAL_REASK_DELAYS_MS: readonly number[] = [
+  2_000, 5_000, 15_000, 30_000, 60_000,
+];
+
 /** Budget for a single unary `response` after its `request` frame is sent. */
 export const UNARY_RESPONSE_TIMEOUT_MS = 30_000;
 

@@ -79,6 +79,7 @@ import {
   HOST_STANDING_BOUND_MS,
   INITIAL_BULK_SEND_CREDITS,
   MAX_TERMINAL_STREAM_IDS,
+  MEMBER_CREDENTIAL_REASK_DELAYS_MS,
   ATTACH_ACK_TIMEOUT_MS,
   NOISE_HANDSHAKE_TIMEOUT_MS,
   SESSION_OPEN_ACK_TIMEOUT_MS,
@@ -557,11 +558,13 @@ export interface RemoteSessionOptions<
    * host offers {@link SESSION_CAPABILITY_MEMBER_CREDENTIAL}, the session
    * mints, enqueues `CREDENTIAL_UPDATE {bearer: null, memberCredential}` and
    * only then becomes `ready`, which is what releases parked unary callers and
-   * re-opens streams; the same on every re-attach, except that a credential
-   * minted for an attach that dropped before carrying it is carried by the
-   * next one instead of a new mint. A mint that resolves `null`
-   * or throws is logged and the session goes on, so the host's own refusal
-   * still names the cause.
+   * re-opens streams; the same on every re-attach. A credential rides only the
+   * attach it was minted for: a suspend ends the family of anything minted
+   * before it, so one left over from a dropped attach is discarded and the
+   * next attach mints its own. A mint that resolves `null` or throws is logged
+   * and the session goes on, so the host's own refusal still names the cause,
+   * and the session then re-asks on that attach
+   * ({@link MEMBER_CREDENTIAL_REASK_DELAYS_MS}).
    */
   readonly mintMemberCredential:
     | ((hostId: string) => Promise<MemberCredentialHandoff | null>)
@@ -1316,14 +1319,6 @@ export class RemoteSession<
   private nextStreamId = 1;
   private readyBoundaryGeneration: number | null = null;
   /**
-   * A minted member credential whose attach went stale or lost its host
-   * before it could carry it. The mint flow holds an adoption claim for the
-   * credential it just handed out, so a fresh mint on the redial answers that
-   * one is already pending; the next attach that offers the capability carries
-   * this one instead of minting.
-   */
-  private undeliveredMemberCredential: MemberCredentialHandoff | null = null;
-  /**
    * The bearer presented in the current connection's `open` frame, captured
    * at send time so the `UNAUTHORIZED` session-fatal recovery can tell
    * whether the NEXT attach would present a different token (progress) or
@@ -1408,6 +1403,7 @@ export class RemoteSession<
   private maskTimer: TimerHandle | null = null;
   private holdTimer: TimerHandle | null = null;
   private resumeAckTimer: TimerHandle | null = null;
+  private memberCredentialReaskTimer: TimerHandle | null = null;
   private reauthTimer: TimerHandle | null = null;
   private standingTimer: TimerHandle | null = null;
   /** Re-reports the no-host refusal while parked before ready; see `reportParkedRefusal`. */
@@ -3769,13 +3765,6 @@ export class RemoteSession<
       mintMemberCredential !== null &&
       parsed.data.capabilities.includes(SESSION_CAPABILITY_MEMBER_CREDENTIAL)
     ) {
-      const held = this.undeliveredMemberCredential;
-      if (held !== null) {
-        this.undeliveredMemberCredential = null;
-        this.enqueueMemberCredential(connection, held);
-        this.completeOpen(generation, connection);
-        return;
-      }
       // The open-ack timer stays armed across the mint, so a mint that never
       // settles drops this attach like a missing ack would.
       connection.memberCredentialPending = true;
@@ -3815,14 +3804,12 @@ export class RemoteSession<
       this.connection !== connection ||
       this.phase !== "opening"
     ) {
-      this.holdUndeliveredMemberCredential(handoff);
       return;
     }
     connection.memberCredentialPending = false;
     if (!connection.hostAttached) {
       // Parked exactly as `handleOpenAck` parks a pre-ready detach: the
-      // redial's own ack carries the held credential.
-      this.holdUndeliveredMemberCredential(handoff);
+      // redial's own ack mints for itself.
       return;
     }
     if (handoff === null) {
@@ -3831,18 +3818,61 @@ export class RemoteSession<
       console.warn(
         `[remote-session] member credential not handed: ${failure ?? "mint-unavailable"}`,
       );
+      this.armMemberCredentialReask(generation, connection, mint, 0);
     } else {
       this.enqueueMemberCredential(connection, handoff);
     }
     this.completeOpen(generation, connection);
   }
 
-  private holdUndeliveredMemberCredential(
-    handoff: MemberCredentialHandoff | null,
+  /**
+   * Arms the re-ask at `index` of {@link MEMBER_CREDENTIAL_REASK_DELAYS_MS}. A
+   * `ready` session sees no other edge while the host's slot sits empty: only
+   * a new attach would mint, and an awake host may not send one for minutes.
+   */
+  private armMemberCredentialReask(
+    generation: number,
+    connection: ActiveConnection,
+    mint: (hostId: string) => Promise<MemberCredentialHandoff | null>,
+    index: number,
   ): void {
-    if (handoff !== null) {
-      this.undeliveredMemberCredential = handoff;
+    const delayMs = MEMBER_CREDENTIAL_REASK_DELAYS_MS[index];
+    if (delayMs === undefined) {
+      console.warn(
+        "[remote-session] member credential not handed: re-asks exhausted",
+      );
+      return;
     }
+    this.memberCredentialReaskTimer = setTimeout(() => {
+      this.memberCredentialReaskTimer = null;
+      void this.reaskMemberCredential(generation, connection, mint, index);
+    }, delayMs);
+  }
+
+  /**
+   * One re-ask. The host reads the frame whenever it lands, but a request sent
+   * since `ready` was refused without it; this only ends the gap.
+   */
+  private async reaskMemberCredential(
+    generation: number,
+    connection: ActiveConnection,
+    mint: (hostId: string) => Promise<MemberCredentialHandoff | null>,
+    index: number,
+  ): Promise<void> {
+    let handoff: MemberCredentialHandoff | null = null;
+    try {
+      handoff = await mint(this.options.hostId);
+    } catch {
+      handoff = null;
+    }
+    if (!this.isCurrent(generation)) {
+      return;
+    }
+    if (handoff !== null && this.isReady()) {
+      this.enqueueMemberCredential(connection, handoff);
+      return;
+    }
+    this.armMemberCredentialReask(generation, connection, mint, index + 1);
   }
 
   private enqueueMemberCredential(
@@ -7211,6 +7241,7 @@ export class RemoteSession<
     this.clearMaskTimer();
     this.clearHoldTimer();
     this.clearResumeAckTimer();
+    this.clearMemberCredentialReaskTimer();
     // A drop from ANY other cause - a relay close, a `host_attached` rebuild,
     // a person's Retry - leaves no silence timer to fire against the next
     // generation. Both also re-check `isCurrent` when they fire, so these are
@@ -7356,6 +7387,13 @@ export class RemoteSession<
     if (this.resumeAckTimer !== null) {
       clearTimeout(this.resumeAckTimer);
       this.resumeAckTimer = null;
+    }
+  }
+
+  private clearMemberCredentialReaskTimer(): void {
+    if (this.memberCredentialReaskTimer !== null) {
+      clearTimeout(this.memberCredentialReaskTimer);
+      this.memberCredentialReaskTimer = null;
     }
   }
 

@@ -18,9 +18,12 @@ import { appLogger } from "@/lib/logger";
  * "one mint in flight per host" holds no matter how many transports exist.
  *
  * That guarantee is about CORRECTNESS, not about interruption: the server
- * supersedes older credentials for a host on every mint, so simultaneous mints
- * would revoke one another and resolve as 409s - leaving the host with nothing.
- * (Provisioning itself is silent; there is no dialog to de-duplicate any more.)
+ * supersedes older credentials for a host on every delegated mint, so
+ * simultaneous mints would revoke one another and resolve as 409s - leaving the
+ * host with nothing. (Provisioning itself is silent; there is no dialog to
+ * de-duplicate any more.) A team host's member mint revokes nothing and is owed
+ * on every attach, so it keeps the one-in-flight half and none of the pacing:
+ * see {@link mintAppMemberCredential}.
  *
  * The mechanism (which auth service) is supplied at runtime by the provisioning
  * provider: this module deliberately owns no React state, so a transport
@@ -363,9 +366,21 @@ export const appHostCredentialMintFlow: HostCredentialMintFlow = (request) => {
       retryAfterMs: remainingBackoffMs(hostId),
     });
   }
+  const attempt = startHostCredentialAttempt(request);
+  if (attempt === null) {
+    return Promise.resolve({ kind: "unavailable" });
+  }
+  return attempt.settled.then(attempt.claim);
+};
+
+/** Starts and registers one mint attempt, or `null` with no runner installed. */
+function startHostCredentialAttempt(
+  request: HostCredentialMintRequest,
+): HostCredentialAttempt | null {
+  const hostId = request.hostId;
   const current = runner;
   if (current === null) {
-    return Promise.resolve({ kind: "unavailable" });
+    return null;
   }
 
   const startedAt = generation;
@@ -447,16 +462,26 @@ export const appHostCredentialMintFlow: HostCredentialMintFlow = (request) => {
     return outcome;
   };
 
-  attemptsByHostId.set(hostId, { settled, claim });
-  return settled.then(claim);
-};
+  const attempt = { settled, claim };
+  attemptsByHostId.set(hostId, attempt);
+  return attempt;
+}
 
 /**
- * The member credential a team host spends for the signed-in person, minted
- * through {@link appHostCredentialMintFlow}: the same runner, the same
- * identity-change drop and the same one mint in flight per host. `null` when
- * nothing was minted for this caller, which the remote session logs and goes
- * on from.
+ * The member credential a team host spends for the signed-in person: the same
+ * runner, the same identity-change drop and the same one mint in flight per
+ * host as {@link appHostCredentialMintFlow}, without its adoption claim and
+ * escalation ladder. Those exist because delegated mints revoke each other. A
+ * member mint revokes nothing, and a suspend ends the member's family, so
+ * every wake owes one at re-attach whenever the last mint was. The server's
+ * mint budget bounds them instead.
+ *
+ * The claim gate is skipped too, so a caller that joins an attempt gets its
+ * outcome. One session serves a host per person, so a joiner is that session's
+ * newest attach, and the older attach it joined discards the credential.
+ *
+ * `null` when nothing was minted, which the remote session logs, goes on from
+ * and re-asks after.
  *
  * Every GUI composition that builds a remote session passes this one function:
  * it is not part of the session cache identity, so the first acquirer's value
@@ -465,10 +490,13 @@ export const appHostCredentialMintFlow: HostCredentialMintFlow = (request) => {
 export async function mintAppMemberCredential(
   hostId: string,
 ): Promise<MemberCredentialHandoff | null> {
-  const outcome = await appHostCredentialMintFlow({
-    hostId,
-    reason: "missing",
-  });
+  const attempt =
+    attemptsByHostId.get(hostId) ??
+    startHostCredentialAttempt({ hostId, reason: "missing" });
+  if (attempt === null) {
+    return null;
+  }
+  const outcome = await attempt.settled;
   if (outcome.kind !== "provisioned") {
     return null;
   }
