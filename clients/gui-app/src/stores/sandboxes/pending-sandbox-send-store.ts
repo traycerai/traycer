@@ -35,6 +35,8 @@ import {
 import { recordMapStorageKey } from "@/lib/persist/keys";
 import {
   createPendingSendStorage,
+  forgetPendingDispatchRequest,
+  recordPendingDispatchRequest,
   requestPendingDispatchRetry,
   type PendingDispatchRetryRequest,
 } from "@/lib/sandboxes/pending-stage-storage";
@@ -101,6 +103,8 @@ export interface PendingSandboxSendDelivery {
   readonly readySeconds: number;
 }
 
+export type PendingDispatchAttempt = "first" | "repeat";
+
 /** The exact request remains replayable even after the account's stage is cleared. */
 export interface PendingSandboxSendDispatch {
   readonly input: CreateChatRequestV14 & { readonly settings: ChatRunSettings };
@@ -108,6 +112,8 @@ export interface PendingSandboxSendDispatch {
   /** A transport failure cannot say whether the host accepted the request. */
   readonly status: "sending" | "uncertain";
   readonly blocker?: PendingSendBlocker;
+  /** Without this, an earlier build made the claim and may have sent it. */
+  readonly recordsRequests?: true;
 }
 
 /**
@@ -198,6 +204,8 @@ interface PendingSandboxSendStoreState {
     id: string,
     dispatch: PendingSandboxSendDispatch,
   ) => boolean;
+  /** Records a request about to leave; `null` means it must not leave. */
+  readonly beginDispatchAttempt: (id: string) => PendingDispatchAttempt | null;
   readonly markDispatchUncertain: (
     id: string,
     dispatch: PendingSandboxSendDispatch,
@@ -206,6 +214,7 @@ interface PendingSandboxSendStoreState {
   readonly refuseDispatch: (
     id: string,
     dispatch: PendingSandboxSendDispatch,
+    attempt: PendingDispatchAttempt,
   ) => void;
   readonly endDispatch: (
     id: string,
@@ -809,7 +818,10 @@ export const usePendingSandboxSendStore =
             return false;
           const boundary = Date.now();
           try {
-            const captured = structuredClone(dispatch);
+            const captured: PendingSandboxSendDispatch = {
+              ...structuredClone(dispatch),
+              recordsRequests: true,
+            };
             set({
               sends: {
                 ...sends,
@@ -839,6 +851,14 @@ export const usePendingSandboxSendStore =
             pendingSandboxDispatchCurrent(id, dispatch) &&
             storedSend(id)?.observationRequestedAt === boundary
           );
+        },
+        beginDispatchAttempt: (id) => {
+          const stored = storedSend(id)?.dispatch;
+          if (!isRecord(stored)) return null;
+          const attempt = recordPendingDispatchRequest(id);
+          return attempt === "first" && stored.recordsRequests !== true
+            ? "repeat"
+            : attempt;
         },
         markDispatchUncertain: (id, captured) => {
           try {
@@ -885,7 +905,8 @@ export const usePendingSandboxSendStore =
             void usePendingSandboxSendStore.persist.rehydrate();
           return request;
         },
-        refuseDispatch: (id, captured) =>
+        refuseDispatch: (id, captured, attempt) => {
+          const held = get().sends[id]?.dispatch ?? null;
           set((state) => ({
             sends: withDispatch(state.sends, id, (dispatch) =>
               pendingDecision(state.sends[id], "known-refusal", {
@@ -899,7 +920,19 @@ export const usePendingSandboxSendStore =
                 ? null
                 : dispatch,
             ),
-          })),
+          }));
+          // Only the first request's refusal, clearing the claim itself, says
+          // nothing landed; a repeat's can't speak for the request before it,
+          // and without the exclusive lock another window may have sent one.
+          if (
+            attempt === "first" &&
+            ownsPendingSandboxSendExclusively(id) &&
+            held !== null &&
+            get().sends[id]?.dispatch === null &&
+            storedSend(id)?.dispatch === null
+          )
+            forgetPendingDispatchRequest(id);
+        },
         endDispatch: (id, dispatch, event, environment) => {
           const { sends } = get();
           if (!Object.hasOwn(sends, id)) return false;
