@@ -7219,7 +7219,7 @@ computer`. A team's host draws no card. The move sheet names the moving computer
       host id. Rows: Host ID (shortened, with copy; Copy host ID stays in the
       `⋯` menu too), Added to account (`createdAt`), Last seen, Last reported
       version (`status.appVersion`) and Platform (`formatPlatform` plus the
-      architecture, as the header words it). A sandbox's row has neither
+      architecture, as the header words it). A live sandbox's row has neither
       `status.lastSeenAt` nor `status.appVersion`, because the credential
       refresh that writes both never runs on one: its Last seen is the report
       the Details drawer shows (`SandboxSummary.lastActivityAt`, through

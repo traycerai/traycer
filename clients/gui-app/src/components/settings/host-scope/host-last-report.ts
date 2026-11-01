@@ -14,7 +14,7 @@ export type HostLastReport =
  * The one reading of when the account last heard from a host.
  *
  * A sandbox reads its control-plane row's `lastActivityAt`, the report the
- * Details drawer shows. Its registry row has no such stamp and never will:
+ * Details drawer shows. A live sandbox's registry row has no such stamp:
  * `status.lastSeenAt` is written by the credential refresh, and a sandbox
  * renews by exchange instead. A sandbox whose row has not answered is
  * `unknown`, not `none`, since the registry's `null` says nothing about it.
