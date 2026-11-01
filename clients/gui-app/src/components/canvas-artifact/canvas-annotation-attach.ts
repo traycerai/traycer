@@ -80,8 +80,8 @@ export interface WindowCaptureBridge {
 /**
  * Two frames: one for React to commit the hidden chrome, one for the
  * compositor to present it. A hidden window paints no frames at all, so the
- * wait gives up as soon as the document is or becomes hidden: the capture
- * then fails fast instead of hanging until the window is shown again.
+ * wait ends as soon as the document is or becomes hidden, allowing the
+ * capture to proceed without waiting for the window to be shown again.
  */
 function nextPresentedFrame(): Promise<void> {
   return new Promise((resolve) => {
@@ -106,10 +106,10 @@ function nextPresentedFrame(): Promise<void> {
  * board. The desktop captures the window as composited, so the selection
  * outline, its handles and the action bar would otherwise be cut into the
  * crop with the element. The caller has already waited for its own popover
- * to leave the screen; this hides the overlay's chrome for the one frame
- * the capture needs and restores it whatever the capture does.
+ * to leave the screen; this hides the overlay's chrome through the capture
+ * and restores it whatever the capture does.
  *
- * The rectangle is measured after that frame, not before: the board can be
+ * The rectangle is measured after those frames: the board can be
  * dragged while the picker closes, and a rectangle measured at the pick
  * would then crop the old place.
  */

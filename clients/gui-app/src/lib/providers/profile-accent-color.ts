@@ -46,7 +46,7 @@ export function resolveProfileAccentColor(
 
 /**
  * The -700 tone of each hue of {@link PROFILE_ACCENT_PALETTE}, in its order,
- * dark enough for white initials.
+ * dark enough for white ink.
  */
 const BOT_DEEP_TONES: readonly string[] = [
   "#b91c1c",
@@ -63,7 +63,7 @@ const BOT_DEEP_TONES: readonly string[] = [
   "#be185d",
 ];
 
-/** A bot's picture without one: its colour and the initials' ink on it. */
+/** A bot's picture: its background colour and the ink on it. */
 export interface BotSwatch {
   readonly color: string;
   readonly ink: "dark" | "light";

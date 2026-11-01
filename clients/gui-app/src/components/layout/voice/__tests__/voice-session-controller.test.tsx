@@ -2387,7 +2387,7 @@ describe("a question nobody has replied under", () => {
     );
   });
 
-  it("whose reply joined a thread the list had not shown speaks that thread's history to nobody, and the actual answer under the delegation", async () => {
+  it("whose reply joined a thread the list had not shown leaves that thread's history unspoken and speaks the actual answer under the delegation", async () => {
     addChat(CHANNEL_ID, { snapshotLoaded: true, messages: [] });
     const thread = addChat("t-existing", {
       snapshotLoaded: false,

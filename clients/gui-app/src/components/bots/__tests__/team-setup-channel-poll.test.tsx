@@ -27,7 +27,7 @@ import { createAppQueryClient } from "@/lib/query-client";
 import { PaneVisibilityContext } from "@/components/epic-tabs/pane-visibility-context";
 import { TeamSetupChannel } from "@/components/bots/team-setup-channel";
 import type { BotThreadsViewState } from "@/components/bots/bot-channel-sidebar";
-import { useInstalledAppLevel2Form } from "@/hooks/ui/use-installed-app-level2-form";
+import { useInstalledAppTileForm } from "@/hooks/ui/use-installed-app-level2-form";
 import {
   installShellForm,
   SHELL_WIDTH_COLUMN_256,
@@ -225,7 +225,7 @@ const THREADS_CLOSED: BotThreadsViewState = {
 function SetupWithLevel2Form(props: {
   readonly client: HostClient<HostRpcRegistry>;
 }): ReactNode {
-  const level2 = useInstalledAppLevel2Form(1);
+  const level2 = useInstalledAppTileForm(1)?.level2 ?? null;
   return (
     <TeamSetupChannel
       setup={{

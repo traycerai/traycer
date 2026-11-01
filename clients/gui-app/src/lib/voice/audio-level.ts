@@ -7,7 +7,7 @@ import { appLogger, describeLogError } from "@/lib/logger";
  * a {@link SPEAKING_HANGOVER_MS} hangover, sampled every {@link SAMPLE_MS}.
  */
 export const SPEAKING_RMS = 0.01;
-export const SPEAKING_HANGOVER_MS = 500;
+const SPEAKING_HANGOVER_MS = 500;
 const SAMPLE_MS = 100;
 const FFT_SIZE = 1024;
 

@@ -38,7 +38,7 @@ export function readVirtualKeyboardInset(): number {
   return inset < MIN_KEYBOARD_INSET_PX ? 0 : inset;
 }
 
-function subscribeToViewportChanges(onChange: () => void): () => void {
+export function subscribeToViewportChanges(onChange: () => void): () => void {
   const viewport = window.visualViewport ?? null;
   if (viewport === null) return () => {};
   // `resize` covers keyboard show/hide; `scroll` covers iOS moving the visual

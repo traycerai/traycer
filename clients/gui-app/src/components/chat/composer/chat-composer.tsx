@@ -10,6 +10,7 @@ import { readStagedWorktreeIntent } from "@/stores/worktree/worktree-intent-stag
 import { useReadingWidthStyle } from "@/lib/layout-overrides";
 import {
   memo,
+  use,
   useCallback,
   useEffect,
   useMemo,
@@ -75,6 +76,8 @@ import { useTabBodySelected } from "@/components/epic-canvas/canvas/tab-body-sel
 import { chatTileCatalogActivity } from "@/components/epic-canvas/renderers/chat-tile-surface-activity";
 import type { ChatSendRestore } from "@/stores/chats/chat-session-store";
 import type { Attachment } from "@/lib/composer/types";
+import { ComposerFocusLayoutContext } from "@/components/home/composer/composer-focus-layout-context";
+import { KEYBOARD_FOCUS_OWNER_PROPS } from "@/hooks/ui/use-keyboard-focus-layout";
 import { cn } from "@/lib/utils";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
@@ -501,6 +504,8 @@ function ChatComposerImpl(props: ChatComposerProps) {
     restingSandbox,
   } = props;
   const readingWidth = useReadingWidthStyle();
+  const focusLayout = use(ComposerFocusLayoutContext);
+  const frame = composerFrame(focusLayout, topSpacing);
   const runnerHost = useRunnerHost();
   const hostClient = useTabHostClient();
   const tabHostId = useTabHostId();
@@ -1054,7 +1059,8 @@ function ChatComposerImpl(props: ChatComposerProps) {
       <div
         ref={guideRef}
         data-chat-composer=""
-        className="pointer-events-none px-4"
+        {...KEYBOARD_FOCUS_OWNER_PROPS}
+        className={cn("pointer-events-none", frame.gutter)}
       >
         <FirstTaskChatGuide
           enabled={focused}
@@ -1064,9 +1070,9 @@ function ChatComposerImpl(props: ChatComposerProps) {
         />
         <div
           className={cn(
-            "pointer-events-auto relative mx-auto w-full bg-canvas pb-4 after:pointer-events-none after:absolute after:inset-x-0 after:-bottom-px after:h-px after:bg-canvas after:content-['']",
+            "pointer-events-auto relative mx-auto w-full bg-canvas after:pointer-events-none after:absolute after:inset-x-0 after:-bottom-px after:h-px after:bg-canvas after:content-['']",
             readingWidth.className,
-            topSpacing === "normal" ? "pt-4" : "pt-0",
+            frame.block,
           )}
           style={{ maxWidth: readingWidth.maxWidth }}
         >
@@ -1170,7 +1176,9 @@ function ChatComposerImpl(props: ChatComposerProps) {
                 />
               </ComposerAttachmentDropZone>
               {workspaceControls !== null ? (
-                <ComposerWorkspaceRow workspaceControls={workspaceControls} />
+                <div hidden={focusLayout} className="contents">
+                  <ComposerWorkspaceRow workspaceControls={workspaceControls} />
+                </div>
               ) : null}
             </ComposerTileIdProvider>
           </div>
@@ -1195,6 +1203,18 @@ function ChatComposerImpl(props: ChatComposerProps) {
       />
     </>
   );
+}
+
+/** The padding around the card: 44 tall in all on the focus layout's one row. */
+function composerFrame(
+  focusLayout: boolean,
+  topSpacing: ChatLowerSurfaceTopSpacing,
+): { readonly gutter: string; readonly block: string } {
+  if (focusLayout) return { gutter: "px-2", block: "py-0.5" };
+  return {
+    gutter: "px-4",
+    block: topSpacing === "normal" ? "pt-4 pb-4" : "pb-4",
+  };
 }
 
 /**

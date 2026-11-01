@@ -105,7 +105,7 @@ export function BotChannelSidebar(props: {
   /** The surface's selected channel; `null` for none. */
   readonly activeBotId: string | null;
   readonly hostId: string;
-  /** The tab's Threads view; `null` where the tab has no channel to swap it for. */
+  /** The surface's Threads view; `null` where no Threads entry is offered. */
   readonly threadsView: BotThreadsViewState | null;
   /** A channel row was picked; the picker's menu closes on it, the column stays. */
   readonly onChannelOpened: () => void;

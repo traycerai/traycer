@@ -23,7 +23,7 @@ import {
 /** The router's model (probe VP0: 10/10 on mis-heard transcripts at effort none). */
 const VOICE_ROUTER_MODEL = "gpt-6-luna";
 
-export const ROUTER_ACTIONS = [
+const ROUTER_ACTIONS = [
   "post",
   "navigate",
   "read",
@@ -39,10 +39,9 @@ export const ROUTER_ACTIONS = [
 ] as const;
 export type RouterAction = (typeof ROUTER_ACTIONS)[number];
 
-export const CONTROL_VERBS = ["end", "mute", "resume", "captions"] as const;
+const CONTROL_VERBS = ["end", "mute", "resume", "captions"] as const;
 export type ControlVerb = (typeof CONTROL_VERBS)[number];
 
-/** The verbs a later ticket executes; recognised here, and refused. */
 export type DeferredVerb = Extract<
   RouterAction,
   "read" | "later" | "brief" | "status" | "open"

@@ -17,6 +17,7 @@ import {
 import {
   tileCategoryOf,
   type ExplicitTilePlacement,
+  type MobileTileOpenSlots,
   type TileOpenGesture,
   type TileOpenIntent,
   type TileOpenMode,
@@ -288,14 +289,86 @@ function resolveConfiguredPlan(args: {
   };
 }
 
+/**
+ * A dedupe hit, where two tiles fit. A tile already beside the current one stays
+ * where it is, whichever slot asked: focusing it would make it the current tile,
+ * and the two would collapse into one. `null` leaves the hit to the plain focus.
+ */
+function resolveMobileSlotHit(
+  slots: MobileTileOpenSlots | null,
+  instanceId: string,
+  tabId: string,
+): TileOpenPlan | null {
+  if (slots === null) return null;
+  const inSecondary = instanceId === slots.secondaryInstanceId;
+  if (
+    !inSecondary &&
+    (slots.target === "primary" || instanceId === slots.primaryInstanceId)
+  ) {
+    return null;
+  }
+  return {
+    kind: "show-in-mobile-secondary",
+    tabId,
+    existingInstanceId: instanceId,
+    transient: false,
+  };
+}
+
+function opensIntoMobileSecondary(
+  intent: TileOpenIntent,
+  mode: TileOpenMode,
+  slots: MobileTileOpenSlots | null,
+): boolean {
+  return (
+    slots?.target === "secondary" &&
+    mode !== "background" &&
+    intent.dedupe &&
+    (intent.placement === null || intent.placement.kind === "beside")
+  );
+}
+
+/**
+ * What a tile already on the canvas answers. A middle-click is explicitly asking
+ * for a SECOND, fresh background tab, so it never dedupes (B4). `null` is no hit.
+ */
+function resolveDedupeHit(args: {
+  readonly intent: TileOpenIntent;
+  readonly canvas: EpicCanvasState;
+  readonly modifiers: TileOpenModifiers;
+  readonly mode: TileOpenMode;
+  readonly mobileSlots: MobileTileOpenSlots | null;
+  readonly tabId: string;
+}): TileOpenPlan | null {
+  const { intent, canvas, modifiers, mode, mobileSlots, tabId } = args;
+  if (!intent.dedupe || modifiers.middle) return null;
+  const existing = findPaneTabForRef(canvas, intent.node);
+  if (existing === null) return null;
+  // A background open of an already-open tile changes nothing at all: it
+  // must not pull focus to the existing instance.
+  if (mode === "background") return { kind: "noop" };
+  const slotted = resolveMobileSlotHit(mobileSlots, existing.instanceId, tabId);
+  if (slotted !== null) return slotted;
+  return {
+    kind: "focus-existing",
+    tabId,
+    paneId: existing.pane.id,
+    instanceId: existing.instanceId,
+    promote:
+      mode !== "preview" && existing.pane.previewTabId === existing.instanceId,
+  };
+}
+
 export function resolveTileOpen(input: {
   readonly intent: TileOpenIntent;
   readonly settings: TilePlacementSettings;
   readonly canvas: EpicCanvasState;
   readonly resolveTargetTabForEpic: (epicId: string) => string;
   readonly singleTileViewport: boolean;
+  /** `null` unless the phone shell has room for two tiles. */
+  readonly mobileSlots: MobileTileOpenSlots | null;
 }): TileOpenPlan {
-  const { canvas, intent, settings, singleTileViewport } = input;
+  const { canvas, intent, mobileSlots, settings, singleTileViewport } = input;
 
   // 1. Target tab.
   const tabId =
@@ -314,24 +387,28 @@ export function resolveTileOpen(input: {
   // promotes it.
   const mode = resolveMode(intent.gesture, modifiers);
 
-  // 3. Dedupe. A middle-click is explicitly asking for a SECOND, fresh
-  // background tab, so it never dedupes (B4).
-  if (intent.dedupe && !modifiers.middle) {
-    const existing = findPaneTabForRef(canvas, intent.node);
-    // A background open of an already-open tile changes nothing at all: it
-    // must not pull focus to the existing instance.
-    if (existing !== null && mode === "background") return { kind: "noop" };
-    if (existing !== null) {
-      return {
-        kind: "focus-existing",
-        tabId,
-        paneId: existing.pane.id,
-        instanceId: existing.instanceId,
-        promote:
-          mode !== "preview" &&
-          existing.pane.previewTabId === existing.instanceId,
-      };
-    }
+  // 3. Dedupe.
+  const hit = resolveDedupeHit({
+    intent,
+    canvas,
+    modifiers,
+    mode,
+    mobileSlots,
+    tabId,
+  });
+  if (hit !== null) return hit;
+
+  // Where two tiles fit, the slot takes what no caller placed (a pane's own
+  // opener and a drop did), and a side chat is beside its conversation by
+  // being in the other tile. Never a second view (`dedupe` off): that is the
+  // opener's, which names its pane.
+  if (opensIntoMobileSecondary(intent, mode, mobileSlots)) {
+    return {
+      kind: "show-in-mobile-secondary",
+      tabId,
+      existingInstanceId: null,
+      transient: mode === "preview",
+    };
   }
 
   // 4a. Explicit placement wins over the setting; a `beside` placement

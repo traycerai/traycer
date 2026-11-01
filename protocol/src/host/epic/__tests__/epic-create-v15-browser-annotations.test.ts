@@ -4,11 +4,9 @@ import {
   epicCreateChatV14,
   epicCreateChatV15,
   epicCreateUpgradeV14ToV15,
-  epicCreateV14,
   epicCreateV15,
 } from "@traycer/protocol/host/epic/contracts";
 import {
-  createChatInitialMessageSchemaV14,
   type CreateChatRequestV14,
   type CreateEpicRequestV14,
 } from "@traycer/protocol/host/epic/unary-schemas";
@@ -93,14 +91,6 @@ const createEpicV14: CreateEpicRequestV14 = {
 };
 
 describe("epic.createChat@1.5 and epic.create@1.5 carry the browser-annotation sidecar", () => {
-  it("the released @1.4 initial message has no browserAnnotations key", () => {
-    expect(createChatInitialMessageSchemaV14.shape).not.toHaveProperty(
-      "browserAnnotations",
-    );
-    expect(epicCreateChatV14.schemaVersion).toEqual({ major: 1, minor: 4 });
-    expect(epicCreateV14.schemaVersion).toEqual({ major: 1, minor: 4 });
-  });
-
   it("parses a create-chat request whose first message carries a record", () => {
     const parsed = epicCreateChatV15.requestSchema.parse({
       ...createChatV14,

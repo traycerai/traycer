@@ -6,6 +6,7 @@ import os
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 BASE = dict(
+    Keys=0,
     R=3, VH=2, EST=2, Heights='"mixed"', MaxH=3, NAVOFF=0,
     HasWheel="TRUE", TouchInput="FALSE", TouchMoveDelivered="FALSE",
     HasScrollEnd="TRUE", DeferUnderFinger="FALSE", HideKinds='{"intact", "collapse"}',
@@ -24,7 +25,8 @@ PHONE = dict(HasWheel="FALSE", TouchInput="TRUE", TouchMoveDelivered="TRUE",
              HasScrollEnd="FALSE", DeferUnderFinger="FALSE")
 
 INVARIANTS = ["TypeOK", "I_IntentHeld", "I_SavingLive", "I_SavedIsView",
-              "I_ModeMatchesGeometry", "I_PillHonest", "I_NoJump", "I_MissedFollowPrice"]
+              "I_ModeMatchesGeometry", "I_PillHonest", "I_NoJump", "I_MissedFollowPrice",
+              "I_LandedInputTypes"]
 
 CONFIGS = {
     # Desktop: a minimap pick while following a live reply.
@@ -181,7 +183,8 @@ SHIPPED = ["nav", "toward", "restore", "pill", "cancel", "paint", "supersede", "
            "arrive", "live", "hold-init", "fling", "evidence", "nested", "fallen", "depart",
            "keep", "padend", "turnguard", "ledger", "ledgermaint", "translate", "followguard",
            "liftledger", "obsarm", "momstill", "freeland", "freelanddep", "armcarry", "restspend",
-           "deprebase", "heldgap", "pressland", "pressstep", "padannounce", "idlehold", "momhybrid", "tailblock", "unreadsize", "restoreanswer", "viewcarry", "oweddep"]
+           "deprebase", "heldgap", "pressland", "pressstep", "padannounce", "idlehold", "momhybrid", "tailblock", "unreadsize", "restoreanswer", "viewcarry", "oweddep",
+           "keyanswer", "presskey", "pressqueue"]
 FIXED = "{" + ", ".join(f'"{f}"' for f in SHIPPED) + "}"
 
 # Configs also run with one shipped fix taken out (`_fixed_no<fix>`;
@@ -247,21 +250,60 @@ def variant_fixes(v):
     return "{" + ", ".join(f'"{f}"' for f in fixes) + "}"
 
 
-def write(name, doc, consts):
-    lines = [f"\\* {doc}", "SPECIFICATION Spec", "CONSTANTS"]
+def write(name, doc, consts, spec, check_deadlock, observers):
+    lines = [f"\\* {doc}", f"SPECIFICATION {spec}"]
+    if check_deadlock:
+        lines.append("CHECK_DEADLOCK TRUE")
+    lines.append("CONSTANTS")
     lines += [f"    {k} = {v}" for k, v in consts.items()]
     lines += ["INVARIANTS"] + [f"    {i}" for i in INVARIANTS]
+    if consts["Keys"]:
+        lines.append("    I_KeyAnswer")
+    lines += [f"    {i}" for i in observers]
     with open(os.path.join(HERE, f"ChatScroll_{name}.cfg"), "w") as f:
         f.write("\n".join(lines) + "\n")
 
 
 names = []
 for name, (doc, overrides) in CONFIGS.items():
-    write(name, doc, dict(BASE, **overrides))
-    write(f"{name}_fixed", f"{doc} With the fixes.", dict(BASE, **overrides, Fixes=FIXED))
+    write(name, doc, dict(BASE, **overrides), "Spec", False, [])
+    write(f"{name}_fixed", f"{doc} With the fixes.", dict(BASE, **overrides, Fixes=FIXED), "Spec", False, [])
     names += [name, f"{name}_fixed"]
     for v in VARIANTS.get(name, []):
         write(f"{name}_fixed_{v}", f"{doc} With the fixes, {v}.",
-              dict(BASE, **overrides, Fixes=variant_fixes(v)))
+              dict(BASE, **overrides, Fixes=variant_fixes(v)), "Spec", False, [])
         names.append(f"{name}_fixed_{v}")
+
+# Each landed input behavior has a control with only its own switch removed.
+# The raw idle fixtures keep their existing geometry/pill failures visible.
+for fixture in ("idle_gap", "idle_clamp"):
+    doc, overrides = CONFIGS[fixture]
+    for switch in ("keyanswer", "presskey"):
+        for lane in ("before", "after"):
+            variant = f"withrawidle_no{switch}" if lane == "before" else "withrawidle"
+            name = f"{fixture}_fixed_withrawidle_{switch}_{lane}"
+            write(name, f"{doc} One key; {switch} {lane} control.",
+                  dict(BASE, **overrides, Keys=1, Fixes=variant_fixes(variant)), "Spec", False, [])
+            names.append(name)
+
+# T2 alone permits a correction write while a drag report is pending. Both
+# sides keep the end-decrease restriction; ordinary configs still use Spec.
+doc, overrides = CONFIGS["drag_idle"]
+for lane in ("before", "after"):
+    name = f"drag_idle_fixed_pressqueue_{lane}"
+    fixes = variant_fixes("nopressqueue") if lane == "before" else FIXED
+    write(name, f"{doc} T2 paired write exception; pressqueue {lane} control.",
+          dict(BASE, **overrides, Fixes=fixes), "T2Spec", False, [])
+    names.append(name)
+
+# The broad key fixtures retain unrelated failures with either switch setting.
+# This separate ordinary-frame history judges the held reader's actual offset.
+doc, overrides = CONFIGS["idle_gap"]
+for lane in ("before", "after"):
+    name = f"PKConsumer_{lane}"
+    variant = "withrawidle_nopresskey" if lane == "before" else "withrawidle"
+    write(name, f"Held press through a zero-pixel key; {lane} consumer control.",
+          dict(BASE, **overrides, Keys=1, Fixes=variant_fixes(variant)), "ReplaySpec", True,
+          ["I_NamedPreconditions", "I_PKConsumerEndpointNotReached"])
+    names.append(name)
 print(" ".join(f"ChatScroll_{n}" for n in names))

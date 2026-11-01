@@ -118,7 +118,7 @@ describe("the phone's talk mode and view", () => {
 });
 
 describe("the phone view and a held talk button", () => {
-  it("putting the view down lets go of the hold but nothing else, and bringing it back holds nothing", () => {
+  it("hiding the view releases the hold but nothing else, and reopening it preserves a hold set while hidden", () => {
     const store = useVoiceSessionStore.getState();
     store.sessionConnecting();
     store.setPushToTalk(true);

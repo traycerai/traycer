@@ -70,8 +70,8 @@ import {
   type EpicNodeKind,
 } from "@/lib/artifacts/node-display";
 import {
-  countDirectAgentChildren,
-  formatAgentDeleteNesting,
+  describeTreeDeleteDisclosure,
+  type TreeDeleteDisclosure,
 } from "@/lib/epic-tree-cascade";
 import { useOpenEpicHandle } from "@/providers/use-open-epic-handle";
 import { cn } from "@/lib/utils";
@@ -168,6 +168,7 @@ import {
   type AgentActivityTier,
   useEpicChatIds,
   useEpicChatIdsNamedByCloudRows,
+  useEpicChatRecordListAuthoritative,
   useEpicConnectionStatus,
   useEpicNodeArchived,
   useEpicNodeUpdatedAt,
@@ -1670,22 +1671,37 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
   const renameTerminalAgent = useEpicRenameTuiAgent();
   const renameArtifactInTab = useEpicCanvasStore((s) => s.renameArtifactInTab);
 
-  // How many agents sit directly under this row (they move to the top level
-  // when it is deleted), subscribed to its ANSWER rather than to the record
-  // list it is computed from.
+  // Whether every nested CHAT row has arrived. A flat boolean that flips once
+  // per session, so this row re-renders on that flip and never on a record
+  // arriving.
+  const nestedChatsKnown = useEpicChatRecordListAuthoritative();
+  // What this row's delete dialog says about the agents nested under it (they
+  // are kept and move to the top level), subscribed to its ANSWER rather than
+  // to the record list it is computed from.
   //
   // `useEpicArtifactRecords()` hands back an array whose identity moves whenever
   // ANY record in the epic changes - a body write, a chat token, a timestamp
   // stamp - so every one of these rows re-rendered on every one of those, for a
-  // count that almost never moves. Measured on the field's shape (40 rows, 12
+  // sentence that almost never moves. Measured on the field's shape (40 rows, 12
   // bursted): 40 of 40 re-rendered per burst, bystanders included. `memo` is no
   // defence, because this is the row's OWN subscription rather than a prop.
   //
   // `childrenByParent` and `nodeById` are the normalised structure this sidebar
-  // already renders, so the count agrees with what the user sees. The selector
-  // returns a number, so it needs no `useShallow`.
-  const nestedAgentCount = useEpicStore((state: OpenEpicState) =>
-    countDirectAgentChildren(state.tree, nodeId),
+  // already renders, so the sentence agrees with what the user sees.
+  //
+  // `useShallow` is required, not decorative: the selector mints a fresh
+  // object each call, so without it `useSyncExternalStore` sees a change on
+  // every notification and loops. Its fields are a string, a string-or-null
+  // and a string, so a shallow compare settles.
+  const deleteDisclosure = useEpicStore(
+    useShallow((state: OpenEpicState) =>
+      describeTreeDeleteDisclosure({
+        tree: state.tree,
+        kind: "agent",
+        nodeIds: [nodeId],
+        nestedChatsKnown,
+      }),
+    ),
   );
 
   const expanded = expandedIds.has(nodeId);
@@ -2043,7 +2059,6 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
   if (node === null) return null;
   if (!treeFilter(node.type)) return null;
 
-  const nestingNote = formatAgentDeleteNesting(nestedAgentCount);
   const rowClick = (event: React.MouseEvent<HTMLButtonElement>) => {
     if (selectionMode || event.ctrlKey || event.metaKey) {
       event.preventDefault();
@@ -2099,7 +2114,7 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
       onPerformDelete={performDelete}
       confirmDeleteOpen={confirmDeleteOpen}
       onConfirmDeleteOpenChange={setConfirmDeleteOpen}
-      nestingNote={nestingNote}
+      deleteDisclosure={deleteDisclosure}
       deletePending={deletePending}
       onConfirmDelete={confirmDelete}
       archive={archiveRow}
@@ -2149,7 +2164,7 @@ interface ChatNodeShellProps {
   readonly onPerformDelete: () => void;
   readonly confirmDeleteOpen: boolean;
   readonly onConfirmDeleteOpenChange: (open: boolean) => void;
-  readonly nestingNote: string | null;
+  readonly deleteDisclosure: TreeDeleteDisclosure;
   readonly deletePending: boolean;
   readonly onConfirmDelete: () => void;
   readonly archive: ChatRowArchiveInputs;
@@ -2250,7 +2265,7 @@ function ChatNodeShellBody(
     onPerformDelete,
     confirmDeleteOpen,
     onConfirmDeleteOpenChange,
-    nestingNote,
+    deleteDisclosure,
     deletePending,
     onConfirmDelete,
     archive: archiveRow,
@@ -2424,12 +2439,9 @@ function ChatNodeShellBody(
         open={confirmDeleteOpen}
         onOpenChange={onConfirmDeleteOpenChange}
         title={`Delete ${EPIC_NODE_SENTENCE_NOUNS[artifactType]} "${nodeName}"?`}
-        description={
-          nestingNote === null
-            ? "This action cannot be undone."
-            : `This action cannot be undone. ${nestingNote}`
-        }
-        cascadeSummary={null}
+        description={deleteDisclosure.description}
+        cascadeSummary={deleteDisclosure.cascadeSummary}
+        cascadeNestedUnder={deleteDisclosure.cascadeNestedUnder}
         actionLabel="Delete"
         isPending={deletePending}
         onConfirm={onConfirmDelete}

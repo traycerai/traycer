@@ -179,10 +179,6 @@ function stateBadge(): { text: string; state: string | null } {
   return { text: badge.textContent, state: badge.getAttribute("data-state") };
 }
 
-function surfaceHostId(): string | null {
-  return useTracySurfaceStore.getState().hostId;
-}
-
 /** The surface left open on `hostId`, as an earlier opener would have. */
 function openSurfaceOn(hostId: string): void {
   useTracySurfaceStore.setState({
@@ -416,7 +412,7 @@ describe("<HomeBotRow /> open", () => {
 
     await user.click(screen.getByTestId("home-bot-row"));
 
-    expect(surfaceHostId()).toBe(EFFECTIVE);
+    expect(useTracySurfaceStore.getState().hostId).toBe(EFFECTIVE);
     expect(mocks.activateTabIntent).toHaveBeenCalledTimes(1);
   });
 
@@ -427,7 +423,7 @@ describe("<HomeBotRow /> open", () => {
 
     await user.click(screen.getByTestId("home-bot-row"));
 
-    expect(surfaceHostId()).toBe(OWN);
+    expect(useTracySurfaceStore.getState().hostId).toBe(OWN);
     expect(mocks.activateTabIntent).toHaveBeenCalledTimes(1);
   });
 
@@ -438,7 +434,7 @@ describe("<HomeBotRow /> open", () => {
 
     await user.click(screen.getByTestId("home-bot-row"));
 
-    expect(surfaceHostId()).toBe(EFFECTIVE);
+    expect(useTracySurfaceStore.getState().hostId).toBe(EFFECTIVE);
     expect(mocks.activateTabIntent).toHaveBeenCalledTimes(1);
   });
 
@@ -453,7 +449,7 @@ describe("<HomeBotRow /> open", () => {
 
     await user.click(screen.getByTestId("home-bot-row"));
 
-    expect(surfaceHostId()).toBe(TEAMMATE);
+    expect(useTracySurfaceStore.getState().hostId).toBe(TEAMMATE);
     expect(mocks.activateTabIntent).toHaveBeenCalledTimes(1);
   });
 
@@ -466,7 +462,7 @@ describe("<HomeBotRow /> open", () => {
     expect(row).toHaveProperty("disabled", true);
     await user.click(row);
 
-    expect(surfaceHostId()).toBeNull();
+    expect(useTracySurfaceStore.getState().hostId).toBeNull();
     expect(mocks.activateTabIntent).not.toHaveBeenCalled();
   });
 });

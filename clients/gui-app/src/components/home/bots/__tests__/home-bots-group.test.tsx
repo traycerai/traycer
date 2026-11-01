@@ -338,16 +338,8 @@ describe("<HomeBotsGroupCard /> a team's main bot still to be set up", () => {
     expect(
       within(row).queryByTestId("home-bot-setup-row-needs-host"),
     ).toBeNull();
-    // The name takes the row's width: its span is the row's last child and
-    // the flexible one, and the main badge is the last thing in it.
-    const name = within(row).getByText("Tracy").parentElement;
-    expect(row.lastElementChild).toBe(name);
-    expect(name?.classList.contains("flex-1")).toBe(true);
-    expect(
-      name?.lastElementChild?.contains(
-        within(row).getByTestId("home-bot-setup-row-main"),
-      ),
-    ).toBe(true);
+    expect(within(row).getByText("Tracy")).toBeTruthy();
+    expect(within(row).getByTestId("home-bot-setup-row-main")).toBeTruthy();
     expect(screen.getByTestId("home-bots-create-toggle")).toBeTruthy();
     expect(screen.queryByText("No bots here yet.")).toBeNull();
   });

@@ -4,8 +4,9 @@ import type { QueueItem, VoiceFocus } from "@/stores/voice/voice-session-store";
 /**
  * The replacement session's seed: one paragraph of what the person was doing
  * and what is waiting, so the new engine carries on where the old one left
- * off, bounded to the mint's input cap. Nothing is replayed: posts already
- * landed are rows. (A first session opens knowing the briefing instead,
+ * off, bounded to the mint's input cap. Landed posts are not sent again;
+ * the scheduler carries unconfirmed speech separately. (A first session
+ * opens knowing the briefing instead,
  * `composeBriefing`; both go with the mint because the vendor accepts
  * startup input only at creation.)
  */

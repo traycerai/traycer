@@ -389,18 +389,21 @@ describe("chat scrollbar + lower composer overlay pointer isolation", () => {
       expect(source).toMatch(
         /topBannerKind === "rate-limit"[\s\S]*?style=\{\{ maxWidth: readingWidth\.maxWidth \}\}/,
       );
-      // Main composer: outer edge-lane only (no vertical padding / bg-canvas).
+      // Main composer: outer edge-lane only (no vertical padding / bg-canvas),
+      // its gutter from the same frame as the centered child's block padding.
       expect(source).toMatch(
-        /data-chat-composer=""\s+className="pointer-events-none px-4"/,
+        /data-chat-composer=""\s+\{\.\.\.KEYBOARD_FOCUS_OWNER_PROPS\}\s+className=\{cn\("pointer-events-none", frame\.gutter\)\}/,
       );
-      // Centered backplate: relative, paint, pb-4, pointer-free 1px seal with
+      // Centered backplate: relative, paint, pointer-free 1px seal with
       // after:content-[''] so the pseudo-element actually renders.
       expect(source).toContain(
-        `pointer-events-auto relative mx-auto w-full bg-canvas pb-4 ${BOTTOM_SEAL_CLASSES}`,
+        `pointer-events-auto relative mx-auto w-full bg-canvas ${BOTTOM_SEAL_CLASSES}`,
       );
-      // Vertical top spacing stays on the centered child, not the outer.
+      // Vertical spacing stays on the centered child, not the outer: pb-4 always
+      // and pt-4 for normal spacing, or the focus layout's row; the gutter never
+      // carries any.
       expect(source).toMatch(
-        /data-chat-composer=""\s+className="pointer-events-none px-4"[\s\S]*?topSpacing === "normal" \? "pt-4" : "pt-0"/,
+        /frame\.block,[\s\S]*function composerFrame\([\s\S]*gutter: "px-2", block: "py-0\.5"[\s\S]*gutter: "px-4",\s*block: topSpacing === "normal" \? "pt-4 pb-4" : "pb-4"/,
       );
 
       // Negative: full-width wrappers must not re-own the old paint/spacing.
