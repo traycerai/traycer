@@ -23,10 +23,13 @@ export interface LoaderTheme {
  * A served plain-html artifact is a folder of pages: `"found"` lets a link to
  * a sibling page navigate the frame and reports which page is showing, and
  * `"missing"` is the stand-in the artifact server composes for a page the
- * folder lacks, which also says so. `null` for loader documents and canvas
- * boards, whose links the app handles itself.
+ * folder lacks, which also says so. `"unreachable"` is the second stand-in,
+ * for a page the folder HAS whose bytes the host would not give up; the two
+ * are separate roles because the app answers them with different sentences and
+ * a different offer. `null` for loader documents and canvas boards, whose
+ * links the app handles itself.
  */
-export type ArtifactPageRole = "found" | "missing" | null;
+export type ArtifactPageRole = "found" | "missing" | "unreachable" | null;
 
 export interface LoaderResource {
   readonly canvas?: boolean;
@@ -735,6 +738,11 @@ function bootstrapMain(config: BootstrapConfig): void {
       );
       if (config.artifactPage === "missing") {
         notify("traycer/notifications/page-missing", { nonce: config.nonce });
+      }
+      if (config.artifactPage === "unreachable") {
+        notify("traycer/notifications/page-unreachable", {
+          nonce: config.nonce,
+        });
       }
       // Served frames drop size reports until the nonce proves this document.
       lastWidth = lastHeight = -1;

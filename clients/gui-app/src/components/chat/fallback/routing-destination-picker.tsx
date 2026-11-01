@@ -1,5 +1,6 @@
 import {
   useCallback,
+  useContext,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -44,7 +45,7 @@ import {
   useBotIdentity,
   type BotIdentity,
 } from "@/components/bots/bot-identity-context";
-import { useBotSettingsOpener } from "@/components/bots/bot-settings-opener-context";
+import { BotSettingsOpenerContext } from "@/components/bots/bot-settings-opener-context";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import {
@@ -216,7 +217,7 @@ export function RoutingDestinationPicker(props: {
     surfaceBot.botId === epicId
       ? surfaceBot
       : null;
-  const openBotSettings = useBotSettingsOpener();
+  const openBotSettings = useContext(BotSettingsOpenerContext);
   const [open, setOpen] = useState(false);
   const entryTuple = useStableValue(entrySeedTuple(entry), sameRunSettings);
   const listing = useRoutingListing({

@@ -21,9 +21,13 @@ import type { EnvironmentListResponseV11 } from "@traycer/protocol/host/environm
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { TalkControl } from "@/components/layout/voice/talk-control";
-import { useInstalledAppLevel2Form } from "@/hooks/ui/use-installed-app-level2-form";
+import { useInstalledAppTileForm } from "@/hooks/ui/use-installed-app-level2-form";
+import { useKeyboardFocusOwnerWithin } from "@/hooks/ui/use-keyboard-focus-layout";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
-import type { MobileLevel2Form } from "@/lib/layout/mobile-layout-form";
+import type {
+  MobileLevel2Form,
+  MobileTileCount,
+} from "@/lib/layout/mobile-layout-form";
 import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
@@ -230,7 +234,7 @@ function TracySurfaceShell(props: {
     [leaveThreads, threadsShown],
   );
 
-  const level2 = useInstalledAppLevel2Form(1);
+  const { level2, tiles, onRailDrawn } = useSurfaceTileForm();
   const shown = usePaneVisible();
   const select = useCallback(
     (next: string | null) => selectTracyChannel(navigate, next, shown),
@@ -273,6 +277,7 @@ function TracySurfaceShell(props: {
             hostId={hostId}
             channelTitle={channelTitle}
             onBack={leaveThreads}
+            level2={level2}
           />
         ) : null}
         {botId === null && !threadsShown ? (
@@ -298,6 +303,8 @@ function TracySurfaceShell(props: {
             botId={botId}
             hostId={hostId}
             level2={level2}
+            tiles={tiles}
+            onRailDrawn={onRailDrawn}
             threadsView={threadsView}
             onGone={forgetChannel}
           />
@@ -305,6 +312,25 @@ function TracySurfaceShell(props: {
       </div>
     </div>
   );
+}
+
+/**
+ * The installed app's form for the surface, both halves `null` everywhere else.
+ * The second tile is the rail the channel draws beside itself, and only the
+ * channel's pane knows it is drawn, so the pane says.
+ */
+function useSurfaceTileForm(): {
+  readonly level2: MobileLevel2Form | null;
+  readonly tiles: MobileTileCount | null;
+  readonly onRailDrawn: (drawn: boolean) => void;
+} {
+  const [railDrawn, setRailDrawn] = useState(false);
+  const form = useInstalledAppTileForm(railDrawn ? 2 : 1);
+  return {
+    level2: form?.level2 ?? null,
+    tiles: form?.tiles ?? null,
+    onRailDrawn: setRailDrawn,
+  };
 }
 
 /**
@@ -580,6 +606,9 @@ function TracyChannelPane(props: {
   readonly hostId: string;
   /** The shell's level-2 form, which the channel's title follows. */
   readonly level2: MobileLevel2Form | null;
+  /** The shell's tile count, which places the rail beside the channel. */
+  readonly tiles: MobileTileCount | null;
+  readonly onRailDrawn: (drawn: boolean) => void;
   /** The shell's Threads, shown in place of the channel's views. */
   readonly threadsView: BotThreadsViewState;
   readonly onGone: (botId: string) => void;
@@ -632,6 +661,8 @@ function TracyChannelPane(props: {
       listedBots={botList.data?.bots}
       mainBotIds={botList.data?.mainBotIds}
       level2={level2}
+      tiles={props.tiles}
+      onRailDrawn={props.onRailDrawn}
       threadsView={threadsView}
       onGone={props.onGone}
     />
@@ -645,6 +676,8 @@ function BotTabBody(props: {
   readonly listedBots: ReadonlyArray<BotRecord> | undefined;
   readonly mainBotIds: MainBotIds | undefined;
   readonly level2: MobileLevel2Form | null;
+  readonly tiles: MobileTileCount | null;
+  readonly onRailDrawn: (drawn: boolean) => void;
   readonly threadsView: BotThreadsViewState;
   readonly onGone: (botId: string) => void;
 }): ReactNode {
@@ -780,6 +813,8 @@ function BotTabBody(props: {
       view={view}
       onViewChange={changeView}
       level2={props.level2}
+      tiles={props.tiles}
+      onRailDrawn={props.onRailDrawn}
       threadsView={threadsView}
       onDeleted={deleted}
       mainBotIds={props.mainBotIds}
@@ -1200,6 +1235,27 @@ function useChannelSetupHistory(input: {
   );
 }
 
+/**
+ * Says whether the rail is drawn beside the channel, before the paint it would
+ * otherwise be a frame late for. The rail draws only under Messages.
+ */
+function useRailDrawnReport(
+  place: BotTabPlace,
+  threadListSupported: boolean,
+  onRailDrawn: (drawn: boolean) => void,
+): void {
+  const railDrawn =
+    place.view === "messages" &&
+    place.session === null &&
+    !place.threadsShown &&
+    (place.openMemory !== null ||
+      (threadListSupported && place.openThread !== null));
+  useLayoutEffect(() => {
+    onRailDrawn(railDrawn);
+    return () => onRailDrawn(false);
+  }, [onRailDrawn, railDrawn]);
+}
+
 function BotTabContent(props: {
   readonly botId: string;
   readonly hostId: string;
@@ -1215,6 +1271,9 @@ function BotTabContent(props: {
   readonly onViewChange: (view: BotTabView) => void;
   /** The shell's level-2 form, which the channel's title follows. */
   readonly level2: MobileLevel2Form | null;
+  /** The shell's tile count, which places the rail beside the channel. */
+  readonly tiles: MobileTileCount | null;
+  readonly onRailDrawn: (drawn: boolean) => void;
   /** Threads, from the column, shows in place of the channel's views. */
   readonly threadsView: BotThreadsViewState;
   /** The bot was deleted from its settings. */
@@ -1234,6 +1293,8 @@ function BotTabContent(props: {
     view,
     onViewChange,
     level2,
+    tiles,
+    onRailDrawn,
     threadsView,
     onDeleted,
     mainBotIds,
@@ -1342,6 +1403,7 @@ function BotTabContent(props: {
     openSession,
     onViewChange,
   });
+  useRailDrawnReport(place, threadListSupported, onRailDrawn);
   const openActivity = useCallback(() => changeView("activity"), [changeView]);
   const activitySummary = useBotActivitySummary({
     botId,
@@ -1498,6 +1560,7 @@ function BotTabContent(props: {
                       botNameOf={botNameOf}
                       onOpenActivity={openActivity}
                       setupHistory={setupHistory}
+                      tiles={tiles}
                     />
                   </TabsContent>
                   <TabsContent
@@ -1619,8 +1682,7 @@ function ErrorNotice(props: {
  * Slack's channel header: the bot's picture (its card on hover and click),
  * its name with the main bot's star, the ⋮ that opens the channel's settings,
  * and the channel's views under it. What the bot is for is the top of its channel; nothing else
- * sits here but, on the phone, Talk: the phone has no tab strip to carry it,
- * so every bot channel does (V5), and a session started here is focused on
+ * sits here but, on the phone, Talk. A session started here is focused on
  * this channel. Activity's label is the bot's indicator: what stopped, in red
  * and first, what runs and the tasks it tracks.
  */
@@ -1637,6 +1699,15 @@ function BotChannelHeader(props: {
 }): ReactNode {
   const { settingsOpen } = props;
   const phoneLayout = useIsMobileViewport();
+  // With the keyboard up on a short viewport: the name row alone while the
+  // channel's box has the focus, and nothing while a thread's does, since the
+  // thread's own header is the identity row then. Only a box under this header
+  // counts, so a parent's children are the header and the panes it heads.
+  const [header, setHeader] = useState<HTMLElement | null>(null);
+  const focusOwner = useKeyboardFocusOwnerWithin(header?.parentElement ?? null);
+  const threadHasFocus =
+    focusOwner !== null &&
+    focusOwner.closest("[data-bot-thread-panel]") !== null;
   // Focus goes back to the ⋮ when the settings close.
   const settingsButtonRef = useRef<HTMLButtonElement | null>(null);
   const wasOpenRef = useRef(settingsOpen);
@@ -1645,8 +1716,20 @@ function BotChannelHeader(props: {
     wasOpenRef.current = settingsOpen;
   }, [settingsOpen]);
   return (
-    <header className="flex shrink-0 flex-col gap-1 px-4 pt-3">
-      <div className="flex min-w-0 items-center gap-2">
+    <header
+      ref={setHeader}
+      hidden={threadHasFocus}
+      className={cn(
+        "flex shrink-0 flex-col gap-1 px-4",
+        focusOwner === null && "pt-3",
+      )}
+    >
+      <div
+        className={cn(
+          "flex min-w-0 items-center gap-2",
+          focusOwner !== null && "min-h-11",
+        )}
+      >
         <BotIdentityTrigger>
           <button
             type="button"
@@ -1688,7 +1771,11 @@ function BotChannelHeader(props: {
           <EllipsisVertical aria-hidden="true" />
         </Button>
       </div>
-      <TabsList variant="line" aria-label="Channel view">
+      <TabsList
+        hidden={focusOwner !== null}
+        variant="line"
+        aria-label="Channel view"
+      >
         <TabsTrigger value="messages" data-testid="bot-tab-view-messages">
           Messages
         </TabsTrigger>

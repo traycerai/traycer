@@ -4,10 +4,13 @@ import { setPhoneLayoutOnly } from "@/lib/mobile-app";
 /**
  * Drives the REAL level-2 form hooks: they measure `#root`'s box and read the
  * screen's orientation, so a test sets those two and lets the resolver answer.
- * `750` answers `{ column: 256 }`, `594` `"menu"`, and portrait `"bar"`.
+ * `750` answers `{ column: 256 }`, `594` `"menu"`, and portrait `"bar"`. `867` is
+ * the narrowest of the rail's two panes with a second tile open: it answers
+ * `"menu"` with two tiles, where 750 has room for one.
  */
 export const SHELL_WIDTH_COLUMN_256 = 750;
 export const SHELL_WIDTH_MENU = 594;
+export const SHELL_WIDTH_TWO_TILES = 867;
 
 /** Narrower than the phone-portrait limit, which the hook reads off `matchMedia`. */
 const PORTRAIT_INNER_WIDTH = 400;
@@ -29,8 +32,7 @@ export function installShellForm(width: number): ShellFormHarness {
   document.body.appendChild(root);
   const originalInnerWidth = window.innerWidth;
   const state = { width, portrait: false };
-  root.getBoundingClientRect = () =>
-    ({ width: state.width, height: 800 }) as DOMRect;
+  root.getBoundingClientRect = () => new DOMRect(0, 0, state.width, 800);
   Object.defineProperty(window.screen, "orientation", {
     configurable: true,
     value: {

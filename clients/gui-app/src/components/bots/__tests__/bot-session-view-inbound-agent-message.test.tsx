@@ -13,7 +13,10 @@ import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AgentMessagePeer } from "@traycer/protocol/host/agent/message-peer";
+import type {
+  AgentMessagePeer,
+  AgentMessagePeerOrigin,
+} from "@traycer/protocol/host/agent/message-peer";
 import type { Message } from "@traycer/protocol/persistence/epic/schemas";
 import type { ChatSessionStoreHandle } from "@/stores/chats/chat-session-store";
 
@@ -23,6 +26,7 @@ interface PeerQueryArgs {
     readonly epicId: string;
     readonly chatId: string;
     readonly agentId: string;
+    readonly origin: AgentMessagePeerOrigin | null;
   };
   readonly options: { readonly enabled: boolean };
 }
@@ -205,15 +209,15 @@ describe("a bot's session holding an inbound agent message (no task open)", () =
     await settleLegendList();
 
     expect(within(view()).getByText("Received message")).not.toBeNull();
-    expect(mocks.peerQueries.length).toBeGreaterThan(0);
-    const primary = mocks.peerQueries.at(-2);
+    const primary = mocks.peerQueries.find(
+      (query) => query.options.enabled && query.params.origin === null,
+    );
     expect(primary?.params).toEqual({
       epicId: BOT_ID,
       chatId: TRUNK_ID,
       agentId: SENDER_ID,
       origin: null,
     });
-    expect(primary?.options.enabled).toBe(true);
   });
 
   it("opens a resolved sender's tile in its own task through the top-level navigation", async () => {

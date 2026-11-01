@@ -48,8 +48,9 @@ import { busyWorkPhrase } from "@/components/host/host-restart-copy";
  *      proof the host is up, which outranks a cloud lease refreshed on a
  *      slower clock.
  *   4. **`connectivity`** — the cloud's answer, and the ONLY thing known
- *      about a host this client has never dialled. Which is precisely why it
- *      no longer says "Online"; see `reported-reachable` below.
+ *      about a host none of the steps above has a verdict on. Which is
+ *      precisely why it no longer says "Online"; see `reported-reachable`
+ *      below.
  *
  * `connectivity` is pure liveness (`connectable` / `offline` / `unknown`) —
  * one fact about one host. This row is projected from the RAW registry DTO
@@ -108,10 +109,14 @@ export function deriveHostPresence(
     // part that mattered: the lease TTL is 15 minutes, so a host that died
     // dirty kept a green "Online" for up to a quarter of an hour with nothing
     // client-side narrowing it, and the 60s keep-warm linger extended even
-    // that. Nothing here has dialled the machine - by the time this arm is
-    // reached the local read said nothing, the authority has published no
-    // lease, and the live-session override above declined - so the strongest
-    // honest sentence is that the ACCOUNT heard from it, not that it is up.
+    // that. Nothing here has a VERDICT on the machine - by the time this arm
+    // is reached the local read said nothing, the authority has reached no
+    // conclusion (no lease, not attached, or a `connecting` lease, which is
+    // its non-committal state and the resting one for a host nothing has
+    // dialled), and the live-session override above declined - so the
+    // strongest honest sentence is that the ACCOUNT heard from it, not that it
+    // is up. It is deliberately not "nothing has dialled it": those three are
+    // indistinguishable here, and one of them is a dial in flight.
     //
     // The green dot was also a straight violation of this file's own stated
     // invariant, four paragraphs up: "NO green dot without live evidence:

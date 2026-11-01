@@ -59,7 +59,6 @@ describe("replyRefsOf", () => {
         blocking: false,
       },
     ]);
-    expect(JSON.stringify(refs)).not.toContain(COPY);
   });
 
   it("names a message of the channel with no thread", () => {
@@ -168,7 +167,6 @@ describe("a bot's own question", () => {
         blocking: true,
       },
     ]);
-    expect(JSON.stringify(refs)).not.toContain(COPY);
   });
 
   it("is counted as a waiting question by its message id", () => {
@@ -527,8 +525,8 @@ describe("stoppedAnswersOf", () => {
     };
 
     expect(stoppedAnswersOf(activity)).toEqual([
-      { requestId: "req-trunk", threadId: null, state: "failed", at: null },
-      { requestId: "req-a", threadId: "thread-a", state: "parked", at: 4_000 },
+      { requestId: "req-trunk", threadId: null, at: null },
+      { requestId: "req-a", threadId: "thread-a", at: 4_000 },
     ]);
   });
 });

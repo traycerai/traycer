@@ -7,7 +7,13 @@ import {
   createRoute,
   createRouter,
 } from "@tanstack/react-router";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MobileAppHeader } from "@/components/layout/header/mobile-app-header";
@@ -27,6 +33,14 @@ import { emptySystemTabs, tabItemId } from "@/stores/tabs/layout";
 import type { SystemTabs } from "@/stores/tabs/layout";
 import { useTabsStore } from "@/stores/tabs/store";
 import type { TabRef } from "@/stores/tabs/types";
+import { KEYBOARD_FOCUS_OWNER_PROPS } from "@/hooks/ui/use-keyboard-focus-layout";
+import {
+  holdScreenLandscape,
+  IPHONE_17,
+  lowerNativeKeyboard,
+  raiseNativeKeyboard,
+  restoreKeyboardEnvironment,
+} from "../../../../__tests__/short-keyboard-viewport-harness";
 
 // The real rate-limit / resource-monitor controls pull host + stream
 // providers; stub them to their accessible trigger so the header renders in
@@ -495,5 +509,50 @@ describe("MobileAppHeader", () => {
     expect(
       screen.queryByRole("button", { name: "stale epic action" }),
     ).toBeNull();
+  });
+
+  describe("on a short viewport under the keyboard", () => {
+    beforeEach(() => {
+      holdScreenLandscape();
+      raiseNativeKeyboard(IPHONE_17);
+    });
+    afterEach(() => {
+      restoreKeyboardEnvironment();
+    });
+
+    function renderComposer(): void {
+      render(
+        <div {...KEYBOARD_FOCUS_OWNER_PROPS}>
+          <textarea aria-label="Reply" />
+        </div>,
+      );
+    }
+
+    function appHeader(): HTMLElement {
+      return screen.getByTestId("app-header");
+    }
+
+    it("hides while a composer holds the focus, and comes back with the keyboard down", async () => {
+      renderAt("/");
+      await screen.findByRole("button", { name: "Open menu" });
+      renderComposer();
+      expect(appHeader().hidden).toBe(false);
+
+      act(() => screen.getByLabelText("Reply").focus());
+      expect(appHeader().hidden).toBe(true);
+
+      lowerNativeKeyboard();
+      expect(appHeader().hidden).toBe(false);
+    });
+
+    it("stays while its own title field holds the focus", async () => {
+      presentEpicTab("t1", "e1", "Wire up billing");
+      renderAt("/epics/e1/t1");
+      const title = await screen.findByTestId("mobile-epic-header-title");
+      renderComposer();
+      fireEvent.keyDown(title, { key: "Enter" });
+      expect(document.activeElement).toBe(screen.getByLabelText("Epic title"));
+      expect(appHeader().hidden).toBe(false);
+    });
   });
 });

@@ -8,6 +8,7 @@ import {
   useBotTabLandingStore,
   type BotTabLanding,
 } from "@/stores/bots/bot-tab-landing-store";
+import { useMobileTabOriginStore } from "@/stores/epics/mobile-tab-origin-store";
 
 /**
  * The source store behind the one Tracy surface of a window (decision 150):
@@ -109,6 +110,7 @@ export const useTracySurfaceStore = create<TracySurfaceState>()(
       forgetBot: (botId) => {
         stagedLandings.delete(botId);
         forgetBotState(botId);
+        useMobileTabOriginStore.getState().forgetBot(botId);
         const visited = get().visitedBotIds;
         if (!visited.includes(botId)) return;
         set({ visitedBotIds: visited.filter((id) => id !== botId) });
@@ -119,6 +121,7 @@ export const useTracySurfaceStore = create<TracySurfaceState>()(
           releaseTracyLanding(botId, landing);
         }
         for (const botId of state.visitedBotIds) forgetBotState(botId);
+        useMobileTabOriginStore.getState().clearAll();
         if (!state.open && state.visitedBotIds.length === 0) return;
         actedOnSinceBind = true;
         set({ open: false, hostId: null, visitedBotIds: [] });

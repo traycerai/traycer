@@ -19,6 +19,7 @@ import {
 import {
   buildArtifactDocument,
   buildMissingPageDocument,
+  buildUnreachablePageDocument,
   type ArtifactDocumentOptions,
 } from "../artifact-document";
 import type {
@@ -28,6 +29,7 @@ import type {
 import {
   ArtifactServer,
   type ArtifactReadSpanResult,
+  type ArtifactServeResult,
 } from "../artifact-server";
 
 /** The most one reply carries. */
@@ -361,6 +363,179 @@ describe("ArtifactServer.serve — a page the artifact lacks", () => {
       status: 404,
     });
     expect(readSpan).not.toHaveBeenCalled();
+  });
+});
+
+describe("ArtifactServer.serve — a page the host will not hand over", () => {
+  function htmlPage(byteLength: number): ArtifactManifest {
+    return manifestWith(
+      "report.html",
+      entry({
+        sha256: "sha-report",
+        byteLength,
+        mediaType: "text/html; charset=utf-8",
+      }),
+    );
+  }
+
+  /**
+   * The reader'd otherwise be shown the bare wire word as the whole page: the
+   * shell answers a 503 with the reason as its body, and the frame renders
+   * that. The stand-in is a real document, so the app hears about it and can
+   * say what happened.
+   */
+  it.each(["failed", "not-downloaded", "missing"])(
+    "answers a document the host refused with %s using the unreachable stand-in",
+    async (reason) => {
+      const readSpan = vi.fn((): Promise<ArtifactReadSpanResult> =>
+        Promise.resolve({ unavailable: reason }),
+      );
+      const server = new ArtifactServer({
+        treePath: "site",
+        manifest: htmlPage(10),
+        readSpan,
+        document: DOCUMENT_OPTIONS,
+      });
+
+      const page = await server.serve({
+        path: "site/report.html",
+        offset: 0,
+        length: FOUR_MIB,
+        signal: signal(),
+      });
+
+      expect(page.kind).toBe("bytes");
+      if (page.kind === "bytes") {
+        expect(new TextDecoder().decode(page.bytes)).toBe(
+          buildUnreachablePageDocument(composedWith("/site/")),
+        );
+        expect(page.mediaType).toBe("text/html; charset=utf-8");
+      }
+    },
+  );
+
+  /**
+   * The two stand-ins must not be one document. They report themselves
+   * differently, and the app answers them with a different sentence and a
+   * different offer — "it is not in the artifact" against "it did not arrive,
+   * try again" — so one server has to tell a page it LACKS from a page whose
+   * read it could not finish.
+   *
+   * The roles are also asserted as the strings the serialized bootstrap and
+   * the bridge's dispatcher agree on. Nothing else ties those three literals
+   * together: the bootstrap is `toString`'d into the document and never runs
+   * in a test, so a typo there would ship with every test green and the
+   * overlay would simply never appear.
+   */
+  it("answers a refused page and an absent one with different stand-ins", async () => {
+    const server = new ArtifactServer({
+      treePath: "site",
+      manifest: htmlPage(10),
+      readSpan: () => Promise.resolve({ unavailable: "failed" }),
+      document: DOCUMENT_OPTIONS,
+    });
+    const text = async (path: string): Promise<string> => {
+      const page = await server.serve({
+        path,
+        offset: 0,
+        length: FOUR_MIB,
+        signal: signal(),
+      });
+      if (page.kind !== "bytes") throw new Error(`expected bytes for ${path}`);
+      return new TextDecoder().decode(page.bytes);
+    };
+
+    const refused = await text("site/report.html");
+    const absent = await text("site/gone.html");
+
+    expect(refused).not.toBe(absent);
+    expect(refused).toContain('"artifactPage":"unreachable"');
+    expect(refused).toContain("traycer/notifications/page-unreachable");
+    expect(absent).toContain('"artifactPage":"missing"');
+    expect(absent).toContain("traycer/notifications/page-missing");
+  });
+
+  /**
+   * The retry the stand-in offers has to be able to succeed, which it only
+   * does because nothing about a failed read is retained: the second ask goes
+   * to the host again rather than replaying the stand-in from the cache.
+   */
+  it("reads again on the next ask, and composes the page once the host answers", async () => {
+    const rawHtml = new TextEncoder().encode("<p>report</p>");
+    const readSpan = vi
+      .fn<
+        (
+          sha256: string,
+          offset: number,
+          length: number,
+          signal: AbortSignal,
+        ) => Promise<ArtifactReadSpanResult>
+      >()
+      .mockResolvedValueOnce({ unavailable: "failed" })
+      .mockResolvedValue({
+        bytes: rawHtml,
+        totalBytes: rawHtml.length,
+        mediaType: "text/html; charset=utf-8",
+      });
+    const server = new ArtifactServer({
+      treePath: "site",
+      manifest: htmlPage(rawHtml.length),
+      readSpan,
+      document: DOCUMENT_OPTIONS,
+    });
+    const ask = (): Promise<ArtifactServeResult> =>
+      server.serve({
+        path: "site/report.html",
+        offset: 0,
+        length: FOUR_MIB,
+        signal: signal(),
+      });
+
+    const refused = await ask();
+    expect(refused.kind).toBe("bytes");
+    if (refused.kind === "bytes") {
+      expect(new TextDecoder().decode(refused.bytes)).toBe(
+        buildUnreachablePageDocument(composedWith("/site/")),
+      );
+    }
+
+    const served = await ask();
+    expect(served.kind).toBe("bytes");
+    if (served.kind === "bytes") {
+      expect(new TextDecoder().decode(served.bytes)).toBe(
+        buildArtifactDocument(
+          new TextDecoder().decode(rawHtml),
+          composedWith("/site/"),
+        ),
+      );
+    }
+    expect(readSpan).toHaveBeenCalledTimes(2);
+  });
+
+  /** A referenced file is not a page: nothing would read a stand-in document. */
+  it("leaves a refused image as an unavailable answer, not a page", async () => {
+    const readSpan = vi.fn((): Promise<ArtifactReadSpanResult> =>
+      Promise.resolve({ unavailable: "failed" }),
+    );
+    const server = new ArtifactServer({
+      treePath: "site",
+      manifest: manifestWith("chart.png", entry({ mediaType: "image/png" })),
+      readSpan,
+      document: DOCUMENT_OPTIONS,
+    });
+
+    const image = await server.serve({
+      path: "site/chart.png",
+      offset: 0,
+      length: 5,
+      signal: signal(),
+    });
+
+    expect(image).toEqual({
+      kind: "unavailable",
+      reason: "failed",
+      status: 503,
+    });
   });
 });
 

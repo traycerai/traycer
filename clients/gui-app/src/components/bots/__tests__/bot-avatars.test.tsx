@@ -1,8 +1,8 @@
 /**
  * A bot's picture: a creature mark on a swatch, both from the bot's id
- * alone. Two bots side by side never draw the same mark on the same swatch,
- * every surface draws one bot the same way, and a rename changes nothing. A
- * person is still initials or a photo in a circle.
+ * alone. Every surface draws one bot the same way, and a rename changes
+ * nothing. A person is
+ * still initials or a photo in a circle.
  *
  * The ids are real derived main-bot ids, `personalAssistantBotId(envId)` in
  * the internal repository's `bot-schemas.ts`: the personal assistant of

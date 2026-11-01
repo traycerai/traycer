@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { CLI_ERROR_CODES, CliError } from "../../../runner/errors";
 import { serviceLabelFor, windowsTaskName } from "../../label";
 import {
+  gateWindowsTaskRun,
   gateWindowsTaskVerb,
   isSidShaped,
   parseTaskPrincipalUserId,
@@ -392,7 +393,7 @@ describe("gateWindowsTaskVerb and the refusal", () => {
     expect(absent.kind).toBe("permitted");
     const own = await gateWindowsTaskVerb(
       label,
-      "run",
+      "end",
       harness({
         query: { kind: "xml", xml: taskXml(principal("A", CALLER_SID), "A") },
         callerSid: CALLER_SID,
@@ -551,5 +552,289 @@ describe("gateWindowsTaskVerb and the refusal", () => {
         (line) => line.level === "warn" || line.level === "error",
       ),
     ).toEqual([]);
+  });
+
+  // The INFO line carries WHICH read branch decided the verdict, so a field
+  // report says from cli.log alone whether the definition read failed,
+  // answered without a principal, or resolved to someone else. One of a fixed
+  // set of words - no free text - which is what keeps it INFO-safe.
+  it("the INFO line names the read branch that decided the verdict, by probe", async () => {
+    const cases: readonly {
+      readonly query: ScheduledTaskXmlQuery;
+      readonly callerSid: string | null;
+      readonly resolve: (account: string) => string | null;
+      readonly probe: string;
+      readonly reason: string;
+    }[] = [
+      {
+        query: { kind: "failed", reason: "exit 4, 0x80070005" },
+        callerSid: CALLER_SID,
+        resolve: () => null,
+        probe: "definition-read-failed",
+        reason: "unconfirmed",
+      },
+      {
+        query: { kind: "xml", xml: taskXml(principal("A", null), "A") },
+        callerSid: CALLER_SID,
+        resolve: () => null,
+        probe: "no-principal",
+        reason: "unconfirmed",
+      },
+      {
+        query: { kind: "xml", xml: taskXml(principal("A", CALLER_SID), "A") },
+        callerSid: null,
+        resolve: () => null,
+        probe: "caller-sid-unreadable",
+        reason: "unconfirmed",
+      },
+      {
+        query: { kind: "xml", xml: W1_BARE },
+        callerSid: CALLER_SID,
+        resolve: () => null,
+        probe: "principal-name-unresolved",
+        reason: "unconfirmed",
+      },
+      {
+        query: { kind: "xml", xml: taskXml(principal("A", OTHER_SID), "A") },
+        callerSid: CALLER_SID,
+        resolve: () => null,
+        probe: "principal-other-sid",
+        reason: "other-owner",
+      },
+      {
+        query: { kind: "xml", xml: W1_BARE },
+        callerSid: CALLER_SID,
+        resolve: () => OTHER_SID,
+        probe: "principal-name-other-account",
+        reason: "other-owner",
+      },
+    ];
+    for (const c of cases) {
+      logged.lines.length = 0;
+      const gate = await gateWindowsTaskVerb(
+        label,
+        "create",
+        harness({
+          query: c.query,
+          callerSid: c.callerSid,
+          resolve: c.resolve,
+          hidden: false,
+        }).deps,
+      );
+      expect({ probe: c.probe, kind: gate.kind }).toEqual({
+        probe: c.probe,
+        kind: "not-owned",
+      });
+      const infos = logged.lines.filter((line) => line.level === "info");
+      expect(infos).toHaveLength(1);
+      expect(JSON.parse(infos[0]?.fields ?? "null")).toEqual({
+        task: windowsTaskName(label),
+        verb: "create",
+        reason: c.reason,
+        probe: c.probe,
+      });
+    }
+  });
+
+  it("a hidden task's probe says so, and it is another account's", async () => {
+    const gate = await gateWindowsTaskVerb(
+      label,
+      "delete",
+      harness({
+        query: { kind: "failed", reason: "access denied" },
+        callerSid: CALLER_SID,
+        resolve: () => null,
+        hidden: true,
+      }).deps,
+    );
+    if (gate.kind !== "not-owned") throw new Error("unreachable");
+    expect(gate.reason).toBe("other-owner");
+    const infos = logged.lines.filter((line) => line.level === "info");
+    expect(JSON.parse(infos[0]?.fields ?? "null")).toMatchObject({
+      probe: "hidden-from-caller",
+    });
+  });
+});
+
+// `/Run` changes no definition and creates and destroys nothing, so it is the
+// one verb whose refusal policy on a task that could not be ATTRIBUTED
+// differs: it is issued, and Task Scheduler's own permissions on the task
+// decide it. A task resolved to another account is still refused.
+describe("gateWindowsTaskRun: the write-free verb's own door", () => {
+  const label = serviceLabelFor("production");
+
+  const runOptions = {
+    env: undefined,
+    cwd: undefined,
+    timeoutMs: 1,
+    tolerateNonZeroExit: false,
+  };
+
+  it("the caller's own task is permitted, carrying the XML the verdict was read from", async () => {
+    const xml = taskXml(principal("A", CALLER_SID), "A");
+    const gate = await gateWindowsTaskRun(
+      label,
+      harness({
+        query: { kind: "xml", xml },
+        callerSid: CALLER_SID,
+        resolve: () => null,
+        hidden: false,
+      }).deps,
+    );
+    if (gate.kind !== "permitted") throw new Error("unreachable");
+    expect(gate.task).toEqual({ kind: "caller", xml });
+    expect(logged.lines).toEqual([]);
+  });
+
+  it("a task whose owner could not be confirmed issues the /Run, and says so once at INFO with its probe", async () => {
+    const gate = await gateWindowsTaskRun(
+      label,
+      harness({
+        query: { kind: "failed", reason: "exit 4, 0x80070005" },
+        callerSid: CALLER_SID,
+        resolve: () => null,
+        hidden: false,
+      }).deps,
+    );
+    if (gate.kind !== "permitted") throw new Error("unreachable");
+    // A definition that could not be read at all leaves `<Enabled>` genuinely
+    // unanswered, and the verdict says so rather than carry someone else's.
+    expect(gate.task).toEqual({ kind: "unattributed", xml: null });
+    const run = vi.fn<WindowsTaskVerbRunner>(async () => ({
+      stdout: "",
+      stderr: "",
+      exitCode: 0,
+    }));
+    await gate.exec(run, runOptions);
+    expect(run.mock.calls[0]?.[0]).toBe("schtasks");
+    expect(run.mock.calls[0]?.[1]).toEqual([
+      "/Run",
+      "/TN",
+      windowsTaskName(label),
+    ]);
+    const infos = logged.lines.filter((line) => line.level === "info");
+    expect(infos).toHaveLength(1);
+    expect(infos[0]?.message).toContain("starting it anyway");
+    expect(infos[0]?.message).not.toContain("another Windows user");
+    expect(JSON.parse(infos[0]?.fields ?? "null")).toEqual({
+      task: windowsTaskName(label),
+      verb: "run",
+      reason: "unconfirmed",
+      probe: "definition-read-failed",
+    });
+  });
+
+  // Ownership being undecided is a different question from the definition
+  // being unreadable: three of the four unconfirmed verdicts are read OFF the
+  // XML, so the verdict carries it and `<Enabled>` is still answerable from
+  // the read that already happened.
+  it("a task whose owner could not be confirmed FROM its XML carries that XML", async () => {
+    const xml = taskXml(principal("A", CALLER_SID), "A");
+    const gate = await gateWindowsTaskRun(
+      label,
+      harness({
+        query: { kind: "xml", xml },
+        callerSid: null,
+        resolve: () => null,
+        hidden: false,
+      }).deps,
+    );
+    if (gate.kind !== "permitted") throw new Error("unreachable");
+    expect(gate.task).toEqual({ kind: "unattributed", xml });
+  });
+
+  // The REFUSE path's own field classification: `/Run` refuses only when the
+  // read ATTRIBUTED the task to another account (`other-owner`), and the
+  // sibling PERMIT-path test above pins the INFO line's fields for one
+  // unconfirmed probe - nothing did the same for this path. One row per
+  // probe that produces `other-owner`; a new one is one more row.
+  it('the REFUSE path\'s INFO line is {task, verb: "run", reason: "other-owner", probe}, by probe, naming no account', async () => {
+    const cases: readonly {
+      readonly query: ScheduledTaskXmlQuery;
+      readonly callerSid: string | null;
+      readonly resolve: (account: string) => string | null;
+      readonly hidden: boolean;
+      readonly probe: string;
+    }[] = [
+      {
+        // Task Scheduler lets a task's own principal read it, so a task
+        // hidden from this account has a principal and it is not this
+        // caller - refused as `other-owner`, not `unconfirmed`.
+        query: { kind: "absent" },
+        callerSid: CALLER_SID,
+        resolve: () => null,
+        hidden: true,
+        probe: "hidden-from-caller",
+      },
+      {
+        query: { kind: "xml", xml: taskXml(principal("A", OTHER_SID), "A") },
+        callerSid: CALLER_SID,
+        resolve: () => null,
+        hidden: false,
+        probe: "principal-other-sid",
+      },
+      {
+        query: { kind: "xml", xml: W1_BARE },
+        callerSid: CALLER_SID,
+        resolve: () => OTHER_SID,
+        hidden: false,
+        probe: "principal-name-other-account",
+      },
+    ];
+    for (const c of cases) {
+      logged.lines.length = 0;
+      const gate = await gateWindowsTaskRun(
+        label,
+        harness({
+          query: c.query,
+          callerSid: c.callerSid,
+          resolve: c.resolve,
+          hidden: c.hidden,
+        }).deps,
+      );
+      expect({ probe: c.probe, kind: gate.kind }).toEqual({
+        probe: c.probe,
+        kind: "not-owned",
+      });
+      if (gate.kind !== "not-owned") throw new Error("unreachable");
+      expect(gate.error.message).toBe(SERVICE_TASK_NOT_OWNED_MESSAGE);
+      expect(gate.error.details).toEqual({
+        task: windowsTaskName(label),
+        verb: "run",
+        reason: "other-owner",
+      });
+      const infos = logged.lines.filter((line) => line.level === "info");
+      expect(infos).toHaveLength(1);
+      expect(infos[0]?.message).toContain("not changing it");
+      expect(JSON.parse(infos[0]?.fields ?? "null")).toEqual({
+        task: windowsTaskName(label),
+        verb: "run",
+        reason: "other-owner",
+        probe: c.probe,
+      });
+      const everything = JSON.stringify(
+        logged.lines.filter((line) => line.level !== "debug"),
+      );
+      expect(everything).not.toMatch(/S-1-\d/);
+      expect(
+        logged.lines.filter(
+          (line) => line.level === "warn" || line.level === "error",
+        ),
+      ).toEqual([]);
+    }
+  });
+
+  it("an absent task is permitted: the /Run it issues is the scheduler's own answer about it", async () => {
+    const gate = await gateWindowsTaskRun(
+      label,
+      harness({
+        query: { kind: "absent" },
+        callerSid: CALLER_SID,
+        resolve: () => null,
+        hidden: false,
+      }).deps,
+    );
+    if (gate.kind !== "permitted") throw new Error("unreachable");
+    expect(gate.task).toEqual({ kind: "absent" });
   });
 });

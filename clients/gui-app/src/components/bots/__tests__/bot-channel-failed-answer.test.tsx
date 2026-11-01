@@ -448,6 +448,7 @@ function mountChannelWith(
         <TooltipProvider>
           <ChatExpansionTestProviders tileInstanceId="tile-1">
             <BotChannelView
+              tiles={null}
               botId={BOT_ID}
               hostId={HOST_ID}
               boundHostId={boundHostId}
@@ -516,7 +517,7 @@ afterEach(() => {
   mocks.boundClient = null;
 });
 
-describe("<BotChannelView /> Retry on a post the bot failed to answer", () => {
+describe("<BotChannelView tiles={null} /> Retry on a post the bot failed to answer", () => {
   it("re-delivers the post as it is, as a channel post", async () => {
     const user = userEvent.setup();
     activityStore.setState({ activity: trunkFailedOn(POST_REQUEST) });
@@ -574,7 +575,7 @@ describe("<BotChannelView /> Retry on a post the bot failed to answer", () => {
   });
 });
 
-describe("<BotChannelView /> a host that cannot retry or replace", () => {
+describe("<BotChannelView tiles={null} /> a host that cannot retry or replace", () => {
   /** The trunk failed on the post with a sign-out, the fix the person can still make. */
   function signedOut(): BotActivity {
     return {
@@ -637,7 +638,7 @@ describe("<BotChannelView /> a host that cannot retry or replace", () => {
   });
 });
 
-describe("<BotChannelView /> a post the bot parked on", () => {
+describe("<BotChannelView tiles={null} /> a post the bot parked on", () => {
   it("offers Retry, re-delivered as it is, on the post the trunk's parked queue holds", async () => {
     const user = userEvent.setup();
     activityStore.setState({
@@ -708,7 +709,7 @@ describe("<BotChannelView /> a post the bot parked on", () => {
   });
 });
 
-describe("<BotChannelView /> a teammate's post the bot failed to answer", () => {
+describe("<BotChannelView tiles={null} /> a teammate's post the bot failed to answer", () => {
   it("offers Retry, which any member may press, and no Edit, which only its writer may", async () => {
     const user = userEvent.setup();
     activityStore.setState({ activity: trunkFailedOn(POST_REQUEST) });
@@ -779,7 +780,7 @@ describe("<BotChannelView /> a teammate's post the bot failed to answer", () => 
   });
 });
 
-describe("<BotChannelView /> Edit on a post the bot failed to answer", () => {
+describe("<BotChannelView tiles={null} /> Edit on a post the bot failed to answer", () => {
   it("loads its text into the channel's box, and the send replaces the failed post", async () => {
     const user = userEvent.setup();
     activityStore.setState({ activity: trunkFailedOn(POST_REQUEST) });
@@ -1001,7 +1002,7 @@ describe("<BotChannelView /> Edit on a post the bot failed to answer", () => {
   });
 });
 
-describe("<BotChannelView /> a post the bot has since moved on from", () => {
+describe("<BotChannelView tiles={null} /> a post the bot has since moved on from", () => {
   it("loses Retry and Edit when the session's activity moves on", () => {
     activityStore.setState({ activity: trunkFailedOn(POST_REQUEST) });
     mountChannel(null, memberPost(VIEWER_USER_ID));
@@ -1030,7 +1031,7 @@ describe("<BotChannelView /> a post the bot has since moved on from", () => {
   });
 });
 
-describe("<BotChannelView /> the line under a post the bot did not answer", () => {
+describe("<BotChannelView tiles={null} /> the line under a post the bot did not answer", () => {
   const GROK_OUTDATED =
     "Your Grok CLI version (1.0.5) is outdated. Update to 1.0.13 or later.";
 

@@ -500,6 +500,7 @@ function ChannelHarness(props: { readonly directive: string }): ReactNode {
   const openThread = rail?.kind === "thread" ? rail : null;
   return (
     <BotChannelView
+      tiles={null}
       botId={BOT_ID}
       hostId={HOST_ID}
       boundHostId={HOST_ID}
@@ -620,7 +621,7 @@ afterEach(() => {
   mocks.streamClient = null;
 });
 
-describe("<BotChannelView /> the channel's typing line", () => {
+describe("<BotChannelView tiles={null} /> the channel's typing line", () => {
   it("reads 'Tracy is replying…' above the composer, outside the transcript, while a direct post waits on the running trunk", async () => {
     const channel = await mountAwaitingDirectReply(replying("request-1", null));
 
@@ -719,7 +720,7 @@ describe("<BotChannelView /> the channel's typing line", () => {
   });
 });
 
-describe("<BotChannelView /> a thread's typing line", () => {
+describe("<BotChannelView tiles={null} /> a thread's typing line", () => {
   it("shows on the closed thread's line, and moves to the panel once the thread is open, never naming the step", async () => {
     const user = userEvent.setup();
     emitSnapshot(CHANNEL_ID, {
@@ -756,7 +757,7 @@ describe("<BotChannelView /> a thread's typing line", () => {
   });
 });
 
-describe("<BotChannelView /> a channel nobody has written in", () => {
+describe("<BotChannelView tiles={null} /> a channel nobody has written in", () => {
   it("opens with the channel's name, where it begins, and what the bot does", async () => {
     emitSnapshot(CHANNEL_ID, { messages: [], ...IDLE });
     mountChannel([]);
@@ -776,7 +777,7 @@ describe("<BotChannelView /> a channel nobody has written in", () => {
   });
 });
 
-describe("<BotChannelView /> a post whose answer lands in a thread", () => {
+describe("<BotChannelView tiles={null} /> a post whose answer lands in a thread", () => {
   /** The channel's box sending what was typed into it, and the callbacks it handed the send. */
   async function postInChannel(user: UserEvent): Promise<SendCallbacks> {
     const box = screen.getByRole("textbox", { name: "Message Tracy" });

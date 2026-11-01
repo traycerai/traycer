@@ -28,7 +28,7 @@ export function MobileTabSwitcherMount(props: {
   readonly tabId: string;
 }) {
   const { epicId, tabId } = props;
-  const level2 = useMobileTileLevel2Form();
+  const level2 = useMobileTileLevel2Form(tabId);
   const open = useIsMobileSwitcherOpen(tabId);
   const setOpen = useMobileSwitcherStore((s) => s.setOpen);
   const registerMount = useMobileSwitcherStore((s) => s.registerMount);

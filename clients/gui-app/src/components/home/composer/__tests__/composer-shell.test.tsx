@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import type { ReactNode } from "react";
+import { use, type ReactNode } from "react";
 
 import { createComposerPickerStore } from "@/components/chat/composer/picker/composer-picker-store";
 import type { ComposerExpansion } from "@/components/home/composer/composer-shell";
 import { ComposerShell } from "../composer-shell";
+import { ComposerFocusLayoutContext } from "../composer-focus-layout-context";
 import type { FileTransferDragOverlayVariant } from "@/lib/files/file-transfer-paths";
 
 afterEach(cleanup);
@@ -400,5 +401,65 @@ describe("ComposerShell phone expansion", () => {
     // (added when expanded) should be absent here.
     expect(classTokens(overlay)).not.toContain("hidden");
     expect(editorFrame?.className).not.toContain("overflow-y-auto");
+  });
+});
+
+describe("ComposerShell focus layout", () => {
+  afterEach(() => {
+    viewportMock.phone = false;
+  });
+
+  function ToolbarProbe(): ReactNode {
+    return <output>{String(use(ComposerFocusLayoutContext))}</output>;
+  }
+
+  function renderUnder(focusLayout: boolean, expanded: boolean): void {
+    render(
+      <ComposerFocusLayoutContext value={focusLayout}>
+        <ComposerShell
+          pickerStore={createComposerPickerStore()}
+          onDragOver={() => undefined}
+          onDrop={() => undefined}
+          onDragEnter={() => undefined}
+          onDragLeave={() => undefined}
+          dragOverlayVariant="images"
+          utilityRail={null}
+          attachmentsStrip={null}
+          editor={<div data-testid="composer-editor" />}
+          toolbar={<ToolbarProbe />}
+          expansion={{ expanded, onExpandedChange: () => undefined }}
+        />
+      </ComposerFocusLayoutContext>,
+    );
+  }
+
+  function shell(): HTMLElement {
+    const element = document.querySelector<HTMLElement>(
+      "[data-composer-shell]",
+    );
+    if (element === null) throw new Error("no shell");
+    return element;
+  }
+
+  it("draws one row and hands its toolbar the layout when the composer holds the focus", () => {
+    renderUnder(true, false);
+    expect(shell().hasAttribute("data-composer-focus-row")).toBe(true);
+    expect(screen.getByRole("status").textContent).toBe("true");
+  });
+
+  it("draws the full composer and its toolbar the full layout when it does not", () => {
+    renderUnder(false, false);
+    expect(shell().hasAttribute("data-composer-focus-row")).toBe(false);
+    expect(screen.getByRole("status").textContent).toBe("false");
+  });
+
+  it("keeps a sheet pulled open as the sheet, with the full toolbar", () => {
+    // Only a phone draws the sheet.
+    viewportMock.phone = true;
+    HTMLElement.prototype.setPointerCapture = vi.fn();
+    renderUnder(true, true);
+    expect(shell().hasAttribute("data-composer-expanded")).toBe(true);
+    expect(shell().hasAttribute("data-composer-focus-row")).toBe(false);
+    expect(screen.getByRole("status").textContent).toBe("false");
   });
 });

@@ -230,6 +230,7 @@ function mount(openThread: BotOpenThread | null): void {
       <TooltipProvider>
         <ChatExpansionTestProviders tileInstanceId="tile-1">
           <BotChannelView
+            tiles={null}
             botId={BOT_ID}
             hostId={HOST_ID}
             boundHostId={HOST_ID}
@@ -299,7 +300,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("<BotChannelView /> a message the host refuses", () => {
+describe("<BotChannelView tiles={null} /> a message the host refuses", () => {
   it("says so in the channel with the text kept, and a second Enter sends it again as a plain send", async () => {
     mount(null);
     const box = screen.getByRole("textbox", { name: "Message Release Bot" });
@@ -343,7 +344,7 @@ describe("<BotChannelView /> a message the host refuses", () => {
   });
 });
 
-describe("<BotChannelView /> a channel message left unsent when the pane goes", () => {
+describe("<BotChannelView tiles={null} /> a channel message left unsent when the pane goes", () => {
   it("shows the typed text again when the channel is shown again", async () => {
     mount(null);
     const user = userEvent.setup();
@@ -378,7 +379,7 @@ describe("<BotChannelView /> a channel message left unsent when the pane goes", 
   });
 });
 
-describe("<BotChannelView /> an option pick the host refuses", () => {
+describe("<BotChannelView tiles={null} /> an option pick the host refuses", () => {
   it("says so in the channel's dock, not in a toast, and a new pick clears it", async () => {
     const user = userEvent.setup();
     mount(null);
@@ -409,7 +410,7 @@ describe("<BotChannelView /> an option pick the host refuses", () => {
   });
 });
 
-describe("<BotChannelView /> a thread's reply the host refuses", () => {
+describe("<BotChannelView tiles={null} /> a thread's reply the host refuses", () => {
   beforeEach(() => {
     mocks.state.threads = [LISTED_THREAD];
   });

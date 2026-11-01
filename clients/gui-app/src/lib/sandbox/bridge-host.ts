@@ -155,6 +155,8 @@ export interface SandboxServedPages {
   readonly onNavigate: (path: string) => void;
   /** The frame moved to something the artifact does not have as a page. */
   readonly onPageMissing: () => void;
+  /** A page the artifact has, whose bytes the host would not hand over. */
+  readonly onPageUnreachable: () => void;
 }
 
 export interface SandboxBridgeHostOptions {
@@ -770,13 +772,51 @@ export class SandboxBridgeHost {
     this.timers.add(timer);
   }
 
+  /**
+   * A stand-in page saying what it stands in for, proven by the armed nonce
+   * like every other claim a served document makes. The answer is passed in by
+   * the dispatcher that matched the method, so a role added later cannot fall
+   * through to the wrong one.
+   */
+  private reportStandInPage(
+    params: unknown,
+    tell: (pages: SandboxServedPages) => void,
+  ): void {
+    if (!isRecord(params) || params.nonce !== this.options.document.nonce) {
+      return;
+    }
+    this.reportPageAnswer(tell);
+  }
+
+  /** The page handshake's own timeout, which has no document to be proven. */
   private reportPageMissing(): void {
+    this.reportPageAnswer((pages) => pages.onPageMissing());
+  }
+
+  /**
+   * Clearing the two timers is what keeps a stand-in an ANSWER rather than a
+   * hang: the page proved itself and said what it is, so neither the page
+   * handshake nor the load watchdog may go on to call it a crash.
+   *
+   * With no page port there is nobody to tell, and a stand-in must NOT be left
+   * standing as a healthy load: it proves its nonce and reports ready like any
+   * document, so `onDocumentReady` has already cleared the watchdog that used
+   * to catch this. Every surface that renders an artifact without page
+   * navigation - a canvas board, an MCP App row, a wireframe - has a crashed
+   * path with an affordance, and a document that draws nothing is a crash by
+   * any reading. Without this a refused board read would be a blank board the
+   * app called healthy, with no way back.
+   */
+  private reportPageAnswer(tell: (pages: SandboxServedPages) => void): void {
+    if (this.phase === "disposed") return;
     const pages = this.servedPages();
-    if (pages === null || this.phase === "disposed") return;
-    // A missing page is an answer, not a hang: it must not turn into a crash.
+    if (pages === null) {
+      this.markCrashed();
+      return;
+    }
     this.clearTimer(this.pageHandshakeTimer);
     this.clearTimer(this.loadWatchdog);
-    pages.onPageMissing();
+    tell(pages);
   }
 
   get status(): SandboxStatus {
@@ -1048,8 +1088,10 @@ export class SandboxBridgeHost {
         this.onDocumentReady(params);
         return;
       case "traycer/notifications/page-missing":
-        if (isRecord(params) && params.nonce === this.options.document.nonce)
-          this.reportPageMissing();
+        this.reportStandInPage(params, (pages) => pages.onPageMissing());
+        return;
+      case "traycer/notifications/page-unreachable":
+        this.reportStandInPage(params, (pages) => pages.onPageUnreachable());
         return;
       case "traycer/notifications/early-error":
         if (this.phase === "delivered") this.earlyError = true;

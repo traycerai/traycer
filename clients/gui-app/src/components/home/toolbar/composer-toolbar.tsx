@@ -1,5 +1,5 @@
 import type { AutoJudgeBilling } from "@/lib/auto-mode/auto-judge-billing";
-import { memo, useMemo } from "react";
+import { memo, use, useMemo } from "react";
 import { useStore } from "zustand";
 
 import {
@@ -9,6 +9,7 @@ import {
 import { useHostMethodSchemaVersion } from "@/hooks/host/use-host-supports-method";
 import { useAutoJudgeBilling } from "@/hooks/auto-mode/use-auto-judge-billing";
 import { useOpenPermissionSettings } from "@/hooks/settings/use-open-permission-settings";
+import { ComposerFocusLayoutContext } from "@/components/home/composer/composer-focus-layout-context";
 import { ComposerToolbarLeft } from "@/components/home/toolbar/composer-toolbar-left";
 import { ComposerToolbarRight } from "@/components/home/toolbar/composer-toolbar-right";
 import { DictationRecordingBar } from "@/components/home/toolbar/dictation-recording-bar";
@@ -17,6 +18,7 @@ import type { DictationPreparingStatus } from "@/hooks/composer/use-dictation-av
 import type { ChatActiveTurn } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { ComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
 import type { ProviderTerminalLoginSurface } from "@/lib/providers/provider-terminal-login-surface";
+import { cn } from "@/lib/utils";
 
 interface ComposerToolbarProps {
   /** Passive sample chrome: no host hooks, activation slots or send action. */
@@ -158,6 +160,9 @@ function ComposerToolbarView(
     () => catalogSupportedPermissionModes(harnesses),
     [harnesses],
   );
+  // Beside the editor, down to Send (and Stop); the rest stays mounted, so the
+  // pickers keep what they hold.
+  const focusRow = use(ComposerFocusLayoutContext);
   // While dictation is active the whole bottom row becomes the recording strip
   // (Codex-style) - the model/permission/send controls return on stop.
   const recordingDictation =
@@ -204,7 +209,14 @@ function ComposerToolbarView(
   // the model picker draws a trigger with no menu, Send is disabled, and the
   // handlers the sample passes are no-ops.
   return (
-    <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_minmax(0,1fr)] items-center gap-x-2 gap-y-1.5 px-2.5 pb-2.5 pt-1">
+    <div
+      className={cn(
+        "min-w-0 items-center",
+        focusRow
+          ? "flex shrink-0 pr-1.5"
+          : "grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-x-2 gap-y-1.5 px-2.5 pb-2.5 pt-1",
+      )}
+    >
       {recordingDictation !== null ? (
         <div className="col-span-2 min-w-0">
           <DictationRecordingBar
@@ -216,7 +228,9 @@ function ComposerToolbarView(
         </div>
       ) : (
         <>
-          <ComposerToolbarLeft {...itemProps} />
+          <div hidden={focusRow} className="contents">
+            <ComposerToolbarLeft {...itemProps} />
+          </div>
           <ComposerToolbarRight
             {...itemProps}
             canSubmit={props.presentation ? false : canSubmit}
