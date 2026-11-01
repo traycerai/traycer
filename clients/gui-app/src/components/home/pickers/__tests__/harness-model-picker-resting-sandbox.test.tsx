@@ -606,7 +606,7 @@ describe("the model picker of a resting sandbox that lists the cloud's models", 
     expect(screen.queryByText(`${SANDBOX_HOST_ID} is offline`)).toBeNull();
   });
 
-  it("holds a bound chat's unlisted slug on the chip while the host's harness read is rejected", async () => {
+  it("holds a bound chat's unlisted slug in the selection, and a generic name on the chip, while the host's harness read is rejected", async () => {
     mocks.harnessesError = new Error("harnesses refused");
     const store = renderSurface({ boundResting: true, pick: UNLISTED_PICK });
 
@@ -620,7 +620,8 @@ describe("the model picker of a resting sandbox that lists the cloud's models", 
       harnessId: "traycer",
       modelSlug: UNLISTED_PICK,
     });
-    expect(chipModelName(store.getState())).toBe(UNLISTED_PICK);
+    // No list ever named the slug on this device, so the chip never shows it.
+    expect(chipModelName(store.getState())).toBe("Traycer model");
   });
 
   it("keeps the rows when a later cloud read fails with the list held", async () => {

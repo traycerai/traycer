@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
+import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 import {
   createRestingBinding,
@@ -35,8 +36,12 @@ vi.mock("@/lib/host", async (importOriginal) => ({
   useHostBinding: () => mocks.binding,
 }));
 
+import { HostRuntimeTestProvider } from "@/lib/host/__tests__/host-runtime-test-provider";
 import { useRestingHostStage } from "@/components/composer/use-sandbox-staging";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { sandboxQueryKeys } from "@/lib/query-keys";
+import { sandboxWakeId } from "@/lib/sandboxes/sandbox-wake-wait";
+import { useSandboxWakeReportStore } from "@/stores/sandboxes/sandbox-wake-report-store";
 import {
   readStagedSandbox,
   useStagedSandboxStore,
@@ -85,7 +90,9 @@ function mount(input: Input) {
     defaultOptions: { queries: { retry: false } },
   });
   const wrapper = ({ children }: { readonly children: ReactNode }) => (
-    <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    <QueryClientProvider client={client}>
+      <HostRuntimeTestProvider>{children}</HostRuntimeTestProvider>
+    </QueryClientProvider>
   );
   const view = renderHook((props: Input) => useRestingHostStage(props), {
     initialProps: input,
@@ -117,6 +124,7 @@ beforeEach(() => {
     contextMetadata: { userId: "u1", username: "ada" },
   });
   useStagedSandboxStore.setState({ bySurface: {} });
+  useSandboxWakeReportStore.setState({ answeredWakes: {} });
 });
 
 afterEach(() => {
@@ -222,5 +230,111 @@ describe("useRestingHostStage", () => {
     view.unmount();
 
     expect(readStagedSandbox(SURFACE)).toBe(adopted);
+  });
+  it("puts back a stage that was cleared while the sandbox is still there", async () => {
+    listed("suspended");
+    mount(UNNAMED);
+    await waitFor(() => expect(readStagedSandbox(SURFACE)).not.toBeNull());
+
+    act(() => useStagedSandboxStore.getState().clear(SURFACE));
+
+    await waitFor(() =>
+      expect(readStagedSandbox(SURFACE)?.target).toMatchObject({
+        hostId: HOST_ID,
+        verb: "resume",
+      }),
+    );
+  });
+
+  describe("through a wake", () => {
+    const RESUMING = sandboxSummaryFixture({
+      id: "sbx_rest",
+      hostId: HOST_ID,
+      displayName: "build-box",
+      state: "resuming",
+    });
+    const WOKEN = sandboxSummaryFixture({
+      id: "sbx_rest",
+      hostId: HOST_ID,
+      displayName: "build-box",
+      state: "awake",
+      operation: {
+        at: 1_791_000_020_000,
+        fromState: "suspended",
+        state: "awake",
+        cause: "wake",
+        outcomeCause: "wake",
+        outcomeDetail: null,
+        actor: null,
+        gesture: null,
+      },
+    });
+
+    /** The row the list carries and the directory mirrors, a tick apart. */
+    function rowNow(
+      client: QueryClient,
+      state: "resuming" | "awake",
+      summary: SandboxSummary,
+    ): void {
+      act(() => {
+        client.setQueryData(
+          sandboxQueryKeys.list(mocks.binding?.auth ?? {}, "u1"),
+          { sandboxes: [summary] },
+        );
+        restingDirectory.setSandbox(HOST_ID, "build-box", state);
+      });
+    }
+
+    it("holds the same stage as the row goes resuming, then awake with a host that has not reported", async () => {
+      listed("suspended");
+      const { client } = mount(UNNAMED);
+      await waitFor(() => expect(readStagedSandbox(SURFACE)).not.toBeNull());
+      const staged = readStagedSandbox(SURFACE);
+
+      rowNow(client, "resuming", RESUMING);
+      await listRead(client);
+      expect(readStagedSandbox(SURFACE)).toBe(staged);
+
+      rowNow(client, "awake", WOKEN);
+      await listRead(client);
+      expect(readStagedSandbox(SURFACE)).toBe(staged);
+    });
+
+    it("takes its stage off once the host first reports", async () => {
+      listed("suspended");
+      const { client } = mount(UNNAMED);
+      await waitFor(() => expect(readStagedSandbox(SURFACE)).not.toBeNull());
+      rowNow(client, "resuming", RESUMING);
+      rowNow(client, "awake", WOKEN);
+      await listRead(client);
+      expect(readStagedSandbox(SURFACE)).not.toBeNull();
+
+      act(() =>
+        useSandboxWakeReportStore
+          .getState()
+          .recordAnswer("sbx_rest", sandboxWakeId(WOKEN)),
+      );
+
+      await waitFor(() => expect(readStagedSandbox(SURFACE)).toBeNull());
+    });
+
+    it("leaves a stage a send took alone when the host first reports", async () => {
+      listed("suspended");
+      const { client } = mount(UNNAMED);
+      await waitFor(() => expect(readStagedSandbox(SURFACE)).not.toBeNull());
+      useStagedSandboxStore.getState().begin(SURFACE, false, Date.now(), false);
+      const taken = readStagedSandbox(SURFACE);
+      rowNow(client, "resuming", RESUMING);
+      rowNow(client, "awake", WOKEN);
+
+      act(() =>
+        useSandboxWakeReportStore
+          .getState()
+          .recordAnswer("sbx_rest", sandboxWakeId(WOKEN)),
+      );
+      await listRead(client);
+
+      expect(readStagedSandbox(SURFACE)).toBe(taken);
+    });
   });
 });

@@ -5,6 +5,7 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import {
   act,
   cleanup,
+  fireEvent,
   render,
   screen,
   waitFor,
@@ -109,6 +110,11 @@ vi.mock(
     };
   },
 );
+vi.mock("@/hooks/host/use-host-directory-entry", async () => {
+  const { useRestingDirectoryEntry } =
+    await import("@/hooks/sandboxes/__tests__/resting-directory-fixture");
+  return { useHostDirectoryEntry: useRestingDirectoryEntry };
+});
 vi.mock("@/hooks/sandboxes/use-sandbox-catalogue-query", () => ({
   useSandboxCatalogue: () => ({
     data: { providers: [] },
@@ -361,6 +367,7 @@ import { chipModelName } from "@/stores/composer/composer-toolbar-store";
 import { usePendingSandboxSendStore } from "@/stores/sandboxes/pending-sandbox-send-store";
 import { useComposerHarnessMemoryStore } from "@/stores/composer/composer-harness-memory-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { useHostPickRequestStore } from "@/stores/composer/host-pick-request-store";
 import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
 import {
   readStagedSandbox,
@@ -530,6 +537,7 @@ beforeEach(() => {
   ];
   host.createChat.mockReset();
   useStagedSandboxStore.setState({ bySurface: {} });
+  useHostPickRequestStore.setState({ bySurface: {} });
   useComposerHarnessMemoryStore.getState().resetForTests();
   useNewConversationModalStore.getState().resetForTests();
   useNewConversationModalStore.getState().setContent(EPIC_ID, DIRTY_CONTENT);
@@ -708,7 +716,7 @@ describe("a new-conversation modal on a host that rests", () => {
       }),
     );
     await waitFor(() =>
-      expect(chipModelName(toolbar().getState())).toBe("trc-a"),
+      expect(chipModelName(toolbar().getState())).toBe("Traycer model"),
     );
     act(() => {
       host.installEditor?.();
@@ -722,7 +730,7 @@ describe("a new-conversation modal on a host that rests", () => {
     const notice = within(await screen.findByTestId("composer-host-notice"));
     expect(
       notice.getByText(
-        "trc-a doesn't run on this sandbox. Choose another Traycer model to run agents here.",
+        "Traycer model doesn't run on this sandbox. Choose another Traycer model to run agents here.",
       ),
     ).toBeDefined();
     expect(
@@ -734,5 +742,78 @@ describe("a new-conversation modal on a host that rests", () => {
     expect(host.createChat).not.toHaveBeenCalled();
     expect(draftSettings()).toBe(draft);
     expect(toolbar().getState().selection.modelSlug).toBe("trc-a");
+  });
+
+  it("stages a stopped sandbox with the start verb", async () => {
+    restingDirectory.setSandbox("host-a", "Laptop box", "stopped");
+    host.binding?.auth.listSandboxes.mockImplementation(() =>
+      Promise.resolve({
+        kind: "ok",
+        response: {
+          sandboxes: [
+            sandboxSummaryFixture({
+              id: "sbx_rest",
+              hostId: "host-a",
+              displayName: "Laptop box",
+              state: "stopped",
+            }),
+          ],
+        },
+      }),
+    );
+    renderModal();
+
+    await waitFor(() =>
+      expect(readStagedSandbox(SURFACE)?.target).toMatchObject({
+        kind: "existing",
+        hostId: "host-a",
+        sandboxId: "sbx_rest",
+        verb: "start",
+      }),
+    );
+  });
+
+  describe("when Send is refused for a Traycer model the sandbox's list leaves out", () => {
+    async function refused(hostId: string | null) {
+      pickTraycer("trc-a");
+      cloudLists("trc-s");
+      render(<Harness hostId={hostId} />, { wrapper: QueryWrapper });
+      await waitFor(() =>
+        expect(readStagedSandbox(SURFACE)?.target).toMatchObject({
+          hostId: "host-a",
+        }),
+      );
+      act(() => {
+        host.installEditor?.();
+      });
+      act(() => {
+        host.bodySubmit?.();
+      });
+      return within(await screen.findByTestId("composer-host-notice"));
+    }
+
+    it("offers another host, which opens the host picker and keeps the stage", async () => {
+      const notice = await refused(null);
+      const staged = readStagedSandbox(SURFACE);
+
+      fireEvent.click(notice.getByRole("button", { name: "Use another host" }));
+
+      expect(useHostPickRequestStore.getState().bySurface[SURFACE]).toBe(1);
+      expect(readStagedSandbox(SURFACE)).toBe(staged);
+    });
+
+    it("offers no host to leave for on a modal that names its host", async () => {
+      const notice = await refused("host-a");
+
+      expect(
+        notice.getByRole("button", { name: "Choose a model" }),
+      ).toBeDefined();
+      expect(
+        notice
+          .getAllByRole("button")
+          .map((button) => button.textContent)
+          .filter((label) => /^Use /.test(label)),
+      ).toEqual([]);
+    });
   });
 });

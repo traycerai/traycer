@@ -1,3 +1,4 @@
+import { useSyncExternalStore } from "react";
 import { vi, type Mock } from "vitest";
 import type { GuiAgentModelOption } from "@traycer/protocol/host/agent/gui/unary-schemas";
 import type { HostListItem } from "@traycer/protocol/host/host-status";
@@ -40,7 +41,20 @@ export const restingDirectory = {
     name: string,
     state: NonNullable<HostListItem["sandboxState"]>,
   ): void => {
-    rows.set(hostId, sandboxEntry(hostId, name, state));
+    rows.set(
+      hostId,
+      sandboxEntry(
+        hostId,
+        name,
+        state,
+        state === "awake" ? "connectable" : "offline",
+      ),
+    );
+    notify(hostId);
+  },
+  /** An awake sandbox whose host has not yet reported: no route answers. */
+  setUnreportedSandbox: (hostId: string, name: string): void => {
+    rows.set(hostId, sandboxEntry(hostId, name, "awake", "offline"));
     notify(hostId);
   },
   clear: (): void => {
@@ -49,10 +63,28 @@ export const restingDirectory = {
   },
 };
 
+/**
+ * `useHostDirectoryEntry` over {@link restingDirectory}, for a suite that
+ * mounts no host runtime: a surface reading its host's row through the runtime
+ * reads the same row the registry mock answers.
+ */
+export function useRestingDirectoryEntry(
+  hostId: string | null,
+): HostDirectoryEntry | null {
+  return useSyncExternalStore(
+    (listener) =>
+      hostId === null
+        ? () => undefined
+        : restingDirectory.subscribe(hostId, listener),
+    () => (hostId === null ? null : restingDirectory.read(hostId)),
+  );
+}
+
 function sandboxEntry(
   hostId: string,
   name: string,
   state: NonNullable<HostListItem["sandboxState"]>,
+  connectivity: "connectable" | "offline",
 ): RemoteHostDirectoryEntry {
   return hostListItemToDirectoryEntry(
     {
@@ -63,7 +95,7 @@ function sandboxEntry(
       publicKey: "pk",
       createdAt: "2026-10-01T00:00:00.000Z",
       status: {
-        connectivity: "connectable",
+        connectivity,
         viewerReachability: "unknown",
         clientCloud: "ok",
         updateState: "current",

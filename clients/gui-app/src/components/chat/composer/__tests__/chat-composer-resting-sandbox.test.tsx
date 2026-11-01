@@ -338,6 +338,7 @@ import {
   readComposerDraftSnapshot,
   useComposerDraftStore,
 } from "@/stores/composer/composer-draft-store";
+import { useComposerHarnessMemoryStore } from "@/stores/composer/composer-harness-memory-store";
 import { useSandboxDetailsStore } from "@/stores/sandboxes/sandbox-details-store";
 import { ChatComposer } from "../chat-composer";
 
@@ -420,6 +421,7 @@ beforeEach(() => {
   answers.openedTiles = [];
   answers.tabHostId = "serving-host";
   answers.submit = null;
+  useComposerHarnessMemoryStore.getState().resetForTests();
 });
 
 afterEach(() => {
@@ -772,6 +774,40 @@ describe("the composer of a resting sandbox's chat, on a tab bound to that sandb
     expect(state.selection.modelSlug).toBe("gpt-6.1-sol");
     expect(state.selectedModel?.slug).toBe("gpt-6.1-sol");
     expect(state.sandboxRunTarget).toBe("resting");
+  });
+
+  describe("with a Traycer model the cloud's list leaves out", () => {
+    const UNLISTED = { ...seed("traycer"), model: "trc-retired" };
+
+    it("refuses Send before any wake, naming the model it was last listed under, with the bound remedies", () => {
+      useComposerHarnessMemoryStore
+        .getState()
+        .recordModelName("traycer", "trc-retired", "Retired Model");
+      mountChatTileCloneFlow();
+      const openForHarness = mountModelPicker();
+      const line =
+        "Retired Model doesn't run on this sandbox. Choose another Traycer model to run agents here.";
+
+      mountComposer(UNLISTED);
+
+      expect(screen.getByText(line)).toBeTruthy();
+      expect(noticeButtons()).toEqual(REFUSAL_LIST);
+      expect(submitted()).toMatchObject({
+        sendDisabled: true,
+        sendDisabledHint: line,
+      });
+      clickNoticeButton("Choose a model");
+      expect(openForHarness).toHaveBeenCalledWith("traycer", ["traycer"]);
+    });
+
+    it("says Traycer model, never the slug, when no list ever named it", () => {
+      mountComposer(UNLISTED);
+
+      expect(submitted().sendDisabledHint).toBe(
+        "Traycer model doesn't run on this sandbox. Choose another Traycer model to run agents here.",
+      );
+      expect(document.body.textContent).not.toContain("trc-retired");
+    });
   });
 });
 
