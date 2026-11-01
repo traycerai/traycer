@@ -823,9 +823,9 @@ function settleDeletedEpics(input: {
 export const DISCARD_CREATED_EPIC_FAILED_COPY =
   "Couldn't remove the empty task this Send created. Delete it from your tasks.";
 
-/** Shown when nothing says whether that Task holds work, so it stays. */
+/** Shown when nothing says whether that Task holds work, so it is left alone. */
 export const DISCARD_CREATED_EPIC_UNREAD_COPY =
-  "Couldn't check the task this Send created, so it stays. Delete it from your tasks if you don't need it.";
+  "Couldn't check the task this Send created. Delete it from your tasks if you don't need it.";
 
 interface DiscardCreatedEpicVariables {
   readonly epicId: string;
