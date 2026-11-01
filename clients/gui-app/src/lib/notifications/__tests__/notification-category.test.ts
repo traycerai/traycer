@@ -7,7 +7,7 @@ import {
 } from "@/lib/notifications/notification-category";
 import type { MergedNotificationSource } from "@/stores/notifications/merged-notifications";
 
-describe("categoryForNotificationSource", () => {
+describe("notification category", () => {
   it("maps every internal source seam to product vocabulary", () => {
     const mapping: ReadonlyArray<
       readonly [MergedNotificationSource, NotificationCategory]
@@ -41,17 +41,16 @@ describe("categoryForNotificationSource", () => {
     expect(categoryForHostNotification("cloud", "team.role.changed")).toBe(
       "collaboration",
     );
-    expect(categoryForNotificationSource("global")).toBe("collaboration");
   });
 
   it("leaves every other host and cloud row to its source", () => {
     for (const source of ["host", "cloud"] as const) {
       expect(categoryForHostNotification(source, "approval.requested")).toBe(
-        categoryForNotificationSource(source),
+        "task",
       );
       expect(
         categoryForHostNotification(source, "host.operation.finished"),
-      ).toBe(categoryForNotificationSource(source));
+      ).toBe("task");
     }
   });
 

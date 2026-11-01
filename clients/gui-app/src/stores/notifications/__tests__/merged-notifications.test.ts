@@ -761,31 +761,52 @@ describe("merged notifications feed", () => {
     });
   });
 
-  it("projects a role change as collaboration, not as its host lane's task", () => {
+  it("projects a role change as collaboration on both lanes, not as their task", () => {
     // The row the member is told their own role moved by, which mirrors the
-    // task-sharing role change — a `global`, Collaboration row. Its lane says
-    // task, so the projection has to read the kind for the filter to keep it
-    // under Collaboration.
+    // task-sharing role change — a `global`, Collaboration row. Both lanes say
+    // task, so each has to read the kind for the filter to keep the row under
+    // Collaboration; the cloud lane is asserted beside the host one because it
+    // is the lane that carries the row between hosts. Its title comes with it:
+    // a cloud row prefers the epic and chat titles its producer snapshotted
+    // over the composed copy, and this is the first kind the center carries
+    // that belongs to no epic, so those titles have to be absent for the
+    // member to read what happened.
+    const entry = {
+      id: "role-1",
+      updatedAt: 10,
+      readAt: null,
+      kind: "team.role.changed",
+      sourceRef: null,
+      severity: "info",
+      outcome: "completed",
+      epicId: null,
+      chatId: null,
+      payload: {
+        kind: "team_role_changed",
+        environmentId: "env-1",
+        teamName: "Acme",
+        from: "editor",
+        to: "admin",
+      },
+    } as const satisfies HostNotificationFeedEntry;
+
+    expect(rowFromHostEntry(entry)).toMatchObject({
+      category: "collaboration",
+      severity: "info",
+    });
     expect(
-      rowFromHostEntry({
-        id: "role-1",
-        updatedAt: 10,
-        readAt: null,
-        kind: "team.role.changed",
-        sourceRef: null,
-        severity: "info",
-        outcome: "completed",
-        epicId: null,
-        chatId: null,
-        payload: {
-          kind: "team_role_changed",
-          environmentId: "env-1",
-          teamName: "Acme",
-          from: "editor",
-          to: "admin",
-        },
+      rowFromCloudFeedRow({
+        entryId: entry.id,
+        originHostId: "host-a",
+        coalesceKey: entry.id,
+        entry,
+        presentation: { epicTitle: null, chatTitle: null },
       }),
-    ).toMatchObject({ category: "collaboration", severity: "info" });
+    ).toMatchObject({
+      category: "collaboration",
+      severity: "info",
+      title: "Your role changed",
+    });
   });
 
   it("routes a parked managed-command delivery back to the chat holding it", () => {

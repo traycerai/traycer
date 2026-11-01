@@ -21,11 +21,12 @@ const DROPPED_NOTIFICATION_KINDS: ReadonlySet<HostNotificationKind> = new Set(
 );
 
 /**
- * Kinds the center holds and shows, and that announce themselves nowhere: no
- * toast, no chime. `team.role.changed` is the one — a member is told their own
- * role moved the way a task's collaborators are, and that tell has never had a
- * live surface or a push either. Mirrored by the server's own push set, which
- * keeps the same kind out of the phone push.
+ * Kinds the center holds and shows without announcing: no toast, no chime.
+ * `team.role.changed` is the one — a member is told their own role moved the
+ * way a task's collaborators are, and that tell has never had a live surface
+ * or a push either. Mirrored by the server's own push set, which keeps the
+ * same kind out of the phone push. A person's own notification hook is outside
+ * this gate and fires on severity alone, by their own standing rule.
  */
 const NO_LIVE_ANNOUNCE_NOTIFICATION_KINDS: ReadonlySet<HostNotificationKind> =
   new Set(["team.role.changed"]);
@@ -80,7 +81,7 @@ export function isDroppedNotification(
 /**
  * Whether a feed row may announce itself as it arrives — a native toast and a
  * chime. The read policy above, and then the kinds the center shows without
- * announcing. The only live-display gate.
+ * announcing. The gate both live-display lanes pass through.
  */
 export function isLiveAnnouncedNotification(
   entry: { readonly kind: HostNotificationKind; readonly payload: unknown },
