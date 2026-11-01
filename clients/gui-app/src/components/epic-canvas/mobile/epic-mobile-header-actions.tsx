@@ -64,7 +64,7 @@ export function EpicMobileSwitcherTrigger(props: { readonly tabId: string }) {
   const { tabId } = props;
   const setOpen = useMobileSwitcherStore((state) => state.setOpen);
   const mounted = useIsMobileSwitcherMounted(tabId);
-  const level2 = useMobileTileLevel2Form();
+  const level2 = useMobileTileLevel2Form(tabId);
   if (level2 !== "bar") return null;
   return (
     <Button

@@ -65,6 +65,7 @@ import {
   type PersistedTabStripLayout,
 } from "@/stores/tabs/layout";
 import type { TabRef } from "@/stores/tabs/types";
+import { recordMobileTabOrigin } from "@/stores/epics/mobile-tab-origin-store";
 import { isRouteBookkeepingState } from "@/lib/tab-navigation/route-bookkeeping";
 import { normalizeEpicFocusSearch } from "@/routes/epic-route-search";
 import { tileIntent } from "@/lib/canvas/tile-open/intent";
@@ -360,6 +361,13 @@ function focusedRefOfLayout(layout: PersistedTabStripLayout): TabRef | null {
   if (active.kind === "tab") return active.ref;
   const side = active.focusedSide === "left" ? active.left : active.right;
   return side.kind === "tab" ? side.ref : null;
+}
+
+/** The channel the Tracy surface shows when it is what the layout has in front. */
+function tracyChannelInFrontOf(layout: PersistedTabStripLayout): string | null {
+  return focusedRefOfLayout(layout)?.kind === "tracy"
+    ? useTracySurfaceStore.getState().botId
+    : null;
 }
 
 function activeItemContainsRef(
@@ -1088,6 +1096,17 @@ export class TabNavigationController {
     if (intent === null) {
       tabCommandCoordinator.restoreTabActivation(activation);
       return false;
+    }
+    // Every way of opening a task passes here (a chip, a task row, a tapped
+    // notification), and the strip's own tap on a tab does not.
+    if (
+      requestedIntent.kind === "open-epic" &&
+      activation.ref.kind === "epic"
+    ) {
+      recordMobileTabOrigin(
+        activation.ref.id,
+        tracyChannelInFrontOf(layoutBefore),
+      );
     }
     // Re-activating what the active item shows replaces the entry; another
     // channel of the Tracy surface is a move, and pushes one.

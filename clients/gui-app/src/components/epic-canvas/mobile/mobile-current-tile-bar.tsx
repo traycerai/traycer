@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { TabIcon } from "@/components/epic-canvas/canvas/tab-strip";
 import {
   terminalTabDisplayTitle,
@@ -34,6 +35,8 @@ interface MobileCurrentTileBarProps {
   readonly epicId: string;
   readonly tile: EpicCanvasTileRef;
   readonly level2: MobileLevel2Form;
+  /** What the pane's header carries past the tile's own controls. */
+  readonly trailing: ReactNode;
 }
 
 /**
@@ -124,7 +127,8 @@ function MobileCurrentTileBarBody(
     readonly terminalControl: TerminalTabControl | null;
   },
 ) {
-  const { epicId, tile, level2, browserPresentation, terminalControl } = props;
+  const { epicId, tile, level2, trailing } = props;
+  const { browserPresentation, terminalControl } = props;
   const isTerminal = tile.type === "terminal";
   // Terminal titles resolve against the tab's bound host; `null` for every
   // other kind (mirrors the tab strip). `useHostClientForHostId(null)` returns
@@ -243,6 +247,7 @@ function MobileCurrentTileBarBody(
           </>
         )}
         <ContentMinimapButton tileInstanceId={tile.instanceId} />
+        {trailing}
       </div>
     </div>
   );

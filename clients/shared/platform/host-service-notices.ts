@@ -26,8 +26,14 @@ export const HOST_NOT_SERVICE_RUN_CODE = "E_HOST_NOT_SERVICE_RUN";
  * `serviceWarning` or `postSwapWarning` of that code. `other-owner`: the
  * task's principal is another account's. `unconfirmed`: nothing could confirm
  * whose it is - the task, its principal or this account's own SID could not
- * be read or resolved - and the CLI failed closed. The behaviour is the same
- * (nothing is written); only the words differ.
+ * be read or resolved.
+ *
+ * Neither reason writes to the task, and the words differ because only
+ * `other-owner` found an owner to name. What else they do is NOT the same:
+ * `other-owner` is refused everything, while `unconfirmed` is refused every
+ * write and still STARTED, because a run changes no definition and Task
+ * Scheduler's own permissions on the task decide it. So of the two, only
+ * `unconfirmed` can reach the desktop beside a host that did come up.
  */
 export type ServiceTaskNotOwnedReason = "other-owner" | "unconfirmed";
 
