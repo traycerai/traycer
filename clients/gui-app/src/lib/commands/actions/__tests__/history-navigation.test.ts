@@ -168,7 +168,7 @@ function seedLiveEpicSession(
     snapshotLoaded: boolean;
     chatRecordListAuthoritative: boolean;
   },
-): void {
+): OpenedStoreForTest {
   const handle = openStoreForTest({
     epicId: epicId,
     userId: null,
@@ -184,6 +184,7 @@ function seedLiveEpicSession(
   handle.store.setState((state) => ({
     snapshotLoaded: authority.snapshotLoaded,
     chatRecordListAuthoritative: authority.chatRecordListAuthoritative,
+    tuiAgentRecordListAuthoritative: true,
     tree: {
       ...state.tree,
       nodeById: Object.fromEntries(
@@ -204,6 +205,7 @@ function seedLiveEpicSession(
   }));
   getOpenEpicRegistry().acquire(epicId, () => handle);
   liveEpicHandles.push(handle);
+  return handle;
 }
 
 const SPEC_A: EpicNodeRef = {
@@ -1390,6 +1392,49 @@ describe("goBack / goForward — preview-reopen closed sub-tabs", () => {
 
     expect(requirePreviewTabId(tabId)).toBe(chat.instanceId);
   });
+
+  it.each([
+    ["restores", false, true],
+    ["discards", true, false],
+  ])(
+    "%s a closed same-host terminal agent by its own list's answer",
+    (_verdict, listAnswered, restored) => {
+      const hostId = bindActiveHost();
+      const agent: EpicCanvasTileRef = {
+        id: "tui-closed",
+        instanceId: "inst-tui-closed",
+        type: "terminal-agent",
+        name: "Closed terminal agent",
+        hostId,
+      };
+      const store = useEpicCanvasStore.getState();
+      const tabId = store.openEpicTab("e1", "Task");
+      store.openTileInTab(tabId, agent);
+      const paneId = requirePaneId(tabId);
+      store.closeCanvasTab(tabId, paneId, agent.instanceId);
+
+      const session = seedLiveEpicSession("e1", [], {
+        snapshotLoaded: true,
+        chatRecordListAuthoritative: true,
+      });
+      session.store.setState({
+        tuiAgentRecordListAuthoritative: listAnswered,
+      });
+
+      const landing = nestedHref("e1", tabId, paneId, agent.instanceId);
+      const history = seedPersistentHistory([landing, `/epics/e1/${tabId}`], 1);
+      vi.spyOn(history, "go").mockImplementation(() => {});
+
+      goBack({ history });
+
+      const canvas = useEpicCanvasStore.getState().canvasByTabId[tabId];
+      const pane =
+        canvas !== undefined && canvas.activePaneId !== null
+          ? findPaneById(canvas.root, canvas.activePaneId)
+          : null;
+      expect(pane?.previewTabId).toBe(restored ? agent.instanceId : null);
+    },
+  );
 
   it("does not let a COLLABORATOR's row vouch for a record-less chat of the viewer's", () => {
     const hostId = bindActiveHost();

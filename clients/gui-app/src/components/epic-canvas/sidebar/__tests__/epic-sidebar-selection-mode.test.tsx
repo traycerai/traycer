@@ -132,6 +132,10 @@ interface TestState {
    * states no number.
    */
   chatRecordListAuthoritative: boolean;
+  /** The terminal twin: `epic.listTuiAgents` has answered. */
+  tuiAgentRecordListAuthoritative: boolean;
+  /** Whether the session's host serves Deleted artifacts. */
+  deletedArtifactsAvailable: boolean;
   activeArtifactId: string | null;
   openTileContentIds: ReadonlySet<string>;
   activePanelId: "chats" | "artifacts";
@@ -256,6 +260,8 @@ const testState = vi.hoisted<TestState>(() => ({
   sessionReady: true,
   snapshotLoaded: true,
   chatRecordListAuthoritative: true,
+  tuiAgentRecordListAuthoritative: true,
+  deletedArtifactsAvailable: false,
   activeArtifactId: null,
   openTileContentIds: new Set<string>(),
   activePanelId: "chats",
@@ -1037,6 +1043,10 @@ vi.mock("@/hooks/epic/use-chat-archive-support", () => ({
   useChatArchiveSupportState: () => testState.archiveSupport,
 }));
 
+vi.mock("@/hooks/epic/use-deleted-artifacts-available", () => ({
+  useDeletedArtifactsAvailable: () => testState.deletedArtifactsAvailable,
+}));
+
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
   useHostSupportsMethod: () => testState.archiveSupport === true,
   useHostMethodSupport: () => testState.archiveSupport,
@@ -1157,11 +1167,6 @@ vi.mock("@/lib/epic-selectors", () => ({
   // to add - which, with no host client bound here, it never does.
   useEpicChatIds: () => [],
   useEpicChatIdsNamedByCloudRows: () => [],
-  // Whether the chat record list has answered. True in every fixture that
-  // predates the delete disclosure's readiness read, which is the settled
-  // state every count assertion here is about.
-  useEpicChatRecordListAuthoritative: () =>
-    testState.chatRecordListAuthoritative,
   useEpicFileArtifactViewer: () => null,
   useEpicArtifactStatus: (artifactId: string) =>
     testState.tree.nodeById[artifactId]?.status ?? null,
@@ -1217,6 +1222,11 @@ function fakeEpicStoreState() {
   );
   return {
     snapshotLoaded: testState.snapshotLoaded,
+    // Whether each record list has answered. True in every fixture that
+    // predates the delete disclosure's readiness read, which is the settled
+    // state every count assertion here is about.
+    chatRecordListAuthoritative: testState.chatRecordListAuthoritative,
+    tuiAgentRecordListAuthoritative: testState.tuiAgentRecordListAuthoritative,
     // The list's sort-clock override reads the record heads, which these
     // fixtures still publish none of, so the override stays empty and every
     // row sorts by the stamp on its node; `chats` itself is populated below
@@ -1438,6 +1448,8 @@ describe("epic sidebar selection mode", () => {
     testState.sessionReady = true;
     testState.snapshotLoaded = true;
     testState.chatRecordListAuthoritative = true;
+    testState.tuiAgentRecordListAuthoritative = true;
+    testState.deletedArtifactsAvailable = false;
     testState.activeArtifactId = null;
     testState.openTileContentIds = new Set<string>();
     testState.activePanelId = "chats";
@@ -3421,6 +3433,34 @@ describe("epic sidebar selection mode", () => {
   });
 
   /**
+   * Both routes, because each reads the host's restore support through its
+   * own hook, and the row menu and select mode must not disagree about it.
+   */
+  it("offers the restore from both routes where the host serves it", async () => {
+    seedArtifactTree();
+    testState.activePanelId = "artifacts";
+    testState.deletedArtifactsAvailable = true;
+    const expected =
+      "You can bring it back from Deleted artifacts. Artifacts nested under it come back separately.";
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    fireEvent.click(dropdownItem("delete-spec-root"));
+    expect(
+      within(await screen.findByTestId("confirm-destructive-dialog")).getByText(
+        expected,
+      ),
+    ).toBeTruthy();
+    cleanup();
+
+    openArtifactDeleteDialog(["spec-root"]);
+    expect(
+      within(await screen.findByTestId("confirm-destructive-dialog")).getByText(
+        expected,
+      ),
+    ).toBeTruthy();
+  });
+
+  /**
    * The delete acts on the RECORDS, not on the view, so a promoted agent the
    * archive filter is hiding is still promoted and still counted. Understating
    * it would be the panel's filter quietly deciding what the reader is told
@@ -3465,17 +3505,73 @@ describe("epic sidebar selection mode", () => {
   });
 
   /**
+   * Answered chats say nothing about terminal agents, which arrive on their
+   * own list. Here that list has not answered, so the tree holds no children
+   * for `agent-root` while a persisted one can exist, and a count of zero would
+   * disarm the very sentence that exists for this row. Row menu and select mode
+   * are both asked, because each reads the flags through its own subscription.
+   */
+  it.each([
+    [
+      "select mode",
+      (): void => {
+        openChatDeleteDialog(["agent-root"]);
+      },
+    ],
+    [
+      "the row menu",
+      (): void => {
+        render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+        fireEvent.click(dropdownItem("delete-agent-root"));
+      },
+    ],
+  ])(
+    "states no agent count from %s while only the terminal-agent list is unanswered",
+    (_route, openDialog) => {
+      seedChatTree();
+      testState.chatRecordListAuthoritative = true;
+      testState.tuiAgentRecordListAuthoritative = false;
+
+      openDialog();
+
+      expect(
+        screen.getByText(
+          "This action cannot be undone. Any agents nested under it will be kept and moved to the top level.",
+        ),
+      ).toBeTruthy();
+      expect(screen.getByTestId("confirm-action").matches(":disabled")).toBe(
+        false,
+      );
+    },
+  );
+
+  /** The other half of that AND: both answered, so the tree's count stands. */
+  it("states the count once the terminal-agent child has arrived with its list", () => {
+    seedChatTree();
+    nestUnderAgentRoot();
+
+    openChatDeleteDialog(["agent-root"]);
+
+    expect(
+      screen.getByText(
+        "This action cannot be undone. 1 agent nested under it will be kept and moved to the top level.",
+      ),
+    ).toBeTruthy();
+  });
+
+  /**
    * The artifact arm does NOT take that readiness answer. An artifact's
    * subtree is artifacts (the projector is family-separated) and artifacts are
-   * doc-sourced, so the chat list has nothing to say about this count - and
-   * the two signals are independent, so hedging here would withhold a known
-   * count for as long as that RPC is slow or failing, on every artifact row,
+   * doc-sourced, so the agent lists have nothing to say about this count - and
+   * the signals are independent, so hedging here would withhold a known count
+   * for as long as either RPC is slow or failing, on every artifact row,
    * including childless ones.
    */
-  it("states the artifact count whatever the chat record list has answered", async () => {
+  it("states the artifact count whatever the agent record lists have answered", async () => {
     seedArtifactTree();
     testState.activePanelId = "artifacts";
     testState.chatRecordListAuthoritative = false;
+    testState.tuiAgentRecordListAuthoritative = false;
 
     openArtifactDeleteDialog(["spec-root"]);
     const dialog = await screen.findByTestId("confirm-destructive-dialog");
@@ -5061,6 +5157,8 @@ describe("chat row archive", () => {
     testState.sessionReady = true;
     testState.snapshotLoaded = true;
     testState.chatRecordListAuthoritative = true;
+    testState.tuiAgentRecordListAuthoritative = true;
+    testState.deletedArtifactsAvailable = false;
     testState.activeArtifactId = null;
     testState.openTileContentIds = new Set<string>();
     testState.activePanelId = "chats";

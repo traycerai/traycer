@@ -53,6 +53,7 @@ function liveness(
     hasLiveRecord: () => false,
     isCloudKnown: () => false,
     recordListAuthorizesChatAbsence: true,
+    recordListAuthorizesTuiAgentAbsence: true,
     ...overrides,
   };
 }
@@ -174,6 +175,20 @@ describe("isTileRefRecordLive", () => {
         "host-a",
       ),
     ).toBe(false);
+  });
+
+  it("keeps a same-host TERMINAL-AGENT ref until its own list has answered", () => {
+    // The record lives in the host's registry and arrives on
+    // `epic.listTuiAgents` alone, so an unanswered list proves nothing. The
+    // chat list's answer is no substitute, which is why it stays true here.
+    expect(
+      isTileRefRecordLive(
+        terminalAgentTile("tui-local", "host-a"),
+        new Set(),
+        liveness({ recordListAuthorizesTuiAgentAbsence: false }),
+        "host-a",
+      ),
+    ).toBe(true);
   });
 
   it("still polices a cross-host ARTIFACT ref - artifact records are doc-shared", () => {

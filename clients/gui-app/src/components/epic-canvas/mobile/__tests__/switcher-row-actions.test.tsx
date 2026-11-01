@@ -12,7 +12,13 @@
  */
 import { type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import * as Y from "yjs";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
@@ -28,8 +34,10 @@ import {
   type OpenedStoreForTest,
 } from "@/stores/epics/open-epic/test-support/open-store-for-test";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { projectTreeSlice } from "@/stores/epics/open-epic/projection-helpers";
 import type {
   ArtifactProjection,
+  ChatProjection,
   TuiAgentProjection,
 } from "@/stores/epics/open-epic/types";
 
@@ -90,6 +98,12 @@ vi.mock("@/hooks/terminal/use-terminal-rename-for-mutation", () => ({
 
 vi.mock("@/hooks/epic/use-epic-record-mutation-client", () => ({
   useEpicRecordMutationClient: () => () => null,
+}));
+
+const deletedArtifacts = vi.hoisted(() => ({ available: false }));
+
+vi.mock("@/hooks/epic/use-deleted-artifacts-available", () => ({
+  useDeletedArtifactsAvailable: () => deletedArtifacts.available,
 }));
 
 const EPIC_ID = "epic-switcher-row-actions";
@@ -211,6 +225,7 @@ afterEach(() => {
   __getOpenEpicRegistryForTests().disposeAll();
   handle.store.getState().dispose();
   vi.clearAllMocks();
+  deletedArtifacts.available = false;
 });
 
 function Wrapper(props: { readonly children: ReactNode }): ReactNode {
@@ -232,7 +247,6 @@ describe("SwitcherRowActions terminal-agent delete", () => {
         kind="terminal-agent"
         nodeId={NODE_ID}
         name="Shared terminal agent"
-        cascadeSummary={null}
       />,
       { wrapper: Wrapper },
     );
@@ -291,7 +305,6 @@ describe("artifact export", () => {
         kind="artifact"
         nodeId={ARTIFACT_NODE_ID}
         name="Artifact One"
-        cascadeSummary={null}
       />,
       { wrapper: Wrapper },
     );
@@ -337,7 +350,6 @@ describe("artifact export", () => {
         kind="terminal-agent"
         nodeId={NODE_ID}
         name="Shared terminal agent"
-        cascadeSummary={null}
       />,
       { wrapper: Wrapper },
     );
@@ -362,7 +374,6 @@ describe("artifact export", () => {
         kind="artifact"
         nodeId={ARTIFACT_NODE_ID}
         name="Artifact One"
-        cascadeSummary={null}
       />,
       { wrapper: Wrapper },
     );
@@ -395,7 +406,6 @@ describe("artifact export", () => {
           kind="artifact"
           nodeId={ARTIFACT_NODE_ID}
           name="Artifact One"
-          cascadeSummary={null}
         />,
         { wrapper: Wrapper },
       );
@@ -413,4 +423,212 @@ describe("artifact export", () => {
       ).toBeNull();
     },
   );
+});
+
+/**
+ * The switcher reads the disclosure the sidebar reads, so these expect the
+ * sidebar's own sentences (`epic-sidebar-selection-mode.test.tsx`) for the same
+ * trees. The tree comes out of the real projector over the seeded slices.
+ */
+describe("delete disclosure", () => {
+  const CHILD_AGENT_ID = "agent-child";
+  const CHAT_ID = "chat-child";
+  const UNDONE = "This action cannot be undone.";
+
+  function seedTree(
+    artifacts: readonly ArtifactProjection[],
+    tuiAgents: readonly TuiAgentProjection[],
+    chats: readonly ChatProjection[],
+  ): void {
+    const artifactSlice = {
+      byId: Object.fromEntries(artifacts.map((entry) => [entry.id, entry])),
+      allIds: artifacts.map((entry) => entry.id),
+    };
+    const tuiSlice = {
+      byId: Object.fromEntries(tuiAgents.map((entry) => [entry.id, entry])),
+      allIds: tuiAgents.map((entry) => entry.id),
+    };
+    const chatSlice = {
+      byId: Object.fromEntries(chats.map((entry) => [entry.id, entry])),
+      allIds: chats.map((entry) => entry.id),
+    };
+    handle.store.setState({
+      artifacts: artifactSlice,
+      tuiAgents: tuiSlice,
+      chats: chatSlice,
+      tree: projectTreeSlice(artifactSlice, chatSlice, tuiSlice),
+    });
+  }
+
+  function chatProjection(parentId: string): ChatProjection {
+    return {
+      id: CHAT_ID,
+      title: "Chat under an artifact",
+      parentId,
+      createdAt: 1,
+      updatedAt: 2,
+      userId: VIEWER_ID,
+      ownedByViewer: true,
+      hostId: HOST_B,
+      isTitleEditedByUser: false,
+      docResident: false,
+      settings: null,
+      archivedAt: null,
+    };
+  }
+
+  function openDeleteDialog(
+    kind: "artifact" | "terminal-agent",
+    nodeId: string,
+  ): HTMLElement {
+    render(
+      <SwitcherRowActions
+        epicId={EPIC_ID}
+        tabId={tabId}
+        kind={kind}
+        nodeId={nodeId}
+        name="Row"
+      />,
+      { wrapper: Wrapper },
+    );
+    fireEvent.pointerDown(screen.getByTestId(`switcher-more-${nodeId}`), {
+      button: 0,
+    });
+    fireEvent.click(screen.getByTestId(`switcher-delete-${nodeId}`));
+    return screen.getByTestId("confirm-destructive-dialog");
+  }
+
+  function markBothListsAnswered(): void {
+    handle.store.getState().markChatRecordListAuthoritative();
+    handle.store.getState().markTuiAgentRecordListAuthoritative();
+  }
+
+  it("counts an artifact's subtree in the sidebar's sentence, whatever the agent lists have answered", () => {
+    seedTree(
+      [
+        artifactProjection({ id: ARTIFACT_NODE_ID, kind: "spec" }),
+        artifactProjection({
+          id: "ticket-child",
+          kind: "ticket",
+          parentId: ARTIFACT_NODE_ID,
+        }),
+      ],
+      [],
+      [],
+    );
+
+    const dialog = openDeleteDialog("artifact", ARTIFACT_NODE_ID);
+
+    expect(within(dialog).getByText(UNDONE)).toBeTruthy();
+    expect(within(dialog).getByTestId("confirm-cascade-meta").textContent).toBe(
+      "This will also delete 1 ticket nested under it.",
+    );
+  });
+
+  it("offers the restore in the sidebar's sentence where the host serves it", () => {
+    deletedArtifacts.available = true;
+    seedTree(
+      [
+        artifactProjection({ id: ARTIFACT_NODE_ID, kind: "spec" }),
+        artifactProjection({
+          id: "ticket-child",
+          kind: "ticket",
+          parentId: ARTIFACT_NODE_ID,
+        }),
+      ],
+      [],
+      [],
+    );
+
+    const dialog = openDeleteDialog("artifact", ARTIFACT_NODE_ID);
+
+    expect(
+      within(dialog).getByText(
+        "You can bring it back from Deleted artifacts. Artifacts nested under it come back separately.",
+      ),
+    ).toBeTruthy();
+    expect(within(dialog).getByTestId("confirm-cascade-meta").textContent).toBe(
+      "This will also delete 1 ticket nested under it.",
+    );
+  });
+
+  /**
+   * The delete leaves a chat standing when its `parentId` corruptly names the
+   * artifact. The switcher used to walk the raw `parentId` and promise to
+   * delete it. This pins the count at the consumer: the family rule itself is
+   * what the next case reads, since a chat is not an artifact kind either way.
+   */
+  it("promises no delete of an agent whose parent corruptly names the artifact", () => {
+    seedTree(
+      [artifactProjection({ id: ARTIFACT_NODE_ID, kind: "spec" })],
+      [],
+      [chatProjection(ARTIFACT_NODE_ID)],
+    );
+
+    const dialog = openDeleteDialog("artifact", ARTIFACT_NODE_ID);
+
+    expect(within(dialog).getByText(UNDONE)).toBeTruthy();
+    expect(within(dialog).queryByTestId("confirm-cascade-meta")).toBeNull();
+  });
+
+  /**
+   * The family rule: nothing walks through the chat, so the artifact beyond it
+   * is promoted to the root and survives. A walk through it would count a row
+   * the delete keeps.
+   */
+  it("promises no delete of an artifact reached only through a corrupt agent parent", () => {
+    seedTree(
+      [
+        artifactProjection({ id: ARTIFACT_NODE_ID, kind: "spec" }),
+        artifactProjection({
+          id: "ticket-beyond-chat",
+          kind: "ticket",
+          parentId: CHAT_ID,
+        }),
+      ],
+      [],
+      [chatProjection(ARTIFACT_NODE_ID)],
+    );
+
+    const dialog = openDeleteDialog("artifact", ARTIFACT_NODE_ID);
+
+    expect(within(dialog).queryByTestId("confirm-cascade-meta")).toBeNull();
+  });
+
+  it("states no agent count while only the terminal-agent list is unanswered", () => {
+    seedTree([], [tuiAgentProjection(HOST_B)], []);
+    handle.store.getState().markChatRecordListAuthoritative();
+
+    const dialog = openDeleteDialog("terminal-agent", NODE_ID);
+
+    expect(
+      within(dialog).getByText(
+        `${UNDONE} Any agents nested under it will be kept and moved to the top level.`,
+      ),
+    ).toBeTruthy();
+  });
+
+  it("states the count once both agent lists have answered", () => {
+    seedTree(
+      [],
+      [
+        tuiAgentProjection(HOST_B),
+        {
+          ...tuiAgentProjection(HOST_B),
+          id: CHILD_AGENT_ID,
+          parentId: NODE_ID,
+        },
+      ],
+      [],
+    );
+    markBothListsAnswered();
+
+    const dialog = openDeleteDialog("terminal-agent", NODE_ID);
+
+    expect(
+      within(dialog).getByText(
+        `${UNDONE} 1 agent nested under it will be kept and moved to the top level.`,
+      ),
+    ).toBeTruthy();
+  });
 });

@@ -621,16 +621,6 @@ vi.mock("@/lib/epic-selectors", () => ({
     };
   },
   useEpicArtifactRecords: () => testState.records,
-  // The bulk-delete controller mounts beside the panel body and asks whether
-  // the chat record list has answered, to decide whether its dialog may state
-  // a nested-agent COUNT or must name the consequence without one. Settled
-  // here: this suite is about where focus lands after a delete, and the
-  // disclosure's own two readings are covered in
-  // `epic-sidebar-selection-mode.test.tsx`. Both answers route focus
-  // identically, so the value cannot decide an assertion below - what matters
-  // is that the real `describeTreeDeleteDisclosure` runs rather than being
-  // mocked away.
-  useEpicChatRecordListAuthoritative: () => true,
   useEpicFileArtifactViewer: () => null,
   useEpicArtifactStatus: (artifactId: string) =>
     testState.tree.nodeById[artifactId]?.status ?? null,
@@ -663,6 +653,13 @@ function fakeEpicStoreState() {
     (record) => record.type === "terminal-agent",
   );
   return {
+    // Whether each agent record list has answered, which decides how the
+    // delete dialog words nested agents. Settled here: this suite is about
+    // where focus lands after a delete, both wordings route focus identically,
+    // and the disclosure's own readings are covered in
+    // `epic-sidebar-selection-mode.test.tsx`.
+    chatRecordListAuthoritative: true,
+    tuiAgentRecordListAuthoritative: true,
     snapshotLoaded: true,
     // The tree index, because the row-level tree reads subscribe HERE now
     // rather than through `useEpicTreeIndex`. A row that used to take the

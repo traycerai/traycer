@@ -324,6 +324,9 @@ export interface EpicReplicaRuntime {
   markChatRecordListAuthoritative(): void;
   /** Withdraw the record list's authority for a new viewer. */
   markChatRecordListNotAuthoritative(): void;
+  markTuiAgentRecordListAuthoritative(): void;
+  /** Withdraw the terminal-agent list's authority for a new viewer. */
+  markTuiAgentRecordListNotAuthoritative(): void;
   applyChatRecordDelta(delta: ChatRecordDelta): void;
   applyConfirmedChatMutation(mutation: ConfirmedChatMutation): void;
   applyTuiAgentRecords(
@@ -1642,6 +1645,12 @@ export function createEpicReplicaRuntime(
     },
     markChatRecordListAuthoritative: () => {
       records.markChatRecordListAuthoritative();
+    },
+    markTuiAgentRecordListNotAuthoritative: () => {
+      records.markTuiAgentRecordListNotAuthoritative();
+    },
+    markTuiAgentRecordListAuthoritative: () => {
+      records.markTuiAgentRecordListAuthoritative();
     },
     applyConfirmedChatMutation: (mutation) => {
       records.applyConfirmedChatMutation(mutation);

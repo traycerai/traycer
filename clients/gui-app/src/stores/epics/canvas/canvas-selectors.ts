@@ -146,6 +146,13 @@ export interface TileRefLivenessCheck {
   readonly hasLiveRecord: (id: string) => boolean;
   readonly isCloudKnown: (id: string) => boolean;
   readonly recordListAuthorizesChatAbsence: boolean;
+  /**
+   * Whether `epic.listTuiAgents` has answered, so a same-host terminal agent's
+   * absence is evidence. Its record lives in the host's registry and reaches
+   * this device on that list alone, so before the answer a missing row says
+   * nothing about the agent.
+   */
+  readonly recordListAuthorizesTuiAgentAbsence: boolean;
 }
 
 /**
@@ -203,6 +210,9 @@ export function isTileRefRecordLive(
   }
   if (pendingCreateArtifactIds.has(ref.id)) return true;
   if (hasLiveRecord(ref.id)) return true;
+  if (ref.type === "terminal-agent") {
+    return !liveness.recordListAuthorizesTuiAgentAbsence;
+  }
   if (ref.type !== "chat") return false;
   if (isCloudKnown(ref.id)) return true;
   return !liveness.recordListAuthorizesChatAbsence;

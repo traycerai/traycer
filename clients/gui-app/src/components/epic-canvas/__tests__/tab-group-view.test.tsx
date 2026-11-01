@@ -148,6 +148,7 @@ interface TestState {
   cloudListState: "pending" | "success" | "error" | "unsupported";
   /** Whether `epic.listChatRecords` has answered for this epic session. */
   chatRecordListAuthoritative: boolean;
+  tuiAgentRecordListAuthoritative: boolean;
   /**
    * Per-chat record-plane retraction, as `useEpicChatRetraction` reads it off
    * `OpenEpicState.chatRetractions` (multi-host-chats record layer). Unlisted
@@ -176,6 +177,7 @@ const testState = vi.hoisted((): TestState => ({
   cloudKnownChatIds: new Set(),
   cloudListState: "success",
   chatRecordListAuthoritative: true,
+  tuiAgentRecordListAuthoritative: true,
   chatRetractionByChatId: new Map(),
   directoryEntries: new Map(),
   poolConfigured: false,
@@ -272,6 +274,8 @@ vi.mock("@/lib/epic-selectors", () => ({
   useEpicSnapshotLoaded: () => true,
   useEpicChatRecordListAuthoritative: () =>
     testState.chatRecordListAuthoritative,
+  useEpicTuiAgentRecordListAuthoritative: () =>
+    testState.tuiAgentRecordListAuthoritative,
   useMaybeEpicTuiAgentHarnessId: () => null,
   useRegisteredEpicActiveAgentIds: () => new Set<string>(),
   useRegisteredEpicNodeArchived: () => false,
@@ -1012,6 +1016,7 @@ describe("<TabGroupView /> stable tile surface host routing (switch ON)", () => 
     testState.cloudKnownChatIds.clear();
     testState.cloudListState = "success";
     testState.chatRecordListAuthoritative = true;
+    testState.tuiAgentRecordListAuthoritative = true;
     testState.chatRetractionByChatId.clear();
     testState.sessionHostId = null;
     testState.stableTileSurfaceHostEnabled = false;
@@ -1471,6 +1476,7 @@ describe("<TabGroupView /> published-copy fallback for an unreachable bound host
     testState.cloudKnownChatIds.clear();
     testState.cloudListState = "success";
     testState.chatRecordListAuthoritative = true;
+    testState.tuiAgentRecordListAuthoritative = true;
     testState.chatRetractionByChatId.clear();
     testState.sessionHostId = null;
     testState.stableTileSurfaceHostEnabled = false;
@@ -1778,6 +1784,7 @@ describe("<TabGroupView /> published-copy fallback for a same-host chat with no 
     testState.cloudKnownChatIds.clear();
     testState.cloudListState = "success";
     testState.chatRecordListAuthoritative = true;
+    testState.tuiAgentRecordListAuthoritative = true;
     testState.chatRetractionByChatId.clear();
     testState.sessionHostId = null;
   });
@@ -1995,6 +2002,34 @@ describe("<TabGroupView /> published-copy fallback for a same-host chat with no 
     ).toBeNull();
   });
 
+  it("keeps a same-host terminal agent's surface until its own list answers", async () => {
+    testState.missingArtifactIds.add(TERMINAL_AGENT.id);
+    testState.sessionHostId = TERMINAL_AGENT.hostId;
+    testState.tuiAgentRecordListAuthoritative = false;
+    seedCanvas([TERMINAL_AGENT], TERMINAL_AGENT.instanceId);
+    const { container, rerender } = render(
+      groupView([TERMINAL_AGENT], TERMINAL_AGENT.instanceId, true),
+    );
+
+    await waitFor(() => {
+      expect(
+        container.querySelector(`[data-testid="tile-${TERMINAL_AGENT.id}"]`),
+      ).not.toBeNull();
+    });
+    expect(
+      container.querySelector('[data-testid="deleted-node-body"]'),
+    ).toBeNull();
+
+    testState.tuiAgentRecordListAuthoritative = true;
+    rerender(groupView([TERMINAL_AGENT], TERMINAL_AGENT.instanceId, true));
+
+    await waitFor(() => {
+      expect(
+        container.querySelector('[data-testid="deleted-node-body"]'),
+      ).not.toBeNull();
+    });
+  });
+
   it("does not convict a chat while the active host identity is unresolved", async () => {
     testState.missingArtifactIds.add(CHAT.id);
     testState.sessionHostId = null;
@@ -2088,6 +2123,7 @@ describe("<TabGroupView /> open-tab retraction from the record plane", () => {
     testState.cloudKnownChatIds.clear();
     testState.cloudListState = "success";
     testState.chatRecordListAuthoritative = true;
+    testState.tuiAgentRecordListAuthoritative = true;
     testState.chatRetractionByChatId.clear();
     testState.sessionHostId = null;
     testState.stableTileSurfaceHostEnabled = false;
