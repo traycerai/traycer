@@ -211,11 +211,12 @@ describe.skipIf(process.platform === "win32")("doctor, CLI on PATH", () => {
   // probe gives up at its deadline.
   it("gives up on a binary that ignores the timeout", async () => {
     const other = join(dir, "bin/traycer");
-    placeScript(other, "trap '' TERM\n/bin/sleep 30");
+    // `exec`, so the kill leaves no sleeper behind.
+    placeScript(other, "trap '' TERM\nexec /bin/sleep 30");
 
     expect(await pathIssue(dirname(other))).toBeUndefined();
     expect(ran(other)).toBe(true);
-  }, 15_000);
+  }, 8_000);
 
   it("stays silent when the managed CLI cannot name its version", async () => {
     placeScript(managedBinary, "exit 1");

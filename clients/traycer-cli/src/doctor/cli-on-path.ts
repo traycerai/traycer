@@ -57,8 +57,8 @@ async function reportedVersion(binary: string): Promise<string | null> {
     const { stdout } = await execFileAsync(binary, ["--version"], {
       encoding: "utf8",
       timeout: CLI_VERSION_TIMEOUT_MS,
-      // SIGKILL: under Bun a child that ignores SIGTERM holds this call for as
-      // long as it lives, however short the timeout.
+      // SIGKILL: a child that ignores SIGTERM holds this call for as long as it
+      // lives, however short the timeout.
       killSignal: "SIGKILL",
       windowsHide: true,
     });
