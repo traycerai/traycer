@@ -937,6 +937,13 @@ describe("useStagedSandboxSend's line after a refusal", () => {
   });
 });
 
+/** A failed line makes no claim about what was or wasn't charged. */
+function expectNoFailureCostSentence(text: string): void {
+  expect(text).not.toContain("Compute is charged while it is awake.");
+  expect(text).not.toContain("Nothing was charged");
+  expect(text).not.toContain("Nothing was billed");
+}
+
 describe("useStagedSandboxSend's setup line prices and names what it stages", () => {
   function stageExisting(): void {
     stageCreated("booting", null);
@@ -1018,7 +1025,7 @@ describe("useStagedSandboxSend's setup line prices and names what it stages", ()
   });
 
   it.each(["applying", "delivering"] as const)(
-    "says compute is charged while it is awake when the sandbox failed at %s, not that nothing was billed",
+    "says no cost sentence at all when the sandbox failed at %s",
     (step) => {
       stageExisting();
       useStagedSandboxStore.getState().report(SURFACE, {
@@ -1028,13 +1035,11 @@ describe("useStagedSandboxSend's setup line prices and names what it stages", ()
       });
       mount(vi.fn());
 
-      const text = shownDetail();
-      expect(text).toContain("Compute is charged while it is awake.");
-      expect(text).not.toContain("Nothing was");
+      expectNoFailureCostSentence(shownDetail());
     },
   );
 
-  it("still says nothing was billed for a sandbox that failed before it woke", () => {
+  it("says no cost sentence for a resume that failed before it woke", () => {
     stageExisting();
     useStagedSandboxStore.getState().report(SURFACE, {
       failure: {
@@ -1045,7 +1050,20 @@ describe("useStagedSandboxSend's setup line prices and names what it stages", ()
     });
     mount(vi.fn());
 
-    expect(shownDetail()).toContain("Nothing was charged for this wake.");
+    expectNoFailureCostSentence(shownDetail());
+  });
+
+  it("says exactly that the message is still pending, and no cost, for a create that failed before it woke", () => {
+    stageCreated("creating", {
+      kind: "failed",
+      code: "PROVIDER_CREATE_FAILED",
+      step: "creating",
+    });
+    mount(vi.fn());
+
+    const text = shownDetail();
+    expect(text).toContain("Your message is still pending.");
+    expectNoFailureCostSentence(text);
   });
 
   it("never prints the id of a region the catalogue does not list in the shape refusal", () => {

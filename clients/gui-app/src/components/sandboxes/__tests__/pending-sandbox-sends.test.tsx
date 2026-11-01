@@ -5817,6 +5817,7 @@ describe("a send whose sandbox left awake on its own after the create timed out"
       "build-box is stopped. Your message wasn't sent; it's saved in your drafts.",
     );
     expect(line.textContent).not.toContain("is suspended");
+    expect(line.textContent).not.toContain("Stopped build-box.");
     expect(
       within(line).getByRole("button", { name: "Open draft" }),
     ).toBeDefined();
@@ -8400,6 +8401,8 @@ describe("choosing Stop on an unclaimed send", () => {
     expect(useNewConversationModalOpenStore.getState().request).toBeNull();
     expect(mocks.openTile).not.toHaveBeenCalled();
     expect(document.body.textContent).toContain(SAVED_DRAFT_RECEIPT);
+    // A Stop the person confirmed says "Stopped", never the state footer.
+    expect(document.body.textContent).not.toContain("api-refactor is stopped");
     expect(screen.getByRole("button", { name: "Open draft" })).toBeDefined();
     expect(screen.getByRole("button", { name: "Start" })).toBeDefined();
     expect(
