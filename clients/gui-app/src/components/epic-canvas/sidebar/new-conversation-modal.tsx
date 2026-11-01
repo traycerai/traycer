@@ -1262,7 +1262,7 @@ export function NewConversationModalBody(props: {
     unstagedHostId,
     openTerminalInstead,
   );
-  useNewConversationReturnedSandbox(epicId, hostId);
+  const draftHoldsSandbox = useNewConversationReturnedSandbox(epicId, hostId);
   const workspaceGate = useStagedWorkspaceGate(
     stagingSurfaceKey(sandboxStaging),
     workspaceAvailability,
@@ -2542,6 +2542,7 @@ export function NewConversationModalBody(props: {
         surfaceKey={stagingSurfaceKey(sandboxStaging)}
         hostId={resolvedHostId}
         named={hostId !== null}
+        draftHoldsSandbox={draftHoldsSandbox}
       />
       <ComposerBody
         pickerStore={pickerStore}

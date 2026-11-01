@@ -14,6 +14,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { JsonContent } from "@traycer/protocol/common/registry";
+import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
 
 import type { ComposerBodyProps } from "@/components/home/composer/composer-body";
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
@@ -353,6 +354,7 @@ import { SurfacePresentationBoundary } from "@/components/layout/surface-present
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { createComposerPickerStore } from "@/components/chat/composer/picker/composer-picker-store";
 import { createAppQueryClient } from "@/lib/query-client";
+import { sandboxQueryKeys } from "@/lib/query-keys";
 import { NewConversationModalBody } from "../new-conversation-modal";
 import { NewConversationTransientContext } from "../new-conversation-transient-context";
 import { chipModelName } from "@/stores/composer/composer-toolbar-store";
@@ -381,12 +383,26 @@ const PICK: ChatRunSettings = {
   profileId: null,
 };
 
+// A sandbox an earlier Send of this draft gave back, under its accepted key.
+const RETURNED = {
+  userId: "user-a",
+  target: {
+    kind: "existing",
+    hostId: "host-returned",
+    sandboxId: "sbx_returned",
+    name: "Returned box",
+    configuration: { kind: "personal" },
+    verb: "start",
+  },
+  clientRequestId: "accepted-create-key",
+} as const;
+
 const DIRTY_CONTENT: JsonContent = {
   type: "doc",
   content: [{ type: "paragraph", content: [{ type: "text", text: "dirty" }] }],
 };
 
-function Harness() {
+function Harness({ hostId }: { readonly hostId: string | null }) {
   const [transient] = useState(() => ({
     pickerStore: createComposerPickerStore(),
   }));
@@ -401,7 +417,7 @@ function Harness() {
               tabId="tab-1"
               placement={null}
               parentId={null}
-              hostId={null}
+              hostId={hostId}
               dismissPickerRef={dismissPickerRef}
               onSubmitted={vi.fn()}
             />
@@ -417,8 +433,35 @@ function QueryWrapper({ children }: { readonly children: ReactNode }) {
   return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
 }
 
+function restingSandboxSummary(): SandboxSummary {
+  return sandboxSummaryFixture({
+    id: "sbx_rest",
+    hostId: "host-a",
+    displayName: "Laptop box",
+    state: "suspended",
+  });
+}
+
+/** The sandbox list already answered, so the resting stage can land on mount. */
+function ListCachedQueryWrapper({
+  children,
+}: {
+  readonly children: ReactNode;
+}) {
+  const [client] = useState(() => {
+    const queryClient = createAppQueryClient();
+    if (host.binding !== null)
+      queryClient.setQueryData(
+        sandboxQueryKeys.list(host.binding.auth, "user-a"),
+        { sandboxes: [restingSandboxSummary()] },
+      );
+    return queryClient;
+  });
+  return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
+}
+
 function renderModal(): RenderResult {
-  return render(<Harness />, { wrapper: QueryWrapper });
+  return render(<Harness hostId={null} />, { wrapper: QueryWrapper });
 }
 
 function editorHandle(): ComposerPromptEditorHandle {
@@ -468,16 +511,7 @@ beforeEach(() => {
   host.binding.auth.listSandboxes.mockImplementation(() =>
     Promise.resolve({
       kind: "ok",
-      response: {
-        sandboxes: [
-          sandboxSummaryFixture({
-            id: "sbx_rest",
-            hostId: "host-a",
-            displayName: "Laptop box",
-            state: "suspended",
-          }),
-        ],
-      },
+      response: { sandboxes: [restingSandboxSummary()] },
     }),
   );
   usePendingSandboxSendStore.setState({ sends: {} });
@@ -575,6 +609,80 @@ describe("a new-conversation modal on a host that rests", () => {
       model: "trc-s",
     });
     expect(host.createChat).not.toHaveBeenCalled();
+  });
+
+  it("restores the draft's returned sandbox ahead of the resting host, and Send adopts its create key", async () => {
+    pickTraycer("trc-s");
+    cloudLists("trc-s");
+    useNewConversationModalStore
+      .getState()
+      .setReturnedSandbox(EPIC_ID, RETURNED);
+    render(<Harness hostId={null} />, { wrapper: ListCachedQueryWrapper });
+    await waitFor(() =>
+      expect(toolbar().getState().sandboxRunTarget).toBe("staged"),
+    );
+    act(() => {
+      host.installEditor?.();
+    });
+
+    act(() => {
+      host.bodySubmit?.();
+    });
+
+    await waitFor(() =>
+      expect(
+        Object.keys(usePendingSandboxSendStore.getState().sends),
+      ).toHaveLength(1),
+    );
+    const pending = Object.values(
+      useStagedSandboxStore.getState().bySurface,
+    ).find((stage) => stage?.sendTaken);
+    expect(pending).toMatchObject({
+      target: { hostId: "host-returned" },
+      clientRequestId: "accepted-create-key",
+    });
+  });
+
+  it("stages the resting host once the draft forgets its returned sandbox", async () => {
+    pickTraycer("trc-s");
+    cloudLists("trc-s");
+    useNewConversationModalStore
+      .getState()
+      .setReturnedSandbox(EPIC_ID, RETURNED);
+    render(<Harness hostId={null} />, { wrapper: ListCachedQueryWrapper });
+    await waitFor(() =>
+      expect(readStagedSandbox(SURFACE)?.target).toMatchObject({
+        hostId: "host-returned",
+      }),
+    );
+
+    act(() => {
+      useNewConversationModalStore.getState().setReturnedSandbox(EPIC_ID, null);
+    });
+
+    await waitFor(() =>
+      expect(readStagedSandbox(SURFACE)?.target).toMatchObject({
+        hostId: "host-a",
+      }),
+    );
+  });
+
+  it("stages the host a modal names, whatever sandbox the task's draft holds", async () => {
+    pickTraycer("trc-s");
+    cloudLists("trc-s");
+    useNewConversationModalStore
+      .getState()
+      .setReturnedSandbox(EPIC_ID, RETURNED);
+    render(<Harness hostId="host-a" />, { wrapper: ListCachedQueryWrapper });
+
+    await waitFor(() =>
+      expect(toolbar().getState().sandboxRunTarget).toBe("staged"),
+    );
+    expect(
+      Object.values(useStagedSandboxStore.getState().bySurface).map(
+        (stage) => stage?.target,
+      ),
+    ).toEqual([expect.objectContaining({ hostId: "host-a" })]);
   });
 
   it("reads no sandbox list and stages nothing on a host that is awake", async () => {
