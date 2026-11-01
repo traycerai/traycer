@@ -337,10 +337,14 @@ export const EXPECTED_CLI_ERROR_CODES: ReadonlySet<CliErrorCode> =
     // HOST_UPDATE_ATTEMPT_ACTIVE above. Contention is a schedule, not a
     // fault.
     CLI_ERROR_CODES.HOST_UPDATE_CONCURRENT_LEGACY_UPDATER,
-    // The update SUCCEEDED; only the attempt record's completion write was
-    // refused, and the next run concludes the record. Reporting a run that
-    // delivered exactly what was asked would be reporting its bookkeeping.
-    CLI_ERROR_CODES.HOST_UPDATE_RECORD_NOT_CONCLUDED,
+    // NOT here, and deliberately: HOST_UPDATE_RECORD_NOT_CONCLUDED. The run
+    // did deliver the update, so classifying it expected looks right from the
+    // message - but one code carries BOTH refusal kinds that arm reports
+    // (`update-run.ts`), and `durability-unverified` is the medium itself
+    // being broken: a symlinked record path, a roundtrip mismatch. That is a
+    // machine fault and has to reach Sentry. Quieting the `rejected` half
+    // needs the two kinds to carry two codes, which is a change to that arm
+    // rather than to this set.
     CLI_ERROR_CODES.HOST_CLIENT_FLOOR_UNMET,
     CLI_ERROR_CODES.HOST_STORE_FORMAT_FLOOR,
     CLI_ERROR_CODES.AGENT_NOT_FOUND,

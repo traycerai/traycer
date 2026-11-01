@@ -280,6 +280,102 @@ describe("runDoctor pending CLI upgrade surface", () => {
     });
   });
 
+  // The ordering has to outrank a MATCHING `swap-failed` marker, because the
+  // superseded path itself writes one: when it hands the host back and the
+  // service will not start, `cli finalize-upgrade` records that failure in the
+  // marker, carrying the same two paths the pending record has. Without this
+  // precedence the marker branch ran first and reported
+  // `CLI_UPGRADE_FINALIZE_FAILED` with a host-restart fix - a repair for a
+  // swap that was never attempted and that the floor would refuse again. The
+  // service-start failure still has to reach the reader, so it is asserted on
+  // the card that does get rendered.
+  it("gives the ordering precedence over a matching swap-failed marker, and keeps its service-start error", async () => {
+    stageDoctorMocks();
+    const liveBinaryPath = join(workHome, "bin", "traycer");
+    const stagedBinaryPath = join(workHome, "bin", "traycer-1.5.1");
+    mkdirSync(join(workHome, "bin"), { recursive: true });
+    writePendingManifest({
+      installedVersion: "1.5.2-rc.2",
+      version: "1.5.1",
+      stagedBinaryPath,
+      liveBinaryPath,
+      stagedExists: true,
+    });
+    const markerPath = join(workHome, ".traycer", "cli", "post-finalize.json");
+    writeFileSync(
+      markerPath,
+      JSON.stringify({
+        status: "swap-failed",
+        attemptedAt: "2026-05-11T00:00:00Z",
+        livePath: liveBinaryPath,
+        stagedBinaryPath,
+        errorMessage:
+          "staged cli 1.5.1 was not installed over the newer installed 1.5.2-rc.2",
+        serviceStartError: "launchctl kickstart failed: Input/output error",
+      }),
+    );
+
+    const { runDoctor } = await import("../engine");
+    const result = await runDoctor({
+      environment: "production",
+      portConflictDeps: null,
+    });
+
+    expect(
+      result.issues.find((i) => i.code === "CLI_UPGRADE_FINALIZE_FAILED"),
+    ).toBeUndefined();
+    const issue = result.issues.find((i) => i.code === "CLI_UPGRADE_PENDING");
+    expect(issue?.title).toBe("CLI upgrade staged but superseded (1.5.1)");
+    expect(issue?.fixAction).toBeNull();
+    expect(issue?.message).toContain("Input/output error");
+    expect(issue?.details?.serviceStartError).toBe(
+      "launchctl kickstart failed: Input/output error",
+    );
+  });
+
+  // A matching `swapped` marker is the one that still outranks the ordering:
+  // the swap HAPPENED, so the pending record is settled history and comparing
+  // its version against the install says nothing about what to do next.
+  it("still lets a matching swapped marker outrank the ordering", async () => {
+    stageDoctorMocks();
+    const liveBinaryPath = join(workHome, "bin", "traycer");
+    const stagedBinaryPath = join(workHome, "bin", "traycer-1.5.1");
+    mkdirSync(join(workHome, "bin"), { recursive: true });
+    writePendingManifest({
+      installedVersion: "1.5.2-rc.2",
+      version: "1.5.1",
+      stagedBinaryPath,
+      liveBinaryPath,
+      stagedExists: true,
+    });
+    writeFileSync(
+      join(workHome, ".traycer", "cli", "post-finalize.json"),
+      JSON.stringify({
+        status: "swapped",
+        attemptedAt: "2026-05-11T00:00:00Z",
+        livePath: liveBinaryPath,
+        stagedBinaryPath,
+        errorMessage: null,
+        serviceStartError: null,
+      }),
+    );
+
+    const { runDoctor } = await import("../engine");
+    const result = await runDoctor({
+      environment: "production",
+      portConflictDeps: null,
+    });
+
+    expect(
+      result.issues.find(
+        (i) => i.code === "CLI_UPGRADE_FINALIZED_UNRECONCILED",
+      ),
+    ).toBeDefined();
+    expect(
+      result.issues.find((i) => i.code === "CLI_UPGRADE_PENDING"),
+    ).toBeUndefined();
+  });
+
   it("emits CLI_UPGRADE_PENDING with null fixAction when staged binary is missing", async () => {
     stageDoctorMocks();
     const liveBinaryPath = join(workHome, "bin", "traycer");

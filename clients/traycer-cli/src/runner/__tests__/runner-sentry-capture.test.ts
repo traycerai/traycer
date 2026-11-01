@@ -297,12 +297,6 @@ describe("runner Sentry capture", () => {
       expected: "E_HOST_UPDATE_CONCURRENT_LEGACY_UPDATER",
       message: "host update: a legacy updater is holding the update marker",
     },
-    {
-      key: "HOST_UPDATE_RECORD_NOT_CONCLUDED" as const,
-      expected: "E_HOST_UPDATE_RECORD_NOT_CONCLUDED",
-      message:
-        "host update: 1.5.1 is installed and the host is running it. The update itself is done - only the completion write for the attempt record was refused.",
-    },
   ])(
     "does not capture the user-controlled refusal $expected",
     async ({ key, expected, message }) => {
@@ -332,6 +326,36 @@ describe("runner Sentry capture", () => {
       expect(process.exitCode).toBe(1);
     },
   );
+
+  // The near miss of that sweep, pinned so the next one does not repeat it.
+  // This code reads like a user-controlled outcome - the update DID land, and
+  // only the attempt record's completion write was refused - but the arm that
+  // raises it carries two refusal kinds under one code, and
+  // `durability-unverified` means the record's medium is broken (a symlinked
+  // path, a roundtrip mismatch). So the code as a whole is a machine fault
+  // and has to keep reaching Sentry. Quieting the other half means giving the
+  // two kinds two codes, not adding this one to the expected set.
+  it("captures the not-concluded update record, which can mean the record's medium is broken", async () => {
+    const { CLI_ERROR_CODES, CliError } = await import("../errors");
+    const err = new CliError({
+      code: CLI_ERROR_CODES.HOST_UPDATE_RECORD_NOT_CONCLUDED,
+      message:
+        "host update: 1.5.1 is installed and the host is running it. The update itself is done - only the completion write for the attempt record was refused.",
+      details: { outcome: "durability-unverified" },
+      exitCode: 1,
+    });
+
+    await runThrowing(err);
+
+    expect(sentryMocks.captureException).toHaveBeenCalledWith(err, {
+      extra: { repeatsSinceLastReport: 0 },
+    });
+    expect(sentryMocks.addBreadcrumb).not.toHaveBeenCalled();
+    // The caller still gets the full answer; capture is a separate decision.
+    const reported = terminalEnvelope()?.error as Record<string, unknown>;
+    expect(reported.code).toBe("E_HOST_UPDATE_RECORD_NOT_CONCLUDED");
+    expect(process.exitCode).toBe(1);
+  });
 
   it("leaves a breadcrumb naming the skipped code", async () => {
     const { CLI_ERROR_CODES, CliError } = await import("../errors");

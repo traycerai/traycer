@@ -727,6 +727,30 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
     const stagedExists = await pendingUpgradeFinalisable({
       stagedBinaryPath: pendingUpgrade.pending.stagedBinaryPath,
     });
+    const supersededByOrdering = wouldDowngradeCli({
+      installedVersion: pendingUpgrade.currentVersion,
+      candidateVersion: pendingUpgrade.pending.version,
+    });
+    // ...with ONE exception, and it is the superseded record's own marker.
+    // When `cli finalize-upgrade` declines a staged version below the install
+    // it still hands the host back, and a service that will not start is
+    // recorded in the marker - carrying the same two paths the pending record
+    // has, so `markerDescribesUpgrade` matches it. Believing that marker
+    // reported `CLI_UPGRADE_FINALIZE_FAILED` with a host-restart fix: a
+    // repair for a swap that was never attempted, and that the floor refuses
+    // again on the next restart. The ordering is the governing fact there.
+    //
+    // It is narrowed to `swap-failed` on purpose. A matching `swapped` marker
+    // says the swap HAPPENED, which makes the pending record settled history
+    // and its version ordering moot - that marker keeps precedence. The
+    // service-start failure is not lost either way: the superseded card
+    // appends the same `serviceStartError` to its own message, which is why
+    // `markerCoveredByPendingCard` above is keyed on identity rather than on
+    // which branch ends up reporting.
+    const supersededOverFailedMarker =
+      supersededByOrdering &&
+      finalizeMarker.status === "present" &&
+      finalizeMarker.marker.status === "swap-failed";
     const settled = postFinalizeMarkerIssue(
       finalizeMarker,
       {
@@ -738,7 +762,7 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
       },
       stagedExists,
     );
-    if (settled !== null) {
+    if (settled !== null && !supersededOverFailedMarker) {
       issues.push(settled);
     } else if (!stagedExists) {
       // The staged binary has been deleted out from under the manifest
@@ -771,12 +795,7 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
           serviceStartError: pendingMarkerServiceStartError,
         },
       });
-    } else if (
-      wouldDowngradeCli({
-        installedVersion: pendingUpgrade.currentVersion,
-        candidateVersion: pendingUpgrade.pending.version,
-      })
-    ) {
+    } else if (supersededByOrdering) {
       // STALE: the staged binary is below the installed version, so the
       // swap will never happen - `finalizePendingCliUpgrade` reads the same
       // ordering and declines it. Reported from the record AND the
@@ -797,6 +816,15 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
       // proxy `cli upgrade` - the same constraint the missing-binary branch
       // states. The terminal command is the explicit two-flag form, so a
       // reader who DID want that version has the way through.
+      //
+      // The message says "while the release feed still serves it" and stops
+      // there. The feed publishes exactly one build and `--target` cannot
+      // resolve a historical version, so this card - read at whatever later
+      // time the person runs `doctor` - cannot promise the command will
+      // succeed. The one condition is stated; the fallback is not spelled
+      // out again here, because the refusal the reader would actually hit
+      // (`E_CLI_UPGRADE_TARGET_UNAVAILABLE`) already names installing by
+      // hand and recording it with `cli re-anchor`.
       issues.push({
         code: DOCTOR_ISSUE_CODES.CLI_UPGRADE_PENDING,
         severity: "warning",
@@ -805,8 +833,9 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
           `cli upgrade staged ${pendingUpgrade.pending.version} at ` +
           `${pendingUpgrade.pending.stagedBinaryPath}, but the installed cli is ` +
           `${pendingUpgrade.currentVersion}, which is newer. The swap will not be ` +
-          `applied. Run 'traycer cli upgrade --target ${pendingUpgrade.pending.version} ` +
-          `--allow-downgrade' to install ${pendingUpgrade.pending.version} anyway.` +
+          `applied. To install ${pendingUpgrade.pending.version} anyway, run ` +
+          `'traycer cli upgrade --target ${pendingUpgrade.pending.version} ` +
+          "--allow-downgrade' while the release feed still serves it." +
           (pendingMarkerServiceStartError === null
             ? ""
             : ` The finalize helper also could not restart the host service: ${pendingMarkerServiceStartError}`),

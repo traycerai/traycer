@@ -423,6 +423,14 @@ async function runFinalizeUpgradeSwapWithStart(
     // `swap-failed` marker written unconditionally would report one. It
     // leaves `pendingUpgrade` standing either way, which is what this
     // outcome wants - the staged record is superseded, not wrong.
+    //
+    // The marker keeps both paths, so `markerDescribesUpgrade` MATCHES the
+    // pending record it was written beside. That is why doctor gives the
+    // version ordering precedence over a matching `swap-failed` marker: left
+    // alone it reported this state as a failed finalization with a
+    // host-restart fix. The identity is kept rather than blanked because the
+    // alternative - the empty-path marker the no-pending branch writes - is
+    // read as "no pending CLI upgrade remained", which is not true here.
     const serviceStartError = await startServiceBestEffort(
       startService,
       opts.environment,
