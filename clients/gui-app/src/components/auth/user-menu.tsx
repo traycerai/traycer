@@ -1,5 +1,4 @@
 import { useColumnOverlayPlacement } from "@/components/layout/column-edge-context";
-import { SignOutConfirmDialog } from "@/components/auth/sign-out-confirm-dialog";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import {
@@ -31,6 +30,7 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { useIsTextTruncated } from "@/hooks/ui/use-is-text-truncated";
 import { computeInitials } from "@/lib/auth/compute-initials";
 import { usePlatformBillingUrl } from "@/hooks/auth/use-platform-billing-url";
+import { useSignOutConfirmStore } from "@/stores/auth/sign-out-confirm-store";
 import { useTitleBarDragSuppression } from "@/stores/layout/title-bar-drag-store";
 import { getSystemTabModalApi } from "@/stores/tabs/system-tab-modal-bridge";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
@@ -90,153 +90,141 @@ export function UserMenu(props: UserMenuProps) {
   const placement = useColumnOverlayPlacement("foot");
   const openLink = useOpenLink();
   const [open, setOpen] = useState<boolean>(false);
-  const [signOutOpen, setSignOutOpen] = useState<boolean>(false);
   const settingsChord = useBindingForAction("app.settings.open");
   useTitleBarDragSuppression("user-menu", open);
   const manageSubscriptionUrl = usePlatformBillingUrl();
   return (
-    <>
-      {/* Outside the menu, which Radix unmounts on select - the confirm has to
-          outlive the item that opened it. */}
-      <SignOutConfirmDialog
-        open={signOutOpen}
-        onOpenChange={setSignOutOpen}
-        onConfirm={() => {
-          setOpen(false);
-        }}
-      />
-      <DropdownMenu open={open} onOpenChange={setOpen}>
-        <TooltipWrapper
-          label={open ? null : props.userName}
-          side={placement?.side ?? "top"}
-          sideOffset={6}
-          align={placement?.align}
-        >
-          <DropdownMenuTrigger asChild>
-            {props.trigger ?? (
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                aria-label="Open user menu"
-                // Non-editable chrome, dimmed while a layout session is live (4.2).
-                data-layout-passive
-                data-testid="user-menu-trigger"
-                className="rounded-full"
-                onClick={() => {
-                  setOpen((value) => !value);
-                }}
-              >
-                <UserMenuAvatar
-                  userName={props.userName}
-                  email={props.email}
-                  avatarUrl={props.avatarUrl}
-                />
-              </Button>
-            )}
-          </DropdownMenuTrigger>
-        </TooltipWrapper>
-        <DropdownMenuContent
-          side={placement?.side}
-          align={placement?.align ?? "end"}
-          sideOffset={6}
-          // A menu's width, whatever a host is called: long names truncate
-          // in their rows and read in full from a tooltip.
-          className="w-max max-w-64 whitespace-nowrap"
-          data-testid="user-menu-content"
-        >
-          <div
-            className="flex flex-col gap-0.5 px-1.5 py-1"
-            data-testid="user-menu-identity"
-          >
-            <span className="truncate text-ui-sm font-medium text-foreground">
-              {props.userName}
-            </span>
-            <span className="truncate text-ui-xs text-muted-foreground">
-              {props.email}
-            </span>
-          </div>
-          <DropdownMenuSeparator />
-          <UserMenuHostSection tooltipSide={placement?.side ?? "left"} />
-          <DropdownMenuItem
-            onSelect={() => {
-              setOpen(false);
-              useDesktopDialogStore.getState().openDrafts("menu");
-            }}
-          >
-            <LayersPlus className="size-3.5" />
-            Drafts
-          </DropdownMenuItem>
-          {props.showAppSettings ? (
-            <DropdownMenuItem
-              data-testid="user-menu-app-settings"
-              onSelect={() => {
-                setOpen(false);
-                Analytics.getInstance().track(AnalyticsEvent.SettingsOpened, {
-                  source: "direct_ui",
-                  section: "general",
-                });
-                getSystemTabModalApi()?.openSettings({
-                  section: null,
-                  resetToGeneral: true,
-                  tab: null,
-                  draft: null,
-                  hostId: null,
-                });
+    <DropdownMenu open={open} onOpenChange={setOpen}>
+      <TooltipWrapper
+        label={open ? null : props.userName}
+        side={placement?.side ?? "top"}
+        sideOffset={6}
+        align={placement?.align}
+      >
+        <DropdownMenuTrigger asChild>
+          {props.trigger ?? (
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label="Open user menu"
+              // Non-editable chrome, dimmed while a layout session is live (4.2).
+              data-layout-passive
+              data-testid="user-menu-trigger"
+              className="rounded-full"
+              onClick={() => {
+                setOpen((value) => !value);
               }}
             >
-              <Settings className="size-3.5" />
-              App settings
-              {settingsChord === null ? null : (
-                <DropdownMenuShortcut>
-                  {formatChordForDisplay(settingsChord)}
-                </DropdownMenuShortcut>
-              )}
-            </DropdownMenuItem>
-          ) : null}
-          {/* Withheld in the installed mobile app: App Store guideline 3.1.1
+              <UserMenuAvatar
+                userName={props.userName}
+                email={props.email}
+                avatarUrl={props.avatarUrl}
+              />
+            </Button>
+          )}
+        </DropdownMenuTrigger>
+      </TooltipWrapper>
+      <DropdownMenuContent
+        side={placement?.side}
+        align={placement?.align ?? "end"}
+        sideOffset={6}
+        // A menu's width, whatever a host is called: long names truncate
+        // in their rows and read in full from a tooltip.
+        className="w-max max-w-64 whitespace-nowrap"
+        data-testid="user-menu-content"
+      >
+        <div
+          className="flex flex-col gap-0.5 px-1.5 py-1"
+          data-testid="user-menu-identity"
+        >
+          <span className="truncate text-ui-sm font-medium text-foreground">
+            {props.userName}
+          </span>
+          <span className="truncate text-ui-xs text-muted-foreground">
+            {props.email}
+          </span>
+        </div>
+        <DropdownMenuSeparator />
+        <UserMenuHostSection tooltipSide={placement?.side ?? "left"} />
+        <DropdownMenuItem
+          onSelect={() => {
+            setOpen(false);
+            useDesktopDialogStore.getState().openDrafts("menu");
+          }}
+        >
+          <LayersPlus className="size-3.5" />
+          Drafts
+        </DropdownMenuItem>
+        {props.showAppSettings ? (
+          <DropdownMenuItem
+            data-testid="user-menu-app-settings"
+            onSelect={() => {
+              setOpen(false);
+              Analytics.getInstance().track(AnalyticsEvent.SettingsOpened, {
+                source: "direct_ui",
+                section: "general",
+              });
+              getSystemTabModalApi()?.openSettings({
+                section: null,
+                resetToGeneral: true,
+                tab: null,
+                draft: null,
+                hostId: null,
+              });
+            }}
+          >
+            <Settings className="size-3.5" />
+            App settings
+            {settingsChord === null ? null : (
+              <DropdownMenuShortcut>
+                {formatChordForDisplay(settingsChord)}
+              </DropdownMenuShortcut>
+            )}
+          </DropdownMenuItem>
+        ) : null}
+        {/* Withheld in the installed mobile app: App Store guideline 3.1.1
               forbids linking out to a subscription that cannot be bought
               through Apple, and this item opens exactly that page. This menu
               does reach the phone - the mobile header only replaces the
               desktop one for the `app` variant, so `host-loading` renders
               `DesktopAppHeader`, identity menu included. Sign out and App
               settings are unaffected. */}
-          {isMobileApp() ? null : (
-            <DropdownMenuItem
-              data-testid="user-menu-manage-subscription"
-              onSelect={() => {
-                setOpen(false);
-                // Tracked on the RESOLVED open only: a failed OS handoff is not
-                // a subscription-management visit. The failure toast is
-                // the link seam's, so the rejection is ignored here.
-                void openLink(manageSubscriptionUrl, "account", null).then(
-                  () =>
-                    Analytics.getInstance().track(
-                      AnalyticsEvent.SubscriptionManagementOpened,
-                      { source: "direct_ui" },
-                    ),
-                  ignoreError,
-                );
-              }}
-            >
-              <ExternalLink className="size-3.5" />
-              Manage subscription
-            </DropdownMenuItem>
-          )}
-          <DropdownMenuSeparator />
+        {isMobileApp() ? null : (
           <DropdownMenuItem
-            data-testid="user-menu-sign-out"
-            variant="destructive"
+            data-testid="user-menu-manage-subscription"
             onSelect={() => {
               setOpen(false);
-              setSignOutOpen(true);
+              // Tracked on the RESOLVED open only: a failed OS handoff is not
+              // a subscription-management visit. The failure toast is
+              // the link seam's, so the rejection is ignored here.
+              void openLink(manageSubscriptionUrl, "account", null).then(
+                () =>
+                  Analytics.getInstance().track(
+                    AnalyticsEvent.SubscriptionManagementOpened,
+                    { source: "direct_ui" },
+                  ),
+                ignoreError,
+              );
             }}
           >
-            <LogOut className="size-3.5" />
-            Sign out
+            <ExternalLink className="size-3.5" />
+            Manage subscription
           </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
-    </>
+        )}
+        <DropdownMenuSeparator />
+        <DropdownMenuItem
+          data-testid="user-menu-sign-out"
+          variant="destructive"
+          onSelect={() => {
+            setOpen(false);
+            useSignOutConfirmStore.getState().setOpen(true);
+          }}
+        >
+          <LogOut className="size-3.5" />
+          Sign out
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 

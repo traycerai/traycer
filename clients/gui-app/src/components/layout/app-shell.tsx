@@ -1,4 +1,5 @@
 import { useState, type ReactNode } from "react";
+import { SignOutConfirmDialog } from "@/components/auth/sign-out-confirm-dialog";
 import { DiffWorkerPoolProvider } from "@/components/diff-worker-pool-provider";
 import { LayoutEditor } from "@/components/layout-editor/layout-editor";
 import { RootDndProvider } from "@/components/epic-canvas/dnd/root-dnd-provider";
@@ -241,6 +242,10 @@ function AppShellBody(props: AppShellProps) {
                   {UNRELEASED_FEATURES_ENABLED ? <TalkShortcutBridge /> : null}
                   <MigrationRunController />
                   <MigrationBlockingModalHost />
+                  {/* Above the drawer's mount gate: a rotation that replaces
+                    the drawer with the strip must not take a pending
+                    confirmation with it. */}
+                  <SignOutConfirmDialog />
                   {isMobile && mobileStripForm === null ? (
                     <MobileNavDrawer />
                   ) : null}

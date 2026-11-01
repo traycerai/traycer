@@ -128,7 +128,10 @@ function DesktopAppHeader(props: AppHeaderProps): ReactNode {
         <div className="flex shrink-0 items-center gap-2">
           {!navDisabled ? <HistoryButton /> : null}
           {showBell ? <HeaderNotificationsBell /> : null}
-          <HeaderIdentity showAppSettings={!navDisabled} />
+          <HeaderIdentity
+            showAppSettings={!navDisabled}
+            hostsSignOutConfirm={navDisabled}
+          />
         </div>
       </div>
     </header>

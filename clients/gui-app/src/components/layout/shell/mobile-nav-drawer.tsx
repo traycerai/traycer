@@ -12,7 +12,6 @@ import {
   Settings,
   SquareArrowOutUpRight,
 } from "lucide-react";
-import { SignOutConfirmDialog } from "@/components/auth/sign-out-confirm-dialog";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -72,6 +71,7 @@ import type { HistoryItem } from "@/components/home/data/home-page.data";
 import { useHistoryQuery } from "@/hooks/home/use-history-query";
 import { admitsLocalPlane, useAuthStore } from "@/stores/auth/auth-store";
 import { useMergedNotificationUnreadCount } from "@/stores/notifications/merged-notifications";
+import { useSignOutConfirmStore } from "@/stores/auth/sign-out-confirm-store";
 import { useEpicDeleteInFlightReader } from "@/hooks/epic/use-epic-batch-delete-mutation";
 import { useMobileNavStore } from "@/stores/layout/mobile-nav-store";
 import { useFirstTaskGuideStore } from "@/stores/onboarding/first-task-guide-store";
@@ -109,7 +109,6 @@ export function MobileNavDrawer(): ReactNode {
   const { openSettings, openHistory } = useSystemTabModalActions();
   const billingUrl = usePlatformBillingUrl();
   const openLink = useOpenLink();
-  const [signOutOpen, setSignOutOpen] = useState(false);
   // Latched on the first open: closing before the first task paint must not
   // unmount the list (and its query) out from under the closing panel.
   const [drawerRequested, setDrawerRequested] = useState(open);
@@ -224,7 +223,7 @@ export function MobileNavDrawer(): ReactNode {
             aria-label="Sign out"
             data-testid="mobile-nav-sign-out"
             onClick={() => {
-              setSignOutOpen(true);
+              useSignOutConfirmStore.getState().setOpen(true);
             }}
           >
             <LogOut className="size-4" />
@@ -319,46 +318,35 @@ export function MobileNavDrawer(): ReactNode {
     </>
   );
 
-  return (
-    <>
-      {/* Outside the drawer, so the confirm can't be unmounted out from under
-          the user by an unrelated drawer close. */}
-      <SignOutConfirmDialog
-        open={signOutOpen}
-        onOpenChange={setSignOutOpen}
-        onConfirm={close}
-      />
-      {installedApp ? (
-        /* A hand-driven surface rather than a dialog primitive, for one
-           reason: dismissal has to follow the finger and stay interruptible
-           mid-flight. Every dialog primitive available here plays a canned
-           exit the hand cannot catch or reverse, and no amount of
-           configuration produces one - a panel that tracks a pointer 1:1 has
-           to own its transform outright.
+  return installedApp ? (
+    /* A hand-driven surface rather than a dialog primitive, for one
+       reason: dismissal has to follow the finger and stay interruptible
+       mid-flight. Every dialog primitive available here plays a canned
+       exit the hand cannot catch or reverse, and no amount of
+       configuration produces one - a panel that tracks a pointer 1:1 has
+       to own its transform outright.
 
-           Branched on the PRODUCT flag, not the viewport, because the drawer
-           itself is mounted by form factor: a narrow desktop window renders
-           this component too, and it has a pointer rather than a finger. A
-           surface whose only dismissal is a drag would be a surface that
-           window cannot close, so it takes the Sheet. */
-        <MobileNavDrawerSurface open={open} onOpenChange={setOpen}>
-          {panel}
-        </MobileNavDrawerSurface>
-      ) : (
-        <Sheet open={open} onOpenChange={setOpen}>
-          <SheetContent
-            side="left"
-            showCloseButton={false}
-            className="gap-0 pb-safe-bottom"
-            data-testid="mobile-nav-drawer"
-            data-mobile-shell-touch-scope=""
-          >
-            <SheetTitle className="sr-only">Menu</SheetTitle>
-            {panel}
-          </SheetContent>
-        </Sheet>
-      )}
-    </>
+       Branched on the PRODUCT flag, not the viewport, because the drawer
+       itself is mounted by form factor: a narrow desktop window renders
+       this component too, and it has a pointer rather than a finger. A
+       surface whose only dismissal is a drag would be a surface that
+       window cannot close, so it takes the Sheet. */
+    <MobileNavDrawerSurface open={open} onOpenChange={setOpen}>
+      {panel}
+    </MobileNavDrawerSurface>
+  ) : (
+    <Sheet open={open} onOpenChange={setOpen}>
+      <SheetContent
+        side="left"
+        showCloseButton={false}
+        className="gap-0 pb-safe-bottom"
+        data-testid="mobile-nav-drawer"
+        data-mobile-shell-touch-scope=""
+      >
+        <SheetTitle className="sr-only">Menu</SheetTitle>
+        {panel}
+      </SheetContent>
+    </Sheet>
   );
 }
 

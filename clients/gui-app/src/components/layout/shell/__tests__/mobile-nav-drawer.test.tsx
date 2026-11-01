@@ -225,6 +225,7 @@ import { domMax, LazyMotion } from "motion/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TestRouterProvider } from "../../../../__tests__/with-test-router";
+import { SignOutConfirmDialog } from "@/components/auth/sign-out-confirm-dialog";
 import { MobileNavDrawer } from "@/components/layout/shell/mobile-nav-drawer";
 import { holdEpicBatchDelete } from "@/hooks/epic/__tests__/hold-epic-batch-delete";
 import {
@@ -337,6 +338,7 @@ function renderDrawer(): HTMLElement {
         <LazyMotion features={domMax}>
           <TestRouterProvider>
             <MobileNavDrawer />
+            <SignOutConfirmDialog />
           </TestRouterProvider>
         </LazyMotion>
       </MobileDrawerHistoryGateProvider>
@@ -1165,6 +1167,25 @@ describe("MobileNavDrawer", () => {
       fireEvent.click(await screen.findByTestId("confirm-action"));
 
       expect(signedOut).toBe(1);
+      expect(useMobileNavStore.getState().open).toBe(false);
+    });
+
+    it("clears its open flag when a form change unmounts it", async () => {
+      const { unmount } = render(
+        <QueryClientProvider client={queryClient}>
+          <MobileDrawerHistoryGateProvider>
+            <LazyMotion features={domMax}>
+              <TestRouterProvider>
+                <MobileNavDrawer />
+              </TestRouterProvider>
+            </LazyMotion>
+          </MobileDrawerHistoryGateProvider>
+        </QueryClientProvider>,
+      );
+      await screen.findByTestId("mobile-nav-sign-out");
+
+      unmount();
+
       expect(useMobileNavStore.getState().open).toBe(false);
     });
 
