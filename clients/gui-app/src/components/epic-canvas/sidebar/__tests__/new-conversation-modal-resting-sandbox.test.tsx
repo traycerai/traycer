@@ -577,6 +577,19 @@ describe("a new-conversation modal on a host that rests", () => {
     expect(host.createChat).not.toHaveBeenCalled();
   });
 
+  it("reads no sandbox list and stages nothing on a host that is awake", async () => {
+    restingDirectory.setSandbox("host-a", "Laptop box", "awake");
+    renderModal();
+    await waitFor(() =>
+      expect(toolbar().getState().selection.harnessId).toBeDefined(),
+    );
+    await act(() => Promise.resolve());
+
+    expect(host.binding?.auth.listSandboxes).not.toHaveBeenCalled();
+    expect(readStagedSandbox(SURFACE)).toBeNull();
+    expect(toolbar().getState().sandboxRunTarget).toBeNull();
+  });
+
   it("refuses a Traycer model the cloud's list leaves out at Send, handing nothing and waking nothing", async () => {
     pickTraycer("trc-a");
     cloudLists("trc-s");

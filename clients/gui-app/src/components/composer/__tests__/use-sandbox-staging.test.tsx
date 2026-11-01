@@ -97,13 +97,6 @@ const mocks = vi.hoisted(() => ({
 vi.mock("@/hooks/auth/use-auth-user-query", () => ({
   useAuthUser: () => ({ data: mocks.user }),
 }));
-vi.mock("@/hooks/sandboxes/use-sandbox-traycer-models-query", () => ({
-  useSandboxTraycerModels: () => ({
-    data: [],
-    isPending: false,
-    fetchStatus: "idle",
-  }),
-}));
 vi.mock("@/hooks/sandboxes/use-sandbox-catalogue-query", () => ({
   useSandboxCatalogue: () => ({ data: mocks.catalogue }),
 }));
