@@ -76,6 +76,7 @@ const landingMocks = vi.hoisted(() => ({
 
 vi.mock("@tanstack/react-router", () => ({
   useNavigate: () => landingMocks.navigate,
+  useRouter: () => ({ state: { location: { pathname: "/" } } }),
 }));
 
 vi.mock("@/lib/host", () => ({

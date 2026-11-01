@@ -1,5 +1,10 @@
 import { useCallback, useMemo } from "react";
-import { useNavigate, useRouterState } from "@tanstack/react-router";
+import {
+  useNavigate,
+  useRouter,
+  useRouterState,
+  type UseNavigateResult,
+} from "@tanstack/react-router";
 import {
   useQueryClient,
   type QueryClient,
@@ -557,9 +562,6 @@ export function useEpicBatchDelete(): UseMutationResult<
       },
       onSuccess: (data, variables, ctx) => {
         const failures = data.results.filter((r) => !r.success);
-        const deletedIds = data.results.flatMap((result) =>
-          result.success ? [result.taskId] : [],
-        );
         const successes = data.results.length - failures.length;
         if (variables.ids.length === 1 && successes === 1) {
           Analytics.getInstance().track(AnalyticsEvent.TaskDeleted, {
@@ -568,68 +570,16 @@ export function useEpicBatchDelete(): UseMutationResult<
               (variables.worktreeCleanup?.candidates.length ?? 0) > 0,
           });
         }
-        const { accountWideIds, hostScopedIds } = splitEpicDeleteScopes(
-          data.results,
-          deletedIds,
-          ctx.destination,
-        );
-        // Local teardown follows each success's scope, keyed to the host that
-        // enacted the delete: a stand-in's local-homed delete removed ITS
-        // Task, and this window's same-id Task on the active host is still
-        // there (`epicIdsLostInWindow`).
-        const scopes = {
-          accountWideIds,
-          hostScopedIds,
-          deletingHostId: ctx.enactingHostId,
-        };
-        const lostIds = epicIdsLostInWindow(scopes, ctx.hostId);
-        const navigationTarget = pickNeighborAfterDeletingEpics(
-          getHeaderTabs(),
+        const deletedIds = settleDeletedEpics({
+          queryClient,
+          navigate,
           activePathname,
-          new Set(lostIds),
-        );
-        clearDeletedEpicRunSettings(scopes);
-        tabCommandCoordinator.handleEpicAccessLoss(lostIds, ctx.userId);
-        if (ctx.userId !== null) {
-          // Tombstone each success in the scope its deletion actually had.
-          //
-          // A cloud-homed epic is deleted from the ACCOUNT, so every host
-          // scope must stop showing it - `hostId: null` is the store's
-          // account-wide bucket, which `deletedEpicIdsForScope` unions into
-          // every host's read. A local-homed one exists on the machine that
-          // held it, and an account-wide tombstone there would hide a row a
-          // sibling host can still serve.
-          //
-          // The split itself is `splitEpicDeleteScopes`.
-          const userId = ctx.userId;
-          // A host-scoped success belongs to the host that deleted it: on a
-          // fallback route that is the stand-in, not the down host.
-          if (hostScopedIds.length > 0) {
-            removeDeletedEpicsFromCloudTaskCaches(
-              queryClient,
-              { hostId: ctx.enactingHostId, userId },
-              hostScopedIds,
-            );
-          }
-          if (accountWideIds.length > 0) {
-            removeDeletedEpicsFromCloudTaskCaches(
-              queryClient,
-              { hostId: null, userId },
-              accountWideIds,
-            );
-          }
-        }
-        if (navigationTarget !== undefined) {
-          if (navigationTarget === null) {
-            void navigate(LANDING_ROUTE);
-          } else {
-            navigateToTabIntent(
-              navigate,
-              tabResolveIntent(navigationTarget),
-              undefined,
-            );
-          }
-        }
+          results: data.results,
+          destination: ctx.destination,
+          windowHostId: ctx.hostId,
+          userId: ctx.userId,
+          epicTitlesById: ctx.epicTitlesById,
+        });
         const epicToast = withSkippedWorktreeCleanup(
           epicDeleteToastParts({
             failures,
@@ -707,24 +657,6 @@ export function useEpicBatchDelete(): UseMutationResult<
             },
           );
         }
-        // Other windows tombstone in the same scopes as this one: the
-        // host-scoped successes under the enacting host, the rest account-wide.
-        if (ctx.enactingHostId !== null && ctx.userId !== null) {
-          publishDeletedEpicNotification({
-            hostId: ctx.enactingHostId,
-            userId: ctx.userId,
-            epicIds: deletedIds,
-            hostScopedEpicIds: hostScopedIds,
-            epicTitlesById: ctx.epicTitlesById,
-          });
-        }
-        // The window's current host too: the selection may have moved while
-        // the delete travelled, and that host's lists were read before it.
-        invalidateBatchDeleteHostScopes(queryClient, [
-          ctx.hostId,
-          ctx.enactingHostId,
-          activeHostIdOrNull(),
-        ]);
       },
       onError: (error, variables, ctx) => {
         // Explicit, never left to the error toast: `toastFromHostError` stays
@@ -780,6 +712,257 @@ export function useEpicBatchDelete(): UseMutationResult<
       },
     },
   });
+}
+
+/**
+ * Everything this window does once Tasks are deleted, in the scope each
+ * deletion had, except tell the person: the run settings, tabs and recovery
+ * state of the lost ones, the task lists, the navigation away from an active
+ * one, the other windows, and the hosts' cached reads. Returns the ids
+ * deleted.
+ */
+function settleDeletedEpics(input: {
+  readonly queryClient: QueryClient;
+  readonly navigate: UseNavigateResult<string>;
+  readonly activePathname: string;
+  readonly results: ReadonlyArray<BatchDeleteItemResult>;
+  readonly destination: EpicBatchDeleteDestination;
+  /** The active host when the delete started: the scope it was asked from. */
+  readonly windowHostId: string | null;
+  readonly userId: string | null;
+  readonly epicTitlesById: Readonly<Record<string, string>>;
+}): ReadonlyArray<string> {
+  const { queryClient, userId } = input;
+  const enactingHostId = input.destination.hostId;
+  const deletedIds = input.results.flatMap((result) =>
+    result.success ? [result.taskId] : [],
+  );
+  const { accountWideIds, hostScopedIds } = splitEpicDeleteScopes(
+    input.results,
+    deletedIds,
+    input.destination,
+  );
+  // Local teardown follows each success's scope, keyed to the host that
+  // enacted the delete: a stand-in's local-homed delete removed ITS
+  // Task, and this window's same-id Task on the active host is still
+  // there (`epicIdsLostInWindow`).
+  const scopes = {
+    accountWideIds,
+    hostScopedIds,
+    deletingHostId: enactingHostId,
+  };
+  const lostIds = epicIdsLostInWindow(scopes, input.windowHostId);
+  const navigationTarget = pickNeighborAfterDeletingEpics(
+    getHeaderTabs(),
+    input.activePathname,
+    new Set(lostIds),
+  );
+  clearDeletedEpicRunSettings(scopes);
+  tabCommandCoordinator.handleEpicAccessLoss(lostIds, userId);
+  if (userId !== null) {
+    // Tombstone each success in the scope its deletion actually had.
+    //
+    // A cloud-homed epic is deleted from the ACCOUNT, so every host
+    // scope must stop showing it - `hostId: null` is the store's
+    // account-wide bucket, which `deletedEpicIdsForScope` unions into
+    // every host's read. A local-homed one exists on the machine that
+    // held it, and an account-wide tombstone there would hide a row a
+    // sibling host can still serve.
+    //
+    // The split itself is `splitEpicDeleteScopes`.
+    // A host-scoped success belongs to the host that deleted it: on a
+    // fallback route that is the stand-in, not the down host.
+    if (hostScopedIds.length > 0) {
+      removeDeletedEpicsFromCloudTaskCaches(
+        queryClient,
+        { hostId: enactingHostId, userId },
+        hostScopedIds,
+      );
+    }
+    if (accountWideIds.length > 0) {
+      removeDeletedEpicsFromCloudTaskCaches(
+        queryClient,
+        { hostId: null, userId },
+        accountWideIds,
+      );
+    }
+  }
+  if (navigationTarget !== undefined) {
+    if (navigationTarget === null) {
+      void input.navigate(LANDING_ROUTE);
+    } else {
+      navigateToTabIntent(
+        input.navigate,
+        tabResolveIntent(navigationTarget),
+        undefined,
+      );
+    }
+  }
+  // Other windows tombstone in the same scopes as this one: the
+  // host-scoped successes under the enacting host, the rest account-wide.
+  if (enactingHostId !== null && userId !== null) {
+    publishDeletedEpicNotification({
+      hostId: enactingHostId,
+      userId,
+      epicIds: deletedIds,
+      hostScopedEpicIds: hostScopedIds,
+      epicTitlesById: input.epicTitlesById,
+    });
+  }
+  // The window's current host too: the selection may have moved while
+  // the delete travelled, and that host's lists were read before it.
+  invalidateBatchDeleteHostScopes(queryClient, [
+    input.windowHostId,
+    enactingHostId,
+    activeHostIdOrNull(),
+  ]);
+  return deletedIds;
+}
+
+/** Shown when a Task a failed Send created could not be removed again. */
+export const DISCARD_CREATED_EPIC_FAILED_COPY =
+  "Couldn't remove the empty task this Send created. Delete it from your tasks.";
+
+/** Shown when nothing says whether that Task holds work, so it is left alone. */
+export const DISCARD_CREATED_EPIC_UNREAD_COPY =
+  "This Send may have left an empty task. Delete it from your tasks if you don't need it.";
+
+interface DiscardCreatedEpicVariables {
+  readonly epicId: string;
+  /** The host the Task was created on, which alone may hold it yet. */
+  readonly hostId: string;
+}
+
+interface DiscardCreatedEpicContext {
+  readonly windowHostId: string | null;
+  readonly userId: string | null;
+}
+
+/**
+ * Deletes a Task this window has just created, on the host it was created on,
+ * when the Send that created it did not go through and the Task still holds no
+ * agent: that Send leaves no Task behind. The Task is open while the Send is
+ * being set up, so the person may have started an agent in it, and any row
+ * keeps it, as does a read that fails. Answers whether it was deleted.
+ *
+ * The two lists are that host's own view, which is the whole of the Task only
+ * while it has not reached the cloud: call this only for such a Task
+ * (`isAttachPromotionPending`).
+ *
+ * No progress or outcome toast, since the person never asked for the Task;
+ * only a Task left behind by a failure is told.
+ */
+export function useEpicDiscardCreatedIfEmpty(): (
+  variables: DiscardCreatedEpicVariables,
+) => Promise<boolean> {
+  const activeClient = useHostClient();
+  const binding = useHostBinding();
+  const queryClient = useQueryClient();
+  const navigate = useNavigate();
+  // Read when the delete lands, not subscribed: the Send's surface would
+  // otherwise re-render on every navigation for a delete it rarely makes.
+  const router = useRouter();
+  const clientFor = (variables: DiscardCreatedEpicVariables) =>
+    resolveNamedHostClient(binding, variables.hostId);
+  // `knownRevision: null` holds no list stamp, so the host always answers
+  // `snapshot`; `hasDocReplica: false` asks for the doc-resident rows too.
+  const readChats = useHostMutation<
+    HostRpcRegistry,
+    "epic.listChatRecords",
+    unknown,
+    DiscardCreatedEpicVariables
+  >({
+    client: clientFor,
+    method: "epic.listChatRecords",
+    mapVariables: ({ epicId }) => ({
+      epicId,
+      hasDocReplica: false,
+      knownRevision: null,
+    }),
+    options: null,
+  }).mutateAsync;
+  const readTerminalAgents = useHostMutation<
+    HostRpcRegistry,
+    "epic.listTuiAgents",
+    unknown,
+    DiscardCreatedEpicVariables
+  >({
+    client: clientFor,
+    method: "epic.listTuiAgents",
+    mapVariables: ({ epicId }) => ({
+      epicId,
+      hasDocReplica: false,
+      knownRevision: null,
+    }),
+    options: null,
+  }).mutateAsync;
+  const discard = useHostMutation<
+    HostRpcRegistry,
+    "epic.batchDelete",
+    DiscardCreatedEpicContext,
+    DiscardCreatedEpicVariables
+  >({
+    client: clientFor,
+    method: "epic.batchDelete",
+    mapVariables: (variables) => ({ ids: [variables.epicId] }),
+    options: {
+      mutationKey: epicMutationKeys.discardCreated(),
+      onMutate: () => ({
+        windowHostId: activeClient.getActiveHostId(),
+        userId: activeClient.getRequestContextUserId(),
+      }),
+      onSuccess: (data, variables, ctx) => {
+        const deletedIds = settleDeletedEpics({
+          queryClient,
+          navigate,
+          activePathname: router.state.location.pathname,
+          results: data.results,
+          destination: { kind: "direct", hostId: variables.hostId },
+          windowHostId: ctx.windowHostId,
+          userId: ctx.userId,
+          epicTitlesById: {},
+        });
+        if (!deletedIds.includes(variables.epicId)) {
+          toast.error(DISCARD_CREATED_EPIC_FAILED_COPY);
+        }
+      },
+      onError: (error) => {
+        toastFromOwnerHostWriteError(error, DISCARD_CREATED_EPIC_FAILED_COPY);
+      },
+    },
+  }).mutateAsync;
+  return async (variables) => {
+    const userId = activeClient.getRequestContextUserId();
+    let holdsAgent: boolean;
+    try {
+      const [chats, terminalAgents] = await Promise.all([
+        readChats(variables),
+        readTerminalAgents(variables),
+      ]);
+      holdsAgent =
+        chats.kind !== "snapshot" ||
+        chats.chats.length > 0 ||
+        terminalAgents.kind !== "snapshot" ||
+        terminalAgents.tuiAgents.length > 0;
+    } catch {
+      toast.error(DISCARD_CREATED_EPIC_UNREAD_COPY);
+      return false;
+    }
+    // The reads are a wait the account can change in, and a delete never
+    // crosses accounts.
+    if (holdsAgent || activeClient.getRequestContextUserId() !== userId) {
+      return false;
+    }
+    try {
+      const { results } = await discard(variables);
+      return results.some(
+        (row) => row.taskId === variables.epicId && row.success,
+      );
+    } catch {
+      // `discard`'s `onError` told the person.
+      return false;
+    }
+  };
 }
 
 /**
