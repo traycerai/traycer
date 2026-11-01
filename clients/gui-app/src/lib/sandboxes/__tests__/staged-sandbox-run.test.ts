@@ -1028,14 +1028,36 @@ describe("runStagedSandbox on a resting sandbox", () => {
       expect(wake).toHaveBeenCalledWith("host-resting", "send");
     });
 
-    it("still wakes at the booting step, where a wake under way at the reload is the person's send", async () => {
+    it("makes no wake call at the booting step either, and records the rest on the stage", async () => {
       stageWoken("booting");
-      const { wake, deps } = resumable("awake");
+      const { wake, deps } = resumable("suspended");
 
       await runWith(true, deps);
 
-      expect(wake).toHaveBeenCalledTimes(1);
-      expect(wake).toHaveBeenCalledWith("host-resting", "send");
+      expect(wake).not.toHaveBeenCalled();
+      expect(stageOf()).toMatchObject({
+        phase: "creating",
+        failure: { kind: "rested" },
+      });
+    });
+
+    it("carries on to the handoff, waking nothing, when a wake that landed before the reload reads resuming and then awake", async () => {
+      stageWoken("booting");
+      const { wake, deps } = harness(
+        {
+          lists: [
+            listOf(RESTING_ROW("resuming")),
+            listOf(RESTING_ROW("awake")),
+          ],
+          entries: [{ ...DIALABLE, hostId: "host-resting" }],
+        },
+        true,
+      );
+
+      await runWith(true, deps);
+
+      expect(wake).not.toHaveBeenCalled();
+      expect(stageOf().phase).toBe("handoff");
     });
   });
 

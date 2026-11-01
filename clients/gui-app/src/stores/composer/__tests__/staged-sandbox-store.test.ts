@@ -393,6 +393,15 @@ describe("a stage whose sandbox rested on its own", () => {
     );
   });
 
+  it("is rested for a recorded rest at step booting, only while its row rests", () => {
+    stageAt("booting", "creating");
+    useStagedSandboxStore.getState().report(SURFACE, {
+      failure: { kind: "rested" },
+    });
+    expect(stagedSandboxRested(stageOf(SURFACE), true)).toBe(true);
+    expect(stagedSandboxRested(stageOf(SURFACE), false)).toBe(false);
+  });
+
   it("leaves a settings failure to its own line, even past handoff", () => {
     stageAt("creating", "handoff");
     useStagedSandboxStore.getState().report(SURFACE, {

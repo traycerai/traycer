@@ -3195,6 +3195,51 @@ describe("a send whose sandbox rests while it waits for the agent", () => {
     },
   );
 
+  it("mounted fresh as after a reload, never wakes a sandbox found at rest: the message goes back on it and the footer says so", async () => {
+    onTestFinished(installImmediateExclusiveLocks());
+    seed({
+      ...SEEDED,
+      target: RESUME_TARGET,
+      send: { request: { kind: "chat", parentId: null, placement: null } },
+      phase: "creating",
+      created: true,
+    });
+    expect(readStagedSandbox(SURFACE)).toMatchObject({
+      phase: "creating",
+      step: "booting",
+      failure: null,
+    });
+    mocks.listReadAt = FRESH;
+    mocks.sandboxes = [rowIn("suspended")];
+    mocks.listSandboxes.mockResolvedValue(listAnswers([rowIn("suspended")]));
+    answerHost(SANDBOX_HOST, CODEX_READY);
+    mount();
+
+    await waitFor(() => {
+      expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+    });
+    expect(mocks.wake).not.toHaveBeenCalled();
+    expect(createChatCalls()).toEqual([]);
+    expect(screen.queryByTestId("sandbox-setup-line")).toBeNull();
+    expect(
+      useNewConversationModalStore.getState().draftPatchesByEpicId["epic-1"],
+    ).toMatchObject({
+      content: MESSAGE_CONTENT,
+      returnedSandbox: {
+        target: {
+          kind: "existing",
+          hostId: SANDBOX_HOST,
+          sandboxId: SANDBOX_ID,
+          verb: "resume",
+        },
+      },
+    });
+    const line = await screen.findByTestId("sandbox-stopped-line");
+    expect(line.textContent).toContain(
+      "build-box is suspended · your next message resumes it",
+    );
+  });
+
   it("cancels a terminal request from a legacy handoff whose sandbox rests, waking nothing", async () => {
     onTestFinished(installImmediateExclusiveLocks());
     seed({

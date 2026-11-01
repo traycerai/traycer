@@ -169,7 +169,7 @@ export async function runStagedSandbox(
     );
     if (started === null) return;
     await settle(
-      { surfaceKey, clientRequestId, started, deps },
+      { surfaceKey, clientRequestId, started, deps, resume: request.resume },
       readStagedSandbox(surfaceKey)?.startedAt ?? deps.now(),
     );
   } finally {
@@ -181,8 +181,8 @@ export async function runStagedSandbox(
  * The new sandbox this key already made, if any. It is read, never created
  * again: a repeat or a resume after a reload waits on that row, and a row
  * that failed or is gone stops the wait rather than naming the key a second
- * time. So is an existing sandbox a resumed run finds it had already woken:
- * it is read for what it is now, never woken for a reload.
+ * time. So is an existing sandbox on a resumed run: it is read for what it
+ * is now, never woken for a reload.
  */
 function sandboxAlreadyMade(
   stage: StagedSandbox,
@@ -191,8 +191,7 @@ function sandboxAlreadyMade(
 ): StartedSandbox | null {
   if (
     fresh ||
-    (stage.target.kind !== "new" &&
-      !(resume && stagedSandboxRested(stage, true))) ||
+    (stage.target.kind !== "new" && !resume) ||
     stage.createdSandboxId === null ||
     stage.createdHostId === null
   ) {
@@ -535,6 +534,7 @@ interface SandboxSettlement {
   readonly clientRequestId: string;
   readonly started: StartedSandbox;
   readonly deps: StagedSandboxRunDeps;
+  readonly resume: boolean;
 }
 
 /**
@@ -572,6 +572,13 @@ async function settleRow(
     // goes back, and the composer stages it to wake on the next one.
     const stage = readStagedSandbox(surfaceKey);
     if (stage === null || stagedSandboxRested(stage, true)) return "finished";
+    // A reload is nobody's gesture, so its run wakes nothing either, and the
+    // stage records the rest it found: its step cannot say whether a wake
+    // landed before the app closed.
+    if (input.resume) {
+      fail(surfaceKey, { kind: "rested" });
+      return "finished";
+    }
     // Cancel/reload can retain an already-created sandbox after it rested.
     const awake = await wakeCurrentStage(
       surfaceKey,
