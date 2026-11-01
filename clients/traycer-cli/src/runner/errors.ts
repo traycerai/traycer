@@ -312,6 +312,10 @@ export const EXPECTED_CLI_ERROR_CODES: ReadonlySet<CliErrorCode> =
     CLI_ERROR_CODES.HOST_INCOMPATIBLE,
     CLI_ERROR_CODES.HOST_UNSUPPORTED,
     CLI_ERROR_CODES.HOST_UPDATE_NOT_NEWER,
+    // Beside its host twin for the same reason: refusing a backwards move
+    // the caller asked for is a typed outcome the command answers for, and
+    // the person resolves it by re-running with `--allow-downgrade`.
+    CLI_ERROR_CODES.CLI_UPGRADE_NOT_NEWER,
     CLI_ERROR_CODES.HOST_CLIENT_FLOOR_UNMET,
     CLI_ERROR_CODES.HOST_STORE_FORMAT_FLOOR,
     CLI_ERROR_CODES.AGENT_NOT_FOUND,
