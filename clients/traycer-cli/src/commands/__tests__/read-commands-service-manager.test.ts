@@ -62,6 +62,11 @@ const mocks = vi.hoisted(() => {
           : "00:00\n";
         return { stdout, stderr: "", exitCode: 0 };
       }
+      // The PATH check's two reads, which must differ for it to report.
+      if (args.includes("--version")) {
+        const version = command.includes("elsewhere") ? "1.0.0" : "1.5.2";
+        return { stdout: `${version}\n`, stderr: "", exitCode: 0 };
+      }
       // The task-definition read's own "no such task".
       if (command === "powershell") {
         return { stdout: "", stderr: "", exitCode: 2 };
@@ -438,8 +443,15 @@ it("host doctor adds exactly two version reads with another CLI ahead of the slo
   vi.stubEnv("PATH", dirname(other));
   const files = homeFiles();
 
-  await hostDoctorCommand(makeCtx());
+  const result = await hostDoctorCommand(makeCtx());
 
+  expect(result.data).toMatchObject({
+    issues: expect.arrayContaining([
+      expect.objectContaining({
+        code: DOCTOR_ISSUE_CODES.CLI_SHADOWED_ON_PATH,
+      }),
+    ]),
+  });
   expect(mocks.calls.toSorted()).toEqual(
     [
       ...launchdLookups,

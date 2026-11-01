@@ -170,6 +170,17 @@ describe.skipIf(process.platform === "win32")("doctor, CLI on PATH", () => {
     expect(ran(other)).toBe(true);
   });
 
+  it("offers only PATH order for an older CLI Homebrew did not install", async () => {
+    const other = join(dir, "local/bin/traycer");
+    placeCli(other, "1.0.0");
+
+    const issue = await pathIssue(dirname(other));
+
+    expect(issue?.message).toBe(
+      `'traycer' runs ${other} (1.0.0), not the CLI Traycer installed at ${managedBinary} (1.5.2-rc.2). Put ${dirname(managedBinary)} first on PATH.`,
+    );
+  });
+
   it("offers only PATH order when the Homebrew CLI is the newer one", async () => {
     const cellarBinary = join(dir, "Cellar/traycer/1.6.0/bin/traycer");
     placeCli(cellarBinary, "1.6.0");
