@@ -34,6 +34,12 @@ vi.mock("@/lib/host", async (importOriginal) => {
   return { ...actual, useHostBinding: () => hostBindingMock.current };
 });
 
+// The sandbox card reads its cost ledger through host-runtime hooks; the
+// Installation tab under test is the card's sibling and never reads it.
+vi.mock("@/components/hosts/sandbox-card", () => ({
+  SandboxCard: () => null,
+}));
+
 vi.mock("sonner", () => ({
   toast: {
     success: vi.fn(),
@@ -57,6 +63,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { HostInstallRecord } from "@traycer/protocol/config/installation-records";
 import type { HostListItem } from "@traycer/protocol/host/host-status";
+import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
 import type { HostGetInstallationInfoResponseV11 } from "@traycer/protocol/host/maintenance/index";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import {
@@ -71,6 +78,8 @@ import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-sc
 import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
 import { HostSettingsPanel } from "@/components/settings/panels/host-settings-panel";
 import { formatSettingsDate } from "@/lib/settings/settings-date";
+import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
+import { sandboxDetailsEntry } from "@/lib/sandboxes/sandbox-details-provider";
 import {
   buildOverviewHostFixture,
   buildOverviewManagement,
@@ -280,6 +289,50 @@ function setRoutelessScope(options: {
   };
 }
 
+/**
+ * A sandbox the account's record knows nothing about: the credential refresh
+ * that writes `lastSeenAt` and `appVersion` never runs on one. What the page
+ * can read is the control plane's row and the header's version.
+ */
+function setSandboxScope(options: {
+  readonly summary: SandboxSummary | null;
+  readonly headerVersion: string;
+}): void {
+  const item = registryItem({
+    kind: "sandbox",
+    status: { ...registryItem({}).status, appVersion: null, lastSeenAt: null },
+  });
+  hostBindingMock.current = null;
+  scopeOverrides.current = {
+    host: hostScopeOptionFixture({
+      hostId: HOST_ID,
+      name: HOST_NAME,
+      isLocalMachine: false,
+      registered: true,
+      connectable: false,
+      item,
+      kind: "sandbox",
+      version: options.headerVersion,
+      sandbox: {
+        state: "awake",
+        frozen: false,
+        summary: options.summary,
+        teamOwned: false,
+      },
+      health: healthLive(false),
+    }),
+    hostId: HOST_ID,
+    status: "unreachable",
+    client: null,
+    nowMs: NOW_MS,
+  };
+}
+
+function aboutRow(testId: string): string | null {
+  return within(screen.getByTestId("host-overview-about")).getByTestId(testId)
+    .textContent;
+}
+
 function fixtureFor(
   isLocalMachine: boolean,
   overrides: Parameters<typeof buildOverviewHostFixture>[0]["overrideHandlers"],
@@ -486,6 +539,76 @@ describe("Overview ▸ Installation — About this host", () => {
       ),
     ).not.toBeNull();
     expect(screen.queryByTestId("host-overview-about")).toBeNull();
+  });
+});
+
+describe("Overview ▸ Installation — About a sandbox", () => {
+  // The page and the Details drawer read ONE source: the control plane's row.
+  // Each drawer wording is its own ladder, so the pin is that both move
+  // together with `lastActivityAt`, not that they match word for word.
+  it.each([
+    [60_000, "1m ago", "1 min ago"],
+    [THREE_HOURS_MS, "3h ago", "3 h ago"],
+  ] as const)(
+    "reads the report the Details drawer shows when it was %s ms ago, with the header's version",
+    async (ago, pageWords, drawerWords) => {
+      const summary = sandboxSummaryFixture({
+        hostId: HOST_ID,
+        lastActivityAt: NOW_MS - ago,
+      });
+      setSandboxScope({ summary, headerVersion: "2.1.0" });
+      mount(null);
+      await selectHostOverviewTab("installation");
+
+      expect(aboutRow("host-overview-about-last-seen")).toBe(pageWords);
+      expect(aboutRow("host-overview-about-version")).toBe("v2.1.0");
+      expect(
+        sandboxDetailsEntry({
+          summary,
+          cost: null,
+          wakeString: null,
+          viewerUserId: null,
+          personal: true,
+          now: NOW_MS,
+        }).export().status["Last report"],
+      ).toBe(drawerWords);
+    },
+  );
+
+  it("says 'Not seen yet' for a control plane row that has reported nothing", async () => {
+    setSandboxScope({
+      summary: sandboxSummaryFixture({ hostId: HOST_ID, lastActivityAt: 0 }),
+      headerVersion: "2.1.0",
+    });
+    mount(null);
+    await selectHostOverviewTab("installation");
+
+    expect(aboutRow("host-overview-about-last-seen")).toBe("Not seen yet");
+  });
+
+  it("says 'Unknown', not 'Not seen yet', while the control plane has not answered for it", async () => {
+    setSandboxScope({ summary: null, headerVersion: "2.1.0" });
+    mount(null);
+    await selectHostOverviewTab("installation");
+
+    expect(aboutRow("host-overview-about-last-seen")).toBe("Unknown");
+  });
+
+  it("words the offline notice on the same report", async () => {
+    setSandboxScope({
+      summary: sandboxSummaryFixture({
+        hostId: HOST_ID,
+        // The notice runs on the page's own clock, not the scope's.
+        lastActivityAt: Date.now() - THREE_HOURS_MS,
+      }),
+      headerVersion: "2.1.0",
+    });
+    mount(null);
+    await selectHostOverviewTab("installation");
+
+    expect(
+      screen.getByTestId("host-overview-offline-notice").textContent,
+    ).toContain("last seen 3h ago");
   });
 });
 

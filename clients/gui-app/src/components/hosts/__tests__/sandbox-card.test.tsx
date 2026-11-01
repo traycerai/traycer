@@ -370,6 +370,13 @@ describe("<SandboxCard /> per state", () => {
     );
   });
 
+  it("reads a report time of 0 as no activity, never an age since 1970", () => {
+    renderCard(sandboxOf("awake", false, { lastActivityAt: 0 }));
+    expect(screen.getByTestId("sandbox-card-last-active").textContent).toBe(
+      "No activity reported yet",
+    );
+  });
+
   it("renders the guest's configuration failure as plain text, only when the guest reported one", () => {
     renderCard(
       sandboxOf("awake", false, {

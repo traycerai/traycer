@@ -166,6 +166,17 @@ const mocks = vi.hoisted(() => ({
   close: vi.fn(),
 }));
 
+const toastMocks = vi.hoisted(() => ({
+  success: vi.fn<(message: string) => void>(),
+  info: vi.fn<(message: string) => void>(),
+  warning: vi.fn<(message: string, options: { description: string }) => void>(),
+}));
+
+vi.mock("sonner", async (importOriginal) => {
+  const original = await importOriginal<typeof import("sonner")>();
+  return { ...original, toast: { ...original.toast, ...toastMocks } };
+});
+
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useHostClient: () => requireTeamHostClient(),
@@ -572,6 +583,9 @@ describe("<SandboxesSettingsPanel />", () => {
     mocks.openAutomation.mockReset();
     mocks.openLink.mockReset();
     mocks.close.mockReset();
+    toastMocks.success.mockReset();
+    toastMocks.info.mockReset();
+    toastMocks.warning.mockReset();
     useLandingPanelStore.getState().resetForTests();
     useSurfaceHostSelectionStore.setState({ selections: {} });
     host.environments = [descriptor(PERSONAL_ENV, "user", "u1", "owner")];
@@ -1245,6 +1259,13 @@ describe("<SandboxesSettingsPanel />", () => {
       return screen.getByRole("dialog", { name: /Destroy \d+ idle sandbox/ });
     }
 
+    function closedDialog(): boolean {
+      return (
+        screen.queryByRole("dialog", { name: /Destroy \d+ idle sandbox/ }) ===
+        null
+      );
+    }
+
     const first = row("idle-a", { state: "suspended", burst: true });
     const second = row("idle-b", { state: "suspended", burst: false });
     const automation = row("Automations", {
@@ -1431,17 +1452,18 @@ describe("<SandboxesSettingsPanel />", () => {
         pending.resolve({ kind: "ok", settled: true });
         await pending.promise;
       });
-      await waitFor(() =>
-        expect(dialog.textContent).toContain(
-          "idle-lost · no longer available to destroy, left as it is",
-        ),
+      await waitFor(() => expect(toastMocks.warning).toHaveBeenCalledOnce());
+      expect(toastMocks.warning).toHaveBeenCalledWith(
+        "Didn't destroy 3 of 4 idle sandboxes",
+        {
+          description: [
+            "idle-b · no longer idle, left as it is",
+            "idle-changed · no longer available to destroy, left as it is",
+            "idle-lost · no longer available to destroy, left as it is",
+          ].join("; "),
+        },
       );
-      expect(dialog.textContent).toContain(
-        "idle-b · no longer idle, left as it is",
-      );
-      expect(dialog.textContent).toContain(
-        "idle-changed · no longer available to destroy, left as it is",
-      );
+      await waitFor(() => expect(closedDialog()).toBe(true));
       expect(binding.auth.destroySandbox.mock.calls).toEqual([
         [first.id, true],
       ]);
@@ -1511,7 +1533,7 @@ describe("<SandboxesSettingsPanel />", () => {
         message: "no longer available to destroy, left as it is",
       },
     ])(
-      "sends the idle precondition and renders $code as that target's skip",
+      "sends the idle precondition and reports $code as that target's skip",
       async ({ status, code, message }) => {
         const { binding } = mount([first]);
         binding.auth.destroySandbox.mockResolvedValueOnce(
@@ -1523,22 +1545,253 @@ describe("<SandboxesSettingsPanel />", () => {
         fireEvent.click(
           within(dialog).getByRole("button", { name: "Destroy 1" }),
         );
-        await waitFor(() =>
-          expect(dialog.textContent).toContain(`idle-a · ${message}`),
+        await waitFor(() => expect(toastMocks.warning).toHaveBeenCalledOnce());
+        expect(toastMocks.warning).toHaveBeenCalledWith(
+          "Didn't destroy 1 of 1 idle sandbox",
+          { description: `idle-a · ${message}` },
         );
+        await waitFor(() => expect(closedDialog()).toBe(true));
+        expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
         expect(binding.auth.destroySandbox.mock.calls).toEqual([
           [first.id, true],
         ]);
-        expect(
-          within(dialog)
-            .getByRole("button", { name: "Retry" })
-            .hasAttribute("disabled"),
-        ).toBe(true);
         expect(
           within(rowOf(first.id)).queryByRole("alert", { hidden: true }),
         ).toBeNull();
       },
     );
+
+    it("closes with a success toast once a clean destroy settles, leaving no Retry", async () => {
+      const { binding } = mount([first]);
+      await screen.findByText("idle-a");
+      await choose("state", "suspended");
+      const dialog = await confirmIdle();
+      fireEvent.click(
+        within(dialog).getByRole("button", { name: "Destroy 1" }),
+      );
+      await waitFor(() => expect(closedDialog()).toBe(true));
+      expect(toastMocks.success).toHaveBeenCalledExactlyOnceWith(
+        "Destroyed idle-a",
+      );
+      expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+      expect(binding.auth.destroySandbox.mock.calls).toEqual([
+        [first.id, true],
+      ]);
+    });
+
+    it("closes with the info toast when the control plane accepts the destroy without settling", async () => {
+      const { binding } = mount([first]);
+      binding.auth.destroySandbox.mockResolvedValueOnce({
+        kind: "ok",
+        settled: false,
+      });
+      await screen.findByText("idle-a");
+      await choose("state", "suspended");
+      const dialog = await confirmIdle();
+      fireEvent.click(
+        within(dialog).getByRole("button", { name: "Destroy 1" }),
+      );
+      await waitFor(() => expect(closedDialog()).toBe(true));
+      expect(toastMocks.info).toHaveBeenCalledExactlyOnceWith(
+        "Destroying idle-a…",
+      );
+      expect(toastMocks.success).not.toHaveBeenCalled();
+    });
+
+    it("keeps a partial failure open with a live Retry, re-sends only the failed id, then closes on one toast for the merged set", async () => {
+      const { binding } = mount([first, second]);
+      binding.auth.destroySandbox
+        .mockResolvedValueOnce({ kind: "ok", settled: true })
+        .mockResolvedValueOnce(refusal(503, "provider-error"))
+        .mockResolvedValueOnce({ kind: "ok", settled: true });
+      await screen.findByText("idle-a");
+      await choose("state", "suspended");
+      const dialog = await confirmIdle();
+      fireEvent.click(
+        within(dialog).getByRole("button", { name: "Destroy 2" }),
+      );
+      await within(rowOf(second.id)).findByRole("alert", { hidden: true });
+      expect(dialog.isConnected).toBe(true);
+      expect(dialog.textContent).toContain("idle-a · destroyed");
+      const retry = within(dialog).getByRole("button", { name: "Retry" });
+      expect(retry.hasAttribute("disabled")).toBe(false);
+      expect(toastMocks.success).not.toHaveBeenCalled();
+      fireEvent.click(retry);
+      await waitFor(() => expect(closedDialog()).toBe(true));
+      expect(binding.auth.destroySandbox.mock.calls).toEqual([
+        [first.id, true],
+        [second.id, true],
+        [second.id, true],
+      ]);
+      expect(toastMocks.success).toHaveBeenCalledExactlyOnceWith(
+        "Destroyed 2 sandboxes",
+      );
+    });
+
+    it("keeps a failed target retryable beside a skipped one, never re-sends the skip, and names it when the retry closes the dialog", async () => {
+      const { binding } = mount([first, second]);
+      binding.auth.destroySandbox
+        .mockResolvedValueOnce(refusal(409, "sandbox_transition_conflict"))
+        .mockResolvedValueOnce(refusal(503, "provider-error"))
+        .mockResolvedValueOnce({ kind: "ok", settled: true });
+      await screen.findByText("idle-a");
+      await choose("state", "suspended");
+      const dialog = await confirmIdle();
+      fireEvent.click(
+        within(dialog).getByRole("button", { name: "Destroy 2" }),
+      );
+      await within(rowOf(second.id)).findByRole("alert", { hidden: true });
+      expect(dialog.textContent).toContain(
+        "idle-a · no longer idle, left as it is",
+      );
+      expect(toastMocks.warning).not.toHaveBeenCalled();
+      fireEvent.click(within(dialog).getByRole("button", { name: "Retry" }));
+      await waitFor(() => expect(closedDialog()).toBe(true));
+      expect(binding.auth.destroySandbox.mock.calls).toEqual([
+        [first.id, true],
+        [second.id, true],
+        [second.id, true],
+      ]);
+      expect(toastMocks.warning).toHaveBeenCalledExactlyOnceWith(
+        "Didn't destroy 1 of 2 idle sandboxes",
+        { description: "idle-a · no longer idle, left as it is" },
+      );
+      expect(toastMocks.success).not.toHaveBeenCalled();
+    });
+
+    it("treats a control plane that cannot be reached as a skip: closes and retries nothing", async () => {
+      const { binding } = mount([first]);
+      binding.auth.destroySandbox.mockResolvedValueOnce({
+        kind: "unavailable",
+        reason: "not-configured",
+      });
+      await screen.findByText("idle-a");
+      await choose("state", "suspended");
+      const dialog = await confirmIdle();
+      fireEvent.click(
+        within(dialog).getByRole("button", { name: "Destroy 1" }),
+      );
+      await waitFor(() => expect(toastMocks.warning).toHaveBeenCalledOnce());
+      await waitFor(() => expect(closedDialog()).toBe(true));
+      expect(toastMocks.warning.mock.calls[0][0]).toBe(
+        "Didn't destroy 1 of 1 idle sandbox",
+      );
+      expect(binding.auth.destroySandbox).toHaveBeenCalledOnce();
+      const alert = within(rowOf(first.id)).getByRole("alert", {
+        hidden: true,
+      });
+      expect(alert.textContent).toContain("Couldn't destroy idle-a");
+      expect(
+        within(alert).queryByRole("button", { name: "Retry", hidden: true }),
+      ).toBeNull();
+    });
+
+    it("keeps its dialog and gates Retry when another account signs in over a failed batch", async () => {
+      const { binding } = mount([first]);
+      binding.auth.destroySandbox.mockResolvedValueOnce(
+        refusal(503, "provider-error"),
+      );
+      await screen.findByText("idle-a");
+      await choose("state", "suspended");
+      const dialog = await confirmIdle();
+      fireEvent.click(
+        within(dialog).getByRole("button", { name: "Destroy 1" }),
+      );
+      await within(rowOf(first.id)).findByRole("alert", { hidden: true });
+      expect(
+        within(dialog)
+          .getByRole("button", { name: "Retry" })
+          .hasAttribute("disabled"),
+      ).toBe(false);
+      const listed = binding.auth.listSandboxes.mock.calls.length;
+      act(() => {
+        useAuthStore.setState({
+          contextMetadata: { userId: "u2", username: "bea" },
+        });
+      });
+      await waitFor(() =>
+        expect(binding.auth.listSandboxes.mock.calls.length).toBeGreaterThan(
+          listed,
+        ),
+      );
+      await screen.findByText("idle-a");
+      expect(dialog.isConnected).toBe(true);
+      expect(dialog.textContent).toContain("idle-a · couldn't be destroyed");
+      const retry = within(dialog).getByRole("button", { name: "Retry" });
+      expect(retry.hasAttribute("disabled")).toBe(true);
+      fireEvent.click(retry);
+      expect(binding.auth.destroySandbox).toHaveBeenCalledOnce();
+    });
+
+    it("keeps a running batch's dialog when the list empties under it, then closes on its result", async () => {
+      const { binding, client } = mount([first]);
+      const pending = Promise.withResolvers<SandboxVerbFetchResult>();
+      binding.auth.destroySandbox.mockReturnValueOnce(pending.promise);
+      await screen.findByText("idle-a");
+      await choose("state", "suspended");
+      const dialog = await confirmIdle();
+      fireEvent.click(
+        within(dialog).getByRole("button", { name: "Destroy 1" }),
+      );
+      await waitFor(() =>
+        expect(binding.auth.destroySandbox).toHaveBeenCalled(),
+      );
+      binding.auth.listSandboxes.mockResolvedValue({
+        kind: "ok",
+        response: { sandboxes: [] },
+      });
+      await act(async () => {
+        await client.invalidateQueries({
+          queryKey: sandboxQueryKeys.listAll(),
+        });
+      });
+      await waitFor(() =>
+        expect(screen.queryByTestId("sandboxes-row")).toBeNull(),
+      );
+      expect(dialog.isConnected).toBe(true);
+      expect(
+        screen.getByTestId("confirm-action").hasAttribute("disabled"),
+      ).toBe(true);
+      expect(toastMocks.success).not.toHaveBeenCalled();
+      await act(async () => {
+        pending.resolve({ kind: "ok", settled: true });
+        await pending.promise;
+      });
+      await waitFor(() => expect(closedDialog()).toBe(true));
+      expect(toastMocks.success).toHaveBeenCalledExactlyOnceWith(
+        "Destroyed idle-a",
+      );
+    });
+
+    it("holds Retry for a failed target until its typed name is entered again", async () => {
+      mocks.report = liveSessionReport(
+        { agents: [agentSessionFixture({ working: true })], terminals: [] },
+        true,
+      );
+      const { binding } = mount([first]);
+      binding.auth.destroySandbox.mockResolvedValueOnce(
+        refusal(503, "provider-error"),
+      );
+      await screen.findByText("idle-a");
+      await choose("state", "suspended");
+      const dialog = await confirmIdle();
+      const input = within(dialog).getByRole("textbox", {
+        name: "Type the name to confirm",
+      });
+      fireEvent.change(input, { target: { value: "idle-a" } });
+      fireEvent.click(
+        within(dialog).getByRole("button", { name: "Destroy 1" }),
+      );
+      await within(rowOf(first.id)).findByRole("alert", { hidden: true });
+      const retry = within(dialog).getByRole("button", { name: "Retry" });
+      expect(retry.hasAttribute("disabled")).toBe(false);
+      fireEvent.change(input, { target: { value: "" } });
+      expect(retry.hasAttribute("disabled")).toBe(true);
+      fireEvent.click(retry);
+      expect(binding.auth.destroySandbox).toHaveBeenCalledOnce();
+      fireEvent.change(input, { target: { value: "idle-a" } });
+      expect(retry.hasAttribute("disabled")).toBe(false);
+    });
 
     it("rechecks a row Retry from a failed batch instead of destroying a target that woke", async () => {
       const { binding } = mount([first]);
