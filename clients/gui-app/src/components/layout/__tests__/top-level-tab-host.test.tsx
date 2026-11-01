@@ -1094,7 +1094,7 @@ describe("<TopLevelTabHost />", () => {
 });
 
 /**
- * Sheet shell (ticket 02, D1/D2): `TopLevelSurfaceMount` is the single sheet
+ * Sheet shell: `TopLevelSurfaceMount` is the single sheet
  * for every non-epic surface (Home/History/Settings/draft) and carries no
  * sheet marker of its own for an epic tab - the epic surface paints its own
  * two sheets (panel/content) internally, proven separately in
@@ -1284,7 +1284,7 @@ describe("activateHostedTopLevelSurface (design-review F3: hosted pointer/focus 
 });
 
 /**
- * Design-review F3: `activateHostedTopLevelSurface`'s own unit tests above
+ * F3: `activateHostedTopLevelSurface`'s own unit tests above
  * prove its routing logic, but not that a real hosted pointerdown reaches it
  * at all - that depends on the `onPointerDownCapture`/`onFocusCapture` JSX
  * wiring on `TopLevelTabHost`'s hosted-plane wrapper (a sibling of every

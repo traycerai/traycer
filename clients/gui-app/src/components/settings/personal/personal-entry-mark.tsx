@@ -15,6 +15,13 @@ import { useHostNegotiatedMethodVersion } from "@/hooks/host/use-host-negotiated
 import { useProvidersPromoteToPersonal } from "@/hooks/providers/use-providers-promote-to-personal-mutation";
 import { useHostClient } from "@/lib/host";
 
+/** Which list a mark is drawn in: the entry kind, provider and scope. */
+export interface PersonalMarkTarget {
+  readonly entryKind: "mcp" | "skills";
+  readonly providerId: ProviderId;
+  readonly scope: ProviderNativeScope;
+}
+
 /**
  * Whether an MCP server or skill on this host is one of the person's
  * settings, and if not, the one way to make it one.
@@ -28,13 +35,6 @@ import { useHostClient } from "@/lib/host";
  *
  * Nothing on a host that is not set up for the person's settings.
  */
-/** Which list a mark is drawn in: the entry kind, provider and scope. */
-export interface PersonalMarkTarget {
-  readonly entryKind: "mcp" | "skills";
-  readonly providerId: ProviderId;
-  readonly scope: ProviderNativeScope;
-}
-
 export function PersonalEntryMark(props: {
   readonly target: PersonalMarkTarget;
   readonly name: string;

@@ -1,7 +1,11 @@
+import { useUltracodeCarrierSupported } from "@/components/home/data/model-ultracode";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useChatPrestartRuntime } from "@/hooks/chats/use-chat-prestart-runtime";
 import { useAccountContextStore } from "@/stores/auth/account-context-store";
-import { settingsFromDerived } from "@/stores/composer/composer-toolbar-store";
+import {
+  settingsFromDerived,
+  type ComposerToolbarStore,
+} from "@/stores/composer/composer-toolbar-store";
 import { readStagedWorktreeIntent } from "@/stores/worktree/worktree-intent-staging-store";
 import { useReadingWidthStyle } from "@/lib/layout-overrides";
 import {
@@ -44,7 +48,10 @@ import { ComposerWorkspaceRow } from "@/components/home/composer/composer-worksp
 import type { ModelOption } from "@/components/home/data/landing-options";
 import { useComposerToolbarStore } from "@/components/home/hooks/use-composer-toolbar-store";
 import { selectedModelRejectsImageAttachments } from "@/lib/composer/chat-run-settings";
-import { authoritativeOrFallbackSeedSource } from "@/lib/composer/composer-seed-source";
+import {
+  authoritativeOrFallbackSeedSource,
+  type ComposerSeedSource,
+} from "@/lib/composer/composer-seed-source";
 import {
   workspaceComposerCanStart,
   type WorkspaceComposerAvailability,
@@ -228,9 +235,10 @@ interface ChatComposerProps {
    * are facts about THIS session's line that no host-wide read can answer.
    */
   readonly autoPermissionModeProtocolSupported: boolean | null;
+  readonly ultracodeProtocolSupported: boolean;
   /**
    * Whether this chat's OWN live stream can materialize a hash-only draft image
-   * at send (T1's `chat.subscribe` 1.12 capability). Gates the hash-only send:
+   * at send (`chat.subscribe` 1.12 capability). Gates the hash-only send:
    * a bare hash on a stream that cannot resolve it is a refusal the user has to
    * read, so the flag is the chat's own, never an app-wide one.
    */
@@ -405,6 +413,57 @@ function SandboxAgentRefusalNotice(props: {
   );
 }
 
+type ChatComposerToolbarInput = Pick<
+  ChatComposerProps,
+  | "settingsSeed"
+  | "fallbackSettingsSeed"
+  | "onSettingsChange"
+  | "autoPermissionModeProtocolSupported"
+  | "ultracodeProtocolSupported"
+> & {
+  readonly hostClient: HostClient<HostRpcRegistry> | null;
+  readonly hostId: string | null;
+  readonly focused: boolean;
+  readonly resting: boolean;
+};
+
+/**
+ * Binds this chat's toolbar to its saved settings and target host. Reauth
+ * consumes the same seed source; Ultracode interaction additionally requires
+ * both this chat's stream and the host's settings writer to carry the field.
+ */
+function useChatComposerToolbar(input: ChatComposerToolbarInput): {
+  readonly seedSource: ComposerSeedSource;
+  readonly toolbarStore: ComposerToolbarStore;
+} {
+  const seedSource = authoritativeOrFallbackSeedSource(
+    input.settingsSeed,
+    input.fallbackSettingsSeed,
+    input.hostClient,
+  );
+  const settingsWriteSupported = useUltracodeCarrierSupported(
+    input.hostId,
+    "epic.updateChatRunSettings",
+  );
+  const toolbarStore = useComposerToolbarStore(
+    input.focused ? "chat-tile" : null,
+    seedSource,
+    input.onSettingsChange,
+    {
+      hostClient: input.hostClient,
+      hostId: input.hostId,
+      tuiOnly: false,
+      // Auto-mode's sticky clamp needs the live session's own negotiated line.
+      chatLineCarriesAutoMode: input.autoPermissionModeProtocolSupported,
+      ultracodeCarried:
+        input.ultracodeProtocolSupported && settingsWriteSupported,
+      stagedSurfaceKey: null,
+      sendsToRestingSandbox: input.resting,
+    },
+  );
+  return { seedSource, toolbarStore };
+}
+
 function ChatComposerImpl(props: ChatComposerProps) {
   const {
     taskId,
@@ -425,6 +484,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
     steerCapable,
     steerProtocolSupported,
     autoPermissionModeProtocolSupported,
+    ultracodeProtocolSupported,
     getActiveTurnForSteer,
     editingQueueItemId,
     onCancelQueueEdit,
@@ -549,43 +609,20 @@ function ChatComposerImpl(props: ChatComposerProps) {
     isActive: focused,
   });
 
-  // S11: one seed source, computed once and consumed identically by both the
-  // toolbar store and the reauth gate below - `settingsSeed` (non-null) makes
-  // it `authoritative` (a real chat pin); otherwise it falls back to
-  // `fallbackSettingsSeed` (a picker default, not a commitment - see
-  // `deriveReauthReason`'s comment for why that distinction matters).
-  const seedSource = authoritativeOrFallbackSeedSource(
+  // Toolbar leaves own their subscriptions; this component reads only the
+  // slices its editor and gates consume. The hook also returns the identical
+  // seed source for reauth, so fallback defaults never become chat pins.
+  const { seedSource, toolbarStore } = useChatComposerToolbar({
     settingsSeed,
     fallbackSettingsSeed,
-    hostClient,
-  );
-  // Per-composer toolbar store: this component only subscribes to the two
-  // slices it consumes (harness id for the picker/editor, selected model for
-  // the image gate); everything else - permission, reasoning, tier, the
-  // catalog churn - stays inside the toolbar leaves and the submit path.
-  // Only the focused top-level surface owns composer controls, automatic focus,
-  // and their catalog subscriptions. Visible split partners retain their body.
-  // The catalog is the TAB host's (`hostClient`), like every other read in
-  // this composer - a tab bound to another host offers that host's harnesses
-  // and models, never the app-wide default's. A resting chat's Traycer models
-  // are the cloud catalog's instead (`sendsToRestingSandbox`).
-  const toolbarStore = useComposerToolbarStore(
-    focused ? "chat-tile" : null,
-    seedSource,
     onSettingsChange,
-    {
-      hostClient,
-      hostId: tabHostId,
-      tuiOnly: false,
-      // The one composer with a live chat session, so the one that can supply
-      // the second proof. This reaches the STICKY CLAMP, which decides the
-      // mode actually sent - the toolbar's own gate only decides what is
-      // offered, and a sticky `auto` would otherwise survive both.
-      chatLineCarriesAutoMode: autoPermissionModeProtocolSupported,
-      stagedSurfaceKey: null,
-      sendsToRestingSandbox: resting,
-    },
-  );
+    autoPermissionModeProtocolSupported,
+    ultracodeProtocolSupported,
+    hostClient,
+    hostId: tabHostId,
+    focused,
+    resting,
+  });
   const prestartSupport = useHostMethodSupport(
     tabHostId,
     "chat.prestartRuntime",
@@ -708,7 +745,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
   });
   // ONE value for both readers: the chain's `rateLimitVisible` below and the
   // return banner, which OUTRANKS the advisory in that chain and so absorbs
-  // its sentence rather than silencing it (MF09, UX §2). Withheld while the
+  // its sentence rather than silencing it (MF09). Withheld while the
   // settled routing card in the transcript draws its own "Switch to…" for this
   // account (clutter cuts, 2026-09-27) - the live routing cards are already
   // handled by the chain below; that card is the one that lives outside it.

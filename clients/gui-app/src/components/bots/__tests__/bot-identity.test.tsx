@@ -1,5 +1,5 @@
 /**
- * A bot looks like a bot (Tracy Bots, T62): on a bot's channel rows the
+ * A bot looks like a bot: on a bot's channel rows the
  * bot's picture is a squircle and a person's a circle, read from the
  * rendered element's clip; a row names no owner, which the bot's card
  * carries; and the bot's card says what it is doing now from the real `useBotActivity` over the real shared
@@ -17,6 +17,7 @@ import type {
 } from "@traycer/protocol/host/bot/schemas";
 import type { EnvironmentMember } from "@traycer/protocol/host/environment/contracts";
 import { avatarShape } from "@/components/bots/__tests__/avatar-shape";
+import { creatureMark, drawCreatureMark } from "@/lib/bots/creature-mark";
 import {
   BotIdentityContext,
   type BotIdentity,
@@ -66,12 +67,10 @@ const EMPTY_BACKGROUND_TOOL_BLOCK_IDS: ReadonlySet<string> = new Set();
 
 const PRESENTATION: ChatBotPresentation = {
   botTitle: "Tracy",
-  scrollToMessage: null,
-  replyFollowsPost: null,
   threadLine: null,
   openThread: null,
   openAnnouncementThread: null,
-  answerThreads: false,
+  threadAnchorKinds: [],
   chooseOption: null,
   questions: null,
   failedRequest: null,
@@ -136,6 +135,7 @@ function snapshot(activity: BotActivity): BotSubscribeServerFrame {
     openRequestCount: 0,
     conversationsRevision: 0,
     notificationSubscriptions: null,
+    surfaceActions: null,
     stoppedNotificationWatches: null,
     boundHost: { hostId: HOST_ID, epoch: 0, isThisHost: true },
     activity,
@@ -233,8 +233,13 @@ describe("a bot channel's rows", () => {
     expect(
       avatarShape(within(memberRow).getByTestId("chat-sender-avatar")),
     ).toBe("circle");
-    // Without a picture, the initials stand in.
-    expect(within(botRow).getByTestId("bot-avatar").textContent).toBe("TR");
+    // The bot is its own creature mark, at the message row's 40 px.
+    expect(
+      within(botRow)
+        .getByTestId("bot-avatar")
+        .querySelector('[data-slot="bot-creature"] path')
+        ?.getAttribute("d"),
+    ).toBe(drawCreatureMark(creatureMark(BOT_ID), 40).path);
   });
 });
 

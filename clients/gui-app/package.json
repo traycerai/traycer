@@ -14,7 +14,7 @@
     "compile": "node ../../scripts/tsrs.mjs -p tsconfig.app.json --incremental --singleThreaded && node ../../scripts/tsrs.mjs -p tsconfig.node.json --incremental --singleThreaded && node ../../scripts/tsrs.mjs -p tsconfig.browser-tests.json --incremental --singleThreaded",
     "lint": "bun run lint:files .",
     "lint:files": "bun scripts/lint-files.mjs",
-    "react-doctor": "npx -y react-doctor@latest . --verbose --offline --blocking warning",
+    "react-doctor": "bunx react-doctor@latest . --verbose --offline --blocking warning",
     "format": "oxfmt .",
     "format:check": "oxfmt --check .",
     "test": "bun scripts/run-tests.ts",

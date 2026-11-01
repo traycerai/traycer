@@ -92,7 +92,7 @@ export function HostedChatSurfaceContextBridge(props: {
  * `tile-surface-membership.ts`'s transaction-aware retention doc comment).
  * During that gap, `environment.placement.viewTabId` still names the SOURCE
  * tab, so looking the node up there returns `undefined` and unmounts the real
- * `renderTile()` subtree (finding 1). Scanning every open canvas by
+ * `renderTile()` subtree. Scanning every open canvas by
  * `instanceId` instead - not just the environment's last-published tab -
  * finds the tile immediately once the canvas write lands, regardless of
  * which tab currently owns it. Placement/providers deliberately stay on the

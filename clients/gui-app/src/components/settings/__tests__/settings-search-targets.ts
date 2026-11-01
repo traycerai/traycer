@@ -86,7 +86,7 @@ function assertNoForeignAnchors(
  * drift rather than the first row of it. jsdom does no layout, so "visible"
  * here means present and not under `[hidden]` — never CSS visibility.
  *
- * Not for Layout (G6): see `assertSettingsSearchTargetsByNavigation` below.
+ * Not for Layout: see `assertSettingsSearchTargetsByNavigation` below.
  */
 export function assertSettingsSearchTargets(
   section: SettingsSectionId,
@@ -108,7 +108,7 @@ export function assertSettingsSearchTargets(
 
 /**
  * The DOM half of the contract for a section whose anchors are not all
- * visible from one static mount - Layout (G6) shows only one tab's rows at a
+ * visible from one static mount - Layout shows only one tab's rows at a
  * time, behind a sticky tab bar. `assertSettingsSearchTargets` would find
  * every anchor outside the default tab concealed and call that a bug, when it
  * is exactly what the tab bar promises.

@@ -594,26 +594,6 @@ describe("spawnEpicRuntimeWorker — the projection path", () => {
 });
 
 /**
- * The negotiated manifest actually crosses, and a host that upgrades under an
- * open tab moves the arm.
- *
- * `stream/manifest` was declared by the protocol and consumed by the worker
- * host, and NOTHING on main ever emitted one. That is not a missing
- * optimisation. `support(method)` answers `"unknown"` against a null manifest,
- * `"unknown"` is deliberately not a selection, and the fail-closed default is
- * the legacy `@1` arm - so every worker-hosted runtime held legacy for its
- * whole life, on lane-serving hosts included. The capability PROBE masks the
- * cold case (the status lane's own subscribe settles a connection's verdict),
- * which is exactly why this went unnoticed; what a probe cannot do is move a
- * tab whose host upgraded underneath it, because that signal exists only here.
- *
- * The chain is pinned END TO END rather than at the emit: main emits, the REAL
- * worker host applies, the PRODUCTION support reader reads what it applied, and
- * the PRODUCTION verdict function turns that into an arm. A pin that stopped at
- * "an event was posted" would have passed against a payload no reader could
- * use.
- */
-/**
  * A host that serves BOTH record-list methods, at the minor that carries the
  * doc remainder. `epic.listTuiAgents` needs `@1.1` specifically - at `@1.0`
  * the host withholds doc-only entries, so the doc arm stays on - which is why
@@ -624,6 +604,26 @@ const RECORD_SERVING_MANIFEST: ConnectionManifest = {
   "epic.listTuiAgents": { major: 1, minor: 1 },
 };
 
+/**
+ * The negotiated manifest actually crosses, and a host that upgrades under an
+ * open tab moves the arm.
+ *
+ * `stream/manifest` was declared by the protocol and consumed by the worker
+ * host, and NOTHING on main ever emitted one. That is not a missing
+ * optimisation. `support(method)` answers `"unknown"` against a null manifest,
+ * `"unknown"` is deliberately not a selection, and the fail-closed default is
+ * the legacy `@1` arm - so every worker-hosted runtime held legacy for its
+ * whole life, on lane-serving hosts included. The capability PROBE masks the
+ * cold case (the status lane's own subscribe settles a connection's verdict),
+ * which is exactly why this went unnoticed; the manifest also carries support changes
+ * without waiting for another probe.
+ *
+ * The chain is pinned END TO END rather than at the emit: main emits, the REAL
+ * worker host applies, the PRODUCTION support reader reads what it applied, and
+ * the PRODUCTION verdict function turns that into an arm. A pin that stopped at
+ * "an event was posted" would have passed against a payload no reader could
+ * use.
+ */
 describe("the negotiated manifest crossing to the worker", () => {
   function supportController(): {
     readonly source: StreamMethodSupportSource<HostStreamRpcRegistry>;

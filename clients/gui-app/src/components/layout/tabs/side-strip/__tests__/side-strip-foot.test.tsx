@@ -1,5 +1,5 @@
 /**
- * `SideStripFoot` (D6): the account row's name, host line (just the host
+ * `SideStripFoot`: the account row's name, host line (just the host
  * label - no running-agent count), health dot, collapsed avatar-only state,
  * and the signed-out fallback. Mounted through the real `SideTabStrip` so
  * `ColumnEdgeContext` and the real auth/agent-activity/selection-authority

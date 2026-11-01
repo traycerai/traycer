@@ -71,6 +71,7 @@ vi.mock("@/components/home/hooks/use-composer-toolbar-store", async () => {
     reasoningFallback: "model-default",
     seedKey: "chat-composer-picker-profile-test",
     values: {
+      ultracode: false,
       permission: "supervised",
       selection: {
         harnessId: "claude",
@@ -83,6 +84,7 @@ vi.mock("@/components/home/hooks/use-composer-toolbar-store", async () => {
     onSettingsChange: null,
     tuiOnly: false,
     chatLineCarriesAutoMode: null,
+    ultracodeCarried: false,
     hostId: null,
   });
   captured.toolbarStore = store;
@@ -295,6 +297,7 @@ function mountComposer() {
         steerCapable={false}
         steerProtocolSupported={false}
         autoPermissionModeProtocolSupported={null}
+        ultracodeProtocolSupported={false}
         getDraftBlobBridgeSupported={() => false}
         getActiveTurnForSteer={() => null}
         editingQueueItemId={null}

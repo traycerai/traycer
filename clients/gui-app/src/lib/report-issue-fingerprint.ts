@@ -61,7 +61,7 @@ function djb2(input: string): string {
 }
 
 /**
- * Computes the versioned `fp:v1:<hash>` fingerprint (critique C8). Identity is
+ * Computes the versioned `fp:v1:<hash>` fingerprint (C8). Identity is
  * error code + operation + causal provider/harness + typed subtype ONLY - the
  * parts that survive a fix. Stack shape does NOT enter this hash at all: a
  * one-frame refactor must never re-identify a defect. The normalized stack

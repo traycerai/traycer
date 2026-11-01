@@ -2,8 +2,8 @@ import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
 
 /**
- * The one line every bar reading is drawn on: the strip's reading tiles (F6)
- * and the header's readings (G6), usage and resources alike.
+ * The one line every bar reading is drawn on: the strip's reading tiles
+ * and the header's readings, usage and resources alike.
  *
  * One row tall, and every reading keeps its whole width, so one that does not
  * fit beside the others wraps onto a clipped second row: the line shows whole

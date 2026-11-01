@@ -136,11 +136,6 @@ type PendingSend = {
 };
 
 /**
- * One host's live draft mirror: `drafts.list` snapshot + `drafts.subscribe`
- * frames, debounced upsert, delete. Unreachable / `E_HOST_UNSUPPORTED` leaves
- * the sink's local persist as the source of truth.
- */
-/**
  * How a `drafts.delete` ended: `deleted` (the host removed its row),
  * `absent` (the host does not hold the row), `unsupported` (the host has no
  * drafts capability; nothing to delete), `failed` (closed or transport
@@ -152,6 +147,11 @@ export type DraftDeleteOutcome =
   | "unsupported"
   | "failed";
 
+/**
+ * One host's live draft mirror: `drafts.list` snapshot + `drafts.subscribe`
+ * frames, debounced upsert, delete. Unreachable / `E_HOST_UNSUPPORTED` leaves
+ * the sink's local persist as the source of truth.
+ */
 export class DraftMirrorSession {
   readonly hostId: string;
   private readonly rpc: DraftsHostRpc;
@@ -255,8 +255,8 @@ export class DraftMirrorSession {
     }
     await this.upsertDirty(ids);
     // Host treats `draftIds: []` as "publish every dirty draft". Never send
-    // that sentinel from a client with nothing pending (T6 is making the host
-    // half a no-op; both sides stay defensive).
+    // that sentinel from a client with nothing pending (the host half is being
+    // made a no-op too; both sides stay defensive).
     if (ids.length === 0) return;
     this.sendFlushFrame(ids);
   }
@@ -271,7 +271,7 @@ export class DraftMirrorSession {
   }
 
   /**
-   * Stash entries are immutable (decision #12): upsert once, never edit.
+   * Stash entries are immutable: upsert once, never edit.
    * A second call for an id already held as a live row is a no-op.
    */
   async publishImmutable(write: DraftWrite): Promise<void> {
@@ -634,7 +634,7 @@ export class DraftMirrorSession {
   ): Promise<void> {
     if (this.isAbandoned()) return;
     const wanted = draftIds === null ? null : new Set(draftIds);
-    // Decision #9: adopt lazily on the first debounced sync, not on mount.
+    // Adopt lazily on the first debounced sync, not on mount.
     await this.sink.adoptUnadoptedLandingDrafts(this.hostId, wanted);
     const writes = await this.sink.collectDirtyWrites(this.hostId);
     for (const entry of writes) {
@@ -809,11 +809,6 @@ export class DraftMirrorSession {
   }
 
   /**
-   * Read through a method so post-await checks are not CFA-narrowed to
-   * the pre-await `false`. `close()` / `markUnsupported()` can run
-   * while `list`/`upsert` are in flight.
-   */
-  /**
    * Has this bootstrap lost the right to mutate anything? Either the session
    * closed under it, or a newer bootstrap superseded it. Both answers mean the
    * same thing to every caller, and every caller is on the far side of an
@@ -896,6 +891,11 @@ export class DraftMirrorSession {
     }
   }
 
+  /**
+   * Read through a method so post-await checks are not CFA-narrowed to
+   * the pre-await `false`. `close()` / `markUnsupported()` can run
+   * while `list`/`upsert` are in flight.
+   */
   private isClosed(): boolean {
     return this.closed;
   }

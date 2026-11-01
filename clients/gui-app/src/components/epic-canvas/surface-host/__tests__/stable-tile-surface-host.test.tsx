@@ -187,7 +187,7 @@ describe("StableTileSurfaceHost lifecycle matrix (real store/coordinator, synthe
     expect(renderer.mountCount("chat-1")).toBe(1);
     expect(renderer.unmountCount("chat-1")).toBe(0);
 
-    // Same-pane reorder via the real action (design-review F3 - was a
+    // Same-pane reorder via the real action (previously a
     // handcrafted setState).
     act(() => {
       useEpicCanvasStore.getState().moveTabOnTabStrip("tab-1", {
@@ -226,7 +226,7 @@ describe("StableTileSurfaceHost lifecycle matrix (real store/coordinator, synthe
     expect(renderer.mountCount("chat-1")).toBe(1);
     expect(renderer.unmountCount("chat-1")).toBe(0);
 
-    // Wrap (design-review F3 - the old test's same-direction split
+    // Wrap (the old test's same-direction split
     // flattened 2->3 siblings instead of wrapping): a genuinely
     // PERPENDICULAR split ("bottom" against the root's "horizontal" group)
     // around chat-1's OWN pane. chat-3 rides along purely as the wrap
@@ -417,7 +417,7 @@ describe("StableTileSurfaceHost lifecycle matrix (real store/coordinator, synthe
 
     setPaneRoot(["chat-1", "term-1"], "chat-1", ["chat-1", "term-1"]);
     // Membership re-includes chat-1, but the registry has no unregister API -
-    // it already deleted the record on loss (F2). No body without a fresh
+    // it already deleted the record on loss. No body without a fresh
     // publish: this is the dormant state, not an automatic remount.
     expect(
       screen.queryByTestId("synthetic-tile-surface-body-chat-1"),
@@ -479,7 +479,7 @@ describe("StableTileSurfaceHost presentation contract (design-review F1)", () =>
     const record = screen.getByTestId("stable-tile-surface-record-chat-1");
     // No ancestor (including the plane root) carries aria-hidden="true" -
     // an aria-hidden ancestor overrides a descendant's own attribute, which
-    // is exactly the F1 defect: the plane used to shroud every record.
+    // is exactly the defect: the plane used to shroud every record.
     expect(record.closest('[aria-hidden="true"]')).toBeNull();
     expect(record.getAttribute("aria-hidden")).toBe("false");
     expect(record.hasAttribute("inert")).toBe(false);
@@ -500,7 +500,7 @@ describe("StableTileSurfaceHost presentation contract (design-review F1)", () =>
     const record = screen.getByTestId("stable-tile-surface-record-chat-1");
     expect(record.getAttribute("aria-hidden")).toBe("true");
     expect(record.hasAttribute("inert")).toBe(true);
-    // The F1 gap: aria-hidden/inert alone do not stop painting - only real
+    // The gap: aria-hidden/inert alone do not stop painting - only real
     // non-paint rules do. Opacity also flushes independently composited child
     // layers that Electron can otherwise retain after visibility changes.
     expect(record.classList.contains("invisible")).toBe(true);

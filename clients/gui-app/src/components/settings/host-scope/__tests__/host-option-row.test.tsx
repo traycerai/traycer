@@ -8,7 +8,7 @@ import {
   type FleetUpdateView,
 } from "@/lib/host/fleet-update/fleet-update-view";
 
-// Ticket 06 subject F, the row half: `HostOptionRow` renders EXACTLY the
+// The row half: `HostOptionRow` renders EXACTLY the
 // `updateView` prop it was handed, and nothing else - the isolation the hook
 // test (`use-fleet-update-views.test.tsx`) proves at the data source, this
 // proves at the LAST consumer, so a future prop threaded through some shared

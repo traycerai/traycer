@@ -2,7 +2,7 @@ import type { FleetUpdateView } from "@/lib/host/fleet-update/fleet-update-view"
 import { warrantsFastPoll } from "@/lib/host/fleet-update/fleet-update-view";
 
 /**
- * The bounds fleet observation runs under (plan §6), kept in one pure module so
+ * The bounds fleet observation runs under, kept in one pure module so
  * they can be asserted directly rather than inferred from a running scheduler.
  *
  * Every number here is a cost paid on someone else's machine — a remote host
@@ -42,7 +42,7 @@ export const FLEET_ACTIVE_POLL_MS = 2_000;
  * How long an observation is presented as current before it projects `unknown`.
  *
  * DERIVED from the cadence rather than written beside it, and that is
- * deliberate — ticket 04 shipped an inverted pair of hand-written timing
+ * deliberate — an earlier change shipped an inverted pair of hand-written timing
  * constants (an outer deadline shorter than the inner probe budget it
  * contained) and the fix there was the same move: make it one number so the
  * inversion cannot be reintroduced by editing one of two.

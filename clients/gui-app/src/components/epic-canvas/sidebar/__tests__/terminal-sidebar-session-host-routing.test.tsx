@@ -35,7 +35,7 @@ const clients = vi.hoisted(() => ({
 }));
 const listCalls = vi.hoisted<{ clients: unknown[] }>(() => ({ clients: [] }));
 // The client each ROW hands to its kill / rename mutation - the two reads
-// that stayed on the ambient host after the list moved (PR #1243, round 6).
+// that stayed on the ambient host after the list moved (PR #1243).
 const mutationClients = vi.hoisted<{ kill: unknown[]; rename: unknown[] }>(
   () => ({ kill: [], rename: [] }),
 );

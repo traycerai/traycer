@@ -1,5 +1,5 @@
 /**
- * Where a bot channel says an error (Tracy Bots T61): in the channel or the
+ * Where a bot channel says an error: in the channel or the
  * thread, never on the tab. The REAL `BotChannelView`, its thread panel, the
  * message box and its send-failure notice run over real stores; only the
  * host hooks are scripted. `bot.conversation.send` is a mutation each case
@@ -201,6 +201,7 @@ const LISTED_THREAD: BotThreadSummary = {
     senderUserId: "user-teammate",
     sentAt: 1_000,
     resolvedAt: null,
+    excerpt: null,
   },
   replyCount: 1,
   lastReplyAt: 2_000,
@@ -211,13 +212,13 @@ const LISTED_THREAD: BotThreadSummary = {
 const OPEN_LISTED_THREAD: BotOpenThread = {
   anchorMessageId: POST_ID,
   announcement: false,
-  answer: false,
+  anchorKind: null,
   sent: null,
 };
 const OPEN_UNOPENED_THREAD: BotOpenThread = {
   anchorMessageId: "question-1",
   announcement: true,
-  answer: false,
+  anchorKind: null,
   sent: null,
 };
 
@@ -237,13 +238,20 @@ function mount(openThread: BotOpenThread | null): void {
             directive={null}
             appConversationChatId={CHANNEL_ID}
             trunkChatId="trunk-chat"
-            openTurn={null}
             onOpenTurn={vi.fn()}
+            onOpenSession={vi.fn()}
+            landOn={null}
+            openMemory={null}
+            onOpenMemory={vi.fn()}
+            environmentId="env-1"
+            botNameOf={() => null}
             resolveMember={resolveMember}
             tasks={[]}
+            surfaceActions={null}
             openThread={openThread}
             onOpenThread={vi.fn()}
             onOpenActivity={onOpenActivity}
+            setupHistory={null}
           />
         </ChatExpansionTestProviders>
       </TooltipProvider>

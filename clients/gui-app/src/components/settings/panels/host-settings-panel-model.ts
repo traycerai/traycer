@@ -265,7 +265,7 @@ export function formatSource(source: HostInstalledRecord["source"]): string {
 }
 
 // `formatProgressKind` / `formatTransfer` / `formatBytes` lived here and are
-// DELETED, not moved with a re-export (F19). They were this file's private
+// DELETED, not moved with a re-export. They were this file's private
 // answer to "what is the host controller doing, and how big is it" - the boot
 // surface had its own, and the two disagreed on both the wording and the unit.
 // The one answer is `@/lib/host/host-progress-copy`, which every surface now

@@ -147,8 +147,8 @@ import {
 
 /**
  * The one "the device has not answered yet" string, shared by the body's status
- * line, the terminal create gate, and the chooser's cards. The core flows call
- * for the SAME message in all three, and four separate literals is four chances
+ * line, the terminal create gate, and the chooser's cards. All three show
+ * the SAME message, and four separate literals is four chances
  * for one to drift.
  */
 const LANDING_PANEL_CONNECTING_MESSAGE = "Connecting to the selected host…";
@@ -2422,7 +2422,7 @@ function useLandingTerminalShortcuts(args: {
   }, [landingPageId, onCloseAllTabs, surfaceActive]);
   // Indexed over the STRIP's rows, not over `state.tabs`: the placeholder is a
   // rendered row and can sit anywhere among them, so two projections would be
-  // two orders. Skipping it is the ticket's intent; landing on the neighbour
+  // two orders. Skipping it is intended; landing on the neighbour
   // the user can SEE is what the projection buys.
   const activateAdjacentTab = useCallback(
     (delta: 1 | -1) => {
@@ -2706,7 +2706,7 @@ function LandingTerminalPanelBody(props: {
   const activeTab =
     props.tabs.find((tab) => tab.instanceId === props.activeInstanceId) ?? null;
   // The chooser outranks the connecting status line, and deliberately: the
-  // core flows want a device that is still connecting to show the chooser with
+  // device that is still connecting shows the chooser with
   // DISABLED cards carrying that same message, not a blank body that never
   // explains what the panel is waiting to offer.
   //

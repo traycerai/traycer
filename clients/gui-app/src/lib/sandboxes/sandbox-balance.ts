@@ -34,7 +34,7 @@ export function sandboxBalanceMc(
 }
 
 /**
- * The two-hour and thirty-minute warnings (core flows, flow 5): the live
+ * The two-hour and thirty-minute warnings: the live
  * balance divided by the awake burn across the user's sandboxes.
  *
  *  - `none`: nothing is burning, the balance is unknown, or it covers more

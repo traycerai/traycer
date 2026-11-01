@@ -4412,7 +4412,7 @@ describe("<EpicsListPanel />", () => {
     expect(screen.queryByTestId("epics-list-delete-selected")).toBeNull();
   });
 
-  // T13: the delete confirmation is an unbounded pause with a human in it, so
+  // The delete confirmation is an unbounded pause with a human in it, so
   // `handleConfirmDelete` re-reads the verdict from the store rather than
   // trusting the render that opened the dialog. A mixed pending set must
   // re-filter, not refuse wholesale: the cloud row drops out, the local-home

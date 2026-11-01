@@ -450,8 +450,8 @@ function ResumeCompletionCardBody(props: {
 }
 
 /**
- * Opens the output window for the command whose delivery woke this turn
- * (`UI.md` §5). Absent on an older trigger that carries no command id - there
+ * Opens the output window for the command whose delivery woke this turn.
+ * Absent on an older trigger that carries no command id - there
  * is nothing to open, and a dead button would be worse than none.
  *
  * The same door the start and restart cards use, presence gate included: this

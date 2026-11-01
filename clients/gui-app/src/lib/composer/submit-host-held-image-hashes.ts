@@ -63,7 +63,7 @@ export interface SubmitHostHeldImageHashesArgs {
   readonly content: JsonContent;
   /** The composer's target host, or `null` where the surface owns placement. */
   readonly hostId: string | null;
-  /** This chat's own live stream's draft-blob bridge capability (T1). */
+  /** This chat's own live stream's draft-blob bridge capability. */
   readonly bridgeSupported: boolean;
   readonly ownerUserId: string | null;
 }

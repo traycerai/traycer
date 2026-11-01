@@ -385,7 +385,7 @@ function sceneInputFor(
  * The view contract's invariants (`view-contract/index.md` "Invariants"),
  * spelled out against one layout. `office-layout-contract.test.ts` pins the
  * same list against `layoutOffice`; this is that list again against a plan
- * this ticket owns, which is why it is not shared.
+ * this file owns, which is why it is not shared.
  */
 function checkContract(
   layout: OfficeLayout,
@@ -755,7 +755,7 @@ describe("planCampus", () => {
   });
 
   it("gives every partition team a cabin, HQ its own, and the district's solos one bullpen", () => {
-    // D38, pinned on the recording's shape. The plan this replaced built one
+    // Pinned on the recording's shape. The plan this replaced built one
     // room per lineage SUBTREE, and triage is one root with everybody under
     // it: 309 desks in a single 55 x 55 room, thirty teams with no cabin, no
     // plate and no region of their own. The counts below are the whole point
@@ -787,7 +787,7 @@ describe("planCampus", () => {
         problems.push(`no cabin for ${team.teamId}`);
         continue;
       }
-      // D16: the room's id is synthetic, and the REAL lead is on the plate.
+      // The room's id is synthetic, and the REAL lead is on the plate.
       const plate = plateAt.get(`${room.signTile.col},${room.signTile.row}`);
       if (plate === undefined) problems.push(`no plate on ${roomId}`);
       else if (plate.ownerAgentId !== team.leadAgentId) {
@@ -1158,7 +1158,7 @@ describe("planCampus", () => {
   });
 
   it("keeps every overview pip inside its own room and inside its district", () => {
-    // THE LIVE FINDING (M4), as a case. At overview a seat is a pip (D27) and
+    // THE LIVE FINDING (M4), as a case. At overview a seat is a pip and
     // a pip is a projected tile, so the population traces the shape the tiles
     // project to - a parallelogram. The block map used to answer that with an
     // axis-aligned rectangle of the same AREA, and on the acceptance pass's
@@ -1268,7 +1268,7 @@ describe("planCampus", () => {
     // other at all; this case is the ground-truth check for that, over a
     // real plan with many rooms rather than a hand-built pair.
     //
-    // `triage(1000, ...)` plans 32 Campus rooms (D38's HQ + 30 team cabins +
+    // `triage(1000, ...)` plans 32 Campus rooms (the HQ + 30 team cabins +
     // 1 bullpen) - the same fixture the "reads only the index's own
     // references" case below cites for that count - which is enough rooms to
     // make a quadratic all-pairs sweep a real property check without being
@@ -1350,10 +1350,10 @@ describe("planCampus", () => {
   });
 
   it("reads only the index's own references at lod 2, never layout.rooms or layout.props whole", () => {
-    // D38 replaced the old one-room-per-lineage-root Campus with one room per
+    // The partition replaced the old one-room-per-lineage-root Campus with one room per
     // partition team, so `triage(1000, 1)` - the largest room count any view
     // still has - plans 32 rooms (HQ + 30 team cabins + 1 bullpen), not the
-    // review's "1,000 rooms and 1,011 props" against the old plan. Measured on
+    // "1,000 rooms and 1,011 props" against the old plan. Measured on
     // this fixture.
     //
     // 70 props where the civic quarter found 47, and the 23 decompose exactly:
@@ -1847,8 +1847,8 @@ describe("planCampus", () => {
       // does; Campus draws it from the plan.
       if (seat.civicRoomId !== null) continue;
       const occupantId = occupantBySeatId.get(seat.seatId) ?? null;
-      // Occupied, not sheeted, `openRequests: 3` - the union the ticket
-      // measures the box against.
+      // Occupied, not sheeted, `openRequests: 3` - the union the box is
+      // measured against.
       const occupiedBoxes = spriteBoxesOf(layout, seat, {
         agentId: occupantId,
         name: occupantId,
@@ -1883,7 +1883,7 @@ describe("planCampus", () => {
   });
 
   it("I1: culls seats AND spots by their own PROJECTED box, not a raw tile viewport", () => {
-    // T2 F1: `chunkKeysOfBox(this.seatBox(seat))`/`chunkKeysOfBox(this.spotBox(spot))`
+    // F1: `chunkKeysOfBox(this.seatBox(seat))`/`chunkKeysOfBox(this.spotBox(spot))`
     // file a seat/spot under the chunks its own PROJECTED box covers. Real
     // Campus at 1,000 agents, over three populated windows - the chunk-
     // boundary corner this case originally shipped with (which, it turns
@@ -1897,7 +1897,7 @@ describe("planCampus", () => {
     // several: `buildSeatProps` caches a seat's/spot's own painter output by
     // seat id/tile, so a selection that re-enters view under a cache hit
     // would never reach `seatProps`/`spotProps` again, and this callback
-    // would miss it - exactly the gap the reviewer's own probe had to work
+    // would miss it - exactly the gap the original probe had to work
     // around by reaching into the cache. A fresh scene per window has no
     // such cache to hide behind.
     const epic = makeTestEpic("triage", 1000, 1);
@@ -1948,8 +1948,8 @@ describe("planCampus", () => {
       if (wantedSpots.size < allSpots.length) sawExcludedSpot = true;
     }
 
-    // Non-vacuous: at least one window genuinely contains spots (closing R3
-    // - the shipped window alone never could), and every window's exact
+    // Non-vacuous: at least one window genuinely contains spots (the shipped
+    // window alone never could), and every window's exact
     // match still excludes some of the world's seats and spots rather than
     // the comparison passing because both sides happened to be everything,
     // or both empty.
@@ -1959,7 +1959,7 @@ describe("planCampus", () => {
   });
 
   it("I1: a small window's spot query reads a small fraction of a whole-world one, through the index's own approachTile objects", () => {
-    // R3's read-budget half. Counting Proxies installed IN PLACE over the
+    // The read-budget check. Counting Proxies installed IN PLACE over the
     // exact `approachTile` object each spot carries - the same objects
     // `spotsIn`'s chunk index holds and `spotBox` reads through - so this
     // measures the real per-tile cost of the lookup the painter is fed
@@ -2022,7 +2022,7 @@ describe("planCampus", () => {
   });
 
   it("I3: a cabin's plate anchors at its tile PROJECTED, never at a raw col * OFFICE_TILE", () => {
-    // T2 F5: `officeSignsToDraw` anchors every sign at
+    // F5: `officeSignsToDraw` anchors every sign at
     // `projector.project(sign.tile.col, sign.tile.row)`. Real Campus cabins
     // at lod 2, so every plate a real plan hands the painter is checked, not
     // one hand-built sign object.
@@ -2066,7 +2066,7 @@ describe("planCampus", () => {
 /**
  * WHAT THE PAINTER OWES A CIVIC ROOM, and what it must not give it.
  *
- * Read O's findings 1 and 2: the civic seats and rooms reached the plan and then
+ * The civic seats and rooms reached the plan and then
  * fell through the painter. Beds and benches entered `layout.seats`, the scene
  * asked for their props like any other seat's, and the isometric painter had no
  * branch for them - so `campusSeatProps` put a `desk-iso` slab on a hospital bed

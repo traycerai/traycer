@@ -13,7 +13,7 @@ import {
  * Both hooks need the same non-obvious lifecycle - one transport session per
  * key however many components mount against it, terminal-entry replacement on
  * retry, consumer migration off a session that is being torn down, and
- * immediate teardown at zero (ADR-0003, no grace period). That lifecycle
+ * immediate teardown at zero (no grace period). That lifecycle
  * carries the feature's concurrency rules, so it lives here ONCE: two copies
  * would mean every fix has to be found and applied twice, and a copy that
  * missed one would fail only under the interleaving it was written for.
@@ -228,7 +228,7 @@ export function useSharedStreamSubscription<TFrame>(args: {
       current.refCount -= 1;
       current.consumers.delete(consumerId);
 
-      // ADR-0003: no grace period - tear down immediately when ref count
+      // No grace period - tear down immediately when ref count
       // reaches 0.
       if (current.refCount === 0) {
         current.unsubscribeFromStream();

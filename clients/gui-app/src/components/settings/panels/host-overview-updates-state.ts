@@ -176,7 +176,7 @@ export function useHostOverviewUpdates(input: {
    */
   readonly foregroundUpdateLine: string | null;
   /**
-   * The dispatching panel mount's token (D8), threaded to all three update
+   * The dispatching panel mount's token, threaded to all three update
    * dispatches so an `accepted` answer can be attributed to the mount that
    * asked for it. See `host-overview-rpc.ts`'s `settleUpdateDispatch`.
    */
@@ -1797,19 +1797,6 @@ function assetUnavailableReason(asset: PlatformAsset | null): string | null {
 }
 
 /**
- * Which refusals retire the REGION and which are just a bad attempt.
- *
- * `cli-unavailable` is structural — there is no Traycer CLI on that host to
- * shell, so no amount of retrying changes it. `externally-managed` is a
- * deliberate configuration (`TRAYCER_HOST_UPDATES=external`), and the cloud pin
- * is the supported control there. Both make every control in this region dead,
- * so both retire it.
- *
- * `cli-failed` / `invalid-output` are this attempt going wrong with the
- * mechanism intact. Retiring the region for those would take the retry away
- * from the person best placed to use it.
- */
-/**
  * Whether a check answer refutes the install-discovered refusal.
  *
  * `host.update.check` shells the very CLI the install could not find, so an
@@ -1836,7 +1823,6 @@ function checkRefutesDiscoveredRefusal(input: {
   );
 }
 
-/** Precedence over the region's four retirement sources, first one wins. */
 /**
  * Whether the mounted CLI-floor recheck runs: a REPAIRABLE floor is on
  * screen (the remedy names a command an upgrade can satisfy), in a region
@@ -1856,6 +1842,7 @@ function floorRecheckArmed(input: {
   );
 }
 
+/** Precedence over the region's four retirement sources, first one wins. */
 function resolveRegionDegrade(input: {
   readonly installDiscovered: OverviewDegradeReason | null;
   readonly checkSticky: OverviewDegradeReason | null;
@@ -1870,6 +1857,19 @@ function resolveRegionDegrade(input: {
   );
 }
 
+/**
+ * Which refusals retire the REGION and which are just a bad attempt.
+ *
+ * `cli-unavailable` is structural — there is no Traycer CLI on that host to
+ * shell, so no amount of retrying changes it. `externally-managed` is a
+ * deliberate configuration (`TRAYCER_HOST_UPDATES=external`), and the cloud pin
+ * is the supported control there. Both make every control in this region dead,
+ * so both retire it.
+ *
+ * `cli-failed` / `invalid-output` are this attempt going wrong with the
+ * mechanism intact. Retiring the region for those would take the retry away
+ * from the person best placed to use it.
+ */
 function stickyDegradeFor(
   outcome: CliShellFailure | "externally-managed",
 ): OverviewDegradeReason | null {

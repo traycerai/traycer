@@ -35,7 +35,7 @@ import {
 } from "@/stores/home/landing-draft-store";
 
 /**
- * The row actions are T04's, exercised end to end by
+ * The row actions are exercised end to end by
  * `draft-inventory-actions.test.ts` against real stores and a fake host. Here
  * they are a boundary: this file is about which rows the control lists and
  * which gesture reaches which action, not about what an action then does to a
@@ -207,7 +207,7 @@ describe("ComposerDraftsControl", () => {
     openList();
 
     // The active draft is the live buffer, never a row; chat drafts belong to
-    // All, not to the start page's own filter (D05).
+    // All, not to the start page's own filter.
     expect(listedRowIds()).toEqual(["landing-a"]);
     expect(
       screen.getAllByText("Ship the release notes").length,
@@ -224,7 +224,7 @@ describe("ComposerDraftsControl", () => {
     expect(screen.queryByRole("button", { name: "Start page" })).toBeNull();
   });
 
-  // T09: the pill click is the "button" entry point (H06's shortcut and the
+  // The pill click is the "button" entry point (H06's shortcut and the
   // palette are the other two, threaded through the registry below).
   it("fires drafts_list_opened with entry_point button when the pill opens the list", () => {
     const trackSpy = vi
@@ -483,7 +483,7 @@ describe("ComposerDraftsControl", () => {
 
     expect(document.querySelector("[data-slot=drawer-content]")).not.toBeNull();
     expect(document.querySelector("[data-slot=popover-content]")).toBeNull();
-    // No key hints on a phone; copy and delete are tappable instead (D22).
+    // No key hints on a phone; copy and delete are tappable instead.
     expect(screen.getByRole("button", { name: "Copy draft" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Delete draft" })).toBeTruthy();
   });
@@ -522,7 +522,7 @@ describe("ComposerDraftsControl", () => {
     }).firstElementChild;
     expect(word?.textContent).toBe("Open");
     // jsdom loads no stylesheet, so the reveal is asserted as the two rules
-    // that carry it (D14): the row's highlight and the cluster's hover.
+    // that carry it: the row's highlight and the cluster's hover.
     expect(word?.className).toContain(
       "group-data-[selected=true]/draft-row:opacity-100",
     );

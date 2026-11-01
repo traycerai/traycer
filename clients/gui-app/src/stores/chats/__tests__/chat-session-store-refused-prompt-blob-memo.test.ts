@@ -63,6 +63,7 @@ const SHA256 =
 const IMAGE_BYTES = new Uint8Array([1, 2, 3, 4]);
 
 const SETTINGS: ChatRunSettings = {
+  ultracode: false,
   harnessId: "codex",
   model: "gpt-5-codex",
   permissionMode: "supervised",
@@ -175,7 +176,7 @@ function createHarness(): Harness {
 }
 
 function emitOwnerSnapshot(callbacks: ChatStreamCallbacks): void {
-  callbacks.onConnectionStatus("open", null, null);
+  callbacks.onConnectionStatus("open", null, null, null);
   callbacks.onSnapshot({
     kind: "snapshot",
     hasBinaryPayload: false,
@@ -699,8 +700,8 @@ function reconnectWithQueueItems(
   items: ReadonlyArray<ChatQueuedPromptItem>,
 ): void {
   const callbacks = harness.callbacks();
-  callbacks.onConnectionStatus("closed", null, null);
-  callbacks.onConnectionStatus("open", null, null);
+  callbacks.onConnectionStatus("closed", null, null, null);
+  callbacks.onConnectionStatus("open", null, null, null);
   callbacks.onSnapshot({
     kind: "snapshot",
     hasBinaryPayload: false,
@@ -821,7 +822,7 @@ describe("cancelling a queued row whose setup failed returns it to the composer"
   });
 
   it("restores nothing when the host refuses the cancel with WORKTREE_CREATE_FAILED", async () => {
-    // Ticket 7's host semantics: the cancel materializes the worktree first and
+    // The host semantics: the cancel materializes the worktree first and
     // is REJECTED when that fails, leaving the row queued. The prompt is still
     // in the dock, so handing a copy to the composer would fork it - the same
     // reason the queued guard declines in the first place.

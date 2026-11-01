@@ -1,5 +1,5 @@
 /**
- * The one placement decision (plan §5.1 steps 1-7; decisions C3-C7, C10).
+ * The one placement decision.
  *
  * Pure: everything it reads is an argument, so the whole placement contract is
  * table-testable and the executor stays a dumb dispatcher.
@@ -31,7 +31,7 @@ const NO_MODIFIERS: TileOpenModifiers = {
   middle: false,
 };
 
-/** Step 3 (C4). Middle-click and host pushes are background; a single click
+/** Step 3. Middle-click and host pushes are background; a single click
  * previews; everything deliberate is permanent. */
 function resolveMode(
   gesture: TileOpenGesture,
@@ -41,7 +41,7 @@ function resolveMode(
   return gesture === "single" ? "preview" : "permanent";
 }
 
-/** Step 4 (C3, C4). Setting for the category, then `shift` forces a split and
+/** Step 4. Setting for the category, then `shift` forces a split and
  * `alt` inverts tab<->split. `pip` is untouched by `alt` - it inverts the two
  * placements it names, not "whatever is configured". */
 function resolvePlacement(
@@ -79,7 +79,7 @@ function categoryRecency(
 }
 
 /**
- * Step 6 (C5): the most recently active pane already hosting this category.
+ * Step 6: the most recently active pane already hosting this category.
  *
  * ponytail: the store keeps no cross-pane activation order - only
  * `activePaneId` and a per-pane tab `activationHistory` - so recency across
@@ -139,7 +139,7 @@ function anchorPaneId(canvas: EpicCanvasState): string | null {
 }
 
 /**
- * Steps 4a + 5 (C7, C10): a placement the caller already decided. A single-tile
+ * Steps 4a + 5: a placement the caller already decided. A single-tile
  * viewport has nowhere to split into, and a background open never creates
  * geometry, so both degrade a split to a tab in the pane that was named.
  */
@@ -199,7 +199,7 @@ function anchoredBeside(
  * A `beside` placement decided the pane but not the shape: its category's
  * setting row (plus the same modifiers as any configured open) says whether
  * the tile becomes a tab of that pane or a split to its right. Category
- * grouping (C5) and empty-pane filling deliberately do NOT apply - the whole
+ * grouping and empty-pane filling deliberately do NOT apply - the whole
  * point of naming the pane is that the tile lands next to it, not in
  * whichever pane last showed something similar.
  */
@@ -310,12 +310,12 @@ export function resolveTileOpen(input: {
       ? intent.placement.category
       : tileCategoryOf(intent.node);
 
-  // 2. Mode (C4). Needed before dedupe: a permanent hit on the pane's preview
+  // 2. Mode. Needed before dedupe: a permanent hit on the pane's preview
   // promotes it.
   const mode = resolveMode(intent.gesture, modifiers);
 
-  // 3. Dedupe (C6). A middle-click is explicitly asking for a SECOND, fresh
-  // background tab, so it never dedupes (B4, C4).
+  // 3. Dedupe. A middle-click is explicitly asking for a SECOND, fresh
+  // background tab, so it never dedupes (B4).
   if (intent.dedupe && !modifiers.middle) {
     const existing = findPaneTabForRef(canvas, intent.node);
     // A background open of an already-open tile changes nothing at all: it
@@ -334,7 +334,7 @@ export function resolveTileOpen(input: {
     }
   }
 
-  // 4a. Explicit placement wins over the setting (C7); a `beside` placement
+  // 4a. Explicit placement wins over the setting; a `beside` placement
   // wins on the pane and defers to its row on the shape.
   if (beside !== null) {
     return resolveBesidePlan({
@@ -356,7 +356,7 @@ export function resolveTileOpen(input: {
   }
 
   // A background open never creates geometry: `split` and `pip` carry no
-  // background mode by construction. Category grouping still applies (C5) -
+  // background mode by construction. Category grouping still applies -
   // a middle-clicked link belongs beside the other browser tabs, not in
   // whatever pane happens to be active.
   if (mode === "background") {

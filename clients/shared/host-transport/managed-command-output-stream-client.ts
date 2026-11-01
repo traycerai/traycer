@@ -9,8 +9,7 @@ import type { ManagedCommand } from "@traycer/protocol/host/managed-command/unar
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type {
   IStreamSession,
-  StreamCloseReason,
-  StreamConnectionStatus,
+  StatusChangeHandler,
   StreamFrameEnvelope,
 } from "./i-stream-session";
 import type { IStreamClient } from "./i-stream-client";
@@ -49,10 +48,7 @@ export interface ManagedCommandOutputStreamCallbacks {
   readonly onOlder: (window: ManagedCommandOutputOlderWindow) => void;
   readonly onStatus: (command: ManagedCommand) => void;
   readonly onDeleted: () => void;
-  readonly onConnectionStatus: (
-    status: StreamConnectionStatus,
-    reason: StreamCloseReason | null,
-  ) => void;
+  readonly onConnectionStatus: StatusChangeHandler;
 }
 
 export interface ManagedCommandOutputStreamClientOptions {
@@ -83,8 +79,8 @@ export class ManagedCommandOutputStreamClient {
     this.session.onServerFrame((envelope) => {
       this.handleServerFrame(envelope);
     });
-    this.session.onStatusChange((status, reason) => {
-      this.callbacks.onConnectionStatus(status, reason);
+    this.session.onStatusChange((status, reason, retryCause, continuity) => {
+      this.callbacks.onConnectionStatus(status, reason, retryCause, continuity);
     });
   }
 

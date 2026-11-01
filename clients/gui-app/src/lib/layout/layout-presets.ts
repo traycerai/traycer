@@ -75,7 +75,12 @@ export const SHIPPED_DEFAULT_VALUES: LayoutValues = {
   todo: { shown: "shown", size: "full" },
   attachImage: { shown: "shown" },
   access: { size: "full" },
-  model: { style: "text", reasoningControl: "slider", toolbarStyle: "flat" },
+  model: {
+    style: "text",
+    ultracodeStyle: "text",
+    reasoningControl: "slider",
+    toolbarStyle: "flat",
+  },
   mic: { shown: "shown" },
   railAgents: { shown: "shown" },
   railTerminals: { shown: "shown" },
@@ -144,7 +149,12 @@ const COMPACT_VALUES: LayoutValues = {
   background: { shown: "shown", size: "chip" },
   todo: { shown: "shown", size: "chip" },
   access: { size: "chip" },
-  model: { style: "bars", reasoningControl: "slider", toolbarStyle: "flat" },
+  model: {
+    style: "bars",
+    ultracodeStyle: "icon",
+    reasoningControl: "slider",
+    toolbarStyle: "flat",
+  },
   mic: { shown: "hidden" },
 };
 
@@ -178,7 +188,12 @@ const DETAILED_VALUES: LayoutValues = {
     compactButton: "shown",
   },
   // Every thinking level spelled out by name, which is what the list does.
-  model: { style: "bars-text", reasoningControl: "list", toolbarStyle: "flat" },
+  model: {
+    style: "bars-text",
+    ultracodeStyle: "icon-text",
+    reasoningControl: "list",
+    toolbarStyle: "flat",
+  },
   toolActivity: { size: "full" },
   thinking: { shown: "shown", size: "full" },
 };

@@ -48,6 +48,7 @@ export const CONFIGURATION_ITEM_READS = [
 export const CONFIGURATION_READS = [
   ...CONFIGURATION_ITEM_READS,
   "environment.configuration.skills.list",
+  "environment.configuration.skills.state",
   "environment.configuration.guide.get",
   "environment.secrets.list",
   "environment.secrets.versions",

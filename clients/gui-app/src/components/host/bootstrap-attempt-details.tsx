@@ -18,7 +18,7 @@ export interface BootstrapAttemptDetailsProps {
  *
  * Lives here rather than beside its original consumer because that consumer
  * (the host-unavailable card) stopped rendering in production and was deleted
- * in P3.4; importing a live surface out of a file queued for deletion would
+ * during the redesign; importing a live surface out of a file queued for deletion would
  * have re-anchored it. The window narrator draws it now.
  *
  * Deliberately NOT behind the "Show details" disclosure. The log PATH is the

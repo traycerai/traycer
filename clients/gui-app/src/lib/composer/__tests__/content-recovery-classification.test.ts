@@ -1233,7 +1233,7 @@ describe("content recovery classification", () => {
     expect(report.size).toBe(0);
   });
 
-  // R13 `-BZH5`: the leading-only invariant the round-5 note leaned on is
+  // `-BZH5`: the leading-only invariant the round-5 note leaned on is
   // EXEMPTED for skills - `isLegalSlashChip` returns true for
   // `kind === "skill"` at any position. A non-leading skill chip's `/name`
   // does not round-trip, because the raw-text converter only rebuilds a
@@ -1587,7 +1587,7 @@ describe("content recovery classification", () => {
     expect(report.size).toBe(0);
   });
 
-  // R13 `-B-Wc`: emission inherits `-4IH`'s adjacency rule. One link across a
+  // `-B-Wc`: emission inherits `-4IH`'s adjacency rule. One link across a
   // bold word arrives as three text nodes, so wrapping each independently
   // recovered three separate links where the user wrote one.
   it("emits a link split across text nodes as one link", () => {
@@ -1773,7 +1773,7 @@ describe("content recovery classification", () => {
   // The recovery text is quoted back verbatim for the user to copy. Trimming
   // it strips meaningful leading indentation - a Python block comes back
   // invalid, and they are told to resend something subtly not theirs.
-  // R7 `-oRi`: the round-5 hoist only reached TOP-LEVEL lists. A list nested
+  // `-oRi`: the round-5 hoist only reached TOP-LEVEL lists. A list nested
   // in a blockquote reached the projection untouched and joined as `foobar`.
   it("keeps list boundaries for a list nested in a blockquote", () => {
     const text = recoveryTextFromContent({
@@ -1830,7 +1830,7 @@ describe("content recovery classification", () => {
     expect(text).toBe("```\n    if True:\n        pass\n```");
   });
 
-  // R10 `-AdAM`: a list marker is visible in its absence, but a NUMBER is not.
+  // `-AdAM`: a list marker is visible in its absence, but a NUMBER is not.
   // The composer preserves non-default `attrs.start`, so dissolving the list
   // silently renumbered the user's steps from 1.
   it("keeps ordered-list numbering, including a non-default start", () => {
@@ -1867,7 +1867,7 @@ describe("content recovery classification", () => {
     expect(text).toBe("2. First\n3. Second");
   });
 
-  // R12 `-A8bL`: depth and association are structure, not decoration - a
+  // `-A8bL`: depth and association are structure, not decoration - a
   // nested step read as a sibling of its parent.
   it("indents a nested list under its parent item", () => {
     const text = recoveryTextFromContent({
@@ -1908,7 +1908,7 @@ describe("content recovery classification", () => {
     expect(text).toBe("1. parent\n   1. child");
   });
 
-  // R12 `-BQcf`: an item whose nested list is followed by a continuation
+  // `-BQcf`: an item whose nested list is followed by a continuation
   // paragraph used to emit the prose FIRST and the sub-list after, so the
   // trailing note jumped above the steps it was written to follow.
   it("keeps an item's children in document order", () => {
@@ -2098,7 +2098,7 @@ describe("content recovery classification", () => {
     expect(text).toBe("- one\n- two");
   });
 
-  // R10 `-AdAI`: content ending in a newline plus the join's own newline made
+  // `-AdAI`: content ending in a newline plus the join's own newline made
   // a blank code line the user never wrote. The serializer strips exactly one
   // terminal newline; match it byte for byte.
   it("preserves an atom block's terminal newline, matching its serializer", () => {

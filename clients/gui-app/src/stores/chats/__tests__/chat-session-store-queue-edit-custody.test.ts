@@ -60,6 +60,7 @@ const QUEUE_ITEM_ID = "queue-item-1";
 const MESSAGE_ID = "queued-message-1";
 
 const SETTINGS: ChatRunSettings = {
+  ultracode: false,
   harnessId: "codex",
   model: "gpt-5-codex",
   permissionMode: "supervised",
@@ -217,7 +218,7 @@ function emitSnapshot(
 /** Open the stream and seat a snapshot whose queue holds the ORIGINAL row. */
 function openWithQueuedRow(): Harness {
   const harness = createHarness();
-  harness.callbacks().onConnectionStatus("open", null, null);
+  harness.callbacks().onConnectionStatus("open", null, null, null);
   emitSnapshot(harness, [queuedRow(ORIGINAL)]);
   return harness;
 }
@@ -227,8 +228,8 @@ function reconnectWithItems(
   items: ReadonlyArray<ChatQueuedPromptItem>,
 ): void {
   const callbacks = harness.callbacks();
-  callbacks.onConnectionStatus("closed", null, null);
-  callbacks.onConnectionStatus("open", null, null);
+  callbacks.onConnectionStatus("closed", null, null, null);
+  callbacks.onConnectionStatus("open", null, null, null);
   emitSnapshot(harness, items);
 }
 
@@ -708,7 +709,7 @@ describe("a queued-prompt edit stays in custody until the host answers", () => {
 
   it("returns null, dispatches no frame and records nothing for a row that is not in the queue", () => {
     harness = createHarness();
-    harness.callbacks().onConnectionStatus("open", null, null);
+    harness.callbacks().onConnectionStatus("open", null, null, null);
     emitSnapshot(harness, []);
     const framesBefore = harness.sent.length;
 

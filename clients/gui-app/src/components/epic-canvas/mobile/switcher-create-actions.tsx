@@ -12,10 +12,10 @@ import { useSwitcherCreateArtifact } from "@/components/epic-canvas/mobile/use-s
 import { MobileNewTerminalDialog } from "@/components/epic-canvas/mobile/mobile-new-terminal-dialog";
 import { SwitcherNewItemRow } from "@/components/epic-canvas/mobile/switcher-list-row";
 import {
-  EPIC_NODE_ICONS,
   EPIC_NODE_LABELS,
   type CreatableArtifactKind,
 } from "@/lib/artifacts/node-display";
+import { StaticEpicNodeIcon } from "@/components/epic-canvas/epic-node-tab-icon";
 
 const ARTIFACT_KINDS: ReadonlyArray<CreatableArtifactKind> = [
   "spec",
@@ -137,14 +137,13 @@ export function SwitcherNewArtifactMenu(props: {
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
         {ARTIFACT_KINDS.map((kind) => {
-          const Icon = EPIC_NODE_ICONS[kind];
           return (
             <DropdownMenuItem
               key={kind}
               data-testid={`switcher-new-artifact-${kind}`}
               onSelect={() => create(kind)}
             >
-              <Icon className="size-3.5" />
+              <StaticEpicNodeIcon type={kind} className="size-3.5" />
               {EPIC_NODE_LABELS[kind]}
             </DropdownMenuItem>
           );

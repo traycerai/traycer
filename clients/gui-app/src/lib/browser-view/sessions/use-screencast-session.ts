@@ -1,3 +1,4 @@
+import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
 import {
   useCallback,
   useEffect,
@@ -18,6 +19,7 @@ import { BrowserScreencastStreamClient } from "@traycer-clients/shared/host-tran
 import type {
   StreamCloseReason,
   StreamConnectionStatus,
+  StreamContinuity,
 } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
@@ -119,10 +121,10 @@ export interface ScreencastSession {
    * The video plane's display state. `media` is non-null from the inbound
    * track onwards so the `<video>` can mount and decode; `active` says it has
    * decoded a frame and is the surface to show. The window in between is the
-   * loader's, never a JPEG frame kept alive underneath (ticket 26).
+   * loader's, never a JPEG frame kept alive underneath.
    */
   readonly video: VideoPlaneView;
-  /** The video plane's latest 5s stats sample (ticket 11); `null` off the live round. */
+  /** The video plane's latest 5s stats sample; `null` off the live round. */
   readonly videoStats: WebrtcVideoStatsSample | null;
   readonly lifecycle: ScreencastLifecycle;
   readonly details: string | null;
@@ -186,6 +188,10 @@ interface ScreencastRenderState {
   readonly image: ScreencastImage | null;
   readonly lifecycle: ScreencastLifecycle;
   readonly details: string | null;
+  readonly heldPresentation: {
+    readonly lifecycle: ScreencastLifecycle;
+    readonly details: string | null;
+  } | null;
   readonly frameSize: ScreencastFrameSize | null;
   readonly navState: BrowserNavState;
 }
@@ -283,7 +289,7 @@ function scopeEpicId(scope: HostResourceScope): string | null {
  * (`MobileRunnerHost.browserView = null`) answer `null`.
  *
  * Everything else is a `"viewer"`: it watches the tab, and the host refuses
- * its `arm` and its input frames outright (security review root cause G). The
+ * its `arm` and its input frames outright (root cause G). The
  * declaration is what the host acts on, so a modified client can still claim
  * `"tile"` - the tier bounds a cooperating viewer, it does not authorize one.
  */
@@ -351,7 +357,7 @@ export function useScreencastSession(
   const lastViewportRef = useRef<ScreencastViewportInput | null>(null);
   /**
    * The host's smoothed control-plane RTT for this subscription, refreshed by
-   * every `rttProbe`, `null` until the first one lands (ticket 18). One value
+   * every `rttProbe`, `null` until the first one lands. One value
    * feeds all three viewer-side deadlines - the arm buffer inside the
    * controller, the video plane's first-frame window, and staleness below -
    * so they can never disagree about how slow this link is.
@@ -436,6 +442,7 @@ export function useScreencastSession(
     client,
     image: null,
     lifecycle: "connecting",
+    heldPresentation: null,
     details: null,
     frameSize: null,
     logicalViewport: null,
@@ -615,7 +622,7 @@ export function useScreencastSession(
     });
     videoPlaneRef.current = videoPlane;
 
-    // Ticket 15: human input rides the round's DataChannels while both are
+    // Human input rides the round's DataChannels while both are
     // open, and reverts to the mux the moment they are not. Two independent
     // reverts, deliberately - the entry publishes `inputReady: false` on
     // channel close / round supersede / peer failure, and the controller's
@@ -636,16 +643,18 @@ export function useScreencastSession(
     const onConnectionStatus = (
       status: StreamConnectionStatus,
       reason: StreamCloseReason | null,
+      _retryCause: FatalErrorDetails | null,
+      continuity: StreamContinuity,
     ): void => {
       if (stream !== null && !isCurrent()) return;
-      if (status !== "open") {
+      if (status !== "open" && continuity !== "held") {
         controller.notePresentedSequence(null);
         // Plane state cannot outlive the transport that established it: the
         // next subscription starts on JPEG until the host says otherwise.
         controller.noteViewportEpoch(null);
         controller.setCaptureMode("jpeg");
         controller.clearLocalArm(false);
-      } else {
+      } else if (status === "open" && continuity !== "continued") {
         // Restate the measured geometry for THIS round - see `lastViewportRef`.
         // On `open`, because that is the first moment the transport stops
         // dropping what it is handed; every earlier attempt (the bridge's own
@@ -664,7 +673,24 @@ export function useScreencastSession(
           });
         }
       }
-      handleStreamStatus(status, reason, patchStreamState);
+      if (continuity === "continued") {
+        patchStreamState((base) => ({
+          ...base.heldPresentation,
+          heldPresentation: null,
+        }));
+      } else if (continuity === "held") {
+        patchStreamState((base) => ({
+          lifecycle: "stale",
+          details: "Reconnecting to the screencast stream.",
+          heldPresentation: base.heldPresentation ?? {
+            lifecycle: base.lifecycle,
+            details: base.details,
+          },
+        }));
+      } else {
+        patchStreamState({ heldPresentation: null });
+        handleStreamStatus(status, reason, patchStreamState);
+      }
     };
 
     const onServerFrame = (
@@ -702,8 +728,8 @@ export function useScreencastSession(
         // The JPEG cast has stopped, so the frame still on screen is the last
         // one of a plane that is no longer producing: drop it - and with it the
         // geometry its hit test was measured against - and let the tile show
-        // its connecting loader until a plane actually paints again (ticket
-        // 26). This is the ONLY thing that retires a JPEG frame; a frame
+        // its connecting loader until a plane actually paints again.
+        // This is the ONLY thing that retires a JPEG frame; a frame
         // arriving is what puts one up.
         if (frame.mode === "video") {
           patchStreamState({ image: null, frameSize: null });
@@ -873,8 +899,8 @@ export function useScreencastSession(
       videoPlaneRef.current?.noteVideoFrame(null);
     };
     let frameHandle: number | null = null;
-    // The metadata argument is the whole glass-to-glass measurement (ticket
-    // 17): `captureTime`/`receiveTime`/`expectedDisplayTime` are the only
+    // The metadata argument is the whole glass-to-glass measurement:
+    // `captureTime`/`receiveTime`/`expectedDisplayTime` are the only
     // client-side view of capture-to-paint there is, and discarding them was
     // what left `glassToGlassMs` null on every sample.
     const onDecodedFrame: VideoFrameRequestCallback = (_now, metadata) => {
@@ -912,7 +938,7 @@ export function useScreencastSession(
     const timer = window.setInterval(() => {
       // While the video plane paints, its decoded frames ARE the liveness
       // signal - the JPEG pump is off, so `lastFrameAt` would freeze at the
-      // last JPEG frame and flip a healthy tile to "stale" (G3).
+      // last JPEG frame and flip a healthy tile to "stale".
       const videoFrameAt = videoPlaneRef.current?.lastVideoFrameAt() ?? null;
       const lastFrameAt = videoFrameAt ?? controller.lastFrameAt();
       if (lastFrameAt === null) return;
@@ -1151,12 +1177,12 @@ function deriveScreencastPlaneView(input: {
   // A video tile paints no JPEG frame, so `notePresented` never runs and the
   // liveness the chrome reads has to come from the decoded video frames
   // instead. Degraded lifecycles still win - `stale` in particular is how a
-  // frozen video track surfaces (G3).
+  // frozen video track surfaces.
   const lifecycle = current ? streamState.lifecycle : "connecting";
   const upgradable =
     lifecycle === "waiting" || lifecycle === "idle" || lifecycle === "live";
   // The video plane's own geometry wins only while it is painting, so a
-  // fallback to JPEG reverts the hit-test box with no restore step (G4).
+  // fallback to JPEG reverts the hit-test box with no restore step.
   const jpegFrameSize = current ? streamState.frameSize : null;
   const frameSize = video.active
     ? ((current ? streamState.logicalViewport : null) ?? input.videoFrameSize)
@@ -1197,6 +1223,7 @@ function resetScreencastStateForClient(
     client,
     image: null,
     lifecycle: "connecting",
+    heldPresentation: null,
     details: clientlessDetails(client === null),
     frameSize: null,
     logicalViewport: null,

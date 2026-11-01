@@ -27,8 +27,7 @@ import { alwaysAvailable } from "@/lib/settings/settings-availability";
  *
  * Everything they say identically is said once in {@link railRegionBase}, and
  * their name and icon come from `LEFT_PANEL_DEFINITIONS` rather than from a
- * second list here - which is why the Chats panel is "Agents" in the index
- * (C-35).
+ * second list here - which is why the Chats panel is "Agents" in the index.
  */
 
 const RAIL_ROWS = [{ kind: "position-order", group: "rail" }] as const;

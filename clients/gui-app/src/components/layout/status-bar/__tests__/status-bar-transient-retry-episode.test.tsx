@@ -355,7 +355,7 @@ describe("a transient account's scheduled re-read", () => {
     expect(mocks.collect).toHaveBeenCalledTimes(1);
 
     // The usage region is hidden, so there is no strip at all - and this is
-    // where the reviewer's sequence lands: a background read answers the
+    // where the sequence lands: a background read answers the
     // account authoritatively, and the read after it times out. Nothing was
     // drawing either answer, and both are in the envelope the next strip
     // reads. So the episode that spent its one-shot is over.

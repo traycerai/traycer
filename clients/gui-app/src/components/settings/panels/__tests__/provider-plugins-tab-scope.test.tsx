@@ -23,7 +23,7 @@ import { useProvidersWorkspaceSelectionStore } from "@/stores/settings/providers
 import { useWorkspaceFoldersStore } from "@/stores/workspace/workspace-folders-store";
 
 /**
- * F5: Plugins tab reuses `useProviderNativeScope` + `McpScopePicker` with
+ * Plugins tab reuses `useProviderNativeScope` + `McpScopePicker` with
  * locationLabel "Plugins location". List and mutate must stamp the selected
  * scope and workspaceRoot — not hardcode global.
  */

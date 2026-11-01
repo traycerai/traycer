@@ -58,6 +58,7 @@ export interface ComposerToolbarValues {
   readonly selection: HarnessModelSelection;
   readonly reasoning: ReasoningLevel;
   readonly serviceTier: ServiceTier;
+  readonly ultracode: boolean;
 }
 
 export interface ComposerToolbarCatalog {
@@ -83,6 +84,8 @@ export interface ComposerToolbarCatalog {
    * `autoModeOfferableHere`.
    */
   readonly chatLineCarriesAutoMode: boolean | null;
+  /** The owning surface's negotiated stream or create line carries the request. */
+  readonly ultracodeCarried: boolean;
   /** `undefined` while the harness list is loading / the surface is inactive. */
   readonly harnesses: ReadonlyArray<HarnessOption> | undefined;
   /**
@@ -136,6 +139,8 @@ interface ComposerToolbarDerived {
   readonly permission: PermissionMode;
   readonly reasoning: ReasoningLevel;
   readonly serviceTier: ServiceTier;
+  /** Saved chat intent, independent of model eligibility. */
+  readonly ultracode: boolean;
   /** Permission modes the selected harness honors; `null` while the catalog
    *  is loading or the harness is unknown (picker keeps every option enabled). */
   readonly supportedPermissionModes: ReadonlyArray<PermissionMode> | null;
@@ -210,6 +215,7 @@ export interface ComposerToolbarActions {
   readonly applyComposerSelection: (input: ApplyComposerSelectionInput) => void;
   readonly setReasoning: (next: ReasoningLevel) => void;
   readonly setServiceTier: (next: ServiceTier) => void;
+  readonly setUltracode: (next: boolean) => void;
   /**
    * Replace the raw values when the seed identity changes (draft swap,
    * settings restored from persistence). No-op when `seedKey` matches the
@@ -263,6 +269,7 @@ export interface CreateComposerToolbarStoreInput {
   readonly tuiOnly: boolean;
   /** Seeds `catalog.chatLineCarriesAutoMode`; kept in sync via `setCatalog`. */
   readonly chatLineCarriesAutoMode: boolean | null;
+  readonly ultracodeCarried: boolean;
   /** Seeds `catalog.hostId`; kept in sync at runtime via `setCatalog`. */
   readonly hostId: string | null;
   /**
@@ -303,6 +310,7 @@ export function createComposerToolbarStore(
   const initialCatalog: ComposerToolbarCatalog = {
     hostId: input.hostId,
     chatLineCarriesAutoMode: input.chatLineCarriesAutoMode,
+    ultracodeCarried: input.ultracodeCarried,
     harnesses: undefined,
     modelsHarnessId: input.values.selection.harnessId,
     models: EMPTY_MODELS,
@@ -368,7 +376,10 @@ export function createComposerToolbarStore(
       // the track); `setSelection` is the low-level setter for tests / internal
       // same-harness model edits only.
       setSelection: (next) => {
-        update({ selection: next });
+        update({
+          selection: next,
+          ultracode: next.harnessId === "claude" && get().values.ultracode,
+        });
       },
       // The combined commit path used by every memory-aware entry point. A
       // single `update()` with all three values patched emits at most once - a
@@ -410,6 +421,7 @@ export function createComposerToolbarStore(
           selection,
           reasoning: purpose === "setting" ? settingReasoning : reasoning,
           serviceTier,
+          ultracode: selection.harnessId === "claude" && previous.ultracode,
         });
       },
       setReasoning: (next) => {
@@ -417,6 +429,11 @@ export function createComposerToolbarStore(
       },
       setServiceTier: (next) => {
         update({ serviceTier: next });
+      },
+      setUltracode: (next) => {
+        update({
+          ultracode: get().values.selection.harnessId === "claude" && next,
+        });
       },
 
       applySeed: (seedKey, values) => {
@@ -481,6 +498,7 @@ export function settingsFromDerived(
     // site shared with the picker display); the codex-adapter still re-filters
     // on the wire as defense-in-depth.
     serviceTier: derived.serviceTier,
+    ultracode: derived.ultracode,
   });
 }
 
@@ -577,6 +595,7 @@ function deriveToolbarState(
   const derived: ComposerToolbarDerived = {
     selection,
     selectedModel,
+    ultracode: selection.harnessId === "claude" && values.ultracode,
     permission: normalizePermissionMode(
       values.permission,
       supportedPermissionModes,
@@ -693,6 +712,7 @@ function sameCatalog(
     // A host switch with an otherwise-identical (cached) catalog must still
     // land: `hostId` keys the memory reads/writes downstream of this store.
     a.hostId === b.hostId &&
+    a.ultracodeCarried === b.ultracodeCarried &&
     a.harnesses === b.harnesses &&
     a.modelsHarnessId === b.modelsHarnessId &&
     a.models === b.models &&

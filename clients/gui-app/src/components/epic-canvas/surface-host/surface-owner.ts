@@ -1,5 +1,5 @@
 /**
- * Ticket 21 slice 4: the single centralized discriminator deciding whether a
+ * The single centralized discriminator deciding whether a
  * pane tab renders through `StableTileSurfaceHost` (a `TileSurfaceSlot`
  * geometry anchor, real body painted elsewhere) or inline (`ActiveTabBody`'s
  * existing `EpicNodeTile` path), per the design's "chat-first migration with
@@ -14,7 +14,7 @@
  * `isHostedSurfaceEligible` is the shared candidate rule extracted so
  * `tile-surface-membership.ts`'s canvas-wide membership derivation and this
  * module's render-routing decision are structurally incapable of disagreeing
- * (design-review slice-4 finding 2: they used to drift on remote-deletion,
+ * (they used to drift on remote-deletion,
  * producing two simultaneous owners for the same instance). `surfaceOwnerFor`
  * layers the switch check on top - membership itself is switch-independent
  * by design (see `stable-tile-surface-host-switch.ts`: "membership and the

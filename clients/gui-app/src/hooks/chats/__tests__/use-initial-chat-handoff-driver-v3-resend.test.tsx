@@ -36,6 +36,7 @@ vi.mock("sonner", () => ({
 }));
 
 const SETTINGS: ChatRunSettings = {
+  ultracode: false,
   harnessId: "codex",
   model: "gpt-5-codex",
   permissionMode: "supervised",

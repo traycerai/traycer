@@ -808,7 +808,7 @@ describe("describeCliFloorRemedy", () => {
         if (candidate.belowFloor) {
           // Bypassing describeDesktopFloorFallback would expose a normal
           // Desktop action for this refusal; these fallback pins must turn RED
-          // under the concrete D01 ablation.
+          // under the concrete ablation.
           expect(result.sentence).toBe(
             `Traycer v${candidate.version} is the latest on this update channel and its command-line tools are below 1.3.0-rc.4. Open a terminal on build-host and run the copied command; this page rechecks while it is open.`,
           );
@@ -869,7 +869,7 @@ describe("describeCliFloorRemedy", () => {
         }),
       );
       // Removing the platform-specific absolute-path/no-PATH-guessing guard
-      // would guess a command for an unsafe case; these D06 pins must RED.
+      // would guess a command for an unsafe case; these pins must RED.
       expect(
         result.actions.some((action) => action.kind === "copy-command"),
       ).toBe(pathCase.copy);
@@ -1022,7 +1022,7 @@ describe("describeCliFloorRemedy", () => {
       );
       expect(result.sentence).toBe(failure.sentence);
       // Mapping failures back to Checking/null-label/checkOnMount true would
-      // hide recovery; this negative retry/help pin must RED under that D02
+      // hide recovery; this negative retry/help pin must RED under that
       // ablation.
       expect(result.actions).toEqual([
         {

@@ -15,7 +15,7 @@ import {
 } from "@/stores/notifications/needs-you-items";
 
 /**
- * `selectNeedsYouItems` / `needsYouReasonOf` (D10): the pure selector behind
+ * `selectNeedsYouItems` / `needsYouReasonOf`: the pure selector behind
  * the Notifications drawer's Needs you group and its count. Rows are built by hand rather
  * than through a live store, since the selector's contract is entirely a
  * function of the merged row - resolution, host kind, and payload. The group's
@@ -71,7 +71,7 @@ const REASON_CASES: ReadonlyArray<
     { hostKind: "interview.requested", payload: INTERVIEW_PAYLOAD },
     "reply",
   ],
-  // Auto-judge (S-41) never files an approval otherwise.
+  // Auto-judge never files an approval otherwise.
   ["a resolved approval", { resolvedAt: 2_000 }, null],
   [
     "a resolved interview",
@@ -190,7 +190,7 @@ describe("groupNeedsYouByEpic", () => {
 
 /**
  * `useNeedsYouItems` against a real `useCloudNotificationsStore` snapshot
- * (finding 3): the cloud store keys its rows by `cloudNotificationFeedId`,
+ * The cloud store keys its rows by `cloudNotificationFeedId`,
  * not by the bare `entryId`, so this exercises the actual wiring the pure
  * selector's hand-built rows above cannot catch.
  */

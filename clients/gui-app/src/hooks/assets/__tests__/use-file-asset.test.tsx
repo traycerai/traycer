@@ -87,7 +87,7 @@ const defaultStreamBindingRef = vi.hoisted(() => ({
 
 vi.mock("@/hooks/host/use-host-stream-client-for", () => ({
   useHostStreamClientFor: () => wsStreamClientRef.value,
-  // `useFileAsset` now takes the full binding (Codex re-review, transport
+  // `useFileAsset` now takes the full binding (transport
   // pin/unpin) - `pin`/`unpin` are no-ops here since the mock's single
   // shared `wsStreamClientRef.value` never actually tears down regardless;
   // tests exercising the pin/unpin CONTRACT itself construct their own
@@ -149,7 +149,7 @@ class MockStreamSession implements IStreamSession {
 
   close(): void {
     this.closed = true;
-    this.statusChangeHandler?.("closed", { kind: "caller" }, null);
+    this.statusChangeHandler?.("closed", { kind: "caller" }, null, null);
   }
 
   emitFrame(
@@ -166,7 +166,7 @@ class MockStreamSession implements IStreamSession {
     status: "connecting" | "open" | "reconnecting" | "closed",
     reason: StreamCloseReason | null,
   ): void {
-    this.statusChangeHandler?.(status, reason, null);
+    this.statusChangeHandler?.(status, reason, null, null);
   }
 }
 
@@ -615,7 +615,7 @@ describe("useFileAsset", () => {
     // `emitBytes` above feeds); `second` resolves from the shared cache
     // without ever invoking its own fetcher - a genuine cache hit, and
     // exactly the case a fresh `<img>` remount can't detect via
-    // `img.complete` (ticket 07 closing E2E item).
+    // `img.complete`.
     expect(first.result.current.servedFromCache).toBe(false);
     expect(second.result.current.servedFromCache).toBe(true);
     expect(createObjectUrlMock).toHaveBeenCalledTimes(1);
@@ -1127,7 +1127,7 @@ describe("useFileAsset", () => {
     );
   });
 
-  // Rename case (sol re-review): the old side of a rename must classify by
+  // Rename case: the old side of a rename must classify by
   // its PREVIOUS path, not the new one - `docs/report.bin` alone would read
   // as a generic binary and lose the PDF-specific fallback copy/telemetry.
   it("classifies a git rename's old side as a document by its previous PDF path", async () => {

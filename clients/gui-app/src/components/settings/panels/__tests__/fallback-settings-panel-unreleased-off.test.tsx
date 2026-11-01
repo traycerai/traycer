@@ -129,7 +129,7 @@ vi.mock(
 // straight off the Select's trigger. `importOriginal` keeps
 // `catalogModelForFamily`, which the card imports directly from this module.
 /**
- * R4's own catalog: empty (`new Map()`) by default, populated by the Pin 6
+ * The catalog: empty (`new Map()`) by default, populated by the Pin 6
  * describe block below with a Codex catalog containing Terra - the one model
  * that lets a genuine "one model, one tier" conflict exist under the pattern
  * rule for that fixture's stored policy.

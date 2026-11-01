@@ -274,7 +274,7 @@ export const PERSIST_STORES = [
   { camelName: "onboarding", leaf: "onboarding", kind: "static" },
   { camelName: "commandPalette", leaf: "command-palette", kind: "static" },
   { camelName: "composerDraft", leaf: "composer-drafts", kind: "static" },
-  // The new-agent modal's per-epic draft patch. Persisted (D21) so a modal
+  // The new-agent modal's per-epic draft patch. Persisted so a modal
   // draft survives a reload and lists before host sync, exactly as a chat
   // draft does — same tier and same reasoning as `composerDraft`.
   {
@@ -495,6 +495,14 @@ export const PERSIST_STORES = [
   {
     camelName: "botPaneWidths",
     leaf: "bot-pane-widths",
+    kind: "static",
+  },
+  // The channel column's arrangement, one per device: the sections' order,
+  // each section's channels' order, the collapsed sections
+  // (`bot-column-layout-store.ts`).
+  {
+    camelName: "botColumnLayout",
+    leaf: "bot-column-layout",
     kind: "static",
   },
 

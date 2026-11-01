@@ -284,6 +284,9 @@ function usePanelBox(): {
   return { setElement, box };
 }
 
+/** How a height change is reached: eased over 220ms, or in the frame. */
+type PanelMove = "ease" | "instant";
+
 /**
  * What the slot's drawn height belongs to, and whether reaching it is one of
  * the three moves L-152 eases (L-165).
@@ -294,9 +297,6 @@ function usePanelBox(): {
  * survive the render in between or the ease is spent on nothing and the move
  * that matters goes instant.
  */
-/** How a height change is reached: eased over 220ms, or in the frame. */
-type PanelMove = "ease" | "instant";
-
 interface PanelEaseState {
   readonly section: ChatDockSection;
   readonly height: number;
@@ -411,37 +411,6 @@ function ChatDockAttachedPanelContent(props: {
 }
 
 /**
- * THE slot the pills switch over: one box above the composer, with the resize
- * handle on its top edge and whichever pill is open inside it (L-142).
- *
- * One slot rather than one box per panel is what makes L-152 possible at all.
- * A switch keeps this element mounted and eases its height from the old
- * content's to the new one's while the two contents crossfade inside it; if
- * every panel brought its own animated box, a switch would collapse one to
- * nothing and grow the other from nothing, which is the jumpy swap the owner
- * reported. It also means one drag state, one `aria-controls` target and one
- * `role="region"` - rather than a second copy of each arriving mid-crossfade,
- * with the same `id` on both.
- *
- * `height` is the one non-compositor property in the file and it is confined
- * to this container. There is no transform that does this job: the panel has
- * to make ROOM, and the stack it sits in is bottom-anchored (the chat pane's
- * lower surfaces are an `absolute inset-x-0 bottom-0` overlay,
- * `chat-tile.tsx`), so growing this box moves the pill row up and leaves the
- * composer exactly where it is. A transform would slide the panel OVER the
- * composer instead, which is the one element on screen whose position must
- * not move. One element's height, for 220ms, transient, is the trade the
- * accordion case has always made.
- *
- * ONLY those three ease (L-165). Every other cause of a height change - a row
- * arriving mid-turn, an Arrow keypress on the handle, the window or the tile
- * being resized - lands in the frame it is made. Easing them all was a
- * frequency defect rather than a taste one: a turn touching twelve files
- * would have restarted a 220ms tween twelve times and never let the frame
- * settle, which is the band L-148 and `motion-opportunities.md` R5 and R7
- * already ruled out by name.
- */
-/**
  * L-165: how the slot is reaching the height it is drawing, and how it last
  * actually moved.
  *
@@ -478,6 +447,37 @@ function usePanelEase(
   return { applied, lastMove: heightChanged ? applied : eased.lastMove };
 }
 
+/**
+ * THE slot the pills switch over: one box above the composer, with the resize
+ * handle on its top edge and whichever pill is open inside it (L-142).
+ *
+ * One slot rather than one box per panel is what makes L-152 possible at all.
+ * A switch keeps this element mounted and eases its height from the old
+ * content's to the new one's while the two contents crossfade inside it; if
+ * every panel brought its own animated box, a switch would collapse one to
+ * nothing and grow the other from nothing, which is the jumpy swap the owner
+ * reported. It also means one drag state, one `aria-controls` target and one
+ * `role="region"` - rather than a second copy of each arriving mid-crossfade,
+ * with the same `id` on both.
+ *
+ * `height` is the one non-compositor property in the file and it is confined
+ * to this container. There is no transform that does this job: the panel has
+ * to make ROOM, and the stack it sits in is bottom-anchored (the chat pane's
+ * lower surfaces are an `absolute inset-x-0 bottom-0` overlay,
+ * `chat-tile.tsx`), so growing this box moves the pill row up and leaves the
+ * composer exactly where it is. A transform would slide the panel OVER the
+ * composer instead, which is the one element on screen whose position must
+ * not move. One element's height, for 220ms, transient, is the trade the
+ * accordion case has always made.
+ *
+ * ONLY those three ease (L-165). Every other cause of a height change - a row
+ * arriving mid-turn, an Arrow keypress on the handle, the window or the tile
+ * being resized - lands in the frame it is made. Easing them all was a
+ * frequency defect rather than a taste one: a turn touching twelve files
+ * would have restarted a 220ms tween twelve times and never let the frame
+ * settle, which is the band L-148 and `motion-opportunities.md`
+ * already ruled out by name.
+ */
 export function ChatDockAttachedPanelSlot(props: {
   readonly section: ChatDockSection;
   readonly panelId: string;

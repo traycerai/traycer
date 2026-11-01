@@ -19,7 +19,7 @@ function selectedLeaseEquals(
 }
 
 /**
- * This window's lease for ONE host (connection registry §1: all status UI
+ * This window's lease for ONE host (all status UI
  * derives from the lease vocabulary - no surface reads sockets, probe caches,
  * or the cloud DTO directly).
  *

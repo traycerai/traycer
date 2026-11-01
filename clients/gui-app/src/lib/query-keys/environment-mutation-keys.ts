@@ -34,6 +34,16 @@ export const environmentMutationKeys = {
     ["environment.configuration.skills.remove"] as const,
   configurationSkillsSetProviders: () =>
     ["environment.configuration.skills.setProviders"] as const,
+  configurationSkillsSetPolicy: () =>
+    ["environment.configuration.skills.setPolicy"] as const,
+  configurationSkillsUpdate: () =>
+    ["environment.configuration.skills.update"] as const,
+  configurationSkillsRestoreBundled: () =>
+    ["environment.configuration.skills.restoreBundled"] as const,
+  configurationSkillsImport: () =>
+    ["environment.configuration.skills.import"] as const,
+  configurationSkillsCheckUpdates: () =>
+    ["environment.configuration.skills.state", "refresh"] as const,
   configurationPolicyPut: () =>
     ["environment.configuration.policy.put"] as const,
   membersInvite: () => ["environment.members.invite"] as const,

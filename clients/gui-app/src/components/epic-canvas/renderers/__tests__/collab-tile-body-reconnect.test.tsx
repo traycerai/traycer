@@ -10,8 +10,8 @@
  * An earlier version of this suite mocked `useEpicArtifactFragment`,
  * `useEpicArtifactBodyAwareness`, `useEpicArtifactBodyAvailability` and
  * `useEpicArtifactBodySubscribeAnswered` with a mutable map and forced
- * `rerender()` calls to move between states. A reviewer correctly pointed out
- * that this bypasses the exact path the suite claims to cover: a non-terminal
+ * `rerender()` calls to move between states. That bypasses
+ * the exact path the suite claims to cover: a non-terminal
  * `unavailable` body-lane frame (`terminal: false`) ->
  * `lane-body-translation.ts`'s `laneBodyTranslationOf` (-> `"retrying"`) ->
  * `epic-rooms-replica.ts`'s `applyAvailability` -> `tier.invalidate` (which

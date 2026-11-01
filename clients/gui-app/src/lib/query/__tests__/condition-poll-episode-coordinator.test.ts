@@ -225,7 +225,7 @@ describe("condition-poll episode coordinator", () => {
             hostVersion: "1.0.0",
             protocolVersion: { major: 1, minor: 0 },
           }),
-        // Deliberately unstamped: the strict T4 sweep must fail this poller.
+        // Deliberately unstamped: the strict sweep must fail this poller.
         refetchInterval: 5_000,
         staleTime: Infinity,
         gcTime: Infinity,

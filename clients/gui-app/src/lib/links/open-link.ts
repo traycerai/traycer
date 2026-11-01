@@ -57,7 +57,7 @@ export interface OpenLinkWithPending {
   /**
    * True while an OS handoff started through THIS hook is outstanding - the
    * bridge mutation's own `isPending`. Drives `disabled` / `aria-disabled` on
-   * the surfaces where a second click would open the browser twice (R10).
+   * the surfaces where a second click would open the browser twice.
    */
   readonly isPending: boolean;
 }

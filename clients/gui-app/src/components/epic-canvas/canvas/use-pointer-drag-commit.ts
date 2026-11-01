@@ -16,7 +16,7 @@
  * During a drag NO React state changes - `onDragFrame` must mutate the DOM
  * directly; the single store write happens in `onDragCommit`.
  *
- * Ticket 21 wave-2 live pass (row 1): once `onDragStart` succeeds, move/up/
+ * Once `onDragStart` succeeds, move/up/
  * cancel/blur are handled via `window`-level listeners rather than React
  * props on the handle. `setPointerCapture` is supposed to make the handle
  * the sole recipient of subsequent pointer events regardless of what else
@@ -32,7 +32,7 @@
  * native event's normal bubble phase, independent of which element the
  * browser ends up treating as the authoritative pointer-capture target.
  *
- * Fix-round 2 (same live pass): moving ownership to imperative `window`
+ * Moving ownership to imperative `window`
  * listeners means THIS hook alone is responsible for every terminal path,
  * not just pointerup/pointercancel:
  * - Blur must be a terminal event the hook itself owns (not just observed
@@ -176,7 +176,7 @@ export function usePointerDragCommit(
   const horizontal = axis === "horizontal";
   const dragRef = useRef<ActivePointerDrag | null>(null);
 
-  // Unmount safety net (fix-round 2, F2): a drag active when this component
+  // Unmount safety net: a drag active when this component
   // unmounts (e.g. a structural op removes the pane mid-gesture) would
   // otherwise leak its window listeners and let a LATER pointerup commit
   // through a dead component. `drag.cancel` was captured at drag-start with
@@ -226,7 +226,7 @@ export function usePointerDragCommit(
       }
       finish(false);
     }
-    // Blur is a terminal event this hook owns directly (fix-round 2, F1):
+    // Blur is a terminal event this hook owns directly:
     // `beginPanelResizeInteraction`'s own blur listener only clears the
     // shared interaction id for the panel-resize CSS class - it has no
     // knowledge of `dragRef` and cannot stop this hook from continuing to

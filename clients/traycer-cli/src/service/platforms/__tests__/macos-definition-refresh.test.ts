@@ -1,5 +1,13 @@
 import { mkdtempSync } from "node:fs";
-import { mkdir, readFile, rm, stat, writeFile, chmod } from "node:fs/promises";
+import {
+  mkdir,
+  readFile,
+  rm,
+  stat,
+  writeFile,
+  chmod,
+  utimes,
+} from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -53,6 +61,7 @@ import {
   inspectMacosServiceDefinition,
   refreshMacosServiceDefinition,
 } from "../macos";
+import { LAUNCHD_EXIT_TIMEOUT_SECONDS } from "../../spawn-edge-bounds";
 import {
   buildCompatibleHostStartScript,
   buildHostStartLauncherScript,
@@ -122,17 +131,24 @@ async function writeLauncher(
   await chmod(launcherPath(label), mode);
 }
 
+const CURRENT_EXIT_TIMEOUT = `<integer>${LAUNCHD_EXIT_TIMEOUT_SECONDS}</integer>`;
+
 /** A hand-crafted plist with a controlled `ProgramArguments` array and a
  * distinctive `EnvironmentVariables PATH`, so a byte-diff against the
- * refreshed plist proves the patch touched ONLY the array. */
+ * refreshed plist proves the patch touched ONLY the array. `exitTimeOut` is
+ * the raw value element of the `ExitTimeOut` key, or `null` for a plist
+ * written before the key existed. */
 function craftPlist(
   label: ServiceLabel,
   programArgs: readonly string[],
   customPath: string,
+  exitTimeOut: string | null,
 ): string {
   const programArgsXml = programArgs
     .map((arg) => `    <string>${escapeXml(arg)}</string>`)
     .join("\n");
+  const exitTimeOutXml =
+    exitTimeOut === null ? "" : `  <key>ExitTimeOut</key>\n  ${exitTimeOut}\n`;
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -145,7 +161,7 @@ ${programArgsXml}
   </array>
   <key>RunAtLoad</key>
   <true/>
-  <key>EnvironmentVariables</key>
+${exitTimeOutXml}  <key>EnvironmentVariables</key>
   <dict>
     <key>HOME</key>
     <string>/Users/test-writer</string>
@@ -267,6 +283,7 @@ describe("launcher-less forms (M1 direct, M2 inline): patch ONLY ProgramArgument
         label,
         programArgs(CLI, label),
         CUSTOM_PATH,
+        CURRENT_EXIT_TIMEOUT,
       );
       await writePlist(label, originalPlist, 0o644);
 
@@ -306,6 +323,201 @@ describe("launcher-less forms (M1 direct, M2 inline): patch ONLY ProgramArgument
       expect(processRunnerCalls).toEqual([]);
     },
   );
+});
+
+const EXIT_TIMEOUT_ENTRY = `<key>ExitTimeOut</key>\n  ${CURRENT_EXIT_TIMEOUT}`;
+const PAST = new Date("2026-01-01T00:00:00Z");
+
+/** A plist+launcher pair whose launcher is current and whose plist carries
+ * `exitTimeOut`; the launcher's mtime is set in the past so a rewrite, even
+ * with identical bytes, shows. */
+async function writeCurrentLauncherDefinition(
+  label: ServiceLabel,
+  exitTimeOut: string | null,
+): Promise<string> {
+  const plist = craftPlist(
+    label,
+    [launcherPath(label), CLI.command],
+    CUSTOM_PATH,
+    exitTimeOut,
+  );
+  await writePlist(label, plist, 0o644);
+  await writeLauncher(label, buildHostStartLauncherScript(label.id), 0o755);
+  await utimes(launcherPath(label), PAST, PAST);
+  return plist;
+}
+
+describe("a stop budget below today's ExitTimeOut: patch ONLY the plist", () => {
+  it("launcher-file plist with a current launcher and no ExitTimeOut -> stale{exit-timeout, next-login}; refresh appends the key to the plist, every other byte unchanged, launcher file untouched", async () => {
+    const label = labelFor("exit-timeout-missing");
+    const originalPlist = await writeCurrentLauncherDefinition(label, null);
+
+    expect(await inspectMacosServiceDefinition(label)).toEqual({
+      kind: "stale",
+      form: "exit-timeout",
+      appliesAt: "next-login",
+    });
+    const result = await refreshMacosServiceDefinition(label);
+    expect(result).toEqual({
+      kind: "refreshed",
+      form: "exit-timeout",
+      appliesAt: "next-login",
+    });
+
+    expect(await readFile(plistPath(label), "utf8")).toBe(
+      originalPlist.replace(
+        "</dict>\n</plist>",
+        `  ${EXIT_TIMEOUT_ENTRY}\n</dict>\n</plist>`,
+      ),
+    );
+    expect((await stat(launcherPath(label))).mtime).toEqual(PAST);
+    expect(await readFile(launcherPath(label), "utf8")).toBe(
+      buildHostStartLauncherScript(label.id),
+    );
+    expect(processRunnerCalls).toEqual([]);
+    expect(await inspectMacosServiceDefinition(label)).toEqual({
+      kind: "current",
+    });
+  });
+
+  it("an ExitTimeOut of 5 is replaced by today's value in place; the launcher file is untouched", async () => {
+    const label = labelFor("exit-timeout-five");
+    const originalPlist = await writeCurrentLauncherDefinition(
+      label,
+      "<integer>5</integer>",
+    );
+
+    expect(await inspectMacosServiceDefinition(label)).toEqual({
+      kind: "stale",
+      form: "exit-timeout",
+      appliesAt: "next-login",
+    });
+    await refreshMacosServiceDefinition(label);
+
+    expect(await readFile(plistPath(label), "utf8")).toBe(
+      originalPlist.replace("<integer>5</integer>", CURRENT_EXIT_TIMEOUT),
+    );
+    expect((await stat(launcherPath(label))).mtime).toEqual(PAST);
+    expect(processRunnerCalls).toEqual([]);
+  });
+
+  it.each([LAUNCHD_EXIT_TIMEOUT_SECONDS, LAUNCHD_EXIT_TIMEOUT_SECONDS + 100])(
+    "an ExitTimeOut of %i with a current launcher is current: no writes",
+    async (seconds) => {
+      const label = labelFor(`exit-timeout-current-${seconds}`);
+      const originalPlist = await writeCurrentLauncherDefinition(
+        label,
+        `<integer>${seconds}</integer>`,
+      );
+      const plistBefore = await stat(plistPath(label));
+
+      expect(await inspectMacosServiceDefinition(label)).toEqual({
+        kind: "current",
+      });
+      expect(await refreshMacosServiceDefinition(label)).toEqual({
+        kind: "current",
+      });
+
+      expect(await readFile(plistPath(label), "utf8")).toBe(originalPlist);
+      expect((await stat(plistPath(label))).mtimeMs).toBe(plistBefore.mtimeMs);
+      expect((await stat(launcherPath(label))).mtime).toEqual(PAST);
+      expect(processRunnerCalls).toEqual([]);
+    },
+  );
+
+  it("a stale launcher AND a missing ExitTimeOut -> stale{launcher-file, next-login}; both files are written", async () => {
+    const label = labelFor("exit-timeout-and-launcher");
+    const originalPlist = craftPlist(
+      label,
+      [launcherPath(label), CLI.command],
+      CUSTOM_PATH,
+      null,
+    );
+    await writePlist(label, originalPlist, 0o644);
+    await writeLauncher(label, historicalLauncherFileBody(label.id), 0o755);
+
+    expect(await inspectMacosServiceDefinition(label)).toEqual({
+      kind: "stale",
+      form: "launcher-file",
+      appliesAt: "next-login",
+    });
+    expect(await refreshMacosServiceDefinition(label)).toEqual({
+      kind: "refreshed",
+      form: "launcher-file",
+      appliesAt: "next-login",
+    });
+
+    expect(await readFile(launcherPath(label), "utf8")).toBe(
+      buildHostStartLauncherScript(label.id),
+    );
+    expect(await readFile(plistPath(label), "utf8")).toBe(
+      originalPlist.replace(
+        "</dict>\n</plist>",
+        `  ${EXIT_TIMEOUT_ENTRY}\n</dict>\n</plist>`,
+      ),
+    );
+    expect(processRunnerCalls).toEqual([]);
+  });
+
+  it.each(LAUNCHERLESS_FIXTURES)(
+    "$name with no ExitTimeOut -> the plist gets the launcher's ProgramArguments AND today's ExitTimeOut, rest byte-for-byte",
+    async ({ id, programArgs }) => {
+      const label = labelFor(`${id}-no-exit-timeout`);
+      const originalPlist = craftPlist(
+        label,
+        programArgs(CLI, label),
+        CUSTOM_PATH,
+        null,
+      );
+      await writePlist(label, originalPlist, 0o644);
+
+      expect(await refreshMacosServiceDefinition(label)).toMatchObject({
+        kind: "refreshed",
+        appliesAt: "next-login",
+      });
+
+      const newPlist = await readFile(plistPath(label), "utf8");
+      expect(programArgumentsOf(newPlist)).toEqual([
+        launcherPath(label),
+        CLI.command,
+      ]);
+      expect(stripProgramArguments(newPlist)).toBe(
+        stripProgramArguments(originalPlist).replace(
+          "</dict>\n</plist>",
+          `  ${EXIT_TIMEOUT_ENTRY}\n</dict>\n</plist>`,
+        ),
+      );
+      expect(await readFile(launcherPath(label), "utf8")).toBe(
+        buildHostStartLauncherScript(label.id),
+      );
+      expect(processRunnerCalls).toEqual([]);
+    },
+  );
+
+  it("an ExitTimeOut that is not an integer: unrecognized; refresh throws the refresh-failed error and writes nothing", async () => {
+    const label = labelFor("exit-timeout-not-integer");
+    const originalPlist = await writeCurrentLauncherDefinition(
+      label,
+      "<string>soon</string>",
+    );
+    const plistBefore = await stat(plistPath(label));
+
+    expect(await inspectMacosServiceDefinition(label)).toEqual({
+      kind: "unrecognized",
+      reason: "its ExitTimeOut is not an integer",
+    });
+    const error = await refreshMacosServiceDefinition(label).catch(
+      (err: unknown) => err,
+    );
+
+    expect(error).toBeInstanceOf(CliError);
+    if (!(error instanceof CliError)) throw new Error("unreachable");
+    expect(error.code).toBe(CLI_ERROR_CODES.SERVICE_DEFINITION_REFRESH_FAILED);
+    expect(await readFile(plistPath(label), "utf8")).toBe(originalPlist);
+    expect((await stat(plistPath(label))).mtimeMs).toBe(plistBefore.mtimeMs);
+    expect((await stat(launcherPath(label))).mtime).toEqual(PAST);
+    expect(processRunnerCalls).toEqual([]);
+  });
 });
 
 describe("current: no writes at all", () => {
@@ -350,6 +562,7 @@ describe("not-registered and unrecognized", () => {
       label,
       ["/usr/bin/some-other-binary", "--flag"],
       CUSTOM_PATH,
+      CURRENT_EXIT_TIMEOUT,
     );
     await writePlist(label, originalPlist, 0o644);
 

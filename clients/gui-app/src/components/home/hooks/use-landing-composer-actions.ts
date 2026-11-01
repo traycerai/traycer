@@ -4,7 +4,7 @@ import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { v4 as uuidv4 } from "uuid";
 import { useFirstTaskGuideStore } from "@/stores/onboarding/first-task-guide-store";
 import type {
-  CreateEpicChatSeedV12,
+  CreateEpicChatSeedV14,
   CreateEpicResponseV12,
   CreateEpicWorkspaceIdentifier,
   EpicCreateOwner,
@@ -186,6 +186,7 @@ export interface LandingComposerSubmitArgs {
     readonly reasoning: ReasoningLevel;
     readonly serviceTier: ServiceTier;
     readonly permission: PermissionMode;
+    readonly ultracode: boolean;
   };
   /**
    * Who the new task belongs to: the resolved host's owner, read by the
@@ -251,7 +252,7 @@ export interface TerminalAgentLaunch {
 }
 
 /**
- * Both actions return the submit-time placement refusal (selection model §54)
+ * Both actions return the submit-time placement refusal
  * instead of dispatching, or `null` otherwise; `settled` then says whether the
  * create went out. The caller renders the message inline on the composer -
  * never a toast-and-proceed, and never a silent fallback onto another host.
@@ -347,7 +348,7 @@ interface FinalizeLandingSubmissionInput {
  * composer), which is exactly when these callbacks must stop addressing the
  * old machine.
  *
- * `target` is the composer's resolved placement (selection model §54), and it
+ * `target` is the composer's resolved placement, and it
  * is the ONLY host any create below touches: the epic create, its folded chat
  * seed, and the terminal-agent chain all run on `target.client`, whose host
  * identity is re-validated at the top of each action. A staged sandbox's team
@@ -404,7 +405,7 @@ export function useLandingComposerActions(
       readonly hostId: string;
       readonly title: string;
       readonly initialUserPrompt: string;
-      readonly chat: CreateEpicChatSeedV12 | null;
+      readonly chat: CreateEpicChatSeedV14 | null;
       /** `epic.create@1.3`'s owner; `null` is the person. */
       readonly owner: EpicCreateOwner | null;
       readonly workspaceFolders: ReadonlyArray<string>;
@@ -443,7 +444,7 @@ export function useLandingComposerActions(
       // (e.g. chat-tile's availability query, which resolves via the tab host)
       // read this seed. Keep the create-time tab binding and the placement
       // host in lockstep, or seed under the host the initial tabs bind to
-      // instead. (Before P1.2 this was the app-wide active host, which the
+      // instead. (Before the redesign this was the app-wide active host, which the
       // picker rebound; it is now the surface pin's resolved host.)
       const seededBindingsKey =
         optimisticRows.length > 0
@@ -636,6 +637,7 @@ export function useLandingComposerActions(
         permission: toolbar.permission,
         reasoning: toolbar.reasoning,
         serviceTier: toolbar.serviceTier,
+        ultracode: toolbar.ultracode,
       });
       if (settings.model.length === 0) {
         draftRuntimeRegistry.complete(attempt);
@@ -797,7 +799,7 @@ export function useLandingComposerActions(
         }
         // Content changed after send: keep that later edit. A close during
         // create used to be the same branch because close destroyed the row;
-        // now close retains, so `"closed"` must still delete (decision #13) or
+        // now close retains, so `"closed"` must still delete, or
         // the sent text stays as a draft alongside the new epic.
         placeCreatedEpicInBackground(epicId, epicTitle);
         if (settlement.kind === "closed") {
@@ -1012,22 +1014,6 @@ export function useLandingComposerActions(
   );
 
   /**
-   * The by-hash submit: confirm the bytes are on the placement host, inline
-   * only what could not be confirmed, and send the rest as hashes.
-   *
-   * ALWAYS ASYNC, unlike the two inline paths beside it, because "is it on the
-   * host" is not a question this window can answer synchronously. That costs
-   * the landing composer its one-stack-frame submit for a message with images,
-   * which is why the re-entry guard and the pending flag both cover it.
-   *
-   * REFUSES rather than dropping an image, which is the landing composer's own
-   * rule and not a general one: a hash here names bytes that were pasted into
-   * THIS window and exist nowhere else (no epic exists yet to hold them), so a
-   * hash it can neither confirm nor inline is an image that would silently
-   * vanish from the message. The chat and edit composers inline best-effort for
-   * the opposite reason - their hashes routinely address the host's epic store.
-   */
-  /**
    * The authoritative cap check, on the hashes the create will actually carry.
    *
    * The pre-upload check below sees only the plan's ELIGIBLE set, which is not
@@ -1054,6 +1040,22 @@ export function useLandingComposerActions(
     },
     [],
   );
+  /**
+   * The by-hash submit: confirm the bytes are on the placement host, inline
+   * only what could not be confirmed, and send the rest as hashes.
+   *
+   * ALWAYS ASYNC, unlike the two inline paths beside it, because "is it on the
+   * host" is not a question this window can answer synchronously. That costs
+   * the landing composer its one-stack-frame submit for a message with images,
+   * which is why the re-entry guard and the pending flag both cover it.
+   *
+   * REFUSES rather than dropping an image, which is the landing composer's own
+   * rule and not a general one: a hash here names bytes that were pasted into
+   * THIS window and exist nowhere else (no epic exists yet to hold them), so a
+   * hash it can neither confirm nor inline is an image that would silently
+   * vanish from the message. The chat and edit composers inline best-effort for
+   * the opposite reason - their hashes routinely address the host's epic store.
+   */
   const dispatchByHashSubmission = useCallback(
     (input: {
       readonly args: LandingComposerSubmitArgs;
@@ -1527,7 +1529,7 @@ export function useLandingComposerActions(
     [createLandingEpic, navigate, terminalAgentCreateFn],
   );
 
-  // Selection model §54's submit-time re-validation, and the FIRST thing both
+  // The submit-time re-validation, and the FIRST thing both
   // actions do. It runs before any store write, navigation, or optimistic
   // seed: a refusal must leave the composer exactly as the user left it, with
   // the message rendered inline next to the send button.

@@ -11,8 +11,8 @@ import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import { useWorkspaceFoldersStore } from "@/stores/workspace/workspace-folders-store";
 
 /**
- * The landing composer's host picker is a SURFACE PIN (redesign P1.2,
- * selection model §2/§54), not the app-wide selection.
+ * The landing composer's host picker is a SURFACE PIN,
+ * not the app-wide selection.
  *
  * The behaviour under test is the one the redesign exists to fix: before this,
  * placing a single chat on another machine moved the whole window - the picker
@@ -20,7 +20,7 @@ import { useWorkspaceFoldersStore } from "@/stores/workspace/workspace-folders-s
  * authority bridge's alone. What has to be true instead is that a pick writes
  * this window's composer pin, that the chip resolves `pin ?? effective`, and
  * that the FIXED arm (fork dialogs, tab-context composers) still writes
- * nothing at all (§55).
+ * nothing at all.
  */
 
 // The picker's sandbox staging reads the account and the catalogue; this suite
@@ -76,7 +76,7 @@ const HOST_ENTRIES = [
 vi.mock("@/lib/host", () => ({
   useHostBinding: () => ({ directory: { selectById: mocks.selectById } }),
   useHostClient: () => null,
-  // The SPINE, a separate export since redesign P2.1.
+  // The SPINE, a separate export.
   useHostRuntimeClient: () => null,
 }));
 
@@ -412,7 +412,7 @@ describe("composer host picker writes a surface pin", () => {
     pickBuildHost();
     expect(chipLabel()).toBe("Build Box");
 
-    // Derivation moves the effective host; a PINNED surface keeps its own (D6).
+    // Derivation moves the effective host; a PINNED surface keeps its own.
     cleanup();
     mocks.effectiveHostId.current = "host-home";
     renderComposerPicker({ kind: "active" }, null);

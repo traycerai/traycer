@@ -1,6 +1,5 @@
 import {
   Fragment,
-  useContext,
   useEffect,
   useState,
   type ReactElement,
@@ -12,14 +11,14 @@ import {
   Pencil,
   RotateCcw,
 } from "lucide-react";
-import {
-  isConversationRequestMessageId,
-  type BotAnnouncement,
-  type BotAnnouncementKind,
-  type BotQuestion,
-  type ConversationRequest,
+import type {
+  BotAnnouncement,
+  BotAnnouncementKind,
+  BotQuestion,
 } from "@traycer/protocol/persistence/epic/messages";
+import { BOT_THREAD_ANCHOR_ANSWER } from "@traycer/protocol/host/bot/conversation-schemas";
 import { UnreadCountBadge } from "@/components/notifications/unread-count-badge";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import {
   Drawer,
@@ -34,7 +33,10 @@ import { SHARED_BY_EARLIER_VERSION_LINE } from "@/components/settings/move/overv
 import { useOpenLink } from "@/lib/links/open-link";
 import { useRelativeTimestamp } from "@/lib/relative-time";
 import { formatClockDuration } from "@/lib/format-duration";
-import { firstLineOf } from "@/lib/bots/bot-trunk-model";
+import {
+  botRowThreadAnchorKind,
+  firstLineOf,
+} from "@/lib/bots/bot-trunk-model";
 import { turnReceiptLabel } from "@/lib/bots/bot-turn-receipt";
 import { useElapsedSeconds } from "@/hooks/use-elapsed-seconds";
 import { useLongPress, type LongPress } from "@/hooks/ui/use-long-press";
@@ -46,16 +48,16 @@ import {
   MemberAvatar,
 } from "@/components/bots/bot-avatars";
 import { BotIdentityTrigger } from "@/components/bots/bot-identity-popover";
+import { BotSurfaceCard } from "@/components/bots/bot-surface-card";
 import { useBotIdentity } from "@/components/bots/bot-identity-context";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
-import {
-  ChatBotPresentationContext,
-  type ChatBotFailedRecovery,
-  type ChatBotFailedRequest,
-  type ChatBotPresentation,
-  type ChatBotQuestions,
-  type ChatBotThreadLine,
-  type ChatBotTurnReceipt,
+import type {
+  ChatBotFailedRecovery,
+  ChatBotFailedRequest,
+  ChatBotPresentation,
+  ChatBotQuestions,
+  ChatBotThreadLine,
+  ChatBotTurnReceipt,
 } from "./chat-bot-presentation-context";
 import { chatFindSegmentUnitId } from "./chat-find";
 import { ChatMessageTimestamp } from "./chat-message-timestamp";
@@ -66,35 +68,34 @@ import {
 import { QuestionCard, type QuestionCardQuestion } from "./question-card";
 import {
   EMPTY_QUESTION_CARD_DRAFT,
+  botQuestionCardSettlement,
   questionCardView,
-  type QuestionCardSettlement,
 } from "./question-card-view";
 import { TextSegment } from "./segments/text-segment";
 
 /**
  * One row of a bot's channel or thread, in Slack's message layout (Tracy
  * Bots, decision 41): the sender's picture, their name and the time, then
- * the text. A member's message carries a jump to the reply that answered it
- * where that reply is not right under it and, in the channel, the line of
- * its thread once the thread has a reply; an announcement carries its kind
+ * the text. A member's message carries, in the channel, the line of its
+ * thread once the thread has a reply; an announcement carries its kind
  * on a coloured bar, as Slack draws an app's attachment. A question or a
  * proposal carries the line of the thread a member answers it in, and a
  * reply that asks carries its options as buttons. A row that asks without
  * waiting (decision 121) draws the question card in place of its text and
- * options, and carries its thread's line as a question does. A bot that
+ * options, and carries its thread's line as a question does. A post that
+ * points into a task (T89) draws the surface's card under its text. A bot that
  * answers posts itself (reply mode `direct`) replies in the channel, as a
  * plain row.
  *
  * In the channel, "Reply in thread" is among the row's hover actions, as
  * Slack offers it on every message, and a thread roots on the row it is
- * opened from (decision 114): a member's post, a question or proposal, and
- * a direct reply each open their own thread, the reply's apart from the
- * post's, and each carries its own thread line. A direct reply opens the
- * thread under the post it answers instead, with no line of its own, where
- * the bot's host does not say it takes replies under one
- * (`answerThreads`). Any other announcement takes no thread. A member's
- * message
- * the bot failed to answer adds Retry and Edit to them, and says under its
+ * opened from (decision 114): a member's post, a question or proposal, a
+ * direct reply and any other row of the bot each open their own
+ * thread, the reply's apart from the post's, and each carries its own
+ * thread line. Where the bot's host does not say it takes replies under
+ * such a row (`threadAnchorKinds`), a direct reply opens the thread under
+ * the post it answers instead, with no line of its own, and any other row
+ * of the bot takes no thread. A member's message the bot failed to answer adds Retry and Edit to them, and says under its
  * text that it was not answered and why, with the same actions inline: the
  * agent chat's reason and actions where the bot's session names the post's
  * turn as its last failed attempt, and the receipt of that turn under them.
@@ -102,8 +103,9 @@ import { TextSegment } from "./segments/text-segment";
  * Under a reply of the bot, the receipt of the turn that wrote it (Tracy
  * Bots T86): what the turn did and how long it took, shown while the row is
  * hovered or the receipt has keyboard focus, and always while the turn
- * runs. It opens the turn beside the channel. A touch screen has no hover:
- * a long press on the reply offers it in a sheet instead.
+ * runs. It opens the turn's session, landed on the turn. A touch screen
+ * has no hover: a long press on any row offers its "Reply in thread", and
+ * on a reply its receipt, in a sheet instead.
  *
  * Without `hoverActions` the row is drawn as the post a thread opens on, at
  * the top of the thread panel: the same row, with nothing on hover.
@@ -127,6 +129,29 @@ export function ChatBotMessage(props: {
       />
     );
   }
+  return (
+    <MemberRow
+      message={message}
+      presentation={presentation}
+      sentAt={sentAt}
+      body={body}
+      hoverActions={hoverActions}
+    />
+  );
+}
+
+/**
+ * A member's row: their message, why it went unanswered where it did, and
+ * the line of its thread.
+ */
+function MemberRow(props: {
+  readonly message: ChatMessageModel;
+  readonly presentation: ChatBotPresentation;
+  readonly sentAt: number;
+  readonly body: ReactNode;
+  readonly hoverActions: boolean;
+}): ReactElement {
+  const { message, presentation, sentAt, body, hoverActions } = props;
   const name = message.senderLabel ?? "Member";
   const postId = message.persistentMessageId;
   const threadLine =
@@ -139,6 +164,7 @@ export function ChatBotMessage(props: {
     message,
     presentation,
   );
+  const sheet = useRowSheet(hoverActions && replyInThread !== null);
   return (
     <BotMessageFrame
       avatar={
@@ -157,7 +183,7 @@ export function ChatBotMessage(props: {
       hoverActions={hoverActions}
       replyInThread={replyInThread}
       failed={failed}
-      longPress={null}
+      longPress={sheet.longPress}
     >
       {body}
       {failed === null ? null : (
@@ -166,13 +192,6 @@ export function ChatBotMessage(props: {
       {failedReceipt === null ? null : (
         <TurnReceiptLine receipt={failedReceipt} alwaysShown />
       )}
-      {message.conversationRequest === undefined ? null : (
-        <AnsweredReplyLink
-          request={message.conversationRequest}
-          postId={postId}
-          inChannel={presentation.threadLine !== null}
-        />
-      )}
       {replyInThread === null || !threadStarted(threadLine) ? null : (
         <ThreadLine
           line={threadLine}
@@ -180,6 +199,46 @@ export function ChatBotMessage(props: {
           onOpen={replyInThread}
         />
       )}
+      {!sheet.shown ? null : (
+        <RowSheet
+          open={sheet.open}
+          onOpenChange={sheet.setOpen}
+          name={name}
+          text={message.content}
+          replyInThread={replyInThread}
+          receipt={null}
+          botTitle={presentation.botTitle}
+        />
+      )}
+    </BotMessageFrame>
+  );
+}
+
+/**
+ * A post the app draws in the bot's voice where the bot has written none (
+ * in a team's channel before the team has a host): the bot's picture
+ * and name, with no time and no actions, over `children`. It is not a message
+ * of the channel: no member wrote it and nothing stores it.
+ */
+export function ChatBotAppPost(props: {
+  readonly name: string;
+  readonly testId: string;
+  readonly children: ReactNode;
+}): ReactElement {
+  return (
+    <BotMessageFrame
+      avatar={<BotAvatar size="lg" />}
+      name={props.name}
+      bot={false}
+      sentAt={null}
+      instanceId={props.testId}
+      testId={props.testId}
+      hoverActions={false}
+      replyInThread={null}
+      failed={null}
+      longPress={null}
+    >
+      {props.children}
     </BotMessageFrame>
   );
 }
@@ -240,6 +299,9 @@ function failedActionsOf(
       state: failed.state,
       summary: recovery.label,
       onSignIn: null,
+      onUpdate: null,
+      updating: false,
+      updateFailure: null,
       onRetry: null,
       retrying: false,
       onEdit: edit === null ? null : () => edit(message.content),
@@ -249,6 +311,9 @@ function failedActionsOf(
     state: failed.state,
     summary: failed.summary,
     onSignIn: parked ? null : failed.signIn,
+    onUpdate: parked ? null : failed.update,
+    updating: failed.updating,
+    updateFailure: parked ? null : failed.updateFailure,
     onRetry: retry === null ? null : () => retry(message.content),
     retrying: failed.retrying,
     onEdit: parked || edit === null ? null : () => edit(message.content),
@@ -273,7 +338,9 @@ function BotRow(props: {
   const questions = question === null ? null : presentation.questions;
   const { replyInThread, threadLine } = botRowThread(message, presentation);
   const receipt = replyReceiptFor(message, presentation);
-  const sheet = useReceiptSheet(receipt !== null && hoverActions);
+  const sheet = useRowSheet(
+    hoverActions && (receipt !== null || replyInThread !== null),
+  );
   return (
     <BotMessageFrame
       avatar={<BotAvatar size="lg" />}
@@ -297,6 +364,13 @@ function BotRow(props: {
       ) : (
         <BotRowBody announcement={announcement} body={body} />
       )}
+      {message.surface === undefined ? null : (
+        <BotSurfaceCard
+          messageId={message.persistentMessageId}
+          surface={message.surface}
+          postText={message.content}
+        />
+      )}
       {message.options === undefined || questions !== null ? null : (
         <ReplyOptions
           options={message.options}
@@ -316,13 +390,15 @@ function BotRow(props: {
           onOpen={replyInThread}
         />
       )}
-      {receipt === null || sheet.longPress === null ? null : (
-        <ReplyReceiptSheet
+      {!sheet.shown ? null : (
+        <RowSheet
           open={sheet.open}
           onOpenChange={sheet.setOpen}
-          botTitle={presentation.botTitle}
-          replyText={message.content}
+          name={presentation.botTitle}
+          text={message.content}
+          replyInThread={replyInThread}
           receipt={receipt}
+          botTitle={presentation.botTitle}
         />
       )}
     </BotMessageFrame>
@@ -330,22 +406,33 @@ function BotRow(props: {
 }
 
 /**
- * A touch screen has no hover to reveal a reply's receipt with: a long press
- * on the reply offers it in a sheet. `longPress` is `null` where the row
- * offers no receipt (`enabled` false).
+ * A touch screen has no hover to reveal a row's actions with: a long press
+ * on the row offers them in a sheet. `longPress` is `null` where the row
+ * offers none (`enabled` false). `shown` holds from the first long press
+ * on, so a channel mounts a sheet only for the rows someone pressed.
  */
-function useReceiptSheet(enabled: boolean): {
+function useRowSheet(enabled: boolean): {
   readonly open: boolean;
   readonly setOpen: (open: boolean) => void;
   readonly longPress: LongPress | null;
+  readonly shown: boolean;
 } {
   const [open, setOpen] = useState(false);
+  const [shown, setShown] = useState(false);
   const longPress = useLongPress({
-    onLongPress: () => setOpen(true),
+    onLongPress: () => {
+      setShown(true);
+      setOpen(true);
+    },
     disabled: !enabled,
     acceptsMouse: false,
   });
-  return { open, setOpen, longPress: enabled ? longPress : null };
+  return {
+    open,
+    setOpen,
+    longPress: enabled ? longPress : null,
+    shown: enabled && shown,
+  };
 }
 
 /** The receipt under a reply of the bot; an announcement has none. */
@@ -409,7 +496,11 @@ function BotQuestionCard(props: {
       text: item.text,
       options: item.options,
       allowFreeText: item.allowFreeText,
-      settlement: cardSettlement(item.settlement, memberName, viewerUserId),
+      settlement: botQuestionCardSettlement(
+        item.settlement,
+        memberName,
+        viewerUserId,
+      ),
       draft:
         messageId === null
           ? EMPTY_QUESTION_CARD_DRAFT
@@ -468,27 +559,6 @@ function BotQuestionCard(props: {
   );
 }
 
-/** A question's settlement as the card names it. */
-function cardSettlement(
-  settlement: BotQuestion["questions"][number]["settlement"],
-  memberName: (userId: string) => string,
-  viewerUserId: string | null,
-): QuestionCardSettlement | null {
-  if (settlement === null) return null;
-  return {
-    answer: settlement.answer,
-    skipped: settlement.skipped,
-    by:
-      settlement.by.kind === "bot"
-        ? { kind: "asker" }
-        : {
-            kind: "person",
-            name: memberName(settlement.by.userId),
-            viewer: settlement.by.userId === viewerUserId,
-          },
-  };
-}
-
 /**
  * What a member's post opens from its hover actions: its own thread, or, for
  * a direct post, which has no thread until a member replies under it, the
@@ -504,15 +574,17 @@ function memberReplyInThread(
     return open === null ? null : () => open(postId);
   }
   const open = presentation.openAnnouncementThread;
-  return open === null ? null : () => open(postId, false);
+  return open === null ? null : () => open(postId, null);
 }
 
 /**
  * The thread a bot's row opens from its hover actions, and the line of it
- * the row carries: a question's, a proposal's, a row's that asks without
- * waiting, or a direct reply's own thread; for a direct reply where the bot's host does not take replies
- * under one, the thread under the post it answers, with no line here. Any
- * other row of the bot takes none.
+ * the row carries: every row of the bot roots its own thread - a question,
+ * a proposal and a row that asks without waiting on any host, a direct
+ * reply and any other row where the bot's host names that row among
+ * its thread anchors. A direct reply whose host does not opens the thread
+ * under the post it answers, with no line here; any other row then takes
+ * none.
  */
 function botRowThread(
   message: ChatMessageModel,
@@ -521,24 +593,26 @@ function botRowThread(
   readonly replyInThread: (() => void) | null;
   readonly threadLine: ChatBotThreadLine | null;
 } {
-  const kind = message.announcement?.kind ?? null;
-  // A row that asks roots its own thread whatever post it follows, as a
-  // question announcement does.
-  const asks = message.question !== undefined;
-  const answer =
-    kind === null &&
-    !asks &&
-    message.repliesTo !== undefined &&
-    presentation.answerThreads;
+  const anchorKind = botRowThreadAnchorKind({
+    announcementKind: message.announcement?.kind ?? null,
+    asksQuestion: message.question !== undefined,
+    repliesToPost: message.repliesTo !== undefined,
+  });
   const ownThread =
-    kind === "question" || kind === "proposal" || asks || answer;
-  const anchorId = ownThread
-    ? message.persistentMessageId
-    : (message.repliesTo ?? null);
+    anchorKind === null || presentation.threadAnchorKinds.includes(anchorKind);
+  let anchorId: string | null = message.persistentMessageId;
+  if (!ownThread) {
+    anchorId =
+      anchorKind === BOT_THREAD_ANCHOR_ANSWER
+        ? (message.repliesTo ?? null)
+        : null;
+  }
   const open = presentation.openAnnouncementThread;
   return {
     replyInThread:
-      anchorId === null || open === null ? null : () => open(anchorId, answer),
+      anchorId === null || open === null
+        ? null
+        : () => open(anchorId, ownThread ? anchorKind : null),
     threadLine:
       !ownThread || anchorId === null || presentation.threadLine === null
         ? null
@@ -556,7 +630,8 @@ function BotMessageFrame(props: {
   readonly name: string;
   /** A bot's row: its picture and name open its card. */
   readonly bot: boolean;
-  readonly sentAt: number;
+  /** When the message was sent; `null` for a post the app draws, which has no time. */
+  readonly sentAt: number | null;
   /** Names the time stamp for the layout editor; a message id. */
   readonly instanceId: string;
   readonly testId: string;
@@ -623,11 +698,13 @@ function BotMessageFrame(props: {
           ) : (
             <span className={nameClassName}>{props.name}</span>
           )}
-          <ChatMessageTimestamp
-            timestamp={props.sentAt}
-            separated={false}
-            instanceId={props.instanceId}
-          />
+          {props.sentAt === null ? null : (
+            <ChatMessageTimestamp
+              timestamp={props.sentAt}
+              separated={false}
+              instanceId={props.instanceId}
+            />
+          )}
         </div>
         {props.children}
       </div>
@@ -652,6 +729,9 @@ type FailedMessageActions = {
   readonly state: ChatBotFailedRequest["state"];
   readonly summary: string | null;
   readonly onSignIn: (() => void) | null;
+  readonly onUpdate: (() => void) | null;
+  readonly updating: boolean;
+  readonly updateFailure: string | null;
   readonly onRetry: (() => void) | null;
   readonly retrying: boolean;
   readonly onEdit: (() => void) | null;
@@ -674,6 +754,8 @@ function UnansweredLine(props: {
     readonly label: string;
     readonly testId: string;
     readonly disabled: boolean;
+    /** Its work is running: the label stays and dots follow it. */
+    readonly pending: boolean;
     readonly onClick: () => void;
   }> = [
     ...(failed.onRetry === null
@@ -683,6 +765,7 @@ function UnansweredLine(props: {
             label: "Retry",
             testId: "bot-message-unanswered-retry",
             disabled: failed.retrying,
+            pending: false,
             onClick: failed.onRetry,
           },
         ]),
@@ -693,6 +776,7 @@ function UnansweredLine(props: {
             label: "Edit",
             testId: "bot-message-unanswered-edit",
             disabled: false,
+            pending: false,
             onClick: failed.onEdit,
           },
         ]),
@@ -703,7 +787,19 @@ function UnansweredLine(props: {
             label: "Sign in",
             testId: "bot-message-unanswered-sign-in",
             disabled: false,
+            pending: false,
             onClick: failed.onSignIn,
+          },
+        ]),
+    ...(failed.onUpdate === null
+      ? []
+      : [
+          {
+            label: "Update",
+            testId: "bot-message-unanswered-update",
+            disabled: failed.updating,
+            pending: failed.updating,
+            onClick: failed.onUpdate,
           },
         ]),
   ];
@@ -730,16 +826,34 @@ function UnansweredLine(props: {
             className="rounded-sm font-medium hover:underline focus-visible:outline-2 focus-visible:outline-ring disabled:opacity-50"
           >
             {action.label}
+            {action.pending ? (
+              <AgentSpinningDots
+                className={undefined}
+                testId={`${action.testId}-pending`}
+                variant={undefined}
+              />
+            ) : null}
           </button>
         </Fragment>
       ))}
     </p>
   );
-  if (recovery === null) return line;
+  const updateFailure =
+    failed.updateFailure === null ? null : (
+      <p
+        data-testid="bot-message-update-failure"
+        role="alert"
+        className="text-ui-xs break-words whitespace-pre-wrap text-destructive"
+      >
+        {failed.updateFailure}
+      </p>
+    );
+  if (recovery === null && updateFailure === null) return line;
   return (
     <div data-testid="bot-message-recovery" className="flex flex-col">
       {line}
-      {recovery.actions}
+      {updateFailure}
+      {recovery?.actions}
     </div>
   );
 }
@@ -784,22 +898,27 @@ function RunningFor(props: { readonly startedAt: number }): ReactElement {
 }
 
 /**
- * The sheet a long press on a reply opens on a touch screen, which has no
- * hover to show the receipt with: one action, "How Tracy answered", with
- * the receipt's label.
+ * The sheet a long press on a row opens on a touch screen, which has no
+ * hover to show the row's actions with: "Reply in thread" where the row
+ * takes one, and on a reply "How Tracy answered", with the receipt's label.
  */
-function ReplyReceiptSheet(props: {
+function RowSheet(props: {
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
+  /** Who wrote the row. */
+  readonly name: string;
+  readonly text: string;
+  readonly replyInThread: (() => void) | null;
+  readonly receipt: ChatBotTurnReceipt | null;
   readonly botTitle: string;
-  readonly replyText: string;
-  readonly receipt: ChatBotTurnReceipt;
 }): ReactElement {
-  const { open, onOpenChange, botTitle, replyText, receipt } = props;
+  const { open, onOpenChange, botTitle, replyInThread, receipt } = props;
   // The drawer portals to <body>; re-assert the theme there, as every sheet
   // does.
   const { resolvedTheme, themePreset } = useResolvedTheme();
-  const label = turnReceiptLabel(receipt);
+  const label = receipt === null ? null : turnReceiptLabel(receipt);
+  const itemClassName =
+    "flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-start text-ui-sm text-foreground transition-colors outline-none focus-visible:ring-3 focus-visible:ring-ring/50 active:bg-foreground/8";
   return (
     <Drawer direction="bottom" open={open} onOpenChange={onOpenChange}>
       <DrawerContent
@@ -808,24 +927,43 @@ function ReplyReceiptSheet(props: {
         className={cn(resolvedTheme === "dark" && "dark")}
       >
         <div className="flex flex-col border-b border-canvas-border/70 p-4">
-          <DrawerTitle>{botTitle}</DrawerTitle>
-          <DrawerDescription>{firstLineOf(replyText) ?? ""}</DrawerDescription>
+          <DrawerTitle>{props.name}</DrawerTitle>
+          <DrawerDescription>{firstLineOf(props.text) ?? ""}</DrawerDescription>
         </div>
         <div className="flex flex-col px-2 pt-1 pb-safe-bottom-gutter">
-          <button
-            type="button"
-            data-testid="bot-reply-sheet-receipt"
-            className="flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-start text-ui-sm text-foreground transition-colors outline-none focus-visible:ring-3 focus-visible:ring-ring/50 active:bg-foreground/8"
-            onClick={() => {
-              onOpenChange(false);
-              receipt.open();
-            }}
-          >
-            <span className="min-w-0 truncate">
-              {`How ${botTitle} answered · `}
-              {label ?? <RunningFor startedAt={receipt.startedAt} />}
-            </span>
-          </button>
+          {replyInThread === null ? null : (
+            <button
+              type="button"
+              data-testid="bot-reply-sheet-reply-in-thread"
+              className={itemClassName}
+              onClick={() => {
+                onOpenChange(false);
+                replyInThread();
+              }}
+            >
+              <MessageSquareText
+                aria-hidden="true"
+                className="size-4 shrink-0"
+              />
+              <span className="min-w-0 truncate">Reply in thread</span>
+            </button>
+          )}
+          {receipt === null ? null : (
+            <button
+              type="button"
+              data-testid="bot-reply-sheet-receipt"
+              className={itemClassName}
+              onClick={() => {
+                onOpenChange(false);
+                receipt.open();
+              }}
+            >
+              <span className="min-w-0 truncate">
+                {`How ${botTitle} answered · `}
+                {label ?? <RunningFor startedAt={receipt.startedAt} />}
+              </span>
+            </button>
+          )}
         </div>
       </DrawerContent>
     </Drawer>
@@ -1050,57 +1188,6 @@ function AnnouncementLink(props: { readonly link: string }): ReactNode {
   );
 }
 
-/**
- * "See reply" under a member's message the bot has answered, a jump to the
- * reply when that reply is in this list (in a thread, or in the channel for
- * a direct post, whose reply is in the channel) and not the row right under
- * the message. Whether a message still waits for its answer is the bot's
- * own bookkeeping and is not drawn. Read off the member's row, which is
- * where the host keeps it; the reply row says nothing about the request.
- */
-function AnsweredReplyLink(props: {
-  readonly request: ConversationRequest;
-  /** The member's message, by its message id; `null` before it is written. */
-  readonly postId: string | null;
-  readonly inChannel: boolean;
-}): ReactNode {
-  const { request, postId, inChannel } = props;
-  const presentation = useContext(ChatBotPresentationContext);
-  const scrollToMessage =
-    inChannel && request.direct !== true
-      ? null
-      : (presentation?.scrollToMessage ?? null);
-  const replyId =
-    request.resolvedAt === null ? null : request.resolvedByMessageId;
-  // A message the person replaced with an edit was not answered: the new
-  // message carries the request now.
-  if (
-    replyId === null ||
-    scrollToMessage === null ||
-    isConversationRequestMessageId(replyId)
-  ) {
-    return null;
-  }
-  if (
-    postId !== null &&
-    presentation?.replyFollowsPost?.(postId, replyId) === true
-  ) {
-    return null;
-  }
-  return (
-    <Button
-      type="button"
-      variant="link"
-      size="xs"
-      className="self-start"
-      onClick={() => scrollToMessage(replyId)}
-      data-testid="conversation-request-reply-link"
-    >
-      See reply
-    </Button>
-  );
-}
-
 const THREAD_LINE_STACK_MAX = 3;
 
 /**
@@ -1135,6 +1222,7 @@ function ThreadLine(props: {
       type="button"
       data-testid="bot-thread-line"
       data-unread={unread ? "true" : "false"}
+      data-new-replies={line.newReplies === true ? "true" : "false"}
       onClick={onOpen}
       className="group/thread -ml-1 flex w-fit max-w-full items-center gap-2 rounded-md border border-transparent px-1 py-0.5 text-left text-ui-xs transition-colors hover:border-border/60 hover:bg-background focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2"
     >
@@ -1148,8 +1236,25 @@ function ThreadLine(props: {
       <ThreadLineCount
         replies={replies}
         unread={unread}
+        bold={line.newReplies ?? unread}
         unreadCount={line.unreadCount}
       />
+      {line.newReplies === true ? (
+        <span
+          className="shrink-0 font-semibold text-foreground"
+          data-testid="bot-thread-new-replies"
+        >
+          new replies
+        </span>
+      ) : null}
+      {line.followedUnwritten ? (
+        <span
+          className="shrink-0 text-muted-foreground"
+          data-testid="bot-thread-following-mark"
+        >
+          following
+        </span>
+      ) : null}
       <ThreadLineStatus
         lastReplyAt={line.lastReplyAt}
         replying={replying}
@@ -1160,16 +1265,18 @@ function ThreadLine(props: {
 }
 
 /**
- * "N replies", bold behind the unread count while one is unread (a 2 badge
- * before "5 replies" reads two unread of five), or behind a dot where the
- * host does not count.
+ * "N replies" behind the unread count while one is unread (a 2 badge before
+ * "5 replies" reads two unread of five), or behind a dot where the host does
+ * not count; bold while a followed thread has new replies, or, where the
+ * host keeps no read cursors, while unread.
  */
 function ThreadLineCount(props: {
   readonly replies: number;
   readonly unread: boolean;
+  readonly bold: boolean;
   readonly unreadCount: number | null;
 }): ReactNode {
-  const { replies, unread, unreadCount } = props;
+  const { replies, unread, bold, unreadCount } = props;
   return (
     <>
       {unreadCount === null ? (
@@ -1190,7 +1297,7 @@ function ThreadLineCount(props: {
       )}
       {replies === 0 ? null : (
         <span
-          className={cn("text-primary", unread ? "font-bold" : "font-semibold")}
+          className={cn("text-primary", bold ? "font-bold" : "font-semibold")}
         >
           {replies === 1 ? "1 reply" : `${replies} replies`}
         </span>

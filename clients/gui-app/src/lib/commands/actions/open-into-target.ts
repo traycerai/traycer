@@ -3,7 +3,7 @@
  *
  * Canonical opener action: place a tile ref into the palette's bound target
  * group via `openTile` with the bound pane as the intent's explicit placement
- * (decisions C1, C6, C7). Both the "open" command source's leaves and any
+ * (decision C1). Both the "open" command source's leaves and any
  * future manual UI route through here per the palette → manual-UI parity rule.
  *
  * Routes through the nested-focus navigation boundary (see the
@@ -59,7 +59,7 @@ export function openTileIntoTargetGroup(
     {
       node: args.ref,
       target: { tabId: args.tabId },
-      // The opener's own pane IS the placement (C6, C7).
+      // The opener's own pane IS the placement.
       gesture: "explicit",
       modifiers: null,
       placement: { kind: "tab", paneId: args.groupId, index: null },

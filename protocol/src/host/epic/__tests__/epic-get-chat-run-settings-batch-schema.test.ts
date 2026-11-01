@@ -18,9 +18,9 @@ describe("epic.getChatRunSettingsBatch", () => {
       0,
     );
     // `commandcode` opened major 2 over the frozen 1.0, which is why 1.0 binds
-    // the frozen response and 2.0 binds the live one.
+    // the frozen response; 2.1 adds Ultracode above the retained 2.0 line.
     expect(hostRpcRegistry["epic.getChatRunSettingsBatch"][2].latestMinor).toBe(
-      0,
+      1,
     );
     expect(
       hostRpcRegistry["epic.getChatRunSettingsBatch"][2].versions[0].contract

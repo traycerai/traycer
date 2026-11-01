@@ -85,9 +85,83 @@ export type BotOnboardingReadRequest = z.infer<
 >;
 
 /**
- * A team environment's onboarding, for a member of it. `unlocked` is whether
- * the GitHub set holds a repository and works: the bots can then be created.
- * `choice` is `null` before any member chose.
+ * `bot.onboarding.read@1.0`'s response, frozen: a team environment's
+ * onboarding, for a member of it. `unlocked` is whether the GitHub set holds
+ * a repository and works: the bots can then be created. `choice` is `null`
+ * before any member chose.
+ */
+export const botOnboardingReadResponseSchemaV10 = lazySchema(() =>
+  z.object({
+    github: botOnboardingGithubSchema,
+    unlocked: z.boolean(),
+    choice: botOnboardingChoiceSchema.nullable(),
+    catalog: z.array(botOnboardingAreaSchema),
+  }),
+);
+
+/**
+ * `bot.onboarding.read@1.1`'s setup, frozen (Tracy Bots T67): the team has no
+ * live bot, so the main bot does not exist yet and no host the team can use
+ * runs it. `botId` is the id it will be created under, the one its
+ * environment derives, so a channel opened on it now is the bot's channel
+ * once it exists; `title` is the name it will be created with.
+ */
+export const botOnboardingSetupSchemaV11 = lazySchema(() =>
+  z.object({
+    botId: botIdSchema,
+    title: z.string().min(1),
+  }),
+);
+
+/**
+ * `bot.onboarding.read@1.1`'s response, frozen: `setup` is the team's main
+ * bot while it is still to be set up, `null` once the team has a live bot
+ * (or had its bots before onboarding existed). `null` too when the answering
+ * host predates it (a `1.0` response upgraded), which offers no setup.
+ */
+export const botOnboardingReadResponseSchemaV11 = lazySchema(() =>
+  z.object({
+    github: botOnboardingGithubSchema,
+    unlocked: z.boolean(),
+    choice: botOnboardingChoiceSchema.nullable(),
+    catalog: z.array(botOnboardingAreaSchema),
+    setup: botOnboardingSetupSchemaV11.nullable(),
+  }),
+);
+
+/**
+ * How the team's host came, once its main bot exists (T67b): `cloud` when
+ * the team's bots run on its sandboxes, the only way a team gets a host
+ * today.
+ */
+export const botOnboardingArrivalSchema = lazySchema(() =>
+  z.object({ kind: z.enum(["cloud"]) }),
+);
+export type BotOnboardingArrival = z.infer<typeof botOnboardingArrivalSchema>;
+
+/**
+ * The team's main bot through its setup (T67, T67b). `needs_host` while the
+ * team has no live bot: no host the team can use runs it yet, and `botId` is
+ * the id it will be created under (the one its environment derives), so a
+ * channel opened on it now is the bot's channel once it exists. `live` once
+ * the team's first host created it: the setup stays in the channel as its
+ * history, and `arrival` says how the host came (`null` while
+ * `needs_host`). `title` is the name it is created with.
+ */
+export const botOnboardingSetupSchema = lazySchema(() =>
+  z.object({
+    botId: botIdSchema,
+    title: z.string().min(1),
+    state: z.enum(["needs_host", "live"]),
+    arrival: botOnboardingArrivalSchema.nullable(),
+  }),
+);
+export type BotOnboardingSetup = z.infer<typeof botOnboardingSetupSchema>;
+
+/**
+ * `bot.onboarding.read@1.2`'s response: `setup` stays once the main bot
+ * exists, in its `live` state. `null` for a team whose bots pre-date
+ * onboarding, and when the answering host predates `setup`.
  */
 export const botOnboardingReadResponseSchema = lazySchema(() =>
   z.object({
@@ -95,6 +169,7 @@ export const botOnboardingReadResponseSchema = lazySchema(() =>
     unlocked: z.boolean(),
     choice: botOnboardingChoiceSchema.nullable(),
     catalog: z.array(botOnboardingAreaSchema),
+    setup: botOnboardingSetupSchema.nullable(),
   }),
 );
 export type BotOnboardingReadResponse = z.infer<

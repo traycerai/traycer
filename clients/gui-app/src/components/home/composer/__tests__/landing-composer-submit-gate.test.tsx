@@ -296,6 +296,7 @@ vi.mock("@/stores/composer/composer-run-settings-store", () => {
 
 vi.mock("@/components/home/hooks/use-composer-toolbar-store", () => {
   const toolbarStore = createStore(() => ({
+    ultracode: false,
     selection: {
       get harnessId() {
         return testState.displayedHarness;
@@ -316,6 +317,7 @@ vi.mock("@/components/home/hooks/use-composer-toolbar-store", () => {
     },
     // The raw pick; `selection` above is what this host's catalog shows.
     values: {
+      ultracode: false,
       selection: {
         get harnessId() {
           return testState.pickHarness;
@@ -547,7 +549,7 @@ vi.mock("@/hooks/composer/use-landing-image-fetcher", () => ({
 // tree reaches these two hooks - confirmed by removing them and finding the
 // suite stays green. Left removed rather than kept as a second, unreachable
 // copy of the same intent.
-// P1.2: the composer resolves its placement (pin ?? effective) through this
+// The composer resolves its placement (pin ?? effective) through this
 // one hook. These suites are about paste/gating/banner behaviour, not
 // selection derivation, so it is stubbed at that single boundary - the same
 // treatment the other host-backed hooks above get.
@@ -613,7 +615,7 @@ vi.mock("@/lib/host", () => ({
     findById: () => null,
     onChange: () => ({ dispose: () => undefined }),
   }),
-  // The SPINE, a separate export since redesign P2.1.
+  // The SPINE, a separate export.
   useHostRuntimeClient: () => null,
 }));
 vi.mock(
@@ -1350,6 +1352,7 @@ describe("LandingComposer direct submit gate", () => {
       await sendFromComposer();
 
       expect(onlyPendingSend().settings).toEqual({
+        ultracode: false,
         harnessId: "codex",
         model: "gpt-6.1-sol",
         permissionMode: "supervised",
@@ -2013,7 +2016,7 @@ describe("LandingComposer direct submit gate", () => {
     expect(testState.submit).toHaveBeenCalledTimes(1);
   });
 
-  // Finding 3: pure path-resolution must also hold submit open.
+  // Pure path-resolution must also hold submit open.
   it("blocks the actual landing submit path while file-path resolution is pending", () => {
     testState.resolvingPaths = true;
     const view = render(

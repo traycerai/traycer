@@ -210,6 +210,7 @@ function installRecordingStreamFactory(): {
     };
     streams.push(record);
     return {
+      supportsViewerFrames: () => false,
       sendAction: (frame) => {
         record.frames.push(frame);
       },
@@ -320,6 +321,7 @@ describe("useTerminalSessionHandle acquire-time defunct guard", () => {
   it("replaces a warm terminal-agent handle a reacquire finds already 'lost'", async () => {
     globalClientRef.value = buildGlobalClient();
     __setTerminalStreamClientFactoryForTests(() => ({
+      supportsViewerFrames: () => false,
       sendAction: () => undefined,
       close: () => undefined,
     }));
@@ -376,6 +378,7 @@ describe("useTerminalSessionHandle acquire-time defunct guard", () => {
   it("replaces an existing handle a second acquisition finds already 'reaped'", async () => {
     globalClientRef.value = buildGlobalClient();
     __setTerminalStreamClientFactoryForTests(() => ({
+      supportsViewerFrames: () => false,
       sendAction: () => undefined,
       close: () => undefined,
     }));
@@ -427,6 +430,7 @@ describe("useTerminalSessionHandle acquire-time defunct guard", () => {
   it("reuses a healthy warm terminal-agent handle across a disable/re-enable cycle", async () => {
     globalClientRef.value = buildGlobalClient();
     __setTerminalStreamClientFactoryForTests(() => ({
+      supportsViewerFrames: () => false,
       sendAction: () => undefined,
       close: () => undefined,
     }));

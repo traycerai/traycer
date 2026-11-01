@@ -49,6 +49,7 @@ async function flush(): Promise<void> {
 
 function settings(model: string): ChatRunSettings {
   return {
+    ultracode: false,
     harnessId: "claude",
     model,
     permissionMode: "supervised",

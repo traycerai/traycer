@@ -25,7 +25,7 @@ import {
 
 /**
  * The picker row's status word, which had NO coverage at all — and that is
- * half of why it survived P3.4's vocabulary census as a third, unnamed status
+ * half of why it survived the redesign's vocabulary census as a third, unnamed status
  * vocabulary.
  *
  * What it used to do was answer a ROUTE question in STATUS words: `connectable`
@@ -85,7 +85,7 @@ describe("hostOptionStatusWord — the row speaks the health vocabulary", () => 
     // Nothing to add: the dot carries it.
     ["online"],
     // Pickable and will dial. The muted dot already withholds the liveness
-    // claim (F26); a word would turn a nuance into a warning.
+    // claim; a word would turn a nuance into a warning.
     ["reported-reachable"],
     // A blind cloud read is not something a person acts on from a picker.
     ["unknown"],
@@ -99,7 +99,7 @@ describe("hostOptionStatusWord — the row speaks the health vocabulary", () => 
   });
 
   /**
-   * M5, ruled at P3.1. A machine mid-install is not "offline" in any sense a
+   * M5. A machine mid-install is not "offline" in any sense a
    * person can act on, and `settingUp` is a MUTATION-LANE fact rather than a
    * status one — which is why it sits outside the table instead of in it.
    */
@@ -193,9 +193,9 @@ describe("hostOptionKindLabel — unchanged, and deliberately route-side", () =>
   });
 });
 
-// G4: the selector row's update badge, decorated from `FleetUpdateView` alone.
-// The `unknown`-with-`lastKnownKind` case is the one the independent cold
-// review's finding 4 named directly: a pre-`@1.3` peer (`unknown`, no
+// The selector row's update badge, decorated from `FleetUpdateView` alone.
+// The `unknown`-with-`lastKnownKind` case is named directly:
+// a pre-`@1.3` peer (`unknown`, no
 // retained phase) must render NOTHING — the noise case a blank badge exists
 // to avoid claiming.
 describe("hostOptionUpdateBadge", () => {

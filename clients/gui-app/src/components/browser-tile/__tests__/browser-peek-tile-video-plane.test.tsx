@@ -117,7 +117,7 @@ function jpegFrame(sequence: number, bytes: readonly number[]): void {
 
 /**
  * A subscription on a host that will attempt video: the JPEG cast is off from
- * the start (ticket 26), so nothing paints until a plane does.
+ * the start, so nothing paints until a plane does.
  */
 function renderTile(): void {
   renderPeekTile(
@@ -510,7 +510,7 @@ describe("BrowserPeekTile video plane", () => {
     decodeFrame(video);
 
     // No JPEG frame can arrive - the host turned the pump off - so the 8s
-    // stale timer would condemn a perfectly healthy tile (G3).
+    // stale timer would condemn a perfectly healthy tile.
     for (let elapsed = 0; elapsed < 12_000; elapsed += 1_000) {
       act(() => {
         vi.advanceTimersByTime(1_000);
@@ -794,7 +794,7 @@ describe("BrowserPeekTile video plane", () => {
 /**
  * The `inputAck` promotion end to end: the frame is parsed and dispatched by
  * the REAL `handleServerFrame`, not by calling the controller directly.
- * Ticket 17's DataChannel ping was swallowed by the transport before any
+ * The DataChannel ping was swallowed by the transport before any
  * contract handler ran, and a controller-level test could never have seen it -
  * hence this one.
  */

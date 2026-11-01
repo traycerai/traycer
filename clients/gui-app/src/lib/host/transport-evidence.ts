@@ -14,7 +14,7 @@ import { TransportEvidenceRelay } from "@traycer-clients/shared/host-selection/t
  * gate. Silent evidence loss, in exactly the window (a remount, an account
  * switch) where the engine most needs to hear from the sockets.
  *
- * One window is one renderer is one kernel (connection registry §1b), so a
+ * One window is one renderer is one kernel, so a
  * single relay per module is also exactly one relay per kernel. The
  * composition root (`host-runtime-provider`) binds the live kernel and unbinds
  * on teardown; until something is bound every report is a no-op, which is the

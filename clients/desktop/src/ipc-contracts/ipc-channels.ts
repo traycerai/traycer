@@ -76,6 +76,20 @@ export const RunnerHostInvoke = {
   getSandboxCatalogue: "runnerHost:sandboxes:catalogue",
   // traycer-server's Traycer model catalog, for a sandbox's model picker.
   getTraycerModels: "runnerHost:traycer:models",
+  // The voice session routes (traycer-server `/api/voice/sessions`): the SDP
+  // exchange that opens a session, and its end. Same CORS reason as above.
+  getVoiceAvailability: "runnerHost:voice:availability",
+  mintVoiceSession: "runnerHost:voice:sessions:mint",
+  endVoiceSession: "runnerHost:voice:sessions:end",
+  // The voice router's model call (traycer-server `/inference`), same CORS
+  // reason.
+  routeVoiceUtterance: "runnerHost:voice:route",
+  // Whether the sender window holds a live voice session: such a window is
+  // hidden, not destroyed, when the person closes it.
+  setVoiceSessionLive: "runnerHost:voice:setLive",
+  // What the sender window's live session is doing (listening, muted,
+  // paused for dictation), for the voice item shown while it is away.
+  setVoiceSessionIndicator: "runnerHost:voice:setIndicator",
   createSandbox: "runnerHost:sandboxes:create",
   destroySandbox: "runnerHost:sandboxes:destroy",
   patchSandbox: "runnerHost:sandboxes:patch",
@@ -83,6 +97,13 @@ export const RunnerHostInvoke = {
   runSandboxVerb: "runnerHost:sandboxes:verb",
   getSandboxAutomation: "runnerHost:sandboxes:automation:get",
   openSandboxAutomation: "runnerHost:sandboxes:automation:open",
+  // A bot's Slack app (traycer-server `/api/slack/apps/*`), for the same
+  // reason as the sandbox control plane.
+  readSlackApp: "runnerHost:slackApps:read",
+  getSlackAppManifest: "runnerHost:slackApps:manifest",
+  registerSlackApp: "runnerHost:slackApps:register",
+  mintSlackAppInstallUrl: "runnerHost:slackApps:installUrl",
+  disconnectSlackApp: "runnerHost:slackApps:disconnect",
   // The secrets broker (authn), from Electron main for the same reason.
   getSandboxGrants: "runnerHost:sandboxSecrets:grants",
   getTeamEnvironment: "runnerHost:environments:team",
@@ -479,6 +500,13 @@ export const RunnerHostEvent = {
   // live request context within seconds of wake instead of waiting out the
   // ~60s heartbeat. No payload: it is a pure "the machine just woke" signal.
   systemResumed: "runnerHost:event:systemResumed",
+  // The person is leaving the machine (powerMonitor `suspend` /
+  // `lock-screen`), bridged so a live voice session ends and its microphone
+  // closes. No payload.
+  systemSuspended: "runnerHost:event:systemSuspended",
+  // The voice item's Mute, Unmute or End, sent to the one window whose live
+  // session it shows. Payload: `VoiceTrayAction`.
+  voiceTrayAction: "runnerHost:event:voiceTrayAction",
   notificationClick: "runnerHost:event:notificationClick",
   notificationForegroundDisplay:
     "runnerHost:event:notificationForegroundDisplay",

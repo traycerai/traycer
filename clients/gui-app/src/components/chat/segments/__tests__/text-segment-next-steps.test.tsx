@@ -448,7 +448,7 @@ describe("TextSegment next steps rendering", () => {
           hostId: "host-1",
         }) as EpicCanvasTileRef,
         target: { epicId: "epic-1" },
-        // The chip is a button, so it pins the tile (R6).
+        // The chip is a button, so it pins the tile.
         gesture: "explicit",
       }),
     );
@@ -482,7 +482,7 @@ describe("TextSegment next steps rendering", () => {
           ownerUserId: "user-owner",
         }) as EpicCanvasTileRef,
         target: { epicId: "epic-1" },
-        // The chip is a button, so it pins the tile (R6).
+        // The chip is a button, so it pins the tile.
         gesture: "explicit",
       }),
     );

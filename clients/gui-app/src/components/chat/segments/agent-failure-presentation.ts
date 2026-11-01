@@ -1,5 +1,9 @@
 import type { AgentFailureReason } from "@traycer/protocol/persistence/epic/content-blocks";
 import { fallbackReasonLabel } from "@traycer/protocol/host/notifications/presentation";
+import {
+  PROVIDER_OUTDATED_ERROR_CODE,
+  PROVIDER_OUTDATED_HOST_OWNER_ERROR_CODE,
+} from "@traycer/protocol/host/agent/gui/agent-runtime";
 
 /**
  * How a failed turn's row should PRESENT itself.
@@ -108,11 +112,19 @@ export function agentFailureHeadline(
  */
 const INTERRUPTED_UNTYPED_CODES: ReadonlyMap<string, string> = new Map([
   ["CLAUDE_RUNTIME_DISPOSED", "Session ended"],
+  // The host shut down (a quit, an update, a restart) under a running turn of
+  // any harness; the next message continues it.
+  ["HOST_SHUTDOWN", "Session ended"],
   // A team host stopped the turn: its person left the team, or the host lost
   // its team's member set for a moment. The host's message says which.
   ["TEAM_MEMBER_REMOVED", "Member left the team"],
   ["TEAM_HOST_RECONNECTING", "Waiting for the team's host"],
   ["CLAUDE_PREVIOUS_SESSION_STOPPING", "Previous session still stopping"],
+  // The provider refused the turn because its command-line tool is too old;
+  // the host's message names the provider and, where this host cannot update
+  // it, who or what does.
+  [PROVIDER_OUTDATED_ERROR_CODE, "Out of date"],
+  [PROVIDER_OUTDATED_HOST_OWNER_ERROR_CODE, "Out of date"],
 ]);
 
 export interface UntypedCodePresentation {

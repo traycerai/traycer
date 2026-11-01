@@ -1,5 +1,5 @@
 /**
- * Ticket 23 (D20 port): the marker-scoped panel-resize freeze's imperative
+ * The marker-scoped panel-resize freeze's imperative
  * visible-row snapshot. Pure DOM, no React and no LegendList API surface -
  * `chat-timeline.tsx` calls these from a `registerPanelResizeParticipant`
  * capture/clear pair (see `lib/layout/panel-resizing-class.ts`), once per

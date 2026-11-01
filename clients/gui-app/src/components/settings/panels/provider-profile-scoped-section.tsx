@@ -240,8 +240,8 @@ function ProfileScopedSectionMessages(props: {
 }
 
 /**
- * Settings > Providers profile-scoped section (multi-profile UX overhaul,
- * T10): the old `ProviderProfilesSection` (list of rows) and the provider's
+ * Settings > Providers profile-scoped section (multi-profile UX overhaul):
+ * the old `ProviderProfilesSection` (list of rows) and the provider's
  * usage-limits card merge into one section. Any provider-reported profile
  * count above zero is headed by the same `ProfileDropdown` the picker uses,
  * even when there is only the terminal/default profile, so the page does not

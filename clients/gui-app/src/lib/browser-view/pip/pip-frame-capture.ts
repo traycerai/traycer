@@ -47,7 +47,7 @@ interface OwnedPipFrame {
  *
  * No epoch gating, unlike the tile: `shouldAcceptAgentCursorFrame` only
  * rejects while the SUBSCRIBER's capture mode is `video`, and PiP's never is -
- * it does not negotiate, so the host keeps casting JPEG to it (ticket 12).
+ * it does not negotiate, so the host keeps casting JPEG to it.
  */
 interface PipFrameMeta {
   readonly selectionId: string;

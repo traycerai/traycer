@@ -86,7 +86,7 @@ export const useHostRuntimeClient = runtime.useHostClient;
  * The host client for THIS SUBTREE: the binding's own host when it names one,
  * and otherwise the selection layer's `effectiveHostId`, resolved through the
  * same pinned-requester mechanism a surface pin resolves its own host through
- * (redesign D17 / P2.1).
+ * (redesign D17).
  *
  * "This subtree" and "the app" are the same host everywhere except beneath a
  * re-provided `HostRuntimeContext` — the seven host-scoped surfaces listed on

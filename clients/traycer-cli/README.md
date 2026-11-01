@@ -28,7 +28,7 @@ traycer host ensure
 traycer host status
 ```
 
-`traycer login` starts the browser-based sign-in flow. `traycer host ensure` installs the host version supported by this CLI, registers it with the operating system service manager when needed, and starts it. `traycer host status` confirms the local host process and endpoint.
+`traycer login` starts the browser-based sign-in flow, and authorizes a host that is already running on this machine. `traycer host ensure` installs the host version supported by this CLI, registers it with the operating system service manager when needed, and starts it. `traycer host status` confirms the local host process and endpoint.
 
 ## What It Does
 
@@ -43,7 +43,7 @@ traycer host status
 
 | Command                        | Purpose                                                                |
 | ------------------------------ | ---------------------------------------------------------------------- |
-| `traycer login`                | Sign in to Traycer.                                                    |
+| `traycer login`                | Sign in to Traycer and authorize the host running on this machine.     |
 | `traycer logout`               | Sign out and delete locally cached published-chat content.             |
 | `traycer whoami`               | Validate the stored credentials and show the signed-in user.           |
 | `traycer host ensure`          | Install, register, and start the local Traycer Host if needed.         |

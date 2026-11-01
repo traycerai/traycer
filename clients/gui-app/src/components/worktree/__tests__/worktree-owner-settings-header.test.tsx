@@ -222,6 +222,7 @@ function renderChatHeader(args: {
   readonly serviceTier: string | null;
 }): void {
   chatSettings.current = {
+    ultracode: false,
     harnessId: "claude",
     model: "sonnet-4.5",
     permissionMode: args.permissionMode,
@@ -627,6 +628,7 @@ describe("chat settings sourced from the host", () => {
   it("renders the full settings line from the fetched tuple", () => {
     fetchedSettings.answered = true;
     fetchedSettings.current = {
+      ultracode: false,
       harnessId: "claude",
       model: "sonnet-4.5",
       permissionMode: "full_access",
@@ -673,6 +675,7 @@ describe("chat settings sourced from the host", () => {
     // stopped being true at the user's first model change.
     fetchedSettings.answered = true;
     fetchedSettings.current = {
+      ultracode: false,
       harnessId: "claude",
       model: "opus-4.1",
       permissionMode: "full_access",

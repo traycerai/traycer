@@ -304,7 +304,7 @@ function ownerDispatches(): ReadonlyArray<DispatchedRequest> {
 }
 
 /**
- * R7's Undo, through the REAL reading query.
+ * The pin write and its Undo, through the REAL reading query.
  *
  * The tab strip's Undo coverage runs against a mocked mutation, which can show
  * the host riding the toast closure but not that the rendered pin follows the

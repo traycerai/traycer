@@ -181,8 +181,8 @@ vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => pinTestState.activeHostId,
 }));
 
-// The surface pin (`useSurfaceHostPin` -> `useEffectiveHostId`, redesign
-// P1.2) resolves and latches against the effective host, not the directory's
+// The surface pin (`useSurfaceHostPin` -> `useEffectiveHostId`)
+// resolves and latches against the effective host, not the directory's
 // active-host hook - drive it off the same fixture state.
 vi.mock("@/hooks/host/use-effective-host-id", () => ({
   useEffectiveHostId: () => pinTestState.activeHostId,
@@ -1421,7 +1421,7 @@ describe("<GitDiffPanelBodyLive /> workspace switcher integration", () => {
 
     // The pin is deposed, so the surface resolves to the effective host and the
     // requester it asks for is host-2, never the dead host-1 - there is no
-    // separate dead-state screen to fall back to (D6 deleted it).
+    // separate dead-state screen to fall back to (it was deleted).
     await waitFor(() => {
       expect(pinTestState.lastClientHostId).toBe("host-2");
     });

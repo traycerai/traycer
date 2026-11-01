@@ -21,7 +21,7 @@ import {
 import { promoteTileFindUiToDurable } from "@/stores/tile-find/tile-find-store";
 import type { TileKindId } from "@/stores/epics/canvas/tile-kinds";
 
-// Ticket 5: scheduleUiReclaim also checks canvas liveness. Default false
+// scheduleUiReclaim also checks canvas liveness. Default false
 // preserves existing "permanently torn down" reclaim coverage (empty canvas).
 const tileLiveness = vi.hoisted(() => ({ live: false }));
 
@@ -660,7 +660,7 @@ describe("useTileFindStore", () => {
     ).toBe(true);
 
     // Live in the canvas (switched-away chat tile will remount with the same
-    // instanceId) - Ticket 5 must NOT reclaim ui after the deferred microtask.
+    // instanceId) - must NOT reclaim ui after the deferred microtask.
     tileLiveness.live = true;
     unregister();
     await Promise.resolve();
@@ -722,7 +722,7 @@ describe("useTileFindStore", () => {
     useTileFindStore.getState().setQuery("tile-a", "needle");
     useTileFindStore.getState().search("tile-a");
     // The reader had navigated to the 3rd match before the tab switch - this
-    // is the tab-switch analogue of round 3/4's now-deleted durable
+    // is the tab-switch analogue of the now-deleted durable
     // occurrence-restore: no mechanism ever consumed this position for
     // restoration (only for live rendering of the CURRENT adapter's own
     // snapshot), so it must NOT influence where the swapped-in adapter lands.
@@ -931,7 +931,7 @@ describe("ticket 15 review round 4 (F5 deletion): reopen-after-close restores qu
     expect(restoredUi?.isOpen).toBe(true);
     expect(restoredUi?.query).toBe("needle");
     expect(restoredUi?.matchCase).toBe(true);
-    // ...but round 4 deleted the auto-advance entirely: the replayed
+    // ...but the auto-advance was deleted entirely: the replayed
     // search's own default landing (whatever the adapter itself returns
     // first) is final, never nudged toward the closed session's occurrence.
     expect(reopenedAdapter.nextMock.mock.calls).toHaveLength(0);

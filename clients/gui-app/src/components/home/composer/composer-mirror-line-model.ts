@@ -11,7 +11,7 @@ import {
   type TaskHostGroup,
 } from "@/components/epic-canvas/sidebar/task-host-groups-model";
 
-/** The mirror line (core flows, flow 5), verbatim. */
+/** The mirror line's text. */
 export function composerMirrorLineText(otherHostLabel: string): string {
   return `Agents here cannot work with the agents on ${otherHostLabel}; the task still shares its files and chats.`;
 }

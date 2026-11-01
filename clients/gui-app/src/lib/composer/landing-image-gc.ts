@@ -9,7 +9,7 @@
  * This module runs OUTSIDE React render (store ops + GC), so it reads stores
  * imperatively via `getState()` at call time. It is consumer-driven: the draft
  * store, draft-runtime registry, paste hook, and submit path call into it on the
- * documented triggers (§6 of the tech plan).
+ * their own triggers.
  *
  * Two invariants drive the reconcile logic:
  *

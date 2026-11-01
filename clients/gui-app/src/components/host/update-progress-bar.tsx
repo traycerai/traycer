@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
  * it is shown.
  *
  * DETERMINATE vs INDETERMINATE is a real distinction here, not a styling one.
- * The experience doc requires that a percentage appear only when the host
+ * The bar requires that a percentage appear only when the host
  * actually measured one and that every other phase be *explicitly*
  * indeterminate — so `percent: null` renders a moving track with no
  * `aria-valuenow`, never a bar parked at zero. A zero-width determinate bar and
