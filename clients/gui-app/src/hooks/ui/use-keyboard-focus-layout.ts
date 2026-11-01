@@ -14,16 +14,28 @@ import {
   readNativeKeyboardInsetPx,
   subscribeNativeKeyboardState,
 } from "@/lib/native-keyboard";
+import {
+  readSafeAreaInsets,
+  subscribeToSafeAreaInsets,
+} from "@/lib/safe-area-insets";
 
 /**
- * Measured, on the devices in the landscape usability report, as the window's
- * raw height less the keyboard's inset: iPhone 17 194 (402 - 208), Pro Max 232
- * (440 - 208), iPhone Duo open 405 (669 - 264), iPad Pro 11 406 (834 - 428).
+ * The height left between the top safe-area inset and the keyboard, measured
+ * in landscape on every device in the landscape usability report (ML7 device
+ * pass) as window - top inset - keyboard inset:
  *
- * The limit is the Duo's 405, the tallest that still wants the focus layout;
- * the iPad's 406 keeps its full layout. The 194 is the floor the layout has to
- * work in: two 44 rows leave it 106 of context. The top safe-area inset stays
- * in these numbers, so a reading here must keep it too.
+ * - iPhone 17: 402 - 0 - 208 = 194
+ * - iPhone 17 Pro Max: 440 - 0 - 208 = 232
+ * - iPad mini: 744 - 32 - 428 = 284
+ * - iPad Pro 11: 834 - 32 - 428 = 374
+ * - iPhone Duo open: 669 - 0 - 264 = 405
+ *
+ * Every one of them wants the focus layout: with the full layout the iPad Pro
+ * showed 133-179 of content, less than the smaller iPad mini's focus layout
+ * gives it (201). So the limit is the largest of them, the Duo's 405. Phone
+ * portrait never applies, and an iPad held upright leaves far more than this.
+ * The 194 is the floor the layout has to work in: two 44 rows leave it 106 of
+ * context.
  */
 export const KEYBOARD_FOCUS_LAYOUT_HEIGHT_LIMIT_PX = 405;
 
@@ -32,9 +44,19 @@ const FOCUS_OWNER_ATTRIBUTE = "data-keyboard-focus-owner";
 /** Spread on the element around a text entry the focus layout makes room for. */
 export const KEYBOARD_FOCUS_OWNER_PROPS = { [FOCUS_OWNER_ATTRIBUTE]: "" };
 
+/** The native shell's keyboard: its height while open, 0 while closed. */
+function readKeyboardOverlayInset(): number {
+  return getNativeKeyboardState().open ? readNativeKeyboardInsetPx() : 0;
+}
+
+function readNoInset(): number {
+  return 0;
+}
+
 /**
  * Overlay shells cover the window, so the inset comes off; Android resizes it,
- * so its height already is what is left, and it writes no inset.
+ * so its height already is what is left, and it writes no inset. The status
+ * bar's strip is not the app's either: `#root` reserves it.
  */
 function readShortKeyboardViewport(): boolean {
   const nativeOpen = getNativeKeyboardState().open;
@@ -43,7 +65,9 @@ function readShortKeyboardViewport(): boolean {
   if (readPhonePortrait()) return false;
   const covered = nativeOpen ? readNativeKeyboardInsetPx() : browserInset;
   return (
-    document.documentElement.clientHeight - covered <=
+    document.documentElement.clientHeight -
+      readSafeAreaInsets().top -
+      covered <=
     KEYBOARD_FOCUS_LAYOUT_HEIGHT_LIMIT_PX
   );
 }
@@ -52,10 +76,12 @@ function subscribeToShortKeyboardViewport(onChange: () => void): () => void {
   const unsubscribeNative = subscribeNativeKeyboardState(onChange);
   const unsubscribeViewport = subscribeToViewportChanges(onChange);
   const unsubscribePortrait = subscribeToPhonePortrait(onChange);
+  const unsubscribeInsets = subscribeToSafeAreaInsets(onChange);
   return () => {
     unsubscribeNative();
     unsubscribeViewport();
     unsubscribePortrait();
+    unsubscribeInsets();
   };
 }
 
@@ -105,6 +131,21 @@ function readFocusOwner(): Element | null {
 
 function readNoFocusOwner(): null {
   return null;
+}
+
+/**
+ * The keyboard's height where it covers a window that keeps its full height
+ * under it: the installed iOS app, which overlays it. A surface placed against
+ * the visual viewport, as Radix places a popover, needs only this part: a
+ * browser's visual viewport already ends at the keyboard, and Android's window
+ * does, so it is 0 there.
+ */
+export function useKeyboardOverlayInset(): number {
+  return React.useSyncExternalStore(
+    subscribeNativeKeyboardState,
+    readKeyboardOverlayInset,
+    readNoInset,
+  );
 }
 
 /**

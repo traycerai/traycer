@@ -191,7 +191,8 @@ export function BotThreadPanel(props: {
       data-testid="bot-thread-panel"
       data-bot-thread-panel=""
       data-thread-id={threadId ?? undefined}
-      className="flex min-h-0 flex-1 flex-col"
+      data-focus-layout={focusLayout ? "" : undefined}
+      className="group/thread-panel flex min-h-0 flex-1 flex-col"
     >
       <header
         className={cn(
@@ -464,12 +465,14 @@ function ThreadOrigin(props: ThreadPanelBodyProps): ReactNode {
 
 /**
  * The post where no list of replies holds it: a scroll region of its own, as
- * tall as the post and no taller than the pane leaves it.
+ * tall as the post and no taller than the pane leaves it. On the focus layout
+ * it is the context region and takes all the pane leaves, so the box rests on
+ * the keyboard under a short post too.
  */
 function ThreadPostScroll(props: { readonly children: ReactNode }): ReactNode {
   return (
     <div
-      className="min-h-0 overflow-y-auto pt-2"
+      className="min-h-0 overflow-y-auto pt-2 group-data-[focus-layout]/thread-panel:flex-1"
       data-testid="bot-thread-post-scroll"
     >
       {props.children}
@@ -744,8 +747,10 @@ function keepOpenThread(): boolean {
  * thread whose id is known, above the panel's box. Once a reply is listed the
  * post and the count are the first thing in the replies' list and scroll with
  * it. A thread with no reply yet draws neither the count nor room for replies,
- * so the box follows the post; a listed one's transcript stays subscribed with
- * nothing drawn while it connects, and takes the room once a reply is listed.
+ * so the box follows the post, except on the focus layout, where the post's
+ * region fills the pane down to the box; a listed one's transcript stays
+ * subscribed with nothing drawn while it connects, and takes the room once a
+ * reply is listed.
  * A thread the list has not returned yet (`listed: null`) has no replies to
  * read, and still says the bot is replying. A failed read of the list says so
  * above the replies, with Retry, and leaves what the list last returned in

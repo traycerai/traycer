@@ -453,6 +453,49 @@ describe("ComposerShell focus layout", () => {
     expect(screen.getByRole("status").textContent).toBe("false");
   });
 
+  describe("the pull zone over the draft's side of the row", () => {
+    beforeEach(() => {
+      viewportMock.phone = true;
+      HTMLElement.prototype.setPointerCapture = vi.fn();
+    });
+
+    function renderRow(expansion: ComposerExpansion): void {
+      render(
+        <ComposerFocusLayoutContext value>
+          {shellWith(expansion, FITTING_EDITOR)}
+        </ComposerFocusLayoutContext>,
+      );
+    }
+
+    function draftZone(): Element | null {
+      return document.querySelector("[data-composer-draft-grabber]");
+    }
+
+    it("is the edge's pull: hidden from assistive technology, and one pull opens the sheet once", () => {
+      const expansion = makeExpansion(false);
+      renderRow(expansion);
+      const zone = draftZone();
+      if (zone === null) throw new Error("no draft zone");
+      expect(zone.getAttribute("aria-hidden")).toBe("true");
+      expect(zone.childElementCount).toBe(0);
+
+      fireEvent.pointerDown(zone, { clientY: 100, pointerId: 1 });
+      fireEvent.pointerMove(zone, { clientY: 40, pointerId: 1 });
+      // What follows the finger is the card, as from the edge's zone.
+      expect(shell().hasAttribute("data-composer-pulling")).toBe(true);
+      fireEvent.pointerUp(zone, { clientY: 40, pointerId: 1 });
+
+      expect(expansion.onExpandedChange).toHaveBeenCalledTimes(1);
+      expect(expansion.onExpandedChange).toHaveBeenCalledWith(true);
+    });
+
+    it("is not drawn off the row", () => {
+      renderShellWithEditor(makeExpansion(false), FITTING_EDITOR);
+      expect(grabber()).not.toBeNull();
+      expect(draftZone()).toBeNull();
+    });
+  });
+
   it("keeps a sheet pulled open as the sheet, with the full toolbar", () => {
     // Only a phone draws the sheet.
     viewportMock.phone = true;

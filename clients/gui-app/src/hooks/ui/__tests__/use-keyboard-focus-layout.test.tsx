@@ -71,18 +71,33 @@ function isShort(): boolean {
 
 describe("useShortKeyboardViewport", () => {
   it.each([
-    ["iPhone 17", IPHONE_17, true],
-    ["iPhone 17 Pro Max", IPHONE_PRO_MAX, true],
-    ["iPhone Duo open", IPHONE_DUO_OPEN, true],
-    ["iPad Pro 11", IPAD_PRO_11, false],
+    ["iPhone 17", IPHONE_17],
+    ["iPhone 17 Pro Max", IPHONE_PRO_MAX],
+    ["iPhone Duo open", IPHONE_DUO_OPEN],
+    ["iPad Pro 11", IPAD_PRO_11],
   ])(
-    "answers %s from the window less the keyboard",
-    (_name, viewport, short) => {
+    "is short on the %s, from the window less its top inset and the keyboard",
+    (_name, viewport) => {
       raiseNativeKeyboard(viewport);
       render(<ShortProbe />);
-      expect(isShort()).toBe(short);
+      expect(isShort()).toBe(true);
     },
   );
+
+  it("takes the top inset off: 406 above the keyboard is short under a 32 status bar, not without one", () => {
+    raiseNativeKeyboard({ ...IPAD_PRO_11, top: 0 });
+    render(<ShortProbe />);
+    expect(isShort()).toBe(false);
+
+    act(() => {
+      document.documentElement.style.setProperty(
+        "--safe-area-inset-top",
+        "32px",
+      );
+      window.dispatchEvent(new Event("resize"));
+    });
+    expect(isShort()).toBe(true);
+  });
 
   it("is never short while the keyboard is closed", () => {
     // The inset variable alone, with the plugin saying closed, is not a keyboard.
@@ -104,7 +119,7 @@ describe("useShortKeyboardViewport", () => {
   it("is not short on a phone held upright, however little height is left", () => {
     setScreenOrientation("portrait-primary");
     window.innerWidth = 400;
-    raiseNativeKeyboard({ height: 800, inset: 500 });
+    raiseNativeKeyboard({ height: 800, top: 0, inset: 500 });
     render(<ShortProbe />);
     expect(isShort()).toBe(false);
   });

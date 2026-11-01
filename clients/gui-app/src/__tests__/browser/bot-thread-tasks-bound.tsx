@@ -59,7 +59,8 @@ import "@/index.css";
  * yet). `?tasks=none` leaves the Tasks section out.
  *
  * The focus-layout spec adds `?keyboard=<px>`: the installed app with the
- * keyboard up, written the way its native bridge writes it.
+ * keyboard up, written the way its native bridge writes it, `?top=<px>` for the
+ * status bar's inset above the pane, and `?post=short` for a post of one line.
  */
 const HOST_ID = "bot-thread-tasks-bound-host";
 const THREAD_ID = "thread-1";
@@ -168,12 +169,31 @@ if (keyboardInset !== null) {
   setNativeKeyboardState({ open: true, transitioning: false });
 }
 
+const topInset = params.get("top");
+if (topInset !== null) {
+  document.documentElement.style.setProperty(
+    "--safe-area-inset-top",
+    `${topInset}px`,
+  );
+}
+
 /** A post taller than any pane the spec makes, ending in a marker. */
 const LONG_POST = `${Array.from(
   { length: 60 },
   (_, index) =>
     `Paragraph ${String(index + 1)} of a long post: the release train leaves at noon.`,
 ).join("\n\n")}\n\nEND-OF-POST`;
+
+function sentText(): string | null {
+  switch (params.get("post")) {
+    case "long":
+      return LONG_POST;
+    case "short":
+      return "Is the release train still leaving at noon?";
+    default:
+      return null;
+  }
+}
 
 function panelThread(): BotThreadPanelThread {
   switch (params.get("thread")) {
@@ -196,17 +216,18 @@ function panelThread(): BotThreadPanelThread {
   }
 }
 
+const sent = sentText();
 const sentPost: BotSentPost | null =
-  params.get("post") === "long"
-    ? {
+  sent === null
+    ? null
+    : {
         threadId: THREAD_ID,
         requestId: "req-1",
-        text: LONG_POST,
+        text: sent,
         senderUserId: null,
         sentAt: 1_000,
         delivery: "written",
-      }
-    : null;
+      };
 
 export function SignedInFixture(props: {
   readonly children: ReactNode;

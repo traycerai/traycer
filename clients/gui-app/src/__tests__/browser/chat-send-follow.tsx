@@ -812,6 +812,27 @@ const FOCUS_ROW = new URLSearchParams(window.location.search).has("focus-row");
 if (FOCUS_ROW) setPhoneLayoutOnly(true);
 
 /**
+ * `?keyboard=<px>`: the installed iOS app's keyboard over a window that keeps
+ * its height. The native bridge writes `--keyboard-inset`, and the shell's
+ * safe-height tokens end the app's box at the keyboard's top, which `#root`'s
+ * height stands in for here.
+ */
+const KEYBOARD_INSET = new URLSearchParams(window.location.search).get(
+  "keyboard",
+);
+if (KEYBOARD_INSET !== null) {
+  document.documentElement.style.setProperty(
+    "--keyboard-inset",
+    `${KEYBOARD_INSET}px`,
+  );
+  // `index.css` gives `#root` a 100vh floor, so the floor moves too.
+  const above = `calc(100vh - ${KEYBOARD_INSET}px)`;
+  const root = document.querySelector<HTMLElement>("#root");
+  root?.style.setProperty("height", above);
+  root?.style.setProperty("min-height", above);
+}
+
+/**
  * What the tile's `dispatchUserSend` does once the composer has built its
  * submit input: put it in the store as the person's own send.
  */

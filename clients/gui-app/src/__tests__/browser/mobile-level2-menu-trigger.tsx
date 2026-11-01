@@ -21,6 +21,7 @@ import { MobileTileMenu } from "@/components/epic-canvas/mobile/mobile-tile-menu
 import { BotChannelTitle } from "@/components/bots/bot-channel-level2";
 import { BotAvatar } from "@/components/bots/bot-avatars";
 import { Button } from "@/components/ui/button";
+import { setNativeKeyboardState } from "@/lib/native-keyboard";
 import { ResolvedThemeContext } from "@/providers/use-resolved-theme";
 import { useTileMinimapStore } from "@/stores/tile-minimap";
 import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
@@ -42,7 +43,27 @@ import "@/index.css";
  * `openStoreForTest` session and a `HostRuntimeProvider` over a mock messenger.
  * The minimap button draws only for a tile with a registered target, so one is
  * registered.
+ *
+ * `window.__level2Keyboard.raise(inset)` raises the installed iOS app's
+ * keyboard as its native bridge does: `--keyboard-inset` on the document
+ * element, then the plugin's open state, over a window that keeps its height.
  */
+declare global {
+  interface Window {
+    __level2Keyboard?: { readonly raise: (inset: number) => void };
+  }
+}
+
+window.__level2Keyboard = {
+  raise: (inset) => {
+    document.documentElement.style.setProperty(
+      "--keyboard-inset",
+      `${String(inset)}px`,
+    );
+    setNativeKeyboardState({ open: true, transitioning: false });
+  },
+};
+
 const EPIC_ID = "fixture-epic";
 const TAB_ID = "fixture-view-tab";
 const FIXTURE_HOST_ID = "fixture-host";

@@ -157,7 +157,7 @@ describe("<ComposerMenu /> disabled rows", () => {
   it("puts the disabled reason in the row's accessible name", () => {
     const store = createComposerPickerStore();
     act(() => {
-      render(<ComposerMenu pickerStore={store} />);
+      render(<ComposerMenu pickerStore={store} replyRow={null} />);
     });
     act(() => {
       openWith(store, [slashItem("plan", LEADING_ONLY)]);
@@ -171,7 +171,7 @@ describe("<ComposerMenu /> disabled rows", () => {
   it("leaves an enabled row's accessible name free of policy text", () => {
     const store = createComposerPickerStore();
     act(() => {
-      render(<ComposerMenu pickerStore={store} />);
+      render(<ComposerMenu pickerStore={store} replyRow={null} />);
     });
     act(() => {
       openWith(store, [slashItem("plan", null)]);
@@ -189,7 +189,7 @@ describe("<ComposerMenu /> disabled rows", () => {
   it("puts the disabled reason in a mention row's accessible name", () => {
     const store = createComposerPickerStore();
     act(() => {
-      render(<ComposerMenu pickerStore={store} />);
+      render(<ComposerMenu pickerStore={store} replyRow={null} />);
     });
     act(() => {
       openMentionWith(store, [mentionItem("Stop the busy-loop", LEADING_ONLY)]);
@@ -205,7 +205,7 @@ describe("<ComposerMenu /> disabled rows", () => {
     // unconditionally would pass the case above too.
     const store = createComposerPickerStore();
     act(() => {
-      render(<ComposerMenu pickerStore={store} />);
+      render(<ComposerMenu pickerStore={store} replyRow={null} />);
     });
     act(() => {
       openMentionWith(store, [mentionItem("Stop the busy-loop", null)]);
@@ -224,7 +224,7 @@ describe("<ComposerMenu /> trigger echo", () => {
   it("prefixes rows with $ when the picker was opened with $", () => {
     const store = createComposerPickerStore();
     act(() => {
-      render(<ComposerMenu pickerStore={store} />);
+      render(<ComposerMenu pickerStore={store} replyRow={null} />);
     });
     act(() => {
       openTriggered(store, [slashItem("frontend-design", null)], "$", "all");
@@ -241,7 +241,7 @@ describe("<ComposerMenu /> trigger echo", () => {
   it("keeps the / prefix for a slash-opened picker", () => {
     const store = createComposerPickerStore();
     act(() => {
-      render(<ComposerMenu pickerStore={store} />);
+      render(<ComposerMenu pickerStore={store} replyRow={null} />);
     });
     act(() => {
       openTriggered(store, [slashItem("plan", null)], "/", "all");
@@ -255,7 +255,7 @@ describe("<ComposerMenu /> trigger echo", () => {
   it("keeps the same header whichever trigger opened the picker", () => {
     const store = createComposerPickerStore();
     act(() => {
-      render(<ComposerMenu pickerStore={store} />);
+      render(<ComposerMenu pickerStore={store} replyRow={null} />);
     });
     act(() => {
       openTriggered(store, [slashItem("frontend-design", null)], "$", "all");
