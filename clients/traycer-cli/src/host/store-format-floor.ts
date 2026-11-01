@@ -828,17 +828,36 @@ export interface StoreFormatFloorEvidence {
  * the sidecar's `1.2.0`, the fixed table answers chat store format 8 and a
  * machine holding 9s blocks it.
  *
- * Preferred whether or not the declaration is itself a released version. A
+ * Preferred whether or not the declaration is itself a released version: a
  * stamp read off the tree is a better description of the tree than one derived
- * from a filename or a caller's prediction either way, and an off-ladder
- * declaration that names no formats still stands aside - so the preference can
- * only ever move a target from "unjudgeable" towards "judged".
+ * from a filename or a caller's prediction either way. An off-ladder stamp that
+ * names no formats stands aside, which is why a registry build's never reaches
+ * here (`floorTargetStamp`).
  */
 export function storeFormatFloorBuildVersion(
   declaredRuntimeVersion: string | null,
   recordVersion: string,
 ): string {
   return declaredRuntimeVersion ?? recordVersion;
+}
+
+/**
+ * The stamp the floor may judge a target by, or `null`.
+ *
+ * A registry build's off-ladder stamp is not one: its catalog version is on
+ * the ladder and the stamp is not, so judging by the stamp would stand aside on
+ * a build the catalog can place. A local tree has no such version to fall back
+ * on, so its stamp stands.
+ */
+export function floorTargetStamp(
+  target: Pick<HostInstallRecord, "runtimeVersion" | "source">,
+): string | null {
+  const { runtimeVersion } = target;
+  return target.source.kind === "registry" &&
+    runtimeVersion !== null &&
+    !isReleasedHostVersion(runtimeVersion)
+    ? null
+    : runtimeVersion;
 }
 
 /**

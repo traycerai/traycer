@@ -44,6 +44,7 @@ import {
   type StoreFloorTargetIdentity,
   assertStoreFormatFloorAtCommit,
   commitFloorTargetVersion,
+  floorTargetStamp,
   installedFloorVersion,
   installedProvenanceOf,
   isSameArchive,
@@ -948,7 +949,7 @@ export async function commitInstallFromSource(
     surveyRoots: await resolveChatStoreSurveyRoots(opts.environment),
     targetVersion: commitFloorTargetVersion(
       opts.targetRegistryEntry,
-      opts.runtimeVersion,
+      floorTargetStamp(opts),
       opts.version,
     ),
     declaredStoreFormats: await readDeclarationOfInstalledTree(
@@ -988,7 +989,7 @@ export async function commitInstallFromSource(
     // can place. Taken from the options rather than re-read off the tree
     // because - unlike the formats below - the record already carries it, read
     // by `stageVerifiedSource` from this same runtime directory.
-    declaredRuntimeVersion: opts.runtimeVersion,
+    declaredRuntimeVersion: floorTargetStamp(opts),
     // The archive's own answer, read from the tree this commit is about to
     // swap in. For a build that is not a release - the host a local desktop
     // install bundles - this is the ONLY thing that can place it, so without

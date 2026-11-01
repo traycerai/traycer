@@ -17,6 +17,7 @@ import { refuseDesktopDisruptionOfForegroundRun } from "../host/foreground-host-
 import type { HostStartOrigin } from "../host/lifecycle-origin";
 import {
   assertHostStoreFormatFloor,
+  floorTargetStamp,
   installedFloorVersion,
   installedProvenanceOf,
   isSameArchive,
@@ -351,7 +352,7 @@ export async function applyHost(
   // evidence's `clearedVersion` below, so the tail - which resolves it the
   // same way from the same two values - agrees with this gate by construction.
   const floorTargetVersion = storeFormatFloorBuildVersion(
-    staged.runtimeVersion,
+    floorTargetStamp(staged),
     staged.version,
   );
   await assertHostStoreFormatFloor({

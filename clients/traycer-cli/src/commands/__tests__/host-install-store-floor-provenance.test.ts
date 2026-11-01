@@ -542,6 +542,21 @@ describe("host install --release over a side-loaded install", () => {
     },
   );
 
+  it("keeps the version shortcut for a forward registry move whose archive carries no stamp", async () => {
+    await writeRegistryInstall("1.5.2", { chatDb: 22 });
+    await writeStampedChatDb("epic-at-22", 22);
+    publish({
+      version: "1.5.9",
+      storeFormats: null,
+      archiveSha256: TARGET_SHA,
+      sidecar: null,
+    });
+
+    await installRelease("1.5.9");
+
+    await expectInstalledFromRegistry("1.5.9");
+  });
+
   it("lets a byte-identical archive through whatever the stores say", async () => {
     // Nothing else can clear this: no runtime version, no sidecar, and a store
     // that cannot be read.
