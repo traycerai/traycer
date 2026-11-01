@@ -295,11 +295,15 @@ describe("settings section is store-backed, not URL-backed", () => {
     render(<RouterProvider router={router} />);
     await waitFor(() => expect(modalProbe.current).not.toBeNull());
 
+    const navigateSpy = vi.spyOn(router, "navigate");
     act(() => {
       modalProbe.current?.replaceOwnedSettingsRoute("providers");
     });
 
-    await waitFor(() => expect(modalProbe.current).not.toBeNull());
+    // The spy and not the pathname, because a navigate is asynchronous: an
+    // unchanged pathname is also what a navigate that has been issued and has
+    // not landed yet looks like.
+    expect(navigateSpy).not.toHaveBeenCalled();
     expect(router.state.location.pathname).toBe("/epics");
   });
 

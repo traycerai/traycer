@@ -109,7 +109,7 @@ export function DemotionPreviewDialog(props: {
               here even while the plan check is out; the plan lead waits for the
               rows, like the table does. */}
           <DialogDescription asChild>
-            <div className="flex flex-col gap-2">
+            <div className="flex max-w-[72ch] flex-col gap-2">
               <span data-testid="members-demotion-loss">
                 {demotionConfirmBody(
                   props.memberName,

@@ -19,6 +19,8 @@ import type {
 } from "@traycer/protocol/host/environment/contracts";
 import { resetNegotiatedManifests } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { ConfigurationSourceBoundary } from "@/components/settings/environment/configuration-source-boundary";
+import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
+import { useEnvironmentInvitationsQuery } from "@/hooks/environment/use-environment-invitations";
 import { useConfigurationSource } from "@/components/settings/environment/configuration-source";
 import {
   useInvitedTeamName,
@@ -29,12 +31,17 @@ import { PersonalPageFrame } from "@/components/settings/personal/personal-page-
 import { SettingsSurface } from "@/components/settings/settings-surface";
 import { PERSONAL_PICK } from "@/lib/settings-environment-pages";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
-import { negotiateMethods } from "./mcp-skills-test-support";
+import {
+  negotiateMethods,
+  negotiateMethodsOn,
+} from "./mcp-skills-test-support";
 import {
   mountTeamPage,
   poolSource,
   requireTeamHostClient,
+  requireViewingHostClient,
   resetTeamPageHarness,
+  teamHostBoundary,
 } from "./team-configuration-test-support";
 
 /**
@@ -196,6 +203,18 @@ const INVITATION: EnvironmentInvitation = {
   role: "editor",
   paidPlan: false,
 };
+
+/**
+ * Reads the other host, as a second window on the same account does, so that
+ * host's entries exist and hold its answers. Unmounted, those entries stay in
+ * cache with nothing observing them — the window closed.
+ */
+function WarmOtherHost(): ReactNode {
+  const client = requireViewingHostClient();
+  useEnvironmentListQuery(client, true);
+  useEnvironmentInvitationsQuery(client);
+  return null;
+}
 
 function Probe(): ReactNode {
   const source = useConfigurationSource();
@@ -469,6 +488,136 @@ describe("a team the environment list no longer carries", () => {
       kind: "team",
       environmentId: "env-a",
     });
+  });
+
+  // Two entries of ONE slot. A build with no server pool gives each host its
+  // own RPC entry for the same account, so the slot never changes when the
+  // client does — and a question certified while one entry served must not
+  // survive the move to the other, whose cached list predates the removal.
+  //
+  // The clock is held so both hosts' membership answers carry the same
+  // `listedAt`: that equality is what isolates the entry identity as the only
+  // thing standing between the old answer and the new entry's stale data. It
+  // is a condition of this case, not a claim that every host switch fails.
+  it("cannot reuse one entry's answer for another entry of the same slot", async () => {
+    negotiateMethods({
+      "environment.invitations.list": V10,
+      "environment.invitations.accept": V10,
+    });
+    useSettingsEnvironmentPickStore.setState({
+      pick: { kind: "team", environmentId: "env-a" },
+    });
+    const frozen = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(frozen);
+    try {
+      const listed: { current: readonly EnvironmentDescriptorV11[] } = {
+        current: [PERSONAL, team("editor")],
+      };
+      const invited = { current: false };
+      const harness = mountTeamPage(poolSource("editor"), {
+        "environment.list": () => ({ environments: [...listed.current] }),
+        "environment.invitations.list": () => ({
+          invitations: invited.current ? [INVITATION] : [],
+        }),
+      });
+      // A held clock makes `timeUntilStale` zero, so without a `staleTime` the
+      // harness refetches forever and nothing ever settles. The clock is held
+      // for the membership timestamps, so the staleness has to be restored by
+      // hand.
+      harness.queryClient.setDefaultOptions({
+        queries: { retry: false, gcTime: Infinity, staleTime: 60_000 },
+      });
+      const remote = requireViewingHostClient();
+      negotiateMethodsOn(remote.getActiveHostId() ?? "", {
+        "environment.invitations.list": V10,
+        "environment.invitations.accept": V10,
+      });
+      const tree = (warm: boolean): ReactNode => (
+        <HeldValueHostRuntime>
+          {warm ? <WarmOtherHost /> : null}
+          <PersonalPageFrame section="secrets">
+            <Probe />
+          </PersonalPageFrame>
+        </HeldValueHostRuntime>
+      );
+      const view = render(tree(true), { wrapper: harness.Wrapper });
+      await screen.findByTestId("probe");
+      await waitFor(() => expect(harness.queryClient.isFetching()).toBe(0));
+
+      // The other window closes. Its entries stay in cache, unobserved, with
+      // the invitations list from before the reinvitation below — which is what
+      // makes this host's answer the only one anything is observing, and so the
+      // one a route-scoped identity would credit to the other host's entry.
+      act(() => {
+        view.rerender(tree(false));
+      });
+      await waitFor(() => expect(harness.queryClient.isFetching()).toBe(0));
+
+      // Removed and invited back. THIS host's entry answers, so the team stays
+      // and Review is offered — the answer is real, for this entry.
+      listed.current = [PERSONAL];
+      invited.current = true;
+      await act(() =>
+        harness.queryClient.invalidateQueries({
+          predicate: (query) => query.queryKey.includes("environment.list"),
+        }),
+      );
+      expect(
+        await screen.findByRole("button", { name: "Review" }),
+      ).toBeTruthy();
+      expect(useSettingsEnvironmentPickStore.getState().pick).toEqual({
+        kind: "team",
+        environmentId: "env-a",
+      });
+
+      // The other host's membership answer says the same thing, in the same
+      // millisecond, so `listedAt` does not move. Its invitations entry still
+      // holds the list from before the reinvitation.
+      const otherList = harness.queryClient
+        .getQueryCache()
+        .getAll()
+        .find(
+          (query) =>
+            query.queryKey.includes("environment.list") &&
+            query.queryKey.includes(remote.getActiveHostId()),
+        );
+      expect(otherList).toBeDefined();
+      if (otherList !== undefined) {
+        act(() => {
+          harness.queryClient.setQueryData(otherList.queryKey, {
+            environments: [PERSONAL],
+          });
+        });
+      }
+
+      act(() => {
+        teamHostBoundary.client = remote;
+        view.rerender(tree(false));
+      });
+
+      // Nothing has answered on the entry now being read, so no removal may be
+      // claimed off it — the answer held is about the entry this page has just
+      // stopped reading.
+      expect(useSettingsEnvironmentPickStore.getState().pick).toEqual({
+        kind: "team",
+        environmentId: "env-a",
+      });
+      expect(hoisted.toasts).toEqual([]);
+
+      // And the right outcome once the new entry answers its own question: the
+      // person is invited back, so Review is what this page offers on the host
+      // now serving it.
+      expect(
+        await screen.findByRole("button", { name: "Review" }),
+      ).toBeTruthy();
+      expect(hoisted.toasts).toEqual([]);
+      expect(useSettingsEnvironmentPickStore.getState().pick).toEqual({
+        kind: "team",
+        environmentId: "env-a",
+      });
+    } finally {
+      clock.mockRestore();
+    }
   });
 
   it("claims no removal on a read that failed, and asks again no more than once", async () => {

@@ -4,7 +4,6 @@ import {
   useMutation,
   useQuery,
   useQueryClient,
-  type Query,
   type QueryClient,
   type QueryFilters,
   type UseQueryResult,
@@ -15,7 +14,10 @@ import type {
   EnvironmentInvitationsListResponse,
 } from "@traycer/protocol/host/environment/contracts";
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
-import { useHostQuery } from "@/hooks/host/use-host-query";
+import {
+  useHostQuery,
+  useHostQueryEntryHash,
+} from "@/hooks/host/use-host-query";
 import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mutation";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
@@ -87,79 +89,77 @@ export function useEnvironmentInvitationsQuery(
   return route.direct ? direct : rpc;
 }
 
-/** Which route's cache slot an invitations read lands in. */
-export type InvitationSlot = "direct" | "rpc";
-
-const INVITATION_SLOTS: readonly InvitationSlot[] = ["rpc", "direct"];
-
 /**
- * The cache entries one route's invitations read can land in.
+ * Every cache entry an invitations read can land in, on either route.
  *
- * Both slots are named from this one function so that "the invitations reads"
- * means the same set to everything that cancels them and everything that
- * watches them. A caller matching only the slot it happens to be served from
- * would be blind to the other the moment host readiness moved the read, and a
- * caller that cancelled one set and watched another would wait on an entry
- * nothing had stopped.
+ * Deliberately all of them and not the one being served: a caller that matched
+ * only the route it happens to be served from would leave a read in flight on
+ * the other the moment host readiness moved, and that read can still answer
+ * into the cache afterwards.
  */
-function invitationSlotFilters(slot: InvitationSlot): QueryFilters {
-  if (slot === "direct")
-    return { queryKey: authQueryKeys.environmentInvitationsAll() };
-  return {
-    predicate: (query) =>
-      hostQueryKeys.matchesMethodOnAnyHost(
-        query.queryKey,
-        "environment.invitations.list",
-      ),
-  };
+function invitationReadFilters(): readonly QueryFilters[] {
+  return [
+    {
+      predicate: (query) =>
+        hostQueryKeys.matchesMethodOnAnyHost(
+          query.queryKey,
+          "environment.invitations.list",
+        ),
+    },
+    { queryKey: authQueryKeys.environmentInvitationsAll() },
+  ];
 }
 
-/** The slot the invitations read is served from right now. */
-export function useEnvironmentInvitationsSlot(
+/**
+ * The identity of the cache entry the serving route's read lands in — its
+ * `queryHash`.
+ *
+ * This is what a caller needs to say "the read I am RENDERING has answered
+ * since I asked", and it holds the evidence to ONE entry. The route is too
+ * coarse for that: one route holds one entry per host scope and per identity it
+ * has been read under, so a question certified while one entry served would
+ * survive a move to another of that route's entries, and the stale list that
+ * entry has cached would be read as an answer to a question it predates.
+ *
+ * Every branch below mirrors {@link useEnvironmentInvitationsQuery}: the same
+ * route, the same viewer, the same auth, the same params, and the same
+ * `route.direct` choice between the two. That is what makes this the identity
+ * of the entry whose data that hook returns in the same render, rather than an
+ * identity that merely tends to agree with it.
+ *
+ * Neither does the cache answer this, which is the subtler half. TanStack hands
+ * a render the data of the key it was given and moves the observer to that key
+ * in an effect, so in the one render where the key changes a cache-side lookup
+ * still names the entry the app has just stopped reading — and that is the
+ * render in which a caller judging the new data decides.
+ */
+export function useEnvironmentInvitationsEntryHash(
   client: HostClient<HostRpcRegistry> | null,
-): InvitationSlot {
-  return useInvitationRoute(client).direct ? "direct" : "rpc";
+): string {
+  const route = useInvitationRoute(client);
+  const viewerUserId = useCloudChatViewerId();
+  const binding = useHostBinding();
+  const auth = binding?.auth ?? null;
+  const queryClient = useQueryClient();
+  const rpc = useHostQueryEntryHash<
+    HostRpcRegistry,
+    "environment.invitations.list"
+  >({
+    client: route.servingClient,
+    method: "environment.invitations.list",
+    params: EMPTY_PARAMS,
+    cacheKeyIdentity: [viewerUserId],
+  });
+  // Hashed by the client, like the RPC route's above, so it is spelled the way
+  // the cache files it — the app replaces TanStack's `queryKeyHashFn`.
+  const direct = queryClient.defaultQueryOptions({
+    queryKey: authQueryKeys.environmentInvitations(auth, viewerUserId),
+  }).queryHash;
+  return route.direct ? direct : rpc;
 }
 
 /**
- * The ONE cache entry the serving route's read lands in, or `null` where the
- * cache cannot name it.
- *
- * A caller that has to know whether a read answered SINCE it asked compares
- * this entry's `dataUpdateCount` before and after. That count is the
- * clock-free form of the question, and clock-free on purpose: `dataUpdatedAt`
- * is `Date.now()` stamped on every success, so an ask and its reply inside one
- * millisecond are indistinguishable on it and the comparison reads a confirmed
- * answer as no answer. The count rises only in the reducer's success case, so
- * it cannot tie, a failure is not an answer, and a reverting cancel restores
- * the pre-fetch count rather than raising it. `setQueryData` also dispatches a
- * success and so does raise it — nothing writes either invitations key today,
- * and a caller that starts to would be claiming an answer, so it belongs in
- * the same read rather than outside it.
- *
- * The entry is found by observation rather than by rebuilding its key.
- * `useHostQuery` owns the RPC key down to the tier that answers and the viewer
- * it is partitioned by, so a second construction of it here would match until
- * that derivation moved and then silently watch nothing. What this page needs
- * is both narrower and stable: the entry THIS app's reads are attached to.
- * Both routes' hooks hold an observer on their own slot's entry even while
- * disabled, and a slot's leftovers from a host or an identity no longer served
- * hold none. Anything other than exactly one observed entry is not an entry a
- * caller can reason about, so this says so instead of guessing.
- */
-export function findEnvironmentInvitationEntry(
-  queryClient: QueryClient,
-  slot: InvitationSlot,
-): Query | null {
-  const observed = queryClient
-    .getQueryCache()
-    .findAll(invitationSlotFilters(slot))
-    .filter((query) => query.getObserversCount() > 0);
-  return observed.length === 1 ? observed[0] : null;
-}
-
-/**
- * Stops every invitations read in flight, in both routes' slots, so the
+ * Stops every invitations read in flight, on both routes, so the
  * caller's own request is the next one made.
  *
  * A caller that has to know whether an invitation exists *now* needs that: a
@@ -188,8 +188,8 @@ export function findEnvironmentInvitationEntry(
 export function cancelEnvironmentInvitationReads(
   queryClient: QueryClient,
 ): void {
-  for (const slot of INVITATION_SLOTS)
-    void queryClient.cancelQueries(invitationSlotFilters(slot));
+  for (const filters of invitationReadFilters())
+    void queryClient.cancelQueries(filters);
 }
 
 /** Accepts one invitation; the team then lists among the person's environments. */

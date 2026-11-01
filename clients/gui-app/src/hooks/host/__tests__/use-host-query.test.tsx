@@ -35,6 +35,7 @@ import { USAGE_SUMMARY_RESPONSE_TIMEOUT_MS } from "@/lib/usage-analytics/usage-s
 import {
   useHostMutation,
   useHostQuery,
+  useHostQueryEntryHash,
   useHostQueryWithResponseMap,
 } from "@/hooks/host/use-host-query";
 
@@ -1815,5 +1816,146 @@ describe("useHostMutation - idempotency-keyed dispatch and resolveResponse", () 
 
     expect(caught).toBeInstanceOf(Error);
     expect((caught as Error).message).toBe("mapped: second dispatch exploded");
+  });
+});
+
+describe("useHostQueryEntryHash", () => {
+  afterEach(() => {
+    cleanup();
+    resetHostConnectionRegistryForTest();
+  });
+
+  /**
+   * The invariant a caller holding evidence against a read depends on: in EVERY
+   * render, the entry the hash names is the entry whose data the read returned.
+   *
+   * The render that breaks it is the one where the serving host moves. TanStack
+   * hands that render the new key's data and moves the observer to the new key
+   * in an effect, so anything that answers "which entry am I reading?" from the
+   * cache names the entry the app has just stopped reading — for exactly the
+   * render in which a caller judging that new data decides.
+   */
+  it("names the entry the read returned, in every render including the host move", async () => {
+    const remoteEntry = mockRemoteHostEntry;
+    const messenger = new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => "req-entry-hash",
+      handlers: {
+        "host.status": () => ({
+          ready: true,
+          hostVersion: "1.2.3",
+          protocolVersion: { major: 1, minor: 0 },
+          busy: false,
+          busySessionCount: 0,
+          updateProgress: null,
+          busyBreakdown: null,
+          updateOperation: null,
+          updateTransaction: null,
+          storeFormats: null,
+          install: null,
+          processMemory: null,
+          crossHostMessaging: null,
+          sessions: null,
+          updatesExternallyManaged: null,
+        }),
+      },
+    });
+    // The app's client, so the hash is spelled by the app's own
+    // `queryKeyHashFn` rather than TanStack's default.
+    const queryClient = createAppQueryClient();
+    queryClient.setDefaultOptions({
+      queries: { retry: false, gcTime: Infinity, staleTime: Infinity },
+    });
+    const spine = new HostClient<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      schedulingPolicy: hostRpcSchedulingPolicy,
+      invalidator: createHostQueryInvalidator(queryClient),
+      findHostById: (hostId): HostDirectoryEntry | null => {
+        if (hostId === mockLocalHostEntry.hostId) return mockLocalHostEntry;
+        return hostId === remoteEntry.hostId ? remoteEntry : null;
+      },
+      messenger,
+    });
+    spine.setRequestContext(
+      createRequestContextFixture({
+        origin: "renderer",
+        bearerToken: "tok-1",
+      }),
+    );
+    installHostConnectionRegistrySource({
+      directory: {
+        findById: (hostId) => {
+          if (hostId === mockLocalHostEntry.hostId) return mockLocalHostEntry;
+          return hostId === remoteEntry.hostId ? remoteEntry : null;
+        },
+        onDirectoryChanged: () => ({ dispose: () => undefined }),
+      },
+      leases: null,
+    });
+    const Wrapper = (props: { readonly children: ReactNode }): ReactNode => (
+      <QueryClientProvider client={queryClient}>
+        {props.children}
+      </QueryClientProvider>
+    );
+
+    // Both halves read at the same instant, every render: what the hash names
+    // and what the read returned.
+    const seen: { readonly named: unknown; readonly read: unknown }[] = [];
+    const rendered = renderHook(
+      (props: { readonly client: HostRequester<HostRpcRegistry> }) => {
+        const query = useHostQuery({
+          cacheKeyIdentity: undefined,
+          client: props.client,
+          method: "host.status",
+          params: {},
+          options: null,
+        });
+        const hash = useHostQueryEntryHash<HostRpcRegistry, "host.status">({
+          cacheKeyIdentity: undefined,
+          client: props.client,
+          method: "host.status",
+          params: {},
+        });
+        seen.push({
+          named: queryClient.getQueryCache().get(hash)?.state.data,
+          read: query.data,
+        });
+        return { hash, query };
+      },
+      {
+        wrapper: Wrapper,
+        initialProps: { client: spine.createRequester(mockLocalHostEntry) },
+      },
+    );
+
+    await waitFor(() =>
+      expect(rendered.result.current.query.data?.ready).toBe(true),
+    );
+    const localHash = rendered.result.current.hash;
+    expect(queryClient.getQueryCache().get(localHash)?.state.data).toBe(
+      rendered.result.current.query.data,
+    );
+
+    act(() => {
+      rendered.rerender({ client: spine.createRequester(remoteEntry) });
+    });
+    // Non-vacuous: the move has to actually re-key the read and answer on the
+    // other host, or the invariant below is asserted over one entry.
+    await waitFor(() =>
+      expect(rendered.result.current.hash).not.toBe(localHash),
+    );
+    await waitFor(() =>
+      expect(rendered.result.current.query.data?.ready).toBe(true),
+    );
+    expect(
+      queryClient.getQueryCache().get(rendered.result.current.hash)?.state.data,
+    ).toBe(rendered.result.current.query.data);
+
+    // No render paired one entry's identity with another's data — the empty
+    // reads of a cold entry included, since `undefined` from the entry the
+    // caller is moving TO and data from the one it is leaving is the mismatch
+    // that authorizes a decision on evidence about another read.
+    expect(seen.length).toBeGreaterThan(1);
+    for (const render of seen) expect(render.named).toBe(render.read);
   });
 });
