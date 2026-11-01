@@ -1299,7 +1299,7 @@ describe("commitInstallFromSource", () => {
       });
     }
 
-    it("judges the post-stop check by the staged entry's version too, so a store that moved after the tail still refuses", async () => {
+    it("judges the post-stop check by the staged entry's formats too, so a store that moved after the tail still refuses", async () => {
       await expect(
         commitOffLadderStamp({ storeFormats: { chatDb: 20 } }, async () => {
           await writeStampedChatDbFor(ENV, "epic-stamped-late", 22);
@@ -1316,7 +1316,10 @@ describe("commitInstallFromSource", () => {
 
       await expect(
         commitOffLadderStamp(null, beforeSwap),
-      ).rejects.toMatchObject({ code: "E_HOST_STORE_FORMAT_FLOOR" });
+      ).rejects.toMatchObject({
+        code: "E_HOST_STORE_FORMAT_FLOOR",
+        message: expect.stringContaining("host 1.5.1"),
+      });
 
       expect(beforeSwap).not.toHaveBeenCalled();
     });

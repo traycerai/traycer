@@ -542,6 +542,23 @@ describe("host install --release over a side-loaded install", () => {
     },
   );
 
+  it("judges a registry entry by its catalog version when the archive's stamp matches the install", async () => {
+    await writeRegistryInstall("1.3.0-rc.4", { chatDb: 9 });
+    await writeStampedChatDb("epic-at-9", 9);
+    publish({
+      version: "1.4.0",
+      storeFormats: null,
+      archiveSha256: TARGET_SHA,
+      sidecar: { version: "1.3.0-rc.4" },
+    });
+
+    const refusal = await refusalOf("1.4.0");
+
+    expect(refusal.message).toContain(
+      "cannot tell which chat store format 1.4.0 reads",
+    );
+  });
+
   it("keeps the version shortcut for a forward registry move whose archive carries no stamp", async () => {
     await writeRegistryInstall("1.5.2", { chatDb: 22 });
     await writeStampedChatDb("epic-at-22", 22);
