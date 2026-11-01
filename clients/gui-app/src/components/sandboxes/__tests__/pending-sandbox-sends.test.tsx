@@ -8020,9 +8020,13 @@ describe("choosing Stop on an unclaimed send", () => {
   });
 
   async function chooseStop(): Promise<void> {
+    await chooseStopWith(mount);
+  }
+
+  async function chooseStopWith<T>(mounter: () => T): Promise<T> {
     seed({ ...SEEDED, elapsedSeconds: 120 });
     answerHost(SANDBOX_HOST, CODEX_DOWNLOADING);
-    mount();
+    const mounted = mounter();
     await screen.findByTestId("sandbox-setup-line");
     act(() => {
       useStagedSandboxStore.getState().report(SURFACE, {
@@ -8030,6 +8034,58 @@ describe("choosing Stop on an unclaimed send", () => {
       });
     });
     fireEvent.click(await screen.findByTestId("sandbox-setup-stop"));
+    return mounted;
+  }
+
+  /** The driver stays; the strip, and with it the Stop's attention, can be closed. */
+  function mountWithRemovableStrip(): { removeStrip: () => void } {
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    const tree = (withStrip: boolean) => (
+      <RunnerHostContext.Provider value={RUNNER_HOST}>
+        <QueryClientProvider client={client}>
+          <PendingSandboxSendsDriver />
+          {withStrip ? (
+            <PendingSandboxSendStrip epicId="epic-1" tabId="tab-1" />
+          ) : null}
+        </QueryClientProvider>
+      </RunnerHostContext.Provider>
+    );
+    const view = render(tree(true));
+    return { removeStrip: () => view.rerender(tree(false)) };
+  }
+
+  /** Stop pending, the task closed, then a fresh row reads `state` before the Stop answers. */
+  async function closeTaskThenRowReads(
+    state: "suspended" | "stopped",
+  ): Promise<void> {
+    const answer = deferred<SandboxVerbOutcome>();
+    mocks.verbAnswer = answer.promise;
+    onTestFinished(async () => {
+      await act(async () => {
+        answer.resolve({ kind: "settled", state });
+        await answer.promise;
+      });
+    });
+    const { removeStrip } = await chooseStopWith(mountWithRemovableStrip);
+    await waitFor(() => {
+      expect(mocks.stopSandbox).toHaveBeenCalledWith("stop");
+    });
+    act(removeStrip);
+    answerSandboxRows(
+      [
+        sandboxSummaryFixture({
+          id: SANDBOX_ID,
+          hostId: SANDBOX_HOST,
+          state,
+        }),
+      ],
+      FRESH,
+    );
+    await waitFor(() => {
+      expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+    });
   }
 
   async function chooseStopAndConfirmRest(): Promise<void> {
@@ -9167,7 +9223,18 @@ describe("choosing Stop on an unclaimed send", () => {
     expect(line.textContent).toContain(SUSPENDED_DRAFT_RECEIPT);
     expectNoStoppedReceipt();
     expect(useLandingDraftStore.getState().drafts).toMatchObject([
-      { content: MESSAGE_CONTENT, closed: true },
+      {
+        content: MESSAGE_CONTENT,
+        closed: true,
+        returnedSandbox: {
+          target: {
+            kind: "existing",
+            hostId: SANDBOX_HOST,
+            sandboxId: SANDBOX_ID,
+            verb: "resume",
+          },
+        },
+      },
     ]);
   });
 
@@ -9319,6 +9386,58 @@ describe("choosing Stop on an unclaimed send", () => {
     );
     expect(useLandingDraftStore.getState().drafts).toEqual([]);
     expect(createChatCalls()).toEqual([]);
+  });
+
+  it("puts the message back in the task's composer on its sandbox's resume pick when the task closed before a suspend reached the Stop", async () => {
+    await closeTaskThenRowReads("suspended");
+
+    expect(
+      useNewConversationModalStore.getState().draftPatchesByEpicId["epic-1"],
+    ).toMatchObject({
+      content: MESSAGE_CONTENT,
+      returnedSandbox: {
+        target: {
+          kind: "existing",
+          hostId: SANDBOX_HOST,
+          sandboxId: SANDBOX_ID,
+          verb: "resume",
+        },
+      },
+    });
+    expect(useLandingDraftStore.getState().drafts).toEqual([]);
+    expect(document.body.textContent).not.toContain("Stopped ");
+  });
+
+  it("saves the message in drafts on its sandbox when the task closed with its composer occupied before a suspend reached the Stop", async () => {
+    act(() => {
+      useNewConversationModalStore
+        .getState()
+        .setContent("epic-1", OCCUPIED_NEW_CHAT_CONTENT);
+    });
+    await closeTaskThenRowReads("suspended");
+
+    expect(useLandingDraftStore.getState().drafts).toMatchObject([
+      {
+        content: MESSAGE_CONTENT,
+        closed: true,
+        returnedSandbox: {
+          target: {
+            kind: "existing",
+            hostId: SANDBOX_HOST,
+            sandboxId: SANDBOX_ID,
+            verb: "resume",
+          },
+        },
+      },
+    ]);
+  });
+
+  it("saves the message in drafts with no sandbox pick when the task closed before the sandbox stopped", async () => {
+    await closeTaskThenRowReads("stopped");
+
+    expect(useLandingDraftStore.getState().drafts).toMatchObject([
+      { content: MESSAGE_CONTENT, closed: true, returnedSandbox: null },
+    ]);
   });
 
   /** Shows Stop on an unclaimed send, then makes writes to `storageKey` throw as a full disk would. */

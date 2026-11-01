@@ -219,15 +219,11 @@ const READINESS_POLL_MS = 2_000;
 const STOP_INTENT_CODE = "pending-send-stop";
 const STOP_FAILED_CODE = "stop";
 const stopsInFlight = new Map<string, { returned: boolean }>();
-const stopAttention = new Map<
-  string,
-  {
-    readonly userId: string | null;
-    readonly giveBack: (
-      rowState: HostSandboxState,
-    ) => ReturnedPendingSandboxSend;
-  }
->();
+interface StopAttention {
+  readonly userId: string | null;
+  readonly giveBack: (rowState: HostSandboxState) => ReturnedPendingSandboxSend;
+}
+const stopAttention = new Map<string, StopAttention>();
 
 /**
  * "Stopped" is only for a Stop that happened. A send that a suspend reached
@@ -252,6 +248,28 @@ function recordStopReceipt(
   }
   if (send.request.kind === "chat")
     recordSandboxStateSend(send, stage, returned, "rested");
+}
+
+/** A suspend is an ordinary rest whoever is watching: the message stays on its sandbox. */
+function giveBackStopped(
+  send: PendingSandboxSend,
+  stage: StagedSandbox | undefined,
+  attention: StopAttention | undefined,
+  rowState: HostSandboxState | null,
+): ReturnedPendingSandboxSend {
+  if (attention === undefined) {
+    return rowState === "suspended" &&
+      send.request.kind === "chat" &&
+      stage !== undefined
+      ? returnPendingSandboxSendToSandbox(
+          send.id,
+          returnedSandboxPick(send, stage, rowState),
+        )
+      : returnPendingSandboxSendToDraft(send.id);
+  }
+  return attention.userId === (useAuthStore.getState().profile?.userId ?? null)
+    ? attention.giveBack(rowState === "suspended" ? "suspended" : "stopped")
+    : returnPendingSandboxSendToDraft(send.id);
 }
 
 /** Attention is local to the requesting mounted strip and never persisted. */
@@ -281,11 +299,7 @@ function returnStoppedPendingSend(
     stopAttention.delete(id);
     return;
   }
-  const returned =
-    attention !== undefined &&
-    attention.userId === (useAuthStore.getState().profile?.userId ?? null)
-      ? attention.giveBack(rowState === "suspended" ? "suspended" : "stopped")
-      : returnPendingSandboxSendToDraft(id);
+  const returned = giveBackStopped(send, stage, attention, rowState);
   if (!Object.hasOwn(usePendingSandboxSendStore.getState().sends, id)) {
     const attempt = stopsInFlight.get(id);
     if (attempt !== undefined) attempt.returned = true;
@@ -3042,12 +3056,7 @@ function PendingStagedSendItem(props: {
   const surfaceKey = pendingSendSurfaceKey(send.id);
   const observedStage = useStagedSandbox(surfaceKey);
   const stage = observedStage ?? send.stopStage ?? null;
-  const attention = useRef<{
-    readonly userId: string | null;
-    readonly giveBack: (
-      rowState: HostSandboxState,
-    ) => ReturnedPendingSandboxSend;
-  } | null>(null);
+  const attention = useRef<StopAttention | null>(null);
   useEffect(
     () => () => {
       if (stopAttention.get(send.id) === attention.current)
