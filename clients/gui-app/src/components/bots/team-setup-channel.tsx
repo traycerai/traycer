@@ -20,6 +20,7 @@ import {
   type BotIdentity,
 } from "@/components/bots/bot-identity-context";
 import { BotChannelTitle } from "@/components/bots/bot-channel-level2";
+import type { BotThreadsViewState } from "@/components/bots/bot-channel-sidebar";
 import { BotMessageComposerUnavailable } from "@/components/bots/bot-message-composer";
 import { MainBotBadge } from "@/components/bots/main-bot-badge";
 import { ChatBotAppPost } from "@/components/chat/chat-bot-message";
@@ -63,8 +64,10 @@ export function TeamSetupChannel(props: {
   readonly hostId: string;
   /** The surface's level-2 form, which the title follows. */
   readonly level2: MobileLevel2Form | null;
+  /** The surface's Threads, a row of the title's picker as of its column. */
+  readonly threadsView: BotThreadsViewState;
 }): ReactNode {
-  const { setup, hostId, level2 } = props;
+  const { setup, hostId, level2, threadsView } = props;
   // Re-read on the shared on-screen cadence while the person can see the
   // setup and it still needs a host. The team's host creating the bot rings
   // the team's room, which reaches this channel's bot list only while this
@@ -111,7 +114,7 @@ export function TeamSetupChannel(props: {
             title={setup.title}
             activeBotId={setup.botId}
             hostId={hostId}
-            threadsView={null}
+            threadsView={threadsView}
           />
           <MainBotBadge testId="bot-tab-main" tone="muted" />
         </header>

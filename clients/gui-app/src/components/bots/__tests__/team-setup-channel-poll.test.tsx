@@ -26,6 +26,7 @@ import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-polic
 import { createAppQueryClient } from "@/lib/query-client";
 import { PaneVisibilityContext } from "@/components/epic-tabs/pane-visibility-context";
 import { TeamSetupChannel } from "@/components/bots/team-setup-channel";
+import type { BotThreadsViewState } from "@/components/bots/bot-channel-sidebar";
 import { useInstalledAppLevel2Form } from "@/hooks/ui/use-installed-app-level2-form";
 import {
   installShellForm,
@@ -213,6 +214,13 @@ describe("TeamSetupChannel level 2 in the installed app", () => {
   });
 });
 
+/** The surface's Threads, not shown. */
+const THREADS_CLOSED: BotThreadsViewState = {
+  shown: false,
+  onShow: () => undefined,
+  onLeave: () => undefined,
+};
+
 /** The setup pane with the form the surface would hand it. */
 function SetupWithLevel2Form(props: {
   readonly client: HostClient<HostRpcRegistry>;
@@ -229,6 +237,7 @@ function SetupWithLevel2Form(props: {
       client={props.client}
       hostId={mockLocalHostEntry.hostId}
       level2={level2}
+      threadsView={THREADS_CLOSED}
     />
   );
 }

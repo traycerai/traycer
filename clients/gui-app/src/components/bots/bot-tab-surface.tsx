@@ -93,6 +93,7 @@ import type { BotThreadsViewState } from "@/components/bots/bot-channel-sidebar"
 import {
   BotChannelColumn,
   BotChannelTitle,
+  BotUnselectedLevel2Pane,
 } from "@/components/bots/bot-channel-level2";
 import { BotActivityPage } from "@/components/bots/bot-activity-page";
 import { BotThreadsView } from "@/components/bots/bot-threads-view";
@@ -275,14 +276,21 @@ function TracySurfaceShell(props: {
           />
         ) : null}
         {botId === null && !threadsShown ? (
-          <TracyUnselected
-            groups={groups}
-            unavailable={unavailable}
-            listsFailed={
-              botList.status === "error" || environments.status === "error"
-            }
-            onRetry={retryLists}
-          />
+          <BotUnselectedLevel2Pane
+            level2={level2}
+            title={TRACY_TAB_LABEL}
+            hostId={hostId}
+            threadsView={threadsView}
+          >
+            <TracyUnselected
+              groups={groups}
+              unavailable={unavailable}
+              listsFailed={
+                botList.status === "error" || environments.status === "error"
+              }
+              onRetry={retryLists}
+            />
+          </BotUnselectedLevel2Pane>
         ) : null}
         {botId === null ? null : (
           <TracyChannelPane
@@ -604,6 +612,7 @@ function TracyChannelPane(props: {
         client={client}
         hostId={hostId}
         level2={level2}
+        threadsView={threadsView}
       />
     );
   }

@@ -59,6 +59,42 @@ export function BotChannelColumn(props: {
   );
 }
 
+/** Whether the installed app draws no column, so a title is the picker. */
+function titlePicks(level2: MobileLevel2Form | null): boolean {
+  return level2 === "menu" || level2 === "bar";
+}
+
+/**
+ * What the surface shows with no channel selected. Where the installed app
+ * draws no column, a title over it is the picker, as a channel's is, so the
+ * column's rows (a team still to be set up, Threads, a new bot) stay within
+ * reach.
+ */
+export function BotUnselectedLevel2Pane(props: {
+  readonly level2: MobileLevel2Form | null;
+  readonly title: string;
+  readonly hostId: string;
+  readonly threadsView: BotThreadsViewState;
+  readonly children: ReactNode;
+}): ReactNode {
+  const { level2 } = props;
+  if (!titlePicks(level2)) return props.children;
+  return (
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+      <header className="flex shrink-0 items-center gap-2 px-4 pt-3 pb-2">
+        <BotChannelTitle
+          level2={level2}
+          title={props.title}
+          activeBotId={null}
+          hostId={props.hostId}
+          threadsView={props.threadsView}
+        />
+      </header>
+      {props.children}
+    </div>
+  );
+}
+
 /**
  * The bot's name at the head of its channel. Where the installed app draws no
  * column the name is also the picker: the bots list in a menu under it, closed
@@ -67,13 +103,14 @@ export function BotChannelColumn(props: {
 export function BotChannelTitle(props: {
   readonly level2: MobileLevel2Form | null;
   readonly title: string;
-  readonly activeBotId: string;
+  /** The channel shown; `null` while the surface shows none. */
+  readonly activeBotId: string | null;
   readonly hostId: string;
   /** The tab's Threads view; `null` where the tab has no channel to swap it for. */
   readonly threadsView: BotThreadsViewState | null;
 }): ReactNode {
   const { level2, title } = props;
-  const picker = level2 === "menu" || level2 === "bar";
+  const picker = titlePicks(level2);
   return (
     <h1
       className="min-w-0 truncate text-ui-md font-bold text-foreground"
@@ -95,7 +132,7 @@ export function BotChannelTitle(props: {
 
 function BotChannelPicker(props: {
   readonly title: string;
-  readonly activeBotId: string;
+  readonly activeBotId: string | null;
   readonly hostId: string;
   readonly threadsView: BotThreadsViewState | null;
 }): ReactNode {

@@ -1013,6 +1013,42 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
     expect(screen.queryByTestId("bot-tab-connecting")).toBeNull();
   });
 
+  describe("level 2 in the installed app", () => {
+    let shell: ShellFormHarness;
+    beforeEach(() => {
+      shell = installShellForm(SHELL_WIDTH_MENU);
+    });
+    afterEach(() => {
+      shell.dispose();
+    });
+
+    it("offers Threads from the setup channel's title, which replaces the setup until Threads goes back", async () => {
+      const user = userEvent.setup();
+      render(surfaceFor(SETUP_BOT_ID));
+
+      expect(screen.queryByTestId("bot-channel-sidebar-pane")).toBeNull();
+      await user.click(
+        within(screen.getByTestId("team-setup-channel")).getByTestId(
+          "bot-channel-picker-trigger",
+        ),
+      );
+      await user.click(
+        within(await screen.findByTestId("bot-channel-picker")).getByTestId(
+          "stub-sidebar-threads",
+        ),
+      );
+
+      expect(screen.getByTestId("stub-threads")).toBeTruthy();
+      expect(screen.queryByTestId("team-setup-channel")).toBeNull();
+      expect(screen.queryByTestId("bot-channel-picker")).toBeNull();
+
+      await user.click(screen.getByTestId("stub-threads-back"));
+
+      expect(screen.queryByTestId("stub-threads")).toBeNull();
+      expect(screen.getByTestId("team-setup-channel")).toBeTruthy();
+    });
+  });
+
   it("draws the machine option's button disabled with a line saying it is not available yet, and a click does nothing", async () => {
     const user = userEvent.setup();
     render(surfaceFor(SETUP_BOT_ID));
@@ -3689,6 +3725,45 @@ describe("<BotTabSurface /> with no channel selected", () => {
     expect(screen.getByTestId("stub-sidebar")).toBeTruthy();
     expect(mocks.activateTabIntent).not.toHaveBeenCalled();
     expect(mocks.open).not.toHaveBeenCalled();
+  });
+
+  describe("level 2 in the installed app", () => {
+    let shell: ShellFormHarness;
+    beforeEach(() => {
+      shell = installShellForm(SHELL_WIDTH_MENU);
+    });
+    afterEach(() => {
+      shell.dispose();
+    });
+
+    it("heads the pane with Tracy as the picker, to reach a team still to be set up that the default channel does not see", async () => {
+      mocks.state.listedBotIds = [];
+      mocks.state.environments = [
+        { environmentId: "env-new", label: "Newco", ownerKind: "organization" },
+      ];
+      mocks.reads["env-new"] = { setup: NEEDS_HOST_SETUP };
+      const user = userEvent.setup();
+      const view = render(surfaceFor(null));
+
+      expect(screen.queryByTestId("bot-channel-sidebar-pane")).toBeNull();
+      expect(screen.getByTestId("bot-tab-no-channel")).toBeTruthy();
+      const trigger = screen.getByTestId("bot-channel-picker-trigger");
+      expect(screen.getByTestId("bot-tab-title").contains(trigger)).toBe(true);
+      expect(trigger.textContent).toBe("Tracy");
+
+      await user.click(trigger);
+      const picker = await screen.findByTestId("bot-channel-picker");
+      expect(
+        within(picker).getByTestId("stub-sidebar").dataset.activeBotId,
+      ).toBe("none");
+      await user.click(within(picker).getByTestId("stub-sidebar-pick"));
+      expect(screen.queryByTestId("bot-channel-picker")).toBeNull();
+
+      // The pick navigates to the setup channel, which the route then shows.
+      view.rerender(surfaceFor(SETUP_BOT_ID));
+      expect(screen.getByTestId("team-setup-channel")).toBeTruthy();
+      expect(screen.queryByTestId("bot-tab-no-channel")).toBeNull();
+    });
   });
 });
 
