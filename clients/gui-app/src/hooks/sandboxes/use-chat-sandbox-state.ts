@@ -13,13 +13,15 @@ import {
   useSandboxConfigurations,
 } from "@/hooks/sandboxes/use-sandbox-configurations";
 import type { ChatSandboxState } from "@/lib/sandboxes/chat-sandbox-state";
+import { chatSandboxEndOf } from "@/lib/sandboxes/task-sandbox-end";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { useEndedSandboxHost } from "@/stores/sandboxes/ended-sandbox-hosts-store";
 
 /**
  * Sandbox state precedes generic transport reachability on every chat copy:
- * the task's end record, then a listed row's state, then a sandbox something
- * names. A host nothing names as a sandbox is not one: the surface takes its
- * own path.
+ * the task's end record, then a destroy this device already saw, then a listed
+ * row's state, then a sandbox something names. A host nothing names as a
+ * sandbox is not one: the surface takes its own path.
  */
 export function useChatSandboxState(
   epicId: string,
@@ -31,8 +33,13 @@ export function useChatSandboxState(
   const configurations = useSandboxConfigurations();
   const entry = useHostDirectoryEntry(hostId);
   const viewerId = useAuthStore((state) => state.profile?.userId ?? null);
+  const seenEnd = useEndedSandboxHost(hostId);
+  const sessionUserId = useAuthStore(
+    (state) => state.contextMetadata?.userId ?? null,
+  );
   if (hostId === null) return { kind: "none" };
-  if (task.kind === "ended") return { kind: "destroyed", ended: task.ended };
+  const ended = chatSandboxEndOf(task, seenEnd, sessionUserId);
+  if (ended !== null) return { kind: "destroyed", ended };
   const sandbox = list.data?.sandboxes.find((row) => row.hostId === hostId);
   if (sandbox === undefined) return unlistedHostState(task, entry);
   if (

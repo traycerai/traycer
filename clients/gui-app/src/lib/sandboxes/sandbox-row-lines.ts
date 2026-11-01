@@ -489,8 +489,8 @@ export function formatSandboxTime(at: number): string {
 }
 
 /**
- * What a chat on a destroyed sandbox says: `e2e-sbx-win2 was destroyed by you
- * at 11:01.`, or the member's name for another member's destroy.
+ * What a terminal on a destroyed sandbox says: `e2e-sbx-win2 was destroyed by
+ * you at 11:01.`, or the member's name for another member's destroy.
  */
 export function sandboxDestroyedLine(
   ended: {

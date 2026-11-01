@@ -268,6 +268,10 @@ export interface ChatServingWitness {
  * move. That is an invariant, not a default, and holds whatever the witness
  * says.
  *
+ * `onTeamSandbox` is the caller's: a directory row answers it for a host that
+ * has one, and a destroyed sandbox has none, yet the pool goes on serving its
+ * chat.
+ *
  * `verdict` is the witness's answer for `chat`, `null` with no witness. It is
  * the value and never the witness: a compiled caller memoizes on what it
  * passes, and the witness keeps one identity while its verdicts move, so a
@@ -275,16 +279,11 @@ export interface ChatServingWitness {
  */
 export function chatServingHostId(
   chat: ChatServingKey,
-  chatHost: HostDirectoryEntry | null,
+  onTeamSandbox: boolean,
   verdict: ChatServingVerdict | null,
   plan: HostRpcTierPlan,
 ): string {
-  if (
-    verdict === null ||
-    plan.pool === null ||
-    chatHost === null ||
-    !isTeamSandboxHostDirectoryEntry(chatHost)
-  ) {
+  if (verdict === null || plan.pool === null || !onTeamSandbox) {
     return chat.hostId;
   }
   return verdict === "live" ? chat.hostId : POOL_HOST_ID;

@@ -7,7 +7,6 @@ import { Button } from "@/components/ui/button";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { useHostLease } from "@/hooks/host/use-host-lease";
 import { useDeadlineReached } from "@/hooks/use-deadline-reached";
-import { useEndedSandboxHost } from "@/stores/sandboxes/ended-sandbox-hosts-store";
 import {
   hostIsBehindClient,
   HOST_UPDATE_SKEW_COPY,
@@ -82,7 +81,6 @@ export function ChatTilePreContent(props: {
   const tabHostId = useTabHostId();
   const lease = useHostLease(tabHostId);
   const hostUpdate = useChatTileHostUpdate();
-  const ended = useEndedSandboxHost(tabHostId);
   const hostLabel = useChatTileHostLabel(frame.reachability, tabHostId);
   const stateLine = useContext(ChatStateLineContext);
   const retries = session?.retries ?? null;
@@ -148,11 +146,6 @@ export function ChatTilePreContent(props: {
   }
   if (frame.sandboxFooter) {
     return <div data-testid={props.testId} className="min-h-0 flex-1" />;
-  }
-  // A sandbox a member destroyed is not a failed open: the pane's own line
-  // says who destroyed it, and there is nothing to try again.
-  if (ended !== null && session !== null && session.fatalClose !== null) {
-    return null;
   }
   const view = describeChatPreContent(input);
   const onTryAgain =

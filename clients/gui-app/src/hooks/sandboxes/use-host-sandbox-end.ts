@@ -6,7 +6,7 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 import { useEndedSandboxHost } from "@/stores/sandboxes/ended-sandbox-hosts-store";
 
 /**
- * How a tile's sandbox host ended, when a person ended it: stopped (or
+ * How a terminal's sandbox host ended, when a person ended it: stopped (or
  * stopping), from its directory entry, or destroyed by a member, with the
  * line saying who and when. `null` for any other host, or one that went away
  * on its own.
@@ -20,10 +20,13 @@ export function useHostSandboxEnd(hostId: string): HostSandboxEnd {
   const entry = useHostDirectoryEntry(hostId);
   const ended = useEndedSandboxHost(hostId);
   const viewerUserId = useAuthStore((s) => s.contextMetadata?.userId ?? null);
-  if (ended !== null) {
+  if (ended !== null && ended.actor !== null) {
     return {
       kind: "destroyed",
-      line: sandboxDestroyedLine(ended, viewerUserId),
+      line: sandboxDestroyedLine(
+        { name: ended.name, at: ended.at, actor: ended.actor },
+        viewerUserId,
+      ),
     };
   }
   const state =

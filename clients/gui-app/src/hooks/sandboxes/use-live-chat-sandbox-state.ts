@@ -12,11 +12,14 @@ import {
 import { useSandboxControlUnavailableReason } from "@/hooks/sandboxes/use-sandbox-control-unavailable-reason";
 import type { ChatSandboxState } from "@/lib/sandboxes/chat-sandbox-state";
 import { authQueryKeys, sandboxQueryKeys } from "@/lib/query-keys";
+import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
 interface LifecycleActivity {
   readonly hostId: string;
   readonly known: boolean;
+  /** Whether the sandbox list holds the row. */
+  readonly listed: boolean;
   readonly disconnected: boolean;
   readonly serving: string | null;
 }
@@ -44,6 +47,8 @@ function lifecycleReadRequired(
     before.hostId !== after.hostId;
   if (rebound || !before.known) return after.disconnected || atRest;
   if (after.disconnected && !before.disconnected) return true;
+  // The row leaves at `destroyed`, when the task's end record exists.
+  if (before.listed && !after.listed) return true;
   return (
     after.serving !== null &&
     before.serving !== after.serving &&
@@ -66,6 +71,7 @@ function useLifecycleRevision(
     before.userId === signal.userId &&
     before.hostId === signal.hostId &&
     before.known === signal.known &&
+    before.listed === signal.listed &&
     before.disconnected === signal.disconnected &&
     before.serving === signal.serving
   ) {
@@ -116,6 +122,7 @@ export function useLiveChatSandboxState(
     {
       hostId,
       known,
+      listed: sandbox !== undefined,
       disconnected,
       serving: servingKey,
     },
@@ -128,6 +135,8 @@ export function useLiveChatSandboxState(
       reachable: false,
     };
   }
+  // The read in flight says what became of it: no line before its answer.
+  if (state.kind === "pending" && reading) return { state, reachable: true };
   return { state, reachable };
 }
 
@@ -182,6 +191,15 @@ function useSandboxLifecycleRead(
         await queryClient.fetchQuery({
           ...sandboxListQueryOptions(auth, userId, true),
           staleTime: 0,
+        });
+        // A row gone from the list is an end the task's hosts now carry.
+        await queryClient.refetchQueries({
+          type: "active",
+          predicate: (query) =>
+            hostQueryKeys.matchesMethodOnAnyHost(
+              query.queryKey,
+              "epic.listTaskHosts",
+            ),
         });
       } catch {
         // The shared query retains its error and last good answer.

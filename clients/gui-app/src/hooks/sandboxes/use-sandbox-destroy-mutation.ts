@@ -135,7 +135,9 @@ export function sandboxDestroyMutationOptions(
         recordEndedSandboxHost(target.hostId, {
           name: target.displayName,
           at: Date.now(),
+          cause: "verb",
           actor: { userId: viewer, displayName: null },
+          idleMinutes: null,
         });
       }
       const result = await binding.auth.destroySandbox(

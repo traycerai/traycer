@@ -18,6 +18,7 @@ import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-cli
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { makePublishedChatTileRef } from "@/stores/epics/canvas/tile-schema/published-chat-tile";
+import { useEnvironmentArmChats } from "@/hooks/environment/use-environment-arms";
 import {
   ChatDeadTileBannerContainer,
   SubstitutedCatchingUpBanner,
@@ -712,6 +713,8 @@ function resolveChatFallbackDecision(args: {
   readonly indexUnavailable: boolean;
   readonly cloudChatOwnerUserId: string | null;
   readonly liveArtifactOwnerUserId: string | null;
+  /** The environment's row for a chat the pool serves, which has no record. */
+  readonly poolChatOwnerUserId: string | null;
 }): ChatFallbackDecision {
   // A published copy exists for this chat and it is the viewer's own (the
   // caller only resolves this row for a same-host chat with no local record -
@@ -725,12 +728,17 @@ function resolveChatFallbackDecision(args: {
   const absent = args.hostUnreachable || args.confirmedAbsent;
   // Same-host needs the copy in hand as well - a same-host chat with no cloud
   // fallback is a genuine local error, not a substitutable one (the earlier
-  // rule, preserved). Cross-host keeps deriving its owner from the projection
-  // or the ref, so it does not need the row.
+  // rule, preserved). Cross-host derives its owner from the projection, or
+  // for a chat the pool serves from the environment's row: a team sandbox's
+  // chat never reaches the projection, so a tab bound to one has no other
+  // owner to read a copy under and stays on the live tile.
   const sameHostFallback =
     args.isSameHost && sameHostCloudCopyAvailable && absent;
   const crossHostFallback = !args.isSameHost && absent;
-  const ownerUserId = args.liveArtifactOwnerUserId ?? args.cloudChatOwnerUserId;
+  const ownerUserId =
+    args.liveArtifactOwnerUserId ??
+    args.cloudChatOwnerUserId ??
+    args.poolChatOwnerUserId;
   if (args.isChat && args.indexUnavailable) {
     return {
       substitute: true,
@@ -811,6 +819,21 @@ function useChatTabServing(
   };
 }
 
+/** The owner of a chat the pool serves, from its environment's row. */
+function usePoolChatOwner(
+  activeTab: EpicCanvasTileRef,
+  epicId: string,
+  servedByPool: boolean,
+): string | null {
+  const armChats = useEnvironmentArmChats(servedByPool ? epicId : "");
+  const row = armChats.find(
+    (chat) =>
+      chat.identity.chatId === activeTab.id &&
+      chat.ownerHostId === activeTab.hostId,
+  );
+  return row?.identity.ownerUserId ?? null;
+}
+
 function usePublishedChatFallbackRef(args: {
   readonly activeTab: EpicCanvasTileRef;
   readonly epicId: string;
@@ -885,6 +908,11 @@ function usePublishedChatFallbackRef(args: {
     liveArtifact !== null && "userId" in liveArtifact
       ? liveArtifact.userId
       : null;
+  const poolChatOwnerUserId = usePoolChatOwner(
+    activeTab,
+    epicId,
+    tabServing.servedByPool,
+  );
   const decision = resolveChatFallbackDecision({
     isChat,
     isSameHost,
@@ -896,6 +924,7 @@ function usePublishedChatFallbackRef(args: {
       tabServing.servedByPool && fatalCode === CHAT_INDEX_UNAVAILABLE_CODE,
     cloudChatOwnerUserId: cloudChatRecord?.identity.ownerUserId ?? null,
     liveArtifactOwnerUserId,
+    poolChatOwnerUserId,
   });
   const { substitute, bannerReason, ownerUserId, readsFromPool } = decision;
   // The SERVING host is chosen once, when this fallback first opens, and then

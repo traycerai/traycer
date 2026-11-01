@@ -13,6 +13,7 @@ import {
   type ChatServingVerdict,
 } from "@traycer-clients/shared/host-client/host-rpc-routing";
 import type { ChatServing } from "@traycer/protocol/host/chat-serving/index";
+import { useTaskHostsView } from "@/hooks/epic/use-task-hosts-view";
 import { useEnvironmentArmChats } from "@/hooks/environment/use-environment-arms";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import type { RetainingChatServingWitness } from "@/lib/chats/pool-chat-serving-witness";
@@ -26,6 +27,23 @@ export const ChatServingWitnessContext =
   createContext<RetainingChatServingWitness | null>(null);
 
 /**
+ * Whether `chat` runs on a team sandbox: its directory row says, and with no
+ * row the task's hosts do. A destroyed sandbox leaves the directory while its
+ * chat stays at rest on the pool, and only that row keeps the chat there.
+ */
+function useChatOnTeamSandbox(chat: ChatServingKey): boolean {
+  const chatHost = useHostDirectoryEntry(chat.hostId);
+  const taskHosts = useTaskHostsView(chat.epicId);
+  if (chatHost !== null) return isTeamSandboxHostDirectoryEntry(chatHost);
+  return (
+    taskHosts.kind === "hosts" &&
+    taskHosts.hosts.some(
+      (row) => row.hostId === chat.hostId && row.principal.kind === "team",
+    )
+  );
+}
+
+/**
  * The witness, when it applies to `chat`: only a team sandbox's chat ever
  * moves between its host and the pool (`chatServingHostId`), so only those
  * are watched. Keeps the chat's state subscribed while the caller is mounted.
@@ -34,12 +52,11 @@ function useApplicableWitness(
   chat: ChatServingKey,
 ): RetainingChatServingWitness | null {
   const witness = use(ChatServingWitnessContext);
-  const chatHost = useHostDirectoryEntry(chat.hostId);
+  const onTeamSandbox = useChatOnTeamSandbox(chat);
   const applicable =
     witness !== null &&
     readProcessHostRpcTierPlan().pool !== null &&
-    chatHost !== null &&
-    isTeamSandboxHostDirectoryEntry(chatHost)
+    onTeamSandbox
       ? witness
       : null;
   const { hostId, epicId, chatId } = chat;
@@ -121,11 +138,11 @@ function useChatServingVerdict(
  * re-read whenever the witness reports a change.
  */
 export function useChatServingHostId(chat: ChatServingKey): string {
-  const chatHost = useHostDirectoryEntry(chat.hostId);
+  const onTeamSandbox = useChatOnTeamSandbox(chat);
   const verdict = useChatServingVerdict(chat);
   return chatServingHostId(
     chat,
-    chatHost,
+    onTeamSandbox,
     verdict,
     readProcessHostRpcTierPlan(),
   );

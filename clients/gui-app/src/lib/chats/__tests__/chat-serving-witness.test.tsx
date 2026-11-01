@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import {
   FakeStreamClient,
@@ -154,6 +155,14 @@ function Tree({ witness }: { readonly witness: PoolChatServingWitness }) {
   );
 }
 
+const queryClient = new QueryClient();
+
+function wrapper({ children }: { readonly children: ReactNode }): ReactNode {
+  return (
+    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+  );
+}
+
 function setup() {
   state.entry = remoteEntry(CHAT.hostId, sandboxFacts("team-1"));
   state.armChats = [];
@@ -161,7 +170,7 @@ function setup() {
   const client = new StatusDrivableClient(true);
   const witness = new PoolChatServingWitness();
   witness.setStreamClient(client);
-  const view = render(<Tree witness={witness} />);
+  const view = render(<Tree witness={witness} />, { wrapper });
   return { client, witness, view };
 }
 
@@ -307,6 +316,7 @@ describe("a chat's serving witness across the chat reaching the environment arm"
       <ChatServingWitnessContext.Provider value={witness}>
         <PeerProbe />
       </ChatServingWitnessContext.Provider>,
+      { wrapper },
     );
     expect(peers.at(-1)).toBe(POOL_HOST_ID);
 

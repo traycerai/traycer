@@ -116,6 +116,9 @@ vi.mock("@/hooks/chats/use-cloud-chat-queries", () => ({
   useCloudChatHasCloudAuthorization: () => true,
   cloudChatListAuthorizesRecordSweep: () => false,
 }));
+vi.mock("@/hooks/epic/use-task-hosts-view", () => ({
+  useTaskHostsView: () => ({ kind: "none" }),
+}));
 vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => ({
   ...(await importOriginal<
     typeof import("@/lib/registries/chat-session-registry")
