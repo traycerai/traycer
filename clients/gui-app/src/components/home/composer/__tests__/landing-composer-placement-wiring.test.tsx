@@ -278,6 +278,7 @@ vi.mock("@/hooks/sandboxes/use-staged-send-sign-in-check", () => ({
 vi.mock("@/components/home/hooks/use-composer-toolbar-store", async () => {
   const { createStore } = await import("zustand/vanilla");
   interface ToolbarMockState {
+    readonly selectedModel: null;
     readonly values: {
       readonly selection: {
         readonly harnessId: string;
@@ -302,6 +303,7 @@ vi.mock("@/components/home/hooks/use-composer-toolbar-store", async () => {
   }
   const toolbarStore = createStore<ToolbarMockState>(() => ({
     ultracode: false,
+    selectedModel: null,
     selection: {
       harnessId: "claude",
       modelSlug: "claude-sonnet",

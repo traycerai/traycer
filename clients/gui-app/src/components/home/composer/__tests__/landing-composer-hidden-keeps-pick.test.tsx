@@ -408,6 +408,7 @@ vi.mock(
 );
 
 import { LandingComposer } from "../landing-composer";
+import { PaneVisibilityContext } from "@/components/epic-tabs/pane-visibility-context";
 import { SurfaceActivityProvider } from "@/components/home/composer/surface-activity-context";
 import { pickedRunSettings } from "@/lib/sandboxes/pending-sandbox-send";
 import { usePendingSandboxSendStore } from "@/stores/sandboxes/pending-sandbox-send-store";
@@ -558,20 +559,29 @@ afterEach(() => {
   useAuthStore.setState({ status: "signed-out", contextMetadata: null });
 });
 
-function hiddenAndVisible(
-  visibleDraft: string,
-  hiddenDraft: string,
-  hiddenActive: boolean,
+interface SecondComposer {
+  /** The query activity of the second composer's surface. */
+  readonly active: boolean;
+  /** Whether the pane the second composer is in is on screen. */
+  readonly onScreen: boolean;
+}
+
+function twoComposers(
+  firstDraft: string,
+  secondDraft: string,
+  second: SecondComposer,
 ): ReactElement {
   return (
     <>
-      <div data-testid="visible-composer">
-        {composer(visibleDraft, draftSettings(visibleDraft))}
+      <div data-testid="first-composer">
+        {composer(firstDraft, draftSettings(firstDraft))}
       </div>
-      <div data-testid="hidden-composer">
-        <SurfaceActivityProvider active={hiddenActive}>
-          {composer(hiddenDraft, draftSettings(hiddenDraft))}
-        </SurfaceActivityProvider>
+      <div data-testid="second-composer">
+        <PaneVisibilityContext.Provider value={second.onScreen}>
+          <SurfaceActivityProvider active={second.active}>
+            {composer(secondDraft, draftSettings(secondDraft))}
+          </SurfaceActivityProvider>
+        </PaneVisibilityContext.Provider>
       </div>
     </>
   );
@@ -587,14 +597,22 @@ function toolbarOf(index: number): ComposerToolbarStore {
   return store;
 }
 
+const CLAUDE_PICK: ChatRunSettings = {
+  ...PICK,
+  harnessId: "claude",
+  model: "sonnet-5.5",
+};
+
 describe("a landing composer that is not on screen, with a sandbox staged", () => {
   it("keeps its own Traycer pick through the stage and after it is shown", async () => {
-    const visibleDraft = useLandingDraftStore.getState().createDraft(PICK);
+    const firstDraft = useLandingDraftStore.getState().createDraft(PICK);
     const hiddenDraft = useLandingDraftStore
       .getState()
       .createDraft(TRAYCER_PICK);
     const hiddenBefore = draftSettings(hiddenDraft);
-    const view = render(hiddenAndVisible(visibleDraft, hiddenDraft, false));
+    const view = render(
+      twoComposers(firstDraft, hiddenDraft, { active: false, onScreen: false }),
+    );
     await waitFor(() =>
       expect(toolbarOf(0).getState().selection.harnessId).toBe("claude"),
     );
@@ -606,8 +624,8 @@ describe("a landing composer that is not on screen, with a sandbox staged", () =
       expect(toolbarOf(0).getState().catalog.keepsUnavailablePick).toBe(true),
     );
 
-    // The composer on screen adopted its reroute; the other one did not.
-    expect(draftSettings(visibleDraft)?.harnessId).toBe("claude");
+    // The composer on screen adopted its reroute; the hidden one did not.
+    expect(draftSettings(firstDraft)?.harnessId).toBe("claude");
     expect(draftSettings(hiddenDraft)).toBe(hiddenBefore);
     expect(draftSettings(hiddenDraft)?.harnessId).toBe("traycer");
     const hidden = toolbarOf(1).getState();
@@ -616,18 +634,22 @@ describe("a landing composer that is not on screen, with a sandbox staged", () =
     );
     expect(pickedRunSettings(hidden).model).toBe(hidden.selection.modelSlug);
 
-    // It comes on screen with the stage still up.
-    view.rerender(hiddenAndVisible(visibleDraft, hiddenDraft, true));
+    // It comes on screen and into focus with the stage still up.
+    view.rerender(
+      twoComposers(firstDraft, hiddenDraft, { active: true, onScreen: true }),
+    );
     await waitFor(() =>
       expect(
-        chipOf("hidden-composer").getByRole("button", {
+        chipOf("second-composer").getByRole("button", {
           name: /^traycer-saved/,
         }),
       ).toBeDefined(),
     );
 
     expect(
-      chipOf("hidden-composer").queryByRole("button", { name: /Select model/ }),
+      chipOf("second-composer").queryByRole("button", {
+        name: /Select model/,
+      }),
     ).toBeNull();
     expect(pickedRunSettings(toolbarOf(1).getState()).harnessId).toBe(
       "traycer",
@@ -637,5 +659,54 @@ describe("a landing composer that is not on screen, with a sandbox staged", () =
     );
     expect(draftSettings(hiddenDraft)?.harnessId).toBe("traycer");
     expect(draftSettings(hiddenDraft)?.model).toBe("traycer-saved");
+  });
+});
+
+describe("a landing composer on screen without focus, with a sandbox staged", () => {
+  async function stageBesideUnfocused(): Promise<{
+    readonly firstDraft: string;
+    readonly secondDraft: string;
+    readonly firstBefore: ChatRunSettings | null;
+  }> {
+    const firstDraft = useLandingDraftStore.getState().createDraft(CLAUDE_PICK);
+    const secondDraft = useLandingDraftStore
+      .getState()
+      .createDraft(TRAYCER_PICK);
+    const firstBefore = draftSettings(firstDraft);
+    render(
+      twoComposers(firstDraft, secondDraft, { active: false, onScreen: true }),
+    );
+    await waitFor(() =>
+      expect(
+        chipOf("second-composer").getByRole("button", {
+          name: /^sonnet-5\.5/,
+        }),
+      ).toBeDefined(),
+    );
+    act(() => {
+      useStagedSandboxStore.getState().stage(SURFACE, NEW_STAGE);
+    });
+    await waitFor(() =>
+      expect(toolbarOf(1).getState().catalog.keepsUnavailablePick).toBe(true),
+    );
+    return { firstDraft, secondDraft, firstBefore };
+  }
+
+  it("keeps the reroute on its chip and adopts it for Send and its own draft", async () => {
+    const { firstDraft, secondDraft, firstBefore } =
+      await stageBesideUnfocused();
+
+    expect(
+      chipOf("second-composer").getByRole("button", { name: /^sonnet-5\.5/ }),
+    ).toBeDefined();
+    const second = toolbarOf(1).getState();
+    expect(second.selection.harnessId).toBe("claude");
+    expect(pickedRunSettings(second).harnessId).toBe("claude");
+    expect(pickedRunSettings(second).model).toBe("sonnet-5.5");
+    await waitFor(() =>
+      expect(draftSettings(secondDraft)?.harnessId).toBe("claude"),
+    );
+    expect(draftSettings(secondDraft)?.model).toBe("sonnet-5.5");
+    expect(draftSettings(firstDraft)).toBe(firstBefore);
   });
 });

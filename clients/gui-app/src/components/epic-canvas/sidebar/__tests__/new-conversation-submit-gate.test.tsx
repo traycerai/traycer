@@ -63,6 +63,7 @@ interface GateCreateChatRequest {
 /** The toolbar slices the modal reads; the catalog is the new host's answer. */
 interface ToolbarMockState {
   readonly ultracode: boolean;
+  readonly selectedModel: null;
   readonly values: {
     readonly selection: {
       readonly harnessId: string;
@@ -224,6 +225,7 @@ vi.mock("@/hooks/auth/use-registered-hosts-query", async (importOriginal) => {
 
 const TOOLBAR_DEFAULTS = vi.hoisted((): ToolbarMockState => ({
   ultracode: false,
+  selectedModel: null,
   values: {
     selection: {
       harnessId: "claude",
