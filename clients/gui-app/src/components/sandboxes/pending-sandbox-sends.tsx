@@ -1,7 +1,10 @@
 import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/environment-schemas";
 import { SandboxRetryApplyingButton } from "@/components/sandboxes/sandbox-retry-applying-button";
 import { SandboxOperationFailure } from "@/components/hosts/sandbox-operation-failure";
-import { useComposerSurfaceHostPin } from "@/hooks/host/use-composer-surface-host-pin";
+import {
+  useComposerSurfaceHostKey,
+  useComposerSurfaceHostPin,
+} from "@/hooks/host/use-composer-surface-host-pin";
 import { useSurfaceHostPinWithDefault } from "@/hooks/host/use-surface-host-pin";
 import { useSandboxOperation } from "@/hooks/sandboxes/use-sandbox-operation";
 import { useStageFallbackHostLine } from "@/hooks/sandboxes/use-stage-fallback-host-line";
@@ -3036,21 +3039,26 @@ function pendingMessageRemedies(
 /**
  * What the line calls giving the send back with no sandbox, named for the host
  * of the composer that shows it: its task's, or the Start Page's when the
- * message goes to Drafts.
+ * message goes to Drafts. A sandbox staged there stays staged, so that
+ * composer's chip will not show its host.
  */
 function usePendingGiveBackLabel(
   send: PendingSandboxSend,
   taskDraftOccupied: boolean,
 ): string {
+  const taskKey = newConversationSurfaceKey(send.epicId);
+  const startPageKey = useComposerSurfaceHostKey();
   const taskPin = useSurfaceHostPinWithDefault(
-    newConversationSurfaceKey(send.epicId),
+    taskKey,
     useEpicSessionHostIdForEpic(send.epicId),
   );
   const startPagePin = useComposerSurfaceHostPin();
   const toDrafts =
     !send.epicConfirmed || (send.request.kind === "chat" && taskDraftOccupied);
+  const destinationStage = useStagedSandbox(toDrafts ? startPageKey : taskKey);
+  const destinationPin = toDrafts ? startPagePin : taskPin;
   return useStageFallbackHostLine(
-    toDrafts ? startPagePin.resolvedHostId : taskPin.resolvedHostId,
+    destinationStage === null ? destinationPin.resolvedHostId : null,
   );
 }
 

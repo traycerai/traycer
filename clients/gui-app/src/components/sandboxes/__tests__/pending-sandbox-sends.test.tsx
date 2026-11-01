@@ -1961,6 +1961,39 @@ describe("a send waiting for the requested agent on its sandbox", () => {
     expect(line.textContent).not.toContain("Providers");
   });
 
+  it("says Use another host when the task's composer already stages a sandbox, and leaves that stage in place", async () => {
+    const restoreLocks = installImmediateExclusiveLocks();
+    try {
+      const taskSurface = newConversationSurfaceKey("epic-1");
+      useStagedSandboxStore.getState().stage(taskSurface, NEW_TARGET);
+      seed(SEEDED);
+      answerHost(SANDBOX_HOST, CODEX_NOT_OFFERED);
+      mount();
+
+      const line = await screen.findByTestId("sandbox-refusal-line");
+      const action = await within(line).findByRole("button", {
+        name: "Use another host",
+      });
+      expect(
+        within(line).queryByRole("button", { name: "Use Task host" }),
+      ).toBeNull();
+
+      fireEvent.click(action);
+
+      await waitFor(() => {
+        expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+      });
+      expect(useNewConversationModalOpenStore.getState().request).toMatchObject(
+        { epicId: "epic-1" },
+      );
+      expect(readStagedSandbox(taskSurface)).toMatchObject({
+        target: NEW_TARGET,
+      });
+    } finally {
+      restoreLocks();
+    }
+  });
+
   it("keeps the Traycer picker remedy out of an occupied new-chat draft until it clears", async () => {
     const restoreLocks = installImmediateExclusiveLocks();
     try {
