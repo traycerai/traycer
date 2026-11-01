@@ -27,7 +27,10 @@ import {
 import { useQueryClient } from "@tanstack/react-query";
 import { useIsMutatingOf } from "@/hooks/use-mutation-state-of";
 import { v5 as uuidv5 } from "uuid";
-import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import {
+  HostRpcError,
+  mayHaveReachedHost,
+} from "@traycer-clients/shared/host-transport/host-messenger";
 import { useStore } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -118,6 +121,7 @@ import {
   recordSandboxStateSend,
   recordStoppedSandboxSend,
 } from "@/stores/sandboxes/stopped-sandbox-send-receipt-store";
+import { appLogger } from "@/lib/logger";
 import { startSandboxWake } from "@/lib/sandboxes/sandbox-wake";
 import type { StageConfiguration } from "@/lib/sandboxes/sandbox-stage-model";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
@@ -174,6 +178,7 @@ import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import {
   holdPendingSandboxSendOwnership,
   ownsPendingSandboxSend,
+  ownsPendingSandboxSendExclusively,
 } from "@/lib/sandboxes/pending-sandbox-send-ownership";
 import {
   settleVerdict,
@@ -204,6 +209,7 @@ import {
   pendingSendSurfaceKey,
   usePendingSandboxSendStore,
   type PendingSandboxSend,
+  type PendingDispatchAttempt,
   type PendingSandboxSendDispatch,
   type PendingSandboxSendRequest,
   pendingSandboxSendFacts,
@@ -1915,7 +1921,8 @@ function settlePendingMessage(input: {
     return true;
   }
   if (outcome !== "rejected" || !dispatchAllowed) return false;
-  refusePendingDispatch(send, dispatch);
+  // The chat answered, so the request that made it landed.
+  refusePendingDispatch(send, dispatch, "repeat");
   state.ackRetainedRejectedSend(message.clientActionId);
   return true;
 }
@@ -2106,8 +2113,6 @@ function usePendingDispatchLifecycle(
       decision.effects.includes("remove")
     )
       returnPendingSandboxSend(send.id);
-    if (decision.state.blocker === "wake" || environment.host !== "resting")
-      wakeRequested.current = false;
     if (!decision.effects.includes("wake") || wakeRequested.current) return;
     const wakeBoundary = usePendingSandboxSendStore
       .getState()
@@ -2120,17 +2125,25 @@ function usePendingDispatchLifecycle(
       dispatch.input.hostId,
       "send",
     ).then((outcome) => {
-      const settled = usePendingSandboxSendStore
-        .getState()
-        .dispatchEvent(
-          send.id,
-          outcome?.kind === "awake" ? "observe" : "wake-failed",
-          {
-            ...environment,
-            wakeInFlight: true,
-            observation: { kind: "wake-result", requestedAt: wakeBoundary },
-          },
-        );
+      // A row can read `suspended` until the wake's verb moves it, so only the
+      // wake's own answer ends the wait; no row read does.
+      wakeRequested.current = false;
+      const store = usePendingSandboxSendStore.getState();
+      const settled = store.dispatchEvent(
+        send.id,
+        outcome?.kind === "awake" ? "observe" : "wake-failed",
+        {
+          ...environment,
+          wakeInFlight: true,
+          observation: { kind: "wake-result", requestedAt: wakeBoundary },
+        },
+      );
+      // A read sent before the sandbox woke can't call the claim rested.
+      if (
+        outcome?.kind === "awake" &&
+        store.sends[send.id]?.observationRequestedAt === wakeBoundary
+      )
+        store.holdObservation(send.id, decision);
       if (settled?.effects.includes("poll")) void refetch();
     });
   }, [
@@ -2176,11 +2189,20 @@ async function runPendingDispatch(
     null
   )
     return;
+  const attempt = usePendingSandboxSendStore
+    .getState()
+    .beginDispatchAttempt(send.id);
+  if (attempt === null) {
+    usePendingSandboxSendStore
+      .getState()
+      .markDispatchUncertain(send.id, dispatch);
+    return;
+  }
   dispatchesInFlight.add(send.id);
   try {
     const response = await createChat(dispatch.input);
     if (response.refusal !== undefined) {
-      refusePendingDispatch(send, dispatch);
+      refusePendingDispatch(send, dispatch, attempt);
       return;
     }
     // The agent's tile opens once its chat exists on the sandbox; until then
@@ -2211,11 +2233,15 @@ async function runPendingDispatch(
     useStagedSandboxStore.getState().clear(pendingSendSurfaceKey(send.id));
     finishDispatchUi(send, dispatch, response, navigateNestedFocus);
   } catch (error: unknown) {
+    appLogger.warn("Pending sandbox dispatch rejected", {
+      code: error instanceof HostRpcError ? error.code : "unknown",
+    });
     if (
       error instanceof HostRpcError &&
-      error.code === "E_FORK_BOUNDARY_NOT_PUBLISHED"
+      (error.code === "E_FORK_BOUNDARY_NOT_PUBLISHED" ||
+        (attempt === "first" && refusedBeforeCreate(send.id, error)))
     ) {
-      refusePendingDispatch(send, dispatch);
+      refusePendingDispatch(send, dispatch, attempt);
     } else {
       usePendingSandboxSendStore
         .getState()
@@ -2224,6 +2250,20 @@ async function runPendingDispatch(
   } finally {
     dispatchesInFlight.delete(send.id);
   }
+}
+
+/**
+ * The host's own `UNAUTHORIZED` comes from `epic.createChat`'s access check,
+ * before the create runs. That check also answers a repeat of a create that
+ * landed, so it clears only a claim's first request, and only while the
+ * exclusive lock shows no other window could have sent another.
+ */
+function refusedBeforeCreate(id: string, error: HostRpcError): boolean {
+  return (
+    error.code === "UNAUTHORIZED" &&
+    !mayHaveReachedHost(error) &&
+    ownsPendingSandboxSendExclusively(id)
+  );
 }
 
 function registerDispatchHandoff(
@@ -2252,6 +2292,7 @@ function registerDispatchHandoff(
 function refusePendingDispatch(
   send: PendingSandboxSend,
   dispatch: PendingSandboxSendDispatch,
+  attempt: PendingDispatchAttempt,
 ): void {
   const decision = transitionPendingSend(
     pendingSendState(send, "none"),
@@ -2287,7 +2328,9 @@ function refusePendingDispatch(
       );
     }
   }
-  usePendingSandboxSendStore.getState().refuseDispatch(send.id, dispatch);
+  usePendingSandboxSendStore
+    .getState()
+    .refuseDispatch(send.id, dispatch, attempt);
 }
 
 function finishDispatchUi(
