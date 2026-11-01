@@ -532,6 +532,9 @@ const HOST_KIND_GLYPHS: Record<
   },
   // A secret is the subject of this row, whatever the request's state.
   "secret.grant.requested": SECRET_GLYPH,
+  // The reader's own role is the subject, so the row carries the same shield as
+  // the task-sharing role change it mirrors.
+  "team.role.changed": { icon: Shield, colorClassName: INVITE_COLOR },
   // Never rendered: the merged rows drop the kind.
   "secret.export.minted": NEUTRAL_BELL,
   "secret.rotated": NEUTRAL_BELL,
@@ -545,7 +548,6 @@ const HOST_KIND_GLYPHS: Record<
   "team.installing_admin.gone": NEUTRAL_BELL,
   "team.plan.unlinked": NEUTRAL_BELL,
   "team.pods.full": NEUTRAL_BELL,
-  "team.role.changed": NEUTRAL_BELL,
   "team.host.returned": NEUTRAL_BELL,
   "environment.move.stalled": NEUTRAL_BELL,
   "environment.apply.failed": NEUTRAL_BELL,
