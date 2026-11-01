@@ -586,6 +586,9 @@ const EXPECTED_PUBLIC_SURFACE: readonly ExpectedSurfaceEntry[] = [
   {
     path: "cli upgrade",
     options: [
+      // Same spelling as `host update`'s, deliberately: it is the consent
+      // for a backwards move on both updaters.
+      { flags: "--allow-downgrade", mandatory: false },
       { flags: "--dry-run", mandatory: false },
       { flags: "--json", mandatory: false },
       { flags: "--no-progress", mandatory: false },

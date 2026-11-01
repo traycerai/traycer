@@ -233,6 +233,37 @@ describe("runner Sentry capture", () => {
     expect(process.exitCode).toBe(4);
   });
 
+  // `cli upgrade` declining a backwards move the caller explicitly asked
+  // for is a user-controlled refusal the person resolves by re-running with
+  // `--allow-downgrade` - the same kind of outcome as its host twin
+  // E_HOST_UPDATE_NOT_NEWER, which is already classified expected. A code
+  // absent from `EXPECTED_CLI_ERROR_CODES` is captured by default, so
+  // mirroring the host error's code, message and details without its
+  // classification would have sent an ordinary refusal to Sentry.
+  it("does not capture the cli-upgrade downgrade refusal, which is a user-controlled outcome", async () => {
+    const { CLI_ERROR_CODES, CliError } = await import("../errors");
+
+    await runThrowing(
+      new CliError({
+        code: CLI_ERROR_CODES.CLI_UPGRADE_NOT_NEWER,
+        message:
+          "cli upgrade: the installed cli is 1.5.2-rc.2, newer than the requested 1.5.1",
+        details: null,
+        exitCode: 1,
+      }),
+    );
+
+    expect(sentryMocks.captureException).not.toHaveBeenCalled();
+    expect(sentryMocks.addBreadcrumb).toHaveBeenCalledTimes(1);
+    const crumb = sentryMocks.addBreadcrumb.mock.calls[0][0] as Breadcrumb;
+    expect(crumb.data.code).toBe("E_CLI_UPGRADE_NOT_NEWER");
+    const terminal = terminalEnvelope();
+    expect((terminal?.error as Record<string, unknown>).code).toBe(
+      "E_CLI_UPGRADE_NOT_NEWER",
+    );
+    expect(process.exitCode).toBe(1);
+  });
+
   it("leaves a breadcrumb naming the skipped code", async () => {
     const { CLI_ERROR_CODES, CliError } = await import("../errors");
 
