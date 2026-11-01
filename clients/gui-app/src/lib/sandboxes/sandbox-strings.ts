@@ -538,6 +538,10 @@ export function stoppedSandboxLine(
 ): string {
   return `Stopped ${name}. ${returnedSandboxMessageLine(savedInDrafts)}`;
 }
+/** A Stop on a task with no chat: its composer isn't on screen. */
+export function stoppedAddAgentLine(name: string): string {
+  return `Stopped ${name}. Your message wasn't sent; it's in Add agent.`;
+}
 export function returnedSandboxMessageLine(savedInDrafts: boolean): string {
   return `Your message wasn't sent; ${savedInDrafts ? "it's saved in your drafts." : "it's back in the composer."}`;
 }
