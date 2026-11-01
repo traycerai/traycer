@@ -72,6 +72,13 @@ const CLOSED_SURFACE: PersistedTracySurface = {
  */
 let legacyBotTabHosts: ReadonlyMap<string, string> | null = null;
 
+/**
+ * Whether the surface was opened, moved to a channel or closed since the
+ * window bound (`bindTracySurfaceToWindow`): a closed surface then is the
+ * person's, which a late adoption must not replace.
+ */
+let actedOnSinceBind = false;
+
 export const useTracySurfaceStore = create<TracySurfaceState>()(
   persist(
     (set, get) => ({
@@ -81,10 +88,12 @@ export const useTracySurfaceStore = create<TracySurfaceState>()(
       visitedBotIds: [],
       openSurface: (hostId) => {
         if (get().open) return;
+        actedOnSinceBind = true;
         set({ open: true, hostId });
       },
       selectChannel: (botId) => {
         if (get().botId === botId) return;
+        actedOnSinceBind = true;
         set({ botId });
       },
       rebind: (hostId) => {
@@ -111,6 +120,7 @@ export const useTracySurfaceStore = create<TracySurfaceState>()(
         }
         for (const botId of state.visitedBotIds) forgetBotState(botId);
         if (!state.open && state.visitedBotIds.length === 0) return;
+        actedOnSinceBind = true;
         set({ open: false, hostId: null, visitedBotIds: [] });
       },
     }),
@@ -309,6 +319,7 @@ export function bindTracySurfaceToWindow(windowId: string): void {
   }
   // Written under this window's key, which holds the record from now on.
   useTracySurfaceStore.setState(CLOSED_SURFACE);
+  actedOnSinceBind = false;
 }
 
 /**
@@ -335,7 +346,9 @@ export function settleTracySurfaceAdoption(adopts: boolean): void {
     }
     return;
   }
-  useTracySurfaceStore.setState(candidate);
+  // Closed: the record is taken whole unless the person closed the surface
+  // themselves since, which leaves it closed on the channel they left.
+  if (!actedOnSinceBind) useTracySurfaceStore.setState(candidate);
 }
 
 /**

@@ -281,6 +281,37 @@ describe("Tracy surface records per desktop window", () => {
       });
     });
 
+    it("keeps a surface the person opened, moved and closed while the list was pending", async () => {
+      window.localStorage.setItem(
+        SURFACE_KEY,
+        JSON.stringify({
+          state: { open: true, hostId: "host-1", botId: "bot-x" },
+          version: 2,
+        }),
+      );
+      const snapshot = snapshotWithTracyTab("bot-x");
+
+      const bound = await bindWindow("win-a");
+      const surface = bound.surfaceModule.useTracySurfaceStore.getState();
+      surface.openSurface("host-2");
+      surface.selectChannel("bot-b");
+      surface.closeSurface();
+      const settled = settleWindow(bound, snapshot);
+      const restarted = await bootWindow("win-a", snapshot);
+
+      expect({
+        surface: settled.surface,
+        refs: settled.refs,
+        globalKey: window.localStorage.getItem(SURFACE_KEY),
+        restarted: restarted.surface,
+      }).toEqual({
+        surface: { open: false, hostId: null, botId: "bot-b" },
+        refs: [],
+        globalKey: null,
+        restarted: { open: false, hostId: null, botId: "bot-b" },
+      });
+    });
+
     it("keeps the host the entry opened while the list was pending", async () => {
       window.localStorage.setItem(
         SURFACE_KEY,

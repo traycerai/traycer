@@ -890,9 +890,23 @@ describe("the Tracy surface shell", () => {
     expect(useTracySurfaceStore.getState().botId).toBeNull();
     expect(mocks.opened.length).toBe(opensBefore);
 
-    // A list that answered, without the bot, leaves nothing to select.
+    // A newer list that still carries the bot, while the stream still reports
+    // it gone, may offer it once more; it is gone again and nothing loops.
     act(() => {
       setListUpdatedAt(2_000);
+      answerList([RELEASE], null);
+    });
+    await screen.findByTestId("bot-tab-no-channel");
+    for (let flush = 0; flush < 3; flush += 1) {
+      await act(() => Promise.resolve());
+    }
+    expect(screen.queryByTestId("stub-channel")).toBeNull();
+    expect(useTracySurfaceStore.getState().botId).toBeNull();
+    expect(mocks.opened.length - opensBefore).toBeLessThanOrEqual(1);
+
+    // A list that answered, without the bot, leaves nothing to select.
+    act(() => {
+      setListUpdatedAt(3_000);
       answerList([], null);
     });
     await screen.findByTestId("bot-tab-no-channel");
@@ -900,7 +914,7 @@ describe("the Tracy surface shell", () => {
 
     // A list that answers with the bot again was a false alarm.
     act(() => {
-      setListUpdatedAt(3_000);
+      setListUpdatedAt(4_000);
       setDeletedBotIds(new Set());
       answerList([RELEASE], null);
     });
