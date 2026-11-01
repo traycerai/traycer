@@ -534,8 +534,7 @@ export type WindowsTaskRunGate =
       /**
        * The refusal, for the one verdict that reaches it: a task RESOLVED to
        * another account. An unconfirmed owner does not refuse a `/Run`, so
-       * this error's own `details.reason` is always `other-owner` - the gate
-       * carries no second copy of it for a caller to branch on.
+       * this error's `details.reason` is always `other-owner`.
        */
       readonly error: CliError;
     };

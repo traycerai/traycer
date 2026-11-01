@@ -778,9 +778,9 @@ describe("gateWindowsTaskRun: the write-free verb's own door", () => {
       }).deps,
     );
     if (gate.kind !== "not-owned") throw new Error("unreachable");
-    // This branch refuses as another account's, not as unconfirmed: a task
-    // hidden from this account is one Task Scheduler let its own principal
-    // read, so it has one and it is not this caller.
+    // This branch refuses as another account's, not as unconfirmed: Task
+    // Scheduler lets a task's own principal read it, so a task hidden from
+    // this account has a principal and it is not this caller.
     expect(gate.error.details).toMatchObject({ reason: "other-owner" });
   });
 
