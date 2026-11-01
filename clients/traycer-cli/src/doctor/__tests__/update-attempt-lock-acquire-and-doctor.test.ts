@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -84,4 +84,41 @@ describe("update-attempt lock acquire vs doctor on a retain-flag dead-pid record
     }
     expect(outcome.kind).toBe("busy");
   });
+});
+
+// Root reads a 000 file and Windows ignores the mode, so neither can stand in
+// for the user a 0600 lock written by an administrator's installer denies.
+const CAN_DENY_READ = process.platform !== "win32" && process.getuid?.() !== 0;
+
+describe("update-attempt lock acquire vs doctor on a lock this user cannot read", () => {
+  it.skipIf(!CAN_DENY_READ)(
+    "refuses acquire and reports HOST_UPDATE_ATTEMPT_LOCK_UNREADABLE",
+    async () => {
+      const hostHomeDir = mkdtempSync(join(tmpdir(), "attempt-lock-denied-"));
+      dirs.push(hostHomeDir);
+      const lockPath = updateAttemptLockPath(hostHomeDir);
+      writeFileSync(lockPath, "{}");
+      chmodSync(lockPath, 0o000);
+
+      const issue = await probeUpdateAttemptLock({
+        lockPath,
+        verifyPublisher: verifyProcessIdentityAsync,
+        livenessGivenPublisher: lockHolderLivenessGivenPublisher,
+      });
+      expect(issue?.code).toBe(
+        DOCTOR_ISSUE_CODES.HOST_UPDATE_ATTEMPT_LOCK_UNREADABLE,
+      );
+
+      const outcome = await acquireUpdateAttemptLock({
+        hostHomeDir,
+        reason: "acquire-against-a-denied-lock",
+        waitMs: 0,
+        pollIntervalMs: 25,
+      });
+      if (outcome.kind === "acquired") {
+        handles.push(outcome.handle);
+      }
+      expect(outcome.kind).toBe("busy");
+    },
+  );
 });
