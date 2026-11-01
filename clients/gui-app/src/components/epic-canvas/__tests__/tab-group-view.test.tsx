@@ -283,6 +283,7 @@ vi.mock("@/lib/epic-selectors", () => ({
       : (testState.chatRetractionByChatId.get(chatId) ?? null),
   useEpicTabDisplayTitle: (node: { readonly name: string }) => node.name,
   useEpicLiveArtifactTitleGenerating: () => false,
+  useEpicTabAwaitingFirstTitle: () => false,
   useEpicPermissionRole: () => "owner",
   useEpicSnapshotLoaded: () => true,
   useEpicChatRecordListAuthoritative: () =>

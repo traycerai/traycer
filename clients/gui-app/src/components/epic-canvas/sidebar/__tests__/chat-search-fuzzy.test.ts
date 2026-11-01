@@ -205,6 +205,15 @@ describe("filterCloudChatsBySearch", () => {
     const matched = filterCloudChatsBySearch(chats, "untitled");
     expect(matched.map((chat) => chat.identity.chatId)).toEqual(["r3"]);
   });
+
+  it("finds a null-titled row by 'agent', the word of the label it paints, and not by 'chat'", () => {
+    expect(
+      filterCloudChatsBySearch(chats, "agent").map(
+        (chat) => chat.identity.chatId,
+      ),
+    ).toEqual(["r3"]);
+    expect(filterCloudChatsBySearch(chats, "chat")).toEqual([]);
+  });
 });
 
 describe("intersectMatchIds", () => {

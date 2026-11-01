@@ -137,6 +137,7 @@ vi.mock("@/lib/epic-selectors", () => {
     useEpicTabDisplayTitle: (node: EpicCanvasTileRef) =>
       liveTitlesById.get(node.id) ?? node.name,
     useEpicLiveArtifactTitleGenerating: () => false,
+    useEpicTabAwaitingFirstTitle: () => false,
     useRegisteredEpicNodeArchived: () => false,
     useRegisteredEpicFileArtifactViewer: () => null,
   };

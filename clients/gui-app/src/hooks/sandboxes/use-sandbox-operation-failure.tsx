@@ -30,6 +30,17 @@ export interface SandboxOperationFailureProps {
   readonly onRetry: ((verb: SandboxRowVerb) => void) | null;
 }
 
+/** A build that cannot reach the control plane gets this answer every time. */
+function liveRetry(
+  onRetry: SandboxOperationFailureProps["onRetry"],
+  error: Error,
+): SandboxOperationFailureProps["onRetry"] {
+  return error instanceof SandboxOperationError &&
+    error.failure.kind === "unavailable"
+    ? null
+    : onRetry;
+}
+
 /** Capture runtime-dependent remedies before a receipt renders outside its provider. */
 export function useSandboxOperationFailure(
   props: SandboxOperationFailureProps,
@@ -52,6 +63,7 @@ export function useSandboxOperationFailure(
     failure.reason !== "unsupported-subscription"
       ? failure
       : null;
+  const retry = liveRetry(onRetry, operation.error);
   const message =
     creditFailure === null
       ? sandboxVerbFailureLine(operation.verb, props.name, operation.reference)
@@ -72,13 +84,13 @@ export function useSandboxOperationFailure(
           {ADD_CREDITS_LINK}
         </Button>
       )}
-      {onRetry === null ? null : (
+      {retry === null ? null : (
         <Button
           type="button"
           variant="link"
           size="inline-xs"
           disabled={props.busy}
-          onClick={() => onRetry(operation.verb)}
+          onClick={() => retry(operation.verb)}
         >
           {RETRY}
         </Button>
