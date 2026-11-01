@@ -173,8 +173,9 @@ describe("useHostQueries condition cadence", () => {
       hostRpcMethod: "speech.getModelStatus",
     });
     const clientRetry = fixture.queryClient.getDefaultOptions().queries?.retry;
-    // The app client's retry must be something a forced `retry: false` is NOT,
-    // or this case would pass on the very option it exists to forbid.
+    // The client's own retry has to be something a forced `retry: false` is
+    // NOT, or this case would pass on the very option it exists to forbid -
+    // and something at all, or it would hold of any override.
     expect(clientRetry).not.toBe(false);
     expect(clientRetry).not.toBeUndefined();
     expect(query.options.retry).toBe(clientRetry);
@@ -200,9 +201,14 @@ function queryForMethod(queryClient: QueryClient, method: string): Query {
 
 /**
  * The plural helper over a CONDITION-policy method, on the app's own query
- * client: its real retry default is what an opted-out reader must keep, and a
- * bare `new QueryClient()` would answer `false` there - the same value the
- * forced option has, which no assertion could tell apart.
+ * client, whose real retry default is what an opted-out reader must keep.
+ *
+ * Its own client rather than `createHostQueriesFixture`'s: that one installs
+ * `retry: false` as the client default, which is the same value the defect
+ * forces onto the query, so no assertion written against it could tell an
+ * inherited `false` from a forced one. A bare `new QueryClient()` configures
+ * no default at all (`getDefaultOptions().queries?.retry` is `undefined`),
+ * which is why the case guards against both before it compares.
  */
 function createConditionHostQueriesFixture(): {
   readonly client: HostClient<HostRpcRegistry>;
