@@ -531,8 +531,12 @@ export type WindowsTaskRunGate =
     }
   | {
       readonly kind: "not-owned";
-      /** Only ever this: an unconfirmed owner does not refuse a `/Run`. */
-      readonly reason: "other-owner";
+      /**
+       * The refusal, for the one verdict that reaches it: a task RESOLVED to
+       * another account. An unconfirmed owner does not refuse a `/Run`, so
+       * this error's own `details.reason` is always `other-owner` - the gate
+       * carries no second copy of it for a caller to branch on.
+       */
       readonly error: CliError;
     };
 
@@ -557,7 +561,6 @@ export async function gateWindowsTaskRun(
   if (ownership.reason === "other-owner") {
     return {
       kind: "not-owned",
-      reason: "other-owner",
       error: refuseNotOwned(label, "run", ownership),
     };
   }
