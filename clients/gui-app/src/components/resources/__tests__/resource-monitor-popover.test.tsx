@@ -40,6 +40,7 @@ import type {
 } from "@traycer-clients/shared/host-transport/resources-stream-client";
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
+import { sanitizePersistedCanvasState } from "@/stores/epics/canvas/canvas-persistence";
 import { ResourceMonitorPopover } from "@/components/resources/resource-monitor-popover";
 import {
   hostScopeFixture,
@@ -4321,6 +4322,65 @@ describe("ResourceMonitorPopover · shells nested under their creator", () => {
     expect(node.hostId).toBe("host-1");
     expect(tabNavigationMock.activateTabIntent).toHaveBeenCalledTimes(1);
   });
+
+  it.each([
+    ["Untitled agent", "New agent"],
+    ["Planner", "Planner"],
+  ])(
+    "names a terminal agent from a persisted tree record saved as %j as %j",
+    (saved, shown) => {
+      const persisted = sanitizePersistedCanvasState({
+        artifactTreeByEpicId: {
+          "epic-1": [
+            {
+              id: "tui-saved",
+              parentId: null,
+              name: saved,
+              type: "terminal-agent",
+              hostId: "host-1",
+            },
+          ],
+        },
+      }).artifactTreeByEpicId["epic-1"];
+      const record = persisted?.[0];
+      if (record === undefined) throw new Error("expected the saved record");
+      const tree = canvasMock.state.artifactTreeByEpicId["epic-1"];
+      tree.push({ ...record, parentId: null });
+      try {
+        emitOwners([
+          owner({
+            owner: {
+              kind: "terminal-agent",
+              hostId: "host-1",
+              epicId: "epic-1",
+              ownerId: "tui-saved",
+            },
+            harnessId: "codex",
+            activeProcessName: "codex",
+            rootPids: [500],
+            processCount: 1,
+            cpuPercent: 2,
+            rssBytes: 10 * MiB,
+            processes: [
+              resourceProcess({
+                pid: 500,
+                rootPid: 500,
+                name: "codex",
+                command: "codex",
+                cpuPercent: 2,
+                rssBytes: 10 * MiB,
+              }),
+            ],
+          }),
+        ]);
+
+        expect(rowButton(shown)).toBeTruthy();
+        expect(screen.queryByText("Untitled agent")).toBeNull();
+      } finally {
+        tree.pop();
+      }
+    },
+  );
 
   it("tucks a TUI agent's shell behind that agent's row the same way", () => {
     // The nesting rule is uniform across creator kinds: a shell made by an
