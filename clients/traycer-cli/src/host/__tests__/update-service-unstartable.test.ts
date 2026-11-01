@@ -63,12 +63,14 @@ vi.mock("../../service/platforms/windows", async (importOriginal) => {
           return {
             kind: "not-owned" as const,
             reason: "other-owner" as const,
+            probe: "principal-other-sid" as const,
             detail: "the task's principal names another account",
           };
         case "not-owned-unconfirmed":
           return {
             kind: "not-owned" as const,
             reason: "unconfirmed" as const,
+            probe: "definition-read-failed" as const,
             detail: "the task could not be read (access denied)",
           };
       }

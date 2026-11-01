@@ -4,15 +4,22 @@ import { fileURLToPath } from "node:url";
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
-// THE SOURCE GATE. Every verb that changes the host's Scheduled Task - the
+// THE SOURCE GATE. Every verb that touches the host's Scheduled Task - the
 // schtasks verbs, the PowerShell `*-ScheduledTask` cmdlets, and the
 // Schedule.Service COM calls - is spelled in `windows-task-gate.ts` and
-// nowhere else in the CLI, and every `gateWindowsTaskVerb` result is only ever
-// executed through its `.exec(` call. A new call site that spells a verb of
-// its own, or hands the executor on, skips the ownership check this suite
-// exists to keep in front of every one of them.
+// nowhere else in the CLI, and every gate result is only ever executed through
+// its `.exec(` call. A new call site that spells a verb of its own, or hands
+// the executor on, skips the ownership check this suite exists to keep in
+// front of every one of them.
+//
+// Both doors count: `gateWindowsTaskVerb` for the verbs that change a
+// definition or its existence, and `gateWindowsTaskRun` for the write-free
+// `/Run`, whose policy on a task it could not attribute differs.
 
 const GATE_FILE = "service/platforms/windows-task-gate.ts";
+
+/** The gate entry points a call site may reach a verb through. */
+const GATE_FUNCTIONS = ["gateWindowsTaskVerb", "gateWindowsTaskRun"];
 
 const SRC_ROOT = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -84,9 +91,9 @@ function relativePath(file: string): string {
 }
 
 /**
- * Every `gateWindowsTaskVerb(...)` call whose result is bound to a name, with
- * how that name is used afterwards. `null` for a call that is not bound to a
- * plain `const x = ...` (which the gate's contract does not allow).
+ * Every gate call whose result is bound to a name, with how that name is used
+ * afterwards. `bound` is `null` for a call that is not bound to a plain
+ * `const x = ...` (which the gate's contract does not allow).
  */
 interface GateResultUse {
   readonly file: string;
@@ -104,7 +111,7 @@ function gateResultUses(file: string, text: string): GateResultUse[] {
     if (
       ts.isCallExpression(node) &&
       ts.isIdentifier(node.expression) &&
-      node.expression.text === "gateWindowsTaskVerb"
+      GATE_FUNCTIONS.includes(node.expression.text)
     ) {
       uses.push(describeGateUse(source, file, node));
     }
@@ -239,7 +246,11 @@ describe("the Scheduled Task source gate: a mutating verb is spelled only in win
     ).toEqual(["DeleteTask"]);
   });
 
-  it("every gateWindowsTaskVerb result is bound and only read as kind / error / task / exec, and exec is only ever called", () => {
+  // `reason` joins the readable properties: it is the verdict a call site
+  // branches its own policy on (the install starts a task it could not
+  // attribute and refuses another account's), a plain enumerated word, not a
+  // way to reach a verb.
+  it("every gate result is bound and only read as kind / error / reason / task / exec, and exec is only ever called", () => {
     const uses: GateResultUse[] = [];
     for (const file of files) {
       const path = relativePath(file);
@@ -266,7 +277,7 @@ describe("the Scheduled Task source gate: a mutating verb is spelled only in win
       for (const property of use.properties) {
         expect({ where, property }).toEqual({
           where,
-          property: expect.stringMatching(/^(?:kind|error|task|exec)$/),
+          property: expect.stringMatching(/^(?:kind|error|reason|task|exec)$/),
         });
       }
     }
