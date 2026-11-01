@@ -158,13 +158,13 @@ import {
   type EpicArtifactProjection,
   type EpicChatProjection,
   type EpicTuiAgentProjection,
+  type EpicTreeIndex,
   type EpicTreeRecord,
 } from "@/lib/epic-selectors";
 import {
   countPromotedAgentChildren,
-  formatAgentDeleteNesting,
+  formatAgentDeleteDescription,
 } from "@/lib/epic-tree-cascade";
-import type { TreeSlice } from "@/stores/epics/open-epic/types";
 import { isEditableRole, mutationDisabledHint } from "@/lib/epic-permissions";
 import { useEpicExportArtifacts } from "@/hooks/epic/use-epic-export-artifacts-mutation";
 import {
@@ -2039,26 +2039,22 @@ function panelRowNoun(panelId: LeftPanelId, count: number): string {
  * Deleting an agent removes that one record: the agents nested under it are
  * KEPT, and the tree redraws them at the top level. That is a real
  * consequence, and an agent row's own menu has always disclosed it - so select
- * mode, which deletes the same records, has to disclose it too.
- *
- * It is computed from the selection rather than summed per row, because a
- * child selected alongside its parent is deleted rather than promoted; see
- * `countPromotedAgentChildren`. A single selected agent gets the sentence as
- * well, which is where select mode and the row menu most obviously disagreed.
+ * mode, which deletes the same records, asks the same function for the same
+ * sentence. A single selected agent gets it too, which is where the two routes
+ * most obviously disagreed.
  */
 function describeSidebarBulkDeleteDescription(
   panelId: LeftPanelId,
   ids: readonly string[] | null,
-  tree: TreeSlice,
+  tree: EpicTreeIndex,
 ): string {
   const undone = "This action cannot be undone.";
   if (ids === null || ids.length === 0) return undone;
   if (panelId === "chats") {
-    const nesting = formatAgentDeleteNesting(
+    return formatAgentDeleteDescription(
       countPromotedAgentChildren(tree, ids),
       ids.length,
     );
-    return nesting === null ? undone : `${undone} ${nesting}`;
   }
   if (ids.length < 2) return undone;
   return `${undone} Nested items under selected rows may also be deleted.`;

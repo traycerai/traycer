@@ -135,8 +135,7 @@ export function formatCascadeSummary(counts: DescendantCounts): string | null {
 /**
  * How many agents are DIRECT children of `nodeId`: the ones that move to the
  * top level when it is deleted. Grandchildren are not counted - they stay under
- * their own, kept, parent. Artifacts never nest under agents, so only the two
- * agent kinds count.
+ * their own, kept, parent.
  */
 export function countDirectAgentChildren(
   tree: TreeSlice,
@@ -185,16 +184,37 @@ export function countPromotedAgentChildren(
 }
 
 /**
- * Sentence for an AGENT delete dialog, or null when nothing is promoted.
- * Deleting an agent removes that one record only: its direct children are kept
- * and the tree draws them at the top level, so the dialog says that instead of
- * the cascade sentence an artifact row gets from `formatCascadeSummary`.
+ * The whole description an AGENT delete dialog shows, for every route that
+ * deletes agents: a row's own menu and select mode both ask here.
+ *
+ * It is one function because the two dialogs disagreeing is the defect it was
+ * written for - select mode showed the first sentence and dropped the second,
+ * for the same records. Two call sites composing the same two sentences is what
+ * let that happen, so neither composes anything now.
  *
  * `deletedAgentCount` is what the reader is about to delete - one from a row's
- * own menu, a whole selection from select mode - and all it decides is whether
- * the agents are nested under "it" or under "them".
+ * menu, a whole selection from select mode - and all it decides is whether the
+ * agents are nested under "it" or under "them".
  */
-export function formatAgentDeleteNesting(
+export function formatAgentDeleteDescription(
+  nestedAgentCount: number,
+  deletedAgentCount: number,
+): string {
+  const nesting = formatAgentDeleteNesting(nestedAgentCount, deletedAgentCount);
+  return nesting === null
+    ? AGENT_DELETE_UNDONE
+    : `${AGENT_DELETE_UNDONE} ${nesting}`;
+}
+
+const AGENT_DELETE_UNDONE = "This action cannot be undone.";
+
+/**
+ * The nesting sentence alone, or null when nothing is promoted. Deleting an
+ * agent removes that one record only: its direct children are kept and the
+ * tree draws them at the top level, so the dialog says that instead of the
+ * cascade sentence an artifact row gets from `formatCascadeSummary`.
+ */
+function formatAgentDeleteNesting(
   nestedAgentCount: number,
   deletedAgentCount: number,
 ): string | null {

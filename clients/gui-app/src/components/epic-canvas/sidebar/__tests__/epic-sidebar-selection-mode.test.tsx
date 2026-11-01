@@ -3271,13 +3271,7 @@ describe("epic sidebar selection mode", () => {
     expect(markRead).not.toHaveBeenCalled();
   });
 
-  /**
-   * Deleting an agent removes that one record: the agents nested under it are
-   * KEPT and redrawn at the top level. An agent row's own menu has always
-   * disclosed that; select mode deletes the same records and said only "This
-   * action cannot be undone.", so the reader got less warning for the same
-   * act, by the route that deletes MORE at once.
-   */
+  /** Enter select mode, check `ids`, open the delete dialog. */
   function openChatDeleteDialog(ids: readonly string[]): void {
     render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
     fireEvent.click(screen.getByRole("menuitem", { name: "Select agents" }));
@@ -3287,6 +3281,32 @@ describe("epic sidebar selection mode", () => {
     fireEvent.click(screen.getByTestId("epic-sidebar-delete-selected-chats"));
   }
 
+  /** Gives `agent-root` a child of its own, so two selected rows are parents. */
+  function nestUnderAgentRoot(): void {
+    const agentChild = treeNode(
+      "agent-child",
+      "agent-root",
+      "Nested terminal agent",
+      "terminal-agent",
+    );
+    testState.tree = {
+      ...testState.tree,
+      childrenByParent: {
+        ...testState.tree.childrenByParent,
+        "agent-root": ["agent-child"],
+      },
+      nodeById: { ...testState.tree.nodeById, "agent-child": agentChild },
+    };
+    testState.records = [...testState.records, recordFromNode(agentChild)];
+  }
+
+  /**
+   * Deleting an agent removes that one record: the agents nested under it are
+   * KEPT and redrawn at the top level. An agent row's own menu has always
+   * disclosed that; select mode deletes the same records and said only "This
+   * action cannot be undone.", so the reader got less warning for the same
+   * act, by the route that deletes MORE at once.
+   */
   it("discloses the agent one selected parent promotes, as the row menu does", () => {
     seedChatTree();
 
@@ -3299,12 +3319,7 @@ describe("epic sidebar selection mode", () => {
     ).toBeTruthy();
   });
 
-  /**
-   * The count is of what SURVIVES, which is why it cannot be a sum over the
-   * selected parents: `chat-child` is being deleted alongside its parent, so
-   * nothing is promoted and there is nothing to disclose. A per-row sum would
-   * promise the reader an agent that is about to be deleted.
-   */
+  /** What survives, not a per-row sum - see `countPromotedAgentChildren`. */
   it("says nothing about a child that is itself selected", () => {
     seedChatTree();
 
@@ -3313,25 +3328,18 @@ describe("epic sidebar selection mode", () => {
     expect(screen.getByText("This action cannot be undone.")).toBeTruthy();
   });
 
-  /** Two parents are "them", not "it". */
-  it("addresses several selected parents as them", () => {
+  /** Two parents: their children add up, and they are "them", not "it". */
+  it("adds up across selected parents and addresses them as them", () => {
     seedChatTree();
+    nestUnderAgentRoot();
 
     openChatDeleteDialog(["chat-root", "agent-root"]);
 
     expect(
       screen.getByText(
-        "This action cannot be undone. 1 agent nested under them will be kept and moved to the top level.",
+        "This action cannot be undone. 2 agents nested under them will be kept and moved to the top level.",
       ),
     ).toBeTruthy();
-  });
-
-  it("stays plain for a selection that promotes nothing", () => {
-    seedChatTree();
-
-    openChatDeleteDialog(["agent-root"]);
-
-    expect(screen.getByText("This action cannot be undone.")).toBeTruthy();
   });
 });
 
