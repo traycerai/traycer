@@ -28,6 +28,11 @@ export interface ResolvedHarnessSwitch extends EffortTier {
 
 export type ResolvedModelSelection = EffortTier;
 
+export interface ModelNameRecord {
+  readonly name: string;
+  readonly updatedAt: number;
+}
+
 /**
  * One host's harness memory. Hosts have different harness/model/profile
  * catalogs, so every map is bucketed by the host the selection was committed
@@ -63,10 +68,16 @@ interface ComposerHarnessMemoryStore {
   // store remains the safety net when the fallback names a harness/model the
   // reading host does not serve.
   legacy: ComposerHarnessMemoryHostBucket;
+  // (harnessId, modelSlug) -> the name it was last listed under, LRU-capped by
+  // updatedAt. Not a host's: a pick keeps its name on a surface with no list
+  // to read it from.
+  modelNames: Record<string, ModelNameRecord>;
 
   // WRITE — settings.model is always resolved (onSettingsChange guarantees
   // it). `hostId === null` (no resolved target host) drops the write.
   record: (hostId: string | null, settings: ChatRunSettings) => void;
+  // WRITE — a model shown under its listed name.
+  recordModelName: (harnessId: string, modelSlug: string, name: string) => void;
   // WRITE — selection commits call this immediately, before model resolution.
   recordProfileSelection: (
     hostId: string | null,
@@ -122,6 +133,16 @@ export function selectLastProfileByHarness(
 // migrate without rewriting their provider/model identity.
 function harnessModelKey(harnessId: string, modelSlug: string): string {
   return `${harnessId} ${modelSlug}`;
+}
+
+/** The name a model was last listed under, or `null` if none is held. */
+export function rememberedModelName(
+  harnessId: string,
+  modelSlug: string,
+): string | null {
+  const { modelNames } = useComposerHarnessMemoryStore.getState();
+  const key = harnessModelKey(harnessId, modelSlug);
+  return Object.hasOwn(modelNames, key) ? modelNames[key].name : null;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -376,6 +397,23 @@ export const useComposerHarnessMemoryStore =
       (set, get) => ({
         byHost: {},
         legacy: EMPTY_HOST_BUCKET,
+        modelNames: {},
+        recordModelName: (harnessId, modelSlug, name) => {
+          const key = harnessModelKey(harnessId, modelSlug);
+          set((state) =>
+            state.modelNames[key]?.name === name
+              ? state
+              : {
+                  modelNames: cappedByUpdatedAt(
+                    {
+                      ...state.modelNames,
+                      [key]: { name, updatedAt: Date.now() },
+                    },
+                    COMPOSER_HARNESS_MEMORY_CAP,
+                  ),
+                },
+          );
+        },
         record: (hostId, settings) => {
           if (hostId === null) return;
           // The settings callback is also a valid profile-selection signal
@@ -532,6 +570,7 @@ export const useComposerHarnessMemoryStore =
           set({
             byHost: {},
             legacy: EMPTY_HOST_BUCKET,
+            modelNames: {},
           });
         },
       }),
@@ -542,6 +581,7 @@ export const useComposerHarnessMemoryStore =
         partialize: (state) => ({
           byHost: state.byHost,
           legacy: state.legacy,
+          modelNames: state.modelNames,
         }),
         migrate: (persisted) =>
           migrateComposerHarnessMemoryPersistedStateV3(persisted),

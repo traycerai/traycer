@@ -110,6 +110,7 @@ function composerMode(
     ],
     rememberedConfigurationKey: null,
     stagedConfigurationKey: null,
+    hostPickRequests: 0,
     stagedLabel: null,
     stagedBusy: false,
     onPickHost,

@@ -153,6 +153,8 @@ export interface HostSwitcherComposerMode {
   readonly rememberedConfigurationKey: string | null;
   /** The New row that is staged, marked picked. */
   readonly stagedConfigurationKey: string | null;
+  /** Counts the requests to open this picker from elsewhere on the surface. */
+  readonly hostPickRequests: number;
   /** What the trigger reads instead of the host's name, while staged. */
   readonly stagedLabel: string | null;
   /** The staged create is running: the trigger carries a spinner. */
@@ -368,6 +370,12 @@ export function HostSwitcher(props: {
     setOpenState(next);
     if (!next) setSearch("");
   };
+  const hostPickRequests = props.composer?.hostPickRequests ?? 0;
+  const [seenPickRequests, setSeenPickRequests] = useState(hostPickRequests);
+  if (hostPickRequests !== seenPickRequests) {
+    setSeenPickRequests(hostPickRequests);
+    setOpenState(true);
+  }
   const { contentRef, onOpenAutoFocus: coarseOpenAutoFocus } =
     useCoarsePointerOpenAutoFocus();
   const binding = useHostBinding();

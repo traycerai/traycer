@@ -8,7 +8,10 @@ import {
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import type { JsonContent } from "@traycer/protocol/common/registry";
-import type { WorktreeIntent } from "@traycer/protocol/host/worktree-schemas";
+import type {
+  WorktreeBindingWorkspaceMode,
+  WorktreeIntent,
+} from "@traycer/protocol/host/worktree-schemas";
 import type { BrowserAnnotationRecord } from "@traycer/protocol/persistence/epic/schemas";
 import type { ChatQueueDeliveryPolicy } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
@@ -92,7 +95,19 @@ export type PendingSandboxSendRequest =
       readonly title: string;
       readonly forkSource: CreateChatForkSourceV11;
       readonly tabId: string;
+      /**
+       * The source's own workspace, for a fork that stays on the source's
+       * sandbox while it wakes. Absent on any other machine, which has none
+       * of it, and on a fork persisted before this field.
+       */
+      readonly workspace?: PendingForkWorkspace;
     };
+
+/** What a fork creates its workspace from. */
+export interface PendingForkWorkspace {
+  readonly workspaceMode: WorktreeBindingWorkspaceMode;
+  readonly worktreeIntent: WorktreeIntent | null;
+}
 
 /** The ready line's facts, kept once the message was handed to the agent. */
 export interface PendingSandboxSendDelivery {

@@ -590,6 +590,10 @@ const CLAUDE_PICK: ChatRunSettings = {
 
 describe("a landing composer that is not on screen, with a sandbox staged", () => {
   it("keeps its own Traycer pick through the stage and after it is shown", async () => {
+    // The name a list gave this pick before the stage dropped it.
+    useComposerHarnessMemoryStore
+      .getState()
+      .recordModelName("traycer", "traycer-saved", "Saved Traycer");
     const firstDraft = useLandingDraftStore.getState().createDraft(PICK);
     const hiddenDraft = useLandingDraftStore
       .getState()
@@ -626,7 +630,7 @@ describe("a landing composer that is not on screen, with a sandbox staged", () =
     await waitFor(() =>
       expect(
         chipOf("second-composer").getByRole("button", {
-          name: /^traycer-saved/,
+          name: /^Saved Traycer/,
         }),
       ).toBeDefined(),
     );

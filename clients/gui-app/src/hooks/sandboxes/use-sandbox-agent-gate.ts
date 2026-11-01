@@ -11,6 +11,8 @@ import type {
 } from "@/components/home/composer/composer-host-notice";
 import { useConfigurationProvidersOpener } from "@/hooks/sandboxes/use-open-configuration-providers";
 import { useSandboxHostConfiguration } from "@/hooks/sandboxes/use-on-team-sandbox";
+import { useRestingSandboxHost } from "@/hooks/sandboxes/use-resting-sandbox-host";
+import { RESTING_STAGE_HOLD } from "@/lib/sandboxes/resting-stage-hold";
 import { useSandboxCatalogue } from "@/hooks/sandboxes/use-sandbox-catalogue-query";
 import { useSandboxTraycerModels } from "@/hooks/sandboxes/use-sandbox-traycer-models-query";
 import {
@@ -111,11 +113,15 @@ export function useSandboxAgentGate(
   const harnesses = useGuiHarnessesQueryForClient(input.client, activity);
   const providers = useProvidersListForClient(input.client, activity);
   const offeredAgents = useSandboxCatalogue(watching).data?.offeredAgents;
+  const restingHost = useRestingSandboxHost(input.hostId);
   const providersOpener = useConfigurationProvidersOpener(
     input.active && configuration !== null && configuration.kind === "team",
   );
   if (configuration === null || input.harnessId === null) return NOT_BLOCKED;
   const label = configurationLabel(stageConfigurationCopy(configuration));
+  // Whatever this host's lists said while it was awake: only a stage reaches a
+  // sandbox at rest (`RestingHostStage`), and it lands once the list is read.
+  if (restingHost !== null) return RESTING_STAGE_HOLD;
   const openProviders = providersOpener(configuration);
   return sandboxAgentGateFor({
     harnessId: input.harnessId,

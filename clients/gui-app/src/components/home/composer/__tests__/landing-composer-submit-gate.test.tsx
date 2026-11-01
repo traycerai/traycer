@@ -720,7 +720,7 @@ const NEW_STAGE: StagedSandboxTarget = {
 
 const EXISTING_RESUME: StagedSandboxTarget = {
   kind: "existing",
-  hostId: "host-test",
+  hostId: "sbx-build-host",
   sandboxId: "sbx-build",
   name: "build-box",
   configuration: { kind: "personal" },

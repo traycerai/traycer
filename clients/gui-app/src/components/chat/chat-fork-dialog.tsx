@@ -40,6 +40,7 @@ import { useFocusedPaneModalOpen } from "@/components/epic-tabs/pane-visibility-
 import { useComposerToolbarStore } from "@/components/home/hooks/use-composer-toolbar-store";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
+import { RestingHostStage } from "@/components/composer/resting-host-stage";
 import { useStageFallbackHostLine } from "@/hooks/sandboxes/use-stage-fallback-host-line";
 import { useTeamSandboxHarnessBlocked } from "@/hooks/sandboxes/use-team-sandbox-harness-blocked";
 import { TEAM_SANDBOX_HARNESS_UNAVAILABLE } from "@/lib/sandboxes/team-sandbox-harness";
@@ -99,6 +100,7 @@ import {
   type LandingDraftWorkspaceSnapshot,
 } from "@/stores/home/landing-draft-store";
 import { deriveWorkspaceMode } from "@/lib/worktree/workspace-mode";
+import type { PendingForkWorkspace } from "@/stores/sandboxes/pending-sandbox-send-store";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { usePrimaryActionShortcut } from "@/hooks/use-primary-action-shortcut";
 import { useInTaskSandboxStagingSurface } from "@/components/composer/use-sandbox-staging";
@@ -107,7 +109,9 @@ import {
   pickedRunSettings,
 } from "@/lib/sandboxes/pending-sandbox-send";
 import {
+  leaveStagedSandbox,
   readStagedSandbox,
+  stagedHostId,
   useStagedSandbox,
   useStagedSandboxStore,
   type StagedSandboxTarget,
@@ -122,6 +126,7 @@ import { createEmptyNewConversationContent } from "@/stores/epics/new-conversati
 import type { StageConfiguration } from "@/lib/sandboxes/sandbox-stage-model";
 import { ComposerHostNotice } from "@/components/home/composer/composer-host-notice";
 import { useSandboxAgentGate } from "@/hooks/sandboxes/use-sandbox-agent-gate";
+import { sendHoldNotice } from "@/lib/sandboxes/resting-stage-hold";
 import { useStagedSendSignInCheck } from "@/hooks/sandboxes/use-staged-send-sign-in-check";
 import { carryComposerDraft } from "@/lib/drafts/carry-composer-draft";
 import { PrimaryActionShortcutHint } from "@/components/ui/primary-action-shortcut-hint";
@@ -355,8 +360,11 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
   // A cross-host fork is a different operation: it cannot carry the source
   // machine's working tree, its folder paths, or the provider's on-disk
   // session. Everything below that changes shape keys on this one fact. A
-  // staged sandbox is another machine too.
-  const isCrossHost = selectedHostId !== tabHostId || forkStage !== null;
+  // staged sandbox is another machine too, unless it is the one the source
+  // already runs on, staged only because it has to wake.
+  const isCrossHost =
+    selectedHostId !== tabHostId ||
+    (forkStage !== null && stagedHostId(forkStage) !== tabHostId);
   // The target only exists as far as this dialog is concerned while it is
   // OPEN. `target` outlives a close (the opener keeps the last one), so every
   // read that costs something - the owner resolution's cloud-chat list, the
@@ -648,7 +656,10 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
     (s) => s.values.selection.modelSlug,
   );
   const chipModel = useStore(toolbarStore, chipModelName);
-  const chooseAnotherHostLabel = useStageFallbackHostLine(selectedHostId);
+  const chooseAnotherHostLabel = useStageFallbackHostLine(
+    selectedHostId,
+    stagedHostId(forkStage),
+  );
   const stagedSignInCheck = useStagedSendSignInCheck({
     harnessId: pickedHarnessId,
     modelSlug: pickedModelSlug,
@@ -658,12 +669,10 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
     onChooseModel: (offeredAgents) =>
       forkModelPickerRef.current?.("traycer", offeredAgents),
     onChooseAnotherHost: () =>
-      useStagedSandboxStore.getState().clear(forkSurfaceKey),
+      leaveStagedSandbox(forkSurfaceKey, selectedHostId),
   });
   const stagedCheck =
     forkStage === null ? null : stagedSignInCheck.check(forkStage);
-  const stagedCatalogueNotice =
-    stagedCheck?.pending === true ? stagedCheck : null;
   // On a sandbox host an agent that cannot run there is refused at Fork, with
   // the configuration's Providers, never swapped; a staged fork is checked
   // above instead.
@@ -675,6 +684,11 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
     onChooseModel: (offeredAgents) =>
       forkModelPickerRef.current?.("traycer", offeredAgents),
   });
+  const stagedCatalogueNotice = sendHoldNotice(
+    forkStage,
+    stagedSignInCheck.check,
+    sandboxAgentGate,
+  );
   // What Fork would be refused for now, by the stage's check or this host's.
   const forkRefusal =
     forkStage === null ? sandboxAgentGate.notice : stagedCheck;
@@ -691,7 +705,8 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
   const modelResolved =
     forkStage !== null
       ? stagedCatalogueNotice === null
-      : modelSlugPresent &&
+      : stagedCatalogueNotice === null &&
+        modelSlugPresent &&
         (!isCrossHost || catalogConfirmed || catalogSubstituted);
   const modelPickerKey =
     target === null
@@ -900,6 +915,28 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
     [],
   );
 
+  const readForkWorkspace = useCallback((): PendingForkWorkspace => {
+    const launchWorkspace = readSeededLaunchWorkspace({
+      stagingKey,
+      seedIntent,
+      // The same snapshot the picker was given, so a cross-host submit that
+      // never touched the folder rows resolves to the empty workspace rather
+      // than falling through to this machine's global folder list.
+      fallbackWorkspace: workspaceSeed,
+      // The launch host, so the global fallback below this one reads the
+      // TARGET machine's folder bucket. Folder paths are host-local; the
+      // source tab's bucket would seed paths that need not exist there.
+      hostId: selectedHostId,
+    });
+    return {
+      workspaceMode: deriveWorkspaceMode(
+        launchWorkspace.folderCount,
+        launchWorkspace.worktreeIntent,
+      ),
+      worktreeIntent: launchWorkspace.worktreeIntent,
+    };
+  }, [seedIntent, selectedHostId, stagingKey, workspaceSeed]);
+
   const submitStagedFork = useCallback(
     (staged: StagedSandbox, target: ChatForkDialogTarget): Promise<void> => {
       if (stagedSubmitAttempt.current !== null) return Promise.resolve();
@@ -952,6 +989,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
                 title: trimmedTitle,
                 forkSource: chatForkSource(target, sourceOwnerUserId),
                 tabId,
+                ...(isCrossHost ? {} : { workspace: readForkWorkspace() }),
               },
               content: createEmptyNewConversationContent(),
               text: trimmedTitle,
@@ -995,6 +1033,8 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
       clearForkWorkspaces,
       epicId,
       forkSurfaceKey,
+      isCrossHost,
+      readForkWorkspace,
       onOpenChange,
       sourceOwnerUserId,
       stagedSignInCheck,
@@ -1024,23 +1064,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
     const hostId = selectedHostClient?.getActiveHostId() ?? null;
     if (hostId === null) return;
     const chatId = uuidv4();
-    const launchWorkspace = readSeededLaunchWorkspace({
-      stagingKey,
-      seedIntent,
-      // The same snapshot the picker was given, so a cross-host submit that
-      // never touched the folder rows resolves to the empty workspace rather
-      // than falling through to this machine's global folder list.
-      fallbackWorkspace: workspaceSeed,
-      // The launch host, so the global fallback below this one reads the
-      // TARGET machine's folder bucket. Folder paths are host-local; the
-      // source tab's bucket would seed paths that need not exist there.
-      hostId,
-    });
-    const workspaceMode = deriveWorkspaceMode(
-      launchWorkspace.folderCount,
-      launchWorkspace.worktreeIntent,
-    );
-    const worktreeIntent = launchWorkspace.worktreeIntent;
+    const { workspaceMode, worktreeIntent } = readForkWorkspace();
     // Same-host only. The per-epic memory is keyed by workspace PATH and holds
     // no host of its own, so remembering a cross-host pick would offer another
     // machine's branch/worktree choice to any later surface on this one that
@@ -1150,6 +1174,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
       },
     );
   }, [
+    readForkWorkspace,
     attachClient,
     attachEnvironment,
     attachTeamId,
@@ -1162,15 +1187,12 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
     submitStagedFork,
     sandboxAgentGate.notice,
     onOpenChange,
-    seedIntent,
     selectedHostClient,
     sourceOwnerUserId,
-    stagingKey,
     tabId,
     target,
     toolbarStore,
     trimmedTitle,
-    workspaceSeed,
     isCrossHost,
   ]);
   usePrimaryActionShortcut(activityEnabled, submit);
@@ -1298,6 +1320,15 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
               placeholder={sourceUntitled ? displayTitle("", "agent") : ""}
             />
           </label>
+          <RestingHostStage
+            surfaceKey={activeWorkspaceTarget === null ? null : forkSurfaceKey}
+            hostId={selectedHostId}
+            named={false}
+            surfaceHoldsSandbox={
+              activeWorkspaceTarget !== null &&
+              activeWorkspaceTarget.stagedSandbox !== null
+            }
+          />
           <section className="flex min-w-0 flex-col gap-2">
             <div className="px-0 py-0 font-sans text-overline font-medium uppercase text-muted-foreground/70">
               Harness

@@ -10,7 +10,10 @@ import {
   isRemoteHostDirectoryEntry,
   type RemoteHostSandboxFacts,
 } from "@traycer-clients/shared/host-client/remote-fetcher";
-import { isSandboxFrozenInEffect } from "@traycer-clients/shared/host-client/sandbox-control";
+import {
+  isSandboxAsleep,
+  isSandboxFrozenInEffect,
+} from "@traycer-clients/shared/host-client/sandbox-control";
 import type { ServiceStatusSnapshot } from "@traycer-clients/shared/platform/runner-host";
 import type { HostLeaseSnapshot } from "@traycer-clients/shared/host-selection/selection-authority-contract";
 import { dialableHostEndpointFor } from "@/lib/host/transport-key";
@@ -23,6 +26,7 @@ import {
   type HostHealth,
 } from "@/components/settings/host-scope/host-health";
 import { hostLastReport } from "@/components/settings/host-scope/host-last-report";
+import { sandboxWakeWait } from "@/lib/sandboxes/sandbox-wake-wait";
 
 /**
  * ONE host, as every settings surface should see it.
@@ -163,6 +167,9 @@ export interface BuildHostScopeOptionsInput {
   readonly nowMs: number;
 }
 
+/** The directory's own tick: a read by then has heard of the wake. */
+const WAKE_MIRROR_LAG_MS = 60_000;
+
 export function buildHostScopeOptions(
   input: BuildHostScopeOptionsInput,
 ): readonly HostScopeOption[] {
@@ -204,7 +211,7 @@ export function buildHostScopeOptions(
       updateState: item?.status.updateState ?? null,
       entry,
       item,
-      ...sandboxFactsOf(entry, item, summary),
+      ...sandboxFactsOf(entry, item, summary, input.nowMs),
     };
   });
   const listed = new Set(hostIds);
@@ -280,6 +287,30 @@ function unenrolledSandboxOption(
 }
 
 /**
+ * An awake sandbox whose host has not first reported reads as the move that
+ * got it there: nothing about it has gone wrong yet, and every word and
+ * decision downstream goes by the row's state. `answeredWakes` is the wake
+ * each sandbox last answered this device in (`sandboxWakeWait`).
+ */
+export function withSandboxWakeWaits(
+  hosts: readonly HostScopeOption[],
+  answeredWakes: Readonly<Record<string, number>>,
+): readonly HostScopeOption[] {
+  return hosts.map((host) => {
+    const sandbox = host.sandbox;
+    if (sandbox?.state !== "awake" || sandbox.summary === null) return host;
+    const wait = sandboxWakeWait(sandbox.summary, {
+      answers:
+        host.connectable || host.item?.status.connectivity === "connectable",
+      answeredWake: answeredWakes[sandbox.summary.id] ?? null,
+    });
+    return wait === null
+      ? host
+      : { ...host, sandbox: { ...sandbox, state: wait } };
+  });
+}
+
+/**
  * Whether this row is one `unenrolledSandboxOption` built: a listed sandbox
  * with no directory entry and no registry row. Destroying it removes the row,
  * so the overview hands Settings back to the active host rather than reading
@@ -298,6 +329,7 @@ function sandboxFactsOf(
   entry: HostDirectoryEntry | null,
   item: HostListItem | null,
   summary: SandboxSummary | null,
+  nowMs: number,
 ): Pick<HostScopeOption, "kind" | "sandbox"> {
   const entryFacts =
     entry !== null && isRemoteHostDirectoryEntry(entry) ? entry.sandbox : null;
@@ -307,7 +339,7 @@ function sandboxFactsOf(
   }
   const listed = item === null ? null : listedSandboxFacts(item);
   const known = listed ?? entryFacts;
-  const state = sandboxStateOf(known?.state ?? null, summary);
+  const state = sandboxStateOf(known?.state ?? null, summary, nowMs);
   return {
     kind,
     sandbox: {
@@ -326,11 +358,14 @@ function sandboxFactsOf(
  * The row's sandbox state: the registry's word, or the control plane's row
  * while it is still on its way to the destination the registry already reads
  * (`transitDestinationOf`) or once it has left a `creating` the registry still
- * reads, or the row's when the registry has said nothing.
+ * reads, once it has left a `creating` the registry still reads, or once a
+ * wake the registry has not heard of shows on it, or the row's when the
+ * registry has said nothing.
  */
 function sandboxStateOf(
   knownState: HostSandboxState | null,
   summary: SandboxSummary | null,
+  nowMs: number,
 ): HostSandboxState | null {
   if (summary === null) return knownState;
   if (knownState === null) return summary.state;
@@ -339,9 +374,27 @@ function sandboxStateOf(
   if (knownState === "creating" && summary.state !== "creating") {
     return summary.state;
   }
+  // The registry mirrors the row and hears of a wake after it.
+  if (rowIsAheadOnAWake(summary, nowMs) && isSandboxAsleep(knownState)) {
+    return summary.state;
+  }
   return transitDestinationOf(summary.state) === knownState
     ? summary.state
     : knownState;
+}
+
+/**
+ * A wake the row shows: on its way, or landed so lately that a resting word
+ * from the registry can only be the mirror lagging. Past that it is a rest the
+ * row has not been re-read for, which keeps the registry's word.
+ */
+function rowIsAheadOnAWake(summary: SandboxSummary, nowMs: number): boolean {
+  if (summary.state === "resuming" || summary.state === "starting") return true;
+  return (
+    summary.state === "awake" &&
+    isSandboxAsleep(summary.operation?.fromState ?? null) &&
+    nowMs - summary.lastTransitionAt < WAKE_MIRROR_LAG_MS
+  );
 }
 
 /**

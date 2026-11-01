@@ -1,3 +1,4 @@
+import { useSyncExternalStore } from "react";
 import { vi, type Mock } from "vitest";
 import type { GuiAgentModelOption } from "@traycer/protocol/host/agent/gui/unary-schemas";
 import type { HostListItem } from "@traycer/protocol/host/host-status";
@@ -40,7 +41,39 @@ export const restingDirectory = {
     name: string,
     state: NonNullable<HostListItem["sandboxState"]>,
   ): void => {
-    rows.set(hostId, sandboxEntry(hostId, name, state));
+    rows.set(
+      hostId,
+      sandboxEntry(hostId, name, state, {
+        connectivity: state === "awake" ? "connectable" : "offline",
+        frozen: false,
+      }),
+    );
+    notify(hostId);
+  },
+  /** An awake sandbox whose host has not yet reported: no route answers. */
+  setUnreportedSandbox: (hostId: string, name: string): void => {
+    rows.set(
+      hostId,
+      sandboxEntry(hostId, name, "awake", {
+        connectivity: "offline",
+        frozen: false,
+      }),
+    );
+    notify(hostId);
+  },
+  /** A sandbox the account has frozen: it wakes by the resume verb, whatever its state. */
+  setFrozenSandbox: (
+    hostId: string,
+    name: string,
+    state: NonNullable<HostListItem["sandboxState"]>,
+  ): void => {
+    rows.set(
+      hostId,
+      sandboxEntry(hostId, name, state, {
+        connectivity: "offline",
+        frozen: true,
+      }),
+    );
     notify(hostId);
   },
   clear: (): void => {
@@ -49,10 +82,31 @@ export const restingDirectory = {
   },
 };
 
+/**
+ * `useHostDirectoryEntry` over {@link restingDirectory}, for a suite that
+ * mounts no host runtime: a surface reading its host's row through the runtime
+ * reads the same row the registry mock answers.
+ */
+export function useRestingDirectoryEntry(
+  hostId: string | null,
+): HostDirectoryEntry | null {
+  return useSyncExternalStore(
+    (listener) =>
+      hostId === null
+        ? () => undefined
+        : restingDirectory.subscribe(hostId, listener),
+    () => (hostId === null ? null : restingDirectory.read(hostId)),
+  );
+}
+
 function sandboxEntry(
   hostId: string,
   name: string,
   state: NonNullable<HostListItem["sandboxState"]>,
+  facts: {
+    readonly connectivity: "connectable" | "offline";
+    readonly frozen: boolean;
+  },
 ): RemoteHostDirectoryEntry {
   return hostListItemToDirectoryEntry(
     {
@@ -63,7 +117,7 @@ function sandboxEntry(
       publicKey: "pk",
       createdAt: "2026-10-01T00:00:00.000Z",
       status: {
-        connectivity: "connectable",
+        connectivity: facts.connectivity,
         viewerReachability: "unknown",
         clientCloud: "ok",
         updateState: "current",
@@ -72,7 +126,7 @@ function sandboxEntry(
       },
       updatePolicy: "manual",
       sandboxState: state,
-      sandboxFrozen: false,
+      sandboxFrozen: facts.frozen,
       profile: "agent",
     },
     "wss://relay.example.test",

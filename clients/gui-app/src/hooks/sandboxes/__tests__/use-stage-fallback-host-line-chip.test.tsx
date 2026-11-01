@@ -128,6 +128,7 @@ function composerMode(stagedLabel: string | null): HostSwitcherComposerMode {
     newRows: [],
     rememberedConfigurationKey: null,
     stagedConfigurationKey: null,
+    hostPickRequests: 0,
     stagedLabel,
     stagedBusy: false,
     onPickHost: () => undefined,
@@ -139,7 +140,7 @@ function composerMode(stagedLabel: string | null): HostSwitcherComposerMode {
 
 /** A composer's host chip with a stage on it, and the stage's way off. */
 function Composer(props: { readonly hostId: string }): ReactNode {
-  const action = useStageFallbackHostLine(props.hostId);
+  const action = useStageFallbackHostLine(props.hostId, null);
   const staged = useStagedSandbox(SURFACE) !== null;
   const selected = findHostOption(hostList.hosts, props.hostId);
   return (

@@ -6,6 +6,11 @@
  *
  * Amounts are millicredits; a credit is a dollar, so a price reads `$0.12`.
  */
+import type { GuiHarnessId } from "@traycer/protocol/host/index";
+import {
+  guiHarnessIdToProviderId,
+  providerDisplayName,
+} from "@/lib/provider-ordering";
 import type {
   SandboxLifecycleVerb,
   SandboxCreditSource,
@@ -378,6 +383,13 @@ export function wakeSandboxLabel(verb: "resume" | "start"): string {
 export function awakePickLabel(name: string): string {
   return `${name} · awake`;
 }
+/** A pick on its way up, in the words a host chip has for it. */
+export function comingUpPickLabel(
+  name: string,
+  word: "resuming" | "starting",
+): string {
+  return `${name} ${word}`;
+}
 
 /** No provider here can create a sandbox: the New rows and the shape sheet. */
 export const SANDBOXES_CANT_BE_CREATED =
@@ -497,6 +509,14 @@ export function agentNotOfferedOnSandboxesLine(agent: string): string {
 }
 
 /** A Traycer model this sandbox's catalog does not list. */
+/** A picked model no list on this device has ever named. */
+export function unnamedModelLabel(harnessId: GuiHarnessId): string {
+  if (harnessId === "traycer") return "Traycer model";
+  const providerId = guiHarnessIdToProviderId(harnessId);
+  return providerId === null
+    ? "Model"
+    : `${providerDisplayName(providerId)} model`;
+}
 export function modelNotOnSandboxLine(model: string): string {
   return `${model} doesn't run on this sandbox. Choose another Traycer model to run agents here.`;
 }

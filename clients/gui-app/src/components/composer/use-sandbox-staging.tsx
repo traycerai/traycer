@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, type ReactNode } from "react";
 import { create } from "zustand";
 import type { AuthenticatedUser } from "@traycer/protocol/auth";
 import type {
@@ -38,7 +38,11 @@ import {
 import { useStageFallbackHostLine } from "@/hooks/sandboxes/use-stage-fallback-host-line";
 import { useSandboxCatalogue } from "@/hooks/sandboxes/use-sandbox-catalogue-query";
 import { useSandboxCosts } from "@/hooks/sandboxes/use-sandbox-costs-query";
-import { useRestingSandboxHost } from "@/hooks/sandboxes/use-resting-sandbox-host";
+import {
+  useRestingSandboxHost,
+  useSandboxHostNotAnswering,
+} from "@/hooks/sandboxes/use-resting-sandbox-host";
+import { useWakingSandboxHost } from "@/hooks/sandboxes/use-waking-sandbox-host";
 import { useSandboxHostConfiguration } from "@/hooks/sandboxes/use-on-team-sandbox";
 import { useSandboxList } from "@/hooks/sandboxes/use-sandbox-list-query";
 import { useSandboxTraycerModels } from "@/hooks/sandboxes/use-sandbox-traycer-models-query";
@@ -89,6 +93,7 @@ import {
   stoppedPickLabel,
   suspendedPickLabel,
   awakePickLabel,
+  comingUpPickLabel,
   usesCreditsClause,
   wakeString,
 } from "@/lib/sandboxes/sandbox-strings";
@@ -97,12 +102,15 @@ import {
   useSandboxShapeMemoryStore,
 } from "@/stores/composer/sandbox-shape-memory-store";
 import {
+  leaveStagedSandbox,
   readStagedSandbox,
+  stagedHostId,
   useStagedSandbox,
   useStagedSandboxStore,
   type StagedSandbox,
   type StagedSandboxTarget,
 } from "@/stores/composer/staged-sandbox-store";
+import { useHostPickRequestStore } from "@/stores/composer/host-pick-request-store";
 import {
   requestSandboxesPageConfiguration,
   type SandboxesPageConfigurationId,
@@ -213,50 +221,67 @@ export interface RestingHostStageInput {
 }
 
 /**
- * Stages the sandbox a composer already rests on, which it reached by naming
- * or by default rather than by a pick: its gates ask a host that answers
- * nothing, and only a stage's Send wakes it. Taken off again if the sandbox
- * wakes or the surface goes unsent; a send has moved it by then. A named host
- * takes the place of a stage still waiting, since naming it is the request.
+ * Stages the sandbox a composer sits on, which it reached by naming or by
+ * default rather than by a pick, from rest until its host first reports: the
+ * composer's gates ask a host that answers nothing, and only a stage's Send
+ * reaches it. So a surface on such a sandbox always has one: a stage cleared
+ * while it is still there is put back. Taken off again once the host answers
+ * or the surface goes; a send has moved it by then. A named host takes the
+ * place of a stage still waiting, since naming it is the request.
  */
 export function useRestingHostStage(input: RestingHostStageInput): void {
   const { surfaceKey, hostId, named } = input;
   const resting = useRestingSandboxHost(hostId);
-  const verb = resting === null ? null : resting.verb;
+  const waking = useWakingSandboxHost(hostId);
+  const verb = (resting ?? waking)?.verb ?? null;
   const configuration = useSandboxHostConfiguration(hostId);
   const row = useSandboxList().data?.sandboxes.find(
     (sandbox) => sandbox.hostId === hostId,
   );
   const sandboxId = row === undefined ? null : row.id;
   const name = row === undefined ? null : row.displayName;
-  useEffect(() => {
+  const target = useMemo((): StagedSandboxTarget | null => {
     if (
-      surfaceKey === null ||
       hostId === null ||
       verb === null ||
       configuration === null ||
       sandboxId === null ||
       name === null
     )
-      return;
-    const current = readStagedSandbox(surfaceKey);
-    if (current !== null && (!named || current.phase !== "staged")) return;
-    const store = useStagedSandboxStore.getState();
-    store.stage(surfaceKey, {
+      return null;
+    return {
       kind: "existing",
       hostId,
       sandboxId,
       name,
       configuration,
       verb,
-    });
-    const stage = readStagedSandbox(surfaceKey);
+    };
+  }, [configuration, hostId, name, sandboxId, verb]);
+  const stageMissing = useStagedSandbox(surfaceKey ?? "") === null;
+  const placed = useRef<StagedSandbox | null>(null);
+  useEffect(() => {
+    if (surfaceKey === null || target === null) return;
+    const current = readStagedSandbox(surfaceKey);
+    if (current !== null) {
+      if (!named || current.phase !== "staged") return;
+      if (stagedHostId(current) === hostId) return;
+    }
+    useStagedSandboxStore.getState().stage(surfaceKey, target);
+    placed.current = readStagedSandbox(surfaceKey);
+  }, [hostId, named, stageMissing, surfaceKey, target]);
+  useEffect(() => {
+    if (surfaceKey === null || target === null) return;
     return () => {
-      if (readStagedSandbox(surfaceKey) === stage) {
+      if (
+        placed.current !== null &&
+        readStagedSandbox(surfaceKey) === placed.current
+      ) {
         useStagedSandboxStore.getState().clear(surfaceKey);
       }
+      placed.current = null;
     };
-  }, [configuration, hostId, name, named, sandboxId, surfaceKey, verb]);
+  }, [surfaceKey, target]);
 }
 
 /**
@@ -267,7 +292,7 @@ export function useUnstagedNamedHost(
   namedHostId: string | null,
   resolvedHostId: string | null,
 ): string | null {
-  return useRestingSandboxHost(resolvedHostId) === null ? namedHostId : null;
+  return useSandboxHostNotAnswering(resolvedHostId) ? null : namedHostId;
 }
 
 /** A composer surface's staging, as the picker, the block and the sheet read it. */
@@ -324,13 +349,20 @@ export function useSandboxStaging(input: {
 }): SandboxStaging | null {
   const { forkOnNew } = input;
   const { memoryHostId } = input;
-  const chooseAnotherHostLabel = useStageFallbackHostLine(memoryHostId);
   // No surface stages in a build without sandboxes
   // (`unreleased-features.ts`): the hook answers `null` for every caller, so
   // each picker draws the plain `Host` group and its own search threshold.
   const surface = UNRELEASED_FEATURES_ENABLED ? input.surface : null;
   const surfaceKey = surface === null ? "" : surface.surfaceKey;
   const task = surface === null ? null : surface.task;
+  const stage = useStagedSandbox(surfaceKey);
+  const chooseAnotherHostLabel = useStageFallbackHostLine(
+    memoryHostId,
+    stagedHostId(stage),
+  );
+  const hostPickRequests = useHostPickRequestStore(
+    (state) => state.bySurface[surfaceKey] ?? 0,
+  );
   const viewerUserId = useCloudChatViewerId();
   const user = useAuthUser().data ?? null;
   // Neither read without a surface: nothing prices or shapes a stage.
@@ -341,7 +373,6 @@ export function useSandboxStaging(input: {
   const lastConfigurationByHost = useSandboxShapeMemoryStore(
     (s) => s.lastConfigurationByHost,
   );
-  const stage = useStagedSandbox(surfaceKey);
   const modelsUnknown = useStagedModelsUnknown(stage, reads);
   const { openSettings } = useSystemTabModalActions();
   const sheetKey = useShapeSheetStore((s) => s.openFor[surfaceKey] ?? null);
@@ -566,6 +597,7 @@ export function useSandboxStaging(input: {
         stage === null || stage.target.kind !== "new"
           ? null
           : stageConfigurationKey(stage.target.configuration),
+      hostPickRequests,
       stagedLabel:
         stage === null
           ? null
@@ -616,6 +648,7 @@ export function useSandboxStaging(input: {
     creatorTitles,
     epicId,
     forkOnNew,
+    hostPickRequests,
     inThisTask,
     input.hosts,
     lastConfigurationByHost,
@@ -694,7 +727,7 @@ export function useSandboxStaging(input: {
     sheet,
     chooseAnotherHost: () => {
       supersedeReturnedSandbox(surfaceKey);
-      useStagedSandboxStore.getState().clear(surfaceKey);
+      leaveStagedSandbox(surfaceKey, memoryHostId);
     },
     chooseAnotherHostLabel,
   };
@@ -816,6 +849,35 @@ export function restingVerb(
   return null;
 }
 
+function existingStagedLabel(
+  stage: StagedSandbox,
+  target: Extract<StagedSandboxTarget, { readonly kind: "existing" }>,
+  hosts: readonly HostScopeOption[],
+  modelsUnknown: boolean,
+): string {
+  // Its wake is ticked once the line is past it: the sandbox is awake now.
+  if (
+    stage.phase === "handoff" ||
+    (stage.phase === "creating" &&
+      (stage.step === "applying" || stage.step === "delivering"))
+  ) {
+    return awakePickLabel(target.name);
+  }
+  // The row says what the sandbox is now. A draft's returned sandbox keeps
+  // the verb its give-back knew; only an unlisted one goes by it.
+  const row = hosts.find((host) => host.hostId === target.hostId)?.sandbox;
+  if (row?.state === "resuming" || row?.state === "starting") {
+    return comingUpPickLabel(target.name, row.state);
+  }
+  const verb =
+    row === undefined || row === null ? target.verb : restingVerb(row.state);
+  if (verb === null) return awakePickLabel(target.name);
+  if (modelsUnknown) return restingPickLabel(target.name, verb);
+  return verb === "resume"
+    ? suspendedPickLabel(target.name)
+    : stoppedPickLabel(target.name);
+}
+
 function stagedLabel(
   stage: StagedSandbox,
   facts: NewRowFacts | null,
@@ -824,24 +886,7 @@ function stagedLabel(
 ): string {
   const { target } = stage;
   if (target.kind === "existing") {
-    // Its wake is ticked once the line is past it: the sandbox is awake now.
-    if (
-      stage.phase === "handoff" ||
-      (stage.phase === "creating" &&
-        (stage.step === "applying" || stage.step === "delivering"))
-    ) {
-      return awakePickLabel(target.name);
-    }
-    // The row says what the sandbox is now. A draft's returned sandbox keeps
-    // the verb its give-back knew; only an unlisted one goes by it.
-    const row = hosts.find((host) => host.hostId === target.hostId)?.sandbox;
-    const verb =
-      row === undefined || row === null ? target.verb : restingVerb(row.state);
-    if (verb === null) return awakePickLabel(target.name);
-    if (modelsUnknown) return restingPickLabel(target.name, verb);
-    return verb === "resume"
-      ? suspendedPickLabel(target.name)
-      : stoppedPickLabel(target.name);
+    return existingStagedLabel(stage, target, hosts, modelsUnknown);
   }
   return stagedChipLabel({
     configuration: stageConfigurationCopy(target.configuration),

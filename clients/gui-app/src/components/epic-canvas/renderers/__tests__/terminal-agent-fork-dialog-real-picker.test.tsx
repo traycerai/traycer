@@ -69,6 +69,9 @@ const dialogMocks = vi.hoisted(() => ({
   providerStates: [] as ProviderCliState[],
 }));
 
+vi.mock("@/hooks/sandboxes/use-waking-sandbox-host", () => ({
+  useWakingSandboxHost: () => null,
+}));
 vi.mock("@/hooks/agent/use-create-tui-agent", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("@/hooks/agent/use-create-tui-agent")>();

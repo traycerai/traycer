@@ -1663,8 +1663,8 @@ function deliverPendingFork(input: {
     ...(input.opencodeLine === null
       ? {}
       : { opencodeLine: input.opencodeLine }),
-    workspaceMode: "folderless",
-    worktreeIntent: null,
+    workspaceMode: request.workspace?.workspaceMode ?? "folderless",
+    worktreeIntent: request.workspace?.worktreeIntent ?? null,
     initialMessage: null,
     forkSource: request.forkSource,
   });
@@ -3102,6 +3102,7 @@ function usePendingGiveBackLabel(
   const destinationPin = toDrafts ? startPagePin : taskPin;
   return useStageFallbackHostLine(
     destinationStage === null ? destinationPin.resolvedHostId : null,
+    null,
   );
 }
 

@@ -1,3 +1,5 @@
+import { useNavigate } from "@tanstack/react-router";
+import { toast } from "sonner";
 import { useUltracodeCarrierSupported } from "@/components/home/data/model-ultracode";
 import { signedInUserId } from "@/lib/sandboxes/sandbox-account-fence";
 import {
@@ -192,8 +194,11 @@ import {
 } from "@/components/composer/use-staged-sandbox-send";
 import { useStagedWorkspaceGate } from "@/components/composer/use-staged-workspace-gate";
 import {
+  leaveStagedSandbox,
   ownerGoneOnUnmount,
   readStagedSandbox,
+  stagedHostId,
+  useStagedSandbox,
   useStagedSandboxStore,
   useStagedTerminalLaunch,
   type StagedSandbox,
@@ -210,6 +215,7 @@ import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-
 import { useProviderPackGateForClient } from "@/hooks/providers/use-provider-pack-gate";
 import { ComposerStagedSurfaceKeyProvider } from "@/components/composer/composer-staged-sandbox-context";
 import { useSandboxAgentGate } from "@/hooks/sandboxes/use-sandbox-agent-gate";
+import { RESTING_STAGE_HOLD } from "@/lib/sandboxes/resting-stage-hold";
 import {
   useStagedSendSignInCheck,
   type StagedSendSignInCheck,
@@ -235,6 +241,8 @@ import {
 import { fallbackSeedSource } from "@/lib/composer/composer-seed-source";
 import type { TerminalAgentLaunch } from "@/components/home/hooks/use-landing-composer-actions";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { openNewChatDraftRow } from "@/lib/drafts/draft-inventory-actions";
+import { returnedSandboxMessageLine } from "@/lib/sandboxes/sandbox-strings";
 import { useAccountContextStore } from "@/stores/auth/account-context-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useInitialChatHandoffStore } from "@/stores/epics/initial-chat-handoff-store";
@@ -853,6 +861,20 @@ export function NewConversationModalHeader(props: {
   );
 }
 
+/** The stage's way off this modal; a named host has no other to choose. */
+function chooseAnotherHostAction(
+  namedHostId: string | null,
+  surfaceKey: string,
+  resolvedHostId: string | null,
+  dismissHostNotice: () => void,
+): (() => void) | undefined {
+  if (namedHostId !== null) return undefined;
+  return () => {
+    leaveStagedSandbox(surfaceKey, resolvedHostId);
+    dismissHostNotice();
+  };
+}
+
 export function NewConversationModalBody(props: {
   readonly epicId: string;
   readonly tabId: string;
@@ -873,6 +895,7 @@ export function NewConversationModalBody(props: {
     dismissPickerRef,
     onSubmitted,
   } = props;
+  const navigate = useNavigate();
   const isMobile = useIsMobileViewport();
   useEffect(() => {
     const harnessId = props.modelPickerHarnessId;
@@ -1290,7 +1313,10 @@ export function NewConversationModalBody(props: {
     (state) => state.values.selection.modelSlug,
   );
   const chipModel = useStore(toolbarStore, chipModelName);
-  const chooseAnotherHostLabel = useStageFallbackHostLine(resolvedHostId);
+  const chooseAnotherHostLabel = useStageFallbackHostLine(
+    resolvedHostId,
+    stagedHostId(useStagedSandbox(newConversationSurfaceKey(epicId))),
+  );
   const pickedHarnessId = useStore(
     toolbarStore,
     (state) => state.values.selection.harnessId,
@@ -1314,10 +1340,12 @@ export function NewConversationModalBody(props: {
     stagedAhead: workspaceGate.stagedAhead,
     stagedSurfaceKey: stagingSurfaceKey(sandboxStaging),
     onOpenTerminalInstead: openTerminalInstead,
-    onChooseAnotherHost: () => {
-      useStagedSandboxStore.getState().clear(newConversationSurfaceKey(epicId));
-      dismissHostNotice();
-    },
+    onChooseAnotherHost: chooseAnotherHostAction(
+      hostId,
+      newConversationSurfaceKey(epicId),
+      resolvedHostId,
+      () => dismissHostNotice(),
+    ),
   });
   const canSubmit =
     canMutate &&
@@ -1396,6 +1424,7 @@ export function NewConversationModalBody(props: {
     watchOwner: ownerGoneOnUnmount,
   });
   const stagedSend = useStagedSandboxSend({
+    fallbackHostId: resolvedHostId,
     surfaceKey: stagingSurfaceKey(sandboxStaging),
     terminal: stagedTerminal,
     taskId: epicId,
@@ -1732,6 +1761,29 @@ export function NewConversationModalBody(props: {
           },
         });
       }
+      // The draft goes with the modal below, before any answer. A create that
+      // didn't happen gives the message back, unless another has been started
+      // or the account has moved on.
+      const restoreUnsentMessage = (): void => {
+        if ((useAuthStore.getState().profile?.userId ?? null) !== userId)
+          return;
+        const modal = useNewConversationModalStore.getState();
+        if ((modal.draftPatchesByEpicId[epicId]?.content ?? null) !== null) {
+          return;
+        }
+        modal.setContent(epicId, liveContent);
+        toast(returnedSandboxMessageLine(true), {
+          action: {
+            label: "Open draft",
+            onClick: () =>
+              openNewChatDraftRow(navigate, {
+                epicId,
+                epicTitle: null,
+                ownerHostId: activeHostId,
+              }),
+          },
+        });
+      };
       // `mutateAsync` + a promise chain, NOT `mutate`'s per-call callbacks, for
       // the reason `use-epic-route-synchronization.ts` records for the sidebar's
       // delete: TanStack Query v5 gates `mutateOptions` on the observer still
@@ -1783,6 +1835,7 @@ export function NewConversationModalBody(props: {
           // for a host that says NOTHING - would clear it. The toast is the
           // mutation's, which reads the host's own two sentences.
           if (response.refusal !== undefined) {
+            restoreUnsentMessage();
             useEpicCanvasStore.getState().clearChatTitlePending(chatId);
             useInitialChatHandoffStore
               .getState()
@@ -1804,6 +1857,7 @@ export function NewConversationModalBody(props: {
           }
         })
         .catch(() => {
+          restoreUnsentMessage();
           useEpicCanvasStore.getState().clearChatTitlePending(chatId);
           // `markFailedByAction`, not `markFailed`: the handoff key is
           // {user, epic} only, so a SECOND create in this epic replaces the
@@ -1834,6 +1888,7 @@ export function NewConversationModalBody(props: {
       pickerStore,
       draftWorkspaceFolderCount,
       epicId,
+      navigate,
       parentId,
       placement,
       // Read by the deferred create's binding-seed release closure.
@@ -2542,7 +2597,7 @@ export function NewConversationModalBody(props: {
         surfaceKey={stagingSurfaceKey(sandboxStaging)}
         hostId={resolvedHostId}
         named={hostId !== null}
-        draftHoldsSandbox={draftHoldsSandbox}
+        surfaceHoldsSandbox={draftHoldsSandbox}
       />
       <ComposerBody
         pickerStore={pickerStore}
@@ -2821,7 +2876,7 @@ function usePlacementAgentGates(input: {
   readonly stagedAhead: boolean;
   readonly stagedSurfaceKey: string | null;
   readonly onOpenTerminalInstead: () => void;
-  readonly onChooseAnotherHost: () => void;
+  readonly onChooseAnotherHost: (() => void) | undefined;
 }): {
   readonly hint: string | null;
   readonly blocked: boolean;
@@ -2861,6 +2916,16 @@ function usePlacementAgentGates(input: {
       sendRefusal: stagedCheck,
       stagedSignInCheck,
       checking,
+    };
+  }
+  if (sandboxAgentGate === RESTING_STAGE_HOLD) {
+    return {
+      hint: sandboxAgentGate.hint,
+      blocked: true,
+      refusal: null,
+      sendRefusal: null,
+      stagedSignInCheck,
+      checking: sandboxAgentGate.notice,
     };
   }
   return {

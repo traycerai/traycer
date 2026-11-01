@@ -45,6 +45,7 @@ import {
   resetHostDirectoryRows,
   sandboxHostEntry,
 } from "@/lib/sandboxes/__tests__/sandbox-host-directory-fixture";
+import { CHECKING_SANDBOX_AGENTS } from "@/lib/sandboxes/sandbox-strings";
 import {
   readStagedSandbox,
   useStagedSandboxStore,
@@ -54,6 +55,7 @@ import {
 const SANDBOX_HOST = "sbx-host";
 const TEAM_SANDBOX_HOST = "team-sbx-host";
 const LAPTOP_HOST = "laptop-host";
+const RESTING_HOST = "resting-sbx-host";
 
 const answers = vi.hoisted(() => ({
   harnesses: undefined as ReadonlyArray<unknown> | undefined,
@@ -184,6 +186,18 @@ function buildClient(hostId: string): HostClient<HostRpcRegistry> {
 
 const CLIENT = buildClient("client-host");
 
+/** A sandbox that rests: its host answers nothing, whatever it was asked. */
+function restingSandboxEntry(hostId: string) {
+  const entry = sandboxHostEntry(hostId, null);
+  return {
+    ...entry,
+    sandbox:
+      entry.sandbox === null
+        ? null
+        : { ...entry.sandbox, state: "suspended" as const },
+  };
+}
+
 const CODEX_SIGNED_OUT: ReadonlyArray<GuiHarnessOption> = [
   harnessRow("codex", { available: false, availabilityPending: false }),
   harnessRow("claude", { available: true }),
@@ -218,6 +232,7 @@ beforeEach(() => {
     sandboxHostEntry(SANDBOX_HOST, null),
     sandboxHostEntry(TEAM_SANDBOX_HOST, { id: "team-9", name: "Acme" }),
     plainHostEntry(LAPTOP_HOST),
+    restingSandboxEntry(RESTING_HOST),
   ]);
 });
 
@@ -525,6 +540,27 @@ describe("useSandboxAgentGate", () => {
       blocked: true,
       notice: { pending: true },
     });
+  });
+
+  it("holds a resting host on the checking line while its lists have not answered, never Preparing", () => {
+    answers.harnesses = undefined;
+    answers.providers = undefined;
+
+    const gate = gateOn(RESTING_HOST, "codex");
+
+    expect(gate).toMatchObject({
+      blocked: true,
+      hint: CHECKING_SANDBOX_AGENTS,
+      notice: { pending: true },
+    });
+    expect(gate.hint).not.toMatch(/^Preparing/);
+  });
+
+  it("holds a live sandbox still waiting on its lists with the Preparing line", () => {
+    answers.harnesses = undefined;
+    answers.providers = undefined;
+
+    expect(gateOn(SANDBOX_HOST, "codex").hint).toBe("Preparing Codex…");
   });
 
   it("holds Send before the host has answered its lists", () => {
