@@ -86,6 +86,8 @@ test.describe("a long draft", () => {
 
 test("gives up the pickers on the row", async ({ page }) => {
   await openComposer(page, "?focus-row");
+  // Hidden, not removed: they keep what they hold for when the row goes.
+  await expect(pickers(page)).not.toHaveCount(0);
   for (const item of await pickers(page).all()) {
     await expect(item).toBeHidden();
   }
