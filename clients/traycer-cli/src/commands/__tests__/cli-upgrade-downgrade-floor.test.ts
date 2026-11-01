@@ -39,7 +39,31 @@ const mocks = vi.hoisted(() => ({
   versionsManifest: null as CliVersionsManifest | null,
   downloadCalls: [] as Array<{ url: string; destPath: string }>,
   downloadContent: "staged-cli-bytes",
+  // When set, `rename` onto THIS path fails with EBUSY, which is what the
+  // supervisor holding the live binary looks like to the publish step
+  // (`isBinaryLockedCode`). An unwritable directory cannot stand in for it:
+  // the command pre-flights writability and refuses with
+  // E_CLI_UPGRADE_REPLACE_FAILED before any download, so that route never
+  // reaches the staging path at all.
+  renameLockedDest: null as string | null,
 }));
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return {
+    ...actual,
+    rename: async (from: Parameters<typeof actual.rename>[0], to: string) => {
+      if (mocks.renameLockedDest !== null && to === mocks.renameLockedDest) {
+        const err: NodeJS.ErrnoException = new Error(
+          `EBUSY: resource busy or locked, rename -> '${to}'`,
+        );
+        err.code = "EBUSY";
+        throw err;
+      }
+      return actual.rename(from, to);
+    },
+  };
+});
 
 vi.mock("../../registry/cli-versions", async (importOriginal) => {
   const actual =
@@ -200,6 +224,7 @@ describe("buildCliUpgradeCommand downgrade floor", () => {
     mocks.versionsManifest = null;
     mocks.downloadCalls = [];
     mocks.downloadContent = "staged-cli-bytes";
+    mocks.renameLockedDest = null;
 
     liveBinaryPath = join(workHome, "bin", "traycer");
     mkdirSync(join(workHome, "bin"), { recursive: true });
@@ -300,6 +325,39 @@ describe("buildCliUpgradeCommand downgrade floor", () => {
     expect(readFileSync(liveBinaryPath, "utf8")).toBe(mocks.downloadContent);
     expect(readManifest()).toMatchObject({ version: "1.5.1" });
     expect(result.human).toContain("downgraded cli 1.5.2-rc.1 → 1.5.1");
+  });
+
+  // The write half of the consent channel, and the regression that made it
+  // necessary. A consented downgrade whose publish cannot happen now - the
+  // live binary is held by the supervisor - is STAGED, and the publish runs in
+  // a later process that sees only the manifest. If the record did not carry
+  // the consent, the floor inside `finalizePendingCliUpgrade` would refuse it
+  // on every restart, and Doctor's own card pointed at this exact command: the
+  // guidance and the recovery would both be dead ends. Asserted on the
+  // persisted bytes, because the persisted record is the only thing the
+  // publisher gets.
+  it("records downgrade consent on the pending upgrade when the live binary is locked", async () => {
+    writeManifest("1.5.2-rc.1");
+    await setFeedVersion("1.5.1");
+    mocks.renameLockedDest = liveBinaryPath;
+
+    const result = await runUpgrade({
+      dryRun: false,
+      targetVersion: "1.5.1",
+      allowDowngrade: true,
+    });
+
+    expect(result.data).toMatchObject({
+      status: "pending-upgrade",
+      stagedVersion: "1.5.1",
+      reason: "binary-locked",
+    });
+    expect(readManifest()).toMatchObject({
+      version: "1.5.2-rc.1",
+      pendingUpgrade: { version: "1.5.1", allowDowngrade: true },
+    });
+    // A deferral, not a publish: the live binary still holds its own bytes.
+    expect(readFileSync(liveBinaryPath, "utf8")).toBe(LIVE_BYTES);
   });
 
   // `--target` alone is NOT consent. It is an assertion that the feed still

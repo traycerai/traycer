@@ -540,6 +540,8 @@ function humanForRestart(jobId: string, result: RestartFinalizeResult): string {
       return `${reconcilePrefix}${base}; cli upgrade ${outcome.stagedBinaryPath} still locked (${outcome.errorMessage}) - pending state retained`;
     case "staged-binary-missing":
       return `${reconcilePrefix}${base}; cli upgrade staged binary for ${outcome.stagedVersion} missing at ${outcome.stagedBinaryPath} - re-run 'traycer cli upgrade'`;
+    case "installed-newer":
+      return `${reconcilePrefix}${base}; staged cli ${outcome.stagedVersion} was not installed because the cli is already at ${outcome.installedVersion} - live binary unchanged`;
     case "publish-failed":
       // The host was relaunched regardless - the restart the user asked
       // for is not forfeited because a staged CLI swap could not be
