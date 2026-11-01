@@ -586,7 +586,7 @@ describe("MembersPage offboarding previews", () => {
     expect(table.textContent).not.toMatch(/\d+ turns? on Claude Code/);
   });
 
-  it("keeps a failed demotion preview as a failure, with Change role off", async () => {
+  it("reports a failed demotion preview and still offers the change", async () => {
     const harness = mountTeamPage(
       { kind: "host" },
       {
@@ -615,12 +615,21 @@ describe("MembersPage offboarding previews", () => {
     });
     expect(dialog.textContent).not.toContain("0 turns");
     expect(
-      within(dialog).getByTestId<HTMLButtonElement>("members-demotion-confirm")
-        .disabled,
-    ).toBe(true);
-    expect(
       within(dialog).getByTestId("members-demotion-preview-failed").textContent,
     ).toContain("Couldn't load what changing Grace's role interrupts");
+    // The check failed, so there are no plan rows to show — but the role is
+    // still the person's to set, and the line about what Grace loses needs
+    // no read.
+    expect(
+      within(dialog).queryByTestId("members-demotion-preview-table"),
+    ).toBeNull();
+    expect(
+      within(dialog).getByTestId("members-demotion-loss").textContent,
+    ).toContain("Grace");
+    expect(
+      within(dialog).getByTestId<HTMLButtonElement>("members-demotion-confirm")
+        .disabled,
+    ).toBe(false);
   });
 });
 

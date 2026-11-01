@@ -62,8 +62,8 @@ function demotionRows(
 /**
  * The confirm on a demotion: the question, what the role loses, and the
  * plan-unlink table only when this member linked a plan the demotion unlinks.
- * A promotion never opens it. A preview that could not be read says so, offers
- * Retry, and keeps the confirm off.
+ * A promotion never opens it. A preview that could not be read says so and
+ * offers Retry; the confirm waits only while the check is loading.
  */
 export function DemotionPreviewDialog(props: {
   readonly open: boolean;
