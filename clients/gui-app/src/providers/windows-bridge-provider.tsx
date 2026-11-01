@@ -297,6 +297,7 @@ function installDesktopWindowsBridge(
 
   // The desktop's windows, asked once: the first adopts the global Tracy
   // record, and the records read before asking are swept against them.
+  // Nothing waits on the answer: the window hydrates from its own record.
   const surfaceRecords = readTracySurfaceWindowRecords();
   const windowIds = Promise.resolve()
     .then(() => bridge.list())
@@ -305,8 +306,11 @@ function installDesktopWindowsBridge(
     )
     .catch(() => null);
   void windowIds.then((ids) => {
-    if (isCancelled() || ids === null) return;
-    forgetClosedTracySurfaceWindows(surfaceRecords, new Set(ids));
+    if (isCancelled()) return;
+    settleTracySurfaceAdoption(ids !== null && ids[0] === bridge.windowId);
+    if (ids !== null) {
+      forgetClosedTracySurfaceWindows(surfaceRecords, new Set(ids));
+    }
   });
 
   void (async () => {
@@ -322,9 +326,6 @@ function installDesktopWindowsBridge(
       if (isCancelled()) return;
       tabsCompatible = verification.supported;
       configureDesktopTabsAuthority(tabsCompatible);
-      const ids = await windowIds;
-      if (isCancelled()) return;
-      settleTracySurfaceAdoption(ids !== null && ids[0] === bridge.windowId);
       const hydrationSnapshot = snapshotObservation.latest ?? snapshot;
       const hydratedTabs = hydrateDesktopTabs(
         hydrationSnapshot,

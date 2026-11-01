@@ -604,6 +604,158 @@ describe("<WindowsBridgeProvider />", () => {
     });
   });
 
+  it("hydrates from the window's own Tracy record while its window list never answers", async () => {
+    const surfaceKey = persistKey(STORE_KEYS.botTabs);
+    const record = JSON.stringify({
+      state: { open: true, hostId: "host-1", botId: "bot-x" },
+      version: 2,
+    });
+    window.localStorage.setItem(`${surfaceKey}:window-1`, record);
+    const fake = createDesktopWindowsBridge();
+    const capabilities = {
+      schemaVersion: 2,
+      features: ["tab-strip-layout-v2", "active-route-v1"],
+    } as const;
+    const lostListBridge = {
+      ...fake.bridge,
+      list: () => new Promise<readonly DesktopWindowSummary[]>(() => undefined),
+      perWindowState: {
+        ...fake.bridge.perWindowState,
+        get: () =>
+          Promise.resolve({
+            ...emptyPerWindowSnapshot(),
+            revision: 1,
+            tabStripLayout: {
+              version: 2,
+              items: [
+                {
+                  kind: "tab",
+                  id: "tab:tracy:tracy",
+                  ref: { kind: "tracy", id: "tracy" },
+                },
+              ],
+              activeItemId: "tab:tracy:tracy",
+              systemTabs: { history: null, settings: null },
+            },
+            activeRoute: "/bot/bot-x",
+          }),
+        capabilities: () => Promise.resolve(capabilities),
+        update: () => Promise.resolve({ capabilities, revision: 2 }),
+      },
+    } satisfies DesktopWindowsBridge;
+
+    render(
+      <RunnerHostProvider
+        runnerHost={createRunnerHostWithWindows(lostListBridge)}
+      >
+        <WindowsBridgeProvider>
+          <HydrationProbe />
+        </WindowsBridgeProvider>
+      </RunnerHostProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("hydration-state").textContent).toBe(
+        "hydrated",
+      );
+    });
+    const { open, hostId, botId } = useTracySurfaceStore.getState();
+    expect({
+      refs: flattenLayoutRefs(useTabsStore.getState()),
+      surface: { open, hostId, botId },
+    }).toEqual({
+      refs: [{ kind: "tracy", id: "tracy" }],
+      surface: { open: true, hostId: "host-1", botId: "bot-x" },
+    });
+  });
+
+  it("adds the Tracy tab when the window list answers after hydration with this window first", async () => {
+    const surfaceKey = persistKey(STORE_KEYS.botTabs);
+    const record = JSON.stringify({
+      state: { open: true, hostId: "host-1", botId: "bot-x" },
+      version: 2,
+    });
+    // The store loads the global record before the window is known; the
+    // window has none of its own, so it starts closed and holds it as the
+    // record it adopts once the list names it first.
+    window.localStorage.setItem(surfaceKey, record);
+    await useTracySurfaceStore.persist.rehydrate();
+    const fake = createDesktopWindowsBridge();
+    const windowList = createDeferred<readonly DesktopWindowSummary[]>();
+    const capabilities = {
+      schemaVersion: 2,
+      features: ["tab-strip-layout-v2", "active-route-v1"],
+    } as const;
+    const lateListBridge = {
+      ...fake.bridge,
+      list: () => windowList.promise,
+      perWindowState: {
+        ...fake.bridge.perWindowState,
+        // The saved layout still carries the Tracy ref; with no record of its
+        // own the surface is closed, so restoring the layout drops it.
+        get: () =>
+          Promise.resolve({
+            ...emptyPerWindowSnapshot(),
+            revision: 1,
+            tabStripLayout: {
+              version: 2,
+              items: [
+                {
+                  kind: "tab",
+                  id: "tab:tracy:tracy",
+                  ref: { kind: "tracy", id: "tracy" },
+                },
+              ],
+              activeItemId: "tab:tracy:tracy",
+              systemTabs: { history: null, settings: null },
+            },
+            activeRoute: "/bot/bot-x",
+          }),
+        capabilities: () => Promise.resolve(capabilities),
+        update: () => Promise.resolve({ capabilities, revision: 2 }),
+      },
+    } satisfies DesktopWindowsBridge;
+
+    render(
+      <RunnerHostProvider
+        runnerHost={createRunnerHostWithWindows(lateListBridge)}
+      >
+        <WindowsBridgeProvider>
+          <HydrationProbe />
+        </WindowsBridgeProvider>
+      </RunnerHostProvider>,
+    );
+    await waitFor(() => {
+      expect(screen.getByTestId("hydration-state").textContent).toBe(
+        "hydrated",
+      );
+    });
+    expect({
+      open: useTracySurfaceStore.getState().open,
+      refs: flattenLayoutRefs(useTabsStore.getState()),
+    }).toEqual({ open: false, refs: [] });
+
+    windowList.resolve([
+      { windowId: "window-1", title: "", isFocused: false, isVisible: true },
+    ]);
+
+    await waitFor(() => {
+      expect(useTracySurfaceStore.getState().open).toBe(true);
+    });
+    const { hostId, botId } = useTracySurfaceStore.getState();
+    expect({
+      surface: { hostId, botId },
+      refs: flattenLayoutRefs(useTabsStore.getState()),
+      global: window.localStorage.getItem(surfaceKey),
+      own: window.localStorage.getItem(`${surfaceKey}:window-1`),
+    }).toEqual({
+      surface: { hostId: "host-1", botId: "bot-x" },
+      refs: [{ kind: "tracy", id: "tracy" }],
+      global: null,
+      own: record,
+    });
+  });
+
   it("sweeps only the Tracy records that existed before the window list was requested", async () => {
     const surfaceKey = persistKey(STORE_KEYS.botTabs);
     const record = JSON.stringify({

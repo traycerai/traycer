@@ -317,8 +317,8 @@ export function bindTracySurfaceToWindow(windowId: string): void {
  * every window's list names alike, as storage offers windows no transaction
  * to claim it with. That window takes the surface it held, open or closed
  * with its channel still selected, and removes it; any other keeps its own.
- * Runs before the window's tabs layout is restored, so the layout keeps or
- * drops the Tracy ref by it.
+ * Runs whenever that list answers, before or after the window's tabs layout
+ * is restored: a surface it opens joins the strip as any opened surface does.
  */
 export function settleTracySurfaceAdoption(adopts: boolean): void {
   const candidate = globalRecordCandidate;
@@ -327,9 +327,10 @@ export function settleTracySurfaceAdoption(adopts: boolean): void {
   if (readStoredItem(TRACY_SURFACE_PERSIST_KEY) === null) return;
   removeStoredItem(TRACY_SURFACE_PERSIST_KEY);
   // The fixed entry may have opened the surface while the list was asked: it
-  // stays open on its host, and takes the saved channel.
-  if (useTracySurfaceStore.getState().open) {
-    if (candidate.botId !== null) {
+  // stays open on its host, and takes the saved channel unless one shows.
+  const current = useTracySurfaceStore.getState();
+  if (current.open) {
+    if (candidate.botId !== null && current.botId === null) {
       useTracySurfaceStore.setState({ botId: candidate.botId });
     }
     return;
