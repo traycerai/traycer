@@ -1119,6 +1119,8 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
     // a freshly regenerated plist - NOT the stale cache the reload evicts.
     // This used to be misreported as SERVICE_INSTALL_FAILED.
     const calls: RecordedCall[] = [];
+    createdPlistPath = join(tempPlistDir, `${label.id}.plist`);
+    const manifest = createdPlistPath;
     const runner: ProcessRunner = async (command, args) => {
       calls.push({ command, args });
       if (args[0] === "bootstrap") {
@@ -1130,10 +1132,12 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
           exitCode: 37,
         });
       }
+      if (args[0] === "print") {
+        return { stdout: `path = ${manifest}\n`, stderr: "", exitCode: 0 };
+      }
       return buildSuccessResult();
     };
     const controller = createMacosController(drainingBootouts(runner));
-    createdPlistPath = join(tempPlistDir, `${label.id}.plist`);
 
     await expect(
       controller.install({
@@ -1153,6 +1157,42 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       "print",
       "kickstart",
     ]);
+  });
+
+  it("fails an install whose reload lost the label to a job loaded from another plist, and starts nothing", async () => {
+    const calls: RecordedCall[] = [];
+    const rivalPlist = "/tmp/someone-elses/ai.traycer.host.plist";
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      if (args[0] === "bootstrap") {
+        throw buildLaunchctlError({
+          command,
+          cmdArgs: args,
+          stderr: REFUSED_BOOTSTRAP_STDERR,
+          stdout: "",
+          exitCode: 5,
+        });
+      }
+      if (args[0] === "print") {
+        return { stdout: `path = ${rivalPlist}\n`, stderr: "", exitCode: 0 };
+      }
+      return buildSuccessResult();
+    };
+    const controller = createMacosController(drainingBootouts(runner));
+    createdPlistPath = join(tempPlistDir, `${label.id}.plist`);
+
+    await expect(
+      controller.install({
+        label,
+        cli: { command: "/usr/local/bin/traycer", args: [] },
+        enableLinger: false,
+      }),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+      message: expect.stringContaining(rivalPlist),
+      details: { label: label.id, loadedPath: rivalPlist },
+    });
+    expect(calls.some((c) => c.args[0] === "kickstart")).toBe(false);
   });
   it("refuses to bootout Desktop's SMAppService job when it wins the reload race before the recovery bootout", async () => {
     // A competing registrar that re-loads the label between the CLI's
@@ -1758,6 +1798,38 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       });
       await expect(failure).resolves.toMatchObject({
         message: expect.not.stringContaining("of SIGTERM"),
+      });
+    });
+
+    it("does not call a signal refused or unsent when launchctl never answered", async () => {
+      vi.useFakeTimers();
+      MOCKS.readHostPidMetadataEvidence.mockResolvedValue({
+        kind: "read",
+        metadata: HOST_PID_METADATA,
+      });
+      MOCKS.isProcessAlive.mockReturnValue(true);
+      const unanswered: ProcessRunner = async (_command, args) =>
+        args[0] === "kill"
+          ? { stdout: "", stderr: "", exitCode: -1 }
+          : buildSuccessResult();
+      const controller = createMacosController(unanswered);
+
+      const failure = controller
+        .stop(label, { force: false })
+        .catch((cause: unknown) => cause);
+      await vi.runAllTimersAsync();
+
+      await expect(failure).resolves.toMatchObject({
+        message: expect.stringContaining(
+          `signal job '${label.id}', which gave no answer`,
+        ),
+        details: { label: label.id, signalDelivered: null },
+      });
+      await expect(failure).resolves.toMatchObject({
+        message: expect.not.stringContaining("refused"),
+      });
+      await expect(failure).resolves.toMatchObject({
+        message: expect.not.stringContaining("no SIGTERM was sent"),
       });
     });
 

@@ -227,6 +227,7 @@ export function buildHostRestartCommand(args: HostRestartArgs): CommandFn {
             // admitted activation flow either way.
             return {
               kind: "deferred-for-parked-activation" as const,
+              jobId: await serviceJobIdFor(controller, label),
               record: contenderContext.activeAttempt,
               parkMatchesInstall,
               attestation: await attestInstallRuntime(ctx.runtime.environment),
@@ -264,6 +265,7 @@ export function buildHostRestartCommand(args: HostRestartArgs): CommandFn {
           );
           return {
             kind: "stopped-for-parked-activation" as const,
+            jobId: await serviceJobIdFor(controller, label),
             record: contenderContext.activeAttempt,
             parkMatchesInstall,
             attestation: await attestInstallRuntime(ctx.runtime.environment),
@@ -293,13 +295,13 @@ export function buildHostRestartCommand(args: HostRestartArgs): CommandFn {
         );
         return {
           kind: "restarted" as const,
+          jobId: await serviceJobIdFor(controller, label),
           result,
           attestation: await attestInstallRuntime(ctx.runtime.environment),
         };
       },
     );
     const restarted = locked.kind === "restarted";
-    const jobId = await serviceJobIdFor(controller, label);
     // A distinct fact from `restarted:false`. Both mean "no relaunch", but a
     // safe-stop STOPPED the service and this one deliberately did not touch
     // it, and a caller that cannot tell them apart cannot tell "your host is
@@ -331,10 +333,10 @@ export function buildHostRestartCommand(args: HostRestartArgs): CommandFn {
         runtimeWasNull: locked.attestation.runtimeWasNull,
       },
       human: restarted
-        ? humanForRestart(jobId, locked.result)
+        ? humanForRestart(locked.jobId, locked.result)
         : deferredForParkedActivation
-          ? `left service '${jobId}' untouched because a packaged update is waiting for its explicit activation${recovery === null ? "" : `: ${recovery}`}`
-          : `stopped service '${jobId}' without relaunch because a packaged update is waiting for its explicit activation; the host is now down${recovery === null ? "" : `: ${recovery}`}`,
+          ? `left service '${locked.jobId}' untouched because a packaged update is waiting for its explicit activation${recovery === null ? "" : `: ${recovery}`}`
+          : `stopped service '${locked.jobId}' without relaunch because a packaged update is waiting for its explicit activation; the host is now down${recovery === null ? "" : `: ${recovery}`}`,
       exitCode: 0,
     };
   };

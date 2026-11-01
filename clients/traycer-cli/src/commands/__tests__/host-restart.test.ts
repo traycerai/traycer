@@ -19,6 +19,7 @@ import type { HostInstallRecord } from "../../manifest/host-install";
 
 const mocks = vi.hoisted(() => ({
   controllerCalls: [] as string[],
+  lockEvents: [] as string[],
   // Runs at the marker-reconciliation step - after the admission checks and
   // before the stop - so a test can publish a host in that window.
   afterAdmission: null as (() => Promise<void>) | null,
@@ -152,7 +153,9 @@ vi.mock("../../store/cli-lock", async (importOriginal) => {
       fn: () => Promise<T>,
     ): Promise<T> => {
       mocks.lockCalls.push({ reason: opts.reason });
-      return fn();
+      const result = await fn();
+      mocks.lockEvents.push("lock released");
+      return result;
     },
   };
 });
@@ -255,6 +258,7 @@ describe("buildHostRestartCommand", () => {
     const { hostHomeDir } = await import("../../store/paths");
     expect(hostHomeDir("production").startsWith(workHome)).toBe(true);
     mocks.controllerCalls = [];
+    mocks.lockEvents = [];
     mocks.afterAdmission = null;
     mocks.afterStop = null;
     mocks.busyOverride = null;
@@ -318,6 +322,7 @@ describe("buildHostRestartCommand", () => {
     const launchctl: string[] = [];
     mocks.realController = createMacosController(async (_command, args) => {
       launchctl.push(args.join(" "));
+      mocks.lockEvents.push(args[0] ?? "");
       return args[0] === "print" && args[1]?.endsWith(".agent") === true
         ? { stdout: agentPrint, stderr: "", exitCode: 0 }
         : { stdout: "", stderr: "", exitCode: 0 };
@@ -341,6 +346,12 @@ describe("buildHostRestartCommand", () => {
     expect(
       launchctl.filter((call) => call.startsWith("kickstart")),
     ).toHaveLength(1);
+    // The closing line's own read, under the lock that excluded a takeover.
+    expect(mocks.lockEvents.slice(-3)).toEqual([
+      "kickstart",
+      "print",
+      "lock released",
+    ]);
   });
 
   it("publishes the relaunch's adoption proof as `maintenance`, whoever asked for the restart", async () => {

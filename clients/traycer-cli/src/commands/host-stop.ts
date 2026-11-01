@@ -119,30 +119,33 @@ export function buildHostStopCommand(args: HostStopArgs): CommandFn {
       admission: "service-maintenance",
     };
     const controller = createServiceController();
-    await withCliUpdateContender(contenderOptions, async (capability) => {
-      if (!args.force || args.lifecycleOrigin === "desktop") {
-        await refuseForegroundHostRun(
-          "host stop",
-          ctx.runtime.environment,
-          args.lifecycleOrigin,
+    const jobId = await withCliUpdateContender(
+      contenderOptions,
+      async (capability) => {
+        if (!args.force || args.lifecycleOrigin === "desktop") {
+          await refuseForegroundHostRun(
+            "host stop",
+            ctx.runtime.environment,
+            args.lifecycleOrigin,
+          );
+        }
+        await stopHostServiceWithAttempt(
+          capability,
+          contenderOptions,
+          controller,
+          label,
+          { force: args.force },
+          args.ifIdle ? "if-idle" : "unconditional",
         );
-      }
-      await stopHostServiceWithAttempt(
-        capability,
-        contenderOptions,
-        controller,
-        label,
-        { force: args.force },
-        args.ifIdle ? "if-idle" : "unconditional",
-      );
-      if (!args.force) {
-        await refuseIfForegroundHostSurvived(
-          ctx.runtime.environment,
-          args.lifecycleOrigin,
-        );
-      }
-    });
-    const jobId = await serviceJobIdFor(controller, label);
+        if (!args.force) {
+          await refuseIfForegroundHostSurvived(
+            ctx.runtime.environment,
+            args.lifecycleOrigin,
+          );
+        }
+        return serviceJobIdFor(controller, label);
+      },
+    );
     return {
       data: { stopped: true, label: label.id, forced: args.force },
       human: args.force

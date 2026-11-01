@@ -145,6 +145,7 @@ export function buildHostFreePortAndRestartCommand(
       record,
       parkMatchesInstall,
       attestation,
+      jobId,
     } = await withCliUpdateContenderContext(
       contenderOptions,
       async (capability, _cliLock, contenderContext) => {
@@ -210,6 +211,7 @@ export function buildHostFreePortAndRestartCommand(
             record: contenderContext.activeAttempt,
             parkMatchesInstall,
             attestation: await attestInstallRuntime(ctx.runtime.environment),
+            jobId: await serviceJobIdFor(controller, label),
           };
         }
         // Same rule as `host restart`: a `waiting-to-activate` park whose
@@ -253,10 +255,10 @@ export function buildHostFreePortAndRestartCommand(
           record: contenderContext.activeAttempt,
           parkMatchesInstall,
           attestation: await attestInstallRuntime(ctx.runtime.environment),
+          jobId: await serviceJobIdFor(controller, label),
         };
       },
     );
-    const jobId = await serviceJobIdFor(controller, label);
     // Both no-relaunch outcomes need distinct copy: one stopped the service,
     // the other deliberately left it alone. Reporting them with one sentence
     // would tell a user their host is down when it is still running.

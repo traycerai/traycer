@@ -1404,7 +1404,8 @@ async function reloadRegisteredService(
     // grabbing the label in the window between our own bootout and this
     // bootstrap attempt - re-verify before accepting the failure as benign,
     // since kickstart-ing "the winner's definition" would otherwise
-    // kickstart Desktop's SMAppService-owned job.
+    // kickstart Desktop's SMAppService-owned job. A winner loaded from any
+    // path but this manifest is outside that rewrite, so it is no success.
     const postRaceOwnership = await jobHoldingRefusedBootstrap(
       cause,
       options.serviceTarget,
@@ -1422,7 +1423,16 @@ async function reloadRegisteredService(
           exitCode: 1,
         });
       }
-      return;
+      if (postRaceOwnership.path === options.manifestPath) return;
+      throw cliError({
+        code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+        message: `service install: label '${options.labelId}' was loaded from ${postRaceOwnership.path ?? "an unknown path"} after the CLI's own bootout, not from ${options.manifestPath}, so the host would not run what this install wrote. Stop whatever loaded it, then re-run 'traycer host service install'.`,
+        details: {
+          label: options.labelId,
+          loadedPath: postRaceOwnership.path,
+        },
+        exitCode: 1,
+      });
     }
     // A genuine second-bootstrap failure leaves the label fully
     // deregistered (the bootout above already succeeded) - launchd has no
@@ -2846,10 +2856,7 @@ async function stopService(
   // Tolerated, and the wait below still runs: a host whose supervisor is
   // already gone may be on its way out. But a refused signal is not a sent
   // one, so what follows reports the job it asked and what launchd answered.
-  const signalDelivered = signal.exitCode === 0;
-  const signalDetail = signalDelivered
-    ? `of SIGTERM to job '${label.id}'`
-    : `of asking launchd to signal job '${label.id}', which it refused (${describeRefusedSignal(signal)}), so no SIGTERM was sent`;
+  const signalOutcome = describeStopSignal(label.id, signal);
   // Nothing was published, so there is no exit to confirm and no host this
   // stop could have failed to take effect on.
   if (before.kind === "absent") return;
@@ -2873,13 +2880,13 @@ async function stopService(
     if (after.kind === "absent") return;
     throw cliError({
       code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
-      message: `host pid metadata at ${hostPidMetadataPath(label.environment)} could not be read (${before.cause}), so the host's exit could not be confirmed within ${STOP_EXIT_TIMEOUT_MS}ms ${signalDetail}; stop-not-confirmed. Re-run the command; if it persists and the host is still serving, re-run with --force to escalate to SIGKILL.`,
+      message: `host pid metadata at ${hostPidMetadataPath(label.environment)} could not be read (${before.cause}), so the host's exit could not be confirmed within ${STOP_EXIT_TIMEOUT_MS}ms ${signalOutcome.summary}; stop-not-confirmed. Re-run the command; if it persists and the host is still serving, re-run with --force to escalate to SIGKILL.`,
       details: {
         label: label.id,
         record: hostPidMetadataPath(label.environment),
         cause: before.cause,
         timeoutMs: STOP_EXIT_TIMEOUT_MS,
-        signalDelivered,
+        signalDelivered: signalOutcome.delivered,
       },
       exitCode: 1,
     });
@@ -2896,23 +2903,43 @@ async function stopService(
   if (!exited) {
     throw cliError({
       code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
-      message: `host (pid=${before.metadata.pid}) did not exit within ${STOP_EXIT_TIMEOUT_MS}ms ${signalDetail}; stop did not take effect. Re-run with --force to escalate to SIGKILL.`,
+      message: `host (pid=${before.metadata.pid}) did not exit within ${STOP_EXIT_TIMEOUT_MS}ms ${signalOutcome.summary}; stop did not take effect. Re-run with --force to escalate to SIGKILL.`,
       details: {
         label: label.id,
         pid: before.metadata.pid,
         timeoutMs: STOP_EXIT_TIMEOUT_MS,
-        signalDelivered,
+        signalDelivered: signalOutcome.delivered,
       },
       exitCode: 1,
     });
   }
 }
 
-function describeRefusedSignal(result: RunResult): string {
+// What became of a `launchctl kill`. A positive exit is launchctl's own
+// refusal. The runner reports -1 when launchctl was killed or never ran, which
+// says nothing about whether the signal landed, so `delivered` is null there.
+function describeStopSignal(
+  labelId: string,
+  result: RunResult,
+): { readonly delivered: boolean | null; readonly summary: string } {
+  if (result.exitCode === 0) {
+    return { delivered: true, summary: `of SIGTERM to job '${labelId}'` };
+  }
+  if (result.exitCode < 0) {
+    return {
+      delivered: null,
+      summary: `of asking launchd to signal job '${labelId}', which gave no answer, so whether SIGTERM was sent is unknown`,
+    };
+  }
   const answer = result.stderr.trim() || result.stdout.trim();
-  return answer.length > 0
-    ? `exit ${result.exitCode}: ${answer}`
-    : `exit ${result.exitCode}`;
+  const refusal =
+    answer.length > 0
+      ? `exit ${result.exitCode}: ${answer}`
+      : `exit ${result.exitCode}`;
+  return {
+    delivered: false,
+    summary: `of asking launchd to signal job '${labelId}', which it refused (${refusal}), so no SIGTERM was sent`,
+  };
 }
 
 // Outcome mapping for the CLI-owned force escalation. Mirrors

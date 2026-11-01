@@ -23,6 +23,7 @@ const mocks = vi.hoisted(() => ({
   lockCalls: [] as Array<{ reason: string }>,
   // The job the service manager runs for the label, when it is not the label.
   serviceJobId: null as string | null,
+  lockEvents: [] as string[],
   killCalls: [] as Array<{ pid: number; port: number; commandName: string }>,
   killResult: {
     killed: true,
@@ -67,8 +68,10 @@ vi.mock("../../service", async (importOriginal) => {
           await atServiceSpawnEdge();
         }
       },
-      hostStartAdoptionLabel: async (label: { id: string }) =>
-        mocks.serviceJobId ?? label.id,
+      hostStartAdoptionLabel: async (label: { id: string }) => {
+        mocks.lockEvents.push("job read");
+        return mocks.serviceJobId ?? label.id;
+      },
     }),
   };
 });
@@ -123,7 +126,9 @@ vi.mock("../../store/cli-lock", async (importOriginal) => {
       fn: () => Promise<T>,
     ): Promise<T> => {
       mocks.lockCalls.push({ reason: opts.reason });
-      return fn();
+      const result = await fn();
+      mocks.lockEvents.push("lock released");
+      return result;
     },
   };
 });
@@ -275,8 +280,10 @@ describe("buildHostFreePortAndRestartCommand", () => {
       expect(result.human).toContain(
         "restart requested for service 'ai.traycer.host.agent'",
       );
+      expect(mocks.lockEvents.slice(-2)).toEqual(["job read", "lock released"]);
     } finally {
       mocks.serviceJobId = null;
+      mocks.lockEvents = [];
     }
   });
 
