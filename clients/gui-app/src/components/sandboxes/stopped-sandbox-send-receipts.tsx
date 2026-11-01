@@ -10,7 +10,10 @@ import {
 import { useShallow } from "zustand/react/shallow";
 import { toast } from "sonner";
 import { CommandPaletteRouterContext } from "@/components/command-palette/command-palette-context";
+import { ChatSandboxFooter } from "@/components/chat/chat-sandbox-footer";
 import { Button } from "@/components/ui/button";
+import { useChatSandboxState } from "@/hooks/sandboxes/use-chat-sandbox-state";
+import { resolveChatSandbox } from "@/lib/sandboxes/chat-sandbox-state";
 import {
   useSandboxList,
   sandboxListReadSentAt,
@@ -44,6 +47,11 @@ const FINISHED_RECEIPT_STATES: ReadonlySet<HostSandboxState> = new Set([
   "awake",
   "destroyed",
   "released",
+]);
+/** A rested receipt says the rest, so it lasts only as long as the rest. */
+const RESTED_RECEIPT_STATES: ReadonlySet<HostSandboxState> = new Set([
+  "suspended",
+  "stopped",
 ]);
 
 function receiptScopeKey(
@@ -146,12 +154,58 @@ function StoppedReceipt(props: {
   readonly receipt: StoppedSandboxSendReceipt;
   readonly tabId: string | null;
 }): ReactNode {
-  return props.receipt.kind === "stopped" ? (
-    <StoppedReceiptOwner receipt={props.receipt} tabId={props.tabId} />
-  ) : (
-    <ReturnedSendReceipt {...props} startSandbox={null} />
+  const { receipt, tabId } = props;
+  if (receipt.kind === "stopped")
+    return <StoppedReceiptOwner receipt={receipt} tabId={tabId} />;
+  // A rest is nobody's gesture: it is said in its task, never in a toast.
+  if (receipt.kind === "rested")
+    return tabId === null ? null : (
+      <RestedReceipt receipt={receipt} tabId={tabId} />
+    );
+  return (
+    <ReturnedSendReceipt
+      receipt={receipt}
+      tabId={tabId}
+      startSandbox={null}
+      sandboxLine={null}
+    />
   );
 }
+
+/** The sandbox's own line, by the resolver its chat would consult. */
+function RestedReceipt(props: {
+  readonly receipt: Extract<
+    StoppedSandboxSendReceipt,
+    { readonly kind: "rested" }
+  >;
+  readonly tabId: string;
+}): ReactNode {
+  const { receipt } = props;
+  const state = useChatSandboxState(receipt.epicId, receipt.hostId, false);
+  const { line } = resolveChatSandbox(state, RECEIPT_VIEWER);
+  return (
+    <ReturnedSendReceipt
+      receipt={receipt}
+      tabId={props.tabId}
+      startSandbox={null}
+      sandboxLine={
+        line?.place === "footer" ? (
+          <ChatSandboxFooter line={line} />
+        ) : (
+          <span>{line?.text}</span>
+        )
+      }
+    />
+  );
+}
+
+/** Only the line is read; the task's composer decides what its send may do. */
+const RECEIPT_VIEWER = {
+  reachable: false,
+  canEdit: false,
+  ownedByViewer: false,
+  environmentOwned: false,
+} as const;
 
 /** Capture the host-bound mutation here; a background toast renders outside that provider. */
 function StoppedReceiptOwner(props: {
@@ -198,7 +252,13 @@ function StoppedReceiptOwner(props: {
     () => ({ start, pending, failure }),
     [start, pending, failure],
   );
-  return <ReturnedSendReceipt {...props} startSandbox={startSandbox} />;
+  return (
+    <ReturnedSendReceipt
+      {...props}
+      startSandbox={startSandbox}
+      sandboxLine={null}
+    />
+  );
 }
 
 function ReturnedSendReceipt(props: {
@@ -209,8 +269,10 @@ function ReturnedSendReceipt(props: {
     readonly pending: boolean;
     readonly failure: ReactNode;
   } | null;
+  /** Said in place of the receipt's sentence: a rested sandbox's own line. */
+  readonly sandboxLine: ReactNode;
 }): ReactNode {
-  const { receipt } = props;
+  const { receipt, sandboxLine } = props;
   const startSandbox = props.startSandbox;
   const router = use(CommandPaletteRouterContext);
   const userId = useAuthStore((state) => state.profile?.userId ?? null);
@@ -232,7 +294,7 @@ function ReturnedSendReceipt(props: {
   const sandboxList = useSandboxList();
   const currentPicks = stoppedReceiptPicks(receipt.epicId, pins, stages);
   const readAt = sandboxListReadSentAt(sandboxList.data);
-  const sandboxId = receipt.kind === "stopped" ? receipt.sandboxId : null;
+  const sandboxId = receipt.kind === "cancelled" ? null : receipt.sandboxId;
   const row = sandboxList.data?.sandboxes.find(
     (sandbox) => sandbox.id === sandboxId,
   );
@@ -257,11 +319,14 @@ function ReturnedSendReceipt(props: {
         pick.pin !== receipt.picks[key]?.pin ||
         pick.target !== receipt.picks[key]?.target,
     ) ||
-    (receipt.kind === "stopped" &&
+    (receipt.kind !== "cancelled" &&
       !sandboxList.isError &&
       readAt !== null &&
       readAt > receipt.confirmedAt &&
-      (row === undefined || FINISHED_RECEIPT_STATES.has(row.state)));
+      (row === undefined ||
+        (receipt.kind === "stopped"
+          ? FINISHED_RECEIPT_STATES.has(row.state)
+          : !RESTED_RECEIPT_STATES.has(row.state))));
   useEffect(() => {
     if (obsolete) dismissReceipt(receipt.id);
   }, [obsolete, receipt.id]);
@@ -288,16 +353,18 @@ function ReturnedSendReceipt(props: {
         data-testid="sandbox-stopped-line"
         className="flex flex-col gap-2 text-ui-xs"
       >
-        <span>
-          {receipt.kind === "stopped"
-            ? stoppedSandboxLine(
-                receipt.name,
-                receipt.returned.kind === "landing-draft",
-              )
-            : returnedSandboxMessageLine(
-                receipt.returned.kind === "landing-draft",
-              )}
-        </span>
+        {sandboxLine ?? (
+          <span>
+            {receipt.kind === "stopped"
+              ? stoppedSandboxLine(
+                  receipt.name,
+                  receipt.returned.kind === "landing-draft",
+                )
+              : returnedSandboxMessageLine(
+                  receipt.returned.kind === "landing-draft",
+                )}
+          </span>
+        )}
         <div className="flex flex-wrap gap-2">
           {receipt.returned.kind === "landing-draft" ||
           // Back in this task's composer: the way back to it, where Stop's
@@ -341,7 +408,7 @@ function ReturnedSendReceipt(props: {
         {startSandbox?.failure}
       </div>
     ),
-    [receipt, openDraft, startSandbox, props.tabId],
+    [receipt, openDraft, startSandbox, props.tabId, sandboxLine],
   );
   const onToastDismissRef = useRef<(() => void) | undefined>(undefined);
   useEffect(() => {

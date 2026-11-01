@@ -31,6 +31,12 @@ type ReceiptOutcome =
       readonly sandboxId: string;
       readonly name: string;
       readonly confirmedAt: number;
+    }
+  | {
+      readonly kind: "rested";
+      readonly sandboxId: string;
+      readonly hostId: string;
+      readonly confirmedAt: number;
     };
 
 export type StoppedSandboxSendReceipt = ReceiptOutcome & {
@@ -95,6 +101,25 @@ export function recordStoppedSandboxSend(
     kind: "stopped",
     sandboxId: stage.createdSandboxId,
     name,
+    confirmedAt: Date.now(),
+  });
+}
+
+/**
+ * A send whose sandbox rested on its own went back to its task's composer:
+ * the task says the sandbox's state where the setup line was, as its chat
+ * would, and nothing else.
+ */
+export function recordRestedSandboxSend(
+  send: PendingSandboxSend,
+  stage: StagedSandbox,
+  returned: ReturnedPendingSandboxSend,
+): void {
+  if (stage.createdSandboxId === null || stage.createdHostId === null) return;
+  recordReturnedSandboxSend(send, returned, {
+    kind: "rested",
+    sandboxId: stage.createdSandboxId,
+    hostId: stage.createdHostId,
     confirmedAt: Date.now(),
   });
 }

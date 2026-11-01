@@ -136,6 +136,8 @@ export interface PendingSendFacts {
   readonly wakeInFlight: boolean;
   readonly epicConfirmed: boolean;
   readonly stageStatus: "missing" | "staged" | "creating" | "handoff";
+  /** The stage's sandbox rested on its own while the stage waited on it. */
+  readonly stageRested: boolean;
 }
 /** Missing observations grant no authority and authorize no network operation. */
 export const UNKNOWN_PENDING_SEND_FACTS: PendingSendFacts = {
@@ -164,6 +166,7 @@ export const UNKNOWN_PENDING_SEND_FACTS: PendingSendFacts = {
   wakeInFlight: false,
   epicConfirmed: false,
   stageStatus: "missing",
+  stageRested: false,
 };
 export type PendingSendEffect =
   | "confirm-epic"
@@ -621,10 +624,8 @@ function observe(
 ): PendingSendTransition {
   if (facts.host === "ended") return terminalObservation(state, facts);
   if (state.phase === "unconfirmed") return result(state, [], facts);
-  if (state.blocker === "stop")
-    return facts.host === "resting"
-      ? withdraw(state, facts)
-      : result(state, ["poll"], facts);
+  const atRest = endedAtRest(state, facts);
+  if (atRest !== null) return atRest;
   if (facts.frozen)
     return result({ ...state, blocker: "credits" }, ["poll"], facts);
   const held = heldOnPerson(state, facts);
@@ -639,6 +640,28 @@ function observe(
   )
     return observeStage(state, facts);
   return reachableHost(state, facts);
+}
+
+/**
+ * A Stop ends once the row proves the rest. Whatever else held the wait, a
+ * sandbox that rested on its own ends it too: the message goes back, and the
+ * next send wakes it, never this one.
+ */
+function endedAtRest(
+  state: PendingSendState,
+  facts: PendingSendFacts,
+): PendingSendTransition | null {
+  if (state.blocker === "stop")
+    return facts.host === "resting"
+      ? withdraw(state, facts)
+      : result(state, ["poll"], facts);
+  if (
+    facts.host === "resting" &&
+    facts.stageRested &&
+    withdrawalAllowed(state, facts)
+  )
+    return withdraw(state, facts);
+  return null;
 }
 
 /**

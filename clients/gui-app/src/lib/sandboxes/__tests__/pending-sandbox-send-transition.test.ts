@@ -1638,6 +1638,7 @@ function defaultFacts(rowId: string): PendingSendFacts {
     wakeInFlight: false,
     epicConfirmed: true,
     stageStatus: "handoff",
+    stageRested: false,
     terminalDisposition: false,
     stopRequested: false,
     sandboxKnown: true,

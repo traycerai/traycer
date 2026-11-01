@@ -108,6 +108,7 @@ import {
 } from "@/stores/epics/new-conversation-modal-store";
 import {
   recordCancelledSandboxSend,
+  recordRestedSandboxSend,
   recordStoppedSandboxSend,
 } from "@/stores/sandboxes/stopped-sandbox-send-receipt-store";
 import { startSandboxWake } from "@/lib/sandboxes/sandbox-wake";
@@ -176,6 +177,7 @@ import {
   holdHandoffOwner,
   readStagedSandbox,
   stagedCreateNeedsFreshKey,
+  stagedSandboxRested,
   useStagedSandbox,
   useStagedSandboxStore,
   type HandoffOwnerWatch,
@@ -1102,6 +1104,19 @@ function stageBlocker(stage: StagedSandbox | null): PendingSendBlocker {
   }
 }
 
+function stageRestedAt(
+  stage: StagedSandbox | null,
+  rowState: HostSandboxState | null,
+): boolean {
+  return (
+    stage !== null &&
+    stagedSandboxRested(
+      stage,
+      rowState === "suspended" || rowState === "stopped",
+    )
+  );
+}
+
 function useWatchedSandboxRow(
   sandboxId: string | null,
   surfaceKey: string,
@@ -1129,6 +1144,7 @@ function useWatchedSandboxRow(
     stageStatus: stage?.phase ?? "missing",
     stageCurrent: stage?.phase === "handoff",
     wakeInFlight: stagedRunActive(surfaceKey),
+    stageRested: stageRestedAt(stage, rowState),
   });
   const decision =
     send === null
@@ -1189,8 +1205,8 @@ function clearPendingSandboxFailure(surfaceKey: string): void {
 
 /**
  * A new agent's message withdrawn because its sandbox rests goes back to its
- * task's composer, still on that sandbox, and the task says so where its
- * setup line was. Nothing opens: a rest is nobody's gesture.
+ * task's composer, still on that sandbox, and the task says the sandbox's
+ * state where its setup line was. Nothing opens: a rest is nobody's gesture.
  */
 function returnWatchedSend(
   send: PendingSandboxSend,
@@ -1223,7 +1239,7 @@ function returnWatchedSend(
     returnedSandboxPick(send, stage, rowState),
   );
   if (!Object.hasOwn(usePendingSandboxSendStore.getState().sends, send.id))
-    recordCancelledSandboxSend(send, returned);
+    recordRestedSandboxSend(send, stage, returned);
 }
 
 /**

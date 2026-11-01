@@ -65,6 +65,7 @@ import {
   holdHandoffOwner,
   readStagedSandbox,
   stagedCreateNeedsFreshKey,
+  stagedSandboxRested,
   useStagedSandbox,
   useStagedSandboxStore,
   type HandoffOwnerWatch,
@@ -395,6 +396,15 @@ export function useStagedSandboxSend(input: {
   );
 
   const facts = useSetupLineFacts(stage);
+  // A sandbox that rested on its own ends the wait with the draft kept, as
+  // Cancel and keep the draft does: the next send wakes it.
+  const rested =
+    stage !== null &&
+    stagedSandboxRested(stage, facts?.sandboxResting ?? false);
+  useEffect(() => {
+    if (surfaceKey !== null && rested)
+      useStagedSandboxStore.getState().cancel(surfaceKey);
+  }, [rested, surfaceKey]);
 
   const stop = useCallback((): void => {
     if (surfaceKey === null || stage === null) return;
@@ -485,6 +495,8 @@ export function useSetupLineFacts(
       : sandboxes?.find((candidate) => candidate.id === stageSandboxId);
   const sandboxAwake =
     stageRow === undefined ? null : stageRow.state === "awake";
+  const sandboxResting =
+    stageRow?.state === "suspended" || stageRow?.state === "stopped";
   const operation = useSandboxOperation(stageSandboxId ?? "");
   const sandboxStoppable = stopOffered(
     stage,
@@ -519,6 +531,7 @@ export function useSetupLineFacts(
         offeredAgents: catalogue?.offeredAgents ?? null,
         sandboxAwake,
         sandboxStoppable,
+        sandboxResting,
       };
     }
     const { shape, configuration } = stage.target;
@@ -552,8 +565,17 @@ export function useSetupLineFacts(
       offeredAgents: catalogue.offeredAgents ?? null,
       sandboxAwake,
       sandboxStoppable,
+      sandboxResting,
     };
-  }, [catalogue, existingPrice, sandboxAwake, sandboxStoppable, stage, user]);
+  }, [
+    catalogue,
+    existingPrice,
+    sandboxAwake,
+    sandboxResting,
+    sandboxStoppable,
+    stage,
+    user,
+  ]);
 }
 
 /**

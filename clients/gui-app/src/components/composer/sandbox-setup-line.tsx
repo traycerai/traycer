@@ -59,10 +59,11 @@ import {
   takingLongerDetail,
 } from "@/lib/sandboxes/sandbox-strings";
 import { cn } from "@/lib/utils";
-import type {
-  StagedSandbox,
-  StagedSandboxFailure,
-  StagedSandboxStep,
+import {
+  stagedSandboxRested,
+  type StagedSandbox,
+  type StagedSandboxFailure,
+  type StagedSandboxStep,
 } from "@/stores/composer/staged-sandbox-store";
 import { sandboxAgentDisplayName } from "@/lib/sandboxes/sandbox-agent-refusal";
 import { openActiveModelPickerForHarness } from "@/lib/commands/active-model-picker-registry";
@@ -189,6 +190,8 @@ export interface SandboxSetupLineFacts {
    * under way: Stop is offered only then.
    */
   readonly sandboxStoppable: boolean;
+  /** The stage's sandbox is listed suspended or stopped. */
+  readonly sandboxResting: boolean;
 }
 
 /**
@@ -238,7 +241,14 @@ export function SandboxSetupLine(props: {
       />
     );
   }
-  if (stage.phase === "staged" || stage.startedAt === null) return null;
+  // A sandbox that rested on its own is said by its state footer, never by
+  // a create still on its way.
+  if (
+    stage.phase === "staged" ||
+    stage.startedAt === null ||
+    stagedSandboxRested(stage, props.facts.sandboxResting)
+  )
+    return null;
   return (
     <SandboxProgressLine
       stage={stage}

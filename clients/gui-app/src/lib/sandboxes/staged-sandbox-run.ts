@@ -55,6 +55,7 @@ import {
   handoffOwnerLive,
   readStagedSandbox,
   refusedBeforeCreate,
+  stagedSandboxRested,
   useStagedSandboxStore,
   type StagedSandbox,
   type StagedSandboxFailure,
@@ -616,8 +617,12 @@ async function settleRow(
   row: SandboxSummary | null | undefined,
 ): Promise<"waiting" | "finished"> {
   const { surfaceKey, clientRequestId, started, deps } = input;
-  // Cancel/reload can retain an already-created sandbox after it rested.
   if (row?.state === "suspended" || row?.state === "stopped") {
+    // One that rested on its own during this wait stays at rest: its send
+    // goes back, and the composer stages it to wake on the next one.
+    const stage = readStagedSandbox(surfaceKey);
+    if (stage === null || stagedSandboxRested(stage, true)) return "finished";
+    // Cancel/reload can retain an already-created sandbox after it rested.
     const awake = await wakeCurrentStage(
       surfaceKey,
       clientRequestId,
