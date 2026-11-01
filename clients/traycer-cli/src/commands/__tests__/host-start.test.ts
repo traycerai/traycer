@@ -2452,6 +2452,71 @@ describe("runHostStart - a host that forced its shutdown", () => {
     expect(recorded.exited).toBe(0);
   });
 
+  it("reads the line split across stderr chunks and behind a long stderr", async () => {
+    const recorded = await runChildExit(
+      [
+        "(node:1) noise\n".repeat(600),
+        forcedLine.slice(0, 40),
+        `${forcedLine.slice(40)}\n`,
+      ],
+      0,
+    );
+
+    expect(terminalMarkers(recorded)).toEqual([
+      expect.objectContaining({
+        phase: "killed",
+        fields: expect.objectContaining({ error: forcedLine }),
+      }),
+    ]);
+  });
+
+  it("names a forced restart at WARN and relaunches as any exit 87 does", async () => {
+    const exec = "/opt/traycer/host/install/traycer-host";
+    const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const stderr = new PassThrough();
+    Object.assign(child, { stderr });
+    const originalSpawn = deps.spawn;
+    if (originalSpawn === undefined) {
+      throw new Error("test spawn dependency missing");
+    }
+    let exits = 0;
+    await runUntilExit(
+      () =>
+        runHostStart(
+          { environment: "production", cwd: null },
+          {
+            ...deps,
+            spawn: (command, args, options) => {
+              const spawned = originalSpawn(command, args, options);
+              exits += 1;
+              if (exits === 1) {
+                setImmediate(() => {
+                  stderr.write(Buffer.from(`${forcedLine}\n`));
+                  stderr.end();
+                  child.emit("exit", RESTART_EXIT_CODE, null);
+                });
+              } else {
+                setImmediate(() => {
+                  child.emit("exit", 0, null);
+                });
+              }
+              return spawned;
+            },
+          },
+        ),
+      recorded,
+    );
+
+    expect(recorded.loggerWarns).toContainEqual(
+      expect.objectContaining({
+        message: "Host child did not finish its shutdown",
+        fields: expect.objectContaining({ forcedShutdown: forcedLine }),
+      }),
+    );
+    expect(recorded.crashReports).toEqual([]);
+    expect(recorded.spawnCalls).toHaveLength(2);
+  });
+
   it("keeps a clean exit clean, phrase in the middle of a line included", async () => {
     const recorded = await runChildExit([`warning: saw ${forcedLine}\n`], 0);
 

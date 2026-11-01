@@ -355,8 +355,9 @@ export class StderrCaptureBuffer {
    * The line a host writes to stderr when its exit did not finish its
    * teardown, or `null` when the capture holds none. The exit code cannot say
    * this: a forced stop keeps the 0 or 87 its intent chose, because any other
-   * code reads here as a crash. It is the last thing the host writes, so the
-   * capture holds it however much came before it. Never throws.
+   * code reads here as a crash. It is the last thing the host writes, and the
+   * host caps it inside the tail capture, so a whole line survives however
+   * much stderr came before it. Never throws.
    */
   forcedShutdownLine(): string | null {
     try {
