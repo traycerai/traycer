@@ -1072,7 +1072,7 @@ function recordForChat(
     id: c.id,
     parentId: c.parentId,
     // Durable Agent tree row: an untitled Chat-interface Agent falls back to
-    // "Untitled agent"; `type` stays the interface discriminator.
+    // "New agent"; `type` stays the interface discriminator.
     name: displayTitle(c.title, "agent"),
     type: "chat",
     status: null,
@@ -1089,7 +1089,7 @@ function recordForTerminalAgent(a: TuiAgentProjection): EpicTreeRecord {
     id: a.id,
     parentId: a.parentId,
     // Durable Agent tree row: an untitled Terminal-interface Agent falls back
-    // to "Untitled agent" too (harness identity is separate interface metadata,
+    // to "New agent" too (harness identity is separate interface metadata,
     // not the title fallback); `type` stays the interface discriminator.
     name: displayTitle(a.title, "agent"),
     type: "terminal-agent",
@@ -2092,7 +2092,7 @@ function useArmChatTitle(
  * surfaces disagree for as long as the record plane lags: the serving host's
  * replica inbox starts empty after a restart and fills by reconciliation, and
  * through that window a tile opened before its title was generated announced
- * "Untitled agent" beside a sidebar row with the real name. The list is read
+ * "New agent" beside a sidebar row with the real name. The list is read
  * on the Epic SESSION's client, the same one the sidebar fetches it on, so the
  * TanStack cache is shared rather than split by host.
  *
@@ -2133,7 +2133,9 @@ export function useEpicTabDisplayTitle(
     armChatTitle ??
     liveTerminalTitle ??
     liveManagedCommandTitle ??
-    node.name
+    (node.type === "chat" || node.type === "terminal-agent"
+      ? displayTitle(node.name, "agent")
+      : node.name)
   );
 }
 
@@ -2169,91 +2171,36 @@ export function useEpicLiveArtifactTitleGenerating(
   node: EpicTabDisplayTitleNode,
   epicId: string,
 ): boolean {
-  return useTabChatTitleGeneration(node, epicId) !== "idle";
-}
-
-/**
- * Whether a chat's first title is on its way and none is known yet: the
- * generation {@link useEpicLiveArtifactTitleGenerating} spins for, on a chat
- * whose projection and arm both still hold no title. The tab and the tree
- * render "New agent" for exactly this window, and the "Untitled agent"
- * fallback once it closes without a title. Render-only: the caller must never
- * hand the label it picks from this to a snapshot or a rename.
- */
-export function useEpicChatAwaitingFirstTitle(
-  artifactId: string | null,
-  epicId: string,
-  boundHostId: string | null,
-): boolean {
-  return (
-    useChatTitleGeneration(artifactId, epicId, boundHostId, null) ===
-    "awaiting-first-title"
-  );
-}
-
-/**
- * {@link useEpicChatAwaitingFirstTitle} for a tab, whose title has one more
- * source: the cloud list answers for a chat the projection holds no record of,
- * and a tab showing that title is not waiting for one.
- */
-export function useEpicTabAwaitingFirstTitle(
-  node: EpicTabDisplayTitleNode,
-  epicId: string,
-): boolean {
-  return useTabChatTitleGeneration(node, epicId) === "awaiting-first-title";
-}
-
-type ChatTitleGeneration = "idle" | "generating" | "awaiting-first-title";
-
-function useTabChatTitleGeneration(
-  node: EpicTabDisplayTitleNode,
-  epicId: string,
-): ChatTitleGeneration {
-  const cloudChatTitle = useCloudChatTitleForAbsentRecord(node, epicId);
-  return useChatTitleGeneration(
-    node.type === "chat" ? node.id : null,
-    epicId,
-    node.hostId,
-    cloudChatTitle,
-  );
-}
-
-function useChatTitleGeneration(
-  artifactId: string | null,
-  epicId: string,
-  boundHostId: string | null,
-  cloudChatTitle: string | null,
-): ChatTitleGeneration {
+  const chatId = node.type === "chat" ? node.id : null;
   const projectedTitle = useEpicStore((s) => {
-    if (artifactId === null) return null;
-    if (Object.hasOwn(s.chats.byId, artifactId)) {
-      const chat = s.chats.byId[artifactId];
+    if (chatId === null) return null;
+    if (Object.hasOwn(s.chats.byId, chatId)) {
+      const chat = s.chats.byId[chatId];
       return chat.title.length > 0 ? chat.title : null;
     }
     return null;
   });
-  const armTitle = useArmChatTitle(epicId, artifactId, boundHostId);
+  const armTitle = useArmChatTitle(epicId, chatId, node.hostId);
+  const cloudChatTitle = useCloudChatTitleForAbsentRecord(node, epicId);
   const currentTitle = projectedTitle ?? armTitle ?? cloudChatTitle;
   const currentUpdatedAt = useEpicStore((s) => {
-    if (artifactId === null) return null;
-    if (Object.hasOwn(s.chats.byId, artifactId)) {
-      return s.chats.byId[artifactId].updatedAt;
+    if (chatId === null) return null;
+    if (Object.hasOwn(s.chats.byId, chatId)) {
+      return s.chats.byId[chatId].updatedAt;
     }
     return null;
   });
-  return useEpicCanvasStore((s): ChatTitleGeneration => {
-    if (artifactId === null) return "idle";
-    const entry = Object.hasOwn(s.pendingChatTitles, artifactId)
-      ? s.pendingChatTitles[artifactId]
+  return useEpicCanvasStore((s) => {
+    if (chatId === null) return false;
+    const entry = Object.hasOwn(s.pendingChatTitles, chatId)
+      ? s.pendingChatTitles[chatId]
       : undefined;
-    const generating = pendingTitleVisibleAutoPurge(
+    return pendingTitleVisibleAutoPurge(
       entry,
       currentTitle,
       currentUpdatedAt,
-      () => s.clearChatTitlePending(artifactId),
+      () => s.clearChatTitlePending(chatId),
     );
-    if (!generating) return "idle";
-    return currentTitle === null ? "awaiting-first-title" : "generating";
   });
 }
 

@@ -4947,7 +4947,7 @@ function ownerLabel(
   }
   if (snapshot.owner.kind === "chat") {
     // Durable Agent read surface: an untitled Chat-interface Agent falls back
-    // to "Untitled agent" (this light surface carries no first-user-message to
+    // to "New agent" (this light surface carries no first-user-message to
     // derive from).
     return displayTitle(
       liveArtifactTitle || ref?.name || record?.name || "",

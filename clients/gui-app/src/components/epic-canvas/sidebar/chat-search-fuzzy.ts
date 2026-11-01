@@ -102,7 +102,7 @@ export function filterCloudChatsBySearch(
       chats.map((chat) => ({
         id: chat.identity.chatId,
         // The literal `EpicSidebarCloudChatRow` renders: a cloud row's title is
-        // nullable on the wire and falls back to the same "Untitled agent".
+        // nullable on the wire and falls back to the same "New agent".
         title: displayTitle(chat.title ?? "", "agent"),
       })),
       query,

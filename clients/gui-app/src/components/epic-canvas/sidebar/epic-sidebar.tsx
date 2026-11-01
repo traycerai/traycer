@@ -1505,9 +1505,9 @@ function SharingPanelBody(props: LeftPanelBodyProps) {
 }
 
 // Display title for a projection: artifacts carry a `kind`; every Agent
-// projection (Chat- or Terminal-interface) falls back to "Untitled agent" -
-// the durable Agent identity - when its stored title is empty, never
-// "Untitled chat" or the harness label.
+// projection (Chat- or Terminal-interface) falls back to "New agent" -
+// the durable Agent identity - when its stored title is empty, never the
+// harness label.
 function epicArtifactRecordDisplayTitle(
   record: EpicArtifactProjection | EpicChatProjection | EpicTuiAgentProjection,
 ): string {
