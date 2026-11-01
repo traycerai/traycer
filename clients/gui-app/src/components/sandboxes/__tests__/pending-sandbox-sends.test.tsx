@@ -5981,6 +5981,42 @@ describe("a rested send this window cannot give back", () => {
       expect(mocks.wake).toHaveBeenCalledWith(SANDBOX_HOST, "send");
     },
   );
+
+  it("replaces a handed-off send's not-sent failure with the rested stage, so one Retry wakes the sandbox", async () => {
+    expect(navigator.locks).toBeUndefined();
+    seed({
+      ...SEEDED,
+      target: RESUME_TARGET,
+      send: { request: { kind: "chat", parentId: null, placement: null } },
+      phase: "handoff",
+      created: true,
+    });
+    useStagedSandboxStore
+      .getState()
+      .report(SURFACE, { failure: { kind: "not-sent" } });
+    mocks.listReadAt = FRESH;
+    mocks.sandboxes = [rowIn("suspended")];
+    mocks.listSandboxes.mockResolvedValue(listAnswers([rowIn("awake")]));
+    mocks.wake.mockResolvedValue({ kind: "awake" });
+    answerHost(SANDBOX_HOST, CODEX_READY);
+    mount();
+
+    const held = await screen.findByTestId("sandbox-rested-held-line");
+    expect(held.textContent).toContain("Your message is still pending.");
+    expect(readStagedSandbox(SURFACE)).toMatchObject({
+      phase: "creating",
+      failure: { kind: "rested" },
+    });
+    expect(document.body.textContent).not.toContain("nothing was sent");
+    expect(mocks.wake).not.toHaveBeenCalled();
+
+    fireEvent.click(within(held).getByTestId("sandbox-rested-held-retry"));
+
+    await waitFor(() => {
+      expect(mocks.wake).toHaveBeenCalledTimes(1);
+    });
+    expect(mocks.wake).toHaveBeenCalledWith(SANDBOX_HOST, "send");
+  });
 });
 
 describe("a send held on settings that didn't apply, once its sandbox leaves awake", () => {

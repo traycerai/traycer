@@ -1293,14 +1293,15 @@ function projectSandboxBlocker(
 
 /**
  * A send this window can't give back keeps the person's way to wake its
- * sandbox: a stopped stage, which Retry runs again. A failure already on the
- * stage has its own remedy.
+ * sandbox: a stopped stage, which Retry runs again. A refusal already on the
+ * stage has its own remedy; "ready, but nothing was sent" no longer holds.
  */
 function projectSandboxRest(
   surfaceKey: string,
   stage: StagedSandbox | null,
 ): void {
-  if (stage === null || stage.failure !== null) return;
+  if (stage === null) return;
+  if (stage.failure !== null && stage.failure.kind !== "not-sent") return;
   useStagedSandboxStore
     .getState()
     .report(surfaceKey, { phase: "creating", failure: { kind: "rested" } });
