@@ -11,7 +11,10 @@ import {
 } from "@/lib/safe-area-insets";
 import { useSideStripCollapsed } from "@/stores/layout/side-tab-strip-store";
 
-const PHONE_WIDTH_QUERY = `(width < ${MOBILE_PHONE_PORTRAIT_WIDTH_LIMIT_PX}px)`;
+// The prefixed form: range syntax needs WebKit 16.4, and on anything older the
+// query never matches, which would silently lose phone portrait in the band
+// only it decides.
+const PHONE_WIDTH_QUERY = `(max-width: ${MOBILE_PHONE_PORTRAIT_WIDTH_LIMIT_PX - 1}px)`;
 
 /** Absent on iOS before 16.4, whatever the DOM types say. */
 function readScreenOrientation(): ScreenOrientation | null {
