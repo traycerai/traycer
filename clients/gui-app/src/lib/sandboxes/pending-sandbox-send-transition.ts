@@ -664,7 +664,8 @@ function claimResting(
  * A Stop ends once the row proves the rest. Whatever else held the delivery,
  * a sandbox that rested on its own ends it too: the message goes back, and
  * only the person's next message or Resume wakes it. A request that may
- * already be running cannot go back, so it says so and waits for its Retry.
+ * already be running cannot go back, so it says so and waits for its Retry,
+ * whatever settings it was waiting on: nothing applies on a resting sandbox.
  */
 function endedAtRest(
   state: PendingSendState,
@@ -674,6 +675,15 @@ function endedAtRest(
     return facts.host === "resting"
       ? withdraw(state, facts)
       : result(state, ["poll"], facts);
+  if (
+    state.blocker === "settings" &&
+    claimed(state) &&
+    facts.host === "resting" &&
+    !facts.frozen
+  ) {
+    const cleared: PendingSendState = { ...state, blocker: "none" };
+    return endedAtRest(cleared, facts) ?? result(cleared, ["poll"], facts);
+  }
   if (
     facts.host === "resting" &&
     facts.stageRested &&
@@ -754,13 +764,15 @@ function retry(
     (state.phase === "waiting" && !LATCHED_BLOCKERS.has(state.blocker))
   )
     return result(state, [], facts);
+  // Settings are said of an awake sandbox: a claim at rest needs its wake first.
+  const settingsHold =
+    state.blocker === "settings" &&
+    !(claimed(state) && facts.host === "resting");
   const next: PendingSendState = {
     ...state,
     phase: claimed(state) ? "sending" : state.phase,
     blocker:
-      state.blocker === "credits" || state.blocker === "settings"
-        ? state.blocker
-        : "none",
+      state.blocker === "credits" || settingsHold ? state.blocker : "none",
   };
   // Retry requests a new model read; the previous negative cache entry cannot
   // refuse that read before it starts. All earlier readiness gates still apply.
