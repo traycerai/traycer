@@ -206,6 +206,30 @@ vi.mock("@/stores/epics/canvas/store", async (importOriginal) => {
           : testState.canvasStore,
     },
   );
+  // Keeps one identity while the fixture does, as the store's own state does.
+  // A fresh object per render would re-fire the sweep on any rerender, which
+  // hides a dependency the effect is missing.
+  let fakeCanvas: {
+    readonly root: TileLayoutNode | null;
+    readonly activePaneId: string | null;
+    readonly tilesByInstanceId: Readonly<Record<string, EpicCanvasTileRef>>;
+    readonly sizesByGroupId: Readonly<Record<string, never>>;
+  } | null = null;
+  function readFakeCanvas() {
+    if (
+      fakeCanvas?.root !== testState.canvasRoot ||
+      fakeCanvas.activePaneId !== testState.canvasActivePaneId ||
+      fakeCanvas.tilesByInstanceId !== testState.canvasTiles
+    ) {
+      fakeCanvas = {
+        root: testState.canvasRoot,
+        activePaneId: testState.canvasActivePaneId,
+        tilesByInstanceId: testState.canvasTiles,
+        sizesByGroupId: {},
+      };
+    }
+    return fakeCanvas;
+  }
   return {
     ...actual,
     useActiveEpicArtifactId: (tabId: string) =>
@@ -215,12 +239,7 @@ vi.mock("@/stores/epics/canvas/store", async (importOriginal) => {
     useEpicCanvas: (tabId: string) =>
       testState.useRealCanvasStore
         ? actual.useEpicCanvas(tabId)
-        : {
-            root: testState.canvasRoot,
-            activePaneId: testState.canvasActivePaneId,
-            tilesByInstanceId: testState.canvasTiles,
-            sizesByGroupId: {},
-          },
+        : readFakeCanvas(),
     useEpicCanvasStore,
     useEpicTab: (tabId: string) =>
       testState.useRealCanvasStore ? actual.useEpicTab(tabId) : null,
@@ -297,18 +316,40 @@ vi.mock("@/hooks/chats/use-cloud-chat-queries", () => {
     throughRecordSeq: null,
     isOwnedByViewer,
   });
+  // Keeps one identity while the fixture does, as the query's own `data` does.
+  // A fresh object per render would re-fire the sweep on any rerender, which
+  // hides a dependency the effect is missing.
+  let fakeCloudChats: {
+    readonly key: string;
+    readonly data: { readonly chats: ReadonlyArray<CloudChatSummary> };
+  } | null = null;
+  function readFakeCloudChats(): {
+    readonly chats: ReadonlyArray<CloudChatSummary>;
+  } {
+    const key = JSON.stringify([
+      [...testState.cloudChatIds],
+      [...testState.cloudCollaboratorChatIds],
+    ]);
+    if (fakeCloudChats?.key !== key) {
+      fakeCloudChats = {
+        key,
+        data: {
+          chats: [
+            ...[...testState.cloudChatIds].map((chatId) =>
+              cloudRow(chatId, true),
+            ),
+            ...[...testState.cloudCollaboratorChatIds].map((chatId) =>
+              cloudRow(chatId, false),
+            ),
+          ],
+        },
+      };
+    }
+    return fakeCloudChats.data;
+  }
   return {
     useCloudChatList: () => ({
-      data: {
-        chats: [
-          ...[...testState.cloudChatIds].map((chatId) =>
-            cloudRow(chatId, true),
-          ),
-          ...[...testState.cloudCollaboratorChatIds].map((chatId) =>
-            cloudRow(chatId, false),
-          ),
-        ],
-      },
+      data: readFakeCloudChats(),
       // `isEnabled` too: the sweep asks `cloudChatListAuthorizesRecordSweep`,
       // which reads a DISABLED query as authorizing (nothing will answer it).
       // A stub omitting this answers `undefined`, which that predicate reads
@@ -1511,6 +1552,61 @@ describe("useEpicRouteSynchronization", () => {
         sameIdOtherEpic.instanceId,
         otherHostChat.instanceId,
       ]);
+    });
+  });
+
+  /**
+   * The prune is the destructive direction: a recovery entry forgotten while
+   * the list is unanswered is gone for good, though the agent is alive.
+   */
+  it("keeps a same-host terminal agent's recovery entry until its own list is authoritative", async () => {
+    testState.autoOpenTarget = null;
+    testState.records = [];
+    testState.tuiAgentRecordListAuthoritative = false;
+    const closedAgent: EpicCanvasTileRef = {
+      id: "tui-recovery",
+      instanceId: "inst-tui-recovery",
+      type: "terminal-agent",
+      name: "Closed agent",
+      hostId: "host-1",
+    };
+    const deletedSpec = specTile("deleted-spec", "inst-deleted-spec", "Gone");
+    const recordClosedTab = (tabId: string, tile: EpicCanvasTileRef): void => {
+      recordClosedHeaderTab({
+        kind: "epic",
+        tab: { epicId: EPIC_ID, tabId, name: EPIC_ID },
+        canvas: canvasWithSingleTile(tile),
+        index: 0,
+      });
+    };
+    recordClosedTab("closed-agent-tab", closedAgent);
+    recordClosedTab("closed-spec-tab", deletedSpec);
+    const intent: EpicRouteFocusIntent = {
+      epicId: EPIC_ID,
+      tabId: TAB_ID,
+      focusedAt: undefined,
+      focusArtifactId: undefined,
+      focusThreadId: undefined,
+      focusPaneId: undefined,
+      focusTileInstanceId: undefined,
+    };
+    const { rerender } = renderHook(
+      (props: EpicRouteFocusIntent) => useEpicRouteSynchronization(props),
+      { initialProps: intent },
+    );
+
+    // The spec going proves the prune ran and judged the agent.
+    await waitFor(() => {
+      expect(recoveryTiles().map(({ tile }) => tile.instanceId)).toEqual([
+        closedAgent.instanceId,
+      ]);
+    });
+
+    testState.tuiAgentRecordListAuthoritative = true;
+    rerender({ ...intent });
+
+    await waitFor(() => {
+      expect(recoveryTiles()).toEqual([]);
     });
   });
 
