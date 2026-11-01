@@ -16,6 +16,9 @@ import {
   type LiveBusySessionCountOptions,
 } from "@/components/settings/panels/my-hosts-model";
 import { HOST_RUNTIME_STATUS_AWARENESS_FIELD } from "@traycer/protocol/host/notifications/index";
+import { HOST_STANDING_BOUND_MS } from "@traycer-clients/shared/host-transport/remote/config";
+
+const NOW_MS = Date.parse("2026-07-03T12:00:00.000Z");
 
 function statusDto(overrides: Partial<HostStatusDTO>): HostStatusDTO {
   return {
@@ -31,12 +34,15 @@ function statusDto(overrides: Partial<HostStatusDTO>): HostStatusDTO {
 
 /**
  * Wraps `deriveHostPresence` for the "core DTO-driven logic" tests below — no
- * live session, so every answer comes from the DTO itself.
+ * live session, so every answer comes from the DTO itself. The fixture's
+ * `lastSeenAt` is `null`, which anchors no freshness bound, so a reading here
+ * is the raw mapping unless a test supplies a stamp of its own.
  */
 function deriveLocal(status: HostStatusDTO): DtoPresenceView {
   return deriveHostPresence({
     status,
     hasLiveSession: false,
+    nowMs: NOW_MS,
   });
 }
 
@@ -121,6 +127,54 @@ describe("deriveHostPresence", () => {
       expect(view.showLiveDot).toBe(false);
     });
 
+    it("renders Offline for a connectable reading older than the relay's host-leg deadline", () => {
+      // A `connectable` word is a lease the host keeps by re-proving standing
+      // inside that deadline, and a host that stops reporting stops advancing
+      // `lastSeenAt` in the same breath. Past the bound the record's two halves
+      // contradict each other and the stamp is what is left.
+      const view = deriveLocal(
+        statusDto({
+          connectivity: "connectable",
+          lastSeenAt: new Date(
+            NOW_MS - HOST_STANDING_BOUND_MS - 1_000,
+          ).toISOString(),
+        }),
+      );
+      expect(view.reading).toBe("offline");
+      expect(view.label).toBe("Offline");
+      expect(view.label).not.toBe("Reported reachable");
+      expect(view.showLiveDot).toBe(false);
+    });
+
+    it("keeps Reported reachable for a connectable reading inside that deadline", () => {
+      const view = deriveLocal(
+        statusDto({
+          connectivity: "connectable",
+          lastSeenAt: new Date(
+            NOW_MS - HOST_STANDING_BOUND_MS + 1_000,
+          ).toISOString(),
+        }),
+      );
+      expect(view.reading).toBe("reported-reachable");
+    });
+
+    it("never invents Offline from a stamp that anchors nothing, or one ahead of this clock", () => {
+      // Unparsable and future stamps are the never-false-Offline invariant in
+      // its other two forms: a missing anchor is not evidence of a death, and
+      // a client lagging the cloud's stamp is skew.
+      const unparsable = deriveLocal(
+        statusDto({ connectivity: "connectable", lastSeenAt: "not-a-date" }),
+      );
+      expect(unparsable.reading).toBe("reported-reachable");
+      const ahead = deriveLocal(
+        statusDto({
+          connectivity: "connectable",
+          lastSeenAt: new Date(NOW_MS + 60 * 60 * 1_000).toISOString(),
+        }),
+      );
+      expect(ahead.reading).toBe("reported-reachable");
+    });
+
     it("reads the retired local-only wire value as Status unknown, never Offline", () => {
       // `local-only` stays in the frozen wire enum, but no server emits it and
       // it never carried liveness evidence, so it is the absence of an answer.
@@ -159,6 +213,7 @@ describe("deriveHostPresence", () => {
       const view = deriveHostPresence({
         status: statusDto({ connectivity: "offline" }),
         hasLiveSession: true,
+        nowMs: NOW_MS,
       });
       expect(view.reading).toBe("online");
       expect(view.label).toBe("Online");
@@ -169,11 +224,13 @@ describe("deriveHostPresence", () => {
       const viewUnknown = deriveHostPresence({
         status: statusDto({ connectivity: "unknown" }),
         hasLiveSession: true,
+        nowMs: NOW_MS,
       });
       expect(viewUnknown.reading).toBe("online");
       const viewRetired = deriveHostPresence({
         status: statusDto({ connectivity: "local-only" }),
         hasLiveSession: true,
+        nowMs: NOW_MS,
       });
       expect(viewRetired.reading).toBe("online");
     });
@@ -182,6 +239,7 @@ describe("deriveHostPresence", () => {
       const view = deriveHostPresence({
         status: statusDto({ connectivity: "connectable", clientCloud: "down" }),
         hasLiveSession: true,
+        nowMs: NOW_MS,
       });
       expect(view.reading).toBe("client-offline");
     });

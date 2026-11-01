@@ -1460,6 +1460,18 @@ invariants are tested and load-bearing: no green dot without live evidence, and
 `unknown` (liveness unreadable) never renders as a false "Offline". The retired
 `local-only` wire value, which no server emits, reads as `unknown`.
 
+A `connectable` reading also EXPIRES, against the host's own `lastSeenAt`. It
+is a lease word the host keeps by re-proving standing inside the relay's
+host-leg deadline (`HOST_STANDING_BOUND_MS`), and a host that stops reporting
+stops advancing its check-in in the same breath - so a reading older than that
+bound is a lease nothing is renewing, and the row reads `offline` rather than
+"Reported reachable" through a real outage. A `null` or unparsable stamp
+anchors no bound and keeps the reading, which is the never-false-Offline
+invariant in its other form. The transport is deliberately NOT bound by this:
+`hostUnavailability` still calls such a row dialable, the same asymmetry
+`isWithinRelayFuseGrace` has in the other direction, because a dial's own
+outcome settles liveness and a render cannot wait for it.
+
 Two things a reader of this file will look for and not find in the DTO:
 `busy` and `busySessionCount`. They describe a _right now_ the cloud's lease
 cannot carry, so they come from `host.status@1.1` over a live connection (or

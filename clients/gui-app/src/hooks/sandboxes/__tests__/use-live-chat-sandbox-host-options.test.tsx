@@ -63,6 +63,15 @@ import { useEndedSandboxHostsStore } from "@/stores/sandboxes/ended-sandbox-host
 import { authQueryKeys, sandboxQueryKeys } from "@/lib/query-keys";
 import type { SandboxListResponse } from "@traycer/protocol/host/sandbox-control";
 
+/**
+ * A check-in on the wall clock this suite runs on, stamped once so two
+ * `registry(...)` answers stay comparable. A `connectable` reading expires
+ * against the host's own check-in, and a fixed calendar date would drift into
+ * the stale arm and read `offline` where this suite is asking about the
+ * SANDBOX state word.
+ */
+const RECENT_CHECK_IN = new Date(Date.now() - 60_000).toISOString();
+
 function registry(state: "awake" | "stopped"): HostListResponse {
   return {
     hosts: [
@@ -82,7 +91,7 @@ function registry(state: "awake" | "stopped"): HostListResponse {
           clientCloud: "ok",
           updateState: "current",
           appVersion: "1.0.0",
-          lastSeenAt: "2026-10-28T00:00:00Z",
+          lastSeenAt: RECENT_CHECK_IN,
         },
       },
     ],

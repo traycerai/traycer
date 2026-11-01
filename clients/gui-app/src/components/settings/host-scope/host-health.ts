@@ -345,6 +345,7 @@ function registryHealth(options: DeriveHostHealthOptions): HostHealth {
   const presence = deriveHostPresence({
     status: item.status,
     hasLiveSession,
+    nowMs,
   });
   switch (presence.reading) {
     case "online":

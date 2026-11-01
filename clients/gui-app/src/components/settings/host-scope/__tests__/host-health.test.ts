@@ -34,7 +34,9 @@ function registryItem(connectivity: HostConnectivity): HostListItem {
       clientCloud: "ok",
       updateState: "current",
       appVersion: "1.4.2",
-      lastSeenAt: new Date(0).toISOString(),
+      // A check-in on the clock below, so a `connectable` row here is a
+      // reading the relay is still renewing. Staleness is its own case.
+      lastSeenAt: new Date(NOW_MS).toISOString(),
     },
   };
 }

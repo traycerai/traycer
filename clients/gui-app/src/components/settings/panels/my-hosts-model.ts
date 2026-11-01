@@ -4,6 +4,7 @@ import type {
 } from "@traycer/protocol/host/host-status";
 import { readHostRuntimeStatusAwareness } from "@traycer/protocol/host/notifications/index";
 import type { HostBusyBreakdown } from "@traycer/protocol/host/status/index";
+import { HOST_STANDING_BOUND_MS } from "@traycer-clients/shared/host-transport/remote/config";
 import { busyWorkPhrase } from "@/components/host/host-restart-copy";
 
 /**
@@ -54,14 +55,22 @@ import { busyWorkPhrase } from "@/components/host/host-restart-copy";
  * `connectivity` is pure liveness (`connectable` / `offline` / `unknown`) —
  * one fact about one host. This row is projected from the RAW registry DTO
  * rather than from a directory entry; `hostUnavailability` reads the same
- * word for entries, and the two must agree cell for cell.
+ * word for entries, and the two agree on every value EXCEPT a `connectable`
+ * that has aged out (below), where they are deliberately asymmetric in the
+ * direction `isWithinRelayFuseGrace` is asymmetric in the other: a dial is
+ * still worth attempting on a reading this one will not render, because the
+ * dial's own outcome is what settles liveness and a render cannot wait for it.
  *
- * Two invariants the tests pin:
+ * Three invariants the tests pin:
  *
  *   - NO green dot without live evidence. This one was WRITTEN here and
  *     violated here — see the `connectable` arm.
  *   - NEVER a false "Offline" when the cloud is blind. `unknown` is its own
  *     rendering, and the retired `local-only` wire value reads as `unknown`.
+ *   - A `connectable` reading EXPIRES. It is a lease word the host renews by
+ *     re-proving standing, so one older than that deadline reads `offline`
+ *     rather than claiming a reachability nothing is maintaining — see
+ *     `connectableReportIsFresh`.
  */
 
 export type DtoPresenceReading =
@@ -81,6 +90,44 @@ export interface DtoPresenceView {
 export interface DeriveHostPresenceOptions {
   readonly status: HostStatusDTO;
   readonly hasLiveSession: boolean;
+  /** The surface's clock, the one its "last seen" copy is worded on. */
+  readonly nowMs: number;
+}
+
+/**
+ * Whether a `connectable` reading is young enough to still describe a live
+ * attachment, measured against the host's own check-in stamp.
+ *
+ * `connectable` asserts that the relay holds the host's leg. The host keeps
+ * that leg by re-proving its standing inside the relay's host-leg deadline,
+ * which {@link HOST_STANDING_BOUND_MS} mirrors and which is the same 15-minute
+ * span as the presence lease `isWithinRelayFuseGrace` reasons about from the
+ * other side. A host that stops reporting stops advancing `lastSeenAt` in
+ * exactly the same breath, so a `connectable` reading older than that bound is
+ * a lease nothing is renewing: the two halves of one record contradict each
+ * other, and the only honest reading left is the one the stamp supports.
+ *
+ * Without this the reading never ages. A dirty death - lid closed, cable
+ * pulled, a host killed mid-flight - leaves the cloud saying `connectable`
+ * until the lease lapses, so the card read "Reported reachable · Your account
+ * last heard from this host" through a real outage while another host in the
+ * same list, whose cloud verdict had already flipped, read "offline" correctly.
+ *
+ * `null` or unparsable stamps keep the reading: nothing anchors the bound, and
+ * inventing a death from a missing timestamp is the failure the whole
+ * never-false-Offline invariant is about. A stamp AHEAD of this clock reads as
+ * fresh for the same reason - a client lagging the cloud's stamp is skew, not
+ * evidence - and the bound it holds open is 15 minutes, not the 4 hours
+ * `RELAY_FUSE_MAX_CLOCK_SKEW_MS` guards.
+ */
+function connectableReportIsFresh(
+  status: HostStatusDTO,
+  nowMs: number,
+): boolean {
+  if (status.lastSeenAt === null) return true;
+  const lastSeenMs = Date.parse(status.lastSeenAt);
+  if (Number.isNaN(lastSeenMs)) return true;
+  return nowMs - lastSeenMs < HOST_STANDING_BOUND_MS;
 }
 
 export function deriveHostPresence(
@@ -128,6 +175,11 @@ export function deriveHostPresence(
     // machinery in P3.4; if a real viewer-path probe is ever built, it comes
     // back with a producer this time.
     case "connectable":
+      // Aged past the deadline that would have renewed it: the record's own
+      // stamp outranks its lease word. See `connectableReportIsFresh`.
+      if (!connectableReportIsFresh(status, options.nowMs)) {
+        return { reading: "offline", label: "Offline", showLiveDot: false };
+      }
       return {
         reading: "reported-reachable",
         label: "Reported reachable",
