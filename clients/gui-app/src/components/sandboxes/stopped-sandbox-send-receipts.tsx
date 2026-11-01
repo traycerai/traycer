@@ -15,8 +15,12 @@ import { chatSandboxStateLine } from "@/components/epic-canvas/renderers/chat-sa
 import { TabHostContext } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { Button } from "@/components/ui/button";
 import { useChatSandboxState } from "@/hooks/sandboxes/use-chat-sandbox-state";
-import { useRestedTaskMessageLine } from "@/hooks/sandboxes/use-rested-task-message-line";
+import {
+  useRestedTaskMessageLine,
+  useTaskHasNoChats,
+} from "@/hooks/sandboxes/use-rested-task-message-line";
 import { resolveChatSandbox } from "@/lib/sandboxes/chat-sandbox-state";
+import type { StoredReturnedSandbox } from "@/lib/sandboxes/returned-sandbox";
 import {
   useSandboxList,
   sandboxListReadSentAt,
@@ -30,15 +34,22 @@ import {
   CHOOSE_ANOTHER_HOST,
   restedDraftLine,
   returnedSandboxMessageLine,
+  stoppedAddAgentLine,
   stoppedSandboxLine,
 } from "@/lib/sandboxes/sandbox-strings";
 import { draftTabIntent } from "@/lib/tab-navigation";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import { useStagedSandboxStore } from "@/stores/composer/staged-sandbox-store";
+import {
+  type StagedSandbox,
+  useStagedSandboxStore,
+} from "@/stores/composer/staged-sandbox-store";
 import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
 import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
-import { useSurfaceHostSelectionStore } from "@/stores/host/surface-host-selection-store";
+import {
+  newConversationSurfaceKey,
+  useSurfaceHostSelectionStore,
+} from "@/stores/host/surface-host-selection-store";
 import { usePendingSandboxSendStore } from "@/stores/sandboxes/pending-sandbox-send-store";
 
 import {
@@ -321,6 +332,14 @@ function ReturnedSendReceipt(props: {
     state.drafts.some((draft) => draft.id === returnedDraftId),
   );
   const sandboxList = useSandboxList();
+  const taskReturned = useNewConversationModalStore(
+    (state) =>
+      state.draftPatchesByEpicId[receipt.epicId]?.returnedSandbox ?? null,
+  );
+  const inAddAgent =
+    useTaskHasNoChats(receipt.epicId) &&
+    receipt.returned.kind === "task" &&
+    props.tabId !== null;
   const currentPicks = stoppedReceiptPicks(receipt.epicId, pins, stages);
   const readAt = sandboxListReadSentAt(sandboxList.data);
   const sandboxId =
@@ -329,12 +348,7 @@ function ReturnedSendReceipt(props: {
       : receipt.sandboxId;
   const picksChanged =
     receipt.kind !== "recovered" &&
-    (Object.keys(currentPicks).length !== Object.keys(receipt.picks).length ||
-      Object.entries(currentPicks).some(
-        ([key, pick]) =>
-          pick.pin !== receipt.picks[key]?.pin ||
-          pick.target !== receipt.picks[key]?.target,
-      ));
+    receiptPicksMoved(receipt, currentPicks, taskReturned);
   const row = sandboxList.data?.sandboxes.find(
     (sandbox) => sandbox.id === sandboxId,
   );
@@ -358,6 +372,18 @@ function ReturnedSendReceipt(props: {
   useEffect(() => {
     if (obsolete) dismissReceipt(receipt.id);
   }, [obsolete, receipt.id]);
+  // Reopens the composer and keeps this line, unlike `openDraft`: the Stop's
+  // actions are still the person's.
+  const openAddAgent = useCallback((): void => {
+    if (receipt.returned.kind !== "task" || props.tabId === null) return;
+    useNewConversationModalOpenStore.getState().open({
+      epicId: receipt.epicId,
+      tabId: props.tabId,
+      placement: receipt.returned.placement,
+      parentId: receipt.returned.parentId,
+      hostId: null,
+    });
+  }, [receipt, props.tabId]);
   const openDraft = useCallback((): void => {
     if ((useAuthStore.getState().profile?.userId ?? null) !== receipt.userId)
       return;
@@ -384,10 +410,7 @@ function ReturnedSendReceipt(props: {
         {sandboxLine ?? (
           <span>
             {receipt.kind === "stopped"
-              ? stoppedSandboxLine(
-                  receipt.name,
-                  receipt.returned.kind === "landing-draft",
-                )
+              ? stoppedReceiptLine(receipt, inAddAgent)
               : returnedSandboxMessageLine(
                   receipt.returned.kind === "landing-draft",
                 )}
@@ -411,6 +434,16 @@ function ReturnedSendReceipt(props: {
           ) : null}
           {startSandbox === null ? null : (
             <>
+              {inAddAgent ? (
+                <Button
+                  type="button"
+                  variant="link"
+                  size="inline-xs"
+                  onClick={openAddAgent}
+                >
+                  Add agent
+                </Button>
+              ) : null}
               <Button
                 type="button"
                 variant="link"
@@ -436,7 +469,15 @@ function ReturnedSendReceipt(props: {
         {startSandbox?.failure}
       </div>
     ),
-    [receipt, openDraft, startSandbox, props.tabId, sandboxLine],
+    [
+      receipt,
+      openDraft,
+      openAddAgent,
+      inAddAgent,
+      startSandbox,
+      props.tabId,
+      sandboxLine,
+    ],
   );
   const onToastDismissRef = useRef<(() => void) | undefined>(undefined);
   useEffect(() => {
@@ -462,6 +503,52 @@ function ReturnedSendReceipt(props: {
     });
   }, [content, props.tabId, obsolete, receipt.id]);
   return obsolete || props.tabId === null ? null : content;
+}
+
+function stoppedReceiptLine(
+  receipt: Extract<StoppedSandboxSendReceipt, { readonly kind: "stopped" }>,
+  inAddAgent: boolean,
+): string {
+  if (inAddAgent) return stoppedAddAgentLine(receipt.name);
+  return stoppedSandboxLine(
+    receipt.name,
+    receipt.returned.kind === "landing-draft",
+  );
+}
+
+/**
+ * The composer stages a message's own sandbox as it shows the draft: that is
+ * no pick of the person's, so a Stop's line stays up. The same on both sides:
+ * the sandbox may already have been staged there when the Stop landed. A Stop
+ * only returns a created sandbox, so the sandbox's id names it.
+ */
+function receiptPicksMoved(
+  receipt: StoppedSandboxSendReceipt,
+  current: StoppedSandboxSendReceipt["picks"],
+  returned: StoredReturnedSandbox | null,
+): boolean {
+  const taskKey = newConversationSurfaceKey(receipt.epicId);
+  function pickedTarget(
+    key: string,
+    target: StagedSandbox["target"] | undefined,
+  ): StagedSandbox["target"] | undefined {
+    const isOwnSandbox =
+      target?.kind === "existing" &&
+      returned?.target.kind === "existing" &&
+      target.sandboxId === returned.target.sandboxId;
+    return receipt.kind === "stopped" && key === taskKey && isOwnSandbox
+      ? undefined
+      : target;
+  }
+  return (
+    Object.keys(current).length !== Object.keys(receipt.picks).length ||
+    Object.entries(current).some(
+      ([key, pick]) =>
+        pick.pin !== receipt.picks[key]?.pin ||
+        pickedTarget(key, pick.target) !==
+          pickedTarget(key, receipt.picks[key]?.target),
+    )
+  );
 }
 
 /** A list read after the receipt shows its sandbox has moved on. */

@@ -8767,6 +8767,204 @@ describe("choosing Stop on an unclaimed send", () => {
     ).toMatchObject({ content: MESSAGE_CONTENT, settings: PICKED_SETTINGS });
   });
 
+  describe("on a task whose composer stages the message's own sandbox", () => {
+    const ADD_AGENT_RECEIPT =
+      "Stopped api-refactor. Your message wasn't sent; it's in Add agent.";
+
+    afterEach(() => {
+      __getOpenEpicRegistryForTests().disposeAll();
+    });
+
+    /** The open composer's own hook, mounted before the Stop, stages what the draft names. */
+    async function stopWithOpenComposer(chatIds: readonly string[]) {
+      openTask(true, chatIds);
+      renderHook(() => useNewConversationReturnedSandbox("epic-1", null));
+      await chooseStopAndConfirmRest();
+      await waitFor(() => {
+        expect(
+          readStagedSandbox(newConversationSurfaceKey("epic-1")),
+        ).toMatchObject({ target: { kind: "existing", hostId: SANDBOX_HOST } });
+      });
+    }
+
+    function expectAddAgentReceipt(): void {
+      const line = screen.getByTestId("sandbox-stopped-line");
+      expect(line.textContent).toContain(ADD_AGENT_RECEIPT);
+      expect(
+        within(line).getByRole("button", { name: "Add agent" }),
+      ).toBeDefined();
+      expect(within(line).getByRole("button", { name: "Start" })).toBeDefined();
+      expect(
+        within(line).getByRole("button", { name: "Choose another host" }),
+      ).toBeDefined();
+      expect(line.textContent).not.toContain("api-refactor is stopped");
+      expect(screen.queryByTestId("rested-task-message-line")).toBeNull();
+    }
+
+    it("keeps the Stopped line, saying the message is in Add agent, once the composer stages its sandbox", async () => {
+      await stopWithOpenComposer([]);
+      expectAddAgentReceipt();
+      expect(
+        useStoppedSandboxSendReceiptStore.getState().receipts[SEND_ID],
+      ).toBeDefined();
+    });
+
+    it("keeps the line, with all three actions, after the person closes Add agent", async () => {
+      await stopWithOpenComposer([]);
+
+      act(() => {
+        useNewConversationModalOpenStore.getState().close();
+      });
+
+      expect(useNewConversationModalOpenStore.getState().request).toBeNull();
+      expectAddAgentReceipt();
+    });
+
+    it("reopens the composer with the message in it on Add agent, keeping the line", async () => {
+      await stopWithOpenComposer([]);
+      act(() => {
+        useNewConversationModalOpenStore.getState().close();
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: "Add agent" }));
+
+      expect(useNewConversationModalOpenStore.getState().request).toMatchObject(
+        {
+          epicId: "epic-1",
+          tabId: "tab-1",
+          hostId: null,
+        },
+      );
+      expect(
+        useNewConversationModalStore.getState().draftPatchesByEpicId["epic-1"],
+      ).toMatchObject({ content: MESSAGE_CONTENT });
+      expectAddAgentReceipt();
+    });
+
+    it("says the message is back in the composer, with no Add agent, on a task that has a chat", async () => {
+      await stopWithOpenComposer(["chat-1"]);
+
+      const line = screen.getByTestId("sandbox-stopped-line");
+      expect(line.textContent).toContain(BACK_IN_COMPOSER_RECEIPT);
+      expect(
+        within(line).queryByRole("button", { name: "Add agent" }),
+      ).toBeNull();
+      expect(
+        useStoppedSandboxSendReceiptStore.getState().receipts[SEND_ID],
+      ).toBeDefined();
+    });
+
+    it("still clears the line when the person stages a different sandbox on the task", async () => {
+      await stopWithOpenComposer([]);
+
+      act(() => {
+        useStagedSandboxStore
+          .getState()
+          .stage(newConversationSurfaceKey("epic-1"), NEW_TARGET);
+      });
+
+      await waitFor(() => {
+        expect(screen.queryByTestId("sandbox-stopped-line")).toBeNull();
+      });
+      expect(
+        useStoppedSandboxSendReceiptStore.getState().receipts[SEND_ID],
+      ).toBeUndefined();
+    });
+
+    it("keeps the line when the composer already held a stage on this sandbox before the Stop landed", async () => {
+      openTask(true, []);
+      useStagedSandboxStore
+        .getState()
+        .stage(newConversationSurfaceKey("epic-1"), START_TARGET);
+      await chooseStopAndConfirmRest();
+
+      expectAddAgentReceipt();
+      expect(
+        useStoppedSandboxSendReceiptStore.getState().receipts[SEND_ID],
+      ).toBeDefined();
+    });
+
+    it("keeps the saved-in-drafts line when an occupied composer already held its earlier stage on this sandbox", async () => {
+      const occupiedContent: JsonContent = {
+        type: "doc",
+        content: [
+          {
+            type: "paragraph",
+            content: [{ type: "text", text: "keep my replacement" }],
+          },
+        ],
+      };
+      openTask(true, []);
+      // Seeded: an earlier give-back left the composer's content, its returned
+      // sandbox and the stage the composer made from it.
+      useNewConversationModalStore
+        .getState()
+        .setContent("epic-1", occupiedContent);
+      useNewConversationModalStore.getState().setReturnedSandbox("epic-1", {
+        target: START_TARGET,
+        clientRequestId: null,
+      });
+      useStagedSandboxStore
+        .getState()
+        .stage(newConversationSurfaceKey("epic-1"), START_TARGET);
+      await chooseStopAndConfirmRest();
+
+      const line = screen.getByTestId("sandbox-stopped-line");
+      expect(line.textContent).toContain(SAVED_DRAFT_RECEIPT);
+      expect(
+        within(line).getByRole("button", { name: "Open draft" }),
+      ).toBeDefined();
+      expect(within(line).getByRole("button", { name: "Start" })).toBeDefined();
+      expect(
+        within(line).getByRole("button", { name: "Choose another host" }),
+      ).toBeDefined();
+      expect(
+        useStoppedSandboxSendReceiptStore.getState().receipts[SEND_ID],
+      ).toBeDefined();
+    });
+
+    it("clears a cancelled receipt when the composer stages the message's own sandbox", async () => {
+      openTask(true, []);
+      useNewConversationModalStore
+        .getState()
+        .setContent("epic-1", MESSAGE_CONTENT);
+      useNewConversationModalStore.getState().setReturnedSandbox("epic-1", {
+        target: START_TARGET,
+        clientRequestId: null,
+      });
+      answerSandboxRows(
+        [
+          sandboxSummaryFixture({
+            id: SANDBOX_ID,
+            hostId: SANDBOX_HOST,
+            state: "stopped",
+          }),
+        ],
+        1,
+      );
+      recordCancelledSandboxSend(
+        pendingSend({ id: SEND_ID, epicConfirmed: true }),
+        {
+          kind: "task",
+          epicId: "epic-1",
+          parentId: null,
+          placement: null,
+        },
+      );
+      mount();
+      await screen.findByTestId("sandbox-stopped-line");
+
+      renderHook(() => useNewConversationReturnedSandbox("epic-1", null));
+
+      await waitFor(() => {
+        expect(screen.queryByTestId("sandbox-stopped-line")).toBeNull();
+      });
+      expect(
+        readStagedSandbox(newConversationSurfaceKey("epic-1")),
+      ).toMatchObject({ target: { kind: "existing" } });
+    });
+  });
+
   it("saves the stopped message in drafts when the task composer has newer content", async () => {
     const occupiedContent: JsonContent = {
       type: "doc",
@@ -10695,15 +10893,6 @@ describe("a task with no chat whose message came back to its own composer on a s
     "build-box is stopped. Your message wasn't sent; it's in Add agent.";
   const LINE = "rested-task-message-line";
 
-  const noopStreamClientFactory: EpicStreamClientFactory = () => ({
-    applyUpdate: () => undefined,
-    awareness: () => undefined,
-    applyArtifactRoomUpdate: () => undefined,
-    artifactRoomAwareness: () => undefined,
-    retryMigration: () => undefined,
-    close: () => undefined,
-  });
-
   afterEach(() => {
     __getOpenEpicRegistryForTests().disposeAll();
   });
@@ -10715,31 +10904,6 @@ describe("a task with no chat whose message came back to its own composer on a s
       state,
       guestConfigured: true,
     });
-  }
-
-  /** The task's real open-epic store, its snapshot loaded or not, holding `chatIds`. */
-  function openTask(
-    snapshotLoaded: boolean,
-    chatIds: readonly string[],
-  ): OpenEpicStoreHandle {
-    const handle = __getOpenEpicRegistryForTests().acquire("epic-1", () =>
-      openStoreForTest({
-        epicId: "epic-1",
-        userId: null,
-        factories: {
-          streamClientFactory: noopStreamClientFactory,
-          laneSelection: null,
-        },
-        writeCommand: null,
-      }),
-    );
-    act(() => {
-      handle.store.setState({
-        snapshotLoaded,
-        chats: { allIds: [...chatIds], byId: {} },
-      });
-    });
-    return handle;
   }
 
   /** What a give-back to the task's own composer leaves: the message and its sandbox. */
@@ -11035,3 +11199,37 @@ describe("a task with no chat whose message came back to its own composer on a s
     );
   });
 });
+
+const noopStreamClientFactory: EpicStreamClientFactory = () => ({
+  applyUpdate: () => undefined,
+  awareness: () => undefined,
+  applyArtifactRoomUpdate: () => undefined,
+  artifactRoomAwareness: () => undefined,
+  retryMigration: () => undefined,
+  close: () => undefined,
+});
+
+/** The task's real open-epic store, its snapshot loaded or not, holding `chatIds`. */
+function openTask(
+  snapshotLoaded: boolean,
+  chatIds: readonly string[],
+): OpenEpicStoreHandle {
+  const handle = __getOpenEpicRegistryForTests().acquire("epic-1", () =>
+    openStoreForTest({
+      epicId: "epic-1",
+      userId: null,
+      factories: {
+        streamClientFactory: noopStreamClientFactory,
+        laneSelection: null,
+      },
+      writeCommand: null,
+    }),
+  );
+  act(() => {
+    handle.store.setState({
+      snapshotLoaded,
+      chats: { allIds: [...chatIds], byId: {} },
+    });
+  });
+  return handle;
+}
