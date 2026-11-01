@@ -1532,7 +1532,10 @@ interface ProvisionSegmentOptions {
 /**
  * What a failed Windows start already knows about the task it could not run:
  * its `/Run` refusal carries `registrationDisabled` from the ownership gate's
- * read of that task. `null` for any failure that does not carry it.
+ * read of that task. `null` for any failure that does not carry it, and for a
+ * refusal whose gate read produced no definition to answer from - which is
+ * the answer that sends the caller below to read for itself, rather than let
+ * it act on a `false` nothing established.
  */
 function startRefusedOverDisabledRegistration(error: unknown): boolean | null {
   if (!(error instanceof CliError) || error.details === null) return null;
