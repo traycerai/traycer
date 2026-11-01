@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 
 import { providerApiKeyRefusal } from "../provider-api-key-issuer";
 import type { ProviderId } from "../provider-ids";
-import { PROVIDER_DISPLAY_NAMES } from "../provider-schemas";
 
 // The providers whose API key the settings form takes. Fake strings only: each
 // carries a vendor's documented prefix and nothing else.
@@ -25,13 +24,45 @@ const KEYS = {
 
 const UNKNOWN_KEY = "unrecognized-shape-fake-key-do-not-use";
 
+// Targets whose own key shape is in the issuer table: the refusal names it.
+const KNOWN_SHAPE_TARGETS = [
+  [
+    "openrouter",
+    'This looks like an Anthropic key, not an OpenRouter key. OpenRouter keys start with "sk-or-".',
+  ],
+  [
+    "huggingface",
+    'This looks like an Anthropic key, not a Hugging Face key. Hugging Face keys start with "hf_".',
+  ],
+  [
+    "droid",
+    'This looks like an Anthropic key, not a Droid key. Droid keys start with "fk-".',
+  ],
+  [
+    "amp",
+    'This looks like an Anthropic key, not an Amp key. Amp keys start with "sgamp_".',
+  ],
+] as const satisfies readonly (readonly [ProviderId, string])[];
+
+// Targets with no known shape of their own: the refusal names only the
+// vendor it found, since there is no shape to name for the target.
+const UNKNOWN_SHAPE_TARGETS = [
+  ["cursor", "This looks like an Anthropic key, not a Cursor key."],
+  ["kiro", "This looks like an Anthropic key, not a Kiro key."],
+] as const satisfies readonly (readonly [ProviderId, string])[];
+
 describe("providerApiKeyRefusal", () => {
-  it.each(KEY_PROVIDERS)(
-    "refuses an Anthropic-shaped key for %s, naming the vendor and the target",
-    (providerId) => {
-      expect(providerApiKeyRefusal(providerId, KEYS.anthropic)).toBe(
-        `That looks like an Anthropic key. Use your ${PROVIDER_DISPLAY_NAMES[providerId]} key.`,
-      );
+  it.each(KNOWN_SHAPE_TARGETS)(
+    "refuses an Anthropic-shaped key for %s, naming the vendor, the target and the target's shape",
+    (providerId, refusal) => {
+      expect(providerApiKeyRefusal(providerId, KEYS.anthropic)).toBe(refusal);
+    },
+  );
+
+  it.each(UNKNOWN_SHAPE_TARGETS)(
+    "refuses an Anthropic-shaped key for %s, with no shape of its own to name",
+    (providerId, refusal) => {
+      expect(providerApiKeyRefusal(providerId, KEYS.anthropic)).toBe(refusal);
     },
   );
 
@@ -41,10 +72,10 @@ describe("providerApiKeyRefusal", () => {
     ["droid", KEYS.factory, "a Factory"],
     ["amp", KEYS.amp, "an Amp"],
   ] as const)(
-    "refuses a %s-shaped key pasted into a different provider, with the right article",
+    "refuses a %s-shaped key pasted into a target with no shape of its own, with the right article",
     (_issuer, key, phrase) => {
       expect(providerApiKeyRefusal("cursor", key)).toBe(
-        `That looks like ${phrase} key. Use your ${PROVIDER_DISPLAY_NAMES.cursor} key.`,
+        `This looks like ${phrase} key, not a Cursor key.`,
       );
     },
   );
