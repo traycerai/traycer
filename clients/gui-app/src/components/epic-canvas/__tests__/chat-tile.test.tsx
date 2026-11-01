@@ -721,7 +721,10 @@ import {
   CHAT_INDEX_UNAVAILABLE_CODE,
   CHAT_NOT_VISIBLE_CODE,
 } from "@/lib/chats/chat-session-close-codes";
-import { publishEnvironmentArmScope } from "@/hooks/environment/use-environment-arms";
+import {
+  publishEnvironmentArmScope,
+  publishEnvironmentChatArmsAbsent,
+} from "@/hooks/environment/use-environment-arms";
 import { ChatServingWitnessContext } from "@/lib/chats/chat-serving-witness";
 import { PoolChatServingWitness } from "@/lib/chats/pool-chat-serving-witness";
 import {
@@ -2752,20 +2755,27 @@ describe("<ChatTile />", () => {
           });
         }
 
+        function publishScope(): void {
+          act(() => {
+            publishEnvironmentArmScope({
+              poolHostId: "pool-host-id",
+              client: arms,
+              viewerId: VIEWER,
+              environmentIds: [ENVIRONMENT_ID],
+              environmentIdByTeamId: new Map(),
+              supported: new Set(["environment.chats.subscribe"]),
+            });
+          });
+        }
+
         beforeEach(() => {
           arms = new FakeStreamClient(true);
-          publishEnvironmentArmScope({
-            poolHostId: "pool-host-id",
-            client: arms,
-            viewerId: VIEWER,
-            environmentIds: [ENVIRONMENT_ID],
-            environmentIdByTeamId: new Map(),
-            supported: new Set(["environment.chats.subscribe"]),
-          });
+          publishScope();
         });
 
         afterEach(() => {
           publishEnvironmentArmScope(null);
+          publishEnvironmentChatArmsAbsent(false);
         });
 
         it("says only the file loss once every arm has answered with no row for the chat", async () => {
@@ -2834,6 +2844,61 @@ describe("<ChatTile />", () => {
             expect(screen.getAllByText(FULL_LINE)).toHaveLength(1);
           });
           expect(screen.queryByText(SHORT_LINE)).toBeNull();
+          witness.dispose();
+        });
+
+        it("keeps the promise through discovery, however the arm then answers", async () => {
+          const seen: string[] = [];
+          const line =
+            /e2e-sbx-t1 was destroyed[^.]*\. Its files are gone[^.]*\./;
+          const record = (): void => {
+            const found = line.exec(document.body.textContent)?.[0];
+            if (found !== undefined && seen.at(-1) !== found) seen.push(found);
+          };
+          const observer = new MutationObserver(record);
+          observer.observe(document.body, {
+            subtree: true,
+            childList: true,
+            characterData: true,
+          });
+          act(() => {
+            publishEnvironmentArmScope(null);
+          });
+          const { witness, session } = await openUntilSubscribed();
+
+          terminateWith(session, CHAT_INDEX_UNAVAILABLE_CODE);
+          await waitFor(() => {
+            expect(screen.getAllByText(FULL_LINE)).toHaveLength(1);
+          });
+          // Discovery is still out: no scope, and no word that there are no arms.
+          publishScope();
+          await waitFor(() => {
+            expect(arms.sessions).toHaveLength(1);
+          });
+          answerArm([armChat(CHAT_ARTIFACT.id, HOST_ID)]);
+          await waitFor(() => {
+            expect(screen.getAllByText(FULL_LINE)).toHaveLength(1);
+          });
+          record();
+          observer.disconnect();
+
+          expect(seen).toEqual([FULL_LINE]);
+          witness.dispose();
+        });
+
+        it("says only the file loss once discovery has answered that there are no arms", async () => {
+          act(() => {
+            publishEnvironmentArmScope(null);
+            publishEnvironmentChatArmsAbsent(true);
+          });
+          const { witness, session } = await openUntilSubscribed();
+
+          terminateWith(session, CHAT_INDEX_UNAVAILABLE_CODE);
+
+          await waitFor(() => {
+            expect(screen.getAllByText(SHORT_LINE)).toHaveLength(1);
+          });
+          expect(arms.sessions).toHaveLength(0);
           witness.dispose();
         });
 
