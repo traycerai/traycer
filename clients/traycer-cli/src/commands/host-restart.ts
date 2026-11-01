@@ -14,6 +14,7 @@ import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import type { CommandFn, CommandResult } from "../runner/runner";
 import {
   createServiceController,
+  serviceJobIdFor,
   serviceLabelFor,
   type ServiceController,
   type ServiceLabel,
@@ -298,6 +299,7 @@ export function buildHostRestartCommand(args: HostRestartArgs): CommandFn {
       },
     );
     const restarted = locked.kind === "restarted";
+    const jobId = await serviceJobIdFor(controller, label);
     // A distinct fact from `restarted:false`. Both mean "no relaunch", but a
     // safe-stop STOPPED the service and this one deliberately did not touch
     // it, and a caller that cannot tell them apart cannot tell "your host is
@@ -329,10 +331,10 @@ export function buildHostRestartCommand(args: HostRestartArgs): CommandFn {
         runtimeWasNull: locked.attestation.runtimeWasNull,
       },
       human: restarted
-        ? humanForRestart(label.id, locked.result)
+        ? humanForRestart(jobId, locked.result)
         : deferredForParkedActivation
-          ? `left service '${label.id}' untouched because a packaged update is waiting for its explicit activation${recovery === null ? "" : `: ${recovery}`}`
-          : `stopped service '${label.id}' without relaunch because a packaged update is waiting for its explicit activation; the host is now down${recovery === null ? "" : `: ${recovery}`}`,
+          ? `left service '${jobId}' untouched because a packaged update is waiting for its explicit activation${recovery === null ? "" : `: ${recovery}`}`
+          : `stopped service '${jobId}' without relaunch because a packaged update is waiting for its explicit activation; the host is now down${recovery === null ? "" : `: ${recovery}`}`,
       exitCode: 0,
     };
   };
@@ -517,11 +519,8 @@ async function restartWithActuators(
   };
 }
 
-function humanForRestart(
-  labelId: string,
-  result: RestartFinalizeResult,
-): string {
-  const base = `requested restart for service '${labelId}'`;
+function humanForRestart(jobId: string, result: RestartFinalizeResult): string {
+  const base = `requested restart for service '${jobId}'`;
   const reconcilePrefix = describeMarkerReconcile(result.markerReconcile);
   if (result.helper !== null && result.helper.status === "armed") {
     return `${reconcilePrefix}${base}; cli upgrade live binary held by current CLI process - armed finalize helper (pid=${

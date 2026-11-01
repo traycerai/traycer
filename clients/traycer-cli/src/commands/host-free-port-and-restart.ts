@@ -21,7 +21,11 @@ import {
 } from "../host/update-mutation";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import type { CommandFn, CommandResult } from "../runner/runner";
-import { createServiceController, serviceLabelFor } from "../service";
+import {
+  createServiceController,
+  serviceJobIdFor,
+  serviceLabelFor,
+} from "../service";
 
 // `traycer host free-port-and-restart --pid <pid> --port <port>` - the
 // CLI-owned mapping for Doctor's Free-Port-and-Restart fix.
@@ -123,6 +127,7 @@ export function buildHostFreePortAndRestartCommand(
       });
     }
     const label = serviceLabelFor(ctx.runtime.environment);
+    const controller = createServiceController();
     // ONE options value for acquisition and every in-segment revalidation:
     // separate literals that must stay identical are how admission policies
     // drift.
@@ -183,7 +188,6 @@ export function buildHostFreePortAndRestartCommand(
           });
           if (failure !== null) throw failure;
         }
-        const controller = createServiceController();
         const stopOnly = contenderContext.recoveryAction === "stop-only";
         // Compared for every stop-only record, deferred ones included, so the
         // guidance below describes THIS record (`host restart` has the same
@@ -252,6 +256,7 @@ export function buildHostFreePortAndRestartCommand(
         };
       },
     );
+    const jobId = await serviceJobIdFor(controller, label);
     // Both no-relaunch outcomes need distinct copy: one stopped the service,
     // the other deliberately left it alone. Reporting them with one sentence
     // would tell a user their host is down when it is still running.
@@ -263,12 +268,12 @@ export function buildHostFreePortAndRestartCommand(
         ? ""
         : `: ${describeNonterminalRecordRecovery(record, parkMatchesInstall)}`;
     const noRelaunch = deferredForParkedActivation
-      ? `left '${label.id}' untouched because a packaged update is waiting for its explicit activation${recovery}`
-      : `stopped '${label.id}' without activating parked update bytes; the host is now down${recovery}`;
+      ? `left '${jobId}' untouched because a packaged update is waiting for its explicit activation${recovery}`
+      : `stopped '${jobId}' without activating parked update bytes; the host is now down${recovery}`;
     // The kill sentence composes with whichever service action actually ran -
     // a stop-only or deferred outcome must not claim a restart was requested.
     const action = restarted
-      ? `restart requested for service '${label.id}'`
+      ? `restart requested for service '${jobId}'`
       : noRelaunch;
     // Rendered from what actually happened to the signal, matching the sibling
     // `host free-port`. Three distinct paths reach success here:

@@ -21,6 +21,8 @@ import type { KillConflictingPortOwnerResult } from "../../host/free-port-kill";
 const mocks = vi.hoisted(() => ({
   controllerCalls: [] as string[],
   lockCalls: [] as Array<{ reason: string }>,
+  // The job the service manager runs for the label, when it is not the label.
+  serviceJobId: null as string | null,
   killCalls: [] as Array<{ pid: number; port: number; commandName: string }>,
   killResult: {
     killed: true,
@@ -65,7 +67,8 @@ vi.mock("../../service", async (importOriginal) => {
           await atServiceSpawnEdge();
         }
       },
-      hostStartAdoptionLabel: async (label: { id: string }) => label.id,
+      hostStartAdoptionLabel: async (label: { id: string }) =>
+        mocks.serviceJobId ?? label.id,
     }),
   };
 });
@@ -254,6 +257,27 @@ describe("buildHostFreePortAndRestartCommand", () => {
       release: null,
     });
     expect(result.exitCode).toBe(0);
+  });
+
+  it("names the job it restarted when that is Desktop's agent", async () => {
+    mocks.serviceJobId = "ai.traycer.host.agent";
+    try {
+      const { buildHostFreePortAndRestartCommand } =
+        await import("../host-free-port-and-restart");
+
+      const result = await buildHostFreePortAndRestartCommand({
+        pid: null,
+        port: null,
+        deferIfParked: false,
+        lifecycleOrigin: "terminal",
+      })(fakeCtx());
+
+      expect(result.human).toContain(
+        "restart requested for service 'ai.traycer.host.agent'",
+      );
+    } finally {
+      mocks.serviceJobId = null;
+    }
   });
 
   it("publishes the restart's adoption proof as `maintenance`, whoever asked for it", async () => {

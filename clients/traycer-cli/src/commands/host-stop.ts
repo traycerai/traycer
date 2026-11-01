@@ -1,7 +1,11 @@
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import type { Environment } from "../runner/environment";
 import type { CommandFn, CommandResult } from "../runner/runner";
-import { createServiceController, serviceLabelFor } from "../service";
+import {
+  createServiceController,
+  serviceJobIdFor,
+  serviceLabelFor,
+} from "../service";
 import {
   findForegroundHostRun,
   foregroundRunRefusal,
@@ -114,6 +118,7 @@ export function buildHostStopCommand(args: HostStopArgs): CommandFn {
       pollIntervalMs: 100,
       admission: "service-maintenance",
     };
+    const controller = createServiceController();
     await withCliUpdateContender(contenderOptions, async (capability) => {
       if (!args.force || args.lifecycleOrigin === "desktop") {
         await refuseForegroundHostRun(
@@ -125,7 +130,7 @@ export function buildHostStopCommand(args: HostStopArgs): CommandFn {
       await stopHostServiceWithAttempt(
         capability,
         contenderOptions,
-        createServiceController(),
+        controller,
         label,
         { force: args.force },
         args.ifIdle ? "if-idle" : "unconditional",
@@ -137,11 +142,12 @@ export function buildHostStopCommand(args: HostStopArgs): CommandFn {
         );
       }
     });
+    const jobId = await serviceJobIdFor(controller, label);
     return {
       data: { stopped: true, label: label.id, forced: args.force },
       human: args.force
-        ? `force-stopped service '${label.id}'`
-        : `requested stop for service '${label.id}'`,
+        ? `force-stopped service '${jobId}'`
+        : `requested stop for service '${jobId}'`,
       exitCode: 0,
     };
   };

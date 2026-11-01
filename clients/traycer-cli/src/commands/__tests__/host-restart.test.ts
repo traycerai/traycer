@@ -302,6 +302,47 @@ describe("buildHostRestartCommand", () => {
     ]);
   });
 
+  it("closes by naming the job it drove on a Desktop-managed Mac, through the real controller", async () => {
+    const { createMacosController } =
+      await import("../../service/platforms/macos");
+    const agentPrint = [
+      "gui/501/ai.traycer.host.agent = {",
+      "\tpath = (submitted by smd.347)",
+      "\ttype = Submitted",
+      "\tmanaged_by = com.apple.xpc.ServiceManagement",
+      "\tstate = running",
+      "\tpid = 89066",
+      "}",
+      "",
+    ].join("\n");
+    const launchctl: string[] = [];
+    mocks.realController = createMacosController(async (_command, args) => {
+      launchctl.push(args.join(" "));
+      return args[0] === "print" && args[1]?.endsWith(".agent") === true
+        ? { stdout: agentPrint, stderr: "", exitCode: 0 }
+        : { stdout: "", stderr: "", exitCode: 0 };
+    });
+    const { buildHostRestartCommand } = await import("../host-restart");
+
+    const result = await buildHostRestartCommand({
+      ifIdle: false,
+      force: false,
+      deferIfParked: false,
+      expectedHost: null,
+      lifecycleOrigin: "terminal",
+    })(fakeCtx());
+
+    expect(result.human).toBe(
+      "requested restart for service 'ai.traycer.host.agent'",
+    );
+    expect(result.data).toMatchObject({ label: "ai.traycer.host" });
+    const jobs = launchctl.map((call) => call.split("/").at(-1));
+    expect(new Set(jobs)).toEqual(new Set(["ai.traycer.host.agent"]));
+    expect(
+      launchctl.filter((call) => call.startsWith("kickstart")),
+    ).toHaveLength(1);
+  });
+
   it("publishes the relaunch's adoption proof as `maintenance`, whoever asked for the restart", async () => {
     // Lifecycle modes: a restart brings back a run that already
     // existed, so its relaunch leg records `maintenance` in the proof the

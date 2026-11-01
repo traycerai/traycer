@@ -26,6 +26,8 @@ const mocks = vi.hoisted(() => ({
   controllerCalls: [] as string[],
   lockCalls: [] as Array<{ reason: string }>,
   assertIdle: vi.fn(),
+  // The job the service manager runs for the label, when it is not the label.
+  serviceJobId: null as string | null,
 }));
 
 vi.mock("../../host/busy-check", async (importOriginal) => {
@@ -58,6 +60,8 @@ vi.mock("../../service", async (importOriginal) => {
       start: async () => {
         mocks.controllerCalls.push("start");
       },
+      hostStartAdoptionLabel: async (label: { id: string }) =>
+        mocks.serviceJobId ?? label.id,
       restart: async () => {
         mocks.controllerCalls.push("restart");
       },
@@ -161,6 +165,35 @@ describe("buildHostStopCommand", () => {
     expect(mocks.lockCalls).toEqual([{ reason: "host-stop" }]);
     expect(mocks.controllerCalls).toEqual(["stop"]);
     expect(result.data).toMatchObject({ stopped: true });
+  });
+
+  it("names the job it stopped, in both closing lines, when that is Desktop's agent", async () => {
+    mocks.serviceJobId = "ai.traycer.host.agent";
+    try {
+      const stop = await buildHostStopCommand({
+        force: false,
+        ifIdle: false,
+        lifecycleOrigin: "terminal",
+      });
+      const forceStop = await buildHostStopCommand({
+        force: true,
+        ifIdle: false,
+        lifecycleOrigin: "terminal",
+      });
+
+      const cooperative = await stop(fakeCtx());
+      const forced = await forceStop(fakeCtx());
+
+      expect(cooperative.human).toBe(
+        "requested stop for service 'ai.traycer.host.agent'",
+      );
+      expect(forced.human).toBe(
+        "force-stopped service 'ai.traycer.host.agent'",
+      );
+      expect(cooperative.data).toMatchObject({ label: "ai.traycer.host" });
+    } finally {
+      mocks.serviceJobId = null;
+    }
   });
 
   it("--if-idle with --force is refused before the lock is taken", async () => {
