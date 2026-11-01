@@ -46,10 +46,15 @@ const dialogMocks = vi.hoisted(() => ({
 
 // The cloud's Traycer catalog, read only for a Traycer pick sent to a sandbox.
 vi.mock("@/hooks/sandboxes/use-sandbox-traycer-models-query", () => ({
-  useSandboxTraycerModels: () => ({
-    data: cloudModelOptions(),
-    isFetching: false,
-  }),
+  // The query's own shape; this dialog's list is always answered.
+  useSandboxTraycerModels: () => {
+    return {
+      data: cloudModelOptions(),
+      isPending: false,
+      isFetching: false,
+      isError: false,
+    };
+  },
 }));
 vi.mock("@/hooks/auth/use-auth-user-query", () => ({
   useAuthUser: () => ({

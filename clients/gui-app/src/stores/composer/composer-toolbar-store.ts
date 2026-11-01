@@ -199,6 +199,11 @@ export interface ComposerToolbarState extends ComposerToolbarDerived {
    * writes.
    */
   readonly onShownPickKept: ((settings: ChatRunSettings) => void) | null;
+  /**
+   * Whether the last catalog push derived under a stage's model hold. A stage
+   * can come or go with no change to the catalog, on a sandbox host.
+   */
+  readonly modelHeld: boolean;
   /** The stage in place is a pick, not a draft's returned sandbox restored. */
   readonly stageKeepsShownPick: boolean;
   /**
@@ -391,6 +396,7 @@ export function createComposerToolbarStore(
       pendingSettingsEmit: false,
       sandboxRunTarget: null,
       onShownPickKept: null,
+      modelHeld: false,
       stageKeepsShownPick: false,
       keptPickUnwritten: false,
 
@@ -485,7 +491,8 @@ export function createComposerToolbarStore(
 
       setCatalog: (catalog) => {
         const state = get();
-        if (sameCatalog(state.catalog, catalog)) return;
+        const { staged } = policyFor(state);
+        if (settledOn(state, catalog, staged)) return;
         const keptDerived = deriveToolbarState(
           state.values,
           catalog,
@@ -515,6 +522,7 @@ export function createComposerToolbarStore(
         set({
           catalog,
           values,
+          modelHeld: staged,
           ...derived,
           // Only an emit clears the deferred flag; a silent push leaves it as-is.
           pendingSettingsEmit:
@@ -841,6 +849,15 @@ function decideCatalogTransition(
     !derived.selectionHealedForDisplay &&
     derived.selection.modelSlug.length > 0
   );
+}
+
+/** Nothing a push derives from has moved since the last one. */
+function settledOn(
+  state: ComposerToolbarState,
+  catalog: ComposerToolbarCatalog,
+  staged: boolean,
+): boolean {
+  return state.modelHeld === staged && sameCatalog(state.catalog, catalog);
 }
 
 function sameCatalog(

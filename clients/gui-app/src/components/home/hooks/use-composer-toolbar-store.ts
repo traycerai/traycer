@@ -333,6 +333,8 @@ export function useComposerToolbarStore(
     chatLineCarriesAutoMode,
     ultracodeCarried,
     keepsUnavailablePick,
+    // The push re-derives a stage's model hold on its own when only this moved.
+    sandboxRunTarget,
   ]);
 
   // The palette commits too, so it is held to the same team-sandbox rule as the

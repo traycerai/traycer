@@ -109,10 +109,16 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
   },
 }));
 vi.mock("@/hooks/sandboxes/use-sandbox-traycer-models-query", () => ({
-  useSandboxTraycerModels: () => ({
-    data: cloudModelOptions(),
-    isFetching: false,
-  }),
+  // The query's own shape: a read that has not answered is pending.
+  useSandboxTraycerModels: () => {
+    const data = cloudModelOptions();
+    return {
+      data,
+      isPending: data === undefined,
+      isFetching: false,
+      isError: false,
+    };
+  },
 }));
 vi.mock("@/hooks/sandboxes/use-sandbox-catalogue-query", () => ({
   useSandboxCatalogue: () => ({

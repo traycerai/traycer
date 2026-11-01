@@ -67,7 +67,8 @@ export function useStagedSendSignInCheck(
   const checksModel = active && harnessId === "traycer" && modelSlug.length > 0;
   const traycerModels = useSandboxTraycerModels(checksModel);
   const models = traycerModels.data;
-  const modelsPending = models === undefined && traycerModels.isFetching;
+  // Pending, not fetching: a read paused offline has not answered either.
+  const modelsPending = traycerModels.isPending;
   const authUser = useAuthUser();
   const runnerHost = useRunnerHost();
   const openLink = useOpenLink();
