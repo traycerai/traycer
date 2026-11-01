@@ -9,6 +9,7 @@ import { isEditableRole } from "@/lib/epic-permissions";
 import { PendingSandboxSendForChat } from "@/components/sandboxes/pending-sandbox-sends";
 import { ChatSandboxFooter } from "@/components/chat/chat-sandbox-footer";
 import { useChatSandboxState } from "@/hooks/sandboxes/use-chat-sandbox-state";
+import { useSandboxEndRead } from "@/hooks/sandboxes/use-sandbox-end-read";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
 import { createStore, useStore } from "zustand";
@@ -57,6 +58,7 @@ import { useChatTileHostLabel } from "./use-chat-tile-host-label";
 import { PublishedChatNotice } from "./published-chat-notice";
 import { PublishedChatSourceProvider } from "@/lib/chats/published-chat-source-provider";
 import {
+  PUBLISHED_COPY_NOTICE,
   publishedChatLockReason,
   replicaChatLockReason,
   type PublishedCopyRefresh,
@@ -235,6 +237,8 @@ interface PublishedChatOwner {
   readonly hostName: string | null;
   readonly sandboxState: ChatSandboxState;
   readonly sandbox: ChatSandboxView;
+  /** The read that says what became of the sandbox is out. */
+  readonly endRead: boolean;
   readonly lockFacts: PublishedCopyOwnerFacts;
 }
 
@@ -249,6 +253,7 @@ function usePublishedChatOwner(
     node.ownerHostId,
     reachability.status === "reachable",
   );
+  const endRead = useSandboxEndRead(sandboxState.kind === "pending");
   useOfflineOwnerRecoveryRead(
     node.ownerHostId,
     reachability,
@@ -264,7 +269,7 @@ function usePublishedChatOwner(
   const editable = role === null || isEditableRole(role);
   const sandbox = resolveChatSandbox(sandboxState, {
     ...ownership,
-    reachable: reachability.status === "reachable",
+    reachable: reachability.status === "reachable" || endRead,
     canEdit: editable,
   });
   const ownerRefusesStore = useHostRefusesEpicStore(
@@ -276,6 +281,7 @@ function usePublishedChatOwner(
     hostName,
     sandboxState,
     sandbox,
+    endRead,
     lockFacts: {
       ...ownership,
       ownerName,
@@ -315,6 +321,7 @@ function copyReadOnlyNotice(
   copyNotice: string,
 ): string | null {
   const { line, composer } = owner.sandbox;
+  if (owner.endRead) return PUBLISHED_COPY_NOTICE;
   if (composer.kind === "wake") return null;
   if (line?.place === "slot") return line.text;
   if (line?.state.kind === "unreachable")
@@ -817,7 +824,7 @@ function PublishedChatDeadTileBanner(props: {
 }): ReactNode {
   const { sandbox, reachability, hostName } = props.owner;
   // A sandbox chat's one line is its only line, whatever the state.
-  if (sandbox.line !== null) return null;
+  if (sandbox.line !== null || props.owner.endRead) return null;
   if (reachability.status !== "unreachable") return null;
   return (
     <ChatDeadTileBannerContainer

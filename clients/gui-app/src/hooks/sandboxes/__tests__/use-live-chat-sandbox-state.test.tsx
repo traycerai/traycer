@@ -416,9 +416,13 @@ describe("a live chat's sandbox lifecycle reconciliation", () => {
       { wrapper },
     );
     await waitFor(() => expect(result.current.state.kind).toBe("resting"));
-    await waitFor(() => expect(taskHostsReads).toBeGreaterThanOrEqual(2));
+    // The observer's own first read is the only one: nothing re-reads the
+    // task's hosts until the state turns pending.
+    await waitFor(() => expect(taskHostsReads).toBe(1));
+    await waitFor(() =>
+      expect(binding.auth.listSandboxes).toHaveBeenCalledTimes(2),
+    );
     const readsBeforeLeaving = taskHostsReads;
-    expect(binding.auth.listSandboxes).toHaveBeenCalledTimes(2);
 
     let answerTaskHosts: (value: number) => void = () => {
       throw new Error("the task hosts read has not started");

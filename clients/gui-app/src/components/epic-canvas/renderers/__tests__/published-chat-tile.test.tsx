@@ -1,4 +1,5 @@
 import {
+  act,
   cleanup,
   render as renderWithoutQueryClient,
   screen,
@@ -6,7 +7,12 @@ import {
   within,
   type RenderResult,
 } from "@testing-library/react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  QueryClient,
+  QueryClientProvider,
+  queryOptions,
+  useQuery,
+} from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import {
@@ -62,6 +68,8 @@ import {
 import { TabBodySelectedContext } from "@/components/epic-canvas/canvas/tab-body-selected-context";
 import { PaneVisibilityContext } from "@/components/epic-tabs/pane-visibility-context";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { useEndedSandboxHostsStore } from "@/stores/sandboxes/ended-sandbox-hosts-store";
+import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { RpcErrorCode } from "@traycer/protocol/framework/index";
 import { TILE_KIND_PUBLISHED_CHAT } from "@/stores/epics/canvas/tile-kinds";
@@ -2633,7 +2641,7 @@ describe("PublishedChatTile - an unknown sandbox state, for every role", () => {
     ["a collaborator", PERSONAL_ONLY_ENVIRONMENTS],
   ] as const)(
     "gives %s the unknown line, by the sandbox's name",
-    (_role, list) => {
+    async (_role, list) => {
       environments.pool = true;
       environments.list = list;
       useAuthStore.setState({
@@ -2677,12 +2685,169 @@ describe("PublishedChatTile - an unknown sandbox state, for every role", () => {
         />,
       );
 
-      expect(screen.getByTestId("chat-tile-session-view").textContent).toBe(
-        "e2e-sbx-p1 isn't available — this chat stays readable.",
-      );
+      // A fresh mount in `pending` reads the task's hosts first; the line is
+      // the state's once that read settles.
+      await waitFor(() => {
+        expect(screen.getByTestId("chat-tile-session-view").textContent).toBe(
+          "e2e-sbx-p1 isn't available — this chat stays readable.",
+        );
+      });
       expect(
         screen.queryByTestId("published-chat-dead-tile-chat-1"),
       ).toBeNull();
     },
   );
+});
+
+/**
+ * A viewer who never saw the destroy: the sandbox is in the task's hosts as a
+ * live row, then leaves the viewer's list. The state turns `pending` and the
+ * task's hosts are read once; until that read answers, nothing on screen
+ * calls the sandbox unavailable or its host offline.
+ */
+describe("PublishedChatTile - a sandbox that leaves the list under a viewer who never saw it end", () => {
+  const OWNER_HOST = "owner-host-1";
+  const ENDED_AT = new Date(2026, 9, 28, 1, 27).getTime();
+
+  function sandboxHostRow(
+    sandboxEnd: TaskHostRow["sandboxEnd"],
+  ): TaskHostsView {
+    return {
+      kind: "hosts",
+      hosts: [
+        {
+          hostId: OWNER_HOST,
+          label: "e2e-sbx-p1",
+          principal: { kind: "team", id: "team-1" },
+          reach: "same_principal",
+          sandboxEnd,
+        },
+      ],
+    };
+  }
+
+  /** The active `epic.listTaskHosts` read the tile's hook refetches. */
+  function TaskHostsObserver(props: {
+    readonly read: () => Promise<number>;
+  }): ReactNode {
+    useQuery(
+      queryOptions({
+        queryKey: hostQueryKeys.methodScope(
+          "session-host",
+          "epic.listTaskHosts",
+        ),
+        queryFn: props.read,
+      }),
+    );
+    return null;
+  }
+
+  function copyTree(read: () => Promise<number>): ReactNode {
+    return (
+      <>
+        <TaskHostsObserver read={read} />
+        <PublishedChatTile
+          node={NODE}
+          viewTabId="tab-1"
+          tileId="pane-1"
+          isActive
+          epicId="epic-1"
+        />
+      </>
+    );
+  }
+
+  it("names no unavailability or offline host while the task's hosts are read, then says the end", async () => {
+    useEndedSandboxHostsStore.setState({ byHostId: {} });
+    useAuthStore.setState({
+      status: "signed-in",
+      profile: {
+        userId: NODE.ownerUserId,
+        userName: "Owner",
+        email: "owner@example.com",
+      },
+      contextMetadata: { userId: NODE.ownerUserId, username: "Owner" },
+    });
+    mockUseHostReachability.mockReturnValue({
+      status: "unreachable",
+      hostLabel: OWNER_HOST,
+    });
+    mockUseCloudChatTranscript.mockReturnValue(refusedUnpublished());
+    mockUseChatReplicaRead.mockReturnValue(replicaOk());
+    const stopped = sandboxSummaryFixture({
+      id: "sbx-p1",
+      hostId: OWNER_HOST,
+      displayName: "e2e-sbx-p1",
+      state: "stopped",
+    });
+    sandboxSurface.sources = {
+      taskHosts: sandboxHostRow(null),
+      sandboxes: [stopped],
+      entry: null,
+    };
+    let reads = 0;
+    let answerRead: (value: number) => void = () => {
+      throw new Error("the task hosts read has not started");
+    };
+    let nextAnswer: Promise<number> = Promise.resolve(0);
+    const read = (): Promise<number> => {
+      reads += 1;
+      return nextAnswer;
+    };
+    const view = render(copyTree(read));
+    await waitFor(() => expect(reads).toBe(1));
+    expect(await screen.findByTestId("chat-tile-session-view")).toBeTruthy();
+
+    // The row leaves the viewer's list; the task's hosts still say live. The
+    // next read of them is the one in flight.
+    nextAnswer = new Promise<number>((resolve) => {
+      answerRead = resolve;
+    });
+    sandboxSurface.sources = {
+      taskHosts: sandboxHostRow(null),
+      sandboxes: [],
+      entry: null,
+    };
+    view.rerender(copyTree(read));
+
+    await waitFor(() => expect(reads).toBe(2));
+    expect(document.body.textContent).not.toContain("isn't available");
+    expect(document.body.textContent).not.toContain("offline");
+    expect(screen.queryByTestId("published-chat-dead-tile-chat-1")).toBeNull();
+    expect(screen.queryByText(/Clone/)).toBeNull();
+    expect(chatTileSessionViewCalls.at(-1)?.readOnlyNotice).toBe(
+      "Showing the last published copy of this agent.",
+    );
+
+    // The answer carries the end.
+    sandboxSurface.sources = {
+      taskHosts: sandboxHostRow({
+        state: "destroyed",
+        destroyedAt: ENDED_AT,
+        cause: "resting",
+        actor: null,
+        idleMinutes: null,
+      }),
+      sandboxes: [],
+      entry: null,
+    };
+    await act(async () => {
+      answerRead(1);
+      await nextAnswer;
+    });
+    view.rerender(copyTree(read));
+
+    await waitFor(() => {
+      const footer = screen.getByTestId("chat-tile-session-view");
+      expect(footer.textContent).toBe(
+        "e2e-sbx-p1 was destroyed on Oct 28 at 01:27 after resting. Its files are gone; this chat stays readable.",
+      );
+      expect(
+        within(footer)
+          .getByTestId("sandbox-end-actions")
+          .getAttribute("data-source-host"),
+      ).toBe(OWNER_HOST);
+    });
+    expect(document.body.textContent).not.toContain("isn't available");
+  });
 });
