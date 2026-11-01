@@ -1,5 +1,35 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  cleanup,
+  fireEvent,
+  render as renderWithoutQueryClient,
+  screen,
+  waitFor,
+  type RenderResult,
+} from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { ReactNode } from "react";
+import type { CollaboratorEntry } from "@traycer/protocol/host/epic/unary-schemas";
+import type { EnvironmentListResponse } from "@traycer/protocol/host/environment/contracts";
+import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
+import { recordNegotiatedHostMethods } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import { remoteEntry } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
+import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
+import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
+import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
+import {
+  EpicSessionContext,
+  EpicSessionHostClientContext,
+} from "@/lib/registries/epic-session-registry";
+import { TaskHostReachContext } from "@/hooks/epic/use-task-host-reach";
+import { useAuthStore } from "@/stores/auth/auth-store";
+import {
+  openStoreForTest,
+  type OpenedStoreForTest,
+} from "@/stores/epics/open-epic/test-support/open-store-for-test";
 import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
 import type { HostSandboxState } from "@traycer/protocol/host/host-status";
 import {
@@ -60,6 +90,15 @@ vi.mock(
   },
 );
 
+// What tells a collaborator's chat from a team sandbox's: the team environment
+// list. Stubbed at its own seam; the ownership hook and the row stay real.
+const environments = vi.hoisted(
+  (): { list: EnvironmentListResponse | undefined } => ({ list: undefined }),
+);
+vi.mock("@/hooks/bots/use-environment-list-query", () => ({
+  useEnvironmentListQuery: () => ({ data: environments.list }),
+}));
+
 vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => "host-a",
 }));
@@ -112,8 +151,28 @@ vi.mock("@/stores/epics/canvas/store", () => ({
     tileId !== null && activeInTab.tileId === tileId,
 }));
 
+// The row reads the owner facts and the collaborator list through Query.
+let queryClient = new QueryClient();
+
+function render(ui: ReactNode): RenderResult {
+  return renderWithoutQueryClient(ui, {
+    wrapper: (props: { readonly children: ReactNode }) => (
+      <QueryClientProvider client={queryClient}>
+        {props.children}
+      </QueryClientProvider>
+    ),
+  });
+}
+
+beforeEach(() => {
+  queryClient = new QueryClient();
+});
+
 afterEach(() => {
   cleanup();
+  queryClient.clear();
+  environments.list = undefined;
+  useAuthStore.setState(useAuthStore.getInitialState(), true);
   resetHostConnectionRegistryForTest();
   reachability.status = "unreachable";
   openedRefs.length = 0;
@@ -760,4 +819,190 @@ describe("EpicSidebarCloudChatRow for an owner sandbox at rest", () => {
       expect(openedRefs.map((ref) => ref.type)).toEqual(["published-chat"]);
     },
   );
+});
+
+/**
+ * A collaborator's chat, locked: the row names the collaborator the task's
+ * `epic.listCollaborators` names, through the REAL `useHostQueries` over a
+ * recording messenger, and never says "offline" about a machine this account
+ * cannot observe.
+ */
+describe("EpicSidebarCloudChatRow for a collaborator's chat", () => {
+  const EPIC_ID = "epic-1";
+  const OWNER_USER_ID = CHAT.identity.ownerUserId;
+  const collaboratorChat: CloudChatSummary = {
+    ...CHAT,
+    isOwnedByViewer: false,
+  };
+  const noopStreamClientFactory = () => ({
+    applyUpdate: () => undefined,
+    awareness: () => undefined,
+    applyArtifactRoomUpdate: () => undefined,
+    artifactRoomAwareness: () => undefined,
+    retryMigration: () => undefined,
+    close: () => undefined,
+  });
+
+  let entries: CollaboratorEntry[] = [];
+  let client: HostClient<HostRpcRegistry>;
+  let session: OpenedStoreForTest;
+
+  function collaboratorRow(
+    profile: { displayName: string; email: string } | null,
+  ): CollaboratorEntry {
+    return {
+      role: "editor",
+      accessType: "direct",
+      environmentId: null,
+      grantedAt: 1,
+      grantedBy: "viewer-user",
+      user: {
+        userId: OWNER_USER_ID,
+        profile:
+          profile === null ? null : { ...profile, avatarUrl: "", handle: "" },
+      },
+      team: null,
+    };
+  }
+
+  beforeEach(() => {
+    entries = [];
+    const messenger = new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => "req-1",
+      handlers: {
+        "epic.listCollaborators": () => ({
+          collaborators: entries,
+          collaboratorsAvailable: true,
+        }),
+      },
+    });
+    client = new HostClient<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      schedulingPolicy: hostRpcSchedulingPolicy,
+      invalidator: createHostQueryInvalidator(queryClient),
+      findHostById: (hostId) =>
+        hostId === "host-1" ? remoteEntry("host-1", null) : null,
+      messenger,
+    });
+    client.setRequestContext(
+      createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
+    );
+    recordNegotiatedHostMethods("host-1", ["epic.listCollaborators"]);
+    session = openStoreForTest({
+      epicId: EPIC_ID,
+      userId: "viewer-user",
+      factories: {
+        streamClientFactory: noopStreamClientFactory,
+        laneSelection: null,
+      },
+      writeCommand: null,
+    });
+    useAuthStore.setState({
+      status: "signed-in",
+      profile: {
+        userId: "viewer-user",
+        userName: "Viewer",
+        email: "viewer@example.com",
+      },
+      contextMetadata: { userId: "viewer-user", username: "Viewer" },
+    });
+    // Answered without the owner: a person's chat, not a team sandbox's.
+    environments.list = { environments: [] };
+  });
+
+  afterEach(() => {
+    session.dispose();
+    client.dispose();
+  });
+
+  /** The task's reach rows name the owner's host as another principal's. */
+  const OTHER_PRINCIPAL_HOSTS: ReadonlySet<string> = new Set([
+    CHAT.ownerHostId,
+  ]);
+
+  function renderCollaboratorRow(chat: CloudChatSummary): void {
+    render(
+      <EpicSessionContext value={session}>
+        <EpicSessionHostClientContext
+          value={client.createRequesterForHostId("host-1")}
+        >
+          <TaskHostReachContext value={OTHER_PRINCIPAL_HOSTS}>
+            <EpicSidebarCloudChatRow
+              chat={chat}
+              childEntries={NO_CHILDREN}
+              expansion={LEAF_EXPANSION}
+              tabId="tab-1"
+              depth={0}
+              selectionMode={false}
+            />
+          </TaskHostReachContext>
+        </EpicSessionHostClientContext>
+      </EpicSessionContext>,
+    );
+  }
+
+  it("names the collaborator in the row's accessible name once the list names them", async () => {
+    entries = [collaboratorRow({ displayName: "Ada Lovelace", email: "" })];
+    renderCollaboratorRow(collaboratorChat);
+
+    const row = await screen.findByRole("button", {
+      name: "Walkthrough — on Ada Lovelace's computer, not reachable from here",
+    });
+    expect(row.getAttribute("aria-label")).not.toContain("offline");
+    expect(row.getAttribute("aria-label")).not.toContain(
+      "not reachable from this host",
+    );
+  });
+
+  it("says another collaborator while no name has loaded, and for a row that names only the user id", async () => {
+    entries = [collaboratorRow(null)];
+    renderCollaboratorRow(collaboratorChat);
+
+    await waitFor(() => {
+      expect(queryClient.isFetching()).toBe(0);
+    });
+    expect(
+      screen.getByRole("button", {
+        name: "Walkthrough — on another collaborator's computer, not reachable from here",
+      }),
+    ).toBeTruthy();
+  });
+
+  it("puts the same words on the lock's tooltip", async () => {
+    entries = [collaboratorRow({ displayName: "Ada Lovelace", email: "" })];
+    renderCollaboratorRow(collaboratorChat);
+    await screen.findByRole("button", {
+      name: "Walkthrough — on Ada Lovelace's computer, not reachable from here",
+    });
+
+    await userEvent.hover(
+      screen.getByTestId(`epic-sidebar-cloud-lock-${CHAT.identity.chatId}`),
+    );
+
+    expect(
+      (
+        await screen.findAllByText(
+          "On Ada Lovelace's computer, not reachable from here. Opens read-only from the last published copy.",
+        )
+      ).length,
+    ).toBeGreaterThan(0);
+  });
+
+  it("keeps the offline wording, and the reach line after it, for the viewer's own chat", async () => {
+    entries = [collaboratorRow({ displayName: "Ada Lovelace", email: "" })];
+    useAuthStore.setState({
+      contextMetadata: { userId: OWNER_USER_ID, username: "Owner" },
+    });
+    renderCollaboratorRow(CHAT);
+
+    await waitFor(() => {
+      expect(queryClient.isFetching()).toBe(0);
+    });
+    expect(
+      screen.getByRole("button", {
+        name: "Walkthrough — On Tanveer's laptop, offline — not reachable from this host",
+      }),
+    ).toBeTruthy();
+  });
 });

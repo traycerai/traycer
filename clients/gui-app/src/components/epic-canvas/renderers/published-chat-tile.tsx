@@ -64,6 +64,7 @@ import {
 import { useHostRefusesEpicStore } from "@/hooks/chats/use-host-refuses-epic-store";
 import { usePublishedChatLiveConversion } from "@/hooks/chats/use-published-chat-live-conversion";
 import { useChatOwnerCopyFacts } from "@/hooks/environment/use-team-environment-ownership";
+import { useCollaboratorDisplayName } from "@/hooks/epics/use-collaborator-display-name";
 
 /**
  * A chat whose owning host is out of reach, rendered through the ORDINARY chat
@@ -224,6 +225,7 @@ interface PublishedCopyOwnerFacts {
   readonly ownerIsThisHost: boolean;
   readonly ownedByViewer: boolean;
   readonly environmentOwned: boolean;
+  readonly ownerName: string | null;
   readonly ownerLabel: string;
 }
 
@@ -257,6 +259,7 @@ function usePublishedChatOwner(
     node.ownerHostId,
     node.chatId,
   );
+  const ownerName = useCollaboratorDisplayName(epicId, node.ownerUserId);
   const role = useEpicPermissionRole();
   const editable = role === null || isEditableRole(role);
   const sandbox = resolveChatSandbox(sandboxState, {
@@ -275,6 +278,7 @@ function usePublishedChatOwner(
     sandbox,
     lockFacts: {
       ...ownership,
+      ownerName,
       ownerIsReachable: reachability.status === "reachable",
       ownerRefusesStore,
       ownerIsThisHost: ownerHostIsServingHost(node.ownerHostId, node.hostId),
