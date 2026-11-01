@@ -105,17 +105,7 @@ export function MemberRow(props: {
           </p>
         )}
       </div>
-      {/* Any action in this group replaces the question this row is still
-          waiting on, Details included — its dialog is opened inside that entry,
-          so the view cannot retire the pick from there the way it does for its
-          own openers. Captured here because those controls are the children,
-          and only while there is a pick to drop. */}
-      <div
-        className="flex flex-wrap items-center gap-2"
-        onClickCapture={
-          props.checkingRole === null ? undefined : props.onCancelRoleChange
-        }
-      >
+      <div className="flex flex-wrap items-center gap-2">
         {showRoleSelect ? (
           <EnumSelect
             labels={ROLE_LABELS}
@@ -130,8 +120,15 @@ export function MemberRow(props: {
           </span>
         )}
         {props.checkingRole === null ? null : (
+          // Announced, like every other status line in these pages: the dots
+          // are decorative, so without a role a screen-reader user picks a
+          // role, hears nothing, is never told a check is running or that the
+          // Cancel beside it exists, and then meets a dialog with the wait
+          // unexplained. The text does not change while this is mounted, so
+          // there is nothing to re-announce.
           <span
             className="flex items-center gap-1.5 text-ui-sm text-muted-foreground"
+            role="status"
             data-testid="members-role-checking"
           >
             <AgentSpinningDots

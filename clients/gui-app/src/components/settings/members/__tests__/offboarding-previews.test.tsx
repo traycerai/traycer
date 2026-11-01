@@ -261,7 +261,11 @@ describe("DemotionPreviewDialog", () => {
     );
   });
 
-  it("keeps the confirm off only while the plan check is loading", () => {
+  // `loading` reaches this dialog only as a Retry already in flight: its caller
+  // does not open it before the first answer. So the state is read as that —
+  // the failure that prompted the Retry still named, the button that started it
+  // still there and quiet, and the confirm off until the read lands.
+  it("keeps the confirm and the Retry off while a retry is in flight", () => {
     render(
       <DemotionPreviewDialog
         open
@@ -280,6 +284,13 @@ describe("DemotionPreviewDialog", () => {
     expect(
       screen.getByTestId("members-demotion-confirm").hasAttribute("disabled"),
     ).toBe(true);
+    expect(
+      screen.getByTestId("members-demotion-preview-failed").textContent,
+    ).toContain("Couldn't load what changing Priya's role interrupts");
+    expect(
+      screen.getByRole<HTMLButtonElement>("button", { name: "Retry" }).disabled,
+    ).toBe(true);
+    expect(screen.getByTestId("members-demotion-retry-busy")).toBeTruthy();
   });
 
   it("asks the question, says what is lost and names the role on the button", () => {

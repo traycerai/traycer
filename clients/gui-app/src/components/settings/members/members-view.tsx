@@ -426,6 +426,27 @@ export function MembersView(props: {
     setDemotionRefusal(null);
   };
 
+  /**
+   * The Details entry, wrapped once for every subject this view hands out —
+   * each row's and the notice's. Details opens its dialog inside the entry,
+   * which this view does not own, so there is no opener here to teach; the
+   * invariant is instead that **every entry this view hands out retires a
+   * pending pick on the way in**, like every opener below. It belongs here and
+   * not on the row, because the pick is the view's while only its tell is the
+   * row's: a press on another member's Details, or on the notice's, is as much
+   * a replacement of the question as Remove is.
+   *
+   * The span is rendered always, never only while a pick is pending. The entry
+   * holds its drawer's own open state, so changing the element at this position
+   * would unmount it in the very commit the press opens it, and `closeDemotion`
+   * with nothing pending is a no-op.
+   */
+  const detailsEntry = (subject: MembersDetailsSubject): ReactNode => (
+    <span className="contents" onClickCapture={closeDemotion}>
+      {rowDetails(subject)}
+    </span>
+  );
+
   // Every opener of a question in this view retires a demotion still waiting
   // on its check, Remove and Revoke through here and Invite below. Its confirm
   // is deferred until the answer lands, so without this the answer mounts a
@@ -557,7 +578,7 @@ export function MembersView(props: {
         <LegacyRoleNotice
           teamName={teamName}
           names={legacyMembers}
-          details={rowDetails(noticeSubject)}
+          details={detailsEntry(noticeSubject)}
           onDismiss={dismissNotice}
         />
       ) : null}
@@ -578,7 +599,7 @@ export function MembersView(props: {
           pendingCount={pendingCount}
           peopleCount={peopleCount}
           legacyMembers={legacyMembers}
-          rowDetails={rowDetails}
+          rowDetails={detailsEntry}
           checkingRole={demotionDialog.checking}
           onCancelRoleChange={closeDemotion}
           onRoleChange={openRoleChange}

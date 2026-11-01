@@ -27,7 +27,7 @@ import {
   within,
 } from "@testing-library/react";
 import userEvent, { type UserEvent } from "@testing-library/user-event";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import type { QueryClient } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import type {
@@ -45,6 +45,7 @@ import {
 import { dashboardRunnerHost } from "@/components/settings/host-scope/__tests__/host-access-test-support";
 import { MembersView } from "@/components/settings/members/members-view";
 import type {
+  MembersDetailsSubject,
   MembersInviteOutcome,
   MembersListMember,
   MembersRemoveOutcome,
@@ -110,6 +111,26 @@ type PreviewAnswer = (
   | EnvironmentMembersRemovePreviewResponse
   | Promise<EnvironmentMembersRemovePreviewResponse>;
 
+/**
+ * Stands in for the page's Details entry, which the view is handed rather than
+ * owning: a trigger whose panel is open state of its own. That state is the
+ * point — a case can tell a pick the view withdrew from an entry the view
+ * remounted, which looks identical from the outside until the drawer someone
+ * just opened disappears with it.
+ */
+function DetailsEntry(props: { readonly subjectKey: string }): ReactNode {
+  const [open, setOpen] = useState(false);
+  const key = props.subjectKey.length === 0 ? "notice" : props.subjectKey;
+  return (
+    <>
+      <button type="button" onClick={() => setOpen(true)}>
+        Details
+      </button>
+      {open ? <span data-testid={`details-open-${key}`}>Open</span> : null}
+    </>
+  );
+}
+
 function renderView(options: {
   readonly viewerRole: TeamRole;
   readonly members: readonly MembersListMember[];
@@ -148,7 +169,9 @@ function renderView(options: {
   );
   const onNoticeSeen = vi.fn(() => undefined);
   const onRetryMembers = vi.fn(() => undefined);
-  const rowDetails = (): ReactNode => <button type="button">Details</button>;
+  const rowDetails = (subject: MembersDetailsSubject): ReactNode => (
+    <DetailsEntry subjectKey={subject.key} />
+  );
   render(
     <harness.Wrapper>
       <RunnerHostContext.Provider value={dashboardRunnerHost()}>
@@ -748,6 +771,89 @@ describe("MembersView demotion announcement", () => {
       expect(screen.queryByTestId("members-demotion-preview")).toBeNull();
     },
   );
+
+  // The pick is the view's; only its tell is the row's. So a Details press
+  // anywhere the view hands an entry out has to retire it — another member's
+  // row, and the notice, which is not in a row at all. Each case also holds the
+  // entry's own panel open across the withdrawal: the wrapper that intercepts
+  // the press must not be the thing that unmounts what the press opened.
+  it.each([
+    {
+      where: "another member's row",
+      seenAt: 1 as number | null,
+      entry: (): HTMLElement =>
+        within(rowOf("u-admin2")).getByRole("button", { name: "Details" }),
+      panel: "details-open-u-admin2",
+    },
+    {
+      where: "the legacy-role notice",
+      seenAt: null as number | null,
+      entry: (): HTMLElement =>
+        within(screen.getByTestId("members-legacy-notice")).getByRole(
+          "button",
+          { name: "Details" },
+        ),
+      panel: "details-open-notice",
+    },
+  ])(
+    "drops a pending demotion when the person presses Details on $where",
+    async ({ seenAt, entry, panel }) => {
+      const user = userEvent.setup();
+      const previews = deferredPreviews();
+      const { queryClient } = renderView({
+        ...BASE,
+        legacyRoleNoticeSeenAt: seenAt,
+        viewerRole: "admin",
+        members: [ADMIN, SECOND_ADMIN, EDITOR],
+        preview: previews.answer,
+      });
+      await user.click(
+        screen.getByRole("combobox", { name: "Role for Priya" }),
+      );
+      await user.click(await screen.findByRole("option", { name: "Viewer" }));
+      await waitFor(() =>
+        expect(
+          within(rowOf("u-editor")).getByTestId("members-role-checking"),
+        ).toBeTruthy(),
+      );
+
+      await user.click(entry());
+      expect(screen.getByTestId(panel)).toBeTruthy();
+
+      // The consequence first: this is the dialog that would land on top of
+      // the drawer the press just opened.
+      await settled(previews, queryClient, "u-editor");
+      expect(screen.queryByTestId("members-demotion-preview")).toBeNull();
+      // Still open: the entry held its own state through the commit that
+      // dropped the pick.
+      expect(screen.getByTestId(panel)).toBeTruthy();
+      expect(
+        within(rowOf("u-editor")).queryByTestId("members-role-checking"),
+      ).toBeNull();
+    },
+  );
+
+  // The dots are decorative, so the wait is announced by the tell itself or
+  // not at all — and the Cancel the wait exists for is only discoverable by
+  // exploring the row.
+  it("announces the row's pending tell", async () => {
+    const user = userEvent.setup();
+    const previews = deferredPreviews();
+    renderView({
+      ...BASE,
+      viewerRole: "admin",
+      members: [ADMIN, SECOND_ADMIN, EDITOR],
+      preview: previews.answer,
+    });
+    await user.click(screen.getByRole("combobox", { name: "Role for Priya" }));
+    await user.click(await screen.findByRole("option", { name: "Viewer" }));
+
+    const announced = await waitFor(() =>
+      within(rowOf("u-editor")).getByRole("status"),
+    );
+    expect(announced.getAttribute("data-testid")).toBe("members-role-checking");
+    expect(announced.textContent).toContain("Checking viewer…");
+  });
 
   // The select is controlled on the role the member HOLDS, so picking that
   // role again fires nothing: without a control of its own, the only way out

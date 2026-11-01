@@ -74,7 +74,12 @@ export interface PlanUnlinkPreviewModel {
   readonly whatKeepsWorking: string;
 }
 
-/** A dialog's preview: still being read, read, or refused. */
+/**
+ * A dialog's preview: still being read, read, or refused. What `loading` means
+ * depends on when its dialog opens. The remove confirm opens before its read,
+ * so there it is a first load; the demotion confirm opens only once the read
+ * has answered, so there it is only ever a Retry already in flight.
+ */
 export type PreviewState<Preview> =
   | { readonly status: "loading" }
   | { readonly status: "ready"; readonly preview: Preview }
