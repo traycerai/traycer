@@ -145,12 +145,15 @@ export async function withCliUpdateExecutionSegment<T>(
 
 const DESKTOP_LOCK_REASON_PREFIX = `${HOST_UPDATE_INITIATOR_DESKTOP}:`;
 
+export function runByDesktop(): boolean {
+  return (
+    process.env[HOST_UPDATE_INITIATOR_ENV_VAR] === HOST_UPDATE_INITIATOR_DESKTOP
+  );
+}
+
 /** The lock carries a reason and a pid, so the reason is what can say who. */
-function lockReasonOf(reason: string): string {
-  return process.env[HOST_UPDATE_INITIATOR_ENV_VAR] ===
-    HOST_UPDATE_INITIATOR_DESKTOP
-    ? `${DESKTOP_LOCK_REASON_PREFIX}${reason}`
-    : reason;
+export function lockReasonOf(reason: string): string {
+  return runByDesktop() ? `${DESKTOP_LOCK_REASON_PREFIX}${reason}` : reason;
 }
 
 /** The desktop's own in-process holders, named `host-controller-*`. */
@@ -166,6 +169,7 @@ function workOf(reason: string): string {
   if (reason.endsWith("host-download")) return "downloading a host update";
   if (reason.endsWith("host-apply")) return "installing a host update";
   if (reason.endsWith("host-update")) return "updating the host";
+  if (reason.endsWith("host-update-verify")) return "checking a host update";
   return "changing the host";
 }
 
@@ -235,7 +239,7 @@ export async function withCliSupervisorRelaunchSegment<T>(
   const outcome = await withSupervisorRelaunchContender(
     {
       hostHomeDir: hostHomeDir(options.environment),
-      reason: options.reason,
+      reason: lockReasonOf(options.reason),
       waitMs: options.waitMs,
       pollIntervalMs: options.pollIntervalMs,
       readInstalledIdentity: () =>
@@ -266,7 +270,7 @@ export async function withCliLifecycleTeardownSegment<T>(
   const outcome = await withLifecycleTeardownContender(
     {
       hostHomeDir: options.hostHomeDir ?? hostHomeDir(options.environment),
-      reason: options.reason,
+      reason: lockReasonOf(options.reason),
       waitMs: options.waitMs,
       pollIntervalMs: options.pollIntervalMs,
       readInstalledIdentity: () =>
@@ -291,7 +295,7 @@ export async function withCliAttemptExecutor<T>(
   const outcome = await withUpdateContender(
     {
       hostHomeDir: options.hostHomeDir ?? hostHomeDir(options.environment),
-      reason: options.reason,
+      reason: lockReasonOf(options.reason),
       waitMs: options.waitMs,
       pollIntervalMs: options.pollIntervalMs,
       admission: "attempt-executor",
