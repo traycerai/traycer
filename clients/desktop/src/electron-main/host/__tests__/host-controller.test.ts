@@ -382,6 +382,7 @@ import {
   type AttemptHolderEvidence,
   type HostUpdateAttemptIdentity,
   type LockMetadata,
+  readHostUpdateLastAttempt,
 } from "@traycer-clients/shared/host-update";
 
 const ORIGINAL_HOME = process.env.HOME;
@@ -1084,6 +1085,13 @@ describe("mutation lane: wait-never-reject", () => {
     unsubscribeStatus();
 
     expect(outcome.kind).toBe("ok");
+    expect(
+      await readHostUpdateLastAttempt(getHostFsLayout("production").rootDir),
+    ).toMatchObject({
+      initiator: "desktop",
+      outcome: "complete",
+      targetVersion: "1.8.0",
+    });
     expect(statuses).toEqual([
       expect.objectContaining({ kind: "apply", progress: null }),
       expect.objectContaining({
@@ -3867,6 +3875,57 @@ describe("platform matrix", () => {
     );
   });
 
+  it("applyStaged on packaged macOS records the update complete once its own restart brought the host up", async () => {
+    vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    writePidMetadata("production", { version: "1.7.0", pid: process.pid });
+    writeStagedRecord("production", "1.8.0", "1.8.0");
+    vi.mocked(runBundledTraycerCliJson).mockResolvedValue(
+      availableSnapshotFixture("1.8.0", ["1.8.0"]),
+    );
+    vi.mocked(streamBundledTraycerCliJson).mockImplementation(async (opts) => {
+      if (opts.args.includes("apply")) {
+        expect(opts.args).toContain("--no-service");
+        writeInstallRecord("production", {
+          version: "1.8.0",
+          runtimeVersion: "1.8.0",
+        });
+        return {
+          data: {
+            outcome: "applied",
+            record: { version: "1.8.0", runtimeVersion: "1.8.0" },
+            runningActivated: false,
+            installGeneration: null,
+          },
+        };
+      }
+      return { data: {} };
+    });
+    vi.mocked(waitForHostReady).mockResolvedValue({
+      ready: true,
+      version: "1.8.0",
+      pid: process.pid,
+      startedAt: "2026-01-01T00:00:00.000Z",
+      reason: "ready",
+    });
+
+    const outcome = await controller.applyStaged("manual", false);
+
+    expect(outcome.kind).toBe("ok");
+    expect(
+      await readHostUpdateLastAttempt(getHostFsLayout("production").rootDir),
+    ).toMatchObject({
+      command: "host apply",
+      initiator: "desktop",
+      outcome: "complete",
+      targetVersion: "1.8.0",
+    });
+  });
+
   it("installVersion on packaged macOS installs bytes with --no-service-register, then runs the locked activation cycle", async () => {
     vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
     const controller = newController("production");
@@ -6563,6 +6622,15 @@ describe("applyStagedCliOwned stamping decision (fixup B9)", () => {
       message: expect.stringContaining("Doctor"),
     });
     expect(waitForHostReady).not.toHaveBeenCalled();
+    expect(
+      await readHostUpdateLastAttempt(getHostFsLayout("production").rootDir),
+    ).toMatchObject({
+      command: "host apply",
+      initiator: "desktop",
+      outcome: "failed",
+      targetVersion: "1.8.0",
+      message: expect.stringContaining("Doctor"),
+    });
   });
 
   it("reports a failed apply when a null-runtime activation never becomes ready", async () => {
