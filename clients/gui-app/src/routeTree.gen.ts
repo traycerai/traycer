@@ -16,6 +16,7 @@ import { Route as OnboardingRouteImport } from "./routes/onboarding";
 import { Route as SampleWorkspaceRouteImport } from "./routes/sample-workspace";
 import { Route as SettingsRouteImport } from "./routes/settings";
 import { Route as WhenYouQuitRouteImport } from "./routes/when-you-quit";
+import { Route as BotIndexRouteImport } from "./routes/bot.index";
 import { Route as BotBotIdRouteImport } from "./routes/bot.$botId";
 import { Route as DraftDraftIdRouteImport } from "./routes/draft.$draftId";
 import { Route as DraftNewRouteImport } from "./routes/draft.new";
@@ -91,6 +92,11 @@ const SettingsRoute = SettingsRouteImport.update({
 const WhenYouQuitRoute = WhenYouQuitRouteImport.update({
   id: "/when-you-quit",
   path: "/when-you-quit",
+  getParentRoute: () => rootRouteImport,
+} as any);
+const BotIndexRoute = BotIndexRouteImport.update({
+  id: "/bot/",
+  path: "/bot/",
   getParentRoute: () => rootRouteImport,
 } as any);
 const BotBotIdRoute = BotBotIdRouteImport.update({
@@ -349,6 +355,7 @@ export interface FileRoutesByFullPath {
   "/settings/skills": typeof SettingsSkillsRoute;
   "/settings/usage": typeof SettingsUsageRoute;
   "/settings/worktrees": typeof SettingsWorktreesRoute;
+  "/bot/": typeof BotIndexRoute;
   "/epics/": typeof EpicsIndexRoute;
   "/settings/": typeof SettingsIndexRoute;
   "/epics/$epicId/$tabId": typeof EpicsEpicIdTabIdRoute;
@@ -397,6 +404,7 @@ export interface FileRoutesByTo {
   "/settings/skills": typeof SettingsSkillsRoute;
   "/settings/usage": typeof SettingsUsageRoute;
   "/settings/worktrees": typeof SettingsWorktreesRoute;
+  "/bot": typeof BotIndexRoute;
   "/epics": typeof EpicsIndexRoute;
   "/settings": typeof SettingsIndexRoute;
   "/epics/$epicId/$tabId": typeof EpicsEpicIdTabIdRoute;
@@ -448,6 +456,7 @@ export interface FileRoutesById {
   "/settings/skills": typeof SettingsSkillsRoute;
   "/settings/usage": typeof SettingsUsageRoute;
   "/settings/worktrees": typeof SettingsWorktreesRoute;
+  "/bot/": typeof BotIndexRoute;
   "/epics/": typeof EpicsIndexRoute;
   "/settings/": typeof SettingsIndexRoute;
   "/epics/$epicId/$tabId": typeof EpicsEpicIdTabIdRoute;
@@ -500,6 +509,7 @@ export interface FileRouteTypes {
     | "/settings/skills"
     | "/settings/usage"
     | "/settings/worktrees"
+    | "/bot/"
     | "/epics/"
     | "/settings/"
     | "/epics/$epicId/$tabId";
@@ -548,6 +558,7 @@ export interface FileRouteTypes {
     | "/settings/skills"
     | "/settings/usage"
     | "/settings/worktrees"
+    | "/bot"
     | "/epics"
     | "/settings"
     | "/epics/$epicId/$tabId";
@@ -598,6 +609,7 @@ export interface FileRouteTypes {
     | "/settings/skills"
     | "/settings/usage"
     | "/settings/worktrees"
+    | "/bot/"
     | "/epics/"
     | "/settings/"
     | "/epics/$epicId/$tabId";
@@ -614,6 +626,7 @@ export interface RootRouteChildren {
   BotBotIdRoute: typeof BotBotIdRoute;
   DraftDraftIdRoute: typeof DraftDraftIdRoute;
   DraftNewRoute: typeof DraftNewRoute;
+  BotIndexRoute: typeof BotIndexRoute;
 }
 
 declare module "@tanstack/react-router" {
@@ -665,6 +678,13 @@ declare module "@tanstack/react-router" {
       path: "/when-you-quit";
       fullPath: "/when-you-quit";
       preLoaderRoute: typeof WhenYouQuitRouteImport;
+      parentRoute: typeof rootRouteImport;
+    };
+    "/bot/": {
+      id: "/bot/";
+      path: "/bot";
+      fullPath: "/bot/";
+      preLoaderRoute: typeof BotIndexRouteImport;
       parentRoute: typeof rootRouteImport;
     };
     "/bot/$botId": {
@@ -1062,6 +1082,7 @@ const rootRouteChildren: RootRouteChildren = {
   BotBotIdRoute: BotBotIdRoute,
   DraftDraftIdRoute: DraftDraftIdRoute,
   DraftNewRoute: DraftNewRoute,
+  BotIndexRoute: BotIndexRoute,
 };
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

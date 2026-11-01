@@ -50,6 +50,7 @@ import {
 const mocks = vi.hoisted(() => ({
   navigate: vi.fn(),
   navigateToTabIntent: vi.fn(),
+  activateTabIntent: vi.fn<(intent: unknown) => void>(),
   createAsync:
     vi.fn<(variables: BotCreateRequest) => Promise<BotCreateResponse>>(),
   /** The client each `useBotCreateMutation` call was given. */
@@ -89,6 +90,10 @@ vi.mock("@tanstack/react-router", () => ({
 }));
 vi.mock("@/lib/tab-navigation", () => ({
   navigateToTabIntent: mocks.navigateToTabIntent,
+  activateTabIntent: (_navigate: unknown, intent: unknown) => {
+    mocks.activateTabIntent(intent);
+    return true;
+  },
 }));
 vi.mock("@/hooks/host/use-reactive-local-host-id", () => ({
   useReactiveLocalHostId: () => mocks.state.localHostId,
@@ -181,7 +186,8 @@ vi.mock("@/components/home/hooks/use-composer-toolbar-store", async () => {
 
 import { CreateBotForm } from "@/components/home/bots/create-bot-form";
 import { useSettingsStore } from "@/stores/settings/settings-store";
-import { lookupBotTab, useBotTabsStore } from "@/stores/bots/bot-tabs-store";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
 
 const TEAM_ENV = "env-team";
 const PERSONAL_ENV = "env-personal";
@@ -386,7 +392,15 @@ beforeEach(() => {
   mocks.createAsync.mockImplementation(() =>
     Promise.resolve(botCreateResponse()),
   );
-  useBotTabsStore.setState({ tabs: {} });
+  // The window's host: where a surface this form opens is bound, whichever
+  // host the bot was created through.
+  useSelectionAuthorityStore.setState({ effectiveHostId: EFFECTIVE });
+  useTracySurfaceStore.setState({
+    open: false,
+    hostId: null,
+    botId: null,
+    visitedBotIds: [],
+  });
 });
 
 afterEach(() => {
@@ -510,7 +524,7 @@ async function createBot(user: UserEvent): Promise<void> {
 }
 
 describe("<CreateBotForm /> create goes to the chosen host", () => {
-  it("creates through this machine's client when it qualifies, then opens the tab bound to it", async () => {
+  it("creates through this machine's client when it qualifies, then opens the Tracy surface on the new bot's channel on the window's host", async () => {
     const user = userEvent.setup();
     mountForm(TEAM_WITH_LOCAL);
 
@@ -529,10 +543,15 @@ describe("<CreateBotForm /> create goes to the chosen host", () => {
       requestKey: LOWERCASE_UUID,
       directive: null,
     });
-    const record = lookupBotTab(useBotTabsStore.getState().tabs, BOT_ID);
-    expect(record?.hostId).toBe(LOCAL);
-    expect(record?.title).toBe("Release Bot");
-    expect(mocks.navigateToTabIntent).toHaveBeenCalledTimes(1);
+    expect(useTracySurfaceStore.getState()).toMatchObject({
+      open: true,
+      hostId: EFFECTIVE,
+    });
+    expect(mocks.activateTabIntent).toHaveBeenCalledTimes(1);
+    expect(mocks.activateTabIntent).toHaveBeenCalledWith({
+      kind: "tracy",
+      botId: BOT_ID,
+    });
     expect(onCreated).toHaveBeenCalledTimes(1);
   });
 
@@ -548,9 +567,8 @@ describe("<CreateBotForm /> create goes to the chosen host", () => {
     });
     await createBot(user);
 
-    expect(lookupBotTab(useBotTabsStore.getState().tabs, BOT_ID)?.hostId).toBe(
-      EFFECTIVE,
-    );
+    expect(mocks.createAsync).toHaveBeenCalledTimes(1);
+    expect(useTracySurfaceStore.getState().hostId).toBe(EFFECTIVE);
   });
 
   it("creates through another bound host in host id order when neither this machine nor the active host qualifies", async () => {
@@ -563,9 +581,8 @@ describe("<CreateBotForm /> create goes to the chosen host", () => {
     });
     await createBot(user);
 
-    expect(lookupBotTab(useBotTabsStore.getState().tabs, BOT_ID)?.hostId).toBe(
-      OTHER,
-    );
+    // The surface is the window's, not the host that made the bot.
+    expect(useTracySurfaceStore.getState().hostId).toBe(EFFECTIVE);
   });
 
   it("creates with a null profile when the toolbar is seeded from a default selection saved before profiles existed", async () => {
@@ -608,9 +625,7 @@ describe("<CreateBotForm /> create goes to the chosen host", () => {
       requestKey: LOWERCASE_UUID,
       directive: null,
     });
-    expect(lookupBotTab(useBotTabsStore.getState().tabs, BOT_ID)?.hostId).toBe(
-      LOCAL,
-    );
+    expect(useTracySurfaceStore.getState().open).toBe(true);
     expect(onCreated).toHaveBeenCalledTimes(1);
   });
 
@@ -764,10 +779,11 @@ describe("<CreateBotForm /> a create the transport sends again", () => {
     expect(bots).toHaveLength(1);
     expect(sentKeys[0]).toEqual(LOWERCASE_UUID);
     expect(sentKeys[1]).toBe(sentKeys[0]);
-    expect(Object.keys(useBotTabsStore.getState().tabs)).toEqual([
-      bots[0].bot.botId,
-    ]);
-    expect(mocks.navigateToTabIntent).toHaveBeenCalledTimes(1);
+    expect(mocks.activateTabIntent).toHaveBeenCalledTimes(1);
+    expect(mocks.activateTabIntent).toHaveBeenCalledWith({
+      kind: "tracy",
+      botId: bots[0].bot.botId,
+    });
   });
 });
 
