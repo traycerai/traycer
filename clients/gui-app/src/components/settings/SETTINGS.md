@@ -7214,14 +7214,20 @@ computer`. A team's host draws no card. The move sheet names the moving computer
     service, Command-line tools, Danger zone.
     - **About this host** (`host-overview-about-this-host.tsx`) reads the
       ACCOUNT's host record - the `HostListItem` the panel already holds
-      (`scope.host.item`), never a host RPC - so it reads the same while the
+      (`scope.host.item`), never a host RPC of its own - so it reads while the
       host connects or cannot be reached, which is when people come for the
       host id. Rows: Host ID (shortened, with copy; Copy host ID stays in the
       `⋯` menu too), Added to account (`createdAt`), Last seen, Last reported
       version (`status.appVersion`) and Platform (`formatPlatform` plus the
-      architecture, as the header words it). Last seen is `status.lastSeenAt`
-      on the header's own ladder and clock (`formatElapsed`, `scope.nowMs`),
-      always, with no tone of its own - a timestamp is not a status word, and
+      architecture, as the header words it). A sandbox's row has neither
+      `status.lastSeenAt` nor `status.appVersion`, because the credential
+      refresh that writes both never runs on one: its Last seen is the report
+      the Details drawer shows (`SandboxSummary.lastActivityAt`, through
+      `hostLastReport`, which the offline notice and the header's offline line
+      read too), and its version is the header's. Last seen is
+      `hostLastReport` on the header's own ladder and clock (`formatElapsed`,
+      `scope.nowMs`), always, with no tone of its own - a timestamp is not a
+      status word, and
       the row has no second wording. It used to read "Online now" while the
       header's live evidence held (`health.live`), whose strongest source is
       the local process read: a host serving this computer while its relay
