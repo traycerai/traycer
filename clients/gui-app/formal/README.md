@@ -596,7 +596,7 @@ height form is used; there is no `view` announcement cause.
 The existing away-wheel guard excludes offset zero. `restoreanswer` is wired
 to the same `CanMove`/measurability result as production, but these fixtures do
 not establish the new top-edge restore control. No top-edge actor or new
-budget was added under the scope freeze. Stable row IDs abstract same-count
+budget was added. Stable row IDs abstract same-count
 re-keying as the same logical row; DOM fallback mechanics remain source-read.
 
 ## Running
