@@ -805,16 +805,16 @@ const queryClient = new QueryClient({
 });
 
 /**
- * What the tile's `dispatchUserSend` does once the composer has built its
- * submit input: put it in the store as the person's own send.
- */
-/**
  * `?focus-row`: the composer as the keyboard focus layout draws it, in the phone
  * layout that layout only ever draws in, which is what gives it its pull zone.
  */
 const FOCUS_ROW = new URLSearchParams(window.location.search).has("focus-row");
 if (FOCUS_ROW) setPhoneLayoutOnly(true);
 
+/**
+ * What the tile's `dispatchUserSend` does once the composer has built its
+ * submit input: put it in the store as the person's own send.
+ */
 function submitFromComposer(input: ChatComposerSubmitInput): boolean {
   const sent = handle.store.getState().sendMessage({
     content: input.content,
