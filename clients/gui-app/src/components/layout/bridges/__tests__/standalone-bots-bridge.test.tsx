@@ -35,6 +35,7 @@ import {
   TEAM_MAIN_BOT_ID,
   tracyRecord,
 } from "@/lib/home-bots/__tests__/standalone-bots-fixtures";
+import { TILE_CONTENT_BUDGET_MS } from "@/lib/host/bounded-load-budgets";
 import {
   displayCloudSnapshotArrivals,
   resetNotificationFeedDisplayReceiptsForTests,
@@ -542,5 +543,44 @@ describe("a bot's notification while the serving host has no handshake", () => {
     });
 
     expect(target.showNotification.mock.calls[0]?.[0].title).toBe("Tracy");
+  });
+
+  describe.each([
+    ["ready", "ready"],
+    ["connecting", null],
+  ])("with a reachable host and a %s lease", (_name, leaseStatus) => {
+    beforeEach(() => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("shows the plain name once the host-load budget runs out", async () => {
+      host.support = null;
+      host.reachability = "reachable";
+      host.leaseStatus = leaseStatus;
+      render(appWithNoAnswers());
+      const target = nativeTarget();
+
+      const delivery = displayCloudSnapshotArrivals(
+        [verdictArrival(TEAM_MAIN_BOT_ID)],
+        target,
+      );
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(TILE_CONTENT_BUDGET_MS - 1_000);
+      });
+      expect(target.showNotification).not.toHaveBeenCalled();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1_000);
+      });
+      await act(async () => {
+        await delivery;
+      });
+
+      expect(target.showNotification.mock.calls[0]?.[0].title).toBe("Tracy");
+      expect(await screen.findByText("Tracy")).toBeTruthy();
+    });
   });
 });
