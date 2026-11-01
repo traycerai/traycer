@@ -74,6 +74,7 @@ CONSTANTS
                         \*   command runs, and the list tracks its own
                         \*   `state.scroll` (the offset it last saw)
     \* Budgets
+    Keys,               \* directional one-unit key steps; zero in original fixtures
     Grows, Appends, Prepends, Wheels, Drags, Clicks, Touches, Flings, IdleShrinks,
     Minimaps, PhonePicks, Pills, Hides, Remounts, Jumps,
     NestedWheels,       \* wheels over a nested scroller that takes them
@@ -87,6 +88,15 @@ CONSTANTS
     WheelsApart,        \* each wheel waits for the scroll report before it
     AboveTailGrows, TailRemounts, Viewports, AppWrites, TailHead,
     ReportBeforeGrowth  \* the absorbed-report scenario reports before measured growth
+
+\* Landed current-source switches: K (#3110), PressKey (#3135), A (#3138).
+\* pressDown is physical contact state and survives spending the gesture arm.
+PressStandsAfterIntent(x, dir, publishes) ==
+    IF dir = "indeterminate" THEN publishes ELSE x.pressDown
+IntentReplacesArm(arm, blocks) ==
+    arm.src # "touch"
+    /\ ("presskey" \notin Fixes
+        \/ ~(arm.src = "gesture" /\ arm.dir = "indeterminate" /\ ~blocks))
 
 NONE == "none"
 Rows == 1..R
@@ -578,8 +588,12 @@ CorrIssue(x) ==
     ELSE LET x0 == IF "paint" \in Fixes
                    THEN Write(x, IF "padend" \in Fixes THEN Max(0, H(x) - x.V) ELSE MaxS(x))
                    ELSE x
-             x1 == LibCall([x0 EXCEPT !.corr.att = @ + 1], "end", 0, 0, FALSE)
-         IN [x1 EXCEPT !.pendEnd = x1.tok, !.corr.stage = "f1"]
+             attempted == [x0 EXCEPT !.corr.att = @ + 1]
+             held == "pressqueue" \in Fixes /\ x.pressDown
+             x1 == IF held THEN SupersedeEnd(attempted, attempted.s)
+                   ELSE LibCall(attempted, "end", 0, 0, FALSE)
+         IN [x1 EXCEPT !.pendEnd = IF held THEN @ ELSE x1.tok,
+                        !.corr.stage = "f1"]
 
 NewCorr(x) ==
     LET g == x.cgen + 1
@@ -622,6 +636,7 @@ NoteReaderGesture(x, dir, freeze, publishes) ==
     \* A gesture toward the end forgets where the reader departed: a strict
     \* bottom they reach after it is theirs, which "fallen" no longer holds.
     LET x1 == CancelCorr([x EXCEPT !.rgen = @ + 1, !.mom = NoMom,
+                                   !.pressDown = PressStandsAfterIntent(x, dir, publishes),
                                    !.depAt = IF dir = "toward-end" THEN -1 ELSE @,
                                    !.depOwed = IF dir = "toward-end" THEN FALSE ELSE @])
         meas == Measurable(x1)
@@ -632,7 +647,7 @@ NoteReaderGesture(x, dir, freeze, publishes) ==
         \* a queued end command to land.
         cont == "toward" \in Fixes /\ x1.perm /\ dir = "toward-end"
                 /\ x1.armed.src # "touch"
-        arm == IF x1.armed.src = "touch" THEN x1.armed
+        arm == IF ~IntentReplacesArm(x1.armed, blocks) THEN x1.armed
                ELSE IF publishes /\ ~cont
                     THEN [src |-> "gesture", dir |-> dir, blocks |-> blocks, at |-> x1.s,
                           dist |-> MaxS(x1) - x1.s, wheel |-> FALSE, nested |-> FALSE, scrolled |-> FALSE]
@@ -989,10 +1004,12 @@ ClearTouch(x) ==
                /\ ~CorrSuppressed(x2) /\ ~ReattachSuppressed(x2) THEN [x2 EXCEPT !.mom = MomAt(x2)] ELSE [x2 EXCEPT !.mom = NoMom]
 
 \* completePointerPreflight (pointerup / pointercancel on the scroll node)
-CompletePointerPreflight(x) ==
+CompletePointerPreflight(x0) ==
+    LET x == [x0 EXCEPT !.pressDown = FALSE] IN
     IF x.armed.src = "gesture" /\ x.armed.dir = "indeterminate"
-    THEN IF Measurable(x) /\ ~AtBottom(x) /\ ~PressUnlanded(x) THEN ObserveLiveGeometry(x)
-         ELSE IF PressUnlanded(x) THEN FollowEndIfPermitted([x EXCEPT !.armed = NoArm])
+    THEN IF Measurable(x) /\ ~AtBottom(x)
+         THEN LET observed == ObserveLiveGeometry(x)
+              IN FollowEndIfPermitted([observed EXCEPT !.armed = NoArm])
          ELSE [x EXCEPT !.armed = NoArm]
     ELSE x
 
@@ -1187,7 +1204,7 @@ MountState(store, reg, lo, hi, real, rowsVer, tok) ==
             sz |-> [i \in Rows |-> EST], s |-> 0, V |-> VH, visible |-> TRUE,
             dirty |-> FALSE, send |-> FALSE, smooth |-> -1, finger |-> FALSE,
             silent |-> FALSE, panDir |-> 0, inputMove |-> "none", flingDir |-> 0,
-            dragging |-> FALSE,
+            dragging |-> FALSE, pressDown |-> FALSE, keyNoMove |-> FALSE,
             ro |-> TRUE, settling |-> FALSE, structUnsettled |-> FALSE,
             tok |-> tok, cmd |-> NoCmd,
             perm |-> follow, armed |-> NoArm, rgen |-> 0, cgen |-> 0, corr |-> NoCorr,
@@ -1280,7 +1297,7 @@ Init ==
     /\ liftEnd = NoLiftEnd
     /\ nestedInput = [gen |-> -1, prior |-> intent, endMoved |-> FALSE]
     /\ missedFollow = "none"
-    /\ budget = [grow |-> Grows, append |-> Appends, prepend |-> Prepends,
+    /\ budget = [key |-> Keys, grow |-> Grows, append |-> Appends, prepend |-> Prepends,
                  wheel |-> Wheels, drag |-> Drags, click |-> Clicks, touch |-> Touches,
                  fling |-> Flings, minimap |-> Minimaps, pick |-> PhonePicks,
                  pill |-> Pills, hide |-> Hides, remount |-> Remounts, jump |-> Jumps,
@@ -1792,6 +1809,24 @@ ReaderActs(x) == Reading(x) /\ x.wheelPend = 0
 \* A wheel's arm (`departsOnGrowth`).
 WheelArm(x) == IF x.armed.src = "gesture" THEN [x EXCEPT !.armed.wheel = TRUE] ELSE x
 
+\* The controller notes the intent, freezes owned movement, then steps.
+\* K asks FEIP only when a toward step actually moves no pixels after preflight.
+KeyStep(dir) ==
+    /\ ReaderActs(w) /\ Can("key") /\ dir \in {"toward-end", "away-from-end"}
+    /\ LET pre == NoteReaderGesture(w, dir, TRUE, TRUE)
+           t == Clamp(pre, pre.s + (IF dir = "toward-end" THEN 1 ELSE -1))
+           moved == [pre EXCEPT !.s = t, !.dirty = @ \/ t # pre.s,
+                                !.smooth = -1,
+                                !.send = @ \/ (t # pre.s /\ HasScrollEnd)]
+           after == IF "keyanswer" \in Fixes /\ dir = "toward-end" /\ t = pre.s
+                    THEN FollowEndIfPermitted(moved) ELSE moved
+       IN /\ w' = [after EXCEPT !.keyNoMove = (t = pre.s)]
+          /\ intent' = IF dir = "toward-end" /\ (w.perm \/ AtBottom(moved) \/ ReachedHeadedEnd(moved))
+                       THEN Intent("tail", 0, 0)
+                       ELSE IF t = w.s THEN intent ELSE IntentOf(moved)
+    /\ Spend("key") /\ last' = "KeyStep(" \o dir \o ")"
+    /\ UNCHANGED flags
+
 \* A wheel notch (handleWheel): the latch notes the gesture, and the browser
 \* scrolls the transcript later (WheelScroll). Chrome's smooth scroll first
 \* reports frames after the handler; the model sets no bound on how many,
@@ -2129,7 +2164,7 @@ Dirs2 == {"toward-end", "away-from-end"}
 
 \* The reader's own scrolling, which no write announces.
 ReaderMoved(l) ==
-    \/ l \in {"WheelScroll", "TouchOnFling", "FlingStep"}
+    \/ l \in {"WheelScroll", "TouchOnFling", "FlingStep", "KeyStep(toward-end)", "KeyStep(away-from-end)"}
     \/ \E d \in Dirs2 : l \in {"DragMove(" \o d \o ")", "FingerMove(" \o d \o ")"}
 
 \* The ledger: a scroll report re-bases it on the view, a reader gesture
@@ -2164,7 +2199,7 @@ Steps ==
     \/ PadOpen \/ PadReset \/ PadCycle \/ TurnEnd \/ BootSettle \/ Relayout
     \/ LibReady \/ LibReadyTimeout \/ LibFinish \/ SmoothStep
     \/ DeliverScroll \/ DeliverScrollEnd \/ NestedScrollEnd \/ NavFallback \/ RestoreFrame \/ CorrFrame
-    \/ \E d \in Dirs2 : Wheel(d) \/ NestedWheel(d) \/ UnscrolledWheel(d)
+    \/ \E d \in Dirs2 : Wheel(d) \/ NestedWheel(d) \/ UnscrolledWheel(d) \/ KeyStep(d)
                        \/ DragMove(d) \/ FingerMove(d)
     \/ WheelScroll
     \/ DragStart \/ DragEnd \/ \E i \in Rows : Click(i)
@@ -2204,7 +2239,7 @@ MissedFollowNext ==
     LET unreadRetired == "unreadsize" \in Fixes
                          /\ ((w.mom.on /\ ~w'.mom.on /\ ~EndShift(w', w.mom).known)
                              \/ (w.cand.on /\ ~w'.cand.on /\ ~EndShift(w', w.cand).known))
-        newInput == last' \in {"TouchStart", "TouchOnFling", "DragStart", "Click", "Minimap", "PhonePick", "Pill"}
+        newInput == last' \in {"KeyStep(toward-end)", "KeyStep(away-from-end)", "TouchStart", "TouchOnFling", "DragStart", "Click", "Minimap", "PhonePick", "Pill"}
                     \/ \E d \in Dirs2 : last' \in {"Wheel(" \o d \o ")", "UnscrolledWheel(" \o d \o ")",
                                                          "NestedWheel(" \o d \o ")"}
         row == AnchorRow(w)
@@ -2321,5 +2356,9 @@ I_PillHonest == Quiescent(w) => ((w.pill = ~AtBottom(w)) \/ EndCameToFree(w))
 \* or follow of the reader's - the list re-laid rows above it unanchored, or
 \* wrote back a scroll it had not seen yet.
 I_NoJump == ~w.jump
+
+\* New-input diagnostics; the existing symptom and contact oracles are retained.
+I_LandedInputTypes == w.pressDown \in BOOLEAN /\ w.keyNoMove \in BOOLEAN
+I_KeyAnswer == (last = "KeyStep(toward-end)" /\ w.keyNoMove /\ AtBottom(w)) => w.perm
 
 =============================================================================

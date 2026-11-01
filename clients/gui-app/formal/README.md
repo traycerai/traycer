@@ -8,12 +8,12 @@ within small budgets and checks what a reader would notice.
 
 ## Current scope and CI status
 
-`SHIPPED` models pinned OSS main `66529da1c`, including #3086, #3088,
-#3089 and #3085. The generator contains 189 exploration configs. CI selects
-25 bounded configs explicitly in `expected.py`; it does not claim a full
-matrix verdict. Passing cases and known failing controls remain distinct.
-The scope is promotions and known exceptions; no new environment scenarios
-were added in this round.
+`SHIPPED` models pinned OSS main `120982023`, including K (#3110),
+PressKey (#3135), Rule A (#3138), and the away-input follow guard (#3128).
+The generator contains the original 189 exploration configs and twelve paired
+landed-input controls. CI selects measured configurations explicitly in
+`expected.py`; it does not claim a full matrix verdict. Passing cases and
+known failing controls remain distinct.
 
 | Switch                  | Landed behavior                                                                                                                                                                                                                                                                                                                                                    |
 | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -21,6 +21,54 @@ were added in this round.
 | `unreadsize` (#3088)    | A lift without a captured tail block retains the list's measured size, not its layout estimate. A changed/unavailable size declines arrival. Unreadable momentum/candidates are retired for that gesture.                                                                                                                                                          |
 | `restoreanswer` (#3089) | A publishing gesture that the viewport cannot answer preserves the restore loop and hydration target, while still cancelling its pending command.                                                                                                                                                                                                                  |
 | `viewcarry` (#3085)     | Offset announcements carry remembered geometry by their delta. Range announcements subtract the exact range loss from remembered height and carry touch references too. Report, maintenance and correction reads absorb a recognisable viewport-growth clamp before judging movement. Both arrival paths judge the content candidate against live viewport height. |
+| `keyanswer` (#3110)     | A toward-end key that moves no pixels after input preflight calls follow-end in the same handler, since no scroll report will arrive to answer it.                                                                                                                                                                                                                 |
+| `presskey` (#3135)      | A held scrollbar press keeps its arm through an incoming intent that cannot move the view; an intent that can move replaces it normally. Touch retains its own arm.                                                                                                                                                                                                |
+| `pressqueue` (#3138)    | A correction under a physical press makes its immediate write and keeps retrying, while superseding the queued copy that could land after the reader's next drag.                                                                                                                                                                                                  |
+
+The old physical contact/tap oracle, existing symptom invariants and ordinary
+frames remain unchanged. `KeyStep` adds a directional one-unit input and its
+independent intent. Its movement is reader-owned in the ledger, and a new key
+retires the old missed-follow diagnostic context. `I_KeyAnswer` checks the
+follow permission after a no-pixel toward key; it does not distinguish real
+key kinds, distances, or browser dispatch.
+
+`pressDown` is physical contact state, independent of the arm: spending the
+arm does not release it, and a directional key does not release it. The node's
+pointer preflight clears it first, even when the arm is already spent. If a
+press arm stands, preflight observes, clears that arm and calls follow-end
+only on the measurable non-bottom branch; at the bottom or with unmeasurable
+geometry, it clears that arm without the call. External window capture,
+blur and no-buttons release topology is not represented.
+The two-stable-height-frame scheduler remains the atomic `StructSettle`.
+
+The two `drag_idle_fixed_pressqueue_*` controls use `ChatScrollT2Bounded`
+and `T2Spec` explicitly. Both sides permit a correction write while a drag
+report is pending, retaining the restriction on a range decrease that erases
+the drag. This exception is confined to the named T2 pair; ordinary configs
+retain `DragFrame`. The selected bound is 20 states on both sides. Unbounded
+`check.sh`/`run-all.sh` reject this scoped exception.
+
+The two `PKConsumer_*` controls use `ChatScrollPKConsumer` and `ReplaySpec`
+with the ordinary frame. They run a fixed reader history through a held press,
+a zero-pixel key, an away drag and release, then only its native scroll reports.
+Every advancing edge satisfies the original action and `Next`. The intrinsic
+clock permits at most 40 full states; the outer bound of 42 leaves a
+non-quiescent cap inside TLC's strict expansion constraint. A completed
+quiescent endpoint has an explicit unchanged self-loop, permitting successful
+termination while engine deadlock checks detect stalled required steps.
+
+The focused pair is selected with an outer bound of 42. `CHECK_DEADLOCK` in
+`expected.py` agrees with each config's `CHECK_DEADLOCK TRUE` directive.
+Other configs retain their existing deadlock setting.
+`I_PKConsumerEndpointNotReached` is an
+inverse coverage observer: its violation records that the full history reached
+quiescence. The selection requires that class in both controls, so a missing endpoint
+fails the regression. Removing `presskey` from the after control restores
+`I_IntentHeld` while retaining endpoint coverage. Disabled mandatory steps,
+missing required reports and an explicit reduced non-quiescent cap each
+produce an engine deadlock. The original symptom invariants and setup/type checks remain
+independent. Companion controls use `regress.py` with recorded bounds and
+expectations; `check.sh` rejects their specifications.
 
 The four existing viewport-family witnesses have source-aligned configurations:
 `armless_viewport_fixed`, `phone_viewport_fixed`, `phone_pad_range_fixed`
@@ -30,13 +78,41 @@ yank is also present in 1.5.1; it is not accepted as safe behavior.
 `phone_above_tail_fixed` returns to CI with `unreadsize` and its explicit
 missed-re-follow price. Older row-only, initial navigation/send and removed
 pad-announcement controls remain generated. The original `nav_follow` and
-`send` controls return at their recorded 14-state bounds, keeping CI at25.
+`send` controls retain their recorded 14-state bounds in the original
+25-config selection.
 
 `idlehold` (#3079) still holds a departed reader when the end meets them,
 rebasing at a maintenance hold. `depAhead` remains the turn-end guard.
 `EndCameIdle` is the accepted pill-at-bottom price; raw controls retain its
 13-state exact-meet and 17-state clamp traces. `padannounce` (#3081) still
 announces a pad clamp before any observer can see regrowth.
+
+### Recorded selected runs
+
+[landed-inputs-results.csv](landed-inputs-results.csv) records each pass for
+the 37 selected configs: 35 historical passes for the original 25, 35 fresh
+passes for those same names and bounds, 41 switched-control passes and five
+focused PressKey passes. Generated and distinct counts belong to individual
+passes; they are never added as unique states. A completed graph can exhaust
+before its bound. The focused pair's recorded bound is the outer guard of 42,
+with the separate intrinsic limit of 40 full states described above.
+
+Of the original 25, 19 fresh scans hold all eight original invariants plus
+the landed-input type check. Six retain ten original failures. Every observed
+failure history matches its historical counterpart on every pre-existing
+state field and event label, and both endpoints are independently quiescent.
+The comparison projects only the three added fields, `budget.key`,
+`w.keyNoMove` and `w.pressDown`, retaining their actual values separately in
+the audit. This is evidence about those finite histories, not whole-model
+equivalence or an all-trace no-worse result.
+
+The CSV keeps historical-before and landed-after model hashes separate.
+Switched controls compare the same landed core with one flag changed;
+focused controls also keep required coverage distinct from product symptoms.
+Hashes identify the measured model, wrapper, source config and raw output.
+The published model includes a later comment-only wording change; three
+selected generated configs reorder the same `Fixes` set. Neither changes the
+measured model tokens or config values. Re-run selected expectations with `regress.py`.
 
 ### Known unread-tail declines
 
@@ -110,8 +186,8 @@ tops use those; `real` is what the next measurement reads. The 1px epsilons
 are below one unit, so "at the strict bottom" and "landed" are exact here.
 
 Left out: find, cross-tile scroll requests (`landScrollRequestRow`), turns
-split into parts, the windowed line's placeholders and voids, keyboard
-scrolling (its latch path is the wheel's, less the wheel's maintenance call),
+split into parts, the windowed line's placeholders and voids, individual
+keyboard kinds and distances beyond the directional one-unit `KeyStep`,
 frames inside sandboxed pages, and most of the list's initial-scroll
 bootstrap (`initialScrollAtEnd`, `initialScrollIndex`): the first-paint scroll
 to a reopened chat's saved row, which holds back the list's scroll reports
@@ -520,7 +596,7 @@ height form is used; there is no `view` announcement cause.
 The existing away-wheel guard excludes offset zero. `restoreanswer` is wired
 to the same `CanMove`/measurability result as production, but these fixtures do
 not establish the new top-edge restore control. No top-edge actor or new
-budget was added under the scope freeze. Stable row IDs abstract same-count
+budget was added. Stable row IDs abstract same-count
 re-keying as the same logical row; DOM fallback mechanics remain source-read.
 
 ## Running
@@ -557,6 +633,11 @@ removes that invariant and checks the rest. It succeeds only when the set of
 failing invariants equals the recorded set, so hiding a known failure is
 also an error. Trace lengths are evidence; worker scheduling can change the
 first witness, so length itself is not an assertion.
+
+`WithinBound` constrains state expansion. TLC can still check invariants on
+a terminal successor one state beyond that expansion bound, so a bound of
+18 can report a 19-state counterexample. Keep the selected bound, reported
+search depth and actual witness-state count distinct.
 
 The initial bounds were measured locally with four TLC workers; the CI job
 has a 45-minute timeout. This is bounded checking, not an unbounded proof.

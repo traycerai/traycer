@@ -8,7 +8,8 @@ Usage:
 The CI subset is the explicit DEPTH selection in expected.py; other configs
 remain available for exploration with check.sh/run-all.sh. A selected config
 is explored breadth-first to its depth in expected.py
-(ChatScrollBounded.tla). Like run-all.sh, each pass checks every remaining
+(ChatScrollBounded.tla, or the explicitly selected T2 companion). Like
+run-all.sh, each pass checks every remaining
 invariant, saves the first violation's trace to
 results/<Config>.<Invariant>.out, drops that invariant and runs again, until
 a pass finds none. The run passes when the violations found are exactly the
@@ -28,7 +29,7 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from expected import DEPTH, VIOLATIONS  # noqa: E402
+from expected import CHECK_DEADLOCK, DEPTH, MODULES, VIOLATIONS  # noqa: E402
 
 
 def configs():
@@ -37,8 +38,13 @@ def configs():
                  if f.startswith("ChatScroll_") and f.endswith(".cfg")}
     stale = sorted(set(names) - available)
     unknown = sorted(set(VIOLATIONS) - set(names))
-    if not names or stale or unknown or any(type(d) is not int or d < 2 for d in DEPTH.values()):
-        sys.exit(f"invalid CI selection: missing configs {stale}, unselected expectations {unknown}")
+    unmapped = sorted(set(MODULES) - available)
+    bad_deadlock = sorted(k for k, v in CHECK_DEADLOCK.items()
+                          if k not in names or type(v) is not bool)
+    if (not names or stale or unknown or unmapped or bad_deadlock
+            or any(type(d) is not int or d < 2 for d in DEPTH.values())):
+        sys.exit(f"invalid CI selection: missing configs {stale}, unselected expectations {unknown}, "
+                 f"missing module configs {unmapped}, invalid deadlock selection {bad_deadlock}")
     return names
 
 
@@ -49,6 +55,15 @@ def invariants(cfg_text):
 
 def tlc(config, cfg_text, invs):
     """One bounded pass. Returns (violated invariant or None, TLC output)."""
+    module, spec = MODULES.get(config, ("ChatScrollBounded", "Spec"))
+    if not re.search(rf"^SPECIFICATION {re.escape(spec)}$", cfg_text, re.M):
+        return "TLC_FAILED", f"{config}: {module} requires SPECIFICATION {spec}\n"
+    check_deadlock = CHECK_DEADLOCK.get(config, False)
+    settings = re.findall(r"^[ \t]*CHECK_DEADLOCK\b([^\n]*)$", cfg_text, re.M)
+    wanted = "TRUE" if check_deadlock else "FALSE"
+    if (len(settings) > 1 or (check_deadlock and not settings)
+            or (settings and settings[0].strip() != wanted)):
+        return "TLC_FAILED", f"{config}: CHECK_DEADLOCK selection and cfg directive disagree\n"
     work = os.path.join(HERE, "states", f"{config}.regress")
     os.makedirs(work, exist_ok=True)
     head = cfg_text.split("INVARIANTS", 1)[0]
@@ -60,7 +75,10 @@ def tlc(config, cfg_text, invs):
     cmd = [java, f"-Djava.io.tmpdir={work}", "-XX:+UseParallelGC", f"-Xmx{os.environ.get('JAVA_XMX', '6g')}",
            "-cp", os.path.join(HERE, "tools", "tla2tools.jar"), "tlc2.TLC",
            "-config", os.path.join(work, "run.cfg"), "-metadir", os.path.join(work, "meta"),
-           "-workers", os.environ.get("TLC_WORKERS", "4"), "-deadlock", "ChatScrollBounded.tla"]
+           "-workers", os.environ.get("TLC_WORKERS", "4")]
+    if not check_deadlock:
+        cmd.append("-deadlock")
+    cmd.append(f"{module}.tla")
     result = subprocess.run(cmd, cwd=HERE, capture_output=True, text=True)
     out = result.stdout + result.stderr
     shutil.rmtree(work)
