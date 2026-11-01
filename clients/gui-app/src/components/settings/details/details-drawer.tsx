@@ -18,6 +18,7 @@ import type {
   DetailsRecovery,
   DetailsSubject,
 } from "@/lib/settings-details-entry";
+import { HOST_DESTROYED_OUTCOME } from "@/lib/settings-details-entry";
 
 /** The parts of a line the app knows, joined; a missing one is left out. */
 function knownParts(parts: readonly (string | null)[]): string {
@@ -141,17 +142,6 @@ function CurrentStatus(props: {
  * the event's codes, which say nothing a person can read. An older server
  * sends no such outcome, and its events keep their generic shape.
  */
-/**
- * The outcome authn writes for a cleanup confirmed on a host that no longer
- * exists, and the one entry whose `actor` is a HOST rather than a person.
- * `environment.history` carries `outcome` as an open string, so nothing here
- * type-checks against the producer: it is
- * `authn-v3/src/service/environments/history.ts`, which derives the destroyed
- * host's name once and uses it for both this outcome and that actor. A rename
- * there lands here, and nowhere else.
- */
-const HOST_DESTROYED_OUTCOME = "host_destroyed";
-
 function destroyedHostLine(entry: DetailsHistoryEntry): string | null {
   if (entry.outcome !== HOST_DESTROYED_OUTCOME || entry.actor === null)
     return null;

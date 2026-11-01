@@ -15,7 +15,10 @@ import type {
   DetailsStatus,
   DetailsSubject,
 } from "@/lib/settings-details-entry";
-import { registerDetailsProvider } from "@/lib/settings-details-entry";
+import {
+  HOST_DESTROYED_OUTCOME,
+  registerDetailsProvider,
+} from "@/lib/settings-details-entry";
 import {
   detailsTime,
   recoveryForHost,
@@ -261,6 +264,18 @@ async function environmentDetailsProvider(
   return loadEnvironmentDetails(subject, context, false);
 }
 
+/**
+ * Who changed the subject, where the newest entry names one. A lifecycle event
+ * names its SUBJECT in `actor`, not a person: a host the cleanup ran against
+ * is what changed, never who changed it. The guard is on the producer, so the
+ * export carries no such provenance either.
+ */
+function changedByOf(latest: DetailsHistoryEntry | undefined): string | null {
+  if (latest === undefined || latest.outcome === HOST_DESTROYED_OUTCOME)
+    return null;
+  return latest.actor?.label ?? null;
+}
+
 async function loadEnvironmentDetails(
   subject: DetailsSubject,
   context: DetailsProviderContext,
@@ -320,14 +335,7 @@ async function loadEnvironmentDetails(
   let status: DetailsStatus = {
     summary: detailsNowSummary(hosts),
     currentVersion: null,
-    // A lifecycle event names its subject in `actor`, not a person: a host
-    // the cleanup ran against is what changed, never who changed it. The
-    // guard is on the producer, so the export carries no such provenance
-    // either.
-    changedBy:
-      latest?.outcome === "host_destroyed"
-        ? null
-        : (latest?.actor?.label ?? null),
+    changedBy: changedByOf(latest),
     changedAt: latest?.at ?? null,
     reason: null,
     hosts,
