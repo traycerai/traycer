@@ -157,7 +157,7 @@ test("the list opens at its end, showing the last row", async ({ page }) => {
   await expect(page.locator(HEADER)).not.toBeInViewport();
 });
 
-test("scrolling to the top reaches the start of the header, and back down the header clears the first row", async ({
+test("scrolling to the top reaches the start of the header", async ({
   page,
 }) => {
   await openList(page);
@@ -178,7 +178,12 @@ test("scrolling to the top reaches the start of the header, and back down the he
       ),
     )
     .toBeGreaterThanOrEqual(-1);
+});
 
+test("the header clears the first row when it is scrolled past", async ({
+  page,
+}) => {
+  await openList(page);
   await scrollToHeaderBottom(page);
   await expect(page.locator(FIRST_ROW).first()).toBeAttached();
   expect(await headerOverlap(page)).toBeLessThanOrEqual(1);
