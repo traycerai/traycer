@@ -17,8 +17,11 @@ import { harnessLabel } from "@/components/settings/panels/fallback/fallback-har
 import {
   hostLabelAtSentenceStart,
   hostNameFromLabel,
+  resolvedHostLabel,
   UNNAMED_HOST_LABEL,
+  useHostReachability,
 } from "@/hooks/agent/use-host-reachability";
+import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 
 /**
  * Lifted out of `chat-tile.tsx` so the host it targets is
@@ -253,4 +256,17 @@ export function useChatCloneOnHostSwitch(
     cloning,
     profileRecovery,
   };
+}
+
+/**
+ * The host {@link useChatCloneOnHostSwitch} clones onto, by name, for copy
+ * that promises the clone before it is pressed. `null` when there is no
+ * active host or it has no name, which the copy reads as "the active host".
+ */
+export function useChatCloneTargetLabel(): string | null {
+  const targetHostId = useEffectiveHostId();
+  const reachability = useHostReachability(
+    targetHostId ?? UNKNOWN_HOST_PLACEHOLDER,
+  );
+  return targetHostId === null ? null : resolvedHostLabel(reachability);
 }

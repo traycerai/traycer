@@ -243,11 +243,12 @@ function useConfigurationStageShape(configuration: SandboxPageConfiguration): {
  * Today's total for the configuration, and the viewer's share of it, as the
  * server totals each configuration's day: sandboxes destroyed today count,
  * which the listed rows no longer carry. Personal is every environment that
- * is none of the viewer's teams'.
+ * is none of the viewer's teams'. Personal's day is all the viewer's, so it
+ * names no share.
  *
- * A server before those totals: the configuration's rows summed. Personal's
- * rows are all the viewer's; a team's share is the viewer's whole share less
- * their Personal rows, which holds while they are in one team.
+ * A server before those totals: the configuration's rows summed. A team's
+ * share is the viewer's whole share less their Personal rows, which holds
+ * while they are in one team.
  */
 function todayFigures(input: {
   readonly configuration: SandboxPageConfiguration;
@@ -265,8 +266,10 @@ function todayFigures(input: {
         ? day.environmentId === configuration.environmentId
         : !input.teamEnvironmentIds.has(day.environmentId),
     );
+    const todayMc = ours.reduce((sum, day) => sum + day.todayMillicredits, 0);
+    if (configuration.kind === "personal") return { todayMc, yoursMc: null };
     return {
-      todayMc: ours.reduce((sum, day) => sum + day.todayMillicredits, 0),
+      todayMc,
       yoursMc: ours.reduce((sum, day) => sum + day.todayYoursMillicredits, 0),
     };
   }
@@ -275,7 +278,7 @@ function todayFigures(input: {
     .filter((cost) => ids.has(cost.sandboxId))
     .reduce((sum, cost) => sum + cost.todayMillicredits, 0);
   if (input.configuration.kind === "personal") {
-    return { todayMc, yoursMc: todayMc };
+    return { todayMc, yoursMc: null };
   }
   if (input.teamEnvironmentIds.size !== 1) {
     return { todayMc, yoursMc: null };

@@ -35,6 +35,7 @@ import {
   useEpicCollaboratorsQuery,
   type EpicCollaboratorsView,
 } from "@/hooks/epics/use-epic-collaborators-query";
+import { useStageFallbackHostLine } from "@/hooks/sandboxes/use-stage-fallback-host-line";
 import { useSandboxCatalogue } from "@/hooks/sandboxes/use-sandbox-catalogue-query";
 import { useSandboxCosts } from "@/hooks/sandboxes/use-sandbox-costs-query";
 import { useMaybeEpicStore } from "@/hooks/use-epic-store";
@@ -208,6 +209,7 @@ export interface SandboxStaging {
   /** The block's `Open terminal instead`; `null` when nothing is staged. */
   readonly openTerminalInstead: (() => void) | null;
   readonly chooseAnotherHost?: () => void;
+  readonly chooseAnotherHostLabel: string;
   /** The shape sheet, mounted beside the picker. */
   readonly sheet: ReactNode;
 }
@@ -252,6 +254,7 @@ export function useSandboxStaging(input: {
 }): SandboxStaging | null {
   const { forkOnNew } = input;
   const { memoryHostId } = input;
+  const chooseAnotherHostLabel = useStageFallbackHostLine(memoryHostId);
   // No surface stages in a build without sandboxes
   // (`unreleased-features.ts`): the hook answers `null` for every caller, so
   // each picker draws the plain `Host` group and its own search threshold.
@@ -619,6 +622,7 @@ export function useSandboxStaging(input: {
       supersedeReturnedSandbox(surfaceKey);
       useStagedSandboxStore.getState().clear(surfaceKey);
     },
+    chooseAnotherHostLabel,
   };
 }
 

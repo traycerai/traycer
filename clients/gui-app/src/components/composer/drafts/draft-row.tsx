@@ -133,11 +133,16 @@ export function DraftRowTrailing(props: {
     // reserves the space the action cluster needs and the preview beside it
     // truncates. An absolutely-positioned cluster left the cell sized to the
     // timestamp alone and painted over the source and `Open` badges.
+    //
+    // Only the visible layer takes the pointer. An element below opacity 1
+    // paints, and hit-tests, above the in-flow layer it shares the cell with,
+    // so the faded timestamp sat over the revealed `Delete` and its click
+    // opened the row instead, and the faded keys sat over the timestamp.
     <span className="grid shrink-0 items-center justify-items-end">
-      <span className="col-start-1 row-start-1 tabular-nums transition-opacity group-hover/draft-row:opacity-0 group-data-[selected=true]/draft-row:opacity-0">
+      <span className="col-start-1 row-start-1 tabular-nums transition-opacity group-hover/draft-row:pointer-events-none group-hover/draft-row:opacity-0 group-data-[selected=true]/draft-row:pointer-events-none group-data-[selected=true]/draft-row:opacity-0">
         {relative}
       </span>
-      <span className="group/draft-keys col-start-1 row-start-1 flex items-center gap-0.5 opacity-0 transition-opacity duration-150 group-hover/draft-row:opacity-100 group-data-[selected=true]/draft-row:opacity-100">
+      <span className="group/draft-keys pointer-events-none col-start-1 row-start-1 flex items-center gap-0.5 opacity-0 transition-opacity duration-150 group-hover/draft-row:pointer-events-auto group-hover/draft-row:opacity-100 group-data-[selected=true]/draft-row:pointer-events-auto group-data-[selected=true]/draft-row:opacity-100">
         <DraftRowKeyButton
           label="Open draft"
           word="Open"

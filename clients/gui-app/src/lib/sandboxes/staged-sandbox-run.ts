@@ -132,7 +132,7 @@ export async function runStagedSandbox(
   if (
     stage === null ||
     stage.phase === "handoff" ||
-    !pendingSandboxStageRunAllowed(surfaceKey, "unknown")
+    !pendingSandboxStageRunAllowed(surfaceKey)
   )
     return;
   // A wake failure still names a usable sandbox, even when the original
@@ -180,74 +180,23 @@ export async function runStagedSandbox(
  * The new sandbox this key already made, if any. It is read, never created
  * again: a repeat or a resume after a reload waits on that row, and a row
  * that failed or is gone stops the wait rather than naming the key a second
- * time.
+ * time. So is an existing sandbox on a resumed run: it is read for what it
+ * is now, never woken for a reload.
  */
 function sandboxAlreadyMade(
   stage: StagedSandbox,
   fresh: boolean,
+  resume: boolean,
 ): StartedSandbox | null {
   if (
     fresh ||
-    stage.target.kind !== "new" ||
+    (stage.target.kind !== "new" && !resume) ||
     stage.createdSandboxId === null ||
     stage.createdHostId === null
   ) {
     return null;
   }
   return { sandboxId: stage.createdSandboxId, hostId: stage.createdHostId };
-}
-
-/**
- * Wakes a handed-off stage's sandbox that rested while its action waited.
- * The original send or terminal ask remains the wake's gesture. Under the
- * same stage and key, back to its wake step on the line, then the wait.
- */
-export async function rewakeStagedSandbox(
-  surfaceKey: string,
-  deps: StagedSandboxRunDeps,
-): Promise<void> {
-  const stage = readStagedSandbox(surfaceKey);
-  if (
-    stage === null ||
-    !pendingSandboxStageRunAllowed(surfaceKey, "resting") ||
-    stage.phase !== "handoff" ||
-    stage.clientRequestId === null ||
-    stage.createdSandboxId === null ||
-    stage.createdHostId === null ||
-    running.has(surfaceKey)
-  ) {
-    return;
-  }
-  const { clientRequestId } = stage;
-  const started = {
-    sandboxId: stage.createdSandboxId,
-    hostId: stage.createdHostId,
-  };
-  const now = deps.now();
-  // The line's clock restarts with the wake: the wait it times is this one.
-  useStagedSandboxStore.getState().report(surfaceKey, {
-    phase: "creating",
-    startedAt: now,
-    step: "booting",
-    stepAt: now,
-    failure: null,
-  });
-  running.set(surfaceKey, clientRequestId);
-  try {
-    if (
-      !(await wakeCurrentStage(
-        surfaceKey,
-        clientRequestId,
-        started.hostId,
-        deps,
-      ))
-    ) {
-      return;
-    }
-    await settle({ surfaceKey, clientRequestId, started, deps }, now);
-  } finally {
-    if (running.get(surfaceKey) === clientRequestId) running.delete(surfaceKey);
-  }
 }
 
 interface StartedSandbox {
@@ -290,8 +239,16 @@ async function wakeCurrentStage(
   );
   // A newer request owns settlement. Supersession is not a failed wake.
   if (observed === "unknown") return false;
-  if (!awake) fail(surfaceKey, stagedWakeFailure(answered));
-  return awake;
+  if (!awake) {
+    fail(surfaceKey, stagedWakeFailure(answered));
+    return false;
+  }
+  // A list read still on its way predates the wake: the wait must not join
+  // it, or its old row reads as a rest.
+  await deps.queryClient.cancelQueries({
+    queryKey: sandboxListQueryOptions(deps.auth, deps.userId, true).queryKey,
+  });
+  return true;
 }
 
 function stagedWakeFailure(
@@ -317,7 +274,7 @@ function stillCurrent(surfaceKey: string, clientRequestId: string): boolean {
     stage !== null &&
     stage.phase === "creating" &&
     stage.clientRequestId === clientRequestId &&
-    pendingSandboxStageRunAllowed(surfaceKey, "unknown")
+    pendingSandboxStageRunAllowed(surfaceKey)
   );
 }
 
@@ -359,7 +316,7 @@ async function startStagedRun(
   fresh: boolean,
   deps: StagedSandboxRunDeps,
 ): Promise<StartedSandbox | null> {
-  const made = sandboxAlreadyMade(stage, fresh);
+  const made = sandboxAlreadyMade(stage, fresh, run.resume);
   if (made === null) return startTarget(run, stage.target, deps);
   if (
     stage.target.kind === "new" &&
@@ -616,8 +573,17 @@ async function settleRow(
   row: SandboxSummary | null | undefined,
 ): Promise<"waiting" | "finished"> {
   const { surfaceKey, clientRequestId, started, deps } = input;
-  // Cancel/reload can retain an already-created sandbox after it rested.
   if (row?.state === "suspended" || row?.state === "stopped") {
+    // A run wakes once, for the person's action that started it: only at
+    // `creating` has it not woken anything yet, which is how Cancel retains
+    // an already-created sandbox after it rested. Any later rest is the
+    // sandbox's, or someone's Suspend, and a reload keeps the step it found
+    // and is nobody's gesture: the stage records the rest, its send goes
+    // back, and a composer stages it to wake on the next one.
+    if (readStagedSandbox(surfaceKey)?.step !== "creating") {
+      fail(surfaceKey, { kind: "rested" });
+      return "finished";
+    }
     const awake = await wakeCurrentStage(
       surfaceKey,
       clientRequestId,

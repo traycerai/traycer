@@ -27,9 +27,10 @@ import {
   type ReasoningLevelOption,
 } from "@/components/home/data/landing-options";
 import { useSurfaceActivity } from "@/components/home/composer/surface-activity-hooks";
-import type {
-  ComposerToolbarStore,
-  ComposerToolbarStoreState,
+import {
+  chipModelName,
+  type ComposerToolbarStore,
+  type ComposerToolbarStoreState,
 } from "@/stores/composer/composer-toolbar-store";
 import type { ProviderTerminalLoginSurface } from "@/lib/providers/provider-terminal-login-surface";
 import {
@@ -839,6 +840,9 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
   });
   const selectedModels = selected.models;
   const modelsPending = selected.pending;
+  const stagedModelName = useStore(store, (s) =>
+    s.sandboxRunTarget === "staged" ? chipModelName(s) : "",
+  );
   const harnessesPending = harnessesQueryPending(
     activityEnabled,
     runTargetClient,
@@ -850,6 +854,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
         selection,
         models: selectedModels,
         selectedModel,
+        stagedModelName,
         reasoningFooter,
         serviceTierFooter,
         maxModeContext,
@@ -869,6 +874,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
       selectedModel,
       selection,
       serviceTierFooter,
+      stagedModelName,
       maxModeContext,
     ],
   );
