@@ -23,7 +23,10 @@ function item(
     publicKey: "pk",
     createdAt: "2026-03-03T12:00:00Z",
     status: {
-      connectivity: "connectable",
+      // The account cannot reach this host, which is the state every Last
+      // seen wording below is about. The one "Online now" case sets
+      // `connectable` itself.
+      connectivity: "offline",
       viewerReachability: "unknown",
       clientCloud: "ok",
       updateState: "current",
@@ -54,27 +57,45 @@ describe("deriveAboutThisHost", () => {
       item: item(null, {
         createdAt: new Date(2026, 9, 24, 8, 35).toISOString(),
       }),
-      live: false,
       nowMs: Date.now(),
     });
 
     expect(view.addedToAccount).toBe("24 Oct");
   });
 
-  it("lets live override lastSeenAt", () => {
+  it("says 'Online now' while the account holds the host, whatever lastSeenAt says", () => {
+    const stale = item("2026-09-24T09:00:00Z", {});
     const view = deriveAboutThisHost({
-      item: item("2026-09-24T09:00:00Z", {}),
-      live: true,
+      item: {
+        ...stale,
+        status: { ...stale.status, connectivity: "connectable" },
+      },
       nowMs: NOW_MS,
     });
     expect(view.lastSeen).toBe("Online now");
     expect(view.online).toBe(true);
   });
 
-  it("words a stale lastSeenAt on the given clock, capitalised", () => {
+  it("does not say 'Online now' from a connectable record this viewer cannot refresh", () => {
+    const stale = item("2026-09-24T09:00:00Z", {});
+    const view = deriveAboutThisHost({
+      item: {
+        ...stale,
+        status: {
+          ...stale.status,
+          connectivity: "connectable",
+          clientCloud: "down",
+        },
+      },
+      nowMs: NOW_MS,
+    });
+    expect(view.lastSeen).toBe("3h ago");
+    expect(view.online).toBe(false);
+  });
+
+  it("words the account's own timestamp on the given clock, capitalised", () => {
     const view = deriveAboutThisHost({
       item: item("2026-09-24T09:00:00Z", {}),
-      live: false,
       nowMs: NOW_MS,
     });
     expect(view.lastSeen).toBe("3h ago");
@@ -84,7 +105,6 @@ describe("deriveAboutThisHost", () => {
   it("says 'Just now' for a stamp inside the header's 45s window", () => {
     const view = deriveAboutThisHost({
       item: item("2026-09-24T11:59:30Z", {}),
-      live: false,
       nowMs: NOW_MS,
     });
     expect(view.lastSeen).toBe("Just now");
@@ -93,7 +113,6 @@ describe("deriveAboutThisHost", () => {
   it("treats a stamp in the future as no time elapsed rather than a negative age", () => {
     const view = deriveAboutThisHost({
       item: item("2026-09-24T12:05:00Z", {}),
-      live: false,
       nowMs: NOW_MS,
     });
     expect(view.lastSeen).toBe("Just now");
@@ -102,7 +121,6 @@ describe("deriveAboutThisHost", () => {
   it("says 'Not seen yet' when the host never checked in", () => {
     const view = deriveAboutThisHost({
       item: item(null, {}),
-      live: false,
       nowMs: NOW_MS,
     });
     expect(view.lastSeen).toBe("Not seen yet");
@@ -111,7 +129,6 @@ describe("deriveAboutThisHost", () => {
   it("says 'Unknown' for an unparsable lastSeenAt", () => {
     const view = deriveAboutThisHost({
       item: item("not-a-date", {}),
-      live: false,
       nowMs: NOW_MS,
     });
     expect(view.lastSeen).toBe("Unknown");
@@ -120,7 +137,6 @@ describe("deriveAboutThisHost", () => {
   it("shows an unparsable createdAt as it came", () => {
     const view = deriveAboutThisHost({
       item: item(null, { createdAt: "yesterday-ish" }),
-      live: false,
       nowMs: NOW_MS,
     });
     expect(view.addedToAccount).toBe("yesterday-ish");
@@ -132,7 +148,6 @@ describe("deriveAboutThisHost", () => {
         platform: null,
         status: { ...item(null, {}).status, appVersion: null },
       }),
-      live: false,
       nowMs: NOW_MS,
     });
     expect(view.lastReportedVersion).toBe("Not reported yet");
@@ -142,7 +157,6 @@ describe("deriveAboutThisHost", () => {
   it("prefixes a reported version with v and words the platform triple", () => {
     const view = deriveAboutThisHost({
       item: item(null, { platform: "darwin-arm64" }),
-      live: false,
       nowMs: NOW_MS,
     });
     expect(view.lastReportedVersion).toBe("v1.5.0");

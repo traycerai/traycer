@@ -117,7 +117,9 @@ function registryItem(overrides: Partial<HostListItem>): HostListItem {
     publicKey: "pk",
     createdAt: "2026-03-03T12:00:00Z",
     status: {
-      connectivity: "connectable",
+      // The account does not hold this host, which is what every Last seen
+      // assertion below is about. The "Online now" case sets `connectable`.
+      connectivity: "offline",
       viewerReachability: "unknown",
       clientCloud: "ok",
       updateState: "current",
@@ -394,16 +396,17 @@ describe("Overview ▸ Installation — About this host", () => {
     expect((await screen.findByRole("tooltip")).textContent).toBe(HOST_ID);
   });
 
-  it("says 'Online now' while the header's live evidence holds, whatever lastSeenAt says", async () => {
+  it("says 'Online now' while the account holds the host, whatever lastSeenAt says", async () => {
     setReadyScope({
       isLocalMachine: false,
       item: registryItem({
         status: {
           ...registryItem({}).status,
+          connectivity: "connectable",
           lastSeenAt: new Date(NOW_MS - THREE_HOURS_MS).toISOString(),
         },
       }),
-      live: true,
+      live: false,
       fixture: fixtureFor(false, undefined, undefined),
       methods: [...OVERVIEW_METHODS, ...SERVICE_METHODS],
     });
@@ -415,16 +418,18 @@ describe("Overview ▸ Installation — About this host", () => {
     ).toBe("Online now");
   });
 
-  it("words a host that is not live from lastSeenAt on the scope's clock", async () => {
+  it("words the account's own timestamp for a host serving this computer whose account record is cold", async () => {
     setReadyScope({
-      isLocalMachine: false,
+      isLocalMachine: true,
       item: registryItem({
         status: {
           ...registryItem({}).status,
           lastSeenAt: new Date(NOW_MS - THREE_HOURS_MS).toISOString(),
         },
       }),
-      live: false,
+      // The header's live dot, which the local process read lights whatever
+      // the relay uplink is doing. Last seen must not follow it.
+      live: true,
       fixture: fixtureFor(false, undefined, undefined),
       methods: [...OVERVIEW_METHODS, ...SERVICE_METHODS],
     });
