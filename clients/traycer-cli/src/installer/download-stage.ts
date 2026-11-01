@@ -1021,10 +1021,10 @@ export async function resolveUpdatePlan(
   if (request.intent === "activate") return { kind: "activate", identity };
 
   if (request.intent === "continue") {
-    // A park can outlive a move of the data folder (the migration does not
-    // look at update attempts), and its target can be below the install (a
-    // downgrade park) or a registry build over a `local-*` one. A park whose
-    // swap already happened targets the installed version and passes.
+    // A park can meet this guard after its CLI was replaced by one that needs
+    // a newer host, and its target can be below the install (a downgrade park)
+    // or a registry build over a `local-*` one. A park whose swap already
+    // happened targets the installed version and passes.
     refuseOlderHostWhileDataMoved({
       command: "host update",
       environment: opts.environment,

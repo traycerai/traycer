@@ -1,5 +1,7 @@
+import { setTimeout as sleep } from "node:timers/promises";
 import {
   readLockHolder,
+  type LockHolderProbe,
   type LockMetadata,
 } from "@traycer-clients/shared/host-lock/cross-process-lock";
 import type {
@@ -31,10 +33,13 @@ import { DOCTOR_ISSUE_CODES, type DoctorIssue } from "./issues";
 // contender started with administrator rights looks like to an ordinary
 // doctor. One failed read proves nothing: on Windows a healthy release or
 // rewrite can fail the read's identity check, and the remedy here is deleting
-// the file, so a failure is reported only when a second read repeats it.
+// the file, so a failure is reported only when a later read repeats it.
 //
 // Read-only. Doctor never removes the file: the remedy needs the one fact no
 // probe here can establish, that no installer is running.
+
+/** Far above a healthy release or rewrite, as the marker lock's probe waits. */
+const UPDATE_ATTEMPT_LOCK_REREAD_DELAY_MS = 250;
 
 export interface ProbeUpdateAttemptLockOptions {
   /** `updateAttemptLockPath(hostHomeDir(environment))`. */
@@ -66,11 +71,8 @@ export interface ProbeUpdateAttemptLockOptions {
 export async function probeUpdateAttemptLock(
   opts: ProbeUpdateAttemptLockOptions,
 ): Promise<DoctorIssue | null> {
-  const first = await readLockHolder(opts.lockPath);
-  if (first.kind === "read-error") {
-    const again = await readLockHolder(opts.lockPath);
-    return again.kind === "read-error" ? unreadableIssue(opts.lockPath) : null;
-  }
+  const first = await readPastOneFailure(opts.lockPath);
+  if (first.kind === "read-error") return unreadableIssue(opts.lockPath);
   if (first.kind !== "held") return null;
   const holder = first.holder;
   const publisher = await opts.verifyPublisher({
@@ -91,12 +93,19 @@ export async function probeUpdateAttemptLock(
   return unbreakableIssue(opts.lockPath, holder, publisher);
 }
 
+async function readPastOneFailure(lockPath: string): Promise<LockHolderProbe> {
+  const first = await readLockHolder(lockPath);
+  if (first.kind !== "read-error") return first;
+  await sleep(UPDATE_ATTEMPT_LOCK_REREAD_DELAY_MS);
+  return readLockHolder(lockPath);
+}
+
 function unreadableIssue(lockPath: string): DoctorIssue {
   return {
     code: DOCTOR_ISSUE_CODES.HOST_UPDATE_ATTEMPT_LOCK_UNREADABLE,
     severity: "warning",
     title: "Host update-attempt lock cannot be read",
-    message: `The host update-attempt lock at ${lockPath} exists but could not be read, so doctor cannot tell who holds it. While it stays, a Traycer install, update or uninstall that cannot read it will not break it, and is refused with "${updateLockBusyMessage(null)}" A Traycer installer, uninstaller or update running with administrator rights can leave a lock an ordinary user cannot read, so if one is running, let it finish and leave the file alone. Only when none is running, check the file's ownership and permissions and remove it, with administrator rights if it needs them; the next one then proceeds.`,
+    message: `The host update-attempt lock at ${lockPath} could not be read, so doctor cannot tell who holds it. While that lasts, a Traycer install, update or uninstall that cannot read it will not break it, and is refused with "${updateLockBusyMessage(null)}" A Traycer install, update, uninstall or maintenance lease running with administrator rights can leave a lock an ordinary user cannot read, so if one is running, let it finish and leave the file alone. Only when none is running, check what is at that path, its ownership and its permissions, and remove it, with administrator rights if it needs them; the next one should then proceed.`,
     fixAction: null,
     terminalCommand: null,
     details: { lockPath },
