@@ -194,18 +194,38 @@ describe("MobileTerminalKeyBar", () => {
       const input = setupTarget("normal");
       raiseNativeKeyboard(IPHONE_17);
       render(<MobileTerminalKeyBar instanceId={INSTANCE_ID} keyboardOpen />);
-      expect([...keyIds()].sort()).toEqual([
-        "terminal-key-alt",
-        "terminal-key-arrow-down",
-        "terminal-key-arrow-left",
-        "terminal-key-arrow-right",
-        "terminal-key-arrow-up",
-        "terminal-key-ctrl",
+      expect(keyIds()).toEqual([
         "terminal-key-esc",
         "terminal-key-tab",
+        "terminal-key-ctrl",
+        "terminal-key-alt",
+        "terminal-key-arrow-left",
+        "terminal-key-arrow-down",
+        "terminal-key-arrow-up",
+        "terminal-key-arrow-right",
       ]);
       fireEvent.pointerDown(screen.getByTestId("terminal-key-arrow-left"));
       expect(input).toHaveBeenCalledExactlyOnceWith("\x1b[D");
+    });
+
+    it("clears a latched Shift that the one row has no key to show or cancel", () => {
+      const input = setupTarget("normal");
+      render(
+        <MobileTerminalKeyBar instanceId={INSTANCE_ID} keyboardOpen={false} />,
+      );
+      fireEvent.pointerDown(screen.getByTestId("terminal-key-shift"));
+      fireEvent.pointerDown(screen.getByTestId("terminal-key-ctrl"));
+
+      raiseNativeKeyboard(IPHONE_17);
+      expect(getTerminalKeyBarModifiers()).toEqual({
+        ctrl: true,
+        alt: false,
+        shift: false,
+      });
+
+      fireEvent.pointerDown(screen.getByTestId("terminal-key-ctrl"));
+      fireEvent.pointerDown(screen.getByTestId("terminal-key-tab"));
+      expect(input).toHaveBeenCalledExactlyOnceWith("\t");
     });
 
     it("draws all twelve again when the keyboard goes down", () => {

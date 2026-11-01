@@ -54,6 +54,13 @@ interface MobileTerminalKeyBarProps {
 export function MobileTerminalKeyBar(props: MobileTerminalKeyBarProps) {
   const { instanceId, keyboardOpen } = props;
   const oneRow = useShortKeyboardViewport();
+  // One row has no Shift to show it latched or to cancel it, and a latch nobody
+  // can see would turn the next Tab into a back-tab.
+  useEffect(() => {
+    if (oneRow && getTerminalKeyBarModifiers().shift) {
+      toggleTerminalKeyBarModifier("shift");
+    }
+  }, [oneRow]);
   const latchedModifiers = useSyncExternalStore(
     subscribeTerminalKeyBarModifiers,
     getTerminalKeyBarModifiers,
@@ -359,7 +366,7 @@ const KEY_ROWS: readonly (readonly KeyDef[])[] = [
 ];
 
 /** The keys of the rows above that the phone's own keyboard cannot type. */
-const ONE_ROW_KEY_IDS: ReadonlySet<string> = new Set([
+const ONE_ROW_KEY_IDS: ReadonlyArray<string> = [
   "esc",
   "tab",
   "ctrl",
@@ -368,8 +375,8 @@ const ONE_ROW_KEY_IDS: ReadonlySet<string> = new Set([
   "arrow-down",
   "arrow-up",
   "arrow-right",
-]);
+];
 
-const ONE_ROW_KEYS = KEY_ROWS.flat().filter((def) =>
-  ONE_ROW_KEY_IDS.has(def.testId),
+const ONE_ROW_KEYS = ONE_ROW_KEY_IDS.flatMap((id) =>
+  KEY_ROWS.flat().filter((def) => def.testId === id),
 );
