@@ -243,6 +243,7 @@ describe("ConfigurationSourceBoundary", () => {
     const { Wrapper } = mountClient(() => new Promise<never>(() => undefined));
     render(
       <ConfigurationSourceBoundary
+        section={null}
         target={{ kind: "team", environmentId: "env-a" }}
       >
         <Probe />
@@ -258,6 +259,7 @@ describe("ConfigurationSourceBoundary", () => {
     );
     render(
       <ConfigurationSourceBoundary
+        section={null}
         target={{ kind: "team", environmentId: "env-gone" }}
       >
         <Probe />
@@ -274,6 +276,7 @@ describe("ConfigurationSourceBoundary", () => {
     const { Wrapper } = mountClient(() => Promise.reject(new Error("down")));
     render(
       <ConfigurationSourceBoundary
+        section={null}
         target={{ kind: "team", environmentId: "env-a" }}
       >
         <Probe />
@@ -295,6 +298,7 @@ describe("ConfigurationSourceBoundary", () => {
       );
       render(
         <ConfigurationSourceBoundary
+          section={null}
           target={{ kind: "team", environmentId: "env-a" }}
         >
           <Probe />
@@ -313,6 +317,7 @@ describe("ConfigurationSourceBoundary", () => {
     );
     render(
       <ConfigurationSourceBoundary
+        section={null}
         target={{ kind: "team", environmentId: "env-a" }}
       >
         <Probe />
@@ -329,7 +334,7 @@ describe("ConfigurationSourceBoundary", () => {
       Promise.resolve({ environments: [team("a", "Acme", "admin"), personal] }),
     );
     render(
-      <ConfigurationSourceBoundary target={{ kind: "personal" }}>
+      <ConfigurationSourceBoundary target={{ kind: "personal" }} section={null}>
         <Probe />
       </ConfigurationSourceBoundary>,
       { wrapper: Wrapper },

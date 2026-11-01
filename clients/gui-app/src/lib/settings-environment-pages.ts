@@ -1,4 +1,9 @@
 import type { SettingsSectionId } from "@/lib/settings-sections";
+import {
+  navigateToSettingsSection,
+  rememberSettingsTabSection,
+} from "@/lib/settings-navigation";
+import { getSystemTabModalApi } from "@/stores/tabs/system-tab-modal-bridge";
 
 /**
  * The pages of Settings ▸ Environment, addressed by the configuration they
@@ -120,6 +125,90 @@ export function environmentSectionShown(
   const pageId = pageIdForSection(section);
   return pageId === null || !PAGES_HIDDEN_BY_PICK[pick.kind].has(pageId);
 }
+
+/**
+ * Moves the selection, and the surface off a page the selection it lands on
+ * does not offer.
+ *
+ * Both movers go through here, because the second half is not optional:
+ * Personal has no Members page, so a person removed from the team they were
+ * reading would otherwise be left on a panel that renders nothing, with the
+ * sidebar row they were standing on gone from under them. `activeSection` is
+ * `null` where the mover does not know the page — nothing is moved then.
+ *
+ * What is NOT shared is how the surface moves, because the two movers differ
+ * in the only way that matters here: whether a person asked for this. A press
+ * on a picker row is a gesture, and taking the surface with it is the whole
+ * point. A removal is a fact the server reported, and Settings may be sitting
+ * in a split pane the person is not looking at — so the caller passes the move
+ * rather than inheriting one, and `moveEnvironmentSurface` has the two.
+ */
+export function moveEnvironmentPick(input: {
+  readonly next: EnvironmentPick;
+  readonly activeSection: SettingsSectionId | null;
+  readonly setPick: (next: EnvironmentPick) => void;
+  readonly moveSurface: (section: SettingsSectionId) => void;
+}): void {
+  input.setPick(input.next);
+  if (
+    input.activeSection !== null &&
+    !environmentSectionShown(input.next, input.activeSection)
+  ) {
+    input.moveSurface("providers");
+  }
+}
+
+/**
+ * The two ways the Settings surface is taken off a page, for
+ * `moveEnvironmentPick`'s `moveSurface`.
+ *
+ * `onGesture` is the command: it opens Settings and focuses it, which is right
+ * when a person just pressed something on it.
+ *
+ * `onServerFact` never activates anything, and Settings has three
+ * presentations to reach without doing so. `navigateToSettingsSection` is
+ * wrong for all of them: it routes through `openSettings`, which focuses the
+ * Settings tab, and in a split that takes the partner pane's focus and route —
+ * pulling a person off the work they were doing because a membership changed
+ * in the background, which is a worse failure than the blank panel this guard
+ * exists to prevent.
+ *
+ * - The live overlay: set the section. That moves what the person is already
+ *   looking at and activates nothing.
+ * - A Settings pane that does NOT own the route: remember the path. The
+ *   surface prefers its remembered path exactly while a partner owns the
+ *   route, so remembering is what moves it.
+ * - A Settings surface that DOES own the route: remembering moves nothing,
+ *   because the surface prefers the route wherever it owns it
+ *   (`settings-surface.test.tsx` asserts that both ways round). Its route has
+ *   to be replaced instead — which activates nothing and takes no partner's
+ *   focus, because a surface owning the route is already the focused route
+ *   owner. This is the presentation a person reading Settings ▸ Environment ▸
+ *   Members with no overlay up is in, so it is the likeliest one of the three
+ *   to be standing in when a removal lands.
+ *
+ * Both of the moves that need the router go through the bridge, which is what
+ * the bridge is for: a panel cannot reach for router hooks, because the modal
+ * may be the one hosting it. `replaceOwnedSettingsRoute` is a no-op wherever
+ * Settings does not own the route, so the order below is "remember, and move
+ * the route too if this surface is holding one".
+ */
+export const moveEnvironmentSurface = {
+  onGesture: (section: SettingsSectionId): void => {
+    navigateToSettingsSection(section);
+  },
+  onServerFact: (section: SettingsSectionId): void => {
+    const api = getSystemTabModalApi();
+    if (api !== null && api.isOverlayActive("settings")) {
+      api.setSection(section);
+      return;
+    }
+    rememberSettingsTabSection(section);
+    // A no-op unless Settings owns the route. `null` is a cold launch, where
+    // the bridge has published nothing and there is no surface to move.
+    if (api !== null) api.replaceOwnedSettingsRoute(section);
+  },
+};
 
 /** The pick an address names; a Local row is never addressed by one. */
 export function pickForConfiguration(

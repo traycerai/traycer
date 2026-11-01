@@ -160,6 +160,52 @@ function buildActionRouter() {
   });
 }
 
+/**
+ * A router that actually has Settings routes, so the move that only a route
+ * can make is asserted against a real one rather than a spy.
+ */
+function buildSettingsOwnerRouter(initialPath: string) {
+  const rootRoute = createRootRoute({
+    validateSearch: (raw) => systemTabOverlaySearchSchema.parse(raw),
+    component: () => (
+      <>
+        <ModalProbe />
+        <Outlet />
+      </>
+    ),
+  });
+  const indexRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/",
+    component: () => <div data-testid="home" />,
+  });
+  const epicsRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/epics",
+    validateSearch: (raw) => historySearchParamsSchema.parse(raw),
+    component: () => <div data-testid="history" />,
+  });
+  const membersRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/settings/members",
+    component: () => <div data-testid="settings-members" />,
+  });
+  const providersRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/settings/providers",
+    component: () => <div data-testid="settings-providers" />,
+  });
+  return createRouter({
+    routeTree: rootRoute.addChildren([
+      indexRoute,
+      epicsRoute,
+      membersRoute,
+      providersRoute,
+    ]),
+    history: createMemoryHistory({ initialEntries: [initialPath] }),
+  });
+}
+
 describe("settings section is store-backed, not URL-backed", () => {
   beforeEach(() => {
     __resetTabNavigationControllerForTesting();
@@ -218,6 +264,47 @@ describe("settings section is store-backed, not URL-backed", () => {
     });
     // Section nav is store-only: it must not re-render the root route.
     expect(navigateSpy).not.toHaveBeenCalled();
+  });
+
+  // The third presentation: a Settings surface holding the route. It prefers
+  // the route over its remembered path, so only a route change moves it — and
+  // replacing a route the focused surface already owns activates nothing.
+  it("replaces the route of a Settings surface that owns it, without adding history", async () => {
+    const router = buildSettingsOwnerRouter("/settings/members");
+    render(<RouterProvider router={router} />);
+    await waitFor(() => expect(modalProbe.current).not.toBeNull());
+    const depth = router.history.length;
+
+    act(() => {
+      modalProbe.current?.replaceOwnedSettingsRoute("providers");
+    });
+
+    await waitFor(() =>
+      expect(router.state.location.pathname).toBe("/settings/providers"),
+    );
+    // Replaced, not pushed: nobody navigated here, so Back has nothing to
+    // return to.
+    expect(router.history.length).toBe(depth);
+  });
+
+  // And where a partner owns the route it must not navigate at all: that pane
+  // is the one the person is working in, and the Settings tab is moved by its
+  // remembered path instead.
+  it("leaves a route Settings does not own alone", async () => {
+    const router = buildSettingsOwnerRouter("/epics");
+    render(<RouterProvider router={router} />);
+    await waitFor(() => expect(modalProbe.current).not.toBeNull());
+
+    const navigateSpy = vi.spyOn(router, "navigate");
+    act(() => {
+      modalProbe.current?.replaceOwnedSettingsRoute("providers");
+    });
+
+    // The spy and not the pathname, because a navigate is asynchronous: an
+    // unchanged pathname is also what a navigate that has been issued and has
+    // not landed yet looks like.
+    expect(navigateSpy).not.toHaveBeenCalled();
+    expect(router.state.location.pathname).toBe("/epics");
   });
 
   it("command-only modal actions do not subscribe to section changes", async () => {

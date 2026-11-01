@@ -54,6 +54,7 @@ function setActiveSystemOverlay(kind: SystemOverlayKind): void {
     openHistory: () => undefined,
     close: () => undefined,
     setSection: (_section: SettingsSectionId) => undefined,
+    replaceOwnedSettingsRoute: (_section: SettingsSectionId) => undefined,
     promoteToTab: () => undefined,
     isOverlayActive: (candidate) => candidate === kind,
   });

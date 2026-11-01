@@ -144,6 +144,7 @@ function publishModalApi(active: SystemModalActive | null): {
     openHistory: vi.fn(),
     close,
     setSection: vi.fn(),
+    replaceOwnedSettingsRoute: vi.fn(),
     promoteToTab: vi.fn(),
     isOverlayActive: (kind) => active?.kind === kind,
   });
