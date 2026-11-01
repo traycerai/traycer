@@ -921,21 +921,26 @@ describe("EpicSidebarCloudChatRow for a collaborator's chat", () => {
     CHAT.ownerHostId,
   ]);
 
-  function renderCollaboratorRow(chat: CloudChatSummary): void {
+  function renderCollaboratorRow(
+    chat: CloudChatSummary,
+    hosts: TaskHostsView,
+  ): void {
     render(
       <EpicSessionContext value={session}>
         <EpicSessionHostClientContext
           value={client.createRequesterForHostId("host-1")}
         >
           <TaskHostReachContext value={OTHER_PRINCIPAL_HOSTS}>
-            <EpicSidebarCloudChatRow
-              chat={chat}
-              childEntries={NO_CHILDREN}
-              expansion={LEAF_EXPANSION}
-              tabId="tab-1"
-              depth={0}
-              selectionMode={false}
-            />
+            <TaskHostsViewContext value={hosts}>
+              <EpicSidebarCloudChatRow
+                chat={chat}
+                childEntries={NO_CHILDREN}
+                expansion={LEAF_EXPANSION}
+                tabId="tab-1"
+                depth={0}
+                selectionMode={false}
+              />
+            </TaskHostsViewContext>
           </TaskHostReachContext>
         </EpicSessionHostClientContext>
       </EpicSessionContext>,
@@ -944,7 +949,7 @@ describe("EpicSidebarCloudChatRow for a collaborator's chat", () => {
 
   it("names the collaborator in the row's accessible name once the list names them", async () => {
     entries = [collaboratorRow({ displayName: "Ada Lovelace", email: "" })];
-    renderCollaboratorRow(collaboratorChat);
+    renderCollaboratorRow(collaboratorChat, { kind: "none" });
 
     const row = await screen.findByRole("button", {
       name: "Walkthrough — on Ada Lovelace's computer, not reachable from here",
@@ -957,7 +962,7 @@ describe("EpicSidebarCloudChatRow for a collaborator's chat", () => {
 
   it("says another collaborator while no name has loaded, and for a row that names only the user id", async () => {
     entries = [collaboratorRow(null)];
-    renderCollaboratorRow(collaboratorChat);
+    renderCollaboratorRow(collaboratorChat, { kind: "none" });
 
     await waitFor(() => {
       expect(queryClient.isFetching()).toBe(0);
@@ -971,7 +976,7 @@ describe("EpicSidebarCloudChatRow for a collaborator's chat", () => {
 
   it("puts the same words on the lock's tooltip", async () => {
     entries = [collaboratorRow({ displayName: "Ada Lovelace", email: "" })];
-    renderCollaboratorRow(collaboratorChat);
+    renderCollaboratorRow(collaboratorChat, { kind: "none" });
     await screen.findByRole("button", {
       name: "Walkthrough — on Ada Lovelace's computer, not reachable from here",
     });
@@ -989,12 +994,26 @@ describe("EpicSidebarCloudChatRow for a collaborator's chat", () => {
     ).toBeGreaterThan(0);
   });
 
+  it("keeps the reach line after a sandbox owner's own line, even on a collaborator's chat", async () => {
+    entries = [collaboratorRow({ displayName: "Ada Lovelace", email: "" })];
+    renderCollaboratorRow(collaboratorChat, taskHosts("e2e-sbx-p1"));
+
+    await waitFor(() => {
+      expect(queryClient.isFetching()).toBe(0);
+    });
+    expect(
+      screen.getByRole("button", {
+        name: "Walkthrough — e2e-sbx-p1 isn't available — this chat stays readable. — not reachable from this host",
+      }),
+    ).toBeTruthy();
+  });
+
   it("keeps the offline wording, and the reach line after it, for the viewer's own chat", async () => {
     entries = [collaboratorRow({ displayName: "Ada Lovelace", email: "" })];
     useAuthStore.setState({
       contextMetadata: { userId: OWNER_USER_ID, username: "Owner" },
     });
-    renderCollaboratorRow(CHAT);
+    renderCollaboratorRow(CHAT, { kind: "none" });
 
     await waitFor(() => {
       expect(queryClient.isFetching()).toBe(0);
