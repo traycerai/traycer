@@ -18,6 +18,7 @@ import {
   ONBOARDING_DRAFT_PROVIDERS_UNSETTLED_POLL_LANE,
   SPEECH_MODEL_DOWNLOADING_POLL_LANE,
 } from "@/lib/host-rpc-policy/host-method-policy-table";
+import { environmentStatusFixture } from "@/lib/environment/__tests__/environment-test-support";
 import { createAppQueryClient } from "@/lib/query-client";
 import { getConditionPollEpisodeCoordinator } from "@/lib/query/condition-poll-episode-coordinator";
 import { useAgentSelectionGuideGlobalOnboardingDraftQuery } from "@/hooks/agent/use-agent-selection-guide-global-onboarding-draft-query";
@@ -71,6 +72,7 @@ function createPathFixture(handlers: {
   readonly "agent.selectionGuide.getGlobalOnboardingDraft"?: () => unknown;
   readonly "speech.getModelStatus"?: () => unknown;
   readonly "host.notifications.indicatorState"?: () => unknown;
+  readonly "environment.status"?: () => unknown;
 }) {
   const queryClient = createAppQueryClient();
   let requestSeq = 0;
@@ -245,5 +247,46 @@ describe("migrated condition paths", () => {
     expect(appliedDelay(query)).toBe(
       NOTIFICATION_INDICATOR_ERROR_POLL_LANE.initialDelayMs,
     );
+  });
+
+  it("a reader that opts out of a condition poll still recovers from one failed read", async () => {
+    // `retry: false` belongs to the branded poller, which re-asks on its own
+    // error lanes. An opted-out reader owns no episode, so without the
+    // ordinary retry a single transient failure would leave it on nothing
+    // until some other producer happened to read the same key.
+    let reads = 0;
+    const fixture = createPathFixture({
+      "environment.status": () => {
+        reads += 1;
+        if (reads === 1) throw new Error("transient host failure");
+        return environmentStatusFixture({});
+      },
+    });
+
+    renderHook(
+      () =>
+        useHostQuery<HostRpcRegistry, "environment.status">({
+          cacheKeyIdentity: undefined,
+          client: fixture.client,
+          method: "environment.status",
+          params: {},
+          options: { poll: false },
+        }),
+      { wrapper: fixture.Wrapper },
+    );
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    const query = queryForMethod(fixture.queryClient, "environment.status");
+    // Opted out: no interval armed, so no episode can recover it either.
+    expect(appliedDelay(query)).toBe(false);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+
+    expect(reads).toBe(2);
+    expect(query.state.data).not.toBeUndefined();
   });
 });
