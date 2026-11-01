@@ -284,14 +284,11 @@ function HistoryRowTrailingMetadata(props: {
       >
         {WIDEST_ACTIVITY_LABEL}
       </span>
-      {/* While the pills show, the faded label lets go of the pointer: at
-          opacity 0 it still paints, and hit-tests, above the pills sharing
-          its cell, so a click on a pill opened the row instead. */}
       <span
         className={cn(
           "col-start-1 row-start-1 text-muted-foreground",
           hasPrPills &&
-            "transition-opacity md:group-hover/list-row:pointer-events-none md:group-hover/list-row:opacity-0 md:group-focus-within/list-row:pointer-events-none md:group-focus-within/list-row:opacity-0",
+            "transition-opacity md:group-hover/list-row:opacity-0 md:group-focus-within/list-row:opacity-0",
         )}
       >
         {props.updatedLabel}
