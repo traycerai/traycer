@@ -969,9 +969,9 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
   // A maintenance lease whose supervisor died after handing liveness to the
   // installer tree leaves a record that, on Windows, the lock's own rule can
   // never judge stale - so every later scripted install and uninstall is
-  // refused as a live contender, and this file is the only trace. A lock this
-  // user cannot read is refused the same way, for whoever cannot read it.
-  // Read-only:
+  // refused as if an update were running, and this file is the only trace. A
+  // lock this user cannot read is refused the same way, for whoever cannot
+  // read it. Read-only:
   // removing it needs a person to confirm no installer is running.
   const attemptLockIssue = await probeUpdateAttemptLock({
     lockPath: updateAttemptLockPath(hostHomeDir(opts.environment)),

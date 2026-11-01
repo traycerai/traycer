@@ -1022,9 +1022,9 @@ export async function resolveUpdatePlan(
 
   if (request.intent === "continue") {
     // A park can meet this guard after its CLI was replaced by one that needs
-    // a newer host, and its target can be below the install (a downgrade park)
-    // or a registry build over a `local-*` one. A park whose swap already
-    // happened targets the installed version and passes.
+    // a newer host. That floor reads no install, so it refuses a park whose
+    // swap already happened too. The install floor is judged here as well, and
+    // a target at the installed version passes it.
     refuseOlderHostWhileDataMoved({
       command: "host update",
       environment: opts.environment,

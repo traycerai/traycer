@@ -86,8 +86,8 @@ export async function probeUpdateAttemptLock(
   }
   // Released and re-taken while the publisher was being judged: the verdict
   // above is about a record that is no longer there.
-  const second = await readLockHolder(opts.lockPath);
-  if (second.kind !== "held" || second.holder.token !== holder.token) {
+  const latest = await readLockHolder(opts.lockPath);
+  if (latest.kind !== "held" || latest.holder.token !== holder.token) {
     return null;
   }
   return unbreakableIssue(opts.lockPath, holder, publisher);
