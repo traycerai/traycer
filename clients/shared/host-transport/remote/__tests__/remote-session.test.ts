@@ -119,6 +119,7 @@ import {
   SESSION_LIVENESS_PROBE_TIMEOUT_MS,
   SESSION_SILENCE_TIMEOUT_MS,
   MEMBER_CREDENTIAL_REASK_DELAYS_MS,
+  MEMBER_CREDENTIAL_REASK_REPEAT_MS,
   UNARY_RESPONSE_TIMEOUT_MS,
 } from "../config";
 import type {
@@ -10598,11 +10599,11 @@ describe("RemoteSession member credential re-ask", () => {
     return session;
   }
 
-  function exhaustedWarnings(warnSpy: MockInstance): number {
+  function repeatWarnings(warnSpy: MockInstance): number {
     return warnSpy.mock.calls.filter(
       (call) =>
         typeof call[0] === "string" &&
-        call[0].includes("member credential not handed: re-asks exhausted"),
+        call[0].includes("member credential not handed: re-asking each minute"),
     ).length;
   }
 
@@ -10616,7 +10617,7 @@ describe("RemoteSession member credential re-ask", () => {
   });
 
   it(
-    "asks again at each of the five delays and then stops, warning once that the re-asks are exhausted",
+    "asks at each of the five delays, then once a minute without stopping, warning once that it re-asks each minute",
     async () => {
       const relay = new FakeRelayHost();
       const mint = refusingMint();
@@ -10629,12 +10630,19 @@ describe("RemoteSession member credential re-ask", () => {
           await vi.advanceTimersByTimeAsync(2 * MARGIN_MS);
           expect(mint).toHaveBeenCalledTimes(2 + index);
         }
-        expect(mint).toHaveBeenCalledTimes(1 + REASK_DELAYS_MS.length);
-        expect(exhaustedWarnings(warnSpy)).toBe(1);
+        const afterList = 1 + REASK_DELAYS_MS.length;
+        expect(mint).toHaveBeenCalledTimes(afterList);
+        expect(repeatWarnings(warnSpy)).toBe(1);
 
-        await vi.advanceTimersByTimeAsync(10 * 60_000);
-        expect(mint).toHaveBeenCalledTimes(1 + REASK_DELAYS_MS.length);
-        expect(exhaustedWarnings(warnSpy)).toBe(1);
+        for (let repeat = 1; repeat <= 5; repeat += 1) {
+          await vi.advanceTimersByTimeAsync(
+            MEMBER_CREDENTIAL_REASK_REPEAT_MS - 2 * MARGIN_MS,
+          );
+          expect(mint).toHaveBeenCalledTimes(afterList + repeat - 1);
+          await vi.advanceTimersByTimeAsync(2 * MARGIN_MS);
+          expect(mint).toHaveBeenCalledTimes(afterList + repeat);
+        }
+        expect(repeatWarnings(warnSpy)).toBe(1);
         expect(relay.credentialUpdates).toEqual([]);
         expect(relay.openBearers).toHaveLength(1);
         expect(relay.errors).toEqual([]);
@@ -10646,18 +10654,61 @@ describe("RemoteSession member credential re-ask", () => {
   );
 
   it(
-    "close() inside the list stops further asks from that attach",
+    "a credential that lands on the eighth ask reaches the wire once on the same connection, and the asking stops",
     async () => {
+      const relay = new FakeRelayHost();
+      const mint = vi.fn((_hostId: string) =>
+        Promise.resolve<MemberCredentialHandoff | null>(
+          mint.mock.calls.length === 8 ? MEMBER_HANDOFF : null,
+        ),
+      );
+      const session = await startReady(relay, mint);
+      try {
+        const eighthAskAtMs =
+          REASK_DELAYS_MS.reduce((sum, delayMs) => sum + delayMs, 0) +
+          2 * MEMBER_CREDENTIAL_REASK_REPEAT_MS;
+        await vi.advanceTimersByTimeAsync(eighthAskAtMs + MARGIN_MS);
+        await vi.waitFor(
+          () => expect(relay.credentialUpdates).toHaveLength(1),
+          WAIT,
+        );
+        expect(mint).toHaveBeenCalledTimes(8);
+
+        await vi.advanceTimersByTimeAsync(10 * 60_000);
+        expect(mint).toHaveBeenCalledTimes(8);
+        expect(relay.credentialUpdates).toEqual([
+          { bearer: null, memberCredential: MEMBER_HANDOFF },
+        ]);
+        expect(relay.openBearers).toHaveLength(1);
+        expect(relay.errors).toEqual([]);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it.each([
+    ["inside the list", FIRST_REASK_MS + MARGIN_MS, 2],
+    [
+      "during the repeating phase",
+      REASK_DELAYS_MS.reduce((sum, delayMs) => sum + delayMs, 0) +
+        MEMBER_CREDENTIAL_REASK_REPEAT_MS +
+        MARGIN_MS,
+      7,
+    ],
+  ])(
+    "close() %s stops further asks from that attach",
+    async (_phase, advanceMs, callsBeforeClose) => {
       const relay = new FakeRelayHost();
       const mint = refusingMint();
       const session = await startReady(relay, mint);
-      await vi.advanceTimersByTimeAsync(FIRST_REASK_MS + MARGIN_MS);
-      expect(mint).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(advanceMs);
+      expect(mint).toHaveBeenCalledTimes(callsBeforeClose);
 
       session.close();
       await vi.advanceTimersByTimeAsync(10 * 60_000);
-      expect(mint).toHaveBeenCalledTimes(2);
-      expect(exhaustedWarnings(warnSpy)).toBe(0);
+      expect(mint).toHaveBeenCalledTimes(callsBeforeClose);
     },
     TEST_BUDGET_MS,
   );
@@ -10681,7 +10732,43 @@ describe("RemoteSession member credential re-ask", () => {
         relay.dropCurrentConnection();
         await vi.advanceTimersByTimeAsync(10 * 60_000);
         expect(mint).toHaveBeenCalledTimes(2);
-        expect(exhaustedWarnings(warnSpy)).toBe(0);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "a drop during the repeating phase stops that attach's asks, and the redial's list starts again from 2s",
+    async () => {
+      const relay = new FakeRelayHost();
+      const mint = refusingMint();
+      const session = await startReady(relay, mint);
+      try {
+        await vi.advanceTimersByTimeAsync(
+          REASK_DELAYS_MS.reduce((sum, delayMs) => sum + delayMs, 0) +
+            MEMBER_CREDENTIAL_REASK_REPEAT_MS +
+            MARGIN_MS,
+        );
+        expect(mint).toHaveBeenCalledTimes(7);
+
+        relay.dropCurrentConnection();
+        await vi.advanceTimersByTimeAsync(RECONNECT_INITIAL_BACKOFF_MS);
+        await vi.waitFor(() => {
+          expect(relay.openBearers).toHaveLength(2);
+          expect(mint).toHaveBeenCalledTimes(8);
+          expect(session.isReady()).toBe(true);
+        }, WAIT);
+
+        await vi.advanceTimersByTimeAsync(FIRST_REASK_MS - MARGIN_MS);
+        expect(mint).toHaveBeenCalledTimes(8);
+        await vi.advanceTimersByTimeAsync(2 * MARGIN_MS);
+        expect(mint).toHaveBeenCalledTimes(9);
+        // The redial is on its own list, not the old attach's repeat.
+        await vi.advanceTimersByTimeAsync(SECOND_REASK_MS + MARGIN_MS);
+        expect(mint).toHaveBeenCalledTimes(10);
+        expect(relay.errors).toEqual([]);
       } finally {
         session.close();
       }

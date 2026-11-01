@@ -80,6 +80,7 @@ import {
   INITIAL_BULK_SEND_CREDITS,
   MAX_TERMINAL_STREAM_IDS,
   MEMBER_CREDENTIAL_REASK_DELAYS_MS,
+  MEMBER_CREDENTIAL_REASK_REPEAT_MS,
   ATTACH_ACK_TIMEOUT_MS,
   NOISE_HANDSHAKE_TIMEOUT_MS,
   SESSION_OPEN_ACK_TIMEOUT_MS,
@@ -563,7 +564,7 @@ export interface RemoteSessionOptions<
    * before it, so one left over from a dropped attach is discarded and the
    * next attach mints its own. A mint that resolves `null` or throws is logged
    * and the session goes on, so the host's own refusal still names the cause,
-   * and the session then re-asks on that attach
+   * and the session then re-asks on that attach until one lands
    * ({@link MEMBER_CREDENTIAL_REASK_DELAYS_MS}).
    */
   readonly mintMemberCredential:
@@ -3826,9 +3827,11 @@ export class RemoteSession<
   }
 
   /**
-   * Arms the re-ask at `index` of {@link MEMBER_CREDENTIAL_REASK_DELAYS_MS}. A
-   * `ready` session sees no other edge while the host's slot sits empty: only
-   * a new attach would mint, and an awake host may not send one for minutes.
+   * Arms the re-ask at `index` of {@link MEMBER_CREDENTIAL_REASK_DELAYS_MS},
+   * then every {@link MEMBER_CREDENTIAL_REASK_REPEAT_MS} until one lands or the
+   * attach ends. A `ready` session sees no other edge while the host's slot
+   * sits empty: only a new attach would mint, and an awake host may not send
+   * one for minutes.
    */
   private armMemberCredentialReask(
     generation: number,
@@ -3836,17 +3839,15 @@ export class RemoteSession<
     mint: (hostId: string) => Promise<MemberCredentialHandoff | null>,
     index: number,
   ): void {
-    const delayMs = MEMBER_CREDENTIAL_REASK_DELAYS_MS[index];
-    if (delayMs === undefined) {
+    if (index === MEMBER_CREDENTIAL_REASK_DELAYS_MS.length) {
       console.warn(
-        "[remote-session] member credential not handed: re-asks exhausted",
+        "[remote-session] member credential not handed: re-asking each minute",
       );
-      return;
     }
     this.memberCredentialReaskTimer = setTimeout(() => {
       this.memberCredentialReaskTimer = null;
       void this.reaskMemberCredential(generation, connection, mint, index);
-    }, delayMs);
+    }, MEMBER_CREDENTIAL_REASK_DELAYS_MS[index] ?? MEMBER_CREDENTIAL_REASK_REPEAT_MS);
   }
 
   /**
