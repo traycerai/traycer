@@ -16,15 +16,17 @@ const plan: ConfigurationPlan = {
 
 function renderPlans(overrides: {
   canAdminister: boolean;
+  plans?: readonly ConfigurationPlan[];
+  adminNames?: readonly string[];
   onLink?: () => void;
   onPreviewUnlink?: (plan: ConfigurationPlan) => void;
 }): void {
   render(
     <PlansCard
       teamName="Acme"
-      plans={[plan]}
+      plans={overrides.plans ?? [plan]}
       canAdminister={overrides.canAdminister}
-      adminNames={["Ada", "Grace"]}
+      adminNames={overrides.adminNames ?? ["Ada", "Grace"]}
       isPending={false}
       onLink={overrides.onLink ?? vi.fn()}
       onPreviewUnlink={overrides.onPreviewUnlink ?? vi.fn()}
@@ -35,12 +37,38 @@ function renderPlans(overrides: {
 afterEach(cleanup);
 
 describe("PlansCard", () => {
-  it("gives a viewer no Link or Unlink verbs and names the admins", () => {
+  it("gives a viewer no Link or Unlink verbs", () => {
     renderPlans({ canAdminister: false });
 
     expect(screen.queryByRole("button", { name: /link a plan/i })).toBeNull();
     expect(screen.queryByRole("button", { name: /unlink/i })).toBeNull();
-    expect(screen.getByText("Admins link a plan: Ada, Grace.")).toBeTruthy();
+  });
+
+  it.each([
+    { admins: [], line: "Only an admin can link a plan." },
+    { admins: ["Ada"], line: "Only an admin can link a plan: ask Ada." },
+    {
+      admins: ["Ada", "Grace"],
+      line: "Only an admin can link a plan: ask Ada or Grace.",
+    },
+    {
+      admins: ["Ada", "Grace", "Linus"],
+      line: "Only an admin can link a plan: ask Ada, Grace or 1 other.",
+    },
+    {
+      admins: ["Ada", "Grace", "Linus", "Barbara", "Alan"],
+      line: "Only an admin can link a plan: ask Ada, Grace or 3 others.",
+    },
+  ])("tells a reader who to ask: $line", ({ admins, line }) => {
+    renderPlans({ canAdminister: false, adminNames: admins });
+
+    expect(screen.getByText(line)).toBeTruthy();
+  });
+
+  it("says no plan is linked when the team has none", () => {
+    renderPlans({ canAdminister: true, plans: [] });
+
+    expect(screen.getByText("No plans linked.")).toBeTruthy();
   });
 
   it("hands the plan to the preview callback when an admin clicks Unlink", () => {
