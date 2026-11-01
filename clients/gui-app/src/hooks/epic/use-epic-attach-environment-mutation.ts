@@ -8,8 +8,9 @@ import { useHostMutation } from "@/hooks/host/use-host-query";
 import { useHostOwnerTeamId } from "@/hooks/sandboxes/use-on-team-sandbox";
 import { useHostClient } from "@/lib/host";
 import {
-  toastFromHostErrorOnGesture,
-  type HostWriteGesture,
+  classifySendRefusal,
+  toastFromHostErrorOnFork,
+  toastSendRefusal,
 } from "@/lib/host-error-toast";
 import { epicMutationKeys } from "@/lib/query-keys/epic-mutation-keys";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -45,6 +46,27 @@ export function isAttachPromotionPending(error: unknown): boolean {
   );
 }
 
+/** The modal's message never left its composer, so a line says nothing of it. */
+function toastModalSendRefusal(error: HostRpcError): void {
+  const refusal = classifySendRefusal(error);
+  switch (refusal.kind) {
+    case "silent":
+      return;
+    case "setting-up":
+      toastSendRefusal(
+        error,
+        "This task is still being set up. Send again in a moment.",
+      );
+      return;
+    case "actionable":
+      toastSendRefusal(error, refusal.message);
+      return;
+    case "failed":
+      toastSendRefusal(error, "Couldn't send your message.");
+      return;
+  }
+}
+
 /**
  * Attachments use the person's bearer. Prefer the task's serving host when
  * it is personal, otherwise a personal app-wide host; never a team's host.
@@ -71,11 +93,13 @@ interface EpicAttachmentContext {
  * `epic.attachEnvironment` on the person's own host: attaches the task to a
  * team so that team's hosts may serve it, before a chat continues on one of
  * them. Unsupported is left to the caller, which continues as before.
- * `gesture` is the button that asked for it, which a refusal's copy names.
+ * `surface` is what asked for it: the new-agent modal and the fork dialog
+ * tell a refusal here, while `landing` tells its own, once it knows where the
+ * message went.
  */
 export function useEpicAttachEnvironment(
   client: HostClient<HostRpcRegistry> | null,
-  gesture: HostWriteGesture,
+  surface: "landing" | "modal" | "fork",
 ) {
   return useHostMutation<
     HostRpcRegistry,
@@ -106,16 +130,21 @@ export function useEpicAttachEnvironment(
         ) {
           return;
         }
-        if (isAttachEnvironmentUnsupported(error)) return;
+        if (surface === "landing" || isAttachEnvironmentUnsupported(error)) {
+          return;
+        }
         if (error.code === "FORBIDDEN") {
           toast.error(ATTACH_ENVIRONMENT_REFUSED_COPY);
           return;
         }
-        toastFromHostErrorOnGesture(
-          error,
-          "Couldn't continue on the team host.",
-          gesture,
-        );
+        if (surface === "fork") {
+          toastFromHostErrorOnFork(
+            error,
+            "Couldn't continue on the team host.",
+          );
+          return;
+        }
+        toastModalSendRefusal(error);
       },
     },
   });

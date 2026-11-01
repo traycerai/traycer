@@ -531,7 +531,8 @@ function rpcError(
     | "FORBIDDEN"
     | "E_HOST_UNSUPPORTED"
     | "RPC_ERROR"
-    | "E_SHARE_PENDING_BUSY",
+    | "E_SHARE_PENDING_BUSY"
+    | "E_SHARE_NOT_OWNED",
 ): HostRpcError {
   return new HostRpcError({
     code,
@@ -663,6 +664,21 @@ describe("ChatForkDialog continuing a personal task on a team host", () => {
 
     expect(dialogMocks.toastError.mock.calls[0]?.[0]).toBe(
       "This task is still being set up. Fork again in a moment.",
+    );
+    expect(dialogMocks.creates).toHaveLength(0);
+    expect(onOpenChange).not.toHaveBeenCalled();
+  });
+
+  it("keeps the fallback line, creates nothing and stays open when the share is refused for another reason", async () => {
+    await startFork();
+
+    attachCalls[0]?.settle(rpcError("E_SHARE_NOT_OWNED"));
+    await waitFor(() => {
+      expect(dialogMocks.toastError).toHaveBeenCalledTimes(1);
+    });
+
+    expect(dialogMocks.toastError.mock.calls[0]?.[0]).toBe(
+      "Couldn't continue on the team host.",
     );
     expect(dialogMocks.creates).toHaveLength(0);
     expect(onOpenChange).not.toHaveBeenCalled();

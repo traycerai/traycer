@@ -825,7 +825,7 @@ export const DISCARD_CREATED_EPIC_FAILED_COPY =
 
 /** Shown when nothing says whether that Task holds work, so it is left alone. */
 export const DISCARD_CREATED_EPIC_UNREAD_COPY =
-  "Couldn't check the task this Send created. Delete it from your tasks if you don't need it.";
+  "This Send may have left an empty task. Delete it from your tasks if you don't need it.";
 
 interface DiscardCreatedEpicVariables {
   readonly epicId: string;

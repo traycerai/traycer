@@ -8,7 +8,6 @@
  * the suite decides which harness ids are blocked.
  */
 
-import { toast } from "sonner";
 import { useRef, useState, type ReactNode } from "react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import {
@@ -37,7 +36,11 @@ import type { SandboxStagingSurface } from "@/components/composer/use-sandbox-st
 import type { TuiHarnessId } from "@traycer/protocol/persistence/epic/schemas";
 import { createComposerEditorIncarnation } from "@/lib/composer/composer-editor-incarnation";
 import { TEAM_SANDBOX_HARNESS_UNAVAILABLE } from "@/lib/sandboxes/team-sandbox-harness";
-import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import {
+  HostRequestAbortedError,
+  HostRpcError,
+  HostTransportFailureError,
+} from "@traycer-clients/shared/host-transport/host-messenger";
 import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
@@ -78,6 +81,48 @@ const imageStore = vi.hoisted(() => ({
     Promise.resolve(undefined),
   ),
 }));
+/** One toast the person was shown, in the order it was shown. */
+interface ShownToast {
+  readonly via: "toast" | "error" | "info";
+  readonly message: string;
+}
+
+const { toastLog } = vi.hoisted(() => ({ toastLog: [] as ShownToast[] }));
+
+vi.mock("sonner", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("sonner")>();
+  return {
+    ...actual,
+    toast: Object.assign(
+      (message: string): string => {
+        toastLog.push({ via: "toast", message });
+        return message;
+      },
+      actual.toast,
+      {
+        error: (message: string): string => {
+          toastLog.push({ via: "error", message });
+          return message;
+        },
+        info: (message: string): string => {
+          toastLog.push({ via: "info", message });
+          return message;
+        },
+      },
+    ),
+  };
+});
+
+function attachRefusal(code: HostRpcError["code"]): HostRpcError {
+  return new HostRpcError({
+    code,
+    message: "This task cannot be attached to that team.",
+    requestId: "request-attach-refused",
+    method: "epic.attachEnvironment",
+    fatalDetails: null,
+  });
+}
+
 vi.mock("@/lib/composer/landing-image-store", async (importOriginal) => ({
   ...(await importOriginal<
     typeof import("@/lib/composer/landing-image-store")
@@ -1070,42 +1115,103 @@ describe("new-conversation modal's send on a staged sandbox", () => {
     expect(testState.onSubmitted).not.toHaveBeenCalled();
   });
 
-  it("tells the person to Send again, exactly, and creates no chat when the task is still being set up", async () => {
-    const errorToast = vi.spyOn(toast, "error");
-    const attach = deferred<{ readonly attached: true }>();
-    testState.attachEnvironment.mockReturnValue(attach.promise);
-    renderModal();
-    act(() => {
-      useStagedSandboxStore.getState().stage(SANDBOX_SURFACE, TEAM_SANDBOX);
-      testState.bodySubmit?.();
-    });
-    await waitFor(() => {
-      expect(testState.attachEnvironment).toHaveBeenCalledTimes(1);
-    });
+  it.each([
+    [
+      "a task still being set up",
+      attachRefusal("E_SHARE_PENDING_BUSY"),
+      [
+        {
+          via: "error",
+          message: "This task is still being set up. Send again in a moment.",
+        },
+      ],
+    ],
+    [
+      "a plain failure",
+      attachRefusal("RPC_ERROR"),
+      [{ via: "error", message: "Couldn't send your message." }],
+    ],
+    [
+      "a task that could not be shared (offline)",
+      attachRefusal("E_SHARE_PENDING_OFFLINE"),
+      [{ via: "error", message: "Couldn't send your message." }],
+    ],
+    [
+      "a refused permission",
+      attachRefusal("FORBIDDEN"),
+      [
+        {
+          via: "error",
+          message: "Ask the task's owner to continue it on a team host.",
+        },
+      ],
+    ],
+    [
+      "a host out of disk space",
+      attachRefusal("E_HOST_STORAGE_FULL"),
+      [
+        {
+          via: "error",
+          message:
+            "The host computer is out of disk space. Free some space on it, then try again.",
+        },
+      ],
+    ],
+    [
+      "a transport failure",
+      new HostTransportFailureError({
+        code: "RPC_ERROR",
+        message: "Host is unreachable",
+        requestId: "request-attach-transport",
+        method: "epic.attachEnvironment",
+        fatalDetails: null,
+      }),
+      [{ via: "toast", message: "Couldn't send your message." }],
+    ],
+    [
+      "an aborted request",
+      new HostRequestAbortedError({
+        message: "authority replaced",
+        requestId: "request-attach-abort",
+        method: "epic.attachEnvironment",
+        mayHaveDispatched: false,
+      }),
+      [],
+    ],
+  ] as const)(
+    "tells exactly what a Send refused for %s says, and creates no chat",
+    async (_label, error, expected) => {
+      toastLog.length = 0;
+      const attach = deferred<{ readonly attached: true }>();
+      testState.attachEnvironment.mockReturnValue(attach.promise);
+      renderModal();
+      act(() => {
+        useStagedSandboxStore.getState().stage(SANDBOX_SURFACE, TEAM_SANDBOX);
+        testState.bodySubmit?.();
+      });
+      await waitFor(() => {
+        expect(testState.attachEnvironment).toHaveBeenCalledTimes(1);
+      });
 
-    await act(async () => {
-      attach.reject(
-        new HostRpcError({
-          code: "E_SHARE_PENDING_BUSY",
-          message: "busy",
-          requestId: "request-attach-busy",
-          method: "epic.attachEnvironment",
-          fatalDetails: null,
-        }),
-      );
-      await attach.promise.catch(() => undefined);
-    });
+      await act(async () => {
+        attach.reject(error);
+        await attach.promise.catch(() => undefined);
+      });
 
-    await waitFor(() => {
-      expect(errorToast.mock.calls.map(([message]) => message)).toEqual([
-        "This task is still being set up. Send again in a moment.",
-      ]);
-    });
-    expect(testState.createChat).not.toHaveBeenCalled();
-    expect(testState.onSubmitted).not.toHaveBeenCalled();
-    expect(draftSurvived()).toBe(true);
-    errorToast.mockRestore();
-  });
+      if (expected.length > 0) {
+        await waitFor(() => {
+          expect(toastLog).toHaveLength(expected.length);
+        });
+      }
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      expect(toastLog).toEqual(expected);
+      expect(testState.createChat).not.toHaveBeenCalled();
+      expect(testState.onSubmitted).not.toHaveBeenCalled();
+      expect(draftSurvived()).toBe(true);
+    },
+  );
 
   it("keeps the staged chat and draft when the account changes during attachment", async () => {
     useAuthStore

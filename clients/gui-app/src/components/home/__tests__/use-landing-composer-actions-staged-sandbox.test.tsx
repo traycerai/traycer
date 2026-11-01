@@ -12,8 +12,10 @@ import { useLandingComposerActions } from "@/components/home/hooks/use-landing-c
 import type { LandingPlacementTarget } from "@/lib/composer/landing-placement";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import {
+  HostRequestAbortedError,
   HostRpcError,
   HostTransportFailureError,
+  RetryableTransportError,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import { returnedSandboxMessageLine } from "@/lib/sandboxes/sandbox-strings";
 import { sandboxHostEntry } from "@/lib/sandboxes/__tests__/sandbox-host-directory-fixture";
@@ -24,10 +26,7 @@ import type { HostClient } from "@traycer-clients/shared/host-client/host-client
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { toast } from "sonner";
 import { wasEpicCreatedThisSession } from "@/lib/epics/session-created-epics";
-import {
-  DISCARD_CREATED_EPIC_FAILED_COPY,
-  DISCARD_CREATED_EPIC_UNREAD_COPY,
-} from "@/hooks/epic/use-epic-batch-delete-mutation";
+import { DISCARD_CREATED_EPIC_FAILED_COPY } from "@/hooks/epic/use-epic-batch-delete-mutation";
 import type { ImageBytes } from "@/lib/attachments/image-bytes";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
@@ -198,16 +197,41 @@ interface OpenDraftToastOptions {
   readonly action: { readonly label: string; readonly onClick: () => void };
 }
 
-const { toastMessage } = vi.hoisted(() => ({
+/** One toast the person was shown, in the order it was shown. */
+interface ShownToast {
+  readonly via: "toast" | "error" | "info";
+  readonly message: string;
+  /** The label of its action, when it has one. */
+  readonly action: string | null;
+}
+
+const { toastMessage, toastLog } = vi.hoisted(() => ({
   toastMessage:
-    vi.fn<(message: string, options: OpenDraftToastOptions) => void>(),
+    vi.fn<
+      (message: string, options: OpenDraftToastOptions | undefined) => void
+    >(),
+  toastLog: [] as ShownToast[],
 }));
 
 vi.mock("sonner", () => ({
-  toast: Object.assign(toastMessage, {
-    error: vi.fn(),
-    info: vi.fn(),
-  }),
+  toast: Object.assign(
+    (message: string, options: OpenDraftToastOptions | undefined) => {
+      toastLog.push({
+        via: "toast",
+        message,
+        action: options === undefined ? null : options.action.label,
+      });
+      toastMessage(message, options);
+    },
+    {
+      error: vi.fn((message: string) => {
+        toastLog.push({ via: "error", message, action: null });
+      }),
+      info: vi.fn((message: string) => {
+        toastLog.push({ via: "info", message, action: null });
+      }),
+    },
+  ),
 }));
 
 const imageStoreMocks = vi.hoisted(() => ({
@@ -328,6 +352,26 @@ const PROMOTION_PENDING_CODES = [
   "E_SHARE_PENDING_FAILED",
 ] as const;
 
+const SETTING_UP_LINE =
+  "This task was still being set up. Send again in a moment.";
+const BACK_IN_COMPOSER_LINE =
+  "Couldn't send your message. It's back in the composer.";
+const NOT_SENT_LINE = "Couldn't send your message.";
+const SAVED_IN_DRAFTS_LINE =
+  "Your message wasn't sent; it's saved in your drafts.";
+const STORAGE_FULL_LINE =
+  "The host computer is out of disk space. Free some space on it, then try again.";
+
+function errorToast(message: string): ShownToast {
+  return { via: "error", message, action: null };
+}
+
+const DRAFTS_TOAST: ShownToast = {
+  via: "toast",
+  message: SAVED_IN_DRAFTS_LINE,
+  action: "Open draft",
+};
+
 /** `epic.attachEnvironment` refused because the task is still being set up. */
 function attachBusy(): HostRpcError {
   return attachRefusal("E_SHARE_PENDING_BUSY");
@@ -363,6 +407,7 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
         { userId: "user-landing", username: "U" },
         [],
       );
+    toastLog.length = 0;
     landingMocks.request.mockReset();
     landingMocks.createTerminalAgent.mockReset();
     landingMocks.navigate.mockReset();
@@ -1298,6 +1343,205 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
     },
   );
 
+  /**
+   * Where the refused Send's message goes, set while the attachment is held:
+   * the composer (the default), Drafts (the source composer holds a newer
+   * stage), nowhere (its pending stage is gone), or back to the person who
+   * took it back.
+   */
+  type MessageFate = "composer" | "drafts" | "nowhere" | "taken-back";
+
+  /** Refuses the held attachment and returns every toast that came after. */
+  async function toastsFromRefusal(
+    fate: MessageFate,
+    error: HostRpcError,
+  ): Promise<ShownToast[]> {
+    const { refuseAttach, queryClient } = await startSendWithHeldAttach();
+    const pending = pendingSendSurfaceKey(onlyPendingSend().id);
+    if (fate === "drafts") {
+      useStagedSandboxStore.getState().stage(SURFACE, NEW_TARGET);
+    }
+    if (fate === "nowhere") {
+      useStagedSandboxStore.setState((state) => ({
+        bySurface: Object.fromEntries(
+          Object.entries(state.bySurface).filter(([key]) => key !== pending),
+        ),
+      }));
+    }
+    if (fate === "taken-back") {
+      returnPendingSandboxSend(onlyPendingSend().id);
+    }
+    const shownBefore = toastLog.length;
+    await refuseAttach(error);
+    await flushPending();
+    queryClient.clear();
+    return toastLog.slice(shownBefore);
+  }
+
+  it.each([
+    ["E_SHARE_PENDING_BUSY"],
+    ["E_SHARE_PENDING_RECENT_ATTEMPT"],
+  ] as const)(
+    "a Send refused while the task is still being set up says to Send again, once, with the message in the composer (%s)",
+    async (code) => {
+      expect(await toastsFromRefusal("composer", attachRefusal(code))).toEqual([
+        errorToast(SETTING_UP_LINE),
+      ]);
+    },
+  );
+
+  it("says both that the task was still being set up and that the message is in Drafts when the composer holds a newer message", async () => {
+    expect(await toastsFromRefusal("drafts", attachBusy())).toEqual([
+      DRAFTS_TOAST,
+      errorToast(SETTING_UP_LINE),
+    ]);
+  });
+
+  it.each([
+    "E_SHARE_PENDING_OFFLINE",
+    "E_SHARE_PENDING_UNVERIFIED",
+    "E_SHARE_PENDING_FAILED",
+    "E_SHARE_NOT_OWNED",
+    "E_SHARE_NEEDS_CLOUD_SYNC",
+    "E_SHARE_REFUSED",
+    "FORBIDDEN",
+    "RPC_ERROR",
+  ] as const)(
+    "a Send refused with nothing to act on says the message is back in the composer, once (%s)",
+    async (code) => {
+      expect(await toastsFromRefusal("composer", attachRefusal(code))).toEqual([
+        errorToast(BACK_IN_COMPOSER_LINE),
+      ]);
+    },
+  );
+
+  it("says only that the message is saved in Drafts, with no refusal line, for a refusal with nothing to act on", async () => {
+    expect(
+      await toastsFromRefusal(
+        "drafts",
+        attachRefusal("E_SHARE_PENDING_OFFLINE"),
+      ),
+    ).toEqual([DRAFTS_TOAST]);
+  });
+
+  it("keeps a transport failure a plain notice, not an error, with the message in the composer", async () => {
+    expect(
+      await toastsFromRefusal(
+        "composer",
+        new HostTransportFailureError({
+          code: "RPC_ERROR",
+          message: "Host is unreachable",
+          requestId: "request-attach-transport",
+          method: "epic.attachEnvironment",
+          fatalDetails: null,
+        }),
+      ),
+    ).toEqual([{ via: "toast", message: BACK_IN_COMPOSER_LINE, action: null }]);
+  });
+
+  it("keeps a retryable attestation a plain notice, with the host's raw reason shown nowhere", async () => {
+    const shown = await toastsFromRefusal(
+      "composer",
+      new RetryableTransportError({
+        replaySafetyFromKey: false,
+        code: "RPC_ERROR",
+        message: "Host timed out awaiting the request frame",
+        requestId: "request-attach-attestation",
+        method: "epic.attachEnvironment",
+        fatalDetails: {
+          code: "RPC_REQUEST_TIMEOUT",
+          reason: "Host timed out awaiting the request frame",
+          incompatibleMethods: null,
+          upgradeGuidance: null,
+          retryable: true,
+        },
+      }),
+    );
+    expect(shown).toEqual([
+      { via: "toast", message: BACK_IN_COMPOSER_LINE, action: null },
+    ]);
+    expect(JSON.stringify(shown)).not.toContain("timed out");
+  });
+
+  it.each([
+    ["a task still being set up", attachBusy()],
+    ["a plain failure", attachRefusal("RPC_ERROR")],
+  ] as const)(
+    "says nothing at all when the person took the message back before the refusal (%s)",
+    async (_label, error) => {
+      expect(await toastsFromRefusal("taken-back", error)).toEqual([]);
+    },
+  );
+
+  it.each([
+    ["a task still being set up", attachBusy()],
+    ["a plain failure", attachRefusal("RPC_ERROR")],
+  ] as const)(
+    "says only that the message was not sent when nothing was returned (%s)",
+    async (_label, error) => {
+      expect(await toastsFromRefusal("nowhere", error)).toEqual([
+        errorToast(NOT_SENT_LINE),
+      ]);
+    },
+  );
+
+  it("says nothing when the account changed during the wait", async () => {
+    const { refuseAttach, queryClient } = await startSendWithHeldAttach();
+    act(() => {
+      useAuthStore
+        .getState()
+        .setSignedIn(
+          { userId: "other-user", userName: "Other", email: "o@example.com" },
+          { userId: "other-user", username: "Other" },
+          [],
+        );
+    });
+    const shownBefore = toastLog.length;
+    await refuseAttach(attachBusy());
+    await flushPending();
+    expect(toastLog.slice(shownBefore)).toEqual([]);
+    queryClient.clear();
+  });
+
+  it("says the host is out of disk space, and nothing more, when the composer holds the message", async () => {
+    expect(
+      await toastsFromRefusal("composer", attachRefusal("E_HOST_STORAGE_FULL")),
+    ).toEqual([errorToast(STORAGE_FULL_LINE)]);
+  });
+
+  it("says the host is out of disk space after the Drafts line when the message was saved there", async () => {
+    expect(
+      await toastsFromRefusal("drafts", attachRefusal("E_HOST_STORAGE_FULL")),
+    ).toEqual([DRAFTS_TOAST, errorToast(STORAGE_FULL_LINE)]);
+  });
+
+  it.each([
+    [
+      "an aborted request",
+      new HostRequestAbortedError({
+        message: "authority replaced",
+        requestId: "request-attach-abort",
+        method: "epic.attachEnvironment",
+        mayHaveDispatched: false,
+      }),
+    ],
+    [
+      "a recoverable sign-in check",
+      new HostRpcError({
+        code: "UNAUTHORIZED",
+        message: "token refresh in flight",
+        requestId: "request-attach-auth",
+        method: "epic.attachEnvironment",
+        fatalDetails: null,
+      }),
+    ],
+  ] as const)(
+    "says nothing from the attachment for %s, the message back in the composer",
+    async (_label, error) => {
+      expect(await toastsFromRefusal("composer", error)).toEqual([]);
+    },
+  );
+
   it.each(READ_METHODS)(
     "a refused Send keeps the task, tells the person, and gives the message back when %s cannot be read",
     async (failing) => {
@@ -1320,9 +1564,10 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
       await refuseAttach(attachBusy());
 
       await waitFor(() => {
-        expect(toast.error).toHaveBeenCalledWith(
-          DISCARD_CREATED_EPIC_UNREAD_COPY,
-        );
+        expect(toastLog.map(({ message }) => message)).toEqual([
+          SETTING_UP_LINE,
+          "This Send may have left an empty task. Delete it from your tasks if you don't need it.",
+        ]);
       });
       expect(landingMocks.deleteRequest).not.toHaveBeenCalled();
       expect(wasEpicCreatedThisSession(epicId)).toBe(true);
@@ -1657,9 +1902,11 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
     const toastCall = toastMessage.mock.calls.at(-1);
     if (toastCall === undefined) throw new Error("expected a toast");
     expect(toastCall[0]).toBe(returnedSandboxMessageLine(true));
-    expect(toastCall[1].action.label).toBe("Open draft");
+    const toastOptions = toastCall[1];
+    if (toastOptions === undefined) throw new Error("expected an action");
+    expect(toastOptions.action.label).toBe("Open draft");
     act(() => {
-      toastCall[1].action.onClick();
+      toastOptions.action.onClick();
     });
     expect(landingMocks.navigate).toHaveBeenLastCalledWith(
       expect.objectContaining({

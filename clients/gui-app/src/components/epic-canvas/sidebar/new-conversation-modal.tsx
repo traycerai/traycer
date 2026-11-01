@@ -2609,7 +2609,7 @@ function useStagedTaskAttachment(input: {
   const attachClient = useEpicAttachmentClient(
     input.sessionClient ?? input.placementClient,
   );
-  const attachEnvironment = useEpicAttachEnvironment(attachClient, "Send");
+  const attachEnvironment = useEpicAttachEnvironment(attachClient, "modal");
   const attachEnvironmentAsync = attachEnvironment.mutateAsync;
   const stageAttachmentRef = useRef<StagedSandbox | null>(null);
   // A team's sandbox can serve this task only after the person's own host

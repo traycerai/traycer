@@ -155,6 +155,11 @@ import type {
   ServiceTier,
 } from "@/components/home/data/landing-options";
 import { deriveWorkspaceMode } from "@/lib/worktree/workspace-mode";
+import {
+  classifySendRefusal,
+  toastSendRefusal,
+  type SendRefusal,
+} from "@/lib/host-error-toast";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import { useTabsStore } from "@/stores/tabs/store";
 import { selectHostFocusedRef } from "@/stores/tabs/selectors";
@@ -170,7 +175,10 @@ import {
   mainCheckoutHasCommit,
 } from "@/lib/worktree/worktree-intent-seeding";
 import { useSettingsStore } from "@/stores/settings/settings-store";
-import type { LandingSandboxSendHandoff } from "./landing-sandbox-send-handoff";
+import type {
+  LandingGiveBack,
+  LandingSandboxSendHandoff,
+} from "./landing-sandbox-send-handoff";
 
 export interface LandingComposerSubmitArgs {
   /** The caller-owned draft; null creates one before the exact attempt starts. */
@@ -362,7 +370,7 @@ export function useLandingComposerActions(
   const queryClient = useQueryClient();
   const createEpic = useEpicCreateForClient(target.client);
   const attachClient = useEpicAttachmentClient(target.client);
-  const attachEnvironment = useEpicAttachEnvironment(attachClient, "Send");
+  const attachEnvironment = useEpicAttachEnvironment(attachClient, "landing");
   const attachEnvironmentAsync = attachEnvironment.mutateAsync;
   const discardCreatedIfEmpty = useEpicDiscardCreatedIfEmpty();
   const terminalAgentCreate = useCreateTuiAgentForClient(
@@ -1655,14 +1663,14 @@ export function useLandingComposerActions(
       // deletes it, unless an agent was started in it meanwhile: the next Send
       // creates its own. Any other refusal keeps it: the task may have reached
       // the cloud, where an agent on another host can't be ruled out.
-      const giveBack = (): void => {
-        if (!sameAccount() || !handed.isCurrent()) return;
+      const giveBack = (): LandingGiveBack | null => {
+        if (!sameAccount() || !handed.isCurrent()) return null;
         const returned = handed.giveBack();
-        if (returned === null) return;
+        if (returned === null) return null;
         const { draftId } = returned;
         if (returned.kind === "opened") {
           openLandingDraft(navigate, draftId);
-          return;
+          return returned;
         }
         // The composer holds the person's next message: saved, not opened.
         toast(returnedSandboxMessageLine(true), {
@@ -1671,6 +1679,7 @@ export function useLandingComposerActions(
             onClick: () => openLandingDraft(navigate, draftId),
           },
         });
+        return returned;
       };
       const refused = (): void => {
         if (!sameAccount()) return;
@@ -1678,8 +1687,14 @@ export function useLandingComposerActions(
         giveBack();
       };
       const attachRefused = (error: unknown): void => {
+        // The account moved on, or the person took the message back: nothing
+        // here is theirs to hear about.
         if (!sameAccount() || !handed.isCurrent()) return;
-        giveBack();
+        const line = landingAttachRefusalLine(
+          classifySendRefusal(error),
+          giveBack(),
+        );
+        if (line !== null) toastSendRefusal(error, line);
         if (!isAttachPromotionPending(error)) return;
         void discardCreatedIfEmpty({ epicId, hostId }).then((discarded) => {
           if (discarded) unmarkEpicCreatedThisSession(epicId);
@@ -1770,6 +1785,33 @@ export function useLandingComposerActions(
       terminalAgentCreate.isPending,
     ],
   );
+}
+
+/**
+ * What a landing Send refused at its attachment says, given where its message
+ * went (`returned`), or `null` to say nothing. Saved in Drafts, `giveBack`'s
+ * own line says so. With nothing returned, no line may claim the message is
+ * back, or offer another Send of it.
+ */
+function landingAttachRefusalLine(
+  refusal: SendRefusal,
+  returned: LandingGiveBack | null,
+): string | null {
+  switch (refusal.kind) {
+    case "silent":
+      return null;
+    case "actionable":
+      return refusal.message;
+    case "setting-up":
+      return returned === null
+        ? "Couldn't send your message."
+        : "This task was still being set up. Send again in a moment.";
+    case "failed":
+      if (returned === null) return "Couldn't send your message.";
+      return returned.kind === "opened"
+        ? "Couldn't send your message. It's back in the composer."
+        : null;
+  }
 }
 
 /**
