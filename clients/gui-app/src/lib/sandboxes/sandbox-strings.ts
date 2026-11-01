@@ -510,6 +510,13 @@ export function openProvidersLabel(configuration: string): string {
 
 export const RETRY = "Retry";
 export const CHOOSE_ANOTHER_HOST = "Choose another host";
+/**
+ * Takes a stage off its composer, which goes back to the host its chip then
+ * shows. `null`: that host has no name yet.
+ */
+export function stageFallbackHostLine(hostName: string | null): string {
+  return hostName === null ? "Use another host" : `Use ${hostName}`;
+}
 export const CHOOSE_A_SMALLER_SHAPE = "Choose a smaller shape";
 export const CHANGE_SHAPE_OR_REGION = "Change shape or region";
 export const OPEN_TERMINAL_INSTEAD = "Open terminal instead";

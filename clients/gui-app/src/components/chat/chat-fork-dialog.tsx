@@ -39,6 +39,7 @@ import { useFocusedPaneModalOpen } from "@/components/epic-tabs/pane-visibility-
 import { useComposerToolbarStore } from "@/components/home/hooks/use-composer-toolbar-store";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
+import { useStageFallbackHostLine } from "@/hooks/sandboxes/use-stage-fallback-host-line";
 import { useTeamSandboxHarnessBlocked } from "@/hooks/sandboxes/use-team-sandbox-harness-blocked";
 import { TEAM_SANDBOX_HARNESS_UNAVAILABLE } from "@/lib/sandboxes/team-sandbox-harness";
 import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
@@ -646,11 +647,13 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
     (s) => s.values.selection.modelSlug,
   );
   const chipModel = useStore(toolbarStore, chipModelName);
+  const chooseAnotherHostLabel = useStageFallbackHostLine(selectedHostId);
   const stagedSignInCheck = useStagedSendSignInCheck({
     harnessId: pickedHarnessId,
     modelSlug: pickedModelSlug,
     modelName: chipModel,
     active: activeWorkspaceTarget !== null && forkStage !== null,
+    chooseAnotherHostLabel,
     onChooseModel: (offeredAgents) =>
       forkModelPickerRef.current?.("traycer", offeredAgents),
     onChooseAnotherHost: () =>

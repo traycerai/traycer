@@ -16,7 +16,6 @@ import {
   CANCEL_AND_KEEP_THE_DRAFT,
   CANCEL_THE_MESSAGE,
   CHANGE_SHAPE_OR_REGION,
-  CHOOSE_ANOTHER_HOST,
   CHOOSE_A_SMALLER_SHAPE,
   DETAILS,
   COMPUTE_CHARGED_WHILE_AWAKE,
@@ -145,6 +144,7 @@ export interface SandboxSetupLineActions {
   /** Before dispatch: Cancel and keep the draft; never destroys the sandbox. */
   readonly onCancel: (() => void) | null;
   readonly onChooseAnotherHost: (() => void) | null;
+  readonly chooseAnotherHostLabel: string;
   /** A new create with a new key, after a terminal failure. */
   readonly onRetryCreation: () => void;
   /** The same create or wake again, with the same key. */
@@ -495,7 +495,7 @@ function SandboxFailureExitActions(props: {
         />
       )}
       <LineButton
-        label={CHOOSE_ANOTHER_HOST}
+        label={actions.chooseAnotherHostLabel}
         testId={`${props.prefix}-choose-another-host`}
         onClick={actions.onChooseAnotherHost}
       />
@@ -789,7 +789,7 @@ function ProgressBranchButtons(props: {
           onClick={actions.onStop}
         />
         <LineButton
-          label={CHOOSE_ANOTHER_HOST}
+          label={actions.chooseAnotherHostLabel}
           testId="sandbox-setup-choose-another-host"
           onClick={actions.onChooseAnotherHost}
         />
@@ -843,7 +843,7 @@ function ProgressBranchButtons(props: {
         onClick={actions.onCancel}
       />
       <LineButton
-        label={CHOOSE_ANOTHER_HOST}
+        label={actions.chooseAnotherHostLabel}
         testId="sandbox-setup-choose-another-host"
         onClick={actions.onChooseAnotherHost}
       />

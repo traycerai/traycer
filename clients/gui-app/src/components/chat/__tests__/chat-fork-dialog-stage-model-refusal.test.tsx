@@ -364,7 +364,7 @@ const SOURCE_FOLDER = {
   hostId: null,
 };
 
-function forkTarget(): ChatForkDialogTarget {
+function forkTarget(initialHostId: string | null): ChatForkDialogTarget {
   return {
     sourceChatId: "source-chat",
     sourceChatTitle: "Source chat",
@@ -392,7 +392,7 @@ function forkTarget(): ChatForkDialogTarget {
     seedIntentOverride: null,
     carriedInterviews: "settled",
     forkMode: "plain",
-    initialHostId: null,
+    initialHostId,
     onlyHostIds: null,
     stagedSandbox: {
       kind: "new",
@@ -413,16 +413,19 @@ function forkTarget(): ChatForkDialogTarget {
   };
 }
 
-function renderDialog(): void {
-  render(
+/** Opens the dialog the way a host-switch does: closed, then open. */
+function renderDialog(initialHostId: string | null): void {
+  const dialog = (open: boolean) => (
     <ChatForkDialog
-      open
-      target={forkTarget()}
+      open={open}
+      target={forkTarget(initialHostId)}
       epicId="epic-test"
       tabId="tab-test"
       onOpenChange={() => undefined}
-    />,
+    />
   );
+  const view = render(dialog(false));
+  view.rerender(dialog(true));
 }
 
 function fillTitle(): void {
@@ -458,7 +461,7 @@ describe("ChatForkDialog onto a staged sandbox", () => {
   });
 
   it("refuses a Traycer model the sandbox's list leaves out at Fork, with the sandbox's line and the remedies the dialog offers", async () => {
-    renderDialog();
+    renderDialog(null);
     fillTitle();
     await waitFor(() =>
       expect(
@@ -481,7 +484,7 @@ describe("ChatForkDialog onto a staged sandbox", () => {
         .getAllByRole("button")
         .map((b) => b.textContent)
         .filter((label) => label !== ""),
-    ).toEqual(["Choose a model", "Choose another host"]);
+    ).toEqual(["Choose a model", "Use Tab host"]);
     expect(dialogMocks.createMutate).not.toHaveBeenCalled();
     expect(
       useStagedSandboxStore.getState().bySurface[FORK_SURFACE],
@@ -490,7 +493,7 @@ describe("ChatForkDialog onto a staged sandbox", () => {
 
   it("lets a model the sandbox's list holds go through", async () => {
     dialogMocks.cloudModels = ["trc-a", "trc-s"];
-    renderDialog();
+    renderDialog(null);
     fillTitle();
     await waitFor(() => expect(forkButton().disabled).toBe(false));
 
@@ -507,5 +510,37 @@ describe("ChatForkDialog onto a staged sandbox", () => {
       settings: { harnessId: "traycer", model: "trc-a" },
     });
     expect(screen.queryByText(/doesn't run on this sandbox/)).toBeNull();
+  });
+
+  it("names the host the dialog falls back to, which is the selected one and not the tab's", async () => {
+    dialogMocks.clientsByHostId.set(
+      "other-host-id",
+      buildHostClient("other-host-id"),
+    );
+    dialogMocks.directoryHosts = [
+      directoryEntry(TAB_HOST_ID, "Tab host"),
+      directoryEntry("other-host-id", "Other host"),
+    ];
+    renderDialog("other-host-id");
+    fillTitle();
+    await waitFor(() =>
+      expect(
+        useStagedSandboxStore.getState().bySurface[FORK_SURFACE],
+      ).toBeDefined(),
+    );
+    await waitFor(() => expect(forkButton().disabled).toBe(false));
+
+    fireEvent.click(forkButton());
+
+    const notice = within(await screen.findByTestId("composer-host-notice"));
+    fireEvent.click(
+      await notice.findByRole("button", { name: "Use Other host" }),
+    );
+    expect(notice.queryByRole("button", { name: /Use Tab host/ })).toBeNull();
+    await waitFor(() =>
+      expect(
+        useStagedSandboxStore.getState().bySurface[FORK_SURFACE],
+      ).toBeUndefined(),
+    );
   });
 });

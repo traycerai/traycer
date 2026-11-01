@@ -558,6 +558,7 @@ function checkFor(harnessId: "codex" | "claude" | null) {
       modelSlug: "",
       modelName: "",
       active: true,
+      chooseAnotherHostLabel: "Use This computer",
       onOpenTerminalInstead: answers.onOpenTerminalInstead,
       onChooseAnotherHost: answers.onChooseAnotherHost,
     }),
@@ -627,7 +628,7 @@ describe("useStagedSendSignInCheck", () => {
         "Your Acme allowance is short $0.21. $0.21 more starts this sandbox for an hour.",
     });
     expect(notice?.secondaryActions?.map((action) => action.label)).toEqual([
-      "Choose another host",
+      "Use This computer",
     ]);
     expect(readStagedSandbox("surface")).toBe(stage);
   });
@@ -663,6 +664,7 @@ describe("useStagedSendSignInCheck", () => {
           modelSlug: "",
           modelName: "",
           active: true,
+          chooseAnotherHostLabel: "Use This computer",
         }),
       ).result.current;
       const refusal = await gate.beforeSend(stage);
@@ -693,7 +695,7 @@ describe("useStagedSendSignInCheck", () => {
       action: { label: "Choose a model" },
       secondaryActions: [
         { label: "Open terminal instead" },
-        { label: "Choose another host" },
+        { label: "Use This computer" },
       ],
     });
     refusal?.action?.onAction();

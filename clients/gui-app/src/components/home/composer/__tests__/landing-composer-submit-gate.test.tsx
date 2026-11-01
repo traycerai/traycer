@@ -297,6 +297,7 @@ vi.mock("@/stores/composer/composer-run-settings-store", () => {
 vi.mock("@/components/home/hooks/use-composer-toolbar-store", () => {
   const toolbarStore = createStore(() => ({
     ultracode: false,
+    selectedModel: null,
     selection: {
       get harnessId() {
         return testState.displayedHarness;
@@ -553,6 +554,19 @@ vi.mock("@/hooks/composer/use-landing-image-fetcher", () => ({
 // one hook. These suites are about paste/gating/banner behaviour, not
 // selection derivation, so it is stubbed at that single boundary - the same
 // treatment the other host-backed hooks above get.
+vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
+  useHostDirectoryList: () => ({
+    data: [
+      {
+        hostId: "host-test",
+        kind: "local",
+        label: "This computer",
+        transportDialability: "dialable",
+        websocketUrl: "ws://127.0.0.1:0",
+      },
+    ],
+  }),
+}));
 vi.mock("@/hooks/host/use-composer-placement", () => ({
   useComposerPlacement: () => ({
     pin: {
@@ -1558,7 +1572,7 @@ describe("LandingComposer direct submit gate", () => {
         for (const action of [
           "Choose a model",
           "Open terminal instead",
-          "Choose another host",
+          "Use This computer",
         ]) {
           expect(notice.getByRole("button", { name: action })).toHaveProperty(
             "disabled",
@@ -1629,7 +1643,7 @@ describe("LandingComposer direct submit gate", () => {
           ["traycer"],
         );
         fireEvent.click(
-          screen.getByRole("button", { name: "Choose another host" }),
+          screen.getByRole("button", { name: "Use This computer" }),
         );
         expect(readStagedSandbox("landing:window-test")).toBeNull();
       },

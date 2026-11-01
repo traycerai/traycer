@@ -1,7 +1,13 @@
 import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/environment-schemas";
 import { SandboxRetryApplyingButton } from "@/components/sandboxes/sandbox-retry-applying-button";
 import { SandboxOperationFailure } from "@/components/hosts/sandbox-operation-failure";
+import {
+  useComposerSurfaceHostKey,
+  useComposerSurfaceHostPin,
+} from "@/hooks/host/use-composer-surface-host-pin";
+import { useSurfaceHostPinWithDefault } from "@/hooks/host/use-surface-host-pin";
 import { useSandboxOperation } from "@/hooks/sandboxes/use-sandbox-operation";
+import { useStageFallbackHostLine } from "@/hooks/sandboxes/use-stage-fallback-host-line";
 import { useSandboxSettingsStatus } from "@/hooks/sandboxes/use-sandbox-settings-status";
 import {
   sandboxSettingsFailureLine,
@@ -154,6 +160,7 @@ import {
   type RequestedAgentReadiness,
 } from "@/lib/sandboxes/pending-sandbox-send";
 import {
+  CHOOSE_ANOTHER_HOST,
   stoppingSandboxLine,
   couldntStopLine,
   RETRY,
@@ -192,6 +199,7 @@ import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useInitialChatHandoffStore } from "@/stores/epics/initial-chat-handoff-store";
 import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
 import { newConversationSurfaceKey } from "@/stores/host/surface-host-selection-store";
+import { useEpicSessionHostIdForEpic } from "@/lib/registries/epic-session-registry";
 import {
   pendingSendSurfaceKey,
   usePendingSandboxSendStore,
@@ -2991,7 +2999,7 @@ function PendingStopFallback(props: {
 
 type PendingLineRemedies = Pick<
   SandboxSetupLineActions,
-  "onChooseModel" | "onChooseAnotherHost"
+  "onChooseModel" | "onChooseAnotherHost" | "chooseAnotherHostLabel"
 >;
 
 /**
@@ -3024,7 +3032,34 @@ function pendingMessageRemedies(
         () => undefined,
       );
     },
+    chooseAnotherHostLabel: CHOOSE_ANOTHER_HOST,
   };
+}
+
+/**
+ * What the line calls giving the send back with no sandbox, named for the host
+ * of the composer that shows it: its task's, or the Start Page's when the
+ * message goes to Drafts. A sandbox staged there stays staged, so that
+ * composer's chip will not show its host.
+ */
+function usePendingGiveBackLabel(
+  send: PendingSandboxSend,
+  taskDraftOccupied: boolean,
+): string {
+  const taskKey = newConversationSurfaceKey(send.epicId);
+  const startPageKey = useComposerSurfaceHostKey();
+  const taskPin = useSurfaceHostPinWithDefault(
+    taskKey,
+    useEpicSessionHostIdForEpic(send.epicId),
+  );
+  const startPagePin = useComposerSurfaceHostPin();
+  const toDrafts =
+    !send.epicConfirmed || (send.request.kind === "chat" && taskDraftOccupied);
+  const destinationStage = useStagedSandbox(toDrafts ? startPageKey : taskKey);
+  const destinationPin = toDrafts ? startPagePin : taskPin;
+  return useStageFallbackHostLine(
+    destinationStage === null ? destinationPin.resolvedHostId : null,
+  );
 }
 
 /** Model recovery needs an undispatched message and an empty destination draft. */
@@ -3065,6 +3100,7 @@ function PendingStagedSendItem(props: {
   const taskDraftOccupied = useNewConversationModalStore((state) =>
     isNewConversationDraftOccupied(state.draftPatchesByEpicId[send.epicId]),
   );
+  const giveBackLabel = usePendingGiveBackLabel(send, taskDraftOccupied);
   const surfaceKey = pendingSendSurfaceKey(send.id);
   const observedStage = useStagedSandbox(surfaceKey);
   const stage = observedStage ?? send.stopStage ?? null;
@@ -3193,6 +3229,7 @@ function PendingStagedSendItem(props: {
   const lineRemedies = pendingMessageRemedies(send, facts.offeredAgents, {
     onChooseModel: chooseModel,
     onChooseAnotherHost: () => backToComposer(false, null),
+    chooseAnotherHostLabel: giveBackLabel,
   });
   return (
     <div
@@ -3239,6 +3276,7 @@ function PendingStagedSendItem(props: {
                 recordCancelledSandboxSend(send, returned);
             },
             onChooseAnotherHost: lineRemedies.onChooseAnotherHost,
+            chooseAnotherHostLabel: lineRemedies.chooseAnotherHostLabel,
             onRetryCreation: () => retrySend("retry-creation"),
             onRetry: () => retrySend("retry-stage"),
             onSendAgain: () => retrySend("send-again"),

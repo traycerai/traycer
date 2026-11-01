@@ -40,6 +40,10 @@ const host = vi.hoisted(() => ({
   /** The sandbox's own Traycer list: `undefined` while it loads. */
   cloudModels: undefined as ReadonlyArray<string> | undefined,
   cloudFetching: false,
+  /** Whether the composer body draws the real model picker, whose chip a test reads. */
+  renderPicker: false,
+  /** Whether the directory has a row for the composer's host. */
+  directoryNamesHost: true,
   /** The host's Traycer list, by slug and chip label. */
   traycerHostModels: [{ slug: "traycer-default", label: "traycer-default" }],
   startTask: vi.fn(),
@@ -111,14 +115,25 @@ const traycerHostList = () => {
   return hostListCache.list;
 };
 
-vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
-  useGuiHarnessesQueryForClient: () => ({ data: host.harnesses }),
-  useGuiHarnessModelsQueryForClient: (_client: unknown, harnessId: string) => {
-    if (harnessId === "claude")
-      return { data: host.claudeModelsLoaded ? CLAUDE_MODELS : undefined };
-    return { data: harnessId === "traycer" ? traycerHostList() : CODEX_MODELS };
-  },
-}));
+vi.mock(
+  "@/hooks/harnesses/use-gui-harness-catalog",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/hooks/harnesses/use-gui-harness-catalog")
+    >()),
+    useGuiHarnessesQueryForClient: () => ({ data: host.harnesses }),
+    useGuiHarnessModelsQueryForClient: (
+      _client: unknown,
+      harnessId: string,
+    ) => {
+      if (harnessId === "claude")
+        return { data: host.claudeModelsLoaded ? CLAUDE_MODELS : undefined };
+      return {
+        data: harnessId === "traycer" ? traycerHostList() : CODEX_MODELS,
+      };
+    },
+  }),
+);
 vi.mock("@/hooks/sandboxes/use-sandbox-traycer-models-query", () => ({
   // The query's own shape: a read that has not answered is pending.
   useSandboxTraycerModels: () => {
@@ -144,32 +159,71 @@ vi.mock("@/hooks/providers/use-resolved-seeded-profile-id", () => ({
 
 // The editor and toolbar chrome are held by their own suites; the body hands
 // back the real toolbar store the composer built and the edit handler.
-vi.mock("@/components/home/composer/composer-body", () => ({
-  ComposerBody: (props: ComposerBodyProps) => {
-    host.toolbar = props.toolbarStore;
-    host.editContent = props.onDocumentChange;
-    host.installEditor = () => {
-      props.editorRef.current = editorHandle();
-    };
-    host.snapshot = () => {
-      props.onDocumentChange(TYPED, { from: 1, to: 1 });
-    };
-    return (
-      <>
-        <button
-          type="button"
-          disabled={props.isSubmitting || !props.canSubmit}
-          onClick={props.onSubmit}
-        >
-          Submit landing
-        </button>
-        {props.workspaceControls}
-        {props.topBanner}
-      </>
-    );
-  },
-}));
+vi.mock("@/components/home/composer/composer-body", async () => {
+  const { HarnessModelPicker } =
+    await import("@/components/home/pickers/harness-model-picker");
+  const { TooltipProvider } = await import("@/components/ui/tooltip");
+  return {
+    ComposerBody: (props: ComposerBodyProps) => {
+      host.toolbar = props.toolbarStore;
+      host.editContent = props.onDocumentChange;
+      host.installEditor = () => {
+        props.editorRef.current = editorHandle();
+      };
+      host.snapshot = () => {
+        props.onDocumentChange(TYPED, { from: 1, to: 1 });
+      };
+      return (
+        <>
+          <button
+            type="button"
+            disabled={props.isSubmitting || !props.canSubmit}
+            onClick={props.onSubmit}
+          >
+            Submit landing
+          </button>
+          <TooltipProvider delayDuration={0}>
+            <HarnessModelPicker
+              withUltracode={false}
+              labelDisplay="responsive"
+              store={props.toolbarStore}
+              maxModeContext={{ kind: "none" }}
+              withServiceTier={false}
+              withReasoning
+              tuiOnly={false}
+              lockedHarnessId={null}
+              disabled={false}
+              registerActivation={false}
+              createProfileHostId={null}
+              runTargetHostId={null}
+              profileAdmission={null}
+              terminalLoginSurface={null}
+              embedding={null}
+            />
+          </TooltipProvider>
+          {props.workspaceControls}
+          {props.topBanner}
+        </>
+      );
+    },
+  };
+});
 
+vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
+  useHostDirectoryList: () => ({
+    data: host.directoryNamesHost
+      ? [
+          {
+            hostId: HOST_ID,
+            kind: "local",
+            label: "This computer",
+            transportDialability: "dialable",
+            websocketUrl: "ws://127.0.0.1:0",
+          },
+        ]
+      : [],
+  }),
+}));
 vi.mock("@/hooks/host/use-composer-placement", () => ({
   useComposerPlacement: () => ({
     pin: {
@@ -493,6 +547,8 @@ beforeEach(() => {
   host.claudeModelsLoaded = true;
   host.cloudModels = undefined;
   host.cloudFetching = false;
+  host.directoryNamesHost = true;
+  host.renderPicker = false;
   host.traycerHostModels = [
     { slug: "traycer-default", label: "traycer-default" },
   ];
@@ -598,6 +654,7 @@ describe("a landing composer with a sandbox staged", () => {
   });
 
   it("leaves a restored stage's draft on its own pick", async () => {
+    host.renderPicker = true;
     const draftId = useLandingDraftStore.getState().createDraft(TRAYCER_PICK);
     signInAndReturnSandbox(draftId);
     const before = draftSettings(draftId);
@@ -615,6 +672,12 @@ describe("a landing composer with a sandbox staged", () => {
     expect(draftSettings(draftId)).toBe(before);
     expect(draftSettings(draftId)?.harnessId).toBe("traycer");
     expect(pickedRunSettings(toolbar().getState()).harnessId).toBe("traycer");
+    // The chip says the model Send carries.
+    expect(pickedRunSettings(toolbar().getState()).model).toBe("traycer-saved");
+    expect(
+      await screen.findByRole("button", { name: /^traycer-saved/ }),
+    ).toBeDefined();
+    expect(screen.queryByRole("button", { name: /Select model/ })).toBeNull();
   });
 
   it("takes a deferred edit to the draft with the kept pick, and emits nothing", async () => {
@@ -899,7 +962,7 @@ describe("a landing composer with a sandbox staged", () => {
       ).toEqual([
         "Choose a model",
         "Open terminal instead",
-        "Choose another host",
+        "Use This computer",
       ]);
       expect(host.startTask).not.toHaveBeenCalled();
       expect(host.submit).not.toHaveBeenCalled();
@@ -907,6 +970,34 @@ describe("a landing composer with a sandbox staged", () => {
       expect(draftSettings(draftId)).toBe(before);
       expect(chipModelName(toolbar().getState())).toBe("Traycer A");
       expect(pickedRunSettings(toolbar().getState()).model).toBe("trc-a");
+    });
+
+    it("takes the stage off with the action named for the composer's host", async () => {
+      const { draftId, before } = await stageAndPressSend(["trc-s"], false);
+      await send();
+      const notice = within(await screen.findByRole("alert"));
+
+      await userEvent.click(
+        notice.getByRole("button", { name: "Use This computer" }),
+      );
+
+      expect(
+        useStagedSandboxStore.getState().bySurface[SURFACE],
+      ).toBeUndefined();
+      expect(host.startTask).not.toHaveBeenCalled();
+      expect(draftSettings(draftId)).toBe(before);
+    });
+
+    it("says Use another host when the directory has no row for the composer's host", async () => {
+      host.directoryNamesHost = false;
+      await stageAndPressSend(["trc-s"], false);
+      await send();
+      const notice = within(await screen.findByRole("alert"));
+
+      expect(
+        notice.getByRole("button", { name: "Use another host" }),
+      ).toBeDefined();
+      expect(notice.queryByRole("button", { name: /^Use This/ })).toBeNull();
     });
 
     it("lets a model the sandbox's list holds go through", async () => {

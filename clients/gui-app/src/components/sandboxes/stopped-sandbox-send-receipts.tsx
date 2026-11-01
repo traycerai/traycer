@@ -453,7 +453,7 @@ function ReturnedSendReceipt(props: {
               >
                 Start
               </Button>
-              {receipt.returned.kind === "chat" ? null : (
+              {receipt.returned.kind === "task" && !inAddAgent ? (
                 <Button
                   type="button"
                   variant="link"
@@ -462,7 +462,7 @@ function ReturnedSendReceipt(props: {
                 >
                   {CHOOSE_ANOTHER_HOST}
                 </Button>
-              )}
+              ) : null}
             </>
           )}
         </div>

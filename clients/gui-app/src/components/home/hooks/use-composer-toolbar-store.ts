@@ -18,6 +18,7 @@ import type {
   ReasoningLevel,
   ServiceTier,
 } from "@/components/home/data/landing-options";
+import { usePaneVisible } from "@/components/epic-tabs/pane-visibility-context";
 import { useSurfaceActivity } from "@/components/home/composer/surface-activity-hooks";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import {
@@ -162,6 +163,7 @@ export function useComposerToolbarStore(
     sendsToRestingSandbox,
   } = catalog;
   const activityEnabled = useSurfaceActivity();
+  const paneVisible = usePaneVisible();
   const defaultPermission = useSettingsStore((s) => s.defaultPermission);
   const defaultSelection = useSettingsStore((s) => s.defaultSelection);
   const defaultReasoning = useSettingsStore((s) => s.defaultReasoning);
@@ -300,16 +302,20 @@ export function useComposerToolbarStore(
     useSandboxHostConfiguration(hostId) !== null || sandboxRunTarget !== null;
   // Before the catalog push below: a stage's push reads these to keep the pick
   // on screen. Read here, not in render: a restore marks its stage after
-  // writing it, and the mark lives outside React.
+  // writing it, and the mark lives outside React. Only a composer on screen
+  // has a shown pick: retained drafts share the window's surface, and one
+  // showing nothing keeps its own. On screen, not focused: a split's other
+  // side is unfocused and still showing.
   useEffect(() => {
     store.setState({
       sandboxRunTarget,
       stageKeepsShownPick:
+        paneVisible &&
         sandboxRunTarget === "staged" &&
         stagedSurfaceKey !== null &&
         !returnedSandboxRestoredOn(stagedSurfaceKey),
     });
-  }, [store, sandboxRunTarget, stagedSurfaceKey]);
+  }, [paneVisible, store, sandboxRunTarget, stagedSurfaceKey]);
   useEffect(() => {
     store.getState().setCatalog({
       hostId,

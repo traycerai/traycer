@@ -83,6 +83,7 @@ describe("the staged gate's model check with a disabled cloud read", () => {
           modelSlug: "trc-a",
           modelName: "Traycer A",
           active: true,
+          chooseAnotherHostLabel: "Use This computer",
         }),
       { wrapper },
     ).result.current;

@@ -53,6 +53,8 @@ export interface SandboxAgentRemedies {
   ) => void;
   readonly onOpenTerminalInstead?: () => void;
   readonly onChooseAnotherHost?: () => void;
+  /** Its label, where it does not open a host chooser. */
+  readonly chooseAnotherHostLabel?: string;
   /** Closes the refusal: nothing is sent, and the text stays in the composer. */
   readonly onCancelMessage?: () => void;
   /** The sandbox's details, for a chat bound to one. */
@@ -71,7 +73,7 @@ function sandboxAgentSecondaryActions(
   }
   if (remedies.onChooseAnotherHost !== undefined) {
     actions.push({
-      label: CHOOSE_ANOTHER_HOST,
+      label: remedies.chooseAnotherHostLabel ?? CHOOSE_ANOTHER_HOST,
       onAction: remedies.onChooseAnotherHost,
     });
   }

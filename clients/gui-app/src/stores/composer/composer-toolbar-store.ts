@@ -10,6 +10,7 @@ import { getNegotiatedHostMethodVersion } from "@traycer-clients/shared/host-tra
 import {
   findDefaultModel,
   findSelectedModel,
+  modelDisplayLabel,
   autoModeOfferableHere,
   normalizePermissionMode,
   normalizeReasoningForModel,
@@ -547,7 +548,9 @@ export function createComposerToolbarStore(
 
 /** The model's name as the toolbar's chip shows it. */
 export function chipModelName(state: ComposerToolbarState): string {
-  return state.selectedModel?.label ?? state.selection.modelSlug;
+  return state.selectedModel === null
+    ? state.selection.modelSlug
+    : modelDisplayLabel(state.selectedModel);
 }
 
 export function settingsFromDerived(

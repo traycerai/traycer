@@ -98,6 +98,7 @@ import {
   useEpicAttachmentClient,
   useEpicAttachEnvironment,
 } from "@/hooks/epic/use-epic-attach-environment-mutation";
+import { useStageFallbackHostLine } from "@/hooks/sandboxes/use-stage-fallback-host-line";
 import { useHostOwnerTeamId } from "@/hooks/sandboxes/use-on-team-sandbox";
 import { useResolvedWorkspaceFolders } from "@/hooks/workspace/use-resolved-workspace-folders-query";
 import {
@@ -1286,6 +1287,7 @@ export function NewConversationModalBody(props: {
     (state) => state.values.selection.modelSlug,
   );
   const chipModel = useStore(toolbarStore, chipModelName);
+  const chooseAnotherHostLabel = useStageFallbackHostLine(resolvedHostId);
   const pickedHarnessId = useStore(
     toolbarStore,
     (state) => state.values.selection.harnessId,
@@ -1304,6 +1306,7 @@ export function NewConversationModalBody(props: {
     pickedHarnessId,
     pickedModelSlug,
     chipModel,
+    chooseAnotherHostLabel,
     active: chatComposerActive,
     stagedAhead: workspaceGate.stagedAhead,
     stagedSurfaceKey: stagingSurfaceKey(sandboxStaging),
@@ -1396,6 +1399,7 @@ export function NewConversationModalBody(props: {
     ownerId: tabId,
     // The draft is the epic's, so any tab's body holds the one that sent.
     claimsSend: true,
+    chooseAnotherHostLabel,
   });
   const composerDisabledHint =
     mutationDisabledHint(permissionRole, isDisconnected, "make changes") ??
@@ -2803,6 +2807,7 @@ function usePlacementAgentGates(input: {
   readonly pickedHarnessId: GuiHarnessId | null;
   readonly pickedModelSlug: string;
   readonly chipModel: string;
+  readonly chooseAnotherHostLabel: string;
   readonly active: boolean;
   readonly stagedAhead: boolean;
   readonly stagedSurfaceKey: string | null;
@@ -2829,6 +2834,7 @@ function usePlacementAgentGates(input: {
     modelSlug: input.pickedModelSlug,
     modelName: input.chipModel,
     active: active && stagedAhead,
+    chooseAnotherHostLabel: input.chooseAnotherHostLabel,
     onOpenTerminalInstead: input.onOpenTerminalInstead,
     onChooseAnotherHost: input.onChooseAnotherHost,
   });

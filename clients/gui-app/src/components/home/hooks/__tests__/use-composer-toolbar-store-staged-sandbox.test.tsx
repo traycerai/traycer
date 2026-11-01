@@ -424,6 +424,7 @@ describe("a composer with a sandbox staged (E19)", () => {
         modelSlug: pickedRunSettings(store.getState()).model,
         modelName: chipModelName(store.getState()),
         active: true,
+        chooseAnotherHostLabel: "Use This computer",
       }),
     ).result.current;
 
@@ -547,6 +548,7 @@ describe("the staged gate's model check against the sandbox's list read", () => 
         modelSlug: "trc-a",
         modelName: "Traycer A",
         active: true,
+        chooseAnotherHostLabel: "Use This computer",
       }),
     ).result.current;
     return { gate, stage };
