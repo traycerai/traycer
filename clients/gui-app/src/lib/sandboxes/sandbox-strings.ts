@@ -545,6 +545,10 @@ export function returnedSandboxMessageLine(savedInDrafts: boolean): string {
 export function restedDraftLine(restingLine: string): string {
   return `${restingLine}. ${returnedSandboxMessageLine(true)}`;
 }
+/** A task with no chat, whose message waits in a composer that isn't on screen. */
+export function restedTaskMessageLine(name: string, stopped: boolean): string {
+  return `${name} is ${stopped ? "stopped" : "suspended"}. Your message wasn't sent; it's in Add agent.`;
+}
 export function couldntStopLine(name: string): string {
   return `Couldn't stop ${name}`;
 }

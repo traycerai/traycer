@@ -15,6 +15,7 @@ import { chatSandboxStateLine } from "@/components/epic-canvas/renderers/chat-sa
 import { TabHostContext } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { Button } from "@/components/ui/button";
 import { useChatSandboxState } from "@/hooks/sandboxes/use-chat-sandbox-state";
+import { useRestedTaskMessageLine } from "@/hooks/sandboxes/use-rested-task-message-line";
 import { resolveChatSandbox } from "@/lib/sandboxes/chat-sandbox-state";
 import {
   useSandboxList,
@@ -188,6 +189,9 @@ function SandboxStateReceipt(props: {
   const { receipt } = props;
   const state = useChatSandboxState(receipt.epicId, receipt.hostId, false);
   const { line } = resolveChatSandbox(state, RECEIPT_VIEWER);
+  const taskMessageLine = useRestedTaskMessageLine(receipt.epicId);
+  // That line says this and where the message is: the task strip shows it.
+  if (receipt.returned.kind === "task" && taskMessageLine !== null) return null;
   let sandboxLine: ReactNode = null;
   // A state not known here says nothing of this task: the receipt's sentence does.
   if (line !== null && state.kind !== "pending") {

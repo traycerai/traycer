@@ -44,6 +44,7 @@ import {
   type SandboxSetupLineActions,
   type SandboxSetupLineFacts,
 } from "@/components/composer/sandbox-setup-line";
+import { RestedTaskMessageLine } from "@/components/sandboxes/rested-task-message-line";
 import {
   StoppedSandboxSendReceipts,
   StoppedSandboxSendReceiptStrip,
@@ -2561,7 +2562,9 @@ export function PendingSandboxSendStrip(props: {
         epicId={props.epicId}
         tabId={props.tabId}
       />
-      {ids.length > 0 ? (
+      {ids.length === 0 ? (
+        <RestedTaskMessageLine epicId={props.epicId} tabId={props.tabId} />
+      ) : (
         <div
           className="flex w-full flex-col gap-3 px-4 py-3"
           data-testid="pending-sandbox-sends"
@@ -2570,7 +2573,7 @@ export function PendingSandboxSendStrip(props: {
             <PendingSendItem key={id} id={id} tabId={props.tabId} />
           ))}
         </div>
-      ) : null}
+      )}
     </>
   );
 }
