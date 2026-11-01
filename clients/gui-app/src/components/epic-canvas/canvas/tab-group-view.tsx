@@ -59,6 +59,7 @@ import { PaneOpener } from "@/components/epic-canvas/canvas/pane-opener";
 import {
   useEpicArtifact,
   useEpicChatRecordListAuthoritative,
+  useEpicTuiAgentRecordListAuthoritative,
   useEpicChatRetraction,
   useEpicPermissionRole,
   useEpicSnapshotLoaded,
@@ -984,6 +985,8 @@ export function ActiveTabBody(props: ActiveTabBodyProps) {
   const role = useEpicPermissionRole();
   const snapshotLoaded = useEpicSnapshotLoaded();
   const chatRecordListAuthoritative = useEpicChatRecordListAuthoritative();
+  const tuiAgentRecordListAuthoritative =
+    useEpicTuiAgentRecordListAuthoritative();
   const liveArtifact = useEpicArtifact(activeTab.id);
   // The projection feeding `liveArtifact` is served by the EPIC SESSION's
   // host - NOT the app-wide active one, which is what this comment used to
@@ -1044,6 +1047,7 @@ export function ActiveTabBody(props: ActiveTabBodyProps) {
         isCloudKnown,
         cloudListAuthorizesChatAbsence,
         recordListAuthorizesChatAbsence: chatRecordListAuthoritative,
+        recordListAuthorizesTuiAgentAbsence: tuiAgentRecordListAuthoritative,
         retractedAsDeleted: chatRetraction === "deleted",
       });
   const isActive = role !== null && props.selected && props.globallyActive;
@@ -1271,6 +1275,8 @@ interface ComputeIsRemoteDeletedArgs {
   readonly cloudListAuthorizesChatAbsence: boolean;
   /** Whether the local record list has answered for this epic session. */
   readonly recordListAuthorizesChatAbsence: boolean;
+  /** The terminal-agent twin: `epic.listTuiAgents` has answered. */
+  readonly recordListAuthorizesTuiAgentAbsence: boolean;
   /**
    * The record plane said this chat was DELETED (a `remove` delta whose reason
    * is `deleted`), as opposed to merely absent from a projection.
@@ -1284,6 +1290,17 @@ function chatAbsenceIsAuthoritative(args: ComputeIsRemoteDeletedArgs): boolean {
     args.cloudListAuthorizesChatAbsence &&
     args.recordListAuthorizesChatAbsence
   );
+}
+
+function recordListsAnsweredFor(
+  ref: EpicCanvasTileRef,
+  args: ComputeIsRemoteDeletedArgs,
+): boolean {
+  if (ref.type === "chat") return chatAbsenceIsAuthoritative(args);
+  if (ref.type === "terminal-agent") {
+    return args.recordListAuthorizesTuiAgentAbsence;
+  }
+  return true;
 }
 
 function computeIsRemoteDeleted(args: ComputeIsRemoteDeletedArgs): boolean {
@@ -1310,9 +1327,7 @@ function computeIsRemoteDeleted(args: ComputeIsRemoteDeletedArgs): boolean {
   // Until the app-wide host binding and both record lists answer, absence
   // cannot be classified. A disabled or failed query is not evidence that the
   // bound chat disappeared.
-  if (leafArtifact.type === "chat" && !chatAbsenceIsAuthoritative(args)) {
-    return false;
-  }
+  if (!recordListsAnsweredFor(leafArtifact, args)) return false;
   // A ref bound to another host is invisible to this device's projection by
   // construction - its record is HOST-AUTHORITATIVE, living in the OWNER
   // host's registry - so a cross-host live tab (a reachable owner's row

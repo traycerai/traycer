@@ -1,73 +1,19 @@
-import type { EpicTreeRecord } from "@/lib/epic-selectors";
+import { isEpicArtifactKind } from "@/lib/artifacts/node-display";
+import type { OpenEpicState } from "@/stores/epics/open-epic/store";
 import type { TreeSlice } from "@/stores/epics/open-epic/types";
+import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
 
-export interface DescendantCounts {
-  readonly spec: number;
-  readonly ticket: number;
-  readonly story: number;
-  readonly review: number;
-  readonly html: number;
-  readonly canvas: number;
-  readonly file: number;
-  readonly chat: number;
-  readonly "terminal-agent": number;
-}
-
-/**
- * BFS over the flat EpicTreeRecord list to count all descendants of
- * `rootId` by type.
- *
- * Returns zero counts when `rootId` has no children. The root node
- * itself is NOT counted - only its descendants.
- *
- * One surface reads this, the mobile switcher's artifact rows, and it walks
- * the RAW `parentId` - so unlike {@link computeSelectionCascadeCounts} it has
- * no family rule, and a chat record whose `parentId` names an artifact is
- * counted as that artifact's descendant. That is a corrupt pairing the
- * projector promotes to the root instead (see `resolveEffectiveParent`), so
- * the two walks disagree exactly there; the switcher's answer is the
- * conservative one and this is not the place to change it.
- */
-export function computeDescendantCounts(
-  records: ReadonlyArray<EpicTreeRecord>,
-  rootId: string,
-): DescendantCounts {
-  const counts: { -readonly [K in keyof DescendantCounts]: number } = {
-    spec: 0,
-    ticket: 0,
-    story: 0,
-    review: 0,
-    html: 0,
-    canvas: 0,
-    file: 0,
-    chat: 0,
-    "terminal-agent": 0,
-  };
-  const queue: string[] = [rootId];
-  while (queue.length > 0) {
-    const parentId = queue.shift();
-    if (parentId === undefined) break;
-    for (const record of records) {
-      if (record.parentId !== parentId) continue;
-      counts[record.type] += 1;
-      queue.push(record.id);
-    }
-  }
-  return counts;
-}
+type CascadeCounts = Record<EpicArtifactKind, number>;
 
 /**
  * What a whole SELECTION destroys BEYOND the rows the reader picked: every
  * descendant of every selected node, minus the selected nodes themselves.
  *
- * Tree-structure variant of `computeDescendantCounts`. Walks the canonical
- * parent -> children index instead of the flat record list, so a caller does
- * NOT have to subscribe to the churning artifact-records projection (which the
- * sidebar nodes re-render against on every chat-stream token). The tree's
- * `parentId`/`type` are the normalised,
- * authoritative structure the sidebar already renders, so the counts match what
- * the user sees. `TreeNode.type` is `EpicTreeNodeType`, which is exactly
- * `keyof DescendantCounts`, so the indexing is total.
+ * Walks the canonical parent -> children index, not the flat record list, so a
+ * caller does NOT have to subscribe to the churning artifact-records projection
+ * (which the sidebar nodes re-render against on every chat-stream token). The
+ * tree's `parentId`/`type` are the normalised, authoritative structure the
+ * sidebar already renders, so the counts match what the user sees.
  *
  * Subtracting the selection is what "will ALSO delete" means, and it is why
  * this is not a sum of per-root walks: a selected child is a row the reader
@@ -80,15 +26,17 @@ export function computeDescendantCounts(
  *
  * The projected tree is FAMILY-SEPARATED - `resolveEffectiveParent` promotes a
  * cross-family parent to the root, so an artifact's subtree holds only
- * artifacts and an agent's only agents. Walking from an artifact therefore
- * cannot reach the `chat`/`terminal-agent` keys at all, which is what makes
- * the artifact disclosure a question about doc-sourced records only.
+ * artifacts and no agent can reach these counts. That is also what the delete
+ * does: it scans artifacts alone, so an agent whose `parentId` corruptly names
+ * an artifact outlives it. That separation is what makes the artifact
+ * disclosure a question about doc-sourced records only; the kind check below
+ * narrows the node type and turns nothing away.
  */
 function computeSelectionCascadeCounts(
   tree: TreeSlice,
   nodeIds: readonly string[],
-): DescendantCounts {
-  const counts: { -readonly [K in keyof DescendantCounts]: number } = {
+): CascadeCounts {
+  const counts: CascadeCounts = {
     spec: 0,
     ticket: 0,
     story: 0,
@@ -96,8 +44,6 @@ function computeSelectionCascadeCounts(
     html: 0,
     canvas: 0,
     file: 0,
-    chat: 0,
-    "terminal-agent": 0,
   };
   const selected = new Set(nodeIds);
   const queue: string[] = [...selected];
@@ -112,7 +58,8 @@ function computeSelectionCascadeCounts(
       if (seen.has(childId)) continue;
       seen.add(childId);
       if (Object.hasOwn(tree.nodeById, childId)) {
-        counts[tree.nodeById[childId].type] += 1;
+        const { type } = tree.nodeById[childId];
+        if (isEpicArtifactKind(type)) counts[type] += 1;
       }
       queue.push(childId);
     }
@@ -120,35 +67,28 @@ function computeSelectionCascadeCounts(
   return counts;
 }
 
-/**
- * Build a human-readable cascade summary string from counts, e.g.
- * "3 specs, 2 tickets, and 1 agent". Returns null when there are no
- * descendants (the confirm dialog omits the cascade line).
- *
- * Chat and terminal-agent descendants aggregate into a single **agent** bucket:
- * Agent is the durable entity and Chat/Terminal are only the interfaces used to
- * interact with it, so a mixed selection reads "2 agents" rather than the
- * entity-splitting "1 chat and 1 terminal agent". Each entry therefore names a
- * SET of node kinds rather than one.
- */
 const CASCADE_LABELS: ReadonlyArray<{
-  readonly keys: ReadonlyArray<keyof DescendantCounts>;
+  readonly key: EpicArtifactKind;
   readonly singular: string;
   readonly plural: string;
 }> = [
-  { keys: ["spec"], singular: "spec", plural: "specs" },
-  { keys: ["ticket"], singular: "ticket", plural: "tickets" },
-  { keys: ["story"], singular: "story", plural: "stories" },
-  { keys: ["review"], singular: "review", plural: "reviews" },
-  { keys: ["html"], singular: "page", plural: "pages" },
-  { keys: ["canvas"], singular: "canvas", plural: "canvases" },
-  { keys: ["file"], singular: "file", plural: "files" },
-  { keys: ["chat", "terminal-agent"], singular: "agent", plural: "agents" },
+  { key: "spec", singular: "spec", plural: "specs" },
+  { key: "ticket", singular: "ticket", plural: "tickets" },
+  { key: "story", singular: "story", plural: "stories" },
+  { key: "review", singular: "review", plural: "reviews" },
+  { key: "html", singular: "page", plural: "pages" },
+  { key: "canvas", singular: "canvas", plural: "canvases" },
+  { key: "file", singular: "file", plural: "files" },
 ];
 
-export function formatCascadeSummary(counts: DescendantCounts): string | null {
+/**
+ * Build a human-readable cascade summary string from counts, e.g.
+ * "3 specs, 2 tickets, and 1 story". Returns null when there are no
+ * descendants (the confirm dialog omits the cascade line).
+ */
+function formatCascadeSummary(counts: CascadeCounts): string | null {
   const parts = CASCADE_LABELS.flatMap((label) => {
-    const n = label.keys.reduce((total, key) => total + counts[key], 0);
+    const n = counts[label.key];
     if (n <= 0) return [];
     return [`${n} ${n === 1 ? label.singular : label.plural}`];
   });
@@ -228,44 +168,64 @@ export type TreeDeleteDisclosureInput =
       /** Read as a set, so a repeated id cannot count a child twice. */
       readonly nodeIds: readonly string[];
       /**
-       * Whether every nested CHAT row is in the tree yet.
+       * Whether every nested agent row is in the tree yet, read through
+       * {@link selectNestedAgentsKnown}.
        *
-       * False while `epic.listChatRecords` has not answered - and a transient
-       * failure leaves it false - when a persisted chat child can be absent
-       * from the tree, so a number read off it would be low. The sentence then
-       * names the consequence and states no number, which costs the reader the
-       * count and never tells them a child does not exist. Deliberately not a
-       * GATE: a row that is visible and selectable, with a working delete
-       * beside it, must stay deletable.
-       *
-       * Chats only, because that is the only readiness flag the store keeps.
-       * The terminal-agent plane has no twin, so a nested terminal agent that
-       * arrives late is still understated - narrower, since both lists are
-       * answered from the same composite, but not closed. Closing it needs a
-       * new store field, not a guess here.
+       * False until BOTH `epic.listChatRecords` and `epic.listTuiAgents` have
+       * answered - and a transient failure of either leaves it false - because
+       * until then a persisted child of that family can be absent from the
+       * tree, so a number read off it would be low. The sentence then names
+       * the consequence and states no number, which costs the reader the count
+       * and never tells them a child does not exist. Deliberately not a GATE:
+       * a row that is visible and selectable, with a working delete beside it,
+       * must stay deletable.
        */
-      readonly nestedChatsKnown: boolean;
+      readonly nestedAgentsKnown: boolean;
     }
   | {
       readonly tree: TreeSlice;
       readonly kind: "artifact";
       /** Read as a set, so a repeated id cannot count a child twice. */
       readonly nodeIds: readonly string[];
+      /**
+       * Whether this host serves Deleted artifacts, the gate the tile and its
+       * menu item read (`useDeletedArtifactsAvailable`). Without it nothing
+       * deleted here can be brought back, so the dialog offers no restore.
+       */
+      readonly restoreAvailable: boolean;
     };
 
 /**
- * The whole disclosure a delete dialog shows, for both routes that delete
- * SIDEBAR rows: a row's own menu and select mode both ask here, for agents and
- * for artifacts alike. (The mobile switcher is a third delete route and still
- * composes its own, under its own description copy - a separate surface, not a
- * second answer to this question.)
+ * Whether both record lists the agent tree is built from have answered, the
+ * one reading of {@link TreeDeleteDisclosureInput}'s `nestedAgentsKnown`.
  *
- * It is one function because the two sidebar dialogs disagreeing is the defect
- * it was written for, twice over. Select mode showed the agent sentence's
- * first half and dropped the second; and a single selected ARTIFACT got no
- * count at all while its own row menu named one, for the same record. Each
- * route composing the same sentences for itself is what let that happen, so
- * neither composes anything now.
+ * Takes the store state rather than two flags so the pair cannot be read
+ * apart: a nested agent is a chat or a terminal agent, and either list alone
+ * says nothing about the other family's rows.
+ */
+export function selectNestedAgentsKnown(
+  state: Pick<
+    OpenEpicState,
+    "chatRecordListAuthoritative" | "tuiAgentRecordListAuthoritative"
+  >,
+): boolean {
+  return (
+    state.chatRecordListAuthoritative && state.tuiAgentRecordListAuthoritative
+  );
+}
+
+/**
+ * The whole disclosure a delete dialog shows, for every route that deletes a
+ * tree row: a sidebar row's own menu, sidebar select mode and the mobile
+ * switcher's row menu all ask here, for agents and for artifacts alike.
+ *
+ * It is one function because the dialogs disagreeing is the defect it was
+ * written for, three times over. Select mode showed the agent sentence's first
+ * half and dropped the second; a single selected ARTIFACT got no count at all
+ * while its own row menu named one, for the same record; and the switcher
+ * walked raw `parentId`, so it promised to delete an agent the delete keeps.
+ * Each route composing the same sentences for itself is what let that happen,
+ * so none composes anything now.
  *
  * It reads the FULL tree, never the panel's filtered view: the delete acts on
  * the records, so an agent an archive or interface filter is hiding is still
@@ -278,13 +238,11 @@ export function describeTreeDeleteDisclosure(
   const nodeIds = new Set(input.nodeIds);
   const nestedUnder = nodeIds.size === 1 ? "it" : "them";
   const nested = describeNestedRows(input, nodeIds.size, nestedUnder);
-  // The one place the undone sentence is joined to anything. Two call sites
+  const cost = describeDeleteCost(input, nodeIds.size);
+  // The one place the opening sentence is joined to anything. Two call sites
   // each joining it their own way is what let the dialogs drift apart.
   return {
-    description:
-      nested.sentence === null
-        ? DELETE_UNDONE
-        : `${DELETE_UNDONE} ${nested.sentence}`,
+    description: nested.sentence === null ? cost : `${cost} ${nested.sentence}`,
     cascadeSummary: nested.cascadeSummary,
     cascadeNestedUnder: nestedUnder,
   };
@@ -293,13 +251,32 @@ export function describeTreeDeleteDisclosure(
 const DELETE_UNDONE = "This action cannot be undone.";
 
 /**
+ * The opening sentence: what the delete costs the rows the reader picked.
+ *
+ * An agent's delete is final. An artifact's is not while its host serves
+ * Deleted artifacts: the delete leaves one tombstone per artifact and a restore
+ * takes one artifact, which is why a selection comes back "one at a time".
+ */
+function describeDeleteCost(
+  input: TreeDeleteDisclosureInput,
+  selectedCount: number,
+): string {
+  if (input.kind === "agent" || !input.restoreAvailable) return DELETE_UNDONE;
+  if (selectedCount === 0) return DELETE_UNDONE;
+  return selectedCount === 1
+    ? "You can bring it back from Deleted artifacts."
+    : "You can bring them back one at a time from Deleted artifacts.";
+}
+
+/**
  * What is owed about the rows nested under a selection: a sentence for the
  * description, a count for the cascade paragraph, or neither.
  *
- * At most one of the two is ever set. A promoted agent is not destroyed, so it
- * must never reach the cascade paragraph ("This will also delete…"); and a
- * cascade count is a phrase the dialog puts in its own sentence, so it is not
- * composed here.
+ * A promoted agent is not destroyed, so it must never reach the cascade
+ * paragraph ("This will also delete…"), and a cascade count is a phrase the
+ * dialog puts in its own sentence, so it is not composed here. An artifact arm
+ * can set both: the count, and, where the opening sentence offers a restore,
+ * the caveat that the restore does not bring nested artifacts with it.
  */
 interface NestedRowsDisclosure {
   readonly sentence: string | null;
@@ -318,18 +295,22 @@ function describeNestedRows(
 ): NestedRowsDisclosure {
   if (selectedCount === 0) return NOTHING_NESTED;
   if (input.kind === "artifact") {
+    const cascadeSummary = formatCascadeSummary(
+      computeSelectionCascadeCounts(input.tree, input.nodeIds),
+    );
     return {
-      sentence: null,
-      cascadeSummary: formatCascadeSummary(
-        computeSelectionCascadeCounts(input.tree, input.nodeIds),
-      ),
+      sentence:
+        input.restoreAvailable && cascadeSummary !== null
+          ? `Artifacts nested under ${nestedUnder} come back separately.`
+          : null,
+      cascadeSummary,
     };
   }
   // "Any" rather than a number, and the sentence is owed even where the tree
   // shows no children: not knowing how many there are includes not knowing
   // there are none. It costs the reader the count and nothing else, because
   // what it describes is a row being KEPT.
-  if (!input.nestedChatsKnown) {
+  if (!input.nestedAgentsKnown) {
     return {
       sentence: `Any agents nested under ${nestedUnder} will be kept and moved to the top level.`,
       cascadeSummary: null,

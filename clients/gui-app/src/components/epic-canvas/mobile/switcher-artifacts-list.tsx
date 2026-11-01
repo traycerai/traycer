@@ -39,10 +39,6 @@ import {
   type EpicTreeRecord,
 } from "@/lib/epic-selectors";
 import { isEditableRole } from "@/lib/epic-permissions";
-import {
-  computeDescendantCounts,
-  formatCascadeSummary,
-} from "@/lib/epic-tree-cascade";
 import { isEpicArtifactKind } from "@/lib/artifacts/node-display";
 import {
   EpicArtifactIcon,
@@ -162,7 +158,6 @@ export function SwitcherArtifactsList(props: SwitcherListProps) {
         <SwitcherArtifactSearchResults
           search={search}
           hitRecords={hitRecords}
-          records={records}
           epicId={epicId}
           tabId={tabId}
           onClose={onClose}
@@ -172,7 +167,6 @@ export function SwitcherArtifactsList(props: SwitcherListProps) {
           artifacts={artifacts}
           hasAnyArtifacts={filtered.length > 0}
           filter={artifactFilter}
-          records={records}
           epicId={epicId}
           tabId={tabId}
           onClose={onClose}
@@ -192,12 +186,11 @@ function SwitcherArtifactBrowseList(props: {
   readonly artifacts: ReadonlyArray<EpicTreeRecord>;
   readonly hasAnyArtifacts: boolean;
   readonly filter: ArtifactFilter;
-  readonly records: ReadonlyArray<EpicTreeRecord>;
   readonly epicId: string;
   readonly tabId: string;
   readonly onClose: () => void;
 }) {
-  const { artifacts, records, epicId, tabId, onClose } = props;
+  const { artifacts, epicId, tabId, onClose } = props;
   const roots = useMemo(
     () => buildSwitcherArtifactTree(artifacts),
     [artifacts],
@@ -223,7 +216,6 @@ function SwitcherArtifactBrowseList(props: {
             key={node.record.id}
             node={node}
             depth={0}
-            records={records}
             epicId={epicId}
             tabId={tabId}
             onClose={onClose}
@@ -237,12 +229,11 @@ function SwitcherArtifactBrowseList(props: {
 function SwitcherArtifactNode(props: {
   readonly node: SwitcherTreeNode;
   readonly depth: number;
-  readonly records: ReadonlyArray<EpicTreeRecord>;
   readonly epicId: string;
   readonly tabId: string;
   readonly onClose: () => void;
 }) {
-  const { node, depth, records, epicId, tabId, onClose } = props;
+  const { node, depth, epicId, tabId, onClose } = props;
   const isActive = useIsActiveEpicArtifact(tabId, node.record.id);
   return (
     // A tree that never collapses still owes its branches an expansion state:
@@ -258,7 +249,6 @@ function SwitcherArtifactNode(props: {
         record={node.record}
         depth={depth}
         active={isActive}
-        records={records}
         epicId={epicId}
         tabId={tabId}
         onClose={onClose}
@@ -270,7 +260,6 @@ function SwitcherArtifactNode(props: {
               key={child.record.id}
               node={child}
               depth={depth + 1}
-              records={records}
               epicId={epicId}
               tabId={tabId}
               onClose={onClose}
@@ -294,7 +283,6 @@ function SwitcherArtifactNode(props: {
 function SwitcherArtifactSearchResults(props: {
   readonly search: ArtifactSearchResults;
   readonly hitRecords: ReadonlyArray<EpicTreeRecord>;
-  readonly records: ReadonlyArray<EpicTreeRecord>;
   readonly epicId: string;
   readonly tabId: string;
   readonly onClose: () => void;
@@ -321,12 +309,11 @@ function SwitcherArtifactSearchResults(props: {
 function SwitcherArtifactSearchBody(props: {
   readonly search: ArtifactSearchResults;
   readonly hitRecords: ReadonlyArray<EpicTreeRecord>;
-  readonly records: ReadonlyArray<EpicTreeRecord>;
   readonly epicId: string;
   readonly tabId: string;
   readonly onClose: () => void;
 }) {
-  const { search, hitRecords, records, epicId, tabId, onClose } = props;
+  const { search, hitRecords, epicId, tabId, onClose } = props;
   if (search.isUnsupported) {
     return (
       <SidebarPanelEmptyState
@@ -412,7 +399,6 @@ function SwitcherArtifactSearchBody(props: {
         <SwitcherArtifactSearchRow
           key={record.id}
           record={record}
-          records={records}
           epicId={epicId}
           tabId={tabId}
           onClose={onClose}
@@ -465,12 +451,11 @@ function SwitcherArtifactRow(props: {
   readonly record: EpicTreeRecord;
   readonly depth: number;
   readonly active: boolean;
-  readonly records: ReadonlyArray<EpicTreeRecord>;
   readonly epicId: string;
   readonly tabId: string;
   readonly onClose: () => void;
 }) {
-  const { record, depth, active, records, epicId, tabId, onClose } = props;
+  const { record, depth, active, epicId, tabId, onClose } = props;
   const activate = useSwitcherActivate(tabId, onClose);
 
   const onSelect = useCallback(() => {
@@ -486,10 +471,6 @@ function SwitcherArtifactRow(props: {
       }),
     );
   }, [activate, record]);
-
-  const cascadeSummary = formatCascadeSummary(
-    computeDescendantCounts(records, record.id),
-  );
 
   return (
     // `min-w-0` for the same reason the row's own levels carry it: this wrapper
@@ -524,7 +505,6 @@ function SwitcherArtifactRow(props: {
             kind="artifact"
             nodeId={record.id}
             name={record.name}
-            cascadeSummary={cascadeSummary}
           />
         }
       />
@@ -538,7 +518,6 @@ function SwitcherArtifactRow(props: {
  */
 function SwitcherArtifactSearchRow(props: {
   readonly record: EpicTreeRecord;
-  readonly records: ReadonlyArray<EpicTreeRecord>;
   readonly epicId: string;
   readonly tabId: string;
   readonly onClose: () => void;
