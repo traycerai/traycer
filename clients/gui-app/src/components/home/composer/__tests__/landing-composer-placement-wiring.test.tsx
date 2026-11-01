@@ -139,6 +139,12 @@ const stagingStoreMocks = vi.hoisted(() => ({
     (key: WorktreeStagingKey) => WorktreeIntent | null
   >(() => null),
 }));
+vi.mock("@/components/settings/host-scope/use-host-options", async () => {
+  const { hostOptionsFixture } =
+    await import("@/components/settings/host-scope/host-scope-fixture");
+  const options = hostOptionsFixture({ hosts: [] });
+  return { useHostOptions: () => options };
+});
 vi.mock("@/stores/worktree/worktree-intent-staging-store", () => ({
   useWorktreeIntentStagingStore: {
     getState: () => ({
@@ -278,6 +284,7 @@ vi.mock("@/hooks/sandboxes/use-staged-send-sign-in-check", () => ({
 vi.mock("@/components/home/hooks/use-composer-toolbar-store", async () => {
   const { createStore } = await import("zustand/vanilla");
   interface ToolbarMockState {
+    readonly selectedModel: null;
     readonly values: {
       readonly selection: {
         readonly harnessId: string;
@@ -302,6 +309,7 @@ vi.mock("@/components/home/hooks/use-composer-toolbar-store", async () => {
   }
   const toolbarStore = createStore<ToolbarMockState>(() => ({
     ultracode: false,
+    selectedModel: null,
     selection: {
       harnessId: "claude",
       modelSlug: "claude-sonnet",

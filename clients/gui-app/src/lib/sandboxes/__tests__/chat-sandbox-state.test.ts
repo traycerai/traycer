@@ -78,7 +78,7 @@ describe("resolveChatSandbox", () => {
 
     expect(view.line).toMatchObject({
       place: "slot",
-      text: "Couldn't start build-box at 11:01 · SBX-0414 · nothing was charged",
+      text: "Couldn't start build-box at 11:01 · SBX-0414",
     });
     expect(view.composer).toEqual({ kind: "line" });
   });

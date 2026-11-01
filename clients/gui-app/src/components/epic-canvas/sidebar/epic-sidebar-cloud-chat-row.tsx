@@ -12,6 +12,9 @@ import { useOwnerHostNotReachable } from "@/hooks/epic/use-task-host-reach";
 import { useChatSandboxRowLine } from "@/hooks/sandboxes/use-chat-sandbox-row-line";
 import { useEpicChatRecordHead } from "@/hooks/chats/use-epic-chat-record-head";
 import { useOwnerSandboxOpensLive } from "@/hooks/chats/use-owner-sandbox-opens-live";
+import { useChatOwnerCopyFacts } from "@/hooks/environment/use-team-environment-ownership";
+import { useCollaboratorDisplayName } from "@/hooks/epics/use-collaborator-display-name";
+import { collaboratorComputer } from "@/lib/chats/collaborator-reference";
 import { EpicSessionContext } from "@/lib/registries/epic-session-registry";
 import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
 import {
@@ -124,9 +127,9 @@ export function EpicSidebarCloudChatRow(
   // through `useMaybeOpenEpicHandle`, which several sidebar suites mock with a
   // narrower surface. No session (`""`) fails the hook's own guard and reads
   // `null`, which is exactly the pre-head behavior.
-  const epicSession = use(EpicSessionContext);
+  const epicId = use(EpicSessionContext)?.epicId ?? "";
   const recordHead = useEpicChatRecordHead(
-    epicSession?.epicId ?? "",
+    epicId,
     chat.identity.ownerUserId,
     chat.identity.chatId,
   );
@@ -152,6 +155,12 @@ export function EpicSidebarCloudChatRow(
   const ownerNotReachable = useOwnerHostNotReachable(chat.ownerHostId);
   // A sandbox owner's own line replaces the offline wording on the lock.
   const sandboxLine = useChatSandboxRowLine(chat.ownerHostId, !ownerReachable);
+  const lockCopy = useCloudRowLockCopy(
+    chat,
+    epicId,
+    ownerReachability.hostLabel,
+    sandboxLine,
+  );
   // Openable-live = the owner answers. Host ids are unique (2026-08-07
   // ruling), so a reachable owner IS the machine that holds this chat, and
   // the click opens the ordinary live surface bound to it - the tile
@@ -255,8 +264,6 @@ export function EpicSidebarCloudChatRow(
     [openRef, openTile, props.tabId],
   );
 
-  const ownerLabel = ownerReachability.hostLabel;
-  const lockCopy = lockedRowCopy(ownerLabel, sandboxLine);
   return (
     <m.li
       layout={motion.layout}
@@ -278,7 +285,7 @@ export function EpicSidebarCloudChatRow(
         aria-label={cloudRowAriaLabel(
           title,
           ownerReachable,
-          lockCopy.ariaLabel,
+          lockCopy,
           ownerNotReachable,
         )}
         data-testid={`epic-sidebar-cloud-item-${chat.identity.chatId}`}
@@ -444,39 +451,91 @@ function CloudRowIdleTime(props: { readonly publishedAt: number }): ReactNode {
   );
 }
 
-/** The row's accessible name: its title, then each state its glyphs show. */
+/**
+ * The row's accessible name: its title, then each state its glyphs show. A
+ * lock that already says the owner is out of reach (`coversReach`) is not
+ * followed by the reach line too.
+ */
 function cloudRowAriaLabel(
   title: string,
   ownerReachable: boolean,
-  lockAriaLabel: string,
+  lockCopy: LockedRowCopy,
   ownerNotReachable: boolean,
 ): string {
-  const lock = ownerReachable ? "" : ` — ${lockAriaLabel}`;
-  const reach = ownerNotReachable ? ` — ${TASK_HOST_UNREACHABLE_LINE}` : "";
+  const lock = ownerReachable ? "" : ` — ${lockCopy.ariaLabel}`;
+  const lockSaysReach = !ownerReachable && lockCopy.coversReach;
+  const reach =
+    ownerNotReachable && !lockSaysReach
+      ? ` — ${TASK_HOST_UNREACHABLE_LINE}`
+      : "";
   return `${title}${lock}${reach}`;
+}
+
+interface LockedRowCopy {
+  readonly tooltip: string;
+  readonly ariaLabel: string;
+  /** Whether `ariaLabel` already says the owner is out of reach. */
+  readonly coversReach: boolean;
+}
+
+/**
+ * {@link lockedRowCopy} for one row. A collaborator's chat names its owner on
+ * the lock instead of a host: the same owner facts and the same name the tile
+ * this row opens reads.
+ */
+function useCloudRowLockCopy(
+  chat: CloudChatSummary,
+  epicId: string,
+  ownerLabel: string,
+  sandboxLine: string | null,
+): LockedRowCopy {
+  const ownership = useChatOwnerCopyFacts(
+    chat.identity.ownerUserId,
+    chat.ownerHostId,
+    chat.identity.chatId,
+  );
+  const collaboratorName = useCollaboratorDisplayName(
+    epicId,
+    chat.identity.ownerUserId,
+  );
+  const collaborator =
+    ownership.ownedByViewer || ownership.environmentOwned
+      ? null
+      : { name: collaboratorName };
+  return lockedRowCopy(ownerLabel, sandboxLine, collaborator);
 }
 
 /**
  * What a locked row says about its owner.
  *
  * The longer explanation lives on the surface the row opens; a tooltip states
- * the fact.
+ * the fact. A collaborator's chat names the collaborator, never their host:
+ * their machine is never in this account's directory, so "offline" would be
+ * read off a machine this device cannot observe, even while it runs.
  */
 function lockedRowCopy(
   ownerLabel: string,
   sandboxLine: string | null,
-): {
-  readonly tooltip: string;
-  readonly ariaLabel: string;
-} {
+  collaborator: { readonly name: string | null } | null,
+): LockedRowCopy {
   if (sandboxLine !== null) {
     return {
       tooltip: `${sandboxLine} Opens read-only from the last published copy.`,
       ariaLabel: sandboxLine,
+      coversReach: false,
+    };
+  }
+  if (collaborator !== null) {
+    const computer = collaboratorComputer(collaborator.name);
+    return {
+      tooltip: `On ${computer}, not reachable from here. Opens read-only from the last published copy.`,
+      ariaLabel: `on ${computer}, not reachable from here`,
+      coversReach: true,
     };
   }
   return {
     tooltip: `Lives on ${ownerLabel}, which is offline. Opens read-only from the last published copy.`,
     ariaLabel: `On ${ownerLabel}, offline`,
+    coversReach: false,
   };
 }
