@@ -844,9 +844,9 @@ export function storeFormatFloorBuildVersion(
 /**
  * The stamp the floor may judge a target by, or `null`.
  *
- * A registry build's off-ladder stamp is not one: its catalog version is on
- * the ladder and the stamp is not, so judging by the stamp would stand aside on
- * a build the catalog can place. A local tree has no such version to fall back
+ * A registry build's off-ladder stamp is not one: its catalog version is the
+ * release the registry names, so judging by the stamp would stand aside on a
+ * build the catalog can place. A local tree has no such version to fall back
  * on, so its stamp stands.
  */
 export function floorTargetStamp(
@@ -867,7 +867,7 @@ export function floorTargetStamp(
  * digest, so it is the string the registry vouches for, and the ladder tests
  * need one. An archive stamp need not be SemVer, and a stamp that sorted above
  * the install, or off the ladder, would stand aside on a target whose entry
- * names an older format. Without an entry, the tree's own stamp.
+ * names an older format. Without an entry, what `floorTargetStamp` leaves.
  */
 export function commitFloorTargetVersion(
   targetEntry: TargetRegistryEntry | null,
@@ -964,7 +964,8 @@ export async function assertStoreFormatFloorAtCommit(args: {
    */
   readonly committingVersion: string;
   /**
-   * The archive's own `version.json` stamp, or `null` when it declares none.
+   * The archive's own `version.json` stamp, or `null` when it declares none
+   * or `floorTargetStamp` withholds it.
    *
    * Takes precedence over `committingVersion` as the version this check
    * judges unless a registry entry names the bytes

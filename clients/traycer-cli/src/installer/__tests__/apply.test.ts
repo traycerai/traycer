@@ -588,6 +588,28 @@ describe("applyHost", () => {
       expect(mocks.callOrder).not.toContain("busy-check");
     });
 
+    it("lets a local stage's off-ladder stamp stand, with no catalog version to judge instead", async () => {
+      await writeInstall("local-host-20261017", {
+        runtimeVersion: "1.5.2",
+        source: { kind: "local-file", value: "dl/host.tar.gz" },
+      });
+      await writeStaged("1.5.1", {
+        runtimeVersion: "staging.1783550586518.bb8c937d9",
+        source: { kind: "local-file", value: "dl/host.tar.gz" },
+      });
+      await writeStampedChatDbFor(ENV, "epic-on-disk", 22);
+
+      const result = await applyHost({
+        environment: ENV,
+        force: false,
+        noService: false,
+        expectedStageFingerprint: null,
+        onProgress: () => {},
+      });
+
+      expect(result.outcome).toBe("applied");
+    });
+
     it("reads no registry entry into a promoted stage, so its released stamp alone places it", async () => {
       await writeInstall("1.3.0-rc.1", {});
       await writeStaged("1.9.0", { runtimeVersion: "1.3.0-rc.4" });

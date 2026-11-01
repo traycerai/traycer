@@ -345,12 +345,13 @@ export async function applyHost(
   // declaration - the tree is already extracted - so an off-ladder stage is
   // judged here rather than standing aside until the commit tail.
   const stagedRuntimeDir = dirname(join(stagedDir, staged.executablePath));
-  // The stage's own stamp outranks the version it was recorded under, for the
-  // same reason it does at the commit tail: a stage promoted from a local
-  // archive carries a `local-…` record version that no table can place, and
-  // the sidecar is what names the build. Resolved once and reused as the
-  // evidence's `clearedVersion` below, so the tail - which resolves it the
-  // same way from the same two values - agrees with this gate by construction.
+  // The stage's own stamp outranks the version it was recorded under, unless
+  // `floorTargetStamp` withholds it, for the same reason it does at the commit
+  // tail: a stage promoted from a local archive carries a `local-…` record
+  // version that no table can place, and the sidecar is what names the build.
+  // Resolved once and reused as the evidence's `clearedVersion` below, so the
+  // tail - which resolves it the same way from the same two values - agrees
+  // with this gate by construction.
   const floorTargetVersion = storeFormatFloorBuildVersion(
     floorTargetStamp(staged),
     staged.version,

@@ -318,7 +318,10 @@ import type {
   HostVersionsManifest,
   RegistryClient,
 } from "../../registry";
-import { ungatedStoreFormatFloorEvidence } from "../../host/store-format-floor";
+import {
+  ungatedStoreFormatFloorEvidence,
+  type TargetRegistryEntry,
+} from "../../host/store-format-floor";
 import { EPIC_STATE_DIRNAME } from "../../host/chat-store-survey";
 import {
   expectReached,
@@ -1237,7 +1240,12 @@ describe("commitInstallFromSource", () => {
       ).toBe("binary-1.2.0-declared");
     });
 
-    it("judges the post-stop check by the staged entry's version too, so a store that moved after the tail still refuses", async () => {
+    // A registry build stamped off the ladder, declaring nothing, over a host
+    // that writes format 22.
+    async function commitOffLadderStamp(
+      targetRegistryEntry: TargetRegistryEntry | null,
+      beforeSwap: () => Promise<void>,
+    ): Promise<unknown> {
       const previousSource = join(sandboxRoot, "source-local-1.5.2");
       writeLocalHostSource(previousSource, "local-1.5.2");
       writeFileSync(
@@ -1261,43 +1269,64 @@ describe("commitInstallFromSource", () => {
         join(sourceDir, "version.json"),
         JSON.stringify({ version: "staging.1783550586518.bb8c937d9" }),
       );
+      return commitInstallFromSource({
+        environment: ENV,
+        sourceDir,
+        executablePath: join(sourceDir, "traycer-host"),
+        version: "1.5.1",
+        runtimeVersion: "staging.1783550586518.bb8c937d9",
+        source: { kind: "registry", value: "1.5.1" },
+        archiveSha256: "a".repeat(64),
+        signatureVerifiedAt: new Date().toISOString(),
+        signatureKeyId: "key-1",
+        sizeBytes: 0,
+        onProgress: () => {},
+        lifecycle: {
+          beforeSwap,
+          beforeSwapCommit: async () => {},
+          afterSwap: async () => {},
+          restartAfterAbortedSwap: async () => {},
+          swapLockRecovery: null,
+        },
+        onWillSwap: null,
+        onCommitted: () => {},
+        onSwapCommitted: null,
+        targetRegistryEntry,
+        storeFormatFloor: ungatedStoreFormatFloorEvidence(
+          "host install",
+          false,
+        ),
+      });
+    }
 
+    it("judges the post-stop check by the staged entry's version too, so a store that moved after the tail still refuses", async () => {
       await expect(
-        commitInstallFromSource({
-          environment: ENV,
-          sourceDir,
-          executablePath: join(sourceDir, "traycer-host"),
-          version: "1.5.1",
-          runtimeVersion: "staging.1783550586518.bb8c937d9",
-          source: { kind: "registry", value: "1.5.1" },
-          archiveSha256: "a".repeat(64),
-          signatureVerifiedAt: new Date().toISOString(),
-          signatureKeyId: "key-1",
-          sizeBytes: 0,
-          onProgress: () => {},
-          lifecycle: {
-            // A live host stamps a store after the tail surveyed none.
-            beforeSwap: async () => {
-              await writeStampedChatDbFor(ENV, "epic-stamped-late", 22);
-            },
-            beforeSwapCommit: async () => {},
-            afterSwap: async () => {},
-            restartAfterAbortedSwap: async () => {},
-            swapLockRecovery: null,
-          },
-          onWillSwap: null,
-          onCommitted: () => {},
-          onSwapCommitted: null,
-          targetRegistryEntry: { storeFormats: { chatDb: 20 } },
-          storeFormatFloor: ungatedStoreFormatFloorEvidence(
-            "host install",
-            false,
-          ),
+        commitOffLadderStamp({ storeFormats: { chatDb: 20 } }, async () => {
+          await writeStampedChatDbFor(ENV, "epic-stamped-late", 22);
         }),
       ).rejects.toMatchObject({
         code: "E_HOST_STORE_FORMAT_FLOOR",
         message: expect.stringContaining("it reads chat store format 20"),
       });
+    });
+
+    it("refuses an off-ladder stamp with no entry at the tail, before anything is stopped", async () => {
+      await writeStampedChatDbFor(ENV, "epic-at-22", 22);
+      const beforeSwap = vi.fn(async () => {});
+
+      await expect(
+        commitOffLadderStamp(null, beforeSwap),
+      ).rejects.toMatchObject({ code: "E_HOST_STORE_FORMAT_FLOOR" });
+
+      expect(beforeSwap).not.toHaveBeenCalled();
+    });
+
+    it("refuses an off-ladder stamp with no entry after the stop too, when a store moved", async () => {
+      await expect(
+        commitOffLadderStamp(null, async () => {
+          await writeStampedChatDbFor(ENV, "epic-stamped-late", 22);
+        }),
+      ).rejects.toMatchObject({ code: "E_HOST_STORE_FORMAT_FLOOR" });
     });
 
     it("judges a REGISTRY target by its declaration when the installed tree came from a local archive recorded under the same version (the `ensure --from` shape)", async () => {
