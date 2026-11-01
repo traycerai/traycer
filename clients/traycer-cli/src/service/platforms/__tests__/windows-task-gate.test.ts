@@ -757,7 +757,6 @@ describe("gateWindowsTaskRun: the write-free verb's own door", () => {
       }).deps,
     );
     if (gate.kind !== "not-owned") throw new Error("unreachable");
-    expect(gate.reason).toBe("other-owner");
     expect(gate.error.message).toBe(SERVICE_TASK_NOT_OWNED_MESSAGE);
     expect(gate.error.details).toEqual({
       task: windowsTaskName(label),
@@ -779,7 +778,10 @@ describe("gateWindowsTaskRun: the write-free verb's own door", () => {
       }).deps,
     );
     if (gate.kind !== "not-owned") throw new Error("unreachable");
-    expect(gate.reason).toBe("other-owner");
+    // This branch refuses as another account's, not as unconfirmed: Task
+    // Scheduler lets a task's own principal read it, so a task hidden from
+    // this account has a principal and it is not this caller.
+    expect(gate.error.details).toMatchObject({ reason: "other-owner" });
   });
 
   it("an absent task is permitted: the /Run it issues is the scheduler's own answer about it", async () => {
