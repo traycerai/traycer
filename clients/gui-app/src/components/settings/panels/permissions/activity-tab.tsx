@@ -320,7 +320,7 @@ function ActivityRow(props: {
     >
       <div role="cell" className="min-w-0 text-ui-xs text-muted-foreground">
         <DecisionTime at={entry.at} />
-        <div className="truncate">{title ?? displayTitle("", "agent")}</div>
+        <div className="truncate">{displayTitle(title ?? "", "agent")}</div>
       </div>
       <div role="cell" className="min-w-0">
         <div className="text-ui-xs text-muted-foreground">{entry.toolName}</div>

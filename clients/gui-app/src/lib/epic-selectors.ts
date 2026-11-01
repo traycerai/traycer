@@ -2133,9 +2133,7 @@ export function useEpicTabDisplayTitle(
     armChatTitle ??
     liveTerminalTitle ??
     liveManagedCommandTitle ??
-    (node.type === "chat" || node.type === "terminal-agent"
-      ? displayTitle(node.name, "agent")
-      : node.name)
+    node.name
   );
 }
 

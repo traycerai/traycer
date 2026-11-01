@@ -81,12 +81,13 @@ const UNTITLED_LABELS: Readonly<Record<DisplayTitleKind, string>> = {
   file: "Untitled file",
 };
 
-/**
- * The Agent fallback older builds froze into tile snapshots, and the one the
- * host still writes into notification rows.
- */
+/** The fallback the host still writes into notification rows. */
 const BAKED_AGENT_FALLBACK = "Untitled agent";
 
+/**
+ * Every fallback a saved Agent tile may carry. A tile's `name` is a snapshot, so
+ * one saved by an older build still holds that build's spelling.
+ */
 const AGENT_FALLBACK_NAMES: ReadonlySet<string> = new Set([
   NEW_AGENT_TITLE,
   BAKED_AGENT_FALLBACK,
@@ -101,6 +102,14 @@ const AGENT_FALLBACK_NAMES: ReadonlySet<string> = new Set([
  */
 export function isAgentFallbackName(name: string): boolean {
   return AGENT_FALLBACK_NAMES.has(name);
+}
+
+/**
+ * A saved Agent tile's name as it loads: a fallback under any spelling becomes
+ * today's. A real title on the record still wins at render.
+ */
+export function agentTileName(name: string): string {
+  return isAgentFallbackName(name) ? untitledLabel("agent") : name;
 }
 
 /** User-facing literal for an empty epic title. Single-sourced from the map. */
@@ -149,8 +158,7 @@ function untitledLabel(kind: DisplayTitleKind): string {
  * per-kind fallback. Use at surfaces that only have the raw title + kind; prefer
  * the source-aware helpers below where the record's derivation source is
  * available. Under the `agent` kind {@link BAKED_AGENT_FALLBACK} counts as no
- * title, which is how a host-written notification row and an old tile snapshot
- * reach the current label.
+ * title, which is how a host-written notification row reaches the current label.
  */
 export function displayTitle(title: string, kind: DisplayTitleKind): string {
   if (title.length === 0) return untitledLabel(kind);

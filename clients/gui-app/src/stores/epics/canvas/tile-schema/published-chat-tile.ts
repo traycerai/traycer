@@ -14,7 +14,7 @@
  * matches on id and nothing else.
  */
 import { v4 as uuidv4 } from "uuid";
-import { displayTitle } from "@/lib/display-title";
+import { agentTileName, displayTitle } from "@/lib/display-title";
 import type { DesktopJsonValue } from "@/lib/windows/types";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { TILE_KIND_PUBLISHED_CHAT } from "../tile-kinds";
@@ -83,7 +83,9 @@ function parsePublishedChatTileRef(
   return {
     id: publishedChatTileId({ taskId, ownerUserId, chatId }),
     instanceId: readTileInstanceId(value.instanceId),
-    name: readNonEmptyString(value.name) ?? PUBLISHED_CHAT_TILE_FALLBACK_NAME,
+    name: agentTileName(
+      readNonEmptyString(value.name) ?? PUBLISHED_CHAT_TILE_FALLBACK_NAME,
+    ),
     type: TILE_KIND_PUBLISHED_CHAT,
     hostId: readNonEmptyString(value.hostId) ?? UNKNOWN_HOST_PLACEHOLDER,
     taskId,
