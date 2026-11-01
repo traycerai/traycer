@@ -40,6 +40,7 @@ import {
 } from "@/lib/canvas/tile-open/intent";
 import { useEpicExportArtifacts } from "@/hooks/epic/use-epic-export-artifacts-mutation";
 import { cn } from "@/lib/utils";
+import { useDeletedArtifactsAvailable } from "@/hooks/epic/use-deleted-artifacts-available";
 import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
 import { ArtifactPanelSearchShell } from "@/components/epic-canvas/sidebar/epic-sidebar-artifact-search";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -876,12 +877,14 @@ const ArtifactNode = memo(function ArtifactNode(props: ArtifactNodeProps) {
   // `useShallow` is required, not decorative: a deriving selector returns a
   // fresh object each call, so without it `useSyncExternalStore` sees a change
   // on every notification and loops. See `epic-sidebar-filter.ts`.
+  const restoreAvailable = useDeletedArtifactsAvailable(useEpicSessionHostId());
   const deleteDisclosure = useEpicStore(
     useShallow((state: OpenEpicState) =>
       describeTreeDeleteDisclosure({
         tree: state.tree,
         kind: "artifact",
         nodeIds: [nodeId],
+        restoreAvailable,
       }),
     ),
   );

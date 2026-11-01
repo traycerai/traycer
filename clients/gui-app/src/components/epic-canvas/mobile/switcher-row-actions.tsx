@@ -1,6 +1,7 @@
 import { isMarkdownArtifactKind } from "@/lib/artifacts/node-display";
 import { useArtifactById } from "@/lib/epic-selectors";
 import { useCallback, useState } from "react";
+import { useShallow } from "zustand/react/shallow";
 import { FileDown, MoreHorizontal, Pencil, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -20,6 +21,11 @@ import {
 } from "@/components/epic-canvas/mobile/use-switcher-rename";
 import { useEpicPermissionRole, useEpicNodeHostId } from "@/lib/epic-selectors";
 import { isEditableRole } from "@/lib/epic-permissions";
+import {
+  describeTreeDeleteDisclosure,
+  selectNestedAgentsKnown,
+} from "@/lib/epic-tree-cascade";
+import { useEpicStore } from "@/hooks/use-epic-store";
 import { useEpicDeleteChat } from "@/hooks/epic/use-epic-chat-mutations";
 import { useChatWriteRoute } from "@/hooks/epic/use-chat-write-route";
 import { CHAT_NOT_ADOPTED_COPY } from "@/stores/epics/open-epic/chat-write-routing";
@@ -28,6 +34,7 @@ import { useEpicExportArtifacts } from "@/hooks/epic/use-epic-export-artifacts-m
 import { useEpicDeleteArtifact } from "@/hooks/epic/use-epic-node-mutations";
 import type { ArtifactExportFormat } from "@/lib/artifacts/artifact-export";
 import { useTerminalKillFor } from "@/hooks/terminal/use-terminal-kill-for-mutation";
+import { useDeletedArtifactsAvailable } from "@/hooks/epic/use-deleted-artifacts-available";
 import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
@@ -36,6 +43,7 @@ import {
   findOpenTileInTab,
 } from "@/stores/epics/canvas/canvas-selectors";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import type { OpenEpicState } from "@/stores/epics/open-epic/store";
 
 interface SwitcherRowActionsProps {
   readonly epicId: string;
@@ -44,8 +52,6 @@ interface SwitcherRowActionsProps {
   /** Content id: the node id for agents/artifacts, the session id for a PTY. */
   readonly nodeId: string;
   readonly name: string;
-  /** "… and N nested" summary for a cascading delete; null when none / N/A. */
-  readonly cascadeSummary: string | null;
 }
 
 const RENAME_TITLE: Record<SwitcherRowKind, string> = {
@@ -163,8 +169,7 @@ export function SwitcherRowActions(props: SwitcherRowActionsProps) {
 function SwitcherRowActionsBody(
   props: SwitcherRowActionsProps & { readonly canMutate: boolean },
 ) {
-  const { epicId, tabId, kind, nodeId, name, cascadeSummary, canMutate } =
-    props;
+  const { epicId, tabId, kind, nodeId, name, canMutate } = props;
   const [renameOpen, setRenameOpen] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
 
@@ -181,6 +186,27 @@ function SwitcherRowActionsBody(
   const deleteArtifact = useEpicDeleteArtifact(nodeId);
   const exportArtifacts = useEpicExportArtifacts();
   const artifact = useArtifactById(nodeId);
+  const restoreAvailable = useDeletedArtifactsAvailable(sessionHostId);
+  // The sentence the sidebar row gives for the same tree, and subscribed to
+  // its ANSWER as the sidebar rows are. `useShallow` is required, not
+  // decorative: the selector mints a fresh object each call.
+  const deleteDisclosure = useEpicStore(
+    useShallow((state: OpenEpicState) =>
+      kind === "artifact"
+        ? describeTreeDeleteDisclosure({
+            tree: state.tree,
+            kind: "artifact",
+            nodeIds: [nodeId],
+            restoreAvailable,
+          })
+        : describeTreeDeleteDisclosure({
+            tree: state.tree,
+            kind: "agent",
+            nodeIds: [nodeId],
+            nestedAgentsKnown: selectNestedAgentsKnown(state),
+          }),
+    ),
+  );
   // Document export requires a Markdown body.
   const canExport =
     kind === "artifact" && isMarkdownArtifactKind(artifact?.kind);
@@ -324,12 +350,9 @@ function SwitcherRowActionsBody(
           open={confirmOpen}
           onOpenChange={setConfirmOpen}
           title={`Delete "${name}"?`}
-          description={
-            kind === "artifact"
-              ? "This permanently deletes the artifact."
-              : "This permanently deletes the agent and its history."
-          }
-          cascadeSummary={cascadeSummary}
+          description={deleteDisclosure.description}
+          cascadeSummary={deleteDisclosure.cascadeSummary}
+          cascadeNestedUnder={deleteDisclosure.cascadeNestedUnder}
           actionLabel="Delete"
           isPending={deletePending}
           onConfirm={confirmDelete}
