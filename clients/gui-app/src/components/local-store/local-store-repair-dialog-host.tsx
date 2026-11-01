@@ -90,6 +90,15 @@ function LocalStoreRepairDialog(props: {
     setRepairRefusal(null);
   }
   const shownRemedy = repairRefusal?.remedy ?? refusal.remedy;
+  const shownMessage = repairRefusal?.message ?? refusal.message;
+  // The rebind warning is part of the description, not a `cascadeSummary`:
+  // that slot is a COUNT the dialog wraps in "This will also delete … nested
+  // under it", so the warning rendered as a claim about deleting a paragraph of
+  // prose. Here it is the third sentence of the one paragraph the description
+  // is documented to be.
+  const paragraph = repairable
+    ? `${shownMessage} ${shownRemedy} ${REBIND_CLAIMS_WARNING}`
+    : `${shownMessage} ${shownRemedy}`;
   return (
     <ConfirmDestructiveDialog
       // Open for as long as a request is pending: the host above renders
@@ -102,12 +111,8 @@ function LocalStoreRepairDialog(props: {
         if (!open) closeLocalStoreRepair();
       }}
       title="Couldn't create the epic"
-      description={`${repairRefusal?.message ?? refusal.message} ${shownRemedy}`}
-      cascadeSummary={
-        repairable
-          ? "Rebinding claims this data directory for this host. Confirm that no other Traycer host is using it — rebinding while another host is writing could put your local data at risk."
-          : null
-      }
+      description={paragraph}
+      cascadeSummary={null}
       blockedReason={
         repairable
           ? null
@@ -152,3 +157,7 @@ function LocalStoreRepairDialog(props: {
     />
   );
 }
+
+/** What a rebind costs the person, beside the refusal's own words. */
+const REBIND_CLAIMS_WARNING =
+  "Rebinding claims this data directory for this host. Confirm that no other Traycer host is using it — rebinding while another host is writing could put your local data at risk.";
