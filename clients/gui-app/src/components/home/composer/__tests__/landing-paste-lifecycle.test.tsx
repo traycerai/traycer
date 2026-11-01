@@ -7,7 +7,7 @@
  * key only changes when switching between existing drafts, so the null→id
  * flip does not remount the editor). Fakes only idb-keyval timing (putImage
  * durable write). Does NOT re-implement ingest on a bare Editor — that is
- * exactly why round 4 missed the store/remount defect.
+ * exactly why the store/remount defect was missed.
  */
 import {
   act,
@@ -165,7 +165,7 @@ vi.mock(
       getEditorIncarnation: () => instance.getEditorIncarnation(),
       hasFocus: () => false,
       focus: () => instance.focus(),
-      focusAtEnd: () => instance.focusAtEnd(),
+      focusAtEnd: (scroll) => instance.focusAtEnd(scroll),
       getJSON: () => instance.getJSON(),
       isEmpty: () => instance.isEmpty(),
       clear: () => instance.clear(),
@@ -229,6 +229,7 @@ vi.mock("@/hooks/sandboxes/use-staged-send-sign-in-check", () => ({
 
 vi.mock("@/components/home/hooks/use-composer-toolbar-store", () => {
   const toolbarStore = createStore(() => ({
+    ultracode: false,
     selection: {
       harnessId: "claude",
       modelSlug: "claude-sonnet",
@@ -304,7 +305,7 @@ vi.mock("@/lib/host", () => ({
     findById: () => null,
     onChange: () => ({ dispose: () => undefined }),
   }),
-  // The SPINE, a separate export since redesign P2.1.
+  // The SPINE, a separate export.
   useHostRuntimeClient: () => null,
 }));
 
@@ -360,7 +361,7 @@ vi.mock("@/hooks/epic/use-epic-create-mutation", () => ({
 vi.mock("@/hooks/agent/use-create-tui-agent", () => ({
   useCreateTuiAgentForClient: () => ({ isPending: false }),
 }));
-// P1.2: the composer resolves its placement (pin ?? effective) through this
+// The composer resolves its placement (pin ?? effective) through this
 // one hook. These suites are about paste/gating/banner behaviour, not
 // selection derivation, so it is stubbed at that single boundary - the same
 // treatment the other host-backed hooks above get.
@@ -1372,8 +1373,8 @@ describe("landing paste lifecycle (real draft-runtime registry + keyed LandingCo
     );
 
     // Only the first image's decode has started - the second job's own
-    // `prepare` call is queued behind it on the same mount's session (the
-    // ticket-1 fix), so NEITHER original job has settled, and both still
+    // `prepare` call is queued behind it on the same mount's session,
+    // so NEITHER original job has settled, and both still
     // hold their own anonymous reservation.
     await waitFor(() => expect(double.gates).toHaveLength(1));
     expect(double.events).toEqual(["decode-call:0"]);

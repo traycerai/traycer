@@ -538,7 +538,7 @@ describe("home-page history helpers", () => {
     });
   });
 
-  // T13: `canDeleteHistoryItem` now ANDs the cloud-authorization verdict into
+  // `canDeleteHistoryItem` now ANDs the cloud-authorization verdict into
   // every non-local-home row, with the preserved-orphan refusal outranking it
   // (a row that can never be deleted stays refused regardless of the
   // verdict).

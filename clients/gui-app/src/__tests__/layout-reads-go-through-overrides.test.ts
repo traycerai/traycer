@@ -22,9 +22,9 @@ import { describe, expect, it } from "vitest";
  *
  * ## What is deliberately NOT converted
  *
- * A read that decides whether an element EXISTS is an ancestor seam, and D11
- * says an override must not reach one: wrapping it would make a specimen mount
- * real chrome - a strip that registers keyboard slots, a stream that starts
+ * A read that decides whether an element EXISTS is an ancestor seam, and an
+ * override must not reach one: wrapping it would make a specimen mount real
+ * chrome - a strip that registers keyboard slots, a stream that starts
  * polling. Those stay on the store, and each is listed in
  * {@link DIRECT_READ_EXEMPTIONS} with the reason. A read by a CONTROL that
  * writes the value (the inspector, the Layout page, the strip's own right-click
@@ -63,7 +63,7 @@ const DIRECT_READ_EXEMPTIONS: Readonly<Record<string, string>> = {
   // The seam itself.
   "lib/layout-overrides.ts": "the seam",
   // The rail's derivation and its writers. What it answers is which panels
-  // EXIST on the rail and in what order - an ancestor seam by D11, and the one
+  // EXIST on the rail and in what order - an ancestor seam, and the one
   // the sidebar's own mount decisions are made from. Layering a specimen's
   // preview over it would mount real panels.
   "lib/layout/rail-view.ts": "the rail's shape: an ancestor seam",

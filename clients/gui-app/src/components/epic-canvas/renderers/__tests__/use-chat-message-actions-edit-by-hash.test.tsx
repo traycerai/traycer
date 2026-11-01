@@ -116,6 +116,7 @@ vi.mock("@/hooks/host/use-tab-host-client", () => ({
 }));
 
 const SETTINGS: ChatRunSettings = {
+  ultracode: false,
   harnessId: "claude",
   model: "claude-sonnet",
   permissionMode: "supervised",

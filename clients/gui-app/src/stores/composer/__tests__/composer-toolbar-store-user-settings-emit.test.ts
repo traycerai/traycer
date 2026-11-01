@@ -61,6 +61,7 @@ function catalog(
     modelsLoaded,
     tuiOnly: false,
     chatLineCarriesAutoMode: null,
+    ultracodeCarried: false,
     keepsUnavailablePick: false,
   };
 }
@@ -79,6 +80,7 @@ function claudeToolbar(): Observed {
     reasoningFallback: "model-default",
     seedKey: "user-settings-emit",
     values: {
+      ultracode: false,
       permission: "supervised",
       selection: {
         harnessId: "claude",
@@ -91,6 +93,7 @@ function claudeToolbar(): Observed {
     onSettingsChange: (settings) => surface.push(settings),
     tuiOnly: false,
     chatLineCarriesAutoMode: null,
+    ultracodeCarried: false,
     hostId: null,
   });
   store.setState({ onUserSettingsChange: (settings) => user.push(settings) });
@@ -169,6 +172,7 @@ describe("onUserSettingsChange across a deferred harness switch", () => {
     const { store, user } = claudeToolbar();
 
     store.getState().applySeed("another-seed", {
+      ultracode: false,
       permission: "supervised",
       selection: {
         harnessId: "codex",

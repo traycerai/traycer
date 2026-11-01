@@ -52,7 +52,7 @@ export function ChordCaptureInput(props: ChordCaptureInputProps) {
   // even while the OS currently rejects it, because it will register on a
   // later launch and would otherwise silently swallow a renderer binding
   // placed on it in the meantime. Only `enabled: false` frees the chord -
-  // the enable-path check (R1, in the settings row) guards re-enabling.
+  // the enable-path check in the settings row guards re-enabling.
   const { status: summonStatus } = useSummonHotkey();
   const externalReserved = useMemo<ReadonlyArray<ExternalReservedChord>>(() => {
     if (summonStatus === null || !summonStatus.intent.enabled) {

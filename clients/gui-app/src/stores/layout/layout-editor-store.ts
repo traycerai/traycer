@@ -97,7 +97,7 @@ export interface RegionInstance {
 }
 
 /**
- * The two surfaces a canvas selection can hold that are not regions (D14): the
+ * The two surfaces a canvas selection can hold that are not regions: the
  * tab strip and the sidebar, keyed by their `SurfaceGroupId`. Neither is a
  * region - the strip is not one at all, and the sidebar's regions are its rail
  * icons - so they are selected as surfaces and placed by the placement bar.
@@ -110,7 +110,7 @@ export type PlacementSurfaceId = "topBar" | "sidebar";
  * no value bag and no index row, so it is not one of `LayoutRegions`; like a
  * region, it hovers and selects from the canvas and from its row, the ring
  * goes around its part, and the part shows ghosted while pointed at in the
- * value that hides it (C3).
+ * value that hides it.
  */
 export type LayoutSettingId = "sideStripView";
 
@@ -211,7 +211,7 @@ export interface LayoutEditorState {
    * layout-store watcher - rather than in a selector or by hand at each gesture
    * path. As a selector it serialised the whole triple TWICE on every
    * editor-store notification, which on a pointer sweep is hundreds of times a
-   * second (G1-04); by hand it was five call sites that had to stay in step.
+   * second; by hand it was five call sites that had to stay in step.
    */
   readonly dirty: boolean;
   readonly lockedBy: LayoutEditorLock;
@@ -364,8 +364,7 @@ export const useLayoutEditorStore = create<LayoutEditorState>()(
       // Every one of these setters is guarded, because zustand notifies on
       // every `set` and the canvas's own painter runs on every notification:
       // `setHovered` alone fires on each pointer event, which on a 120Hz
-      // trackpad is 120 full repaints a second of state that did not move
-      // (G1-04).
+      // trackpad is 120 full repaints a second of state that did not move.
       select: (selected) => {
         const state = get();
         if (selected === null) {
@@ -559,7 +558,7 @@ export const useLayoutEditorStore = create<LayoutEditorState>()(
         // A quick verb fires with no session open (L-19), and there is no
         // history for it to be a step in: pushing a snapshot onto a stack
         // nothing can pop would notify every editor-store subscriber and stamp
-        // a first-change time for a session that does not exist (G3-12).
+        // a first-change time for a session that does not exist.
         if (get().session === null) {
           applyAsEditorWrite(mutate);
           return;
@@ -620,7 +619,7 @@ export const useLayoutEditorStore = create<LayoutEditorState>()(
 
 /**
  * The instance the overlays point at: the first one registered for the region
- * that is on screen, else the first one registered (4.6, C-25).
+ * that is on screen, else the first one registered (4.6).
  *
  * Most regions have exactly one instance in a live session. `useLayoutRegion`
  * registers nothing from a surface whose `PaneVisibilityContext` is false; the
@@ -783,7 +782,7 @@ function sameSnapshot(
  *
  * Only `recordGesture` asks this, once per gesture. The dirty flag keeps the
  * cheap record comparison above: it runs inside the store subscription, on
- * every one of the hundreds of layout writes a drag lands (G1-21), and its
+ * every one of the hundreds of layout writes a drag lands, and its
  * own question - is there anything Discard would put back - is about the
  * record.
  */

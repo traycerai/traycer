@@ -182,7 +182,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function parsePersistedChatRunSettings(value: unknown): ChatRunSettings | null {
   const parsed = chatRunSettingsSchema.safeParse(value);
-  return parsed.success ? parsed.data : null;
+  return parsed.success ? { ...parsed.data, ultracode: false } : null;
 }
 
 function parsePersistedEntry(value: unknown): ComposerRunSettingsEntry | null {
@@ -246,6 +246,7 @@ export const useComposerRunSettingsStore = create<ComposerRunSettingsStore>()(
       setGlobalRunSettings: (hostId, settings, _updatedAt) => {
         if (hostId === null) return;
         if (!chatRunSettingsModelResolved(settings)) return;
+        const remembered = { ...settings, ultracode: false };
         set((state) => {
           const existing = Object.hasOwn(
             state.globalLastRunSettingsByHostId,
@@ -253,13 +254,13 @@ export const useComposerRunSettingsStore = create<ComposerRunSettingsStore>()(
           )
             ? state.globalLastRunSettingsByHostId[hostId]
             : null;
-          if (existing !== null && sameChatRunSettings(existing, settings)) {
+          if (existing !== null && sameChatRunSettings(existing, remembered)) {
             return state;
           }
           return {
             globalLastRunSettingsByHostId: {
               ...state.globalLastRunSettingsByHostId,
-              [hostId]: { ...settings },
+              [hostId]: remembered,
             },
           };
         });
@@ -275,7 +276,7 @@ export const useComposerRunSettingsStore = create<ComposerRunSettingsStore>()(
             {
               ...state.epicRunSettingsByEpicHost,
               [epicHostKey(epicId, hostId)]: {
-                settings: { ...settings },
+                settings: { ...settings, ultracode: false },
                 updatedAt,
               },
             },
@@ -443,6 +444,7 @@ function sameChatRunSettings(a: ChatRunSettings, b: ChatRunSettings): boolean {
     // `??` guards a pre-profile persisted blob (the field is missing, not
     // `null`, on an old serialized `ChatRunSettings`).
     profileId: (a.profileId ?? null) === (b.profileId ?? null),
+    ultracode: a.ultracode === b.ultracode,
   } satisfies Record<keyof ChatRunSettings, boolean>;
   return Object.values(fieldsEqual).every((equal) => equal);
 }

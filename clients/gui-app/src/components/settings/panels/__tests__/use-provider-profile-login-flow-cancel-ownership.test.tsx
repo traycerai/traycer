@@ -42,7 +42,7 @@ import {
  * per-attempt holder id sent on every start and cancel call, so the host can
  * tell this attempt's claim apart from another surface's.
  *
- * Per the spec: against a host that negotiates both new minors, Cancel
+ * Against a host that negotiates both new minors, Cancel
  * releases the attempt's claim AT ONCE in every state, because the host now
  * owns the ordering — it no longer has to wait for `startLogin`'s answer to
  * learn what to cancel. That is the download-gap case below.
@@ -1003,10 +1003,10 @@ describe("useProviderProfileLoginFlow — a failed cancel RPC must not latch out
   });
 
   it("with ownership: the next press releases a holder whose cancel from waiting failed", async () => {
-    // Codex review of OSS #2283 head 8ee3e1a0a: a cancel pressed from the
+    // A cancel pressed from the
     // settled `waiting` state (the started answer already landed) has no
-    // later start answer to retry it if its cancel RPC rejects - round 1
-    // only reopened the latch. Nothing else calls `cancelProfile` again for
+    // later start answer to retry it if its cancel RPC rejects - reopening
+    // the latch alone is not enough. Nothing else calls `cancelProfile` again for
     // this attempt, so with nothing retried the old holder's claim is never
     // released on the host, and the FIX owes it: the next press (and
     // unmount) sends it again, best effort, before minting a new holder.

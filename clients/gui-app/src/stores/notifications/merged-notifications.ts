@@ -86,6 +86,7 @@ import {
 } from "@/stores/notifications/notifications-store";
 import {
   formatHostNotificationPresentation,
+  isBotConversationAttention,
   isBotThreadVerdictNotification,
   parseKnownHostNotificationPayloadForKind,
   type HostNotificationChatStoppedPayload,
@@ -134,8 +135,9 @@ export interface MergedNotificationRow {
    * expiry), read from its typed payload. Absent or `null` on every other
    * row, and on a secrets row whose payload this build cannot read. */
   readonly secrets?: SecretsNotificationDetail | null;
-  /** A bot's answer to the person: Attention's last class while unread.
-   * Absent or `false` on every other row. */
+  /** A bot's answer to the person, a reply in a thread they follow or a
+   * row that mentions them: Attention's last class while unread. Absent or
+   * `false` on every other row. */
   readonly botAnswer?: boolean;
   readonly hostKind: HostNotificationFeedEntry["kind"] | null;
   readonly appLocalKind: AppLocalNotificationEntry["kind"] | null;
@@ -420,7 +422,7 @@ export function useMergedNotificationOccurrenceEntries(): ReadonlyArray<MergedNo
  * is not a field on a row, it is what `classifyNotificationLifecycle` says
  * about one, and the unfiltered attention list also carries failures. The
  * layout editor's relay row is the caller (4.8) and it says "an agent is
- * waiting for you", which a failed task is not (C-05).
+ * waiting for you", which a failed task is not.
  */
 export function useBlockingAttentionCount(): number {
   const rows = useMergedNotificationRows();
@@ -835,7 +837,7 @@ export function useNotificationCenterHostState(): NotificationCenterHostState {
  * The retained local-host connection carries no renderer verdict, so a cloud
  * write dispatched in that window goes out on the still-valid bearer after
  * authorization was withdrawn. Every cloud-feed mutation below re-reads the
- * store here instead of trusting its closure. Found in review.
+ * store here instead of trusting its closure.
  */
 function cloudAuthorizedNow(): boolean {
   return authorizesCloudCapability(useAuthStore.getState().status);
@@ -1859,7 +1861,7 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
         // whole-origin clear, defeating the sixth floor at the one moment the
         // floor cannot see. Mark-all's version of this reaches cloud-home rows;
         // this one DELETES them. The whole gesture waits rather than half of it
-        // landing. Found by review.
+        // landing.
         if (liveFeedModeSettling.current) return;
         // The confirmation this sits behind promises "every notification
         // currently visible in this feed", and in mixed mode the feed renders
@@ -2045,7 +2047,7 @@ function asAttentionCursor(
 
 /** `unreadRecent` pagination is a filtered view of Recent, not its own
  * analytics section - both collapse to `"recent"` so the section enum stays
- * the two values the tech plan names. */
+ * at two values. */
 function trackNotificationPageLoadedSuccess(
   section: "attention" | "recent",
   entryCount: number,
@@ -2096,7 +2098,7 @@ function rowFromHostEntryForOrigin(
     payload: payloadFromHostEntry(entry),
     agentSurface: agentSurfaceFromHostEntry(entry),
     secrets: secretsNotificationDetail(entry.kind, entry.payload),
-    botAnswer: isBotThreadVerdictNotification(entry),
+    botAnswer: isBotAttention(entry),
     hostKind: entry.kind,
     appLocalKind: null,
     globalEntry: null,
@@ -2177,7 +2179,7 @@ export function rowFromCloudFeedRow(
     payload: payloadFromHostEntry(row.entry),
     agentSurface: agentSurfaceFromHostEntry(row.entry),
     secrets: secretsNotificationDetail(row.entry.kind, row.entry.payload),
-    botAnswer: isBotThreadVerdictNotification(row.entry),
+    botAnswer: isBotAttention(row.entry),
     hostKind: row.entry.kind,
     appLocalKind: null,
     globalEntry: null,
@@ -2368,6 +2370,8 @@ function navigationPayloadFromKnown(
   known: HostNotificationKnownPayload,
 ): NotificationPayload | null {
   if (isRowCompletePayload(known)) return null;
+  // A bot's row opens the bot's tab on it, as its push does.
+  if (isBotRowPayload(known)) return navigationPayloadForBotRow(known);
   switch (known.kind) {
     // Never shown: readers drop these rows.
     case "notification_hooks_removed":
@@ -2426,6 +2430,33 @@ function navigationPayloadFromKnown(
   }
 }
 
+type BotRowPayload = Extract<
+  HostNotificationKnownPayload,
+  { readonly kind: "bot_thread_verdict" | "bot_conversation" }
+>;
+
+function isBotRowPayload(
+  known: HostNotificationKnownPayload,
+): known is BotRowPayload {
+  return (
+    known.kind === "bot_thread_verdict" || known.kind === "bot_conversation"
+  );
+}
+
+function navigationPayloadForBotRow(known: BotRowPayload): NotificationPayload {
+  const verdict = known.kind === "bot_thread_verdict";
+  return {
+    kind: "chat",
+    epicId: known.botId,
+    chatId: verdict ? known.threadId : (known.threadId ?? known.conversationId),
+    bot: {
+      botId: known.botId,
+      threadId: known.threadId,
+      messageId: verdict ? known.replyMessageId : known.messageId,
+    },
+  };
+}
+
 function navigationPayloadForSecretsRow(
   epicId: string | undefined,
   chatId: string | undefined,
@@ -2456,3 +2487,17 @@ function navigationPayloadForChatStopped(
 }
 
 const HOST_PAGE_LIMIT = 50;
+
+/**
+ * Whether a row is one of a bot's that needs the person: its answer, a reply
+ * in a thread they follow, or a row that mentions them, as the hosts'
+ * summaries count them.
+ */
+function isBotAttention(entry: {
+  readonly kind: string;
+  readonly payload: unknown;
+}): boolean {
+  return (
+    isBotThreadVerdictNotification(entry) || isBotConversationAttention(entry)
+  );
+}

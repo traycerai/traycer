@@ -502,7 +502,7 @@ describe("the single-window lease (L-32, 5.3)", () => {
     closeLayoutEditor("done");
 
     // Still held while the editor is still on screen and still writing: the
-    // key goes back with the teardown, not 220ms before it (G2-03).
+    // key goes back with the teardown, not 220ms before it.
     expect(window.localStorage.getItem(LAYOUT_EDITOR_LEASE_KEY)).not.toBeNull();
 
     drainTransitions();
@@ -722,7 +722,7 @@ describe("the guarded fallback exit (5.2)", () => {
     closeLayoutEditor("done");
 
     // Still rendering the section the user was in: an inspector torn down
-    // first would slide out as the empty index, which is the flash ticket 07
+    // first would slide out as the empty index, which is the flash that was
     // deferred rather than shipped.
     const state = useLayoutEditorStore.getState();
     expect(state.session).not.toBeNull();

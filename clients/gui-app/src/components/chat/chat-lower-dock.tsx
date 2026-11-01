@@ -58,7 +58,7 @@ export interface DockRowHotspot {
    * At rest the row wrapper is `display: contents` and the panel below it owns
    * the geometry; a `contents` box has no rect, so the hover outline and the
    * travelling ring would measure `0,0,0,0` (the same trap `drag-engine.ts`
-   * refuses a `contents` clamp for, and C-06). This is more load-bearing under
+   * refuses a `contents` clamp for). This is more load-bearing under
    * L-87, not less: the sample workspace mounts these very rows, so the canvas
    * the editor opens is made of them.
    */
@@ -311,7 +311,7 @@ export function ChatLowerDock(props: ChatLowerDockProps) {
               onSettled={markStripSettled}
             />
             {/* The box the dock's rows are laid out in, which is what a canvas
-              drag reorders inside (G3-01), under ONE quick-verb menu for the
+              drag reorders inside, under ONE quick-verb menu for the
               whole stack (L-144). A right-click anywhere on a row that does
               not belong to a control with a menu of its own - its header, its
               empty space - offers that member's verbs; the cluster resolves
@@ -349,7 +349,7 @@ export function ChatLowerDock(props: ChatLowerDockProps) {
                 })}
                 {/* Passive: it is chrome the editor cannot customize, so a
                     layout session dims it like the transcript, and the canvas
-                    names it with a cue rather than a setting (C4). */}
+                    names it with a cue rather than a setting. */}
                 {queueVisible ? (
                   <div
                     data-layout-passive

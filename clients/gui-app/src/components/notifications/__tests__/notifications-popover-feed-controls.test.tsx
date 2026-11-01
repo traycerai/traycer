@@ -379,7 +379,7 @@ function renderPopover(): void {
   );
 }
 
-/** The strip's Notifications drawer variant (finding 2): Needs you rows are pulled
+/** The strip's Notifications drawer variant: Needs you rows are pulled
  * out of Attention/Recent but must still feed scroll anchoring and arrivals. */
 function InboxPopoverShell(): ReactNode {
   const headingRef = useRef<HTMLHeadingElement>(null);
@@ -1440,7 +1440,7 @@ describe("NotificationsPopover feed controls (T05)", () => {
     });
 
     it("counts a same-feedId host recurrence via applyUpsertFrame as 1 new", async () => {
-      // Closure-review P0: store replaces byId[id] in place, so the prior
+      // Store replaces byId[id] in place, so the prior
       // occurrence key never survives. A scrolled user must still see N-new
       // for a genuine recurrence (stable id, newer updatedAt).
       applyHostSnapshot({

@@ -468,7 +468,7 @@ function SideFillableMember(
 
 /**
  * The empty half's own menu, scoped to its partner. The title-bar drag
- * regions stand down while it is open (S-44), so its items fire over the
+ * regions stand down while it is open, so its items fire over the
  * strip's drag spacer.
  */
 function FillableSlotMenu(props: {

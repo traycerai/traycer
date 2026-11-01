@@ -111,7 +111,7 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
 
 /**
- * Settings › Sandboxes for one configuration (Flow 6): every sandbox on its
+ * Settings › Sandboxes for one configuration: every sandbox on its
  * settings, whoever started it, with its cost, under the configuration's
  * defaults. It manages and never creates: a sandbox starts from a task's host
  * picker, and the empty page's `New task` goes there.
@@ -214,7 +214,7 @@ function configurationMemoryKey(
 
 /**
  * The shape a configuration's New row stages when nobody opens its gear: the
- * configuration's defaults, else the spec's; `null` before the catalogue
+ * configuration's defaults, else the built-in defaults; `null` before the catalogue
  * answers. The person's remembered gear pick seeds only their gear.
  */
 function useConfigurationStageShape(configuration: SandboxPageConfiguration): {

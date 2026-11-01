@@ -881,7 +881,7 @@ describe("<HostSettingsPanel /> local-maintenance CLI fallback", () => {
   });
 
   it("a host-restart doctor fix on a capability-false local host opens the page confirm, then dispatches on confirm", async () => {
-    // Discriminator: the P1 was a one-click `forceRestart.mutate()` from
+    // Discriminator: the defect was a one-click `forceRestart.mutate()` from
     // the Doctor sheet — skipping the same RestartHostConfirmDialog the
     // header uses. Click must open the dialog; confirm then fires the
     // page's forceRestart once. `onLocalFix` would land on `hostRunDoctor`.
@@ -1566,7 +1566,7 @@ describe("<HostSettingsPanel /> local-maintenance CLI fallback", () => {
   });
 
   it("an HOST_NOT_INSTALLED fix is disabled while a same-key hostRestart is in flight, and a click does not dispatch", async () => {
-    // Discriminator: round 4 only gated the restart pair. Widening to EVERY
+    // Discriminator: only the restart pair was gated. Widening to EVERY
     // bridge-routed repair disables Install host while the page's lifecycle
     // gate is armed. Red against 8816fab7^ if DoctorFixControl still uses
     // isBridgeRestart.

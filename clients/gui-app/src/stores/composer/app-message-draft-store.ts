@@ -8,7 +8,7 @@ import {
 } from "@/stores/composer/composer-draft-store";
 
 /**
- * Which chat composers hold a message an MCP App asked to send (D29). The app
+ * Which chat composers hold a message an MCP App asked to send. The app
  * never sends: its text lands in the composer, the composer shows a "From the
  * <app> app" chip with Discard, and the reader sends it or not.
  *

@@ -172,7 +172,7 @@ const LIVE_SESSION = {
 function deliverSnapshot(stream: ControlledEpicStream, roomId: string): void {
   // Open first, as a real stream does: the snapshot arrives on an open
   // transport, and the write-throughs and the metadata hold both wait for it.
-  stream.callbacks.onConnectionStatus("open", null, false);
+  stream.callbacks.onConnectionStatus("open", null, false, null);
   stream.callbacks.onSnapshot(snapshotMeta(roomId), new Uint8Array([0, 0]));
 }
 

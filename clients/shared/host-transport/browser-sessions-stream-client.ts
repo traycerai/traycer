@@ -15,8 +15,7 @@ import {
 } from "./browser-contracts-v1-bridge";
 import type {
   IStreamSession,
-  StreamCloseReason,
-  StreamConnectionStatus,
+  StatusChangeHandler,
   StreamFrameEnvelope,
 } from "./i-stream-session";
 import type { IHostStreamClient } from "./host-stream-client";
@@ -33,10 +32,7 @@ export interface BrowserSessionsStreamCallbacks {
    * callback so a consumer has a single place to correlate against.
    */
   readonly onServerFrame: (frame: BrowserSessionsServerFrame) => void;
-  readonly onConnectionStatus: (
-    status: StreamConnectionStatus,
-    reason: StreamCloseReason | null,
-  ) => void;
+  readonly onConnectionStatus: StatusChangeHandler;
 }
 
 export type BrowserSessionsStreamClientOptions = BrowserSessionsOpenRequest & {
@@ -90,8 +86,8 @@ export class BrowserSessionsStreamClient {
     this.session.onServerFrame((envelope) => {
       this.handleServerFrame(envelope);
     });
-    this.session.onStatusChange((status, reason) => {
-      this.callbacks.onConnectionStatus(status, reason);
+    this.session.onStatusChange((status, reason, retryCause, continuity) => {
+      this.callbacks.onConnectionStatus(status, reason, retryCause, continuity);
     });
   }
 

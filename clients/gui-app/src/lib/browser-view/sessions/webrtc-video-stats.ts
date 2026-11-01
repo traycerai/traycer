@@ -1,6 +1,6 @@
 /**
  * Maps a raw `RTCPeerConnection.getStats()` report to the getStats-derived half
- * of the wire's `videoStats` shape (ticket 11). Pure and DOM-report-shaped only
+ * of the wire's `videoStats` shape. Pure and DOM-report-shaped only
  * - no peer connection, no timers - so it is testable against a fake
  * `RTCStatsReport` built from a plain `Map`.
  *

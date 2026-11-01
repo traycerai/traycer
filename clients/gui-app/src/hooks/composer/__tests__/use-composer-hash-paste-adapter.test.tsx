@@ -1,5 +1,5 @@
 /**
- * T4's hash-only paste adapter (`useComposerHashPasteAdapter`/
+ * The hash-only paste adapter (`useComposerHashPasteAdapter`/
  * `useComposerHashPaste`), the sibling of `useComposerPasteAdapter` that
  * stores a pasted/dropped/picked image content-addressed and inserts a
  * `{ hash }` node, instead of inline base64. `useComposerPasteAdapter` itself

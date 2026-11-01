@@ -20,7 +20,7 @@ export type NeedsYouReason = "approval" | "reply";
 
 /**
  * One agent prompt waiting on the person: the Notifications drawer's Needs you group, its
- * count, and the Activity view's Needs you block all read this (D10).
+ * count, and the Activity view's Needs you block all read this.
  */
 export interface NeedsYouItem {
   /** The notification row behind the item; activating it opens the chat. */
@@ -44,7 +44,7 @@ const ASK_BY_REASON: Readonly<Record<NeedsYouReason, string>> = {
  * Browser prompts belong to their browser tab and are not agent asks.
  *
  * An approval an auto-judge is still reviewing never reaches here: the host
- * files no notification until the judge escalates it (S-41).
+ * files no notification until the judge escalates it.
  */
 export function needsYouReasonOf(
   row: MergedNotificationRow,

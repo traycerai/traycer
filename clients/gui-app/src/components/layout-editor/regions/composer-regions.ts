@@ -72,6 +72,16 @@ const MODEL_EXAMPLES: ReadonlyArray<StyleExample<"model">> = [
   { id: "barsText", label: "Bars and text", patch: { style: "bars-text" } },
 ];
 
+const ULTRACODE_EXAMPLES: ReadonlyArray<StyleExample<"model">> = [
+  { id: "text", label: "Text", patch: { ultracodeStyle: "text" } },
+  { id: "icon", label: "Icon", patch: { ultracodeStyle: "icon" } },
+  {
+    id: "iconText",
+    label: "Icon and text",
+    patch: { ultracodeStyle: "icon-text" },
+  },
+];
+
 const REASONING_CONTROL_EXAMPLES: ReadonlyArray<StyleExample<"model">> = [
   { id: "slider", label: "Slider", patch: { reasoningControl: "slider" } },
   { id: "list", label: "List", patch: { reasoningControl: "list" } },
@@ -179,7 +189,7 @@ export const ACCESS_REGION: LayoutRegion<"access"> = {
   rows: [TOOLBAR_LEFT_ORDER_ROW],
   shellGate: alwaysAvailable,
   availability: alwaysLive,
-  // No Hide: the pill is a floor, never hidden (G6).
+  // No Hide: the pill is a floor, never hidden.
   quickVerbs: SIZE_ONLY_VERBS,
   stateWord: accessStateWord,
 };
@@ -192,7 +202,15 @@ export const MODEL_REGION: LayoutRegion<"model"> = {
   where: "Composer - toolbar, right",
   whereByHost: null,
   hint: null,
-  keywords: ["model", "chip", "effort", "medium", "bars", "reasoning"],
+  keywords: [
+    "model",
+    "chip",
+    "effort",
+    "medium",
+    "bars",
+    "reasoning",
+    "ultracode",
+  ],
   // Toolbar style is not here: it styles the whole toolbar row, so it is a
   // Composer area row (`area-rows.ts`, C3) even though its value is stored on
   // Model, the one toolbar region that never hides (G6).
@@ -200,7 +218,8 @@ export const MODEL_REGION: LayoutRegion<"model"> = {
   // Whether a model has effort levels is the picked model's fact, not the
   // form's, so both rows say it rather than disable (P1). The phone layout's
   // chip has no label, so Style is a desktop-layout row; Reasoning control is
-  // the same picker's on every layout.
+  // the same picker's on every layout. Ultracode is on every layout too: the
+  // phone chip writes the request after the model name.
   rows: [
     {
       kind: "style",
@@ -218,6 +237,19 @@ export const MODEL_REGION: LayoutRegion<"model"> = {
               "Bars show only for models with several effort levels.",
             ),
           ]),
+      },
+    },
+    {
+      kind: "style",
+      key: "ultracodeStyle",
+      label: "Ultracode",
+      description: null,
+      labelPlacement: "end",
+      examples: ULTRACODE_EXAMPLES,
+      depends: {
+        under: null,
+        availability: () =>
+          liveWithNote("Shows on Claude chats with Ultracode on."),
       },
     },
     {

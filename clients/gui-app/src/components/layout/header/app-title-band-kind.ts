@@ -45,7 +45,7 @@ export function appColumnChrome(input: AppColumnChromeInput): AppColumnChrome {
 }
 
 /**
- * Whether a side strip's top block is the window's title bar (S-04): only on
+ * Whether a side strip's top block is the window's title bar: only on
  * a frameless macOS window with the strip at the left, where no band is drawn
  * and the strip's first row sits under the traffic lights.
  */

@@ -16,7 +16,7 @@ import { isTailHydrated } from "@/stores/chats/transcript-window";
 import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
 
 /**
- * F14 (`lastFailedAttempt`) pins - the review's biggest gap: nothing in the
+ * `lastFailedAttempt` pins - the biggest gap: nothing in the
  * store test directory asserted this DTO exists at all.
  *
  * Its own file, matching `chat-session-store-last-fallback-outcome.test.ts`'s
@@ -183,7 +183,7 @@ function emitLegacySnapshot(
   callbacks: ChatStreamCallbacks,
   lastFailedAttempt: LastFailedAttempt | undefined,
 ): void {
-  callbacks.onConnectionStatus("open", null, null);
+  callbacks.onConnectionStatus("open", null, null, null);
   callbacks.onSnapshot({
     kind: "snapshot",
     hasBinaryPayload: false,
@@ -281,7 +281,7 @@ function deferredWindowedSnapshot(
       // below drives the DEFERRAL branch, not the ordinary fold. `rowCount: 2`
       // with `fromOrdinal: 0` below leaves ordinal 1 uncovered, so a partial
       // range genuinely stays partial rather than accidentally completing the
-      // tail (the D219 trap `last-fallback-outcome`'s re-entry test hit).
+      // tail (the trap `last-fallback-outcome`'s re-entry test hit).
       transcriptEpoch: 4,
       rowCount: 2,
       indexRevision: null,

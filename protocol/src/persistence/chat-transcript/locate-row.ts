@@ -1,6 +1,9 @@
 import { z } from "zod";
 
-import type { ContentBlock } from "@traycer/protocol/persistence/epic/content-blocks";
+import type {
+  BotSendReceipt,
+  ContentBlock,
+} from "@traycer/protocol/persistence/epic/content-blocks";
 import type { Message } from "@traycer/protocol/persistence/epic/messages";
 
 import type { TranscriptRowDescriptor } from "@traycer/protocol/persistence/chat-transcript/row-projection";
@@ -114,6 +117,11 @@ export const transcriptRowLocatorSchema = lazySchema(() =>
      *
      * Misses (`null`) for a block persisted before receipts existed; the caller
      * degrades to the tile it already opened.
+     *
+     * A bot's send names its channel post the same way (`botSendReceipt`,
+     * Tracy Bots T94): a post's message id finds the `traycer_reply`,
+     * `traycer_ask` or `traycer_announce` call in the bot's session that
+     * wrote it.
      */
     z.object({ kind: z.literal("receipt"), messageId: z.string() }),
     /**
@@ -216,8 +224,20 @@ function sentMessageBlockId(
 }
 
 /**
+ * Whether a bot send's receipt names a channel post: a send posted in Slack
+ * (S4b) does not. Read through `unknown`: a receipt from before `slack`
+ * existed reaches a caller holding unparsed blocks without the key, and it
+ * names a channel post.
+ */
+function namesChannelPost(receipt: BotSendReceipt): boolean {
+  const slack: unknown = receipt.slack;
+  return slack === null || slack === undefined;
+}
+
+/**
  * The `tool_call` block whose `agentMessageReceipt` names this delivered
- * message, or `null`.
+ * message, or whose `botSendReceipt` names this channel post; `null` for
+ * neither.
  *
  * Exact, not nearest: the receipt's `messageId` is a host-minted id that one
  * delivery owns, so at most one block can legitimately carry it. First writer
@@ -233,7 +253,11 @@ function receiptBlockId(
     if (message.role !== "assistant") continue;
     for (const block of message.blocks) {
       if (block.type !== "tool_call") continue;
-      if (block.agentMessageReceipt?.messageId === messageId) {
+      if (
+        block.agentMessageReceipt?.messageId === messageId ||
+        (block.botSendReceipt?.messageId === messageId &&
+          namesChannelPost(block.botSendReceipt))
+      ) {
         return block.blockId;
       }
     }

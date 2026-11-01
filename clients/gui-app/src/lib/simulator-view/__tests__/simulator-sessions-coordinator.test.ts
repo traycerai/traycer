@@ -114,6 +114,7 @@ class IncompatibleCloseSession extends FakeStreamSession {
         },
       },
       null,
+      null,
     );
   }
 }

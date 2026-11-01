@@ -13,7 +13,7 @@
  * the claim.
  */
 import { afterEach, describe, expect, it, vi, type MockInstance } from "vitest";
-import { act, cleanup, renderHook } from "@testing-library/react";
+import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import {
   QueryClient,
   QueryClientProvider,
@@ -32,6 +32,23 @@ import {
   __resetBotListChangedSessionsForTesting,
   useBotListChangedSubscription,
 } from "@/hooks/bots/use-bot-list-changed-subscription";
+import { useTeamSetupHistory } from "@/hooks/bots/use-team-setup-history";
+import type {
+  BotOnboardingReadResponse,
+  BotOnboardingSetup,
+} from "@traycer/protocol/host/bot/onboarding-schemas";
+import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import {
+  recordNegotiatedHostMethods,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
+import { hostRpcRegistry } from "@/lib/host";
+import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
+import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
+import { createAppQueryClient } from "@/lib/query-client";
 
 const HOST_A = "host-a";
 const HOST_B = "host-b";
@@ -91,6 +108,7 @@ afterEach(() => {
   for (const unsubscribe of unsubscribers.splice(0)) unsubscribe();
   for (const queryClient of queryClients.splice(0)) queryClient.clear();
   __resetBotListChangedSessionsForTesting();
+  resetNegotiatedManifests();
 });
 
 function botListKey(hostId: string): readonly unknown[] {
@@ -500,5 +518,98 @@ describe("useBotListChangedSubscription close", () => {
     expect(next.subscribeCallCount).toBe(1);
     sessionOf(next).emitFrame(CHANGED);
     expect(isInvalidated(harness.queryClient, HOST_A)).toBe(true);
+  });
+});
+
+describe("useBotListChangedSubscription and a team's setup", () => {
+  const MAIN_BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAX";
+
+  function readWith(setup: BotOnboardingSetup): BotOnboardingReadResponse {
+    return {
+      github: {
+        state: "ok",
+        installingAdmin: null,
+        repositories: [],
+        callerCanConnect: true,
+      },
+      unlocked: false,
+      choice: null,
+      catalog: [],
+      setup,
+    };
+  }
+
+  it("shows a team main bot's setup history once a changed frame announces the bot, with no remount and within the read's stale time", async () => {
+    const queryClient = createAppQueryClient();
+    queryClients.push(queryClient);
+    let setup: BotOnboardingSetup = {
+      botId: MAIN_BOT_ID,
+      title: "Tracy",
+      state: "needs_host",
+      arrival: null,
+    };
+    let reads = 0;
+    let requestCounter = 0;
+    const spine = new HostClient<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      schedulingPolicy: hostRpcSchedulingPolicy,
+      invalidator: createHostQueryInvalidator(queryClient),
+      findHostById: (hostId) =>
+        hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
+      messenger: new MockHostMessenger<HostRpcRegistry>({
+        registry: hostRpcRegistry,
+        requestId: () => {
+          requestCounter += 1;
+          return `req-${String(requestCounter)}`;
+        },
+        handlers: {
+          "bot.onboarding.read": () => {
+            reads += 1;
+            return readWith(setup);
+          },
+        },
+      }),
+    });
+    spine.setRequestContext(
+      createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
+    );
+    const client = spine.createRequester(mockLocalHostEntry);
+    const hostId = mockLocalHostEntry.hostId;
+    recordNegotiatedHostMethods(hostId, ["bot.onboarding.read"]);
+    const stream = new SupportClient("supported");
+    const { result } = renderHook(
+      () => {
+        useBotListChangedSubscription(hostId, stream, true);
+        return useTeamSetupHistory({
+          client,
+          hostId,
+          botId: MAIN_BOT_ID,
+          environmentId: "env-team",
+          team: true,
+        });
+      },
+      {
+        wrapper: ({ children }) => (
+          <QueryClientProvider client={queryClient}>
+            {children}
+          </QueryClientProvider>
+        ),
+      },
+    );
+    await waitFor(() => {
+      expect(reads).toBe(1);
+    });
+    expect(result.current).toBeNull();
+
+    // The team's host created the bot; the host rings the doorbell.
+    setup = { ...setup, state: "live", arrival: { kind: "cloud" } };
+    act(() => {
+      sessionOf(stream).emitFrame(CHANGED);
+    });
+
+    await waitFor(() => {
+      expect(result.current).toEqual({ arrival: { kind: "cloud" } });
+    });
+    expect(reads).toBe(2);
   });
 });

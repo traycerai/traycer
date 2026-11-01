@@ -85,7 +85,7 @@ interface SubagentSegmentProps {
   // Total run duration once finished; null while streaming / when unknown.
   durationMs: number | null;
   // Rich fleet data when this card is a workflow run's dual-written card
-  // (§2.2) - null for an ordinary agent. Drives the dedicated workflow
+  // - null for an ordinary agent. Drives the dedicated workflow
   // rendering (header live line, Intent, Activity timeline, Result totals)
   // instead of the plain agent layout.
   workflowMeta: WorkflowMeta | null;
@@ -817,7 +817,7 @@ interface WorkflowCardSegmentProps extends Omit<
 }
 
 /**
- * The dedicated workflow card (Flow 2) - rendered whenever a subagent block
+ * The dedicated workflow card - rendered whenever a subagent block
  * carries `workflowMeta`, never as a separate segment/block-type branch. It
  * reuses the same segment-card primitives and open-store as an ordinary agent
  * card (a workflow IS a subagent block underneath), but replaces Task/Progress
@@ -1024,7 +1024,7 @@ function latestActivityText(
  * recently active fleet-agent label, and finished/started counts. Derived
  * from the activity log itself, not a dedicated phase/activeLabel field -
  * those live only on the ephemeral BackgroundItem (panel row); the persisted
- * workflowMeta carries just the activity log + aggregate counts (§2.2), so
+ * workflowMeta carries just the activity log + aggregate counts, so
  * "current phase" / "current label" are the latest entry of each kind.
  */
 function workflowLiveLine(meta: WorkflowMeta): string | null {
@@ -1143,7 +1143,7 @@ function formatWorkflowTokens(value: number): string {
 
 /**
  * Totals line under the Result panel once the run has settled: agents run,
- * tokens, and total duration (Flow 2, point 3). Omits whichever pieces the
+ * tokens, and total duration. Omits whichever pieces the
  * host never populated instead of showing a placeholder.
  */
 function WorkflowResultTotals(props: {

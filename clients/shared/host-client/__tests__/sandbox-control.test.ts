@@ -559,6 +559,113 @@ describe("on a WebView without AbortSignal.timeout or AbortSignal.any (iOS 15.5)
   });
 });
 
+describe("sandbox control calls on a fetch that ignores its signal", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** A 200 whose body read never settles, with the read observable. */
+  function stalledBodyResponse(): {
+    readonly response: Response;
+    readonly text: Mock<() => Promise<string>>;
+  } {
+    const response = new Response(null, { status: 200 });
+    const text = vi
+      .spyOn(response, "text")
+      .mockImplementation(() => new Promise<string>(() => undefined));
+    return { response, text };
+  }
+
+  it("settles at the deadline as a network error, and a late answer is never read", async () => {
+    // Like CapacitorHttp's patched fetch: the signal is dropped, so only the
+    // test can settle the request.
+    let answer: (response: Response) => void = () => undefined;
+    const fetchMock = vi.fn<typeof fetch>(
+      () =>
+        new Promise<Response>((resolve) => {
+          answer = resolve;
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    let settled = false;
+
+    const pending = listSandboxesViaHttp(BASE, BEARER, null);
+    void pending.then(() => {
+      settled = true;
+    });
+
+    await vi.advanceTimersByTimeAsync(LIST_TIMEOUT_MS - 1);
+    expect(settled).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(settled).toBe(true);
+    expect(await pending).toEqual({
+      kind: "network-error",
+      detail: "the request never completed (TimeoutError)",
+    });
+
+    const late = stalledBodyResponse();
+    answer(late.response);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(late.text).not.toHaveBeenCalled();
+  });
+
+  // A body that never arrives is the request not completing, whatever the
+  // status said: every call answers the network error a stalled fetch does.
+  it.each([
+    {
+      name: "listSandboxesViaHttp",
+      call: () => listSandboxesViaHttp(BASE, BEARER, null),
+    },
+    {
+      name: "runSandboxVerbViaHttp",
+      call: () =>
+        runSandboxVerbViaHttp(
+          BASE,
+          BEARER,
+          null,
+          "sbx_1",
+          "resume",
+          null,
+          LIST_TIMEOUT_MS,
+        ),
+    },
+    {
+      name: "keepSandboxViaHttp",
+      call: () => keepSandboxViaHttp(BASE, BEARER, null, "sbx_1"),
+    },
+  ])(
+    "$name: a 200 whose body never arrives settles at the deadline as a network error",
+    async ({ call }) => {
+      const stalled = stalledBodyResponse();
+      vi.stubGlobal(
+        "fetch",
+        vi.fn<typeof fetch>(async () => stalled.response),
+      );
+      let settled = false;
+
+      const pending = call();
+      void pending.then(() => {
+        settled = true;
+      });
+
+      await vi.advanceTimersByTimeAsync(LIST_TIMEOUT_MS - 1);
+      expect(stalled.text).toHaveBeenCalledTimes(1);
+      expect(settled).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(settled).toBe(true);
+      expect(await pending).toEqual({
+        kind: "network-error",
+        detail: "the request never completed (TimeoutError)",
+      });
+    },
+  );
+});
+
 describe("destroySandboxViaHttp", () => {
   it("sends the idle-only precondition and preserves the typed CAS conflict", async () => {
     const fetchMock = stubFetch(async () =>

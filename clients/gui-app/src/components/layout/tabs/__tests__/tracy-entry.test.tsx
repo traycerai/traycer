@@ -1,5 +1,5 @@
 /**
- * The fixed Tracy entry (Tracy Bots T58), through the REAL
+ * The fixed Tracy entry, through the REAL
  * `TracyEntryController`, the real top and vertical strips, the real
  * keybinding dispatch and the real General settings panel, over the real
  * settings, bot-tabs, tabs and layout stores. Only host boundaries are
@@ -35,6 +35,7 @@ import {
 import type { ReactNode } from "react";
 import type {
   BotListResponse,
+  BotReadCursorReadResponse,
   BotRecord,
 } from "@traycer/protocol/host/bot/schemas";
 import type { StreamFrameEnvelope } from "@traycer-clients/shared/host-transport/i-stream-session";
@@ -69,6 +70,7 @@ import {
   useLayoutStore,
 } from "@/stores/layout/layout-store";
 import { useSideTabStripStore } from "@/stores/layout/side-tab-strip-store";
+import { useVoiceSessionStore } from "@/stores/voice/voice-session-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import type { SurfaceNotificationIndicators } from "@/stores/notifications/notification-indicator-state";
 import { useSettingsStore } from "@/stores/settings/settings-store";
@@ -100,12 +102,17 @@ const scripted = vi.hoisted(
     activity: BotActivity | null;
     indicators: SurfaceNotificationIndicators;
     connectable: ConnectableHosts;
+    levels: Record<string, "all" | "mentions" | "off">;
+    /** The person's read cursors by bot id; a bot not listed is unread. */
+    readCursors: Record<string, BotReadCursorReadResponse>;
     stream: MockWsStreamClient<StreamFrameEnvelope> | null;
   } => ({
     list: undefined,
     activity: null,
     indicators: { epics: {}, chats: {} },
     connectable: { hostIds: [], resolved: true },
+    levels: {},
+    readCursors: {},
     stream: null,
   }),
 );
@@ -135,6 +142,41 @@ vi.mock("@/lib/host/stream-runtime-context", async (importOriginal) => ({
   useStreamHostId: () => "host-a",
   useWsStreamClient: () => scripted.stream,
 }));
+// The person's notification levels, as the host answers them.
+vi.mock("@/hooks/host/use-host-query", async (importOriginal) => {
+  const original =
+    await importOriginal<typeof import("@/hooks/host/use-host-query")>();
+  return {
+    ...original,
+    useHostQuery: (args: { method: string }) =>
+      args.method === "bot.notificationLevel.read"
+        ? { data: { levels: scripted.levels } }
+        : original.useHostQuery(args as never),
+  };
+});
+// The person's read cursors, one read per listed bot, as the host answers them.
+vi.mock("@/hooks/host/use-host-queries", async (importOriginal) => {
+  const original =
+    await importOriginal<typeof import("@/hooks/host/use-host-queries")>();
+  return {
+    ...original,
+    useHostQueries: (args: {
+      requests: ReadonlyArray<{ method: string; params: { botId: string } }>;
+    }) =>
+      args.requests.every(
+        (request) =>
+          request.method === "bot.readCursor.read" ||
+          request.method === "bot.notificationLevel.read",
+      )
+        ? args.requests.map((request) => ({
+            data:
+              request.method === "bot.readCursor.read"
+                ? scripted.readCursors[request.params.botId]
+                : { levels: scripted.levels },
+          }))
+        : original.useHostQueries(args as never),
+  };
+});
 vi.mock("@/hooks/host/use-connectable-host-ids", () => ({
   useConnectableHostIds: () => scripted.connectable,
 }));
@@ -343,6 +385,8 @@ function resetStores(): void {
   tabCommandCoordinator.resetReconciliationForTesting();
   __resetBotListChangedSessionsForTesting();
   scripted.list = undefined;
+  scripted.levels = {};
+  scripted.readCursors = {};
   scripted.activity = null;
   scripted.indicators = { epics: {}, chats: {} };
   scripted.connectable = { hostIds: ["host-a"], resolved: true };
@@ -937,6 +981,46 @@ describe("the fixed Tracy entry - signals", () => {
     },
   );
 
+  it("bolds the entry for a row past the cursor in another bot's channel, though Tracy's indicator holds nothing", async () => {
+    tracyIsMainBot();
+    scripted.readCursors = {
+      [TRACY]: {
+        cursors: { [`app-${TRACY}`]: { messageId: "m-1", seq: 1_000 } },
+        latest: { [`app-${TRACY}`]: { messageId: "m-1", seq: 1_000 } },
+      },
+      [TEAM_BOT]: {
+        cursors: { [`app-${TEAM_BOT}`]: { messageId: "m-1", seq: 1_000 } },
+        latest: { [`app-${TEAM_BOT}`]: { messageId: "m-2", seq: 2_000 } },
+      },
+    };
+    mountTopStrip("/");
+
+    const entry = await screen.findByTestId("tab-tracy");
+    await waitFor(() => expect(entry.hasAttribute("data-unread")).toBe(true));
+  });
+
+  it("leaves the entry unmarked when every channel's cursor has caught up, whatever Tracy's indicator says", async () => {
+    tracyIsMainBot();
+    scripted.indicators = {
+      epics: { [TRACY]: { ...NO_FLAGS, unreadDone: true } },
+      chats: {},
+    };
+    scripted.readCursors = {
+      [TRACY]: {
+        cursors: { [`app-${TRACY}`]: { messageId: "m-1", seq: 1_000 } },
+        latest: { [`app-${TRACY}`]: { messageId: "m-1", seq: 1_000 } },
+      },
+      [TEAM_BOT]: {
+        cursors: { [`app-${TEAM_BOT}`]: { messageId: "m-2", seq: 2_000 } },
+        latest: { [`app-${TEAM_BOT}`]: { messageId: "m-2", seq: 2_000 } },
+      },
+    };
+    mountTopStrip("/");
+
+    const entry = await screen.findByTestId("tab-tracy");
+    expect(entry.hasAttribute("data-unread")).toBe(false);
+  });
+
   it("leaves the entry unmarked with nothing unread", async () => {
     scripted.indicators = {
       epics: { [TRACY]: { ...NO_FLAGS } },
@@ -1064,6 +1148,47 @@ describe("the fixed Tracy entry - signals", () => {
   });
 });
 
+describe("the fixed Tracy entry - muted", () => {
+  const PLACEMENTS = [
+    { placement: "top strip", mountEntry: () => mountTopStrip("/") },
+    { placement: "vertical strip", mountEntry: () => mountSideStrip("/") },
+  ];
+
+  beforeEach(() => {
+    tracyIsMainBot();
+  });
+
+  it.each(PLACEMENTS)(
+    "carries the muted mark in the $placement while Tracy's channel is set to Nothing",
+    async ({ mountEntry }) => {
+      scripted.levels = { [`app-${TRACY}`]: "off" };
+      mountEntry();
+
+      const entry = await screen.findByTestId("tab-tracy");
+      expect(within(entry).getByTestId("tracy-entry-muted")).toBeTruthy();
+    },
+  );
+
+  it.each(["all", "mentions", null] as const)(
+    "carries no muted mark for the level %s",
+    async (level) => {
+      scripted.levels = level === null ? {} : { [`app-${TRACY}`]: level };
+      mountTopStrip("/");
+
+      const entry = await screen.findByTestId("tab-tracy");
+      expect(within(entry).queryByTestId("tracy-entry-muted")).toBeNull();
+    },
+  );
+
+  it("is not muted by another bot's channel being set to Nothing", async () => {
+    scripted.levels = { [`app-${TEAM_BOT}`]: "off" };
+    mountTopStrip("/");
+
+    const entry = await screen.findByTestId("tab-tracy");
+    expect(within(entry).queryByTestId("tracy-entry-muted")).toBeNull();
+  });
+});
+
 describe("the fixed Tracy entry - a main bot with any title", () => {
   beforeEach(() => {
     scripted.list = {
@@ -1178,6 +1303,108 @@ describe("the fixed Tracy entry - vertical strip", () => {
     await waitFor(() => {
       expect(view.pathname()).toBe(`/bot/${TRACY}`);
     });
+  });
+
+  it("draws Talk under the entry when voice is available, and as the glyph alone in the collapsed rail", async () => {
+    const initialVoice = useVoiceSessionStore.getInitialState();
+    useVoiceSessionStore.setState({
+      availability: "live",
+      driver: {
+        start: () => undefined,
+        end: () => undefined,
+        setMuted: () => undefined,
+      },
+    });
+    try {
+      openEpicTabs(["Alpha"]);
+      mountSideStrip("/epics/e-alpha/e-alpha");
+
+      const entry = await screen.findByRole("tab", { name: "Tracy" });
+      const talk = screen.getByRole("button", { name: "Talk" });
+      expect(screen.getByTestId("side-strip-top-block").contains(talk)).toBe(
+        true,
+      );
+      expect(
+        entry.compareDocumentPosition(talk) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+      expect(talk.textContent).toBe("Talk");
+
+      act(() => {
+        useSideTabStripStore.setState({ collapsed: true });
+      });
+      const tile = await screen.findByRole("button", { name: "Talk" });
+      expect(tile.textContent).toBe("");
+      expect(screen.getByTestId("side-strip-top-block").contains(tile)).toBe(
+        true,
+      );
+    } finally {
+      useVoiceSessionStore.setState(initialVoice, true);
+    }
+  });
+});
+
+describe("Talk without the fixed Tracy entry", () => {
+  const initialVoice = useVoiceSessionStore.getInitialState();
+
+  beforeEach(() => {
+    // Show Tracy off: no fixed entry, the bot stays reachable as a tab.
+    useSettingsStore.setState({ showTracy: false });
+    useVoiceSessionStore.setState({
+      availability: "live",
+      driver: {
+        start: () => undefined,
+        end: () => undefined,
+        setMuted: () => undefined,
+      },
+    });
+  });
+
+  afterEach(() => {
+    useVoiceSessionStore.setState(initialVoice, true);
+  });
+
+  it("is drawn on the header strip", async () => {
+    openEpicTabs(["Alpha"]);
+    mountTopStrip("/epics/e-alpha/e-alpha");
+
+    const talk = await screen.findByRole("button", { name: "Talk" });
+    expect(talk.textContent).toBe("Talk");
+    expect(screen.queryByRole("tab", { name: "Tracy" })).toBeNull();
+  });
+
+  it("is drawn on the empty landing route, where the strip draws no tabs, idle and through a live session", async () => {
+    // Show Tracy off, Home off, no tabs, route "/": the strip's empty landing.
+    setHomeTabEnabled(false);
+    mountTopStrip("/");
+
+    const talk = await screen.findByRole("button", { name: "Talk" });
+    expect(talk.getAttribute("data-state")).toBe("idle");
+    expect(screen.queryByTestId("tab-strip")).toBeNull();
+
+    act(() => {
+      useVoiceSessionStore.setState({ phase: "live" });
+    });
+    const live = screen.getAllByRole("button", { name: "Talk" });
+    expect(live).toHaveLength(1);
+    expect(live[0]?.getAttribute("data-state")).toBe("live");
+    expect(live[0]?.getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("is drawn in the vertical strip's top block, expanded and collapsed", async () => {
+    openEpicTabs(["Alpha"]);
+    mountSideStrip("/epics/e-alpha/e-alpha");
+
+    const talk = await screen.findByRole("button", { name: "Talk" });
+    expect(screen.getByTestId("side-strip-top-block").contains(talk)).toBe(
+      true,
+    );
+    expect(screen.queryByRole("tab", { name: "Tracy" })).toBeNull();
+
+    act(() => {
+      useSideTabStripStore.setState({ collapsed: true });
+    });
+    const tile = await screen.findByRole("button", { name: "Talk" });
+    expect(tile.textContent).toBe("");
   });
 });
 

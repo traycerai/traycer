@@ -10,7 +10,7 @@
  * points once, then slices on those boundaries.
  *
  * The host already bounds snippet text and clamps/drops ranges so every range
- * addresses the returned text (Ticket 2 hardening), but this stays defensive:
+ * addresses the returned text (hardening), but this stays defensive:
  * ranges are clamped to the snippet's byte length, empty/inverted ranges are
  * dropped, and overlapping ranges are merged so the output is always a clean,
  * gap-free left-to-right partition of `text`.

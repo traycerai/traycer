@@ -246,7 +246,7 @@ function renderHostWithBrowserRouting(): void {
   };
   render(
     <BrowserSessionsContext.Provider value={sessions}>
-      {/* The click-time reader lives on the snapshot context (C8). */}
+      {/* The click-time reader lives on the snapshot context. */}
       <BrowserSessionsSnapshotProvider value={sessions}>
         <LinkTargetProvider epicId="epic-terminal" viewTabId={VIEW_TAB_ID}>
           <TerminalXtermHost

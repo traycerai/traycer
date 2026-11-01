@@ -1,6 +1,5 @@
 /**
  * Query key builders for the `pr.*` host stream surface.
- * Scope: `pr-panel-and-list-hook` ticket (Epic PR View T5).
  */
 
 import { hostQueryKeys } from "./host-query-keys";

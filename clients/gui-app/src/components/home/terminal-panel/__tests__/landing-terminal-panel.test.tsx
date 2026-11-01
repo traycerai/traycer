@@ -269,7 +269,7 @@ vi.mock("@/lib/host", () => ({
   // The staged sandbox runner's binding; the run itself is stubbed below.
   useHostBinding: () => ({ auth: {}, directory: {} }),
   useHostClient: () => mocks.defaultClient,
-  // The SPINE, a separate export since redesign P2.1.
+  // The SPINE, a separate export.
   useHostRuntimeClient: () => mocks.defaultClient,
   useHostDirectory: () => ({
     findById: (hostId: string) => ({ hostId, websocketUrl: "ws://test" }),
@@ -7138,7 +7138,7 @@ describe("<LandingTerminalPanel />", () => {
       expect(coverageFor(TEST_LANDING_PAGE_ID)).toBeUndefined();
     });
 
-    // The reviewer's case: the layout is open and maximized, and the target
+    // The layout is open and maximized, and the target
     // cannot serve a terminal, so no panel is rendered at all.
     it("publishes nothing when the layout is open and maximized but no host is selected", async () => {
       selectNoHost();

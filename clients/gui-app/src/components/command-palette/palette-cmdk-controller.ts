@@ -114,7 +114,7 @@ export function handlePalettePageNavigation(
 }
 
 /**
- * Rows that outrank every other match of a query they match (C15): typing
+ * Rows that outrank every other match of a query they match: typing
  * "layout" means the two layout doors, not the tasks whose titles say it.
  */
 const PRIMARY_ITEM_IDS: ReadonlyArray<string> = [

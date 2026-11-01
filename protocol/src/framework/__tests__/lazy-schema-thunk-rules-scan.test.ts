@@ -88,6 +88,14 @@ const ALLOWED_UNANALYSED: ReadonlyMap<
     },
   ],
   [
+    "parse-runs-callbacks creditOfferSchema.safeParse (protocol/src/auth/credit-offers.ts)",
+    {
+      count: 1,
+      reason:
+        "the schema is a z.object of z.string, z.number, z.iso.datetime, z.enum and nullable fields with no refine or transform callback; the call sits in the list schema's transform callback, so it runs at parse time, not at build (auth/credit-offers.ts:67)",
+    },
+  ],
+  [
     "method-on-non-schema SEMVER_PATTERN.test (protocol/src/config/installation-records.ts)",
     {
       count: 1,

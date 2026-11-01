@@ -1,5 +1,5 @@
 /**
- * Ticket 21 slice 2: the cold/ready environment registry for hosted tile
+ * The cold/ready environment registry for hosted tile
  * surfaces.
  *
  * A store-selected chat may be a stable-tile-surface-host member before
@@ -22,8 +22,8 @@
  *   `subscribeTileSurfaceMembership` and deletes a record (notifying its
  *   subscribers) only when the instance actually leaves membership - close,
  *   eviction past the pane's chat retention cap, or settled top-level MRU
- *   eviction. Deselecting a tab no longer removes anything (it did while
- *   decision #17 stood); it only flips the record out of
+ *   eviction. Deselecting a tab no longer removes anything (it did before
+ *   pane chat retention); it only flips the record out of
  *   `isTileSurfacePresented`. Nothing else deletes a record.
  *
  * `retractTileSurfacePresentation` is the one narrow exception, and it is
@@ -38,7 +38,7 @@
  * publishing or updating pane B's environment must not notify pane A's
  * subscribers.
  *
- * ## The transfer-gap contract (design-review finding 4)
+ * ## The transfer-gap contract
  *
  * "Retained" is a continuity guarantee, not a current-readiness guarantee.
  * During the gap between a source slot going quiet and a destination slot's
@@ -64,7 +64,7 @@
  * takes a placement-sensitive action (portal-mounting into
  * `panePortalContainer`, routing a focus request through `isPaneFocusedNow`)
  * MUST NOT do so purely because `getTileSurfaceEnvironment` returned
- * non-null. Slice 3+ is responsible for either (a) proving current
+ * non-null. The consumer is responsible for either (a) proving current
  * attachment via a separate slot/geometry signal before acting, or (b)
  * gating placement-sensitive actions until the destination slot's own
  * publish lands. This module intentionally does not add that gating itself -
@@ -120,7 +120,7 @@ export interface TileSurfaceServices {
    * module doc's "transfer-gap contract") this can be a disconnected node
    * left behind by a since-unmounted source slot - verify current attachment
    * before relying on its geometry. Distinct from `panePortalContainer`
-   * below (design-review slice-4 finding 5): this element exists purely to
+   * below: this element exists purely to
    * be measured, never to host portaled content.
    */
   readonly geometryAnchorElement: HTMLElement;

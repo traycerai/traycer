@@ -17,7 +17,7 @@ import type { TerminalConnectionOverlayState } from "./terminal-connection-overl
  * - `recovering` - the session was found gone and is being respawned-and-resumed
  *   automatically (see `useTerminalSessionRecovery`).
  * - `lost` - automatic recovery gave up (the respawn kept failing); offer a
- *   manual retry ("reattachable" - the session may still exist, Architecture §8).
+ *   manual retry ("reattachable" - the session may still exist).
  * Keystrokes are already blocked from the dead PTY at the store
  * (`writeInput` returns null while `status` is `"lost"`/`"reaped"` or the
  * connection is not open), so the overlay does not steal focus; it covers

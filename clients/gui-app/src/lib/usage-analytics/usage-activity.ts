@@ -307,8 +307,8 @@ export const USAGE_ACTIVITY_WINDOW_DAYS = 365;
 /**
  * What the calendar falls back to when a host refuses the year.
  *
- * Hosts update independently of the app, and every host released before
- * ticket 15 caps `windowDays` at 90 - so a year request there fails
+ * Hosts update independently of the app, and older hosts cap `windowDays`
+ * at 90 - so a year request there fails
  * outright ("windowDays must be an integer between 1 and 90"). 90 is that
  * ceiling, so this is the widest calendar such a host can answer, and the
  * section degrades to a shorter calendar instead of an error card.
@@ -317,7 +317,7 @@ export const USAGE_ACTIVITY_FALLBACK_WINDOW_DAYS = 90;
 
 /**
  * Recognizes the ONE failure the 90-day fallback exists for: a host whose
- * shared validator still caps `windowDays` (pre-ticket-15 releases cap at
+ * shared validator still caps `windowDays` (older releases cap at
  * 90) rejecting the year read. Matched on the validator's message shape
  * because the rejection reaches the client as a generic RPC error - and
  * deliberately NOT on "any error at all": a transient transport failure on

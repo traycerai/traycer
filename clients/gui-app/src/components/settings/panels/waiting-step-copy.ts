@@ -9,8 +9,8 @@ export interface WaitingStepCopy {
 }
 
 /**
- * Shared header/guidance copy for the waiting step's phase (statefulness
- * fixup): both the add-profile dialog/Settings reauth panel's full step and
+ * Shared header/guidance copy for the waiting step's phase:
+ * both the add-profile dialog/Settings reauth panel's full step and
  * the in-chat banner's compact row derive their title text from this, so a
  * provider's real exchange-verification window ("verifying") always reads
  * the same way instead of leaving the generic "waiting for browser sign-in"

@@ -98,7 +98,7 @@ describe("sidebarBulkDeleteSelectedRows", () => {
 
   // The notice counts what the user selected, so an artifact whose delete
   // cascades to selected descendants stands for every one of those rows
-  // (traycerai/traycer#2546, round 10, finding 6).
+  // (traycerai/traycer#2546).
   it("counts each selected descendant against the topmost selected artifact its delete cascades from", () => {
     const rows = sidebarBulkDeleteSelectedRows({
       ids: [
@@ -132,7 +132,7 @@ describe("sidebarBulkDeleteSelectedRows", () => {
 
 // A batch notice lists refusal advice in the order it first appears in the
 // selection, while deletes are dispatched agents deepest first and artifacts
-// last (traycerai/traycer#2546, round 11).
+// last (traycerai/traycer#2546).
 describe("sidebarBulkDeleteSelectionOrder", () => {
   const tree = treeOf([
     node("chat-parent", null, "chat"),

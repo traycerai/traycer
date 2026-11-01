@@ -6,18 +6,18 @@ vi.mock("sonner", () => ({
 
 // The APP-WIDE client. `useEditorOpen` is the wrapper kept for the one caller
 // that is genuinely app-wide - the dead-tile "open in editor" button, a
-// FOLLOWING surface with no host of its own (selection model §2). Every
+// FOLLOWING surface with no host of its own. Every
 // Epic-scoped caller now uses `useEditorOpenForClient` with its own tab client,
 // which is what `routesToThePassedClient` below pins (D15).
 const fakeClient = { __isFakeClient: true };
 vi.mock("@/lib/host", () => ({
   useHostClient: () => fakeClient,
-  // The SPINE, a separate export since redesign P2.1.
+  // The SPINE, a separate export.
   useHostRuntimeClient: () => fakeClient,
 }));
 vi.mock("@/lib/host/runtime", () => ({
   useHostClient: () => fakeClient,
-  // The SPINE, a separate export since redesign P2.1.
+  // The SPINE, a separate export.
   useHostRuntimeClient: () => fakeClient,
 }));
 

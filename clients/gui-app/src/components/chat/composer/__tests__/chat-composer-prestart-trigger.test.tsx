@@ -68,6 +68,7 @@ const captured = vi.hoisted(() => ({
           };
           readonly reasoning: string;
           readonly serviceTier: string;
+          readonly ultracode: boolean;
         },
       ) => void;
     };
@@ -97,6 +98,8 @@ vi.mock("@/hooks/chats/use-chat-prestart-runtime", () => ({
 }));
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
   useHostMethodSupport: () => captured.support,
+  useHostMethodSchemaVersion: (_hostId: string | null, method: string) =>
+    method === "epic.updateChatRunSettings" ? { major: 1, minor: 2 } : null,
 }));
 vi.mock("@/stores/worktree/worktree-intent-staging-store", async (original) => {
   const actual =
@@ -129,6 +132,7 @@ async function createToolbarStore(modelSlug: string) {
     reasoningFallback: "model-default",
     seedKey: "chat-composer-picker-profile-test",
     values: {
+      ultracode: false,
       permission: "supervised",
       selection: {
         harnessId: "claude",
@@ -141,6 +145,7 @@ async function createToolbarStore(modelSlug: string) {
     onSettingsChange: null,
     tuiOnly: false,
     chatLineCarriesAutoMode: null,
+    ultracodeCarried: false,
     hostId: null,
   });
 }
@@ -371,6 +376,7 @@ function composerElement() {
       steerCapable={false}
       steerProtocolSupported={false}
       autoPermissionModeProtocolSupported={null}
+      ultracodeProtocolSupported={false}
       getDraftBlobBridgeSupported={() => false}
       getActiveTurnForSteer={() => null}
       editingQueueItemId={null}
@@ -517,6 +523,7 @@ describe("ChatComposer fires chat.prestartRuntime", () => {
 
     act(() => {
       captured.toolbarStore?.getState().applySeed("another-seed", {
+        ultracode: false,
         permission: "supervised",
         selection: {
           harnessId: "claude",

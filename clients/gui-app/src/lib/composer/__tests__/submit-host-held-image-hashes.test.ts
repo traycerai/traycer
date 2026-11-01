@@ -1,6 +1,6 @@
 /**
- * Pure-level coverage of T5's send gate,
- * `submitHostHeldImageHashes` - the union of T3's inherited host-held set
+ * Pure-level coverage of the send gate,
+ * `submitHostHeldImageHashes` - the union of the inherited host-held set
  * with the memo-confirmed digests, gated on the bridge flag and a non-null
  * target host, minus anything marked unbridgeable.
  */

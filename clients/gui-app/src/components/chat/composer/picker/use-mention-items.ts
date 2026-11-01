@@ -257,7 +257,7 @@ export function useMentionItems(params: UseMentionItemsParams): void {
   //
   // It fans out over EVERY host with an open browser surface in this epic, not
   // just the canvas host's coordinator: a tab on another host is still
-  // mentionable, as snapshot-only context (spec decision #10). Only tabs on
+  // mentionable, as snapshot-only context. Only tabs on
   // the chat's OWN host keep the drive token.
   const hostDirectory = useHostDirectory();
   const hostLabelOf = useCallback(
@@ -440,7 +440,7 @@ export function useMentionItems(params: UseMentionItemsParams): void {
   // (its own epic is on this disk), but must not spend that index through the
   // retained credential - so the request list is empty without a verdict,
   // while the local suggestions merged below (open handles, the cached task
-  // list, browser tabs) keep serving. Found in review.
+  // list, browser tabs) keep serving.
   const cloudAuthorized = useAuthStore((state) =>
     authorizesCloudCapability(state.status),
   );
@@ -614,8 +614,8 @@ export function useMentionItems(params: UseMentionItemsParams): void {
       workspacePending: workspaceFetching,
       epicRequested: epicRequests.length > 0,
       epicPending: epicFetching,
-      // Core flows asks for the header spinner AND the `Checking…` stamp during
-      // a background refetch, explicitly "same as Artifacts" - so the GitHub
+      // The header spinner AND the `Checking…` stamp show during
+      // a background refetch, the same as Artifacts - so the GitHub
       // sections drive it too. They sit in the same menu as the section that
       // does; reporting in-flight work differently there would read as one of
       // them being broken.
@@ -1094,7 +1094,7 @@ export function browserTabMentionSourcesFrom(
  *
  * The picker used to see exactly ONE coordinator - the canvas host's - and
  * dropped its rows whenever that host was not the chat's. Cross-host mentions
- * (spec decision #10) invert that: every host with an open browser surface in
+ * invert that: every host with an open browser surface in
  * this epic contributes rows, and the ones that are not the chat's host come
  * back marked `contextOnly`. Those attach a snapshot (url, title, screenshot)
  * instead of a `browser-tab:` drive token, because a session is host-local for

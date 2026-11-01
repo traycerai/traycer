@@ -1,0 +1,220 @@
+name: Formal regressions
+
+# The TLA+ model of the chat transcript's scrolling
+# (`clients/gui-app/formal/`, see its README.md), checked by TLC. The initial CI subset selected in expected.py
+# is explored breadth-first to the depth `expected.py` records for it, which
+# fits one 45-minute job using the runner's available cores. The run passes when each selected config
+# violates exactly the invariants `expected.py` records, each with its reason:
+# a `_fixed` config holds the rest to its bound, and a config of the code
+# before a fix still reaches the violation that fix removes, so a model edit
+# that hides a bug fails here as surely as one that breaks a fix.
+#
+# It runs only when a change touches the model, the production code the
+# README's mapping table names, the list patch or this workflow (the
+# `changes` job's list). Run workflow on the Actions tab runs it regardless.
+#
+# `formal regressions` (the last job) always reports and fails when any job
+# that ran failed; the per-config jobs come and go with the configs. No
+# secrets.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # Only a pull request's runs supersede each other. A push to `main` gets its own
+  # group (the run id): every merge is tested once, so a later merge must never
+  # cancel an earlier merge's run, and a manual run is never cancelled either.
+  group: formal-regressions-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  changes:
+    name: formal regressions (changes)
+    # A team PR into `main`, `integration/*` or `land/*` skips this job: the
+    # merge to `main` runs it once. A fork PR, a bot PR and a PR into any
+    # other branch run it in full.
+    if: >-
+      github.event_name != 'pull_request'
+      || (github.base_ref != 'main' && !startsWith(github.base_ref, 'integration/') && !startsWith(github.base_ref, 'land/'))
+      || github.event.pull_request.head.repo.full_name != github.repository
+      || github.event.pull_request.user.type == 'Bot'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    # `actions: read` lets the push step below list this workflow's earlier runs.
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      run: ${{ steps.filter.outputs.run }}
+      configs: ${{ steps.configs.outputs.configs }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      # A push run is compared with the last push this workflow PASSED on, not
+      # with the push before it, so a red merge is not forgotten by the next
+      # one (see browser-regressions.yml).
+      - name: Find the last green push to compare against
+        id: base
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BEFORE: ${{ github.event.before }}
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          base="$(scripts/ci-last-green-sha.sh formal-regressions.yml "$BRANCH" "$BEFORE")"
+          echo "sha=${base}" >> "$GITHUB_OUTPUT"
+      # What the model stands for: the model itself, the production files its
+      # README maps each action to, the list patch, and this workflow. A
+      # change to any of them can leave the model behind the code or break
+      # it. Markdown changes none of that.
+      - name: Does this change touch the model or what it stands for?
+        id: filter
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PUSH_BASE: ${{ steps.base.outputs.sha }}
+        run: |
+          set -euo pipefail
+          case "$EVENT" in
+            pull_request) range="$PR_BASE...HEAD" ;;
+            push)
+              if [ -z "$PUSH_BASE" ] || ! git cat-file -e "$PUSH_BASE^{commit}" 2>/dev/null; then
+                echo "run=true" >> "$GITHUB_OUTPUT"
+                echo "No earlier commit to diff against: running the model."
+                exit 0
+              fi
+              range="$PUSH_BASE..HEAD" ;;
+            *)
+              echo "run=true" >> "$GITHUB_OUTPUT"
+              echo "A $EVENT run always runs the model."
+              exit 0 ;;
+          esac
+          relevant=$(git diff --name-only "$range" | awk '
+            /\.md$/ { next }
+            /^clients\/gui-app\/formal\// ||
+            /^clients\/gui-app\/src\/components\/chat\/chat-timeline-follow-latch\.ts$/ ||
+            /^clients\/gui-app\/src\/components\/chat\/chat-timeline\.tsx$/ ||
+            /^clients\/gui-app\/src\/components\/chat\/chat-messages\.tsx$/ ||
+            /^clients\/gui-app\/src\/stores\/chats\/chat-tab-state-cache\.ts$/ ||
+            /^patches\/@legendapp%2Flist@3\.3\.4\.patch$/ ||
+            /^\.github\/workflows\/formal-regressions\.yml$/ { print }
+          ')
+          if [ -n "$relevant" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            printf 'Running the model; it depends on:\n%s\n' "$relevant"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "Nothing the model depends on changed: skipping it."
+          fi
+      # One job per selected config. Exploration-only configs are not CI
+      # expectations; regress.py validates every selected name and bound.
+      - name: List the configs
+        id: configs
+        run: |
+          set -euo pipefail
+          echo "configs=$(python3 clients/gui-app/formal/regress.py --list)" >> "$GITHUB_OUTPUT"
+
+  tlc:
+    name: tlc (${{ matrix.config }})
+    needs: changes
+    # A team PR into `main`, `integration/*` or `land/*` skips this job: the
+    # merge to `main` runs it once. A fork PR, a bot PR and a PR into any
+    # other branch run it in full.
+    if: >-
+      (
+        github.event_name != 'pull_request'
+        || (github.base_ref != 'main' && !startsWith(github.base_ref, 'integration/') && !startsWith(github.base_ref, 'land/'))
+        || github.event.pull_request.head.repo.full_name != github.repository
+        || github.event.pull_request.user.type == 'Bot'
+      )
+      && needs.changes.outputs.run == 'true'
+    runs-on: ubuntu-24.04
+    # The above-tail case exceeded 20m on hosted runners; preserve its bound
+    # and allow roughly twice that observed duration plus setup headroom.
+    timeout-minutes: 45
+    strategy:
+      # One red config must not cancel the others: each proves different claims.
+      fail-fast: false
+      matrix:
+        config: ${{ fromJSON(needs.changes.outputs.configs) }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      # TLC v1.7.4, pinned by checksum. Java is the runner's own JDK 17.
+      - name: Fetch tla2tools.jar
+        working-directory: clients/gui-app/formal
+        run: |
+          set -euo pipefail
+          mkdir -p tools
+          curl -fsSL --retry 3 -o tools/tla2tools.jar \
+            https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar
+          echo "936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88  tools/tla2tools.jar" | sha256sum -c -
+      - name: Check ${{ matrix.config }}
+        working-directory: clients/gui-app/formal
+        env:
+          CONFIG: ${{ matrix.config }}
+          TLC_WORKERS: "auto"
+          JAVA_XMX: 8g
+        run: |
+          set -euo pipefail
+          JAVA="$JAVA_HOME_17_X64/bin/java" python3 regress.py "$CONFIG"
+      # Every counterexample TLC found, expected or not: read one with
+      # `formal/trace.py <file>` after downloading.
+      - name: Upload the traces
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: formal-${{ matrix.config }}
+          path: clients/gui-app/formal/results/
+          retention-days: 14
+
+  # The check to require. `always()` makes it report even when the model was
+  # skipped or a job before it failed. It passes when the model ran and every
+  # config passed, or when `changes` found nothing to run; anything else - a
+  # failed or cancelled config, a failed `changes` - fails it.
+  result:
+    name: formal regressions
+    needs: [changes, tlc]
+    # A team PR into `main`, `integration/*` or `land/*` skips this job: the
+    # merge to `main` runs it once. A fork PR, a bot PR and a PR into any
+    # other branch run it in full.
+    if: >-
+      always() && (
+        github.event_name != 'pull_request'
+        || (github.base_ref != 'main' && !startsWith(github.base_ref, 'integration/') && !startsWith(github.base_ref, 'land/'))
+        || github.event.pull_request.head.repo.full_name != github.repository
+        || github.event.pull_request.user.type == 'Bot'
+      )
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Every job that ran passed
+        env:
+          CHANGES: ${{ needs.changes.result }}
+          RUN: ${{ needs.changes.outputs.run }}
+          TLC: ${{ needs.tlc.result }}
+        run: |
+          echo "changes=$CHANGES run=$RUN tlc=$TLC"
+          if [ "$CHANGES" != "success" ]; then
+            echo "The changes job did not succeed, so nothing proves the model could be skipped."
+            exit 1
+          fi
+          if [ "$RUN" = "true" ]; then
+            if [ "$TLC" != "success" ]; then
+              echo "The model ran and did not pass."
+              exit 1
+            fi
+            echo "The model ran and passed."
+          else
+            echo "Nothing the model depends on changed; it was skipped."
+          fi

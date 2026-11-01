@@ -11,11 +11,14 @@ import {
   type BotStoppedNotificationWatch,
   type BotRecord,
   type BotSubscribeServerFrame,
+  type BotSurfaceActionState,
   type BotTaskEntry,
 } from "@traycer/protocol/host/bot/schemas";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import { botQueryKeys } from "@/lib/query-keys/bot-query-keys";
 import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
+import { isReadCursorReadOf } from "@/hooks/bots/use-bot-read-cursor";
+import { isFollowReadOf } from "@/hooks/bots/use-bot-thread-follow";
 import { useWsStreamClient } from "@/lib/host/stream-runtime-context";
 import { useStreamAuthRevalidator } from "@/lib/host/stream-auth-revalidator";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
@@ -68,6 +71,12 @@ export interface BotSubscriptionSnapshot {
    * the serving host does not run the bot, or predates them.
    */
   readonly notificationSubscriptions: ReadonlyArray<BotNotificationSubscription> | null;
+  /**
+   * The viewer's own answers and decisions from a bot's surface cards still
+   * on their way to a task on another machine, or refused there (T89).
+   * `null` from a host that predates them.
+   */
+  readonly surfaceActions: ReadonlyArray<BotSurfaceActionState> | null;
   /**
    * The watches members stopped from the Activity page (T92), with who and
    * when. `null` like `notificationSubscriptions`.
@@ -255,6 +264,7 @@ function toSnapshot(
     boundHost: frame.boundHost,
     activity: frame.activity,
     notificationSubscriptions: frame.notificationSubscriptions,
+    surfaceActions: frame.surfaceActions,
     stoppedNotificationWatches: frame.stoppedNotificationWatches,
   };
 }
@@ -341,6 +351,14 @@ function createSharedSubscription(
       void queryClient
         .cancelQueries({ queryKey })
         .then(() => queryClient.invalidateQueries({ queryKey }));
+      // The conversations' newest rows moved with it (decision 139), and a
+      // row may have followed the person to a thread (posted, replied,
+      // mentioned: decision 137).
+      void queryClient.invalidateQueries({
+        predicate: (query) =>
+          isReadCursorReadOf(query.queryKey, args.botId) ||
+          isFollowReadOf(query.queryKey, args.botId),
+      });
     }
   });
 

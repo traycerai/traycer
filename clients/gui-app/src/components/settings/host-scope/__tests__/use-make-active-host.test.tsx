@@ -6,7 +6,7 @@ import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtu
 import { hostScopeOptionFixture } from "../host-scope-fixture";
 
 /**
- * `useMakeActiveHost` directly (F5): the seam `useHostScopeFor` now delegates
+ * `useMakeActiveHost` directly: the seam `useHostScopeFor` now delegates
  * to and the account menu's Host section calls straight. `activate-single-flight.test.tsx`
  * already pins the single-flight guard through `useHostScopeFor`; this suite
  * proves the extracted hook carries the same behaviour on its own, with no

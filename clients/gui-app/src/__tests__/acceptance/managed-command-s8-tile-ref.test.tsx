@@ -1,17 +1,17 @@
 /**
- * Independent acceptance suite — seam S8 (GUI half).
+ * Independent acceptance suite — the output window's persisted shape (GUI half).
  *
- * S8 pins the output window's persisted shape to what `UI.md` §9a promises:
+ * The output window's persisted shape:
  * a renderer-local pointer of exactly `{ id: commandId, instanceId, type,
  * hostId }`, with kind/description/status re-read live on restore, and
  * NOTHING written to the epic doc. The key-set assertion is the fence that
  * keeps state from creeping into storage later.
  *
- * S9's GUI half (CPU/mem readout chips on the Shells menu rows) went with the
+ * The GUI half (CPU/mem readout chips on the Shells menu rows) went with the
  * menu itself (product decision, 2026-08-15): the shell's readout now lives on
  * its owner row in the Resource Monitor. The old-peer fold and its frame
  * invariant are still proven host-side in
- * `traycer-host/.../managed-command-ui-acceptance.test.ts` (S9a-c).
+ * `traycer-host/.../managed-command-ui-acceptance.test.ts`.
  */
 import { cleanup } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -68,7 +68,7 @@ describe("S8 · tile-ref minimalism", () => {
     if (persisted === null || typeof persisted !== "object") {
       throw new Error("expected an object");
     }
-    // UI.md §9a pins this exact key set.
+    // Exactly this key set.
     expect(Object.keys(persisted).sort()).toEqual([
       "hostId",
       "id",
@@ -88,7 +88,7 @@ describe("S8 · tile-ref minimalism", () => {
       instanceId: "instance-1",
       type: TILE_KIND_MANAGED_COMMAND_OUTPUT,
       hostId: HOST_ID,
-      // The creep §9a rules out — none of it may survive a round-trip.
+      // The creep the key set rules out — none of it may survive a round-trip.
       monitoring: true,
       description: "deploy watcher",
       command: "tail -f deploy.log",
@@ -165,7 +165,7 @@ describe("S8 · tile-ref minimalism", () => {
     expect(tiles.some((ref) => ref !== undefined && ref.id === "cmd-doc")).toBe(
       true,
     );
-    // …and the epic doc never heard about it (UI.md §9a: zero protocol /
+    // …and the epic doc never heard about it (zero protocol /
     // persistence surface; invisible to other users by construction).
     expect(docUpdates).toBe(0);
   });

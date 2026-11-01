@@ -33,6 +33,9 @@ import { TopLevelSurfaceActivationProvider } from "@/components/layout/top-level
 import { HostScopeReady } from "@/components/layout/host-readiness-controller";
 import { MigrationRunController } from "@/components/migration/migration-run-controller";
 import { TracyEntryController } from "@/components/layout/tabs/tracy-entry-controller";
+import { TalkShortcutBridge } from "@/components/layout/voice/talk-control";
+import { VoiceSessionController } from "@/components/layout/voice/voice-session-controller";
+import { VoiceSessionChrome } from "@/components/layout/voice/voice-session-chrome";
 import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 import { LandingTerminalHost } from "@/components/home/terminal-panel/landing-terminal-host";
 import { OpenFolderDialog } from "@/components/open-folder-dialog";
@@ -119,7 +122,7 @@ function AppShellBody(props: AppShellProps) {
           shell: a side dock is the inspector taking its share of this row, so
           the app reflows beside it in one frame and is never scaled (L-02).
           No new wrapper - `aria-hidden` and the firewall go on the column
-          below, which must never be an ancestor of the inspector (C-06). */}
+          below, which must never be an ancestor of the inspector. */}
         <div className="flex min-h-safe-dvh bg-canvas text-canvas-foreground">
           <RootDndProvider>
             <AppColumnFrame
@@ -143,6 +146,12 @@ function AppShellBody(props: AppShellProps) {
                   <SessionConnectivityStrip
                     connectivity={sessionConnectivity}
                   />
+                  {/* Beneath the tab strip and across every tab while a
+                    voice session is live (V6): the destination the next
+                    spoken post goes to, Mute, End, captions. The phone
+                    draws its full-screen view instead, and this bar while
+                    that view is down (V5). */}
+                  {UNRELEASED_FEATURES_ENABLED ? <VoiceSessionChrome /> : null}
                 </>
               }
               surface={
@@ -211,6 +220,13 @@ function AppShellBody(props: AppShellProps) {
                   {UNRELEASED_FEATURES_ENABLED ? (
                     <TracyEntryController />
                   ) : null}
+                  {/* Once per window: the voice session's owner (the
+                    microphone, the engine, the scheduler), which the Talk
+                    control and the strip drive through the store. */}
+                  {UNRELEASED_FEATURES_ENABLED ? (
+                    <VoiceSessionController />
+                  ) : null}
+                  {UNRELEASED_FEATURES_ENABLED ? <TalkShortcutBridge /> : null}
                   <MigrationRunController />
                   <MigrationBlockingModalHost />
                   {isMobile ? <MobileNavDrawer /> : null}

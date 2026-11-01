@@ -207,6 +207,7 @@ import {
  * the pixel art stays square; the bounds are what keeps a one-agent room from
  * filling the tile with a single desk and a fifty-agent floor from vanishing.
  */
+
 /**
  * Far below one sprite pixel per screen pixel, because a thousand-agent City
  * is tens of thousands of sprite pixels across and the overview band exists to
@@ -349,11 +350,6 @@ type OfficeSelectedDetail =
   | { readonly kind: "agent"; readonly agentId: string }
   | { readonly kind: "pair"; readonly edgeId: string };
 
-/**
- * The hovered character and where its card should sit, in container-relative
- * screen pixels. Set on pointer move, and moved by the frame loop only while
- * the character under the pointer is itself moving.
- */
 /**
  * The open hover card's subject and geometry.
  *
@@ -1401,16 +1397,6 @@ function drawFloorSigns(args: {
   ctx.restore();
 }
 
-/**
- * A room's name on a wall plate.
- *
- * SIGNAGE, not a name tag - and the distinction is the point. Cabin, area and
- * pod names used to be drawn in the same face as an agent's name, so a reader
- * counted "Cafeteria" as another person standing in the room. Uppercase,
- * tracked out, and set on a plate, it reads as a fixture instead. The plate is
- * also its own backing, so the four-offset outline the name tags use would
- * only muddy it.
- */
 /** Puts the plate's own face on the context. Shared, so measuring matches drawing. */
 function applySignPlateFont(ctx: CanvasRenderingContext2D): void {
   ctx.font = `bold ${OFFICE_SIGN_FONT_PX}px ${OFFICE_SIGN_MONOSPACE_STACK}`;
@@ -1460,6 +1446,16 @@ function signPlateBox(
   };
 }
 
+/**
+ * A room's name on a wall plate.
+ *
+ * SIGNAGE, not a name tag - and the distinction is the point. Cabin, area and
+ * pod names used to be drawn in the same face as an agent's name, so a reader
+ * counted "Cafeteria" as another person standing in the room. Uppercase,
+ * tracked out, and set on a plate, it reads as a fixture instead. The plate is
+ * also its own backing, so the four-offset outline the name tags use would
+ * only muddy it.
+ */
 function drawSignPlate(
   ctx: CanvasRenderingContext2D,
   sign: {
@@ -1488,8 +1484,8 @@ function drawSignPlate(
   }
   // A WASH, NOT A PANEL - and no outline at all. The plate used to be an
   // opaque `ink` fill inside a 1px `bright` stroke, which is a hard-edged
-  // rectangle sitting ON the art rather than lettering ON THE FLOOR: feedback
-  // round 1 called it "too prominent" in three views and "the labels
+  // rectangle sitting ON the art rather than lettering ON THE FLOOR. It was
+  // called "too prominent" in three views and "the labels
   // completely cover the artwork" in a fourth. The stroke was the worst of it,
   // because an outline reads as a separate object however quiet its fill.
   //
@@ -2036,7 +2032,7 @@ function drawSignLabels(args: {
     const screenY = anchorY + (box.top - offered.top);
     drawSignPlate(ctx, { text: plateText, screenX, screenY, palette });
     // THE WARD'S BEACON, where a ward has one: Mission control's medbay, which
-    // has no street for an ambulance to come down (C6). Which frame is up is
+    // has no street for an ambulance to come down. Which frame is up is
     // the resolver's answer - it is the one place the room's occupancy and the
     // clock meet - and a sign that carries no beacon says `null`.
     //
@@ -2768,7 +2764,7 @@ export interface CommGraphOfficeCanvasProps extends CommGraphCanvasProps {
    * frame), so a framing made within that window is still pending when a mode
    * switch unmounts this canvas - and the unmount cancels the timer, which is
    * the right thing for the VIEW-PICK remount (a pan on the old view must not
-   * land on the new one) but wrong for a mode switch, which D68 promises keeps
+   * land on the new one) but wrong for a mode switch, which the camera split promises keeps
    * each renderer's camera. So the tile calls the registered function before a
    * mode change: it clears the pending timer and returns the patch that would
    * have been persisted, or `null` when nothing is pending, and the tile folds
@@ -2885,7 +2881,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
 
   // THE BAND IS NOT MIRRORED INTO REACT. It used to be, for the chip that
   // named it ("Overview" / "Office" / "Close-up"); with that chip gone
-  // (feedback round 1) nothing outside the frame loop asks which band the
+  // nothing outside the frame loop asks which band the
   // camera is in, and the loop reads it off the live camera every frame
   // (`officeLodForZoom(camera.zoom)`). A second copy in state would be a
   // re-render of this whole component with no reader on the other end.
@@ -3130,8 +3126,8 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
     // THE PLAN THAT SETTLING OWES is the scene's, asked for by the
     // `feedSettled` flag on the sync input below rather than by anything here.
     // This comment once read "the re-plan that follows is the same population
-    // change any arrival causes", which was wrong and is the cold reviewer's
-    // P2: an arrival changes the agent set and re-plans, while settling
+    // change any arrival causes", which was wrong:
+    // an arrival changes the agent set and re-plans, while settling
     // changes only statuses, which deliberately never re-plans on its own - so
     // the provisional floor, cold teams and quiet cubbies and all, stayed on
     // screen for the life of the mount.
@@ -4617,10 +4613,10 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
         {/*
           NOTHING BUT THE BUTTONS SITS HERE ANY MORE. Three chips have stood in
           this corner and all three are gone: Auto's measurement and the zoom
-          band went in feedback round 1 ("the text at the bottom left is too
+          band went first ("the text at the bottom left is too
           verbose - is it even needed", and a read-only band label stacked on
-          the buttons read as a fourth button), and the catching-up line went in
-          round 2, asked for by name. It said the feed was still replaying and
+          the buttons read as a fourth button), and the catching-up line went
+          next, asked for by name. It said the feed was still replaying and
           the statuses on screen might lag - true, and transient, and still a
           sentence of chrome on a drawing whose whole point is that it is a
           drawing. Nothing replaces it: a floor that is already drawn and

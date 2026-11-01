@@ -134,7 +134,10 @@ export function TeamSkills(props: {
             />
           )}
           {canEdit ? (
-            <TeamSkillUpload onNotServed={() => setNotServed(true)} />
+            <TeamSkillUpload
+              onNotServed={() => setNotServed(true)}
+              importAction={null}
+            />
           ) : null}
         </TeamViewingHostBinding>
       )}

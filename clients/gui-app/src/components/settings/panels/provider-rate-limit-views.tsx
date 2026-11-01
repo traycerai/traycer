@@ -9,6 +9,7 @@ import type {
   AntigravityRateLimitWindow,
   ProviderRateLimits,
   ProviderRateLimitWindow,
+  RateLimitChatCredential,
   RateLimitUnavailableReason,
 } from "@traycer/protocol/host";
 import {
@@ -42,6 +43,7 @@ import {
   namedCadenceForDuration,
 } from "@/lib/rate-limits/window-duration-cadence";
 import {
+  formatChatCredentialNotice,
   formatUnavailableReason,
   resolveProviderRateLimitViewState,
   titleCaseFromToken,
@@ -150,8 +152,8 @@ const RESET_TIMESTAMP_PLAUSIBLE_WINDOW_MS = 365 * 24 * 60 * 60 * 1000;
 
 /**
  * A window's label from its real duration, not a hardcoded "5-hour"/"Weekly"
- * (Core Flows: "if the provider tells us the window is 6 hours, that's what's
- * shown"). Every `ProviderRateLimitWindow` now carries `durationMinutes`, so
+ * - a 6-hour window says 6 hours.
+ * Every `ProviderRateLimitWindow` now carries `durationMinutes`, so
  * Codex's primary/secondary, Claude's fixed buckets, and Codex's per-model
  * `extraWindows` all label from the same formatter. `10080` (a 7-day window)
  * reads as "Weekly" rather than "7d" since that's the product's own wording;
@@ -392,7 +394,7 @@ function ProviderWindowRow({
 
 /**
  * A neutral labeled number (no bar, no severity color) - for values with no
- * computable "% of limit" (Core Flows: "Windows without a percentage"), e.g.
+ * computable "% of limit", e.g.
  * OpenRouter's spend/credits and Kilo Code's balance. Renders nothing when the
  * provider didn't report the value.
  */
@@ -533,8 +535,8 @@ function CodexRateLimitViewContent({
     </div>
   );
 
-  // Each per-model sub-limit becomes its own labeled window row (Core Flows:
-  // "no separate UI concept needed"), named by its `limitName`.
+  // Each per-model sub-limit becomes its own labeled window row, with no
+  // separate UI concept, named by its `limitName`.
   const perModelLimits: ReactNode =
     !overview && data.extraWindows.length > 0 ? (
       <div className="flex flex-col gap-3">
@@ -935,7 +937,7 @@ function ClaudeExtraUsageRow({
 }): ReactNode {
   // `monthlyLimit`/`usedCredits` give a ratio-based bar without depending on
   // the ambiguous 0-1-vs-0-100 scale of `utilization` (open item on the wire
-  // contract - see the tech plan). `utilization` is only ever shown as raw
+  // contract). `utilization` is only ever shown as raw
   // supplementary text.
   if (extraUsage.monthlyLimit !== null && extraUsage.usedCredits !== null) {
     const usedPercent =
@@ -966,8 +968,8 @@ function ClaudeExtraUsageRow({
 
 /**
  * OpenRouter's usage detail: a request/credit bar when a hard `limit` exists,
- * plus its uncapped spend/credit/balance figures as plain neutral rows (Core
- * Flows: "Windows without a percentage" - no fabricated percentage, no severity
+ * plus its uncapped spend/credit/balance figures as plain neutral rows
+ * ("Windows without a percentage" - no fabricated percentage, no severity
  * color). All figures are $-denominated OpenRouter credits.
  */
 export function OpenRouterRateLimitView({
@@ -1058,7 +1060,7 @@ function OpenRouterCreditBar({
  * number the user cares about), and one with none at all - a pay-as-you-go
  * account that only ever reports what it has spent. In the second case there is
  * no denominator, so no bar and no fabricated "0 of unknown" row; spend stands
- * alone (Core Flows: "Windows without a percentage"). No plan chip either -
+ * alone. No plan chip either -
  * Hugging Face reports no tier on this endpoint.
  */
 export function HuggingFaceRateLimitView({
@@ -1188,7 +1190,7 @@ function HuggingFaceCreditBar({
 /**
  * Kilo Code's usage detail: a credit balance and Kilo Pass state, both as plain
  * neutral rows. No computable percentage exists for Kilo Code, so it never
- * renders a bar (Core Flows: "Windows without a percentage").
+ * renders a bar.
  */
 export function KiloCodeRateLimitView({
   data,
@@ -1663,6 +1665,9 @@ export function ProviderRateLimitBody(
     );
   }
   const data = state.data;
+  if (!data.available && data.chatCredential !== undefined) {
+    return <ChatCredentialNotice credential={data.chatCredential} />;
+  }
   if (!data.available) {
     return (
       <div className="flex flex-col items-start gap-1.5">
@@ -1704,9 +1709,35 @@ export function ProviderRateLimitBody(
 }
 
 /**
+ * Says which credential chats on this account use instead of the plan, in
+ * place of "Usage limits unavailable". Shared by the Settings card and the
+ * header popover so both say the same thing.
+ */
+export function ChatCredentialNotice({
+  credential,
+}: {
+  readonly credential: RateLimitChatCredential;
+}): ReactNode {
+  return (
+    <p className="rounded-md border border-warning/30 bg-warning/10 px-2 py-1.5 text-ui-xs text-warning-foreground">
+      {/* A notice's runs never repeat, so each run's text is its key. */}
+      {formatChatCredentialNotice(credential).map((part) =>
+        part.code ? (
+          <code key={part.text} className="font-mono">
+            {part.text}
+          </code>
+        ) : (
+          <span key={part.text}>{part.text}</span>
+        ),
+      )}
+    </p>
+  );
+}
+
+/**
  * The failed-refresh / stale line the Settings usage card shows while it's
  * displaying a retained last-known-good reading after the latest poll failed
- * (Core Flows degraded state): the ORIGINAL `lastGoodAt` as "Updated Xm ago"
+ * (the degraded state): the ORIGINAL `lastGoodAt` as "Updated Xm ago"
  * (never the failed attempt's time, so it can't read as fresh) followed by a
  * note - the specific transient reason's plain-language copy when the envelope
  * itself is why (`degradedReason` non-null), otherwise the generic "refresh
@@ -1741,8 +1772,8 @@ function StaleUsageRefreshNote({
  * `available: true` arm (`data.provider` is now five-way, not the old binary
  * codex/claude split), so a new provider arm added to the wire union fails the
  * build here until it gets a view. Exported so the header popover reuses the
- * exact same per-provider bodies the Settings card shows (Core Flows: "both
- * read the same underlying provider usage data, so they never disagree").
+ * exact same per-provider bodies the Settings card shows: both
+ * read the same underlying provider usage data, so they never disagree.
  */
 export function ProviderRateLimitDetail({
   data,

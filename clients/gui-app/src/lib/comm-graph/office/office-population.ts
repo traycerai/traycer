@@ -611,7 +611,7 @@ function survivingMemberHostOf(
  * team that is still named after it, because their classes are frozen. The two
  * halves are each following their own correct rule and together they produce a
  * team whose lead is standing outside it: the same broken shape three earlier
- * fixups closed, arrived at from a direction none of them covered.
+ * fixes closed, arrived at from a direction none of them covered.
  *
  * The WAITING TEAM is what makes this safe to do, and what says where to put
  * the returner: it establishes that the team is real and which building it is
@@ -845,7 +845,7 @@ export function partitionOfficePopulation(
 /**
  * HOW MANY OF EACH BUILDING'S AGENTS HAVE BEEN ARCHIVED, as of the cursor.
  *
- * What the archive's sign counts (C5). It is asked of the PARTITION and the
+ * What the archive's sign counts. It is asked of the PARTITION and the
  * archive MOMENT rather than of the scene's walk-outs, and that is the whole
  * point: a walk-out is a character that happened to leave while somebody was
  * watching, so a floor opened at a cursor where three hundred records were

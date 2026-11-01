@@ -29,6 +29,10 @@ import * as Y from "yjs";
 import type { Awareness } from "y-protocols/awareness";
 import { artifactFolderChain } from "@/lib/artifacts/artifact-folder-chain";
 import {
+  artifactFileViewer,
+  type ArtifactFileViewer,
+} from "@/lib/files/artifact-file-viewer";
+import {
   authorizesCloudCapability,
   useAuthStore,
 } from "@/stores/auth/auth-store";
@@ -259,7 +263,7 @@ export type EpicCommentRoomAvailability =
    * this disk), but its comment room lives in the cloud-backed artifact room
    * and every read (`epic.listCommentThreads` poll) and write goes through
    * the local-host context, which does not carry the renderer's verdict.
-   * A local-homed room (`local` / `promoting`) is exempt. Found in review.
+   * A local-homed room (`local` / `promoting`) is exempt.
    */
   | { readonly kind: "unauthorized" };
 
@@ -683,7 +687,7 @@ export function deriveEpicDurabilityView(
   }
   if (status === null || status === "unknown") {
     // The frame's absence rule, stated as code: an absent `durability` key
-    // from a `@1.4` peer means UNKNOWN, never synced. Review found the
+    // from a `@1.4` peer means UNKNOWN, never synced. The
     // earlier arm here resolving absence-beside-`armed` into the calm
     // rendering, which let a schema-permitted omission claim "All changes
     // synced" - the silence-as-reassurance inference this minor exists to
@@ -861,6 +865,11 @@ export function useEpicLastFocusedArtifactId(): string | null {
  */
 export function useOpenEpicId(): string {
   return useOpenEpicHandle().epicId;
+}
+
+/** {@link useOpenEpicId}, or `null` outside an open-epic session. */
+export function useMaybeOpenEpicId(): string | null {
+  return useMaybeOpenEpicHandle()?.epicId ?? null;
 }
 
 // ─── Title ────────────────────────────────────────────────────────────────
@@ -1455,10 +1464,22 @@ function resolveEpicAgentReference(
   return matchedId === null ? null : exactEpicAgent(state, matchedId);
 }
 
+/**
+ * `null` without an open-epic session: a bot's transcript renders the same
+ * agent-message cards and has no task agents to match.
+ */
 export function useEpicAgentReference(
   referenceId: string,
 ): EpicAgentProjection | null {
-  return useEpicStore((state) => resolveEpicAgentReference(state, referenceId));
+  const handle = useMaybeOpenEpicHandle();
+  return useSyncExternalStore(
+    (listener) => handle?.store.subscribe(listener) ?? noopSubscribe,
+    () =>
+      handle === null
+        ? null
+        : resolveEpicAgentReference(handle.store.getState(), referenceId),
+    () => null,
+  );
 }
 
 export function useEpicLiveArtifactTitle(
@@ -2050,7 +2071,9 @@ function useArmChatTitle(
  * files, git diff, pre-hydration, a terminal session the host no longer
  * knows). Every render site (visible tab strip, drag overlay, ...) MUST read
  * through this hook - never the raw `node.name` - so the resolve cannot be
- * forgotten in one place.
+ * forgotten in one place. The tab strip also writes a record-backed tile's
+ * resolved title back into that snapshot, so a reader with no live source
+ * sees the last known title rather than the opening-time one.
  *
  * A chat tab whose record the projection does not hold at all reads the cloud
  * chat list next, before the snapshot. The sidebar renders exactly such a chat
@@ -2170,7 +2193,7 @@ export function useEpicLiveArtifactTitleGenerating(
 /**
  * Returns the live `Y.XmlFragment` backing an artifact's body. The fragment
  * resolves through the artifact's assigned artifact-room doc (`artifact-body:{id}`),
- * not the root Epic doc - see B6 in the artifact-room approach spec.
+ * not the root Epic doc (B6).
  *
  * Selects the resolved fragment itself so any store write that makes the
  * artifact-room replica available wakes the editor, even when the room id and
@@ -2551,7 +2574,7 @@ export function useEpicAgentRoleClaimsByAgentId(): Readonly<
  * dot on every render; selecting the scalar (instead of `find`-ing it out of
  * the full `useEpicArtifactRecords()` array) keeps the value reference-stable
  * while OTHER records churn - e.g. the active chat streaming - so the memoized
- * node bails. See RENDER_PERF_FINDINGS.md (T1 follow-up).
+ * node bails. See RENDER_PERF_FINDINGS.md.
  */
 export function useEpicArtifactStatus(id: string): number | null {
   return useEpicStore((s) =>
@@ -2563,7 +2586,7 @@ export function useEpicArtifactStatus(id: string): number | null {
  * Ancestor ids of `nodeId`, nearest first, cycle-guarded. Empty for a root, a
  * null id, or an id the tree does not hold.
  *
- * ## Subscribed to the ANSWER (epic-sync-overhaul finding 12, round 2)
+ * ## Subscribed to the ANSWER
  *
  * This read the whole `tree` slice and walked it in a `useMemo`, so it returned
  * a fresh `Set` on every store tick that re-minted the slice - which a body
@@ -2913,6 +2936,55 @@ function liveEpicNodeArchivedFromHandle(
     return state.tuiAgents.byId[nodeId].archivedAt !== null;
   }
   return false;
+}
+
+/**
+ * The viewer a file artifact opens in, decided from the same on-disk name and
+ * media type its tile decides from, so the glyph a row shows names what
+ * clicking it does. Null for every other node, for a file not yet synced, and
+ * for a null `artifactId` (a row whose artifact the caller cannot name).
+ */
+export function useEpicFileArtifactViewer(
+  artifactId: string | null,
+): ArtifactFileViewer | null {
+  return useEpicStore((s) => fileArtifactViewerFromState(s, artifactId));
+}
+
+/**
+ * Provider-optional counterpart to {@link useEpicFileArtifactViewer} for the
+ * shared artifact icon, which also renders in provider-less drag previews and
+ * mention lists: an epic with no mounted session has no file to read, and a
+ * null `artifactId` names no file, so in both the glyph stays the plain file.
+ */
+export function useRegisteredEpicFileArtifactViewer(
+  epicId: string,
+  artifactId: string | null,
+): ArtifactFileViewer | null {
+  const registry = getOpenEpicRegistry();
+  const handle = useSyncExternalStore(
+    (listener) => registry.subscribe(listener),
+    () => registry.peek(epicId),
+    () => null,
+  );
+  return useSyncExternalStore(
+    (listener) => handle?.store.subscribe(listener) ?? noopSubscribe,
+    () =>
+      handle === null
+        ? null
+        : fileArtifactViewerFromState(handle.store.getState(), artifactId),
+    () => null,
+  );
+}
+
+function fileArtifactViewerFromState(
+  state: OpenEpicState,
+  artifactId: string | null,
+): ArtifactFileViewer | null {
+  if (artifactId === null || !Object.hasOwn(state.artifacts.byId, artifactId))
+    return null;
+  const artifact = state.artifacts.byId[artifactId];
+  if (artifact.kind !== "file" || artifact.object === undefined) return null;
+  return artifactFileViewer(artifact.folderName, artifact.object.mediaType);
 }
 
 /**

@@ -23,8 +23,8 @@ export interface HistoryPruneProviderProps {
 
 /**
  * Mounts the load-free prune scheduler that keeps the persisted back/forward
- * stack free of dead entries (tech plan §3.3 / §3.4; critique Blocker 1, High
- * 3, High 4). This is the renderer's single mount point for
+ * stack free of dead entries.
+ * This is the renderer's single mount point for
  * `installPruneScheduler`.
  *
  * Why an effect: this is genuine external-store synchronization (a Zustand +
@@ -102,7 +102,7 @@ export function HistoryPruneProvider(
  * transition, or otherwise pending. Reading all three flags (rather than just
  * `status`) keeps the scheduler conservative: over-reporting in-flight only
  * defers a prune by a frame, while under-reporting would let a prune interleave
- * with an in-flight navigation (critique Blocker 1 / High 3).
+ * with an in-flight navigation.
  */
 function isRouterLoadInFlight(router: AppRouter): boolean {
   const state = router.state;

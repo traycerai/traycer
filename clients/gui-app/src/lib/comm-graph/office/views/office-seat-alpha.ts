@@ -6,7 +6,7 @@
  * nobody at it, this screen is on but unattended, this record is archived. They
  * were written per painter, and two of them (Floor and Mission control) had
  * byte-identical copies of the same `monitorAlphaFor` sitting in both files.
- * Feedback round 1 turned one of those numbers into a visible bug on one view
+ * One of those numbers became a visible bug on one view
  * only ("these transparent desks look weird" on Building), which is what
  * duplicated constants buy: a fix that lands on the view somebody screenshotted
  * and nowhere else.
@@ -47,7 +47,7 @@ export const OFFICE_ARCHIVED_ALPHA = 0.45;
  * Below about 0.7 a sprite's near-black OUTLINE stops reading as a line over a
  * dark floor, and the piece goes from dimmed to translucent - an empty desk
  * became a brown bar painted onto the floor, and an empty console became a grey
- * smear. Feedback round 1 named it on Building ("these transparent desks look
+ * smear. It was named on Building ("these transparent desks look
  * weird"); Mission control's empty consoles were the same decision at a
  * different number (`0.55`) and the same complaint waiting to be filed.
  *

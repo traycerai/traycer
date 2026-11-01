@@ -22,7 +22,7 @@ export interface SessionImportScanHandle {
  * Subscribing is what makes the host read `~/.claude` and `~/.codex` at all,
  * so the caller decides when that starts: the Settings dialog on open, the
  * tour on its first act so the list is filled in by the time the import act
- * is reached (D13, revised 2026-09-02). Nothing reads those folders outside
+ * is reached. Nothing reads those folders outside
  * one of those two surfaces. Unlike the run, a dropped scan costs nothing but
  * a re-read, so there is no attach-and-resume story here.
  */

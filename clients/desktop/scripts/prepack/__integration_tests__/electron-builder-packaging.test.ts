@@ -377,6 +377,27 @@ describe.skipIf(process.platform !== "darwin")(
       expect(agentPlist).not.toContain(RELEASE_DIR);
     });
 
+    it("keeps the production package's microphone usage description to dictation", () => {
+      if (packagedAppPath === null) {
+        throw new Error(
+          "packagedAppPath was not set - packaging must have failed",
+        );
+      }
+      const usage = execFileSync(
+        "plutil",
+        [
+          "-extract",
+          "NSMicrophoneUsageDescription",
+          "raw",
+          path.join(packagedAppPath, "Contents", "Info.plist"),
+        ],
+        { encoding: "utf8" },
+      ).trim();
+      expect(usage).toBe(
+        "Traycer uses the microphone for voice dictation in the composer.",
+      );
+    });
+
     it("relocates cleanly - after cp -R to a different path, BundleProgram (parsed, not grepped) still resolves to a real executable file", () => {
       if (packagedAppPath === null) {
         throw new Error(

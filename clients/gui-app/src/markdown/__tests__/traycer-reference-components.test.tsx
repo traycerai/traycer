@@ -75,8 +75,8 @@ vi.mock("@/lib/epic-selectors", () => ({
 // The chip imports the canvas store and `@dnd-kit/core` at its module top, so
 // these spies must exist before those (hoisted) `vi.mock` factories run.
 // `vi.hoisted` guarantees that ordering; `resolveTabIdForEpic` is the pure,
-// non-side-effecting resolver the chip reads for its `viewTabId` (constraint
-// C1), returning a tab id for the open epic and `null` otherwise.
+// non-side-effecting resolver the chip reads for its `viewTabId`, returning
+// a tab id for the open epic and `null` otherwise.
 const {
   openTile,
   resolveTargetTabForEpic,
@@ -179,8 +179,8 @@ import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-st
 import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
 
 /**
- * Naming the effective host is part of building an app-wide host fixture
- * (P2.1's sweep convention). These references resolve through
+ * Naming the effective host is part of building an app-wide host fixture.
+ * These references resolve through
  * `useCanvasHostId()` -> `useEffectiveHostId()` -> the selection authority
  * store, so the STORE is the seam that must carry the host. Seeding it here
  * rather than mocking the hook keeps the fixture indifferent to which hook

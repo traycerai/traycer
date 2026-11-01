@@ -179,7 +179,7 @@ function createStreamHarness(): {
       onFrame?.(frame, null);
     },
     emitStatus: (status) => {
-      onStatus?.(status, null, null);
+      onStatus?.(status, null, null, null);
     },
     sent,
     subscribeCalls,

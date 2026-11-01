@@ -27,7 +27,7 @@ import type {
  * seeded from a chat whose profile is now tombstoned: falls back to ambient
  * for the new selection; no crash."
  *
- * A cold reviewer flagged the FIRST version of this fix: the seed-resolution
+ * The FIRST version of this fix was wrong: the seed-resolution
  * hook originally read `providers.list` from the app-wide ACTIVE host
  * instead of the host the fork's `createChat` call actually targets. The
  * dialog now resolves that host through `useHostClientForHostId(selectedHostId)`
@@ -352,6 +352,7 @@ function forkTarget(profileId: string | null): ChatForkDialogTarget {
     interviewBlockId: null,
     parentId: null,
     settingsSeed: {
+      ultracode: false,
       harnessId: "claude",
       model: "claude-opus-4-7",
       permissionMode: "supervised",
@@ -685,8 +686,7 @@ describe("D4: ChatForkDialog seeded from a tombstoned profile", () => {
   it("ticket 07: resolves the seeded profileId to ambient once the tab host SETTLES on an empty profiles[] (old host, or flag-off/unsupported provider)", async () => {
     // The tab's host HAS responded - just with no profiles for this
     // provider (an old host upgraded to `profiles: []`, or a new host with
-    // the flag off / an unsupported provider). Per the protocol-schema-
-    // contract-compat review's Major finding, preserving the pin here would
+    // the flag off / an unsupported provider). Preserving the pin here would
     // silently run the account on ambient while the UI/artifact still
     // claimed the managed profile - this must clear it instead.
     dialogMocks.providersByClient.set(TAB_HOST_CLIENT, [claudeState([])]);

@@ -322,15 +322,6 @@ export const NOTIFICATION_INDICATOR_ERROR_POLL_LANE: ConditionPollLane = {
   maxDelayMs: 30 * SECOND_MS,
 };
 /**
- * `host.update.check` answered `cli-unavailable`. That answer retires the
- * whole update region and the retired region hides Check now, so with no
- * focus/reconnect refetch in production nothing would ever notice the Traycer
- * CLI being reinstalled — the region stayed retired until the user left the
- * host scope and came back. The probe fails fast on the host while the CLI is
- * genuinely absent, and the first ok answer revives the region and ends the
- * lane.
- */
-/**
  * A fork boundary waiting on the publisher: the chat has not been backed up
  * yet, or the chosen turn is not covered by the last receipt.
  *
@@ -349,6 +340,15 @@ export const CHAT_PUBLICATION_WAIT_POLL_LANE: ConditionPollLane = {
   initialDelayMs: 5 * SECOND_MS,
   maxDelayMs: 30 * SECOND_MS,
 };
+/**
+ * `host.update.check` answered `cli-unavailable`. That answer retires the
+ * whole update region and the retired region hides Check now, so with no
+ * focus/reconnect refetch in production nothing would ever notice the Traycer
+ * CLI being reinstalled — the region stayed retired until the user left the
+ * host scope and came back. The probe fails fast on the host while the CLI is
+ * genuinely absent, and the first ok answer revives the region and ends the
+ * lane.
+ */
 export const UPDATE_CHECK_CLI_RECOVERY_POLL_LANE: ConditionPollLane = {
   id: "host-update-check.cli-recovery",
   initialDelayMs: 5 * SECOND_MS,
@@ -1561,7 +1561,7 @@ export const HOST_METHOD_POLL_TABLE = {
   // One-shot read: the doc content of an unreachable owner's chat cannot
   // change while its owner is away.
   "epic.chatReplicaRead": { ...LATEST_SCHEDULING, poll: null },
-  // The store-backed chat RECORD channel (chat-sync-v2 ticket 49).
+  // The store-backed chat RECORD channel.
   //
   // POLLED, at a cadence, and the reason is that there is no invalidation edge
   // to ride. The facts this serves - a chat was created, renamed, re-parented,
@@ -1651,6 +1651,24 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  "bot.threadFollow.read": { ...LATEST_SCHEDULING, poll: null },
+  "bot.threadFollow.set": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // A bot's read cursors and newest rows drive the sidebar's bold, so a read
+  // on another device clears it here within one interval while the window is
+  // visible.
+  "bot.readCursor.read": {
+    ...LATEST_SCHEDULING,
+    poll: { kind: "fixed", intervalMs: 30 * SECOND_MS },
+  },
+  "bot.readCursor.advance": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   "bot.updateTitle": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   "bot.updateRunSettings": {
     mode: "fifo",
@@ -1687,6 +1705,13 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // A member's answer or decision from a surface card: each action is the
+  // person's own, sent in order and never joined with another.
+  "bot.surface.act": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // A read of the bound host's thread records, never polled: the bot's
   // `bot.subscribe` snapshot moves `conversationsRevision` on every row
   // written there, and the subscription reads the listing again then.
@@ -1712,7 +1737,11 @@ export const HOST_METHOD_POLL_TABLE = {
   },
   // A team's onboarding (T48): the read is refetched when its card mounts or
   // a choice or completion lands; the two writes persist, so they queue.
-  "bot.onboarding.read": { ...LATEST_SCHEDULING, poll: null },
+  // Opt-in polling (`poll: true`) from a team's setup channel only, while it
+  // is on screen and the setup still needs a host: a bot created under
+  // the team host's own context rings no other host's bot list, so this is
+  // how a member watching the setup sees it go live.
+  "bot.onboarding.read": { ...LATEST_SCHEDULING, poll: ON_SCREEN_FIXED_POLL },
   "bot.onboarding.choose": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
@@ -2583,6 +2612,16 @@ export const HOST_METHOD_POLL_TABLE = {
     ...LATEST_SCHEDULING,
     poll: CONFIGURATION_READ_POLL,
   },
+  // Read beside the list it overlays, on the same cadence, so another
+  // editor's update or restore reaches this page's versions and Restore.
+  "environment.configuration.skills.state": {
+    ...LATEST_SCHEDULING,
+    poll: CONFIGURATION_READ_POLL,
+  },
+  "environment.configuration.skills.search": {
+    ...LATEST_SCHEDULING,
+    poll: null,
+  },
   "environment.move.accept": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
@@ -2629,6 +2668,26 @@ export const HOST_METHOD_POLL_TABLE = {
     poll: null,
   },
   "environment.configuration.skills.setProviders": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.configuration.skills.setPolicy": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.configuration.skills.update": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.configuration.skills.restoreBundled": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.configuration.skills.import": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
     poll: null,
@@ -2876,7 +2935,7 @@ export const HOST_METHOD_POLL_TABLE = {
   // retry) and opts out of polling; the ambient epic cost badge opts in
   // (matching `host.getRateLimitUsage`'s cadence below) so it self-heals
   // within a bounded time from a silently-reverted fetch instead of staying
-  // stuck pending forever with no other trigger (ticket-7 fixup-01).
+  // stuck pending forever with no other trigger.
   "host.usage.summary": {
     ...LATEST_SCHEDULING,
     joinResponseTimeoutMs: USAGE_SUMMARY_RESPONSE_TIMEOUT_MS,

@@ -266,6 +266,7 @@ const IMAGE_CONTENT: JsonContent = {
 };
 
 const SETTINGS = {
+  ultracode: false,
   harnessId: "codex" as const,
   model: "gpt-5-codex",
   permissionMode: "supervised" as const,
@@ -276,6 +277,7 @@ const SETTINGS = {
 };
 
 const UPDATED_SETTINGS = {
+  ultracode: false,
   harnessId: "claude" as const,
   model: "claude-sonnet",
   permissionMode: "supervised" as const,
@@ -349,7 +351,7 @@ class ProtocolMockStreamSession implements IStreamSession {
   }
 
   close(): void {
-    this.statusChangeHandler?.("closed", { kind: "caller" }, null);
+    this.statusChangeHandler?.("closed", { kind: "caller" }, null, null);
   }
 
   emitStatus(
@@ -357,7 +359,7 @@ class ProtocolMockStreamSession implements IStreamSession {
     reason: StreamCloseReason | null,
   ): void {
     if (this.statusChangeHandler !== null) {
-      this.statusChangeHandler(status, reason, null);
+      this.statusChangeHandler(status, reason, null, null);
     }
   }
 }
@@ -591,7 +593,7 @@ function statedNoticeWithIntent(intent: WorktreeIntent): ChatErrorNotice {
   );
   const second = harness.sent[1];
   if (second.kind !== "send") throw new Error("Expected a send frame");
-  callbacks.onConnectionStatus("reconnecting", null, null);
+  callbacks.onConnectionStatus("reconnecting", null, null, null);
   emitSnapshot(callbacks, "owner");
   return noticeFor(harness, second.clientActionId);
 }
@@ -741,7 +743,7 @@ function emitSnapshotWithQueuedSend(
  * mutates it after the fact to prove the store copied rather than aliased it.
  */
 function emitSnapshotFrame(input: SnapshotFrameInput): Chat {
-  input.callbacks.onConnectionStatus("open", null, null);
+  input.callbacks.onConnectionStatus("open", null, null, null);
   const chat: Chat = {
     id: CHAT_ID,
     parentId: null,
@@ -800,7 +802,7 @@ function emitSnapshotWithWorktree(
   events: ReadonlyArray<ChatEvent>,
   worktreeBinding: WorktreeBinding | null,
 ): void {
-  callbacks.onConnectionStatus("open", null, null);
+  callbacks.onConnectionStatus("open", null, null, null);
   callbacks.onSnapshot({
     kind: "snapshot",
     hasBinaryPayload: false,
@@ -1037,7 +1039,9 @@ describe("createChatSessionStore", () => {
     startRunningTurn(harness.callbacks());
     expect(harness.handle.store.getState().runStatus).toBe("running");
 
-    harness.callbacks().onConnectionStatus("closed", { kind: "caller" }, null);
+    harness
+      .callbacks()
+      .onConnectionStatus("closed", { kind: "caller" }, null, null);
 
     expect(harness.handle.store.getState().connectionStatus).toBe("closed");
     expect(harness.handle.store.getState().runStatus).toBe("idle");
@@ -1047,7 +1051,9 @@ describe("createChatSessionStore", () => {
   it("captures a fatal close (CHAT_INVALID) but not a caller close", () => {
     const harness = createHarness();
 
-    harness.callbacks().onConnectionStatus("closed", { kind: "caller" }, null);
+    harness
+      .callbacks()
+      .onConnectionStatus("closed", { kind: "caller" }, null, null);
     expect(harness.handle.store.getState().fatalClose).toBeNull();
 
     harness.callbacks().onConnectionStatus(
@@ -1062,6 +1068,7 @@ describe("createChatSessionStore", () => {
           upgradeGuidance: null,
         },
       },
+      null,
       null,
     );
     expect(harness.handle.store.getState().fatalClose?.reason).toContain(
@@ -1085,17 +1092,17 @@ describe("createChatSessionStore", () => {
     const notificationId =
       "stream.transport.error:host-a:chat-1:CONNECTION_LOST";
 
-    harness.callbacks().onConnectionStatus("closed", reason, null);
+    harness.callbacks().onConnectionStatus("closed", reason, null, null);
     useAppLocalNotificationsStore
       .getState()
       .markAsRead(notificationId, Date.now());
-    harness.callbacks().onConnectionStatus("closed", reason, null);
+    harness.callbacks().onConnectionStatus("closed", reason, null, null);
     expect(
       useAppLocalNotificationsStore.getState().byId[notificationId].readAt,
     ).not.toBeNull();
 
     harness.handle.store.getState().retry();
-    harness.callbacks().onConnectionStatus("closed", reason, null);
+    harness.callbacks().onConnectionStatus("closed", reason, null, null);
     expect(
       useAppLocalNotificationsStore.getState().byId[notificationId].readAt,
     ).toBeNull();
@@ -1117,7 +1124,7 @@ describe("createChatSessionStore", () => {
       },
     };
 
-    callbacks.onConnectionStatus("closed", fatalClose, null);
+    callbacks.onConnectionStatus("closed", fatalClose, null, null);
     expect(
       useAppLocalNotificationsStore.getState().byId[notificationId].readAt,
     ).toBeNull();
@@ -1159,7 +1166,7 @@ describe("createChatSessionStore", () => {
       useAppLocalNotificationsStore.getState().byId[notificationId].readAt,
     ).not.toBeNull();
 
-    recoveredCallbacks.onConnectionStatus("closed", fatalClose, null);
+    recoveredCallbacks.onConnectionStatus("closed", fatalClose, null, null);
     expect(
       useAppLocalNotificationsStore.getState().byId[notificationId].readAt,
     ).toBeNull();
@@ -1214,6 +1221,7 @@ describe("createChatSessionStore", () => {
         },
       },
       null,
+      null,
     );
     expect(handle.store.getState().fatalClose?.reason).toContain(
       "CHAT_INVALID",
@@ -1257,16 +1265,16 @@ describe("createChatSessionStore", () => {
       return lastCallbacks;
     };
     const staleCallbacks = callbacks();
-    staleCallbacks.onConnectionStatus("open", null, null);
+    staleCallbacks.onConnectionStatus("open", null, null, null);
     expect(handle.store.getState().steerProtocolSupported).toBe(true);
 
     handle.store.getState().retry();
     expect(handle.store.getState().steerProtocolSupported).toBe(false);
 
-    staleCallbacks.onConnectionStatus("open", null, null);
+    staleCallbacks.onConnectionStatus("open", null, null, null);
     expect(handle.store.getState().connectionStatus).toBe("connecting");
 
-    callbacks().onConnectionStatus("open", null, null);
+    callbacks().onConnectionStatus("open", null, null, null);
     expect(handle.store.getState().connectionStatus).toBe("open");
   });
 
@@ -1617,7 +1625,7 @@ describe("createChatSessionStore", () => {
       .interviewDeliveryRetry(identity);
     acceptLastAction(harness);
 
-    callbacks.onConnectionStatus("reconnecting", null, null);
+    callbacks.onConnectionStatus("reconnecting", null, null, null);
     snapshot();
     expect(harness.handle.store.getState().acceptedActions).toEqual({});
     harness.handle.store.setState({
@@ -3116,7 +3124,7 @@ describe("createChatSessionStore", () => {
     // arrives with the edit still un-acked: the stale pending is swept, and the
     // sweep restores its staged intent instead of leaving the slot cleared for
     // the next resend to run against the prior binding.
-    callbacks.onConnectionStatus("reconnecting", null, null);
+    callbacks.onConnectionStatus("reconnecting", null, null, null);
     emitSnapshotFrame({
       callbacks,
       access: "owner",
@@ -3132,7 +3140,7 @@ describe("createChatSessionStore", () => {
     ).toEqual(intent);
   });
 
-  // R14 `-CKjC`: the sweep's fallback is a PICK hand-back for one specific
+  // `-CKjC`: the sweep's fallback is a PICK hand-back for one specific
   // action, so it inherits the rejection path's ownership rule - a swept
   // action hands its pick back only when the outstanding consumption is ITS
   // OWN. Here it is not: a later send consumed the slot and was ACCEPTED, so
@@ -3225,7 +3233,7 @@ describe("createChatSessionStore", () => {
     // The reconnect sweeps the still-pending edit. The accepted send IS in the
     // transcript, so it is not restored - this is the sweep's own fallback
     // deciding alone, with no prompt hand-back to defer to.
-    callbacks.onConnectionStatus("reconnecting", null, null);
+    callbacks.onConnectionStatus("reconnecting", null, null, null);
     emitSnapshotFrame({
       callbacks,
       access: "owner",
@@ -3270,7 +3278,7 @@ describe("createChatSessionStore", () => {
 
     // Nothing staged, and the connection is gone: the send is refused before
     // it reaches the wire.
-    callbacks.onConnectionStatus("reconnecting", null, null);
+    callbacks.onConnectionStatus("reconnecting", null, null, null);
     expect(
       sendTestMessage(
         harness.handle.store,
@@ -3325,7 +3333,7 @@ describe("createChatSessionStore", () => {
     // A send then finds the slot empty (the edit took the pick) and is refused
     // locally. It never reached the host, so the edit is still the last
     // dispatch that actually took this slot.
-    callbacks.onConnectionStatus("reconnecting", null, null);
+    callbacks.onConnectionStatus("reconnecting", null, null, null);
     expect(
       sendTestMessage(
         harness.handle.store,
@@ -3384,7 +3392,7 @@ describe("createChatSessionStore", () => {
       .getState()
       .setSuspendedWorkspacePaths(key, ["/other-repo"]);
 
-    callbacks.onConnectionStatus("reconnecting", null, null);
+    callbacks.onConnectionStatus("reconnecting", null, null, null);
     expect(
       sendTestMessage(
         harness.handle.store,
@@ -3430,7 +3438,7 @@ describe("createChatSessionStore", () => {
     );
 
     // A second send finds the slot empty and is refused locally.
-    callbacks.onConnectionStatus("reconnecting", null, null);
+    callbacks.onConnectionStatus("reconnecting", null, null, null);
     expect(
       sendTestMessage(
         harness.handle.store,
@@ -3649,7 +3657,7 @@ describe("createChatSessionStore", () => {
       harness.handle.store.getState().acceptedActions[frame.clientActionId],
     ).toMatchObject({ action: "send", messageId: frame.messageId });
 
-    callbacks.onConnectionStatus("reconnecting", null, null);
+    callbacks.onConnectionStatus("reconnecting", null, null, null);
     emitSnapshot(callbacks, "owner");
 
     const state = harness.handle.store.getState();
@@ -3742,7 +3750,7 @@ describe("createChatSessionStore", () => {
     acceptLastAction(harness);
 
     // Snapshot A settles the stranded row: recovery happens exactly here.
-    callbacks.onConnectionStatus("reconnecting", null, null);
+    callbacks.onConnectionStatus("reconnecting", null, null, null);
     emitSnapshot(callbacks, "owner");
     expect(
       harness.handle.store.getState().failedSendRestoration,
@@ -3758,7 +3766,7 @@ describe("createChatSessionStore", () => {
       .ackFailedSendRestoration(frame.clientActionId);
 
     // Snapshot B on a later epoch must find nothing left to recover.
-    callbacks.onConnectionStatus("reconnecting", null, null);
+    callbacks.onConnectionStatus("reconnecting", null, null, null);
     emitSnapshot(callbacks, "owner");
 
     const state = harness.handle.store.getState();
@@ -3770,7 +3778,7 @@ describe("createChatSessionStore", () => {
     ).toEqual([]);
   });
 
-  // `P42f`: the same divide, at the LIVE site. `-NRic` fixed the record
+  // The same divide, at the LIVE site. `-NRic` fixed the record
   // retirement where the settled pass runs inside a snapshot; the settled
   // pass also runs on a live `turnStateChanged` frame, and THAT caller
   // applied every field of the patch except the retirement. So a send
@@ -3822,7 +3830,7 @@ describe("createChatSessionStore", () => {
       .ackFailedSendRestoration(frame.clientActionId);
 
     // A snapshot on a later epoch must find nothing left to recover.
-    callbacks.onConnectionStatus("reconnecting", null, null);
+    callbacks.onConnectionStatus("reconnecting", null, null, null);
     emitSnapshot(callbacks, "owner");
 
     const state = harness.handle.store.getState();
@@ -3921,7 +3929,7 @@ describe("createChatSessionStore", () => {
     if (frame.kind !== "send") throw new Error("Expected a send frame");
 
     // The snapshot pass restores it and hands the binding back.
-    callbacks.onConnectionStatus("reconnecting", null, null);
+    callbacks.onConnectionStatus("reconnecting", null, null, null);
     emitSnapshot(callbacks, "owner");
     expect(
       useWorktreeIntentStagingStore.getState().intentByKey[
@@ -4104,7 +4112,7 @@ describe("createChatSessionStore", () => {
       .setIntent(key, { entries: [standingPick] });
 
     // A reconnect restoration arrives carrying a worktree intent...
-    callbacks.onConnectionStatus("reconnecting", null, null);
+    callbacks.onConnectionStatus("reconnecting", null, null, null);
     emitSnapshot(callbacks, "owner");
     expect(
       harness.handle.store.getState().failedSendRestoration,
@@ -4299,7 +4307,7 @@ describe("createChatSessionStore", () => {
       chatId: CHAT_ID,
       queue: { status: "running", items: [] },
     });
-    callbacks.onConnectionStatus("reconnecting", null, null);
+    callbacks.onConnectionStatus("reconnecting", null, null, null);
     emitSnapshot(callbacks, "owner");
 
     const state = harness.handle.store.getState();
@@ -4378,7 +4386,7 @@ describe("createChatSessionStore", () => {
     ).toBe(true);
 
     // ...then an edit rewrites history and the message is gone for good.
-    callbacks.onConnectionStatus("reconnecting", null, null);
+    callbacks.onConnectionStatus("reconnecting", null, null, null);
     emitSnapshot(callbacks, "owner");
 
     const state = harness.handle.store.getState();
@@ -4459,7 +4467,7 @@ describe("createChatSessionStore", () => {
     ).toMatchObject({ confirmedByHost: true });
 
     // An edit rewrites history; the message is gone from every later snapshot.
-    callbacks.onConnectionStatus("reconnecting", null, null);
+    callbacks.onConnectionStatus("reconnecting", null, null, null);
     emitSnapshot(callbacks, "owner");
 
     const state = harness.handle.store.getState();
@@ -4553,7 +4561,7 @@ describe("createChatSessionStore", () => {
       },
     });
 
-    callbacks.onConnectionStatus("reconnecting", null, null);
+    callbacks.onConnectionStatus("reconnecting", null, null, null);
     emitSnapshot(callbacks, "owner");
 
     const state = harness.handle.store.getState();
@@ -4645,7 +4653,7 @@ describe("createChatSessionStore", () => {
       chatId: CHAT_ID,
       queue: { status: "running", items: [] },
     });
-    callbacks.onConnectionStatus("reconnecting", null, null);
+    callbacks.onConnectionStatus("reconnecting", null, null, null);
     emitSnapshot(callbacks, "owner");
 
     const state = harness.handle.store.getState();
@@ -4688,7 +4696,7 @@ describe("createChatSessionStore", () => {
       harness.handle.store.getState().acceptedActions[frame.clientActionId],
     ).toMatchObject({ confirmedByHost: true });
 
-    callbacks.onConnectionStatus("reconnecting", null, null);
+    callbacks.onConnectionStatus("reconnecting", null, null, null);
     emitSnapshot(callbacks, "owner");
 
     const state = harness.handle.store.getState();
@@ -4732,7 +4740,7 @@ describe("createChatSessionStore", () => {
     ).toMatchObject({ confirmedByHost: true });
 
     // ...the user cancels it, so every later snapshot lacks it.
-    callbacks.onConnectionStatus("reconnecting", null, null);
+    callbacks.onConnectionStatus("reconnecting", null, null, null);
     emitSnapshot(callbacks, "owner");
 
     const state = harness.handle.store.getState();
@@ -4796,7 +4804,7 @@ describe("createChatSessionStore", () => {
     }
     acceptLastAction(harness);
 
-    callbacks.onConnectionStatus("reconnecting", null, null);
+    callbacks.onConnectionStatus("reconnecting", null, null, null);
     emitSnapshotWithQueuedSend(callbacks, frame.messageId);
 
     const state = harness.handle.store.getState();
@@ -4831,7 +4839,7 @@ describe("createChatSessionStore", () => {
     harness.handle.store
       .getState()
       .setCurrentComposerSettings({ ...SETTINGS, model: "gpt-5.6" });
-    callbacks.onConnectionStatus("reconnecting", null, null);
+    callbacks.onConnectionStatus("reconnecting", null, null, null);
     emitSnapshot(callbacks, "owner");
     harness.handle.store
       .getState()
@@ -4902,7 +4910,7 @@ describe("createChatSessionStore", () => {
     harness.handle.store
       .getState()
       .setCurrentComposerSettings({ ...SETTINGS, model: "gpt-5.6" });
-    callbacks.onConnectionStatus("reconnecting", null, null);
+    callbacks.onConnectionStatus("reconnecting", null, null, null);
     emitSnapshot(callbacks, "owner");
 
     const reason =
@@ -5132,7 +5140,7 @@ describe("createChatSessionStore", () => {
     // The reconnect sweeps the edit. No prompt is handed back by THIS pass, so
     // the sweep's fallback would otherwise stage the edit's pick - underneath
     // the send's prompt that is still waiting in the slot.
-    callbacks.onConnectionStatus("reconnecting", null, null);
+    callbacks.onConnectionStatus("reconnecting", null, null, null);
     emitSnapshotFrame({
       callbacks,
       access: "owner",
@@ -5315,7 +5323,7 @@ describe("createChatSessionStore", () => {
     const frame = harness.sent[0];
     if (frame.kind !== "send") throw new Error("Expected send frame");
 
-    callbacks.onConnectionStatus("reconnecting", null, null);
+    callbacks.onConnectionStatus("reconnecting", null, null, null);
     emitSnapshot(callbacks, "owner");
 
     expect(harness.handle.store.getState().pendingActions).toEqual({});
@@ -5360,7 +5368,7 @@ describe("createChatSessionStore", () => {
       throw new Error("Expected two send frames");
     }
 
-    callbacks.onConnectionStatus("reconnecting", null, null);
+    callbacks.onConnectionStatus("reconnecting", null, null, null);
     emitSnapshot(callbacks, "owner");
 
     const noticesFor = (clientActionId: string) =>
@@ -5427,7 +5435,7 @@ describe("createChatSessionStore", () => {
     const second = harness.sent[1];
     if (second.kind !== "send") throw new Error("Expected a send frame");
 
-    callbacks.onConnectionStatus("reconnecting", null, null);
+    callbacks.onConnectionStatus("reconnecting", null, null, null);
     emitSnapshot(callbacks, "owner");
     expect(
       harness.handle.store
@@ -5503,7 +5511,7 @@ describe("createChatSessionStore", () => {
     ).toHaveLength(1);
   });
 
-  // R11 `-ApT-`: a multi-workspace intent labelled as "branch a, branch b"
+  // `-ApT-`: a multi-workspace intent labelled as "branch a, branch b"
   // with no workspace association, so a multi-repo staging could not actually
   // be re-picked. A SINGLE-workspace intent stays unqualified - the workspace
   // is unambiguous there and naming it would be noise.
@@ -5537,7 +5545,7 @@ describe("createChatSessionStore", () => {
     expect(notice.message).toContain("/repo/frontend");
     expect(notice.message).toContain("/repo/backend");
   });
-  // R12 `-A8bB`: the winning prompt's claim is TERMINAL. A send deliberately
+  // `-A8bB`: the winning prompt's claim is TERMINAL. A send deliberately
   // dispatched with no worktree still decides the slot - it just decides it is
   // empty. Skipping a null claim let a stale edit's binding attach itself to a
   // prompt that was sent without one: the same wrong-binding hazard as round
@@ -5579,7 +5587,7 @@ describe("createChatSessionStore", () => {
       { settings: SETTINGS, deliveryPolicy: "auto" },
     );
 
-    callbacks.onConnectionStatus("reconnecting", null, null);
+    callbacks.onConnectionStatus("reconnecting", null, null, null);
     emitSnapshotFrame({
       callbacks,
       access: "owner",
@@ -5600,7 +5608,7 @@ describe("createChatSessionStore", () => {
     ).toBeUndefined();
   });
 
-  // R10 `-AdAP`: the consumed-mark said "a dispatch took this slot" but not
+  // `-AdAP`: the consumed-mark said "a dispatch took this slot" but not
   // WHICH one. With a dead edit and a dead send both wanting their intent
   // back, the sweep runs first and the older EDIT claimed the mark - so the
   // send's recovered prompt landed in the composer bound to the edit's
@@ -5645,7 +5653,7 @@ describe("createChatSessionStore", () => {
 
     // Both die. The sweep restores the edit first, then the reconcile hands
     // the send's prompt back.
-    callbacks.onConnectionStatus("reconnecting", null, null);
+    callbacks.onConnectionStatus("reconnecting", null, null, null);
     emitSnapshotFrame({
       callbacks,
       access: "owner",
@@ -5667,7 +5675,7 @@ describe("createChatSessionStore", () => {
     ).toEqual(sendIntent);
   });
 
-  // R13 `-BtWD`: the consume-site mirror of round 12's terminal-claim rule. An
+  // `-BtWD`: the consume-site mirror of the terminal-claim rule. An
   // intent-FREE send skipped `consumeForDispatch` entirely, so the mark stayed
   // owned by an earlier edit - and that edit's rejection handed E back even
   // though a later send had superseded it. A dispatch's state is authoritative
@@ -5735,7 +5743,7 @@ describe("createChatSessionStore", () => {
     ).toBeUndefined();
   });
 
-  // R13 `-BmQF`: the sweep tested the LAST consumption's entries, but a
+  // `-BmQF`: the sweep tested the LAST consumption's entries, but a
   // restoration hands back its OWN action's intent. Send 1 took A; the user
   // then staged B and send 2 took that, so the mark describes B. A sweep that
   // removes A leaves the mark untouched - and send 1's prompt comes back with
@@ -5809,7 +5817,7 @@ describe("createChatSessionStore", () => {
 
     // Both die; send 1's prompt wins the restoration slot, so its binding is
     // what the arbiter tries to stage - and that worktree is gone.
-    callbacks.onConnectionStatus("reconnecting", null, null);
+    callbacks.onConnectionStatus("reconnecting", null, null, null);
     emitSnapshot(callbacks, "owner");
 
     expect(
@@ -5822,7 +5830,7 @@ describe("createChatSessionStore", () => {
     ).toBeUndefined();
   });
 
-  // R12 `-BZH4`: a third arrival order the claimant rules never saw. The edit
+  // `-BZH4`: a third arrival order the claimant rules never saw. The edit
   // consumed E; the user then staged S and a send consumed THAT, so the slot's
   // mark now belongs to the send's dispatch. If the edit's rejection lands
   // first and hands E back, it takes a slot the send still needs AND
@@ -5896,7 +5904,7 @@ describe("createChatSessionStore", () => {
     ).toBeUndefined();
   });
 
-  // R12 `-BQcb`: the rejection path refuses the hand-back like the reconnect
+  // `-BQcb`: the rejection path refuses the hand-back like the reconnect
   // paths do, but states things through its own errorNotice rather than
   // `failedSendRestoration.reason` - so the refusal was silent here while
   // being spoken everywhere else.
@@ -6056,7 +6064,7 @@ describe("createChatSessionStore", () => {
     expect(notice.message).not.toContain("re-pick that before resending");
   });
 
-  // R13 `-B5UX`: the founding invariant's last uncovered surface. Two sends
+  // `-B5UX`: the founding invariant's last uncovered surface. Two sends
   // rejected together - the first claims the restoration slot, the second's
   // optimistic row is dropped, and the rejection path appended only the host's
   // REASON. A dead send neither restored nor stated, on the one path that
@@ -6120,7 +6128,7 @@ describe("createChatSessionStore", () => {
     expect(notice.message).toContain("Host refused the send");
   });
 
-  // R13 `-BZHy`: the SEEDED first message (landing handoff) stamped PERSONAL
+  // `-BZHy`: the SEEDED first message (landing handoff) stamped PERSONAL
   // on its pendings while the frame carried the real context - so a
   // Team-billed first message that stranded would report it was going to bill
   // personal. A drift statement lying about the very thing it warns about.
@@ -6156,7 +6164,7 @@ describe("createChatSessionStore", () => {
 
     // Billing moves; the seeded send's own context must be what is reported.
     useAccountContextStore.setState({ accountContext: { type: "PERSONAL" } });
-    callbacks.onConnectionStatus("reconnecting", null, null);
+    callbacks.onConnectionStatus("reconnecting", null, null, null);
     emitSnapshotFrame({
       callbacks,
       access: "owner",
@@ -6170,7 +6178,7 @@ describe("createChatSessionStore", () => {
     expect(notice.message).toContain("billing team team-7");
   });
 
-  // R13 `-BmQJ`: delivery is dispatched per send and dies with the action, so
+  // `-BmQJ`: delivery is dispatched per send and dies with the action, so
   // a resend takes whatever the submit gesture implies then - a message queued
   // to land after a safe point can come back and interrupt instead.
   it("states a non-default delivery the send was queued with", () => {
@@ -6192,7 +6200,7 @@ describe("createChatSessionStore", () => {
     const second = harness.sent[1];
     if (second.kind !== "send") throw new Error("Expected a send frame");
 
-    callbacks.onConnectionStatus("reconnecting", null, null);
+    callbacks.onConnectionStatus("reconnecting", null, null, null);
     emitSnapshot(callbacks, "owner");
 
     const notice = noticeFor(harness, second.clientActionId);
@@ -6207,7 +6215,7 @@ describe("createChatSessionStore", () => {
     const second = harness.sent[1];
     if (second.kind !== "send") throw new Error("Expected a send frame");
 
-    callbacks.onConnectionStatus("reconnecting", null, null);
+    callbacks.onConnectionStatus("reconnecting", null, null, null);
     emitSnapshot(callbacks, "owner");
 
     // Naming `auto` every time would bury the case that matters.
@@ -6216,7 +6224,7 @@ describe("createChatSessionStore", () => {
     );
   });
 
-  // R12 `-A8bF`: billing context is stamped at dispatch and dies with the
+  // `-A8bF`: billing context is stamped at dispatch and dies with the
   // action, so a resend bills whatever the picker holds now. Unlike a model
   // change it leaves no trace in the conversation.
   it("states that a resend would bill a different account", () => {
@@ -6241,7 +6249,7 @@ describe("createChatSessionStore", () => {
     useAccountContextStore.setState({
       accountContext: { type: "TEAM", teamId: "team-9" },
     });
-    callbacks.onConnectionStatus("reconnecting", null, null);
+    callbacks.onConnectionStatus("reconnecting", null, null, null);
     emitSnapshotFrame({
       callbacks,
       access: "owner",
@@ -6258,7 +6266,7 @@ describe("createChatSessionStore", () => {
     expect(notice.message).toContain("different settings now");
   });
 
-  // R9 `-AQUj`: the drift compared against the last SNAPSHOT's settings. When
+  // `-AQUj`: the drift compared against the last SNAPSHOT's settings. When
   // the user changes settings and a `turnStateChanged` settles the send before
   // another snapshot lands, the live composer already holds the new tuple - so
   // the clause was omitted exactly when the change most worth warning about
@@ -6310,7 +6318,7 @@ describe("createChatSessionStore", () => {
     expect(notice.message).toContain("gpt-5-codex");
   });
 
-  // R9 `-AQUm`: `null` is a VALUE - "use the default" - not an absence. A send
+  // `-AQUm`: `null` is a VALUE - "use the default" - not an absence. A send
   // dispatched under default effort and settled after the user picked an
   // explicit one drifts, and dropping the field because its sent value was
   // null hid exactly that.
@@ -6330,7 +6338,7 @@ describe("createChatSessionStore", () => {
     const second = harness.sent[1];
     if (second.kind !== "send") throw new Error("Expected a send frame");
 
-    callbacks.onConnectionStatus("reconnecting", null, null);
+    callbacks.onConnectionStatus("reconnecting", null, null, null);
     emitSnapshotFrame({
       callbacks,
       access: "owner",
@@ -6344,7 +6352,7 @@ describe("createChatSessionStore", () => {
     expect(notice.message).toContain("service tier default");
   });
 
-  // R9 `-AQUo`: the exemption's cost must not be paid by ordinary history. The
+  // `-AQUo`: the exemption's cost must not be paid by ordinary history. The
   // cap counted TOTAL length, so retained records crowded the ordinary window
   // down to nothing and an ordinary notice was evicted before it was ever seen.
   it("keeps the ordinary notice window intact alongside retained records", () => {
@@ -6392,7 +6400,7 @@ describe("createChatSessionStore", () => {
     ).toHaveLength(4);
   });
 
-  // R8 `-6Te`: the dead send's run settings die with it, so a resend picks up
+  // `-6Te`: the dead send's run settings die with it, so a resend picks up
   // whatever the chat uses NOW. A different model changes what the agent does,
   // silently - same statement-obligation class as the worktree.
   it("names run settings that moved between dispatch and settle", () => {
@@ -6411,7 +6419,7 @@ describe("createChatSessionStore", () => {
     if (second.kind !== "send") throw new Error("Expected a send frame");
 
     // The chat's settings change while both sends are in flight.
-    callbacks.onConnectionStatus("reconnecting", null, null);
+    callbacks.onConnectionStatus("reconnecting", null, null, null);
     emitSnapshotFrame({
       callbacks,
       access: "owner",
@@ -6425,7 +6433,7 @@ describe("createChatSessionStore", () => {
     expect(notice.message).toContain("gpt-5-codex");
     expect(notice.message).toContain("model");
   });
-  // R7 `-oRb`: "no branch to re-pick" is not "nothing to state". A send staged
+  // `-oRb`: "no branch to re-pick" is not "nothing to state". A send staged
   // to switch to a LOCAL checkout or to IMPORT an existing worktree settles
   // with no statement at all today, so the resend runs against the previous
   // binding - the same silent-wrong-worktree class, two entry kinds over.
@@ -6443,7 +6451,7 @@ describe("createChatSessionStore", () => {
 
     expect(notice.message).toContain("/repo/service-a");
   });
-  // R7 `-oRn`: the guard's contract is "a newer LIVE pick wins", but it was
+  // `-oRn`: the guard's contract is "a newer LIVE pick wins", but it was
   // implemented as "a newer REVISION wins". A second send consuming its own
   // staged pick advances the revision and then leaves the slot EMPTY - so
   // nothing live is at risk, yet the winner's binding was suppressed.
@@ -6505,7 +6513,7 @@ describe("createChatSessionStore", () => {
     ).toEqual(first);
   });
 
-  // R6 `-cbH`: a diagram-only send used to be told it had "no recoverable
+  // `-cbH`: a diagram-only send used to be told it had "no recoverable
   // content" while its source was deleted. The block is an ATOM - the source
   // is in `attrs.code`, not in children - so the projection saw nothing, and
   // classifying it text-complete on top of that was the defect.
@@ -6517,7 +6525,7 @@ describe("createChatSessionStore", () => {
     const second = harness.sent[1];
     if (second.kind !== "send") throw new Error("Expected a send frame");
 
-    callbacks.onConnectionStatus("reconnecting", null, null);
+    callbacks.onConnectionStatus("reconnecting", null, null, null);
     emitSnapshot(callbacks, "owner");
 
     const notice = noticeFor(harness, second.clientActionId);
@@ -6526,7 +6534,7 @@ describe("createChatSessionStore", () => {
     expect(notice.message).not.toContain("no recoverable content");
   });
 
-  // R5 `-LSI`: the slot LOSER's worktree. Round 4 gave the winner its binding
+  // `-LSI`: the slot LOSER's worktree. The winner gets its binding
   // back; a send that loses the race is STATED, and its intent dies with the
   // row. The staging slot is single and the winner holds it, so this cannot be
   // a restore - it is a statement obligation, and the branch name is the part
@@ -6575,7 +6583,7 @@ describe("createChatSessionStore", () => {
     const second = harness.sent[1];
     if (second.kind !== "send") throw new Error("Expected a send frame");
 
-    callbacks.onConnectionStatus("reconnecting", null, null);
+    callbacks.onConnectionStatus("reconnecting", null, null, null);
     emitSnapshot(callbacks, "owner");
 
     const notice = noticeFor(harness, second.clientActionId);
@@ -6583,7 +6591,7 @@ describe("createChatSessionStore", () => {
     expect(notice.message).toContain("feat/rescue");
   });
 
-  // R5 `-LSS`: the quoted draft must be the user's text, not a mangling of it.
+  // `-LSS`: the quoted draft must be the user's text, not a mangling of it.
   // `plainTextFromNode` joins a list's children with "", so `foo`/`bar` come
   // back as `foobar` - the statement tells them to copy something they never
   // wrote, which is worse than saying nothing.
@@ -6595,7 +6603,7 @@ describe("createChatSessionStore", () => {
     const second = harness.sent[1];
     if (second.kind !== "send") throw new Error("Expected a send frame");
 
-    callbacks.onConnectionStatus("reconnecting", null, null);
+    callbacks.onConnectionStatus("reconnecting", null, null, null);
     emitSnapshot(callbacks, "owner");
 
     const notice = noticeFor(harness, second.clientActionId);
@@ -6605,7 +6613,7 @@ describe("createChatSessionStore", () => {
     expect(notice.message).toContain("- foo\n- bar");
   });
 
-  // R5 `-KNQ`: the settled patch is spread into the state object, so its
+  // `-KNQ`: the settled patch is spread into the state object, so its
   // non-state keys land in the store. They are reconcile plumbing, not state,
   // and every `useShallow` subscriber compares them forever after.
   it("keeps reconcile-only patch keys out of the store state", () => {
@@ -6627,7 +6635,7 @@ describe("createChatSessionStore", () => {
     expect(stateKeys).not.toContain("restoredWorktreeIntent");
   });
 
-  // R4-2: a terminal/artifact quote projects through the blockquote branch to
+  // A terminal/artifact quote projects through the blockquote branch to
   // plain quoted text, dropping sourceType/sourceId/sourceEpicId - the
   // provenance `serializeSourcedQuote` sends to the agent. Second member of
   // the mention class: projection-loses-invisible-structure.
@@ -6639,7 +6647,7 @@ describe("createChatSessionStore", () => {
     const second = harness.sent[1];
     if (second.kind !== "send") throw new Error("Expected a send frame");
 
-    callbacks.onConnectionStatus("reconnecting", null, null);
+    callbacks.onConnectionStatus("reconnecting", null, null, null);
     emitSnapshot(callbacks, "owner");
 
     const notice = noticeFor(harness, second.clientActionId);
@@ -6658,7 +6666,7 @@ describe("createChatSessionStore", () => {
     const second = harness.sent[1];
     if (second.kind !== "send") throw new Error("Expected a send frame");
 
-    callbacks.onConnectionStatus("reconnecting", null, null);
+    callbacks.onConnectionStatus("reconnecting", null, null, null);
     emitSnapshot(callbacks, "owner");
 
     const notice = noticeFor(harness, second.clientActionId);
@@ -6676,7 +6684,7 @@ describe("createChatSessionStore", () => {
     const second = harness.sent[1];
     if (second.kind !== "send") throw new Error("Expected a send frame");
 
-    callbacks.onConnectionStatus("reconnecting", null, null);
+    callbacks.onConnectionStatus("reconnecting", null, null, null);
     emitSnapshot(callbacks, "owner");
 
     const notice = noticeFor(harness, second.clientActionId);
@@ -6686,7 +6694,7 @@ describe("createChatSessionStore", () => {
     expect(notice.message).not.toContain("re-pick");
   });
 
-  // R4-1: a staged worktree/branch choice rides the send, and dispatch clears
+  // A staged worktree/branch choice rides the send, and dispatch clears
   // the slot. The ACCEPTED ack drops the pending action - `acceptedActions`
   // does not retain `restoreWorktreeIntent` - so a stop before
   // `messageAccepted` leaves this pass restoring the prompt with no binding.
@@ -6834,7 +6842,7 @@ describe("createChatSessionStore", () => {
     ).toEqual(newer);
   });
 
-  // R3-1: absence from a snapshot is only evidence for a send dispatched on an
+  // Absence from a snapshot is only evidence for a send dispatched on an
   // EARLIER connection, where the ack is definitively dead. A send dispatched
   // after this connection reached `open` can be missing simply because the
   // snapshot was generated before it arrived - settling on that would tell the
@@ -6856,8 +6864,8 @@ describe("createChatSessionStore", () => {
 
     // The connection drops and comes back; the composer gate reopens on
     // `open`, so the user can send again before the snapshot lands.
-    callbacks.onConnectionStatus("reconnecting", null, null);
-    callbacks.onConnectionStatus("open", null, null);
+    callbacks.onConnectionStatus("reconnecting", null, null, null);
+    callbacks.onConnectionStatus("open", null, null, null);
     sendTestMessage(
       harness.handle.store,
       SECOND_CONTENT,
@@ -6914,7 +6922,7 @@ describe("createChatSessionStore", () => {
     expect(noticesForLive()).toEqual([]);
   });
 
-  // R3-2: a mention chip projects to plain `@path`, so the quoted text LOOKS
+  // A mention chip projects to plain `@path`, so the quoted text LOOKS
   // complete - but the workspace, host and entity binding behind the chip do
   // not survive, and pasting the text back does not rebuild it. A partial loss
   // presented as a whole recovery is the same silence one content class over.
@@ -6938,7 +6946,7 @@ describe("createChatSessionStore", () => {
     const second = harness.sent[1];
     if (second.kind !== "send") throw new Error("Expected a send frame");
 
-    callbacks.onConnectionStatus("reconnecting", null, null);
+    callbacks.onConnectionStatus("reconnecting", null, null, null);
     emitSnapshot(callbacks, "owner");
 
     const notice = harness.handle.store
@@ -6979,7 +6987,7 @@ describe("createChatSessionStore", () => {
     const second = harness.sent[1];
     if (second.kind !== "send") throw new Error("Expected a send frame");
 
-    callbacks.onConnectionStatus("reconnecting", null, null);
+    callbacks.onConnectionStatus("reconnecting", null, null, null);
     emitSnapshot(callbacks, "owner");
 
     const notice = harness.handle.store
@@ -7019,7 +7027,7 @@ describe("createChatSessionStore", () => {
     const first = harness.sent[0];
     if (first.kind !== "send") throw new Error("Expected a send frame");
 
-    callbacks.onConnectionStatus("reconnecting", null, null);
+    callbacks.onConnectionStatus("reconnecting", null, null, null);
     emitSnapshot(callbacks, "owner");
 
     // The composer consumes the winning restoration, freeing the slot - what
@@ -7116,7 +7124,7 @@ describe("createChatSessionStore", () => {
     send(THIRD_CONTENT);
     const strandedB = acceptLastAction(harness);
 
-    callbacks.onConnectionStatus("reconnecting", null, null);
+    callbacks.onConnectionStatus("reconnecting", null, null, null);
     emitSnapshot(callbacks, "owner");
 
     const state = harness.handle.store.getState();
@@ -7430,7 +7438,7 @@ describe("createChatSessionStore", () => {
     expect(
       harness.handle.store.getState().queueCancel(queuedItem.queueItemId),
     ).not.toBeNull();
-    callbacks.onConnectionStatus("reconnecting", null, null);
+    callbacks.onConnectionStatus("reconnecting", null, null, null);
     emitQueuedSnapshot();
     expect(harness.handle.store.getState().pendingActions).toEqual({});
     expect(visibleQueueItemIds()).toEqual([queuedItem.queueItemId]);
@@ -7557,7 +7565,7 @@ describe("createChatSessionStore", () => {
     // guards: `withoutResolvedAcceptedQueueCancellations` used to run only on
     // the `queueChanged` frame, so a cancellation accepted just before a
     // reconnect kept its record through every later snapshot.
-    callbacks.onConnectionStatus("reconnecting", null, null);
+    callbacks.onConnectionStatus("reconnecting", null, null, null);
     emitSnapshotFrame({
       callbacks,
       access: "owner",
@@ -7602,7 +7610,7 @@ describe("createChatSessionStore", () => {
       throw new Error("Expected queue cancel action");
     acceptLastAction(harness);
 
-    callbacks.onConnectionStatus("reconnecting", null, null);
+    callbacks.onConnectionStatus("reconnecting", null, null, null);
     emitSnapshotFrame({
       callbacks,
       access: "owner",
@@ -7903,7 +7911,7 @@ describe("createChatSessionStore", () => {
     const frame = harness.sent[0];
     if (frame.kind !== "send") throw new Error("Expected send frame");
 
-    callbacks.onConnectionStatus("reconnecting", null, null);
+    callbacks.onConnectionStatus("reconnecting", null, null, null);
     emitSnapshotFrame({
       callbacks,
       access: "owner",
@@ -9674,7 +9682,7 @@ describe("createChatSessionStore", () => {
     ).toEqual({ clientActionId: sent, awaitingTurnEnd: false, turnId: null });
 
     // The frame died with the connection before any ack arrived.
-    callbacks.onConnectionStatus("reconnecting", null, null);
+    callbacks.onConnectionStatus("reconnecting", null, null, null);
     emitSnapshotFrame({
       callbacks,
       access: "owner",
@@ -9736,7 +9744,7 @@ describe("createChatSessionStore", () => {
 
     // The turn-stop frame died with the connection before any ack arrived;
     // the reconnect snapshot still reports the turn as active.
-    callbacks.onConnectionStatus("reconnecting", null, null);
+    callbacks.onConnectionStatus("reconnecting", null, null, null);
     emitSnapshotFrame({
       callbacks,
       access: "owner",
@@ -9820,7 +9828,7 @@ describe("createChatSessionStore", () => {
     // The connection drops before `turnStateChanged` reports the turn
     // settled; the reconnect snapshot is the only signal that arrives, and
     // it must advance the deferred stop on its own.
-    callbacks.onConnectionStatus("reconnecting", null, null);
+    callbacks.onConnectionStatus("reconnecting", null, null, null);
     emitSnapshotFrame({
       callbacks,
       access: "owner",
@@ -11765,7 +11773,7 @@ describe("createChatSessionStore", () => {
       event: transitionOnly,
     });
 
-    // Restorable selector keeps the gating event so Flow 8 restore still
+    // Restorable selector keeps the gating event so the restore still
     // fires even after the transition-only emission lands.
     expect(
       selectRestorableSetupInterruption(harness.handle.store.getState()),
@@ -12550,7 +12558,7 @@ describe("blockDelta coalescing", () => {
     harness.handle.store.getState().retry();
 
     expect(harness.manual.pendingCount()).toBe(0);
-    staleCallbacks.onConnectionStatus("open", null, null);
+    staleCallbacks.onConnectionStatus("open", null, null, null);
     expect(harness.handle.store.getState().connectionStatus).toBe("connecting");
     harness.manual.runAll();
     expect(liveText(harness.handle)).toBe("");
@@ -12811,7 +12819,7 @@ describe("in-flight block finalization on stop / steer", () => {
 
     // Disconnect: activeTurn is cleared but the live row is kept (not yet
     // materialized). This is the window where a replayed/late delta can arrive.
-    callbacks.onConnectionStatus("closed", null, null);
+    callbacks.onConnectionStatus("closed", null, null, null);
     expect(harness.handle.store.getState().activeTurn).toBeNull();
     expect(harness.handle.store.getState().liveAssistantMessage).not.toBeNull();
     const versionBefore =
@@ -12889,7 +12897,7 @@ describe("non-message pendings across a missed-ack reconnect", () => {
 
     // The connection drops before any ack arrives; the drop itself settles
     // NOTHING (a transient wobble must not cancel in-flight actions).
-    harness.callbacks().onConnectionStatus("reconnecting", null, null);
+    harness.callbacks().onConnectionStatus("reconnecting", null, null, null);
     expect(pendingActionKinds(harness)).toEqual([
       "stop",
       "approvalDecision",
@@ -12926,7 +12934,7 @@ describe("non-message pendings across a missed-ack reconnect", () => {
     ).not.toBeNull();
     expect(pendingActionKinds(harness)).toEqual(["editUserMessage"]);
 
-    harness.callbacks().onConnectionStatus("reconnecting", null, null);
+    harness.callbacks().onConnectionStatus("reconnecting", null, null, null);
     // The reconnect snapshot does not contain the edit (never applied).
     emitSnapshot(harness.callbacks(), "owner");
     expect(store.getState().pendingActions).toEqual({});
@@ -12938,8 +12946,8 @@ describe("non-message pendings across a missed-ack reconnect", () => {
 
     // Reconnect first, then act on the NEW connection before its snapshot
     // lands - that pending's ack is still live and must survive the sweep.
-    harness.callbacks().onConnectionStatus("reconnecting", null, null);
-    harness.callbacks().onConnectionStatus("open", null, null);
+    harness.callbacks().onConnectionStatus("reconnecting", null, null, null);
+    harness.callbacks().onConnectionStatus("open", null, null, null);
     expect(harness.handle.store.getState().stopTurn()).not.toBeNull();
 
     emitSnapshot(harness.callbacks(), "owner");
@@ -12985,7 +12993,7 @@ describe("non-message pendings across a missed-ack reconnect", () => {
     expect(store.getState().stopBackgroundItem("task-lost")).not.toBeNull();
 
     // Both tasks are still running when the reconnect snapshot arrives.
-    callbacks.onConnectionStatus("reconnecting", null, null);
+    callbacks.onConnectionStatus("reconnecting", null, null, null);
     emitSnapshotFrame({
       callbacks,
       access: "owner",
@@ -13026,7 +13034,7 @@ describe("non-message pendings across a missed-ack reconnect", () => {
 
     // After a drop, its restoreCompleted can never arrive - the reconnect
     // snapshot clears the stranded slot instead of spinning forever.
-    callbacks.onConnectionStatus("reconnecting", null, null);
+    callbacks.onConnectionStatus("reconnecting", null, null, null);
     emitSnapshot(callbacks, "owner");
     expect(harness.handle.store.getState().restore).toBeNull();
   });
@@ -13138,7 +13146,7 @@ describe("createChatSessionStore - persisted auth-error provider nudge", () => {
     expect(harness.nudgeCount()).toBe(1);
 
     // Reconnect re-delivers the SAME row: no duplicate nudge.
-    harness.callbacks().onConnectionStatus("reconnecting", null, null);
+    harness.callbacks().onConnectionStatus("reconnecting", null, null, null);
     emitMessagesSnapshot(harness.callbacks(), [authRow]);
     expect(harness.nudgeCount()).toBe(1);
   });
@@ -13160,7 +13168,7 @@ describe("createChatSessionStore - persisted auth-error provider nudge", () => {
     // A second headless failure lands during a disconnect; the reconnect
     // snapshot is its only signal, so the store must nudge again - a
     // store-lifetime latch would leave the provider gate stale here.
-    harness.callbacks().onConnectionStatus("reconnecting", null, null);
+    harness.callbacks().onConnectionStatus("reconnecting", null, null, null);
     emitMessagesSnapshot(harness.callbacks(), [
       authErroredAssistantMessage("assistant-auth-1", "auth"),
       authErroredAssistantMessage("assistant-ok", null),
@@ -13405,7 +13413,7 @@ describe("turn-settled stranded-send reconciliation", () => {
     // The accepted ack removes the pending action but keeps the optimistic
     // entry; the connection then dies before any settling frame arrives.
     acceptLastAction(harness);
-    callbacks.onConnectionStatus("reconnecting", null, null);
+    callbacks.onConnectionStatus("reconnecting", null, null, null);
 
     // The reconnect snapshot is the only authoritative settled state: no
     // turn in progress, and the message never reached the transcript.
@@ -13444,7 +13452,7 @@ describe("turn-settled stranded-send reconciliation", () => {
     const frame = harness.sent[0];
     if (frame.kind !== "send") throw new Error("Expected send frame");
     acceptLastAction(harness);
-    callbacks.onConnectionStatus("reconnecting", null, null);
+    callbacks.onConnectionStatus("reconnecting", null, null, null);
 
     // The send did land host-side; the lost frame was `messageAccepted`, not
     // the message itself. The persisted row is authoritative - no composer
@@ -13923,7 +13931,7 @@ describe("preSnapshotRetries", () => {
     const harness = createHarness();
     const callbacks = harness.callbacks();
 
-    callbacks.onConnectionStatus("reconnecting", null, null);
+    callbacks.onConnectionStatus("reconnecting", null, null, null);
     const first = preSnapshotRetries(harness);
     // The `firstAt` below is self-referential - it proves STABILITY across the
     // two reads, not that a clock was ever read - so pin down that it is a
@@ -13937,7 +13945,7 @@ describe("preSnapshotRetries", () => {
       reason: null,
     });
 
-    callbacks.onConnectionStatus("reconnecting", null, null);
+    callbacks.onConnectionStatus("reconnecting", null, null, null);
     const second = preSnapshotRetries(harness);
     expect(second).toEqual({
       count: 2,
@@ -13954,13 +13962,18 @@ describe("preSnapshotRetries", () => {
 
     // The details arrive as the transition's retry cause, never as a close
     // reason: `StreamCloseReason` describes a CLOSE (see `StatusChangeHandler`).
-    callbacks.onConnectionStatus("reconnecting", null, {
-      code: "CHAT_OPEN_FAILED",
-      reason: "CHAT_OPEN_FAILED: host refused to open this chat",
-      incompatibleMethods: null,
-      upgradeGuidance: null,
-      retryable: true,
-    });
+    callbacks.onConnectionStatus(
+      "reconnecting",
+      null,
+      {
+        code: "CHAT_OPEN_FAILED",
+        reason: "CHAT_OPEN_FAILED: host refused to open this chat",
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+        retryable: true,
+      },
+      null,
+    );
 
     const retries = preSnapshotRetries(harness);
     expect(retries).toEqual({
@@ -13976,13 +13989,13 @@ describe("preSnapshotRetries", () => {
     const harness = createHarness();
     const callbacks = harness.callbacks();
 
-    callbacks.onConnectionStatus("reconnecting", null, null);
+    callbacks.onConnectionStatus("reconnecting", null, null, null);
     expect(harness.handle.store.getState().preSnapshotRetries).not.toBeNull();
 
     emitSnapshot(callbacks, "owner");
     expect(harness.handle.store.getState().preSnapshotRetries).toBeNull();
 
-    callbacks.onConnectionStatus("reconnecting", null, null);
+    callbacks.onConnectionStatus("reconnecting", null, null, null);
     expect(harness.handle.store.getState().preSnapshotRetries).toBeNull();
     harness.handle.dispose();
   });
@@ -13991,7 +14004,7 @@ describe("preSnapshotRetries", () => {
     const harness = createHarness();
     const callbacks = harness.callbacks();
 
-    callbacks.onConnectionStatus("closed", { kind: "caller" }, null);
+    callbacks.onConnectionStatus("closed", { kind: "caller" }, null, null);
     expect(harness.handle.store.getState().preSnapshotRetries).toBeNull();
 
     callbacks.onConnectionStatus(
@@ -14006,6 +14019,7 @@ describe("preSnapshotRetries", () => {
         },
       },
       null,
+      null,
     );
     expect(harness.handle.store.getState().preSnapshotRetries).toBeNull();
     harness.handle.dispose();
@@ -14015,8 +14029,8 @@ describe("preSnapshotRetries", () => {
     const harness = createHarness();
     const callbacks = harness.callbacks();
 
-    callbacks.onConnectionStatus("reconnecting", null, null);
-    callbacks.onConnectionStatus("reconnecting", null, null);
+    callbacks.onConnectionStatus("reconnecting", null, null, null);
+    callbacks.onConnectionStatus("reconnecting", null, null, null);
     const beforeRetry = preSnapshotRetries(harness);
     expect(beforeRetry.count).toBe(2);
 
@@ -14027,7 +14041,7 @@ describe("preSnapshotRetries", () => {
     expect(preSnapshotRetries(harness)).toEqual(beforeRetry);
 
     const recoveredCallbacks = harness.callbacks();
-    recoveredCallbacks.onConnectionStatus("reconnecting", null, null);
+    recoveredCallbacks.onConnectionStatus("reconnecting", null, null, null);
     expect(preSnapshotRetries(harness)).toEqual({
       count: 3,
       firstAt: beforeRetry.firstAt,

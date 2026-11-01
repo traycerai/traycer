@@ -101,6 +101,7 @@ function connect() {
           event.status.status,
           event.status.reason,
           event.status.retryCause,
+          event.status.continuity,
         );
         return;
       case "stream/manifest":
@@ -443,6 +444,30 @@ describe("stream proxy — opening", () => {
     // host's details, and still no close reason on a reconnect.
     expect(heard).toEqual([
       { status: "reconnecting", reason: null, retryCause },
+    ]);
+  });
+
+  it("carries a held and a continued transition to the worker session, and a null reconnect after them", () => {
+    const { recording, worker } = connect();
+    const session = worker.client.subscribe("epic.status.subscribe", {
+      epicId: "epic-1",
+    });
+    const heard: Array<{
+      readonly status: string;
+      readonly continuity: unknown;
+    }> = [];
+    session.onStatusChange((status, _reason, _retryCause, continuity) => {
+      heard.push({ status, continuity });
+    });
+
+    recording.opened()[0]?.emitContinuity("reconnecting", "held");
+    recording.opened()[0]?.emitContinuity("open", "continued");
+    recording.opened()[0]?.emitContinuity("reconnecting", null);
+
+    expect(heard).toEqual([
+      { status: "reconnecting", continuity: "held" },
+      { status: "open", continuity: "continued" },
+      { status: "reconnecting", continuity: null },
     ]);
   });
 });

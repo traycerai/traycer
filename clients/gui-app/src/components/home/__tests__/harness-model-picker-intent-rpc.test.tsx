@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // NOT mocked here - the whole point of this suite is to exercise the real
 // query hooks against a mocked host transport so an actual RPC undercount (or
 // overcount) is observable, which a wholesale hook mock structurally cannot
-// catch (see the review comment on PR #331).
+// catch.
 vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
   useSystemTabModalActions: () => ({
     openSettings: vi.fn(),
@@ -241,7 +241,7 @@ vi.mock("@/lib/host/runtime", () => ({
   // `useHostClient()` rather than `useHostBinding()?.hostClient` - both must
   // resolve to the same fixture client or the component throws on render.
   useHostClient: () => hostBindingMock.current?.hostClient,
-  // The SPINE, a separate export since redesign P2.1.
+  // The SPINE, a separate export.
   useHostRuntimeClient: () => hostBindingMock.current?.hostClient,
 }));
 
@@ -458,6 +458,7 @@ function renderPickerWithActivity(
     reasoningFallback: "model-default",
     seedKey: "picker-intent-rpc-test",
     values: {
+      ultracode: false,
       permission: "supervised",
       selection,
       reasoning: "",
@@ -466,6 +467,7 @@ function renderPickerWithActivity(
     onSettingsChange: null,
     tuiOnly: false,
     chatLineCarriesAutoMode: null,
+    ultracodeCarried: false,
     hostId: "host-a",
   });
   const tree = (active: boolean): ReactElement => (
@@ -473,6 +475,7 @@ function renderPickerWithActivity(
       <SurfaceActivityProvider active={active}>
         <TooltipProvider delayDuration={0}>
           <HarnessModelPicker
+            withUltracode={false}
             labelDisplay="responsive"
             store={store}
             maxModeContext={{ kind: "none" }}

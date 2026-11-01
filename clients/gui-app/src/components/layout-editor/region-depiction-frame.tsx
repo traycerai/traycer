@@ -47,8 +47,8 @@ export type HostContextId =
  * frame and holds the first half of that split; it is the only thing that
  * keeps these strings honest as the surfaces move (Risk 3).
  *
- * A surface that carries no type scale of its own gets none here either: since
- * C1 and C2 every composer control is a chip with its own `text-ui-xs`, so a
+ * A surface that carries no type scale of its own gets none here either:
+ * every composer control is a chip with its own `text-ui-xs`, so a
  * scale invented here would be drift in the one direction a subset check
  * cannot see.
  */
@@ -119,7 +119,7 @@ export function HostContextFrame(props: {
   // The box is not the only thing that moves: a longer reading at the same
   // width overflows a frame that never resized, so the two numbers are re-read
   // whenever the CONTENT changes. Keyed on the children rather than run on
-  // every render (G1-21): the presets block alone mounts ~30 of these, and an
+  // every render: the presets block alone mounts ~30 of these, and an
   // unkeyed effect made every filter keystroke a synchronous layout read per
   // frame while none of their content had moved.
   useEffect(measure, [measure, props.children]);

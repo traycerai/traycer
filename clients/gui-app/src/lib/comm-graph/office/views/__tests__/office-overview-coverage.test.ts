@@ -1,9 +1,9 @@
 /**
- * Two overview-floor coverage regressions found by T5's cold review of
- * `08ee4f038`, on top of the seam that review closed. BOTH ARE CLOSED; what
+ * Two overview-floor coverage regressions found in
+ * `08ee4f038`, on top of the seam closed there. BOTH ARE CLOSED; what
  * follows records what each one was and pins the behaviour that replaced it.
  * The original eleven Campus/City corner misses (see `original-corner-sweep`
- * in the review evidence) are not reopened here.
+ * in the evidence) are not reopened here.
  *
  * H1 - `cornerOverhangOf` (`views/isometric/iso-painter.ts`) derived its bleed
  * from a symmetric diamond, but a NONSQUARE tile rectangle projects to a
@@ -23,7 +23,7 @@
  *
  * H2 - `isoBlockOverhang` walked every floor, amenity and room on EVERY
  * overview frame, before the scene's floor cache was consulted, which
- * reintroduced the full-population work T5's painter index removed. The scene
+ * reintroduced the full-population work the painter index removed. The scene
  * memoises the painter's declared overhang per plan now, and the case below
  * pins the repeat walks at none. The memo and its invalidation are unchanged
  * by the shape - the scalar it caches is simply zero on these two views now -
@@ -128,7 +128,7 @@ interface OverviewMiss {
  * Nine points per region - both near corners, both edge midpoints and the
  * centre, along each of its own two edges - checked against a real per-rect
  * `scene.frame(0, …)` query rather than the whole-map floor it is compared to.
- * The T5 review's own probe (`t5-overview-handoff.test.ts`) uses the same nine
+ * The probe (`t5-overview-handoff.test.ts`) uses the same nine
  * fractions; they walk the region's edges rather than a bounding box because
  * an isometric region is a parallelogram and the corners of ITS box are ground
  * it does not paint (see `overview-shapes.ts`).
@@ -412,9 +412,9 @@ function withCountedRooms(
   };
 }
 
-/** 10 / 100 / 1,000 agents, the reviewer's own scale. */
+/** 10 / 100 / 1,000 agents, the measured scale. */
 const MANY_ROOTS_COUNTS: ReadonlyArray<number> = [10, 100, 1000];
-/** The reviewer's measured room counts - identical for Campus and City, since both plan one room per lineage root/team. */
+/** The measured room counts - identical for Campus and City, since both plan one room per lineage root/team. */
 const MANY_ROOTS_ROOM_COUNTS: ReadonlyArray<number> = [6, 51, 501];
 
 /** `many-roots(n, 1)`, with every odd-indexed agent made the child of the preceding root - turning a flat forest of loners into small real teams. */
@@ -449,7 +449,7 @@ describe("the per-frame room-population memo (H2)", () => {
         const { agents, statusById } = manyRootsAgents(count);
         const counter: RoomReadCounter = { reads: 0 };
         // This case is only about room reads; the overhang side of the
-        // instrumented view is exercised by the H2-fixup cases below.
+        // instrumented view is exercised by the H2 cases below.
         const overhangCounter: OverhangRecomputeCounter = { recomputes: 0 };
         const countedView = withCountedRooms(view, counter, overhangCounter);
         const scene = new OfficeScene(countedView, null);
@@ -497,7 +497,7 @@ describe("the per-frame room-population memo (H2)", () => {
   }
 });
 
-// ---- H2 fixup: the overhang memo's own invalidation --------------------- //
+// ---- H2: the overhang memo's own invalidation --------------------------- //
 
 /**
  * `blockOverhangPx` memoizes a scalar property of the LAYOUT alone, keyed on
@@ -553,7 +553,7 @@ describe("the block-overhang memo's own invalidation (H2 fixup)", () => {
 
         // Five more identical frames must neither re-walk the rooms (H2's
         // own regression, above) nor recompute the overhang again (this
-        // fixup's).
+        // case's).
         roomCounter.reads = 0;
         for (let frame = 0; frame < 5; frame += 1) {
           expect(scene.frame(0, OFF_MAP_OVERVIEW_RECT).floor).toEqual([]);

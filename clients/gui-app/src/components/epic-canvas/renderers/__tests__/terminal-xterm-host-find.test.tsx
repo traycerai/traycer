@@ -1248,7 +1248,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
     // A pre-terminal.create@2.1 host has no host-side answer for OSC 10/11.
     // This viewer's xterm reply - late-query-only and per-viewer as it is -
     // is the only answer a probing TUI gets there, so suppression must not
-    // engage (Codex review on #1424).
+    // engage.
     recordNegotiatedHostManifest("host-1", {
       "terminal.create": { major: 2, minor: 0 },
     });

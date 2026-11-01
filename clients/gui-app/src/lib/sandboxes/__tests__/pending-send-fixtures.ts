@@ -12,6 +12,7 @@ import type { PendingSandboxSend } from "@/stores/sandboxes/pending-sandbox-send
 
 /** The pick the person made in the composer: Codex · GPT-6.1-Sol · High. */
 export const PICKED_SETTINGS: ChatRunSettings = {
+  ultracode: false,
   harnessId: "codex",
   model: "gpt-6.1-sol",
   permissionMode: "supervised",

@@ -25,7 +25,7 @@ import {
 import type { FallbackSettingsProfileLabel } from "@/components/settings/panels/fallback/fallback-profile-labels";
 
 /**
- * Shared fixture catalog, matching the ticket's spec: Codex astra/sol/luna
+ * Shared fixture catalog: Codex astra/sol/luna
  * (plus a luna-mini and a terra) - one member per seeded tier pattern
  * (frontier `*astra*`, flagship `*sol*`, standard `*terra*`).
  */
@@ -312,7 +312,7 @@ describe("patternBlockedReason - wording", () => {
         { tierIndex: 1, tierId: "flagship", candidateIndex: 0 },
       ]),
     ]);
-    // Falsification: matches the exact wording pin the ticket calls out.
+    // Falsification: matches the exact wording pin.
     expect(reason).toBe(
       "Can't use: GPT-6-Astra is in frontier and GPT-6-Sol is in flagship. A model can be in only one tier.",
     );

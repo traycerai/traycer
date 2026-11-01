@@ -35,7 +35,9 @@ import {
 } from "@traycer/protocol/host/agent/profiles";
 import { hostRpcRegistry } from "@traycer/protocol/host/index";
 import {
+  degradeProviderRateLimitsToV151,
   providerRateLimitsSchema,
+  providerRateLimitsSchemaV151,
   providersConsumeRateLimitResetCreditRequestSchema,
   providersConsumeRateLimitResetCreditResponseSchema,
   providersRefreshProfileStatusResponseSchema,
@@ -1887,6 +1889,14 @@ describe("host.getRateLimitUsage v6.0 kimi arm + downgrade bridges", () => {
     reason: "cli_not_found" as const,
   };
 
+  const notSignedIn = {
+    provider: "claude-code" as const,
+    available: false as const,
+    reason: "not_signed_in" as const,
+  };
+
+  const notAvailable = { ...notSignedIn, reason: "rate_limits_not_available" };
+
   const DOWNGRADE_UNSUPPORTED_ERROR = {
     code: "DOWNGRADE_UNSUPPORTED" as const,
     message:
@@ -1901,6 +1911,47 @@ describe("host.getRateLimitUsage v6.0 kimi arm + downgrade bridges", () => {
     });
 
   const registry = hostRpcRegistry["host.getRateLimitUsage"];
+
+  it("accepts not_signed_in on the live union and rejects it on every frozen line", () => {
+    expect(providerRateLimitsSchema.parse(notSignedIn)).toEqual(notSignedIn);
+    expect(providerRateLimitsSchemaV151.safeParse(notSignedIn).success).toBe(
+      false,
+    );
+    expect(
+      rateLimitUsageResponseSchemaV50.safeParse({
+        totalTokens: 0,
+        remainingTokens: 0,
+        providerRateLimits: notSignedIn,
+      }).success,
+    ).toBe(false);
+    expect(
+      agentGetProviderProfileRateLimitsResponseSchemaV7.safeParse({
+        rateLimits: notSignedIn,
+        usageUpdatedAt: null,
+      }).success,
+    ).toBe(false);
+    expect(
+      providersRefreshProfileStatusResponseSchemaV30.safeParse({
+        providerRateLimits: notSignedIn,
+      }).success,
+    ).toBe(false);
+  });
+
+  it.each([5, 4, 3, 2, 1] as const)(
+    "maps not_signed_in to rate_limits_not_available through the registry 6 -> %i",
+    (toMajor) => {
+      expect(
+        downgradeResponseAcrossMajors(registry, 6, toMajor, usage(notSignedIn)),
+      ).toEqual({
+        ok: true,
+        value: {
+          totalTokens: 0,
+          remainingTokens: 0,
+          providerRateLimits: notAvailable,
+        },
+      });
+    },
+  );
 
   it("parses a kimi-available snapshot on the live 6.0 line, with every window or with the null ones, and rejects it on the frozen 5.0 line", () => {
     expect(usage(kimiAvailable).providerRateLimits).toEqual(kimiAvailable);
@@ -2143,6 +2194,22 @@ describe("host.getRateLimitUsage v6.0 kimi arm + downgrade bridges", () => {
       },
     );
 
+    it.each([3, 2, 1] as const)(
+      "maps not_signed_in to rate_limits_not_available through the registry 4 -> %i",
+      (toMajor) => {
+        expect(
+          downgradeResponseAcrossMajors(
+            refreshRegistry,
+            4,
+            toMajor,
+            providersRefreshProfileStatusResponseSchema.parse({
+              providerRateLimits: notSignedIn,
+            }),
+          ),
+        ).toEqual({ ok: true, value: { providerRateLimits: notAvailable } });
+      },
+    );
+
     // The degrade is Kimi-only: an arm the 1.0 line cannot represent still
     // fails closed.
     it("still refuses an antigravity-available snapshot through the registry 4 -> 1", () => {
@@ -2205,6 +2272,29 @@ describe("host.getRateLimitUsage v6.0 kimi arm + downgrade bridges", () => {
       },
     );
 
+    it.each([7, 6, 5, 4, 3, 2, 1] as const)(
+      "maps not_signed_in to rate_limits_not_available through the registry 8 -> %i",
+      (toMajor) => {
+        expect(
+          downgradeResponseAcrossMajors(
+            profileRegistry,
+            8,
+            toMajor,
+            agentGetProviderProfileRateLimitsResponseSchemaV8.parse({
+              rateLimits: notSignedIn,
+              usageUpdatedAt: 1_735_689_600_000,
+            }),
+          ),
+        ).toEqual({
+          ok: true,
+          value: {
+            rateLimits: notAvailable,
+            usageUpdatedAt: 1_735_689_600_000,
+          },
+        });
+      },
+    );
+
     it("still refuses an antigravity-available snapshot through the registry 8 -> 1", () => {
       expect(
         downgradeResponseAcrossMajors(
@@ -2230,6 +2320,111 @@ describe("host.getRateLimitUsage v6.0 kimi arm + downgrade bridges", () => {
         expect(
           downgradeResponseAcrossMajors(profileRegistry, 8, toMajor, response),
         ).toEqual({ ok: true, value: response });
+      },
+    );
+  });
+  describe("the unavailable arm's chatCredential", () => {
+    const withCredential = {
+      provider: "claude-code" as const,
+      available: false as const,
+      reason: "rate_limits_not_available" as const,
+      chatCredential: { kind: "api-key" as const, source: "ANTHROPIC_API_KEY" },
+    };
+    const bare = {
+      provider: "claude-code" as const,
+      available: false as const,
+      reason: "rate_limits_not_available" as const,
+    };
+
+    it("is kept on the live 6.0 / 4.0 / 8.0 responses", () => {
+      expect(usage(withCredential).providerRateLimits).toEqual(withCredential);
+      expect(
+        providersRefreshProfileStatusResponseSchema.parse({
+          providerRateLimits: withCredential,
+        }).providerRateLimits,
+      ).toEqual(withCredential);
+      expect(
+        agentGetProviderProfileRateLimitsResponseSchemaV8.parse({
+          rateLimits: withCredential,
+          usageUpdatedAt: null,
+        }).rateLimits,
+      ).toEqual(withCredential);
+    });
+
+    it("rejects an unknown kind and an empty source on the live union", () => {
+      expect(
+        providerRateLimitsSchema.safeParse({
+          ...withCredential,
+          chatCredential: { kind: "password", source: "x" },
+        }).success,
+      ).toBe(false);
+      expect(
+        providerRateLimitsSchema.safeParse({
+          ...withCredential,
+          chatCredential: { kind: "token", source: "" },
+        }).success,
+      ).toBe(false);
+    });
+
+    it("degradeProviderRateLimitsToV151 drops it and leaves the rest of the row alone", () => {
+      expect(degradeProviderRateLimitsToV151(withCredential)).toEqual(bare);
+      expect(degradeProviderRateLimitsToV151(bare)).toEqual(bare);
+    });
+
+    it.each([5, 4, 3, 2, 1] as const)(
+      "host.getRateLimitUsage 6 -> %i never carries it",
+      (toMajor) => {
+        expect(
+          downgradeResponseAcrossMajors(
+            registry,
+            6,
+            toMajor,
+            usage(withCredential),
+          ),
+        ).toEqual({
+          ok: true,
+          value: {
+            totalTokens: 0,
+            remainingTokens: 0,
+            providerRateLimits: bare,
+          },
+        });
+      },
+    );
+
+    it.each([3, 2, 1] as const)(
+      "providers.refreshProfileStatus 4 -> %i never carries it",
+      (toMajor) => {
+        expect(
+          downgradeResponseAcrossMajors(
+            hostRpcRegistry["providers.refreshProfileStatus"],
+            4,
+            toMajor,
+            providersRefreshProfileStatusResponseSchema.parse({
+              providerRateLimits: withCredential,
+            }),
+          ),
+        ).toEqual({ ok: true, value: { providerRateLimits: bare } });
+      },
+    );
+
+    it.each([7, 6, 5, 4, 3, 2, 1] as const)(
+      "agent.getProviderProfileRateLimits 8 -> %i never carries it",
+      (toMajor) => {
+        expect(
+          downgradeResponseAcrossMajors(
+            hostRpcRegistry["agent.getProviderProfileRateLimits"],
+            8,
+            toMajor,
+            agentGetProviderProfileRateLimitsResponseSchemaV8.parse({
+              rateLimits: withCredential,
+              usageUpdatedAt: 1_735_689_600_000,
+            }),
+          ),
+        ).toEqual({
+          ok: true,
+          value: { rateLimits: bare, usageUpdatedAt: 1_735_689_600_000 },
+        });
       },
     );
   });

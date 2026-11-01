@@ -1,7 +1,7 @@
 /**
  * Concurrent acquires for one artifact, answered ONE AT A TIME.
  *
- * ## The defect this pins (epic-sync-overhaul finding 11)
+ * ## The defect this pins
  *
  * `CollabTileBody` takes two body leases, and the canvas remounts it during
  * boot, so four `acquire` calls for one artifact are outstanding at once. The

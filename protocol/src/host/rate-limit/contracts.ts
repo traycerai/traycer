@@ -24,10 +24,10 @@ import {
   rateLimitUsageResponseSchemaV40,
   rateLimitUsageResponseSchemaV50,
   rateLimitUsageResponseSchemaV60,
+  degradeProviderRateLimitsToV151,
   mapCursorAvailableToUnavailable,
   mapGrokAvailableToUnavailable,
   mapHuggingFaceAvailableToUnavailable,
-  mapKimiAvailableToUnavailable,
   mapOpenCodeAvailableToUnavailable,
   type ProviderRateLimits,
   type ProvidersRefreshProfileStatusResponse,
@@ -269,23 +269,24 @@ export const providersRefreshProfileStatusDowngradeV30ToV10 =
     },
   });
 
-// A Kimi-available snapshot has no arm on any older line, but `"kimi"` is in
-// every older provider enum, so every 4.0 bridge degrades it to the
-// `unsupported_provider` row a pre-Kimi-usage host returned, then passes the
-// response through or refuses it. The message names no provider so it stays
-// honest as the enum grows.
+// Every 4.0 bridge first degrades what the live union added since 1.5.1
+// (`degradeProviderRateLimitsToV151`: a Kimi-available snapshot becomes the
+// `unsupported_provider` row a pre-Kimi-usage host returned, `not_signed_in`
+// becomes `rate_limits_not_available`), then passes the response through or
+// refuses it. The message names no provider so it stays honest as the enum
+// grows.
 const REFRESH_PROFILE_STATUS_REQUIRES_NEWER_CLIENT = {
   code: "DOWNGRADE_UNSUPPORTED" as const,
   message:
     "Refreshing this provider's profile status requires a newer Traycer client.",
 };
 
-function withKimiRefreshDegraded(
+function refreshDegradedToV151(
   response: ProvidersRefreshProfileStatusResponse,
 ): { providerRateLimits: ProviderRateLimits | null } {
   return {
     ...response,
-    providerRateLimits: mapKimiAvailableToUnavailable(
+    providerRateLimits: degradeProviderRateLimitsToV151(
       response.providerRateLimits,
     ),
   };
@@ -312,7 +313,7 @@ export const providersRefreshProfileStatusDowngradeV40ToV30 =
     downgradeRequest: (request) => ({ ok: true, value: request }),
     downgradeResponse: (response) => {
       const parsed = providersRefreshProfileStatusResponseSchemaV30.safeParse(
-        withKimiRefreshDegraded(response),
+        refreshDegradedToV151(response),
       );
       return parsed.success
         ? { ok: true, value: parsed.data }
@@ -330,7 +331,7 @@ export const providersRefreshProfileStatusDowngradeV40ToV20 =
     downgradeRequest: (request) => ({ ok: true, value: request }),
     downgradeResponse: (response) => {
       const parsed = providersRefreshProfileStatusResponseSchemaV20.safeParse(
-        withKimiRefreshDegraded(response),
+        refreshDegradedToV151(response),
       );
       return parsed.success
         ? { ok: true, value: parsed.data }
@@ -348,7 +349,7 @@ export const providersRefreshProfileStatusDowngradeV40ToV10 =
     downgradeRequest: (request) => ({ ok: true, value: request }),
     downgradeResponse: (response) => {
       const parsed = providersRefreshProfileStatusResponseSchemaV10.safeParse(
-        withKimiRefreshDegraded(response),
+        refreshDegradedToV151(response),
       );
       return parsed.success
         ? { ok: true, value: parsed.data }
@@ -707,8 +708,9 @@ export const hostGetRateLimitUsageUpgradeV40ToV50 = defineUpgradePath<
 
 // The 5.0 -> N response bodies, shared by the 5 -> N and 6 -> N bridges so the
 // two fans can never apply different maps to the same arm. Each takes a live
-// (6.0) response: a 5.0 response is one whose union lacks only the Kimi arm, and
-// every 6 -> N bridge runs `mapKimiAvailableToUnavailable` before handing over.
+// (6.0) response: a 5.0 response is one whose union lacks only the Kimi arm and
+// the `not_signed_in` reason, and every 6 -> N bridge runs
+// `degradeProviderRateLimitsToV151` before handing over.
 type RateLimitDowngrade<T> =
   | { ok: true; value: T }
   | { ok: false; error: typeof RATE_LIMIT_READ_REQUIRES_NEWER_CLIENT };
@@ -831,8 +833,9 @@ export const hostGetRateLimitUsageDowngradeV5ToV1 = defineDowngradePath<
 // v6.0 adds the Kimi available arm (see `rateLimitUsageResponseSchemaV60`). A
 // major, not a 5.1: the 1.5.1 tags shipped 5.0, a new available arm is not
 // strippable by the within-major skew handler, and the frozen 5.0 union
-// (`providerRateLimitsSchemaV151`) has no arm for it. The request is unchanged
-// from 4.0, `force` included.
+// (`providerRateLimitsSchemaV151`) has no arm for it. The `not_signed_in` reason
+// rides 6.0 for the same reason: an enum value is not strippable either. The
+// request is unchanged from 4.0, `force` included.
 export const hostGetRateLimitUsageV60 = defineRpcContract({
   method: "host.getRateLimitUsage",
   schemaVersion: { major: 6, minor: 0 } as const,
@@ -854,16 +857,18 @@ export const hostGetRateLimitUsageUpgradeV50ToV60 = defineUpgradePath<
 });
 
 // The 6.0 -> N bridges. The negotiator looks up one direct bridge per target
-// major (it never chains them), so each one degrades a Kimi-available snapshot
-// to `unsupported_provider` - a row every older line can parse, since `"kimi"`
-// is in every frozen provider enum - and then does exactly what the 5.0 -> N
-// bridge to that major does.
-function withKimiDegraded(
+// major (it never chains them), so each one first degrades what the live union
+// added since 1.5.1 (`degradeProviderRateLimitsToV151`: a Kimi-available
+// snapshot becomes `unsupported_provider`, a row every older line can parse
+// since `"kimi"` is in every frozen provider enum, and `not_signed_in` becomes
+// `rate_limits_not_available`) and then does exactly what the 5.0 -> N bridge
+// to that major does.
+function degradedToV151(
   response: RateLimitUsageResponseV60,
 ): RateLimitUsageResponseV60 {
   return {
     ...response,
-    providerRateLimits: mapKimiAvailableToUnavailable(
+    providerRateLimits: degradeProviderRateLimitsToV151(
       response.providerRateLimits,
     ),
   };
@@ -878,7 +883,7 @@ export const hostGetRateLimitUsageDowngradeV6ToV5 = defineDowngradePath<
   downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) => {
     const parsed = rateLimitUsageResponseSchemaV50.safeParse(
-      withKimiDegraded(response),
+      degradedToV151(response),
     );
     return parsed.success
       ? { ok: true, value: parsed.data }
@@ -894,7 +899,7 @@ export const hostGetRateLimitUsageDowngradeV6ToV4 = defineDowngradePath<
   to: hostGetRateLimitUsageV40.schemaVersion,
   downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) =>
-    downgradeRateLimitResponseToV40(withKimiDegraded(response)),
+    downgradeRateLimitResponseToV40(degradedToV151(response)),
 });
 
 export const hostGetRateLimitUsageDowngradeV6ToV3 = defineDowngradePath<
@@ -905,7 +910,7 @@ export const hostGetRateLimitUsageDowngradeV6ToV3 = defineDowngradePath<
   to: hostGetRateLimitUsageV30.schemaVersion,
   downgradeRequest: (request) => ({ ok: true, value: dropForce(request) }),
   downgradeResponse: (response) =>
-    downgradeRateLimitResponseToV30(withKimiDegraded(response)),
+    downgradeRateLimitResponseToV30(degradedToV151(response)),
 });
 
 export const hostGetRateLimitUsageDowngradeV6ToV2 = defineDowngradePath<
@@ -916,7 +921,7 @@ export const hostGetRateLimitUsageDowngradeV6ToV2 = defineDowngradePath<
   to: hostGetRateLimitUsageV21.schemaVersion,
   downgradeRequest: (request) => ({ ok: true, value: dropForce(request) }),
   downgradeResponse: (response) =>
-    downgradeRateLimitResponseToV21(withKimiDegraded(response)),
+    downgradeRateLimitResponseToV21(degradedToV151(response)),
 });
 
 export const hostGetRateLimitUsageDowngradeV6ToV1 = defineDowngradePath<
@@ -927,5 +932,5 @@ export const hostGetRateLimitUsageDowngradeV6ToV1 = defineDowngradePath<
   to: hostGetRateLimitUsageV12.schemaVersion,
   downgradeRequest: (request) => ({ ok: true, value: dropForce(request) }),
   downgradeResponse: (response) =>
-    downgradeRateLimitResponseToV12(withKimiDegraded(response)),
+    downgradeRateLimitResponseToV12(degradedToV151(response)),
 });

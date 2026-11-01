@@ -61,7 +61,7 @@ vi.mock("@/components/home/composer/composer-workspace-mode-row", () => ({
 }));
 
 const bodyMocks = vi.hoisted(() => ({
-  // S11 coverage (see "forwards a non-null hostId..." below): `ComposerBody`
+  // Coverage (see "forwards a non-null hostId..." below): `ComposerBody`
   // forwards its `hostId` prop to the terminal panel's `hostId` and the
   // toolbar's `createProfileHostId`/`runTargetHostId` - both children are
   // mocked wholesale here, so a test can only see that forwarding by
@@ -139,6 +139,7 @@ function renderComposerBody(options: RenderComposerBodyOptions) {
     reasoningFallback: "model-default",
     seedKey: "test",
     values: {
+      ultracode: false,
       permission: "supervised",
       selection: { harnessId: "claude", modelSlug: "", profileId: null },
       reasoning: "",
@@ -147,6 +148,7 @@ function renderComposerBody(options: RenderComposerBodyOptions) {
     onSettingsChange: null,
     tuiOnly: composerMode === "terminal",
     chatLineCarriesAutoMode: null,
+    ultracodeCarried: false,
     // Same host the body renders with: production never splits these two, and
     // a split fixture would hide a broken host hand-off to the toolbar.
     hostId,
@@ -363,7 +365,7 @@ describe("ComposerBody overlay utility visibility", () => {
     ).toBeNull();
   });
 
-  // D11: a terminal-mode start-page draft is still a draft, so the rail is no
+  // A terminal-mode start-page draft is still a draft, so the rail is no
   // longer gated on the composer's mode - only the attachments strip is.
   it("keeps the drafts control in terminal mode", () => {
     renderComposerBody({
@@ -380,7 +382,7 @@ describe("ComposerBody overlay utility visibility", () => {
   });
 });
 
-// S11 coverage: `ComposerBody` forwards its single `hostId` prop to the
+// Coverage: `ComposerBody` forwards its single `hostId` prop to the
 // terminal panel and the toolbar - a regression back to reading the app-wide
 // default anywhere along that path would leave one (or both) of these
 // children pinned to `null` regardless of what the composer is bound to.

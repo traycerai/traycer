@@ -14,7 +14,10 @@ import {
 import { createPortal } from "react-dom";
 import { cn } from "@/lib/utils";
 import type { CanvasBox, CanvasElement } from "@/lib/sandbox/canvas-bridge";
-import { clipCanvasBox, transformCanvasBox } from "./canvas-selection-geometry";
+import {
+  canvasSelectionCaptureRect,
+  clipCanvasBox,
+} from "./canvas-selection-geometry";
 import {
   useCanvasSelectionStore,
   isCanvasBoardRoot,
@@ -43,6 +46,12 @@ function canvasHoverBox(
 function SelectionActionBar(props: {
   readonly frame: HTMLIFrameElement;
   readonly box: CanvasBox;
+  /**
+   * Painted invisible rather than unmounted: the Send to chat action inside
+   * owns the capture in flight, and unmounting it would drop that mutation's
+   * completion on the floor.
+   */
+  readonly hidden: boolean;
   readonly children: ReactNode;
 }) {
   const bar = useRef<HTMLDivElement>(null);
@@ -77,7 +86,10 @@ function SelectionActionBar(props: {
     <div
       ref={bar}
       data-canvas-selection-action=""
-      className="canvas-nopan touch-auto absolute z-20 flex max-w-full items-start gap-1 rounded-md border bg-popover p-1 text-popover-foreground shadow-sm pointer-events-auto"
+      className={cn(
+        "canvas-nopan touch-auto absolute z-20 flex max-w-full items-start gap-1 rounded-md border bg-popover p-1 text-popover-foreground shadow-sm pointer-events-auto",
+        props.hidden && "invisible",
+      )}
       onPointerDown={(event) => event.stopPropagation()}
     >
       {props.children}
@@ -94,6 +106,7 @@ function SelectionOutline(props: {
 }) {
   return (
     <div
+      data-canvas-selection-outline=""
       className={cn(
         "absolute border border-primary",
         props.emphasized && "ring-1 ring-primary bg-primary/5",
@@ -128,7 +141,6 @@ function SelectionOutline(props: {
 export function CanvasSelectionOverlay(props: {
   readonly controls?: ReactNode;
   readonly actionControls?: ReactNode;
-  readonly menuControls?: ReactNode;
   readonly hideAction?: boolean;
   readonly commenting?: boolean;
   readonly hideHandles?: boolean;
@@ -141,6 +153,8 @@ export function CanvasSelectionOverlay(props: {
   ) => void;
   readonly onRetire: (path: string) => void;
   readonly onEscape: () => void;
+  /** Shift+Enter on the shield; `null` where the selection cannot widen. */
+  readonly onSelectParent: (() => void) | null;
 }) {
   useSyncExternalStore(props.registry.subscribe, props.registry.getSnapshot);
   const entry = props.registry.get(props.boardPath);
@@ -154,6 +168,7 @@ export function CanvasSelectionOverlay(props: {
   const additional = useCanvasSelectionStore(
     (state) => state.additionalElements,
   );
+  const capturing = useCanvasSelectionStore((state) => state.capturing);
   const multiple = selection !== null && additional.length > 0;
   const gesture = useRef<{
     x: number;
@@ -320,36 +335,10 @@ export function CanvasSelectionOverlay(props: {
     selection?.element ?? null,
     dimensions,
   );
-  const captureRect = (): CanvasBox | null => {
-    if (
-      frame === null ||
-      box === null ||
-      frame.clientWidth === 0 ||
-      frame.clientHeight === 0
-    )
-      return null;
-    const bounds = frame.getBoundingClientRect();
-    const padded = clipCanvasBox(
-      {
-        x: box.x - 20,
-        y: box.y - 20,
-        width: box.width + 40,
-        height: box.height + 40,
-      },
-      { x: 0, y: 0, width: frame.clientWidth, height: frame.clientHeight },
-    );
-    return padded === null
+  const captureRect = (): CanvasBox | null =>
+    frame === null || box === null
       ? null
-      : clipCanvasBox(
-          transformCanvasBox(padded, {
-            x: bounds.x,
-            y: bounds.y,
-            scaleX: bounds.width / frame.clientWidth,
-            scaleY: bounds.height / frame.clientHeight,
-          }),
-          { x: 0, y: 0, width: window.innerWidth, height: window.innerHeight },
-        );
-  };
+      : canvasSelectionCaptureRect(frame, box);
   return (
     <div
       // XYFlow captures Shift-pointerdown before our shields can receive it.
@@ -365,12 +354,28 @@ export function CanvasSelectionOverlay(props: {
         )}
         tabIndex={-1}
         onKeyDown={(event) => {
-          if (event.key !== "Escape" || event.defaultPrevented) return;
-          // The node wrapper would otherwise deselect the board before the
-          // provider can clear just the element on the first Escape.
-          event.preventDefault();
-          event.stopPropagation();
-          props.onEscape();
+          if (event.defaultPrevented) return;
+          if (event.key === "Escape") {
+            // The node wrapper would otherwise deselect the board before the
+            // provider can clear just the element on the first Escape.
+            event.preventDefault();
+            event.stopPropagation();
+            props.onEscape();
+            return;
+          }
+          // Shift+Enter widens the selection to the parent element, as design
+          // tools do. There is no visible control for it: the hit test picks
+          // the deepest element, and this is the quiet way up.
+          if (
+            event.key === "Enter" &&
+            event.shiftKey &&
+            selection !== null &&
+            props.onSelectParent !== null
+          ) {
+            event.preventDefault();
+            event.stopPropagation();
+            props.onSelectParent();
+          }
         }}
         onPointerDown={(event) => {
           if (event.button !== 0) return;
@@ -449,7 +454,7 @@ export function CanvasSelectionOverlay(props: {
           if (point !== null && !props.commenting) void bridge?.retypeAt(point);
         }}
       />
-      {hoverBox === null || pointerDown ? null : (
+      {hoverBox === null || pointerDown || capturing ? null : (
         <SelectionOutline
           box={hoverBox}
           generated={false}
@@ -463,12 +468,12 @@ export function CanvasSelectionOverlay(props: {
         frame={frame}
         hideAction={Boolean(props.hideAction) || pointerDown}
         hideHandles={props.hideHandles}
+        capturing={capturing}
         scope={props.scope}
         actionControls={props.actionControls}
-        menuControls={props.menuControls}
         captureRect={captureRect}
       />
-      {props.controls}
+      {capturing ? null : props.controls}
     </div>
   );
 }
@@ -479,33 +484,41 @@ function CanvasSelectionPaint(props: {
   readonly frame: HTMLIFrameElement | null;
   readonly hideAction: boolean;
   readonly hideHandles: boolean | undefined;
+  readonly capturing: boolean;
   readonly scope: CanvasAnnotationScope;
   readonly actionControls: ReactNode;
-  readonly menuControls: ReactNode;
   readonly captureRect: () => CanvasBox | null;
 }) {
   return props.selection !== null && props.box !== null ? (
     <>
-      {props.selection.textRange?.rects.map((rect) => (
-        <div
-          key={`${rect.x}:${rect.y}:${rect.width}:${rect.height}`}
-          className="absolute bg-primary/20"
-          style={{
-            left: rect.x,
-            top: rect.y,
-            width: rect.width,
-            height: rect.height,
-          }}
+      {props.capturing
+        ? null
+        : props.selection.textRange?.rects.map((rect) => (
+            <div
+              key={`${rect.x}:${rect.y}:${rect.width}:${rect.height}`}
+              className="absolute bg-primary/20"
+              style={{
+                left: rect.x,
+                top: rect.y,
+                width: rect.width,
+                height: rect.height,
+              }}
+            />
+          ))}
+      {props.capturing ? null : (
+        <SelectionOutline
+          box={props.box}
+          generated={props.selection.element.generated}
+          emphasized
+          hideHandles={props.hideHandles}
         />
-      ))}
-      <SelectionOutline
-        box={props.box}
-        generated={props.selection.element.generated}
-        emphasized
-        hideHandles={props.hideHandles}
-      />
+      )}
       {props.hideAction || props.frame === null ? null : (
-        <SelectionActionBar frame={props.frame} box={props.box}>
+        <SelectionActionBar
+          frame={props.frame}
+          box={props.box}
+          hidden={props.capturing}
+        >
           {props.actionControls}
           <CanvasSelectionAction
             key={`${props.selection.servedSha256}:${props.selection.element.marker ?? props.selection.element.selector}:${props.selection.textRange?.start ?? ""}:${props.selection.textRange?.end ?? ""}`}
@@ -513,7 +526,6 @@ function CanvasSelectionPaint(props: {
             selection={props.selection}
             captureRect={props.captureRect}
           />
-          {props.menuControls}
         </SelectionActionBar>
       )}
     </>

@@ -187,7 +187,7 @@ describe("the comm-graph playback tick", () => {
     // And the fastest rung is fast enough to be worth pressing: a busy epic's
     // couple of thousand rows in well under a minute, against the six the old
     // 4x ceiling took. This is the "even at 4x, the graph is filling super
-    // slow" of round 2's feedback, as a number.
+    // slow" complaint, as a number.
     const fastest = perRow[perRow.length - 1];
     expect(fastest * 2_000).toBeLessThan(60_000);
     // Stated against what it replaced, so the rung cannot quietly come back

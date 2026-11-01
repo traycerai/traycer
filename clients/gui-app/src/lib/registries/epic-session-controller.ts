@@ -65,7 +65,7 @@
  * Desktop ownership claims (per TAB, before acquisition), the create-host seed
  * and effective-host selection, the session rebuild backoff ladder, the
  * `failed` presentation, retry generation, owner-key rotation (R-1), warm-handle
- * adoption and the safe re-point (F1). They are controller state, not provider
+ * adoption and the safe re-point. They are controller state, not provider
  * callbacks: passing the provider's closures in would have preserved the mount
  * coupling this module exists to remove.
  *
@@ -106,7 +106,7 @@
  * Beside the registry singleton and the stamp maps, and importing them, so the
  * HMR co-lifetime holds: a warm handle the registry hands back must have its
  * construction stamp in the same module generation, or `requireConstructionHostStamp`
- * throws (F1). This module imports the registry; the registry never imports it.
+ * throws. This module imports the registry; the registry never imports it.
  */
 import { appLogger } from "@/lib/logger";
 import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
@@ -328,7 +328,7 @@ function ownerIdentityKeyForHost(
  *
  * The stamp is written once, inside the session factory, and it is what routes
  * RPCs and capability answers to the host that owns the stream; substituting
- * the caller's target instead would silently re-create F1, so absence is a
+ * the caller's target instead would silently mislabel the transport, so absence is a
  * thrown invariant rather than a fallback. Reachable only if the write-once
  * invariant broke - this module, the stamp map and the registry that hands
  * back warm handles share one module lifetime, so no module replacement can
@@ -369,11 +369,6 @@ interface MetadataHold {
   readonly timer: number;
 }
 
-/**
- * One in-flight acquisition or re-point, with the fences the provider's
- * effect cleanup used to provide: `cancelled` for every async tail, and
- * `cleanup` for the subscriptions, the deadline and a pending candidate.
- */
 /** What one reconcile pass reads, taken once so its arms agree. */
 interface ReconcileInputs {
   readonly userId: string | null;
@@ -395,6 +390,11 @@ interface RunInputs {
   readonly mounted: boolean;
 }
 
+/**
+ * One in-flight acquisition or re-point, with the fences the provider's
+ * effect cleanup used to provide: `cancelled` for every async tail, and
+ * `cleanup` for the subscriptions, the deadline and a pending candidate.
+ */
 interface ActiveRun {
   cancelled: boolean;
   cleanup: () => void;
@@ -588,12 +588,6 @@ function createEpicSessionController(): EpicSessionController {
   const deniedListeners = new Set<(epicId: string, tabId: string) => void>();
   let environment: EpicSessionControllerEnvironment | null = null;
   /**
-   * Re-entrancy: the registry notifies from inside its own transaction, and an
-   * acquisition inside `reconcile` notifies too. A nested reconcile request is
-   * queued and drained once the outer one returns, so no entry is reconciled
-   * while an arm of its own run is still on the stack.
-   */
-  /**
    * Bumped at every auth boundary; captured before an await and re-checked
    * after it, so a continuation issued under one identity cannot act under
    * the next (or under none).
@@ -606,6 +600,12 @@ function createEpicSessionController(): EpicSessionController {
    * to open in that state. What is fenced is acting after a sign-out.
    */
   let signedOutFence = false;
+  /**
+   * Re-entrancy: the registry notifies from inside its own transaction, and an
+   * acquisition inside `reconcile` notifies too. A nested reconcile request is
+   * queued and drained once the outer one returns, so no entry is reconciled
+   * while an arm of its own run is still on the stack.
+   */
   let reconciling = false;
   const pendingReconcile = new Set<string>();
   let reconcileAllPending = false;
@@ -1685,7 +1685,7 @@ function createEpicSessionController(): EpicSessionController {
     // The stamp is written once, at construction. When the registry returns
     // a WARM handle the factory never ran and the stamp names the host the
     // handle's transport was built for - not necessarily `targetHostId`.
-    // Recording the stamp rather than the target is the F1 fix: a warm
+    // Recording the stamp rather than the target is the fix: a warm
     // handle bound elsewhere takes the safe re-point arm on the next pass
     // instead of streaming from one host while labelled with another.
     const stampedHostId = requireConstructionHostStamp(nextHandle);
@@ -1735,7 +1735,7 @@ function createEpicSessionController(): EpicSessionController {
   }
 
   /**
-   * A tuple recorded honest-ABSENT (R-1, B5) has to be COMPLETED from its own
+   * A tuple recorded honest-ABSENT (B5) has to be COMPLETED from its own
    * host's reading before any rotation of that host can be seen - otherwise
    * the first rotation is read as the initial completion, and the old worker
    * and document are carried across an identity boundary.
@@ -1752,7 +1752,7 @@ function createEpicSessionController(): EpicSessionController {
   }
 
   /**
-   * R-1: see `readOwnerIdentityVerdict` for the invariant this enforces.
+   * See `readOwnerIdentityVerdict` for the invariant this enforces.
    * Returns the session the run continues with - `null` when an identity
    * change discarded it.
    */
@@ -2302,7 +2302,7 @@ function createEpicSessionController(): EpicSessionController {
  * The renderer's one controller. Module-scoped like the registry it drives,
  * for the same reason: membership outlives every route transition, and the
  * HMR co-lifetime with the stamp maps is what makes a warm handle's stamp
- * readable (F1).
+ * readable.
  */
 export const epicSessionController: EpicSessionController =
   createEpicSessionController();

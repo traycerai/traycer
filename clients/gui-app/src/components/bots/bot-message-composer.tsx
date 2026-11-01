@@ -3,8 +3,11 @@ import {
   useId,
   useRef,
   useState,
+  type Dispatch,
   type KeyboardEvent,
   type ReactNode,
+  type RefObject,
+  type SetStateAction,
 } from "react";
 import { SendHorizontal } from "lucide-react";
 import type {
@@ -21,6 +24,11 @@ import {
   BotQueuedNotice,
   BotSendFailedNotice,
 } from "@/components/bots/bot-channel-notices";
+import { useBotMentionCompletion } from "@/components/bots/bot-mention-completion";
+import {
+  appendQuoteMarkdown,
+  type QuoteTextSnapshot,
+} from "@/components/chat/quote/append-quote-to-draft";
 
 const MESSAGE_MAX = 100_000;
 
@@ -48,8 +56,17 @@ const MESSAGE_MAX = 100_000;
  * outlives the box, and spends that draft once it is sent - even when the
  * send lands after the box is gone.
  *
- * A send that lands clears the box only while the box still holds the
- * draft it sent: an edit or a seed loaded since is a newer draft, and stays.
+ * A send that lands is reported, and clears the box only while the box
+ * still holds the draft it sent: an edit, a seed or a quote loaded since is
+ * a newer draft, and stays.
+ *
+ * A quote of a selection in the conversation (`quote`) is added after what
+ * the box shows, as markdown quote lines - an edit in progress included,
+ * which stays an edit - and the box takes the focus with the caret after it.
+ *
+ * `@` completes a member of the team's environment (decision 137); the box
+ * shows their name and the send writes their token, so the bot's host knows
+ * who was mentioned.
  */
 export function BotMessageComposer(props: {
   readonly botId: string;
@@ -81,6 +98,8 @@ export function BotMessageComposer(props: {
   readonly seed: BotComposerSeed | null;
   /** Where the box's draft is kept outside it, while it is not editing a failed message; `null` where none is. */
   readonly keptDraft: BotKeptDraft | null;
+  /** A quote to add to what the box shows; `null` for none. */
+  readonly quote: BotComposerQuote | null;
   /**
    * The host accepted `text`, what the box held, and the box was cleared.
    * Answers whether the owner says the send's delivery itself, where the
@@ -105,11 +124,20 @@ export function BotMessageComposer(props: {
     onEditEnd,
     seed,
     keptDraft,
+    quote,
     onSent,
   } = props;
   const client = useTabHostClient();
   const send = useBotConversationSendMutation(client);
   const [text, setText] = useState("");
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const mentionListId = useId();
+  const mentions = useBotMentionCompletion({
+    text,
+    setText,
+    inputRef,
+    listId: mentionListId,
+  });
   // Which draft the box holds: each edit or seed loaded is a new one, and a
   // send owns the one it started with.
   const [generation, setGeneration] = useState(0);
@@ -118,7 +146,7 @@ export function BotMessageComposer(props: {
   if (edit !== loadedEdit) {
     setLoadedEdit(edit);
     if (edit !== null) {
-      setText(edit.text);
+      setText(mentions.toDisplay(edit.text));
       setGeneration((current) => current + 1);
     }
   }
@@ -137,7 +165,7 @@ export function BotMessageComposer(props: {
       setText("");
     }
   }
-  const inputRef = useRef<HTMLTextAreaElement>(null);
+  useBoxQuote({ quote, setText, setGeneration, inputRef });
   // The draft the box holds now, for a send that lands after the person
   // moved on to another; and whether the box is still there to say anything.
   const generationRef = useRef(generation);
@@ -183,7 +211,7 @@ export function BotMessageComposer(props: {
       .mutateAsync({
         botId,
         conversationId,
-        text: trimmed,
+        text: mentions.toWire(trimmed),
         threadId,
         announcementId,
         redeliver: null,
@@ -192,22 +220,27 @@ export function BotMessageComposer(props: {
       })
       .then(
         (response) => {
-          // The box is cleared, the edit ended, the send's delivery said and
-          // the send reported, only while it still holds the draft it sent:
-          // an edit or a seed loaded since keeps its draft, with nothing said
-          // under it.
-          if (generationRef.current !== started) return;
-          if (supersedes === null && held !== null) keptDraft?.spend(held);
+          // The send went, so it is reported whatever the box did meanwhile.
+          // The box is cleared, the edit ended and the delivery said under
+          // it only while it still holds the draft it sent: an edit, a seed
+          // or a quote loaded since is a newer draft, and stays, with
+          // nothing said under it.
+          const sentDraftHeld = generationRef.current === started;
+          if (sentDraftHeld && supersedes === null && held !== null) {
+            keptDraft?.spend(held);
+          }
           if (!mountedRef.current) return;
+          const deliverySaid = onSent(response, trimmed);
+          if (!sentDraftHeld) return;
           setText("");
           if (supersedes !== null) onEditEnd();
-          const deliverySaid = onSent(response, trimmed);
           setLastDelivery(deliverySaid ? null : response.delivery);
         },
         () => failure.fail(),
       );
   };
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>): void => {
+    if (mentions.onKeyDown(event)) return;
     if (
       event.key !== "Enter" ||
       event.shiftKey ||
@@ -228,7 +261,8 @@ export function BotMessageComposer(props: {
         submit();
       }}
     >
-      <div className="flex flex-col rounded-lg border border-border bg-background transition-colors focus-within:border-ring">
+      <div className="relative flex flex-col rounded-lg border border-border bg-background transition-colors focus-within:border-ring">
+        {mentions.list}
         <label htmlFor={inputId} className="sr-only">
           {label}
         </label>
@@ -266,6 +300,16 @@ export function BotMessageComposer(props: {
           maxLength={MESSAGE_MAX}
           className="max-h-60 min-h-10"
           data-testid={`${testId}-input`}
+          aria-autocomplete="list"
+          aria-controls={mentions.listOpen ? mentionListId : undefined}
+          aria-activedescendant={mentions.activeOptionId ?? undefined}
+          onSelect={(event) =>
+            mentions.onCaret(event.currentTarget.selectionStart)
+          }
+          // Every edit, as `input` reports it: one that leaves the text as
+          // it was (a paste of the same text over it) reaches no `onChange`,
+          // and still replaced the picks it covered.
+          onInput={(event) => mentions.onInput(event.currentTarget)}
           onChange={(event) => {
             setText(event.target.value);
             if (lastDelivery !== null) setLastDelivery(null);
@@ -302,6 +346,97 @@ export function BotMessageComposer(props: {
   );
 }
 
+/**
+ * The message box of a channel that cannot take a message yet (
+ * a team's main bot before the team has a host): drawn as the box is,
+ * with nothing to type into and nothing to send, and `reason` under it. No
+ * message is kept for later.
+ */
+export function BotMessageComposerUnavailable(props: {
+  readonly placeholder: string;
+  /** The accessible name of the box. */
+  readonly label: string;
+  /** Why nothing can be sent, said under the box. */
+  readonly reason: string;
+  readonly testId: string;
+}): ReactNode {
+  const { testId } = props;
+  const inputId = useId();
+  const reasonId = useId();
+  return (
+    <div
+      className="flex shrink-0 flex-col gap-1 px-4 pt-1 pb-3"
+      data-testid={testId}
+    >
+      <div className="flex flex-col rounded-lg border border-border bg-background">
+        <label htmlFor={inputId} className="sr-only">
+          {props.label}
+        </label>
+        <Textarea
+          id={inputId}
+          value=""
+          variant="bare"
+          size="sm"
+          rows={1}
+          placeholder={props.placeholder}
+          disabled
+          readOnly
+          aria-describedby={reasonId}
+          className="max-h-60 min-h-10"
+          data-testid={`${testId}-input`}
+        />
+        <div className="flex items-center justify-end gap-2 px-2 pb-1.5">
+          <Button
+            type="button"
+            size="icon-sm"
+            disabled
+            aria-label="Send"
+            data-testid={`${testId}-send`}
+          >
+            <SendHorizontal aria-hidden="true" />
+          </Button>
+        </div>
+      </div>
+      <p
+        id={reasonId}
+        className="px-1 text-ui-xs text-muted-foreground"
+        data-testid={`${testId}-reason`}
+      >
+        {props.reason}
+      </p>
+    </div>
+  );
+}
+
+/**
+ * Adds each quote once, by its id, to what the box shows then, and moves the
+ * focus into the box with the caret after it. The box then holds a newer
+ * draft: a send still in flight does not clear it when it lands.
+ */
+function useBoxQuote(args: {
+  readonly quote: BotComposerQuote | null;
+  readonly setText: Dispatch<SetStateAction<string>>;
+  readonly setGeneration: Dispatch<SetStateAction<number>>;
+  readonly inputRef: RefObject<HTMLTextAreaElement | null>;
+}): void {
+  const { quote, setText, setGeneration, inputRef } = args;
+  const [takenQuoteId, setTakenQuoteId] = useState<number | null>(null);
+  if (quote !== null && quote.id !== takenQuoteId) {
+    setTakenQuoteId(quote.id);
+    setText((current) => quote.snapshots.reduce(appendQuoteMarkdown, current));
+    setGeneration((current) => current + 1);
+  }
+  useEffect(() => {
+    if (quote === null || quote.id !== takenQuoteId) return;
+    const input = inputRef.current;
+    if (input !== null) {
+      input.focus();
+      input.setSelectionRange(input.value.length, input.value.length);
+    }
+    quote.taken();
+  }, [inputRef, quote, takenQuoteId]);
+}
+
 function ComposerStatus(props: {
   readonly failed: boolean;
   readonly queued: boolean;
@@ -329,6 +464,16 @@ export type BotKeptDraft = {
   readonly revision: () => number | null;
   /** The draft at `revision` was sent: spent, unless a newer draft took its place. */
   readonly spend: (revision: number) => void;
+};
+
+/** Quotes of selections, for the box to add to what it shows. */
+export type BotComposerQuote = {
+  /** Which quote it is: the box adds each id once. */
+  readonly id: number;
+  /** The selections, added in order. */
+  readonly snapshots: ReadonlyArray<QuoteTextSnapshot>;
+  /** The box added them: the owner stops offering them. */
+  readonly taken: () => void;
 };
 
 /** A failed message loaded into the box to be edited and sent again. */

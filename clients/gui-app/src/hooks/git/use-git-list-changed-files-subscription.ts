@@ -431,7 +431,7 @@ export function useGitListChangedFilesSubscription(args: {
     return () => {
       shared.refCount -= 1;
 
-      // ADR-0003: no grace period - tear down immediately when ref count reaches 0.
+      // No grace period - tear down immediately when ref count reaches 0.
       if (shared.refCount === 0) {
         shared.unsubscribeFromStream();
         subscriptions.delete(key);
@@ -875,9 +875,15 @@ function replaceStreamSession(opts: ReplaceStreamSessionArgs): void {
   // inert session, the no-progress UNAUTHORIZED give-up) never produce a
   // domain error frame - without this handler the subscription would sit in
   // a pending state forever (the stuck git-diff skeleton incident).
-  session.onStatusChange((status, reason) => {
+  let heldWatcherStatus: GitWatcherStatus | null = null;
+  session.onStatusChange((status, reason, _retryCause, continuity) => {
     if (sessionClosed || generation !== shared.sessionGeneration) return;
     if (status === "open") {
+      if (continuity === "continued") {
+        shared.lastWatcherStatus = heldWatcherStatus;
+        notifyEntryChanged(shared.key);
+      }
+      heldWatcherStatus = null;
       // The handshake has settled, so this session finally knows its own minor.
       // Publishing here is what makes ownership correct BEFORE the first frame.
       publishNegotiatedVersion(
@@ -888,6 +894,10 @@ function replaceStreamSession(opts: ReplaceStreamSessionArgs): void {
       return;
     }
     if (status === "reconnecting") {
+      heldWatcherStatus =
+        continuity === "held"
+          ? (shared.lastWatcherStatus ?? heldWatcherStatus)
+          : null;
       // A recoverable drop never reaches `"closed"` - `resetForReconnect()`
       // parks the logical session here - so `markTerminal` is not on this
       // path. Without an explicit clear, a degraded value would survive the
@@ -1059,7 +1069,7 @@ function writeIntoCache(
     event.type === "updated" &&
     event.changedPaths.length > 0
   ) {
-    // ADR-0004: Per-path invalidation for changed files.
+    // Per-path invalidation for changed files.
     invalidateChangedFileDiffs(queryClient, args.hostId, [
       { runningDir: args.runningDir, changedPaths: event.changedPaths },
     ]);
@@ -1245,7 +1255,7 @@ function replayLastEventIntoCache(opts: {
 }
 
 /**
- * ADR-0004 per-path diff invalidation across one or more repo roots (the
+ * Per-path diff invalidation across one or more repo roots (the
  * parent worktree and, on rich frames, each submodule root).
  */
 function invalidateChangedFileDiffs(

@@ -73,6 +73,7 @@ const CONTENT: JsonContent = {
 };
 
 const SETTINGS: ChatRunSettings = {
+  ultracode: false,
   harnessId: "codex",
   model: "gpt-5-codex",
   permissionMode: "supervised",
@@ -2103,6 +2104,7 @@ describe("useRenderedMessages", () => {
           managedCommand: null,
           agentMessageReceipt: null,
           agentMessageDelivery: null,
+          botSendReceipt: null,
           artifact: null,
           mcpApp: null,
           progress: null,
@@ -2167,6 +2169,7 @@ describe("useRenderedMessages", () => {
           managedCommand: null,
           agentMessageReceipt,
           agentMessageDelivery: null,
+          botSendReceipt: null,
           artifact: null,
           mcpApp: null,
           progress: null,
@@ -2241,6 +2244,7 @@ describe("useRenderedMessages", () => {
         managedCommand: null,
         agentMessageReceipt: overrides.receipt,
         agentMessageDelivery: delivery,
+        botSendReceipt: null,
         artifact: null,
         mcpApp: null,
         progress: null,
@@ -2390,6 +2394,7 @@ describe("useRenderedMessages", () => {
         agentMessageSend: null,
         agentMessageReceipt: null,
         agentMessageDelivery: null,
+        botSendReceipt: null,
       });
 
       // The same input again serves the cached model by identity.
@@ -2413,6 +2418,7 @@ describe("useRenderedMessages", () => {
           managedCommand: null,
           agentMessageReceipt: null,
           agentMessageDelivery: null,
+          botSendReceipt: null,
           artifact: null,
           mcpApp: null,
           progress: null,
@@ -2483,6 +2489,7 @@ describe("useRenderedMessages", () => {
           managedCommand: null,
           agentMessageReceipt: null,
           agentMessageDelivery: null,
+          botSendReceipt: null,
           artifact: null,
           mcpApp: null,
           progress: null,
@@ -2542,6 +2549,7 @@ describe("useRenderedMessages", () => {
           managedCommand: null,
           agentMessageReceipt: null,
           agentMessageDelivery: null,
+          botSendReceipt: null,
           artifact: null,
           mcpApp: null,
           progress: null,
@@ -2626,6 +2634,7 @@ describe("useRenderedMessages", () => {
           managedCommand: null,
           agentMessageReceipt: null,
           agentMessageDelivery: null,
+          botSendReceipt: null,
           artifact: null,
           mcpApp: null,
           progress: null,
@@ -2742,6 +2751,7 @@ describe("useRenderedMessages", () => {
           managedCommand: null,
           agentMessageReceipt: null,
           agentMessageDelivery: null,
+          botSendReceipt: null,
           artifact: null,
           mcpApp: null,
           progress: null,
@@ -2864,6 +2874,7 @@ describe("useRenderedMessages", () => {
           managedCommand: null,
           agentMessageReceipt: null,
           agentMessageDelivery: null,
+          botSendReceipt: null,
           artifact: null,
           mcpApp: null,
           progress: null,
@@ -2889,6 +2900,7 @@ describe("useRenderedMessages", () => {
           managedCommand: null,
           agentMessageReceipt: null,
           agentMessageDelivery: null,
+          botSendReceipt: null,
           artifact: null,
           mcpApp: null,
           progress: null,
@@ -2914,6 +2926,7 @@ describe("useRenderedMessages", () => {
           managedCommand: null,
           agentMessageReceipt: null,
           agentMessageDelivery: null,
+          botSendReceipt: null,
           artifact: null,
           mcpApp: null,
           progress: null,
@@ -2942,6 +2955,7 @@ describe("useRenderedMessages", () => {
           managedCommand: null,
           agentMessageReceipt: null,
           agentMessageDelivery: null,
+          botSendReceipt: null,
           artifact: null,
           mcpApp: null,
           progress: null,
@@ -2964,6 +2978,7 @@ describe("useRenderedMessages", () => {
           managedCommand: null,
           agentMessageReceipt: null,
           agentMessageDelivery: null,
+          botSendReceipt: null,
           artifact: null,
           mcpApp: null,
           progress: null,
@@ -3089,6 +3104,7 @@ describe("useRenderedMessages", () => {
           managedCommand: null,
           agentMessageReceipt: null,
           agentMessageDelivery: null,
+          botSendReceipt: null,
           artifact: null,
           mcpApp: null,
           progress: null,
@@ -3257,6 +3273,7 @@ describe("useRenderedMessages", () => {
           managedCommand: null,
           agentMessageReceipt: null,
           agentMessageDelivery: null,
+          botSendReceipt: null,
           artifact: null,
           mcpApp: null,
           progress: null,
@@ -3796,6 +3813,7 @@ describe("useRenderedMessages", () => {
           managedCommand: null,
           agentMessageReceipt: null,
           agentMessageDelivery: null,
+          botSendReceipt: null,
           artifact: null,
           mcpApp: null,
           progress: null,
@@ -3855,6 +3873,7 @@ describe("useRenderedMessages", () => {
           managedCommand: null,
           agentMessageReceipt: null,
           agentMessageDelivery: null,
+          botSendReceipt: null,
           artifact: null,
           mcpApp: null,
           progress: null,
@@ -4857,7 +4876,7 @@ describe("useRenderedMessages setup card integration", () => {
   });
 
   it("suppresses the Working indicator while a multi-repo window has a failed and a still-setting-up repo", () => {
-    // F3b regression: the rollup ranks `failed` above `setting-up`, so a
+    // Regression: the rollup ranks `failed` above `setting-up`, so a
     // multi-repo window with one failed + one in-flight repo rolls up to
     // `failed`. Suppression must key off any-workspace-setting-up, NOT the
     // aggregate, so the live card still stands in for the awaited turn (no
@@ -7262,6 +7281,7 @@ describe("useRenderedMessages: a subagent's own conversation nests under its car
       managedCommand: null,
       agentMessageReceipt: null,
       agentMessageDelivery: null,
+      botSendReceipt: null,
       artifact: null,
       mcpApp: null,
       progress: null,
@@ -7954,6 +7974,7 @@ describe("useRenderedMessages: object artifact creation cards", () => {
       managedCommand: null,
       agentMessageReceipt: null,
       agentMessageDelivery: null,
+      botSendReceipt: null,
       artifact: null,
       mcpApp: null,
       progress: null,
