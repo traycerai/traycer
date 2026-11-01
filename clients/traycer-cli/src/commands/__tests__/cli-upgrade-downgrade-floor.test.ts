@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import {
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -246,6 +247,12 @@ describe("buildCliUpgradeCommand downgrade floor", () => {
       version: "1.5.2-rc.1",
       pendingUpgrade: null,
     });
+    // "Nothing changed" down to the install directory's contents: the
+    // refusal happens before the writability probe and before staging, so
+    // it leaves behind neither a `.traycer-upgrade-probe-*` nor the
+    // `.traycer-upgrade-*.download` file that a FAILED upgrade keeps on
+    // purpose for its retry.
+    expect(readdirSync(join(workHome, "bin"))).toEqual(["traycer"]);
     // Names both versions and the whole way to install the published one
     // anyway, so the sentence is actionable without re-reading `--help`.
     expect(result.human).toContain("1.5.2-rc.1");
