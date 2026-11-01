@@ -1,9 +1,10 @@
 /**
- * A terminal-agent tile whose record never arrives because `epic.listTuiAgents`
- * keeps failing. Until the list answers nothing may call the agent deleted, so
- * the tile stays open; this pins what it shows meanwhile. The real sync hook,
- * a real `QueryClient`, a real `HostClient` and a real open-epic store feed the
- * real tile, because the state in question is that chain's settled end.
+ * A terminal-agent tile whose record is not coming: `epic.listTuiAgents` keeps
+ * failing, or it answered without an agent bound to another host. Nothing may
+ * call that agent deleted, so the tile stays open; this pins what it shows. The
+ * real sync hook, a real `QueryClient`, a real `HostClient` and a real open-epic
+ * store feed the real tile, because the state in question is that chain's
+ * settled end.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
@@ -37,16 +38,16 @@ import type { OpenedStoreForTest } from "@/stores/epics/open-epic/test-support/o
 const EPIC_ID = "epic-list-failure";
 const VIEWER_ID = "viewer-1";
 const HOST_ID = mockLocalHostEntry.hostId;
+const OTHER_HOST_ID = "other-host";
 
 const runtime: { client: HostClient<HostRpcRegistry> | null } = vi.hoisted(
   () => ({ client: null }),
 );
 
 const canvas = vi.hoisted(() => ({
-  pendingCreateArtifactIds: new Set<string>(),
+  setPendingCreate: (_ids: ReadonlySet<string>): void => undefined,
   prepareCloseCanvasTabFocusTarget:
     vi.fn<(tabId: string, paneId: string, instanceId: string) => void>(),
-  tabsById: {},
 }));
 
 vi.mock("@/lib/host/runtime", async (importOriginal) => ({
@@ -119,12 +120,18 @@ vi.mock("@/hooks/terminal/use-terminal-kill-for-mutation", () => ({
   useTerminalKillFor: () => ({ mutate: () => undefined }),
 }));
 
-vi.mock("@/stores/epics/canvas/store", () => ({
-  useEpicCanvasStore: Object.assign(
-    (selector: (s: typeof canvas) => unknown) => selector(canvas),
-    { getState: () => canvas },
-  ),
-}));
+vi.mock("@/stores/epics/canvas/store", async () => {
+  const { create } = await import("zustand");
+  const useEpicCanvasStore = create(() => ({
+    pendingCreateArtifactIds: new Set<string>() as ReadonlySet<string>,
+    prepareCloseCanvasTabFocusTarget: canvas.prepareCloseCanvasTabFocusTarget,
+    tabsById: {},
+  }));
+  canvas.setPendingCreate = (ids) => {
+    useEpicCanvasStore.setState({ pendingCreateArtifactIds: ids });
+  };
+  return { useEpicCanvasStore };
+});
 
 vi.mock("@/hooks/epic/use-epic-nested-focus-navigation", () => ({
   useEpicNestedFocusNavigation: () => () => undefined,
@@ -212,7 +219,7 @@ interface Mounted {
   readonly list: { behaviour: ListBehaviour };
 }
 
-function mountTile(behaviour: ListBehaviour): Mounted {
+function mountTile(behaviour: ListBehaviour, tileHostId: string): Mounted {
   const listCalls = { value: 0 };
   const list = { behaviour };
   const requestSeq = { value: 0 };
@@ -266,7 +273,7 @@ function mountTile(behaviour: ListBehaviour): Mounted {
       <EpicSessionContext.Provider value={handle}>
         <EpicSessionHostClientContext.Provider value={client}>
           <TooltipProvider>
-            <TabHostProvider hostId={HOST_ID}>
+            <TabHostProvider hostId={tileHostId}>
               <SyncRecords />
               <TuiAgentTile
                 viewTabId="tab-test"
@@ -275,7 +282,7 @@ function mountTile(behaviour: ListBehaviour): Mounted {
                   instanceId: "inst-agent-1",
                   type: "terminal-agent",
                   name: "claude",
-                  hostId: HOST_ID,
+                  hostId: tileHostId,
                 }}
                 tileId="tile-1"
                 isActive
@@ -292,7 +299,7 @@ function mountTile(behaviour: ListBehaviour): Mounted {
 }
 
 async function mountOnceFailed(): Promise<Mounted> {
-  const mounted = mountTile("reject");
+  const mounted = mountTile("reject", HOST_ID);
   await waitFor(() => {
     expect(screen.queryByRole("button", { name: "Close tab" })).not.toBeNull();
   });
@@ -311,7 +318,7 @@ function refetchList(mounted: Mounted): void {
 const sessions: OpenedStoreForTest[] = [];
 
 beforeEach(() => {
-  canvas.pendingCreateArtifactIds = new Set();
+  canvas.setPendingCreate(new Set());
   canvas.prepareCloseCanvasTabFocusTarget.mockClear();
   useAuthStore.setState({
     contextMetadata: { userId: VIEWER_ID, username: VIEWER_ID },
@@ -328,7 +335,7 @@ afterEach(() => {
 
 describe("<TuiAgentTile /> with a record list that keeps failing", () => {
   it("shows the skeleton while the list is still being asked", async () => {
-    const { handle, listCalls } = mountTile("hang");
+    const { handle, listCalls } = mountTile("hang", HOST_ID);
 
     await waitFor(() => {
       expect(listCalls.value).toBe(1);
@@ -364,8 +371,8 @@ describe("<TuiAgentTile /> with a record list that keeps failing", () => {
   });
 
   it("stays on the skeleton and the setup card for an agent still being created", async () => {
-    canvas.pendingCreateArtifactIds = new Set(["agent-1"]);
-    const { handle } = mountTile("reject");
+    canvas.setPendingCreate(new Set(["agent-1"]));
+    const { handle } = mountTile("reject", HOST_ID);
 
     await waitFor(() => {
       expect(handle.store.getState().tuiAgentRecordListFailed).toBe(true);
@@ -405,5 +412,50 @@ describe("<TuiAgentTile /> with a record list that keeps failing", () => {
     await waitFor(() => {
       expect(screen.queryByRole("button", { name: "Close tab" })).toBeNull();
     });
+    expect(screen.queryByText(SKELETON)).not.toBeNull();
+  });
+});
+
+describe("<TuiAgentTile /> bound to another host, with a list that answered without it", () => {
+  async function answerWithoutTheAgent(): Promise<Mounted> {
+    const mounted = mountTile("answer-empty", OTHER_HOST_ID);
+    await waitFor(() => {
+      expect(
+        mounted.handle.store.getState().tuiAgentRecordListAuthoritative,
+      ).toBe(true);
+    });
+    return mounted;
+  }
+
+  it("stops at the banner, because nothing will close this tile", async () => {
+    await answerWithoutTheAgent();
+
+    await waitFor(() => {
+      expect(screen.queryByTestId(BANNER_TEST_ID)).not.toBeNull();
+    });
+    expect(screen.queryByText(SKELETON)).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Close tab" }));
+
+    expect(canvas.prepareCloseCanvasTabFocusTarget).toHaveBeenCalledWith(
+      "tab-test",
+      "tile-1",
+      "inst-agent-1",
+    );
+  });
+
+  it("reaches the banner when a create on that host fails", async () => {
+    canvas.setPendingCreate(new Set(["agent-1"]));
+    await answerWithoutTheAgent();
+
+    expect(screen.queryByTestId(BANNER_TEST_ID)).toBeNull();
+    expect(screen.queryByText(SKELETON)).not.toBeNull();
+
+    act(() => {
+      canvas.setPendingCreate(new Set());
+    });
+
+    expect(screen.queryByTestId(BANNER_TEST_ID)).not.toBeNull();
+    expect(screen.queryByText(SETUP_CARD)).not.toBeNull();
   });
 });

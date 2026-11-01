@@ -61,10 +61,12 @@ export type DeadTileOwnerKind = "terminal" | "agent";
  * live-only by construction; the owner's machine is the only place it can be
  * started.
  *
- * `record-unavailable` - the epic session's agent list keeps failing and this
- * agent's record has not arrived. That list is the SESSION host's, which need
- * not be this tile's, so the banner names no host. The agent may be alive or
- * deleted: only the list can say, so the banner claims neither.
+ * `record-unavailable` - this agent has no record on this device: the epic
+ * session's agent list keeps failing, or it answered without this agent and the
+ * agent is bound to another host. That list is the SESSION host's, which need
+ * not be this tile's, so the banner names no host. The agent may be alive,
+ * deleted or never created, and a replica arrives on the feed's schedule with
+ * nothing to say it is late rather than gone, so the banner claims none of them.
  *
  * `sandbox-stopped` - the bound host is a sandbox someone stopped. Its PTYs
  * ended with it, and Start is the remedy, so a terminal or a terminal
@@ -96,7 +98,7 @@ function terminalDeadTileMessage(
     return `This agent is not running on ${named} right now, and it can only be started on that computer. The agent and its transcript are kept there — closing this tab only removes it from the canvas.`;
   }
   if (reason === "record-unavailable") {
-    return "Couldn't load this agent. Traycer keeps trying, and it opens here once it loads. Closing this tab only removes it from the canvas.";
+    return "Couldn't load this agent. Traycer keeps trying. Closing this tab only removes it from the canvas.";
   }
   if (reason === "sandbox-stopped") {
     return `${hostLabelAtSentenceStart(hostLabel)} is stopped. Start it to use this terminal again.`;
@@ -119,7 +121,7 @@ function agentReportCopy(reason: DeadTileReason): {
   if (reason === "record-unavailable") {
     return {
       title: "Agent could not be loaded",
-      message: "The agent list keeps failing.",
+      message: "The agent's record is not available on this device.",
     };
   }
   return {
