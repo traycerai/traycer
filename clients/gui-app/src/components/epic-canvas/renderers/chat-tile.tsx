@@ -2402,22 +2402,29 @@ function useChatTileSessionViewModel(
       refreshMissingWorktreePaths: s.refreshMissingWorktreePaths,
     })),
   );
-  const chatStateTitle = state.chat?.title ?? "";
-  // The name the tab shows. `node.name` is a snapshot only the tab strip writes
-  // back, so it lags the tab, and it trails the session's own title here.
-  const agentName = useEpicTabDisplayTitle(
+  // The tab's own sources, empty when none has a title: the blank name is what
+  // tells a title apart from the fallback the tab would otherwise show.
+  const liveTitle = useEpicTabDisplayTitle(
     {
       id: node.id,
-      name: chatStateTitle.length > 0 ? chatStateTitle : node.name,
+      name: "",
       type: isCopy ? "published-chat" : "chat",
       hostId: viewModelHostId,
     },
     currentEpicId,
     null,
   );
-  // Empty until a real title exists: a fork or side chat seeds its name from
-  // this and must not store the fallback.
-  const agentTitle = isAgentFallbackName(agentName) ? "" : agentName;
+  // Then the tab's saved name. The session's title comes last, and only so an
+  // agent with a title is never named by the fallback. Empty until a real title
+  // exists: a fork or side chat seeds its name from this and must not store the
+  // fallback.
+  const agentTitle =
+    [
+      liveTitle,
+      isAgentFallbackName(node.name) ? "" : node.name,
+      state.chat?.title ?? "",
+    ].find((title) => title.length > 0) ?? "";
+  const agentName = agentTitle.length > 0 ? agentTitle : node.name;
   const projectedQueue = useMemo(
     () =>
       queueWithoutPersistedPrompts(
