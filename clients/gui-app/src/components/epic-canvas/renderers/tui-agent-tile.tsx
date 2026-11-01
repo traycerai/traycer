@@ -16,7 +16,10 @@ import {
 } from "@/components/epic-tabs/pane-visibility-context";
 import type { EpicNodeRef } from "@/stores/epics/canvas/types";
 import { useOpenEpicId } from "@/lib/epic-selectors";
-import { useEpicTerminalAgent } from "@/lib/epic-selectors";
+import {
+  useEpicTerminalAgent,
+  useEpicTuiAgentRecordListFailed,
+} from "@/lib/epic-selectors";
 import {
   TerminalXtermHost,
   useTerminalTileBootstrap,
@@ -376,6 +379,55 @@ function sleepsUntilRequested(input: {
 }): boolean {
   if (input.isCloudReplica || input.startRequested) return false;
   return input.agent !== null && input.agent.sessionState === "sleeping";
+}
+
+/**
+ * No record for this agent yet. Same stable skeleton the reachability-check,
+ * pre-launch, and xterm suspense states use, so the create→ready transition
+ * reads as one continuous loading state instead of a sequence of placeholder
+ * strings. The worktree-setup notice still rides on top (it keys off the
+ * tab/node id, not the pending agent projection), so a just-created worktree
+ * agent shows its notice before the record lands.
+ *
+ * Unless the list has failed: nothing can call this agent deleted until the
+ * list answers, so the tile stays open, and a skeleton there would wait forever
+ * with nothing to say why.
+ */
+function TuiAgentAwaitingRecord(props: {
+  readonly node: EpicNodeRef;
+  readonly tileId: string;
+  readonly viewTabId: string;
+  readonly hostId: string;
+  readonly hostLabel: string;
+  readonly onClose: () => void;
+}) {
+  const recordListFailed = useEpicTuiAgentRecordListFailed();
+  if (recordListFailed) {
+    return (
+      <TerminalDeadTileBanner
+        reason="record-unavailable"
+        destroyedLine={null}
+        hostLabel={props.hostLabel}
+        ownerKind="agent"
+        onClose={props.onClose}
+        testId={`terminal-agent-tile-${props.tileId}`}
+      />
+    );
+  }
+  return (
+    <TerminalAgentTileShell tileId={props.tileId}>
+      <TerminalAgentWorktreeNotice
+        owningTileInstanceId={props.node.instanceId}
+        hostId={props.hostId}
+        agentId={props.node.id}
+        viewTabId={props.viewTabId}
+        layout="bar"
+      />
+      <div className="flex min-h-0 flex-1 items-center justify-center">
+        <TerminalLoadingSkeleton />
+      </div>
+    </TerminalAgentTileShell>
+  );
 }
 
 function TuiAgentTileLive(
@@ -869,25 +921,15 @@ function TuiAgentTileLive(
   }
 
   if (agent === null) {
-    // Same stable skeleton the reachability-check, pre-launch, and xterm
-    // suspense states use, so the create→ready transition reads as one
-    // continuous loading state instead of a sequence of placeholder strings.
-    // The worktree-setup notice still rides on top (it keys off the tab/node
-    // id, not the pending agent projection), so a just-created worktree agent
-    // shows its notice before the record lands.
     return (
-      <TerminalAgentTileShell tileId={props.tileId}>
-        <TerminalAgentWorktreeNotice
-          owningTileInstanceId={props.node.instanceId}
-          hostId={hostId}
-          agentId={props.node.id}
-          viewTabId={props.viewTabId}
-          layout="bar"
-        />
-        <div className="flex min-h-0 flex-1 items-center justify-center">
-          <TerminalLoadingSkeleton />
-        </div>
-      </TerminalAgentTileShell>
+      <TuiAgentAwaitingRecord
+        node={props.node}
+        tileId={props.tileId}
+        viewTabId={props.viewTabId}
+        hostId={hostId}
+        hostLabel={hostLabel}
+        onClose={closeTile}
+      />
     );
   }
 
