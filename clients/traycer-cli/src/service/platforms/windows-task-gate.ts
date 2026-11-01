@@ -498,7 +498,7 @@ export async function gateWindowsTaskVerb<V extends GatedWindowsTaskVerb>(
 
 /**
  * The task a permitted `/Run` acts on, as the gate's own read found it: the
- * three `PermittedWindowsTask` answers a write may act on, plus the one only
+ * two `PermittedWindowsTask` answers a write may act on, plus the one only
  * this write-free verb may - a task that is there and could not be attributed
  * to this account.
  */
@@ -532,19 +532,23 @@ export type WindowsTaskRunGate =
   | {
       readonly kind: "not-owned";
       /**
-       * The refusal, for the one verdict that reaches it: a task RESOLVED to
-       * another account. An unconfirmed owner does not refuse a `/Run`, so
-       * this error's `details.reason` is always `other-owner`.
+       * The refusal, for the one verdict that reaches it: a task this read
+       * ATTRIBUTED to another account - its principal resolved to another
+       * SID, or the task is hidden from this account. An unconfirmed owner
+       * does not refuse a `/Run`, so this error's `details.reason` is always
+       * `other-owner`.
        */
       readonly error: CliError;
     };
 
 /**
- * The one door to `/Run`: read ownership now, then start the task unless it
- * was RESOLVED to another account. `/Run` writes no definition and creates and
- * destroys nothing - it starts whatever is registered - so a task whose owner
- * could not be confirmed is started rather than refused (THE INVARIANT above),
- * and the scheduler's own answer, not this read's silence, decides the outcome.
+ * The one door to `/Run`: read ownership now, then start the task unless this
+ * read ATTRIBUTED it to another account - a principal resolved to another
+ * SID, or a task hidden from this account. `/Run` writes no definition and
+ * creates and destroys nothing - it starts whatever is registered - so a task
+ * whose owner could not be confirmed is started rather than refused (THE
+ * INVARIANT above), and the scheduler's own answer, not this read's silence,
+ * decides the outcome.
  */
 export async function gateWindowsTaskRun(
   label: ServiceLabel,
