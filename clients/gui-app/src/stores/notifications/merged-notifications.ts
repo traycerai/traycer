@@ -156,8 +156,9 @@ export interface MergedNotificationRow {
    * relayed the feed. Feed mutations never use it - they address the entry.
    * `null` for rows with no meaningful origin. */
   readonly originHostId: string | null;
-  /** Product-vocabulary category, mapped from `source` at the projection
-   * boundary so consumers never branch on the internal source seam. */
+  /** Product-vocabulary category, assigned by the projection so consumers
+   * never branch on the internal source seam. A row's `source` answers for it
+   * unless its kind names its own category. */
   readonly category: NotificationCategory;
 }
 

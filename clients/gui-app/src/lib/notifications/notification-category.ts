@@ -17,7 +17,8 @@ const CATEGORY_BY_SOURCE: Readonly<
 
 /** Maps the internal source seam to the product vocabulary at the
  * projection boundary - callers outside the store never branch on `source`
- * directly. */
+ * directly. A host or cloud row reaches this through
+ * {@link categoryForHostNotification}, which reads its kind first. */
 export function categoryForNotificationSource(
   source: MergedNotificationSource,
 ): NotificationCategory {
