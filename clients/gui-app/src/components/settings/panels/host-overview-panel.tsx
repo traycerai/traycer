@@ -26,7 +26,6 @@ import {
   HostOverviewNameAction,
 } from "@/components/settings/panels/host-overview-status-card";
 import { HostEnvironmentSection } from "@/components/settings/panels/host-environment-section";
-import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 import { HostOverviewTabs } from "@/components/settings/panels/host-overview-tabs";
 import {
   NO_HOST_OVERVIEW_TAB_BADGES,
@@ -2036,25 +2035,19 @@ export function HostOverviewPanel(props: {
             which configuration this host runs, for the host the picker names;
             and the settings card on every tab like the lines above it: whether
             this computer's settings are its own, moving, moved, shared by an
-            earlier version or stopped. None in a build without environments
-            (`unreleased-features.ts`): a host there runs its own settings,
-            has nowhere to move them, and asks no remote access question. */}
-        {UNRELEASED_FEATURES_ENABLED ? (
-          <>
-            <RemoteAccessQuestion
-              client={client}
-              hostId={scope.hostId}
-              enabled={usable}
-            />
-            <HostEnvironmentSection scope={scope} />
-            <HostOverviewSettingsCardSlot
-              client={client}
-              hostId={scope.hostId}
-              hostName={displayName}
-              usable={usable}
-            />
-          </>
-        ) : null}
+            earlier version or stopped. */}
+        <RemoteAccessQuestion
+          client={client}
+          hostId={scope.hostId}
+          enabled={usable}
+        />
+        <HostEnvironmentSection scope={scope} />
+        <HostOverviewSettingsCardSlot
+          client={client}
+          hostId={scope.hostId}
+          hostName={displayName}
+          usable={usable}
+        />
         {/* The tab bar and the one body showing, pinned under the header.
             The Ports count and the Installation dot hang on `badges`. */}
         <HostOverviewTabs
@@ -2082,9 +2075,7 @@ export function HostOverviewPanel(props: {
           bodies={{
             installation: installationTab,
             updates: updatesTab,
-            // No Access and setup tab in a build without environments
-            // (`HOST_OVERVIEW_TABS`).
-            access: UNRELEASED_FEATURES_ENABLED ? accessTab : null,
+            access: accessTab,
             data: dataTab,
             ports: portsTab,
             simulators: simulatorsTab,

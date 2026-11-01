@@ -6,24 +6,20 @@ import { useEnvironmentStatusRead } from "@/hooks/environment/use-environment-re
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
 import { useMoveSheetStore } from "@/stores/settings/move-sheet-store";
-import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 
 /**
  * The note above a provider's tabs while a Local row is picked: these
  * settings are that computer's own, and the verb that moves them. While the
  * move runs, or once it stopped, it reads as the Overview's settings card
  * does (`MoveProgressLine`), from that computer's own `environment.status`.
- * Nothing in a build without environments (`unreleased-features.ts`), where
- * every host is its own Local row and there is no Personal to move to.
  */
 export function LocalRowNote(): ReactNode {
   const pick = useEnvironmentPick();
-  const hostId =
-    pick.kind === "local" && UNRELEASED_FEATURES_ENABLED ? pick.hostId : null;
+  const hostId = pick.kind === "local" ? pick.hostId : null;
   const client = useHostClientForHostId(hostId);
   const status = useEnvironmentStatusRead(client, hostId, hostId !== null);
   const openMoveSheet = useMoveSheetStore((state) => state.openSheet);
-  if (pick.kind !== "local" || !UNRELEASED_FEATURES_ENABLED) return null;
+  if (pick.kind !== "local") return null;
   const state =
     status.data === null ? null : hostSettingsCardState(status.data);
   return (

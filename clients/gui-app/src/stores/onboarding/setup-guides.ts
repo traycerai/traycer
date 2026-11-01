@@ -228,7 +228,7 @@ export interface SetupGuideShell {
  * out of the checklist's totals: counting a step nobody can take leaves the
  * panel one short forever and keeps the "you're all set" nudge alive.
  */
-export function isSetupGuideAvailable(
+function isSetupGuideAvailable(
   id: SetupGuideId,
   shell: SetupGuideShell,
 ): boolean {

@@ -13,10 +13,9 @@ import type { UltracodeStyle } from "@/lib/layout/layout-values";
 /**
  * The picker's Ultracode row: a native switch named by its label, the exact
  * single-line hint, and a disabled switch (with the normal hint) while the
- * model's eligibility is unknown. Nothing here reads a build constant, so the
- * production build, where the global unreleased switch is off, shows the same
- * row. The trigger draws the request after the effort, as Layout ▸ Model ▸
- * Ultracode asks, only for a requested saved intent.
+ * model's eligibility is unknown. The trigger draws the request after the
+ * effort, as Layout ▸ Model ▸ Ultracode asks, only for a requested saved
+ * intent.
  */
 
 afterEach(() => {

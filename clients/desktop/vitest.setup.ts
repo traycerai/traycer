@@ -2,19 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import os from "node:os";
 import { join } from "node:path";
-import { afterAll, vi } from "vitest";
-
-// The suites describe the whole desktop, as every build but production has
-// it. The build-time switches (the desktop's and the shared client library's
-// `unreleased-features.ts`) are committed `true`; the mock keeps the suites on
-// that build in a checkout stamped `--off` for a production comparison. A
-// suite of the production build mocks the module itself with `false`.
-vi.mock("./src/unreleased-features", () => ({
-  UNRELEASED_FEATURES_ENABLED: true,
-}));
-vi.mock("@traycer-clients/shared/unreleased-features", () => ({
-  UNRELEASED_FEATURES_ENABLED: true,
-}));
+import { afterAll } from "vitest";
 
 // Sandbox the suite's notion of "home" at the `os` boundary, not the env var.
 //

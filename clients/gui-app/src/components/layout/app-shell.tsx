@@ -39,7 +39,6 @@ import { TracyEntryController } from "@/components/layout/tabs/tracy-entry-contr
 import { TalkShortcutBridge } from "@/components/layout/voice/talk-control";
 import { VoiceSessionController } from "@/components/layout/voice/voice-session-controller";
 import { VoiceSessionChrome } from "@/components/layout/voice/voice-session-chrome";
-import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 import { LandingTerminalHost } from "@/components/home/terminal-panel/landing-terminal-host";
 import { OpenFolderDialog } from "@/components/open-folder-dialog";
 import { RemoteFolderPickerDialog } from "@/components/remote-folder-picker-dialog";
@@ -161,7 +160,7 @@ function AppShellBody(props: AppShellProps) {
                     spoken post goes to, Mute, End, captions. The phone
                     draws its full-screen view instead, and this bar while
                     that view is down (V5). */}
-                  {UNRELEASED_FEATURES_ENABLED ? <VoiceSessionChrome /> : null}
+                  <VoiceSessionChrome />
                 </>
               }
               surface={
@@ -227,16 +226,12 @@ function AppShellBody(props: AppShellProps) {
                   <TabStripKeybindingBridge />
                   {/* Once per window, for every strip placement: the fixed
                     Tracy entry's tab, its lock and its place first. */}
-                  {UNRELEASED_FEATURES_ENABLED ? (
-                    <TracyEntryController />
-                  ) : null}
+                  <TracyEntryController />
                   {/* Once per window: the voice session's owner (the
                     microphone, the engine, the scheduler), which the Talk
                     control and the strip drive through the store. */}
-                  {UNRELEASED_FEATURES_ENABLED ? (
-                    <VoiceSessionController />
-                  ) : null}
-                  {UNRELEASED_FEATURES_ENABLED ? <TalkShortcutBridge /> : null}
+                  <VoiceSessionController />
+                  <TalkShortcutBridge />
                   <MigrationRunController />
                   <MigrationBlockingModalHost />
                   {/* Above the drawer's mount gate: a rotation that replaces
