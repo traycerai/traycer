@@ -162,9 +162,9 @@ const VERIFIED_ALTERNATE_GATE: Readonly<Record<string, string>> = {
   // `bot.list` stands for the family: the sibling-method proxy pattern of
   // worktree.setAutoCleanupPolicy above.
   "bot.create":
-    "sibling-method proxy gate: CreateBotForm renders only inside HomeBotsSection (home-bots-group.tsx), which gates on bot.list (home-bots-section.tsx), and inside a bot tab's channel sidebar (bot-channel-sidebar.tsx), which BotTabSurface draws only under bot.open of the same block (bot-tab-surface.tsx); onError toasts an E_HOST_UNSUPPORTED like any other refusal (use-bot-mutations.ts)",
+    "sibling-method proxy gate: CreateBotForm renders only inside HomeBotsSection (home-bots-group.tsx), which gates on bot.list (home-bots-section.tsx), and inside the Tracy surface's channel sidebar (bot-channel-sidebar.tsx), which BotTabSurface draws only under bot.open of the same block (bot-tab-surface.tsx); onError toasts an E_HOST_UNSUPPORTED like any other refusal (use-bot-mutations.ts)",
   "bot.delete":
-    "same bot.list proxy as bot.create: a bot tab is created only from HomeBotRow and CreateBotForm under that gate (home-bot-row.tsx, create-bot-form.tsx), and BotTabSurface re-checks bot.open - the newest method of the same block - on its own host before drawing any control (bot-tab-surface.tsx), so a tab restored from bot-tabs-store onto a host without bots shows the update notice; documented no-toast: the Settings panel states the refusal inline (use-bot-mutations.ts, bot-settings-panel.tsx)",
+    "same bot.list proxy as bot.create: a bot's channel is opened only from HomeBotRow and CreateBotForm under that gate (home-bot-row.tsx, create-bot-form.tsx), and BotTabSurface re-checks bot.open - the newest method of the same block - on its own host before drawing any control (bot-tab-surface.tsx), so a surface restored from tracy-surface-store onto a host without bots shows the update notice; documented no-toast: the Settings panel states the refusal inline (use-bot-mutations.ts, bot-settings-panel.tsx)",
   "bot.updateTitle":
     "same proxy and inline refusal as bot.delete (bot-settings-panel.tsx)",
   "bot.updateRunSettings":

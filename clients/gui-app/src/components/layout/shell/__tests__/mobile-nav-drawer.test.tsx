@@ -239,7 +239,8 @@ import { useAccountContextStore } from "@/stores/auth/account-context-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import { useMobileNavStore } from "@/stores/layout/mobile-nav-store";
-import { useBotTabsStore } from "@/stores/bots/bot-tabs-store";
+import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
+import { TRACY_TAB_REF } from "@/stores/tabs/kinds/tracy";
 import {
   DEFAULT_LAYOUT_SNAPSHOT,
   useLayoutStore,
@@ -417,7 +418,7 @@ describe("MobileNavDrawer", () => {
   });
   afterEach(() => {
     cleanup();
-    useBotTabsStore.setState({ tabs: {}, fixedBotId: null });
+    useTracySurfaceStore.setState(useTracySurfaceStore.getInitialState(), true);
     useTabsStore.setState(useTabsStore.getInitialState(), true);
     useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
     vi.useRealTimers();
@@ -433,17 +434,12 @@ describe("MobileNavDrawer", () => {
       useAuthStore.setState({ status: "signed-in" });
       useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
       useLayoutStore.getState().setRegionValues("homeTab", { shown: "shown" });
-      const ref = { kind: "bot", id: "bot-tracy" } as const;
-      useBotTabsStore.setState({
-        tabs: {
-          "bot-tracy": {
-            botId: "bot-tracy",
-            hostId: "host-a",
-            title: "Tracy",
-            openedAt: 1,
-          },
-        },
-        fixedBotId: "bot-tracy",
+      const ref = TRACY_TAB_REF;
+      useTracySurfaceStore.setState({
+        open: true,
+        hostId: "host-a",
+        botId: "bot-tracy",
+        visitedBotIds: [],
       });
       useTabsStore.setState({
         items: [{ kind: "tab", id: tabItemId(ref), ref }],

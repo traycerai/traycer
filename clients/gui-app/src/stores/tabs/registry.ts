@@ -2,7 +2,7 @@ import { sampleWorkspaceTabModule } from "./kinds/sample-workspace";
 import type { NavigateOptions } from "@tanstack/react-router";
 import { epicTabModule } from "@/stores/tabs/kinds/epic";
 import { draftTabModule } from "@/stores/tabs/kinds/draft";
-import { botTabModule } from "@/stores/tabs/kinds/bot";
+import { tracyTabModule } from "@/stores/tabs/kinds/tracy";
 import { historyTabModule } from "@/stores/tabs/kinds/history";
 import { settingsTabModule } from "@/stores/tabs/kinds/settings";
 import { homeTabModule } from "@/stores/tabs/kinds/home";
@@ -38,7 +38,7 @@ import type {
 export const TAB_KINDS = {
   epic: epicTabModule,
   draft: draftTabModule,
-  bot: botTabModule,
+  tracy: tracyTabModule,
   history: historyTabModule,
   settings: settingsTabModule,
   home: homeTabModule,
@@ -71,7 +71,9 @@ export function tabSurfaceDescriptor(
 export function tabSurfaceDescriptor(
   kind: "draft",
 ): TabSurfaceDescriptor<"draft">;
-export function tabSurfaceDescriptor(kind: "bot"): TabSurfaceDescriptor<"bot">;
+export function tabSurfaceDescriptor(
+  kind: "tracy",
+): TabSurfaceDescriptor<"tracy">;
 export function tabSurfaceDescriptor(
   kind: "history",
 ): TabSurfaceDescriptor<"history">;
@@ -89,7 +91,7 @@ export function tabSurfaceDescriptor(
 ):
   | TabSurfaceDescriptor<"epic">
   | TabSurfaceDescriptor<"draft">
-  | TabSurfaceDescriptor<"bot">
+  | TabSurfaceDescriptor<"tracy">
   | TabSurfaceDescriptor<"history">
   | TabSurfaceDescriptor<"settings">
   | TabSurfaceDescriptor<"sample-workspace">
@@ -99,7 +101,7 @@ export function tabSurfaceDescriptor(
 ):
   | TabSurfaceDescriptor<"epic">
   | TabSurfaceDescriptor<"draft">
-  | TabSurfaceDescriptor<"bot">
+  | TabSurfaceDescriptor<"tracy">
   | TabSurfaceDescriptor<"history">
   | TabSurfaceDescriptor<"settings">
   | TabSurfaceDescriptor<"sample-workspace">
@@ -109,8 +111,8 @@ export function tabSurfaceDescriptor(
       return TAB_KINDS.epic.descriptor.surface;
     case "draft":
       return TAB_KINDS.draft.descriptor.surface;
-    case "bot":
-      return TAB_KINDS.bot.descriptor.surface;
+    case "tracy":
+      return TAB_KINDS.tracy.descriptor.surface;
     case "history":
       return TAB_KINDS.history.descriptor.surface;
     case "settings":
@@ -139,8 +141,8 @@ export function tabRequestClose(
       return TAB_KINDS.epic.descriptor.requestClose(tab, close);
     case "draft":
       return TAB_KINDS.draft.descriptor.requestClose(tab, close);
-    case "bot":
-      return TAB_KINDS.bot.descriptor.requestClose(tab, close);
+    case "tracy":
+      return TAB_KINDS.tracy.descriptor.requestClose(tab, close);
     case "history":
       return TAB_KINDS.history.descriptor.requestClose(tab, close);
     case "settings":
@@ -162,8 +164,8 @@ export function tabDuplicate(tab: HeaderTab): TabNavigationIntent | null {
       return TAB_KINDS.epic.descriptor.duplicate(tab);
     case "draft":
       return TAB_KINDS.draft.descriptor.duplicate(tab);
-    case "bot":
-      return TAB_KINDS.bot.descriptor.duplicate(tab);
+    case "tracy":
+      return TAB_KINDS.tracy.descriptor.duplicate(tab);
     case "history":
       return TAB_KINDS.history.descriptor.duplicate(tab);
     case "settings":
@@ -185,8 +187,8 @@ export function tabResolveIntent(tab: HeaderTab): TabNavigationIntent {
       return TAB_KINDS.epic.descriptor.resolveIntent(tab);
     case "draft":
       return TAB_KINDS.draft.descriptor.resolveIntent(tab);
-    case "bot":
-      return TAB_KINDS.bot.descriptor.resolveIntent(tab);
+    case "tracy":
+      return TAB_KINDS.tracy.descriptor.resolveIntent(tab);
     case "history":
       return TAB_KINDS.history.descriptor.resolveIntent(tab);
     case "settings":
@@ -208,8 +210,8 @@ export function tabRouteOptions(intent: TabNavigationIntent): NavigateOptions {
       return TAB_KINDS.epic.descriptor.routeOptions(intent);
     case "draft":
       return TAB_KINDS.draft.descriptor.routeOptions(intent);
-    case "bot":
-      return TAB_KINDS.bot.descriptor.routeOptions(intent);
+    case "tracy":
+      return TAB_KINDS.tracy.descriptor.routeOptions(intent);
     case "history":
       return TAB_KINDS.history.descriptor.routeOptions(intent);
     case "settings":
@@ -231,8 +233,8 @@ export function tabActivate(intent: TabNavigationIntent): void {
       return TAB_KINDS.epic.descriptor.activate(intent);
     case "draft":
       return TAB_KINDS.draft.descriptor.activate(intent);
-    case "bot":
-      return TAB_KINDS.bot.descriptor.activate(intent);
+    case "tracy":
+      return TAB_KINDS.tracy.descriptor.activate(intent);
     case "history":
       return TAB_KINDS.history.descriptor.activate(intent);
     case "settings":
@@ -256,8 +258,8 @@ export function tabRequiresCloseConfirm(tab: HeaderTab): boolean {
       return TAB_KINDS.epic.descriptor.requiresCloseConfirm(tab);
     case "draft":
       return TAB_KINDS.draft.descriptor.requiresCloseConfirm(tab);
-    case "bot":
-      return TAB_KINDS.bot.descriptor.requiresCloseConfirm(tab);
+    case "tracy":
+      return TAB_KINDS.tracy.descriptor.requiresCloseConfirm(tab);
     case "history":
       return TAB_KINDS.history.descriptor.requiresCloseConfirm(tab);
     case "settings":
@@ -279,7 +281,7 @@ export function tabEpicId(tab: HeaderTab): string | null {
     case "epic":
       return tab.epicId;
     case "draft":
-    case "bot":
+    case "tracy":
     case "history":
     case "settings":
     case "home":
@@ -307,8 +309,8 @@ export function tabOpenInNewWindow(
       return TAB_KINDS.epic.descriptor.openInNewWindow(tab, deps);
     case "draft":
       return TAB_KINDS.draft.descriptor.openInNewWindow(tab, deps);
-    case "bot":
-      return TAB_KINDS.bot.descriptor.openInNewWindow(tab, deps);
+    case "tracy":
+      return TAB_KINDS.tracy.descriptor.openInNewWindow(tab, deps);
     case "history":
       return TAB_KINDS.history.descriptor.openInNewWindow(tab, deps);
     case "settings":
@@ -334,8 +336,8 @@ export function tabMatchesPath(tab: HeaderTab, pathname: string): boolean {
       return TAB_KINDS.epic.descriptor.matchesPath(tab, pathname);
     case "draft":
       return TAB_KINDS.draft.descriptor.matchesPath(tab, pathname);
-    case "bot":
-      return TAB_KINDS.bot.descriptor.matchesPath(tab, pathname);
+    case "tracy":
+      return TAB_KINDS.tracy.descriptor.matchesPath(tab, pathname);
     case "history":
       return TAB_KINDS.history.descriptor.matchesPath(tab, pathname);
     case "settings":

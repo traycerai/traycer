@@ -30,7 +30,9 @@ import { MOVED_ASK_TEXT } from "@/lib/voice/say-loop";
 import { voiceMutationKeys } from "@/lib/query-keys";
 import { useBotOpenThreadStore } from "@/stores/bots/bot-open-thread-store";
 import { useBotTabLandingStore } from "@/stores/bots/bot-tab-landing-store";
-import { useBotTabsStore } from "@/stores/bots/bot-tabs-store";
+import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import { TRACY_TAB_REF } from "@/stores/tabs/kinds/tracy";
 import { useTabsStore } from "@/stores/tabs/store";
 import {
   useVoiceSessionStore,
@@ -676,18 +678,20 @@ vi.mock("@/lib/voice/audio-level", () => ({
   watchAudioLevel: () => ({ stop: () => undefined }),
 }));
 // The tab navigation's activation as the real one behaves for the voice: it
-// brings the bot's tab to the front at once and runs the route navigation
-// (whose outcome `navigateOutcome` decides), putting the previous tab back
-// when that navigation fails unless a newer activation superseded it; or it
-// queues the activation, or refuses it.
+// brings the Tracy surface to the front on the bot's channel at once and runs
+// the route navigation (whose outcome `navigateOutcome` decides), putting the
+// previous tab and channel back when that navigation fails unless a newer
+// activation superseded it; or it queues the activation, or refuses it.
 vi.mock("@/lib/tab-navigation", async (importOriginal) => {
   const { useTabsStore: tabs } = await import("@/stores/tabs/store");
+  const { useTracySurfaceStore: surface } =
+    await import("@/stores/bots/tracy-surface-store");
   let activations = 0;
   return {
     ...(await importOriginal<typeof import("@/lib/tab-navigation")>()),
     activateTabIntent: (
       navigate: (options: object) => Promise<void>,
-      intent: { readonly kind: string; readonly botId?: string },
+      intent: { readonly kind: string; readonly botId: string | null },
       options: { readonly onRejected?: (error: Error) => void } | undefined,
     ): boolean => {
       if (fake.tabActivation === "refused") {
@@ -696,24 +700,30 @@ vi.mock("@/lib/tab-navigation", async (importOriginal) => {
       }
       if (fake.tabActivation === "queued") return true;
       const before = tabs.getState();
-      const botId = intent.botId ?? "";
+      const beforeBotId = surface.getState().botId;
       // A newer activation supersedes this one: the tab navigation then
       // drops it, and its failure later puts nothing back.
       activations += 1;
       const activation = activations;
       tabs.setState({
         items: [
-          ...before.items.filter((item) => item.id !== `item-${botId}`),
-          { kind: "tab", id: `item-${botId}`, ref: { kind: "bot", id: botId } },
+          ...before.items.filter((item) => item.id !== "item-tracy"),
+          {
+            kind: "tab",
+            id: "item-tracy",
+            ref: { kind: "tracy", id: "tracy" },
+          },
         ],
-        activeItemId: `item-${botId}`,
+        activeItemId: "item-tracy",
       });
+      surface.setState({ botId: intent.botId });
       void navigate({}).catch(() => {
         if (activation !== activations) return;
         tabs.setState({
           items: before.items,
           activeItemId: before.activeItemId,
         });
+        surface.setState({ botId: beforeBotId });
       });
       return true;
     },
@@ -727,7 +737,7 @@ vi.mock("@tanstack/react-router", async (importOriginal) => ({
 const initialVoice = useVoiceSessionStore.getState();
 const initialRail = useBotOpenThreadStore.getState();
 const initialTabs = useTabsStore.getState();
-const initialBotTabs = useBotTabsStore.getState();
+const initialSurface = useTracySurfaceStore.getState();
 
 function textBlock(text: string): OpenTextBlock {
   return {
@@ -782,17 +792,22 @@ function openRequestRow(messageId: string, requestId: string): ReplyRow {
   };
 }
 
-/** The person picks `botId`'s tab: the real tab stores the selection sync reads. */
-function selectBotTab(botId: string): void {
+/**
+ * The person picks `botId`'s channel on the Tracy surface, which is the
+ * focused tab: the real stores the selection sync reads. The channel has
+ * been shown, so the surface keeps it.
+ */
+function selectBotChannel(botId: string): void {
   act(() => {
-    useBotTabsStore
-      .getState()
-      .openBotTab({ botId, hostId: "host-a", title: botId });
+    useTracySurfaceStore.setState({
+      open: true,
+      hostId: "host-a",
+      botId,
+      visitedBotIds: [botId],
+    });
     useTabsStore.setState({
-      items: [
-        { kind: "tab", id: `item-${botId}`, ref: { kind: "bot", id: botId } },
-      ],
-      activeItemId: `item-${botId}`,
+      items: [{ kind: "tab", id: "item-tracy", ref: TRACY_TAB_REF }],
+      activeItemId: "item-tracy",
     });
   });
 }
@@ -924,7 +939,9 @@ beforeEach(() => {
   useVoiceSessionStore.getState().setAvailability("live");
   useBotOpenThreadStore.setState(initialRail, true);
   useTabsStore.setState(initialTabs, true);
-  useBotTabsStore.setState(initialBotTabs, true);
+  useTracySurfaceStore.setState(initialSurface, true);
+  // The window's host, which a surface the voice opens is bound to.
+  useSelectionAuthorityStore.setState({ effectiveHostId: "host-a" });
   Object.defineProperty(navigator, "mediaDevices", {
     configurable: true,
     value: { getUserMedia: fake.getUserMedia },
@@ -1263,7 +1280,7 @@ describe("an interruption whose ask is never delivered", () => {
     fake.sendMock.mockClear();
 
     act(() => eventsOf(0).onInputTranscriptDelta("Run"));
-    selectBotTab("bot-2");
+    selectBotChannel("bot-2");
     expect(useVoiceSessionStore.getState().pendingAction).toMatchObject({
       kind: "interrupted",
       askState: "asking",
@@ -1305,7 +1322,7 @@ describe("a manual move with a card open", () => {
     });
     expect(useVoiceSessionStore.getState().openSpan()).toBe("");
 
-    selectBotTab("bot-2");
+    selectBotChannel("bot-2");
 
     expect(useVoiceSessionStore.getState().focus?.botId).toBe("bot-2");
     expect(invalidate).toHaveBeenCalledExactlyOnceWith("focus");
@@ -1329,7 +1346,7 @@ describe("an ask given up during an utterance", () => {
       ).length;
 
     act(() => eventsOf(0).onInputTranscriptDelta("Delete "));
-    selectBotTab("bot-2");
+    selectBotChannel("bot-2");
     expect(useVoiceSessionStore.getState().pendingAction).toMatchObject({
       kind: "interrupted",
       askState: "asking",
@@ -1382,7 +1399,7 @@ describe("an interruption before the session's first delegation", () => {
     focusOn(CHANNEL_FOCUS);
 
     act(() => eventsOf(0).onInputTranscriptDelta("Delete "));
-    selectBotTab("bot-2");
+    selectBotChannel("bot-2");
     await say("the branch.", "d0");
     await act(async () => {
       await vi.advanceTimersByTimeAsync(6_000);
@@ -1402,7 +1419,7 @@ describe("an interruption before the session's first delegation", () => {
 describe("a routed post to another bot", () => {
   it("opens that bot, sends only once its channel is known and never on the previous bot's, and the voice's own tab change is no move", async () => {
     addChat(CHANNEL_ID, { snapshotLoaded: true, messages: [] });
-    selectBotTab(BOT_ID);
+    selectBotChannel(BOT_ID);
     await bringLive();
     expect(useVoiceSessionStore.getState().focus).toEqual(CHANNEL_FOCUS);
     fake.routeAnswer = (body) => fake.routeToBot("bot-2", body);
@@ -1451,7 +1468,7 @@ describe("a routed post to another bot", () => {
     "whose move is %s keeps the focus and the generation, posts nothing, and says the move did not happen",
     async (_name, activation) => {
       addChat(CHANNEL_ID, { snapshotLoaded: true, messages: [] });
-      selectBotTab(BOT_ID);
+      selectBotChannel(BOT_ID);
       await bringLive();
       fake.routeAnswer = (body) => fake.routeToBot("bot-2", body);
       fake.tabActivation = activation;
@@ -1485,6 +1502,13 @@ describe("a fast answer in a cold existing thread", () => {
     threadId: "t1",
   };
   const THREAD_FOCUS: VoiceFocus = { ...CHANNEL_FOCUS, threadId: "t1" };
+
+  // These cases focus a thread directly, not through a selection: the
+  // surface's activation stays queued, so the channel it would bring up does
+  // not stand in for the thread's focus.
+  beforeEach(() => {
+    fake.tabActivation = "queued";
+  });
 
   function coldSnapshot(): ReadonlyArray<ReplyRow> {
     return [
@@ -2098,19 +2122,18 @@ describe("a Talk ended and started again while dictation records", () => {
   });
 });
 
-describe("a Talk with no bot tab open", () => {
-  it("goes to the personal environment's main bot and opens its tab, whatever the Show Tracy setting", async () => {
-    // Show Tracy off: no fixed entry.
-    expect(useBotTabsStore.getState().fixedBotId).toBeNull();
+describe("a Talk with the Tracy surface closed", () => {
+  it("goes to the personal environment's main bot and opens the surface on its channel, on this window's host", async () => {
+    expect(useTracySurfaceStore.getState().open).toBe(false);
     expect(useVoiceSessionStore.getState().destinationKnown).toBe(true);
     await bringLive();
 
     expect(useVoiceSessionStore.getState().focus).toEqual(CHANNEL_FOCUS);
-    expect(useBotTabsStore.getState().tabs[BOT_ID]).toMatchObject({
+    expect(useTracySurfaceStore.getState()).toMatchObject({
+      open: true,
       hostId: "host-a",
-      title: "CI bot",
+      botId: BOT_ID,
     });
-    expect(useBotTabsStore.getState().fixedBotId).toBeNull();
   });
 
   it("does not start while no main bot is known: Talk is disabled and nothing is minted", async () => {
@@ -2248,7 +2271,7 @@ describe("a run of sessions that die at once", () => {
 
 describe("a question nobody has replied under", () => {
   function openQuestionRail(): void {
-    selectBotTab(BOT_ID);
+    selectBotChannel(BOT_ID);
     act(() =>
       useBotOpenThreadStore.getState().setRail(BOT_ID, {
         kind: "thread",
@@ -2588,7 +2611,7 @@ describe("a voice switch to a thread", () => {
       snapshotLoaded: true,
       messages: [botRow("r-9", "Deployed.")],
     });
-    selectBotTab(BOT_ID);
+    selectBotChannel(BOT_ID);
     focusOn(CHANNEL_FOCUS);
     await bringLive();
     act(() =>
@@ -2654,7 +2677,7 @@ describe("what waits at Talk", () => {
       snapshotLoaded: true,
       messages: [botRow("r-2", "The Safari fix landed in build forty.")],
     });
-    selectBotTab(BOT_ID);
+    selectBotChannel(BOT_ID);
     focusOn(CHANNEL_FOCUS);
     act(() =>
       fake.attention.set({
@@ -2690,7 +2713,7 @@ describe("what waits at Talk", () => {
       snapshotLoaded: true,
       messages: [teammateRow("tm-1", "Ship it Friday", "u-9")],
     });
-    selectBotTab(BOT_ID);
+    selectBotChannel(BOT_ID);
     focusOn(CHANNEL_FOCUS);
     act(() =>
       fake.attention.set({
@@ -2732,7 +2755,7 @@ describe("what waits at Talk", () => {
 describe("an announcement on the focused channel", () => {
   it("is not spoken as it lands, and the queue keeps it for a briefing", async () => {
     const channel = addChat(CHANNEL_ID, { snapshotLoaded: true, messages: [] });
-    selectBotTab(BOT_ID);
+    selectBotChannel(BOT_ID);
     focusOn(CHANNEL_FOCUS);
     await bringLive();
     await act(async () => {
@@ -2760,7 +2783,7 @@ describe("an announcement on the focused channel", () => {
 describe("a bot's question at the focused channel's top level", () => {
   it("is spoken with its choices, and is not kept as an announcement, whichever record names it", async () => {
     const channel = addChat(CHANNEL_ID, { snapshotLoaded: true, messages: [] });
-    selectBotTab(BOT_ID);
+    selectBotChannel(BOT_ID);
     focusOn(CHANNEL_FOCUS);
     await bringLive();
     await act(async () => {
@@ -2846,7 +2869,7 @@ describe("an answer a bot stopped on, before Talk", () => {
       threads: {},
     });
     addChat(CHANNEL_ID, { snapshotLoaded: true, messages: [] });
-    selectBotTab(BOT_ID);
+    selectBotChannel(BOT_ID);
     focusOn(CHANNEL_FOCUS);
 
     await bringLive();
@@ -2880,7 +2903,7 @@ describe("a bot whose stream is gone before Talk", () => {
   it("leaves no stopped answer in the opening briefing or the queue", async () => {
     fake.activity.set(BOT_ID, PARKED);
     addChat(CHANNEL_ID, { snapshotLoaded: true, messages: [] });
-    selectBotTab(BOT_ID);
+    selectBotChannel(BOT_ID);
     focusOn(CHANNEL_FOCUS);
     await settle();
 
@@ -2903,7 +2926,7 @@ describe("a reply read through Waiting", () => {
   it("is not read again on returning to its thread", async () => {
     addChat(CHANNEL_ID, { snapshotLoaded: true, messages: [] });
     const thread = addChat("t-5", { snapshotLoaded: true, messages: [] });
-    selectBotTab(BOT_ID);
+    selectBotChannel(BOT_ID);
     await bringLive();
     const threadFocus: VoiceFocus = { ...CHANNEL_FOCUS, threadId: "t-5" };
     // The feed baselines the thread's loaded snapshot, then the person moves on.
@@ -2978,7 +3001,7 @@ describe("a reply read through Waiting", () => {
 describe("a rail change in the bot the voice is leaving", () => {
   it("counts as the person moving while the target's tab has not come up", async () => {
     addChat(CHANNEL_ID, { snapshotLoaded: true, messages: [] });
-    selectBotTab(BOT_ID);
+    selectBotChannel(BOT_ID);
     await bringLive();
     fake.routeAnswer = (body) => fake.routeToBot("bot-2", body);
     // The activation is queued (the tab navigation is not ready yet): bot-1's
@@ -3027,7 +3050,7 @@ describe("a routed post to another thread of the active bot", () => {
         costUsd: null,
       },
     ]);
-    selectBotTab(BOT_ID);
+    selectBotChannel(BOT_ID);
     await bringLive();
     let land: () => void = () => undefined;
     fake.navigateOutcome = () =>
@@ -3079,7 +3102,7 @@ describe("a routed post to another thread of the active bot", () => {
 describe("a held voice navigation to another bot", () => {
   it("a rail change by the person in the tab the voice is opening, while its navigation is out, is a move", async () => {
     addChat(CHANNEL_ID, { snapshotLoaded: true, messages: [] });
-    selectBotTab(BOT_ID);
+    selectBotChannel(BOT_ID);
     await bringLive();
     fake.routeAnswer = (body) => fake.routeToBot("bot-2", body);
     act(() => fake.conversationLists.answer("bot-2", true));
@@ -3134,7 +3157,7 @@ describe("two overlapping voice navigations", () => {
         costUsd: null,
       },
     ]);
-    selectBotTab(BOT_ID);
+    selectBotChannel(BOT_ID);
     await bringLive();
     // The first request goes to bot-2's channel, the second to bot-1's
     // Safari thread; each navigation is held until the test lands it.
@@ -3210,7 +3233,7 @@ describe("a held voice move within the active bot", () => {
         costUsd: null,
       },
     ]);
-    selectBotTab(BOT_ID);
+    selectBotChannel(BOT_ID);
     await bringLive();
     let land: () => void = () => undefined;
     fake.navigateOutcome = () =>
@@ -3248,7 +3271,7 @@ describe("a held voice move within the active bot", () => {
 describe("a confirmation dropped before its question was said", () => {
   it("withdraws the question: a new request in its place leaves nothing asking about the dropped post", async () => {
     addChat(CHANNEL_ID, { snapshotLoaded: true, messages: [] });
-    selectBotTab(BOT_ID);
+    selectBotChannel(BOT_ID);
     await bringLive();
     const routes = [
       (body: string) => fake.routeToBotUnsure("bot-2", body),
@@ -3280,7 +3303,7 @@ describe("a confirmation dropped before its question was said", () => {
 
   it("a question that was appended but not confirmed is not appended again once a new request drops its confirmation", async () => {
     addChat(CHANNEL_ID, { snapshotLoaded: true, messages: [] });
-    selectBotTab(BOT_ID);
+    selectBotChannel(BOT_ID);
     await bringLive();
     const routes = [
       (body: string) => fake.routeToBotUnsure("bot-2", body),
@@ -3331,7 +3354,7 @@ describe("a voice move to another thread of the active bot that fails", () => {
         costUsd: null,
       },
     ]);
-    selectBotTab(BOT_ID);
+    selectBotChannel(BOT_ID);
     await bringLive();
     fake.routeAnswer = (body) => fake.routeToThread(BOT_ID, "t-safari", body);
     fake.navigateOutcome = () => Promise.reject(new Error("blocked"));
@@ -3388,7 +3411,7 @@ describe("a rail put back against a newer navigation", () => {
 
   async function startWithOtherBotOnAThread(): Promise<void> {
     addChat(CHANNEL_ID, { snapshotLoaded: true, messages: [] });
-    selectBotTab(BOT_ID);
+    selectBotChannel(BOT_ID);
     // bot-2 already shows a thread, as the person left it.
     act(() => useBotOpenThreadStore.getState().setRail("bot-2", THREAD_RAIL));
     await bringLive();
@@ -3430,7 +3453,7 @@ describe("a rail put back against a newer navigation", () => {
 describe("an answer that lands before its post's request names it", () => {
   it("is held as an announcement, then read on the focused channel once the request resolves to it", async () => {
     const channel = addChat(CHANNEL_ID, { snapshotLoaded: true, messages: [] });
-    selectBotTab(BOT_ID);
+    selectBotChannel(BOT_ID);
     focusOn(CHANNEL_FOCUS);
     await bringLive();
     await act(async () => {
@@ -3492,7 +3515,7 @@ describe("a provisional answer on the focused channel", () => {
   async function provisionalAnswer() {
     const channel = addChat(CHANNEL_ID, { snapshotLoaded: true, messages: [] });
     addChat("t-other", { snapshotLoaded: true, messages: [] });
-    selectBotTab(BOT_ID);
+    selectBotChannel(BOT_ID);
     focusOn(CHANNEL_FOCUS);
     await bringLive();
     await act(async () => {
@@ -3697,7 +3720,7 @@ describe("a bot whose stream ends for good under a live session", () => {
       threads: {},
     });
     addChat(CHANNEL_ID, { snapshotLoaded: true, messages: [] });
-    selectBotTab(BOT_ID);
+    selectBotChannel(BOT_ID);
     focusOn(CHANNEL_FOCUS);
     await bringLive();
     expect(
@@ -3727,7 +3750,7 @@ describe("a bot whose stream ends for good under a live session", () => {
   });
 });
 
-describe("a bot's tab closed and reopened under a live session", () => {
+describe("a bot's channel forgotten and shown again under a live session", () => {
   const PARKED: BotActivity = {
     trunk: {
       state: "parked",
@@ -3740,11 +3763,11 @@ describe("a bot's tab closed and reopened under a live session", () => {
   };
   const FAILED_ID = "stopped:bot-1:req-7";
 
-  /** A seeded failed item with a Read of it waiting for the voice, and the bot's tab reopened with no reading yet. */
+  /** A seeded failed item with a Read of it waiting for the voice, and the bot's channel shown again with no reading yet. */
   async function reopenedWithPendingRead() {
     fake.activity.set(BOT_ID, PARKED);
     addChat(CHANNEL_ID, { snapshotLoaded: true, messages: [] });
-    selectBotTab(BOT_ID);
+    selectBotChannel(BOT_ID);
     focusOn(CHANNEL_FOCUS);
     await bringLive();
     expect(
@@ -3761,20 +3784,16 @@ describe("a bot's tab closed and reopened under a live session", () => {
     });
     expect(commentary).not.toHaveBeenCalled();
 
-    act(() => useBotTabsStore.getState().closeBotTab(BOT_ID));
+    act(() => useTracySurfaceStore.getState().forgetBot(BOT_ID));
     await settle();
     // It reopens with no snapshot yet: the reading has not come.
     act(() => fake.activity.remove(BOT_ID));
-    act(() =>
-      useBotTabsStore
-        .getState()
-        .openBotTab({ botId: BOT_ID, hostId: "host-a", title: BOT_ID }),
-    );
+    act(() => useTracySurfaceStore.getState().markVisited(BOT_ID));
     await settle();
     return commentary;
   }
 
-  it("keeps the failed item while the reopened tab's reading has not come", async () => {
+  it("keeps the failed item while the reshown channel's reading has not come", async () => {
     await reopenedWithPendingRead();
 
     expect(
@@ -3835,7 +3854,7 @@ describe("a bot's question answered elsewhere while it waits in the queue", () =
       snapshotLoaded: true,
       messages: [asking(null)],
     });
-    selectBotTab(BOT_ID);
+    selectBotChannel(BOT_ID);
     focusOn(CHANNEL_FOCUS);
     await bringLive();
     const commentary = fake.engines[0]?.appendCommentary;
@@ -3916,12 +3935,8 @@ describe("two statuses asked inside the wait", () => {
       resubscribe: () => undefined,
     });
     addChat(CHANNEL_ID, { snapshotLoaded: true, messages: [] });
-    selectBotTab(BOT_ID);
-    act(() =>
-      useBotTabsStore
-        .getState()
-        .openBotTab({ botId: "bot-2", hostId: "host-a", title: "Release bot" }),
-    );
+    selectBotChannel(BOT_ID);
+    act(() => useTracySurfaceStore.getState().markVisited("bot-2"));
     focusOn(CHANNEL_FOCUS);
     await bringLive();
     const commentary = fake.engines[0]?.appendCommentary;

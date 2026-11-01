@@ -3,13 +3,13 @@ import {
   isOpenLandingDraft,
   useLandingDraftStore,
 } from "@/stores/home/landing-draft-store";
-import { botTabRecords, useBotTabsStore } from "@/stores/bots/bot-tabs-store";
+import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
 import type { TabRef } from "@/stores/tabs/types";
 
 /**
  * The canonical set of refs a strip layout may reference: every open Epic tab
- * in canvas order, then every open, non-retired landing draft, then every
- * open bot tab (oldest first). Closed drafts stay in the store for history
+ * in canvas order, then every open, non-retired landing draft, then the
+ * Tracy surface while it is open. Closed drafts stay in the store for history
  * but are not strip sources. Retirement can precede another window's
  * storage-event cleanup of its local row.
  *
@@ -28,10 +28,10 @@ export function tabSourceRefs(): ReadonlyArray<TabRef> {
     .getState()
     .drafts.filter(isOpenLandingDraft)
     .map<TabRef>((draft) => ({ kind: "draft", id: draft.id }));
-  const bots = botTabRecords(useBotTabsStore.getState().tabs).map<TabRef>(
-    (record) => ({ kind: "bot", id: record.botId }),
-  );
-  return [...epics, ...drafts, ...bots];
+  const tracy: ReadonlyArray<TabRef> = useTracySurfaceStore.getState().open
+    ? [{ kind: "tracy", id: "tracy" }]
+    : [];
+  return [...epics, ...drafts, ...tracy];
 }
 
 /**
@@ -42,5 +42,5 @@ export function tabSourceRefs(): ReadonlyArray<TabRef> {
  * kinds out, so a new source kind reaches all of them at once.
  */
 export function isSourceBackedTabKind(kind: TabRef["kind"]): boolean {
-  return kind === "epic" || kind === "draft" || kind === "bot";
+  return kind === "epic" || kind === "draft" || kind === "tracy";
 }
