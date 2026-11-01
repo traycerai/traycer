@@ -8076,4 +8076,97 @@ describe("useRenderedMessages: object artifact creation cards", () => {
       ]);
     },
   );
+
+  describe("with a native tool start recorded before the host's receipt", () => {
+    const RECEIPT = 100;
+    const NATIVE_START = 40;
+
+    function placementWith(
+      toolStartedAt: number,
+      artifactTimestamp: number,
+      kind: "html" | "canvas",
+    ): { order: string[]; rowIds: string[] } {
+      const { result } = renderRenderedMessages({
+        messages: [
+          {
+            ...assistantMessage("turn-1", 2000),
+            blocks: [
+              plainTextBlock("w1", 10, "writing"),
+              { ...readToolBlockAt("r1", RECEIPT), startedAt: toolStartedAt },
+              plainTextBlock("t-final", 300, "closing"),
+              artifactBlockAt("a1", artifactTimestamp, kind, "create"),
+            ],
+          },
+        ],
+      });
+      return {
+        order: (result.current[0]?.segments ?? []).map((segment) => {
+          if (segment.kind === "artifact_operation")
+            return `card:${segment.artifactKind}`;
+          if (segment.kind === "text") return `text:${segment.markdown}`;
+          return segment.kind;
+        }),
+        rowIds: result.current.map((row) => row.id),
+      };
+    }
+
+    it.each(["html", "canvas"] as const)(
+      "moves a %s card created between the native start and the receipt to the far side of the tool",
+      (kind) => {
+        const receiptStart = placementWith(RECEIPT, 70, kind);
+        const nativeStart = placementWith(NATIVE_START, 70, kind);
+
+        expect(receiptStart.order).toEqual([
+          "text:writing",
+          `card:${kind}`,
+          "tool",
+          "text:closing",
+        ]);
+        expect(nativeStart.order).toEqual([
+          "text:writing",
+          "tool",
+          `card:${kind}`,
+          "text:closing",
+        ]);
+        expect(nativeStart.rowIds).toEqual(receiptStart.rowIds);
+      },
+    );
+
+    it.each([
+      ["before the native start", 20],
+      ["after the receipt", 150],
+    ] as const)(
+      "keeps a card created %s where it was",
+      (_name, artifactTimestamp) => {
+        const receiptStart = placementWith(RECEIPT, artifactTimestamp, "html");
+        const nativeStart = placementWith(
+          NATIVE_START,
+          artifactTimestamp,
+          "html",
+        );
+
+        expect(nativeStart.order).toEqual(receiptStart.order);
+        expect(nativeStart.rowIds).toEqual(receiptStart.rowIds);
+      },
+    );
+
+    it("compares a native start that is later than the receipt as recorded, without clamping it", () => {
+      const receiptStart = placementWith(RECEIPT, 150, "html");
+      const futureStart = placementWith(200, 150, "html");
+
+      expect(receiptStart.order).toEqual([
+        "text:writing",
+        "tool",
+        "card:html",
+        "text:closing",
+      ]);
+      expect(futureStart.order).toEqual([
+        "text:writing",
+        "card:html",
+        "tool",
+        "text:closing",
+      ]);
+      expect(futureStart.rowIds).toEqual(receiptStart.rowIds);
+    });
+  });
 });
