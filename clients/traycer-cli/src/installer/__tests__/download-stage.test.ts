@@ -2291,6 +2291,40 @@ describe("downloadAndStageHost", () => {
       expect(snapshotTree(hostHomeFor(ENV))).toEqual(before);
     });
 
+    it("install: an installed PRERELEASE above the registry's stable latest is a no-op, never a silent downgrade", async () => {
+      // The host-side sibling of the `cli upgrade` downgrade floor: a feed
+      // that publishes stable builds only is NOT an upper bound, so a box on
+      // 1.5.2-rc.1 sits above a `latest` of 1.5.1 and must not be staged
+      // backwards onto it. The cases above reach the same no-op from EQUAL
+      // versions; this one reaches it from strictly-above, which is the
+      // shape a release-candidate machine is actually in and the one an
+      // `installedVsTarget` reading narrowed to `equal` would stage.
+      await writeInstall("1.5.2-rc.1", {});
+      const before = snapshotTree(hostHomeFor(ENV));
+
+      const plan = await resolveUpdatePlan({
+        environment: ENV,
+        request: {
+          intent: "install",
+          versionRequest: null,
+          allowDowngrade: false,
+        },
+        onProgress: noopProgress,
+        registryClient: fakeRegistryClient({
+          latest: "1.5.1",
+          versions: [
+            { version: "1.5.0", yanked: false },
+            { version: "1.5.1", yanked: false },
+          ],
+          downloadGate: null,
+          onDownloadStart: null,
+        }),
+      });
+
+      expect(plan).toMatchObject({ kind: "no-op", targetVersion: "1.5.1" });
+      expect(snapshotTree(hostHomeFor(ENV))).toEqual(before);
+    });
+
     it("install: an IMPLICIT latest at or above the installed record IS the no-op - the binding is the explicit request's alone", async () => {
       await writeInstall("1.5.0", {});
       const before = snapshotTree(hostHomeFor(ENV));

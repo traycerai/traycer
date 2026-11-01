@@ -120,6 +120,12 @@ vi.mock("@traycer-clients/shared/host-update", async (importOriginal) => {
 });
 
 import { hostStatusCommand } from "../host-status";
+import {
+  acquireUpdateAttemptLock,
+  removeHostUpdateLastAttempt,
+  writeHostUpdateLastAttempt,
+} from "@traycer-clients/shared/host-update";
+import { hostHomeDir } from "../../store/paths";
 import type { HostLifecycleSnapshot } from "../../host/lifecycle-snapshot";
 
 function makeRuntime(overrides: Partial<RuntimeContext>): RuntimeContext {
@@ -326,6 +332,8 @@ describe("hostStatusCommand - observational (CLI-001)", () => {
       bootstrap: null,
       lifecycle: lifecycleSnapshot,
       updateAttempt: null,
+      lastUpdateAttempt: null,
+      updateLockHolder: null,
     });
     expect(mocks.readHostLifecycleSnapshotMock).toHaveBeenCalledWith(
       "production",
@@ -343,6 +351,56 @@ describe("hostStatusCommand - observational (CLI-001)", () => {
     expect(result.exitCode).toBe(0);
     expect(result.data).toMatchObject({ running: false, bootstrap: null });
     expect(mocks.provisionHostMock).not.toHaveBeenCalled();
+  });
+
+  it("says who is changing the host while they are at it", async () => {
+    const held = await acquireUpdateAttemptLock({
+      hostHomeDir: hostHomeDir("production"),
+      reason: "desktop:host-download",
+      waitMs: 0,
+      pollIntervalMs: 25,
+    });
+    if (held.kind !== "acquired") throw new Error("the lock was not free");
+    try {
+      const result = await hostStatusCommand(makeCtx(makeRuntime({})));
+      expect(result.data).toMatchObject({
+        updateLockHolder: "The Traycer app is downloading a host update",
+      });
+      expect(result.human).toContain(
+        "The Traycer app is downloading a host update.",
+      );
+    } finally {
+      await held.handle.release();
+    }
+  });
+
+  it("says how the last update ended, and who started it", async () => {
+    const attempt = {
+      command: "host update",
+      initiator: "manual",
+      outcome: "refused",
+      targetVersion: "1.5.2",
+      attemptId: null,
+      code: "E_CLI_LOCK_BUSY",
+      message: "The Traycer app is downloading a host update",
+      recordedAt: "2026-11-01T06:57:02.000Z",
+    } as const;
+    await writeHostUpdateLastAttempt(hostHomeDir("production"), attempt, {
+      info: vi.fn(),
+    });
+    try {
+      const result = await hostStatusCommand(makeCtx(makeRuntime({})));
+      expect(result.data).toMatchObject({
+        lastUpdateAttempt: { ...attempt, recordedAt: expect.any(String) },
+      });
+      expect(result.human).toContain("Last update");
+      expect(result.human).toContain("did not run");
+      expect(result.human).toContain("1.5.2");
+      expect(result.human).toContain("a command");
+      expect(result.human).toContain(attempt.message);
+    } finally {
+      await removeHostUpdateLastAttempt(hostHomeDir("production"));
+    }
   });
 
   it("human output on the not-running branch includes the 'host ensure' hint", async () => {

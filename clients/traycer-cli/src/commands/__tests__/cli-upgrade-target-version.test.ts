@@ -218,6 +218,7 @@ describe("buildCliUpgradeCommand target-version contract (CLI-013)", () => {
     const result = await buildCliUpgradeCommand({
       dryRun: false,
       targetVersion: null,
+      allowDowngrade: false,
     })(fakeCtx());
 
     expect(result.data).toMatchObject({
@@ -250,6 +251,7 @@ describe("buildCliUpgradeCommand target-version contract (CLI-013)", () => {
       await buildCliUpgradeCommand({
         dryRun: false,
         targetVersion: "2.0.0",
+        allowDowngrade: false,
       })(fakeCtx());
     } catch (err) {
       caught = err;
@@ -278,6 +280,7 @@ describe("buildCliUpgradeCommand target-version contract (CLI-013)", () => {
     const result = await buildCliUpgradeCommand({
       dryRun: true,
       targetVersion: "1.5.0",
+      allowDowngrade: false,
     })(fakeCtx());
 
     expect(result.data).toMatchObject({
@@ -299,6 +302,7 @@ describe("buildCliUpgradeCommand target-version contract (CLI-013)", () => {
     const result = await buildCliUpgradeCommand({
       dryRun: true,
       targetVersion: "v1.5.0",
+      allowDowngrade: false,
     })(fakeCtx());
 
     expect(result.data).toMatchObject({
@@ -323,6 +327,7 @@ describe("buildCliUpgradeCommand target-version contract (CLI-013)", () => {
     const result = await buildCliUpgradeCommand({
       dryRun: true,
       targetVersion: null,
+      allowDowngrade: false,
     })(fakeCtx());
 
     expect(result.data).toMatchObject({
