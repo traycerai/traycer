@@ -16,11 +16,11 @@ import { SettingsGroup } from "@/components/settings/settings-group";
  * its id, when it joined, when it was last seen, the version it last reported
  * and its platform.
  *
- * Read from the account's host record, never from the host, so it reads the
- * same whether or not the host can be reached - which is exactly when someone
- * comes here for the host id or to see when it was last alive. A host the
- * account has no record of gets no group (the caller passes none), the way it
- * gets no Danger zone.
+ * Read from the account's host record and, for a sandbox, its control-plane
+ * row, never from a host RPC of its own, so it reads whether or not the host
+ * can be reached - which is exactly when someone comes here for the host id or
+ * to see when it was last alive. A host the account has no record of gets no
+ * group (the caller passes none), the way it gets no Danger zone.
  */
 export function HostOverviewAboutThisHost(
   props: HostOverviewAboutSource,

@@ -1176,6 +1176,7 @@ vi.mock("@/lib/epic-selectors", () => ({
   useEpicNodeArchived: (nodeId: string) =>
     testState.archivedIds.includes(nodeId),
   useEpicNodeHostId: () => testState.rowHostId,
+  useEpicChatAwaitingFirstTitle: () => false,
   useEpicNodeHostIds: (nodeIds: ReadonlyArray<string>) =>
     nodeIds.map(() => testState.rowHostId ?? "host-1"),
   useEpicNodeOwnerUserId: () => "user-1",

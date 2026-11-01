@@ -394,6 +394,18 @@ export function useIsActiveTile(
 }
 
 /**
+ * Whether this client still holds a first-title mark for `chatId`. For a row
+ * that has no projection record to settle the mark against: it ends with the
+ * row's own title or the mark's 30s backstop.
+ */
+export function useHasPendingChatTitle(chatId: string | null): boolean {
+  return useEpicCanvasStore(
+    (state) =>
+      chatId !== null && Object.hasOwn(state.pendingChatTitles, chatId),
+  );
+}
+
+/**
  * Whether `paneId` is the globally-active pane in `tabId`, as a boolean. Every
  * pane view subscribes per-pane via this instead of reading the raw
  * `activePaneId`: with the raw id, opening/switching the active pane changed

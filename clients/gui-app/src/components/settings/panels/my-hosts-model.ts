@@ -5,6 +5,7 @@ import type {
 import { readHostRuntimeStatusAwareness } from "@traycer/protocol/host/notifications/index";
 import type { HostBusyBreakdown } from "@traycer/protocol/host/status/index";
 import { busyWorkPhrase } from "@/components/host/host-restart-copy";
+import type { HostLastReport } from "@/components/settings/host-scope/host-last-report";
 
 /**
  * The DTO's own reading of a host — **evidence, not a vocabulary**.
@@ -475,21 +476,17 @@ export function deriveUpdateAffordance(
 }
 
 /**
- * Human relative last-seen ("last seen 2h ago"), from the durable registry
- * timestamp (survives cache loss). Returns `null` when never seen or unparsable.
+ * Human relative last-seen ("last seen 2h ago"), from the host's last report.
+ * Returns `null` when there is no time to word.
  */
 export function formatLastSeen(
-  lastSeenAt: string | null,
+  report: HostLastReport,
   nowMs: number,
 ): string | null {
-  if (lastSeenAt === null) {
+  if (report.kind !== "reported") {
     return null;
   }
-  const then = Date.parse(lastSeenAt);
-  if (Number.isNaN(then)) {
-    return null;
-  }
-  const deltaSeconds = Math.max(0, Math.round((nowMs - then) / 1000));
+  const deltaSeconds = Math.max(0, Math.round((nowMs - report.at) / 1000));
   return `last seen ${formatElapsed(deltaSeconds)}`;
 }
 

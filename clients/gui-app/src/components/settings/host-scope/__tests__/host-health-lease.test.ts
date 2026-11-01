@@ -53,6 +53,7 @@ const BASE = {
   item: registryItem("connectable"),
   isLocalMachine: false,
   hasLiveSession: false,
+  lastReport: { kind: "reported", at: 0 } as const,
   service: undefined,
   nowMs: NOW_MS,
 };
