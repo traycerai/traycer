@@ -26,8 +26,8 @@ import {
 } from "@/lib/disabled-presentation";
 import { ARTIFACT_PANEL_EXCLUDED_TYPES } from "@/components/epic-canvas/add-node-options";
 import {
-  computeDescendantCountsFromTree,
-  formatCascadeSummary,
+  describeTreeDeleteDisclosure,
+  type TreeDeleteDisclosure,
 } from "@/lib/epic-tree-cascade";
 import { useOpenEpicHandle } from "@/providers/use-open-epic-handle";
 import { requestArtifactEditorFocus } from "@/lib/artifacts/pending-editor-focus";
@@ -876,9 +876,13 @@ const ArtifactNode = memo(function ArtifactNode(props: ArtifactNodeProps) {
   // `useShallow` is required, not decorative: a deriving selector returns a
   // fresh object each call, so without it `useSyncExternalStore` sees a change
   // on every notification and loops. See `epic-sidebar-filter.ts`.
-  const cascadeCounts = useEpicStore(
+  const deleteDisclosure = useEpicStore(
     useShallow((state: OpenEpicState) =>
-      computeDescendantCountsFromTree(state.tree, nodeId),
+      describeTreeDeleteDisclosure({
+        tree: state.tree,
+        kind: "artifact",
+        nodeIds: [nodeId],
+      }),
     ),
   );
   const statusValue = useEpicArtifactStatus(nodeId);
@@ -1192,13 +1196,6 @@ const ArtifactNode = memo(function ArtifactNode(props: ArtifactNodeProps) {
   if (node === null) return null;
   if (!treeFilter(node.type)) return null;
 
-  // Cascade counts feed only the delete-confirm dialog, computed from the
-  // canonical tree structure rather than the churning record list. Subscribed
-  // at the top of this component rather than derived here, because a hook
-  // cannot live below the two early returns above - see the note at the
-  // subscription for why it stopped reading the whole slice.
-  const cascadeSummary = formatCascadeSummary(cascadeCounts);
-
   const showStatusDot = computeArtifactNodeStatusDot(artifactType, statusValue);
 
   const addChildIsPending = computeArtifactNodeAddChildPending({
@@ -1259,7 +1256,7 @@ const ArtifactNode = memo(function ArtifactNode(props: ArtifactNodeProps) {
       confirmDeleteOpen={confirmDeleteOpen}
       renderDeleteDialog={confirmDeleteOpen || deleteDialogEverOpened}
       onConfirmDeleteOpenChange={changeConfirmDeleteOpen}
-      cascadeSummary={cascadeSummary}
+      deleteDisclosure={deleteDisclosure}
       deletePending={deletePending}
       onConfirmDelete={confirmDelete}
       selectionMode={selectionMode}
@@ -1312,7 +1309,7 @@ interface ArtifactNodeShellProps {
   /** First-open latch: see the note beside `deleteDialogEverOpened`. */
   readonly renderDeleteDialog: boolean;
   readonly onConfirmDeleteOpenChange: (open: boolean) => void;
-  readonly cascadeSummary: string | null;
+  readonly deleteDisclosure: TreeDeleteDisclosure;
   readonly deletePending: boolean;
   readonly onConfirmDelete: () => void;
   readonly treeFilter: TreeFilterFn;
@@ -1364,7 +1361,7 @@ function ArtifactNodeShell(props: ArtifactNodeShellProps) {
     confirmDeleteOpen,
     renderDeleteDialog,
     onConfirmDeleteOpenChange,
-    cascadeSummary,
+    deleteDisclosure,
     deletePending,
     onConfirmDelete,
     treeFilter,
@@ -1485,8 +1482,9 @@ function ArtifactNodeShell(props: ArtifactNodeShellProps) {
           open={confirmDeleteOpen}
           onOpenChange={onConfirmDeleteOpenChange}
           title={`Delete ${artifactType} "${nodeName}"?`}
-          description="This action cannot be undone."
-          cascadeSummary={cascadeSummary}
+          description={deleteDisclosure.description}
+          cascadeSummary={deleteDisclosure.cascadeSummary}
+          cascadeNestedUnder={deleteDisclosure.cascadeNestedUnder}
           actionLabel="Delete"
           isPending={deletePending}
           onConfirm={onConfirmDelete}
