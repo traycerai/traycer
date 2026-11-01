@@ -1,6 +1,9 @@
 import { cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { EnvironmentSecretV12 } from "@traycer/protocol/host/environment-schemas";
+import type {
+  EnvironmentSecretV12,
+  EnvironmentSecretsListResponseV12,
+} from "@traycer/protocol/host/environment-schemas";
 import {
   mountTeamPage,
   poolSource,
@@ -56,17 +59,26 @@ function secret(name: string): EnvironmentSecretV12 {
   };
 }
 
-function renderPanel(
-  secrets: readonly EnvironmentSecretV12[],
-  listError: { current: Error | null },
-): TeamPageHarness {
+/**
+ * The team's page as `role` reads it. A team's own roles are admin, editor and
+ * viewer: `owner` is the role of a user-owned configuration, and the boundary
+ * reads an organization descriptor claiming it as a viewer
+ * (`configurationRoleOf`), so a case about an editor must name one.
+ */
+function renderPanel(options: {
+  readonly secrets: readonly EnvironmentSecretV12[];
+  readonly listError: { current: Error | null };
+  readonly role: "admin" | "viewer";
+  readonly removed: EnvironmentSecretsListResponseV12["removed"];
+}): TeamPageHarness {
+  const { secrets, listError, role, removed } = options;
   useSettingsEnvironmentPickStore.setState({
     pick: { kind: "team", environmentId: "env-a" },
   });
-  const harness = mountTeamPage(poolSource("owner"), {
+  const harness = mountTeamPage(poolSource(role), {
     "environment.secrets.list": () => {
       if (listError.current !== null) throw listError.current;
-      return { secrets: [...secrets], removed: [] };
+      return { secrets: [...secrets], removed: [...removed] };
     },
     "environment.list": () => ({
       environments: [
@@ -76,7 +88,7 @@ function renderPanel(
           ownerId: "team-a",
           roomId: "room-a",
           label: "Acme",
-          effectiveRole: "owner" as const,
+          effectiveRole: role,
           kind: "team" as const,
           hostCount: 1,
           providerHandle: null,
@@ -97,7 +109,12 @@ function renderPanel(
 
 describe("the Secrets page header", () => {
   it("has no subtitle while the list is empty, so the empty state says it once", async () => {
-    renderPanel([], { current: null });
+    renderPanel({
+      secrets: [],
+      listError: { current: null },
+      role: "admin",
+      removed: [],
+    });
 
     const empty = await screen.findByTestId("secrets-empty");
     expect(empty.textContent).toBe(TEAM_SUBTITLE);
@@ -106,7 +123,12 @@ describe("the Secrets page header", () => {
   });
 
   it("shows the subtitle once there are secrets", async () => {
-    renderPanel([secret("OPENAI_API_KEY")], { current: null });
+    renderPanel({
+      secrets: [secret("OPENAI_API_KEY")],
+      listError: { current: null },
+      role: "admin",
+      removed: [],
+    });
 
     await screen.findByText("OPENAI_API_KEY");
     expect(screen.getAllByText(TEAM_SUBTITLE)).toHaveLength(1);
@@ -114,7 +136,12 @@ describe("the Secrets page header", () => {
   });
 
   it("keeps the subtitle once, and shows no empty claim, when the first read of the list fails", async () => {
-    renderPanel([], { current: new Error("down") });
+    renderPanel({
+      secrets: [],
+      listError: { current: new Error("down") },
+      role: "admin",
+      removed: [],
+    });
 
     await screen.findByTestId("secrets-page-error");
     // No authoritative answer yet: not "no secrets", and the failure line
@@ -125,7 +152,12 @@ describe("the Secrets page header", () => {
 
   it("keeps an empty answer it already had, and the subtitle once, when a later read of the list fails", async () => {
     const listError: { current: Error | null } = { current: null };
-    const harness = renderPanel([], listError);
+    const harness = renderPanel({
+      secrets: [],
+      listError,
+      role: "admin",
+      removed: [],
+    });
     await screen.findByTestId("secrets-empty");
 
     listError.current = new Error("down");
@@ -136,8 +168,85 @@ describe("the Secrets page header", () => {
     expect(screen.getAllByText(TEAM_SUBTITLE)).toHaveLength(1);
   });
 
+  // NEW-154-24: a viewer read "Read-only" top right with the subtitle twice,
+  // and a heading over no list. K1-a: a remote error body never reaches the
+  // person.
+  it("gives a viewer the standing line instead of a Read-only tag", async () => {
+    renderPanel({
+      secrets: [secret("OPENAI_API_KEY")],
+      listError: { current: null },
+      role: "viewer",
+      removed: [],
+    });
+
+    await screen.findByText("OPENAI_API_KEY");
+    expect(screen.queryByText("Read-only")).toBeNull();
+    expect(screen.queryByText("Editors can replace these")).toBeNull();
+    expect(
+      screen.getAllByText("You can see Acme's settings but not change them."),
+    ).toHaveLength(1);
+    expect(screen.getAllByText(TEAM_SUBTITLE)).toHaveLength(1);
+  });
+
+  it("lists a viewer's secrets and their states, and says None rather than the subtitle", async () => {
+    renderPanel({
+      secrets: [],
+      listError: { current: null },
+      role: "viewer",
+      removed: [],
+    });
+
+    expect(await screen.findByText("No secrets.")).toBeTruthy();
+    expect(screen.queryByTestId("secrets-empty")).toBeNull();
+    expect(screen.getAllByText(TEAM_SUBTITLE)).toHaveLength(1);
+  });
+
+  it("shows a viewer a removal that is still waiting", async () => {
+    renderPanel({
+      secrets: [],
+      listError: { current: null },
+      role: "viewer",
+      removed: [
+        {
+          id: "sec-OLD_TOKEN",
+          name: "OLD_TOKEN",
+          removal: {
+            outcome: "cleanup_requested",
+            revokedAt: 1,
+            destroyedAt: null,
+            targets: [],
+          },
+        },
+      ],
+    });
+
+    expect(await screen.findByText("OLD_TOKEN")).toBeTruthy();
+    expect(screen.queryByText("No secrets.")).toBeNull();
+  });
+
+  it("keeps the ruled failure line whatever the remote body says", async () => {
+    renderPanel({
+      secrets: [],
+      listError: {
+        current: new Error("the destination api.example.com does not resolve"),
+      },
+      role: "admin",
+      removed: [],
+    });
+
+    const failure = await screen.findByTestId("secrets-page-error");
+    expect(failure.textContent).toContain("Couldn't read Acme's secrets.");
+    expect(document.body.textContent).not.toContain("api.example.com");
+    expect(document.body.textContent).not.toContain("does not resolve");
+  });
+
   it("puts Details in the header beside the chip, not in the page body", async () => {
-    renderPanel([secret("OPENAI_API_KEY")], { current: null });
+    renderPanel({
+      secrets: [secret("OPENAI_API_KEY")],
+      listError: { current: null },
+      role: "admin",
+      removed: [],
+    });
 
     const page = await screen.findByTestId("secrets-page");
     const details = await screen.findByRole("button", { name: "Details" });
@@ -147,6 +256,12 @@ describe("the Secrets page header", () => {
     expect(details.parentElement).toBe(
       within(header).getByTestId("page-chip").parentElement,
     );
-    expect(within(page).queryByRole("button", { name: "Details" })).toBeNull();
+    // Each secret row carries its own Details; what the body must not repeat
+    // is the page's own, which belongs to the header.
+    expect(
+      within(page)
+        .queryAllByRole("button", { name: "Details" })
+        .filter((button) => button.closest("li") === null),
+    ).toEqual([]);
   });
 });

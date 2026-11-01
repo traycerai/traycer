@@ -1940,7 +1940,7 @@ function ProviderMcpTabBody(props: {
   }
   if (personal)
     return (
-      <ConfigurationSourceBoundary target={{ kind: "personal" }}>
+      <ConfigurationSourceBoundary target={{ kind: "personal" }} section={null}>
         <EnvironmentProviderMcpTab providerId={state.providerId} />
       </ConfigurationSourceBoundary>
     );
@@ -1965,7 +1965,7 @@ function ProviderSkillsTabBody(props: {
   const personal = useEnvironmentPick().kind === "personal";
   if (personal)
     return (
-      <ConfigurationSourceBoundary target={{ kind: "personal" }}>
+      <ConfigurationSourceBoundary target={{ kind: "personal" }} section={null}>
         <EnvironmentProviderSkillsTab providerId={props.state.providerId} />
       </ConfigurationSourceBoundary>
     );

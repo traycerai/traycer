@@ -344,7 +344,7 @@ function CloudPageFrame(props: {
   readonly children: ReactNode;
 }): ReactNode {
   return (
-    <ConfigurationSourceBoundary target={props.target}>
+    <ConfigurationSourceBoundary target={props.target} section={props.section}>
       <TeamPageFrame section={props.section} pick={props.pick}>
         {props.children}
       </TeamPageFrame>

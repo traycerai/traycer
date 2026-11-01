@@ -2374,6 +2374,7 @@ describe("useLandingComposerActions", () => {
       openHistory: () => undefined,
       close: () => undefined,
       setSection: () => undefined,
+      replaceOwnedSettingsRoute: () => undefined,
       promoteToTab: () => undefined,
       isOverlayActive: (kind) => kind === "settings",
     });

@@ -47,6 +47,7 @@ import type {
   EnvironmentSecretsVersionsResponseV11,
 } from "@traycer/protocol/host/environment-schemas";
 import { SettingsDetailsDialog } from "@/components/settings/details/settings-details-button";
+import type { DetailsSubject } from "@/lib/settings-details-entry";
 import {
   mountTeamPage,
   poolSource,
@@ -119,7 +120,7 @@ const LEAKY_HOST = { ...brokenHost, token: "tok_SECRET" };
 
 function openDrawer(
   harness: TeamPageHarness,
-  subject: { kind: string; key: string },
+  subject: Omit<DetailsSubject, "environmentId">,
   title: string,
 ): void {
   render(
@@ -159,7 +160,9 @@ describe("the drawer's reader scopes", () => {
       "environment.history": () =>
         history({ readerScope: "status_only", hostStates: [brokenHost] }),
     });
-    openDrawer(harness, { kind: "member", key: "u-2" }, "Member");
+    // A setting, not a member: a member's `Now` names no host at all, so it
+    // could not carry this case's host status.
+    openDrawer(harness, { kind: "host_settings", key: "k-1" }, "Settings");
 
     expect(
       await screen.findByRole("button", { name: "Open dev-box" }),
@@ -222,7 +225,9 @@ describe("the drawer's reader scopes", () => {
     const user = userEvent.setup();
     openDrawer(harness, { kind: "variable", key: "FOO" }, "FOO");
 
-    expect(await screen.findByText(`Ada · ${formatted(AT)}`)).toBeTruthy();
+    expect(
+      await screen.findByText(`Last change ${formatted(AT)}`),
+    ).toBeTruthy();
     await user.click(screen.getByRole("tab", { name: "History" }));
 
     expect(screen.queryByText(/Your changes/)).toBeNull();
@@ -256,9 +261,43 @@ describe("the drawer's reader scopes", () => {
     openDrawer(harness, { kind: "variable", key: "FOO" }, "FOO");
 
     expect(await screen.findByText("Applied on 1 host")).toBeTruthy();
-    expect(screen.getByText(formatted(AT))).toBeTruthy();
+    expect(screen.getByText(`Last change ${formatted(AT)}`)).toBeTruthy();
     expect(screen.getByText("Applied")).toBeTruthy();
     expect(document.body.textContent).not.toMatch(/unknown/i);
+  });
+
+  // NEW-145-20: the line under "Now" read "windows-test-machine · 15:06" — a
+  // host name and a time with nothing to say which they were.
+  it("labels the change line and leaves out a time the app does not have", async () => {
+    const harness = mountTeamPage(poolSource("admin"), {
+      "environment.history": () =>
+        history({
+          entries: [
+            {
+              at: AT,
+              actor: { label: "windows-test-machine", tombstoned: false },
+              operation: "set",
+              outcome: "applied",
+            },
+          ],
+        }),
+    });
+    openDrawer(harness, { kind: "variable", key: "FOO" }, "FOO");
+
+    expect(
+      await screen.findByText(`Last change ${formatted(AT)}`),
+    ).toBeTruthy();
+    expect(
+      screen.queryByText(`windows-test-machine · ${formatted(AT)}`),
+    ).toBeNull();
+    cleanup();
+
+    const noHistory = mountTeamPage(poolSource("admin"), {
+      "environment.history": () => history({}),
+    });
+    openDrawer(noHistory, { kind: "variable", key: "FOO" }, "FOO");
+    await screen.findByRole("tab", { name: "Status" });
+    expect(screen.queryByText(/Last change/)).toBeNull();
   });
 
   it("offers Retry for a failed setup script, and no raw code for a failed setting", async () => {
@@ -1143,5 +1182,219 @@ describe("a sandbox's unused settings", () => {
 
     expect(JSON.stringify(exported)).toContain("claude:ANTHROPIC_API_KEY");
     expect(JSON.stringify(exported)).toContain("not_used");
+  });
+});
+
+/**
+ * NEW-154-25: the member subject used to reuse the host-apply summary, so a
+ * member's drawer read "No hosts yet" — a host claim about a person. Q3 takes
+ * the host out of a pending removal's line.
+ */
+describe("a member's Now", () => {
+  it("names the role, since when and who changed it, not what hosts did", async () => {
+    const harness = mountTeamPage(poolSource("admin"), {
+      "environment.history": () =>
+        history({
+          // A member's role change is a `put`, as authn commits it.
+          entries: [
+            {
+              at: AT,
+              actor: { label: "Ada", tombstoned: false },
+              operation: "put",
+              outcome: "live",
+            },
+          ],
+          hostStates: [{ ...brokenHost, state: "applied", reason: null }],
+        }),
+    });
+    openDrawer(
+      harness,
+      { kind: "member", key: "u-2", roleLabel: "Editor" },
+      "Member details",
+    );
+
+    expect(
+      await screen.findByText(`Editor since ${formatted(AT)}, changed by Ada`),
+    ).toBeTruthy();
+    expect(screen.queryByText("No hosts yet")).toBeNull();
+    expect(screen.queryByText("Applied on 1 host")).toBeNull();
+    // The summary already carries the time and the actor.
+    expect(screen.queryByText(/Last change/)).toBeNull();
+  });
+
+  // A reader the server answers with `status_only` gets no entries at all, so
+  // there is nothing to say about the role or who set it. The delivery summary
+  // is what that reader has always had, and it stays: a "Now" heading with an
+  // empty line under it reads as a broken panel.
+  it("keeps the delivery summary for a reader the history is closed to", async () => {
+    const harness = mountTeamPage(poolSource("admin"), {
+      "environment.history": () =>
+        history({
+          readerScope: "status_only",
+          hostStates: [{ ...brokenHost, state: "applied", reason: null }],
+        }),
+    });
+    openDrawer(
+      harness,
+      { kind: "member", key: "u-2", roleLabel: "Editor" },
+      "Member details",
+    );
+
+    expect(await screen.findByText("Applied on 1 host")).toBeTruthy();
+    expect(screen.queryByText(/since/)).toBeNull();
+  });
+
+  it("claims no role the row did not name", async () => {
+    const harness = mountTeamPage(poolSource("admin"), {
+      "environment.history": () =>
+        history({
+          entries: [
+            {
+              at: AT,
+              actor: { label: "Ada", tombstoned: false },
+              operation: "put",
+              outcome: "live",
+            },
+          ],
+        }),
+    });
+    openDrawer(harness, { kind: "member", key: "u-2" }, "Member details");
+
+    await screen.findByRole("tab", { name: "Status" });
+    expect(screen.queryByText(/since/)).toBeNull();
+    expect(screen.queryByText("No hosts yet")).toBeNull();
+  });
+
+  it("reads Removing while a removal is pending, and names no host", async () => {
+    const harness = mountTeamPage(poolSource("admin"), {
+      "environment.history": () =>
+        history({
+          entries: [
+            {
+              at: AT,
+              actor: { label: "Ada", tombstoned: false },
+              operation: "delete",
+              outcome: "live",
+            },
+          ],
+          hostStates: [{ ...brokenHost, state: "offline" }],
+        }),
+    });
+    openDrawer(harness, { kind: "member", key: "u-2" }, "Member details");
+
+    expect(await screen.findByText("Removing")).toBeTruthy();
+    expect(screen.queryByText(/waiting for/)).toBeNull();
+    expect(screen.queryByText("No hosts yet")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Open dev-box" })).toBeNull();
+  });
+
+  it("says nothing it has not read when the member has no history", async () => {
+    const harness = mountTeamPage(poolSource("admin"), {
+      "environment.history": () => history({}),
+    });
+    openDrawer(harness, { kind: "member", key: "u-2" }, "Member details");
+
+    await screen.findByRole("tab", { name: "Status" });
+    expect(screen.queryByText("No hosts yet")).toBeNull();
+    expect(document.body.textContent).not.toMatch(/unknown/i);
+  });
+
+  // The roles notice opens the drawer with no member named, so
+  // `environment.history` answers for the whole configuration. A secret
+  // removed there is the newest `delete` in that answer, and it says nothing
+  // about anyone's membership.
+  it("reads another item's removal as no person's, when the subject names none", async () => {
+    const harness = mountTeamPage(poolSource("admin"), {
+      "environment.history": () =>
+        history({
+          entries: [
+            // The configuration's newest change: a secret was removed.
+            {
+              at: AT,
+              actor: { label: "Ada", tombstoned: false },
+              operation: "delete",
+              outcome: "live",
+            },
+          ],
+          hostStates: [{ ...brokenHost, state: "applied", reason: null }],
+        }),
+    });
+    openDrawer(
+      harness,
+      { kind: "member", key: "", roleLabel: null },
+      "Member details",
+    );
+
+    // The delivery summary, as every keyless subject reads, and no claim that
+    // a person is on their way out.
+    expect(await screen.findByText("Applied on 1 host")).toBeTruthy();
+    expect(screen.queryByText("Removing")).toBeNull();
+    expect(document.body.textContent).not.toContain("since");
+  });
+});
+
+/**
+ * NEW-154-21's History sentence. A host destroyed with a cleanup outstanding
+ * has no copy left to delete, and the server says so on the event itself:
+ * `outcome: "host_destroyed"` with the host as the event's actor (G8's #7382).
+ * An older server sends no such outcome, and its events read as they always
+ * did.
+ */
+describe("a destroyed host in History", () => {
+  /** The one entry's row in History, where the event's own line is drawn. */
+  async function openHistory(
+    entry: EnvironmentHistoryResponse["entries"][number],
+  ): Promise<HTMLElement> {
+    const harness = mountTeamPage(poolSource("admin"), {
+      "environment.history": () =>
+        history({ entries: [entry], hostStates: [brokenHost] }),
+      "environment.secrets.list": () => ({ secrets: [], removed: [] }),
+    });
+    const user = userEvent.setup();
+    openDrawer(harness, { kind: "secret", key: "" }, "Secrets");
+    await user.click(await screen.findByRole("tab", { name: "History" }));
+    const rows = screen.getAllByRole("listitem");
+    expect(rows).toHaveLength(1);
+    return rows[0];
+  }
+
+  // The entry authn emits, verbatim from the agreed contract.
+  const DESTROYED = {
+    at: AT,
+    actor: { label: "e2e-sbx-t1", tombstoned: true },
+    operation: "secret_cleanup_confirmed",
+    outcome: "host_destroyed",
+  };
+
+  it("says the destroyed host's copy is gone, in place of the event's codes", async () => {
+    const row = await openHistory(DESTROYED);
+
+    expect(row.textContent).toContain(
+      "e2e-sbx-t1 was destroyed, so its copy is gone.",
+    );
+    expect(row.textContent).toContain(formatted(AT));
+    // No raw code, and the host is named once: by the sentence, not again
+    // on the line under it.
+    expect(row.textContent).not.toContain("host_destroyed");
+    expect(row.textContent).not.toContain("secret_cleanup_confirmed");
+    expect(row.textContent.match(/e2e-sbx-t1/g)).toHaveLength(1);
+  });
+
+  it("keeps the generic event for a server that reports no destruction", async () => {
+    const row = await openHistory({ ...DESTROYED, outcome: "succeeded" });
+
+    expect(row.textContent).toContain("secret_cleanup_confirmed · succeeded");
+    expect(row.textContent).not.toContain("was destroyed");
+    expect(row.textContent).toContain(`e2e-sbx-t1 · ${formatted(AT)}`);
+  });
+
+  it("names no host when the outcome arrives with no actor to name", async () => {
+    const row = await openHistory({ ...DESTROYED, actor: null });
+
+    expect(row.textContent).not.toContain("was destroyed");
+    expect(row.textContent).toContain(
+      "secret_cleanup_confirmed · host_destroyed",
+    );
+    expect(row.textContent).toContain("Traycer");
   });
 });

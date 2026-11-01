@@ -8,14 +8,21 @@ import { ENVIRONMENT_ITEM_KINDS } from "@traycer/protocol/host/environment-schem
 import type {
   DetailsEntry,
   DetailsHistory,
+  DetailsHistoryEntry,
   DetailsHostStatus,
   DetailsProviderContext,
   DetailsRecovery,
   DetailsStatus,
   DetailsSubject,
 } from "@/lib/settings-details-entry";
-import { registerDetailsProvider } from "@/lib/settings-details-entry";
-import { recoveryForHost } from "@/components/settings/details/details-copy";
+import {
+  HOST_DESTROYED_OUTCOME,
+  registerDetailsProvider,
+} from "@/lib/settings-details-entry";
+import {
+  detailsTime,
+  recoveryForHost,
+} from "@/components/settings/details/details-copy";
 
 import { loadSecretDetails } from "@/components/settings/details/secret-details-status";
 import { sandboxDetailsProvider } from "@/lib/sandboxes/sandbox-details-provider";
@@ -112,6 +119,31 @@ function detailsHistory(history: HistoryResponse): DetailsHistory {
             hosts: [],
           })),
   };
+}
+
+/**
+ * A member's `Now`, which is about a person and names no host: `Removing`
+ * while their removal is pending (Q3 retired the per-host wait on a member
+ * receipt), else the role they hold, since when, and who changed it.
+ *
+ * The role comes from the subject, not from the read: a member's change entry
+ * is `put` / `delete` with the role inside the item's value, and
+ * `environment.history` ships no values. Nothing is claimed that was not read,
+ * so with no entry, or no role on the subject, the member's `Now` says nothing.
+ */
+function memberNowSummary(
+  subject: DetailsSubject,
+  entries: readonly DetailsHistoryEntry[],
+): string | null {
+  const latest = entries.toSorted((a, b) => b.at - a.at).at(0);
+  if (latest === undefined) return null;
+  if (latest.operation === "delete") return "Removing";
+  const roleLabel = subject.roleLabel ?? null;
+  if (roleLabel === null) return null;
+  const since = `${roleLabel} since ${detailsTime(latest.at)}`;
+  return latest.actor === null
+    ? since
+    : `${since}, changed by ${latest.actor.label}`;
 }
 
 type CurrentEnvironmentStatus = ResponseOfMethod<
@@ -235,6 +267,18 @@ async function environmentDetailsProvider(
   return loadEnvironmentDetails(subject, context, false);
 }
 
+/**
+ * Who changed the subject, where the newest entry names one. A lifecycle event
+ * names its SUBJECT in `actor`, not a person: a host the cleanup ran against
+ * is what changed, never who changed it. The guard is on the producer, so the
+ * export carries no such provenance either.
+ */
+function changedByOf(latest: DetailsHistoryEntry | undefined): string | null {
+  if (latest === undefined || latest.outcome === HOST_DESTROYED_OUTCOME)
+    return null;
+  return latest.actor?.label ?? null;
+}
+
 async function loadEnvironmentDetails(
   subject: DetailsSubject,
   context: DetailsProviderContext,
@@ -301,18 +345,40 @@ async function loadEnvironmentDetails(
   let status: DetailsStatus = {
     summary: detailsNowSummary(hosts),
     currentVersion: null,
-    // A lifecycle event names its subject in `actor`, not a person: a host
-    // the cleanup ran against is what changed, never who changed it. The
-    // guard is on the producer, so the export carries no such provenance
-    // either.
-    changedBy:
-      latest?.outcome === "host_destroyed"
-        ? null
-        : (latest?.actor?.label ?? null),
+    changedBy: changedByOf(latest),
     changedAt: latest?.at ?? null,
     reason: null,
     hosts,
   };
+  // One member, named by the subject's key. The roles notice opens the drawer
+  // with no key, and `environment.history` then answers for the whole
+  // configuration, where the newest `delete` is as likely to be a secret's as
+  // a member's: that drawer keeps the delivery summary and claims nothing
+  // about a person.
+  //
+  // A reader the server answers with `status_only` is given no entries at
+  // all, so nothing here can say anything about the role or who set it. That
+  // reader keeps the delivery summary they have always had, because a `Now`
+  // heading with an empty line under it reads as a broken panel — where a
+  // readable history with no entry for this person says nothing rather than
+  // putting a host's state where their role belongs.
+  if (
+    subject.kind === "member" &&
+    subject.key.length > 0 &&
+    history.readerScope !== "status_only"
+  ) {
+    // A member is not a setting delivered to hosts: their `Now` is their own
+    // role, and it carries the time and the actor, so the change line below it
+    // would only repeat them.
+    const summary = memberNowSummary(subject, history.entries);
+    status = {
+      ...status,
+      summary: summary ?? "",
+      changedBy: null,
+      changedAt: null,
+      hosts: [],
+    };
+  }
   if (subject.kind === "secret") {
     const secret = await loadSecretDetails(subject, context, status);
     title = secret.title;
