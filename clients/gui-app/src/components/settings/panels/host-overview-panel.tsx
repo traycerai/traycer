@@ -13,6 +13,7 @@ import {
 } from "@/components/host/host-restart-copy";
 import { DoctorSheet } from "@/components/settings/panels/host-settings-doctor-sheet";
 import { HostIdentityCard } from "@/components/settings/host-scope/host-identity-card";
+import { hostLastReport } from "@/components/settings/host-scope/host-last-report";
 import { hostOptionCanActivate } from "@/components/settings/host-scope/host-option-model";
 import { HostLifecycleModeLine } from "@/components/settings/host-scope/host-lifecycle-mode-line";
 import { HostUpdateRequiredAction } from "@/components/settings/host-scope/host-update-required-action";
@@ -1443,6 +1444,10 @@ export function HostOverviewPanel(props: {
   if (host === null) return null;
 
   const registryItem = host.item;
+  const lastReport = hostLastReport(
+    registryItem,
+    host.sandbox?.summary ?? null,
+  );
 
   // ATTEMPT-DERIVED CARD CONTROLS. When the view carries an attempt AND
   // this host advertises the matching bound method, the card's control comes
@@ -1702,10 +1707,7 @@ export function HostOverviewPanel(props: {
         offline
           ? describeHostOfflineNotice({
               hostName: displayName,
-              lastSeen: formatLastSeen(
-                registryItem?.status.lastSeenAt ?? null,
-                nowMs,
-              ),
+              lastSeen: formatLastSeen(lastReport, nowMs),
               view: operationView,
               accountKnowsHost: registryItem !== null,
             })
@@ -1922,13 +1924,18 @@ export function HostOverviewPanel(props: {
     <HostOverviewInstallationTab
       usable={usable}
       hostName={displayName}
-      // The account's record, so it reads with or without a route. "Online
-      // now" is the account's own reach, derived from that record; the
+      // The account's record, so it reads with or without a route; the
       // timestamp is worded on the scope's clock.
       about={
         registryItem === null
           ? null
-          : { item: registryItem, nowMs: scope.nowMs }
+          : {
+              item: registryItem,
+              lastReport,
+              // Same two-layer rule as the header's version.
+              headerVersion: view.hostVersion ?? host.version,
+              nowMs: scope.nowMs,
+            }
       }
       installInfoDegrade={installInfoDegrade}
       record={

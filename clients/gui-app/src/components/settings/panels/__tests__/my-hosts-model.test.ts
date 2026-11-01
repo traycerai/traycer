@@ -210,23 +210,18 @@ describe("deriveUpdatePill", () => {
 describe("formatLastSeen", () => {
   const now = Date.parse("2026-07-03T12:00:00.000Z");
 
-  it("returns null when never seen", () => {
-    expect(formatLastSeen(null, now)).toBeNull();
+  it("returns null when there is no time to word", () => {
+    expect(formatLastSeen({ kind: "none" }, now)).toBeNull();
+    expect(formatLastSeen({ kind: "unknown" }, now)).toBeNull();
   });
 
   it("formats recent as just now, then minutes/hours/days", () => {
-    expect(formatLastSeen("2026-07-03T11:59:50.000Z", now)).toBe(
-      "last seen just now",
-    );
-    expect(formatLastSeen("2026-07-03T11:55:00.000Z", now)).toBe(
-      "last seen 5m ago",
-    );
-    expect(formatLastSeen("2026-07-03T10:00:00.000Z", now)).toBe(
-      "last seen 2h ago",
-    );
-    expect(formatLastSeen("2026-07-01T12:00:00.000Z", now)).toBe(
-      "last seen 2d ago",
-    );
+    const seen = (iso: string) =>
+      formatLastSeen({ kind: "reported", at: Date.parse(iso) }, now);
+    expect(seen("2026-07-03T11:59:50.000Z")).toBe("last seen just now");
+    expect(seen("2026-07-03T11:55:00.000Z")).toBe("last seen 5m ago");
+    expect(seen("2026-07-03T10:00:00.000Z")).toBe("last seen 2h ago");
+    expect(seen("2026-07-01T12:00:00.000Z")).toBe("last seen 2d ago");
   });
 });
 

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { HostListItem } from "@traycer/protocol/host/host-status";
 import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
+import type { HostLeaseSnapshot } from "@traycer-clients/shared/host-selection/selection-authority-contract";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { hostListItemToDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
 import {
@@ -70,6 +71,73 @@ function build(input: {
   });
   return new Map(options.map((option) => [option.hostId, option]));
 }
+
+describe("buildHostScopeOptions sandbox last report", () => {
+  const NOW_MS = 1_791_100_000_000;
+
+  function offlineDetail(
+    summary: SandboxSummary | null,
+    leases: readonly HostLeaseSnapshot[],
+  ): string | null {
+    const registry = [
+      item({
+        hostId: "sbx-host",
+        kind: "sandbox",
+        sandboxState: "awake",
+        // The registry stamp a sandbox never gets written.
+        status: {
+          ...item({}).status,
+          connectivity: "offline",
+          lastSeenAt: null,
+          appVersion: null,
+        },
+      }),
+    ];
+    const [option] = buildHostScopeOptions({
+      leases,
+      authorityAttached: true,
+      directory: registry.map((row) =>
+        hostListItemToDirectoryEntry(row, "wss://relay.example.test"),
+      ),
+      registry,
+      localHostId: null,
+      activeHostId: null,
+      localService: undefined,
+      localPlatform: null,
+      hasLiveSession: () => false,
+      localHostSettingUp: false,
+      localHostTerminalRunNote: null,
+      sandboxes: summary === null ? null : [summary],
+      nowMs: NOW_MS,
+    });
+    return option.health.detail;
+  }
+
+  const reported = sandboxSummaryFixture({
+    hostId: "sbx-host",
+    lastActivityAt: NOW_MS - 60_000,
+  });
+
+  it("words a dead-offline sandbox's header detail on the control plane's report, not the registry stamp it never gets", () => {
+    expect(
+      offlineDetail(reported, [
+        {
+          hostId: "sbx-host",
+          status: "dead",
+          dead: { reason: "offline" },
+        },
+      ]),
+    ).toBe("Last seen 1m ago");
+  });
+
+  it("words a registry-offline sandbox with no lease the same way", () => {
+    expect(offlineDetail(reported, [])).toBe("Last seen 1m ago");
+  });
+
+  it("gives an offline sandbox the control plane has not answered for no age to claim", () => {
+    expect(offlineDetail(null, [])).toBeNull();
+  });
+});
 
 describe("buildHostScopeOptions sandbox facts", () => {
   it("leaves a personal host with no sandbox facts", () => {
