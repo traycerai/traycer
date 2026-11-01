@@ -48,8 +48,9 @@ import { busyWorkPhrase } from "@/components/host/host-restart-copy";
  *      proof the host is up, which outranks a cloud lease refreshed on a
  *      slower clock.
  *   4. **`connectivity`** — the cloud's answer, and the ONLY thing known
- *      about a host this client has never dialled. Which is precisely why it
- *      no longer says "Online"; see `reported-reachable` below.
+ *      about a host none of the steps above has a verdict on. Which is
+ *      precisely why it no longer says "Online"; see `reported-reachable`
+ *      below.
  *
  * `connectivity` is pure liveness (`connectable` / `offline` / `unknown`) —
  * one fact about one host. This row is projected from the RAW registry DTO

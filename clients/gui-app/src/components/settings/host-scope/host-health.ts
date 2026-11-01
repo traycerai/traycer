@@ -44,7 +44,7 @@ import {
  * "Offline". A remote host that is off simply reads `offline`.
  *
  * `reported-reachable` is the state that exists because the honest answer for
- * a never-dialled host is neither "Online" nor "Offline". See
+ * a host this app has no verdict about is neither "Online" nor "Offline". See
  * `deriveHostPresence`.
  */
 export type HostHealthState =
@@ -79,7 +79,7 @@ export interface HostHealth {
 
 export const HOST_HEALTH_TONE: Record<HostHealthState, HostHealthTone> = {
   online: "live",
-  // Not a fault and not a claim: nothing has reached this machine from here,
+  // Not a fault and not a claim: nothing here has a verdict on this machine,
   // so it gets the same muted treatment as a host that is simply not running.
   "reported-reachable": "idle",
   // A restart we asked for or expect is not a failure in progress.
@@ -148,8 +148,8 @@ export interface DeriveHostHealthOptions {
  *      experience of the host, and it is why a host can read `Offline` here
  *      while the cloud still holds a `connectable` lease for it (the
  *      window, now narrowed by real evidence instead of waited out).
- *   3. **The cloud DTO** — the only thing known about a host nothing has
- *      dialled, and deliberately the weakest.
+ *   3. **The cloud DTO** — the only thing known about a host neither of the
+ *      steps above has a verdict on, and deliberately the weakest.
  *
  * Steps 2 and 3 are a FALL-THROUGH, not a switch. The lease step returns
  * `null` for "no verdict yet" so an unattached authority or a host still
@@ -365,16 +365,12 @@ function registryHealth(options: DeriveHostHealthOptions): HostHealth {
       // "not verified from here"; that is the whole reason this state was
       // coined instead of Online or Offline.
       //
-      // The detail used to add "Nothing has connected to it from here yet.",
-      // and that claim is CUT rather than reworded. It describes only one of
-      // the three ways `leaseHealth` declines, and the lease vocabulary cannot
-      // tell them apart: `connecting` is both the resting state of a host
-      // nothing has dialled (`deriveLease`'s fall-through, derived for every
-      // registered host once the authority attaches) and what a host reads
-      // while a dial or a RE-dial is in flight. So the sentence was false for
-      // a card shown through a host restart this app was mid-reconnect to, and
-      // any replacement asserting an attempt would be false for the resting
-      // case instead — a worse trade, since that one is the common one.
+      // It asserts nothing about whether anything has DIALLED the host, in
+      // either direction, because the three ways `leaseHealth` declines are
+      // indistinguishable from here: `connecting` is both `deriveLease`'s
+      // fall-through, derived for every registered host once the authority
+      // attaches, and what a host reads while a dial or a re-dial is in
+      // flight. SETTINGS.md records the two sentences this ruled out.
       return {
         state: "reported-reachable",
         label: "Reported reachable",

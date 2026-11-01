@@ -126,29 +126,37 @@ describe("deriveHostHealth — absence of evidence is not death", () => {
   });
 
   /**
-   * The detail claims nothing about whether anything has dialled the host,
-   * BECAUSE the three ways this arm is reached are indistinguishable from the
-   * lease and one of them is a dial in flight.
+   * ONE detail serves every way the lease step declines — that is the
+   * contract, and it needs every path in one case to be expressed at all.
    *
-   * `connecting` is `deriveLease`'s fall-through, derived for every registered
-   * host once the authority attaches (`transport-evidence.ts`: "with nothing
-   * reporting, every lease reads `connecting`"), AND what a host reads while a
-   * re-dial is in flight - which is the card a host restart produced. One
-   * sentence has to serve both, so it carries only the account's report.
+   * It is what makes the detail unable to say whether anything has dialled the
+   * host. `connecting` is `deriveLease`'s fall-through, derived for every
+   * registered host once the authority attaches (`transport-evidence.ts`: "with
+   * nothing reporting, every lease reads `connecting`"), AND what a host reads
+   * while a re-dial is in flight. A path-dependent sentence — either
+   * direction — fails here instead of passing on the path its author had in
+   * mind. The `state` is left to the cases above: this string is produced by no
+   * other arm.
    */
-  it("says only what the account reported, however the lease step declined", () => {
-    const accountReport = "Your account last heard from this host.";
-    for (const options of [
+  it.each([
+    [
+      "a connecting lease",
       { lease: lease("connecting"), authorityAttached: true },
-      { lease: null, authorityAttached: true },
+    ],
+    ["no lease", { lease: null, authorityAttached: true }],
+    [
+      "an unattached authority",
       { lease: lease("connecting"), authorityAttached: false },
-      { lease: null, authorityAttached: false },
-    ]) {
-      const health = deriveHostHealth({ ...BASE, ...options });
-      expect(health.state).toBe("reported-reachable");
-      expect(health.detail).toBe(accountReport);
-    }
-  });
+    ],
+    ["neither", { lease: null, authorityAttached: false }],
+  ] as const)(
+    "says only what the account reported, declining through %s",
+    (_label, options) => {
+      expect(deriveHostHealth({ ...BASE, ...options }).detail).toBe(
+        "Your account last heard from this host.",
+      );
+    },
+  );
 });
 
 describe("deriveHostHealth — the lease outranks the cloud DTO", () => {
