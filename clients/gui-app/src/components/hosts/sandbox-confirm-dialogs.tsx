@@ -875,6 +875,28 @@ function batchOutcomeLine(result: SandboxBatchResult): string {
   }
 }
 
+/**
+ * A batch's closing word, since its lines close with the dialog. A skipped
+ * target can be missing from the rows behind it, so its reason is said here.
+ */
+function toastBatchEnd(results: readonly SandboxBatchResult[]): void {
+  const total = results.length;
+  const noun = total === 1 ? "sandbox" : "sandboxes";
+  const left = results.filter((result) => result.outcome.kind === "skipped");
+  if (left.length > 0) {
+    toast.warning(`Didn't destroy ${left.length} of ${total} idle ${noun}`, {
+      description: left.map(batchOutcomeLine).join("; "),
+    });
+    return;
+  }
+  const subject = total === 1 ? results[0].name : `${total} ${noun}`;
+  if (results.some((result) => result.outcome.kind === "destroying")) {
+    toast.info(`Destroying ${subject}…`);
+  } else {
+    toast.success(`Destroyed ${subject}`);
+  }
+}
+
 /** Each open owns a snapshot. Closing resets only the confirmation's form. */
 export function SandboxDestroyAllIdleDialog(props: {
   readonly targets: readonly SandboxSummary[];
@@ -889,7 +911,10 @@ export function SandboxDestroyAllIdleDialog(props: {
   ) : null;
 }
 
-/** The enumerated set and its per-target outcomes stay fixed across retries. */
+/**
+ * The enumerated set and its per-target outcomes stay fixed across retries.
+ * It stays open only while a failed target is left to retry.
+ */
 function SandboxDestroyAllIdleConfirmation(props: {
   readonly targets: readonly SandboxSummary[];
   readonly onOpenChange: (open: boolean) => void;
@@ -961,17 +986,20 @@ function SandboxDestroyAllIdleConfirmation(props: {
           { targets: pendingTargets, startedBy },
           {
             onSuccess: (next) => {
-              setResults((previous) => {
-                const outcomes = new Map(
-                  (previous ?? []).map((result) => [result.sandboxId, result]),
-                );
-                for (const result of next)
-                  outcomes.set(result.sandboxId, result);
-                return targets.flatMap((target) => {
-                  const result = outcomes.get(target.id);
-                  return result === undefined ? [] : [result];
-                });
+              const outcomes = new Map(
+                (results ?? []).map((result) => [result.sandboxId, result]),
+              );
+              for (const result of next) outcomes.set(result.sandboxId, result);
+              const merged = targets.flatMap((target) => {
+                const result = outcomes.get(target.id);
+                return result === undefined ? [] : [result];
               });
+              if (merged.some((result) => result.outcome.kind === "failed")) {
+                setResults(merged);
+                return;
+              }
+              toastBatchEnd(merged);
+              props.onOpenChange(false);
             },
           },
         );

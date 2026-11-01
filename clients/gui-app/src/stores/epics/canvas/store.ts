@@ -3830,6 +3830,7 @@ export {
   useEpicArtifactRecords,
   useEpicCanvas,
   useEpicTab,
+  useHasPendingChatTitle,
   useIsActiveEpicArtifact,
   useIsActivePane,
   useIsActiveTile,

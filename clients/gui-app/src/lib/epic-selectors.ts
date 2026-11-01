@@ -2160,16 +2160,70 @@ function useManagedCommandOutputTitle(
 }
 
 /**
- * Whether a chat tab's title is still being generated. `epicId` and
- * `boundHostId` name the tab's task and host, so a team host's chat, whose
- * title reaches this client only on the environment arm's row, stops spinning
- * when that title arrives rather than at the backstop.
+ * Whether a chat tab's title is still being generated. `node` and `epicId`
+ * name the tab's chat, task and host, so a chat whose title reaches this client
+ * only on the environment arm's row or the cloud list stops spinning when that
+ * title arrives rather than at the backstop.
  */
 export function useEpicLiveArtifactTitleGenerating(
+  node: EpicTabDisplayTitleNode,
+  epicId: string,
+): boolean {
+  return useTabChatTitleGeneration(node, epicId) !== "idle";
+}
+
+/**
+ * Whether a chat's first title is on its way and none is known yet: the
+ * generation {@link useEpicLiveArtifactTitleGenerating} spins for, on a chat
+ * whose projection and arm both still hold no title. The tab and the tree
+ * render "New agent" for exactly this window, and the "Untitled agent"
+ * fallback once it closes without a title. Render-only: the caller must never
+ * hand the label it picks from this to a snapshot or a rename.
+ */
+export function useEpicChatAwaitingFirstTitle(
   artifactId: string | null,
   epicId: string,
   boundHostId: string | null,
 ): boolean {
+  return (
+    useChatTitleGeneration(artifactId, epicId, boundHostId, null) ===
+    "awaiting-first-title"
+  );
+}
+
+/**
+ * {@link useEpicChatAwaitingFirstTitle} for a tab, whose title has one more
+ * source: the cloud list answers for a chat the projection holds no record of,
+ * and a tab showing that title is not waiting for one.
+ */
+export function useEpicTabAwaitingFirstTitle(
+  node: EpicTabDisplayTitleNode,
+  epicId: string,
+): boolean {
+  return useTabChatTitleGeneration(node, epicId) === "awaiting-first-title";
+}
+
+type ChatTitleGeneration = "idle" | "generating" | "awaiting-first-title";
+
+function useTabChatTitleGeneration(
+  node: EpicTabDisplayTitleNode,
+  epicId: string,
+): ChatTitleGeneration {
+  const cloudChatTitle = useCloudChatTitleForAbsentRecord(node, epicId);
+  return useChatTitleGeneration(
+    node.type === "chat" ? node.id : null,
+    epicId,
+    node.hostId,
+    cloudChatTitle,
+  );
+}
+
+function useChatTitleGeneration(
+  artifactId: string | null,
+  epicId: string,
+  boundHostId: string | null,
+  cloudChatTitle: string | null,
+): ChatTitleGeneration {
   const projectedTitle = useEpicStore((s) => {
     if (artifactId === null) return null;
     if (Object.hasOwn(s.chats.byId, artifactId)) {
@@ -2179,7 +2233,7 @@ export function useEpicLiveArtifactTitleGenerating(
     return null;
   });
   const armTitle = useArmChatTitle(epicId, artifactId, boundHostId);
-  const currentTitle = projectedTitle ?? armTitle;
+  const currentTitle = projectedTitle ?? armTitle ?? cloudChatTitle;
   const currentUpdatedAt = useEpicStore((s) => {
     if (artifactId === null) return null;
     if (Object.hasOwn(s.chats.byId, artifactId)) {
@@ -2187,17 +2241,19 @@ export function useEpicLiveArtifactTitleGenerating(
     }
     return null;
   });
-  return useEpicCanvasStore((s) => {
-    if (artifactId === null) return false;
+  return useEpicCanvasStore((s): ChatTitleGeneration => {
+    if (artifactId === null) return "idle";
     const entry = Object.hasOwn(s.pendingChatTitles, artifactId)
       ? s.pendingChatTitles[artifactId]
       : undefined;
-    return pendingTitleVisibleAutoPurge(
+    const generating = pendingTitleVisibleAutoPurge(
       entry,
       currentTitle,
       currentUpdatedAt,
       () => s.clearChatTitlePending(artifactId),
     );
+    if (!generating) return "idle";
+    return currentTitle === null ? "awaiting-first-title" : "generating";
   });
 }
 

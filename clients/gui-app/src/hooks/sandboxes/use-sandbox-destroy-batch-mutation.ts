@@ -14,6 +14,7 @@ import {
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useAccountFencedMutation } from "@/hooks/sandboxes/use-account-fenced-mutation";
+import { SandboxOperationError } from "@/hooks/sandboxes/sandbox-failure-copy";
 import {
   sandboxDestroyMutationOptions,
   SandboxDestroySkippedError,
@@ -23,7 +24,10 @@ import {
   signedInUserId,
 } from "@/lib/sandboxes/sandbox-account-fence";
 
-/** One target's own outcome: a batch never reports for the set as a whole. */
+/**
+ * One target's own outcome: a batch never reports for the set as a whole.
+ * `failed` is what a Retry can change; `skipped` is what it cannot.
+ */
 export type SandboxBatchOutcome =
   | { readonly kind: "destroyed" }
   | { readonly kind: "destroying" }
@@ -121,7 +125,9 @@ export function useSandboxDestroyBatch(): UseMutationResult<
             ...target,
             outcome: {
               kind:
-                error instanceof SandboxDestroySkippedError
+                error instanceof SandboxDestroySkippedError ||
+                (error instanceof SandboxOperationError &&
+                  error.failure.kind === "unavailable")
                   ? "skipped"
                   : "failed",
               message,
