@@ -4286,6 +4286,55 @@ describe("platform matrix", () => {
       });
     });
 
+    it.each([
+      ["seen running", "complete"],
+      ["refused", "failed"],
+    ] as const)(
+      "an activation %s keeps who asked for the apply it concludes",
+      async (activation, outcome) => {
+        vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+        const controller = stagedUpdate();
+        appliesTheBytes();
+        vi.mocked(probeHostActivityBusy).mockResolvedValue(true);
+        await controller.applyStaged("manual", false);
+        await writeHostUpdateLastAttempt(
+          getHostFsLayout("production").rootDir,
+          {
+            command: "host apply",
+            initiator: "manual",
+            outcome: "applied",
+            targetVersion: "1.8.0",
+            attemptId: null,
+            code: null,
+            message: null,
+          },
+          { info: vi.fn() },
+        );
+
+        vi.mocked(probeHostActivityBusy).mockResolvedValue(false);
+        if (activation === "refused") {
+          vi.mocked(registerHostLoginItem).mockRejectedValue(
+            new Error("login item refused"),
+          );
+        } else {
+          vi.mocked(waitForHostReady).mockResolvedValue({
+            ready: true,
+            version: "1.8.0",
+            pid: process.pid,
+            startedAt: "2026-01-01T00:00:00.000Z",
+            reason: "ready",
+          });
+        }
+        await controller.activateInstalled(false, false);
+
+        expect(await lastAttempt()).toMatchObject({
+          initiator: "manual",
+          outcome,
+          targetVersion: "1.8.0",
+        });
+      },
+    );
+
     it("a later activation that also fails ends the waiting apply failed", async () => {
       vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
       const controller = stagedUpdate();
@@ -4310,6 +4359,7 @@ describe("platform matrix", () => {
     it.each([
       ["a host update of its own", { command: "host update" }],
       ["an apply of another version", { targetVersion: "1.7.0" }],
+      ["a failed apply it healed", { outcome: "failed" }],
     ] as const)("an activation leaves %s standing", async (_name, recorded) => {
       vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
       const controller = stagedUpdate();

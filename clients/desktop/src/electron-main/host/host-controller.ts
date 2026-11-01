@@ -4922,15 +4922,15 @@ export class HostController {
   ): Promise<void> {
     const concluded = concludedOutcome(outcome, hostRunning);
     if (concluded === null) return;
-    if (concluded !== "complete") {
-      const recorded = await readHostUpdateLastAttempt(this.layout.rootDir);
-      if (!awaitsConclusion(recorded, targetVersion)) return;
-    }
+    const recorded = await readHostUpdateLastAttempt(this.layout.rootDir);
+    const waiting = awaitsConclusion(recorded, targetVersion) ? recorded : null;
+    if (concluded !== "complete" && waiting === null) return;
     await writeHostUpdateLastAttempt(
       this.layout.rootDir,
       {
         command: "host apply",
-        initiator: "desktop",
+        // Who asked for the apply, which a person's own `host apply` may be.
+        initiator: waiting?.initiator ?? "desktop",
         targetVersion,
         attemptId: null,
         code: null,
@@ -6890,7 +6890,7 @@ function concludedOutcome(
 function awaitsConclusion(
   recorded: HostUpdateLastAttempt | null,
   targetVersion: string,
-): boolean {
+): recorded is HostUpdateLastAttempt {
   return (
     recorded?.command === "host apply" &&
     recorded.targetVersion === targetVersion &&
