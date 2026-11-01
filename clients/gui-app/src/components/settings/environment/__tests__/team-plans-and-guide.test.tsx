@@ -159,7 +159,9 @@ describe("TeamPlans", () => {
     expect(screen.queryByRole("button", { name: /link a plan/i })).toBeNull();
     expect(screen.queryByRole("button", { name: "Unlink" })).toBeNull();
     expect(screen.queryByText(/add a profile/i)).toBeNull();
-    expect(screen.getByText("Admins link a plan: Ada.")).toBeTruthy();
+    expect(
+      screen.getByText("Only an admin can link a plan: ask Ada."),
+    ).toBeTruthy();
   });
 
   it("holds Unlink until its preview resolves, then unlinks the picked profile in this team", async () => {
@@ -318,8 +320,10 @@ describe("TeamGuide", () => {
     render(<TeamGuide />, { wrapper: harness.Wrapper });
 
     await waitFor(() => {
+      // One host, and it is the one being read: there is nothing to switch
+      // to, so the opening is the whole line and no verb is offered.
       expect(screen.getByRole("status").textContent).toBe(
-        "The guide needs a host running Acme.Pick one.",
+        "The guide needs a host running Acme.",
       );
     });
     expect(harness.paramsOf("environment.configuration.guide.get")).toEqual([

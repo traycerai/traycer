@@ -31,8 +31,6 @@ vi.mock("@/components/settings/details/overview-card-details-line", () => ({
   OverviewCardDetailsLine: () => <button type="button">Details</button>,
 }));
 
-const ACCEPTED_AT = Date.UTC(2026, 9, 20, 12);
-
 function renderNote(status: EnvironmentStatusResponseV11): void {
   const { client } = buildEnvironmentClient({
     hostId: HOST_ID,
@@ -88,7 +86,10 @@ describe("<LocalRowNote />", () => {
   it("shows the move's progress, and not Move to Personal, while the computer is moving", async () => {
     renderNote(
       environmentStatusFixture({
-        consent: { acceptedAt: ACCEPTED_AT, planHash: "h" },
+        // No consent while a move runs: the status serves the migration
+        // MARKER's consent and the host writes that marker only once the upload
+        // has finished (`traycer-host/.../migration/migrator.ts`, step 5). A
+        // fixture that sets it here invites a reader to key on it.
         setup: { stage: "moving_settings", state: "running" },
         items: [
           itemStatusFixture({ kind: "variable", key: "A", status: "applied" }),
@@ -110,7 +111,6 @@ describe("<LocalRowNote />", () => {
   it("shows no count while the move has registered no item", async () => {
     renderNote(
       environmentStatusFixture({
-        consent: { acceptedAt: ACCEPTED_AT, planHash: "h" },
         setup: { stage: "moving_settings", state: "running" },
       }),
     );
@@ -124,7 +124,6 @@ describe("<LocalRowNote />", () => {
   it("says the move stopped, and not Move to Personal, once it stalled", async () => {
     renderNote(
       environmentStatusFixture({
-        consent: { acceptedAt: ACCEPTED_AT, planHash: "h" },
         setup: { stage: "moving_settings", state: "stalled" },
         items: [
           itemStatusFixture({ kind: "variable", key: "A", status: "applied" }),

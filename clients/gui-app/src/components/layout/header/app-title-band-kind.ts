@@ -16,11 +16,19 @@ export type AppTitleBandKind = "header" | SideTitleBandKind;
 
 /**
  * The placement and title band together, as the only pairs a window can
- * draw: the header goes with the top placement and never with a side strip.
+ * draw: the header goes with the top placement, and with a side strip only in
+ * the phone shell, whose strip is always at the left.
  */
 export type AppColumnChrome =
   | { readonly placement: "top"; readonly titleBand: "header" }
+  | { readonly placement: "left"; readonly titleBand: "header" }
   | { readonly placement: EdgeSide; readonly titleBand: SideTitleBandKind };
+
+/** The phone shell with its strip mounted: the mobile header stays, over the content. */
+export const PHONE_SHELL_STRIP_CHROME: AppColumnChrome = {
+  placement: "left",
+  titleBand: "header",
+};
 
 export interface AppColumnChromeInput {
   readonly placement: TabStripPlacement;

@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { SignOutConfirmDialog } from "@/components/auth/sign-out-confirm-dialog";
 import { UserMenu } from "@/components/auth/user-menu";
 import { SignInButton } from "@/components/layout/header/sign-in-button";
 import { RateLimitIconButton } from "@/components/layout/header/rate-limit-icon";
@@ -183,6 +184,11 @@ export function HeaderNotificationsBell(): ReactNode {
 
 export interface HeaderIdentityProps {
   readonly showAppSettings: boolean;
+  /**
+   * The host gate's header: no app shell is up to host the menu's sign-out
+   * confirmation, so this does.
+   */
+  readonly hostsSignOutConfirm: boolean;
 }
 
 export function HeaderIdentity(props: HeaderIdentityProps): ReactNode {
@@ -190,13 +196,16 @@ export function HeaderIdentity(props: HeaderIdentityProps): ReactNode {
   const isSignedIn = useAuthStore((state) => state.status === "signed-in");
   if (isSignedIn && profile !== null) {
     return (
-      <UserMenu
-        userName={profile.userName}
-        email={profile.email}
-        avatarUrl={profile.avatarUrl ?? null}
-        showAppSettings={props.showAppSettings}
-        trigger={null}
-      />
+      <>
+        <UserMenu
+          userName={profile.userName}
+          email={profile.email}
+          avatarUrl={profile.avatarUrl ?? null}
+          showAppSettings={props.showAppSettings}
+          trigger={null}
+        />
+        {props.hostsSignOutConfirm ? <SignOutConfirmDialog /> : null}
+      </>
     );
   }
   return <SignInButton layout="compact" />;

@@ -189,7 +189,10 @@ vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
 vi.mock("@/components/chat/chat-messages", async () => {
   const { ChatExpansionTestProviders: Providers } =
     await import("@/components/chat/__tests__/chat-expansion-test-providers");
+  const { use } = await import("react");
   const { ChatMessage } = await import("@/components/chat/chat-message");
+  const { ChatTimelineHeaderContext } =
+    await import("@/components/chat/chat-timeline-header-context");
   const noBackgroundToolBlockIds: ReadonlySet<string> = new Set();
   return {
     ChatMessages: (props: {
@@ -201,6 +204,7 @@ vi.mock("@/components/chat/chat-messages", async () => {
           data-testid="chat-messages-stub"
           data-instance-id={props.instanceId}
         >
+          {use(ChatTimelineHeaderContext)}
           {props.messages.map((message) => (
             <ChatMessage
               key={message.id}

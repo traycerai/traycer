@@ -127,7 +127,10 @@ const partlyMoved = environmentStatusFixture({
     },
   ],
   setup: { stage: "moving_settings", state: "running" },
-  consent: { acceptedAt: 1, planHash: "hash" },
+  // No consent while a move runs: the status serves the migration
+  // MARKER's consent and the host writes that marker only once the upload
+  // has finished (`traycer-host/.../migration/migrator.ts`, step 5). A
+  // fixture that sets it here invites a reader to key on it.
 });
 const running = environmentStatusFixture({ principal: { kind: "personal" } });
 
@@ -169,6 +172,7 @@ function runningOn(
   reads.running = {
     hosts: names.map((name) => runningHost(name, false)),
     state: "ready",
+    thisComputerUnread: false,
     collisions: [],
     retry: () => undefined,
     reread: () => undefined,
@@ -420,6 +424,7 @@ describe("<EnvironmentPicker />", () => {
     reads.running = {
       hosts: [runningHost("other", false), runningHost("mac", true)],
       state: "ready",
+      thisComputerUnread: false,
       collisions: [
         { hostName: "windows-test-machine", hostIds: ["other", "mac"] },
       ],
@@ -442,6 +447,7 @@ describe("<EnvironmentPicker />", () => {
     reads.running = {
       hosts: [runningHost("other", false), runningHost("third", false)],
       state: "ready",
+      thisComputerUnread: false,
       collisions: [
         { hostName: "windows-test-machine", hostIds: ["other", "third"] },
       ],

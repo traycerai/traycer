@@ -106,8 +106,10 @@ export function BotChannelSidebar(props: {
   readonly hostId: string;
   /** The tab's Threads view; `null` where the tab has no channel to swap it for. */
   readonly threadsView: BotThreadsViewState | null;
+  /** A channel row was picked; the picker's menu closes on it, the column stays. */
+  readonly onChannelOpened: () => void;
 }): ReactNode {
-  const { activeBotId, hostId, threadsView } = props;
+  const { activeBotId, hostId, threadsView, onChannelOpened } = props;
   const client = useTabHostClient();
   const environments = useEnvironmentListQuery(client, true);
   useRereadEnvironmentListOnFocus(true);
@@ -173,6 +175,7 @@ export function BotChannelSidebar(props: {
   const openBotChannel = useOpenBotChannel(hostId);
   const [newBot, setNewBot] = useState<NewBotTarget | null>(null);
   const openChannel = (channel: SidebarChannel): void => {
+    onChannelOpened();
     if (channel.botId === activeBotId) {
       threadsView?.onLeave();
       return;

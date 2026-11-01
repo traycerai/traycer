@@ -31,6 +31,7 @@ import {
   type ActionId,
   type ActionMeta,
 } from "@/lib/keybindings/actions";
+import { useSideStripCollapseOffered } from "@/components/layout/tabs/mobile-strip-form-context";
 import { useTabStripPlacement } from "@/components/layout/tabs/use-tab-strip-placement";
 import { isMobileApp } from "@/lib/mobile-app";
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
@@ -49,7 +50,9 @@ export const actionsSource: ReactCommandSource = {
       (state) => state.ready && state.entries.length > 0,
     );
     const homeTabEnabled = isHomeTabEnabled();
-    const verticalTabs = useTabStripPlacement() !== "top";
+    const placement = useTabStripPlacement();
+    const collapseOffered = useSideStripCollapseOffered();
+    const stripCollapsible = placement !== "top" && collapseOffered;
     const canTalk = useVoiceSessionStore(
       (state) => talkToggleAction(state) !== null,
     );
@@ -58,7 +61,7 @@ export const actionsSource: ReactCommandSource = {
       for (const id of ACTION_IDS) {
         const meta = ACTION_META[id];
         if (
-          !isPaletteEligible(meta, homeTabEnabled, verticalTabs) ||
+          !isPaletteEligible(meta, homeTabEnabled, stripCollapsible) ||
           (id === "tab.reopen" && !canRecover) ||
           (id === "voice.talk.toggle" && !canTalk)
         )
@@ -66,14 +69,14 @@ export const actionsSource: ReactCommandSource = {
         items.push(buildActionItem(meta, bindings[id] ?? null));
       }
       return items;
-    }, [bindings, canRecover, canTalk, homeTabEnabled, verticalTabs]);
+    }, [bindings, canRecover, canTalk, homeTabEnabled, stripCollapsible]);
   },
 };
 
 function isPaletteEligible(
   meta: ActionMeta,
   homeTabEnabled: boolean,
-  verticalTabs: boolean,
+  stripCollapsible: boolean,
 ): boolean {
   if (meta.kind !== "chord") return false;
   // The installed mobile app never draws the surface a desktop-only action
@@ -85,7 +88,8 @@ function isPaletteEligible(
   // nothing is worse than no row.
   if (meta.id === "app.home.open" && !homeTabEnabled) return false;
   // Only the vertical strip registers its handler (`side-tab-strip.tsx`).
-  if (meta.id === "app.tabs.vertical.collapse" && !verticalTabs) return false;
+  if (meta.id === "app.tabs.vertical.collapse" && !stripCollapsible)
+    return false;
   if (meta.id === "app.palette.open") return false;
   // No dispatchAction handler; handled by the capture-phase dictation hook.
   if (meta.id === "composer.dictation.toggle") return false;

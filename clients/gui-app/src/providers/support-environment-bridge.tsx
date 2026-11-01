@@ -71,7 +71,10 @@ function SupportEnvironmentHost(props: { readonly hostId: string }): ReactNode {
     client,
     method: "environment.status",
     params: NO_PARAMS,
-    options: { enabled: statusSupported === true },
+    // The status declares a condition poll, which a reader takes unless it
+    // says otherwise: this one adds no cadence of its own, it reads whatever
+    // the Settings pages last asked for.
+    options: { enabled: statusSupported === true, poll: false },
   });
   const attempts = useHostQuery<HostRpcRegistry, "environment.setup.attempts">({
     cacheKeyIdentity: undefined,

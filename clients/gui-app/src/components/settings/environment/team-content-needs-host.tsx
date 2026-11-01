@@ -1,7 +1,10 @@
 import type { ReactNode } from "react";
 import { withIndefiniteArticle } from "@traycer/protocol/host/notifications/indefinite-article";
 import { Button } from "@/components/ui/button";
-import { useTeamViewingHost } from "@/hooks/environment/team/use-team-viewing-host";
+import {
+  canSwitchViewingHost,
+  useTeamViewingHost,
+} from "@/hooks/environment/team/use-team-viewing-host";
 import { useConfigurationIsPersonal } from "./configuration-source";
 
 /** What a card needs a host for, as its line opens. */
@@ -21,9 +24,25 @@ const NEED_OPENING: Readonly<Record<TeamHostNeed, string>> = {
 };
 
 /**
- * A card that only a host running the picked configuration can fill, with
- * no such host picked. `Pick one.` only while a host can be picked; on a
- * team with none, the remedy is a sandbox of the team's.
+ * A card that only a host running the picked configuration can fill, with no
+ * such host picked. Five states:
+ *
+ * - the host inventory has not answered yet: no line at all, since an unread
+ *   inventory is not an empty one;
+ * - the host inventory could not be read: that, and Retry. An unread
+ *   inventory is not an empty one, so this state claims nothing about where
+ *   the configuration runs;
+ * - the configuration runs somewhere, but nothing there can be reached right
+ *   now: that, and Retry, which reads the host list again;
+ * - a host OTHER than the one being viewed can be picked: `Pick one.`, which
+ *   opens the picker;
+ * - the only host that can be picked is the one already being viewed: the
+ *   opening alone. Picking is no remedy when there is nothing to switch to;
+ * - nothing runs it at all: a sandbox of the configuration's.
+ *
+ * `Pick one.` is offered on `canSwitchViewingHost` — the same answer the
+ * switch itself is drawn on — so the verb is never drawn where the picker
+ * would open with nothing in it.
  */
 export function TeamContentNeedsHost(props: {
   readonly content: TeamHostNeed;
@@ -33,30 +52,107 @@ export function TeamContentNeedsHost(props: {
   const scope = useTeamViewingHost();
   const personal = useConfigurationIsPersonal();
   const hosts = scope.hosts.data?.hosts ?? [];
-  const pickable = hosts.some((host) => scope.canSelectHost(host.hostId));
-  const object = props.content === "guide" ? "it" : "them";
+  // An inventory with no answer is not an empty one either, whether a read is
+  // in flight or the read is disabled and never asked: until it answers, the
+  // card has nothing true to say about where the configuration runs, so it
+  // says nothing. `isPending` is that condition - no data - and not
+  // `isLoading`, which is `isPending && isFetching` and so false for a
+  // disabled read, where every line this card can draw would be a claim about
+  // an inventory nobody read.
+  if (scope.hosts.isPending) return null;
   return (
     <p
       role="status"
       className="flex flex-wrap items-center gap-1 text-ui-sm text-muted-foreground"
     >
-      <span>
-        {NEED_OPENING[props.content]} a host running {props.teamName}.
-      </span>
-      {pickable || personal ? (
+      {needsHostLine({
+        content: props.content,
+        teamName: props.teamName,
+        personal,
+        unread: scope.hosts.isError,
+        listed: hosts.length,
+        reachable: hosts.some((host) => scope.canSelectHost(host.hostId)),
+        // The switch's own answer, not a copy of its rule: `Pick one.` is
+        // drawn exactly where a switch would have somewhere to go.
+        pickable: canSwitchViewingHost(scope),
+        onPickHost: props.onPickHost,
+        onRetry: () => void scope.hosts.refetch(),
+      })}
+    </p>
+  );
+}
+
+/** The line the card reads, by what the host inventory says. */
+function needsHostLine(state: {
+  readonly content: TeamHostNeed;
+  readonly teamName: string;
+  readonly personal: boolean;
+  readonly unread: boolean;
+  readonly listed: number;
+  /** Whether any listed host can be reached at all. */
+  readonly reachable: boolean;
+  /** Whether one of those is a host other than the one being viewed. */
+  readonly pickable: boolean;
+  readonly onPickHost: () => void;
+  readonly onRetry: () => void;
+}): ReactNode {
+  const retry = (
+    <Button type="button" variant="link" size="sm" onClick={state.onRetry}>
+      Retry
+    </Button>
+  );
+  if (state.unread) {
+    return (
+      <>
+        <span>
+          Couldn&apos;t read {state.teamName}&apos;s{" "}
+          {state.personal ? "computers" : "hosts"}.
+        </span>
+        {retry}
+      </>
+    );
+  }
+  if (!state.reachable && state.listed > 0) {
+    return (
+      <>
+        <span>
+          No {state.personal ? "computer" : "host"} running {state.teamName} can
+          be reached.
+        </span>
+        {retry}
+      </>
+    );
+  }
+  const opening = (
+    <span>
+      {NEED_OPENING[state.content]} a host running {state.teamName}.
+    </span>
+  );
+  if (state.pickable) {
+    return (
+      <>
+        {opening}
         <Button
           type="button"
           variant="link"
           size="sm"
-          onClick={props.onPickHost}
+          onClick={state.onPickHost}
         >
           Pick one.
         </Button>
-      ) : (
-        <span>
-          Start {withIndefiniteArticle(props.teamName)} sandbox to see {object}.
-        </span>
-      )}
-    </p>
+      </>
+    );
+  }
+  // A reachable host with nothing to switch to: the one that can be picked is
+  // the one already being viewed, so the opening is the whole line.
+  if (state.reachable) return opening;
+  return (
+    <>
+      {opening}
+      <span>
+        Start {withIndefiniteArticle(state.teamName)} sandbox to see{" "}
+        {state.content === "guide" ? "it" : "them"}.
+      </span>
+    </>
   );
 }

@@ -14,6 +14,13 @@
  * reads the real summary hook over the real agent-activity store.
  */
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { setPhoneLayoutOnly } from "@/lib/mobile-app";
+import {
+  installShellForm,
+  SHELL_WIDTH_COLUMN_256,
+  SHELL_WIDTH_MENU,
+  type ShellFormHarness,
+} from "../../../../__tests__/mobile-level2-form-harness";
 import { StrictMode, type ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
@@ -377,6 +384,7 @@ vi.mock("@/components/bots/bot-channel-sidebar", () => ({
       onShow: () => void;
       onLeave: () => void;
     } | null;
+    onChannelOpened: () => void;
   }) => (
     <div
       data-testid="stub-sidebar"
@@ -384,6 +392,11 @@ vi.mock("@/components/bots/bot-channel-sidebar", () => ({
       data-host-id={props.hostId}
       data-threads-shown={String(props.threadsView?.shown ?? "none")}
     >
+      <button
+        type="button"
+        data-testid="stub-sidebar-pick"
+        onClick={props.onChannelOpened}
+      />
       <button
         type="button"
         data-testid="stub-sidebar-threads"
@@ -1833,6 +1846,77 @@ describe("<BotTabSurface /> bot.open", () => {
         .getByTestId("bot-channel-sidebar-pane-resize-handle")
         .getAttribute("aria-label"),
     ).toBe("Resize channels");
+  });
+
+  describe("level 2 in the installed app", () => {
+    let shell: ShellFormHarness;
+    beforeEach(() => {
+      shell = installShellForm(SHELL_WIDTH_COLUMN_256);
+    });
+    afterEach(() => {
+      shell.dispose();
+    });
+
+    it("draws the bots as the 256 column the resolver answers, with no handle and no container gate", () => {
+      render(surface());
+
+      const pane = screen.getByTestId("bot-channel-sidebar-pane");
+      expect(pane.style.width).toBe("256px");
+      expect(
+        screen.queryByTestId("bot-channel-sidebar-pane-resize-handle"),
+      ).toBeNull();
+      expect(pane.className).not.toContain("@3xl");
+      expect(within(pane).getByTestId("stub-sidebar")).toBeTruthy();
+      expect(screen.queryByTestId("bot-channel-picker-trigger")).toBeNull();
+    });
+
+    it.each([
+      ["menu", { width: SHELL_WIDTH_MENU, portrait: false }],
+      ["bar", { width: SHELL_WIDTH_COLUMN_256, portrait: true }],
+    ])(
+      "draws no sidebar at %s, and the bot's name opens the bots list, which a pick or Threads closes",
+      async (_form, shape) => {
+        shell.set(shape);
+        const user = userEvent.setup();
+        render(surface());
+
+        expect(screen.queryByTestId("bot-channel-sidebar-pane")).toBeNull();
+        const trigger = screen.getByTestId("bot-channel-picker-trigger");
+        expect(screen.getByTestId("bot-tab-title").contains(trigger)).toBe(
+          true,
+        );
+        expect(trigger.textContent).toContain("Release Bot");
+
+        await user.click(trigger);
+        const picker = await screen.findByTestId("bot-channel-picker");
+        expect(
+          within(picker).getByTestId("stub-sidebar").dataset.activeBotId,
+        ).toBe(BOT_ID);
+        await user.click(within(picker).getByTestId("stub-sidebar-pick"));
+        expect(screen.queryByTestId("bot-channel-picker")).toBeNull();
+
+        await user.click(trigger);
+        await user.click(
+          within(await screen.findByTestId("bot-channel-picker")).getByTestId(
+            "stub-sidebar-threads",
+          ),
+        );
+        expect(screen.queryByTestId("bot-channel-picker")).toBeNull();
+      },
+    );
+
+    it("keeps the resizable pane and the plain title off the installed app", () => {
+      setPhoneLayoutOnly(false);
+      render(surface());
+
+      const pane = screen.getByTestId("bot-channel-sidebar-pane");
+      expect(
+        within(pane).getByTestId("bot-channel-sidebar-pane-resize-handle"),
+      ).toBeTruthy();
+      const title = screen.getByTestId("bot-tab-title");
+      expect(title.textContent).toBe("Release Bot");
+      expect(screen.queryByTestId("bot-channel-picker-trigger")).toBeNull();
+    });
   });
 
   it("lays the channel column and the conversation on the task page's grounds: the column on the page, the conversation on the canvas, the canvas hairline between them", () => {

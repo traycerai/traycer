@@ -4,20 +4,14 @@ import { AnimatePresence } from "motion/react";
 import * as m from "motion/react-m";
 import { Button } from "@/components/ui/button";
 import { RollingNumber } from "@/components/ui/rolling-number";
-import {
-  Analytics,
-  AnalyticsEvent,
-  analyticsCountBucket,
-} from "@/lib/analytics";
+import { useOpenMobileNotificationCenter } from "@/hooks/notifications/use-open-mobile-notification-center";
 import { useMotionEnabled } from "@/lib/animation/use-motion-enabled";
 import { cn } from "@/lib/utils";
 import {
   notificationBellAccessibleLabel,
   useMergedNotificationUnreadCount,
   useNotificationBellState,
-  useNotificationCenterHostState,
 } from "@/stores/notifications/merged-notifications";
-import { useNotificationsPopoverStore } from "@/stores/notifications/notifications-popover-store";
 
 /**
  * The same arrival the desktop bell's badge uses, at the `LeaderDigitBadge`
@@ -93,10 +87,9 @@ function MobileCountBadge(props: {
  * button that flips it open.
  */
 export function MobileNotificationsButton(): ReactNode {
-  const setOpen = useNotificationsPopoverStore((state) => state.setOpen);
+  const handleOpen = useOpenMobileNotificationCenter();
   const unread = useMergedNotificationUnreadCount();
   const bellState = useNotificationBellState();
-  const hostState = useNotificationCenterHostState();
   const motionEnabled = useMotionEnabled();
   const showsUnreadBadge = bellState.kind === "quietDot" && unread > 0;
   // The attention badge outranks the unread one, and only one of them is ever
@@ -124,25 +117,6 @@ export function MobileNotificationsButton(): ReactNode {
       }
     : null;
   const badge = attentionBadge ?? unreadBadge;
-
-  const handleOpen = () => {
-    // Mirror the desktop bell's open telemetry (notifications-bell.tsx). That
-    // bell isn't mounted on mobile, so its edge-triggered open effect never
-    // fires - this button is the sole open path here, and it's a direct UI
-    // interaction, hence entry_point "direct_ui".
-    const attentionCount = bellState.kind === "attention" ? bellState.count : 0;
-    Analytics.getInstance().track(AnalyticsEvent.NotificationCenterOpened, {
-      entry_point: "direct_ui",
-      host_state: hostState.isPartial ? "unknown" : "exact",
-      attention_bucket:
-        bellState.kind === "unknown"
-          ? "unknown"
-          : analyticsCountBucket(attentionCount),
-      unread_bucket:
-        bellState.kind === "unknown" ? "unknown" : analyticsCountBucket(unread),
-    });
-    setOpen(true);
-  };
 
   return (
     <Button
