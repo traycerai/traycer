@@ -48,6 +48,7 @@ export interface EnvironmentArmScope {
 }
 
 let publishedScope: EnvironmentArmScope | null = null;
+let chatArmsAbsent = false;
 const scopeListeners = new Set<() => void>();
 
 export function publishEnvironmentArmScope(
@@ -56,6 +57,22 @@ export function publishEnvironmentArmScope(
   if (publishedScope === scope) return;
   publishedScope = scope;
   for (const listener of [...scopeListeners]) listener();
+}
+
+/**
+ * Says discovery is over with no chat arm to read: the environment list
+ * answered or failed, and it names no team or the pool does not serve the
+ * arms. A `null` scope alone does not say so, since it is also what discovery
+ * still out publishes.
+ */
+export function publishEnvironmentChatArmsAbsent(absent: boolean): void {
+  if (chatArmsAbsent === absent) return;
+  chatArmsAbsent = absent;
+  for (const listener of [...scopeListeners]) listener();
+}
+
+function readEnvironmentChatArmsAbsent(): boolean {
+  return chatArmsAbsent;
 }
 
 function subscribeEnvironmentArmScope(listener: () => void): () => void {
@@ -197,14 +214,7 @@ const ENDED_CHATS: ChatsState = Object.freeze({
 });
 const chatLanes = createEnvironmentArmLanes<ChatsState, ChatsFrame>();
 
-/**
- * The task's chats that its team environments own, as the pool's
- * environment arm serves them to a member - private ones included. Each
- * row's `identity.ownerUserId` is its environment.
- */
-export function useEnvironmentArmChats(
-  taskId: string,
-): readonly CloudChatSummary[] {
+function useEnvironmentArmChatStates(taskId: string): readonly ChatsState[] {
   const scope = useEnvironmentArmScope("environment.chats.subscribe");
   const specs = useMemo(
     () =>
@@ -248,8 +258,46 @@ export function useEnvironmentArmChats(
           ),
     [scope, taskId],
   );
-  const states = useEnvironmentArmStates(chatLanes, specs, NO_CHATS);
+  return useEnvironmentArmStates(chatLanes, specs, NO_CHATS);
+}
+
+/**
+ * The task's chats that its team environments own, as the pool's
+ * environment arm serves them to a member - private ones included. Each
+ * row's `identity.ownerUserId` is its environment.
+ */
+export function useEnvironmentArmChats(
+  taskId: string,
+): readonly CloudChatSummary[] {
+  const states = useEnvironmentArmChatStates(taskId);
   return useMemo(() => states.flatMap((state) => state.chats), [states]);
+}
+
+/**
+ * Whether every arm of `taskId` has answered with no row for this chat, so
+ * none will name its owner. True once discovery is over with no arms to read,
+ * and never while it is out.
+ */
+export function useEnvironmentArmsLackChat(
+  taskId: string,
+  chatId: string,
+  ownerHostId: string,
+): boolean {
+  const states = useEnvironmentArmChatStates(taskId);
+  const absent = useSyncExternalStore(
+    subscribeEnvironmentArmScope,
+    readEnvironmentChatArmsAbsent,
+    readEnvironmentChatArmsAbsent,
+  );
+  if (states.length === 0) return absent;
+  return states.every(
+    (state) =>
+      state.settled &&
+      !state.chats.some(
+        (chat) =>
+          chat.identity.chatId === chatId && chat.ownerHostId === ownerHostId,
+      ),
+  );
 }
 
 /**

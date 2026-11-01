@@ -145,10 +145,11 @@ import { visibleWorktreeIntent } from "@/lib/worktree/fork-workspace-seed";
 import { useAccountContextStore } from "@/stores/auth/account-context-store";
 import {
   useChatById,
-  useEpicLiveArtifactTitle,
   useEpicPermissionRole,
+  useEpicTabDisplayTitle,
   useOpenEpicId,
 } from "@/lib/epic-selectors";
+import { isAgentFallbackName } from "@/lib/display-title";
 import { isEditableRole } from "@/lib/epic-permissions";
 import type { EpicNodeRef } from "@/stores/epics/canvas/types";
 import {
@@ -669,17 +670,20 @@ function ChatTileForChat(props: ChatTileProps) {
   const ownerReachability = useHostReachability(tabHostId);
   const ownerLease = useHostLease(tabHostId);
   const ownerSessionReady = useRemoteSessionPollReadiness(tabHostId);
-  const { state: sandboxState, reachable: ownerReachable } =
-    useLiveChatSandboxState(
-      epicId,
-      node.id,
-      tabHostId,
-      chatPreContentStrip(
-        ownerReachability.status,
-        ownerLease,
-        ownerSessionReady,
-      ) === "none",
-    );
+  const {
+    state: sandboxState,
+    reachable: ownerReachable,
+    staysReadable,
+  } = useLiveChatSandboxState(
+    epicId,
+    node.id,
+    tabHostId,
+    chatPreContentStrip(
+      ownerReachability.status,
+      ownerLease,
+      ownerSessionReady,
+    ) === "none",
+  );
   const copyFacts = useChatOwnerCopyFacts(
     chatRecord?.userId ?? null,
     tabHostId,
@@ -690,6 +694,7 @@ function ChatTileForChat(props: ChatTileProps) {
     ...copyFacts,
     reachable: ownerReachable,
     canEdit,
+    staysReadable,
   });
   const sandboxAvailability = chatSandboxAvailability(sandbox, ownerReachable);
   const lease = useHostLease(servingHostId);
@@ -753,6 +758,7 @@ function ChatTileForChat(props: ChatTileProps) {
           testId={`chat-dead-tile-${node.id}`}
           // The frame's value, which the body under this strip reads too.
           cloneAllowed={preContentFrame.cloneAllowed}
+          staysReadable={staysReadable}
         />
       );
     }
@@ -891,6 +897,7 @@ export function SubstitutedCatchingUpBanner(props: {
     canEdit: false,
     ownedByViewer: false,
     environmentOwned: false,
+    staysReadable: true,
   });
   if (view.line !== null) return null;
   return <ChatCatchingUpBanner reason={props.reason} testId={props.testId} />;
@@ -944,7 +951,14 @@ export function ChatDeadTileBannerContainer(
   props: ChatDeadTileBannerContainerProps,
 ): ReactNode {
   const cloneAllowed = useChatCloneAllowed();
-  return <ChatDeadTileBannerWithOffer {...props} cloneAllowed={cloneAllowed} />;
+  // Over a copy a sandbox's line is the copy's; otherwise no read here settled.
+  return (
+    <ChatDeadTileBannerWithOffer
+      {...props}
+      cloneAllowed={cloneAllowed}
+      staysReadable
+    />
+  );
 }
 
 function useDeadTileSourceOwner(props: DeadTileOfferSource): string | null {
@@ -1028,6 +1042,7 @@ function useDeadTileCloneOffer(props: DeadTileOfferSource) {
 function ChatDeadTileBannerWithOffer(
   props: ChatDeadTileBannerContainerProps & {
     readonly cloneAllowed: boolean;
+    readonly staysReadable: boolean;
   },
 ): ReactNode {
   const {
@@ -1063,6 +1078,7 @@ function ChatDeadTileBannerWithOffer(
     canEdit: props.cloneAllowed,
     ownedByViewer,
     environmentOwned,
+    staysReadable: props.staysReadable,
   });
   const taskHosts = useTaskHostsView(props.epicId);
   const sourceEntry = useHostDirectoryEntry(props.sourceHostId);
@@ -2216,7 +2232,6 @@ function useChatTileSessionViewModel(
   const { handle, node, viewTabId, tileId, isActive, currentEpicId } = props;
   const isCopy = !props.isLiveSession;
   const viewModelHostId = useTabHostId();
-  const projectedChatTitle = useEpicLiveArtifactTitle(node.id);
   // Surface visibility for the stream-flush coordinator's tiered flush rate:
   // on screen = the pane is shown AND this tab is the pane's front tab. Pane
   // focus (`isActive`'s `globallyActive` half) is deliberately excluded - an
@@ -2402,6 +2417,29 @@ function useChatTileSessionViewModel(
       refreshMissingWorktreePaths: s.refreshMissingWorktreePaths,
     })),
   );
+  // The tab's own sources, empty when none has a title: the blank name is what
+  // tells a title apart from the fallback the tab would otherwise show.
+  const liveTitle = useEpicTabDisplayTitle(
+    {
+      id: node.id,
+      name: "",
+      type: isCopy ? "published-chat" : "chat",
+      hostId: viewModelHostId,
+    },
+    currentEpicId,
+    null,
+  );
+  // Then the tab's saved name. The session's title comes last, and only so an
+  // agent with a title is never named by the fallback. Empty until a real title
+  // exists: a fork or side chat seeds its name from this and must not store the
+  // fallback.
+  const agentTitle =
+    [
+      liveTitle,
+      isAgentFallbackName(node.name) ? "" : node.name,
+      state.chat?.title ?? "",
+    ].find((title) => title.length > 0) ?? "";
+  const agentName = agentTitle.length > 0 ? agentTitle : node.name;
   const projectedQueue = useMemo(
     () =>
       queueWithoutPersistedPrompts(
@@ -3203,7 +3241,7 @@ function useChatTileSessionViewModel(
       fallbackToGlobalMentionRoots: !isFolderlessWorkspace,
       currentEpicId,
       node,
-      chatTitle: projectedChatTitle ?? state.chat?.title ?? null,
+      chatTitle: agentTitle,
       chatParentId: state.chat?.parentId ?? null,
       messages: state.messages,
       messageDelivery: state.messageDelivery,
@@ -3279,7 +3317,7 @@ function useChatTileSessionViewModel(
     hostId: activeHostId,
     ownerKind: "chat",
     ownerId: node.id,
-    ownerLabel: node.name,
+    ownerLabel: agentName,
     hasActiveTurn: composerActiveTurnStatus !== null,
     ptyLive: false,
   });
@@ -3502,7 +3540,7 @@ function useChatTileSessionViewModel(
         hostId: activeHostId,
         userId: profile.userId,
         sourceChatId: node.id,
-        sourceChatTitle: state.chat?.title ?? "",
+        sourceChatTitle: agentTitle,
         sourceOwnerUserId: state.chat?.userId ?? null,
         content: input.content,
         settings: input.settings,
@@ -3545,6 +3583,7 @@ function useChatTileSessionViewModel(
     [
       activeHostId,
       activeEditingQueueItemId,
+      agentTitle,
       chatActions,
       createSideChat,
       currentEpicId,
@@ -3886,7 +3925,7 @@ function useChatTileSessionViewModel(
           // foreground turn active). A drain handoff can also keep the owner
           // active before there is an owned turn for the "stop" wording.
           hasActiveTurn: composerActiveTurnStatus !== null,
-          ownerLabel: node.name,
+          ownerLabel: agentName,
           inFlightWorktreeIntent: inFlightChatWorktreeIntent,
           missingWorktreePaths: effectiveMissingPaths,
           bindingResolved: state.snapshotLoaded,
@@ -3901,7 +3940,7 @@ function useChatTileSessionViewModel(
     activeHostId,
     currentEpicId,
     node.id,
-    node.name,
+    agentName,
     state.worktreeBinding,
     inFlightChatWorktreeIntent,
     effectiveMissingPaths,
@@ -4279,16 +4318,10 @@ function useChatTileSessionViewModel(
     [state.pendingFallback, state.pendingReturn],
   );
 
-  const chatStateTitle = state.chat?.title ?? "";
   return {
     handle,
     node,
-    // The title the tab strip shows. `node.name` is the tile's persisted
-    // opening-name snapshot, so a chat opened before its title was generated
-    // announced every finished turn as "New agent" for the tile's life.
-    taskTitle:
-      projectedChatTitle ??
-      (chatStateTitle.length > 0 ? chatStateTitle : node.name),
+    taskTitle: agentName,
     viewTabId,
     tileId,
     tabHostId: activeHostId,
@@ -4438,7 +4471,6 @@ function useChatTileSessionViewModel(
       target: forkTarget,
       onOpenChange: handleForkOpenChange,
     },
-    chatTitle: projectedChatTitle ?? state.chat?.title ?? node.name,
   };
 }
 

@@ -11,7 +11,10 @@ import {
 } from "@/components/ui/dialog";
 import { taskSandboxEndLine } from "@/lib/sandboxes/task-sandbox-end";
 
-/** Details available to every reader of this task, without owner-only reads. */
+/**
+ * Details available to every reader of this task, without owner-only reads.
+ * Reading no chat, they promise none.
+ */
 export function TaskSandboxEndDetails(props: {
   readonly ended: TaskSandboxEndedHost;
 }): ReactNode {
@@ -26,7 +29,7 @@ export function TaskSandboxEndDetails(props: {
         <DialogHeader>
           <DialogTitle>{props.ended.name}</DialogTitle>
           <DialogDescription>
-            {taskSandboxEndLine(props.ended.name, props.ended.end)}
+            {taskSandboxEndLine(props.ended.name, props.ended.end, false)}
           </DialogDescription>
         </DialogHeader>
       </DialogContent>

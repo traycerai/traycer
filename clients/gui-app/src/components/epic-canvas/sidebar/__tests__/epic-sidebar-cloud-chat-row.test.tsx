@@ -55,6 +55,11 @@ import type { TileOpenIntent } from "@/lib/canvas/tile-open/intent";
 import { publishedChatTileId } from "@/stores/epics/canvas/tile-schema/published-chat-tile";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import type { TaskHostsView } from "@/hooks/epic/use-task-hosts-view";
+import {
+  recordEndedSandboxHost,
+  useEndedSandboxHostsStore,
+} from "@/stores/sandboxes/ended-sandbox-hosts-store";
+import { chatRecordKey } from "@/stores/epics/open-epic/chat-record-head";
 import { TaskHostsViewContext } from "@/hooks/sandboxes/use-chat-sandbox-row-line";
 
 /**
@@ -170,6 +175,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  useEndedSandboxHostsStore.setState({ byHostId: {} });
   queryClient.clear();
   environments.list = undefined;
   useAuthStore.setState(useAuthStore.getInitialState(), true);
@@ -280,22 +286,35 @@ describe("EpicSidebarCloudChatRow", () => {
     ).toBeTruthy();
   });
 
+  const PUBLISHED_CHAT: CloudChatSummary = {
+    ...CHAT,
+    headSha256: "a".repeat(64),
+  };
+
   it.each([
     [
-      "a sandbox the task names",
+      "a sandbox the task names, over a chat with no published copy",
+      CHAT,
+      taskHosts("e2e-sbx-p1"),
+      "e2e-sbx-p1 isn't available.",
+    ],
+    [
+      "a sandbox the task names, over a chat with a published copy",
+      PUBLISHED_CHAT,
       taskHosts("e2e-sbx-p1"),
       "e2e-sbx-p1 isn't available — this chat stays readable.",
     ],
     [
       "a host nothing names as a sandbox, as an ordinary offline host",
+      CHAT,
       { kind: "none" } as const,
       "On Tanveer's laptop, offline",
     ],
-  ])("says the lock for %s", (_case, view, line) => {
+  ])("says the lock for %s", (_case, chat, view, line) => {
     render(
       <TaskHostsViewContext value={view}>
         <EpicSidebarCloudChatRow
-          chat={CHAT}
+          chat={chat}
           childEntries={NO_CHILDREN}
           expansion={LEAF_EXPANSION}
           tabId="tab-1"
@@ -309,6 +328,55 @@ describe("EpicSidebarCloudChatRow", () => {
       screen.getByRole("button", { name: `Walkthrough — ${line}` }),
     ).toBeTruthy();
   });
+
+  it.each([
+    [
+      "no published head",
+      CHAT,
+      "e2e-sbx-p1 was destroyed on Oct 28 at 01:27 after resting. Its files are gone.",
+      "Opens read-only",
+    ],
+    [
+      "a published head",
+      PUBLISHED_CHAT,
+      "e2e-sbx-p1 was destroyed on Oct 28 at 01:27 after resting. Its files are gone; this chat stays readable. Opens read-only from the last published copy.",
+      null,
+    ],
+  ])(
+    "says a destroyed sandbox's end in the lock's tooltip for a row with %s",
+    async (_case, chat, line, absent) => {
+      recordEndedSandboxHost("host-b", {
+        name: "e2e-sbx-p1",
+        at: new Date(2026, 9, 28, 1, 27).getTime(),
+        cause: "resting",
+        actor: null,
+        idleMinutes: null,
+      });
+      render(
+        <TaskHostsViewContext value={{ kind: "none" }}>
+          <EpicSidebarCloudChatRow
+            chat={chat}
+            childEntries={NO_CHILDREN}
+            expansion={LEAF_EXPANSION}
+            tabId="tab-1"
+            depth={0}
+            selectionMode={false}
+          />
+        </TaskHostsViewContext>,
+      );
+
+      await userEvent.hover(
+        screen.getByTestId(`epic-sidebar-cloud-lock-${chat.identity.chatId}`),
+      );
+
+      expect(
+        (await screen.findAllByText(line, { exact: true })).length,
+      ).toBeGreaterThan(0);
+      if (absent !== null) {
+        expect(document.body.textContent).not.toContain(absent);
+      }
+    },
+  );
 
   it("keeps a reachable row's accessible name to the chat title", () => {
     // The row carries a timestamp with its own text; without an explicit label
@@ -1003,9 +1071,46 @@ describe("EpicSidebarCloudChatRow for a collaborator's chat", () => {
     });
     expect(
       screen.getByRole("button", {
-        name: "Walkthrough — e2e-sbx-p1 isn't available — this chat stays readable. — not reachable from this host",
+        name: "Walkthrough — e2e-sbx-p1 isn't available. — not reachable from this host",
       }),
     ).toBeTruthy();
+  });
+
+  it("promises the copy for a row whose list entry has no head but whose record table holds one", async () => {
+    entries = [collaboratorRow({ displayName: "Ada Lovelace", email: "" })];
+    session.store.setState({
+      chatRecordHeads: {
+        [chatRecordKey(OWNER_USER_ID, collaboratorChat.identity.chatId)]: {
+          headSha256: "a".repeat(64),
+          publishedAt: 123,
+          throughRecordSeq: 1,
+        },
+      },
+    });
+    recordEndedSandboxHost("host-b", {
+      name: "e2e-sbx-p1",
+      at: new Date(2026, 9, 28, 1, 27).getTime(),
+      cause: "resting",
+      actor: null,
+      idleMinutes: null,
+    });
+    expect(collaboratorChat.headSha256).toBeNull();
+    renderCollaboratorRow(collaboratorChat, { kind: "none" });
+
+    await userEvent.hover(
+      screen.getByTestId(
+        `epic-sidebar-cloud-lock-${collaboratorChat.identity.chatId}`,
+      ),
+    );
+
+    expect(
+      (
+        await screen.findAllByText(
+          "e2e-sbx-p1 was destroyed on Oct 28 at 01:27 after resting. Its files are gone; this chat stays readable. Opens read-only from the last published copy.",
+          { exact: true },
+        )
+      ).length,
+    ).toBeGreaterThan(0);
   });
 
   it("keeps the offline wording, and the reach line after it, for the viewer's own chat", async () => {

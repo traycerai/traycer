@@ -74,10 +74,19 @@ function taskEndOfEndedHost(
   };
 }
 
-/** The same end and timestamp drive the footer and task-authorized Details. */
-export function taskSandboxEndLine(name: string, end: TaskSandboxEnd): string {
+/**
+ * The same end and timestamp drive the footer and task-authorized Details.
+ * `staysReadable` is `ChatSandboxViewer.staysReadable`: the file loss stands
+ * alone wherever nothing shows the chat has a copy.
+ */
+export function taskSandboxEndLine(
+  name: string,
+  end: TaskSandboxEnd,
+  staysReadable: boolean,
+): string {
   const when = `${endDate.format(end.destroyedAt)} at ${endTime.format(end.destroyedAt)}`;
   const cause = taskSandboxEndCause(end);
   const after = cause.length > 0 ? ` ${cause}` : "";
-  return `${name} was destroyed on ${when}${after}. Its files are gone; this chat stays readable.`;
+  const gone = `${name} was destroyed on ${when}${after}. Its files are gone`;
+  return staysReadable ? `${gone}; this chat stays readable.` : `${gone}.`;
 }

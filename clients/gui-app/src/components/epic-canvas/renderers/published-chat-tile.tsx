@@ -52,6 +52,7 @@ import {
   ChatTileSessionView,
   SandboxEndActions,
 } from "./chat-tile";
+import { ChatSandboxStateBody } from "./chat-sandbox-state-body";
 import { chatSandboxStateLine } from "./chat-sandbox-state-line";
 import { ChatStateLineContext } from "./chat-state-line";
 import { useChatTileHostLabel } from "./use-chat-tile-host-label";
@@ -246,6 +247,7 @@ interface PublishedChatOwner {
 function usePublishedChatOwner(
   node: PublishedChatTileRef,
   epicId: string,
+  staysReadable: boolean,
 ): PublishedChatOwner {
   const reachability = useHostReachability(node.ownerHostId);
   const hostName = useChatTileHostLabel(reachability, node.ownerHostId);
@@ -272,6 +274,7 @@ function usePublishedChatOwner(
     ...ownership,
     reachable: reachability.status === "reachable" || endRead,
     canEdit: editable,
+    staysReadable,
   });
   const ownerRefusesStore = useHostRefusesEpicStore(
     node.ownerHostId.length > 0 ? node.ownerHostId : null,
@@ -377,7 +380,6 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
   // surfaces can never describe one host two ways. This tile is opened
   // precisely because the owner is out of reach, and when that host returns it
   // converts itself into the live tile (`usePublishedChatLiveConversion`).
-  const owner = usePublishedChatOwner(node, props.epicId);
   const identity = useMemo(
     () => ({
       taskId: node.taskId,
@@ -405,33 +407,6 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
     () => ({ identity, client }),
     [identity, client],
   );
-  const deadTileBanner = (showsPublishedCopy: boolean): ReactNode => (
-    <PublishedChatDeadTileBanner
-      node={node}
-      epicId={props.epicId}
-      tabId={props.viewTabId}
-      owner={owner}
-      showsPublishedCopy={showsPublishedCopy}
-    />
-  );
-
-  // The one transition an on-demand read cannot cover: the owner came back
-  // while this copy was open. Same reachability source the sidebar row's lock
-  // reads - a second source could disagree with the row that opened this tile.
-  // Rather than an "open it live" affordance (reachability alone once produced
-  // a button routing to a record-backed tile which opened nothing), the copy
-  // converts ITSELF into the live tile the row would open now, and only with
-  // the proof the button lacked: the epic's own record for this chat, under
-  // this owner host. `tileId` is the pane this tile is a tab of.
-  usePublishedChatLiveConversion({
-    node,
-    epicId: props.epicId,
-    viewTabId: props.viewTabId,
-    paneId: props.tileId,
-    ownerStatus: owner.reachability.status,
-    ownerRefusesStore: owner.lockFacts.ownerRefusesStore,
-    ownerIsThisHost: owner.lockFacts.ownerIsThisHost,
-  });
   const conversion = useMemo(
     () =>
       state.kind === "ready" ? convertPublishedChat(state.presented) : null,
@@ -503,6 +478,44 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
     props.epicId,
     node.chatId,
   ]);
+  const replicaFailure = replicaTransportFailure(
+    cloudUnpublished,
+    replicaQuery,
+  );
+  const noCopy = readsSettledOnNoCopy({
+    cloudUnpublished,
+    replicaPending: replicaQuery.isPending,
+    replicaFailure,
+    replicaHandle,
+  });
+  const owner = usePublishedChatOwner(node, props.epicId, !noCopy);
+  const deadTileBanner = (showsPublishedCopy: boolean): ReactNode => (
+    <PublishedChatDeadTileBanner
+      node={node}
+      epicId={props.epicId}
+      tabId={props.viewTabId}
+      owner={owner}
+      showsPublishedCopy={showsPublishedCopy}
+    />
+  );
+
+  // The one transition an on-demand read cannot cover: the owner came back
+  // while this copy was open. Same reachability source the sidebar row's lock
+  // reads - a second source could disagree with the row that opened this tile.
+  // Rather than an "open it live" affordance (reachability alone once produced
+  // a button routing to a record-backed tile which opened nothing), the copy
+  // converts ITSELF into the live tile the row would open now, and only with
+  // the proof the button lacked: the epic's own record for this chat, under
+  // this owner host. `tileId` is the pane this tile is a tab of.
+  usePublishedChatLiveConversion({
+    node,
+    epicId: props.epicId,
+    viewTabId: props.viewTabId,
+    paneId: props.tileId,
+    ownerStatus: owner.reachability.status,
+    ownerRefusesStore: owner.lockFacts.ownerRefusesStore,
+    ownerIsThisHost: owner.lockFacts.ownerIsThisHost,
+  });
 
   // At the surface the catalog names: this tile's reads go through
   // the TAB's client, and when that client is null every `useHostQuery` under
@@ -592,10 +605,21 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
     );
   }
 
-  const replicaFailure = replicaTransportFailure(
-    cloudUnpublished,
-    replicaQuery,
-  );
+  if (showsEndAsBody(noCopy, owner)) {
+    return (
+      <div className="flex h-full min-h-0 flex-col" data-node-id={node.id}>
+        <PublishedSandboxStateLine
+          node={node}
+          epicId={props.epicId}
+          tabId={props.viewTabId}
+          owner={owner}
+        >
+          <ChatSandboxStateBody testId={`published-chat-end-${node.chatId}`} />
+        </PublishedSandboxStateLine>
+      </div>
+    );
+  }
+
   if (applied === null) {
     return (
       <div className="flex h-full min-h-0 flex-col" data-node-id={node.id}>
@@ -843,6 +867,29 @@ function PublishedChatDeadTileBanner(props: {
       sourceOwnerUserId={props.node.ownerUserId}
     />
   );
+}
+
+/** Both sources have answered, and neither holds a copy: nothing will show. */
+function readsSettledOnNoCopy(input: {
+  readonly cloudUnpublished: boolean;
+  readonly replicaPending: boolean;
+  readonly replicaFailure: HostRpcError | null;
+  readonly replicaHandle: PublishedChatSessionHandle | null;
+}): boolean {
+  return (
+    input.cloudUnpublished &&
+    !input.replicaPending &&
+    input.replicaFailure === null &&
+    input.replicaHandle === null
+  );
+}
+
+/**
+ * A destroyed sandbox's one line stands in for "not published": it is what the
+ * reader can act on, and it carries Continue.
+ */
+function showsEndAsBody(noCopy: boolean, owner: PublishedChatOwner): boolean {
+  return noCopy && owner.sandboxState.kind === "destroyed";
 }
 
 /**

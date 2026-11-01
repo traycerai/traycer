@@ -17,6 +17,7 @@ import {
 import type { EpicNodeRef } from "@/stores/epics/canvas/types";
 import { useOpenEpicId } from "@/lib/epic-selectors";
 import {
+  useEpicTabDisplayTitle,
   useEpicTerminalAgent,
   useEpicTuiAgentRecordListAuthoritative,
   useEpicTuiAgentRecordListFailed,
@@ -169,6 +170,17 @@ export function TuiAgentTile(props: TuiAgentTileProps) {
       reachability.status === "checking" ||
       reachability.status === "host-starting",
   });
+  // The tab's name: `node.name` is a snapshot only the tab strip writes back.
+  const agentName = useEpicTabDisplayTitle(
+    {
+      id: props.node.id,
+      name: props.node.name,
+      type: props.node.type,
+      hostId,
+    },
+    epicId,
+    null,
+  );
   const crashReportedRef = useRef(false);
   const reportCrashExit = useCallback(() => {
     if (crashReportedRef.current) return;
@@ -176,7 +188,7 @@ export function TuiAgentTile(props: TuiAgentTileProps) {
     emitTerminalCrashedNotification({
       instanceId: props.node.instanceId,
       hostId,
-      terminalName: props.node.name,
+      terminalName: agentName,
       target: {
         kind: "terminal",
         epicId,
@@ -192,7 +204,7 @@ export function TuiAgentTile(props: TuiAgentTileProps) {
     hostId,
     props.node.id,
     props.node.instanceId,
-    props.node.name,
+    agentName,
     props.tileId,
     props.viewTabId,
   ]);
@@ -203,7 +215,7 @@ export function TuiAgentTile(props: TuiAgentTileProps) {
     emitTerminalCrashedNotification({
       instanceId: props.node.instanceId,
       hostId,
-      terminalName: props.node.name,
+      terminalName: agentName,
       target: {
         kind: "terminal",
         epicId,
@@ -219,7 +231,7 @@ export function TuiAgentTile(props: TuiAgentTileProps) {
     hostId,
     props.node.id,
     props.node.instanceId,
-    props.node.name,
+    agentName,
     props.tileId,
     props.viewTabId,
   ]);

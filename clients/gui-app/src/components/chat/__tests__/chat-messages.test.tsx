@@ -2293,7 +2293,7 @@ describe("ChatMessages scroll policy", () => {
         expect(live?.textContent).toBe("Build plan finished responding.");
       });
     });
-    it("keeps an announced sentence frozen when the chat is renamed", async () => {
+    it("empties an announced sentence when the chat is renamed, without announcing it again, and the next completion speaks the new name", async () => {
       const userMsg = makeMessage(0, "user");
       const assistantStreaming: ChatMessageModel = {
         ...makeMessage(1, "assistant"),
@@ -2319,19 +2319,34 @@ describe("ChatMessages scroll policy", () => {
       await waitFor(() => {
         expect(live?.textContent).toBe("Build plan finished responding.");
       });
-      const announcedNode = live?.firstElementChild;
 
       // A chat is auto-titled right after its first turn - exactly when this
-      // announcement is still mounted. Rewriting the text inside the live
-      // region would re-announce a completion that never happened, so the
-      // sentence stays as it was announced.
+      // announcement is still mounted. A live region keeps its text, so the
+      // old sentence would sit beside the new title. Rewriting it in place
+      // would announce a completion that never happened, so the region is
+      // emptied, which speaks nothing.
+      const spoken: Array<string | null> = [];
+      const observer = new MutationObserver((records) => {
+        for (const record of records) {
+          for (const node of Array.from(record.addedNodes)) {
+            spoken.push(node.textContent);
+          }
+        }
+      });
+      if (live === null) throw new Error("expected the live region");
+      observer.observe(live, { childList: true, subtree: true });
       rerenderWith({ taskTitle: "Renamed plan" });
       await settleLegendList();
-      expect(live?.textContent).toBe("Build plan finished responding.");
-      expect(live?.firstElementChild).toBe(announcedNode);
+      observer.takeRecords().forEach((record) => {
+        for (const node of Array.from(record.addedNodes)) {
+          spoken.push(node.textContent);
+        }
+      });
+      observer.disconnect();
+      expect(live.textContent).toBe("");
+      expect(spoken).toEqual([]);
 
-      // Freezing is per announcement, not permanent: the next one speaks the
-      // title the reader now sees.
+      // The next completion speaks the title the reader now sees.
       rerenderWith({
         messages: [
           userMsg,
@@ -2348,7 +2363,7 @@ describe("ChatMessages scroll policy", () => {
       await settleLegendList();
 
       await waitFor(() => {
-        expect(live?.textContent).toBe("Renamed plan finished responding.");
+        expect(live.textContent).toBe("Renamed plan finished responding.");
       });
     });
 

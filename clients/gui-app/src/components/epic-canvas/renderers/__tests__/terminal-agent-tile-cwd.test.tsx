@@ -101,6 +101,8 @@ vi.mock("@/hooks/agent/use-agent-stop-controls", () => ({
 
 vi.mock("@/lib/epic-selectors", () => ({
   useOpenEpicId: () => "epic-test",
+  // The tab's resolver; no live title in this suite, so the snapshot name.
+  useEpicTabDisplayTitle: (node: { readonly name: string }) => node.name,
   useEpicTerminalAgent: () => mockAgent,
 }));
 
