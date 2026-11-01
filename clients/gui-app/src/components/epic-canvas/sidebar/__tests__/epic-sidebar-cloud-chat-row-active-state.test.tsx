@@ -179,7 +179,7 @@ describe("EpicSidebarCloudChatRow active state (real canvas store)", () => {
 describe("EpicSidebarCloudChatRow first-title label (real canvas store)", () => {
   const UNTITLED: CloudChatSummary = { ...CHAT, title: null };
 
-  it("paints New agent for a title-less row under a mark, while the tile it opens says Untitled chat", () => {
+  it("paints New agent for a title-less row under a mark, while the tile it opens says Untitled agent", () => {
     const tabId = useEpicCanvasStore
       .getState()
       .openEpicTab(CHAT.identity.taskId, "Epic");
@@ -197,16 +197,16 @@ describe("EpicSidebarCloudChatRow first-title label (real canvas store)", () => 
     const canvas = useEpicCanvasStore.getState().canvasByTabId[tabId];
     expect(
       Object.values(canvas?.tilesByInstanceId ?? {}).map((tile) => tile?.name),
-    ).toEqual(["Untitled chat"]);
+    ).toEqual(["Untitled agent"]);
   });
 
-  it("says Untitled chat once the mark is gone", () => {
+  it("says Untitled agent once the mark is gone", () => {
     const tabId = useEpicCanvasStore
       .getState()
       .openEpicTab(CHAT.identity.taskId, "Epic");
     const row = renderRow(tabId, UNTITLED);
 
-    expect(row.getAttribute("aria-label")).toContain("Untitled chat");
+    expect(row.getAttribute("aria-label")).toContain("Untitled agent");
     expect(row.textContent).not.toContain("New agent");
   });
 

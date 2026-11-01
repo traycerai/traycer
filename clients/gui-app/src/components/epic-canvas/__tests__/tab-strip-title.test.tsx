@@ -129,6 +129,20 @@ vi.mock("@/hooks/environment/use-environment-arms", () => ({
     taskId.length === 0 ? [] : armRows.value,
 }));
 
+// The viewer's cloud list: the one source of a title for a chat the
+// projection holds no record of. Everything else in the module stays real.
+const cloudListRows = vi.hoisted(
+  (): { value: readonly CloudChatSummary[] } => ({
+    value: [],
+  }),
+);
+vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/chats/use-cloud-chat-queries")
+  >()),
+  useCloudChatList: () => ({ data: { chats: cloudListRows.value } }),
+}));
+
 // Intentionally do not mock ChatProgressIcon: title-generation composition
 // must exercise real running / notification / idle-default precedence.
 
@@ -255,6 +269,36 @@ function installUntitledChat(): void {
   }, "owner");
 }
 
+/** Reopens the session with no projection record for the chat at all. */
+function installAbsentChat(): void {
+  harness.teardown();
+  harness.install((doc) => {
+    seedDocWithChat(doc);
+    const chats = doc.getMap<unknown>("epic").get("chats");
+    if (!(chats instanceof Y.Map)) throw new Error("expected chats map");
+    chats.delete(CHAT_ID);
+  }, "owner");
+}
+
+function cloudRow(title: string | null): CloudChatSummary {
+  return {
+    identity: { taskId: EPIC_ID, chatId: CHAT_ID, ownerUserId: "viewer-1" },
+    ownerHostId: TAB.hostId,
+    createdAt: 1,
+    visibility: "task",
+    title,
+    isTitleEditedByUser: false,
+    parentChatId: null,
+    isArchived: false,
+    runSettingsSummary: null,
+    metadataUpdatedAt: 2,
+    headSha256: null,
+    publishedAt: null,
+    throughRecordSeq: null,
+    isOwnedByViewer: true,
+  };
+}
+
 /** The send marks the first title pending once the untitled chat is held. */
 function awaitFirstTitle(): void {
   act(() => {
@@ -331,6 +375,7 @@ describe("TabStrip title", () => {
     harness.teardown();
     useEpicCanvasStore.getState().clearAllTitleGenerationPending();
     armRows.value = [];
+    cloudListRows.value = [];
     onRenameSpy.mockReset();
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   });
@@ -849,6 +894,43 @@ describe("TabStrip title", () => {
         tile.instanceId,
         "My own name",
       );
+    });
+  });
+
+  describe("a chat the projection holds no record of", () => {
+    it("keeps New agent while the cloud list has no row for it", async () => {
+      installAbsentChat();
+      const tile = seedChatTile("Untitled agent");
+      renderTabStrip(tile, true);
+      await flushEpicSnapshot();
+      awaitFirstTitle();
+
+      await waitFor(() => {
+        expect(screen.getAllByRole("tab", { name: "New agent" })).toHaveLength(
+          1,
+        );
+      });
+      expect(persistedTileName(tile.instanceId)).toBe("Untitled agent");
+    });
+
+    it("shows the cloud list's title, not New agent, under a held mark", async () => {
+      installAbsentChat();
+      cloudListRows.value = [cloudRow("Cloud title")];
+      const tile = seedChatTile("Untitled agent");
+      renderTabStrip(tile, true);
+      await flushEpicSnapshot();
+      awaitFirstTitle();
+
+      await waitFor(() => {
+        expect(persistedTileName(tile.instanceId)).toBe("Cloud title");
+      });
+      expect(screen.getAllByRole("tab", { name: "Cloud title" })).toHaveLength(
+        1,
+      );
+      expect(screen.queryAllByRole("tab", { name: "New agent" })).toHaveLength(
+        0,
+      );
+      expect(screen.queryByLabelText("Close New agent")).toBeNull();
     });
   });
 });
