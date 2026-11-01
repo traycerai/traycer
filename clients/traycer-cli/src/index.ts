@@ -2506,7 +2506,8 @@ function registerCliCommands(program: Command): void {
           // from rendered help, and its full-help test enforces that.
           "When the file is in use - usually because the host is running from it - the new binary is staged and " +
           "finalized on a later 'traycer host restart'; a restart retries the swap rather than guaranteeing it, and any staged " +
-          "upgrade that is still outstanding is reported by 'traycer host doctor'.",
+          "upgrade that is still outstanding is reported by 'traycer host doctor'. " +
+          "When the published version is older than the one installed, nothing is changed; use --target to install it anyway.",
       )
       .option(
         "--dry-run",
@@ -2514,7 +2515,7 @@ function registerCliCommands(program: Command): void {
       )
       .option(
         "--target <version>",
-        "Fail unless the release feed still publishes exactly this version. The feed carries one build's assets and cannot install older versions, so this asserts which build you expect rather than selecting one",
+        "Fail unless the release feed still publishes exactly this version. The feed carries one build's assets, so this asserts which build you expect rather than selecting one - and asking for it by name is how you install it when it is older than the version you have",
       ),
     (opts) =>
       buildCliUpgradeCommand({

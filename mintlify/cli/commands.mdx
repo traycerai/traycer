@@ -160,9 +160,9 @@ In particular, `set none` leaves a running host alone and switches Desktop to re
 
 | Command | Purpose |
 | --- | --- |
-| `traycer cli upgrade` | Download and install the CLI version Traycer currently publishes. For a CLI installed by npm, Homebrew, or another package manager, it prints that package manager's upgrade command instead. If the binary is in use, usually because the host runs from it, the upgrade finishes on the next `traycer host restart`. |
+| `traycer cli upgrade` | Download and install the CLI version Traycer currently publishes. For a CLI installed by npm, Homebrew, or another package manager, it prints that package manager's upgrade command instead. If the binary is in use, usually because the host runs from it, the upgrade finishes on the next `traycer host restart`. If the published version is older than the one you have, as it is while you run a release candidate, nothing is changed. |
 | `traycer cli upgrade --dry-run` | Show the version and download URL without installing anything. |
-| `traycer cli upgrade --target <version>` | Fail unless the published version is exactly `<version>`. It does not install older versions. |
+| `traycer cli upgrade --target <version>` | Fail unless the published version is exactly `<version>`. Asking for it by name is also how you install it when it is older than the version you have. |
 | `traycer cli re-anchor --binary-path <path> --installed-version <version>` | Point upgrade tracking at a CLI binary you installed or moved by hand. Use it when `cli upgrade` reports that there is no recorded install. |
 
 ## Config Commands
