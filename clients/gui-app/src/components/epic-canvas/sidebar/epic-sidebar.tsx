@@ -898,7 +898,7 @@ export function LeftPanelBody(props: {
           panel={panels[0]}
           // A lone panel IS the sidebar body, so it is never collapsible and
           // a flag left in a record by a pair the user has since taken apart
-          // is inert rather than obeyed (L-157, R5R-01).
+          // is inert rather than obeyed (L-157).
           collapsible={false}
           collapsed={false}
         />
@@ -955,7 +955,7 @@ function useLeftPanelBodyDropCue(
  * a gap: it goes `flex-none` at its header height, and the handles and
  * weights are the open members' alone. That is what makes a per-section collapse
  * safe here and unsafe on a lone panel - a lone panel has no other member to
- * hand its space to, which is the empty column R5R-01 found.
+ * hand its space to, so a lone collapsed panel would leave an empty column.
  */
 const SECTION_SPLIT_GROUP_ID = "epic-left-panel-sections";
 /** Old `minSize="2rem"` floor, now enforced by the custom handle. */
@@ -2314,7 +2314,7 @@ function TreePanelActions(props: TreePanelActionsProps) {
       terminalAgentWorkspaceSeed={null}
       terminalAgentHostScope={undefined}
       // Root create keeps the epic-scoped default launcher slot; only chat /
-      // agent ROWS override with a per-parent key (T4).
+      // agent ROWS override with a per-parent key.
       terminalAgentStagingKey={undefined}
       tuiAgentPending={undefined}
       excludeTypes={props.excludeTypes}

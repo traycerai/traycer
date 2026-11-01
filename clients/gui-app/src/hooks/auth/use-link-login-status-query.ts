@@ -9,7 +9,8 @@ import { useHostBinding } from "@/lib/host";
 import { authQueryKeys } from "@/lib/query-keys";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
-const LINK_LOGIN_STATUS_POLL_MS = 2_000;
+/** Also the cadence of the Slack install watch (`useBotSlackAppQuery`). */
+export const LINK_LOGIN_STATUS_POLL_MS = 2_000;
 
 /**
  * `gone` is a first-class datum, not an error: an expired/consumed/foreign

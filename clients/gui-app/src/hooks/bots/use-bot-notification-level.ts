@@ -13,6 +13,7 @@ import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-m
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useHostMutation, useHostQuery } from "@/hooks/host/use-host-query";
+import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 import { botMutationKeys, hostQueryKeys } from "@/lib/query-keys";
 
@@ -42,6 +43,32 @@ export function useBotNotificationLevelsQuery(
       refetchOnWindowFocus: true,
     },
   });
+}
+
+/**
+ * Whether the person set a bot's channel to Nothing: no default is muted,
+ * so a channel with no level set never is. `false` while unread, and on a
+ * host that cannot read the levels.
+ */
+export function useBotChannelMuted(
+  client: HostClient<HostRpcRegistry> | null,
+  hostId: string | null,
+  botId: string,
+  channelId: string | null,
+): boolean {
+  const supported =
+    useHostMethodSupport(hostId, "bot.notificationLevel.read") === true;
+  const levels = useBotNotificationLevelsQuery(
+    client,
+    botId,
+    supported && channelId !== null,
+  ).data?.levels;
+  return (
+    channelId !== null &&
+    levels !== undefined &&
+    Object.hasOwn(levels, channelId) &&
+    levels[channelId] === "off"
+  );
 }
 
 /**

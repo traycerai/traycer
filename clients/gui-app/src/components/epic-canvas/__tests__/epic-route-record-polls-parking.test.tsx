@@ -1,5 +1,5 @@
 /**
- * Renderer parking (plan C, C1) vs the two record polls, observed as REQUESTS.
+ * Renderer parking vs the two record polls, observed as REQUESTS.
  *
  * `epic-route-session-body.tsx` gates `EpicRecordSyncEffects` on
  * `useEpicParked`, and the reason given there is a claim about the wire: each

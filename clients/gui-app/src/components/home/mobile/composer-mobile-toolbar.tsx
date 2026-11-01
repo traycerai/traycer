@@ -208,6 +208,7 @@ function ComposerMobileToolbarImpl(props: ComposerMobileToolbarProps) {
       </ToolbarPillButton>
       <div className="ml-auto flex min-w-0 shrink items-center gap-1">
         <HarnessModelPicker
+          withUltracode
           store={store}
           maxModeContext={maxModeContext}
           withServiceTier
@@ -227,7 +228,7 @@ function ComposerMobileToolbarImpl(props: ComposerMobileToolbarProps) {
           embedding={null}
         />
         {/* The slot, not the bare button: it is what honours Layout's
-          Microphone switch, which this row used to ignore (G6). */}
+          Microphone switch, which this row used to ignore. */}
         <ComposerMicSlot
           dictation={dictation}
           dictationPreparing={dictationPreparing}

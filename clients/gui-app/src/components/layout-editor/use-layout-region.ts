@@ -85,7 +85,7 @@ export function useLayoutRegion(input: {
     // too for the case the ref callback cannot see (a pane becoming visible, a
     // scene id changing). Re-stripping and re-registering an unchanged node
     // was pure churn, and on a scene with thirty regions it was thirty of
-    // them (G1-21).
+    // them.
     if (
       previous !== null &&
       wanted &&
@@ -164,15 +164,13 @@ export function useLayoutRegion(input: {
     // this effect would otherwise restate, so listing them again said "re-run
     // when the region or the instance changes" twice and implied the cleanup
     // depended on the CURRENT render's copies of them. It does not - taking a
-    // name off is a fact about the node that wore it, which the ref carries
-    // (R3-17).
+    // name off is a fact about the node that wore it, which the ref carries.
   }, [sync]);
 
   // After the commit that mounted the materialised control, not from the store
   // subscription above: the node the flag belongs on is the one this render
   // just produced. Keyed on the flag itself rather than run on every render,
-  // which is what a ~30-region scene pays for a value that changes on a hover
-  // (G1-21).
+  // which is what a ~30-region scene pays for a value that changes on a hover.
   useEffect(() => {
     ghostRef.current = ghost;
     const node = registered.current?.node ?? null;
@@ -309,7 +307,7 @@ function nameNode(
 
 /**
  * Take the name off whichever node is wearing it, which is a fact about THAT
- * node and needs nothing from the render that asks for it (R3-17).
+ * node and needs nothing from the render that asks for it.
  */
 function unnameNode(named: RefObject<HTMLElement | null>): void {
   const previous = named.current;

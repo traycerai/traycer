@@ -324,7 +324,7 @@ describe("applyTouches - the session facet survives a recency patch (T7)", () =>
 
     // A recency patch is a registry quiet write and states nothing about the
     // facet - `withPatch` on the tui plane deliberately leaves it untouched.
-    // `TerminalAgentsSlice` does not carry the facet yet (ticket 8's work),
+    // `TerminalAgentsSlice` does not carry the facet yet,
     // so the only thing observable here is that the patch is accepted and
     // the row's ordinary fields move; the facet's survival THROUGH the patch
     // has no seam this table exposes to a caller outside the plane.
@@ -378,7 +378,7 @@ describe("applyTouches - the session facet survives a recency patch (T7)", () =>
 
   it("types applyRecords' rows as the @1.3 shape, refusing a @1.2-shaped (facet-less) row", () => {
     // The runtime half above cannot observe the facet's SURVIVAL (no seam
-    // exists until ticket 8 widens `TuiAgentProjection`), but the claim that
+    // exists until `TuiAgentProjection` is widened), but the claim that
     // the table's rows CARRY the facet at all is a fact about
     // `applyRecords`' parameter type, and that is compile-time checkable: if
     // this ever gets typed back down to the `@1.2` row, a `@1.2` array (no

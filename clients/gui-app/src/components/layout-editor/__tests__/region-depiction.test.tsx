@@ -303,7 +303,7 @@ describe("what a depiction draws", () => {
       oneHidden.container.querySelectorAll("[data-provider-id]"),
     ).toHaveLength(1);
 
-    // The catalog, not a sample of it (R3-03). A picture never lies, and on
+    // The catalog, not a sample of it. A picture never lies, and on
     // Settings ▸ Layout this band is the only feedback the providers list's
     // Shown/Hidden control has: a picture that stopped after three said
     // nothing when the fifth was hidden.

@@ -58,7 +58,7 @@ export interface CreatedChatOpenIntent {
   readonly hostId: string;
   /**
    * Explicit placement for the created tile, or `null` to let the configured
-   * conversation placement decide (C3, C8). The opener path (palette
+   * conversation placement decide. The opener path (palette
    * open-into-target, side chat beside its source) is the only thing that
    * names a pane.
    */
@@ -100,7 +100,7 @@ export interface OpenNewChatInActiveTileArgs {
    *  flow, which carries the source chat's own settings forward). */
   readonly settings: ChatRunSettings | null;
   /** Optional fork source - `null` for an ordinary empty chat (every caller
-   *  but the clone flow, chat-sync-v2 ticket 34B1). */
+   *  but the clone flow). */
   readonly forkSource: CreateChatMutationInput["forkSource"] | null;
   readonly source: AnalyticsSource;
   readonly createChat: CreateChatCommand;
@@ -108,7 +108,7 @@ export interface OpenNewChatInActiveTileArgs {
   /** The create call failed outright (never reached `onSuccess`).
    *  `useEpicCreateChatForHostClient`'s own `onError` already toasts regardless of what
    *  this callback does, so it exists for a caller that needs to REACT to
-   *  the failure, not merely report it - the clone flow (ticket 34B1) is the
+   *  the failure, not merely report it - the clone flow is the
    *  one caller that does: a checkpoint-unavailable refusal retries
    *  settings-only instead of giving up. Every other caller passes a no-op. */
   readonly onCreateError: (error: HostRpcError) => void;

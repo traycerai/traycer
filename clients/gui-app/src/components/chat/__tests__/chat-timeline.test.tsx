@@ -1,4 +1,11 @@
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import {
   createRef,
   useEffect,
@@ -14,6 +21,7 @@ import type {
   ChatMessageUserActions,
 } from "@/components/chat/chat-message";
 import { ChatTimeline } from "@/components/chat/chat-timeline";
+import { ChatTimelineHeaderContext } from "@/components/chat/chat-timeline-header-context";
 import { CHAT_NAVIGATION_HIGHLIGHT_CLASSNAME } from "@/components/chat/chat-navigation-highlight";
 import { PANEL_RESIZE_VISIBLE_ROW_ATTRIBUTE } from "@/components/chat/chat-timeline-panel-resize-snapshot";
 import type { NextStepActionHandler } from "@/components/chat/segments/next-steps-action-group";
@@ -33,7 +41,7 @@ const MESSAGE_ROW_SELECTOR = "[data-message-id]";
 const LARGE_MESSAGE_COUNT = 400;
 
 /**
- * Review round 1, finding 2: counts ROW-BOUNDARY renders - i.e. how many
+ * Counts ROW-BOUNDARY renders - i.e. how many
  * times `ChatTimelineRow` re-entered this child boundary - NOT executions of
  * the real memoized `ChatMessageImpl` body. This wrapper is intentionally
  * un-memoized, so it always re-runs (and increments the counter) whenever
@@ -97,7 +105,7 @@ function mountedMessageRows(container: HTMLElement): NodeListOf<Element> {
   return container.querySelectorAll(MESSAGE_ROW_SELECTOR);
 }
 
-/** Ticket 23 panel-resize tests: a distinct-position rect, overriding the
+/** The panel-resize tests use a distinct-position rect, overriding the
  *  shared `installLegendListViewportMetrics()` shim's uniform (0,0)-origin
  *  stub on a specific element so visible vs. off-screen rows are
  *  distinguishable (see `chat-timeline-panel-resize-snapshot.test.ts` for
@@ -150,6 +158,7 @@ interface RenderTimelineOptions {
   readonly onItemSizeChanged?: () => void;
   readonly navigationHighlightedMessageId?: string | null;
   readonly navigationHighlightedBlockId?: string | null;
+  readonly header?: ReactNode;
 }
 
 function renderTimeline(options: RenderTimelineOptions) {
@@ -165,30 +174,32 @@ function renderTimeline(options: RenderTimelineOptions) {
     navigationHighlightedMessageId: string | null | undefined,
     navigationHighlightedBlockId: string | null | undefined,
   ): ReactNode => (
-    <div
-      style={{
-        height: VIEWPORT_HEIGHT_PX,
-        width: VIEWPORT_WIDTH_PX,
-      }}
-    >
-      <ChatTimeline
-        rows={transcriptListRows({
-          window: null,
-          rendered: messages,
-          splitLongTurns: true,
-        })}
-        taskTitle={options.taskTitle ?? "Test transcript"}
-        backgroundToolBlockIds={backgroundToolBlockIds}
-        getMessageActions={getMessageActions}
-        nextStepActions={nextStepActions}
-        listRef={listRef}
-        className={options.className ?? "h-full"}
-        data-testid={options["data-testid"]}
-        onItemSizeChanged={options.onItemSizeChanged}
-        navigationHighlightedMessageId={navigationHighlightedMessageId}
-        navigationHighlightedBlockId={navigationHighlightedBlockId}
-      />
-    </div>
+    <ChatTimelineHeaderContext value={options.header ?? null}>
+      <div
+        style={{
+          height: VIEWPORT_HEIGHT_PX,
+          width: VIEWPORT_WIDTH_PX,
+        }}
+      >
+        <ChatTimeline
+          rows={transcriptListRows({
+            window: null,
+            rendered: messages,
+            splitLongTurns: true,
+          })}
+          taskTitle={options.taskTitle ?? "Test transcript"}
+          backgroundToolBlockIds={backgroundToolBlockIds}
+          getMessageActions={getMessageActions}
+          nextStepActions={nextStepActions}
+          listRef={listRef}
+          className={options.className ?? "h-full"}
+          data-testid={options["data-testid"]}
+          onItemSizeChanged={options.onItemSizeChanged}
+          navigationHighlightedMessageId={navigationHighlightedMessageId}
+          navigationHighlightedBlockId={navigationHighlightedBlockId}
+        />
+      </div>
+    </ChatTimelineHeaderContext>
   );
 
   const result = render(
@@ -378,6 +389,17 @@ describe("ChatTimeline", () => {
     expect(screen.queryByTestId("chat-timeline")).toBeNull();
   });
 
+  it("draws the header it is given in place of the empty state while the list has no row", () => {
+    const { container } = renderTimeline({
+      messages: [],
+      header: <div data-testid="timeline-header-probe" />,
+    });
+
+    expect(screen.getByTestId("timeline-header-probe")).not.toBeNull();
+    expect(screen.queryByText("Start the conversation")).toBeNull();
+    expect(mountedMessageRows(container).length).toBe(0);
+  });
+
   it("sets data-message-id and role-specific contain-intrinsic-size classes on row wrappers", async () => {
     const messages: ReadonlyArray<ChatMessageModel> = [
       makeMessage(0, "user"),
@@ -456,8 +478,7 @@ describe("ChatTimeline", () => {
     expect(screen.getByLabelText("Edit message")).not.toBeNull();
   });
 
-  // Ticket 17 (chat-messages.tsx review round 2, finding 2 residual):
-  // establishes the LIBRARY-LEVEL contract the fix depends on - a row's
+  // Establishes the LIBRARY-LEVEL contract the fix depends on - a row's
   // real measured size CAN change under the SAME `data` array with NO
   // scroll event at all (an activity-group disclosure collapsing/expanding
   // is exactly this shape: that open/closed state lives outside `messages`,
@@ -515,7 +536,7 @@ describe("ChatTimeline", () => {
     );
   });
 
-  // M4 (ticket 16 spacer alignment): header/footer 40px -> 12/16px, fade
+  // Spacer alignment: header/footer 40px -> 12/16px, fade
   // header 64/80px -> 40/48px.
   it("uses the approved compact spacer sizes instead of the old 40/64/80px drift", () => {
     const messages: ChatMessageModel[] = [makeMessage(0, "user")];
@@ -532,7 +553,31 @@ describe("ChatTimeline", () => {
     expect(spacerClasses(container)).toEqual(["h-3 sm:h-4", "h-3 sm:h-4"]);
   });
 
-  // Ticket 24 (painted-chat lifecycle audit, finding 5): the shared row
+  it("draws the header it is given inside the list, after the top spacer and before the first row", async () => {
+    const messages = makeMessages(3);
+    const { container } = renderTimeline({
+      messages,
+      "data-testid": "timeline",
+      header: <div data-testid="timeline-header-probe" />,
+    });
+
+    await settleLegendList();
+    await waitFor(() => {
+      expect(rowIds(container)).toContain("message-0");
+    });
+    const list = within(container).getByTestId("timeline");
+    const header = within(list).getByTestId("timeline-header-probe");
+    const spacer = list.querySelector('div[aria-hidden="true"]');
+    const firstRow = list.querySelector('[data-message-id="message-0"]');
+    expect(spacer?.compareDocumentPosition(header)).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+    expect(firstRow?.compareDocumentPosition(header)).toBe(
+      Node.DOCUMENT_POSITION_PRECEDING,
+    );
+  });
+
+  // Painted-chat lifecycle: the shared row
   // context previously carried `navigationHighlightedMessageId` directly, so
   // React's context propagation re-rendered EVERY mounted row - bypassing
   // each row's own `memo` bailout entirely (see the render-count probe's own
@@ -596,14 +641,14 @@ describe("ChatTimeline", () => {
   }
 
   /**
-   * Review round 1, finding 1: owns messages/highlight as REAL React state
+   * Owns messages/highlight as REAL React state
    * (mirroring how chat-messages.tsx drives `ChatTimeline`) and exposes the
    * raw setters, so timing-sensitive tests can trigger updates WITHOUT going
    * through Testing Library's `rerender` - `rerender`'s internal `act()`
    * (confirmed empirically, including with `IS_REACT_ACT_ENVIRONMENT`
    * disabled and with `flushSync`) fully settles BOTH `useLayoutEffect` AND
    * `useEffect` synchronously in this React version, which hides the exact
-   * regression finding 1 covers. Calling the exposed setters directly, with
+   * regression this file pins. Calling the exposed setters directly, with
    * the act-environment flag OFF (see `withActEnvironmentDisabled`), lets a
    * PLAIN state update go through React's ordinary (non-test) scheduling,
    * where a passive effect's flush is a real, separately-scheduled task
@@ -686,7 +731,7 @@ describe("ChatTimeline", () => {
     await vi.advanceTimersByTimeAsync(16);
   }
 
-  // Finding 1's "row mounting in the stale window" sub-case was investigated
+  // The "row mounting in the stale window" sub-case was investigated
   // specifically for a row that mounts because `messages` GROWS (a new
   // message arrives) in the same update as a highlight change. Empirically
   // (verified with fine-grained per-tick polling, both against this fix and
@@ -1258,13 +1303,13 @@ describe("ChatTimeline LegendList strict-edge policy config", () => {
   });
 
   it("pins maintainScrollAtEndThreshold=0, MVCP maintenance, and the library's own maintainScrollAtEnd permanently disabled", async () => {
-    // Fixup (callback-synchronous-follow): the library's own
-    // `maintainScrollAtEnd` is NEVER passed at all anymore - not even
-    // conditionally - since every one of its call sites (data/item/footer/
-    // layout) already no-ops when this prop is falsy. Bottom-follow is
-    // reimplemented in `chat-timeline-follow-latch.ts` and driven
-    // imperatively; see that module's own real-LegendList integration
-    // coverage for the actual follow/detach behavior this enables.
+    // The library's own `maintainScrollAtEnd` is NEVER passed at all
+    // anymore - not even conditionally - since every one of its call sites
+    // (data/item/footer/layout) already no-ops when this prop is falsy.
+    // Bottom-follow is reimplemented in `chat-timeline-follow-latch.ts` and
+    // driven imperatively; see that module's own real-LegendList
+    // integration coverage for the actual follow/detach behavior this
+    // enables.
     renderTimeline({ messages: makeMessages(6) });
     await settleLegendList();
     expect(legendListPolicyProps.last).not.toBeNull();

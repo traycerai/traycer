@@ -7,7 +7,7 @@ import type { TileRect } from "@/lib/browser-view/tiles/tile-rect-registry";
 import { registerTileRect } from "@/lib/browser-view/tiles/tile-rect-registry";
 import { setMobileApp } from "@/lib/mobile-app";
 
-// Ticket 06: the toaster picks the least-overlapping of sonner's six fixed
+// The toaster picks the least-overlapping of sonner's six fixed
 // anchors against live registered tile rects, and freezes that choice while
 // a toast is visible. `sonner`'s real `Toaster` only mounts an
 // `<ol data-sonner-toaster>` while a toast exists (see sonner.tsx's

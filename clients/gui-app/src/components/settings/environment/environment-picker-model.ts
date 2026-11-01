@@ -10,9 +10,6 @@ import {
   type EnvironmentPick,
 } from "@/lib/settings-environment-pages";
 
-export const NOT_MOVED_SUBTITLE = "its own settings, not in Personal yet";
-export const PARTLY_MOVED_SUBTITLE = "partly in Personal";
-
 /** The tooltip on every `Local` badge. */
 export const LOCAL_BADGE_TOOLTIP = "Settings on this computer only";
 
@@ -61,13 +58,13 @@ export function isEnvironmentComputer(
  * The Local row a host has, from its `environment.status` and the version it
  * negotiated for that method, or `null` for none.
  *
- * A Local row exists while setup waits at the move: `moving_settings` and
- * either `awaiting_consent` (nothing has moved) or an upload accepted and not
- * finished (partly moved). A host whose `environment.status` predates 1.1
- * can never report `awaiting_consent`, so one that has not reached
- * `applying` gets the greyed `needs an update` row instead; one that has is
- * already shared and has no row. A host that has not answered, or not been
- * dialled, has no row: nothing is known about it.
+ * A Local row exists while any plane is still this computer's own or stopped,
+ * and its wording comes from those planes (`localRowCohort`) - `setup` says
+ * nothing about it. A host whose `environment.status` predates 1.1 reports no
+ * planes at all, so one that has not reached `applying` gets the greyed
+ * `needs an update` row instead; one that has is already shared and has no
+ * row. A host that has not answered, or not been dialled, has no row:
+ * nothing is known about it.
  */
 export function localPickerRow(
   host: EnvironmentPickerHost,
@@ -79,39 +76,16 @@ export function localPickerRow(
   }
   if (status === null) return null;
   const cohort = localRowCohort(status);
-  if (cohort !== null) {
-    return cohort.kind === "none"
-      ? null
-      : {
-          hostId: host.hostId,
-          name: host.name,
-          subtitle: cohort.subtitle,
-          verb: cohort.verb,
-          needsUpdate: false,
-          defaultsToLocal: cohort.defaultsToLocal,
-        };
-  }
-  const setup = status.setup;
-  if (setup === null || setup.stage !== "moving_settings") return null;
-  if (setup.state === "awaiting_consent") {
-    return {
-      hostId: host.hostId,
-      name: host.name,
-      subtitle: NOT_MOVED_SUBTITLE,
-      verb: "move_to_personal",
-      needsUpdate: false,
-      defaultsToLocal: true,
-    };
-  }
-  if (!hasUploadPastAccept(status)) return null;
-  return {
-    hostId: host.hostId,
-    name: host.name,
-    subtitle: PARTLY_MOVED_SUBTITLE,
-    verb: "finish_moving",
-    needsUpdate: false,
-    defaultsToLocal: false,
-  };
+  return cohort.kind === "none"
+    ? null
+    : {
+        hostId: host.hostId,
+        name: host.name,
+        subtitle: cohort.subtitle,
+        verb: cohort.verb,
+        needsUpdate: false,
+        defaultsToLocal: cohort.defaultsToLocal,
+      };
 }
 
 /**
@@ -162,14 +136,6 @@ function isBeforeConsentGate(version: NegotiatedMethodVersion): boolean {
   if (version === null) return false;
   if (version === false) return true;
   return version.major < 1 || (version.major === 1 && version.minor < 1);
-}
-
-/**
- * The person accepted the move (`consent` is recorded) and setup is still
- * at `moving_settings`: the upload stopped or has not finished.
- */
-function hasUploadPastAccept(status: EnvironmentStatusResponseV11): boolean {
-  return status.consent !== null;
 }
 
 /**

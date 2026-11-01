@@ -27,7 +27,7 @@ export const authQueryKeys = {
     "user",
     authService,
   ],
-  // Remote Host Support (§7): the cross-device host registry + live status.
+  // The cross-device host registry + live status.
   // Keyed to the signed-in user like `userSessions`, and for the same reason:
   // an AuthService survives account changes, so without the user id the
   // previous account's cached host list (names, ids, platforms) would be
@@ -64,6 +64,20 @@ export const authQueryKeys = {
     "link-login-code",
     authService,
     userId,
+  ],
+  // Settings ▸ Credits' claimable offers, keyed to the live AuthService and
+  // signed-in user like `userSessions`, so one account's offers never render
+  // for its replacement.
+  creditOffers: (authService: object, userId: string): readonly unknown[] => [
+    "auth",
+    "credit-offers",
+    authService,
+    userId,
+  ],
+  creditOffersMissing: (): readonly unknown[] => [
+    "auth",
+    "credit-offers",
+    "missing",
   ],
   // Stable, disabled key for when no `AuthService` binding is available yet
   // (mirrors `uiQueryKeys.hostPickerMissing`).

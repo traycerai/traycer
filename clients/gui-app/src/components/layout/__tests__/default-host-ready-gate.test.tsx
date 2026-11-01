@@ -396,7 +396,7 @@ describe("<HostReadyGate />", () => {
   });
 
   it("replaces the whole app - not just a surface - on a cold start before the host is ready", () => {
-    // Cold-start only (D1). Before the gate has ever seen `ready` it still
+    // Cold-start only. Before the gate has ever seen `ready` it still
     // replaces the shell: with only per-surface fallbacks the tab strip and
     // every host-dependent affordance in it stayed reachable during setup.
     // Post-latch behaviour is covered below - this pin must not be loosened
@@ -409,7 +409,7 @@ describe("<HostReadyGate />", () => {
   });
 
   it("keeps the app mounted after latching for every non-splash non-ready kind", () => {
-    // D1 post-latch table: once the window has been ready, non-ready kinds
+    // Post-latch table: once the window has been ready, non-ready kinds
     // must NOT unmount the shell. That unmount is what made every host switch
     // (and every transient probe failure on a host that was already running)
     // throw away editors, terminals, scroll, and popovers.
@@ -553,7 +553,7 @@ describe("<HostReadyGate />", () => {
   });
 
   it("defers loading-host to the window narrator: draws the frame and no card of the KIND's own", () => {
-    // The window narrator (D10) now speaks for this kind. The gate used to
+    // The window narrator now speaks for this kind. The gate used to
     // draw the setup card itself (the host-boot view, wrapped in a max-w-md
     // shadowed Card); it now draws only the shared frame
     // (header + background) and leaves the card to the narrator, so the two
@@ -933,7 +933,7 @@ describe("<HostReadyGate />", () => {
   });
 
   it("defers the zero-dialable default-host card to the window modal too - no gate-drawn card, no tab wording", () => {
-    // D7 zero-dialable arm: default-host reaches unavailable-host only when
+    // Zero-dialable arm: default-host reaches unavailable-host only when
     // nothing is dialable. This card (and its copy, its report family) now
     // belongs to the window modal - the gate draws only the frame. The old
     // "tab" mislabelling pin still matters as a negative: neither the old nor

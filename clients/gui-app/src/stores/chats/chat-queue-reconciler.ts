@@ -285,56 +285,6 @@ export type ReconcileSnapshotPatch = {
 };
 
 /**
- * The statement for a dead send that could not claim the single
- * `failedSendRestoration` slot.
- *
- * The slot is deliberately first-writer-wins - the earlier send has waited
- * longest, and last-wins would bury it - so a displacement is expected. What
- * must not happen is a displaced send going quiet: the rejection ack path
- * already pairs the same rule with an `errorNotice`, and this is that
- * statement for both reconcile passes.
- *
- * It INLINES the message body, because by the time this fires the client is
- * the last holder of that text. Both passes settle the send outright - row
- * dropped, action dropped - so there is no surviving row to point at. That is
- * deliberate on both: a row that will never confirm keeps edit/delete gated
- * off and renders a user message the host never recorded, and (on the
- * reconnect path) an action left restoration-eligible re-states itself on
- * every later snapshot and pushes stale text back into the composer after the
- * user has already resent it.
- *
- * What survives the trip is TEXT, and {@link classifyContentRecovery} decides
- * what that costs. The criterion there is whether a loss is INVISIBLE in the
- * projected text and so unretypeable - attachment bytes, a mention's binding,
- * a quote's provenance - not whether the projection is byte-identical.
- * Markdown structure is visible in its absence and would only add noise.
- *
- * The classification is total and fails CLOSED, so a node kind nobody has
- * classified earns a generic qualification rather than passing as complete.
- * This defect shipped three times running - attachments, then mentions, then
- * sourced quotes - because each was fixed as itself; driving the clauses off
- * one classification is what makes a fourth a test failure instead.
- */
-/**
- * The one sentence that says a prompt came back WITHOUT the worktree it was
- * staged for, because a sweep removed that worktree while the dispatch was in
- * flight.
- *
- * Four surfaces owe it - the snapshot pass, the settled-turn pass, a
- * rejection's own notice, and a rejection DISPLACED into the statement
- * builder - and they reach it three different ways: two append it to
- * `failedSendRestoration.reason` (the composer says it), one appends it to
- * the rejection's `errorNotice` (its own surface already speaks there), and
- * the fourth needs {@link UnrecoverableSend.worktreeGone} instead, because a
- * statement names the branch and must not name it as re-pickable.
- *
- * It is a CONSTANT rather than three literals because it was three literals:
- * the fourth surface was missed twice running, and each miss was found only
- * after shipping. Nothing here can enforce that a new surface asks the
- * question, but nothing should be able to ask it and then phrase the answer
- * differently.
- */
-/**
  * The OTHER reason a prompt can come back unbound, and a different fact from
  * the sweep clause {@link worktreeAccountClause} builds - superseded, not
  * swept - so deliberately not the same sentence.
@@ -476,6 +426,37 @@ export function unrecoverableSendPrompt(
   };
 }
 
+/**
+ * The statement for a dead send that could not claim the single
+ * `failedSendRestoration` slot.
+ *
+ * The slot is deliberately first-writer-wins - the earlier send has waited
+ * longest, and last-wins would bury it - so a displacement is expected. What
+ * must not happen is a displaced send going quiet: the rejection ack path
+ * already pairs the same rule with an `errorNotice`, and this is that
+ * statement for both reconcile passes.
+ *
+ * It INLINES the message body, because by the time this fires the client is
+ * the last holder of that text. Both passes settle the send outright - row
+ * dropped, action dropped - so there is no surviving row to point at. That is
+ * deliberate on both: a row that will never confirm keeps edit/delete gated
+ * off and renders a user message the host never recorded, and (on the
+ * reconnect path) an action left restoration-eligible re-states itself on
+ * every later snapshot and pushes stale text back into the composer after the
+ * user has already resent it.
+ *
+ * What survives the trip is TEXT, and {@link classifyContentRecovery} decides
+ * what that costs. The criterion there is whether a loss is INVISIBLE in the
+ * projected text and so unretypeable - attachment bytes, a mention's binding,
+ * a quote's provenance - not whether the projection is byte-identical.
+ * Markdown structure is visible in its absence and would only add noise.
+ *
+ * The classification is total and fails CLOSED, so a node kind nobody has
+ * classified earns a generic qualification rather than passing as complete.
+ * This defect shipped three times running - attachments, then mentions, then
+ * sourced quotes - because each was fixed as itself; driving the clauses off
+ * one classification is what makes a fourth a test failure instead.
+ */
 export function unrecoverableSendNotice(
   send: UnrecoverableSend,
 ): ChatErrorNotice {
@@ -627,16 +608,6 @@ interface CountedLossClause {
 }
 
 /**
- * The staged worktree a STATED send was going to run in.
- *
- * Unlike the restored send's, this binding cannot be handed back: the staging
- * slot is single and per chat, and the send that won the restoration slot
- * rightfully holds it. So this is a statement obligation rather than a restore
- * one - the same rule as the text itself. Naming the branch makes it
- * actionable: re-picking blind is how the resubmit silently runs somewhere
- * else, which is exactly what the restore path exists to prevent.
- */
-/**
  * What the send was queued to WAIT for, when it was not the default.
  *
  * Delivery is dispatched per send and dies with the action, so a resend takes
@@ -702,10 +673,20 @@ export const NO_WORKTREE_SWEEP: WorktreeSweepAccount = {
  * (the rejection notice, the displaced statement, the ack's `SEND_RESTORED`,
  * and each reconcile pass's restoration reason) each assembling the same
  * clauses from the same facts behind their own gating conditions. They drifted
- * in granularity and in clause ORDER, and every reviewer round found another
+ * in granularity and in clause ORDER, and each round found another
  * cell of that cross-product. There is nowhere left for them to disagree.
  */
 export interface DeadSendAccount {
+  /**
+   * The staged worktree a STATED send was going to run in.
+   *
+   * Unlike the restored send's, this binding cannot be handed back: the staging
+   * slot is single and per chat, and the send that won the restoration slot
+   * rightfully holds it. So this is a statement obligation rather than a restore
+   * one - the same rule as the text itself. Naming the branch makes it
+   * actionable: re-picking blind is how the resubmit silently runs somewhere
+   * else, which is exactly what the restore path exists to prevent.
+   */
   readonly worktree: WorktreeSweepAccount;
   readonly sentSettings: ChatRunSettings | null;
   readonly currentSettings: ChatRunSettings | null;
@@ -853,6 +834,7 @@ const DRIFT_LABELS: Record<keyof ChatRunSettings | "accountContext", string> = {
   serviceTier: "service tier",
   agentMode: "agent mode",
   profileId: "profile",
+  ultracode: "Ultracode",
   accountContext: "billing",
 };
 
@@ -921,6 +903,7 @@ function runSettingsDrift(
     serviceTier: [sent.serviceTier, current.serviceTier],
     agentMode: [sent.agentMode, current.agentMode],
     profileId: [sent.profileId ?? null, current.profileId ?? null],
+    ultracode: [String(sent.ultracode), String(current.ultracode)],
   };
   // `null` is a VALUE - "use the default" - not an absence. Dropping a field
   // because its SENT value was null hid the drift that matters most.
@@ -2091,8 +2074,8 @@ export function withoutSettledAcceptedQueueStatusActions(
  * Completion, not start: the record used to retire at `restoreStarted` and
  * hand the hold to the in-flight slot, but that slot is UI state a reconnect
  * snapshot sweeps (`sweepStaleRestoreSlot`), so a restore still running
- * across a reconnect had no hold left and the epic parked over it (Codex on
- * b63aa85d7). The record is the bookkeeping now and the slot is only the
+ * across a reconnect had no hold left and the epic parked over it
+ * The record is the bookkeeping now and the slot is only the
  * spinner. The durable `checkpoint.restored` event is the other door
  * ({@link settleRestoreAttemptsByEvidence}), exact by client action id, for a
  * completion frame that died with the dropped stream.
@@ -2188,7 +2171,7 @@ export function restoreOutcomesFrom(
  * legacy snapshot serialized in that gap carries it ahead of the frame. The
  * frame carries no action id, so when it then arrives it would retire the
  * EARLIEST record for its checkpoint - a second attempt accepted back to
- * back, whose own restore has not run yet (Codex on ad9f99fb8). This entry
+ * back, whose own restore has not run yet. This entry
  * is how the frame door tells "already settled by the event" from "one more
  * attempt finished": one entry per retired record, consumed by the next
  * completion frame for the checkpoint on the same connection.
@@ -2233,7 +2216,7 @@ export interface SettledRestoreAttempts {
  * Both halves move together because both are parking holds
  * (`hasUnsettledChatWork` reads the record AND the in-flight slot): the
  * record retired by a live outcome event while the spinner stayed in flight
- * held the epic until a reconnect happened to sweep it (Codex on ac6c4eca1).
+ * held the epic until a reconnect happened to sweep it.
  *
  * A record retired by an OUTCOME (not a refusal - a refused attempt sends no
  * completion frame) also leaves a {@link SettledRestoreCompletion} for the
@@ -2354,7 +2337,7 @@ export function consumeSettledRestoreCompletion(
  * settleRestoreAttemptsByEvidence} (which settles the slot only through a
  * record) leaves its spinner in flight when the completion frame is lost and
  * the outcome event arrives, and `hasUnsettledChatWork` keeps vetoing the
- * park on that spinner alone (Codex on ad9f99fb8). Matched by checkpoint,
+ * park on that spinner alone. Matched by checkpoint,
  * which is sound only for the live door: live events arrive in order, so an
  * outcome for the checkpoint a live slot names is that attempt's, never an
  * older attempt's. A snapshot's events can carry older outcomes for the same
@@ -2467,8 +2450,8 @@ function isAcceptedActionLifecycleLocked(action: AcceptedChatAction): boolean {
     (action.action === "queueCancel" && action.queueItemId !== null) ||
     // A restore is file mutation still running on the host, and this record
     // is the only parking hold that survives a reconnect: the progress slot
-    // is frame-driven and the post-reconnect snapshot sweeps it (Codex on
-    // b63aa85d7). Aging it out mid-restore would park over live work, so it
+    // is frame-driven and the post-reconnect snapshot sweeps it
+    // Aging it out mid-restore would park over live work, so it
     // is retired only by completion evidence - the `restoreCompleted` frame,
     // the durable `checkpoint.restored` event (appended live or carried by a
     // snapshot), or an error notice for the action. A host that dies
@@ -2547,7 +2530,7 @@ export interface AcceptedActionSettlementContext {
  * any row is runnable), so a queue can carry paused rows under `running` or
  * `idle`, and a status-keyed resume verdict parked over rows still held while
  * a status-keyed pause verdict never settled beside a runnable system-owned
- * row (Codex on 7f3f67441).
+ * row.
  *
  * `restoreCheckpoint` is the one kind whose settlement is NOT readable from
  * live state, and the arm deliberately does not try. The restore slot cannot
@@ -2555,11 +2538,11 @@ export interface AcceptedActionSettlementContext {
  * dialog consumers, so with checkpoint A completed, a restore of B accepted
  * afterwards read A's slot as its own settlement (fixed by matching ids), and
  * a REPEAT restore of A accepted afterwards still did - same id, older slot -
- * and parked before its own `restoreStarted` arrived (CodeRabbit and Codex on
- * 7f3f67441). And the slot does not survive a reconnect: the snapshot sweeps
+ * and parked before its own `restoreStarted` arrived
+ * And the slot does not survive a reconnect: the snapshot sweeps
  * an in-flight slot stamped on the old connection, so a restore still running
- * on the host had no hold at all once the record had handed off to it (Codex
- * on b63aa85d7). What does identify the action's own restore is ORDER: the
+ * on the host had no hold at all once the record had handed off to it
+ * What does identify the action's own restore is ORDER: the
  * record is added at the ack and retired one per `restoreCompleted` by the
  * frame door ({@link withoutEarliestAcceptedRestoreActionFor}), or exactly by
  * its id when the durable `checkpoint.restored` event or an error notice

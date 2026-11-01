@@ -784,7 +784,7 @@ vi.mock("@/hooks/sandboxes/use-sandbox-list-query", () => ({
 
 vi.mock("@/lib/host/runtime", () => ({
   useHostClient: () => testState.activeHostClient,
-  // The SPINE, a separate export since redesign P2.1.
+  // The SPINE, a separate export.
   useHostRuntimeClient: () => testState.activeHostClient,
 }));
 
@@ -963,7 +963,7 @@ vi.mock("@/stores/epics/epic-sidebar-expansion-store", () => ({
 }));
 
 // The rail's shape and its per-panel Hide/Show live beside the bijection
-// now, not on the panel store (G1-09), so the sidebar's two reads are
+// now, not on the panel store, so the sidebar's two reads are
 // stubbed where they are actually imported from.
 vi.mock("@/lib/layout/rail-view", () => ({
   useLayoutRail: () => [
@@ -1150,6 +1150,7 @@ vi.mock("@/lib/epic-selectors", () => ({
   // to add - which, with no host client bound here, it never does.
   useEpicChatIds: () => [],
   useEpicChatIdsNamedByCloudRows: () => [],
+  useEpicFileArtifactViewer: () => null,
   useEpicArtifactStatus: (artifactId: string) =>
     testState.tree.nodeById[artifactId]?.status ?? null,
   useEpicChatHarnessId: (nodeId: string) =>
@@ -1689,7 +1690,7 @@ describe("epic sidebar selection mode", () => {
   });
 
   // Deletes go out deepest agent first; the notice's advice follows the
-  // selection (traycerai/traycer#2546, round 11, rows 5 and 7).
+  // selection (traycerai/traycer#2546, rows 5 and 7).
   it("lists refusal advice in selection order, not the order the deletes were sent", async () => {
     seedGuiChatTree();
     const toastError = vi.spyOn(toast, "error");
@@ -3305,7 +3306,7 @@ function leadingStatusKinds(nodeId: string): readonly string[] {
 
 /**
  * The `data-status-glyph` kind drawn inside a leading status testid, for the
- * sidebar tree's rows (D12's shared vocabulary, which every surface now
+ * sidebar tree's rows (the shared vocabulary, which every surface now
  * draws - only a tone the glyph set has no shape for keeps a lucide icon).
  */
 function statusGlyphKind(testId: string): string | null {
@@ -3317,11 +3318,6 @@ function statusGlyphKind(testId: string): string | null {
   );
 }
 
-/**
- * A row's read-only lock, which `ChatProgressIcon` renders in the IDLE slot -
- * so it appears only once no attention tone, activity tier or unread completion
- * has claimed the icon. Scoped to the row so a sibling's lock cannot satisfy it.
- */
 /**
  * The hover label attached to `el`. Leaf tooltips mount on hover; the
  * `@/components/ui/tooltip` mock then renders content inline as a sibling of
@@ -3340,6 +3336,11 @@ function tooltipTextIn(el: HTMLElement): string | null {
   return tip === null ? null : tip.textContent;
 }
 
+/**
+ * A row's read-only lock, which `ChatProgressIcon` renders in the IDLE slot -
+ * so it appears only once no attention tone, activity tier or unread completion
+ * has claimed the icon. Scoped to the row so a sibling's lock cannot satisfy it.
+ */
 function readOnlyLock(nodeId: string): HTMLElement | null {
   const row = screen.queryByTestId(`epic-sidebar-item-${nodeId}`);
   if (row === null) return null;
@@ -3783,7 +3784,7 @@ describe("chat row leading status icon", () => {
     };
     view.rerender(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
     expect(leadingStatusKinds("chat-child")).toEqual(["done"]);
-    // The tree draws every state through the shared D12 glyph vocabulary,
+    // The tree draws every state through the shared glyph vocabulary,
     // not a surface-specific tone icon.
     expect(statusGlyphKind("chat-sidebar-spinner-done-chat-child")).toBe(
       "done",

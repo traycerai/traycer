@@ -17,6 +17,7 @@ import type {
   ServerFrameHandler,
   StatusChangeHandler,
   StreamCloseReason,
+  StreamContinuity,
   StreamFrameEnvelope,
 } from "@traycer-clients/shared/host-transport/i-stream-session";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
@@ -190,17 +191,25 @@ class MockStreamSession implements IStreamSession {
 
   emitOpen(): void {
     if (this.statusChangeHandler === null) return;
-    this.statusChangeHandler("open", null, null);
+    this.statusChangeHandler("open", null, null, null);
   }
 
   emitStatus(status: "connecting" | "open" | "closed" | "reconnecting"): void {
     if (this.statusChangeHandler === null) return;
-    this.statusChangeHandler(status, null, null);
+    this.statusChangeHandler(status, null, null, null);
+  }
+
+  emitContinuityStatus(
+    status: "open" | "reconnecting",
+    continuity: StreamContinuity,
+  ): void {
+    if (this.statusChangeHandler === null) return;
+    this.statusChangeHandler(status, null, null, continuity);
   }
 
   emitClosed(reason: StreamCloseReason | null): void {
     if (this.statusChangeHandler === null) return;
-    this.statusChangeHandler("closed", reason, null);
+    this.statusChangeHandler("closed", reason, null, null);
   }
 }
 
@@ -852,6 +861,71 @@ describe("host notifications store", () => {
     expect(state.connectionStatus).toBe("reconnecting");
   });
 
+  describe("while the host holds the stream", () => {
+    function openHeldStream(onStreamOpened: () => void) {
+      const client = new MockWsStreamClient();
+      applySimpleSnapshot({
+        entries: [entry("kept", 10, null)],
+        summary: { unreadCount: 1, attentionCount: 0 },
+        recentCursor: null,
+        attentionNext: null,
+      });
+      const close = openHostNotificationsStream(reconnectEngine, client, null, {
+        windowId: "window-1",
+        now: () => 123,
+        displayChannelEmission: () => undefined,
+        onFeedFrame: () => undefined,
+        onPresenceChanged: () => undefined,
+        onStreamOpened,
+        cloudLane: null,
+      });
+      client.session.emitOpen();
+      return { client, close };
+    }
+
+    it("keeps the summary while reporting reconnecting, and restores live on a continued open without a new stream cycle", () => {
+      const onStreamOpened = vi.fn<() => void>();
+      const { client, close } = openHeldStream(onStreamOpened);
+      expect(onStreamOpened).toHaveBeenCalledTimes(1);
+      const sentBefore = client.session.clientFrames.length;
+
+      client.session.emitContinuityStatus("reconnecting", "held");
+      expect(useHostNotificationsStore.getState().connectionStatus).toBe(
+        "reconnecting",
+      );
+      expect(useHostNotificationsStore.getState().summary).toEqual({
+        unreadCount: 1,
+        attentionCount: 0,
+      });
+
+      client.session.emitContinuityStatus("open", "continued");
+      expect(useHostNotificationsStore.getState().connectionStatus).toBe(
+        "open",
+      );
+      expect(useHostNotificationsStore.getState().summary).toEqual({
+        unreadCount: 1,
+        attentionCount: 0,
+      });
+      expect(onStreamOpened).toHaveBeenCalledTimes(1);
+      // Presence is re-announced so the host hears this window again.
+      expect(client.session.clientFrames.length).toBeGreaterThan(sentBefore);
+      close();
+    });
+
+    it("nulls the summary once the hold ends and starts a new cycle on the next open", () => {
+      const onStreamOpened = vi.fn<() => void>();
+      const { client, close } = openHeldStream(onStreamOpened);
+
+      client.session.emitContinuityStatus("reconnecting", "held");
+      client.session.emitContinuityStatus("reconnecting", null);
+      expect(useHostNotificationsStore.getState().summary).toBeNull();
+
+      client.session.emitContinuityStatus("open", null);
+      expect(onStreamOpened).toHaveBeenCalledTimes(2);
+      close();
+    });
+  });
+
   it("marks summary unknown and requests session reconnect after a malformed server frame", () => {
     const client = new MockWsStreamClient();
     applySimpleSnapshot({
@@ -972,7 +1046,7 @@ describe("host notifications store", () => {
     expect(after.unreadRecentStatus).toBe("idle");
   });
 
-  // These three reproduce the exact ABA collision from the review's read-only
+  // These three reproduce the exact ABA collision from the read-only
   // repro: a page-request token is captured, `reset()` fires, and a fresh
   // snapshot lands whose epoch/revision would equal the captured token again
   // if the counters were zeroed by reset. Because both counters are

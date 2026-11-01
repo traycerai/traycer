@@ -1,13 +1,18 @@
 import { useCallback, useMemo, useState } from "react";
 import type { Viewport } from "@xyflow/react";
 import type { CanvasLayoutSnapshot } from "@traycer/protocol/persistence/epic/canvas-layout";
-import { usePaneFocused } from "@/components/epic-tabs/pane-visibility-context";
+import {
+  usePaneFocused,
+  usePaneVisible,
+} from "@/components/epic-tabs/pane-visibility-context";
 import {
   adjacentFullscreenBoard,
   boardFrame,
   selectLiveBoards,
   type CanvasPageItems,
 } from "./canvas-model";
+import { useTabBodySelected } from "@/components/epic-canvas/canvas/tab-body-selected-context";
+import { useCanvasBoardMounts } from "./use-canvas-board-mounts";
 import type { CanvasFullscreenSizing } from "./canvas-fullscreen";
 import { useCanvasFullscreenSurface } from "./use-canvas-fullscreen-surface";
 
@@ -21,8 +26,8 @@ function currentFullscreen(
 export function useCanvasPresentation({
   snapshot,
   items,
-  boardFiles,
-  liveFrameLimit,
+  boardByteLengths,
+  liveSlotBudget,
   size,
   viewport,
   settledViewport,
@@ -30,8 +35,8 @@ export function useCanvasPresentation({
 }: {
   readonly snapshot: CanvasLayoutSnapshot;
   readonly items: CanvasPageItems;
-  readonly boardFiles: ReadonlySet<string> | null;
-  readonly liveFrameLimit: number;
+  readonly boardByteLengths: Readonly<Record<string, number>> | null;
+  readonly liveSlotBudget: number;
   readonly size: { readonly width: number; readonly height: number };
   readonly viewport: Viewport;
   readonly settledViewport: Viewport;
@@ -42,20 +47,23 @@ export function useCanvasPresentation({
   const [recentBoards, setRecentBoards] = useState<readonly string[]>([]);
   const [surface, setSurface] = useState<HTMLDivElement | null>(null);
   const paneFocused = usePaneFocused();
-  const activeFullscreen = paneFocused
-    ? currentFullscreen(snapshot.boards, fullscreen)
-    : null;
+  const paneVisible = usePaneVisible();
+  const tabSelected = useTabBodySelected();
+  const activeFullscreen =
+    paneFocused && tabSelected
+      ? currentFullscreen(snapshot.boards, fullscreen)
+      : null;
   const closeFullscreen = useCallback(() => setFullscreen(null), []);
   const rememberBoard = useCallback(
     (path: string): void => {
       setRecentBoards((previous) =>
         [path, ...previous.filter((item) => item !== path)].slice(
           0,
-          Math.max(1, liveFrameLimit),
+          Math.max(1, liveSlotBudget),
         ),
       );
     },
-    [liveFrameLimit],
+    [liveSlotBudget],
   );
   const stepFullscreen = useCallback(
     (direction: -1 | 1): void => {
@@ -77,49 +85,48 @@ export function useCanvasPresentation({
     closeFullscreen,
     stepFullscreen,
   );
-  const liveBoards = useMemo(() => {
-    const nearest = selectLiveBoards(
-      items,
-      {
-        x: (size.width / 2 - settledViewport.x) / settledViewport.zoom,
-        y: (size.height / 2 - settledViewport.y) / settledViewport.zoom,
-      },
-      liveFrameLimit,
-    );
-    // Explicitly visited boards retain their running document in a bounded
-    // working set. The remaining slots go to the boards nearest the viewport.
-    const candidates = [
-      ...(activeFullscreen === null ? [] : [activeFullscreen]),
-      // The playing board keeps its running document whatever the camera does.
-      ...(playingBoard === null ? [] : [playingBoard]),
-      ...recentBoards.slice(0, 1),
-      ...[...nearest].slice(0, Math.max(1, Math.floor(liveFrameLimit / 2))),
-      ...recentBoards.slice(1),
-      ...nearest,
-    ].filter(
-      (path) =>
-        Object.hasOwn(snapshot.boards, path) &&
-        (boardFiles === null || boardFiles.has(path)),
-    );
-    return new Set(
-      [...new Set(candidates)].slice(0, Math.max(0, liveFrameLimit)),
-    );
-  }, [
-    items,
-    size,
-    settledViewport,
-    liveFrameLimit,
-    activeFullscreen,
-    playingBoard,
-    recentBoards,
-    snapshot.boards,
-    boardFiles,
-  ]);
+  const desiredBoards = useMemo(
+    () =>
+      selectLiveBoards({
+        boards: snapshot.boards,
+        pageBoards: items.boards.map(([path]) => path),
+        byteLengths: boardByteLengths,
+        viewport: {
+          x: -settledViewport.x / settledViewport.zoom,
+          y: -settledViewport.y / settledViewport.zoom,
+          w: size.width / settledViewport.zoom,
+          h: size.height / settledViewport.zoom,
+        },
+        fullscreenBoard: activeFullscreen,
+        playingBoard,
+        recentBoards,
+        slotBudget: liveSlotBudget,
+      }),
+    [
+      items.boards,
+      snapshot.boards,
+      boardByteLengths,
+      size,
+      settledViewport,
+      activeFullscreen,
+      playingBoard,
+      recentBoards,
+      liveSlotBudget,
+    ],
+  );
+  const { liveBoards, onBoardStatus } = useCanvasBoardMounts(
+    desiredBoards,
+    paneVisible && tabSelected,
+  );
   const renderedBoards = useMemo(
     () => [
       ...items.boards,
       ...[...liveBoards]
-        .filter((path) => !items.boards.some(([item]) => item === path))
+        .filter(
+          (path) =>
+            Object.hasOwn(snapshot.boards, path) &&
+            !items.boards.some(([item]) => item === path),
+        )
         .map((path) => [path, snapshot.boards[path]] as const),
     ],
     [items.boards, liveBoards, snapshot.boards],
@@ -176,6 +183,7 @@ export function useCanvasPresentation({
     setSurface,
     rememberBoard,
     liveBoards,
+    onBoardStatus,
     renderedBoards,
     shownViewport,
   };

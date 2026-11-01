@@ -1,6 +1,12 @@
 import { PROVIDER_DISPLAY_NAMES, type ProviderId } from "./provider-schemas";
 
-/** Recognizable issuers, never a list of required formats for a target. */
+/**
+ * Recognizable issuers. A value accepted here is either of no recognizable
+ * shape, or of the target's own shape; a target absent from this table is
+ * refused the same as one present, if the value matches another issuer's
+ * shape — absence only drops the refusal's prefix guidance, never the
+ * refusal itself.
+ */
 const API_KEY_ISSUERS = [
   // https://platform.claude.com/docs/en/manage-claude/authentication
   { providerId: "claude-code", label: "Anthropic", prefix: "sk-ant-" },
@@ -14,10 +20,16 @@ const API_KEY_ISSUERS = [
   { providerId: "amp", label: "Amp", prefix: "sgamp_" },
 ] as const;
 
+function article(label: string): string {
+  return /^[AEIOU]/.test(label) ? "an" : "a";
+}
+
 /**
  * Refuse only a positively recognizable foreign issuer. Unknown shapes stay
  * accepted so a vendor changing its format cannot lock out a legitimate key.
- * No key material is included in the refusal.
+ * No key material is included in the refusal. Names the target's own prefix
+ * too, for a target in `API_KEY_ISSUERS`; a target with no known shape gets
+ * only the first sentence, since there is no shape to name.
  */
 export function providerApiKeyRefusal(
   providerId: ProviderId,
@@ -29,6 +41,11 @@ export function providerApiKeyRefusal(
       trimmed.startsWith(row.prefix) && trimmed.length > row.prefix.length,
   );
   if (issuer === undefined || issuer.providerId === providerId) return null;
-  const article = /^[AEIOU]/.test(issuer.label) ? "an" : "a";
-  return `That looks like ${article} ${issuer.label} key. Use your ${PROVIDER_DISPLAY_NAMES[providerId]} key.`;
+  const targetLabel = PROVIDER_DISPLAY_NAMES[providerId];
+  const target = API_KEY_ISSUERS.find((row) => row.providerId === providerId);
+  const shapeClause =
+    target === undefined
+      ? ""
+      : ` ${targetLabel} keys start with "${target.prefix}".`;
+  return `This looks like ${article(issuer.label)} ${issuer.label} key, not ${article(targetLabel)} ${targetLabel} key.${shapeClause}`;
 }

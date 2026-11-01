@@ -516,6 +516,7 @@ function queryClientWrapper(
 
 function defaultToolbar() {
   return {
+    ultracode: false,
     selection: {
       harnessId: "codex" as const,
       modelSlug: "gpt-5-codex",

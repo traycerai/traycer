@@ -775,7 +775,7 @@ function bindHostClient(): void {
       findById: (hostId: string) =>
         hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
       selectById: () => {},
-      // Locality (D7) reads the local entry through useReactiveLocalHostEntry;
+      // Locality reads the local entry through useReactiveLocalHostEntry;
       // keep this mock honest for the desktop shell under test.
       getLocalEntry: () => mockLocalHostEntry,
       onChange: () => ({ dispose: () => {} }),
@@ -3114,7 +3114,7 @@ describe("NotificationsPopover", () => {
     expect("resolvedAt" in retained ? retained.resolvedAt : null).toBeNull();
   });
 
-  // D10: the Notifications drawer's own group of prompts waiting on the person, on
+  // The Notifications drawer's own group of prompts waiting on the person, on
   // top of the ordinary Updates/Recent sections it otherwise shares with the
   // center.
   it("titles the shell 'Notifications' in both the inbox and center variants", async () => {

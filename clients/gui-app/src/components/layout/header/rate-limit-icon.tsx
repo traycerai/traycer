@@ -165,7 +165,7 @@ function ScopedRateLimitIconButton({
       ? tooltipLabel
       : `${tooltipLabel} (${formatChordForDisplay(chord)})`;
 
-  // The Detailed forms name themselves (R1-A3), and carry their own
+  // The Detailed forms name themselves, and carry their own
   // per-profile tooltips, so only the glyph forms get the button's tooltip.
   const readings = form === "inline" || form === "rows";
   const trigger = (
@@ -241,7 +241,7 @@ function usageButtonLook(
 }
 
 /**
- * The reading over live data, through the status bar's own selector (G6): the
+ * The reading over live data, through the status bar's own selector: the
  * same providers in the same order, the same hidden providers, the same limits
  * and the same checked accounts. The tab strip used to read a fixed pair of its
  * own, so every one of those settings did nothing while the reading lived
@@ -251,7 +251,7 @@ function usageButtonLook(
  * Every form owns its fetching the way the status bar's cluster does, the
  * phone header's glyph included: the phone footer is opt-in and off by
  * default, and HTTP providers are not in the background poll, so a glyph that
- * left fetching to the footer read a cold cache (G6 review A). When the footer
+ * left fetching to the footer read a cold cache. When the footer
  * is on too, the query cache and `fetchProviderRateLimits` share one request.
  */
 function LiveRateLimitGlyph({

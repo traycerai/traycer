@@ -1,4 +1,9 @@
 import { lexer, type MarkedToken, type Token, type Tokens } from "marked";
+import {
+  paintedBotSendOf,
+  slackSendPlace,
+  type BotSend,
+} from "@/lib/bots/bot-send-tool";
 import { segmentsShownInTranscript } from "@/stores/chats/hidden-transcript-notices";
 import {
   buildChatActivityTimeline,
@@ -24,7 +29,10 @@ import {
 import { importedChatMarkerLabel } from "@/components/chat/segments/imported-chat-marker-display";
 import { autoJudgeUnattendedDenialText } from "@/components/chat/segments/auto-judge-unattended-denial-display";
 import { genericToolImageCaption } from "@/components/chat/segments/image-result-presentation";
-import type { ImageGenerationResult } from "@traycer/protocol/persistence/epic/content-blocks";
+import type {
+  BotSendReceipt,
+  ImageGenerationResult,
+} from "@traycer/protocol/persistence/epic/content-blocks";
 import { singleSpecialSegment } from "@/components/chat/chat-special-segment";
 import { assistantTurnPartIndexes } from "@/components/chat/chat-turn-parts";
 import {
@@ -127,6 +135,14 @@ interface ChatFindRendering {
    * carrying a part key there would send a hit to a row the list never built.
    */
   readonly splitLongTurns: boolean;
+  /**
+   * In a bot's session, what a question's send card says of
+   * each question, read from the post the send wrote as the card reads it;
+   * `null` outside a session.
+   */
+  readonly botSendQuestionStates:
+    | ((receipt: BotSendReceipt) => ReadonlyArray<string | null> | null)
+    | null;
 }
 
 const NO_PART_CUTS: readonly string[] = [];
@@ -159,6 +175,77 @@ export function buildChatFindRows(
       units,
     };
   });
+}
+
+/**
+ * A question's send card in a bot's session whose post is read: what
+ * it posted, and under each settled question what the card says of it.
+ * `null` for every other item, which indexes as any tool row does.
+ */
+function botQuestionSendSearchUnits(
+  item: ChatActivityTimelineItem,
+  statesOf: ChatFindRendering["botSendQuestionStates"],
+): ReadonlyArray<ChatFindUnit> | null {
+  if (statesOf === null || item.kind !== "segment") return null;
+  if (item.segment.kind !== "tool") return null;
+  const send = paintedBotSendOf(item.segment);
+  if (send?.kind !== "ask" || send.receipt?.slack !== null) return null;
+  const states = statesOf(send.receipt);
+  if (states === null) return null;
+  return compactUnits([
+    chatFindUnit({
+      unitId: chatFindSegmentUnitId(item.segment.id),
+      text: botSendSearchText(send, states),
+      owningChain: [],
+    }),
+  ]);
+}
+
+/**
+ * What a bot's send card paints of what it posted: a question's text and
+ * options, with each settled question's state where `states` names it, or a
+ * reply's or announcement's text as its `TextSegment` paints it and a
+ * reply's choices. A send posted in Slack leads with its place line (S4b).
+ */
+function botSendSearchText(
+  send: BotSend,
+  states: ReadonlyArray<string | null> | null,
+): string {
+  const slackPlace = slackSendPlace(send);
+  const place = slackPlace === null ? [] : [slackPlace];
+  if (send.kind === "ask") {
+    return normalizeSearchableText(
+      [
+        ...place,
+        ...send.questions.flatMap((question, index) => {
+          const state = states?.[index] ?? null;
+          return [
+            question.text,
+            ...question.options,
+            ...(state === null ? [] : [state]),
+          ];
+        }),
+      ].join("\n"),
+    );
+  }
+  const choices = send.kind === "reply" ? send.options : [];
+  return normalizeSearchableText(
+    [...place, ...textSegmentSearchText(send.text, false), ...choices].join(
+      "\n",
+    ),
+  );
+}
+
+/** What `TextSegment` paints of Markdown: its next-step blocks' prose, and the rest as rendered. */
+function textSegmentSearchText(
+  markdown: string,
+  isStreaming: boolean,
+): ReadonlyArray<string> {
+  return parseTraycerNextStepsMarkdown(markdown, isStreaming).map((part) =>
+    markdownToChatSearchText(
+      part.kind === "markdown" ? part.markdown : part.prose,
+    ),
+  );
 }
 
 export function markdownToChatSearchText(markdown: string): string {
@@ -291,9 +378,10 @@ function chatFindUnitsForMessage(
     const unitsOf = (
       item: ChatActivityTimelineItem,
     ): ReadonlyArray<ChatFindUnit> =>
-      settled !== null && item.kind === "segment"
+      botQuestionSendSearchUnits(item, rendering.botSendQuestionStates) ??
+      (settled !== null && item.kind === "segment"
         ? settledCardSearchUnits(item.segment, settled, tileInstanceId)
-        : timelineItemSearchUnits(item, tileInstanceId);
+        : timelineItemSearchUnits(item, tileInstanceId));
     const cuts = rendering.splitLongTurns
       ? assistantTurnPartCuts(message.segments)
       : NO_PART_CUTS;
@@ -642,15 +730,7 @@ function interviewSearchUnits(
 function segmentSearchText(segment: MessageSegment): ReadonlyArray<string> {
   switch (segment.kind) {
     case "text":
-      return parseTraycerNextStepsMarkdown(
-        segment.markdown,
-        segment.isStreaming,
-      ).flatMap((part) => {
-        if (part.kind === "markdown") {
-          return [markdownToChatSearchText(part.markdown)];
-        }
-        return [markdownToChatSearchText(part.prose)];
-      });
+      return textSegmentSearchText(segment.markdown, segment.isStreaming);
     case "reasoning":
       return reasoningSegmentSearchText(segment);
     case "tool":
@@ -809,6 +889,13 @@ function toolSegmentSearchText(segment: ToolSegment): ReadonlyArray<string> {
   if (segment.artifact !== null) return [];
   // The same for an app row: the app is a sandboxed document too.
   if (isMcpAppToolCall(segment)) return [];
+  const send = paintedBotSendOf(segment);
+  if (send !== null) {
+    // A bot's send card paints what it posted; its destination line names
+    // where, which is not the transcript's text - except a Slack send's,
+    // which is the only place that send is named (S4b).
+    return [botSendSearchText(send, null)];
+  }
   if (segment.agentMessageSend !== null) {
     // The header's "Sent message" label is screen-reader-only, so it is not
     // indexed: a find hit on it would highlight nothing. The collapsed

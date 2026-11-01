@@ -244,6 +244,14 @@ function createBaseRunnerHost(): IRunnerHost {
       Promise.resolve({ kind: "unauthorized" as const }),
     openSandboxAutomation: () =>
       Promise.resolve({ kind: "unauthorized" as const }),
+    readSlackApp: () => Promise.resolve({ kind: "unauthorized" as const }),
+    getSlackAppManifest: () =>
+      Promise.resolve({ kind: "unauthorized" as const }),
+    registerSlackApp: () => Promise.resolve({ kind: "unauthorized" as const }),
+    mintSlackAppInstallUrl: () =>
+      Promise.resolve({ kind: "unauthorized" as const }),
+    disconnectSlackApp: () =>
+      Promise.resolve({ kind: "unauthorized" as const }),
     getSandboxGrants: () => Promise.resolve({ kind: "unauthorized" as const }),
     getTeamEnvironment: () =>
       Promise.resolve({ kind: "unauthorized" as const }),
@@ -324,7 +332,21 @@ function createBaseRunnerHost(): IRunnerHost {
     onLocalHostChange: () => ({ dispose: () => undefined }),
     onLocalHostUnresponsive: () => ({ dispose: () => undefined }),
     onSystemResumed: () => ({ dispose: () => undefined }),
+    onSystemSuspended: () => ({ dispose: () => undefined }),
+    onVoiceTrayAction: () => ({ dispose: () => undefined }),
     onNetworkPathChanged: () => ({ dispose: () => undefined }),
+    getVoiceAvailability: () =>
+      Promise.resolve({ kind: "ok" as const, available: false }),
+    mintVoiceSession: () => Promise.resolve({ kind: "dormant" as const }),
+    endVoiceSession: () =>
+      Promise.resolve({ kind: "ok" as const, closedAt: null }),
+    routeVoiceUtterance: () =>
+      Promise.resolve({
+        kind: "network-error" as const,
+        detail: "no router in this test",
+      }),
+    setVoiceSessionLive: () => Promise.resolve(),
+    setVoiceSessionIndicator: () => Promise.resolve(),
     requestHostRespawn: () => Promise.resolve({ kind: "restarted" as const }),
     forceRestartUnresponsiveHost: () =>
       Promise.resolve({ kind: "restarted" as const }),
@@ -633,7 +655,7 @@ describe("Report issue capture dialog (deep interactions)", () => {
 
     it("satisfies the gate for idea/other with an attached image and empty intent text", async () => {
       // Mirror the "satisfies the gate by typing intent" shape, but evidence
-      // is a screenshot instead of typed text (ticket 08 / D7 hasImages).
+      // is a screenshot instead of typed text (hasImages).
       const harness = createSupportBridgeHarness({
         snapshot: undefined,
         submitReport: undefined,
@@ -2546,8 +2568,8 @@ describe("Report issue capture dialog (deep interactions)", () => {
       renderReportIssueDialog(createRunnerHost(harness));
       await flushDialogEffects();
 
-      // The gate is satisfied by the image alone (tech-plan T4/T5's "text or
-      // image, either satisfies") - Send must complete without ever typing
+      // The gate is satisfied by the image alone (T4/T5: text or image, either
+      // satisfies) - Send must complete without ever typing
       // into the intent field.
       await attachPngAndWaitForThumbnail("image-only.png");
       await screen.findByRole("img", { name: "image-only.png" });
@@ -2801,7 +2823,7 @@ describe("evidence review shows the whole error message", () => {
   });
 });
 
-// --- image attachment helpers (ticket 08) ---------------------------------
+// --- image attachment helpers --------------------------------------------
 
 function makePngFile(name: string): File {
   const bytes = new Uint8Array(32);

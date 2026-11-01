@@ -1,5 +1,5 @@
 /**
- * The store-backed chat RECORD channel (chat-sync-v2 ticket 49).
+ * The store-backed chat RECORD channel.
  *
  * Since the single-write pivot the epic Y.Doc is no longer where a chat's
  * existence is recorded: creation writes only the chat database, and the upgrade
@@ -265,7 +265,7 @@ describe("chats.byId unions the host's records with the doc projection", () => {
 
   it("degrades to doc-only when the host lacks the method", () => {
     // `E_HOST_UNSUPPORTED` means the sync hook never calls `applyChatRecords`,
-    // so this session is exactly the pre-ticket one.
+    // so this session is exactly the doc-only one.
     const session = newSession(
       seedChats([
         [
@@ -976,7 +976,7 @@ describe("applyChatRecordDelta pushes into the same table the poll fills", () =>
 describe("pending chat creations", () => {
   it("survives the poll's omission retraction when the answer does not include it yet", () => {
     signedInAs("user-a");
-    // Ablation: this is the whole point of the ticket. Fold the union out of
+    // Ablation: this is the whole point of the test. Fold the union out of
     // `publishChatRecords` and the second `applyChatRecords` below - which
     // reconciles `chatRecordRows` against what the answer carries and knows
     // nothing about "just-created" - evicts it exactly like any other stale

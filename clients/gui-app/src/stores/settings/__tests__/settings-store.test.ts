@@ -339,6 +339,26 @@ describe("useSettingsStore", () => {
     });
   });
 
+  it("gives a kind the persisted icon colors predate its default colour", async () => {
+    // Saved before html, canvas and file artifacts existed.
+    await rehydrateFrom({
+      artifactIconColors: {
+        chat: "#38bdf8",
+        "terminal-agent": "#22d3ee",
+        spec: "#abcdef",
+        ticket: "#a78bfa",
+        story: "#34d399",
+        review: "#fb7185",
+        terminal: "#94a3b8",
+      },
+    });
+
+    expect(useSettingsStore.getState().artifactIconColors).toEqual({
+      ...DEFAULT_EPIC_NODE_ICON_COLORS,
+      spec: "#abcdef",
+    });
+  });
+
   it("resets artifact icon colors to defaults", () => {
     useSettingsStore.getState().setArtifactIconColor("ticket", "#ff00aa");
     useSettingsStore.getState().resetArtifactIconColors();

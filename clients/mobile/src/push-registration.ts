@@ -660,12 +660,15 @@ function readString(value: unknown): string | null {
 
 /**
  * Maps a tapped push's `data` (`{entryId, epicId, chatId}` from the server's
- * fan-out contract) onto the GUI's versioned notification-activation
- * envelope, so the focus bridge routes it exactly like a desktop native
- * notification click and acknowledges the correlated cloud feed row.
+ * fan-out contract, with `botId`, `threadId` and `messageId` for a row of a
+ * bot's channel) onto the GUI's versioned notification-activation envelope,
+ * so the focus bridge routes it exactly like a desktop native notification
+ * click and acknowledges the correlated cloud feed row.
  *
  * The push data carries no route `kind`, so the mapping is by presence:
- * chat when both ids exist, epic when only the epic does. Anything less
+ * chat when both ids exist, epic when only the epic does. A chat that names
+ * its bot carries the bot's row with it, which opens the bot's channel with
+ * the thread beside it; without one it opens as a chat. Anything less
  * returns `{}`, which the bridge parses as `unknown` and answers by opening
  * the notification center - the honest fallback, never a dropped tap.
  */
@@ -674,9 +677,18 @@ export function activationPayloadFromPushData(data: unknown): unknown {
   const entryId = readString(record.entryId);
   const epicId = readString(record.epicId);
   const chatId = readString(record.chatId);
+  const botId = readString(record.botId);
+  const bot =
+    botId === null
+      ? {}
+      : {
+          botId,
+          threadId: readString(record.threadId),
+          messageId: readString(record.messageId),
+        };
   const route =
     epicId !== null && chatId !== null
-      ? { kind: "chat", epicId, chatId }
+      ? { kind: "chat", epicId, chatId, ...bot }
       : epicId !== null
         ? { kind: "epic", epicId }
         : null;

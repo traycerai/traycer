@@ -223,7 +223,7 @@ describe("ComposerOptionsSheet", () => {
   });
 });
 
-// FIX 2 (P1): the Auto row must be gated on the HOST's own line, not the
+// FIX 2: the Auto row must be gated on the HOST's own line, not the
 // row's constraint alone - the mobile sheet is the second of the two copies
 // of this rule (the desktop picker is the first), and both were wrong the
 // same way before this fix.

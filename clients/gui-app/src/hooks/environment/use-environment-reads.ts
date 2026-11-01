@@ -37,7 +37,12 @@ export interface EnvironmentRead<Data> {
   readonly isError: boolean;
 }
 
-/** `environment.status`, re-read while mounted at the cadence its policy declares. */
+/**
+ * `environment.status`, re-read while mounted at the cadence its policy
+ * declares: the steady one, and the move's own while this computer's move
+ * into Personal is still running, since this read is that move's only
+ * progress (`host-method-policy-table.ts`).
+ */
 export function useEnvironmentStatusRead(
   client: HostClient<HostRpcRegistry> | null,
   hostId: string | null,

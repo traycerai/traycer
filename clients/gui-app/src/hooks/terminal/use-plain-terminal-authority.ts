@@ -617,9 +617,12 @@ export function usePlainTerminalAuthority(args: {
               };
               settleIfReady();
             },
-            onConnectionStatus: (status, reason) => {
+            onConnectionStatus: (status, reason, _retryCause, continuity) => {
               if (connectionPhase === "closed") return;
-              if (status === "connecting" || status === "reconnecting") {
+              if (
+                continuity !== "held" &&
+                (status === "connecting" || status === "reconnecting")
+              ) {
                 connectionEpisode += 1;
                 connectionPhase = "pre-open";
                 pendingSettlement = null;
@@ -627,15 +630,22 @@ export function usePlainTerminalAuthority(args: {
                 connectionEpisode += 1;
                 connectionPhase = "closed";
                 pendingSettlement = null;
-              } else {
+              } else if (status === "open") {
                 connectionPhase = "open";
               }
               queryClient.setQueryData<PlainTerminalCollection>(
                 queryKey,
-                (current) =>
-                  isMethodIncompatibleClose(reason)
-                    ? markPlainTerminalStreamIncompatible(current)
-                    : setPlainTerminalStreamStatus(current, status),
+                (current) => {
+                  if (isMethodIncompatibleClose(reason)) {
+                    return markPlainTerminalStreamIncompatible(current);
+                  }
+                  // The status gate withholds writes while held; its snapshot
+                  // still proves this subscription's rows on continuation.
+                  if (continuity === "held" && current !== undefined) {
+                    return { ...current, streamStatus: status };
+                  }
+                  return setPlainTerminalStreamStatus(current, status);
+                },
               );
               if (status === "open") settleIfReady();
             },

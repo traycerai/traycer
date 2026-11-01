@@ -19,6 +19,7 @@
 import type {
   StreamCloseReason,
   StreamConnectionStatus,
+  StreamContinuity,
 } from "../host-transport/i-stream-session";
 import type { LaneId, ResumeOffer, ResumeOutcome } from "./lane-cursor";
 import type {
@@ -57,6 +58,7 @@ export interface AdapterDescriptor {
  */
 export interface AdapterStatus {
   readonly connection: StreamConnectionStatus;
+  readonly continuity: StreamContinuity;
   /** Non-null only on a `"closed"` transition. */
   readonly closeReason: StreamCloseReason | null;
 }

@@ -15,7 +15,11 @@ import {
   MockTraycerCli,
 } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
-import { BotThreadPanel } from "@/components/bots/bot-thread-panel";
+import {
+  BotThreadPanel,
+  type BotThreadPanelThread,
+} from "@/components/bots/bot-thread-panel";
+import type { BotSentPost } from "@/stores/bots/bot-open-thread-store";
 import { TabHostContext } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import {
@@ -38,13 +42,19 @@ import "@/index.css";
  * A BOT'S THREAD PANEL WHOSE THREAD SET UP MORE TASKS THAN THE PANE HOLDS.
  *
  * The real `BotThreadPanel` fills a window-high pane, as the channel view's
- * thread column does, on a listed thread with replies: its header, the post
- * it opens on, the Tasks section over forty labeled automations, the replies'
- * region and the box that replies in the thread. The host serves no
+ * thread column does, on a listed thread with replies: its header, the Tasks
+ * section over forty labeled automations, the replies' region with the post it
+ * opens on, and the box that replies in the thread. The host serves no
  * transcript here, so the replies' region holds its connecting line; its box
  * is what the spec measures. Nothing of the panel is reimplemented; the
  * fixture supplies the provider stack and the host's answers only.
  * `?pane=<px>` makes the pane shorter than the window, as a split column is.
+ *
+ * The long-post spec reads the same panel with `?post=long`, a post far taller
+ * than any pane, as the person sent it (no channel row in this fixture), and
+ * `?thread=` for the state it is in: `listed` (default, three replies, the
+ * session connecting), `zero` (listed with no reply) or `posted` (not listed
+ * yet). `?tasks=none` leaves the Tasks section out.
  */
 const HOST_ID = "bot-thread-tasks-bound-host";
 const THREAD_ID = "thread-1";
@@ -113,6 +123,7 @@ const tasks: ReadonlyArray<BotTaskEntry> = Array.from(
     originRequestId: null,
     createdByChatId: THREAD_ID,
     checkins: null,
+    inputNeeded: null,
     pause: null,
     stop: null,
     runRequest: null,
@@ -130,6 +141,7 @@ const thread: BotThreadSummary = {
     senderUserId: null,
     sentAt: 1_000,
     resolvedAt: null,
+    excerpt: null,
   },
   replyCount: 3,
   lastReplyAt: 2_000,
@@ -138,6 +150,48 @@ const thread: BotThreadSummary = {
 };
 
 function noop(): void {}
+
+const params = new URLSearchParams(window.location.search);
+
+/** A post taller than any pane the spec makes, ending in a marker. */
+const LONG_POST = `${Array.from(
+  { length: 60 },
+  (_, index) =>
+    `Paragraph ${String(index + 1)} of a long post: the release train leaves at noon.`,
+).join("\n\n")}\n\nEND-OF-POST`;
+
+function panelThread(): BotThreadPanelThread {
+  switch (params.get("thread")) {
+    case "zero":
+      return {
+        kind: "listed",
+        thread: { ...thread, replyCount: 0 },
+        retry: null,
+        sendable: true,
+      };
+    case "posted":
+      return {
+        kind: "posted",
+        threadId: THREAD_ID,
+        retry: null,
+        sendable: true,
+      };
+    default:
+      return { kind: "listed", thread, retry: null, sendable: true };
+  }
+}
+
+const sentPost: BotSentPost | null =
+  params.get("post") === "long"
+    ? {
+        threadId: THREAD_ID,
+        requestId: "req-1",
+        text: LONG_POST,
+        senderUserId: null,
+        sentAt: 1_000,
+        delivery: "written",
+      }
+    : null;
 
 export function SignedInFixture(props: {
   readonly children: ReactNode;
@@ -158,7 +212,7 @@ export function SignedInFixture(props: {
   return <>{props.children}</>;
 }
 
-const paneHeight = new URLSearchParams(window.location.search).get("pane");
+const paneHeight = params.get("pane");
 
 export function Pane(): ReactElement {
   return (
@@ -179,20 +233,18 @@ export function Pane(): ReactElement {
                   botTitle="Release Bot"
                   conversationId="channel-1"
                   originMessageId="post-1"
-                  sent={null}
-                  thread={{
-                    kind: "listed",
-                    thread,
-                    retry: null,
-                    sendable: true,
-                  }}
-                  tasks={tasks}
+                  sent={sentPost}
+                  thread={panelThread()}
+                  tasks={params.get("tasks") === "none" ? [] : tasks}
                   anchorSenderLabel={() => "You"}
                   resolveMember={UNRESOLVED_BOT_MEMBERS}
                   onClose={noop}
                   onOpenActivity={noop}
                   onEditPost={noop}
                   onOpenTurn={noop}
+                  onOpenSession={noop}
+                  landOn={null}
+                  quote={null}
                 />
               </ChatFindForceStoreProvider>
             </A2AOpenStoreProvider>

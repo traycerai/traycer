@@ -144,7 +144,7 @@ let clickToken = 0;
 const openTile = vi.fn();
 
 /**
- * The intent every chat link open produces (C4): a single-click gesture into
+ * The intent every chat link open produces: a single-click gesture into
  * the chat's own tab, with placement left to the setting.
  */
 function chatLinkIntent(node: unknown): unknown {
@@ -779,7 +779,7 @@ describe("buildChatLinkPolicy", () => {
     // No structural candidate (default mock): falls to the deterministic
     // fallback, where in-root resolution misses (out-of-root) and the
     // absolute-file fallback supplies the synthesized ref so the file still
-    // opens (D1/D2).
+    // opens.
     mocks.workspaceFileRefFromLinkPath.mockReturnValue(null);
     mocks.workspaceFileRefFromAbsoluteFilePath.mockReturnValue({
       id: "abs-content",

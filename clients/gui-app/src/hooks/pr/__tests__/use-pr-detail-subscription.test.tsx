@@ -114,7 +114,7 @@ class MockStreamSession implements IStreamSession {
 
   close(): void {
     this.closed = true;
-    this.statusChangeHandler?.("closed", { kind: "caller" }, null);
+    this.statusChangeHandler?.("closed", { kind: "caller" }, null, null);
   }
 
   emitFrame(frame: PrSubscribeDetailServerFrame): void {
@@ -129,7 +129,7 @@ class MockStreamSession implements IStreamSession {
     status: "connecting" | "open" | "reconnecting" | "closed",
     reason: StreamCloseReason | null,
   ): void {
-    this.statusChangeHandler?.(status, reason, null);
+    this.statusChangeHandler?.(status, reason, null, null);
   }
 }
 
@@ -305,7 +305,7 @@ describe("usePrDetailSubscription - non-default-host subscription", () => {
     expect(session.closed).toBe(false);
 
     // Ref-counted teardown: the sole consumer unmounting closes the session
-    // immediately (ADR-0003 - no grace period).
+    // immediately (no grace period).
     unmount();
     expect(session.closed).toBe(true);
     expect(mockWsStreamClient.subscribeCallCount).toBe(1);

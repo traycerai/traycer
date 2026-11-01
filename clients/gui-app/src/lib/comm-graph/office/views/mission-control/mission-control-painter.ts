@@ -349,8 +349,8 @@ function paintFloor(
  * The oblique views' `civicGround` one view over, for the same reason and with
  * the same number: an amphitheatre's medbay, gallery and records are regions
  * of an open hall with nothing but a sign to say where each one stops, so a
- * reader cannot tell a seat inside one from a seat beside it. Feedback round 1
- * asked that question about Building's waiting room; this is the same floor
+ * reader cannot tell a seat inside one from a seat beside it. That question
+ * was asked about Building's waiting room; this is the same floor
  * plan one view over, and fixing only the view somebody happened to screenshot
  * is how the next round gets the same complaint about a different office.
  *
@@ -542,7 +542,7 @@ function paintSeat(
             // It used to be `deskY + OFFICE_TILE`, which is the console's
             // BOTTOM EDGE: the glyphs sat entirely inside the console art, in
             // a muted grey against the console's own grey, and read as a name
-            // with its lower half sliced off (feedback round 1: "lower half of
+            // with its lower half sliced off ("lower half of
             // labels on some agents are cut out"). Nothing was clipping it -
             // it was lettering with no floor behind it.
             y: (seat.chairTile.row + 1) * OFFICE_TILE + OFFICE_LABEL_GAP,

@@ -11,7 +11,7 @@ function ComposerToolbarLeftImpl(props: ComposerToolbarItemsProps) {
   const order = useArrangementValue("toolbarLeft");
   const cluster = (
     // The box this cluster's items are laid out in, which is the scope a
-    // canvas drag reorders inside (G3-01).
+    // canvas drag reorders inside.
     <div
       {...{ [LAYOUT_CLUSTER_ATTRIBUTE]: "" }}
       className="flex min-w-0 items-center gap-1"
@@ -26,8 +26,8 @@ function ComposerToolbarLeftImpl(props: ComposerToolbarItemsProps) {
     </div>
   );
 
-  // One menu for the strip, naming whichever item the pointer was over
-  // (G3-10) - including the presentation copy, which is the sample workspace's
+  // One menu for the strip, naming whichever item the pointer was over,
+  // including the presentation copy, which is the sample workspace's
   // toolbar and therefore the one the user right-clicks while customizing
   // (L-129). What `presentation` still turns off is the item's own behaviour
   // (`registerActivation`), not the menu: a quick verb writes the same value

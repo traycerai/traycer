@@ -1,10 +1,10 @@
 /**
- * Tab navigation single-path guard (ticket 12).
+ * Tab navigation single-path guard.
  *
  * Every entry point that switches the active tab must funnel through
  * `navigateToTabIntent` so cross-cutting behavior (per-kind store
- * activation, route resolution) lands once. The ESLint rule from
- * ticket 05 blocks raw `setActiveTab` / `setActiveDraft` /
+ * activation, route resolution) lands once. The ESLint rule
+ * blocks raw `setActiveTab` / `setActiveDraft` /
  * `epicTabRoute` outside the seam at compile time; this test locks
  * down the runtime contract: the seam itself wires
  * `descriptor.activate -> router.navigate`, and keybinding dispatch
@@ -217,7 +217,7 @@ describe("tab navigation single-path contract", () => {
     expect(recorded.intents).toHaveLength(1);
   });
 
-  // Cold review #4: empty/fillable focus must still allow strip digit +
+  // Empty/fillable focus must still allow strip digit +
   // next/prev traversal, while member-specific close no-ops when host focus
   // is not on a concrete epic member.
   it("fillable empty focus still allows digit strip selection", () => {

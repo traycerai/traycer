@@ -483,11 +483,6 @@ export function ChatTile(props: ChatTileProps) {
 }
 
 /**
- * The wait for this chat's first transcript, with what the pre-content body
- * needs from above the handle branch. See `ChatLoadWait` for why it lives
- * here and not in the body.
- */
-/**
  * Whether this viewer's epic role can create agents - the gate the dead-tile
  * banner draws Clone agent on. The live tile reads it once, into its
  * pre-content frame, and hands that one value to both its banner and the
@@ -500,6 +495,11 @@ function useChatCloneAllowed(): boolean {
   return permissionRole === null || isEditableRole(permissionRole);
 }
 
+/**
+ * The wait for this chat's first transcript, with what the pre-content body
+ * needs from above the handle branch. See `ChatLoadWait` for why it lives
+ * here and not in the body.
+ */
 function useChatTilePreContentFrame(
   reachability: HostReachability,
   hasReadySession: boolean,
@@ -548,12 +548,12 @@ function ChatTileForChat(props: ChatTileProps) {
   // evidence of a doc record.
   //
   // The doc record used to be the whole gate, on the premise that "the create
-  // seeds the chat into the epic doc". That premise died with ticket 19
-  // (creation no longer projects) and ticket 20 (`ChatDocEntrySweep` deletes
+  // seeds the chat into the epic doc". That premise died with the create path
+  // (creation no longer projects) and the sweep (`ChatDocEntrySweep` deletes
   // every entry whose publication it has proven), which together made "no doc
   // record" the ORDINARY steady state of a healthy owned chat. Left as-is,
   // this gate refused `chat.subscribe` for every migrated chat on its own
-  // connected host - the second, independent half of ticket 49's
+  // connected host - the second, independent half of the
   // permanently-read-only defect (the first is `tab-group-view.tsx`'s
   // substitution arm, which cannot even observe a `CHAT_NOT_VISIBLE`
   // terminate until this gate lets the open through).
@@ -594,7 +594,7 @@ function ChatTileForChat(props: ChatTileProps) {
         : hostBinding.hostClient.resolveHostById(projectionHostId);
     return projectionEntry !== null && projectionEntry.hostId !== tabHostId;
   });
-  // The record-less same-host case (ticket 49): a published cloud row is
+  // The record-less same-host case: a published cloud row is
   // existence evidence too, and it is the ONLY evidence a swept chat has
   // left locally. Consulted only when the two gates above have already
   // refused, so the ordinary live path costs nothing extra.
@@ -629,7 +629,7 @@ function ChatTileForChat(props: ChatTileProps) {
       (chat) => chat.identity.chatId === node.id && cloudRowIsViewersOwn(chat),
     ) ??
       false);
-  // Renderer parking (plan C, decision C1): a parked epic holds no
+  // Renderer parking: a parked epic holds no
   // `chat.subscribe`, because that subscription claims a VISIBLE lease on the
   // epic through the host's chat session and one survivor pins the slot.
   //
@@ -695,9 +695,9 @@ function ChatTileForChat(props: ChatTileProps) {
   // The chat's own bounded load (invariant 6), for both halves of the wait:
   // while `handle === null`, and after it until the first snapshot. The
   // handle-pending half has THREE causes that look identical from here: the
-  // tab's host client is null so every `useHostQuery` disabled itself (audit
-  // S3), the subscription is live but nothing has arrived (S4), or the
-  // directory has not answered at all (S5's `checking`). The reader cannot act
+  // tab's host client is null so every `useHostQuery` disabled itself,
+  // the subscription is live but nothing has arrived, or the
+  // directory has not answered at all (`checking`). The reader cannot act
   // on the difference, so all three get one sentence naming the host - and an
   // end. The wait is recorded here, above the branch, so the handle arriving
   // restarts none of its deadlines.
@@ -757,7 +757,7 @@ function ChatTileForChat(props: ChatTileProps) {
     if (strip === "starting") {
       // The bound host is coming back: this machine's host hasn't published
       // yet (boot/ensure/wake), or the host's lease vouches for a restart it
-      // announced (D4), remote hosts included. Never offer Clone here -
+      // announced, remote hosts included. Never offer Clone here -
       // cloning would fork a healthy thread.
       return (
         <ChatHostStartingBanner
@@ -958,7 +958,7 @@ function useDeadTileSourceOwner(props: DeadTileOfferSource): string | null {
     props.sourceOwnerUserId !== undefined && props.sourceOwnerUserId.length > 0
       ? props.sourceOwnerUserId
       : null;
-  // Ticket 37: both banner render sites (this tile's unreachable-host arm and
+  // Both banner render sites (this tile's unreachable-host arm and
   // the canvas substitution) resolve the source owner through the one hook, so
   // a chat with no local record still carries its history across the clone.
   // A surface that already knows the owner (the published tile's ref names
@@ -1422,12 +1422,12 @@ function ChatTileSessionViewBody(props: ChatTileSessionViewProps) {
   const pendingComposerInterviewBlockId =
     view.lower.interview.pending?.blockId ?? null;
   // The composer + queue/pinned/agents/background dock now overlays the
-  // transcript (decision log #3, #13) instead of pushing it via flex height,
+  // transcript instead of pushing it via flex height,
   // so its reply stream can flow visually behind it. Measuring the whole
   // overlay as one unit (rather than composer/queued-surface separately) is
-  // a deliberate ticket-3 scope narrowing - see ticket-3 report for the
-  // follow-up split. `useMeasuredElementHeight` (review finding: extracted so
-  // this measurement -> prop contract is directly testable, ticket 18 rider)
+  // a deliberate scope narrowing: the composer and queued surface are not
+  // measured separately. `useMeasuredElementHeight` (extracted so this
+  // measurement -> prop contract is directly testable)
   // owns the ResizeObserver plumbing.
   const {
     setElement: setLowerSurfacesElement,
@@ -2045,7 +2045,7 @@ function ChatTileSessionViewBody(props: ChatTileSessionViewProps) {
                  * its transcript and scroll state, but releases catalog/provider query
                  * observers and cannot own palette/composer-global work.
                  *
-                 * Absolutely overlays the transcript (decision log #3) instead of
+                 * Absolutely overlays the transcript instead of
                  * pushing its height via flex, so streamed replies flow visually
                  * behind it; `lowerSurfacesHeight` (measured here) feeds the
                  * transcript's bottom content inset. The full-width positioning
@@ -2253,6 +2253,7 @@ function useChatTileSessionViewModel(
         permission: defaultPermission,
         reasoning: defaultReasoning,
         serviceTier: defaultServiceTier,
+        ultracode: false,
       }),
     [defaultPermission, defaultReasoning, defaultServiceTier, defaultSelection],
   );
@@ -2343,6 +2344,7 @@ function useChatTileSessionViewModel(
       steerProtocolSupported: s.steerProtocolSupported,
       autoPermissionModeProtocolSupported:
         s.autoPermissionModeProtocolSupported,
+      ultracodeProtocolSupported: s.ultracodeProtocolSupported,
       draftBlobBridgeSupported: s.draftBlobBridgeSupported,
       interviewDeliveryRetryProtocolSupported:
         s.interviewDeliveryRetryProtocolSupported,
@@ -3977,6 +3979,7 @@ function useChatTileSessionViewModel(
   // handshake lands, so it never churns the memoized composer per token.
   const autoPermissionModeProtocolSupported =
     state.autoPermissionModeProtocolSupported;
+  const ultracodeProtocolSupported = state.ultracodeProtocolSupported;
   const getActiveTurnForSteer = useCallback(
     () => handle.store.getState().activeTurn,
     [handle.store],
@@ -3996,6 +3999,7 @@ function useChatTileSessionViewModel(
       steerCapable,
       steerProtocolSupported,
       autoPermissionModeProtocolSupported,
+      ultracodeProtocolSupported,
       getDraftBlobBridgeSupported,
       getQueuedSteerRestartConfirmationSupported,
       getActiveTurnForSteer,
@@ -4008,6 +4012,7 @@ function useChatTileSessionViewModel(
       steerCapable,
       steerProtocolSupported,
       autoPermissionModeProtocolSupported,
+      ultracodeProtocolSupported,
       getDraftBlobBridgeSupported,
       getQueuedSteerRestartConfirmationSupported,
       getActiveTurnForSteer,

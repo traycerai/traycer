@@ -4,16 +4,27 @@ import {
 } from "../../../shared/auth/auth-validation";
 import { runDeviceAuthFlow } from "../auth/login-flow";
 import { config } from "../config";
+import {
+  formatCredentialProvisionNote,
+  provisionRunningHostCredential,
+} from "../host/install-auth";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import type { CommandFn, CommandResult } from "../runner/runner";
+import type { HostCredentialProvisionOutcome } from "../host/credential-provisioning";
 import type { StoredCredentials } from "../store/credentials";
 import { runWithCliStore, withCommitRetry } from "../store/credentials-store";
 
-// `traycer login` only authenticates: it opens the browser sign-in and
-// persists the resulting credentials. It does NOT provision the host -
-// host install/start is an explicit action driven by the `host`
-// subcommands (`host ensure` / `host install`). A user signing in should
-// never trigger a host download as a side effect.
+// `traycer login` opens the browser sign-in and persists the resulting
+// credentials. It never installs, downloads or starts a host - that is an
+// explicit action driven by the `host` subcommands (`host ensure` /
+// `host install`), and a user signing in should never trigger a host
+// download as a side effect.
+//
+// What it DOES do for a host that is already running on this machine is hand
+// it its delegated credential (`provisionRunningHostCredential`): on a machine
+// without Desktop no other client ever will, and a host left without one
+// cannot deliver work to the user's other machines. A host that already holds
+// one is left alone, and with no host running nothing is dialed.
 export const loginCommand: CommandFn = async (ctx): Promise<CommandResult> => {
   ctx.runtime.logger.info("Interactive login command started", {
     environment: ctx.runtime.environment,
@@ -25,27 +36,39 @@ export const loginCommand: CommandFn = async (ctx): Promise<CommandResult> => {
     hasEmail: result.user.email.length > 0,
   });
 
-  const humanSignedIn = `Signed in as ${result.user.email || result.user.name || result.user.id}.`;
-  const data = {
-    user: result.user,
-    bootstrap: null,
-  };
+  const credentialProvision = await provisionRunningHostCredential(ctx);
   return {
-    data,
-    human: ctx.runtime.json ? null : humanSignedIn,
+    data: { user: result.user, bootstrap: null, credentialProvision },
+    human: ctx.runtime.json
+      ? null
+      : formatSignedIn(result.user, credentialProvision),
     exitCode: 0,
   };
 };
+
+function formatSignedIn(
+  user: StoredCredentials["user"],
+  credentialProvision: HostCredentialProvisionOutcome | null,
+): string {
+  const signedIn = `Signed in as ${user.email || user.name || user.id}.`;
+  const note = formatCredentialProvisionNote(credentialProvision);
+  if (note === null) return signedIn;
+  // The notes are written as clauses for the host commands' `;`-joined
+  // summary line; here each follows a full sentence, so it becomes one.
+  const sentence = `${note.charAt(0).toUpperCase()}${note.slice(1)}`;
+  return `${signedIn} ${sentence.endsWith(".") ? sentence : `${sentence}.`}`;
+}
 
 // Resolves the right `login` behaviour from the parsed `--token` flag.
 //   - no `--token` → the interactive device-flow sign-in (`loginCommand`).
 //   - `--token -` → a non-interactive credential-seeding path: read a JSON
 //     `{ token, refreshToken }` payload from stdin, validate the captured bearer
 //     access-only, and persist it to the shared credentials file via the locked
-//     store. No browser, no host auto-bootstrap. (The Desktop app used to drive
-//     this after its own sign-in; that seam was removed in the credentials-file
-//     refactor now that the CLI reads the same shared file, so this path now
-//     serves scripted/support use.)
+//     store, then hand an already-running host its credential exactly as the
+//     interactive path does. No browser, no host install or start. (The
+//     Desktop app used to drive this after its own sign-in; that seam was
+//     removed in the credentials-file refactor now that the CLI reads the
+//     same shared file, so this path now serves scripted/support use.)
 //
 // `--token` only accepts `-`; passing a literal bearer on argv is rejected so
 // secrets never land in the process list.
@@ -171,11 +194,12 @@ function loginWithToken(rawToken: string): CommandFn {
       hasFinalRefreshToken:
         (persisted.credentials?.refreshToken.length ?? 0) > 0,
     });
+    const credentialProvision = await provisionRunningHostCredential(ctx);
     return {
-      data: { user, bootstrap: null },
+      data: { user, bootstrap: null, credentialProvision },
       human: ctx.runtime.json
         ? null
-        : `Signed in as ${user.email || user.name || user.id}.`,
+        : formatSignedIn(user, credentialProvision),
       exitCode: 0,
     };
   };

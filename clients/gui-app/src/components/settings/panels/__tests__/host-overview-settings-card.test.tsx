@@ -173,7 +173,10 @@ describe("<HostOverviewSettingsCard />", () => {
   it("shows N of M items applied while moving", () => {
     renderCard(
       environmentStatusFixture({
-        consent: { acceptedAt: ACCEPTED_AT, planHash: "h" },
+        // No consent while a move runs: the status serves the migration
+        // MARKER's consent and the host writes that marker only once the upload
+        // has finished (`traycer-host/.../migration/migrator.ts`, step 5). A
+        // fixture that sets it here invites a reader to key on it.
         setup: { stage: "moving_settings", state: "running" },
         items: [
           itemStatusFixture({ kind: "variable", key: "A", status: "applied" }),
@@ -206,7 +209,6 @@ describe("<HostOverviewSettingsCard />", () => {
   it("shows no count while the move has registered no item", () => {
     renderCard(
       environmentStatusFixture({
-        consent: { acceptedAt: ACCEPTED_AT, planHash: "h" },
         setup: { stage: "moving_settings", state: "running" },
       }),
       {},
@@ -222,7 +224,6 @@ describe("<HostOverviewSettingsCard />", () => {
   describe("when the move stopped", () => {
     const stoppedStatus = (state: "stalled" | "failed") =>
       environmentStatusFixture({
-        consent: { acceptedAt: ACCEPTED_AT, planHash: "h" },
         setup: { stage: "moving_settings", state },
         items: [
           itemStatusFixture({ kind: "variable", key: "A", status: "applied" }),
@@ -289,7 +290,6 @@ describe("<HostOverviewSettingsCard />", () => {
     expect(
       hostSettingsCardState(
         environmentStatusFixture({
-          consent: { acceptedAt: ACCEPTED_AT, planHash: "h" },
           setup: { stage: "moving_settings", state: "running" },
           items: [
             itemStatusFixture({
@@ -311,6 +311,9 @@ describe("<HostOverviewSettingsCard />", () => {
   it("says when it moved, from the consent, once setup is past the move", () => {
     renderCard(
       environmentStatusFixture({
+        // Set HERE and nowhere above: the marker that carries this consent is
+        // written when the move finishes, so a status past the move is the
+        // only one that really has one.
         consent: { acceptedAt: ACCEPTED_AT, planHash: "h" },
         setup: { stage: "done", state: "done" },
       }),

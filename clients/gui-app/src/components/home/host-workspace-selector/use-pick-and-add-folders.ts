@@ -38,7 +38,7 @@ export function usePickAndAddWorkspaceFolders(
 /**
  * Locate recovery for an absent row: open the host folder picker and REPLACE
  * the dead path with whatever the user picked. A cancelled picker changes
- * nothing. Required by remote-repo-resolution D2 — re-pointing is the action
+ * nothing. Required by remote-repo-resolution — re-pointing is the action
  * that unblocks readiness; add-only left the absent entry blocking forever.
  */
 export function useLocateAndReplaceWorkspaceFolder(

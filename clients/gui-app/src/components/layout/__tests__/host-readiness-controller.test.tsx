@@ -105,7 +105,7 @@ describe("projectDefaultHostReadiness", () => {
     ).toEqual({ kind: "ready" });
   });
 
-  // D13, P3.2: the compat verdict is a SELECTION input, and this projection is
+  // D13: the compat verdict is a SELECTION input, and this projection is
   // where it used to be a readiness input instead. Every non-compatible verdict
   // is asserted, not just `incompatible`: `checking` held the window behind a
   // full-screen probe card and `failed` behind an error card, and re-adding any
@@ -138,7 +138,7 @@ describe("projectDefaultHostReadiness", () => {
 });
 
 /**
- * T1: `canProvision` in `host-readiness-controller.tsx` moved from
+ * `canProvision` in `host-readiness-controller.tsx` moved from
  * `authStatus === "signed-in"` to `admitsLocalPlane(authStatus)`. The removal
  * sentinel it arms (`useRunnerHostRemovalStateQuery`) is a purely local
  * question - "did this device's user remove Traycer's background components"
@@ -436,7 +436,7 @@ describe("local-plane admission for the removal-sentinel read", () => {
     // `resolveSurfaceReadiness`'s `restoring-request-context` branch also
     // reads `admitsLocalPlane`, so the fix widens the same gate the whole
     // chain runs through before the removed-host card can ever appear -
-    // this settle is itself part of what T1 is pinning down, not incidental
+    // this settle is itself part of the behavior under test, not incidental
     // setup.
     await waitFor(() => {
       expect(

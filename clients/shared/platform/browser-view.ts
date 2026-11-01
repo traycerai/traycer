@@ -1,6 +1,7 @@
 import type {
   StreamCloseReason,
   StreamConnectionStatus,
+  StreamContinuity,
 } from "../host-transport/i-stream-session";
 import { isMethodIncompatibleClose } from "../host-transport/i-stream-session";
 import type {
@@ -699,6 +700,7 @@ export interface BrowserSessionsStreamSend {
 export type BrowserSessionsStreamEvent =
   | {
       readonly kind: "status";
+      readonly continuity: StreamContinuity;
       readonly lifecycle: BrowserSessionsLifecycle;
       readonly errorMessage: string | null;
     }

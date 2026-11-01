@@ -234,6 +234,7 @@ function Harness(props: {
               isPending={false}
               onSubmit={() => Promise.resolve()}
               onCancel={null}
+              leadingActions={null}
               className={undefined}
               ref={refA}
             />
@@ -249,6 +250,7 @@ function Harness(props: {
               isPending={false}
               onSubmit={() => Promise.resolve()}
               onCancel={null}
+              leadingActions={null}
               className={undefined}
               ref={refB}
             />
@@ -586,7 +588,7 @@ describe("renderer parking draft-guard pins", () => {
   });
 });
 
-// ── transcript-record-fingerprint-memo P1: emptying a SAVED comment must not
+// ── transcript-record-fingerprint-memo: emptying a SAVED comment must not
 // be treated as "nothing to lose" ───────────────────────────────────────────
 //
 // `CommentComposer` distinguishes a NEW composer (`initialContent === null`)
@@ -624,6 +626,7 @@ function EditHarness(props: {
             isPending={false}
             onSubmit={() => Promise.resolve()}
             onCancel={null}
+            leadingActions={null}
             className={undefined}
             ref={refA}
           />

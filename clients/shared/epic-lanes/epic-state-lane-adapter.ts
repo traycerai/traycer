@@ -466,10 +466,11 @@ export function createEpicStateLaneAdapter(
           trust: trustOf(frame.reconciledWithCloud),
         });
       },
-      onConnectionStatus: (status, reason) => {
+      onConnectionStatus: (status, reason, _retryCause, continuity) => {
         if (!accepts(generation)) return;
         host?.reportStatus({
           connection: status,
+          continuity,
           closeReason: status === "closed" ? reason : null,
         });
       },

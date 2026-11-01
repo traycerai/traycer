@@ -1,9 +1,9 @@
 /**
- * `prepareDraftImageInlining` directly - the R2 fix. Its contract is stronger
+ * `prepareDraftImageInlining` directly. Its contract is stronger
  * than "reconcile the live document": `commit` must run in the SAME
  * synchronous step as the final `readRequiredHashes()` call, or a queued
  * document rewrite can land in the gap and reach the caller's own final read
- * without ever having been attempted (R2(b)). Tested here rather than through
+ * without ever having been attempted. Tested here rather than through
  * a mounted composer where that is cleanest - especially the bound-exhaustion
  * case (c), which needs precise control over pass count.
  */

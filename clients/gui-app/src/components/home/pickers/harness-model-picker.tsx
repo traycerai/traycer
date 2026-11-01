@@ -72,6 +72,8 @@ import {
   type RefObject,
 } from "react";
 import { HarnessModelPickerPanel } from "@/components/home/pickers/harness-model-picker-panel";
+import { modelUltracodeOffered } from "@/components/home/data/model-ultracode";
+import type { UltracodeFooterConfig } from "@/components/home/pickers/ultracode-footer-button";
 import { useHarnessModelPickerState } from "@/components/home/pickers/harness-model-picker-state";
 import {
   EMPTY_PREPARING_BY_HARNESS_ID,
@@ -105,7 +107,7 @@ import { useRegisterActiveModelPicker } from "@/hooks/command-palette/use-regist
 import { useBindingForAction } from "@/stores/settings/keybinding-store";
 import { formatChordForDisplay } from "@/lib/keybindings/chord";
 import { useRegionValue } from "@/lib/layout-overrides";
-import type { ModelStyle } from "@/lib/layout/layout-values";
+import type { ModelStyle, UltracodeStyle } from "@/lib/layout/layout-values";
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
 import { useProviderProfileEnablementPending } from "@/hooks/providers/use-providers-set-profile-enabled-mutation";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
@@ -255,6 +257,8 @@ interface HarnessModelPickerProps {
    * it.
    */
   withReasoning: boolean;
+  /** Per-chat control: false for bot, terminal and Settings selectors. */
+  withUltracode: boolean;
   /**
    * When true, the provider rail and model rows are restricted to TUI-capable
    * harnesses (the terminal-launch surface), hiding GUI-only providers like
@@ -381,12 +385,57 @@ function maxModeLabel(required: boolean): string | null {
   return required ? maxModeTooltipCopy() : null;
 }
 
+/**
+ * The Chat-only row and trigger indicator share one view of saved intent and
+ * catalog availability. Transport capability disables the row's interaction;
+ * it never clears the request or removes the row from an applicable surface.
+ */
+function useUltracodePickerControls(
+  store: ComposerToolbarStore,
+  withUltracode: boolean,
+  selection: HarnessModelSelection,
+  selectedModel: ModelOption | null,
+): {
+  readonly footer: UltracodeFooterConfig | null;
+  readonly requested: boolean;
+  /** How the chip draws the request (Layout ▸ Model ▸ Ultracode), or `null`. */
+  readonly chip: UltracodeStyle | null;
+} {
+  const ultracodeStyle = useRegionValue("model", "ultracodeStyle");
+  const ultracode = useStore(store, (state) => state.ultracode);
+  const carried = useStore(store, (state) => state.catalog.ultracodeCarried);
+  const offered = useStore(store, (state) =>
+    state.catalog.modelsLoaded &&
+    !state.selectionHealedForDisplay &&
+    state.selection.harnessId === state.values.selection.harnessId
+      ? modelUltracodeOffered(state.selectedModel)
+      : undefined,
+  );
+  const onChange = useStore(store, (state) => state.setUltracode);
+  const requested = withUltracode && ultracode && offered === true;
+  return {
+    requested,
+    chip: requested ? ultracodeStyle : null,
+    footer:
+      withUltracode && selection.harnessId === "claude"
+        ? {
+            requested: ultracode,
+            carried,
+            offered,
+            modelLabel: selectedModel?.label ?? selection.modelSlug,
+            onChange,
+          }
+        : null,
+  };
+}
+
 function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
   const {
     store,
     maxModeContext,
     withServiceTier,
     withReasoning,
+    withUltracode,
     tuiOnly,
     lockedHarnessId,
     disabled,
@@ -405,6 +454,12 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
   const serviceTier = useStore(store, (s) => s.serviceTier);
   const setReasoning = useStore(store, (s) => s.setReasoning);
   const setServiceTier = useStore(store, (s) => s.setServiceTier);
+  const ultracodeControls = useUltracodePickerControls(
+    store,
+    withUltracode,
+    selection,
+    selectedModel,
+  );
   // The footer configs were previously assembled (identically) by both the
   // chat toolbar and the terminal launcher; the picker is their only consumer,
   // so they are derived here in one place.
@@ -1296,6 +1351,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
         presentation.reasoningStep,
       )}
       serviceTierTooltip={serviceTierTooltip(serviceTierFooter, selectedModel)}
+      ultracodeRequested={ultracodeControls.requested}
       maxModeLabel={maxModeLabel(presentation.maxModeRequired)}
       profileLabel={profileTooltipLabel(
         profilesByHarnessId.get(selection.harnessId) ?? [],
@@ -1324,6 +1380,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
         reasoningIndicator={reasoningIndicator}
         serviceTierLabel={presentation.activeServiceTierLabel}
         serviceTierActive={presentation.serviceTierActive}
+        ultracode={ultracodeControls.chip}
         maxModeRequired={presentation.maxModeRequired}
         profileLabel={presentation.profileLabel}
         profileAccentDot={presentation.profileAccentDot}
@@ -1384,6 +1441,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
         onActiveRow={setActiveRowId}
         onSelectRow={selectRow}
         reasoningFooter={reasoningFooter}
+        ultracodeFooter={ultracodeControls.footer}
         reasoningPickerOpen={visibleOpen}
         serviceTierFooter={serviceTierFooter}
         maxModeContextKind={maxModeRowContextKind(maxModeContext)}
@@ -1598,6 +1656,7 @@ function PresentationHarnessModelPicker(props: HarnessModelPickerProps) {
   const reasoningIndicator = useRegionValue("model", "style");
   return (
     <HarnessModelTrigger
+      ultracode={null}
       ref={ref}
       selection={selection}
       label="Sample model"
@@ -1621,6 +1680,7 @@ function HarnessModelPickerTooltip({
   modelLabel,
   reasoningLabel,
   serviceTierTooltip,
+  ultracodeRequested,
   maxModeLabel,
   profileLabel,
   shortcutLabel,
@@ -1633,6 +1693,7 @@ function HarnessModelPickerTooltip({
     readonly value: string;
   } | null;
   readonly maxModeLabel: string | null;
+  readonly ultracodeRequested: boolean;
   readonly profileLabel: string | null;
   readonly shortcutLabel: string | null;
 }): ReactNode {
@@ -1655,6 +1716,7 @@ function HarnessModelPickerTooltip({
           <p className="whitespace-normal font-medium">{maxModeLabel}</p>
         </div>
       )}
+      {ultracodeRequested ? <span>Ultracode requested</span> : null}
       {profileLabel === null ? null : (
         <TooltipSummaryRow label="Profile" value={profileLabel} />
       )}

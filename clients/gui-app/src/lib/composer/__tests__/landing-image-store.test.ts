@@ -333,7 +333,7 @@ describe("landing-image-store", () => {
     installIdbWorking();
   });
 
-  // Finding 4: concurrent same-hash callers join one write; a failed durable
+  // Concurrent same-hash callers join one write; a failed durable
   // write rolls back cleanly without leaving torn session/knownHashes state.
   it("putImage single-flights concurrent same-hash callers and rolls back cleanly on set failure", async () => {
     const bytes = bytesOf([4, 4, 4, 4]);
@@ -389,7 +389,7 @@ describe("landing-image-store", () => {
     installIdbWorking();
   });
 
-  // Finding 6: prune knownHashes only AFTER del resolves.
+  // Prune knownHashes only AFTER del resolves.
   it("deleteImageBytesUnchecked keeps hasLandingImageBytes true when del rejects (bytes still present)", async () => {
     const hash = await putImage(bytesOf([6, 6, 6]));
     expect(hasLandingImageBytes(hash)).toBe(true);

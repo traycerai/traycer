@@ -3,8 +3,8 @@ import { z } from "zod";
 
 import { fixture, nextFrames } from "./support/fixtures.ts";
 
-// A bot's thread panel lists the tasks its thread set up between the post
-// the thread opens on and its replies. However many there are, the list
+// A bot's thread panel lists the tasks its thread set up above the post the
+// thread opens on and its replies. However many there are, the list
 // scrolls in a bounded band: an unbounded list pushes the box that replies
 // past the pane's bottom edge, and a list that keeps its height in a short
 // pane squeezes the replies to nothing, or pushes the box out of the pane
@@ -31,7 +31,6 @@ const ReadingSchema = z.object({
   tasksHeight: z.number(),
   repliesTop: z.number(),
   repliesHeight: z.number(),
-  composerTop: z.number(),
   composerBottom: z.number(),
   sendBottom: z.number(),
   scrollHeight: z.number(),
@@ -65,7 +64,6 @@ async function readPanel(page: Page): Promise<Reading> {
           tasksHeight: box(selectors.tasks).height,
           repliesTop: box(selectors.replies).top,
           repliesHeight: box(selectors.replies).height,
-          composerTop: box(selectors.composer).top,
           composerBottom: box(selectors.composer).bottom,
           sendBottom: box(selectors.send).bottom,
           scrollHeight: scroll.scrollHeight,
@@ -173,14 +171,35 @@ test.describe("a pane shorter than the band's cap", () => {
     expectReachable(await openPanel(page, "?pane=260"));
   });
 
-  test("Tab from Close thread skips the collapsed tasks and lands on the reply box", async ({
+  // The pane is barely taller than the post, so the post's scroll region
+  // overflows and Chrome makes it a stop of its own before the box. The claim
+  // is that no stop between Close and the box is in the collapsed tasks.
+  test("Tab from Close thread skips the collapsed tasks and reaches the reply box", async ({
     page,
   }) => {
     await openPanel(page, "?pane=260");
     await expect(page.locator(TASKS)).toHaveAttribute("data-collapsed", "true");
     await page.locator(CLOSE).focus();
-    await page.keyboard.press("Tab");
+    const stops: boolean[] = [];
+    for (let press = 0; press < 4; press += 1) {
+      await page.keyboard.press("Tab");
+      stops.push(
+        await page.evaluate((tasks: string) => {
+          const active = document.activeElement;
+          return active !== null && active.closest(tasks) !== null;
+        }, TASKS),
+      );
+      if (
+        await page.evaluate(
+          (input: string) => document.activeElement?.matches(input) === true,
+          COMPOSER_INPUT,
+        )
+      ) {
+        break;
+      }
+    }
     await expect(page.locator(COMPOSER_INPUT)).toBeFocused();
+    expect(stops).not.toContain(true);
   });
 
   test("the tasks come back into the tab order when the pane grows", async ({

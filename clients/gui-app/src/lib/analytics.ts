@@ -568,7 +568,7 @@ export enum AnalyticsEvent {
   SettingsOpened = "settings_opened",
   SettingChanged = "setting_changed",
   // Layout is deliberately the one Settings section that fires no
-  // per-control `setting_changed` (C-47): these three replace it (L-46, L-54).
+  // per-control `setting_changed`: these three replace it (L-46, L-54).
   LayoutSnapshot = "layout_snapshot",
   LayoutEditorSession = "layout_editor_session",
   LayoutQuickVerb = "layout_quick_verb",
@@ -688,7 +688,7 @@ export interface AnalyticsEventProperties {
   };
   /**
    * The DERIVATION moved the app, with no gesture behind it - the selection
-   * authority's `failover` / `recovery` cause (redesign P1.2). Property-less
+   * authority's `failover` / `recovery` cause. Property-less
    * on purpose: what happened is the whole event, and a host id here would be
    * an identifier for a machine, attached to a signal nobody segments by.
    * `HostSelected` stays the INTENT event, fired only by Settings ▸ Activate,
@@ -976,7 +976,7 @@ export interface AnalyticsEventProperties {
   /**
    * How an MCP App's tool call ended: `approved` when the host ran it (with or
    * without asking), `denied` when the reader declined, `refused` when the
-   * host refused it. Never the server, tool or arguments (D31).
+   * host refused it. Never the server, tool or arguments.
    */
   readonly [AnalyticsEvent.McpAppCall]: {
     readonly outcome: "approved" | "denied" | "refused";
@@ -1142,10 +1142,10 @@ export interface AnalyticsEventProperties {
   readonly [AnalyticsEvent.ReportIssueOpened]: SourceProperties & {
     readonly surface: string | null;
   };
-  // Which report type's gate blocked the attempt (ticket 07's evidence gate,
-  // Flow 2 manual opens only) - downstream funnels join this against a later
+  // Which report type's gate blocked the attempt (the evidence gate,
+  // manual opens only) - downstream funnels join this against a later
   // `ReportIssuePrivateSubmit` (or its absence) to compute abandon-after-block.
-  // `blocked_action` (review round N1) - the gate guards every report-
+  // `blocked_action` - the gate guards every report-
   // producing action, not just Send, so this says which one the user hit.
   readonly [AnalyticsEvent.ReportIssueBlocked]: {
     readonly report_type: "bug" | "idea" | "other";
@@ -1601,7 +1601,7 @@ const ANALYTICS_RESOURCE_PRESSURE_TIERS = new Set<string>([
 
 /** {@link LayoutDurationBucket}'s runtime allowlist, shared by
  * `layout_editor_session`'s `session_duration_bucket` and
- * `first_change_bucket` - distinct property names, the same scale (C-42). */
+ * `first_change_bucket` - distinct property names, the same scale. */
 const ANALYTICS_LAYOUT_DURATION_BUCKETS = new Set<string>([
   "under_10s",
   "10s_to_1m",
@@ -1621,7 +1621,7 @@ const ANALYTICS_LAYOUT_DURATION_BUCKETS = new Set<string>([
 const ANALYTICS_LAYOUT_SETTING_VALUES = new Set<string>([
   // The three spellings `settingPropertyValue` produces itself, then every
   // enum member a leaf can hold - derived, so an enum this file has never
-  // heard of cannot silently fail its own validator (G3-03).
+  // heard of cannot silently fail its own validator.
   "default",
   "changed",
   "true",
@@ -2698,7 +2698,7 @@ const STRICT_EVENTS = new Set<AnalyticsEvent>([
   AnalyticsEvent.HostQuitDecision,
   // A stray identifier here must fail loudly rather than be silently
   // trimmed: the ~40 declared properties are what keeps the denominator
-  // exact (C-49).
+  // exact.
   AnalyticsEvent.LayoutSnapshot,
 ]);
 
@@ -3020,7 +3020,7 @@ export function analyticsBlockerFromError(error: unknown): AnalyticsBlocker {
  * exception from the mutation itself still goes through
  * `analyticsBlockerFromError` on the `onError` path.
  *
- * `attachmentCount` (ticket 08 / T5) is the number of images on the request
+ * `attachmentCount` is the number of images on the request
  * that produced `result` - a low-cardinality integer the count-property
  * validator already accepts, so it rides along on every outcome rather than
  * needing its own event.

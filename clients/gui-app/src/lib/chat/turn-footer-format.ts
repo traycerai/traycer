@@ -1,8 +1,7 @@
 /**
  * The agent chat's turn footer, as words and figures: the verb that says how
- * long a turn worked, and its cost. Shared by the footer
- * (`chat-message-assistant-body.tsx`) and a bot's turn in the rail (Tracy
- * Bots T86), which says the same turn the same way.
+ * long a turn worked, and its cost, as the footer
+ * (`chat-message-assistant-body.tsx`) says them.
  */
 
 /**

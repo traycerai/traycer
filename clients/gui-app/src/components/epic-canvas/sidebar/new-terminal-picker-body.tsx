@@ -13,7 +13,7 @@
  * the active host's default cwd from `worktree.listBindingsForEpic@1.1`.
  * `launchTarget` unifies both paths so callers only ever handle one shape.
  *
- * A picked New sandbox row stages a create (sandboxes redesign D9): the
+ * A picked New sandbox row stages a create (the sandboxes redesign): the
  * folder list gives way to the consequences block, and `Open terminal`
  * creates the sandbox and settles with the setup line here. The launch on
  * the new host is the tab's (`NewTerminalStagedHandoff`), so it happens

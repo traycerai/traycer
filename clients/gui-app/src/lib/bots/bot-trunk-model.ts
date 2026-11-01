@@ -4,9 +4,16 @@
  */
 
 import type { OpenMessage } from "@traycer/protocol/persistence/epic/open-harness-records";
-import type { BotThreadSummary } from "@traycer/protocol/host/bot/conversation-schemas";
+import {
+  BOT_THREAD_ANCHOR_ANSWER,
+  BOT_THREAD_ANCHOR_MESSAGE,
+  type BotThreadSummary,
+} from "@traycer/protocol/host/bot/conversation-schemas";
 import type { BotTaskEntry } from "@traycer/protocol/host/bot/schemas";
-import { conversationRequestMessageId } from "@traycer/protocol/persistence/epic/messages";
+import {
+  conversationRequestMessageId,
+  type BotAnnouncementKind,
+} from "@traycer/protocol/persistence/epic/messages";
 
 const MINUTE_S = 60;
 const HOUR_S = 3600;
@@ -54,17 +61,6 @@ export function sortTasksForDisplay(
 
 function stateRank(task: BotTaskEntry): number {
   return task.state === "tracking" ? 0 : 1;
-}
-
-/**
- * The tasks a thread's session set up, by the thread id its entries name
- * (Tracy Bots T82); none from a host that does not say.
- */
-export function tasksOfThread(
-  tasks: ReadonlyArray<BotTaskEntry>,
-  threadId: string,
-): ReadonlyArray<BotTaskEntry> {
-  return tasks.filter((task) => task.createdByChatId === threadId);
 }
 
 /**
@@ -123,28 +119,48 @@ export function taskRequestPost(
  * How the channel opens the thread hung off `row` (decision 114), as its
  * own row's "Reply in thread" does: a member's post opens its own thread,
  * and a direct post the box whose first reply starts one; a question or a
- * proposal opens its thread through that box too, and the bot's direct
- * reply as well, marked as an answer, whose thread takes a send only while
- * the bot's binding opens one under it. `null` for a row that roots no
- * thread.
+ * proposal opens its thread through that box too, and every other row of
+ * the bot as well, marked with the thread anchor its thread takes a
+ * send under only while the bot's binding names it: `"answer"` for a
+ * direct reply, `"message"` for the rest.
  */
-export function threadOpenOf(
-  row: OpenMessage,
-): { readonly announcement: boolean; readonly answer: boolean } | null {
+export function threadOpenOf(row: OpenMessage): {
+  readonly announcement: boolean;
+  readonly anchorKind: string | null;
+} {
   if (row.role === "user") {
     return {
       announcement: row.conversationRequest?.direct === true,
-      answer: false,
+      anchorKind: null,
     };
   }
-  const kind = row.announcement?.kind ?? null;
-  if (kind === "question" || kind === "proposal") {
-    return { announcement: true, answer: false };
+  return {
+    announcement: true,
+    anchorKind: botRowThreadAnchorKind({
+      announcementKind: row.announcement?.kind ?? null,
+      asksQuestion: row.question !== undefined,
+      repliesToPost: row.repliesTo !== undefined,
+    }),
+  };
+}
+
+/** The host capability a bot row needs to root a thread; questions need none. */
+export function botRowThreadAnchorKind(input: {
+  readonly announcementKind: BotAnnouncementKind | null;
+  readonly asksQuestion: boolean;
+  readonly repliesToPost: boolean;
+}): string | null {
+  const { announcementKind, asksQuestion, repliesToPost } = input;
+  if (
+    announcementKind === "question" ||
+    announcementKind === "proposal" ||
+    asksQuestion
+  ) {
+    return null;
   }
-  if (kind === null && row.repliesTo !== undefined) {
-    return { announcement: true, answer: true };
-  }
-  return null;
+  return announcementKind === null && repliesToPost
+    ? BOT_THREAD_ANCHOR_ANSWER
+    : BOT_THREAD_ANCHOR_MESSAGE;
 }
 
 /** A post's first line, as a task row names the request it came from. */

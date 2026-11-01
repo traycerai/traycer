@@ -19,6 +19,13 @@ interface ChatTargetMenuProps {
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
   /**
+   * The menu has left the screen: fired once its exit animation has finished
+   * and its node is gone, which is later than `onOpenChange(false)`. A caller
+   * that screenshots the window right after a pick waits for this, or the
+   * fading menu is in the picture.
+   */
+  readonly onClosed: (() => void) | null;
+  /**
    * The element the menu anchors to and opens from. The terminal pill and the
    * artifact popover's anchor both go here; the roster does not care what it
    * looks like, only that Radix has a trigger to position against.
@@ -60,6 +67,8 @@ export function ChatTargetMenu(props: ChatTargetMenuProps) {
       <DropdownMenuContent
         align="start"
         className="flex w-max min-w-[min(90vw,14rem)] max-w-[min(90vw,20rem)] flex-col overflow-y-hidden"
+        // Radix runs this from the content's unmount, after its exit animation.
+        onCloseAutoFocus={props.onClosed ?? undefined}
       >
         {props.targets.length > 0 ? (
           <>

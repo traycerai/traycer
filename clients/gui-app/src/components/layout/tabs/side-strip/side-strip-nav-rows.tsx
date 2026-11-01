@@ -42,7 +42,7 @@ import {
 } from "./side-strip-tokens";
 
 /**
- * The strip's nav rows under the top block's controls (D6): Notifications, which
+ * The strip's nav rows under the top block's controls: Notifications, which
  * opens the notification center as a drawer on the strip's edge, and All
  * tasks, which opens History. Collapsed, both are 32px icon tiles.
  */
@@ -61,7 +61,7 @@ export function SideStripNavRows(props: {
 }
 
 /**
- * New Task (F7): the button that closes the nav list - after Home
+ * New Task: the button that closes the nav list - after Home
  * expanded, after All tasks on the rail - and does what the header's `+` does.
  * Expanded, a row lined up with the nav rows, its shortcut trailing as All
  * tasks' does; collapsed, a primary 32px tile. Solid primary in every view:

@@ -1,6 +1,6 @@
 /**
- * A post the bot did not answer, and the routing card above its box (Tracy
- * Bots T86), through the REAL `BotChannelView` and `BotThreadPanel`: where
+ * A post the bot did not answer, and the routing card above its box,
+ * through the REAL `BotChannelView` and `BotThreadPanel`: where
  * the session that answers the surface (the trunk beside the channel, a
  * thread's session in its panel) names the post's turn as its last failed
  * attempt, the row says why in the agent chat's words and offers the agent
@@ -42,6 +42,7 @@ import {
   hostClientLocating,
   memberPost,
   turnRef,
+  openedSessions,
   turnsAskedFor,
   type Scene,
 } from "@/components/bots/__tests__/bot-turn-test-support";
@@ -188,7 +189,10 @@ vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
 vi.mock("@/components/chat/chat-messages", async () => {
   const { ChatExpansionTestProviders: Providers } =
     await import("@/components/chat/__tests__/chat-expansion-test-providers");
+  const { use } = await import("react");
   const { ChatMessage } = await import("@/components/chat/chat-message");
+  const { ChatTimelineHeaderContext } =
+    await import("@/components/chat/chat-timeline-header-context");
   const noBackgroundToolBlockIds: ReadonlySet<string> = new Set();
   return {
     ChatMessages: (props: {
@@ -200,6 +204,7 @@ vi.mock("@/components/chat/chat-messages", async () => {
           data-testid="chat-messages-stub"
           data-instance-id={props.instanceId}
         >
+          {use(ChatTimelineHeaderContext)}
           {props.messages.map((message) => (
             <ChatMessage
               key={message.id}
@@ -312,6 +317,7 @@ beforeEach(() => {
   mocks.rungs = [];
   activityStore.setState({ activity: null });
   useBotOpenThreadStore.setState({ byBotId: {} });
+  openedSessions.length = 0;
   scene = buildScene();
   scene.knownTurns = [failedTurn(TRUNK_ID, null)];
   mocks.sessions = scene.sessions;
@@ -426,7 +432,7 @@ describe("a post the trunk failed to answer", () => {
     expect(screen.queryByTestId("failed-turn-actions")).toBeNull();
   });
 
-  it("shows the failed turn's receipt under the line at all times, and it opens the turn beside the channel", async () => {
+  it("shows the failed turn's receipt under the line at all times, and it opens the trunk's session landed on the turn", async () => {
     const user = userEvent.setup();
     failPostOnTrunk();
     mountChannel(null);
@@ -441,9 +447,14 @@ describe("a post the trunk failed to answer", () => {
         .compareDocumentPosition(receipt) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
     await user.click(receipt);
-    expect(
-      screen.getByRole("region", { name: "How Release Bot answered" }),
-    ).toBeTruthy();
+    expect(openedSessions).toEqual([
+      {
+        chatId: TRUNK_ID,
+        threadId: null,
+        messageId: FAILED_PROMPT_ID,
+        sendPostId: null,
+      },
+    ]);
   });
 });
 

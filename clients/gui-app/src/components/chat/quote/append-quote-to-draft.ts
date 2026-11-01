@@ -5,7 +5,7 @@ import {
   useComposerDraftStore,
 } from "@/stores/composer/composer-draft-store";
 
-/** Selection text already extracted from the DOM (T4/T5 own that step). */
+/** Selection text already extracted from the DOM. */
 export interface QuoteTextSnapshot {
   readonly text: string;
   readonly fenceLanguage: string | null;
@@ -66,6 +66,39 @@ export function appendQuoteToDraft(
     { type: "paragraph" },
   ]);
   useComposerDraftStore.getState().replaceDraft(taskId, next, null);
+}
+
+/**
+ * Appends a quoted selection to a markdown box's `text`, as blockquote lines
+ * after a blank line (none when the box is empty) and followed by one, so
+ * what is typed next starts its own paragraph. A selection wholly inside a
+ * code block keeps its fence, inside the quote.
+ */
+export function appendQuoteMarkdown(
+  text: string,
+  snapshot: QuoteTextSnapshot,
+): string {
+  const lines =
+    snapshot.fenceLanguage === null
+      ? normalizedQuoteLines(snapshot.text)
+      : fencedLines(snapshot.text, snapshot.fenceLanguage);
+  const quote = lines
+    .map((line) => (line.length === 0 ? ">" : `> ${line}`))
+    .join("\n");
+  // Blank lines the box already ends with are the gap, not more of it.
+  const before = text.replace(/\n+$/, "");
+  return `${before.length === 0 ? "" : `${before}\n\n`}${quote}\n\n`;
+}
+
+// The code between fences longer than any run of backticks in it, so no
+// line of it closes the fence early.
+function fencedLines(code: string, language: string): string[] {
+  const longestRun = Math.max(
+    0,
+    ...(code.match(/`+/g) ?? []).map((run) => run.length),
+  );
+  const fence = "`".repeat(Math.max(3, longestRun + 1));
+  return [`${fence}${language}`, ...code.split(LINE_BREAK_REGEX), fence];
 }
 
 function quoteCodeBlockNode(text: string, language: string): JsonContent {

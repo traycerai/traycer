@@ -86,7 +86,7 @@ export function useStatusBarResourceMetrics(input: {
     globalStreamUnsupported,
     hostLabel: input.hostLabel,
   });
-  // The sample shell prints sample readings, never the host's own (C12).
+  // The sample shell prints sample readings, never the host's own.
   if (sample) {
     return {
       views: views.map((view) => ({

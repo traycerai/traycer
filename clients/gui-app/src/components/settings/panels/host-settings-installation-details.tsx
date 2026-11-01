@@ -22,8 +22,8 @@ import type { HostInstallSourceTag } from "@traycer-clients/shared/platform/runn
  *
  * The local CLI bridge (`HostInstalledRecord`) and the host's own
  * `host.getInstallationInfo` return the same record — they read the same
- * `install.json`, through the shared protocol module the maintenance ticket
- * moved it into. They differ only in nullability at the edges, so this is their
+ * `install.json`, through the shared protocol module they were moved into.
+ * They differ only in nullability at the edges, so this is their
  * intersection rather than a third format: the host is authoritative about its
  * own installation, and the bridge is what answers when the host cannot.
  */

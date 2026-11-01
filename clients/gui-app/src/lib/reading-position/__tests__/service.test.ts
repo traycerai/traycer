@@ -364,7 +364,7 @@ describe("reading-position service", () => {
     });
   });
 
-  // T4: `currentAuthAccountId()` moved from `status === "signed-in"` to
+  // `currentAuthAccountId()` moved from `status === "signed-in"` to
   // `admitsLocalPlane(status)`. Reading positions are a purely local,
   // `window.localStorage` fact about this device's own rendering - no
   // account server is ever consulted - so `unverified` (a stored session

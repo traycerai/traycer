@@ -47,7 +47,7 @@ interface CompatVerdictReport {
 type CompatReportSpy = MockInstance<(input: CompatVerdictReport) => void>;
 
 /**
- * P5.2 T9-T11: the compat probe now binds the session id it resolved on into
+ * P5.2: the compat probe now binds the session id it resolved on into
  * the verdict it reports to the selection authority (`compatAnchorAtSuccess` /
  * `compatAnchorAtFailure` in `compatibility-state.ts`).
  *

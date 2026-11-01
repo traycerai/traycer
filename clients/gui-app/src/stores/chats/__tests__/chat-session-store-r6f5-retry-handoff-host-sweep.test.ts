@@ -1,5 +1,5 @@
 /**
- * R6F5(b) (P2): `retryHandoffAccountFor` - the account builder for a
+ * R6F5(b): `retryHandoffAccountFor` - the account builder for a
  * dispatched-retry action still in flight at disposal - reads the HOST-LEVEL
  * swept set (`sweepAccountForIntent` / `sessionSweptRefsForHost`), not the
  * old per-slot `worktreePartition`.
@@ -63,6 +63,7 @@ const OWNER_ID = "owner-r6f5b";
 const HOST_ID = "host-r6f5b";
 
 const SETTINGS: ChatRunSettings = {
+  ultracode: false,
   harnessId: "codex",
   model: "gpt-5-codex",
   permissionMode: "supervised",
@@ -149,7 +150,7 @@ function createHarness(): Harness {
 }
 
 function emitOwnerSnapshot(callbacks: ChatStreamCallbacks): void {
-  callbacks.onConnectionStatus("open", null, null);
+  callbacks.onConnectionStatus("open", null, null, null);
   const chat: Chat = {
     id: CHAT_ID,
     parentId: null,
@@ -321,7 +322,7 @@ describe("R7F3: a sticky per-consumer sweep record survives another consumer cle
     // retry has not dispatched yet. `beginHashOnlyRecovery` folds the
     // still-visible host-wide sweep into this recovery's sticky record
     // SYNCHRONOUSLY, in the same tick, before B gets a chance to clear the
-    // host-wide mark below - R9F2's fix, and the only thing that captures
+    // host-wide mark below - the only step that captures
     // this evidence: nothing else touches the staging store between the
     // purge above and B's own stage next, so there is no OTHER write to fire
     // the consumer-observing subscription and fold the fact in that way.

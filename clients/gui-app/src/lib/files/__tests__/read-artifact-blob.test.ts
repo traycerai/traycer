@@ -9,15 +9,15 @@ import {
   readArtifactBlobPrefix,
 } from "@/lib/files/read-artifact-blob";
 
-// A four-byte range cap makes a small fixture span several requests, so the
+// A four-byte span makes a small fixture take several requests, so the
 // reader's offset arithmetic is exercised without allocating megabytes.
 vi.mock(
-  "@traycer/protocol/host/epic/artifact-objects",
+  "@traycer-clients/shared/platform/sandbox-artifacts",
   async (importOriginal) => ({
     ...(await importOriginal<
-      typeof import("@traycer/protocol/host/epic/artifact-objects")
+      typeof import("@traycer-clients/shared/platform/sandbox-artifacts")
     >()),
-    EPIC_READ_ARTIFACT_OBJECT_RANGE_MAX_BYTES: 4,
+    ARTIFACT_OBJECT_SPAN_BYTES: 4,
   }),
 );
 

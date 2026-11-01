@@ -371,7 +371,7 @@ vi.mock("@/hooks/providers/use-providers-skills-mutate-mutation", () => ({
   }),
 }));
 
-// Sibling ticket 11 owns the MCP tab; mock its hooks so panel tests stay isolated.
+// The MCP tab is owned elsewhere; mock its hooks so panel tests stay isolated.
 vi.mock("@/hooks/providers/use-providers-mcp-list-query", () => ({
   useProvidersMcpList: () => ({
     data: { servers: [] },
@@ -527,7 +527,7 @@ vi.mock("@/hooks/providers/use-providers-delete-env-override-mutation", () => ({
 
 // Both the plain and `*ForClient` names are exported: the inline profile
 // re-auth panel calls the plain hooks (host-runtime-context-
-// scoped, unchanged by S8), while `AddProviderProfileDialog` calls the
+// scoped), while `AddProviderProfileDialog` calls the
 // `*ForClient` variants with an explicit client (also Settings' own host in
 // this tree - see the `@/lib/host` mock below). Both resolve to the same
 // recorded mock so assertions don't care which path fired.
@@ -805,7 +805,7 @@ vi.mock("@/lib/host", async (importOriginal) => {
     // wrapper and the selected-host refresh lands on the ambient host.
     useHostBinding: () => providerMocks.ambientBinding,
     useHostClient: () => null,
-    // The SPINE, a separate export since redesign P2.1.
+    // The SPINE, a separate export.
     useHostRuntimeClient: () => null,
   };
 });
@@ -1213,7 +1213,7 @@ const FULL_TABS: ProviderNativeCapabilities = {
   plugins: {
     addModes: ["cli-source"],
     marketplaceBrowse: false,
-    // Both scopes so the F5 scope picker renders (global-only contracts get a
+    // Both scopes so the scope picker renders (global-only contracts get a
     // plain "every workspace" line instead of a trigger with locationLabel).
     actionScopes: {
       list: [...BOTH_SCOPES],
@@ -2549,7 +2549,7 @@ describe("<ProvidersSettingsPanel />", () => {
     // hidesCliCandidates(amp||cursor) used to suppress this whole tab on the
     // premise that those two have no user-selectable binary. Both spawn the
     // Traycer-resolved binary for MCP write verbs, so the table is the only
-    // route out of the F2 dead end when nothing is on PATH.
+    // route out of the dead end when nothing is on PATH.
     providerMocks.listResult.data = {
       providers: [
         providerState({
@@ -3987,7 +3987,7 @@ describe("<ProvidersSettingsPanel />", () => {
     );
 
     selectTab("Plugins");
-    // F5 replaced the "Installed plugins" heading with the shared scope
+    // The "Installed plugins" heading was replaced with the shared scope
     // picker. Match the MCP suite's aria-label idiom so this both identifies
     // the Plugins tab body and covers the control the heading used to stand
     // in for.

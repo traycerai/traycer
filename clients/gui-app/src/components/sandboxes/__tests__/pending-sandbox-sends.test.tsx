@@ -3583,7 +3583,7 @@ describe("a message for an existing chat whose sandbox rests", () => {
       mocks.listReadAt = FRESH;
       mocks.sandboxes = [rowIn("suspended")];
       answerHost(SANDBOX_HOST, CODEX_READY);
-      // Cancel is an exit of a failed or timed-out wake only (R9): the
+      // Cancel is an exit of a failed or timed-out wake only: the
       // failure is on the stage before mount, which also auto-expands it.
       useStagedSandboxStore.getState().report(SURFACE, {
         failure: { kind: "timed-out", step: "booting" },

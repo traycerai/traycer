@@ -201,7 +201,7 @@ export function findPaneById(
 /**
  * The tab a pane actually shows: `activeTabId` when it names a live tab,
  * otherwise the pane's first tab (matching `TabGroupView`'s inline fallback).
- * Shared by the renderer and, from Ticket 21 slice 2 on, host membership -
+ * Shared by the renderer and host membership -
  * the two must agree or a chat the renderer paints can go unhosted. Returns
  * `null` for an empty pane.
  */
@@ -382,7 +382,7 @@ export function removePaneFromTree(
 }
 
 /**
- * Ticket 20: read-only mirror of {@link removePaneFromTree}'s single-survivor
+ * Read-only mirror of {@link removePaneFromTree}'s single-survivor
  * dissolve branch - if removing `paneId` would leave its parent group with
  * exactly one remaining child, that child is promoted into the parent's slot
  * and every pane in ITS subtree gets a new React ancestor (a dissolve whose

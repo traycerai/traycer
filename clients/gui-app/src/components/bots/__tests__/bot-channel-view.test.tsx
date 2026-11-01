@@ -25,10 +25,19 @@ import type {
   BotThreadAnchors,
   BotThreadSummary,
 } from "@traycer/protocol/host/bot/conversation-schemas";
+import type {
+  BotReadCursorAdvanceRequest,
+  BotNotificationLevel,
+  BotReadCursorReadResponse,
+  BotThreadFollow,
+} from "@traycer/protocol/host/bot/schemas";
 import type { Message } from "@traycer/protocol/persistence/epic/schemas";
 import { ChatExpansionTestProviders } from "@/components/chat/__tests__/chat-expansion-test-providers";
 import type { ChatBotThreadLine } from "@/components/chat/chat-bot-presentation-context";
-import type { BotTranscriptSurface } from "@/components/bots/bot-chat-transcript";
+import type {
+  BotTranscriptLanding,
+  BotTranscriptSurface,
+} from "@/components/bots/bot-chat-transcript";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
 interface ThreadListCall {
@@ -55,6 +64,7 @@ const mocks = vi.hoisted(() => {
     client: { stub: "tab-host-client" },
     markRead: vi.fn<(entity: { epicId: string; chatId: string }) => void>(),
     refetchThreads: vi.fn<() => void>(),
+    advance: vi.fn<(request: BotReadCursorAdvanceRequest) => void>(),
     send: vi.fn<
       (
         variables: BotConversationSendRequest,
@@ -91,8 +101,20 @@ const mocks = vi.hoisted(() => {
       // `false`: the thread list has not answered (pending, or failed).
       threadListAnswered: true,
       threadListError: false,
+      // Whether the read of the bot's conversations failed.
+      conversationsError: false,
       // Whether a `bot.conversation.send` is in flight.
       sending: false,
+      // The person's follows of the threads; `undefined` = not read.
+      follows: undefined as Record<string, BotThreadFollow> | undefined,
+      // The person's read cursors and the newest rows; `undefined` = not read.
+      readCursors: undefined as BotReadCursorReadResponse | undefined,
+      // Whether the host keeps read cursors at all.
+      readCursorsKept: true,
+      // The next advance fails, as one to an offline host does.
+      failNextAdvance: false,
+      // The person's notification levels by channel id; `undefined` = not read.
+      levels: undefined as Record<string, BotNotificationLevel> | undefined,
       chats,
     },
   };
@@ -107,13 +129,19 @@ vi.mock("@/hooks/host/use-host-supports-method", async (importOriginal) => ({
   >()),
   useHostMethodSupport: () => mocks.state.threadListSupported,
 }));
-vi.mock("@/components/epic-tabs/pane-visibility-context", () => ({
-  usePaneVisible: () => mocks.state.paneVisible,
-}));
+vi.mock(
+  "@/components/epic-tabs/pane-visibility-context",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/components/epic-tabs/pane-visibility-context")
+    >()),
+    usePaneVisible: () => mocks.state.paneVisible,
+  }),
+);
 vi.mock("@/hooks/bots/use-bot-conversation-list-query", () => ({
   useBotConversationListQuery: () => ({
     data: { conversations: mocks.state.conversations },
-    isError: false,
+    isError: mocks.state.conversationsError,
     refetch: vi.fn(),
   }),
 }));
@@ -166,6 +194,48 @@ vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => ({
   >()),
   useChatSessionHandleForContainer: () => null,
 }));
+// The person's follows are read from the cloud through the host; here the
+// read answers `state.follows`.
+vi.mock("@/hooks/bots/use-bot-thread-follow", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/bots/use-bot-thread-follow")
+  >()),
+  useBotThreadFollows: () => ({
+    data:
+      mocks.state.follows === undefined
+        ? undefined
+        : { follows: mocks.state.follows },
+  }),
+}));
+// The person's read cursors are read from the cloud through the host; here
+// the read answers `state.readCursors` and an advance is recorded.
+vi.mock("@/hooks/bots/use-bot-read-cursor", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/bots/use-bot-read-cursor")
+  >()),
+  useBotReadCursors: () =>
+    mocks.state.readCursorsKept ? { data: mocks.state.readCursors } : null,
+  useBotReadCursorAdvanceMutation: () => ({
+    mutateAsync: (request: BotReadCursorAdvanceRequest): Promise<void> => {
+      mocks.advance(request);
+      if (!mocks.state.failNextAdvance) return Promise.resolve();
+      mocks.state.failNextAdvance = false;
+      return Promise.reject(new Error("the host is offline"));
+    },
+  }),
+}));
+// The person's notification levels, by channel id.
+vi.mock("@/hooks/bots/use-bot-notification-level", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/bots/use-bot-notification-level")
+  >()),
+  useBotNotificationLevelsQuery: () => ({
+    data:
+      mocks.state.levels === undefined
+        ? undefined
+        : { levels: mocks.state.levels },
+  }),
+}));
 vi.mock("@/hooks/bots/use-bot-activity", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/hooks/bots/use-bot-activity")>()),
   useBotActivity: () => null,
@@ -174,18 +244,22 @@ vi.mock("@/components/bots/bot-chat-transcript", () => ({
   BotChatTranscript: (props: {
     chatId: string;
     surface: BotTranscriptSurface | null;
+    header: ReactNode;
+    landOn: BotTranscriptLanding | null;
   }) => {
     const surface = props.surface;
     return (
       <div
         data-testid={`stub-transcript-${surface === null ? "session" : surface.kind}`}
         data-chat-id={props.chatId}
+        data-land-on={props.landOn?.messageId ?? "none"}
         data-answer-threads={
           surface !== null && surface.kind === "channel"
-            ? String(surface.answerThreads)
+            ? String(surface.threadAnchorKinds.includes("answer"))
             : ""
         }
       >
+        {props.header}
         {surface !== null && surface.kind === "channel"
           ? mocks.postIds.map((postId) => (
               <PostStub
@@ -264,7 +338,7 @@ function PostStub(props: {
   readonly threadLine: (postMessageId: string) => ChatBotThreadLine | null;
   readonly openThread: ((postMessageId: string) => void) | null;
   readonly openAnnouncementThread:
-    | ((announcementId: string, answer: boolean) => void)
+    | ((announcementId: string, anchorKind: string | null) => void)
     | null;
 }): ReactNode {
   const line = props.threadLine(props.postId);
@@ -281,7 +355,11 @@ function PostStub(props: {
             ? ""
             : String(line.lastReplyAt)
         }
+        data-followed-unwritten={
+          line === null ? "" : String(line.followedUnwritten)
+        }
         data-unread={line === null ? "" : String(line.unread)}
+        data-new-replies={line === null ? "" : String(line.newReplies)}
         data-unread-count={
           line === null || line.unreadCount === null
             ? ""
@@ -309,7 +387,7 @@ function PostStub(props: {
           onClick={() =>
             openAnnouncementThread(
               props.postId,
-              mocks.answerIds.includes(props.postId),
+              mocks.answerIds.includes(props.postId) ? "answer" : null,
             )
           }
         />
@@ -318,7 +396,10 @@ function PostStub(props: {
   );
 }
 
-import { BotChannelView } from "@/components/bots/bot-channel-view";
+import {
+  BotChannelView,
+  type BotChannelLanding,
+} from "@/components/bots/bot-channel-view";
 import { BotSendFailedNotice } from "@/components/bots/bot-channel-notices";
 import type { BotOpenThread } from "@/stores/bots/bot-open-thread-store";
 import { threadOpenOf } from "@/lib/bots/bot-trunk-model";
@@ -359,6 +440,7 @@ function thread(
       senderUserId: "user-teammate",
       sentAt: 1_000,
       resolvedAt: null,
+      excerpt: null,
     },
     replyCount: 0,
     lastReplyAt: null,
@@ -388,9 +470,12 @@ interface MountOptions {
 const QUESTION_1: BotOpenThread = {
   anchorMessageId: "question-1",
   announcement: true,
-  answer: false,
+  anchorKind: null,
   sent: null,
 };
+
+/** Where the next mount lands the channel; `null` for where it opens. */
+let mountLanding: BotChannelLanding | null = null;
 
 function mount(options: MountOptions): {
   readonly onOpenThread: Mock<(open: BotOpenThread | null) => void>;
@@ -416,13 +501,20 @@ function mount(options: MountOptions): {
             directive={null}
             appConversationChatId={mocks.state.appConversationChatId}
             trunkChatId="trunk-chat"
-            openTurn={null}
             onOpenTurn={vi.fn()}
+            onOpenSession={vi.fn()}
+            landOn={mountLanding}
+            openMemory={null}
+            onOpenMemory={vi.fn()}
+            environmentId="env-1"
+            botNameOf={() => null}
             resolveMember={resolveMember}
             tasks={[]}
+            surfaceActions={null}
             openThread={openThread}
             onOpenThread={onOpenThread}
             onOpenActivity={onOpenActivity}
+            setupHistory={null}
           />
         </ChatExpansionTestProviders>
       </TooltipProvider>
@@ -434,7 +526,7 @@ function mount(options: MountOptions): {
       : {
           anchorMessageId: options.openThreadPostId,
           announcement: false,
-          answer: false,
+          anchorKind: null,
           sent: null,
         };
   const result = render(tree(current));
@@ -457,6 +549,7 @@ function lastThreadListCall(): ThreadListCall {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mountLanding = null;
   mocks.threadListCalls.length = 0;
   mocks.state.paneVisible = true;
   mocks.state.threadListSupported = true;
@@ -471,8 +564,14 @@ beforeEach(() => {
   mocks.answerIds = [];
   mocks.state.threadListAnswered = true;
   mocks.state.threadListError = false;
+  mocks.state.conversationsError = false;
   mocks.state.sending = false;
   mocks.state.chats = {};
+  mocks.state.follows = undefined;
+  mocks.state.readCursors = undefined;
+  mocks.state.readCursorsKept = true;
+  mocks.state.failNextAdvance = false;
+  mocks.state.levels = undefined;
   mocks.postIds = [];
   mocks.sendResponse = {
     messageId: "post-new",
@@ -608,6 +707,34 @@ describe("<BotChannelView /> channel", () => {
     expect(line("post-new").getAttribute("data-has-line")).toBe("false");
   });
 
+  it("marks a thread's line as followed only where the person follows it without having written in it", () => {
+    mocks.state.threads = [
+      thread("thread-a", "post-a", { replyCount: 1 }),
+      thread("thread-b", "post-b", { replyCount: 1 }),
+      thread("thread-c", "post-c", { replyCount: 1 }),
+      thread("thread-d", "post-d", { replyCount: 1 }),
+      thread("thread-e", "post-e", { replyCount: 1 }),
+    ];
+    mocks.state.follows = {
+      "thread-a": { state: "following", reason: "mentioned" },
+      "thread-b": { state: "following", reason: "manual" },
+      "thread-c": { state: "following", reason: "participated" },
+      "thread-d": { state: "unfollowed", reason: "manual" },
+    };
+    mocks.postIds = ["post-a", "post-b", "post-c", "post-d", "post-e"];
+    mount({ openThreadPostId: null });
+
+    const marked = (postId: string): string | null =>
+      screen
+        .getByTestId(`stub-line-${postId}`)
+        .getAttribute("data-followed-unwritten");
+    expect(marked("post-a")).toBe("true");
+    expect(marked("post-b")).toBe("true");
+    expect(marked("post-c")).toBe("false");
+    expect(marked("post-d")).toBe("false");
+    expect(marked("post-e")).toBe("false");
+  });
+
   it("stacks a thread's line with the post's writer, and the bot once the thread has a reply", () => {
     mocks.state.threads = [
       thread("thread-a", "post-a", { replyCount: 0 }),
@@ -636,7 +763,7 @@ describe("<BotChannelView /> channel", () => {
     expect(onOpenThread).toHaveBeenCalledWith({
       anchorMessageId: "post-a",
       announcement: false,
-      answer: false,
+      anchorKind: null,
       sent: null,
     });
   });
@@ -718,7 +845,7 @@ describe("<BotChannelView /> channel", () => {
     reopen({
       anchorMessageId: "answer-1",
       announcement: true,
-      answer: true,
+      anchorKind: "answer",
       sent: null,
     });
     expect(sendable()).toBe("true");
@@ -729,7 +856,7 @@ describe("<BotChannelView /> channel", () => {
     reopen({
       anchorMessageId: "answer-1",
       announcement: true,
-      answer: true,
+      anchorKind: "answer",
       sent: null,
     });
     expect(answerThreads()).toBe("false");
@@ -746,7 +873,7 @@ describe("<BotChannelView /> channel", () => {
     reopen({
       anchorMessageId: "answer-1",
       announcement: true,
-      answer: true,
+      anchorKind: "answer",
       sent: null,
     });
     expect(answerThreads()).toBe("false");
@@ -757,7 +884,7 @@ describe("<BotChannelView /> channel", () => {
     reopen({
       anchorMessageId: "answer-1",
       announcement: true,
-      answer: true,
+      anchorKind: "answer",
       sent: null,
     });
     expect(sendable()).toBe("false");
@@ -768,7 +895,7 @@ describe("<BotChannelView /> channel", () => {
     reopen({
       anchorMessageId: "answer-1",
       announcement: true,
-      answer: true,
+      anchorKind: "answer",
       sent: null,
     });
     expect(answerThreads()).toBe("true");
@@ -783,7 +910,7 @@ describe("<BotChannelView /> channel", () => {
     const ANSWER_THREAD: BotOpenThread = {
       anchorMessageId: "answer-1",
       announcement: true,
-      answer: true,
+      anchorKind: "answer",
       sent: null,
     };
     mocks.state.binding = { hostId: "host-capable", epoch: 3 };
@@ -812,12 +939,99 @@ describe("<BotChannelView /> channel", () => {
     expect(sendable()).toBe("true");
   });
 
+  it("sends from the box under another row of the bot only while the bot's binding names that row among the rows a thread roots on", () => {
+    const sendable = (): string | null =>
+      within(screen.getByTestId("bot-thread-panel"))
+        .getByTestId("stub-bot-thread-composer")
+        .getAttribute("data-sendable");
+    const NOTICE_THREAD: BotOpenThread = {
+      anchorMessageId: "notice-1",
+      announcement: true,
+      anchorKind: "message",
+      sent: null,
+    };
+    mocks.state.binding = { hostId: "host-capable", epoch: 3 };
+    mocks.state.threadAnchors = saidBy("host-capable", 3, [
+      "answer",
+      "message",
+    ]);
+    const { reopen } = mount({ openThreadPostId: null });
+    reopen(NOTICE_THREAD);
+    expect(sendable()).toBe("true");
+
+    // A host that roots threads on a direct answer and on nothing else.
+    mocks.state.threadAnchors = saidBy("host-capable", 3, ["answer"]);
+    reopen(NOTICE_THREAD);
+    expect(sendable()).toBe("false");
+  });
+
+  it("takes no send in a listed thread whose anchor no member wrote, opened by its anchor alone, until the channel's row says which row it is", () => {
+    const sendable = (): string | null =>
+      within(screen.getByTestId("bot-thread-panel"))
+        .getByTestId("stub-bot-thread-composer")
+        .getAttribute("data-sendable");
+    mocks.state.binding = { hostId: "host-capable", epoch: 3 };
+    mocks.state.threadAnchors = saidBy("host-capable", 3, [
+      "answer",
+      "message",
+    ]);
+    mocks.state.threads = [
+      thread("thread-notice", "notice-1", {
+        anchor: {
+          messageId: "notice-1",
+          requestId: "req-thread-notice",
+          senderUserId: null,
+          sentAt: 1_000,
+          resolvedAt: null,
+          excerpt: null,
+        },
+        replyCount: 1,
+        lastReplyAt: 8_000,
+      }),
+    ];
+    const { reopen } = mount({ openThreadPostId: null });
+    reopen({
+      anchorMessageId: "notice-1",
+      announcement: false,
+      anchorKind: null,
+      sent: null,
+    });
+
+    expect(sendable()).toBe("false");
+  });
+
+  it("offers no box in a thread opened by its anchor alone before the list has it, and one that sends once the list says a member wrote the anchor", () => {
+    const panel = (): HTMLElement => screen.getByTestId("bot-thread-panel");
+    const BY_ANCHOR: BotOpenThread = {
+      anchorMessageId: "post-late",
+      announcement: false,
+      anchorKind: null,
+      sent: null,
+    };
+    mocks.state.threads = [];
+    const { reopen } = mount({ openThreadPostId: null });
+    reopen(BY_ANCHOR);
+
+    expect(
+      within(panel()).queryByTestId("stub-bot-thread-composer"),
+    ).toBeNull();
+
+    mocks.state.threads = [thread("thread-late", "post-late", {})];
+    reopen(BY_ANCHOR);
+
+    expect(
+      within(panel())
+        .getByTestId("stub-bot-thread-composer")
+        .getAttribute("data-sendable"),
+    ).toBe("true");
+  });
+
   it("keeps the box under a direct reply mounted, beside Retry, through a failed read of the list after a claim, and sending once the read recovers", async () => {
     const user = userEvent.setup();
     const ANSWER_THREAD: BotOpenThread = {
       anchorMessageId: "answer-1",
       announcement: true,
-      answer: true,
+      anchorKind: "answer",
       sent: null,
     };
     mocks.state.binding = { hostId: "host-capable", epoch: 3 };
@@ -853,7 +1067,7 @@ describe("<BotChannelView /> channel", () => {
     const ANSWER_THREAD: BotOpenThread = {
       anchorMessageId: "answer-1",
       announcement: true,
-      answer: true,
+      anchorKind: "answer",
       sent: null,
     };
     mocks.state.binding = { hostId: "host-capable", epoch: 3 };
@@ -892,7 +1106,7 @@ describe("<BotChannelView /> channel", () => {
 
   it("gates a direct reply's thread opened from a task row as the reply's own row gates it: no send after a claim the binding does not say, and the box kept while the list drops the thread", () => {
     // The bot's direct reply, as the channel's session holds it: a task row
-    // opens the thread rooted on it as the row's kind says (Tracy Bots T82).
+    // opens the thread rooted on it as the row's kind says.
     const reply: Message = {
       role: "assistant",
       messageId: "answer-1",
@@ -916,7 +1130,6 @@ describe("<BotChannelView /> channel", () => {
       repliesTo: "post-1",
     };
     const how = threadOpenOf(reply);
-    if (how === null) throw new Error("a direct reply roots a thread");
     const fromTask: BotOpenThread = {
       anchorMessageId: reply.messageId,
       ...how,
@@ -956,7 +1169,7 @@ describe("<BotChannelView /> channel", () => {
     const ANSWER_THREAD: BotOpenThread = {
       anchorMessageId: "answer-1",
       announcement: true,
-      answer: true,
+      anchorKind: "answer",
       sent: null,
     };
     mocks.state.binding = { hostId: "host-capable", epoch: 3 };
@@ -1033,6 +1246,7 @@ describe("<BotChannelView /> channel", () => {
           senderUserId: null,
           sentAt: 1_500,
           resolvedAt: null,
+          excerpt: null,
         },
       },
     ];
@@ -1053,7 +1267,7 @@ describe("<BotChannelView /> channel", () => {
         {
           anchorMessageId: "answer-1",
           announcement: true,
-          answer: true,
+          anchorKind: "answer",
           sent: null,
         },
       ],
@@ -1061,7 +1275,7 @@ describe("<BotChannelView /> channel", () => {
         {
           anchorMessageId: "post-1",
           announcement: true,
-          answer: false,
+          anchorKind: null,
           sent: null,
         },
       ],
@@ -1069,7 +1283,7 @@ describe("<BotChannelView /> channel", () => {
     reopen({
       anchorMessageId: "answer-1",
       announcement: true,
-      answer: true,
+      anchorKind: "answer",
       sent: null,
     });
     expect(
@@ -1078,7 +1292,7 @@ describe("<BotChannelView /> channel", () => {
     reopen({
       anchorMessageId: "post-1",
       announcement: true,
-      answer: false,
+      anchorKind: null,
       sent: null,
     });
     expect(
@@ -1117,7 +1331,7 @@ describe("<BotChannelView /> channel", () => {
     reopen({
       anchorMessageId: "post-a",
       announcement: false,
-      answer: false,
+      anchorKind: null,
       sent: null,
     });
 
@@ -1131,7 +1345,7 @@ describe("<BotChannelView /> channel", () => {
     reopen({
       anchorMessageId: "post-a",
       announcement: false,
-      answer: false,
+      anchorKind: null,
       sent: null,
     });
 
@@ -1245,6 +1459,182 @@ describe("<BotChannelView /> channel read mark", () => {
   });
 });
 
+describe("<BotChannelView /> read cursor", () => {
+  const OLD_ROW = { messageId: "row-old", seq: 1_000 };
+  const NEW_ROW = { messageId: "row-new", seq: 2_000 };
+
+  it("advances the channel's cursor to its newest row once, only while shown, and not again when the read catches up", () => {
+    mocks.state.paneVisible = false;
+    mocks.state.readCursors = {
+      cursors: { "conversation-channel": OLD_ROW },
+      latest: { "conversation-channel": NEW_ROW },
+    };
+    const { rerender } = mount({ openThreadPostId: null });
+    expect(mocks.advance).not.toHaveBeenCalled();
+
+    mocks.state.paneVisible = true;
+    rerender();
+    rerender();
+    expect(mocks.advance).toHaveBeenCalledTimes(1);
+    expect(mocks.advance).toHaveBeenCalledWith({
+      botId: BOT_ID,
+      conversationId: "conversation-channel",
+      ...NEW_ROW,
+    });
+
+    mocks.state.readCursors = {
+      cursors: { "conversation-channel": NEW_ROW },
+      latest: { "conversation-channel": NEW_ROW },
+    };
+    rerender();
+    expect(mocks.advance).toHaveBeenCalledTimes(1);
+  });
+
+  it("advances again for a row that lands while the channel is shown", () => {
+    mocks.state.readCursors = {
+      cursors: { "conversation-channel": NEW_ROW },
+      latest: { "conversation-channel": NEW_ROW },
+    };
+    const { rerender } = mount({ openThreadPostId: null });
+    expect(mocks.advance).not.toHaveBeenCalled();
+
+    const landed = { messageId: "row-landed", seq: 3_000 };
+    mocks.state.readCursors = {
+      cursors: { "conversation-channel": NEW_ROW },
+      latest: { "conversation-channel": landed },
+    };
+    rerender();
+    expect(mocks.advance).toHaveBeenCalledWith({
+      botId: BOT_ID,
+      conversationId: "conversation-channel",
+      ...landed,
+    });
+  });
+
+  it("advances again to the same row when an advance failed and the channel is presented again", async () => {
+    mocks.state.failNextAdvance = true;
+    mocks.state.readCursors = {
+      cursors: { "conversation-channel": OLD_ROW },
+      latest: { "conversation-channel": NEW_ROW },
+    };
+    const { rerender } = mount({ openThreadPostId: null });
+    expect(mocks.advance).toHaveBeenCalledTimes(1);
+    // Let the rejected advance settle, so the view has forgotten it.
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    mocks.state.paneVisible = false;
+    rerender();
+    mocks.state.paneVisible = true;
+    rerender();
+
+    expect(mocks.advance).toHaveBeenCalledTimes(2);
+    expect(mocks.advance).toHaveBeenLastCalledWith({
+      botId: BOT_ID,
+      conversationId: "conversation-channel",
+      ...NEW_ROW,
+    });
+  });
+
+  it("says no new replies on a followed thread of a channel set to Nothing", () => {
+    mocks.state.threads = [
+      thread("thread-a", "post-a", { replyCount: 2, lastReplyAt: 2_000 }),
+    ];
+    mocks.state.follows = {
+      "thread-a": { state: "following", reason: "manual" },
+    };
+    mocks.state.readCursors = {
+      cursors: { "thread-a": OLD_ROW },
+      latest: { "thread-a": NEW_ROW },
+    };
+    mocks.state.levels = { "conversation-channel": "off" };
+    mocks.postIds = ["post-a"];
+    mount({ openThreadPostId: null });
+
+    expect(
+      screen.getByTestId("stub-line-post-a").getAttribute("data-new-replies"),
+    ).toBe("false");
+  });
+
+  it("gives a thread line no new-replies answer at all where the host keeps no read cursors", () => {
+    mocks.state.readCursorsKept = false;
+    mocks.state.threads = [
+      thread("thread-a", "post-a", { replyCount: 2, lastReplyAt: 2_000 }),
+    ];
+    mocks.postIds = ["post-a"];
+    mount({ openThreadPostId: null });
+
+    expect(
+      screen.getByTestId("stub-line-post-a").getAttribute("data-new-replies"),
+    ).toBe("null");
+  });
+
+  it("says a followed thread has new replies past the cursor, and not a thread the person does not follow", () => {
+    mocks.state.threads = [
+      thread("thread-a", "post-a", { replyCount: 2, lastReplyAt: 2_000 }),
+      thread("thread-b", "post-b", { replyCount: 2, lastReplyAt: 2_000 }),
+      thread("thread-c", "post-c", { replyCount: 2, lastReplyAt: 2_000 }),
+    ];
+    mocks.state.follows = {
+      "thread-a": { state: "following", reason: "manual" },
+      "thread-b": { state: "unfollowed", reason: "manual" },
+      "thread-c": { state: "following", reason: "manual" },
+    };
+    mocks.state.readCursors = {
+      cursors: {
+        "thread-a": OLD_ROW,
+        "thread-b": OLD_ROW,
+        "thread-c": NEW_ROW,
+      },
+      latest: {
+        "thread-a": NEW_ROW,
+        "thread-b": NEW_ROW,
+        "thread-c": NEW_ROW,
+      },
+    };
+    mocks.postIds = ["post-a", "post-b", "post-c"];
+    mount({ openThreadPostId: null });
+
+    const marked = (postId: string): string | null =>
+      screen
+        .getByTestId(`stub-line-${postId}`)
+        .getAttribute("data-new-replies");
+    expect(marked("post-a")).toBe("true");
+    expect(marked("post-b")).toBe("false");
+    expect(marked("post-c")).toBe("false");
+  });
+
+  it("clears a thread's new replies once the cursor catches up, and advances the thread that is open", () => {
+    mocks.state.threads = [
+      thread("thread-a", "post-a", { replyCount: 2, lastReplyAt: 2_000 }),
+    ];
+    mocks.state.follows = {
+      "thread-a": { state: "following", reason: "manual" },
+    };
+    mocks.state.readCursors = {
+      cursors: { "thread-a": OLD_ROW },
+      latest: { "thread-a": NEW_ROW },
+    };
+    mocks.postIds = ["post-a"];
+    const { rerender } = mount({ openThreadPostId: "post-a" });
+    expect(mocks.advance).toHaveBeenCalledWith({
+      botId: BOT_ID,
+      conversationId: "thread-a",
+      ...NEW_ROW,
+    });
+
+    mocks.state.readCursors = {
+      cursors: { "thread-a": NEW_ROW },
+      latest: { "thread-a": NEW_ROW },
+    };
+    rerender();
+    expect(
+      screen.getByTestId("stub-line-post-a").getAttribute("data-new-replies"),
+    ).toBe("false");
+  });
+});
+
 describe("<BotChannelView /> channel read mark beside an open thread", () => {
   /** The `ResizeObserver`s the view made, to report a size for the channel's section. */
   const observers: FakeResizeObserver[] = [];
@@ -1344,6 +1734,116 @@ describe("<BotChannelView /> open thread", () => {
 
   afterEach(() => {
     useBotPaneWidthsStore.getState().resetWidth("thread");
+  });
+
+  it("lands the open thread's replies on the message of it the tab named, and leaves the channel where it opens", () => {
+    mountLanding = {
+      messageId: "reply-a9",
+      sendPostId: null,
+      threadId: "thread-a",
+      visit: 1,
+    };
+    mount({ openThreadPostId: "post-a" });
+
+    const panel = screen.getByTestId("bot-thread-panel");
+    expect(
+      within(panel)
+        .getByTestId("stub-transcript-thread")
+        .getAttribute("data-land-on"),
+    ).toBe("reply-a9");
+    expect(
+      screen
+        .getByTestId("stub-transcript-channel")
+        .getAttribute("data-land-on"),
+    ).toBe("none");
+  });
+
+  it("lands the thread once: the memory taking its place and Back to it open it where it opens", () => {
+    mountLanding = {
+      messageId: "reply-a9",
+      sendPostId: null,
+      threadId: "thread-a",
+      visit: 1,
+    };
+    const view = mount({ openThreadPostId: "post-a" });
+    const threadLanding = (): string | null =>
+      within(screen.getByTestId("bot-thread-panel"))
+        .getByTestId("stub-transcript-thread")
+        .getAttribute("data-land-on");
+    expect(threadLanding()).toBe("reply-a9");
+
+    // The memory takes the thread's slot; its Back puts the thread back.
+    view.reopen(null);
+    expect(screen.queryByTestId("bot-thread-panel")).toBeNull();
+    view.reopen({
+      anchorMessageId: "post-a",
+      announcement: false,
+      anchorKind: null,
+      sent: null,
+    });
+
+    expect(threadLanding()).toBe("none");
+  });
+
+  it("lands the thread once: a failed read of the channel and its retry draw it where it opens", () => {
+    mountLanding = {
+      messageId: "reply-a9",
+      sendPostId: null,
+      threadId: "thread-a",
+      visit: 1,
+    };
+    const view = mount({ openThreadPostId: "post-a" });
+    const threadLanding = (): string | null =>
+      within(screen.getByTestId("bot-thread-panel"))
+        .getByTestId("stub-transcript-thread")
+        .getAttribute("data-land-on");
+    expect(threadLanding()).toBe("reply-a9");
+
+    mocks.state.conversationsError = true;
+    view.rerender();
+    expect(screen.getByTestId("bot-channel-error")).toBeTruthy();
+    expect(screen.queryByTestId("bot-thread-panel")).toBeNull();
+    mocks.state.conversationsError = false;
+    view.rerender();
+
+    expect(threadLanding()).toBe("none");
+  });
+
+  it("holds the landing while the thread list has not answered, and lands once it does", () => {
+    mocks.state.threadListAnswered = false;
+    mountLanding = {
+      messageId: "reply-a9",
+      sendPostId: null,
+      threadId: "thread-a",
+      visit: 1,
+    };
+    const view = mount({ openThreadPostId: "post-a" });
+    expect(screen.queryByTestId("stub-transcript-thread")).toBeNull();
+
+    mocks.state.threadListAnswered = true;
+    view.rerender();
+
+    expect(
+      within(screen.getByTestId("bot-thread-panel"))
+        .getByTestId("stub-transcript-thread")
+        .getAttribute("data-land-on"),
+    ).toBe("reply-a9");
+  });
+
+  it("lands no thread on a message the tab named for another thread", () => {
+    mountLanding = {
+      messageId: "reply-b9",
+      sendPostId: null,
+      threadId: "thread-b",
+      visit: 1,
+    };
+    mount({ openThreadPostId: "post-a" });
+
+    expect(
+      within(screen.getByTestId("bot-thread-panel"))
+        .getByTestId("stub-transcript-thread")
+        .getAttribute("data-land-on"),
+    ).toBe("none");
   });
 
   it("reads the thread's chat in the panel and replies into that thread", () => {
@@ -1505,7 +2005,7 @@ describe("<BotChannelView /> a post whose answer lands in a thread", () => {
   const POSTED: BotOpenThread = {
     anchorMessageId: "post-new",
     announcement: false,
-    answer: false,
+    anchorKind: null,
     sent: {
       threadId: "thread-new",
       requestId: "request-new",

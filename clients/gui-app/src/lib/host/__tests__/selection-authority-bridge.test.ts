@@ -100,7 +100,7 @@ function buildAuthority(input: {
     // A PROVISIONABLE local host. The `unavailable` port models a machine
     // whose host cannot be started, and since P1.3's F3(b)/(c) rulings such a
     // host honestly reads `dead` as soon as the engine's own ensure comes back
-    // unavailable (registry §5's ∅ definition made real). Every test below is
+    // unavailable (the ∅ definition made real). Every test below is
     // about what the BRIDGE does with a derivation, so leaving that port in
     // place would silently rewrite the derivation under each of them - the
     // window lands on ∅ or on the remote, and the bridge assertions end up
@@ -220,7 +220,7 @@ describe("mountSelectionAuthorityBridge", () => {
       kernel,
     });
 
-    // C2: kernel already started; the opening bind is subscribe-time
+    // Kernel already started; the opening bind is subscribe-time
     // apply(kernel.snapshot()), not a later change event.
     expect(pushes.calls.length).toBe(1);
     expect(pushes.calls.at(-1)).toBe("L");

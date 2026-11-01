@@ -127,6 +127,16 @@ export type CompetingRegistrationRetirement =
       readonly manifestRemoved: boolean;
       readonly agentStartRequested: boolean;
     }
+  // The competing registration was booted out, but the host it ran may still
+  // be running (it outlived the wait for it, or its `pid.json` could not be
+  // read, so it could not be waited on), so Desktop's agent was NOT
+  // started (its host would have declined beside the old one and stayed
+  // down). Desktop brings its host up once the old one is gone: its own
+  // ensure while it runs, its next launch, or the next login.
+  | {
+      readonly kind: "removed-host-still-exiting";
+      readonly manifestRemoved: boolean;
+    }
   // A failed repair still reports what it DID: `bootedOut` / `manifestRemoved`
   // are the halves that succeeded before or beside the one that failed, and
   // together with `bootoutIndeterminate` they decide whether the
@@ -137,7 +147,9 @@ export type CompetingRegistrationRetirement =
   // launchd may already have accepted the eviction. So a bootout that was
   // attempted and did not confirm is `bootoutIndeterminate`, and counts as
   // a possible removal; one never attempted, beside a manifest that was
-  // already absent, provably removed nothing.
+  // already absent, provably removed nothing. `retiredHostStillExiting` is
+  // the `removed-host-still-exiting` fact beside a failed manifest removal:
+  // the bootout succeeded, so nothing may start the host yet either.
   | {
       readonly kind: "retire-failed";
       readonly bootoutFailed: boolean;
@@ -145,6 +157,7 @@ export type CompetingRegistrationRetirement =
       readonly bootedOut: boolean;
       readonly bootoutIndeterminate: boolean;
       readonly manifestRemoved: boolean;
+      readonly retiredHostStillExiting: boolean;
     };
 
 // Outcome of `ServiceController.takeoverDesktopRegistration`.
@@ -490,6 +503,7 @@ export function withCliInvocationRecord(
         remove: () => controller.retireCompetingRegistration(label),
         removed: (result) =>
           result.kind === "retired" ||
+          result.kind === "removed-host-still-exiting" ||
           (result.kind === "retire-failed" &&
             (result.bootedOut ||
               result.bootoutIndeterminate ||

@@ -8,10 +8,10 @@ follows are in the root `AGENTS.md`, "When CI runs".
 A team pull request (a branch in this repository) into `main`, an
 `integration/*` branch or a `land/*` branch runs no job but the CodeQL scan.
 The rule is one expression, copied into the `if:` of every job but `analyze`
-in the nine workflows that trigger on `pull_request` (`test`, `pre-commit`,
-`protocol-compat`, `browser-regressions`, `real-supervisor`, `codeql`,
-`secret-scan`, `dco`, `gradle-wrapper`), and pinned by
-`scripts/__tests__/ci-pull-request-gate.test.mjs`:
+in the ten workflows that trigger on `pull_request` (`test`, `pre-commit`,
+`protocol-compat`, `browser-regressions`, `formal-regressions`,
+`real-supervisor`, `codeql`, `secret-scan`, `dco`, `gradle-wrapper`), and
+pinned by `scripts/__tests__/ci-pull-request-gate.test.mjs`:
 
 ```
 github.event_name != 'pull_request'
@@ -53,8 +53,8 @@ later merge never cancels an earlier merge's run.
   summary. It sends nothing anywhere: a failed `trunk-red` run is the signal,
   and the one thing an alert has to watch.
 - A merge run that narrows to what changed (`nx affected` in `pre-commit.yml`,
-  the `changes` job of `browser-regressions.yml`) compares against the last
-  push its own workflow passed on (`scripts/ci-last-green-sha.sh`), not the
+  the `changes` jobs of `browser-regressions.yml` and `formal-regressions.yml`)
+  compares against the last push its own workflow passed on (`scripts/ci-last-green-sha.sh`), not the
   push before. So the next merge's range still holds a break, and `main`
   stays red until a run covering everything since the last green push passes.
 - The internal repository's nightly staging train and its promotion to

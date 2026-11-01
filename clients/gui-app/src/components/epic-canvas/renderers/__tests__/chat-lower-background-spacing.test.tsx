@@ -158,6 +158,7 @@ function surfacesProps(): ChatLowerInteractionSurfacesProps {
       steerCapable: false,
       steerProtocolSupported: true,
       autoPermissionModeProtocolSupported: null,
+      ultracodeProtocolSupported: false,
       getDraftBlobBridgeSupported: () => false,
       getActiveTurnForSteer: () => null,
       // Unused by this suite - it covers background-section spacing, not Stop.

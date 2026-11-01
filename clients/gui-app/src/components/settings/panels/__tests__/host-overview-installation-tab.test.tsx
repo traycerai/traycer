@@ -892,7 +892,7 @@ describe("Overview ▸ Installation — a host restarting to finish an update", 
     live: false,
   };
 
-  /** Asserts the Restarting row of the core flows' state table. */
+  /** Asserts the Restarting state's shape. */
   function expectRestartingShape(): void {
     const pane = installationPane();
     expect(within(pane).getByTestId("host-scope-connecting")).not.toBeNull();

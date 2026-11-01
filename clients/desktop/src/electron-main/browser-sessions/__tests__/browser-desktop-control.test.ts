@@ -167,6 +167,35 @@ describe("BrowserDesktopControl", () => {
     expect(releases[1]).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps its holds while the host holds the control stream, and a release after the continued open still lets go", async () => {
+    const session = await openControlSession();
+    session.emit(prepareFrame("request-1", "epic-1"), null);
+
+    session.emitContinuityStatus("reconnecting", "held");
+    expect(releases[0]).not.toHaveBeenCalled();
+
+    session.emitContinuityStatus("open", "continued");
+    session.emit(prepareFrame("request-1", "epic-1"), null);
+    expect(releases[0]).not.toHaveBeenCalled();
+    expect(calls).toHaveLength(1);
+
+    session.emit(
+      { kind: "release", hasBinaryPayload: false, requestId: "request-1" },
+      null,
+    );
+    expect(releases[0]).toHaveBeenCalledTimes(1);
+  });
+
+  it("releases every hold when the hold on the control stream ends", async () => {
+    const session = await openControlSession();
+    session.emit(prepareFrame("request-1", "epic-1"), null);
+
+    session.emitContinuityStatus("reconnecting", "held");
+    session.emitContinuityStatus("reconnecting", null);
+
+    expect(releases[0]).toHaveBeenCalledTimes(1);
+  });
+
   it("ignores frames that are not a valid host frame, or that carry a binary payload", async () => {
     const session = await openControlSession();
 

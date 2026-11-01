@@ -12,6 +12,7 @@ import {
   profile,
   provider,
 } from "@/components/settings/panels/permissions/__tests__/judge-test-support";
+import { useMoveSheetStore } from "@/stores/settings/move-sheet-store";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 
 const mocks = vi.hoisted(() => ({
@@ -22,6 +23,12 @@ const mocks = vi.hoisted(() => ({
   user: null as AuthenticatedUser | null,
   staged: null as { readonly target: { readonly kind: string } } | null,
   openLink: vi.fn(() => Promise.resolve()),
+  thisComputer: {
+    hostId: null as string | null,
+    hostName: "this computer",
+    client: null,
+  },
+  thisComputersMove: "unknown" as "pending" | "unknown" | "not_moved" | "moved",
 }));
 
 vi.mock("@/lib/links/open-link", () => ({
@@ -44,6 +51,17 @@ vi.mock("@/hooks/host/use-host-supports-method", () => ({
 
 vi.mock("@/hooks/host/use-requester-host-id", () => ({
   useRequesterHostId: () => "host-1",
+}));
+
+// This computer and where its settings stand: the move card's own boundary,
+// faked here so these cases stay about the cards. The default says this
+// window has no computer of its own, which hides the move card for every case
+// but the one that sets it.
+vi.mock("@/components/settings/move/this-computer", () => ({
+  useThisComputer: () => mocks.thisComputer,
+}));
+vi.mock("@/components/settings/move/use-this-computers-move", () => ({
+  useThisComputersMove: () => mocks.thisComputersMove,
 }));
 
 vi.mock("@/hooks/epics/use-cloud-epic-tasks-query", () => ({
@@ -192,6 +210,12 @@ describe("GettingStartedSettingsPanel", () => {
     mocks.hosts = [];
     mocks.user = zeroUser();
     mocks.staged = null;
+    mocks.thisComputer = {
+      hostId: null,
+      hostName: "this computer",
+      client: null,
+    };
+    mocks.thisComputersMove = "unknown";
     mocks.openLink.mockClear();
     navigateMock.mockReset();
     activateTabIntentMock.mockClear();
@@ -201,6 +225,7 @@ describe("GettingStartedSettingsPanel", () => {
 
   afterEach(() => {
     cleanup();
+    useMoveSheetStore.setState({ target: null });
   });
 
   it("draws the design's four always-on steps and no tour, appearance, or browser cards", () => {
@@ -374,6 +399,48 @@ describe("GettingStartedSettingsPanel", () => {
 
     expect(
       screen.getByRole("button", { name: "Add credits, Complete" }),
+    ).toBeTruthy();
+  });
+
+  it("invites the move and opens the sheet that shows what moves", () => {
+    mocks.thisComputer = {
+      hostId: "old",
+      hostName: "Old laptop",
+      client: null,
+    };
+    mocks.thisComputersMove = "not_moved";
+    render(<GettingStartedSettingsPanel />);
+
+    const card = screen.getByTestId("getting-started-card-move");
+    expect(card.textContent).toContain(
+      "Move this computer's settings to Personal",
+    );
+    expect(card.textContent).toContain(
+      "So they work on every computer and sandbox you use.",
+    );
+    expect(card.textContent).toContain("Show me what moves");
+
+    fireEvent.click(card);
+
+    expect(useMoveSheetStore.getState().target).toEqual({
+      hostId: "old",
+      hostName: "Old laptop",
+    });
+  });
+
+  it("completes the move once this computer's settings are in Personal", () => {
+    mocks.thisComputer = {
+      hostId: "old",
+      hostName: "Old laptop",
+      client: null,
+    };
+    mocks.thisComputersMove = "moved";
+    render(<GettingStartedSettingsPanel />);
+
+    expect(
+      screen.getByRole("button", {
+        name: "Move this computer's settings to Personal, Complete",
+      }),
     ).toBeTruthy();
   });
 });

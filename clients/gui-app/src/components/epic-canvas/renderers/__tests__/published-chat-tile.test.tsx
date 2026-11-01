@@ -498,7 +498,7 @@ const NODE: PublishedChatTileRef = {
 
 /**
  * The SAME ref shape the canvas builds when this device's own connected host
- * answers `CHAT_NOT_VISIBLE` for one of its chats (tickets 47/48): the
+ * answers `CHAT_NOT_VISIBLE` for one of its chats: the
  * serving host and the owning host are one machine, which is exactly what
  * `hostId === ownerHostId` says. Nothing about it is probed - the copy's
  * footer has to read that off the ref.
@@ -1100,7 +1100,7 @@ describe("PublishedChatTile - dead-tile clone banner", () => {
   // The canvas no longer draws a banner over this tile for an unreachable
   // owner, so the tile's own has to be there on every branch - a reader
   // stuck on the load state or a refused read still needs the host sentence
-  // and the Clone way out (PR #1818 review). Neither branch has a copy on
+  // and the Clone way out (PR #1818). Neither branch has a copy on
   // screen, so neither may claim one.
   it("keeps the banner above the load state before the first copy", () => {
     mockUseCloudChatTranscript.mockReturnValue(refusedUnpublished());
@@ -2165,7 +2165,7 @@ describe("PublishedChatTile - the sandbox's own state", () => {
 /**
  * The REAL state hook over its data sources: what a sandbox chat shows while
  * its state is moving or not yet known to this device, as after a Stop and
- * after a reload of a destroyed chat (§10).
+ * after a reload of a destroyed chat.
  */
 describe("PublishedChatTile - a sandbox chat whose state is not known yet", () => {
   const TASK_ROW: TaskHostRow = {

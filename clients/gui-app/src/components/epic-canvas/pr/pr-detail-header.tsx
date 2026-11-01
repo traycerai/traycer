@@ -247,7 +247,7 @@ function PrDetailStalenessLabel(props: {
 function PrDetailGitHubLink(props: {
   readonly prUrl: string | null;
 }): ReactNode {
-  // Guarded on the bridge mutation's own pending flag (R10): each call fires a
+  // Guarded on the bridge mutation's own pending flag: each call fires a
   // fresh request, so a click landing on an outstanding handoff would open a
   // second OS tab.
   const { isPending, openLink } = useOpenLinkWithPending();

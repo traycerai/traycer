@@ -227,7 +227,7 @@ export function TabStripPositionRow(props: AreaRowPlacement): ReactNode {
 }
 
 /**
- * What the vertical strip shows (D8), each value drawn as the strip itself: the
+ * What the vertical strip shows, each value drawn as the strip itself: the
  * sample task's row and the one below it, with its live agents between them in
  * Tabs and agents. It only means something while the tabs are at an edge, so
  * at the top the pictures are disabled and the row says why; the stored value
@@ -495,7 +495,7 @@ export function TabOverflowRow(props: AreaRowPlacement): ReactNode {
 }
 
 /**
- * The resource readings on each agent and terminal row in the sidebar (G7).
+ * The resource readings on each agent and terminal row in the sidebar.
  * Stored beside the Resource monitor's values, but a Sidebar setting: it works
  * whether or not the monitor is shown, so it never greys with it. WHICH
  * readings is the monitor's own Metrics choice (L-174), so the description

@@ -297,12 +297,65 @@ describe("createArtifactLaneAdapter - doc-ready transitions", () => {
     adapter.attach(host);
 
     latest().callbacks.onDoc(docFrame({}), new Uint8Array([1]));
-    latest().callbacks.onConnectionStatus("reconnecting", null);
+    latest().callbacks.onConnectionStatus("reconnecting", null, null, null);
     latest().callbacks.onDoc(docFrame({}), new Uint8Array([2]));
 
     expect(
       emittedEvents(log).filter((event) => event.kind === "doc-ready"),
     ).toHaveLength(2);
+  });
+});
+
+describe("createArtifactLaneAdapter - held continuity", () => {
+  function docReadyCount(log: readonly LogEntry[]): number {
+    return emittedEvents(log).filter((event) => event.kind === "doc-ready")
+      .length;
+  }
+
+  function statuses(log: readonly LogEntry[]): AdapterStatus[] {
+    return log
+      .filter(
+        (entry): entry is Extract<LogEntry, { channel: "reportStatus" }> =>
+          entry.channel === "reportStatus",
+      )
+      .map((entry) => entry.status);
+  }
+
+  it("stays ready through a held reconnect and a continued open, reporting both transitions", () => {
+    const { factory, latest } = createFakeStreamClientFactory();
+    const adapter = createArtifactLaneAdapter(
+      createSources(factory, undefined, undefined),
+    );
+    const { host, log } = createRecordingHost();
+    adapter.attach(host);
+
+    latest().callbacks.onDoc(docFrame({}), new Uint8Array([1]));
+    latest().callbacks.onConnectionStatus("reconnecting", null, null, "held");
+    latest().callbacks.onConnectionStatus("open", null, null, "continued");
+    latest().callbacks.onDoc(docFrame({}), new Uint8Array([2]));
+
+    expect(docReadyCount(log)).toBe(1);
+    expect(statuses(log)).toEqual([
+      { connection: "reconnecting", continuity: "held", closeReason: null },
+      { connection: "open", continuity: "continued", closeReason: null },
+    ]);
+  });
+
+  it("re-announces readiness after the hold ends in a plain reconnect", () => {
+    const { factory, latest } = createFakeStreamClientFactory();
+    const adapter = createArtifactLaneAdapter(
+      createSources(factory, undefined, undefined),
+    );
+    const { host, log } = createRecordingHost();
+    adapter.attach(host);
+
+    latest().callbacks.onDoc(docFrame({}), new Uint8Array([1]));
+    latest().callbacks.onConnectionStatus("reconnecting", null, null, "held");
+    latest().callbacks.onConnectionStatus("reconnecting", null, null, null);
+    latest().callbacks.onConnectionStatus("open", null, null, null);
+    latest().callbacks.onDoc(docFrame({}), new Uint8Array([2]));
+
+    expect(docReadyCount(log)).toBe(2);
   });
 });
 
@@ -696,7 +749,7 @@ describe("ArtifactStreamClient (real, over a stub IStreamSession) - binary-paylo
       status: StreamConnectionStatus,
       reason: StreamCloseReason | null,
     ): void {
-      this.statusHandler?.(status, reason, null);
+      this.statusHandler?.(status, reason, null, null);
     }
   }
 

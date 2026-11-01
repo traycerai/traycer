@@ -72,7 +72,7 @@ export PATH="$HOME/.traycer/cli/bin:$PATH"
 
 | Command | Purpose |
 | --- | --- |
-| `traycer login` | Sign in with a device code. The CLI prints a URL and a short code, tries to open the URL in your browser, and waits until you approve. You can approve on any device, so this also works over SSH. |
+| `traycer login` | Sign in with a device code. The CLI prints a URL and a short code, tries to open the URL in your browser, and waits until you approve. You can approve on any device, so this also works over SSH. If a host is already running on this machine and is not yet authorized, this authorizes it too. |
 | `traycer logout` | Sign out. Removes the stored credentials, which also signs Traycer Desktop out on this machine, and clears the local cache of chat content. A host that is already running keeps its own credential until it stops. |
 | `traycer whoami` | Check the stored sign-in with Traycer and print the signed-in user. This can refresh the stored credentials. |
 | `traycer whoami --local` | Print the stored identity without contacting Traycer. It cannot tell whether the session has expired or been revoked. |

@@ -80,7 +80,7 @@ function useEnvironmentPickerModel(scope: HostScope): EnvironmentPickerModel {
 /**
  * Settings ▸ Environment's dropdown, at the head of the group: Personal, a
  * Local row under it for each computer whose own settings have not moved,
- * and the team rows (P1's slot). The pick decides what every page below it
+ * and the team rows. The pick decides what every page below it
  * shows; it never changes which host this window works on.
  */
 export function EnvironmentPicker(props: {

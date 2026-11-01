@@ -170,7 +170,7 @@ vi.mock("@/hooks/agent/use-create-tui-agent", () => ({
 }));
 
 /**
- * The composer's resolved placement (redesign P1.2). These tests exercise the
+ * The composer's resolved placement. These tests exercise the
  * READY arm - `resolveLandingPlacement`'s own refusals have their own unit
  * suite - so the target names the same host the mocked client addresses.
  */
@@ -657,6 +657,60 @@ describe("useLandingComposerActions", () => {
 
     queryClient.clear();
   });
+
+  // The first send carries the toolbar's saved Ultracode request on the
+  // opening message: a Claude selection keeps it, any other harness states
+  // false even when the toolbar still holds true.
+  it.each([
+    ["claude", "claude-opus-4-7", true],
+    ["codex", "gpt-5-codex", false],
+  ] as const)(
+    "carries the toolbar's saved request for %s / %s on the opening message as %s",
+    async (harnessId, modelSlug, expected) => {
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false, gcTime: 0 } },
+      });
+      const { result } = renderHook(
+        () => useLandingComposerActions(useTestPlacementTarget()),
+        {
+          wrapper: queryClientWrapper(queryClient),
+        },
+      );
+
+      act(() => {
+        result.current.submit({
+          draftId: null,
+          editor: editorHandleForPrompt(SUBMITTED_PROMPT),
+          slashCatalog: null,
+          owner: null,
+          teamSandboxHarnessBlocked: false,
+          settled: null,
+          toolbar: {
+            ...defaultToolbar(),
+            selection: { harnessId, modelSlug, profileId: null },
+            ultracode: true,
+          },
+        });
+      });
+
+      await waitFor(() => {
+        expect(
+          landingMocks.request.mock.calls.some((c) => c[0] === "epic.create"),
+        ).toBe(true);
+      });
+
+      const createEpicCall = landingMocks.request.mock.calls.find(
+        (c) => c[0] === "epic.create",
+      );
+      expect(createEpicCall?.[1]).toMatchObject({
+        chat: {
+          initialMessage: { settings: { harnessId, ultracode: expected } },
+        },
+      });
+
+      queryClient.clear();
+    },
+  );
 
   // Widening the divergence beyond the suite defaults: an explicit target
   // host that is neither `undefined` nor coincidentally equal to the local
@@ -1182,6 +1236,7 @@ describe("useLandingComposerActions", () => {
       }),
     ).toBe(createEpicName(SUBMITTED_PROMPT));
     const expectedSettings = {
+      ultracode: false,
       harnessId: "codex",
       model: "gpt-5-codex",
       permissionMode: "supervised",
@@ -1879,7 +1934,7 @@ describe("useLandingComposerActions", () => {
   });
 
   it("never lets a ghost folder from corrupt persisted state reach the launch payload or intent restamp", async () => {
-    // The reviewer's corrupt-persistence scenario, end to end: a persisted
+    // The corrupt-persistence scenario, end to end: a persisted
     // payload whose folder array carries a ghost path with no metadata, a
     // staged intent still naming that ghost as primary - after rehydration
     // + submit, neither the associations nor the intent may carry the ghost,
@@ -2131,12 +2186,13 @@ describe("useLandingComposerActions", () => {
         landingMocks.request.mock.calls.some((c) => c[0] === "epic.create"),
       ).toBe(true);
     });
-    // T6 does not materialize a tab before the one-shot create succeeds, so a
+    // The create flow does not materialize a tab before the one-shot create succeeds, so a
     // rejected request leaves no optimistic result to clean up.
     expect(useEpicCanvasStore.getState().openTabOrder).toEqual([]);
     expect(
       useComposerRunSettingsStore.getState().getGlobalRunSettings(TEST_HOST_ID),
     ).toEqual({
+      ultracode: false,
       harnessId: "codex",
       model: "gpt-5-codex",
       permissionMode: "supervised",
@@ -4444,6 +4500,7 @@ function queryClientWrapper(
 
 function defaultToolbar() {
   return {
+    ultracode: false,
     selection: {
       harnessId: "codex" as const,
       modelSlug: "gpt-5-codex",
@@ -4496,8 +4553,7 @@ function jsonContentForPrompt(prompt: string): JsonContent {
 }
 
 // A hash-only image draft (an `imageAttachment` node carrying a `hash`, never
-// `b64content`) plus a line of text — the shape the live landing editor produces
-// after T4.
+// `b64content`) plus a line of text — the shape the live landing editor produces.
 function editorHandleForHashImage(
   hash: string,
   prompt: string,

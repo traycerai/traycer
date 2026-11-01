@@ -46,7 +46,7 @@ export type HostPickIntent = "view" | "bind" | "pin";
 /**
  * What an Activate does, said where it is offered (Settings' Activate button
  * and the account menu's Host rows). Not "tabs stay on the host they started
- * on" - the active-host switch still reloads open tabs today (F2/F3/F7), so
+ * on" - the active-host switch still reloads open tabs today, so
  * that promise would be false. This only says what IS true.
  */
 export const ACTIVATE_HOST_HINT = "Switching changes where new work starts.";
@@ -182,7 +182,7 @@ const STATUS_WORD: Record<HostHealthState, string | null> = {
   online: null,
   // Deliberately silent. The host is pickable and will dial; "reported
   // reachable" is a nuance for the card, not a warning for a row, and the
-  // muted dot already withholds the liveness claim (F26).
+  // muted dot already withholds the liveness claim.
   "reported-reachable": null,
   // A blind cloud read is not something a person acts on from a picker.
   unknown: null,
@@ -308,7 +308,7 @@ export function sandboxWordYieldsToHealth(host: HostScopeOption): boolean {
  *
  * The status word above answers **health and route**: can this machine be
  * reached, is it mid-setup, is it removed. This answers **what its update is
- * doing**. The experience doc states the rule directly — "connectivity and
+ * doing**. The rule is stated directly — "connectivity and
  * update state remain separate facts" — and the long note on `STATUS_WORD`
  * records what happened the last time one vocabulary tried to answer two
  * questions: a row contradicted its own health line, in the same row.

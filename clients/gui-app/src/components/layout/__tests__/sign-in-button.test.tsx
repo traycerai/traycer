@@ -1000,7 +1000,7 @@ describe("<SignInButton />", () => {
 
   it("keeps credentials file when a stored session is rejected (local plane held)", async () => {
     // Automatic failure paths never destroy the shared credentials file —
-    // only explicit sign-out does (tech plan §5). CLI seeding is gone; the
+    // only explicit sign-out does. CLI seeding is gone; the
     // file is the single store.
     const host = buildHost();
     await host.tokenStore.signIn(
@@ -1069,7 +1069,7 @@ describe("<SignInButton />", () => {
         { id: "auth-session:expired", cancel: null },
       );
     });
-    // Cold-review P1-4: a live refresh rejection is a verdict about the TOKEN,
+    // A live refresh rejection is a verdict about the TOKEN,
     // so the session is DEMOTED and the local plane survives - it is no longer
     // torn down out from under whatever the user was editing.
     expect(useAuthStore.getState().status).toBe("unverified");

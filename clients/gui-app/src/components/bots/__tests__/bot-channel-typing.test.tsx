@@ -1,5 +1,5 @@
 /**
- * A bot channel's typing signal (Tracy Bots T60/T64), through the REAL
+ * A bot channel's typing signal, through the REAL
  * `BotChannelView`: its transcript, thread panel and replying strips read
  * what the bot is doing through the real `useBotActivity`, which reads the
  * `activity` the bot's `bot.subscribe` snapshot carries; the case moves it
@@ -208,7 +208,10 @@ vi.mock(
 vi.mock("@/components/chat/chat-messages", async () => {
   const { ChatExpansionTestProviders: Providers } =
     await import("@/components/chat/__tests__/chat-expansion-test-providers");
+  const { use } = await import("react");
   const { ChatMessage } = await import("@/components/chat/chat-message");
+  const { ChatTimelineHeaderContext } =
+    await import("@/components/chat/chat-timeline-header-context");
   const noBackgroundToolBlockIds: ReadonlySet<string> = new Set();
   return {
     ChatMessages: (props: {
@@ -217,6 +220,7 @@ vi.mock("@/components/chat/chat-messages", async () => {
     }) => (
       <Providers tileInstanceId={props.instanceId}>
         <div data-testid="chat-messages-stub">
+          {use(ChatTimelineHeaderContext)}
           {props.messages.map((message) => (
             <ChatMessage
               key={message.id}
@@ -327,6 +331,7 @@ function threadSummary(): BotThreadSummary {
       senderUserId: USER_ID,
       sentAt: 1_000,
       resolvedAt: null,
+      excerpt: null,
     },
     replyCount: 1,
     lastReplyAt: 2_000,
@@ -369,6 +374,7 @@ function emitActivity(activity: BotActivity): void {
       openRequestCount: null,
       conversationsRevision: null,
       notificationSubscriptions: null,
+      surfaceActions: null,
       stoppedNotificationWatches: null,
       boundHost: { hostId: HOST_ID, epoch: 0, isThisHost: true },
       activity,
@@ -458,7 +464,7 @@ function session(chatId: string): SessionHarness {
 function emitSnapshot(chatId: string, state: SessionState): void {
   const callbacks = session(chatId).callbacks();
   act(() => {
-    callbacks.onConnectionStatus("open", null, null);
+    callbacks.onConnectionStatus("open", null, null, null);
     callbacks.onSnapshot({
       kind: "snapshot",
       hasBinaryPayload: false,
@@ -502,10 +508,16 @@ function ChannelHarness(props: { readonly directive: string }): ReactNode {
       directive={props.directive}
       appConversationChatId={CHANNEL_ID}
       trunkChatId="trunk-chat"
-      openTurn={null}
       onOpenTurn={vi.fn()}
+      onOpenSession={vi.fn()}
+      landOn={null}
+      openMemory={null}
+      onOpenMemory={vi.fn()}
+      environmentId="env-1"
+      botNameOf={() => null}
       resolveMember={resolveMember}
       tasks={[]}
+      surfaceActions={null}
       openThread={openThread}
       onOpenThread={(open) =>
         useBotOpenThreadStore
@@ -513,6 +525,7 @@ function ChannelHarness(props: { readonly directive: string }): ReactNode {
           .setRail(BOT_ID, open === null ? null : { kind: "thread", ...open })
       }
       onOpenActivity={vi.fn()}
+      setupHistory={null}
     />
   );
 }

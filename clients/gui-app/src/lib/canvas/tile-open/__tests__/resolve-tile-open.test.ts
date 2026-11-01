@@ -1,6 +1,6 @@
 /**
- * The resolver IS the placement spec (plan §5.1 steps 1-7, decisions C3-C7,
- * C10), so this suite is the spec's executable form: one case per rule, built
+ * The resolver IS the placement spec, so this suite is its executable form:
+ * one case per rule, built
  * on the real canvas fixtures the store suites use.
  */
 import { describe, expect, it } from "vitest";
@@ -111,7 +111,7 @@ const BASE_INTENT: TileOpenIntent = tileIntent(
 
 const NO_MODS = { shift: false, alt: false, middle: false } as const;
 
-/** default + per-category, at the shipped defaults (C3). */
+/** default + per-category, at the shipped defaults. */
 const DEFAULT_SETTINGS: TilePlacementSettings = {
   default: "per-category",
   content: "tab",
@@ -179,7 +179,7 @@ describe("target", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 2. Dedupe (C6, B4)
+// 2. Dedupe (B4)
 // ---------------------------------------------------------------------------
 
 describe("dedupe", () => {
@@ -208,7 +208,7 @@ describe("dedupe", () => {
     });
   });
 
-  // R1: the old `openTile(preview: false)` cleared the pane's preview slot on
+  // The old `openTile(preview: false)` cleared the pane's preview slot on
   // a dedupe hit; the plan has to carry that or a double-click stops pinning.
   it("promotes a permanent hit on the pane's own preview", () => {
     const plan = resolve({
@@ -255,7 +255,7 @@ describe("dedupe", () => {
     ).toMatchObject({ kind: "focus-existing", promote: false });
   });
 
-  // C1: `openTileInBackgroundTab` was idempotent - a host re-registering an
+  // `openTileInBackgroundTab` was idempotent - a host re-registering an
   // already-open tile must not steal focus.
   it("is a no-op when a background open hits an open tile", () => {
     expect(resolveDefault({ ...BASE_INTENT, gesture: "host" })).toEqual({
@@ -303,7 +303,7 @@ describe("dedupe", () => {
     });
   });
 
-  // R14: middle = "a fresh background tab", whatever the category.
+  // Middle = "a fresh background tab", whatever the category.
   it("middle-click bypasses dedupe for a non-browser node too", () => {
     expect(
       resolveDefault({
@@ -322,7 +322,7 @@ describe("dedupe", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 3. Gesture -> mode (C4)
+// 3. Gesture -> mode
 // ---------------------------------------------------------------------------
 
 describe("gesture -> mode", () => {
@@ -369,7 +369,7 @@ describe("gesture -> mode", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 4. Explicit placement (C7)
+// 4. Explicit placement
 // ---------------------------------------------------------------------------
 
 describe("explicit placement", () => {
@@ -428,7 +428,7 @@ describe("explicit placement", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 4b. Setting + modifiers (C3, C4)
+// 4b. Setting + modifiers
 // ---------------------------------------------------------------------------
 
 describe("setting and modifiers", () => {
@@ -494,7 +494,7 @@ describe("setting and modifiers", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 5. Viewport clamp (C10) and pip
+// 5. Viewport clamp and pip
 // ---------------------------------------------------------------------------
 
 describe("single-tile viewport", () => {
@@ -568,7 +568,7 @@ describe("pip", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 6. Category affinity (C5)
+// 6. Category affinity
 // ---------------------------------------------------------------------------
 
 describe("category affinity", () => {
@@ -629,8 +629,8 @@ describe("category affinity", () => {
     });
   });
 
-  // R5: a background open creates no geometry, but it still belongs beside
-  // its own category rather than in whatever pane is active (C5).
+  // A background open creates no geometry, but it still belongs beside
+  // its own category rather than in whatever pane is active.
   it("groups a background open into the category's pane", () => {
     expect(
       resolve({
@@ -1032,7 +1032,7 @@ describe("beside placement", () => {
 });
 
 // ---------------------------------------------------------------------------
-// tileCategoryOf (C2)
+// tileCategoryOf
 // ---------------------------------------------------------------------------
 
 describe("tileCategoryOf", () => {

@@ -10,7 +10,7 @@
  * is, Edit loads the text into the channel's box and the send replaces the
  * failed post, and Sign in opens the provider on the bot's host.
  */
-import { StrictMode } from "react";
+import { StrictMode, type ReactElement } from "react";
 import {
   act,
   cleanup,
@@ -30,6 +30,7 @@ import {
 import { mockRemoteHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
+import { recordNegotiatedHostManifest } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type {
   BotConversationSendRequest,
@@ -91,7 +92,10 @@ type ChannelTranscriptState = Pick<
 
 const mocks = vi.hoisted(() => ({
   channelHandle: null as ChatSessionStoreHandle | null,
+  threadHandle: null as ChatSessionStoreHandle | null,
   client: null as HostRequester<HostRpcRegistry> | null,
+  /** The client of the host that runs the bot, which takes an Update. */
+  boundClient: null as HostRequester<HostRpcRegistry> | null,
   threads: [] as BotThreadSummary[],
   openSettings: vi.fn<(opts: OpenSettingsModalOpts) => void>(),
 }));
@@ -100,15 +104,25 @@ vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => ({
   ...(await importOriginal<
     typeof import("@/lib/registries/chat-session-registry")
   >()),
-  // The channel reads its own session; a thread's session has no rows here.
+  // The channel reads its own session; a thread's has rows where a case
+  // gives it some.
   useChatSessionHandleForContainer: (
     _botId: string,
     chatId: string,
-  ): ChatSessionStoreHandle | null =>
-    chatId === CHANNEL_ID ? mocks.channelHandle : null,
+  ): ChatSessionStoreHandle | null => {
+    if (chatId === CHANNEL_ID) return mocks.channelHandle;
+    return chatId === THREAD_ID ? mocks.threadHandle : null;
+  },
 }));
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => mocks.client,
+}));
+// The app's host binding names a client per host; here only the host that
+// runs the bot has one.
+vi.mock("@/lib/host/binding-host-client", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/host/binding-host-client")>()),
+  resolveNamedHostClient: (_binding: unknown, hostId: string) =>
+    hostId === BOUND_HOST_ID ? mocks.boundClient : null,
 }));
 vi.mock("@/hooks/host/use-host-supports-method", async (importOriginal) => ({
   ...(await importOriginal<
@@ -160,7 +174,10 @@ vi.mock("@/hooks/bots/use-bot-activity", async (importOriginal) => ({
 vi.mock("@/components/chat/chat-messages", async () => {
   const { ChatExpansionTestProviders: Providers } =
     await import("@/components/chat/__tests__/chat-expansion-test-providers");
+  const { use } = await import("react");
   const { ChatMessage } = await import("@/components/chat/chat-message");
+  const { ChatTimelineHeaderContext } =
+    await import("@/components/chat/chat-timeline-header-context");
   const noBackgroundToolBlockIds: ReadonlySet<string> = new Set();
   return {
     ChatMessages: (props: {
@@ -169,6 +186,7 @@ vi.mock("@/components/chat/chat-messages", async () => {
     }) => (
       <Providers tileInstanceId={props.instanceId}>
         <div data-testid="chat-messages-stub">
+          {use(ChatTimelineHeaderContext)}
           {props.messages.map((message) => (
             <ChatMessage
               key={message.id}
@@ -276,6 +294,7 @@ function postThread(senderUserId: string): BotThreadSummary {
       senderUserId,
       sentAt: 1_000,
       resolvedAt: null,
+      excerpt: null,
     },
     replyCount: 1,
     lastReplyAt: 2_000,
@@ -381,6 +400,34 @@ function hostClientRecordingSends(): HostRequester<HostRpcRegistry> {
   return spine.createRequester(mockRemoteHostEntry);
 }
 
+/** What the bot's host was asked to update, in order. */
+let ensured: ReadonlyArray<string>;
+
+/** The bot's host's client, over a messenger whose `providers.ensurePack` records the provider. */
+function boundHostClientRecordingUpdates(): HostRequester<HostRpcRegistry> {
+  const messenger = new MockHostMessenger<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    requestId: () => "request-update",
+    handlers: {
+      "providers.ensurePack": (params) => {
+        ensured = [...ensured, params.providerId];
+        return Promise.resolve({ managedInstallState: null });
+      },
+    },
+  });
+  const spine = new HostClient<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    invalidator: createHostQueryInvalidator(new QueryClient()),
+    findHostById: (hostId) =>
+      hostId === mockRemoteHostEntry.hostId ? mockRemoteHostEntry : null,
+    messenger,
+  });
+  spine.setRequestContext(
+    createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
+  );
+  return spine.createRequester(mockRemoteHostEntry);
+}
+
 /** The channel with `post` in it, the viewer's own unless a case says otherwise. */
 function mountChannel(openThread: BotOpenThread | null, post: Message): void {
   mountChannelWith(openThread, [post]);
@@ -389,13 +436,15 @@ function mountChannel(openThread: BotOpenThread | null, post: Message): void {
 function mountChannelWith(
   openThread: BotOpenThread | null,
   posts: ReadonlyArray<Message>,
-): void {
+): () => void {
   mocks.channelHandle = {
     store: createChannelStore(posts),
   } as ChatSessionStoreHandle;
-  render(
+  // One client for the mount, as the app has: a rerender keeps its cache.
+  const queryClient = new QueryClient();
+  const tree = (): ReactElement => (
     <StrictMode>
-      <QueryClientProvider client={new QueryClient()}>
+      <QueryClientProvider client={queryClient}>
         <TooltipProvider>
           <ChatExpansionTestProviders tileInstanceId="tile-1">
             <BotChannelView
@@ -407,19 +456,28 @@ function mountChannelWith(
               directive={null}
               appConversationChatId={CHANNEL_ID}
               trunkChatId="trunk-chat"
-              openTurn={null}
               onOpenTurn={vi.fn()}
+              onOpenSession={vi.fn()}
+              landOn={null}
+              openMemory={null}
+              onOpenMemory={vi.fn()}
+              environmentId="env-1"
+              botNameOf={() => null}
               resolveMember={resolveMember}
               tasks={[]}
+              surfaceActions={null}
               openThread={openThread}
               onOpenThread={onOpenThread}
               onOpenActivity={vi.fn()}
+              setupHistory={null}
             />
           </ChatExpansionTestProviders>
         </TooltipProvider>
       </QueryClientProvider>
-    </StrictMode>,
+    </StrictMode>
   );
+  const view = render(tree());
+  return () => view.rerender(tree());
 }
 
 function channelBox(): HTMLTextAreaElement {
@@ -440,6 +498,8 @@ beforeEach(() => {
   mocks.threads = [];
   activityStore.setState({ activity: null });
   mocks.client = hostClientRecordingSends();
+  ensured = [];
+  mocks.boundClient = boundHostClientRecordingUpdates();
   // A host that can retry and replace, and a viewer who wrote the post.
   negotiateBotSend(HOST_ID, { major: 1, minor: 1 });
   signInViewer(VIEWER_USER_ID);
@@ -451,7 +511,9 @@ afterEach(() => {
   cleanup();
   resetBotFailedRequestSupport();
   mocks.channelHandle = null;
+  mocks.threadHandle = null;
   mocks.client = null;
+  mocks.boundClient = null;
 });
 
 describe("<BotChannelView /> Retry on a post the bot failed to answer", () => {
@@ -692,7 +754,7 @@ describe("<BotChannelView /> a teammate's post the bot failed to answer", () => 
       {
         anchorMessageId: POST_ID,
         announcement: false,
-        answer: false,
+        anchorKind: null,
         sent: null,
       },
       memberPost(TEAMMATE_USER_ID),
@@ -755,6 +817,77 @@ describe("<BotChannelView /> Edit on a post the bot failed to answer", () => {
       expect(screen.queryByTestId("bot-channel-composer-editing")).toBeNull();
     });
     expect(box.value).toBe("");
+  });
+
+  it("keeps an edit of a message in the open thread, its text and the message it replaces, while the channel's session goes and comes back", async () => {
+    const user = userEvent.setup();
+    const THREAD_REQUEST = "req-in-thread";
+    const THREAD_TEXT = "And the release branch?";
+    mocks.threads = [postThread(VIEWER_USER_ID)];
+    mocks.threadHandle = {
+      store: createChannelStore([
+        {
+          role: "user",
+          messageId: "thread-message-1",
+          sender: { type: "user", userId: VIEWER_USER_ID },
+          sessionAnchor: null,
+          message: {
+            kind: "user",
+            content: textDoc(THREAD_TEXT),
+            browserAnnotations: [],
+          },
+          timestamp: 3_000,
+          conversationRequest: {
+            requestId: THREAD_REQUEST,
+            resolvedAt: null,
+            resolvedByMessageId: null,
+          },
+        },
+      ]),
+    } as ChatSessionStoreHandle;
+    activityStore.setState({
+      activity: {
+        trunk: null,
+        threads: { [THREAD_ID]: failedOn(THREAD_REQUEST) },
+      },
+    });
+    const rerender = mountChannelWith(
+      {
+        anchorMessageId: POST_ID,
+        announcement: false,
+        anchorKind: null,
+        sent: null,
+      },
+      [memberPost(VIEWER_USER_ID)],
+    );
+    const panel = screen.getByTestId("bot-thread-panel");
+    const messages = within(panel).getByTestId("chat-messages-stub");
+    // The reply's row, not the post the list opens on.
+    const anchor = within(panel).getByTestId("bot-thread-anchor");
+    const [replyRow] = within(messages)
+      .getAllByTestId("bot-member-row")
+      .filter((row) => !anchor.contains(row));
+    await user.click(within(replyRow).getByTestId("bot-message-edit"));
+    const box = within(panel).getByTestId("bot-thread-composer-input");
+    if (!(box instanceof HTMLTextAreaElement))
+      throw new Error("not a textarea");
+    await user.type(box, " Since Monday.");
+
+    const channel = mocks.channelHandle;
+    mocks.channelHandle = null;
+    rerender();
+    mocks.channelHandle = channel;
+    rerender();
+
+    expect(box.isConnected).toBe(true);
+    expect(box.value).toBe(`${THREAD_TEXT} Since Monday.`);
+    expect(screen.getByTestId("bot-thread-composer-editing")).toBeTruthy();
+    await user.click(screen.getByTestId("bot-thread-composer-send"));
+    expect(sent.at(-1)).toMatchObject({
+      threadId: THREAD_ID,
+      text: `${THREAD_TEXT} Since Monday.`,
+      supersedes: THREAD_REQUEST,
+    });
   });
 
   it("opens the replacement's thread when the bot answers it in one", async () => {
@@ -850,7 +983,7 @@ describe("<BotChannelView /> Edit on a post the bot failed to answer", () => {
       {
         anchorMessageId: POST_ID,
         announcement: false,
-        answer: false,
+        anchorKind: null,
         sent: null,
       },
       memberPost(VIEWER_USER_ID),
@@ -1014,6 +1147,49 @@ describe("<BotChannelView /> the line under a post the bot did not answer", () =
     expect(sent).toEqual([]);
   });
 
+  it("adds Update for an out-of-date command-line tool, which updates the provider on the host that runs the bot", async () => {
+    const user = userEvent.setup();
+    recordNegotiatedHostManifest(BOUND_HOST_ID, {
+      "providers.ensurePack": { major: 1, minor: 0 },
+    });
+    activityStore.setState({
+      activity: trunkWithReason("failed", {
+        summary: "Grok's command-line tool is out of date.",
+        code: "provider_outdated",
+        harnessId: "grok",
+        action: "update-provider",
+      }),
+    });
+    mountChannel(null, memberPost(VIEWER_USER_ID));
+
+    const line = lineOf(screen.getByTestId("bot-member-row"));
+    expect(line.textContent).toBe(
+      "Not answered: Grok's command-line tool is out of date. · Retry · Edit · Update",
+    );
+    await user.click(within(line).getByRole("button", { name: "Update" }));
+
+    await waitFor(() => expect(ensured).toEqual(["grok"]));
+    expect(sent).toEqual([]);
+  });
+
+  it("offers no Update where the bot's host cannot update the tool, and says who does", () => {
+    const owner =
+      "Grok's command-line tool is out of date. The host's owner can update it.";
+    activityStore.setState({
+      activity: trunkWithReason("failed", {
+        summary: owner,
+        code: "provider_outdated_host_owner",
+        harnessId: "grok",
+        action: "none",
+      }),
+    });
+    mountChannel(null, memberPost(VIEWER_USER_ID));
+
+    expect(lineOf(screen.getByTestId("bot-member-row")).textContent).toBe(
+      `Not answered: ${owner} · Retry · Edit`,
+    );
+  });
+
   it("offers no Sign in while no host runs the bot, and still says why", () => {
     boundHostId = null;
     activityStore.setState({
@@ -1112,7 +1288,7 @@ describe("<BotChannelView /> the line under a post the bot did not answer", () =
       {
         anchorMessageId: POST_ID,
         announcement: false,
-        answer: false,
+        anchorKind: null,
         sent: null,
       },
       memberPost(VIEWER_USER_ID),

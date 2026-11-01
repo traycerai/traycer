@@ -45,7 +45,7 @@ interface PendingArmGesture<T> {
 
 /**
  * `readTimeoutMs` is read when a press is stored, not captured once: the
- * timeout is derived from the measured control-plane RTT (ticket 18), which
+ * timeout is derived from the measured control-plane RTT, which
  * arrives after the buffer is built and refines while the tile lives.
  */
 export function createScreencastArmBuffer<T>(

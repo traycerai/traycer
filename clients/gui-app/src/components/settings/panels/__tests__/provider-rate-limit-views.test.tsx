@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { NO_EPISODE } from "@/lib/rate-limits/rate-limit-envelope";
+import {
+  NO_EPISODE,
+  type ProviderRateLimitEnvelope,
+} from "@/lib/rate-limits/rate-limit-envelope";
 import {
   act,
   cleanup,
@@ -8,7 +11,10 @@ import {
   screen,
   within,
 } from "@testing-library/react";
-import type { ProviderRateLimits } from "@traycer/protocol/host";
+import type {
+  ProviderRateLimits,
+  RateLimitChatCredential,
+} from "@traycer/protocol/host";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { formatSettingsDate } from "@/lib/settings/settings-date";
 import { useLayoutStore } from "@/stores/layout/layout-store";
@@ -472,7 +478,7 @@ describe("CodexRateLimitView (extended fields)", () => {
   });
 
   it("shows a relative countdown for a short popover window", () => {
-    // Fixup C #1: the popover reverts to the same relative-for-short /
+    // The popover reverts to the same relative-for-short /
     // exact-for-weekly split as the Settings card. `primary` is a 5h window, so
     // it reads as a relative countdown ("Resets in 4h 7m"), not an absolute date.
     render(
@@ -1458,6 +1464,108 @@ describe("ProviderRateLimitDetail dispatch", () => {
     expect(screen.getByText("Gemini Models")).toBeTruthy();
     expect(screen.getByText("Current session")).toBeTruthy();
   });
+});
+
+const CHAT_CREDENTIAL_COPY: ReadonlyArray<
+  readonly [string, RateLimitChatCredential, string, string | null]
+> = [
+  [
+    "an API key variable",
+    { kind: "api-key", source: "ANTHROPIC_API_KEY" },
+    "Chats here are billed to ANTHROPIC_API_KEY, not your Claude plan, so there are no plan limits to show.",
+    "ANTHROPIC_API_KEY",
+  ],
+  [
+    "an apiKeyHelper",
+    { kind: "api-key", source: "apiKeyHelper" },
+    "Chats here are billed to the key from your apiKeyHelper, not your Claude plan, so there are no plan limits to show.",
+    "apiKeyHelper",
+  ],
+  [
+    "the Console managed key",
+    { kind: "api-key", source: "/login managed key" },
+    "Chats here are billed to your Anthropic Console key, not your Claude plan, so there are no plan limits to show.",
+    null,
+  ],
+  [
+    "another api-key source",
+    { kind: "api-key", source: "user" },
+    "Chats here are billed to user, not your Claude plan, so there are no plan limits to show.",
+    "user",
+  ],
+  [
+    "a token",
+    { kind: "token", source: "CLAUDE_CODE_OAUTH_TOKEN" },
+    "Chats here sign in with CLAUDE_CODE_OAUTH_TOKEN instead of your Claude login.",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+  ],
+  [
+    "Bedrock",
+    { kind: "cloud-provider", source: "bedrock" },
+    "Chats here run on Amazon Bedrock, so there are no plan limits to show.",
+    null,
+  ],
+  [
+    "Vertex",
+    { kind: "cloud-provider", source: "vertex" },
+    "Chats here run on Google Vertex AI, so there are no plan limits to show.",
+    null,
+  ],
+  [
+    "Foundry",
+    { kind: "cloud-provider", source: "foundry" },
+    "Chats here run on Microsoft Foundry, so there are no plan limits to show.",
+    null,
+  ],
+  [
+    "an unknown cloud provider",
+    { kind: "cloud-provider", source: "gateway" },
+    "Chats here run on gateway, so there are no plan limits to show.",
+    null,
+  ],
+];
+
+function chatCredentialEnvelope(
+  chatCredential: RateLimitChatCredential,
+): ProviderRateLimitEnvelope {
+  return {
+    latest: {
+      provider: "claude-code",
+      available: false,
+      reason: "rate_limits_not_available",
+      chatCredential,
+    },
+    lastGood: null,
+    lastGoodAt: null,
+    lastFailureAt: NOW,
+    credentialGeneration: null,
+    episode: NO_EPISODE,
+  };
+}
+
+describe("ProviderRateLimitBody (chat credential notice)", () => {
+  it.each(CHAT_CREDENTIAL_COPY)(
+    "says %s in place of 'Usage limits unavailable'",
+    (_name, credential, text, codeText) => {
+      const { container } = render(
+        <ProviderRateLimitBody
+          isPending={false}
+          isFetching={false}
+          isError={false}
+          envelope={chatCredentialEnvelope(credential)}
+          codexResetAction={null}
+          openModelProvidersAction={null}
+        />,
+      );
+      expect(container.textContent).toBe(text);
+      expect(
+        Array.from(container.querySelectorAll("code")).map(
+          (node) => node.textContent,
+        ),
+      ).toEqual(codeText === null ? [] : [codeText]);
+      expect(screen.queryByText(/Usage limits unavailable/)).toBeNull();
+    },
+  );
 });
 
 describe("ProviderRateLimitBody (unavailable state)", () => {

@@ -42,7 +42,7 @@ export function tileLoadNoun(subject: TileLoadSubject): string {
  * compile HERE, naming its missing key - rather than arriving at runtime and
  * routing silently to a generic fallback. That failure mode is not
  * hypothetical: it is exactly how `activateRefusalMessage` shipped a broker
- * message instead of a compile error during P1.2.
+ * message instead of a compile error during the redesign.
  */
 const DEAD_MESSAGE: Record<
   HostLeaseDeadState["reason"],
@@ -81,7 +81,7 @@ export function tileDeadMessage(
 }
 
 /**
- * The sentence for one bounded load state. Asserted directly by the S1-S6
+ * The sentence for one bounded load state. Asserted directly by the
  * catalog suite: "no spinner is on screen" passes vacuously when nothing
  * rendered at all, and that is the exact shape an empty mount produces, so
  * the pins assert the WORDS.

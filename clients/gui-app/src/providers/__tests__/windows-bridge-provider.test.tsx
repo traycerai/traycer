@@ -1178,7 +1178,7 @@ describe("<WindowsBridgeProvider /> - renderer parking's cross-window channel", 
   });
 });
 
-// ── Renderer parking's WINDOW-level input (fixup 5) ──────────────────────────
+// ── Renderer parking's WINDOW-level input ────────────────────────────────────
 //
 // The Page Visibility API is inert in a desktop window that a browser tile's
 // video plane keeps rendering unseen (`backgroundThrottling` off), which keeps
@@ -1190,7 +1190,7 @@ describe("<WindowsBridgeProvider /> - renderer parking's cross-window channel", 
 // observe the two things the signal exists for: the park clock and the
 // cross-window claim. Manually overwriting `document.visibilityState` (the
 // other parking pins) cannot see this configuration mismatch, which is how the
-// first cut of fixup 5 shipped inert on the desktop.
+// first cut shipped inert on the desktop.
 
 interface FakeWindowVisibilityChannel {
   readonly channel: NonNullable<DesktopWindowsBridge["windowVisibility"]>;
@@ -1422,7 +1422,7 @@ describe("<WindowsBridgeProvider /> - renderer parking's window visibility input
   });
 
   // ── The startup read is OLDER than any event that lands while it is in
-  // flight (Codex re-review of 343f6cc0b9, P1) ───────────────────────────────
+  // flight ───────────────────────────────────────────────────────────────────
   //
   // Main answers the snapshot from what the window looked like when the invoke
   // arrived; an `onChange` that lands before the answer does is newer. Applying
@@ -1525,7 +1525,7 @@ describe("<WindowsBridgeProvider /> - renderer parking's window visibility input
   });
 
   // ── A transient snapshot failure is retried, because "the next edge" never
-  // comes for a window minimised at startup and left alone (P2) ──────────────
+  // comes for a window minimised at startup and left alone ──────────────
   it("retries a failed startup snapshot and reclaims a quiet minimised window without any further edge", async () => {
     const EPIC = "epic-provider-snapshot-retry";
     const VIEW = "view-provider-snapshot-retry";
@@ -1645,8 +1645,8 @@ describe("<WindowsBridgeProvider /> - renderer parking's window visibility input
         // Microtasks only: the settle runs the leg's `.then`/`.catch`.
         await vi.advanceTimersByTimeAsync(0);
       });
-      // The discriminator for teardown's `snapshotLeg.cancel()` (Codex on
-      // 7f3f67441): a rejection after teardown must not ARM a retry timer.
+      // The discriminator for teardown's `snapshotLeg.cancel()`:
+      // a rejection after teardown must not ARM a retry timer.
       // Asserted on the timer count before the backoff elapses, because a
       // stray retry that does fire returns at `snapshotSuperseded()` before
       // it reads, leaving `snapshotCalls` unchanged - so the count below is

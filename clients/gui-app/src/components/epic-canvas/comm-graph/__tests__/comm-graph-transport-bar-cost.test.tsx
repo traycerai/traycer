@@ -539,6 +539,7 @@ describe("what a playback step costs the transport bar", () => {
  * time. So it lives here now, where a media player puts its clock and where it
  * costs the drawing nothing.
  */
+
 /** The bar's clock, spelled independently - see the width case for why. */
 function expectedClock(timestamp: number): string {
   return new Intl.DateTimeFormat(undefined, {

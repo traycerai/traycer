@@ -18,7 +18,7 @@
  * "a long idle gap does not push every real exchange into a sliver", which was
  * simply untrue of `(t - start) / (end - start)`: an epic worked in bursts over
  * an afternoon rendered as five smears of unreadable ticks separated by half a
- * track of nothing, which is what round 2's feedback asked about ("why do we
+ * track of nothing, which is what the complaint named ("why do we
  * have these big gaps in the timeline? it doesn't need the gaps").
  *
  * The transport has ALWAYS been event-paced: one row per tick, `BASE_STEP_MS`

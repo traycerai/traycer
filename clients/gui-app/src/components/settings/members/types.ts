@@ -87,7 +87,7 @@ export type PreviewState<Preview> =
 export type MembersReadState = "loading" | "failed" | "unsupported" | "ready";
 
 /**
- * P3's drawer subject. Members rows use kind `member` and key = userId;
+ * The drawer subject. Members rows use kind `member` and key = userId;
  * the legacy notice / page uses kind `member` and an empty key.
  *
  * `roleLabel` is the role the row holds, which the drawer cannot read for

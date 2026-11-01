@@ -141,6 +141,7 @@ function startCard(): ReactNode {
       }}
       agentMessageReceipt={null}
       agentMessageDelivery={null}
+      botSendReceipt={null}
       isStreaming={false}
       endState={null}
       stopped={false}
@@ -181,6 +182,7 @@ function restartCard(): ReactNode {
       }}
       agentMessageReceipt={null}
       agentMessageDelivery={null}
+      botSendReceipt={null}
       isStreaming={false}
       endState={null}
       stopped={false}

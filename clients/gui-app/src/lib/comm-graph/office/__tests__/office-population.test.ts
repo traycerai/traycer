@@ -200,7 +200,7 @@ describe("partitionOfficePopulation", () => {
     });
   });
 
-  // The recording's shape, at the counts the ticket pins: the team count is
+  // The recording's shape, at the pinned counts: the team count is
   // `min(30, floor((n-1)/7))`, so it only reaches the cap of 30 once n is well
   // past it - both 309 and 1000 are past that point and land on 30. Hot and
   // archived are pinned too, straight from the fixture's own stated rates
@@ -257,7 +257,7 @@ describe("partitionOfficePopulation", () => {
   });
 
   it("gives a different seed a different solo count at the same scale", () => {
-    // The reviewer measured 220 solos at 309 agents for seed 2 - verified
+    // 220 solos at 309 agents for seed 2, measured - verified
     // here rather than trusted, since team sizes (and so the solo count)
     // depend on the seed's own random draws.
     const epic = makeTestEpic("triage", 309, 2);
@@ -487,7 +487,7 @@ describe("partitionOfficePopulation", () => {
 
   it("N1a: an arrival under a frozen solo is a solo, and no team is fabricated around its lead", () => {
     // S is a direct leaf of HQ, so it is a solo by construction. Appending C
-    // under it and re-partitioning with `previous` is the reviewer's exact
+    // under it and re-partitioning with `previous` is the exact
     // N1 sequence: fresh topology alone would read S as now leading a team,
     // but S is a KNOWN agent and stays frozen as a solo - so C, the arrival,
     // must be classified against that settled fact rather than against the
@@ -1313,7 +1313,7 @@ describe("partitionOfficePopulation", () => {
   /**
    * EVERY COMBINATION OF WHO RETURNS, WHAT SURVIVED, AND WHERE.
    *
-   * One row per line of the ticket's matrix; N5, N7, N9 and N10 are rows of
+   * One row per line of the matrix; N5, N7, N9 and N10 are rows of
    * it too, restated here alongside the rest so the whole class is closed in
    * one place. Each row says whether it fails on `e89c7e1ea` / `4bbfcbb9b`
    * (the trees before waiting-team continuity was resolved before HQ) or is
@@ -1955,7 +1955,7 @@ describe("partitionOfficePopulation", () => {
       // HQ - Q holds the office now - so R reads as a later root leading a
       // team of its own, and L is its child. Adoption would quietly move L
       // into team R and leave team L standing with M in it and L outside,
-      // which is the very shape this whole chain of fixups exists to ban.
+      // which is the very shape this whole chain of fixes exists to ban.
       const base: ReadonlyArray<OfficeAgentInput> = [
         agent({ id: "R", hostId: "host-a", createdAt: 0 }),
         agent({ id: "L", parentId: "R", hostId: "host-a", createdAt: 1 }),
@@ -2001,7 +2001,7 @@ describe("partitionOfficePopulation", () => {
   /**
    * THE WHOLE FAMILY OF TRANSITIONS, NOT A LIST OF THE ONES SOMEBODY THOUGHT OF.
    *
-   * Six fixups of this file were each found by a reader constructing one more
+   * Six fixes of this file were each found by a reader constructing one more
    * sequence by hand, and every one of them was a shape the cases above had no
    * reason to reach. The rows are still worth having - they say what the office
    * is SUPPOSED to look like - but they cannot be what closes the question, so

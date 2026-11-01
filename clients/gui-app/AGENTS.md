@@ -16,8 +16,9 @@ bunx vitest run <path>       # one test file; CI runs the suite
 ```
 
 After .ts/.tsx changes, run react-doctor on the changed files only (manual; not
-in pre-commit): `npx -y react-doctor@latest . --verbose --diff <base> --offline
---no-score`. `bun run react-doctor` scans the whole project.
+in pre-commit): `bunx react-doctor@latest . --verbose --diff <base> --offline
+--no-score`. `bun run react-doctor` scans the whole project. Not `npx`: npm
+refuses this workspace's `yaml` catalog override (`EOVERRIDE`).
 
 After making changes, lint the files you changed with `bun run lint:files
 <paths>` and fix all errors. `@shadcn/lint` runs there and reads

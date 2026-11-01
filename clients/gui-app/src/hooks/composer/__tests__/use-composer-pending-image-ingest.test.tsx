@@ -1,5 +1,5 @@
 /**
- * T4's shared in-place b64 -> hash rewrite (`useComposerPendingImageIngest`),
+ * The shared in-place b64 -> hash rewrite (`useComposerPendingImageIngest`),
  * extracted from `landing-composer.tsx`'s own copy for the three chat
  * surfaces. Two entry points, one background job: `ingestPastedComposerImages`
  * (a rich-clipboard paste, node arrives already carrying bytes) and

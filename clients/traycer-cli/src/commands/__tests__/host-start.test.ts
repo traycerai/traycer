@@ -329,6 +329,11 @@ interface Recorded {
   readonly crashReports: HostCrashTelemetry[];
   /** Environments the supervisor asked to resume crash-report state for. */
   readonly resumedCrashReports: Environment[];
+  /** Service-definition refreshes a service-manager start asked for. */
+  readonly refreshedDefinitions: Array<{
+    environment: Environment;
+    serviceLabel: string;
+  }>;
   /** When set, reportHostCrash never resolves (report-timeout path). */
   reportHostCrashHangs: boolean;
   /** When set, reportHostCrash rejects (must not skip marker/exit). */
@@ -415,6 +420,7 @@ function makeRunStubs(
     findCrashReportRejects: false,
     crashReports: [],
     resumedCrashReports: [],
+    refreshedDefinitions: [],
     reportHostCrashHangs: false,
     reportHostCrashRejects: false,
     lastStderrTee: null,
@@ -613,6 +619,12 @@ function makeRunStubs(
     resumeCrashReports: async (environment) => {
       recorded.resumedCrashReports.push(environment);
     },
+    // Unset, a labelled start rewrites the developer's real service
+    // definition.
+    refreshServiceDefinitionAtStart: async (environment, serviceLabel) => {
+      recorded.sequence.push("refresh-definition");
+      recorded.refreshedDefinitions.push({ environment, serviceLabel });
+    },
     createStderrTee: (_environment: Environment): StderrTee => {
       const tee = new MemoryStderrTee();
       recorded.lastStderrTee = tee;
@@ -807,6 +819,93 @@ describe("runHostStart - incumbent host guard", () => {
     expect(recorded.exited).toBe(69);
     expect(recorded.spawnCalls).toHaveLength(0);
     expect(recorded.markers.map((m) => m.phase)).toContain("failed-to-spawn");
+  });
+});
+
+describe("runHostStart - service definition refresh at supervisor start", () => {
+  const exec = "/opt/traycer/host/install/traycer-host";
+
+  it("a service-manager start (label, no authorised probe) refreshes its definition once, before the host is spawned", async () => {
+    const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          {
+            environment: "production",
+            cwd: null,
+            serviceLabel: "ai.traycer.host",
+          },
+          withChildExit(deps, child, 0, null),
+        ),
+      recorded,
+    );
+
+    expect(recorded.refreshedDefinitions).toEqual([
+      { environment: "production", serviceLabel: "ai.traycer.host" },
+    ]);
+    expect(recorded.sequence.indexOf("refresh-definition")).toBeLessThan(
+      recorded.sequence.indexOf("spawn"),
+    );
+  });
+
+  it("an interactive start (no label) does not refresh", async () => {
+    const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          { environment: "production", cwd: null },
+          withChildExit(deps, child, 0, null),
+        ),
+      recorded,
+    );
+
+    expect(recorded.spawnCalls).toHaveLength(1);
+    expect(recorded.refreshedDefinitions).toEqual([]);
+  });
+
+  it("a labelled start under an authorised probe does not refresh", async () => {
+    const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const status = new PassThrough();
+    Object.assign(child, { stdio: [null, null, null, status] });
+    const originalSpawn = deps.spawn;
+    if (originalSpawn === undefined)
+      throw new Error("test spawn dependency missing");
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          {
+            environment: "production",
+            cwd: null,
+            serviceLabel: "ai.traycer.host",
+          },
+          {
+            ...deps,
+            readLiveProbeContextForServiceLabel: async () => ({
+              kind: "authorised" as const,
+              context: {
+                transitionId: "transition-1",
+                probeNonce: "nonce-1",
+                serviceLabel: "ai.traycer.host",
+              },
+            }),
+            spawn: (command, args, options) => {
+              const spawned = originalSpawn(command, args, options);
+              setImmediate(() => {
+                status.end();
+                child.emit("exit", 0, null);
+              });
+              return spawned;
+            },
+          },
+        ),
+      recorded,
+    );
+
+    expect(recorded.spawnCalls).toHaveLength(1);
+    expect(recorded.refreshedDefinitions).toEqual([]);
   });
 });
 

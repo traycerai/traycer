@@ -259,6 +259,7 @@ function renderPanel(input: {
     onActiveRow: noop,
     onSelectRow: input.onSelectRow,
     reasoningFooter: null,
+    ultracodeFooter: null,
     reasoningPickerOpen: true,
     serviceTierFooter: null,
     createProfileHostId: HOST_ID,

@@ -815,12 +815,10 @@ describe("a task id in a message", () => {
 describe("a task id in a bot's row", () => {
   const PRESENTATION: ChatBotPresentation = {
     botTitle: "Tracy",
-    scrollToMessage: null,
-    replyFollowsPost: null,
     threadLine: null,
     openThread: null,
     openAnnouncementThread: null,
-    answerThreads: false,
+    threadAnchorKinds: [],
     chooseOption: null,
     questions: null,
     failedRequest: null,

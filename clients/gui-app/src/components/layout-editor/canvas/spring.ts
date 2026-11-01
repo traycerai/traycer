@@ -1,5 +1,5 @@
 /**
- * The one spring stepper the editor's motion runs on (L-29, section 6).
+ * The one spring stepper the editor's motion runs on (L-29).
  *
  * Critically damped by default: the ring, the reflowing siblings and the
  * release all want "arrives and stops", not "arrives and wobbles". A spring
@@ -20,10 +20,10 @@ const SETTLED_VELOCITY = 0.2;
  */
 export const MAX_SPRING_STEP_SECONDS = 1 / 30;
 
-/** The travelling selection ring (section 6). */
+/** The travelling selection ring. */
 export const RING_SPRING = { response: 0.35, zeta: 1 } as const;
 
-/** The siblings reflowing around a member being dragged past them (section 6). */
+/** The siblings reflowing around a member being dragged past them. */
 export const DRAG_SIBLING_SPRING = { response: 0.34, zeta: 1 } as const;
 
 /**

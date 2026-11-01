@@ -590,18 +590,25 @@ const CHAT_SESSION_NOT_VISIBLE_CODE = "CHAT_NOT_VISIBLE";
 const CHAT_INDEX_UNAVAILABLE_CODE = "CHAT_INDEX_UNAVAILABLE";
 
 /**
+ * The revoked banner's clone handler. Module-level so it is reference-stable,
+ * and a no-op because that banner declares `offersClone: false` and therefore
+ * never renders a control that could call it - the prop exists only because
+ * `ChatDeadTileBanner` is shared with the three reasons that DO offer it.
+ */
+const noopClone = (): void => undefined;
+
+/**
  * CONSISTENCY over ref provenance (user ruling, 2026-08-09): a live chat tab
- * whose bound host is unreachable renders what a fresh click on its row
+ * whose serving host is unreachable renders what a fresh click on its row
  * renders - the published copy, locked - instead of a dead dial wearing a
  * live tab's face. The ref itself is untouched (bind-for-life protects DATA
  * identity: we never show a different host's chat under this tab); only the
  * SURFACE follows reachability, and it flips back to live the moment the
- * owner returns. The copy ref binds a LIVE reading host - serving a cloud
- * read through the dead bound host would just be the same dial with extra
- * steps - so it needs a resolvable active host that differs from the bound
- * one, and an owner user id derivable from the projection.
+ * serving host returns. The copy ref uses the captured reading host (or the
+ * pool for an index-unavailable fallback), and an owner user id from the
+ * projection or cloud row.
  *
- * ## Extended for a REACHABLE owner with a confirmed-absent chat (ticket 35)
+ * ## Extended for a REACHABLE owner with a confirmed-absent chat
  *
  * The bound host can be perfectly reachable and still have nothing to serve
  * for this specific chat - a leased "machine" identity that never adopted
@@ -617,16 +624,16 @@ const CHAT_INDEX_UNAVAILABLE_CODE = "CHAT_INDEX_UNAVAILABLE";
  * lands) rather than the reachability arm's upfront one - `chat-tile.tsx`
  * must attempt the open before this can possibly fire.
  *
- * ## Extended AGAIN for a SAME-host chat with no local record (ticket 36)
+ * ## Extended AGAIN for a SAME-host chat with no local record
  *
- * Ticket 35's `confirmedAbsent` needs `chat-tile.tsx` to have already
+ * The `confirmedAbsent` arm above needs `chat-tile.tsx` to have already
  * attempted `chat.subscribe` - and at the time this arm was written
  * `chat-tile.tsx`'s own `enabled` gate was the doc record alone, so it never
  * even TRIED for a same-host tab with no local record and `fatalClose` never
- * fired for this case (ticket 49 changed that; see the section below).
+ * fired for this case (the section below changed that).
  * Without this arm the tile fell through to
- * `computeIsRemoteDeleted`'s reap instead (a silent no-open, ticket 36's
- * bug report). `cloudChatRecord` reads the SAME already-fetched
+ * `computeIsRemoteDeleted`'s reap instead (a silent no-open, the
+ * original bug report). `cloudChatRecord` reads the SAME already-fetched
  * `useCloudChatList` data `use-epic-route-synchronization.ts`'s reap
  * exemption reads (`epic.listCloudChats`'s host-side filter already
  * excludes anything this host's registry has tombstoned, so cloud presence
@@ -635,13 +642,13 @@ const CHAT_INDEX_UNAVAILABLE_CODE = "CHAT_INDEX_UNAVAILABLE";
  * arm specifically, since a chat this arm targets by definition has no
  * local projection to read it from.
  *
- * ## NARROWED for a REACHABLE same-host owner (ticket 49)
+ * ## NARROWED for a REACHABLE same-host owner
  *
- * Ticket 36's arm above rested on "a same-host chat with no epic-doc record
+ * The arm above rested on "a same-host chat with no epic-doc record
  * is a chat this host genuinely does not hold". That equivalence was already
  * false when it landed: chat creation stopped projecting into the epic doc
- * (`chat-registry-writer.ts`, ticket 19) and `ChatDocEntrySweep` deletes
- * every entry whose publication it has proven (ticket 20), so "no doc
+ * (`chat-registry-writer.ts`) and `ChatDocEntrySweep` deletes
+ * every entry whose publication it has proven, so "no doc
  * record" became the ORDINARY steady state of a healthy, owned,
  * fully-present chat. The renderer's record set is a shrinking set of
  * pre-upgrade entries converging on empty, and every chat the sweep had
@@ -653,7 +660,7 @@ const CHAT_INDEX_UNAVAILABLE_CODE = "CHAT_INDEX_UNAVAILABLE";
  * So cloud-known-and-record-less no longer substitutes on its own. It is now
  * the `ownerUserId` SOURCE for a same-host substitution, and the proof that
  * there IS a published copy to substitute with - never the trigger. The
- * triggers are the same two facts the cross-host arms already use:
+ * triggers are:
  *
  * - the owner host is unreachable (nothing can be dialed), or
  * - `chat.subscribe` itself terminated `CHAT_NOT_VISIBLE`.
@@ -673,14 +680,6 @@ const CHAT_INDEX_UNAVAILABLE_CODE = "CHAT_INDEX_UNAVAILABLE";
  * swap it for is exactly what it does not have, so it keeps its live
  * generic-error surface).
  */
-/**
- * The revoked banner's clone handler. Module-level so it is reference-stable,
- * and a no-op because that banner declares `offersClone: false` and therefore
- * never renders a control that could call it - the prop exists only because
- * `ChatDeadTileBanner` is shared with the three reasons that DO offer it.
- */
-const noopClone = (): void => undefined;
-
 interface ChatFallbackDecision {
   readonly substitute: boolean;
   /** The banner the canvas mounts above the copy; `null` leaves it to the copy tile. */
@@ -715,15 +714,15 @@ function resolveChatFallbackDecision(args: {
   // A published copy exists for this chat and it is the viewer's own (the
   // caller only resolves this row for a same-host chat with no local record -
   // see `wantsCloudChatFallback`). Necessary for a same-host substitution,
-  // never sufficient: post-ticket-19/20 this is the steady state of a healthy
-  // chat, not evidence of absence (ticket 49).
+  // never sufficient: post-sweep this is the steady state of a healthy
+  // chat, not evidence of absence.
   const sameHostCloudCopyAvailable = args.cloudChatOwnerUserId !== null;
   // The two honest absence causes, shared by both host arms. `hostUnreachable`
   // is upfront; `confirmedAbsent` is the host's own `CHAT_NOT_VISIBLE`
   // terminate, which lands only after `chat-tile.tsx` has attempted the open.
   const absent = args.hostUnreachable || args.confirmedAbsent;
   // Same-host needs the copy in hand as well - a same-host chat with no cloud
-  // fallback is a genuine local error, not a substitutable one (ticket 35's
+  // fallback is a genuine local error, not a substitutable one (the earlier
   // rule, preserved). Cross-host keeps deriving its owner from the projection
   // or the ref, so it does not need the row.
   const sameHostFallback =
@@ -825,7 +824,7 @@ function usePublishedChatFallbackRef(args: {
    * builds) so the substitution mount can thread `ownerUserId` - the owner
    * the OPENING ROW resolved - into the banner instead of leaving the
    * banner's container to re-derive it from a second cloud lookup that can
-   * fail independently (cold-review finding).
+   * fail independently.
    */
   readonly fallbackRef: PublishedChatTileRef | null;
   readonly ownerHostLabel: string | null;
@@ -1056,7 +1055,7 @@ export function ActiveTabBody(props: ActiveTabBodyProps) {
   // chat instanceIds. Unregisters (reports false) on unmount so a closed
   // tab's entry never lingers.
   //
-  // A LAYOUT effect, not a passive one (design-review slice-4 F2 residual):
+  // A LAYOUT effect, not a passive one (F2 residual):
   // this render already commits to the inline `DeletedArtifactBody` branch
   // below for a remote-deleted chat, but that alone doesn't remove the
   // hosted owner - `tile-surface-membership.ts`, `tile-surface-environment-
@@ -1084,7 +1083,7 @@ export function ActiveTabBody(props: ActiveTabBodyProps) {
     // Without it, membership keeps the instance, the environment registry
     // ("removal only by membership") retains a stale visible/anchored
     // snapshot from the unmounted slot, and the hosted live body paints over
-    // the copy - the exact two-owners drift design-review slice-4 finding 2
+    // the copy - the exact two-owners drift this report
     // exists to prevent. Reported through the deletion registry rather than a
     // parallel one so membership has ONE inline-takeover input.
     reportChatRemoteDeletionState(
@@ -1260,8 +1259,8 @@ interface ComputeIsRemoteDeletedArgs {
   /** The host whose projection `liveArtifact` was resolved from. */
   readonly projectionHostId: string | null;
   /**
-   * Same-host counterpart of the cross-host exemption below (chat-sync-v2
-   * ticket 36): true when this SAME-host chat has no local record but is
+   * Same-host counterpart of the cross-host exemption below:
+   * true when this SAME-host chat has no local record but is
    * still known to `epic.listCloudChats` (whose host-side filter already
    * excludes anything this host's own registry has tombstoned - see
    * `usePublishedChatFallbackRef`, which computes this alongside the
