@@ -22,6 +22,11 @@ import {
   HostTransportFailureError,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import { markMayHaveReachedHost } from "@traycer/protocol/host-transport/remote/rpc-types";
+import {
+  createPendingSendStorage,
+  forgetPendingDispatchRequest,
+  recordPendingDispatchRequest,
+} from "@/lib/sandboxes/pending-stage-storage";
 import { appLogger } from "@/lib/logger";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { ExternalToast } from "sonner";
@@ -92,6 +97,7 @@ import {
 import {
   holdPendingSandboxSendOwnership,
   ownsPendingSandboxSend,
+  ownsPendingSandboxSendExclusively,
 } from "@/lib/sandboxes/pending-sandbox-send-ownership";
 import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
 import {
@@ -4187,6 +4193,30 @@ describe("a message for an existing chat whose sandbox rests", () => {
       expect(createChatCalls()).toEqual([]);
     });
 
+    it("keeps the request when the chat itself rejects the message, because the create that made the chat landed", async () => {
+      seedAwakeMessage();
+      session.openAsOwner();
+      mountInChat();
+      await waitFor(() => {
+        expect(sendFrames()).toHaveLength(1);
+      });
+      // The create that made this chat left earlier, and its request was recorded.
+      expect(recordPendingDispatchRequest(SEND_ID)).toBe("first");
+
+      session.rejectSend(onlyPendingActionId(), "the host refused it");
+
+      await waitFor(() => {
+        expect(readStagedSandbox(SURFACE)?.failure).toEqual({
+          kind: "not-sent",
+        });
+      });
+      expect(
+        usePendingSandboxSendStore.getState().sends[SEND_ID]?.dispatch ?? null,
+      ).toBeNull();
+      expect(requestRecord()).not.toBeNull();
+      expect(createChatCalls()).toEqual([]);
+    });
+
     it("keeps its own rejection when an ordinary send already holds the restoration slot: one Not sent, no retry, the first send's restoration untouched, no duplicate recovery copy", async () => {
       seedAwakeMessage();
       session.openAsOwner();
@@ -5246,35 +5276,8 @@ describe("a pending chat create", () => {
 describe("a create the host's access check refused", () => {
   const REJECTED = "Pending sandbox dispatch rejected";
 
-  function unauthorized(): HostRpcError {
-    return new HostRpcError({
-      code: "UNAUTHORIZED",
-      message: "Not signed in.",
-      requestId: "request-1",
-      method: "epic.createChat",
-      fatalDetails: null,
-    });
-  }
-
-  function dispatchOf(): PendingSandboxSendDispatch | null {
-    return (
-      usePendingSandboxSendStore.getState().sends[SEND_ID]?.dispatch ?? null
-    );
-  }
-
   function refusalLine(): HTMLElement {
     return screen.getByTestId("sandbox-refusal-line");
-  }
-
-  function expectUncertainClaim(): void {
-    expect(
-      screen.getByTestId("pending-sandbox-dispatch").textContent,
-    ).toContain("Couldn't confirm the agent was created.");
-    expect(screen.getByTestId("pending-sandbox-dispatch-retry")).toBeDefined();
-    expect(dispatchOf()).toMatchObject({ status: "uncertain" });
-    expect(screen.queryByTestId("sandbox-refusal-line")).toBeNull();
-    expect(usePendingSandboxSendStore.getState().sends[SEND_ID]).toBeDefined();
-    expect(useLandingDraftStore.getState().drafts).toEqual([]);
   }
 
   async function waitForRefusalLine(): Promise<void> {
@@ -5339,6 +5342,7 @@ describe("a create the host's access check refused", () => {
   });
 
   it("makes one more create with the same IDs on Retry, and delivers exactly once when the credential is back", async () => {
+    onTestFinished(installImmediateExclusiveLocks());
     seed(SEEDED);
     mocks.createChatError = unauthorized();
     answerHost(SANDBOX_HOST, CODEX_READY);
@@ -5429,6 +5433,683 @@ describe("a create the host's access check refused", () => {
     });
     expect(createChatCalls()).toHaveLength(1);
     expectUncertainClaim();
+  });
+
+  /** Rejects the create that is in flight, once the test has changed the world under it. */
+  function holdCreateRejecting(): (error: Error) => void {
+    let reject: (error: Error) => void = () => undefined;
+    mocks.createChatDeferred = new Promise<CreateChatResponseV12>(
+      (_resolve, rejectCreate) => {
+        reject = rejectCreate;
+      },
+    );
+    return reject;
+  }
+
+  /** Writes of one record throw, or silently vanish, until `recover`; every other key writes. */
+  function failRecordWrites(
+    record: string,
+    mode: "throw" | "drop",
+  ): () => void {
+    const key = recordMapStorageKey(SEND_RECORDS, record);
+    const write: unknown = Reflect.get(Storage.prototype, "setItem");
+    if (typeof write !== "function") throw new Error("no setItem to wrap");
+    let failing = true;
+    const spy = vi
+      .spyOn(Storage.prototype, "setItem")
+      .mockImplementation(function (this: Storage, name, value) {
+        if (failing && name === key) {
+          if (mode === "throw") throw new Error("storage is full");
+          return;
+        }
+        Reflect.apply(write, this, [name, value]);
+      });
+    onTestFinished(() => spy.mockRestore());
+    return () => {
+      failing = false;
+    };
+  }
+
+  it("keeps a first request refused UNAUTHORIZED uncertain when there are no Web Locks, and a Retry sends once", async () => {
+    expect("locks" in navigator).toBe(false);
+    seed(SEEDED);
+    mocks.createChatError = unauthorized();
+    answerHost(SANDBOX_HOST, CODEX_READY);
+    mount();
+
+    await waitForCreateChats(1);
+    await waitFor(expectUncertainClaim);
+    expect(createChatCalls()).toHaveLength(1);
+
+    mocks.createChatError = null;
+    fireEvent.click(screen.getByTestId("pending-sandbox-dispatch-retry"));
+    await waitForCreateChats(2);
+    await waitFor(expectDelivered);
+    expect(createChatCalls()).toHaveLength(2);
+  });
+
+  it("keeps a first request uncertain when the exclusive lock is lost while it is in flight", async () => {
+    onTestFinished(installImmediateExclusiveLocks());
+    seed(SEEDED);
+    const refuse = holdCreateRejecting();
+    answerHost(SANDBOX_HOST, CODEX_READY);
+    mount();
+    await waitForCreateChats(1);
+    expect(ownsPendingSandboxSendExclusively(SEND_ID)).toBe(true);
+
+    // The window goes; with it goes the lock the request was sent under.
+    cleanup();
+    await waitFor(() => {
+      expect(ownsPendingSandboxSendExclusively(SEND_ID)).toBe(false);
+    });
+    await act(async () => {
+      refuse(unauthorized());
+      await Promise.resolve();
+    });
+    await waitFor(() => {
+      expect(dispatchOf()).toMatchObject({ status: "uncertain" });
+    });
+    expect(usePendingSandboxSendStore.getState().sends[SEND_ID]).toBeDefined();
+    expect(readStagedSandbox(SURFACE)?.failure ?? null).toBeNull();
+    expect(createChatCalls()).toHaveLength(1);
+
+    mocks.createChatDeferred = null;
+    mocks.createChatError = null;
+    mount();
+    fireEvent.click(
+      await screen.findByTestId("pending-sandbox-dispatch-retry"),
+    );
+    await waitForCreateChats(2);
+    await waitFor(expectDelivered);
+    expect(createChatCalls()).toHaveLength(2);
+  });
+
+  it.each(["throw", "drop"] as const)(
+    "sends nothing when the request cannot be recorded (a write that %ss), and treats the Retry after storage recovers as a first request",
+    async (mode) => {
+      onTestFinished(installImmediateExclusiveLocks());
+      seed(SEEDED);
+      const recover = failRecordWrites(REQUEST_RECORD, mode);
+      mocks.createChatError = unauthorized();
+      answerHost(SANDBOX_HOST, CODEX_READY);
+      mount();
+
+      await waitFor(() => {
+        expect(dispatchOf()).toMatchObject({ status: "uncertain" });
+      });
+      await waitFor(expectUncertainClaim);
+      expect(createChatCalls()).toEqual([]);
+      expect(requestRecord()).toBeNull();
+
+      recover();
+      fireEvent.click(screen.getByTestId("pending-sandbox-dispatch-retry"));
+      await waitForCreateChats(1);
+      // That request was the claim's first, and the host refused it.
+      await waitForRefusalLine();
+      expect(dispatchOf()).toBeNull();
+      expect(createChatCalls()).toHaveLength(1);
+      // The refusal was definite, so the send's request is forgotten with it.
+      expect(requestRecord()).toBeNull();
+    },
+  );
+
+  it("never takes the first request of a claim whose request already left, even after a reload", async () => {
+    onTestFinished(installImmediateExclusiveLocks());
+    seed(SEEDED);
+    mocks.createChatError = new Error("The reply was lost.");
+    answerHost(SANDBOX_HOST, CODEX_READY);
+    mount();
+    await waitFor(() => {
+      expect(dispatchOf()).toMatchObject({ status: "uncertain" });
+    });
+    expect(requestRecord()).not.toBeNull();
+    expect(createChatCalls()).toHaveLength(1);
+
+    await reloadPendingSandboxStores();
+    expect(dispatchOf()).toMatchObject({ status: "uncertain" });
+    mocks.createChatError = unauthorized();
+    mount();
+    fireEvent.click(
+      await screen.findByTestId("pending-sandbox-dispatch-retry"),
+    );
+    await waitForCreateChats(2);
+    await waitFor(expectUncertainClaim);
+    expect(createChatCalls()).toHaveLength(2);
+
+    mocks.createChatError = null;
+    fireEvent.click(screen.getByTestId("pending-sandbox-dispatch-retry"));
+    await waitForCreateChats(3);
+    await waitFor(expectDelivered);
+    expect(createChatCalls()).toHaveLength(3);
+  });
+
+  it("forgets the request on a refusal, so the next claim is a first and a second refusal clears it again with the same IDs", async () => {
+    onTestFinished(installImmediateExclusiveLocks());
+    seed(SEEDED);
+    mocks.createChatError = unauthorized();
+    answerHost(SANDBOX_HOST, CODEX_READY);
+    mount();
+    await waitForRefusalLine();
+    // A definite refusal forgets the request, so the next claim's is a first.
+    expect(requestRecord()).toBeNull();
+
+    fireEvent.click(
+      within(refusalLine()).getByRole("button", { name: "Retry" }),
+    );
+    await waitForCreateChats(2);
+    await waitForRefusalLine();
+    expect(dispatchOf()).toBeNull();
+    expect(requestRecord()).toBeNull();
+    expect(document.body.textContent).not.toContain("Couldn't confirm");
+    expect(
+      within(refusalLine()).getByRole("button", { name: "Retry" }),
+    ).toBeDefined();
+    const [first, second] = createChatCalls();
+    expect(second.input).toMatchObject({
+      chatId: first.input.chatId,
+      initialMessage: {
+        messageId: first.input.initialMessage?.messageId,
+        clientActionId: first.input.initialMessage?.clientActionId,
+      },
+    });
+
+    mocks.createChatError = null;
+    fireEvent.click(
+      within(refusalLine()).getByRole("button", { name: "Retry" }),
+    );
+    await waitForCreateChats(3);
+    await waitFor(expectDelivered);
+    expect(createChatCalls()).toHaveLength(3);
+  });
+
+  describe("the request record in the pending-send storage", () => {
+    const OTHER_ID = "send-2";
+
+    function sendJson(
+      id: string,
+      dispatch: { readonly recordsRequests: true } | null,
+      text: string,
+    ): Record<string, unknown> {
+      return { id, userId: "user-1", delivery: null, text, dispatch };
+    }
+
+    const STAMPED = { recordsRequests: true } as const;
+
+    type Sends = Record<string, Record<string, unknown>>;
+
+    /** One window's storage over the shared localStorage, as the store holds it. */
+    function openWindow(): {
+      readonly hydrate: () => string[];
+      readonly write: (sends: Sends) => void;
+    } {
+      const storage = createPendingSendStorage();
+      return {
+        hydrate: () => {
+          const raw = storage.getItem(SEND_RECORDS);
+          if (typeof raw !== "string") throw new Error("nothing hydrated");
+          const parsed: unknown = JSON.parse(raw);
+          if (
+            typeof parsed !== "object" ||
+            parsed === null ||
+            !("state" in parsed)
+          )
+            throw new Error("unexpected snapshot");
+          const state: unknown = parsed.state;
+          if (
+            typeof state !== "object" ||
+            state === null ||
+            !("sends" in state)
+          )
+            throw new Error("unexpected state");
+          const sends: unknown = state.sends;
+          if (typeof sends !== "object" || sends === null)
+            throw new Error("unexpected sends");
+          return Object.keys(sends).sort();
+        },
+        write: (sends) => {
+          void storage.setItem(
+            SEND_RECORDS,
+            JSON.stringify({ state: { sends }, version: 1 }),
+          );
+        },
+      };
+    }
+
+    function sends(
+      claim: { readonly recordsRequests: true } | null,
+      edited: "none" | "this" | "other",
+    ): Sends {
+      return {
+        [SEND_ID]: sendJson(
+          SEND_ID,
+          claim,
+          edited === "this" ? "edited" : "first",
+        ),
+        [OTHER_ID]: sendJson(
+          OTHER_ID,
+          null,
+          edited === "other" ? "edited" : "other",
+        ),
+      };
+    }
+
+    function expectRequestKept(): void {
+      expect(JSON.parse(requestRecord() ?? "null")).toEqual({ sent: true });
+      expect(recordPendingDispatchRequest(SEND_ID)).toBe("repeat");
+    }
+
+    it("records a send's first request once, and a forgotten one reads as a first again", () => {
+      openWindow().write(sends(STAMPED, "none"));
+      expect(recordPendingDispatchRequest(SEND_ID)).toBe("first");
+      expect(recordPendingDispatchRequest(SEND_ID)).toBe("repeat");
+      forgetPendingDispatchRequest(SEND_ID);
+      expect(recordPendingDispatchRequest(SEND_ID)).toBe("first");
+    });
+
+    it("keeps the request when a window that hydrated before it writes the claim", () => {
+      openWindow().write(sends(STAMPED, "none"));
+      const stale = openWindow();
+      stale.hydrate();
+      expect(recordPendingDispatchRequest(SEND_ID)).toBe("first");
+
+      stale.write(sends(STAMPED, "this"));
+
+      expectRequestKept();
+    });
+
+    it.each(["this", "other"] as const)(
+      "keeps the request when a window that hydrated the send with no dispatch writes a change to %s send",
+      (edited) => {
+        openWindow().write(sends(null, "none"));
+        const stale = openWindow();
+        stale.hydrate();
+        // Another window claims the send, and its request leaves.
+        const owner = openWindow();
+        owner.hydrate();
+        owner.write(sends(STAMPED, "none"));
+        expect(recordPendingDispatchRequest(SEND_ID)).toBe("first");
+
+        stale.write(sends(null, edited));
+
+        expectRequestKept();
+      },
+    );
+
+    it("never hydrates the request record as a send", () => {
+      openWindow().write(sends(STAMPED, "none"));
+      expect(recordPendingDispatchRequest(SEND_ID)).toBe("first");
+      expect(requestRecord()).not.toBeNull();
+
+      expect(openWindow().hydrate()).toEqual([OTHER_ID, SEND_ID].sort());
+    });
+
+    it("drops the request record when its send goes, so a later send with the same id is a first", () => {
+      openWindow().write(sends(STAMPED, "none"));
+      expect(recordPendingDispatchRequest(SEND_ID)).toBe("first");
+      const observing = openWindow();
+      observing.hydrate();
+
+      observing.write({ [OTHER_ID]: sendJson(OTHER_ID, null, "other") });
+
+      expect(requestRecord() === null || requestRecord() === "null").toBe(true);
+      expect(openWindow().hydrate()).toEqual([OTHER_ID]);
+      expect(recordPendingDispatchRequest(SEND_ID)).toBe("first");
+    });
+  });
+
+  /** Makes `method` throw for the request record's key only, until the test ends. */
+  function failRequestRecord(method: "removeItem"): void {
+    const key = recordMapStorageKey(SEND_RECORDS, REQUEST_RECORD);
+    const original: unknown = Reflect.get(Storage.prototype, method);
+    if (typeof original !== "function") throw new Error("nothing to wrap");
+    const spy = vi
+      .spyOn(Storage.prototype, method)
+      .mockImplementation(function (this: Storage, name) {
+        if (name === key) throw new Error("storage is locked");
+        Reflect.apply(original, this, [name]);
+      });
+    onTestFinished(() => spy.mockRestore());
+  }
+
+  it("stays uncertain on a refusal of the second create when a stale window's write nulled the durable claim after the first create left", async () => {
+    onTestFinished(installImmediateExclusiveLocks());
+    seed(SEEDED);
+    // A window that hydrated before any claim exists.
+    const stale = createPendingSendStorage();
+    const before = stale.getItem(SEND_RECORDS);
+    if (typeof before !== "string") throw new Error("nothing hydrated");
+    mocks.createChatError = new Error("The reply was lost.");
+    answerHost(SANDBOX_HOST, CODEX_READY);
+    mount();
+    await waitFor(() => {
+      expect(dispatchOf()).toMatchObject({ status: "uncertain" });
+    });
+    await waitForCreateChats(1);
+    const parsed: unknown = JSON.parse(before);
+    if (typeof parsed !== "object" || parsed === null || !("state" in parsed))
+      throw new Error("unexpected snapshot");
+    const state: unknown = parsed.state;
+    if (typeof state !== "object" || state === null || !("sends" in state))
+      throw new Error("unexpected state");
+    const staleSends: unknown = state.sends;
+    if (typeof staleSends !== "object" || staleSends === null)
+      throw new Error("unexpected sends");
+    for (const [, staleSend] of Object.entries(staleSends)) {
+      if (typeof staleSend === "object" && staleSend !== null)
+        Reflect.set(staleSend, "text", "edited");
+    }
+    void stale.setItem(SEND_RECORDS, JSON.stringify(parsed));
+    const durable: unknown = JSON.parse(
+      localStorage.getItem(recordMapStorageKey(SEND_RECORDS, SEND_ID)) ??
+        "null",
+    );
+    // The stale write replaced the claim: the durable send holds no dispatch.
+    expect(durable).toMatchObject({ text: "edited" });
+    expect(durable).not.toHaveProperty("dispatch");
+    expect(requestRecord()).not.toBeNull();
+
+    // The send re-claims, and the host's access check refuses the second create.
+    mocks.createChatError = unauthorized();
+    await usePendingSandboxSendStore.persist.rehydrate();
+    await waitForCreateChats(2);
+    await waitFor(expectUncertainClaim);
+    expect(dispatchOf()).toMatchObject({ recordsRequests: true });
+    expect(createChatCalls()).toHaveLength(2);
+
+    mocks.createChatError = null;
+    fireEvent.click(screen.getByTestId("pending-sandbox-dispatch-retry"));
+    await waitForCreateChats(3);
+    await waitFor(expectDelivered);
+    expect(createChatCalls()).toHaveLength(3);
+  });
+
+  it("forgets the request when the first request's own create is refused with a structured refusal", async () => {
+    onTestFinished(installImmediateExclusiveLocks());
+    seed(SEEDED);
+    mocks.createChatRefusal = {
+      kind: "local-store-unavailable",
+      message: "The local store is busy.",
+      remedy: "Try again after the other window closes.",
+    };
+    answerHost(SANDBOX_HOST, CODEX_READY);
+    mount();
+
+    await waitForRefusalLine();
+    expect(createChatCalls()).toHaveLength(1);
+    expect(dispatchOf()).toBeNull();
+    expect(requestRecord()).toBeNull();
+  });
+
+  it("clears the claim but keeps the request when the first request's structured refusal comes without the exclusive lock, so the next attempt is a repeat", async () => {
+    expect("locks" in navigator).toBe(false);
+    seed(SEEDED);
+    mocks.createChatRefusal = {
+      kind: "local-store-unavailable",
+      message: "The local store is busy.",
+      remedy: "Try again after the other window closes.",
+    };
+    answerHost(SANDBOX_HOST, CODEX_READY);
+    mount();
+
+    await waitForRefusalLine();
+    expect(createChatCalls()).toHaveLength(1);
+    expect(dispatchOf()).toBeNull();
+    // Another window may have sent a request of its own.
+    expect(requestRecord()).not.toBeNull();
+    expect(recordPendingDispatchRequest(SEND_ID)).toBe("repeat");
+  });
+
+  it("forgets the request when the first request's own fork is refused for an unpublished boundary", async () => {
+    onTestFinished(installImmediateExclusiveLocks());
+    seed({ ...SEEDED, send: { request: FORK_REQUEST } });
+    mocks.createChatError = unpublishedBoundary();
+    answerHost(SANDBOX_HOST, CODEX_READY);
+    mount();
+
+    await waitForRefusalLine();
+    expect(createChatCalls()).toHaveLength(1);
+    expect(dispatchOf()).toBeNull();
+    expect(requestRecord()).toBeNull();
+  });
+
+  it("clears the claim but keeps the request when a repeat's create is definitely refused, so a later UNAUTHORIZED stays uncertain and a Retry delivers once", async () => {
+    onTestFinished(installImmediateExclusiveLocks());
+    seed(SEEDED);
+    mocks.createChatError = new Error("The reply was lost.");
+    answerHost(SANDBOX_HOST, CODEX_READY);
+    mount();
+    await waitFor(() => {
+      expect(dispatchOf()).toMatchObject({ status: "uncertain" });
+    });
+    expect(requestRecord()).not.toBeNull();
+
+    mocks.createChatError = null;
+    mocks.createChatRefusal = {
+      kind: "local-store-unavailable",
+      message: "The local store is busy.",
+      remedy: "Try again after the other window closes.",
+    };
+    fireEvent.click(screen.getByTestId("pending-sandbox-dispatch-retry"));
+    await waitForCreateChats(2);
+    await waitForRefusalLine();
+    expect(dispatchOf()).toBeNull();
+    // A repeat's refusal can't speak for the request before it.
+    expect(requestRecord()).not.toBeNull();
+
+    mocks.createChatRefusal = null;
+    mocks.createChatError = unauthorized();
+    fireEvent.click(
+      within(refusalLine()).getByRole("button", { name: "Retry" }),
+    );
+    await waitForCreateChats(3);
+    await waitFor(expectUncertainClaim);
+    expect(createChatCalls()).toHaveLength(3);
+
+    mocks.createChatError = null;
+    fireEvent.click(screen.getByTestId("pending-sandbox-dispatch-retry"));
+    await waitForCreateChats(4);
+    await waitFor(expectDelivered);
+    expect(createChatCalls()).toHaveLength(4);
+  });
+
+  it("clears the claim but keeps the request when a repeat's fork is refused for an unpublished boundary, so a later UNAUTHORIZED stays uncertain and a Retry delivers once", async () => {
+    onTestFinished(installImmediateExclusiveLocks());
+    seed({ ...SEEDED, send: { request: FORK_REQUEST } });
+    mocks.createChatError = new Error("The reply was lost.");
+    answerHost(SANDBOX_HOST, CODEX_READY);
+    mount();
+    await waitFor(() => {
+      expect(dispatchOf()).toMatchObject({ status: "uncertain" });
+    });
+    expect(requestRecord()).not.toBeNull();
+
+    mocks.createChatError = unpublishedBoundary();
+    fireEvent.click(screen.getByTestId("pending-sandbox-dispatch-retry"));
+    await waitForCreateChats(2);
+    await waitForRefusalLine();
+    expect(dispatchOf()).toBeNull();
+    expect(requestRecord()).not.toBeNull();
+
+    mocks.createChatError = unauthorized();
+    fireEvent.click(
+      within(refusalLine()).getByRole("button", { name: "Retry" }),
+    );
+    await waitForCreateChats(3);
+    await waitFor(expectUncertainClaim);
+    expect(createChatCalls()).toHaveLength(3);
+
+    mocks.createChatError = null;
+    fireEvent.click(screen.getByTestId("pending-sandbox-dispatch-retry"));
+    await waitForCreateChats(4);
+    await waitFor(expectDelivered);
+    expect(createChatCalls()).toHaveLength(4);
+  });
+
+  it("keeps the request when a late first refusal finds the durable claim already nulled by a stale window, and the re-claim's UNAUTHORIZED stays uncertain", async () => {
+    onTestFinished(installImmediateExclusiveLocks());
+    seed(SEEDED);
+    mocks.createChatError = new Error("The reply was lost.");
+    answerHost(SANDBOX_HOST, CODEX_READY);
+    mount();
+    await waitFor(() => {
+      expect(dispatchOf()).toMatchObject({ status: "uncertain" });
+    });
+    const memory = dispatchOf();
+    if (memory === null) throw new Error("no claim");
+    // A stale window that hydrated a refused send writes `dispatch: null`.
+    const durableKey = recordMapStorageKey(SEND_RECORDS, SEND_ID);
+    const saved: unknown = JSON.parse(
+      localStorage.getItem(durableKey) ?? "null",
+    );
+    if (typeof saved !== "object" || saved === null)
+      throw new Error("no durable send");
+    localStorage.setItem(
+      durableKey,
+      JSON.stringify({ ...saved, dispatch: null }),
+    );
+
+    usePendingSandboxSendStore
+      .getState()
+      .refuseDispatch(SEND_ID, memory, "first");
+
+    expect(dispatchOf()).not.toBeNull();
+    expect(requestRecord()).not.toBeNull();
+
+    // The send re-claims; the host's access check refuses the second create.
+    mocks.createChatError = unauthorized();
+    await usePendingSandboxSendStore.persist.rehydrate();
+    await waitForCreateChats(2);
+    await waitFor(expectUncertainClaim);
+    expect(createChatCalls()).toHaveLength(2);
+
+    mocks.createChatError = null;
+    fireEvent.click(screen.getByTestId("pending-sandbox-dispatch-retry"));
+    await waitForCreateChats(3);
+    await waitFor(expectDelivered);
+    expect(createChatCalls()).toHaveLength(3);
+  });
+
+  it("keeps the request when a first refusal finds no claim in memory, because it cleared nothing", async () => {
+    onTestFinished(installImmediateExclusiveLocks());
+    seed(SEEDED);
+    mocks.createChatError = new Error("The reply was lost.");
+    answerHost(SANDBOX_HOST, CODEX_READY);
+    mount();
+    await waitFor(() => {
+      expect(dispatchOf()).toMatchObject({ status: "uncertain" });
+    });
+    const memory = dispatchOf();
+    if (memory === null) throw new Error("no claim");
+    // No window is left to re-claim; the claim is gone from memory and storage.
+    cleanup();
+    usePendingSandboxSendStore.setState((state) => ({
+      sends: {
+        ...state.sends,
+        [SEND_ID]: { ...state.sends[SEND_ID], dispatch: null },
+      },
+    }));
+    expect(dispatchOf()).toBeNull();
+
+    usePendingSandboxSendStore
+      .getState()
+      .refuseDispatch(SEND_ID, memory, "first");
+
+    expect(requestRecord()).not.toBeNull();
+    expect(createChatCalls()).toHaveLength(1);
+  });
+
+  it("keeps the request when a first refusal clears the claim in memory but the durable claim is still there", async () => {
+    onTestFinished(installImmediateExclusiveLocks());
+    seed(SEEDED);
+    mocks.createChatError = new Error("The reply was lost.");
+    answerHost(SANDBOX_HOST, CODEX_READY);
+    mount();
+    await waitFor(() => {
+      expect(dispatchOf()).toMatchObject({ status: "uncertain" });
+    });
+    const memory = dispatchOf();
+    if (memory === null) throw new Error("no claim");
+    cleanup();
+    // The send's own record stops taking writes, so the cleared claim never lands.
+    failRecordWrites(SEND_ID, "drop");
+
+    usePendingSandboxSendStore
+      .getState()
+      .refuseDispatch(SEND_ID, memory, "first");
+
+    expect(dispatchOf()).toBeNull();
+    const durable: unknown = JSON.parse(
+      localStorage.getItem(recordMapStorageKey(SEND_RECORDS, SEND_ID)) ??
+        "null",
+    );
+    expect(durable).toMatchObject({ dispatch: { status: "uncertain" } });
+    expect(requestRecord()).not.toBeNull();
+  });
+
+  it("keeps the request when a refusal finds the claim is no longer the durable one", async () => {
+    onTestFinished(installImmediateExclusiveLocks());
+    seed(SEEDED);
+    mocks.createChatError = new Error("The reply was lost.");
+    answerHost(SANDBOX_HOST, CODEX_READY);
+    mount();
+    await waitFor(() => {
+      expect(dispatchOf()).toMatchObject({ status: "uncertain" });
+    });
+    const memory = dispatchOf();
+    if (memory === null) throw new Error("no claim");
+    // Another window's claim now holds the durable record.
+    const durableKey = recordMapStorageKey(SEND_RECORDS, SEND_ID);
+    const saved = localStorage.getItem(durableKey) ?? "";
+    expect(saved).toContain(memory.input.chatId);
+    localStorage.setItem(
+      durableKey,
+      saved.replaceAll(memory.input.chatId, "another-chat"),
+    );
+
+    usePendingSandboxSendStore
+      .getState()
+      .refuseDispatch(SEND_ID, memory, "first");
+
+    expect(dispatchOf()).not.toBeNull();
+    expect(requestRecord()).not.toBeNull();
+    expect(createChatCalls()).toHaveLength(1);
+  });
+
+  it("keeps the request, and throws nothing, when forgetting it fails: the next create is a repeat", async () => {
+    onTestFinished(installImmediateExclusiveLocks());
+    const escaped: unknown[] = [];
+    const collect = (reason: unknown): void => {
+      escaped.push(reason);
+    };
+    process.on("unhandledRejection", collect);
+    onTestFinished(() => {
+      process.off("unhandledRejection", collect);
+    });
+    seed(SEEDED);
+    failRequestRecord("removeItem");
+    mocks.createChatError = unauthorized();
+    answerHost(SANDBOX_HOST, CODEX_READY);
+    mount();
+
+    await waitForRefusalLine();
+    expect(dispatchOf()).toBeNull();
+    expect(requestRecord()).not.toBeNull();
+    expect(createChatCalls()).toHaveLength(1);
+
+    fireEvent.click(
+      within(refusalLine()).getByRole("button", { name: "Retry" }),
+    );
+    await waitForCreateChats(2);
+    await waitFor(expectUncertainClaim);
+    expect(createChatCalls()).toHaveLength(2);
+
+    mocks.createChatError = null;
+    fireEvent.click(screen.getByTestId("pending-sandbox-dispatch-retry"));
+    await waitForCreateChats(3);
+    await waitFor(expectDelivered);
+    expect(createChatCalls()).toHaveLength(3);
+    // Nothing the refusal did escaped as a rejected promise.
+    expect(escaped).toEqual([]);
   });
 
   it.each([
@@ -7309,6 +7990,57 @@ describe("a send whose stored record says its sandbox ended while local memory s
   );
 });
 
+function unpublishedBoundary(): HostRpcError {
+  return new HostRpcError({
+    code: "E_FORK_BOUNDARY_NOT_PUBLISHED",
+    message: "Checkpoint is still publishing.",
+    requestId: "request-1",
+    method: "epic.createChat",
+    fatalDetails: null,
+  });
+}
+
+function unauthorized(): HostRpcError {
+  return new HostRpcError({
+    code: "UNAUTHORIZED",
+    message: "Not signed in.",
+    requestId: "request-1",
+    method: "epic.createChat",
+    fatalDetails: null,
+  });
+}
+
+function dispatchOf(): PendingSandboxSendDispatch | null {
+  return usePendingSandboxSendStore.getState().sends[SEND_ID]?.dispatch ?? null;
+}
+
+function expectUncertainClaim(): void {
+  expect(screen.getByTestId("pending-sandbox-dispatch").textContent).toContain(
+    "Couldn't confirm the agent was created.",
+  );
+  expect(screen.getByTestId("pending-sandbox-dispatch-retry")).toBeDefined();
+  expect(dispatchOf()).toMatchObject({ status: "uncertain" });
+  expect(screen.queryByTestId("sandbox-refusal-line")).toBeNull();
+  expect(usePendingSandboxSendStore.getState().sends[SEND_ID]).toBeDefined();
+  expect(useLandingDraftStore.getState().drafts).toEqual([]);
+}
+
+const SEND_RECORDS = persistKey(STORE_KEYS.pendingSandboxSend);
+const REQUEST_RECORD = `dispatch-request:${SEND_ID}`;
+
+function requestRecord(): string | null {
+  return localStorage.getItem(
+    recordMapStorageKey(SEND_RECORDS, REQUEST_RECORD),
+  );
+}
+
+function expectDelivered(): void {
+  expect(dispatchOf()).toBeNull();
+  expect(
+    usePendingSandboxSendStore.getState().sends[SEND_ID]?.delivery,
+  ).toMatchObject({ hostId: SANDBOX_HOST, sandboxId: SANDBOX_ID });
+}
+
 describe("a durable dispatch claim and its sandbox's lifecycle", () => {
   const FRESH = Date.now() + 60_000;
   const KINDS = ["chat", "fork"] as const;
@@ -7948,7 +8680,9 @@ describe("a durable dispatch claim and its sandbox's lifecycle", () => {
     async (kind) => {
       const { captured, current } = await seedCurrentClaimOther(kind);
 
-      usePendingSandboxSendStore.getState().refuseDispatch(SEND_ID, captured);
+      usePendingSandboxSendStore
+        .getState()
+        .refuseDispatch(SEND_ID, captured, "first");
 
       expect(
         usePendingSandboxSendStore.getState().sends[SEND_ID]?.dispatch,
@@ -7968,7 +8702,9 @@ describe("a durable dispatch claim and its sandbox's lifecycle", () => {
         usePendingSandboxSendStore.getState().sends[SEND_ID]?.dispatch,
       ).toMatchObject({ status: "uncertain" });
 
-      usePendingSandboxSendStore.getState().refuseDispatch(SEND_ID, current);
+      usePendingSandboxSendStore
+        .getState()
+        .refuseDispatch(SEND_ID, current, "first");
       expect(
         usePendingSandboxSendStore.getState().sends[SEND_ID]?.dispatch,
       ).toBeNull();
@@ -8278,6 +9014,75 @@ describe("a durable dispatch claim and its sandbox's lifecycle", () => {
         expect(useNewConversationModalOpenStore.getState().request).toBeNull();
       },
     );
+  });
+
+  describe("a claim a previous build wrote", () => {
+    it("keeps a claim an earlier build made uncertain even under the exclusive lock, records its request, and a Retry delivers once", async () => {
+      onTestFinished(installImmediateExclusiveLocks());
+      // seedClaim writes the claim as the previous build did: unstamped.
+      await seedClaim("chat", "uncertain", SANDBOX_ID);
+      expect(dispatchOf()).not.toHaveProperty("recordsRequests");
+      answerSandboxRows(
+        [
+          sandboxSummaryFixture({
+            id: SANDBOX_ID,
+            hostId: SANDBOX_HOST,
+            state: "awake",
+          }),
+        ],
+        Date.now() + 60_000,
+      );
+      answerHost(SANDBOX_HOST, CODEX_READY);
+      mocks.createChatError = unauthorized();
+      mount();
+
+      fireEvent.click(
+        await screen.findByTestId("pending-sandbox-dispatch-retry"),
+      );
+      await waitForCreateChats(1);
+      await waitFor(expectUncertainClaim);
+      expect(ownsPendingSandboxSendExclusively(SEND_ID)).toBe(true);
+      expect(createChatCalls()).toHaveLength(1);
+      expect(requestRecord()).not.toBeNull();
+
+      mocks.createChatError = null;
+      fireEvent.click(screen.getByTestId("pending-sandbox-dispatch-retry"));
+      await waitForCreateChats(2);
+      await waitFor(expectDelivered);
+      expect(createChatCalls()).toHaveLength(2);
+    });
+
+    it("reads the stamp from the durable record, not from a memory ahead of it", async () => {
+      await seedClaim("chat", "uncertain", SANDBOX_ID);
+      // This window's memory holds a stamp the durable record never had.
+      usePendingSandboxSendStore.setState((state) => {
+        const dispatch = state.sends[SEND_ID].dispatch;
+        if (dispatch === null || dispatch === undefined)
+          throw new Error("the claim was not seeded");
+        return {
+          sends: {
+            ...state.sends,
+            [SEND_ID]: {
+              ...state.sends[SEND_ID],
+              dispatch: { ...dispatch, recordsRequests: true },
+            },
+          },
+        };
+      });
+      const durable = recordMapStorageKey(SEND_RECORDS, SEND_ID);
+      const saved = localStorage.getItem(durable) ?? "";
+      expect(saved).toContain('"recordsRequests":true');
+      localStorage.setItem(
+        durable,
+        saved.replace(',"recordsRequests":true', ""),
+      );
+      expect(localStorage.getItem(durable)).not.toContain("recordsRequests");
+
+      expect(
+        usePendingSandboxSendStore.getState().beginDispatchAttempt(SEND_ID),
+      ).toBe("repeat");
+      expect(requestRecord()).not.toBeNull();
+    });
   });
 
   describe("when Retry wakes a sandbox that rests", () => {

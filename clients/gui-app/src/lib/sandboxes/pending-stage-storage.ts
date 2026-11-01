@@ -24,6 +24,7 @@ export interface PendingDispatchRetryRequest {
 }
 
 const RETRY_REGISTER_PREFIX = "retry-request:";
+const REQUEST_REGISTER_PREFIX = "dispatch-request:";
 
 function record(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -60,7 +61,12 @@ function createPendingRetryStorage(
       const stages: Record<string, unknown> = {};
       const records = snapshot.state[field];
       for (const [key, stage] of Object.entries(records)) {
-        if (key.startsWith(RETRY_REGISTER_PREFIX) || !record(stage)) continue;
+        if (
+          key.startsWith(RETRY_REGISTER_PREFIX) ||
+          key.startsWith(REQUEST_REGISTER_PREFIX) ||
+          !record(stage)
+        )
+          continue;
         const retry = records[`${RETRY_REGISTER_PREFIX}${key}`];
         stages[key] = matches(stage, retry)
           ? { ...stage, retryRequest: retry }
@@ -89,6 +95,11 @@ function createPendingRetryStorage(
           localStorage.getItem(recordMapStorageKey(name, registerId)),
         );
         if (matches(stage, retry)) records[registerId] = retry;
+        const requestId = `${REQUEST_REGISTER_PREFIX}${key}`;
+        const request: unknown = parse(
+          localStorage.getItem(recordMapStorageKey(name, requestId)),
+        );
+        if (record(request)) records[requestId] = request;
       }
       storage.setItem(
         name,
@@ -153,6 +164,41 @@ export function requestPendingDispatchRetry(input: {
       : null;
   } catch {
     return null;
+  }
+}
+
+function dispatchRequestKey(id: string): string {
+  return recordMapStorageKey(
+    persistKey(STORE_KEYS.pendingSandboxSend),
+    `${REQUEST_REGISTER_PREFIX}${id}`,
+  );
+}
+
+/**
+ * Records a send's request before it leaves, in its own record for the same
+ * reason as a Retry: a stale window's write of the claim can't undo it, and a
+ * new claim repeats the same ids, so it outlives the claim. `null` means it
+ * isn't recorded, and a request that left would look unsent.
+ */
+export function recordPendingDispatchRequest(
+  id: string,
+): "first" | "repeat" | null {
+  const key = dispatchRequestKey(id);
+  try {
+    if (record(parse(localStorage.getItem(key)))) return "repeat";
+    localStorage.setItem(key, JSON.stringify({ sent: true }));
+    return record(parse(localStorage.getItem(key))) ? "first" : null;
+  } catch {
+    return null;
+  }
+}
+
+/** A definite refusal: nothing landed under these ids, so they count as unsent. */
+export function forgetPendingDispatchRequest(id: string): void {
+  try {
+    localStorage.removeItem(dispatchRequestKey(id));
+  } catch {
+    // The record stays, and the next request reads as a repeat.
   }
 }
 

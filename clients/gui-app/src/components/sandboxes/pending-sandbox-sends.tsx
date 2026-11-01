@@ -178,6 +178,7 @@ import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import {
   holdPendingSandboxSendOwnership,
   ownsPendingSandboxSend,
+  ownsPendingSandboxSendExclusively,
 } from "@/lib/sandboxes/pending-sandbox-send-ownership";
 import {
   settleVerdict,
@@ -208,6 +209,7 @@ import {
   pendingSendSurfaceKey,
   usePendingSandboxSendStore,
   type PendingSandboxSend,
+  type PendingDispatchAttempt,
   type PendingSandboxSendDispatch,
   type PendingSandboxSendRequest,
   pendingSandboxSendFacts,
@@ -1919,7 +1921,8 @@ function settlePendingMessage(input: {
     return true;
   }
   if (outcome !== "rejected" || !dispatchAllowed) return false;
-  refusePendingDispatch(send, dispatch);
+  // The chat answered, so the request that made it landed.
+  refusePendingDispatch(send, dispatch, "repeat");
   state.ackRetainedRejectedSend(message.clientActionId);
   return true;
 }
@@ -2186,14 +2189,20 @@ async function runPendingDispatch(
     null
   )
     return;
-  dispatchesInFlight.add(send.id);
-  const firstAttempt = usePendingSandboxSendStore
+  const attempt = usePendingSandboxSendStore
     .getState()
     .beginDispatchAttempt(send.id);
+  if (attempt === null) {
+    usePendingSandboxSendStore
+      .getState()
+      .markDispatchUncertain(send.id, dispatch);
+    return;
+  }
+  dispatchesInFlight.add(send.id);
   try {
     const response = await createChat(dispatch.input);
     if (response.refusal !== undefined) {
-      refusePendingDispatch(send, dispatch);
+      refusePendingDispatch(send, dispatch, attempt);
       return;
     }
     // The agent's tile opens once its chat exists on the sandbox; until then
@@ -2230,9 +2239,9 @@ async function runPendingDispatch(
     if (
       error instanceof HostRpcError &&
       (error.code === "E_FORK_BOUNDARY_NOT_PUBLISHED" ||
-        (firstAttempt && refusedBeforeCreate(error)))
+        (attempt === "first" && refusedBeforeCreate(send.id, error)))
     ) {
-      refusePendingDispatch(send, dispatch);
+      refusePendingDispatch(send, dispatch, attempt);
     } else {
       usePendingSandboxSendStore
         .getState()
@@ -2246,10 +2255,15 @@ async function runPendingDispatch(
 /**
  * The host's own `UNAUTHORIZED` comes from `epic.createChat`'s access check,
  * before the create runs. That check also answers a repeat of a create that
- * landed, so it clears only a claim's first attempt.
+ * landed, so it clears only a claim's first request, and only while the
+ * exclusive lock shows no other window could have sent another.
  */
-function refusedBeforeCreate(error: HostRpcError): boolean {
-  return error.code === "UNAUTHORIZED" && !mayHaveReachedHost(error);
+function refusedBeforeCreate(id: string, error: HostRpcError): boolean {
+  return (
+    error.code === "UNAUTHORIZED" &&
+    !mayHaveReachedHost(error) &&
+    ownsPendingSandboxSendExclusively(id)
+  );
 }
 
 function registerDispatchHandoff(
@@ -2278,6 +2292,7 @@ function registerDispatchHandoff(
 function refusePendingDispatch(
   send: PendingSandboxSend,
   dispatch: PendingSandboxSendDispatch,
+  attempt: PendingDispatchAttempt,
 ): void {
   const decision = transitionPendingSend(
     pendingSendState(send, "none"),
@@ -2313,7 +2328,9 @@ function refusePendingDispatch(
       );
     }
   }
-  usePendingSandboxSendStore.getState().refuseDispatch(send.id, dispatch);
+  usePendingSandboxSendStore
+    .getState()
+    .refuseDispatch(send.id, dispatch, attempt);
 }
 
 function finishDispatchUi(
