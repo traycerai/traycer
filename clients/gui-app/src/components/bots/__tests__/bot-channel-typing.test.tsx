@@ -50,7 +50,7 @@ import {
   useBotOpenThreadStore,
   useBotRail,
 } from "@/stores/bots/bot-open-thread-store";
-import { useBotTabsStore } from "@/stores/bots/bot-tabs-store";
+import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
 import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { __resetBotSubscriptionsForTesting } from "@/hooks/bots/use-bot-subscription";
@@ -208,7 +208,10 @@ vi.mock(
 vi.mock("@/components/chat/chat-messages", async () => {
   const { ChatExpansionTestProviders: Providers } =
     await import("@/components/chat/__tests__/chat-expansion-test-providers");
+  const { use } = await import("react");
   const { ChatMessage } = await import("@/components/chat/chat-message");
+  const { ChatTimelineHeaderContext } =
+    await import("@/components/chat/chat-timeline-header-context");
   const noBackgroundToolBlockIds: ReadonlySet<string> = new Set();
   return {
     ChatMessages: (props: {
@@ -217,6 +220,7 @@ vi.mock("@/components/chat/chat-messages", async () => {
     }) => (
       <Providers tileInstanceId={props.instanceId}>
         <div data-testid="chat-messages-stub">
+          {use(ChatTimelineHeaderContext)}
           {props.messages.map((message) => (
             <ChatMessage
               key={message.id}
@@ -496,6 +500,7 @@ function ChannelHarness(props: { readonly directive: string }): ReactNode {
   const openThread = rail?.kind === "thread" ? rail : null;
   return (
     <BotChannelView
+      tiles={null}
       botId={BOT_ID}
       hostId={HOST_ID}
       boundHostId={HOST_ID}
@@ -591,9 +596,8 @@ beforeEach(() => {
   };
   botStream = new StubSession();
   mocks.streamClient = new StubHostStreamClient(botStream);
-  useBotTabsStore
-    .getState()
-    .openBotTab({ botId: BOT_ID, hostId: HOST_ID, title: "Tracy" });
+  useTracySurfaceStore.getState().openSurface(HOST_ID);
+  useTracySurfaceStore.getState().selectChannel(BOT_ID);
 });
 
 afterEach(() => {
@@ -605,14 +609,19 @@ afterEach(() => {
   sessions.clear();
   mocks.sessionFor = null;
   mocks.threadListData = { threads: [], threadAnchors: null };
-  useBotTabsStore.setState({ tabs: {} });
+  useTracySurfaceStore.setState({
+    open: false,
+    hostId: null,
+    botId: null,
+    visitedBotIds: [],
+  });
   useBotOpenThreadStore.setState({ byBotId: {} });
   useAuthStore.setState({ profile: null });
   __resetBotSubscriptionsForTesting();
   mocks.streamClient = null;
 });
 
-describe("<BotChannelView /> the channel's typing line", () => {
+describe("<BotChannelView tiles={null} /> the channel's typing line", () => {
   it("reads 'Tracy is replying…' above the composer, outside the transcript, while a direct post waits on the running trunk", async () => {
     const channel = await mountAwaitingDirectReply(replying("request-1", null));
 
@@ -711,7 +720,7 @@ describe("<BotChannelView /> the channel's typing line", () => {
   });
 });
 
-describe("<BotChannelView /> a thread's typing line", () => {
+describe("<BotChannelView tiles={null} /> a thread's typing line", () => {
   it("shows on the closed thread's line, and moves to the panel once the thread is open, never naming the step", async () => {
     const user = userEvent.setup();
     emitSnapshot(CHANNEL_ID, {
@@ -748,7 +757,7 @@ describe("<BotChannelView /> a thread's typing line", () => {
   });
 });
 
-describe("<BotChannelView /> a channel nobody has written in", () => {
+describe("<BotChannelView tiles={null} /> a channel nobody has written in", () => {
   it("opens with the channel's name, where it begins, and what the bot does", async () => {
     emitSnapshot(CHANNEL_ID, { messages: [], ...IDLE });
     mountChannel([]);
@@ -768,7 +777,7 @@ describe("<BotChannelView /> a channel nobody has written in", () => {
   });
 });
 
-describe("<BotChannelView /> a post whose answer lands in a thread", () => {
+describe("<BotChannelView tiles={null} /> a post whose answer lands in a thread", () => {
   /** The channel's box sending what was typed into it, and the callbacks it handed the send. */
   async function postInChannel(user: UserEvent): Promise<SendCallbacks> {
     const box = screen.getByRole("textbox", { name: "Message Tracy" });

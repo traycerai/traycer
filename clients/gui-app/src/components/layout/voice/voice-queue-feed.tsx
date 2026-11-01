@@ -48,7 +48,7 @@ import {
   type ReplyRef,
 } from "@/lib/voice/queue-sources";
 import type { PendingHydration, VoiceQueue } from "@/lib/voice/voice-queue";
-import { useBotTabsStore } from "@/stores/bots/bot-tabs-store";
+import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
 import {
   useVoiceSessionStore,
   waitingItems,
@@ -60,7 +60,7 @@ import {
  * to the bell: the thread's store opening, its snapshot loading, the row
  * landing after the notification that named it.
  */
-export const HYDRATION_TIMEOUT_MS = 15_000;
+const HYDRATION_TIMEOUT_MS = 15_000;
 
 /**
  * Everything the queue reads while a session runs: its sources, and the
@@ -251,8 +251,9 @@ function VoiceReplyHydrator(props: {
 }
 
 /**
- * The stopped answers of the bots whose tabs are open, read whether or not a
- * session runs, so the briefing a session opens with already names them.
+ * The stopped answers of the bots whose channels the Tracy surface has shown
+ * since it opened, read through its host whether or not a session runs, so
+ * the briefing a session opens with already names them.
  * Each bot's reading goes to the queue's owner, which keeps the latest and
  * hands it to the queue while a session runs.
  */
@@ -260,17 +261,21 @@ export function VoiceStoppedSources(props: {
   readonly owner: VoiceQueueOwner;
 }): ReactNode {
   const { owner } = props;
-  const botTabs = useBotTabsStore((state) => state.tabs);
+  const hostId = useTracySurfaceStore((state) =>
+    state.open ? state.hostId : null,
+  );
+  const visitedBotIds = useTracySurfaceStore((state) => state.visitedBotIds);
+  if (hostId === null) return null;
   return (
     <>
-      {Object.values(botTabs).map((tab) => (
+      {visitedBotIds.map((botId) => (
         <VoiceStoppedWatch
-          key={tab.botId}
-          botId={tab.botId}
-          hostId={tab.hostId}
+          key={botId}
+          botId={botId}
+          hostId={hostId}
           channelChatId={
-            owner.bots.find((bot) => bot.botId === tab.botId)
-              ?.appConversationChatId ?? tab.botId
+            owner.bots.find((bot) => bot.botId === botId)
+              ?.appConversationChatId ?? botId
           }
           noteStopped={owner.noteStopped}
           forgetStopped={owner.forgetStopped}
@@ -321,7 +326,8 @@ function VoicePromptWatch(props: {
 
 /**
  * A bot's failed and parked answers, as its stream says (`bot.subscribe`,
- * read through the bot's tab host like every reading of what a bot does).
+ * read through the Tracy surface's host like every reading of what a bot
+ * does).
  */
 function VoiceStoppedWatch(props: {
   readonly botId: string;
@@ -381,9 +387,9 @@ function VoiceReadMarker(props: {
 }
 
 /** How long `status` waits for the bot's readings before it says what it has. */
-export const STATUS_READ_TIMEOUT_MS = 4_000;
+const STATUS_READ_TIMEOUT_MS = 4_000;
 /** The usage window `status` reports, in days. */
-export const STATUS_COST_WINDOW_DAYS = 7;
+const STATUS_COST_WINDOW_DAYS = 7;
 
 /**
  * Gathers what `status` says about a bot, from the readings the app already

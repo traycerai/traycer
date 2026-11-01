@@ -202,6 +202,11 @@ Application. It uses the first settings leader digit; General uses the second.
 The start page offers the checklist through a persistent, dismissible toast once
 the first-task guide ends. Dismissing it is remembered locally across reloads;
 the checklist remains available in Settings. Completed checklists hide the toast.
+While this computer's settings are not in Personal, the move's own invitation
+stands there instead, under an id of its own
+(`MOVE_INVITATION_TOAST_ID`): "This computer's settings aren't in Personal." ·
+Show me what moves · Not now. Only the person takes it down - a status that
+stops naming a move does not, and the reminder never stands in its place.
 
 The Home tab draws the checklist itself, above its task sections
 (`home-focus/home-getting-started-section.tsx`), from the same cards
@@ -1442,11 +1447,27 @@ registry-backed presence words and the local service words ("Running" /
 two a person can act on. It DELEGATES to `deriveHostPresence`
 (`panels/my-hosts-model.ts`) rather than re-deriving it.
 
+`reported-reachable`'s `detail` says only what the ACCOUNT reported ("Your
+account last heard from this host."). It deliberately does NOT add whether
+anything here has dialled the host, in either direction, because the three ways
+the lease step declines are indistinguishable from here: `connecting` is both
+`deriveLease`'s fall-through - derived for every registered host once the
+authority attaches - and what a host reads while a dial or a re-dial is in
+flight. Two sentences are therefore ruled out. "Nothing has connected to it
+from here yet." was false for any host this app had dialled and lost and was
+re-dialling (a dirty drop on a non-effective host leaves no live session and a
+refusal streak short of `CONFIRMED_DEATH_REFUSAL_STREAK`, so the lease rests at
+`connecting`); "Connecting to it now." would be false for the resting case
+instead, and that one is the common one, since every registered host holds a
+`connecting` lease until something reports. What carries "not verified from
+here" is the label, the idle tone and the absent dot - the reason this state
+exists at all.
+
 The precedence across the two is one chain, and each step outranks the next for
 a stated reason: **local process read** (a direct read of the service on this
 box) -> **live session** (an open E2E connection is firsthand proof) ->
 `status.connectivity` (the cloud's relay-attachment answer, and the only one
-available for a host this client has never dialled).
+available when neither of those has a verdict).
 
 `connectivity` is the ONE cloud liveness signal. It replaced a heartbeat lease
 plus a separate relay-attach bit, and with them the states that existed only to
@@ -6239,7 +6260,8 @@ set-state-in-effect` forbids the effect form, and an effect would also
     closes or the host changes.
   - **Access and setup** (`host-overview-access-tab.tsx`, tab id `access`).
     The picked host's own access and setup, read
-    through that host (`environment.status`, re-read every 5 s while open). A
+    through that host (`environment.status`, re-read every 5 s while open, and
+    on the move's own pace while a move into Personal is still running). A
     host without the method shows only "Update this host to use your
     settings."; an unreachable one says its values need a connection. Top to
     bottom, each only while it applies:
@@ -7197,12 +7219,18 @@ computer`. A team's host draws no card. The move sheet names the moving computer
       host id. Rows: Host ID (shortened, with copy; Copy host ID stays in the
       `⋯` menu too), Added to account (`createdAt`), Last seen, Last reported
       version (`status.appVersion`) and Platform (`formatPlatform` plus the
-      architecture, as the header words it). Last seen reads "Online now"
-      while the header's live evidence holds (`health.live`); otherwise
-      `status.lastSeenAt` on the header's own ladder and clock
-      (`formatElapsed`, `scope.nowMs`), so the two never disagree on one
-      screen. A host the account has no record of gets no group, as it gets
-      no Danger zone.
+      architecture, as the header words it). Last seen is `status.lastSeenAt`
+      on the header's own ladder and clock (`formatElapsed`, `scope.nowMs`),
+      always, with no tone of its own - a timestamp is not a status word, and
+      the row has no second wording. It used to read "Online now" while the
+      header's live evidence held (`health.live`), whose strongest source is
+      the local process read: a host serving this computer while its relay
+      uplink is down therefore claimed an account check-in no other device
+      could see. Nothing on the record supports a second wording either -
+      `connectivity: "connectable"` is a lease read up to its TTL old, which
+      `deriveHostPresence` words "Reported reachable" and deliberately not
+      "Online", and which no surface renders directly. A host the account has
+      no record of gets no group, as it gets no Danger zone.
     - **Install record** (`host-settings-installation-details.tsx`) is shown
       open - it was a collapsed "Installation details" disclosure - and reads
       `host.getInstallationInfo`: Version, Build (only when it differs),

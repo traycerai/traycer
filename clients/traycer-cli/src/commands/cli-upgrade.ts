@@ -30,6 +30,7 @@ import { CLI_ERROR_CODES, CliError, cliError } from "../runner/errors";
 import { stageWellKnownCliBinary } from "../store/well-known-cli";
 import { createCliLogger, errorFromUnknown, type ILogger } from "../logger";
 import { withCliLock } from "../store/cli-lock";
+import { wouldDowngradeCli } from "../upgrade/downgrade-floor";
 
 // `traycer cli upgrade` - self-upgrade the installed CLI binary.
 //
@@ -72,6 +73,37 @@ import { withCliLock } from "../store/cli-lock";
 //   keeps installed bytes and recorded version inseparable; the
 //   previous behaviour downloaded the feed's build and recorded the
 //   caller's arbitrary string.
+//
+// Downgrade contract:
+//
+//   The feed publishes STABLE builds only, so its `version` is NOT an
+//   upper bound: a machine on a prerelease sits ABOVE it. The equality
+//   test below ("already at the feed's version?") cannot see that - it
+//   answers "no" for 1.5.2-rc.1 against a 1.5.1 feed and installs 1.5.1
+//   over it, announcing a downgrade as an upgrade. The comparison is
+//   therefore a SemVer ORDERING, prerelease included, through
+//   `upgrade/downgrade-floor.ts`.
+//
+//   The four readings are `host update`'s, deliberately - same
+//   comparator, same consent flag, same error code shape - so the two
+//   updaters cannot refuse a backwards move differently:
+//
+//     feed below installed, no --target        → exit 0, nothing changed
+//     --target <feed>, no --allow-downgrade    → E_CLI_UPGRADE_NOT_NEWER
+//     --target <feed> + --allow-downgrade      → installs it, says
+//                                                "downgraded"
+//     --allow-downgrade alone                  → exit 0, nothing changed
+//
+//   Consent needs BOTH the named version and the flag, exactly as
+//   `host update --release X --allow-downgrade` does. `--target` alone
+//   is not enough: it is an ASSERTION that the feed still serves a
+//   build (see the target-version contract above), so a caller who
+//   names the feed's own version to check it has not asked to be moved
+//   backwards onto it. `--allow-downgrade` alone is not enough either,
+//   for the reason the host gives: an unqualified "bring me up to date"
+//   must never go backwards just because consent was lying around on
+//   the command line. Equal versions keep the `already-current` reading
+//   they always had.
 
 export interface CliUpgradeArgs {
   // When true, fetch the CLI manifest and report what would be done
@@ -81,6 +113,11 @@ export interface CliUpgradeArgs {
   // Not a selector - see the target-version contract above. `null`
   // accepts whatever the feed currently publishes.
   readonly targetVersion: string | null;
+  // `--allow-downgrade`. Same spelling and same meaning as `host
+  // update`'s: consent to install a version BELOW the installed one,
+  // and only ever consulted alongside an explicit `targetVersion` - see
+  // the downgrade contract above for why neither half suffices alone.
+  readonly allowDowngrade: boolean;
 }
 
 const UPGRADE_HINT_FOR_SOURCE: Record<CliInstallSource, string> = {
@@ -217,8 +254,69 @@ export function buildCliUpgradeCommand(args: CliUpgradeArgs): CommandFn {
           };
         }
 
+        // Asked BEFORE the asset is resolved, so a prerelease machine whose
+        // platform the feed does not carry still gets told the useful fact
+        // (what it has is newer) rather than "no asset for <platform>".
+        const wouldDowngrade = wouldDowngradeCli({
+          installedVersion: manifest.version,
+          candidateVersion: targetVersion,
+        });
+        // Consent is the named version AND the flag - see the downgrade
+        // contract at the top of this file for why neither half is enough.
+        const downgradeConsented =
+          args.targetVersion !== null && args.allowDowngrade;
+        if (wouldDowngrade && !downgradeConsented) {
+          ctx.runtime.logger.info("CLI upgrade declined a downgrade", {
+            environment: ctx.runtime.environment,
+            currentVersion: manifest.version,
+            feedVersion: targetVersion,
+            source: manifest.source,
+            targetAsserted: args.targetVersion !== null,
+            allowDowngrade: args.allowDowngrade,
+          });
+          // An EXPLICITLY requested version that is not delivered is an
+          // error, not a no-op - the same split `host update` makes, for
+          // the same reason: "a request for X answered `already at Y`"
+          // exits 0 having delivered nothing the caller asked for.
+          if (args.targetVersion !== null) {
+            throw cliError({
+              code: CLI_ERROR_CODES.CLI_UPGRADE_NOT_NEWER,
+              message:
+                `cli upgrade: the installed cli is ${manifest.version}, newer than the requested ${targetVersion}; ` +
+                "nothing was downloaded and the live binary is untouched. Pass --allow-downgrade to install " +
+                `${targetVersion} over it.`,
+              details: {
+                environment: ctx.runtime.environment,
+                targetVersion,
+                installedVersion: manifest.version,
+              },
+              exitCode: 1,
+            });
+          }
+          return {
+            data: {
+              status: "installed-newer",
+              currentVersion: manifest.version,
+              targetVersion,
+              source: manifest.source,
+              binaryPath: manifest.binaryPath,
+            },
+            // One sentence for both the real run and `--dry-run`: the
+            // decision is the same, so there is nothing for a dry-run to
+            // preview differently.
+            human:
+              `cli stays at ${manifest.version}; it is newer than ${targetVersion}, the version the release feed publishes. ` +
+              `Run 'traycer cli upgrade --target ${targetVersion} --allow-downgrade' to install ${targetVersion} over it.`,
+            exitCode: 0,
+          };
+        }
+
         const platformKey = currentCliPlatformKey();
         const asset = resolveCliAsset(versions, platformKey);
+        // Reached going backwards only with consent, so this is the word
+        // for a swap that is going ahead - no run announces a backwards
+        // move as an upgrade.
+        const direction = wouldDowngrade ? "downgrade" : "upgrade";
         if (args.dryRun) {
           ctx.runtime.logger.info("CLI upgrade dry-run completed", {
             environment: ctx.runtime.environment,
@@ -239,7 +337,7 @@ export function buildCliUpgradeCommand(args: CliUpgradeArgs): CommandFn {
               // bytes it names, rather than trusting the number alone.
               downloadSha256: asset.sha256,
             },
-            human: `would upgrade cli ${manifest.version} → ${targetVersion} (source=${manifest.source}, url=${asset.url})`,
+            human: `would ${direction} cli ${manifest.version} → ${targetVersion} (source=${manifest.source}, url=${asset.url})`,
             exitCode: 0,
           };
         }
@@ -405,17 +503,25 @@ export function buildCliUpgradeCommand(args: CliUpgradeArgs): CommandFn {
               binaryPath: manifest.binaryPath,
               source: manifest.source,
             },
-            human: `upgraded cli ${manifest.version} → ${targetVersion}`,
+            human: `${direction === "downgrade" ? "downgraded" : "upgraded"} cli ${manifest.version} → ${targetVersion}`,
             exitCode: 0,
           };
         }
         // Locked - keep the staged binary and record pendingUpgrade.
+        //
+        // `allowDowngrade` carries the CONSENT forward. Reaching this line at
+        // all means the floor above either found no downgrade or found one the
+        // caller asked for by name, and the publish happens in a later process
+        // that sees only this record - so a consented downgrade that has to be
+        // deferred would otherwise arrive at the publisher indistinguishable
+        // from a pre-floor accidental one and be refused for ever.
         await updateCliManifest(ctx.runtime.environment, {
           pendingUpgrade: {
             version: targetVersion,
             stagedBinaryPath,
             stagedAt: new Date().toISOString(),
             reason: "binary-locked",
+            allowDowngrade: downgradeConsented,
           },
         });
         ctx.runtime.logger.warn("CLI upgrade staged pending upgrade", {
@@ -885,6 +991,18 @@ export type FinalizePendingCliUpgradeOutcome =
       readonly livePath: string;
       readonly errorMessage: string;
     }
+  // The staged binary is BELOW the installed version, so publishing it
+  // would move the CLI backwards. Nothing was attempted and nothing went
+  // wrong: the record is superseded. See the guard in
+  // `finalizePendingCliUpgrade` for why the manifest is read as untrusted
+  // input here rather than trusted to be ordered.
+  | {
+      readonly status: "installed-newer";
+      readonly stagedVersion: string;
+      readonly installedVersion: string;
+      readonly stagedBinaryPath: string;
+      readonly livePath: string;
+    }
   // Publication genuinely failed (full disk, unwritable install dir,
   // digest mismatch on a cross-filesystem copy). Reported rather than
   // thrown: `host restart` stops the service BEFORE calling this and
@@ -966,6 +1084,53 @@ export async function finalizePendingCliUpgrade(opts: {
       livePath: manifest.binaryPath,
     };
   }
+  // The same floor `cli upgrade` applies when it STAGES, re-asked here
+  // where the bytes are actually published.
+  //
+  // This guard was removed once, on the argument that no writer of this
+  // manifest produces a pending record below the installed version - which
+  // is true of our writers and is the WRONG TEST for this function. What
+  // runs here reads a FILE and publishes an executable from what it says,
+  // so the question is what the input can express, not what today's
+  // writers emit. A JSON record below the install is expressible, and a
+  // concrete population already holds one: every machine where a pre-fix
+  // `cli upgrade` staged the feed's older stable over a prerelease while
+  // the binary was locked wrote exactly that record. Treating the manifest
+  // as untrusted input is validation, not a branch for an impossible state.
+  //
+  // `pendingUpgrade` is RETAINED, like every other outcome here that does
+  // not swap: the record is superseded, not false, and Doctor's card reads
+  // the same ordering to say so (see `CLI_UPGRADE_PENDING`).
+  //
+  // `allowDowngrade` is the whole reason this is a floor and not a wall. The
+  // guard asks the ordering AND the consent, because the two states it has to
+  // separate carry identical versions: a pre-floor accidental record, and a
+  // downgrade the person asked for by name whose publish was deferred because
+  // the live binary was locked. Reading the ordering alone refused both -
+  // which made `cli upgrade --target X --allow-downgrade` unable to complete
+  // on a locked binary at all, and sent Doctor's own card at the command that
+  // could not finish. Consent travels on the record for exactly this hop.
+  if (
+    wouldDowngradeCli({
+      installedVersion: manifest.version,
+      candidateVersion: pending.version,
+    }) &&
+    !pending.allowDowngrade
+  ) {
+    logger.info("CLI pending upgrade is below the installed version", {
+      environment: opts.environment,
+      currentVersion: manifest.version,
+      pendingVersion: pending.version,
+    });
+    return {
+      status: "installed-newer",
+      stagedVersion: pending.version,
+      installedVersion: manifest.version,
+      stagedBinaryPath: pending.stagedBinaryPath,
+      livePath: manifest.binaryPath,
+    };
+  }
+
   // A publication failure must not escape as an exception - see the
   // `publish-failed` variant for why the restart path cannot survive one.
   let swap: ReplaceResult;

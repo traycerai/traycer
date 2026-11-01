@@ -72,7 +72,7 @@ const SIDEBAR_ACTION_ROW_CLASS =
   "flex w-full items-center gap-1.5 rounded-md px-1.5 py-1 text-left text-ui-sm text-muted-foreground transition-colors hover:bg-foreground/6 focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2";
 
 /**
- * Slack's sidebar for a bot tab (Tracy Bots, decision 41): every environment
+ * Slack's sidebar for the Tracy surface (Tracy Bots, decision 41): every environment
  * the person belongs to is a section, every bot in it a channel, drawn as
  * the bot's picture and name. A channel with a reply the person has not
  * read is bold and carries how many, right-aligned, as Slack marks an unread
@@ -97,17 +97,20 @@ const SIDEBAR_ACTION_ROW_CLASS =
  * counting those with new replies; it is the current row while they show,
  * and the tab's own channel row goes back to the channel.
  *
- * Read through the tab's host: the lists are cloud-backed, so any host gives
- * the same answer. A channel opens that bot's tab, through this tab's host,
- * which asks where the bot is served and follows the answer.
+ * Read through the surface's host: the lists are cloud-backed, so any host
+ * gives the same answer. A channel swaps the surface's pane to that bot in
+ * place (decision 150), on the same host.
  */
 export function BotChannelSidebar(props: {
-  readonly activeBotId: string;
+  /** The surface's selected channel; `null` for none. */
+  readonly activeBotId: string | null;
   readonly hostId: string;
-  /** The tab's Threads view; `null` where the tab has no channel to swap it for. */
+  /** The surface's Threads view; `null` where no Threads entry is offered. */
   readonly threadsView: BotThreadsViewState | null;
+  /** A channel row was picked; the picker's menu closes on it, the column stays. */
+  readonly onChannelOpened: () => void;
 }): ReactNode {
-  const { activeBotId, hostId, threadsView } = props;
+  const { activeBotId, hostId, threadsView, onChannelOpened } = props;
   const client = useTabHostClient();
   const environments = useEnvironmentListQuery(client, true);
   useRereadEnvironmentListOnFocus(true);
@@ -170,14 +173,15 @@ export function BotChannelSidebar(props: {
         : model.groups,
   });
 
-  const openBotChannel = useOpenBotChannel(hostId);
+  const openBotChannel = useOpenBotChannel();
   const [newBot, setNewBot] = useState<NewBotTarget | null>(null);
   const openChannel = (channel: SidebarChannel): void => {
+    onChannelOpened();
     if (channel.botId === activeBotId) {
       threadsView?.onLeave();
       return;
     }
-    openBotChannel(channel);
+    openBotChannel(channel.botId, null);
   };
   // The tab's channel is the current row unless Threads shows in its place.
   const currentBotId = threadsView?.shown === true ? null : activeBotId;

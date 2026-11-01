@@ -18,7 +18,7 @@ Each host shows a status word in the host picker and in its Overview header.
 | **Not installed** | No Traycer host is installed on this computer yet. |
 | **Update required** | The host runs an older version than this app supports. Click **Update host**. |
 | **Removed** | The host was removed from your account. |
-| **Reported reachable** | Your account heard from the host recently, but nothing on this device has connected to it yet. |
+| **Reported reachable** | Your account heard from the host recently. This device hasn't confirmed it. |
 | **Status unknown** | The host hasn't reported to your account yet, or its live status is unavailable right now. |
 | **You're offline** | This device has no connection, so it can't check the host. |
 
@@ -167,7 +167,7 @@ Every tab belongs to the host it was opened on. See [Tabs and their host](/conce
 | `This agent is not running on "{label}" right now, and it can only be started on that machine.` | An agent on the Terminal interface on another machine isn't running. Start it from that machine. |
 | `Clone this agent to continue while "{label}" is offline; the original stays there.` | Click **Clone agent** to continue on the active host, or open Traycer on the original host. Cloning creates a new agent and leaves the original where it was. With view-only access to the Task, the banner explains that cloning is unavailable and shows no Clone button. |
 | `This agent lives on {host}, which is offline — showing the last published copy. Sending resumes when that host is back.` | You're reading a read-only copy. See [Sync and offline](/concepts/sync-and-offline). |
-| `This agent belongs to another collaborator, and its history isn't available here.` | A shared agent whose live history isn't on this host. The tab may show its last published copy, and cloning creates your own agent on the active host. |
+| `This agent belongs to {collaborator}, and its history isn't available here.` | A shared agent whose live history isn't on this host. The tab may show its last published copy, and cloning creates your own agent on the active host. |
 | `This agent is no longer shared with you.` | Access was removed while the tab was open. |
 | `This file is on host "{label}", which is currently unreachable.` | The file preview loads once that host is back. |
 | `This diff is on host "{label}", which is currently unreachable.` | The diff loads once that host is back. |

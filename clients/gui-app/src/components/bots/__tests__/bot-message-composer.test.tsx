@@ -89,11 +89,7 @@ const onSent =
   vi.fn<(response: BotConversationSendResponse, text: string) => boolean>();
 const onEditEnd = vi.fn<() => void>();
 
-function composer(edit: BotComposerEdit | null): ReactNode {
-  return composerQuoting(edit, null);
-}
-
-function composerQuoting(
+function composer(
   edit: BotComposerEdit | null,
   quote: BotComposerQuote | null,
 ): ReactNode {
@@ -158,7 +154,7 @@ describe("<BotMessageComposer /> reporting a send", () => {
   async function sendQueued(saidByOwner: boolean): Promise<void> {
     const user = userEvent.setup();
     onSent.mockReturnValue(saidByOwner);
-    render(composer(null));
+    render(composer(null, null));
     await user.type(box(), "Is CI green?");
     await user.click(screen.getByTestId("bot-channel-composer-send"));
     await settleSend(lastSend(), (callbacks) =>
@@ -183,7 +179,7 @@ describe("<BotMessageComposer /> reporting a send", () => {
 
   it("reports the host's answer once it accepts the send, with the box cleared", async () => {
     const user = userEvent.setup();
-    render(composer(null));
+    render(composer(null, null));
     await user.type(box(), "Is CI green?");
     await user.click(screen.getByTestId("bot-channel-composer-send"));
     expect(onSent).not.toHaveBeenCalled();
@@ -199,7 +195,7 @@ describe("<BotMessageComposer /> reporting a send", () => {
 
   it("reports nothing for a send the host refused, and keeps the text", async () => {
     const user = userEvent.setup();
-    render(composer(null));
+    render(composer(null, null));
     await user.type(box(), "Is CI green?");
     await user.click(screen.getByTestId("bot-channel-composer-send"));
 
@@ -213,7 +209,9 @@ describe("<BotMessageComposer /> reporting a send", () => {
 
   it("reports the send that replaced a failed message, as it ends the edit", async () => {
     const user = userEvent.setup();
-    render(composer({ requestId: "request-failed", text: "Is CI green?" }));
+    render(
+      composer({ requestId: "request-failed", text: "Is CI green?" }, null),
+    );
     await user.click(screen.getByTestId("bot-channel-composer-send"));
 
     await settleSend(lastSend(), (callbacks) =>
@@ -227,12 +225,15 @@ describe("<BotMessageComposer /> reporting a send", () => {
   it("reports an edit's send the person moved on from, and keeps the edit they opened since", async () => {
     const user = userEvent.setup();
     const view = render(
-      composer({ requestId: "request-first", text: "Is CI green?" }),
+      composer({ requestId: "request-first", text: "Is CI green?" }, null),
     );
     await user.click(screen.getByTestId("bot-channel-composer-send"));
     const callbacks = lastSend();
     view.rerender(
-      composer({ requestId: "request-second", text: "Is the nightly green?" }),
+      composer(
+        { requestId: "request-second", text: "Is the nightly green?" },
+        null,
+      ),
     );
 
     await settleSend(callbacks, (sent) => sent.onSuccess?.(RESPONSE));
@@ -246,13 +247,13 @@ describe("<BotMessageComposer /> reporting a send", () => {
 describe("<BotMessageComposer /> quoting", () => {
   it("keeps a quote added while a send is in flight when the send lands, and reports the send", async () => {
     const user = userEvent.setup();
-    const view = render(composer(null));
+    const view = render(composer(null, null));
     await user.type(box(), "Is CI green?");
     await user.click(screen.getByTestId("bot-channel-composer-send"));
     const callbacks = lastSend();
 
     view.rerender(
-      composerQuoting(null, {
+      composer(null, {
         id: 1,
         snapshots: [{ text: "quoted", fenceLanguage: null }],
         taken: vi.fn(),
@@ -288,7 +289,7 @@ describe("<BotMessageComposer /> @ mentions", () => {
   function mountIn(owner: BotOwner): void {
     render(
       <BotIdentityContext value={{ botId: "bot-1", title: "Tracy", owner }}>
-        {composer(null)}
+        {composer(null, null)}
       </BotIdentityContext>,
     );
   }
@@ -409,10 +410,13 @@ describe("<BotMessageComposer /> @ mentions", () => {
         <BotIdentityContext
           value={{ botId: "bot-1", title: "Tracy", owner: SHARED }}
         >
-          {composer({
-            requestId: "request-failed",
-            text: "hi <@u-ann> and <@u-ann-2>",
-          })}
+          {composer(
+            {
+              requestId: "request-failed",
+              text: "hi <@u-ann> and <@u-ann-2>",
+            },
+            null,
+          )}
         </BotIdentityContext>,
       );
       expect(box().value).toBe("hi @Ann Lee and @Ann Lee");
@@ -459,7 +463,7 @@ describe("<BotMessageComposer /> @ mentions", () => {
         <BotIdentityContext
           value={{ botId: "bot-1", title: "Tracy", owner: SHARED }}
         >
-          {composer({ requestId: "request-failed", text })}
+          {composer({ requestId: "request-failed", text }, null)}
         </BotIdentityContext>,
       );
     }
@@ -738,7 +742,10 @@ describe("<BotMessageComposer /> @ mentions", () => {
         <BotIdentityContext
           value={{ botId: "bot-1", title: "Tracy", owner: SHARED }}
         >
-          {composer({ requestId: "request-failed", text: "hi <@u-ann-2>" })}
+          {composer(
+            { requestId: "request-failed", text: "hi <@u-ann-2>" },
+            null,
+          )}
         </BotIdentityContext>,
       );
       expect(box().value).toBe("hi @Ann Lee");
@@ -796,7 +803,7 @@ describe("the member list after Escape", () => {
       <BotIdentityContext
         value={{ botId: "bot-1", title: "Tracy", owner: TEAM }}
       >
-        {composer(null)}
+        {composer(null, null)}
       </BotIdentityContext>,
     );
   });
@@ -882,7 +889,7 @@ describe("the member list for assistive technology", () => {
       <BotIdentityContext
         value={{ botId: "bot-1", title: "Tracy", owner: TEAM }}
       >
-        {composer(null)}
+        {composer(null, null)}
       </BotIdentityContext>,
     );
   });

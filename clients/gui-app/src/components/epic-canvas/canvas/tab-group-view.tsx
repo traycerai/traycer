@@ -59,7 +59,9 @@ import { PaneOpener } from "@/components/epic-canvas/canvas/pane-opener";
 import {
   useEpicArtifact,
   useEpicChatRecordListAuthoritative,
+  useEpicTuiAgentRecordListAuthoritative,
   useEpicChatRetraction,
+  useEpicTuiAgentRetraction,
   useEpicPermissionRole,
   useEpicSnapshotLoaded,
   type EpicArtifactProjection,
@@ -957,15 +959,23 @@ function usePublishedChatFallbackRef(args: {
  * exists (the deleted-node body, with its Close), a REVOKED one still exists
  * and is simply not this viewer's to read any more.
  *
- * Non-chat tabs answer `null` without the store ever being asked about them.
- * Extracted from `ActiveTabBody` rather than inlined for the same reason
- * `resolveChatFallbackDecision` is - that function mixes hook calls with
+ * A terminal agent answers `deleted` alone: `revoked` says nothing about whether
+ * the agent exists, and the revoked surface is chat-shaped, so that tile keeps
+ * its own banner. Other tabs answer `null` without the store ever being asked
+ * about them. Extracted from `ActiveTabBody` rather than inlined for the same
+ * reason `resolveChatFallbackDecision` is - that function mixes hook calls with
  * branching and sits one conditional under this repo's lint ceiling.
  */
-function useChatTabRetraction(
+function useTabRetraction(
   activeTab: EpicCanvasTileRef,
 ): ChatRecordRemovalReason | null {
-  return useEpicChatRetraction(activeTab.type === "chat" ? activeTab.id : null);
+  const chatRetraction = useEpicChatRetraction(
+    activeTab.type === "chat" ? activeTab.id : null,
+  );
+  const agentRetraction = useEpicTuiAgentRetraction(
+    activeTab.type === "terminal-agent" ? activeTab.id : null,
+  );
+  return agentRetraction === "deleted" ? "deleted" : chatRetraction;
 }
 
 /**
@@ -984,6 +994,8 @@ export function ActiveTabBody(props: ActiveTabBodyProps) {
   const role = useEpicPermissionRole();
   const snapshotLoaded = useEpicSnapshotLoaded();
   const chatRecordListAuthoritative = useEpicChatRecordListAuthoritative();
+  const tuiAgentRecordListAuthoritative =
+    useEpicTuiAgentRecordListAuthoritative();
   const liveArtifact = useEpicArtifact(activeTab.id);
   // The projection feeding `liveArtifact` is served by the EPIC SESSION's
   // host - NOT the app-wide active one, which is what this comment used to
@@ -998,8 +1010,8 @@ export function ActiveTabBody(props: ActiveTabBodyProps) {
   // machinery at epic-view altitude, not a chat tab - hence the canvas host,
   // not `useTabHostId()`.
   const activeHostIdForRecordGate = useCanvasHostId();
-  const chatRetraction = useChatTabRetraction(activeTab);
-  const isRetractedAsRevoked = chatRetraction === "revoked";
+  const tabRetraction = useTabRetraction(activeTab);
+  const isRetractedAsRevoked = tabRetraction === "revoked";
   const {
     fallbackRef: publishedFallbackRef,
     ownerHostLabel,
@@ -1044,7 +1056,8 @@ export function ActiveTabBody(props: ActiveTabBodyProps) {
         isCloudKnown,
         cloudListAuthorizesChatAbsence,
         recordListAuthorizesChatAbsence: chatRecordListAuthoritative,
-        retractedAsDeleted: chatRetraction === "deleted",
+        recordListAuthorizesTuiAgentAbsence: tuiAgentRecordListAuthoritative,
+        retractedAsDeleted: tabRetraction === "deleted",
       });
   const isActive = role !== null && props.selected && props.globallyActive;
 
@@ -1136,6 +1149,8 @@ export function ActiveTabBody(props: ActiveTabBodyProps) {
           // and declares `offersClone: false`, so no owner or clone flag can
           // render anything. Passed as the do-nothing values, like `noopClone`.
           ownedByViewer
+          ownerName={null}
+          cloneTargetLabel={null}
           environmentOwned={false}
           cloneAllowed={false}
           showsPublishedCopy={false}
@@ -1271,9 +1286,12 @@ interface ComputeIsRemoteDeletedArgs {
   readonly cloudListAuthorizesChatAbsence: boolean;
   /** Whether the local record list has answered for this epic session. */
   readonly recordListAuthorizesChatAbsence: boolean;
+  /** The terminal-agent twin: `epic.listTuiAgents` has answered. */
+  readonly recordListAuthorizesTuiAgentAbsence: boolean;
   /**
-   * The record plane said this chat was DELETED (a `remove` delta whose reason
-   * is `deleted`), as opposed to merely absent from a projection.
+   * The record plane said this chat or terminal agent was DELETED (a `remove`
+   * or `tuiRemove` delta whose reason is `deleted`), as opposed to merely
+   * absent from a projection.
    */
   readonly retractedAsDeleted: boolean;
 }
@@ -1284,6 +1302,17 @@ function chatAbsenceIsAuthoritative(args: ComputeIsRemoteDeletedArgs): boolean {
     args.cloudListAuthorizesChatAbsence &&
     args.recordListAuthorizesChatAbsence
   );
+}
+
+function recordListsAnsweredFor(
+  ref: EpicCanvasTileRef,
+  args: ComputeIsRemoteDeletedArgs,
+): boolean {
+  if (ref.type === "chat") return chatAbsenceIsAuthoritative(args);
+  if (ref.type === "terminal-agent") {
+    return args.recordListAuthorizesTuiAgentAbsence;
+  }
+  return true;
 }
 
 function computeIsRemoteDeleted(args: ComputeIsRemoteDeletedArgs): boolean {
@@ -1302,17 +1331,15 @@ function computeIsRemoteDeleted(args: ComputeIsRemoteDeletedArgs): boolean {
   // POSITIVE evidence, so it outranks every exemption below - each of those
   // exists because a missing projection is not proof of deletion, and this is
   // the one signal that IS proof. In particular it outranks the cross-host
-  // exemption (a chat on another host is invisible to this projection, but a
-  // delete the host announced is not an inference) and the cloud-known
+  // exemption (a record on another host is invisible to this projection, but
+  // a delete the host announced is not an inference) and the cloud-known
   // exemption (a published copy outliving the chat is exactly the ghost row
   // the record plane's tombstones exist to retract).
-  if (leafArtifact.type === "chat" && retractedAsDeleted) return true;
+  if (retractedAsDeleted) return true;
   // Until the app-wide host binding and both record lists answer, absence
   // cannot be classified. A disabled or failed query is not evidence that the
   // bound chat disappeared.
-  if (leafArtifact.type === "chat" && !chatAbsenceIsAuthoritative(args)) {
-    return false;
-  }
+  if (!recordListsAnsweredFor(leafArtifact, args)) return false;
   // A ref bound to another host is invisible to this device's projection by
   // construction - its record is HOST-AUTHORITATIVE, living in the OWNER
   // host's registry - so a cross-host live tab (a reachable owner's row

@@ -28,6 +28,10 @@ import {
   pendingUpgradeFinalisable,
   readPendingCliUpgrade,
 } from "../commands/cli-upgrade";
+// The SAME predicate `finalizePendingCliUpgrade` declines a publication
+// with, so the card and the publish path cannot disagree about whether a
+// staged record will ever be applied.
+import { wouldDowngradeCli } from "../upgrade/downgrade-floor";
 import {
   markerDescribesUpgrade,
   readPostFinalizeMarker,
@@ -70,6 +74,7 @@ import {
 import { readCliFeedCompatibilityEpoch } from "../registry/cli-versions";
 import type { IncompatibilityUpgradeGuidance } from "@traycer/protocol/framework/index";
 import type { Environment } from "../runner/environment";
+import { probeCliShadowedOnPath } from "./cli-on-path";
 import { probeUpdateMarkerLock } from "./update-marker-lock";
 import { probeUpdateAttemptLock } from "./update-attempt-lock";
 import {
@@ -723,6 +728,36 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
     const stagedExists = await pendingUpgradeFinalisable({
       stagedBinaryPath: pendingUpgrade.pending.stagedBinaryPath,
     });
+    // The same pair `finalizePendingCliUpgrade` reads, in the same order:
+    // ordering AND consent. A record the person asked for by name with
+    // `--allow-downgrade` WILL be published on the next restart, so calling it
+    // superseded would be false - and would withhold the restart that
+    // completes it. Only an unconsented backwards record is stale.
+    const supersededByOrdering =
+      wouldDowngradeCli({
+        installedVersion: pendingUpgrade.currentVersion,
+        candidateVersion: pendingUpgrade.pending.version,
+      }) && !pendingUpgrade.pending.allowDowngrade;
+    // ...with ONE exception, and it is the superseded record's own marker.
+    // When `cli finalize-upgrade` declines a staged version below the install
+    // it still hands the host back, and a service that will not start is
+    // recorded in the marker - carrying the same two paths the pending record
+    // has, so `markerDescribesUpgrade` matches it. Believing that marker
+    // reported `CLI_UPGRADE_FINALIZE_FAILED` with a host-restart fix: a
+    // repair for a swap that was never attempted, and that the floor refuses
+    // again on the next restart. The ordering is the governing fact there.
+    //
+    // It is narrowed to `swap-failed` on purpose. A matching `swapped` marker
+    // says the swap HAPPENED, which makes the pending record settled history
+    // and its version ordering moot - that marker keeps precedence. The
+    // service-start failure is not lost either way: the superseded card
+    // appends the same `serviceStartError` to its own message, which is why
+    // `markerCoveredByPendingCard` above is keyed on identity rather than on
+    // which branch ends up reporting.
+    const supersededOverFailedMarker =
+      supersededByOrdering &&
+      finalizeMarker.status === "present" &&
+      finalizeMarker.marker.status === "swap-failed";
     const settled = postFinalizeMarkerIssue(
       finalizeMarker,
       {
@@ -734,7 +769,7 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
       },
       stagedExists,
     );
-    if (settled !== null) {
+    if (settled !== null && !supersededOverFailedMarker) {
       issues.push(settled);
     } else if (!stagedExists) {
       // The staged binary has been deleted out from under the manifest
@@ -763,6 +798,71 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
           reason: pendingUpgrade.pending.reason,
           currentVersion: pendingUpgrade.currentVersion,
           binaryPath: pendingUpgrade.binaryPath,
+          finalizeMarker: finalizeMarkerDetail(finalizeMarker),
+          serviceStartError: pendingMarkerServiceStartError,
+        },
+      });
+    } else if (supersededByOrdering) {
+      // STALE: the staged binary is below the installed version, so the
+      // swap will never happen - `finalizePendingCliUpgrade` reads the same
+      // ordering and declines it. Reported from the record AND the
+      // ordering, because the record alone said "restart to finalise",
+      // which on this state was advice to perform a downgrade.
+      //
+      // Doctor REPORTS and does not clear it. `readPendingCliUpgrade` is
+      // the read-only path by construction, this surface's whole contract
+      // is to describe what is on disk, and the rule `cli upgrade` applies
+      // is itself a refusal rather than a cleanup - so "clear it here"
+      // would invent a mutation that no other surface performs. The record
+      // also remains the only evidence that someone asked for this
+      // version, which the `staged-binary-missing` branch above preserves
+      // for the same reason.
+      //
+      // No `fixAction`: the Desktop button is `host-restart`, which is
+      // exactly what must not be offered here, and the bridge does not
+      // proxy `cli upgrade` - the same constraint the missing-binary branch
+      // states. The terminal command is the explicit two-flag form, so a
+      // reader who DID want that version has the way through.
+      //
+      // The message says "while the release feed still serves it" and stops
+      // there. The feed publishes exactly one build and `--target` cannot
+      // resolve a historical version, so this card - read at whatever later
+      // time the person runs `doctor` - cannot promise the command will
+      // succeed. The one condition is stated; the fallback is not spelled
+      // out again here, because the refusal the reader would actually hit
+      // (`E_CLI_UPGRADE_TARGET_UNAVAILABLE`) already names installing by
+      // hand and recording it with `cli re-anchor`.
+      issues.push({
+        code: DOCTOR_ISSUE_CODES.CLI_UPGRADE_PENDING,
+        severity: "warning",
+        title: `CLI upgrade staged but superseded (${pendingUpgrade.pending.version})`,
+        message:
+          `cli upgrade staged ${pendingUpgrade.pending.version} at ` +
+          `${pendingUpgrade.pending.stagedBinaryPath}, but the installed cli is ` +
+          `${pendingUpgrade.currentVersion}, which is newer. The swap will not be ` +
+          `applied. To install ${pendingUpgrade.pending.version} anyway, run ` +
+          // The whole quoted command stays inside ONE literal. The
+          // parseability guard scans this source for single-quoted traycer
+          // references and parses each against the real command tree;
+          // line-wrapping the quote across a `+` put the JS seam inside the
+          // command, which it read as three positionals to `cli upgrade`.
+          // (A quoted example in a comment is scanned too - this sentence
+          // deliberately carries none.)
+          `'traycer cli upgrade --target ${pendingUpgrade.pending.version} --allow-downgrade' ` +
+          "while the release feed still serves it." +
+          (pendingMarkerServiceStartError === null
+            ? ""
+            : ` The finalize helper also could not restart the host service: ${pendingMarkerServiceStartError}`),
+        fixAction: null,
+        terminalCommand: `traycer cli upgrade --target ${pendingUpgrade.pending.version} --allow-downgrade`,
+        details: {
+          stagedVersion: pendingUpgrade.pending.version,
+          stagedBinaryPath: pendingUpgrade.pending.stagedBinaryPath,
+          stagedAt: pendingUpgrade.pending.stagedAt,
+          reason: pendingUpgrade.pending.reason,
+          currentVersion: pendingUpgrade.currentVersion,
+          binaryPath: pendingUpgrade.binaryPath,
+          source: pendingUpgrade.source,
           finalizeMarker: finalizeMarkerDetail(finalizeMarker),
           serviceStartError: pendingMarkerServiceStartError,
         },
@@ -831,6 +931,10 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
   const cliSlotIssue = await probeDanglingCliSlotBinary(opts.environment);
   if (cliSlotIssue !== null) issues.push(cliSlotIssue);
 
+  // ---- 4b-path. The CLI a bare `traycer` runs ----
+  const cliOnPathIssue = await probeCliShadowedOnPath(opts.environment);
+  if (cliOnPathIssue !== null) issues.push(cliOnPathIssue);
+
   // ---- 4c. Host delegated-credential health ----
   // Local, cheap, and the only surface that reports this at all: the host
   // reports `needs-reauth` to CLIENTS on every stream open, but a user whose
@@ -868,11 +972,13 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
   });
   if (markerLockIssue !== null) issues.push(markerLockIssue);
 
-  // ---- 4f. Host update-attempt lock left by an interrupted install ----
+  // ---- 4f. Host update-attempt lock no acquisition will release ----
   // A maintenance lease whose supervisor died after handing liveness to the
   // installer tree leaves a record that, on Windows, the lock's own rule can
   // never judge stale - so every later scripted install and uninstall is
-  // refused as a live contender, and this file is the only trace. Read-only:
+  // refused as if an update were running, and this file is the only trace. A
+  // lock this user cannot read is refused the same way, for whoever cannot
+  // read it. Read-only:
   // removing it needs a person to confirm no installer is running.
   const attemptLockIssue = await probeUpdateAttemptLock({
     lockPath: updateAttemptLockPath(hostHomeDir(opts.environment)),

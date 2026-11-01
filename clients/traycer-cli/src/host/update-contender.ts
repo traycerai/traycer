@@ -1,4 +1,6 @@
 import {
+  HOST_UPDATE_INITIATOR_DESKTOP,
+  HOST_UPDATE_INITIATOR_ENV_VAR,
   supervisorRelaunchInstalledIdentityOf,
   verifyUpdateMutationCapability,
   withLifecycleTeardownContender,
@@ -13,6 +15,7 @@ import {
 } from "@traycer-clients/shared/host-update";
 import type {
   HostUpdateAttemptRecord,
+  LockMetadata,
   UpdateMutationCapabilityAdoption,
 } from "@traycer-clients/shared/host-update";
 import { readHostInstallRecord } from "../manifest/host-install";
@@ -129,7 +132,7 @@ export async function withCliUpdateExecutionSegment<T>(
   const outcome = await withUpdateContender(
     {
       hostHomeDir: home,
-      reason: options.reason,
+      reason: lockReasonOf(options.reason),
       waitMs: options.waitMs,
       pollIntervalMs: options.pollIntervalMs,
       admission: options.admission,
@@ -138,6 +141,53 @@ export async function withCliUpdateExecutionSegment<T>(
   );
 
   return unwrapContenderOutcome(options, outcome);
+}
+
+const DESKTOP_LOCK_REASON_PREFIX = `${HOST_UPDATE_INITIATOR_DESKTOP}:`;
+
+export function runByDesktop(): boolean {
+  return (
+    process.env[HOST_UPDATE_INITIATOR_ENV_VAR] === HOST_UPDATE_INITIATOR_DESKTOP
+  );
+}
+
+/** The lock carries a reason and a pid, so the reason is what can say who. */
+export function lockReasonOf(reason: string): string {
+  return runByDesktop() ? `${DESKTOP_LOCK_REASON_PREFIX}${reason}` : reason;
+}
+
+/** The desktop's own in-process holders, named `host-controller-*`. */
+function heldByDesktop(reason: string): boolean {
+  return (
+    reason.startsWith(DESKTOP_LOCK_REASON_PREFIX) ||
+    reason.startsWith("host-controller-") ||
+    reason.startsWith("desktop-")
+  );
+}
+
+function workOf(reason: string): string {
+  if (reason.endsWith("host-download")) return "downloading a host update";
+  if (reason.endsWith("host-apply")) return "installing a host update";
+  if (reason.endsWith("host-update")) return "updating the host";
+  if (reason.endsWith("host-update-verify")) return "checking a host update";
+  return "changing the host";
+}
+
+/**
+ * Who holds the update lock and what they are doing, as the start of a
+ * sentence. A `null` holder is a lock whose record could not be read.
+ */
+export function describeUpdateLockHolder(holder: LockMetadata | null): string {
+  if (holder === null) return "Another Traycer process is changing the host";
+  const who = heldByDesktop(holder.reason)
+    ? "The Traycer app"
+    : "Another Traycer command";
+  return `${who} is ${workOf(holder.reason)}`;
+}
+
+/** The refusal every update-lock loser reports, named once. */
+export function updateLockBusyMessage(holder: LockMetadata | null): string {
+  return `${describeUpdateLockHolder(holder)}, so this did not run. Let it finish, or watch 'traycer host status'.`;
 }
 
 /**
@@ -189,7 +239,7 @@ export async function withCliSupervisorRelaunchSegment<T>(
   const outcome = await withSupervisorRelaunchContender(
     {
       hostHomeDir: hostHomeDir(options.environment),
-      reason: options.reason,
+      reason: lockReasonOf(options.reason),
       waitMs: options.waitMs,
       pollIntervalMs: options.pollIntervalMs,
       readInstalledIdentity: () =>
@@ -220,7 +270,7 @@ export async function withCliLifecycleTeardownSegment<T>(
   const outcome = await withLifecycleTeardownContender(
     {
       hostHomeDir: options.hostHomeDir ?? hostHomeDir(options.environment),
-      reason: options.reason,
+      reason: lockReasonOf(options.reason),
       waitMs: options.waitMs,
       pollIntervalMs: options.pollIntervalMs,
       readInstalledIdentity: () =>
@@ -245,7 +295,7 @@ export async function withCliAttemptExecutor<T>(
   const outcome = await withUpdateContender(
     {
       hostHomeDir: options.hostHomeDir ?? hostHomeDir(options.environment),
-      reason: options.reason,
+      reason: lockReasonOf(options.reason),
       waitMs: options.waitMs,
       pollIntervalMs: options.pollIntervalMs,
       admission: "attempt-executor",
@@ -347,7 +397,7 @@ function unwrapContenderOutcome<T>(
     case "held-in-process":
       throw cliError({
         code: CLI_ERROR_CODES.CLI_LOCK_BUSY,
-        message: "another host update contender is in progress",
+        message: updateLockBusyMessage(outcome.holder),
         details: { reason: options.reason, holder: outcome.holder },
         exitCode: 75,
       });

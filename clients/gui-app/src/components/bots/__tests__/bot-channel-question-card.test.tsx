@@ -152,7 +152,10 @@ vi.mock("@/hooks/bots/use-bot-activity", async (importOriginal) => ({
 vi.mock("@/components/chat/chat-messages", async () => {
   const { ChatExpansionTestProviders: Providers } =
     await import("@/components/chat/__tests__/chat-expansion-test-providers");
+  const { use } = await import("react");
   const { ChatMessage } = await import("@/components/chat/chat-message");
+  const { ChatTimelineHeaderContext } =
+    await import("@/components/chat/chat-timeline-header-context");
   const noBackgroundToolBlockIds: ReadonlySet<string> = new Set();
   return {
     ChatMessages: (props: {
@@ -161,6 +164,7 @@ vi.mock("@/components/chat/chat-messages", async () => {
     }) => (
       <Providers tileInstanceId={props.instanceId}>
         <div data-testid="chat-messages-stub">
+          {use(ChatTimelineHeaderContext)}
           {props.messages.map((message) => (
             <ChatMessage
               key={message.id}
@@ -430,6 +434,7 @@ function mountChannel(openThread: BotOpenThread | null): {
         <TooltipProvider>
           <ChatExpansionTestProviders tileInstanceId="tile-1">
             <BotChannelView
+              tiles={null}
               botId={BOT_ID}
               hostId={HOST_ID}
               boundHostId={HOST_ID}
@@ -497,7 +502,7 @@ afterEach(() => {
   mocks.client = null;
 });
 
-describe("<BotChannelView /> a question the bot asks without waiting", () => {
+describe("<BotChannelView tiles={null} /> a question the bot asks without waiting", () => {
   it("draws the card under the bot: each question, its options, a field where words are taken, Submit and Skip, and none of the older client's buttons", () => {
     session(CHANNEL_ID, [questionRow([deploy(null), hold(null)])]);
     mountChannel(null);
@@ -668,7 +673,7 @@ describe("<BotChannelView /> a question the bot asks without waiting", () => {
   });
 });
 
-describe("<BotChannelView /> a question on a tab whose host cannot take a card's answer", () => {
+describe("<BotChannelView tiles={null} /> a question on a tab whose host cannot take a card's answer", () => {
   it("draws the card with nothing to press on a host that negotiated bot.conversation.send 1.1, keeping the member's draft, and offers them again once the host reaches 1.2", async () => {
     const user = userEvent.setup();
     session(CHANNEL_ID, [questionRow([deploy(null), hold(null)])]);
@@ -705,7 +710,7 @@ describe("<BotChannelView /> a question on a tab whose host cannot take a card's
   });
 });
 
-describe("<BotChannelView /> a question settled while a member was answering (decision 122)", () => {
+describe("<BotChannelView tiles={null} /> a question settled while a member was answering (decision 122)", () => {
   it("refuses the member's answer at the host, keeps their draft, and once the settlement lands says who answered, drops Submit, and offers Copy and Discuss", async () => {
     const user = userEvent.setup();
     const write = session(CHANNEL_ID, [questionRow([hold(null)])]);
@@ -843,7 +848,7 @@ function questionThreadBox(): HTMLTextAreaElement {
   return box;
 }
 
-describe("<BotChannelView /> an answer the host queued while the bot's host is away", () => {
+describe("<BotChannelView tiles={null} /> an answer the host queued while the bot's host is away", () => {
   it("holds the sent answer on the card, its choice pressed and nothing left to press, until the room settles it; the member's own settlement closes it", async () => {
     const user = userEvent.setup();
     delivery = "queued";
@@ -920,7 +925,7 @@ describe("<BotChannelView /> an answer the host queued while the bot's host is a
   });
 });
 
-describe("<BotChannelView /> an answer someone else settled with first, the same member from another window included", () => {
+describe("<BotChannelView tiles={null} /> an answer someone else settled with first, the same member from another window included", () => {
   it("shows the card's sent answer overtaken when a teammate settled the question first with the same answer", async () => {
     const user = userEvent.setup();
     delivery = "queued";
@@ -981,7 +986,7 @@ describe("<BotChannelView /> an answer someone else settled with first, the same
   });
 });
 
-describe("<BotChannelView /> what a member has not sent, across the views that draw it", () => {
+describe("<BotChannelView tiles={null} /> what a member has not sent, across the views that draw it", () => {
   /**
    * The card's two questions answered by a teammate first, the viewer's
    * answers to both unsent: `typed` to the one that takes words, Now to the
@@ -1163,7 +1168,7 @@ describe("<BotChannelView /> what a member has not sent, across the views that d
   });
 });
 
-describe("<BotChannelView /> a question a thread's session asks in its thread", () => {
+describe("<BotChannelView tiles={null} /> a question a thread's session asks in its thread", () => {
   const THREAD_ID = "thread-1";
   const POST_ID = "post-1";
   const IN_THREAD_ID = "bot-question:req-thread";

@@ -1,6 +1,7 @@
-import { memo } from "react";
+import { memo, use } from "react";
 import { useStore } from "zustand";
 
+import { ComposerFocusLayoutContext } from "@/components/home/composer/composer-focus-layout-context";
 import { ComposerSendButton } from "@/components/home/composer/composer-send-button";
 import { LAYOUT_CLUSTER_ATTRIBUTE } from "@/components/layout-editor/canvas/region-drag";
 import { LayoutClusterContextMenu } from "@/components/layout-editor/region-quick-verbs";
@@ -23,6 +24,7 @@ interface ComposerToolbarRightProps extends ComposerToolbarItemsProps {
 
 function ComposerToolbarRightImpl(props: ComposerToolbarRightProps) {
   const order = useArrangementValue("toolbarRight");
+  const focusRow = use(ComposerFocusLayoutContext);
   // Block sending until the model slug resolves to a concrete value - an
   // empty slug is the transient "catalog still loading" marker and must never
   // reach the wire as `model: ""`. Gating HERE (instead of in the host
@@ -40,7 +42,12 @@ function ComposerToolbarRightImpl(props: ComposerToolbarRightProps) {
       className="flex min-w-0 items-center justify-end gap-1"
     >
       {order.map((id) => (
-        <span key={id} className="contents" data-testid={`toolbar-item-${id}`}>
+        <span
+          key={id}
+          hidden={focusRow}
+          className="contents"
+          data-testid={`toolbar-item-${id}`}
+        >
           {renderToolbarItem(id, props)}
         </span>
       ))}

@@ -2,17 +2,32 @@ import {
   useCallback,
   useEffect,
   useEffectEvent,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type ReactNode,
 } from "react";
+import type { UseQueryResult } from "@tanstack/react-query";
+import { useNavigate } from "@tanstack/react-router";
+import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { EllipsisVertical } from "lucide-react";
-import type { BotOpenResponse } from "@traycer/protocol/host/bot/schemas";
+import type {
+  BotListResponse,
+  BotOpenResponse,
+} from "@traycer/protocol/host/bot/schemas";
+import type { EnvironmentListResponseV11 } from "@traycer/protocol/host/environment/contracts";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { TalkControl } from "@/components/layout/voice/talk-control";
+import { useInstalledAppTileForm } from "@/hooks/ui/use-installed-app-level2-form";
+import { useKeyboardFocusOwnerWithin } from "@/hooks/ui/use-keyboard-focus-layout";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
+import type {
+  MobileLevel2Form,
+  MobileTileCount,
+} from "@/lib/layout/mobile-layout-form";
 import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
@@ -33,14 +48,28 @@ import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query
 import { useEnvironmentMemberDirectory } from "@/hooks/bots/use-environment-members-query";
 import { useBotOpenMutation } from "@/hooks/bots/use-bot-mutations";
 import { useTeamSetups } from "@/hooks/bots/use-team-setups";
-import { botTabRouteOf } from "@/lib/bots/bot-tab-route";
+import { botTabRouteOf, type BotTabRouteView } from "@/lib/bots/bot-tab-route";
 import {
   TeamSetupChannel,
   TeamSetupHistoryRows,
 } from "@/components/bots/team-setup-channel";
 import { useTeamSetupHistory } from "@/hooks/bots/use-team-setup-history";
-import { buildHomeBotsModel } from "@/lib/home-bots/bots-model";
-import { useBotTabsStore } from "@/stores/bots/bot-tabs-store";
+import { useArrangedBotsModel } from "@/hooks/bots/use-arranged-bots-model";
+import {
+  buildHomeBotsModel,
+  type HomeBotsGroup,
+} from "@/lib/home-bots/bots-model";
+import { selectTracyChannel } from "@/lib/bots/open-bot-channel";
+import {
+  subscribeTabNavigationPending,
+  tracyNavigationPending,
+} from "@/lib/tab-navigation";
+import { defaultTracyChannelOf } from "@/lib/bots/tracy-channel";
+import {
+  handTracyLandingToChannel,
+  useTracySurfaceStore,
+} from "@/stores/bots/tracy-surface-store";
+import { TRACY_TAB_LABEL } from "@/stores/tabs/kinds/tracy";
 import {
   useBotTabLandingStore,
   type BotTabLanding,
@@ -64,11 +93,12 @@ import {
   type BotOpenSession,
 } from "@/components/bots/bot-session-view";
 import type { BotThreadSummary } from "@traycer/protocol/host/bot/conversation-schemas";
+import type { BotThreadsViewState } from "@/components/bots/bot-channel-sidebar";
 import {
-  BotChannelSidebar,
-  type BotThreadsViewState,
-} from "@/components/bots/bot-channel-sidebar";
-import { BotResizablePane } from "@/components/bots/bot-resizable-pane";
+  BotChannelColumn,
+  BotChannelTitle,
+  BotUnselectedLevel2Pane,
+} from "@/components/bots/bot-channel-level2";
 import { BotActivityPage } from "@/components/bots/bot-activity-page";
 import { BotThreadsView } from "@/components/bots/bot-threads-view";
 import { useBotThreadListQuery } from "@/hooks/bots/use-bot-thread-list-query";
@@ -112,50 +142,31 @@ function isBotTabView(value: string): value is BotTabView {
 }
 
 /**
- * A bot's tab (Tracy Bots). The person never picks the machine a bot runs
- * on: the tab opens through the host it was created on (this host, from
- * Home), asks it `bot.open`, and stays there whatever the answer -
- * the tab's host serves the bot's channel, its threads and what the bot is
- * doing, whether it runs the bot (bound here, or claimed here because its
- * host was away) or another host does; the bot's host only runs its turns.
- * When no host can run them the paused banner says so, naming no machine,
- * above the channel, and a post waits for delivery. The background work
- * under Activity alone is the bot's host's to show.
+ * The Tracy surface (decision 150): one per window, Slack's layout (decision
+ * 41) - the person's environments and their bots as channels down the side,
+ * and the selected channel beside them. Picking a channel swaps the pane in
+ * place; the surface never becomes another tab.
  *
- * A team's main bot that is still to be set up (`useTeamSetups`, T67) has no
- * row yet: its tab shows the channel where the team is set up
- * (`TeamSetupChannel`) and opens nothing, until the bot exists under the
- * same id. Until the lists say which it is - the bot and environment lists,
- * and the onboarding of a team with no bot - the tab neither opens nor shows
- * a channel.
- *
- * Laid out as Slack is (decision 41): the person's environments and their
- * bots as channels down the side, and the bot's channel beside them, with
- * Slack's tab strip under its header - Messages and Activity (what the bot is
- * doing and did, its label counting it) - and its settings behind the
- * header's ⋮. The column's Threads row shows the threads the person follows
- * across every bot in place of the channel (decision 149), until a channel
- * row is chosen.
- *
- * Bound to ONE host at a time through `TabHostProvider`; everything below
- * reads that host - the stream, the conversation list, every write. A tab
- * left on a host this client can no longer dial is moved back to the app's
- * host by the next open from Home (`HomeBotRow`), which may read that host;
- * the tab itself never reads the app-wide host. While anything about that
- * host is unknown - its methods, `bot.open`'s answer, the stream - the tab
- * shows its connecting state, never nothing.
+ * The person never picks the machine a bot runs on: the surface is bound to
+ * ONE host through `TabHostProvider` (the window's, when it first opened) and
+ * stays there whatever channel shows - that host serves every bot's
+ * channel, its threads and what the bot is doing, whether it runs the bot or
+ * another host does; the bot's host only runs its turns. A surface left on a
+ * host this client can no longer dial is moved to the window's host by the
+ * next opener (`openBotChannel`); the surface itself never reads the
+ * app-wide host. While anything about its host is unknown it shows its
+ * connecting state, never nothing.
  */
 export function BotTabSurface(props: {
-  readonly botId: string;
+  readonly botId: string | null;
   readonly hostId: string;
 }): ReactNode {
   const { botId, hostId } = props;
-  // A tab is created only from Home's bots band, which draws nothing until
-  // the host advertises `bot.list`; a RESTORED tab (the store persists per
-  // window) meets whatever that host advertises now. `bot.open` is the
-  // newest method of the `bot.*` block, so its presence stands for every
-  // write the tab offers; without it the tab shows the update notice and no
-  // control that would call a method the host lacks.
+  // A RESTORED surface (the store persists) meets whatever its host
+  // advertises now. `bot.open` is the newest method of the `bot.*` block, so
+  // its presence stands for every write the surface offers; without it the
+  // surface shows the update notice and no control that would call a method
+  // the host lacks.
   const support = useHostMethodSupport(hostId, "bot.open");
   if (support === null) return <BotTabConnecting />;
   if (!support) {
@@ -170,49 +181,367 @@ export function BotTabSurface(props: {
   }
   return (
     <TabHostProvider key={hostId} hostId={hostId}>
-      <BotTabRoute botId={botId} hostId={hostId} />
+      <TracySurfaceShell botId={botId} hostId={hostId} />
     </TabHostProvider>
   );
 }
 
 /**
- * Whether the tab's bot is a listed bot, whose channel the tab opens, or a
- * team's main bot still to be set up, whose setup it shows. A bot that is
- * neither is a listed bot's tab all the same, which closes itself once the
- * list does not carry it.
+ * The surface's stable shell: the host, the channel column, the Threads row
+ * and view, and only the selected channel's pane keyed by its bot - so a
+ * switch, a channel still connecting, a team's setup, or a channel that
+ * failed to open never blanks the column, and another channel can always be
+ * picked. Threads, from the column, shows in place of the channel until a
+ * channel is chosen; selecting one leaves it.
  *
- * A bot this tab has shown listed is that bot until a list without it closes
- * the tab. Any other bot may be a team's main bot still to be set up, so it
- * is never taken for a deleted one on a list older than the tab or than the
- * newest setup read: the list is read again first, so a main bot created
- * since is found rather than its tab closed. Only lists that were read say
- * what is absent: while either list has not answered or its last read
- * failed, or a team with no bot cannot be told apart (`unresolved`: its
- * setup read failed, or the host does not answer it), the tab says the
- * channel could not be loaded and, when a read failed, offers to read it
- * again (`botTabRouteOf`).
+ * The shell keeps the per-channel state of every channel shown since the
+ * surface opened (its rail, drafts, surface actions, landing) and forgets a
+ * bot's once it is gone: deleted, or missing from a list that answered after
+ * carrying it. A list that has not answered, or whose read failed, removes
+ * nothing, and a team's main bot still to be set up is never taken for a
+ * deleted one. With no channel selected, or the selected bot gone, the
+ * default channel is selected (`defaultTracyChannelOf`).
  */
-function BotTabRoute(props: {
-  readonly botId: string;
+function TracySurfaceShell(props: {
+  readonly botId: string | null;
   readonly hostId: string;
 }): ReactNode {
   const { botId, hostId } = props;
+  const navigate = useNavigate();
   const client = useTabHostClient();
   const botList = useBotListQuery(client, true);
   const environments = useEnvironmentListQuery(client, true);
-  const listed = botList.data?.bots.some((bot) => bot.botId === botId) ?? false;
-  const groups = useMemo(
-    () =>
-      botList.data === undefined || environments.data === undefined
-        ? null
-        : buildHomeBotsModel({
-            environments: environments.data.environments,
-            bots: botList.data.bots,
-            mainBotIds: botList.data.mainBotIds,
-          }).groups,
-    [botList.data, environments.data],
+  // A teammate's rename, claim or delete reaches the list (and so the
+  // surface) without waiting for focus, through the surface's own host.
+  useBotListChangedSubscriptionForHost(hostId, true);
+  const groups = useBotsGroups(botList.data, environments.data);
+
+  // Threads, from the column, in place of the channel; any move to one of
+  // the channel's views ends it, and so does selecting a channel.
+  const [threadsShown, setThreadsShown] = useState(false);
+  const [threadsChannel, setThreadsChannel] = useState(botId);
+  if (threadsChannel !== botId) {
+    setThreadsChannel(botId);
+    setThreadsShown(false);
+  }
+  const leaveThreads = useCallback(() => setThreadsShown(false), []);
+  const threadsView = useMemo(
+    (): BotThreadsViewState => ({
+      shown: threadsShown,
+      onShow: () => setThreadsShown(true),
+      onLeave: leaveThreads,
+    }),
+    [leaveThreads, threadsShown],
   );
+
+  const { level2, tiles, onRailDrawn } = useSurfaceTileForm();
+  const shown = usePaneVisible();
+  const select = useCallback(
+    (next: string | null) => selectTracyChannel(navigate, next, shown),
+    [navigate, shown],
+  );
+  const { forget: forgetChannel, unavailable } = useTracyChannelUpkeep({
+    botId,
+    groups,
+    listed: botList.status === "success" ? botList.data.bots : null,
+    listedAt: botList.dataUpdatedAt,
+    select,
+  });
+  useSenderLandingSpentOnDeparture(botId);
+  const channelTitle =
+    botList.data?.bots.find((bot) => bot.botId === botId)?.title ??
+    TRACY_TAB_LABEL;
+  const { refetch: refetchBots } = botList;
+  const { refetch: refetchEnvironments } = environments;
+  const retryLists = useCallback(() => {
+    void refetchBots();
+    void refetchEnvironments();
+  }, [refetchBots, refetchEnvironments]);
+
+  return (
+    <div className="@container flex h-full min-h-0" data-testid="bot-tab">
+      <BotChannelColumn
+        level2={level2}
+        activeBotId={botId}
+        hostId={hostId}
+        threadsView={threadsView}
+      />
+      <div
+        className="relative flex min-h-0 min-w-0 flex-1 md:bg-canvas"
+        data-testid="bot-tab-content-pane"
+      >
+        {/* Threads, from the column, takes the place of the channel's
+            views and of a session. */}
+        {threadsShown ? (
+          <BotThreadsView
+            hostId={hostId}
+            channelTitle={channelTitle}
+            onBack={leaveThreads}
+            level2={level2}
+          />
+        ) : null}
+        {botId === null && !threadsShown ? (
+          <BotUnselectedLevel2Pane
+            level2={level2}
+            title={TRACY_TAB_LABEL}
+            hostId={hostId}
+            threadsView={threadsView}
+          >
+            <TracyUnselected
+              groups={groups}
+              unavailable={unavailable}
+              listsFailed={
+                botList.status === "error" || environments.status === "error"
+              }
+              onRetry={retryLists}
+            />
+          </BotUnselectedLevel2Pane>
+        ) : null}
+        {botId === null ? null : (
+          <TracyChannelPane
+            key={botId}
+            botId={botId}
+            hostId={hostId}
+            level2={level2}
+            tiles={tiles}
+            onRailDrawn={onRailDrawn}
+            threadsView={threadsView}
+            onGone={forgetChannel}
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The installed app's form for the surface, both halves `null` everywhere else.
+ * The second tile is the rail the channel draws beside itself, and only the
+ * channel's pane knows it is drawn, so the pane says.
+ */
+function useSurfaceTileForm(): {
+  readonly level2: MobileLevel2Form | null;
+  readonly tiles: MobileTileCount | null;
+  readonly onRailDrawn: (drawn: boolean) => void;
+} {
+  const [railDrawn, setRailDrawn] = useState(false);
+  const form = useInstalledAppTileForm(railDrawn ? 2 : 1);
+  return {
+    level2: form?.level2 ?? null,
+    tiles: form?.tiles ?? null,
+    onRailDrawn: setRailDrawn,
+  };
+}
+
+/**
+ * A `sender` landing waits in its channel's pane for the thread list, and a
+ * move of the channel while it waits spends it unlanded
+ * (`useSpendTabLanding`). Leaving the channel is such a move, but it unmounts
+ * the pane and its wait with it, so the shell spends it here: the sender
+ * landing the channel held while shown is withdrawn once another is selected.
+ * Only that same request: one asked of the channel since (an opener staging
+ * it before navigating back) is the channel's next landing.
+ */
+function useSenderLandingSpentOnDeparture(botId: string | null): void {
+  const shownLanding = useBotTabLandingStore((state) =>
+    botId !== null && Object.hasOwn(state.byBotId, botId)
+      ? state.byBotId[botId]
+      : null,
+  );
+  const held = useRef<{
+    readonly botId: string;
+    readonly landing: BotTabLanding;
+  } | null>(null);
+  useEffect(() => {
+    // Compared with the channel last seen, not run on cleanup, so a remount
+    // of the same channel is no departure.
+    const previous = held.current;
+    if (previous !== null && previous.botId !== botId) {
+      const { byBotId, clear } = useBotTabLandingStore.getState();
+      if (
+        Object.hasOwn(byBotId, previous.botId) &&
+        byBotId[previous.botId] === previous.landing
+      ) {
+        clear(previous.botId);
+      }
+    }
+    held.current =
+      botId !== null && shownLanding?.kind === "sender"
+        ? { botId, landing: shownLanding }
+        : null;
+  }, [botId, shownLanding]);
+}
+
+/**
+ * Keeps the visited channels' state in step with the bots that exist, and a
+ * channel selected: forgets each visited bot once a list that answered no
+ * longer carries it after carrying it, and returns the way the selected
+ * channel's own pane reports one gone. With no channel selected, or the
+ * selected one gone, `select`s the default channel once the lists answered.
+ *
+ * The default is the surface's own choice, never an opener's: while a
+ * navigation to the surface is in flight (a channel someone opened, not yet
+ * acknowledged) it waits, so it never supersedes that navigation, and a
+ * selected bot that goes away meanwhile is only deselected. A bot reported
+ * gone is never the default (`unavailable`) until a list read newer than the
+ * report settles it: the list it was reported against still carries it.
+ */
+function useTracyChannelUpkeep(input: {
+  readonly botId: string | null;
+  readonly groups: ReadonlyArray<HomeBotsGroup> | null;
+  /** The bots of the last list read that succeeded; `null` before one. */
+  readonly listed: ReadonlyArray<BotRecord> | null;
+  /** When the last list read that succeeded answered; `0` before one. */
+  readonly listedAt: number;
+  readonly select: (botId: string | null) => void;
+}): {
+  readonly forget: (botId: string) => void;
+  readonly unavailable: ReadonlySet<string>;
+} {
+  const { botId, groups, listed, listedAt, select } = input;
+  // Each bot reported gone, with the list read it was reported against.
+  const [goneReports, setGoneReports] = useState<ReadonlyMap<string, number>>(
+    () => new Map(),
+  );
+  const unavailable = useMemo(
+    () =>
+      new Set(
+        [...goneReports]
+          .filter(([, reportedAt]) => reportedAt === listedAt)
+          .map(([goneBotId]) => goneBotId),
+      ),
+    [goneReports, listedAt],
+  );
+  const forget = useCallback(
+    (goneBotId: string): void => {
+      setGoneReports((reports) => new Map(reports).set(goneBotId, listedAt));
+      const surface = useTracySurfaceStore.getState();
+      surface.forgetBot(goneBotId);
+      if (goneBotId !== surface.botId) return;
+      if (tracyNavigationPending()) {
+        surface.selectChannel(null);
+        return;
+      }
+      select(
+        groups === null
+          ? null
+          : defaultTracyChannelOf(groups, new Set([...unavailable, goneBotId])),
+      );
+    },
+    [groups, listedAt, select, unavailable],
+  );
+  const visitedBotIds = useTracySurfaceStore((state) => state.visitedBotIds);
+  const seenListedRef = useRef(new Set<string>());
+  useEffect(() => {
+    if (listed === null) return;
+    const listedIds = new Set(listed.map((bot) => bot.botId));
+    const seen = seenListedRef.current;
+    for (const visited of visitedBotIds) {
+      if (listedIds.has(visited)) {
+        seen.add(visited);
+      } else if (seen.has(visited)) {
+        seen.delete(visited);
+        forget(visited);
+      }
+    }
+  }, [forget, listed, visitedBotIds]);
+  const defaultBotId =
+    groups === null ? null : defaultTracyChannelOf(groups, unavailable);
+  const navigationPending = useSyncExternalStore(
+    subscribeTabNavigationPending,
+    tracyNavigationPending,
+  );
+  useEffect(() => {
+    if (botId !== null || defaultBotId === null || navigationPending) return;
+    select(defaultBotId);
+  }, [botId, defaultBotId, navigationPending, select]);
+  return { forget, unavailable };
+}
+
+/** The channel column's groups; `null` until both lists answer. */
+function useBotsGroups(
+  bots: BotListResponse | undefined,
+  environments: EnvironmentListResponseV11 | undefined,
+): ReadonlyArray<HomeBotsGroup> | null {
+  // In the order the person gave the column (decision 151), so the default's
+  // "first channel" is the first one drawn.
+  const model = useArrangedBotsModel(
+    useMemo(
+      () =>
+        buildHomeBotsModel({
+          environments: environments?.environments ?? [],
+          bots: bots?.bots ?? [],
+          mainBotIds: bots?.mainBotIds ?? null,
+        }),
+      [bots, environments],
+    ),
+  );
+  return bots === undefined || environments === undefined ? null : model.groups;
+}
+
+/**
+ * The pane with no channel selected. Until both lists have answered: the
+ * connecting state, or, when a read failed, the failure and a Retry of both
+ * (the default channel is chosen from them, so nothing else would recover).
+ * Then: that there are no bots, when there are none but the `unavailable`
+ * ones; otherwise nothing, as the default channel (or a navigation in
+ * flight) is on its way.
+ */
+function TracyUnselected(props: {
+  readonly groups: ReadonlyArray<HomeBotsGroup> | null;
+  readonly unavailable: ReadonlySet<string>;
+  readonly listsFailed: boolean;
+  readonly onRetry: () => void;
+}): ReactNode {
+  const { groups } = props;
+  if (groups === null) {
+    return props.listsFailed ? (
+      <ErrorNotice
+        text="Couldn't load this channel."
+        onRetry={props.onRetry}
+        className="m-4"
+      />
+    ) : (
+      <BotTabConnecting />
+    );
+  }
+  return defaultTracyChannelOf(groups, props.unavailable) === null ? (
+    <TracyNoChannel />
+  ) : null;
+}
+
+/** The surface with no channel: there is no bot to show yet. */
+function TracyNoChannel(): ReactNode {
+  return (
+    <div
+      className="flex flex-1 items-center justify-center p-6 text-center text-ui-sm text-muted-foreground"
+      data-testid="bot-tab-no-channel"
+    >
+      No bots yet. Create one from Home.
+    </div>
+  );
+}
+
+/**
+ * What a channel shows (`botTabRouteOf`), read through the surface's lists,
+ * and the Retry for the reads that failed (`null` when none did). A bot not
+ * yet seen listed is read again while the list is older than the pane or
+ * than the newest setup read.
+ */
+function useChannelRoute(
+  botId: string,
+  hostId: string,
+): {
+  readonly route: BotTabRouteView;
+  readonly botList: UseQueryResult<BotListResponse, HostRpcError>;
+  readonly retry: (() => void) | null;
+} {
+  const client = useTabHostClient();
+  const botList = useBotListQuery(client, true);
+  const environments = useEnvironmentListQuery(client, true);
+  const groups = useBotsGroups(botList.data, environments.data);
   const teamSetups = useTeamSetups({ client, hostId, groups });
+  const listed = botList.data?.bots.some((bot) => bot.botId === botId) ?? false;
   const [shownListed, setShownListed] = useState(false);
   if (listed && !shownListed) setShownListed(true);
   const unlisted = !listed && !shownListed;
@@ -244,70 +573,139 @@ function BotTabRoute(props: {
     setupsSettled: teamSetups.settled,
     setupsUnresolved: teamSetups.unresolved,
   });
+  const retry = retryFailedReads([
+    { failed: botListFailed, retry: () => void refetchList() },
+    {
+      failed: environmentsFailed,
+      retry: () => void environments.refetch(),
+    },
+    { failed: teamSetups.retryable, retry: teamSetups.retry },
+  ]);
+  return { route, botList, retry };
+}
+
+/**
+ * One channel of the surface, keyed by its bot: whether it is a listed bot,
+ * whose channel opens, or a team's main bot still to be set up, whose setup
+ * it shows. A bot that is neither is a listed bot's channel all the same,
+ * reported gone once the list does not carry it.
+ *
+ * A bot this pane has shown listed is that bot until a list without it
+ * reports it gone. Any other bot may be a team's main bot still to be set
+ * up, so it is never taken for a deleted one on a list older than the pane
+ * or than the newest setup read: the list is read again first, so a main bot
+ * created since is found rather than reported gone. Only lists that were
+ * read say what is absent: while either list has not answered or its last
+ * read failed, or a team with no bot cannot be told apart (`unresolved`: its
+ * setup read failed, or the host does not answer it), the pane says the
+ * channel could not be loaded and, when a read failed, offers to read it
+ * again (`botTabRouteOf`).
+ */
+function TracyChannelPane(props: {
+  readonly botId: string;
+  readonly hostId: string;
+  /** The shell's level-2 form, which the channel's title follows. */
+  readonly level2: MobileLevel2Form | null;
+  /** The shell's tile count, which places the rail beside the channel. */
+  readonly tiles: MobileTileCount | null;
+  readonly onRailDrawn: (drawn: boolean) => void;
+  /** The shell's Threads, shown in place of the channel's views. */
+  readonly threadsView: BotThreadsViewState;
+  readonly onGone: (botId: string) => void;
+}): ReactNode {
+  const { botId, hostId, level2, threadsView } = props;
+  const threadsShown = threadsView.shown;
+  const client = useTabHostClient();
+  // The channel shows: it is visited. Before any passive effect of the
+  // pane's, so a channel reported gone on its first commit is forgotten after
+  // it was marked visited, not before.
+  useLayoutEffect(() => {
+    useTracySurfaceStore.getState().markVisited(botId);
+  }, [botId]);
+  // Each landing the shown channel observes is its own from that commit on,
+  // including one asked of it while it was already showing, so a later
+  // navigation elsewhere does not withdraw it as never landed.
+  const landing = useBotTabLandingStore((state) =>
+    Object.hasOwn(state.byBotId, botId) ? state.byBotId[botId] : null,
+  );
+  useLayoutEffect(() => {
+    if (landing !== null) handTracyLandingToChannel(botId, landing);
+  }, [botId, landing]);
+  const { route, botList, retry } = useChannelRoute(botId, hostId);
+  if (threadsShown && route.kind !== "bot") return null;
   if (route.kind === "connecting") return <BotTabConnecting />;
   if (route.kind === "setup") {
     return (
-      <TeamSetupChannel setup={route.setup} client={client} hostId={hostId} />
+      <TeamSetupChannel
+        setup={route.setup}
+        client={client}
+        hostId={hostId}
+        level2={level2}
+        threadsView={threadsView}
+      />
     );
   }
   if (route.kind === "unresolved") {
     return (
       <ErrorNotice
         text="Couldn't load this channel."
-        onRetry={retryFailedReads([
-          { failed: botListFailed, retry: () => void refetchList() },
-          {
-            failed: environmentsFailed,
-            retry: () => void environments.refetch(),
-          },
-          { failed: teamSetups.retryable, retry: teamSetups.retry },
-        ])}
+        onRetry={retry}
         className="m-4"
       />
     );
   }
-  return <BotTabBody {...props} />;
+  return (
+    <BotTabBody
+      botId={botId}
+      hostId={hostId}
+      listedBots={botList.data?.bots}
+      mainBotIds={botList.data?.mainBotIds}
+      level2={level2}
+      tiles={props.tiles}
+      onRailDrawn={props.onRailDrawn}
+      threadsView={threadsView}
+      onGone={props.onGone}
+    />
+  );
 }
 
 function BotTabBody(props: {
   readonly botId: string;
   readonly hostId: string;
+  /** `bot.list`'s bots; `undefined` until the list answers. */
+  readonly listedBots: ReadonlyArray<BotRecord> | undefined;
+  readonly mainBotIds: MainBotIds | undefined;
+  readonly level2: MobileLevel2Form | null;
+  readonly tiles: MobileTileCount | null;
+  readonly onRailDrawn: (drawn: boolean) => void;
+  readonly threadsView: BotThreadsViewState;
+  readonly onGone: (botId: string) => void;
 }): ReactNode {
-  const { botId, hostId } = props;
+  const { botId, hostId, listedBots, threadsView, onGone } = props;
+  const { shown: threadsShown, onLeave: onLeaveThreads } = threadsView;
   const subscription = useBotSubscriptionForHost({
     botId,
     hostId,
     enabled: true,
   });
   const client = useTabHostClient();
-  const closeBotTab = useBotTabsStore((s) => s.closeBotTab);
-  const setBotTabTitle = useBotTabsStore((s) => s.setBotTabTitle);
   const [view, setView] = useState<BotTabView>("messages");
-  // Threads, from the column, in place of the channel; any move to one of
-  // the channel's views ends it.
-  const [threadsShown, setThreadsShown] = useState(false);
-  const changeView = useCallback((next: BotTabView) => {
-    setView(next);
-    setThreadsShown(false);
-  }, []);
-  const threadsView = useMemo(
-    () => ({
-      shown: threadsShown,
-      onShow: () => setThreadsShown(true),
-      onLeave: () => setThreadsShown(false),
-    }),
-    [threadsShown],
+  const changeView = useCallback(
+    (next: BotTabView) => {
+      setView(next);
+      onLeaveThreads();
+    },
+    [onLeaveThreads],
   );
 
-  const botList = useBotListQuery(client, true);
-  const listedBots = botList.data?.bots;
-
-  // Open once per (bot, tab host) - this body remounts with the host - and
-  // again on Retry or when the tab comes back into view. A mutation, not a
-  // query: an open may claim the bot onto this host, which a background
-  // refetch must never do on its own. The last answer is HELD across a
-  // re-open, so asking again never blanks a tab that is serving; a failed
-  // re-open is shown above it instead.
+  // Open once per channel - this body is keyed by its bot - and again on
+  // Retry or when the surface comes back into view. A mutation, not a query:
+  // an open may claim the bot onto this host, which a background refetch
+  // must never do on its own. The last answer is HELD across a re-open, so
+  // asking again never blanks a channel that is serving; a failed re-open is
+  // shown above it instead. The answer feeds only the channel's paused,
+  // failed and opening states: whatever it says, the surface stays on its
+  // host.
   const { mutate: openBot } = useBotOpenMutation(client);
   const [answer, setAnswer] = useState<BotOpenResponse | undefined>(undefined);
   const [openError, setOpenError] = useState<string | null>(null);
@@ -334,32 +732,25 @@ function BotTabBody(props: {
     error: answer === undefined ? openError : null,
   });
 
-  // A deleted bot has no tab: the store removal closes it everywhere. Two
-  // signals say so - the stream's `deleted` frame, and a `bot.list` answer
-  // that no longer carries the bot, which is how a delete made while this
-  // stream was down reaches the tab, and how a `bot.open` that found no bot
-  // does (every open invalidates the list).
-  // A teammate's rename, claim or delete reaches the list (and so this tab)
-  // without waiting for focus, through the tab's own host.
-  useBotListChangedSubscriptionForHost(hostId, true);
+  // A deleted bot's channel is gone from the surface. Two signals say so -
+  // the stream's `deleted` frame, and a `bot.list` answer that no longer
+  // carries the bot, which is how a delete made while this stream was down
+  // reaches the channel, and how a `bot.open` that found no bot does (every
+  // open invalidates the list).
   const goneFromList =
     listedBots !== undefined && !listedBots.some((bot) => bot.botId === botId);
+  const reportGone = useEffectEvent(() => onGone(botId));
+  const deleted = useCallback(() => onGone(botId), [botId, onGone]);
   useEffect(() => {
-    if (subscription.deleted || goneFromList) closeBotTab(botId);
-  }, [botId, closeBotTab, goneFromList, subscription.deleted]);
-
-  // The header tab shows the stream's title, which a rename elsewhere moves.
-  const snapshotTitle = subscription.snapshot?.bot.title ?? null;
-  useEffect(() => {
-    if (snapshotTitle !== null) setBotTabTitle(botId, snapshotTitle);
-  }, [botId, setBotTabTitle, snapshotTitle]);
+    if (subscription.deleted || goneFromList) reportGone();
+  }, [goneFromList, subscription.deleted]);
 
   // The host re-sends a snapshot only for changes IT made; a bot rebound or
   // edited from another host reaches this client on the next subscribe, so
-  // the tab asks again - and opens again, since the bot's host may have come
-  // back or gone away - when it comes back into view: the window becoming
-  // visible, and this tab becoming the active one (inactive tabs stay
-  // mounted, hidden).
+  // the channel asks again - and opens again, since the bot's host may have
+  // come back or gone away - when it comes back into view: the window
+  // becoming visible, and the surface becoming the active tab (inactive tabs
+  // stay mounted, hidden).
   const { resubscribe } = subscription;
   const refresh = useCallback(() => {
     reopen();
@@ -372,8 +763,9 @@ function BotTabBody(props: {
     wasVisibleRef.current = paneVisible;
     if (becameVisible) refresh();
   }, [paneVisible, refresh]);
-  // Only the tab in view re-opens when the window returns: an open can claim
-  // the bot onto this host, and a hidden tab is not a person asking for it.
+  // Only the surface in view re-opens when the window returns: an open can
+  // claim the bot onto this host, and a hidden tab is not a person asking
+  // for it.
   const onWindowVisible = useEffectEvent(() => {
     if (document.visibilityState === "visible") refresh();
   });
@@ -386,7 +778,7 @@ function BotTabBody(props: {
   }, [paneVisible]);
 
   if (openState.kind === "failed") {
-    return (
+    return threadsShown ? null : (
       <ErrorNotice
         text={`Couldn't open this bot: ${openState.message}`}
         onRetry={reopen}
@@ -396,7 +788,7 @@ function BotTabBody(props: {
   }
   const snapshot = subscription.snapshot;
   if (snapshot === null && subscription.error !== null) {
-    return (
+    return threadsShown ? null : (
       <ErrorNotice
         text={`Couldn't reach this bot: ${subscription.error}`}
         onRetry={resubscribe}
@@ -405,7 +797,7 @@ function BotTabBody(props: {
     );
   }
   if (snapshot === null || openState.kind === "opening") {
-    return <BotTabConnecting />;
+    return threadsShown ? null : <BotTabConnecting />;
   }
 
   return (
@@ -420,8 +812,12 @@ function BotTabBody(props: {
       onRetry={resubscribe}
       view={view}
       onViewChange={changeView}
+      level2={props.level2}
+      tiles={props.tiles}
+      onRailDrawn={props.onRailDrawn}
       threadsView={threadsView}
-      mainBotIds={botList.data?.mainBotIds}
+      onDeleted={deleted}
+      mainBotIds={props.mainBotIds}
     />
   );
 }
@@ -488,9 +884,14 @@ function useBotTabRail(
  * channel - on a post, or with a thread beside it - in Messages; its back
  * button returns to the view it was opened from, the channel where it was.
  * The channel lands on a post once: leaving Messages drops the landing.
+ * Threads takes the place of a session as well: leaving it shows the
+ * channel, since a session open when Threads was chosen is not where either
+ * way back says it goes.
  */
 function useBotTabSession(args: {
   readonly threads: ReadonlyArray<BotThreadSummary> | null;
+  /** The shell's Threads shows in place of the channel's views. */
+  readonly threadsShown: boolean;
   readonly onViewChange: (view: BotTabView) => void;
   readonly setOpenThread: (open: BotOpenThread | null) => void;
 }): {
@@ -504,12 +905,17 @@ function useBotTabSession(args: {
   readonly landChannel: (messageId: string | null) => void;
   readonly showThread: (threadId: string, messageId: string | null) => void;
 } {
-  const { threads, onViewChange, setOpenThread } = args;
+  const { threads, threadsShown, onViewChange, setOpenThread } = args;
   const [shown, setShown] = useState<{
     readonly session: BotOpenSession | null;
     readonly channelLanding: BotChannelLanding | null;
     readonly visits: number;
   }>({ session: null, channelLanding: null, visits: 0 });
+  const [threadsSeen, setThreadsSeen] = useState(threadsShown);
+  if (threadsSeen !== threadsShown) {
+    setThreadsSeen(threadsShown);
+    if (threadsShown) setShown({ ...shown, session: null });
+  }
   const openSession = useCallback<BotSessionOpen>((target) => {
     setShown((previous) => {
       const visit = previous.visits + 1;
@@ -829,6 +1235,27 @@ function useChannelSetupHistory(input: {
   );
 }
 
+/**
+ * Says whether the rail is drawn beside the channel, before the paint it would
+ * otherwise be a frame late for. The rail draws only under Messages.
+ */
+function useRailDrawnReport(
+  place: BotTabPlace,
+  threadListSupported: boolean,
+  onRailDrawn: (drawn: boolean) => void,
+): void {
+  const railDrawn =
+    place.view === "messages" &&
+    place.session === null &&
+    !place.threadsShown &&
+    (place.openMemory !== null ||
+      (threadListSupported && place.openThread !== null));
+  useLayoutEffect(() => {
+    onRailDrawn(railDrawn);
+    return () => onRailDrawn(false);
+  }, [onRailDrawn, railDrawn]);
+}
+
 function BotTabContent(props: {
   readonly botId: string;
   readonly hostId: string;
@@ -842,7 +1269,15 @@ function BotTabContent(props: {
   readonly onRetry: () => void;
   readonly view: BotTabView;
   readonly onViewChange: (view: BotTabView) => void;
+  /** The shell's level-2 form, which the channel's title follows. */
+  readonly level2: MobileLevel2Form | null;
+  /** The shell's tile count, which places the rail beside the channel. */
+  readonly tiles: MobileTileCount | null;
+  readonly onRailDrawn: (drawn: boolean) => void;
+  /** Threads, from the column, shows in place of the channel's views. */
   readonly threadsView: BotThreadsViewState;
+  /** The bot was deleted from its settings. */
+  readonly onDeleted: () => void;
   /** `bot.list`'s main bots; `undefined` until the list answers. */
   readonly mainBotIds: MainBotIds | undefined;
 }): ReactNode {
@@ -857,9 +1292,14 @@ function BotTabContent(props: {
     onRetry,
     view,
     onViewChange,
-    threadsView: tabThreadsView,
+    level2,
+    tiles,
+    onRailDrawn,
+    threadsView,
+    onDeleted,
     mainBotIds,
   } = props;
+  const threadsShown = threadsView.shown;
   const client = useTabHostClient();
   const isMain = isMainBot(mainBotIds, snapshot.bot);
   const environments = useEnvironmentListQuery(client, true);
@@ -937,8 +1377,8 @@ function BotTabContent(props: {
     showChannel,
     landChannel,
     showThread,
-  } = useBotTabSession({ threads, onViewChange, setOpenThread });
-  const threadsShown = tabThreadsView.shown;
+  } = useBotTabSession({ threads, threadsShown, onViewChange, setOpenThread });
+  // Threads is the shell's, shown in place of the channel: a move too.
   const place = useMemo(
     (): BotTabPlace => ({
       view,
@@ -963,18 +1403,7 @@ function BotTabContent(props: {
     openSession,
     onViewChange,
   });
-  // Leaving Threads for the tab's channel shows the channel: a session open
-  // when Threads was chosen is not where either way back says it goes.
-  const threadsView = useMemo(
-    (): BotThreadsViewState => ({
-      ...tabThreadsView,
-      onLeave: () => {
-        closeSession();
-        tabThreadsView.onLeave();
-      },
-    }),
-    [closeSession, tabThreadsView],
-  );
+  useRailDrawnReport(place, threadListSupported, onRailDrawn);
   const openActivity = useCallback(() => changeView("activity"), [changeView]);
   const activitySummary = useBotActivitySummary({
     botId,
@@ -1042,160 +1471,133 @@ function BotTabContent(props: {
       <BotIdentityContext value={identity}>
         <BotSettingsOpenerContext value={openSettings}>
           <BotMemoryContext value={memoryAccess}>
-            <div
-              className="@container flex h-full min-h-0"
-              data-testid="bot-tab"
-            >
-              <BotResizablePane
-                pane="sidebar"
-                edge="right"
-                label="Resize channels"
-                className="hidden min-h-0 w-(--bot-pane-width) max-w-[40%] shrink-0 flex-col border-r border-canvas-border/70 @3xl:flex"
-                handleClassName=""
-                testId="bot-channel-sidebar-pane"
-              >
-                <BotChannelSidebar
-                  activeBotId={botId}
+            {/* Threads, shown by the shell, takes the place of the
+                channel's views and of a session. */}
+            {!threadsShown &&
+              (session !== null ? (
+                <BotSessionView
+                  key={session.chatId}
+                  botId={botId}
                   hostId={hostId}
-                  threadsView={threadsView}
+                  botTitle={snapshot.bot.title}
+                  session={session}
+                  threads={threads}
+                  resolveMember={resolveMember}
+                  onClose={closeSession}
+                  onOpenChannel={showChannel}
+                  onOpenThread={showThread}
                 />
-              </BotResizablePane>
-              <div
-                className="relative flex min-h-0 min-w-0 flex-1 md:bg-canvas"
-                data-testid="bot-tab-content-pane"
-              >
-                {/* Threads, from the column, takes the place of the channel's
-                    views and of a session. */}
-                {threadsView.shown ? (
-                  <BotThreadsView
+              ) : (
+                <Tabs
+                  value={view}
+                  onValueChange={(next) => {
+                    if (isBotTabView(next)) changeView(next);
+                  }}
+                  className="flex min-h-0 min-w-0 flex-1 flex-col gap-0"
+                >
+                  <BotChannelHeader
+                    level2={level2}
+                    botId={botId}
                     hostId={hostId}
-                    channelTitle={snapshot.bot.title}
-                    onBack={threadsView.onLeave}
+                    threadsView={threadsView}
+                    title={snapshot.bot.title}
+                    isMain={isMain === true}
+                    settingsOpen={settingsOpen}
+                    onToggleSettings={toggleSettings}
+                    activityLabel={activityLabelParts({
+                      stopped: activitySummary.stopped.length,
+                      running: activitySummary.running.length,
+                      tasks: activitySummary.tasks,
+                    })}
                   />
-                ) : null}
-                {!threadsView.shown &&
-                  (session !== null ? (
-                    <BotSessionView
-                      key={session.chatId}
+                  {streamError === null ? null : (
+                    // A fatal close AFTER a snapshot: the last reading stays on
+                    // screen, marked as such, and the retry sits on top of it.
+                    <ErrorNotice
+                      text={`Couldn't reach this bot: ${streamError}`}
+                      onRetry={onRetry}
+                      className="mx-4 mt-2"
+                    />
+                  )}
+                  {reopenError === null ? null : (
+                    <ErrorNotice
+                      text={`Couldn't open this bot: ${reopenError}`}
+                      onRetry={onReopen}
+                      className="mx-4 mt-2"
+                    />
+                  )}
+                  {pausedReason === null ? null : (
+                    <PausedBanner
+                      reason={pausedReason}
+                      environmentLabel={environmentLabel}
+                      onRetry={onReopen}
+                    />
+                  )}
+                  <TabsContent
+                    value="messages"
+                    className="flex min-h-0 flex-1 flex-col"
+                  >
+                    <BotChannelView
                       botId={botId}
                       hostId={hostId}
+                      boundHostId={snapshot.boundHost.hostId}
+                      boundHostEpoch={snapshot.boundHost.epoch}
                       botTitle={snapshot.bot.title}
-                      session={session}
-                      threads={threads}
+                      directive={snapshot.bot.directive}
+                      appConversationChatId={snapshot.bot.appConversationChatId}
+                      trunkChatId={snapshot.bot.trunkChatId}
                       resolveMember={resolveMember}
-                      onClose={closeSession}
-                      onOpenChannel={showChannel}
-                      onOpenThread={showThread}
+                      tasks={snapshot.tasks}
+                      surfaceActions={snapshot.surfaceActions}
+                      openThread={openThread}
+                      onOpenThread={setOpenThread}
+                      onOpenTurn={openTurn}
+                      onOpenSession={openSession}
+                      landOn={channelLanding}
+                      openMemory={openMemory}
+                      onOpenMemory={setOpenMemory}
+                      environmentId={snapshot.bot.environmentId}
+                      botNameOf={botNameOf}
+                      onOpenActivity={openActivity}
+                      setupHistory={setupHistory}
+                      tiles={tiles}
                     />
-                  ) : (
-                    <Tabs
-                      value={view}
-                      onValueChange={(next) => {
-                        if (isBotTabView(next)) changeView(next);
-                      }}
-                      className="flex min-h-0 min-w-0 flex-1 flex-col gap-0"
-                    >
-                      <BotChannelHeader
-                        title={snapshot.bot.title}
-                        isMain={isMain === true}
-                        settingsOpen={settingsOpen}
-                        onToggleSettings={toggleSettings}
-                        activityLabel={activityLabelParts({
-                          stopped: activitySummary.stopped.length,
-                          running: activitySummary.running.length,
-                          tasks: activitySummary.tasks,
-                        })}
-                      />
-                      {streamError === null ? null : (
-                        // A fatal close AFTER a snapshot: the last reading stays on
-                        // screen, marked as such, and the retry sits on top of it.
-                        <ErrorNotice
-                          text={`Couldn't reach this bot: ${streamError}`}
-                          onRetry={onRetry}
-                          className="mx-4 mt-2"
-                        />
-                      )}
-                      {reopenError === null ? null : (
-                        <ErrorNotice
-                          text={`Couldn't open this bot: ${reopenError}`}
-                          onRetry={onReopen}
-                          className="mx-4 mt-2"
-                        />
-                      )}
-                      {pausedReason === null ? null : (
-                        <PausedBanner
-                          reason={pausedReason}
-                          environmentLabel={environmentLabel}
-                          onRetry={onReopen}
-                        />
-                      )}
-                      <TabsContent
-                        value="messages"
-                        className="flex min-h-0 flex-1 flex-col"
-                      >
-                        <BotChannelView
-                          botId={botId}
-                          hostId={hostId}
-                          boundHostId={snapshot.boundHost.hostId}
-                          boundHostEpoch={snapshot.boundHost.epoch}
-                          botTitle={snapshot.bot.title}
-                          directive={snapshot.bot.directive}
-                          appConversationChatId={
-                            snapshot.bot.appConversationChatId
-                          }
-                          trunkChatId={snapshot.bot.trunkChatId}
-                          resolveMember={resolveMember}
-                          tasks={snapshot.tasks}
-                          surfaceActions={snapshot.surfaceActions}
-                          openThread={openThread}
-                          onOpenThread={setOpenThread}
-                          onOpenTurn={openTurn}
-                          onOpenSession={openSession}
-                          landOn={channelLanding}
-                          openMemory={openMemory}
-                          onOpenMemory={setOpenMemory}
-                          environmentId={snapshot.bot.environmentId}
-                          botNameOf={botNameOf}
-                          onOpenActivity={openActivity}
-                          setupHistory={setupHistory}
-                        />
-                      </TabsContent>
-                      <TabsContent
-                        value="activity"
-                        className="flex min-h-0 flex-1 flex-col"
-                      >
-                        <BotActivityPage
-                          botId={botId}
-                          hostId={hostId}
-                          boundHost={snapshot.boundHost}
-                          channelId={snapshot.bot.appConversationChatId}
-                          tasks={snapshot.tasks}
-                          notificationSubscriptions={
-                            snapshot.notificationSubscriptions
-                          }
-                          stoppedNotificationWatches={
-                            snapshot.stoppedNotificationWatches
-                          }
-                          resolveMember={resolveMember}
-                          summary={activitySummary}
-                          threads={threads}
-                          onOpenPost={openPostInChannel}
-                          onOpenTurn={openTurn}
-                        />
-                      </TabsContent>
-                    </Tabs>
-                  ))}
-                {settingsOpen ? (
-                  <BotChannelSettingsPanel
-                    bot={snapshot.bot}
-                    personal={personal}
-                    channelId={snapshot.bot.appConversationChatId}
-                    environmentBots={environmentBots}
-                    onClose={closeSettings}
-                  />
-                ) : null}
-              </div>
-            </div>
+                  </TabsContent>
+                  <TabsContent
+                    value="activity"
+                    className="flex min-h-0 flex-1 flex-col"
+                  >
+                    <BotActivityPage
+                      botId={botId}
+                      hostId={hostId}
+                      boundHost={snapshot.boundHost}
+                      channelId={snapshot.bot.appConversationChatId}
+                      tasks={snapshot.tasks}
+                      notificationSubscriptions={
+                        snapshot.notificationSubscriptions
+                      }
+                      stoppedNotificationWatches={
+                        snapshot.stoppedNotificationWatches
+                      }
+                      resolveMember={resolveMember}
+                      summary={activitySummary}
+                      threads={threads}
+                      onOpenPost={openPostInChannel}
+                      onOpenTurn={openTurn}
+                    />
+                  </TabsContent>
+                </Tabs>
+              ))}
+            {settingsOpen ? (
+              <BotChannelSettingsPanel
+                bot={snapshot.bot}
+                personal={personal}
+                channelId={snapshot.bot.appConversationChatId}
+                environmentBots={environmentBots}
+                onClose={closeSettings}
+                onDeleted={onDeleted}
+              />
+            ) : null}
           </BotMemoryContext>
         </BotSettingsOpenerContext>
       </BotIdentityContext>
@@ -1280,12 +1682,15 @@ function ErrorNotice(props: {
  * Slack's channel header: the bot's picture (its card on hover and click),
  * its name with the main bot's star, the ⋮ that opens the channel's settings,
  * and the channel's views under it. What the bot is for is the top of its channel; nothing else
- * sits here but, on the phone, Talk: the phone has no tab strip to carry it,
- * so every bot channel does (V5), and a session started here is focused on
+ * sits here but, on the phone, Talk. A session started here is focused on
  * this channel. Activity's label is the bot's indicator: what stopped, in red
  * and first, what runs and the tasks it tracks.
  */
 function BotChannelHeader(props: {
+  readonly level2: MobileLevel2Form | null;
+  readonly botId: string;
+  readonly hostId: string;
+  readonly threadsView: BotThreadsViewState;
   readonly title: string;
   readonly isMain: boolean;
   readonly settingsOpen: boolean;
@@ -1294,6 +1699,15 @@ function BotChannelHeader(props: {
 }): ReactNode {
   const { settingsOpen } = props;
   const phoneLayout = useIsMobileViewport();
+  // With the keyboard up on a short viewport: the name row alone while the
+  // channel's box has the focus, and nothing while a thread's does, since the
+  // thread's own header is the identity row then. Only a box under this header
+  // counts, so a parent's children are the header and the panes it heads.
+  const [header, setHeader] = useState<HTMLElement | null>(null);
+  const focusOwner = useKeyboardFocusOwnerWithin(header?.parentElement ?? null);
+  const threadHasFocus =
+    focusOwner !== null &&
+    focusOwner.closest("[data-bot-thread-panel]") !== null;
   // Focus goes back to the ⋮ when the settings close.
   const settingsButtonRef = useRef<HTMLButtonElement | null>(null);
   const wasOpenRef = useRef(settingsOpen);
@@ -1302,8 +1716,20 @@ function BotChannelHeader(props: {
     wasOpenRef.current = settingsOpen;
   }, [settingsOpen]);
   return (
-    <header className="flex shrink-0 flex-col gap-1 px-4 pt-3">
-      <div className="flex min-w-0 items-center gap-2">
+    <header
+      ref={setHeader}
+      hidden={threadHasFocus}
+      className={cn(
+        "flex shrink-0 flex-col gap-1 px-4",
+        focusOwner === null && "pt-3",
+      )}
+    >
+      <div
+        className={cn(
+          "flex min-w-0 items-center gap-2",
+          focusOwner !== null && "min-h-11",
+        )}
+      >
         <BotIdentityTrigger>
           <button
             type="button"
@@ -1314,12 +1740,13 @@ function BotChannelHeader(props: {
             <BotAvatar size="sm" />
           </button>
         </BotIdentityTrigger>
-        <h1
-          className="min-w-0 truncate text-ui-md font-bold text-foreground"
-          data-testid="bot-tab-title"
-        >
-          {props.title}
-        </h1>
+        <BotChannelTitle
+          level2={props.level2}
+          title={props.title}
+          activeBotId={props.botId}
+          hostId={props.hostId}
+          threadsView={props.threadsView}
+        />
         {props.isMain ? (
           <MainBotBadge testId="bot-tab-main" tone="muted" />
         ) : null}
@@ -1344,7 +1771,11 @@ function BotChannelHeader(props: {
           <EllipsisVertical aria-hidden="true" />
         </Button>
       </div>
-      <TabsList variant="line" aria-label="Channel view">
+      <TabsList
+        hidden={focusOwner !== null}
+        variant="line"
+        aria-label="Channel view"
+      >
         <TabsTrigger value="messages" data-testid="bot-tab-view-messages">
           Messages
         </TabsTrigger>

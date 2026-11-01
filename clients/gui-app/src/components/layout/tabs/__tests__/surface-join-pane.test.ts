@@ -55,7 +55,7 @@ const PANE_BY_KIND: ReadonlyArray<
 > = [
   { kind: "epic", top: "surface", left: "canvas", right: "canvas" },
   { kind: "draft", top: "surface", left: "surface", right: "surface" },
-  { kind: "bot", top: "surface", left: "surface", right: "surface" },
+  { kind: "tracy", top: "surface", left: "surface", right: "surface" },
   { kind: "settings", top: "surface", left: "panel", right: "surface" },
   { kind: "home", top: "canvas", left: "canvas", right: "canvas" },
   { kind: "history", top: "canvas", left: "canvas", right: "canvas" },
@@ -163,12 +163,13 @@ const SAMPLE_WORKSPACE_TAB: HeaderTab = {
   canOpenInNewWindow: false,
 };
 
-const BOT_TAB: HeaderTab = {
-  kind: "bot",
-  id: "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV",
+const TRACY_TAB: HeaderTab = {
+  kind: "tracy",
+  id: "tracy",
   hostId: "host-a",
+  botId: "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV",
   route: "/bot/bot_01ARZ3NDEKTSV4RRFFQ69G5FAV",
-  name: "Release bot",
+  name: "Tracy",
   icon: null,
   canDuplicate: false,
   canOpenInNewWindow: false,
@@ -178,7 +179,7 @@ const BOT_TAB: HeaderTab = {
 const HEADER_TAB_BY_KIND: Readonly<Record<HeaderTabKind, HeaderTab>> = {
   epic: EPIC_TAB,
   draft: DRAFT_TAB,
-  bot: BOT_TAB,
+  tracy: TRACY_TAB,
   settings: SETTINGS_TAB,
   home: HOME_TAB,
   history: HISTORY_TAB,

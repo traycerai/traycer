@@ -9,6 +9,10 @@ import {
   type FileHandle,
 } from "node:fs/promises";
 import { join } from "node:path";
+import {
+  HOST_UPDATE_INITIATOR_DESKTOP,
+  HOST_UPDATE_INITIATOR_ENV_VAR,
+} from "@traycer-clients/shared/host-update";
 import { log } from "../app/logger";
 import {
   CLI_INVOCATION_PROBE_TIMEOUT_MS,
@@ -224,6 +228,14 @@ export interface TraycerCliResult {
   readonly stderr: string;
 }
 
+/** Every CLI child Desktop starts says so, for the lock it may take. */
+function withDesktopInitiator(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return {
+    ...env,
+    [HOST_UPDATE_INITIATOR_ENV_VAR]: HOST_UPDATE_INITIATOR_DESKTOP,
+  };
+}
+
 export async function runTraycerCli(
   opts: RunTraycerCliOptions,
 ): Promise<TraycerCliResult> {
@@ -250,6 +262,7 @@ async function runTraycerCliWithInvocation(
       allArgs,
       {
         encoding: "utf8",
+        env: withDesktopInitiator(process.env),
         maxBuffer: opts.maxBuffer,
         timeout: opts.timeoutMs,
         windowsHide: true,
@@ -693,7 +706,7 @@ async function spawnWithFileStdio(
     const stderrFile: FileHandle = await open(stderrPath, "w", 0o600);
     try {
       const child = spawn(command, args, {
-        env: process.env,
+        env: withDesktopInitiator(process.env),
         detached: true,
         stdio: ["ignore", stdoutFile.fd, stderrFile.fd],
         windowsHide: true,
@@ -795,7 +808,7 @@ async function streamTraycerCliJsonWithInvocation<T>(
   const allArgs = [...inv.args, ...augmentedArgs];
   return new Promise<StreamTraycerCliResult<T>>((resolve, reject) => {
     const child = spawn(inv.command, allArgs, {
-      env: opts.env === null ? process.env : { ...process.env, ...opts.env },
+      env: withDesktopInitiator({ ...process.env, ...opts.env }),
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
     });

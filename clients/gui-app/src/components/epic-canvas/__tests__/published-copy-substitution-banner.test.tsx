@@ -66,6 +66,8 @@ vi.mock("@/lib/epic-selectors", async (importOriginal) => ({
   useEpicPermissionRole: () => "owner",
   useEpicSnapshotLoaded: () => true,
   useEpicChatRecordListAuthoritative: () => true,
+  useEpicTuiAgentRecordListAuthoritative: () => true,
+  useEpicTuiAgentRetraction: () => null,
 }));
 
 vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => ({
@@ -244,6 +246,8 @@ vi.mock("@/components/epic-canvas/renderers/chat-tile", async () => {
         hostLabel={props.hostLabel}
         reason={props.reason}
         ownedByViewer
+        ownerName={null}
+        cloneTargetLabel={null}
         environmentOwned={false}
         cloneAllowed
         showsPublishedCopy={props.showsPublishedCopy}

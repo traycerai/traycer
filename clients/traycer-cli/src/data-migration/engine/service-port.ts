@@ -57,20 +57,13 @@ export interface ServiceRelocationPort {
   stopRunningHosts(roots: DataRootPair): Promise<readonly EngineBlocker[]>;
 }
 
-const STAGING_LABEL: ServiceLabel = {
-  id: "ai.traycer.host.staging",
-  displayName: "Traycer Host (Staging)",
-  environment: "staging",
-  devSlot: null,
-};
-
 /** Every label whose registration could name the source root. */
 export async function migrationServiceLabels(
   sourceRoot: string,
 ): Promise<readonly ServiceLabel[]> {
   const labels: ServiceLabel[] = [
     serviceLabelFor("production"),
-    STAGING_LABEL,
+    serviceLabelFor("staging"),
     devServiceLabelForSlot(null),
   ];
   let slots: string[] = [];

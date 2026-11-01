@@ -21,6 +21,9 @@ import type { KillConflictingPortOwnerResult } from "../../host/free-port-kill";
 const mocks = vi.hoisted(() => ({
   controllerCalls: [] as string[],
   lockCalls: [] as Array<{ reason: string }>,
+  // The job the service manager runs for the label, when it is not the label.
+  serviceJobId: null as string | null,
+  lockEvents: [] as string[],
   killCalls: [] as Array<{ pid: number; port: number; commandName: string }>,
   killResult: {
     killed: true,
@@ -65,7 +68,10 @@ vi.mock("../../service", async (importOriginal) => {
           await atServiceSpawnEdge();
         }
       },
-      hostStartAdoptionLabel: async (label: { id: string }) => label.id,
+      hostStartAdoptionLabel: async (label: { id: string }) => {
+        mocks.lockEvents.push("job read");
+        return mocks.serviceJobId ?? label.id;
+      },
     }),
   };
 });
@@ -120,7 +126,9 @@ vi.mock("../../store/cli-lock", async (importOriginal) => {
       fn: () => Promise<T>,
     ): Promise<T> => {
       mocks.lockCalls.push({ reason: opts.reason });
-      return fn();
+      const result = await fn();
+      mocks.lockEvents.push("lock released");
+      return result;
     },
   };
 });
@@ -254,6 +262,29 @@ describe("buildHostFreePortAndRestartCommand", () => {
       release: null,
     });
     expect(result.exitCode).toBe(0);
+  });
+
+  it("names the job it restarted when that is Desktop's agent", async () => {
+    mocks.serviceJobId = "ai.traycer.host.agent";
+    try {
+      const { buildHostFreePortAndRestartCommand } =
+        await import("../host-free-port-and-restart");
+
+      const result = await buildHostFreePortAndRestartCommand({
+        pid: null,
+        port: null,
+        deferIfParked: false,
+        lifecycleOrigin: "terminal",
+      })(fakeCtx());
+
+      expect(result.human).toContain(
+        "restart requested for service 'ai.traycer.host.agent'",
+      );
+      expect(mocks.lockEvents.slice(-2)).toEqual(["job read", "lock released"]);
+    } finally {
+      mocks.serviceJobId = null;
+      mocks.lockEvents = [];
+    }
   });
 
   it("publishes the restart's adoption proof as `maintenance`, whoever asked for it", async () => {

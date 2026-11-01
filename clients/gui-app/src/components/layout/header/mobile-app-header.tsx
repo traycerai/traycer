@@ -9,6 +9,8 @@ import { RateLimitIconButton } from "@/components/layout/header/rate-limit-icon"
 import { ResourceMonitorPopover } from "@/components/resources/resource-monitor-popover";
 import { MobileNotificationsButton } from "@/components/notifications/mobile-notifications-button";
 import { MobileEpicHeaderTitle } from "@/components/epic-canvas/mobile/epic-mobile-header-actions";
+import { useMobileStripForm } from "@/components/layout/tabs/mobile-strip-form-context";
+import { useKeyboardFocusOwner } from "@/hooks/ui/use-keyboard-focus-layout";
 import "@/components/layout/shell/mobile-shell-touch-targets.css";
 import { useRegisteredEpicTitle } from "@/lib/epic-selectors";
 import { useRegionShown, useStatusBarVisible } from "@/lib/layout-overrides";
@@ -23,10 +25,15 @@ import { selectHostFocusedRef } from "@/stores/tabs/selectors";
  * The phone app header. Replaces the desktop tab strip + control cluster with a
  * hamburger (opens the navigation drawer), the current surface title, and a
  * right slot the focused surface fills with its own actions. Rendered only
- * below md (see `AppHeader`), so desktop is untouched.
+ * below md (see `AppHeader`), so desktop is untouched. While the form draws the
+ * strip, the strip carries the menu and Notifications, so the header gives up
+ * the hamburger and the bell. While the focus layout serves a composer or a
+ * terminal, the row gives its height up; it stays mounted, so its chords stay
+ * registered.
  */
 export function MobileAppHeader(): ReactNode {
   const setNavOpen = useMobileNavStore((state) => state.setOpen);
+  const stripMounted = useMobileStripForm() !== null;
   // Resolved, not read from a cell: the presented surface's registered actions,
   // derived from the same tab layout the title comes from. See
   // `useMobileHeaderRightActions` for why display is a resolution rather than
@@ -50,8 +57,10 @@ export function MobileAppHeader(): ReactNode {
   const epicId = useMobileHeaderEpicId(epicTabId);
   const title = useMobileHeaderTitle(surface, epicId, epicTabId);
   const settingsSection = settingsSectionLabel(surface);
+  const collapsed = useKeyboardFocusOwner() !== null;
   return (
     <header
+      hidden={collapsed}
       data-testid="app-header"
       data-variant="app"
       data-mobile-shell-touch-scope=""
@@ -71,17 +80,19 @@ export function MobileAppHeader(): ReactNode {
         "relative z-20 flex shrink-0 items-center gap-2 bg-background px-2 text-foreground after:absolute after:inset-x-0 after:bottom-0 after:z-1 after:h-px after:bg-border/90 after:content-[''] pointer-coarse:touch-chrome",
       )}
     >
-      <Button
-        type="button"
-        variant="muted"
-        size="icon-touch"
-        aria-label="Open menu"
-        data-testid="mobile-nav-trigger"
-        onClick={() => setNavOpen(true)}
-        className="shrink-0"
-      >
-        <Menu className="size-4" />
-      </Button>
+      {stripMounted ? null : (
+        <Button
+          type="button"
+          variant="muted"
+          size="icon-touch"
+          aria-label="Open menu"
+          data-testid="mobile-nav-trigger"
+          onClick={() => setNavOpen(true)}
+          className="shrink-0"
+        >
+          <Menu className="size-4" />
+        </Button>
+      )}
       <MobileHeaderTitleSlot
         title={title}
         settingsSection={settingsSection}
@@ -106,7 +117,7 @@ export function MobileAppHeader(): ReactNode {
         ) : null}
         {/* Last of the global controls, matching the desktop header's order
             (rate limit -> resource monitor -> bell). */}
-        <MobileNotificationsButton />
+        {stripMounted ? null : <MobileNotificationsButton />}
         {rightActions}
       </div>
     </header>
@@ -195,7 +206,7 @@ type MobileHeaderSurface =
   | { readonly kind: "home" }
   | { readonly kind: "settings"; readonly path: string | null }
   | { readonly kind: "composer" }
-  // A bot tab draws its own header band (title, host, environment), so the
+  // The Tracy surface draws its own header band (title, host, environment), so the
   // app header presents no title for it - the same answer the composer
   // surfaces give, kept as its own kind so nothing mistakes it for one.
   | { readonly kind: "bot" };
@@ -245,7 +256,7 @@ function useMobileHeaderSurface(): MobileHeaderSurface {
             kind: "settings",
             path: state.systemTabs.settings?.lastPath ?? null,
           };
-        case "bot":
+        case "tracy":
           return BOT_SURFACE;
         case "sample-workspace":
         case "draft":

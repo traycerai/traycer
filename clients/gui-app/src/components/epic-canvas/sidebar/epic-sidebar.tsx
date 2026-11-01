@@ -66,6 +66,7 @@ import {
 } from "@/hooks/host/use-surface-host-pin";
 import { isBrowsable } from "@/lib/worktree/worktree-row-browsable";
 import { useCanvasHostId } from "@/components/epic-canvas/hooks/use-canvas-host-id";
+import { useDeletedArtifactsAvailable } from "@/hooks/epic/use-deleted-artifacts-available";
 import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
 import {
   describeBlockedChatWrites,
@@ -160,6 +161,11 @@ import {
   type EpicTuiAgentProjection,
   type EpicTreeRecord,
 } from "@/lib/epic-selectors";
+import {
+  describeTreeDeleteDisclosure,
+  selectNestedAgentsKnown,
+} from "@/lib/epic-tree-cascade";
+import { useEpicStore } from "@/hooks/use-epic-store";
 import { isEditableRole, mutationDisabledHint } from "@/lib/epic-permissions";
 import { useEpicExportArtifacts } from "@/hooks/epic/use-epic-export-artifacts-mutation";
 import {
@@ -1538,6 +1544,7 @@ function SidebarBulkDeleteController(props: {
   const selection = useSidebarBulkSelection();
   const liveRecords = useEpicArtifactRecords();
   const tree = useEpicTreeIndex();
+  const nestedAgentsKnown = useEpicStore(selectNestedAgentsKnown);
   const navigateNested = useEpicNestedFocusNavigation();
   const closeCanvasTab = useEpicCanvasStore((s) => s.closeCanvasTab);
   const markArtifactSelfDeleted = useEpicCanvasStore(
@@ -1555,6 +1562,7 @@ function SidebarBulkDeleteController(props: {
   const deleteChat = useEpicDeleteChatInBatch();
   const deleteTerminalAgent = useEpicDeleteTuiAgentInBatch();
   const sessionHostId = useEpicSessionHostId();
+  const restoreAvailable = useDeletedArtifactsAvailable(sessionHostId);
   const chatsById = useChatsByIdForWriteRoute();
   const recordById = useMemo(
     () => new Map(liveRecords.map((record) => [record.id, record])),
@@ -1774,6 +1782,31 @@ function SidebarBulkDeleteController(props: {
     unmarkArtifactSelfDeleted,
   ]);
 
+  // Memoized for the same reason `blockedDeleteReason` above is: this
+  // controller subscribes to `useEpicArtifactRecords()`, whose identity moves
+  // on every chat-stream token, so an un-memoized walk of the whole
+  // selection's subtree would re-run several times a second while the dialog
+  // is open during a turn.
+  const disclosure = useMemo(() => {
+    const nodeIds = pendingDeleteIds ?? [];
+    // Only the agent arm has a readiness question to ask: an artifact's
+    // subtree is artifacts, which are doc-sourced and have no record plane to
+    // lag behind.
+    return panelId === "chats"
+      ? describeTreeDeleteDisclosure({
+          tree,
+          kind: "agent",
+          nodeIds,
+          nestedAgentsKnown,
+        })
+      : describeTreeDeleteDisclosure({
+          tree,
+          kind: "artifact",
+          nodeIds,
+          restoreAvailable,
+        });
+  }, [nestedAgentsKnown, panelId, pendingDeleteIds, restoreAvailable, tree]);
+
   return (
     <ConfirmDestructiveDialog
       blockedReason={blockedDeleteReason}
@@ -1786,11 +1819,9 @@ function SidebarBulkDeleteController(props: {
         pendingDeleteIds,
         recordById,
       )}
-      description={describeSidebarBulkDeleteDescription(
-        panelId,
-        pendingDeleteIds,
-      )}
-      cascadeSummary={null}
+      description={disclosure.description}
+      cascadeSummary={disclosure.cascadeSummary}
+      cascadeNestedUnder={disclosure.cascadeNestedUnder}
       actionLabel="Delete"
       isPending={deletePending}
       onConfirm={handleConfirmDelete}
@@ -2027,17 +2058,6 @@ function describeSidebarBulkDeleteTitle(
 function panelRowNoun(panelId: LeftPanelId, count: number): string {
   if (panelId === "chats") return count === 1 ? "agent" : "agents";
   return count === 1 ? "artifact" : "artifacts";
-}
-
-function describeSidebarBulkDeleteDescription(
-  panelId: LeftPanelId,
-  ids: readonly string[] | null,
-): string {
-  if (ids === null || ids.length < 2) return "This action cannot be undone.";
-  // Deleting an agent keeps the agents nested under it, so only artifacts
-  // carry the warning.
-  if (panelId === "chats") return "This action cannot be undone.";
-  return "This action cannot be undone. Nested items under selected rows may also be deleted.";
 }
 
 function usePanelRootIds(panelId: LeftPanelId): ReadonlyArray<string> {

@@ -35,17 +35,18 @@ import {
   installTabSyncCoordinator,
 } from "@/lib/tab-sync/tab-sync-coordinator";
 import { rowFromHostEntry } from "@/stores/notifications/merged-notifications";
-import { lookupBotTab, useBotTabsStore } from "@/stores/bots/bot-tabs-store";
+import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { useBotTabLandingStore } from "@/stores/bots/bot-tab-landing-store";
 
 /**
  * A bot's chat container id IS the bot id, so a chat route that does not
  * know the id is a bot's falls back to an EPIC tab keyed by it, a tab no
  * host can open. Two doors reach that fallback and both must end at the
- * bot's tab, or at nothing with a reason:
+ * Tracy surface on the bot's channel, or at nothing with a reason:
  *  - a chat search hit (a team host answers with the bot id as `epicId`);
  *  - a bot row activated while no device is bound (the server writes the row
- *    with no host, so the bot's tab has nowhere to open).
+ *    with no host, so the Tracy surface has nowhere to open).
  */
 
 const BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
@@ -72,7 +73,8 @@ beforeEach(async () => {
   installTabSyncCoordinator({ readyPromise: Promise.resolve() });
   await Promise.resolve();
   await Promise.resolve();
-  useBotTabsStore.setState({ tabs: {} });
+  useTracySurfaceStore.setState(useTracySurfaceStore.getInitialState(), true);
+  useSelectionAuthorityStore.setState({ effectiveHostId: null });
   useBotTabLandingStore.setState({ byBotId: {} });
   navigateSpy.mockReset();
   navigateSpy.mockImplementation(() => undefined);
@@ -94,17 +96,19 @@ describe("a chat search hit in a bot's chat", () => {
   }
 
   // Which of the bot's chats the hit is in (channel, thread, session) is the
-  // tab's to resolve: bot-tab-surface.test.tsx lands each kind.
-  it("opens the bot's tab and hands it the hit's chat and row, never an epic tab keyed by the bot id", () => {
+  // channel's to resolve: bot-tab-surface.test.tsx lands each kind.
+  it("opens the surface on the bot's channel and hands it the hit's chat and row, never an epic tab keyed by the bot id", () => {
+    useSelectionAuthorityStore.setState({ effectiveHostId: "host-team" });
     const intents = searchHit("chat-1");
 
     expect(epicIntentsKeyedByBotId(intents)).toEqual([]);
     expect(intents).toContainEqual(
       expect.objectContaining({ params: { botId: BOT_ID } }),
     );
-    expect(lookupBotTab(useBotTabsStore.getState().tabs, BOT_ID)).toMatchObject(
-      { hostId: "host-team" },
-    );
+    expect(useTracySurfaceStore.getState()).toMatchObject({
+      open: true,
+      hostId: "host-team",
+    });
     expect(useBotTabLandingStore.getState().byBotId[BOT_ID]).toEqual({
       kind: "chat",
       chatId: "chat-1",

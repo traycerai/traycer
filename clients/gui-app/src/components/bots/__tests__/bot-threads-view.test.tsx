@@ -2,8 +2,8 @@
  * Threads in place of a bot's channel (Tracy Bots, decision 149): every
  * thread the person follows across the bots the column lists, newest reply
  * first, each named by its bot, with its new-replies mark and unread count;
- * choosing one asks its bot's tab to land it, and Unfollow drops it. The real
- * view, fan-out hook, follow mutation, landing store and bot-tabs store run
+ * choosing one asks its bot's channel to land it, and Unfollow drops it. The real
+ * view, fan-out hook, follow mutation, landing store and Tracy surface store run
  * over a real HostClient and QueryClient whose host answers each bot's thread
  * list, follows, read cursors and levels from the case's script. Only the
  * channels' sessions (the posts are read from), the notification indicators
@@ -37,6 +37,7 @@ import type {
 } from "@traycer/protocol/host/bot/schemas";
 import { conversationRequestMessageId } from "@traycer/protocol/persistence/epic/messages";
 import type { ChatSessionStoreHandle } from "@/stores/chats/chat-session-store";
+import type { MobileLevel2Form } from "@/lib/layout/mobile-layout-form";
 import { chatSessionWithPosts } from "./bot-channel-rows-test-support";
 
 /** What the host answers for one bot. */
@@ -61,7 +62,7 @@ const mocks = vi.hoisted(() => ({
   unread: {} as Record<string, number>,
   writes: [] as BotThreadFollowSetRequest[],
   client: null as HostClient<HostRpcRegistry> | null,
-  navigateToTabIntent: vi.fn<(intent: unknown) => void>(),
+  activateTabIntent: vi.fn<(intent: unknown) => void>(),
   /** How `bot.list` stands: answered, still being read, or failed. */
   botList: "listed" as "listed" | "pending" | "failed",
   refetchBots: vi.fn<() => Promise<unknown>>(),
@@ -121,8 +122,10 @@ vi.mock("@/lib/chats/chat-serving-witness", () => ({
 }));
 vi.mock("@tanstack/react-router", () => ({ useNavigate: () => vi.fn() }));
 vi.mock("@/lib/tab-navigation", () => ({
-  navigateToTabIntent: (_navigate: unknown, intent: unknown) =>
-    mocks.navigateToTabIntent(intent),
+  activateTabIntent: (_navigate: unknown, intent: unknown) => {
+    mocks.activateTabIntent(intent);
+    return true;
+  },
 }));
 vi.mock("@/hooks/host/use-connectable-host-ids", () => ({
   useConnectableHostIds: () => ({ hostIds: ["host-1"], resolved: true }),
@@ -130,7 +133,8 @@ vi.mock("@/hooks/host/use-connectable-host-ids", () => ({
 
 import { BotThreadsView } from "@/components/bots/bot-threads-view";
 import { useBotTabLandingStore } from "@/stores/bots/bot-tab-landing-store";
-import { lookupBotTab, useBotTabsStore } from "@/stores/bots/bot-tabs-store";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
 
 const TRACY = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
 const TEAM = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAW";
@@ -197,6 +201,9 @@ const FOLLOWING: BotThreadFollow = {
   reason: "participated",
 };
 
+/** The installed app's form the next mount draws in; `null` where the container decides. */
+let mountLevel2: MobileLevel2Form | null = null;
+
 function mount(): void {
   const queryClient = new QueryClient({
     defaultOptions: {
@@ -244,6 +251,7 @@ function mount(): void {
   render(
     <QueryClientProvider client={queryClient}>
       <BotThreadsView
+        level2={mountLevel2}
         hostId="host-1"
         channelTitle="Tracy"
         onBack={mocks.back}
@@ -268,6 +276,7 @@ function item(threadId: string): HTMLElement {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mountLevel2 = null;
   mocks.bots = [bot(TRACY, "Tracy"), bot(TEAM, "Team Tracy")];
   mocks.botList = "listed";
   mocks.refetchBots.mockResolvedValue(undefined);
@@ -278,7 +287,13 @@ beforeEach(() => {
   mocks.unread = {};
   mocks.writes = [];
   useBotTabLandingStore.setState({ byBotId: {} });
-  useBotTabsStore.setState({ tabs: {} });
+  useSelectionAuthorityStore.setState({ effectiveHostId: "host-1" });
+  useTracySurfaceStore.setState({
+    open: false,
+    hostId: null,
+    botId: null,
+    visitedBotIds: [],
+  });
 });
 
 afterEach(() => {
@@ -348,7 +363,7 @@ describe("<BotThreadsView />", () => {
     ).toBeNull();
   });
 
-  it("asks the thread's bot's tab to land it beside its channel, and opens that tab", async () => {
+  it("asks the thread's bot's channel to land it beside it, and opens the surface on that channel", async () => {
     const user = userEvent.setup();
     mount();
     await waitFor(() => expect(listed()).toContain("team-new"));
@@ -358,10 +373,15 @@ describe("<BotThreadsView />", () => {
     expect(useBotTabLandingStore.getState().byBotId).toEqual({
       [TEAM]: { kind: "thread", threadId: "team-new", messageId: null },
     });
-    expect(lookupBotTab(useBotTabsStore.getState().tabs, TEAM)?.hostId).toBe(
-      "host-1",
-    );
-    expect(mocks.navigateToTabIntent).toHaveBeenCalledTimes(1);
+    expect(useTracySurfaceStore.getState()).toMatchObject({
+      open: true,
+      hostId: "host-1",
+    });
+    expect(mocks.activateTabIntent).toHaveBeenCalledTimes(1);
+    expect(mocks.activateTabIntent).toHaveBeenCalledWith({
+      kind: "tracy",
+      botId: TEAM,
+    });
   });
 
   it("drops a thread from the list when Unfollow is chosen from its menu", async () => {
@@ -384,17 +404,36 @@ describe("<BotThreadsView />", () => {
 });
 
 describe("<BotThreadsView /> header", () => {
-  it("goes back to the tab's channel from its back control, which only a tab too narrow for the column draws", async () => {
+  it("goes back to the tab's channel when Back to Tracy is clicked", async () => {
     const user = userEvent.setup();
     mocks.hosted[TRACY] = script([], {});
     mocks.hosted[TEAM] = script([], {});
     mount();
 
     const back = screen.getByRole("button", { name: "Back to Tracy" });
-    expect(back.className).toContain("@3xl:hidden");
     await user.click(back);
 
     expect(mocks.back).toHaveBeenCalledTimes(1);
+  });
+
+  it("draws no back control beside a level 2 column, whose channel row is the way back", () => {
+    mountLevel2 = { column: 256 };
+    mocks.hosted[TRACY] = script([], {});
+    mocks.hosted[TEAM] = script([], {});
+    mount();
+
+    expect(screen.queryByTestId("bot-threads-back")).toBeNull();
+  });
+
+  it("draws the back control at every width of the menu form", () => {
+    mountLevel2 = "menu";
+    mocks.hosted[TRACY] = script([], {});
+    mocks.hosted[TEAM] = script([], {});
+    mount();
+
+    expect(screen.getByTestId("bot-threads-back").className).not.toContain(
+      "@3xl",
+    );
   });
 });
 

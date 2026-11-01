@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
 # Runs TLC on one config: formal/check.sh <Config> [TLC args...]
-# <Config> names <Config>.cfg in this directory; the spec is ChatScroll.tla.
+# <Config> names an ordinary <Config>.cfg; companion controls use regress.py.
 # Needs Java 11+ and formal/tools/tla2tools.jar (gitignored; see README.md).
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 config="${1:?usage: check.sh <Config> [TLC args...]}"
 shift
+if ! grep -q '^SPECIFICATION Spec$' "$here/$config.cfg"; then
+  echo "Companion controls require a recorded depth bound. Use formal/regress.py once the config is selected in expected.py." >&2
+  exit 2
+fi
 jar="$here/tools/tla2tools.jar"
 if [ ! -f "$jar" ]; then
   echo "missing $jar; fetch it with:" >&2

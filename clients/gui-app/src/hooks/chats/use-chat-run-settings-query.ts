@@ -101,8 +101,9 @@ export function useChatRunSettings(args: {
       // mount no matter what `staleTime` says. Same predicate as every other
       // optional chat read here. Note this cannot be left to the poll table:
       // `epic.getChatRunSettings` is a `poll: null` method, so `useHostQuery`
-      // injects no `retry: false` of its own (only `kind: "condition"` methods
-      // get that), and the production default retry would otherwise apply.
+      // injects no `retry: false` of its own (only the branded poller of a
+      // `kind: "condition"` method gets that), and the production default
+      // retry would otherwise apply.
       retry: (failureCount, error) =>
         error.code !== "E_HOST_UNSUPPORTED" && failureCount < 2,
     },

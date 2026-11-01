@@ -1,4 +1,4 @@
-import { createContext, useContext } from "react";
+import { createContext } from "react";
 
 /**
  * Opens the bot tab's Channel settings panel, for a surface inside the tab
@@ -7,8 +7,3 @@ import { createContext, useContext } from "react";
 export const BotSettingsOpenerContext = createContext<(() => void) | null>(
   null,
 );
-
-/** The tab's settings opener; `null` outside a bot tab. */
-export function useBotSettingsOpener(): (() => void) | null {
-  return useContext(BotSettingsOpenerContext);
-}

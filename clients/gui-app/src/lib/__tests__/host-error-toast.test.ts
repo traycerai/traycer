@@ -16,8 +16,12 @@ vi.mock("sonner", () => {
 });
 
 import { toast } from "sonner";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   toastFromHostError,
+  classifySendRefusal,
+  toastFromHostErrorOnFork,
+  toastSendRefusal,
   toastFromHostErrorWithDetail,
 } from "@/lib/host-error-toast";
 import {
@@ -745,5 +749,278 @@ describe("transport-class causes never reach a reportable toast", () => {
 
     expect(toast).not.toHaveBeenCalled();
     expect(toast.error).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("toastFromHostErrorOnFork", () => {
+  afterEach(() => {
+    vi.mocked(toast.error).mockClear();
+    __resetAppLocalNotificationsStoreForTests();
+  });
+
+  it.each(["E_SHARE_PENDING_BUSY", "E_SHARE_PENDING_RECENT_ATTEMPT"] as const)(
+    "tells Fork again in a moment, never about an invite (%s)",
+    (code) => {
+      toastFromHostErrorOnFork(
+        makeError(code, "refused"),
+        "Couldn't continue on the team host.",
+      );
+
+      expect(toast.error).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(toast.error).mock.calls[0]?.[0]).toBe(
+        "This task is still being set up. Fork again in a moment.",
+      );
+    },
+  );
+
+  it("gives any other share refusal the caller's fallback", () => {
+    toastFromHostErrorOnFork(
+      makeError("E_SHARE_NOT_OWNED", "refused"),
+      "Couldn't continue on the team host.",
+    );
+
+    expect(vi.mocked(toast.error).mock.calls[0]?.[0]).toBe(
+      "Couldn't continue on the team host.",
+    );
+  });
+
+  it("leaves a non-share error to the shared mapping", () => {
+    toastFromHostErrorOnFork(makeError("FORBIDDEN", "test error"), "fallback");
+
+    expect(toast.error).toHaveBeenCalledWith(
+      "You don't have permission to do that.",
+    );
+  });
+
+  it("keeps the invite copy on toastFromHostError for the same busy refusal", () => {
+    toastFromHostError(
+      makeError("E_SHARE_PENDING_BUSY", "refused"),
+      "Couldn't share.",
+    );
+
+    expect(vi.mocked(toast.error).mock.calls[0]?.[0]).toBe(
+      "This epic is busy right now, so it hasn't finished reaching the cloud. Let the current work settle, then invite again.",
+    );
+  });
+});
+
+describe("classifySendRefusal", () => {
+  afterEach(() => {
+    useAuthStore.getState().setSignedOut();
+  });
+
+  function signIn(): void {
+    useAuthStore
+      .getState()
+      .setSignedIn(
+        { userId: "user-1", userName: "U", email: "u@example.com" },
+        { userId: "user-1", username: "U" },
+        [],
+      );
+  }
+
+  it.each([
+    ["E_SHARE_PENDING_BUSY", { kind: "setting-up" }],
+    ["E_SHARE_PENDING_RECENT_ATTEMPT", { kind: "setting-up" }],
+    ["E_SHARE_PENDING_OFFLINE", { kind: "failed" }],
+    ["E_SHARE_PENDING_UNVERIFIED", { kind: "failed" }],
+    ["E_SHARE_PENDING_FAILED", { kind: "failed" }],
+    ["E_SHARE_NOT_OWNED", { kind: "failed" }],
+    ["E_SHARE_NEEDS_CLOUD_SYNC", { kind: "failed" }],
+    ["E_SHARE_REFUSED", { kind: "failed" }],
+    ["RPC_ERROR", { kind: "failed" }],
+  ] as const)("sorts the code %s", (code, expected) => {
+    expect(classifySendRefusal(makeError(code, "refused"))).toEqual(expected);
+  });
+
+  it.each([
+    "test error",
+    "This request does not have editor access to epic 'epic-1'",
+    "This request does not have owner access to epic 'epic-1'",
+  ])("gives way to the surface's line for FORBIDDEN: %s", (message) => {
+    expect(classifySendRefusal(makeError("FORBIDDEN", message))).toEqual({
+      kind: "failed",
+    });
+  });
+
+  it("gives way for a retryable sign-in check", () => {
+    expect(
+      classifySendRefusal(
+        unauthorizedFatal("req-jwks", "epic.attachEnvironment", "jwks", true),
+      ),
+    ).toEqual({ kind: "failed" });
+  });
+
+  it("is silent for a recoverable terminal sign-in while the session is signed in", () => {
+    signIn();
+    expect(
+      classifySendRefusal(
+        unauthorizedFatal(
+          "req-auth",
+          "epic.attachEnvironment",
+          "expired",
+          false,
+        ),
+      ),
+    ).toEqual({ kind: "silent" });
+  });
+
+  it("asks to sign in again for a terminal sign-in while signed out", () => {
+    useAuthStore.getState().setSignedOut();
+    expect(
+      classifySendRefusal(
+        unauthorizedFatal(
+          "req-auth",
+          "epic.attachEnvironment",
+          "expired",
+          false,
+        ),
+      ),
+    ).toEqual({ kind: "actionable", message: "Please sign in again." });
+  });
+
+  it("names a full host disk", () => {
+    expect(
+      classifySendRefusal(makeError("E_HOST_STORAGE_FULL", "full")),
+    ).toEqual({
+      kind: "actionable",
+      message:
+        "The host computer is out of disk space. Free some space on it, then try again.",
+    });
+  });
+
+  it("carries a terminal verdict's own reason", () => {
+    expect(
+      classifySendRefusal(
+        new HostRpcError({
+          code: "RPC_ERROR",
+          message: "closed",
+          requestId: "req-verdict",
+          method: "epic.attachEnvironment",
+          fatalDetails: {
+            code: "UNAUTHORIZED",
+            reason: "Host access was revoked",
+            incompatibleMethods: null,
+            upgradeGuidance: null,
+          },
+        }),
+      ),
+    ).toEqual({ kind: "actionable", message: "Host access was revoked" });
+  });
+
+  it("gives way for a stale write", () => {
+    expect(
+      classifySendRefusal(
+        HostRpcError.fromWireEnvelope(
+          {
+            code: "ENVIRONMENT_WRITE_STALE",
+            message: "The setting changed since it was read.",
+            staleWrite: {
+              changedBy: { kind: "dashboard" },
+              currentRevision: 43,
+            },
+          },
+          "req-stale",
+          "epic.attachEnvironment",
+        ),
+      ),
+    ).toEqual({ kind: "failed" });
+  });
+
+  it.each([
+    [
+      "a retryable transport error",
+      new RetryableTransportError({
+        replaySafetyFromKey: false,
+        code: "RPC_ERROR",
+        message: "Dial failed before the request was sent",
+        requestId: "req-retryable",
+        method: "epic.attachEnvironment",
+        fatalDetails: null,
+      }),
+    ],
+    [
+      "a transport failure",
+      new HostTransportFailureError({
+        code: "RPC_ERROR",
+        message: "Host is unreachable",
+        requestId: "req-transport",
+        method: "epic.attachEnvironment",
+        fatalDetails: null,
+      }),
+    ],
+    [
+      // The host's typed no-dispatch timeout: the retryable subclass, yet
+      // carrying a fatal frame whose `reason` the verdict mapping would
+      // otherwise show as a terminal verdict.
+      "a retryable attestation carrying fatal details",
+      new RetryableTransportError({
+        replaySafetyFromKey: false,
+        code: "RPC_ERROR",
+        message: "Host timed out awaiting the request frame",
+        requestId: "req-attestation",
+        method: "epic.attachEnvironment",
+        fatalDetails: {
+          code: "RPC_REQUEST_TIMEOUT",
+          reason: "Host timed out awaiting the request frame",
+          incompatibleMethods: null,
+          upgradeGuidance: null,
+          retryable: true,
+        },
+      }),
+    ],
+  ] as const)("gives way for %s", (_label, error) => {
+    expect(classifySendRefusal(error)).toEqual({ kind: "failed" });
+  });
+
+  it.each([
+    [
+      "an abort",
+      new HostRequestAbortedError({
+        message: "authority replaced",
+        requestId: "req-abort",
+        method: "epic.attachEnvironment",
+        mayHaveDispatched: false,
+      }),
+    ],
+    ["an error that is not a host error", new Error("boom")],
+  ] as const)("is silent for %s", (_label, error) => {
+    expect(classifySendRefusal(error)).toEqual({ kind: "silent" });
+  });
+});
+
+describe("toastSendRefusal", () => {
+  afterEach(() => {
+    vi.mocked(toast).mockClear();
+    vi.mocked(toast.error).mockClear();
+    __resetAppLocalNotificationsStoreForTests();
+  });
+
+  it("shows a transport failure as a plain notice, never an error", () => {
+    toastSendRefusal(
+      new HostTransportFailureError({
+        code: "RPC_ERROR",
+        message: "Host is unreachable",
+        requestId: "req-transport",
+        method: "epic.attachEnvironment",
+        fatalDetails: null,
+      }),
+      "Couldn't send your message.",
+    );
+
+    expect(toast).toHaveBeenCalledWith("Couldn't send your message.");
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it("shows any other refusal as a reportable error", () => {
+    toastSendRefusal(
+      makeError("RPC_ERROR", "refused"),
+      "Couldn't send your message.",
+    );
+
+    expect(vi.mocked(toast.error).mock.calls[0]?.[0]).toBe(
+      "Couldn't send your message.",
+    );
+    expect(toast).not.toHaveBeenCalled();
   });
 });

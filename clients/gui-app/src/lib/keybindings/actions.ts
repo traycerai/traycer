@@ -638,8 +638,9 @@ export const ACTION_META: Readonly<Record<ActionId, ActionMeta>> = {
     // (`app.browser.new`): the strip sits beside every terminal.
     terminalPolicy: "app",
     secondaryTerminalPolicy: undefined,
-    // The installed mobile app never draws the vertical strip.
-    desktopOnly: true,
+    // The installed mobile app draws the strip where its width allows; the
+    // strip registers the handler only where the expanded form fits.
+    desktopOnly: false,
   },
   "nav.back": {
     id: "nav.back",

@@ -12,6 +12,11 @@ import {
   type CreateEpicRequestV12,
   type CreateEpicRequestV13,
 } from "@traycer/protocol/host/epic/unary-schemas";
+import {
+  SERVES_EVERY_INSTALLED_MAJOR,
+  splitConnectionManifest,
+} from "@traycer/protocol/framework/index";
+import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
 import { hostRpcRegistry } from "@traycer/protocol/host/registry";
 
 /**
@@ -173,8 +178,13 @@ describe("epic.create@1.2 peer strip", () => {
 describe("epic.create registry line", () => {
   const line = hostRpcRegistry["epic.create"][1];
 
-  it("major 1 has latestMinor 5", () => {
-    expect(line.latestMinor).toBe(5);
+  it("advertises 1.5 on the released floor of a connection manifest", () => {
+    const { manifest } = splitConnectionManifest(
+      hostRpcRegistry,
+      RELEASED_FLOOR_METHOD_NAMES,
+      SERVES_EVERY_INSTALLED_MAJOR,
+    );
+    expect(manifest["epic.create"]).toEqual({ major: 1, minor: 5 });
   });
 
   it("minor 3 is the epicCreateV13 contract, upgrading from the previous minor", () => {

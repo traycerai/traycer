@@ -173,7 +173,9 @@ vi.mock("@/components/epics/history-surface", () => ({
   HistorySurface: () => <div data-testid="history-surface-body" />,
 }));
 
+import { useSignOutConfirmStore } from "@/stores/auth/sign-out-confirm-store";
 import { AppShell } from "@/components/layout/app-shell";
+import { MobileStripFormScope } from "@/components/layout/tabs/mobile-strip-form-scope";
 import {
   hostRpcRegistry,
   HostRuntimeProvider,
@@ -183,7 +185,7 @@ import {
   dispatchAction,
   type KeybindingRouter,
 } from "@/lib/keybindings/dispatch";
-import { setMobileApp } from "@/lib/mobile-app";
+import { setMobileApp, setPhoneLayoutOnly } from "@/lib/mobile-app";
 import { setNativeKeyboardState } from "@/lib/native-keyboard";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { useLayoutEditorStore } from "@/stores/layout/layout-editor-store";
@@ -242,9 +244,11 @@ function renderAppShell(): QueryClient {
           remoteFetcher={() => Promise.resolve({ kind: "hosts", entries: [] })}
           fallback={<div data-testid="runtime-fallback" />}
         >
-          <AppShell>
-            <div data-testid="app-shell-child" />
-          </AppShell>
+          <MobileStripFormScope>
+            <AppShell>
+              <div data-testid="app-shell-child" />
+            </AppShell>
+          </MobileStripFormScope>
         </HostRuntimeProvider>
       </QueryClientProvider>
     </RunnerHostProvider>,
@@ -252,6 +256,78 @@ function renderAppShell(): QueryClient {
 
   return queryClient;
 }
+
+/** The hook's real measurement, against a `#root` a test sizes and re-measures. */
+const rootResizeObservers = new Set<() => void>();
+
+class FakeResizeObserver implements ResizeObserver {
+  private readonly notify: () => void;
+
+  constructor(callback: ResizeObserverCallback) {
+    this.notify = () => {
+      callback([], this);
+    };
+  }
+
+  observe(): void {
+    rootResizeObservers.add(this.notify);
+  }
+
+  unobserve(): void {}
+
+  disconnect(): void {
+    rootResizeObservers.delete(this.notify);
+  }
+}
+
+function setRootWidth(root: HTMLElement, width: number): void {
+  root.getBoundingClientRect = () => new DOMRect(0, 0, width, 402);
+}
+
+describe("<AppShell /> across a form change", () => {
+  let queryClient: QueryClient | undefined;
+  let root: HTMLElement;
+
+  beforeEach(() => {
+    vi.stubGlobal("ResizeObserver", FakeResizeObserver);
+    setMobileApp(true);
+    setPhoneLayoutOnly(true);
+    root = document.createElement("div");
+    root.id = "root";
+    document.body.append(root);
+  });
+
+  afterEach(() => {
+    cleanup();
+    queryClient?.clear();
+    queryClient = undefined;
+    root.remove();
+    rootResizeObservers.clear();
+    setMobileApp(false);
+    setPhoneLayoutOnly(false);
+    useSignOutConfirmStore.setState({ open: false });
+    vi.unstubAllGlobals();
+  });
+
+  it("keeps a pending sign-out confirmation when a rotation replaces the drawer with the strip", async () => {
+    setRootWidth(root, 400);
+    queryClient = renderAppShell();
+    await screen.findByTestId("mobile-nav-drawer-stub");
+    act(() => {
+      useSignOutConfirmStore.getState().setOpen(true);
+    });
+    await screen.findByTestId("confirm-destructive-dialog");
+
+    setRootWidth(root, 750);
+    act(() => {
+      for (const notify of rootResizeObservers) notify();
+    });
+
+    await screen.findByTestId("side-tab-strip");
+    expect(screen.queryByTestId("mobile-nav-drawer-stub")).toBeNull();
+    expect(screen.getByTestId("confirm-destructive-dialog")).not.toBeNull();
+  });
+});
 
 describe("<AppShell />", () => {
   // Undefined until a test renders, and reset after every one: a teardown that

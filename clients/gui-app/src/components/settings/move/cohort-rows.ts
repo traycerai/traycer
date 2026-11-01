@@ -164,16 +164,12 @@ function localRowSubtitle(input: {
 }
 
 /**
- * Nothing of this computer's has moved: its Local row reads
- * `its own settings, not in Personal yet` and offers `Move to Personal`.
+ * A plane is still this computer's own, or stopped: it has something to move,
+ * and a surface that invites the move has something to invite. Read from the
+ * planes rather than from a Local row's wording, so a computer that stopped
+ * sharing counts too - its row says `stopped using Personal`, not `its own
+ * settings, not in Personal yet`.
  */
-export function planesNotMoved(
-  planes: EnvironmentPlanes,
-  partlyMoved: boolean,
-): boolean {
-  return cohortFromPlanes(planes, partlyMoved).subtitle === LOCAL_ROW_NOT_MOVED;
-}
-
 export function planesHaveLocal(planes: EnvironmentPlanes): boolean {
   return planeValues(planes).some(isThisComputers);
 }

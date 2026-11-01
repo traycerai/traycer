@@ -277,6 +277,7 @@ function sampleStaged(version: string): StagedHostInstallSource {
     signatureVerifiedAt: "2026-01-01T00:00:00.000Z",
     signatureKeyId: "test-key",
     sizeBytes: 1,
+    targetRegistryEntry: null,
   };
 }
 
@@ -1102,6 +1103,7 @@ describe("provisionHost - --force does not bypass the store-format floor", () =>
     expect(mocks.gateStoreFormatFloorMock).toHaveBeenCalledTimes(1);
     expect(mocks.gateStoreFormatFloorMock.mock.calls[0]?.[0]).toMatchObject({
       targetVersion: "1.2.0",
+      installedProvenance: { recordVersion: expect.any(String) },
       site: "host ensure",
     });
     expect(stageHostInstallSourceMock).not.toHaveBeenCalled();

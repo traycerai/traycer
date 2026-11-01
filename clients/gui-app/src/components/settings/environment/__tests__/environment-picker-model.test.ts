@@ -21,7 +21,7 @@ const awaiting = environmentStatusFixture({
   planes: { records: "local", broker: "local", room: "local" },
   setup: { stage: "moving_settings", state: "awaiting_consent" },
 });
-const consentRecorded = environmentStatusFixture({
+const partlyMoved = environmentStatusFixture({
   principal: null,
   planes: { records: "moved", broker: "local", room: "local" },
   pendingUploads: [
@@ -36,7 +36,10 @@ const consentRecorded = environmentStatusFixture({
     },
   ],
   setup: { stage: "moving_settings", state: "running" },
-  consent: { acceptedAt: 1, planHash: "hash" },
+  // No consent while a move runs: the status serves the migration
+  // MARKER's consent and the host writes that marker only once the upload
+  // has finished (`traycer-host/.../migration/migrator.ts`, step 5). A
+  // fixture that sets it here invites a reader to key on it.
 });
 
 describe("localPickerRow", () => {
@@ -51,8 +54,8 @@ describe("localPickerRow", () => {
     });
   });
 
-  it("gives a host whose consent is recorded and which is still moving the partly-moved row", () => {
-    const row = localPickerRow(OLD_LAPTOP, consentRecorded, V11);
+  it("gives a host with a plane still local the partly-moved row", () => {
+    const row = localPickerRow(OLD_LAPTOP, partlyMoved, V11);
     expect(row).toMatchObject({
       subtitle: "partly in Personal",
       verb: "finish_moving",
@@ -61,7 +64,7 @@ describe("localPickerRow", () => {
     });
   });
 
-  it("gives a host that is moving with no consent recorded no row", () => {
+  it("gives a host with no plane of its own left no row, whatever setup says", () => {
     const status = environmentStatusFixture({
       setup: { stage: "moving_settings", state: "running" },
     });
@@ -197,7 +200,7 @@ describe("environmentPickerModel", () => {
   it("does not default to a partly-moved or greyed window host", () => {
     const partly = environmentPickerModel({
       hosts: [OLD_LAPTOP],
-      statuses: statusMap([["old", consentRecorded]]),
+      statuses: statusMap([["old", partlyMoved]]),
       versions: new Map([["old", V11]]),
       windowHostId: "old",
     });

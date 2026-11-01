@@ -14,6 +14,7 @@ import {
   CHOOSE_ANOTHER_HOST,
   COULDNT_CHECK_SANDBOX_AGENTS,
   DETAILS,
+  modelNotOnSandboxLine,
   OPEN_TERMINAL_INSTEAD,
   RETRY,
 } from "@/lib/sandboxes/sandbox-strings";
@@ -52,6 +53,8 @@ export interface SandboxAgentRemedies {
   ) => void;
   readonly onOpenTerminalInstead?: () => void;
   readonly onChooseAnotherHost?: () => void;
+  /** Its label, where it does not open a host chooser. */
+  readonly chooseAnotherHostLabel?: string;
   /** Closes the refusal: nothing is sent, and the text stays in the composer. */
   readonly onCancelMessage?: () => void;
   /** The sandbox's details, for a chat bound to one. */
@@ -70,7 +73,7 @@ function sandboxAgentSecondaryActions(
   }
   if (remedies.onChooseAnotherHost !== undefined) {
     actions.push({
-      label: CHOOSE_ANOTHER_HOST,
+      label: remedies.chooseAnotherHostLabel ?? CHOOSE_ANOTHER_HOST,
       onAction: remedies.onChooseAnotherHost,
     });
   }
@@ -120,6 +123,20 @@ export function sandboxAgentRefusedNotice(
     },
     secondaryActions: extra === null ? exits : [...exits, extra],
   };
+}
+
+/** A Traycer model the sandbox's catalog does not list; the same remedies. */
+export function sandboxModelNotOfferedNotice(
+  modelName: string,
+  offeredAgents: ReadonlyArray<string> | null,
+  remedies: SandboxAgentRemedies,
+): ComposerHostNoticeState {
+  return sandboxAgentRefusedNotice(
+    modelNotOnSandboxLine(modelName),
+    offeredAgents,
+    remedies,
+    null,
+  );
 }
 
 export function sandboxAgentNotOfferedNotice(

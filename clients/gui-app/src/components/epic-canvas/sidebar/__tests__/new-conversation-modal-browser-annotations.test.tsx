@@ -5,6 +5,7 @@ import {
   cleanup,
   render,
   screen,
+  waitFor,
   type RenderResult,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -39,6 +40,12 @@ import { NewConversationTransientContext } from "../new-conversation-transient-c
 
 // Sandbox staging has its own suites (`composer/__tests__`): here the picker
 // stages nothing and the send is never intercepted.
+vi.mock("@/components/settings/host-scope/use-host-options", async () => {
+  const { hostOptionsFixture } =
+    await import("@/components/settings/host-scope/host-scope-fixture");
+  const options = hostOptionsFixture({ hosts: [] });
+  return { useHostOptions: () => options };
+});
 vi.mock(
   "@/components/composer/use-sandbox-staging",
   async (importOriginal) => ({
@@ -69,9 +76,7 @@ vi.mock("sonner", () => ({
 /**
  * The new-conversation modal's browser-annotation sidecar: the cards a
  * selection sent to "New chat" brought along, the strip that shows them, and
- * the create that carries them. The harness is the by-hash suite's
- * (`new-conversation-modal-attachments-by-hash.test.tsx`), copied rather than
- * shared because that file's mock block is owned by other work in parallel.
+ * the create that carries them.
  */
 
 const DIRTY_CONTENT: JsonContent = {
@@ -83,19 +88,7 @@ const EPIC_ID = "epic-byhash";
 const HOST_ID = "host-byhash";
 const USER_ID = "user-byhash";
 
-/**
- * The slice of the `epic.createChat` request this suite reads back.
- *
- * Declared once, at the recorder, rather than asserted at each read site: the
- * repo bans `as unknown` casts outright, and a per-site cast would also let two
- * cases disagree about the shape they believe the modal sent.
- *
- * `initialMessage` is `.nullable().optional()` on the wire, so it is spelled
- * that way here and narrowed by `sentInitialMessage` below. Declaring it
- * required would have been the shorter lie - TS would stop asking, and a modal
- * that shipped a null message would fail as a bare TypeError inside an
- * assertion instead of as the sentence that says what went wrong.
- */
+/** The slice of the `epic.createChat` request this suite reads back. */
 interface RecordedInitialMessage {
   readonly content: JsonContent;
   readonly attachmentsByHash?: boolean;
@@ -125,19 +118,9 @@ const testState = vi.hoisted(() => ({
   createRequests: [] as RecordedCreateChatRequest[],
   bodySubmit: null as (() => void) | null,
   installEditor: null as ((content: JsonContent) => void) | null,
-  // Held open by `putBlobResponse` below so a test can drive exactly when the
-  // upload settles relative to a mid-await edit.
-  putBlobCalls: [] as Array<{
-    readonly sha256: string;
-    readonly hostId: string;
-  }>,
-  putBlobResponse: null as
-    | ((response: { readonly ok: boolean }) => void)[]
-    | null,
   onSubmitted: vi.fn<() => void>(),
-  // The directory's LOCAL host id - the machine typing, deliberately
-  // distinct from `HOST_ID`/`PLACEMENT_TARGET` (the target host the chat is
-  // created on).
+  // The directory's LOCAL host id - the machine typing, distinct from
+  // `HOST_ID` (the target host the chat is created on).
   getLocalHostId: vi.fn<() => string | null>(() => "host-local-typing"),
 }));
 
@@ -202,16 +185,8 @@ type PlacementTarget = {
 };
 
 /**
- * A placement target bound to `hostId`: `getActiveHostId` for the gate's
- * plumbing, plus a `request`/`requestWithOptions` pair standing in for
- * `DraftBlobClient` - a bare mock, not a real `HostClient`, since
- * `putDraftBlobs` calls these two directly and needs neither the class' own
- * idempotency-key validation nor a scheduling policy to exercise the gate.
- *
- * FACTORY rather than a single constant so Pin 3's destination-race case can
- * build a second target for a different host mid-test and swap `PLACEMENT`
- * to it - each call mints its own `requestWithOptions` mock, so a case that
- * moves the destination can tell which host an upload landed on.
+ * A placement target bound to `hostId`; its client is a bare stand-in, since
+ * these cases send the crop inline and upload nothing.
  */
 function makePlacementTarget(
   hostId: string,
@@ -222,15 +197,7 @@ function makePlacementTarget(
     client: {
       getActiveHostId: () => hostId,
       request: vi.fn<(method: string, params: unknown) => Promise<unknown>>(),
-      requestWithOptions: vi.fn(
-        (method: string, params: { readonly sha256: string }) => {
-          if (method !== "drafts.putBlob") return Promise.resolve({});
-          testState.putBlobCalls.push({ sha256: params.sha256, hostId });
-          return new Promise<{ readonly ok: boolean }>((resolve) => {
-            (testState.putBlobResponse ??= []).push(resolve);
-          });
-        },
-      ),
+      requestWithOptions: () => Promise.resolve({}),
     },
     hostLabel,
     isPinned: false,
@@ -238,10 +205,7 @@ function makePlacementTarget(
   };
 }
 
-// The CURRENT placement, read by the mocked hook below on every render. Every
-// existing case defaults this to host A by resetting it in `beforeEach`; only
-// Pin 3's destination-race case reassigns it mid-test.
-let PLACEMENT_TARGET: PlacementTarget = makePlacementTarget(
+const PLACEMENT_TARGET: PlacementTarget = makePlacementTarget(
   HOST_ID,
   "Byhash Host",
 );
@@ -324,11 +288,6 @@ vi.mock("@/components/home/hooks/use-composer-toolbar-store", async () => {
   return { useComposerToolbarStore: () => store };
 });
 
-// A full-replacement factory, so it has to carry every export the rendered
-// modal reaches - `useEpicTitle` arrived on `new-conversation-modal.tsx` from
-// main while this file was being written on the branch, which is a gap neither
-// side's diff can show: no conflict, no type error, and the three sibling
-// mocks that main did update look like proof the class was swept.
 vi.mock("@/lib/epic-selectors", () => ({
   useEpicPermissionRole: () => "owner",
   useEpicConnectionStatus: () => "open",
@@ -345,9 +304,7 @@ const stubHostClient = {
 vi.mock("@/lib/host", () => ({ useHostClient: () => stubHostClient }));
 vi.mock("@/lib/host/runtime", () => ({
   useHostClient: () => stubHostClient,
-  // The create stamps `sentFromHostId` from the directory's local host at
-  // submit - see `testState.getLocalHostId` for the default and the
-  // sender-host-placement cases below for the assertions.
+  // The create stamps `sentFromHostId` from the directory's local host.
   getHostBindingSnapshot: () => ({
     hostClient: stubHostClient,
     directory: { getLocalHostId: testState.getLocalHostId },
@@ -451,9 +408,7 @@ vi.mock("@/stores/epics/canvas/store", () => ({
   },
 }));
 
-// The by-hash upload path reads local bytes through the SAME
-// `landing-image-store` the landing/chat composers do -
-// `draft-blob-transport`'s `localBytesForHash` calls `getImageBytes`.
+// Local crop bytes are read through the `landing-image-store` the composers use.
 const imageStoreMocks = vi.hoisted(() => ({
   getImageBytes: vi.fn<(hash: string) => Promise<Uint8Array | undefined>>(() =>
     Promise.resolve(undefined),
@@ -498,16 +453,7 @@ function annotationRecord(): BrowserAnnotationRecord {
   };
 }
 
-/**
- * The client the modal's own `useQueryClient()` resolves to, minted fresh per
- * test in `beforeEach`.
- *
- * Hoisted out of `Harness` (it was a `useState` initializer) so the seed-mark
- * cases can spy `invalidateQueries` on the SAME instance the registered
- * `release` closure captured. A closure that invalidates is only half the
- * claim; which key it invalidates is the other half, and a client the test
- * cannot reach makes that half unobservable.
- */
+/** The client the modal's own `useQueryClient()` resolves to, fresh per test. */
 let QUERY_CLIENT: QueryClient = createAppQueryClient();
 
 function Harness() {
@@ -547,28 +493,17 @@ function renderModal(content: JsonContent): RenderResult {
   return view;
 }
 
-async function submitAndSettle(): Promise<void> {
-  await act(async () => {
+function submit(): void {
+  act(() => {
     testState.bodySubmit?.();
-    await flushMicrotasks();
   });
-}
-
-async function flushMicrotasks(): Promise<void> {
-  for (let turn = 0; turn < 4; turn += 1) {
-    await Promise.resolve();
-  }
 }
 
 beforeEach(() => {
   QUERY_CLIENT = createAppQueryClient();
   useAuthStore.setState({
     profile: { userId: USER_ID, userName: "Tester", email: "t@example.com" },
-    // `currentDraftBlobOwnerId()` reads `contextMetadata.userId`, NOT
-    // `profile.userId` - and a null owner CONFIRMS NOTHING, so without this the
-    // upload below records no confirmation, the host-held set stays empty, the
-    // modal silently falls to the inline path and every by-hash assertion in
-    // this suite either reds or passes for the wrong reason.
+    // The draft-blob owner id is read from `contextMetadata`, not `profile`.
     contextMetadata: { userId: USER_ID, username: USER_ID },
   });
   useNewConversationModalStore.getState().resetForTests();
@@ -578,9 +513,6 @@ beforeEach(() => {
   testState.createRequests.length = 0;
   testState.createChat.mockReset();
   testState.createChat.mockResolvedValue({ initialTurnStarted: false });
-  testState.putBlobCalls.length = 0;
-  testState.putBlobResponse = null;
-  PLACEMENT_TARGET = makePlacementTarget(HOST_ID, "Byhash Host");
   testState.onSubmitted.mockClear();
   testState.getLocalHostId.mockReset();
   testState.getLocalHostId.mockReturnValue("host-local-typing");
@@ -606,10 +538,7 @@ afterEach(() => {
   resetNegotiatedManifests();
   resetDraftBlobTransportForTests();
   useWorktreeIntentStagingStore.getState().resetForTests();
-  // `pending-epic-create-seeds` keeps module-level state with no bulk reset -
-  // clear every pair this run's requests minted, or a leftover mark answers
-  // for the NEXT test's `readEpicCreateSeed`/`isEpicCreateHeld` reads (the
-  // same class of gap `dispatchOptions` had in the landing composer suite).
+  // `pending-epic-create-seeds` has no bulk reset: clear the pairs this run minted.
   for (const request of testState.createRequests) {
     clearEpicCreateSeedPending(EPIC_ID, request.chatId);
   }
@@ -643,7 +572,8 @@ describe("new-conversation modal: browser-annotation sidecar", () => {
     useNewConversationAnnotationStore.getState().add(EPIC_ID, record);
     renderModal(TEXT);
 
-    await submitAndSettle();
+    submit();
+    await waitFor(() => expect(testState.onSubmitted).toHaveBeenCalledTimes(1));
 
     expect(testState.createRequests).toHaveLength(1);
     const message = sentInitialMessage(testState.createRequests[0]);
@@ -665,12 +595,14 @@ describe("new-conversation modal: browser-annotation sidecar", () => {
     useNewConversationAnnotationStore.getState().add(EPIC_ID, record);
     renderModal(TEXT);
 
-    await submitAndSettle();
+    submit();
+    expect(
+      await screen.findByText(
+        "Update the host to start a chat with this capture.",
+      ),
+    ).toBeDefined();
 
     expect(testState.createRequests).toHaveLength(0);
-    expect(
-      screen.getByText("Update the host to start a chat with this capture."),
-    ).toBeDefined();
     expect(readNewConversationAnnotations(EPIC_ID)).toEqual([record]);
   });
 });

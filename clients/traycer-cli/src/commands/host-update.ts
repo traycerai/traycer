@@ -1,4 +1,5 @@
 import { baseDispatchAckReason } from "@traycer/protocol/config/host-update-ack-reason";
+import { reportBoundedWait } from "../runner/bounded-wait-progress";
 import type { CommandFn, CommandResult } from "../runner/runner";
 import {
   runHostUpdate,
@@ -76,6 +77,13 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
         environment,
         logger: ctx.runtime.logger,
         onProgress: (info) => ctx.progress(info),
+        // `humanRequired` goes through `--no-progress` and `--quiet` and is
+        // silent in JSON mode, where a progress line says it instead.
+        onUpdateLockWait: (notice) => {
+          ctx.output.humanRequired(notice);
+          if (ctx.runtime.json) reportBoundedWait(notice);
+        },
+        lockWaitMs: null,
         versionRequest: args.versionRequest ?? null,
         allowDowngrade: args.allowDowngrade,
         force: args.force,

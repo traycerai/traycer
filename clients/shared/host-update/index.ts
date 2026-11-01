@@ -161,6 +161,22 @@ export {
   discardAttemptRecordWithCapability,
   withUpdateContenderAdoption,
 } from "./contender";
+export {
+  HOST_UPDATE_INITIATOR_DESKTOP,
+  HOST_UPDATE_INITIATOR_ENV_VAR,
+} from "./initiator";
+export type {
+  HostUpdateAttemptInitiator,
+  HostUpdateAttemptOutcome,
+  HostUpdateLastAttempt,
+} from "./last-attempt";
+export {
+  readHostDownloadFailure,
+  readHostUpdateLastAttempt,
+  removeHostUpdateLastAttempt,
+  clearHostDownloadFailure,
+  writeHostUpdateLastAttempt,
+} from "./last-attempt";
 
 // The parent-to-child adoption proof transport (Ticket 05, Ruling 1). The
 // MINT is deliberately not here: it is a two-line composition of

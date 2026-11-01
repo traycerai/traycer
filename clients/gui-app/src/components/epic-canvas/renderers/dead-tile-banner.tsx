@@ -4,6 +4,7 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { createReportIssueContext } from "@/lib/report-issue-context";
+import { collaboratorReference } from "@/lib/chats/collaborator-reference";
 import { cn } from "@/lib/utils";
 import {
   hostLabelAtSentenceStart,
@@ -61,6 +62,16 @@ export type DeadTileOwnerKind = "terminal" | "agent";
  * live-only by construction; the owner's machine is the only place it can be
  * started.
  *
+ * `record-unavailable` - this agent has no record on this device: the epic
+ * session's agent list keeps failing, or it answered without this agent and the
+ * agent is bound to another host. That list is the SESSION host's, which need
+ * not be this tile's, so the banner names no host. A delete the record plane
+ * announced never lands here: `ActiveTabBody` shows the tile as deleted. Short
+ * of that, the list cannot tell a late replica from an agent that is gone or
+ * was never created, and a `revoked` retraction says nothing about whether it
+ * exists and stops any row arriving this session. So the banner claims none of
+ * them, and promises no retry.
+ *
  * `sandbox-stopped` - the bound host is a sandbox someone stopped. Its PTYs
  * ended with it, and Start is the remedy, so a terminal or a terminal
  * agent says that instead of calling the host unreachable.
@@ -71,6 +82,7 @@ export type DeadTileOwnerKind = "terminal" | "agent";
 export type DeadTileReason =
   | "host-unreachable"
   | "not-running-remotely"
+  | "record-unavailable"
   | "sandbox-stopped"
   | "sandbox-destroyed";
 
@@ -89,12 +101,37 @@ function terminalDeadTileMessage(
     );
     return `This agent is not running on ${named} right now, and it can only be started on that computer. The agent and its transcript are kept there — closing this tab only removes it from the canvas.`;
   }
+  if (reason === "record-unavailable") {
+    return "Couldn't load this agent. Closing this tab only removes it from the canvas.";
+  }
   if (reason === "sandbox-stopped") {
     return `${hostLabelAtSentenceStart(hostLabel)} is stopped. Start it to use this terminal again.`;
   }
   return ownerKind === "agent"
     ? `${quotedHostReference(hostLabel, true)} is unreachable, so this agent is unavailable until that host is back. The agent and its transcript are kept — closing this tab only removes it from the canvas.`
     : `${quotedHostReference(hostLabel, true)} is unreachable. This terminal is permanently closed.`;
+}
+
+function agentReportCopy(reason: DeadTileReason): {
+  readonly title: string;
+  readonly message: string;
+} {
+  if (reason === "not-running-remotely") {
+    return {
+      title: "Agent is not running on its host",
+      message: "The agent has no running session on the host it is bound to.",
+    };
+  }
+  if (reason === "record-unavailable") {
+    return {
+      title: "Agent could not be loaded",
+      message: "The agent's record is not available on this device.",
+    };
+  }
+  return {
+    title: "Agent host is unreachable",
+    message: "The agent's bound host is unreachable.",
+  };
 }
 
 export interface TerminalDeadTileBannerProps {
@@ -141,14 +178,7 @@ export function TerminalDeadTileBanner(
           context={createReportIssueContext(
             props.ownerKind === "agent"
               ? {
-                  title:
-                    props.reason === "not-running-remotely"
-                      ? "Agent is not running on its host"
-                      : "Agent host is unreachable",
-                  message:
-                    props.reason === "not-running-remotely"
-                      ? "The agent has no running session on the host it is bound to."
-                      : "The agent's bound host is unreachable.",
+                  ...agentReportCopy(props.reason),
                   code: null,
                   source: "Agent",
                 }
@@ -448,6 +478,17 @@ export interface ChatDeadTileBannerProps {
    */
   readonly ownedByViewer: boolean;
   /**
+   * The collaborator who owns the chat, by name, or `null` until the task's
+   * collaborator list names them ("another collaborator"). Only the
+   * foreign-owner sentence reads it.
+   */
+  readonly ownerName: string | null;
+  /**
+   * The host a Clone lands on, by name, or `null` when it has none ("the
+   * active host"). Only the foreign-owner sentence reads it.
+   */
+  readonly cloneTargetLabel: string | null;
+  /**
    * Whether the source chat's owner is one of the viewer's team environments:
    * a team sandbox's chat. Outranks `ownedByViewer` on the same reasons: the
    * foreign-owner sentence would call a team chat another collaborator's, and
@@ -660,23 +701,27 @@ function hostAnsweredForReason(reason: ChatDeadTileBannerReason): boolean {
  *   unknowable from this account (see `ownedByViewer`) - while the two
  *   answered-host reasons (`chat-not-visible` / `chat-not-on-this-host`) keep
  *   their missing-history fact, because "isn't connected" would invert the
- *   evidence of a host that just spoke. Neither names a host: the label for a
- *   foreign machine is a raw id.
+ *   evidence of a host that just spoke. Both name the collaborator
+ *   (`ownerName`), never their host: the label for a foreign machine is a
+ *   raw id.
  * - The COPY clause appears only when the mounting surface actually shows one
  *   (`showsPublishedCopy`).
  * - The CLONE clause matches the sharing panel's promise ("Collaborators can
- *   view and clone your agent chats"); the view-only arm says why that
- *   promise does not extend to this reader instead of dangling a button the
- *   host's editor gate would refuse.
+ *   view and clone your agent chats") and names the host the clone lands on;
+ *   the view-only arm says why that promise does not extend to this reader
+ *   instead of dangling a button the host's editor gate would refuse.
  */
 function foreignOwnerMessage(input: {
   readonly reason: ChatDeadTileBannerReason;
+  readonly ownerName: string | null;
+  readonly cloneTargetLabel: string | null;
   readonly showsPublishedCopy: boolean;
   readonly cloneAllowed: boolean;
 }): string {
+  const owner = collaboratorReference(input.ownerName);
   const fact = hostAnsweredForReason(input.reason)
-    ? "This agent belongs to another collaborator, and its history isn't available here."
-    : "This agent belongs to another collaborator and lives on their computer, which isn't connected here.";
+    ? `This agent belongs to ${owner}, and its history isn't available here.`
+    : `This agent belongs to ${owner} and runs on their computer, which isn't connected here.`;
   return `${fact}${copyClauses(input)}`;
 }
 
@@ -695,8 +740,9 @@ function environmentOwnerMessage(input: {
   return `This chat's sandbox isn't available.${copyClause}`;
 }
 
-/** The published-copy and clone clauses both non-own sentences end with. */
+/** The published-copy and clone clauses the collaborator sentence ends with. */
 function copyClauses(input: {
+  readonly cloneTargetLabel: string | null;
   readonly showsPublishedCopy: boolean;
   readonly cloneAllowed: boolean;
 }): string {
@@ -704,7 +750,7 @@ function copyClauses(input: {
     ? " Showing the last published copy."
     : "";
   const cloneClause = input.cloneAllowed
-    ? " Cloning creates your own agent on the active host."
+    ? ` Cloning creates your own agent on ${input.cloneTargetLabel ?? "the active host"}.`
     : " You have view-only access to this task, so it can't be cloned.";
   return `${copyClause}${cloneClause}`;
 }

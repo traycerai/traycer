@@ -167,7 +167,7 @@ function PersonalPageChip(props: {
   const client = useHostClient();
   const environmentId = useDetailsEnvironmentId(client);
   const queryClient = useQueryClient();
-  const running = useHostsRunningPersonal();
+  const running = useHostsRunningPersonal(true);
   const { statuses, versions } = usePersonalComputers(true);
   const kinds = chipPageKinds(props.section);
   const statusOf = (host: RunningHost) => statuses.get(host.hostId) ?? null;
@@ -218,10 +218,13 @@ function TeamPageChip(props: {
   readonly section: SettingsSectionId;
   readonly environmentId: string;
 }): ReactNode {
-  const running = useHostsRunningConfiguration({
-    kind: "team",
-    environmentId: props.environmentId,
-  });
+  const running = useHostsRunningConfiguration(
+    {
+      kind: "team",
+      environmentId: props.environmentId,
+    },
+    true,
+  );
   const hostIds = useMemo(
     () => running.hosts.map((host) => host.hostId),
     [running.hosts],
@@ -251,7 +254,7 @@ function TeamPageChip(props: {
       section={props.section}
       environmentId={props.environmentId}
       hosts={chips}
-      emptyText="No hosts yet"
+      emptyText="Not on any host"
     />
   );
 }

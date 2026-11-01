@@ -25,6 +25,10 @@ import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import type { IHostMessenger } from "@traycer-clients/shared/host-transport/host-messenger";
+import {
+  MobileStripFormContext,
+  type MobileStripForm,
+} from "@/components/layout/tabs/mobile-strip-form-context";
 import { SideTabStrip } from "@/components/layout/tabs/side-strip/side-tab-strip";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import {
@@ -172,6 +176,9 @@ function makeMessengerFactory(): (args: {
     });
 }
 
+/** The phone shell's form around the strip; `null` is every other window. */
+let stripForm: MobileStripForm | null = null;
+
 function renderStrip(): void {
   const runnerHost = createRunnerHost();
   const queryClient = new QueryClient({
@@ -195,7 +202,9 @@ function renderStrip(): void {
               <WindowsBridgeContext.Provider
                 value={{ bridge: null, hasHydrated: true }}
               >
-                <SideTabStrip edge="left" ownsTitleBar={false} />
+                <MobileStripFormContext.Provider value={stripForm}>
+                  <SideTabStrip edge="left" ownsTitleBar={false} />
+                </MobileStripFormContext.Provider>
               </WindowsBridgeContext.Provider>
             </TooltipProvider>
           </HostRuntimeProvider>
@@ -216,6 +225,7 @@ function renderStrip(): void {
 }
 
 function resetSharedState(): void {
+  stripForm = null;
   messagingRef.value = null;
   __resetTabNavigationControllerForTesting();
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
@@ -470,5 +480,22 @@ describe("SideStripFoot", () => {
     fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
     const identity = await screen.findByTestId("user-menu-identity");
     expect(identity.textContent).toContain("Ada Lovelace");
+  });
+
+  it("draws the readings region on desktop and none in the phone shell, whose header keeps the readings, with the account row in both", async () => {
+    seedHost("host-a", "Ada's Mac", "ready");
+    renderStrip();
+    await screen.findByTestId("side-tab-strip");
+    expect(screen.getByTestId("side-strip-readings")).not.toBeNull();
+    cleanup();
+
+    stripForm = "expanded";
+    renderStrip();
+    await screen.findByTestId("side-tab-strip");
+
+    expect(screen.queryByTestId("side-strip-readings")).toBeNull();
+    expect(screen.getByTestId("user-menu-trigger").textContent).toContain(
+      "Ada Lovelace",
+    );
   });
 });

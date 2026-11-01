@@ -54,37 +54,26 @@ describe("deriveAboutThisHost", () => {
       item: item(null, {
         createdAt: new Date(2026, 9, 24, 8, 35).toISOString(),
       }),
-      live: false,
       nowMs: Date.now(),
     });
 
     expect(view.addedToAccount).toBe("24 Oct");
   });
 
-  it("lets live override lastSeenAt", () => {
-    const view = deriveAboutThisHost({
-      item: item("2026-09-24T09:00:00Z", {}),
-      live: true,
-      nowMs: NOW_MS,
-    });
-    expect(view.lastSeen).toBe("Online now");
-    expect(view.online).toBe(true);
-  });
-
+  // The fixture's record is `connectable`, so this also pins that the cloud's
+  // lease reading does not word the row: a lease read up to its TTL old is not
+  // evidence of a check-in, and the row has one wording.
   it("words a stale lastSeenAt on the given clock, capitalised", () => {
     const view = deriveAboutThisHost({
       item: item("2026-09-24T09:00:00Z", {}),
-      live: false,
       nowMs: NOW_MS,
     });
     expect(view.lastSeen).toBe("3h ago");
-    expect(view.online).toBe(false);
   });
 
   it("says 'Just now' for a stamp inside the header's 45s window", () => {
     const view = deriveAboutThisHost({
       item: item("2026-09-24T11:59:30Z", {}),
-      live: false,
       nowMs: NOW_MS,
     });
     expect(view.lastSeen).toBe("Just now");
@@ -93,7 +82,6 @@ describe("deriveAboutThisHost", () => {
   it("treats a stamp in the future as no time elapsed rather than a negative age", () => {
     const view = deriveAboutThisHost({
       item: item("2026-09-24T12:05:00Z", {}),
-      live: false,
       nowMs: NOW_MS,
     });
     expect(view.lastSeen).toBe("Just now");
@@ -102,7 +90,6 @@ describe("deriveAboutThisHost", () => {
   it("says 'Not seen yet' when the host never checked in", () => {
     const view = deriveAboutThisHost({
       item: item(null, {}),
-      live: false,
       nowMs: NOW_MS,
     });
     expect(view.lastSeen).toBe("Not seen yet");
@@ -111,7 +98,6 @@ describe("deriveAboutThisHost", () => {
   it("says 'Unknown' for an unparsable lastSeenAt", () => {
     const view = deriveAboutThisHost({
       item: item("not-a-date", {}),
-      live: false,
       nowMs: NOW_MS,
     });
     expect(view.lastSeen).toBe("Unknown");
@@ -120,7 +106,6 @@ describe("deriveAboutThisHost", () => {
   it("shows an unparsable createdAt as it came", () => {
     const view = deriveAboutThisHost({
       item: item(null, { createdAt: "yesterday-ish" }),
-      live: false,
       nowMs: NOW_MS,
     });
     expect(view.addedToAccount).toBe("yesterday-ish");
@@ -132,7 +117,6 @@ describe("deriveAboutThisHost", () => {
         platform: null,
         status: { ...item(null, {}).status, appVersion: null },
       }),
-      live: false,
       nowMs: NOW_MS,
     });
     expect(view.lastReportedVersion).toBe("Not reported yet");
@@ -142,7 +126,6 @@ describe("deriveAboutThisHost", () => {
   it("prefixes a reported version with v and words the platform triple", () => {
     const view = deriveAboutThisHost({
       item: item(null, { platform: "darwin-arm64" }),
-      live: false,
       nowMs: NOW_MS,
     });
     expect(view.lastReportedVersion).toBe("v1.5.0");

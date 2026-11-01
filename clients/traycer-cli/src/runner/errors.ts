@@ -214,12 +214,13 @@ export const CLI_ERROR_CODES = {
   // The target host build reads an on-disk store format OLDER than one this
   // machine's host data is already written in, so landing it would make those
   // chats unreadable - and a host that meets a store it cannot open crash-
-  // loops instead of reporting it. Raised before anything is downloaded,
-  // stopped or swapped, and equally when the target's format cannot be
-  // established at all: an unprovable move is refused, not assumed safe.
+  // loops instead of reporting it. Raised before anything is stopped or
+  // swapped, before anything is downloaded wherever the target can already be
+  // placed, and equally when the target's format cannot be established at
+  // all: an unprovable move is refused, not assumed safe.
   //
-  // Deliberately NOT HOST_CLIENT_FLOOR_UNMET, which is the other pre-download
-  // refusal: that one is about the CLI being too old for the host, and its
+  // Deliberately NOT HOST_CLIENT_FLOOR_UNMET, which is the other refusal of a
+  // target host: that one is about the CLI being too old for the host, and its
   // remedy is to update Traycer. This one is about DATA, the target is
   // typically older on purpose, and the only remedies are to update forward or
   // to accept the loss explicitly with `--accept-store-format-loss`.
@@ -266,6 +267,11 @@ export const CLI_ERROR_CODES = {
   CLI_UPGRADE_PACKAGE_MANAGER_OWNED: "E_CLI_UPGRADE_PACKAGE_MANAGER_OWNED",
   CLI_UPGRADE_NO_MANIFEST: "E_CLI_UPGRADE_NO_MANIFEST",
   CLI_UPGRADE_TARGET_UNAVAILABLE: "E_CLI_UPGRADE_TARGET_UNAVAILABLE",
+  // The CLI-side twin of HOST_UPDATE_NOT_NEWER, deliberately the same
+  // shape: an EXPLICITLY requested version below the installed one, with
+  // no downgrade consent. Both name `--allow-downgrade` as the way
+  // through, so the two updaters refuse a backwards move identically.
+  CLI_UPGRADE_NOT_NEWER: "E_CLI_UPGRADE_NOT_NEWER",
   CLI_UPGRADE_DOWNLOAD_FAILED: "E_CLI_UPGRADE_DOWNLOAD_FAILED",
   CLI_UPGRADE_REPLACE_FAILED: "E_CLI_UPGRADE_REPLACE_FAILED",
   CLI_UPGRADE_FINALIZE_HELPER_FAILED: "E_CLI_UPGRADE_FINALIZE_HELPER_FAILED",
@@ -307,6 +313,39 @@ export const EXPECTED_CLI_ERROR_CODES: ReadonlySet<CliErrorCode> =
     CLI_ERROR_CODES.HOST_INCOMPATIBLE,
     CLI_ERROR_CODES.HOST_UNSUPPORTED,
     CLI_ERROR_CODES.HOST_UPDATE_NOT_NEWER,
+    // Beside its host twin for the same reason: refusing a backwards move
+    // the caller asked for is a typed outcome the command answers for, and
+    // the person resolves it by re-running with `--allow-downgrade`.
+    CLI_ERROR_CODES.CLI_UPGRADE_NOT_NEWER,
+    // The rest of `cli upgrade`'s refusals that report a state of the
+    // INSTALL or of the caller's request, each with a remedy the person
+    // carries out. What stays captured is every arm where the feed or the
+    // installer is the thing that failed: DOWNLOAD_FAILED (the transfer) and
+    // REPLACE_FAILED (publication over the live binary).
+    //
+    // The rolling feed serves exactly one build, so `--target` naming any
+    // other version is an assertion that was simply wrong - the feed is
+    // healthy and still publishing.
+    CLI_ERROR_CODES.CLI_UPGRADE_TARGET_UNAVAILABLE,
+    // No recorded install to upgrade. An environment state, and the message
+    // already names `cli re-anchor` as the way out.
+    CLI_ERROR_CODES.CLI_UPGRADE_NO_MANIFEST,
+    // A package manager owns this binary, so self-upgrade is refused by
+    // design and the message names that manager's own upgrade command.
+    // Nothing is broken; the ownership contract is being honoured.
+    CLI_ERROR_CODES.CLI_UPGRADE_PACKAGE_MANAGER_OWNED,
+    // Another updater already owns the work - the legacy-updater twin of
+    // HOST_UPDATE_ATTEMPT_ACTIVE above. Contention is a schedule, not a
+    // fault.
+    CLI_ERROR_CODES.HOST_UPDATE_CONCURRENT_LEGACY_UPDATER,
+    // NOT here, and deliberately: HOST_UPDATE_RECORD_NOT_CONCLUDED. The run
+    // did deliver the update, so classifying it expected looks right from the
+    // message - but one code carries BOTH refusal kinds that arm reports
+    // (`update-run.ts`), and `durability-unverified` is the medium itself
+    // being broken: a symlinked record path, a roundtrip mismatch. That is a
+    // machine fault and has to reach Sentry. Quieting the `rejected` half
+    // needs the two kinds to carry two codes, which is a change to that arm
+    // rather than to this set.
     CLI_ERROR_CODES.HOST_CLIENT_FLOOR_UNMET,
     CLI_ERROR_CODES.HOST_STORE_FORMAT_FLOOR,
     CLI_ERROR_CODES.AGENT_NOT_FOUND,

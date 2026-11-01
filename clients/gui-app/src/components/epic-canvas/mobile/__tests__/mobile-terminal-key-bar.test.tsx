@@ -1,5 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { setPhoneLayoutOnly } from "@/lib/mobile-app";
+import {
+  holdScreenLandscape,
+  IPHONE_17,
+  lowerNativeKeyboard,
+  raiseNativeKeyboard,
+  restoreKeyboardEnvironment,
+} from "../../../../../__tests__/short-keyboard-viewport-harness";
 import { MobileTerminalKeyBar } from "@/components/epic-canvas/mobile/mobile-terminal-key-bar";
 import {
   getTerminalKeyBarModifiers,
@@ -163,5 +171,68 @@ describe("MobileTerminalKeyBar", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  describe("on a short viewport under the keyboard", () => {
+    beforeEach(() => {
+      setPhoneLayoutOnly(true);
+      holdScreenLandscape();
+    });
+
+    afterEach(() => {
+      setPhoneLayoutOnly(false);
+      restoreKeyboardEnvironment();
+    });
+
+    function keyIds(): ReadonlyArray<string> {
+      return screen
+        .getAllByTestId(/^terminal-key-/)
+        .map((key) => key.dataset["testid"] ?? "");
+    }
+
+    it("draws the eight keys the phone's keyboard lacks, and a key still sends", () => {
+      const input = setupTarget("normal");
+      raiseNativeKeyboard(IPHONE_17);
+      render(<MobileTerminalKeyBar instanceId={INSTANCE_ID} keyboardOpen />);
+      expect(keyIds()).toEqual([
+        "terminal-key-esc",
+        "terminal-key-tab",
+        "terminal-key-ctrl",
+        "terminal-key-alt",
+        "terminal-key-arrow-left",
+        "terminal-key-arrow-down",
+        "terminal-key-arrow-up",
+        "terminal-key-arrow-right",
+      ]);
+      fireEvent.pointerDown(screen.getByTestId("terminal-key-arrow-left"));
+      expect(input).toHaveBeenCalledExactlyOnceWith("\x1b[D");
+    });
+
+    it("clears a latched Shift that the one row has no key to show or cancel", () => {
+      const input = setupTarget("normal");
+      render(
+        <MobileTerminalKeyBar instanceId={INSTANCE_ID} keyboardOpen={false} />,
+      );
+      fireEvent.pointerDown(screen.getByTestId("terminal-key-shift"));
+      fireEvent.pointerDown(screen.getByTestId("terminal-key-ctrl"));
+
+      raiseNativeKeyboard(IPHONE_17);
+      expect(getTerminalKeyBarModifiers()).toEqual({
+        ctrl: true,
+        alt: false,
+        shift: false,
+      });
+
+      fireEvent.pointerDown(screen.getByTestId("terminal-key-ctrl"));
+      fireEvent.pointerDown(screen.getByTestId("terminal-key-tab"));
+      expect(input).toHaveBeenCalledExactlyOnceWith("\t");
+    });
+
+    it("draws all twelve again when the keyboard goes down", () => {
+      raiseNativeKeyboard(IPHONE_17);
+      render(<MobileTerminalKeyBar instanceId={INSTANCE_ID} keyboardOpen />);
+      lowerNativeKeyboard();
+      expect(keyIds()).toHaveLength(12);
+    });
   });
 });

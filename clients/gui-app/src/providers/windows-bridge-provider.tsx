@@ -43,6 +43,12 @@ import {
   shouldApplyDesktopTabsSnapshot,
 } from "@/stores/tabs/desktop-tabs-persistence";
 import { readPersistedCurrentRoute } from "@/lib/persistent-history";
+import {
+  bindTracySurfaceToWindow,
+  forgetClosedTracySurfaceWindows,
+  readTracySurfaceWindowRecords,
+  settleTracySurfaceAdoption,
+} from "@/stores/bots/tracy-surface-store";
 import { installTabSyncCoordinator } from "@/lib/tab-sync/tab-sync-coordinator";
 import type {
   DesktopPerWindowSnapshot,
@@ -219,6 +225,8 @@ function installDesktopWindowsBridge(
   bridge: DesktopWindowsBridge,
   hydrationRequest: WindowsBridgeHydrationRequest,
 ): () => void {
+  // This window's own Tracy surface record, before anything writes to it.
+  bindTracySurfaceToWindow(bridge.windowId);
   const lifecycle = { cancelled: false };
   let tabsCompatible = false;
   const projectionBridge = createDebouncedDesktopPerWindowProjectionBridge(
@@ -286,6 +294,24 @@ function installDesktopWindowsBridge(
     bridge.perWindowState.onChange(applyNewestSnapshot);
 
   const isCancelled = (): boolean => lifecycle.cancelled;
+
+  // The desktop's windows, asked once: the first adopts the global Tracy
+  // record, and the records read before asking are swept against them.
+  // Nothing waits on the answer: the window hydrates from its own record.
+  const surfaceRecords = readTracySurfaceWindowRecords();
+  const windowIds = Promise.resolve()
+    .then(() => bridge.list())
+    .then((windows): ReadonlyArray<string> | null =>
+      windows.map((summary) => summary.windowId),
+    )
+    .catch(() => null);
+  void windowIds.then((ids) => {
+    if (isCancelled()) return;
+    settleTracySurfaceAdoption(ids !== null && ids[0] === bridge.windowId);
+    if (ids !== null) {
+      forgetClosedTracySurfaceWindows(surfaceRecords, new Set(ids));
+    }
+  });
 
   void (async () => {
     if (isCancelled()) return;

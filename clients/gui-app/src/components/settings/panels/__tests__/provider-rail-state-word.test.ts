@@ -52,6 +52,15 @@ function state(overrides: Partial<ProviderCliState>): ProviderCliState {
   };
 }
 
+const OAUTH_CAP: ProviderCliState["loginCapability"] = {
+  oauthArgs: ["auth", "login"],
+  token: null,
+  codePaste: null,
+  terminalLogin: null,
+  remoteSafe: null,
+  selfOpensBrowser: null,
+};
+
 const SIGNED_IN = {
   status: "authenticated",
   badgeText: null,
@@ -154,6 +163,52 @@ describe("providerRailStateWord", () => {
     expect(
       providerRailStateWord(
         state({ auth: { ...SIGNED_IN, status: "unavailable" } }),
+      ),
+    ).toBeNull();
+  });
+
+  it("says not checked for a provider with a terminal login whose settled check answered neither way", () => {
+    expect(
+      providerRailStateWord(
+        state({
+          loginCapability: OAUTH_CAP,
+          profiles: [profile("ambient", "unavailable")],
+          auth: { ...SIGNED_IN, status: "unavailable" },
+        }),
+      ),
+    ).toBe("not checked");
+    expect(
+      providerRailStateWord(
+        state({
+          loginCapability: OAUTH_CAP,
+          profiles: [profile("ambient", "unknown")],
+          auth: { ...SIGNED_IN, status: "unknown" },
+        }),
+      ),
+    ).toBe("not checked");
+  });
+
+  it("stays null, never 'not checked', while the probe is still running - a surface that wants 'checking' reads authPending itself", () => {
+    expect(
+      providerRailStateWord(
+        state({
+          loginCapability: OAUTH_CAP,
+          profiles: [profile("ambient", "unavailable")],
+          auth: { ...SIGNED_IN, status: "unavailable" },
+          authPending: true,
+        }),
+      ),
+    ).toBeNull();
+  });
+
+  it("control: a provider with no terminal login at all says nothing, never 'not checked', even though the host still sends it an ambient profile row", () => {
+    expect(
+      providerRailStateWord(
+        state({
+          loginCapability: null,
+          profiles: [profile("ambient", "unknown")],
+          auth: { ...SIGNED_IN, status: "unknown" },
+        }),
       ),
     ).toBeNull();
   });

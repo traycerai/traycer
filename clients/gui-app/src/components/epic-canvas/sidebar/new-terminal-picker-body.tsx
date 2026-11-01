@@ -27,6 +27,7 @@ import { ReportIssueAction } from "@/components/report-issue/report-issue-action
 import { createReportIssueContext } from "@/lib/report-issue-context";
 import { WorktreeFolderListBody } from "@/components/worktree/worktree-folder-list-body";
 import { WorktreePickerHostSection } from "@/components/worktree/worktree-picker-host-section";
+import { useStageFallbackHostLine } from "@/hooks/sandboxes/use-stage-fallback-host-line";
 import {
   useSurfaceHostClient,
   useSurfaceHostPin,
@@ -140,12 +141,13 @@ export function NewTerminalPickerBody(props: NewTerminalPickerBodyProps) {
     },
     [onLaunch],
   );
-  const { staging, stage, consequences, stagedSend } = useTerminalStagedLaunch({
-    epicId,
-    surfaceKey,
-    resolvedHostId: pin.resolvedHostId,
-    onLaunch: launchOnce,
-  });
+  const { staging, stage, consequences, stagedSend, chooseAnotherHostLabel } =
+    useTerminalStagedLaunch({
+      epicId,
+      surfaceKey,
+      resolvedHostId: pin.resolvedHostId,
+      onLaunch: launchOnce,
+    });
   const handleLaunch = useCallback(() => {
     if (stagedSend.intercept("terminal", null)) return;
     if (launchTarget !== null) launchOnce(launchTarget);
@@ -217,6 +219,7 @@ export function NewTerminalPickerBody(props: NewTerminalPickerBodyProps) {
               onMoveFirst={null}
               onOpenTerminalInstead={null}
               onChooseAnotherHost={staging?.chooseAnotherHost}
+              chooseAnotherHostLabel={chooseAnotherHostLabel}
             />
           </div>
         )}
@@ -319,6 +322,7 @@ function useTerminalStagedLaunch(input: {
   readonly stage: StagedSandbox | null;
   readonly consequences: ConsequencesInput | null;
   readonly stagedSend: StagedSandboxSend;
+  readonly chooseAnotherHostLabel: string;
 } {
   const { onLaunch, surfaceKey } = input;
   const hostOptions = useHostOptions();
@@ -346,18 +350,21 @@ function useTerminalStagedLaunch(input: {
     }),
     [input.epicId, onLaunch, surfaceKey],
   );
+  const chooseAnotherHostLabel = useStageFallbackHostLine(input.resolvedHostId);
   const stagedSend = useStagedSandboxSend({
     surfaceKey,
     terminal: stagedTerminal,
     taskId: input.epicId,
     ownerId: null,
     claimsSend: false,
+    chooseAnotherHostLabel,
   });
   return {
     staging,
     stage: staging === null ? null : staging.stage,
     consequences: staging === null ? null : staging.consequences,
     stagedSend,
+    chooseAnotherHostLabel,
   };
 }
 

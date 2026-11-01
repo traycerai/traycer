@@ -32,7 +32,7 @@ import {
 import { ChatMessage } from "@/components/chat/chat-message";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { __resetBotSubscriptionsForTesting } from "@/hooks/bots/use-bot-subscription";
-import { useBotTabsStore } from "@/stores/bots/bot-tabs-store";
+import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 import {
   StubHostStreamClient,
@@ -209,15 +209,19 @@ function mount(
 }
 
 beforeEach(() => {
-  useBotTabsStore
-    .getState()
-    .openBotTab({ botId: BOT_ID, hostId: HOST_ID, title: "Tracy" });
+  useTracySurfaceStore.getState().openSurface(HOST_ID);
+  useTracySurfaceStore.getState().selectChannel(BOT_ID);
 });
 
 afterEach(() => {
   cleanup();
   __resetBotSubscriptionsForTesting();
-  useBotTabsStore.setState({ tabs: {} });
+  useTracySurfaceStore.setState({
+    open: false,
+    hostId: null,
+    botId: null,
+    visitedBotIds: [],
+  });
   stream.client = null;
 });
 

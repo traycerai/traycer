@@ -38,6 +38,9 @@ import {
   tabSourceRefs,
 } from "@/stores/tabs/source-refs";
 import type { SystemTab, TabRef } from "@/stores/tabs/types";
+import { isTracyPath, tracyPathname } from "@/lib/routes";
+import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
+import { TRACY_TAB_REF } from "@/stores/tabs/kinds/tracy";
 
 const DEBOUNCE_MS = 100;
 
@@ -582,7 +585,9 @@ function routeForRef(layout: PersistedTabStripLayout, ref: TabRef): string {
       : `/epics/${encodeURIComponent(tab.epicId)}/${encodeURIComponent(tab.tabId)}`;
   }
   if (ref.kind === "draft") return `/draft/${encodeURIComponent(ref.id)}`;
-  if (ref.kind === "bot") return `/bot/${encodeURIComponent(ref.id)}`;
+  if (ref.kind === "tracy") {
+    return tracyPathname(useTracySurfaceStore.getState().botId);
+  }
   // A `home` ref never reaches here: it is not a layout ref (`validRef` refuses
   // one) and not a source ref, so nothing this module walks can produce it.
   if (ref.kind === "home") return "/";
@@ -614,22 +619,11 @@ function routeRef(route: string | null): TabRef | null {
     const tabId = decodeRouteSegment(epicMatch[2]);
     return tabId === null ? null : { kind: "epic", id: tabId };
   }
-  return (
-    singleSegmentRef(pathname, /^\/bot\/([^/]+)\/?$/, "bot") ??
-    singleSegmentRef(pathname, /^\/draft\/([^/]+)\/?$/, "draft")
-  );
-}
-
-/** A `/<kind>/:id` route as its ref, or `null` when it is not one. */
-function singleSegmentRef(
-  pathname: string | null,
-  pattern: RegExp,
-  kind: "bot" | "draft",
-): TabRef | null {
-  const match = pathname?.match(pattern);
-  if (match === null || match === undefined) return null;
-  const id = decodeRouteSegment(match[1]);
-  return id === null ? null : { kind, id };
+  if (pathname !== null && isTracyPath(pathname)) return TRACY_TAB_REF;
+  const draftMatch = pathname?.match(/^\/draft\/([^/]+)\/?$/);
+  if (draftMatch === null || draftMatch === undefined) return null;
+  const draftId = decodeRouteSegment(draftMatch[1]);
+  return draftId === null ? null : { kind: "draft", id: draftId };
 }
 
 function routeMatchesHydratedRef(route: string, ref: TabRef): boolean {
@@ -646,8 +640,7 @@ function routeMatchesHydratedRef(route: string, ref: TabRef): boolean {
   if (ref.kind === "sample-workspace") return pathname === "/sample-workspace";
   if (ref.kind === "draft")
     return pathname === `/draft/${encodeURIComponent(ref.id)}`;
-  if (ref.kind === "bot")
-    return pathname === `/bot/${encodeURIComponent(ref.id)}`;
+  if (ref.kind === "tracy") return isTracyPath(pathname);
   if (ref.kind === "history")
     return pathname === "/epics" || pathname === "/epics/";
   return isSettingsRoutePath(pathname);

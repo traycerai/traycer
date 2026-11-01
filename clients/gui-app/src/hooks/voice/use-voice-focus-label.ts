@@ -4,7 +4,6 @@ import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useHostClient } from "@/lib/host";
 import { useBotRail, type BotRail } from "@/stores/bots/bot-open-thread-store";
-import { lookupBotTab, useBotTabsStore } from "@/stores/bots/bot-tabs-store";
 import type { VoiceFocus } from "@/stores/voice/voice-session-store";
 
 /** How much of a thread's opening post the focus line shows. */
@@ -29,9 +28,6 @@ export function useVoiceFocusLabel(focus: VoiceFocus): VoiceFocusLabel {
   const botsSupported = useHostMethodSupport(appHostId, "bot.list") === true;
   const bots = useBotListQuery(appClient, botsSupported);
   const environments = useEnvironmentListQuery(appClient, botsSupported);
-  const tabTitle = useBotTabsStore(
-    (state) => lookupBotTab(state.tabs, focus.botId)?.title ?? null,
-  );
   const rail = useBotRail(focus.botId);
   const bot = bots.data?.bots.find((row) => row.botId === focus.botId) ?? null;
   const environmentLabel =
@@ -42,7 +38,7 @@ export function useVoiceFocusLabel(focus: VoiceFocus): VoiceFocusLabel {
         )?.label ?? null);
   return {
     environmentLabel,
-    botTitle: bot?.title ?? tabTitle ?? "Bot",
+    botTitle: bot?.title ?? "Bot",
     threadLabel: threadLabelOf(focus, rail),
   };
 }

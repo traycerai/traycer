@@ -21,8 +21,6 @@ import {
   BotMessageComposer,
   type BotComposerEdit,
   type BotComposerQuote,
-  type BotComposerSeed,
-  type BotKeptDraft,
 } from "@/components/bots/bot-message-composer";
 import {
   useBotSendFailure,
@@ -59,11 +57,13 @@ import type { BotMemberResolver } from "@/lib/bots/bot-member-names";
 import { threadOriginRow } from "@/lib/bots/reply-row";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
+import { useKeptBoxDraft } from "@/hooks/bots/use-kept-box-draft";
 import type {
   BotSessionOpen,
   BotTurnOpen,
 } from "@/stores/bots/bot-open-thread-store";
 import type { BotSentPost } from "@/stores/bots/bot-open-thread-store";
+import { useKeyboardFocusLayoutWithin } from "@/hooks/ui/use-keyboard-focus-layout";
 import { cn } from "@/lib/utils";
 
 /**
@@ -108,10 +108,12 @@ export type BotThreadPanelThread =
 
 /**
  * A thread of a bot's channel, in Slack's thread panel (Tracy Bots): the
- * header names the thread and its channel, the post it opens on sits on top,
+ * header names the thread and its channel, the post it opens on comes first,
  * as the channel draws it, in every state (decision 90), then the replies -
  * the thread record in the ordinary message list - and a box that replies in
- * the thread. With no reply yet, the box follows the post.
+ * the thread. The post scrolls, with the replies once there are any, so
+ * however long it is the box stays in the pane. With no reply yet, the box
+ * follows the post.
  *
  * "Activity" opens the bot's Activity tab, where the thread's work is listed
  * with the rest of the bot's (decision 115).
@@ -178,14 +180,25 @@ export function BotThreadPanel(props: {
     props.thread.kind === "posted" ||
     (viewerUserId !== null &&
       (thread?.anchor?.senderUserId ?? null) === viewerUserId);
+  // With the keyboard up on a short viewport the panel is its identity row, the
+  // scroll region and the box's one row: what it hides stays mounted.
+  const [panel, setPanel] = useState<HTMLElement | null>(null);
+  const focusLayout = useKeyboardFocusLayoutWithin(panel);
   return (
     <section
+      ref={setPanel}
       aria-label="Thread"
       data-testid="bot-thread-panel"
+      data-bot-thread-panel=""
       data-thread-id={threadId ?? undefined}
       className="flex min-h-0 flex-1 flex-col"
     >
-      <header className="flex shrink-0 items-center gap-2 border-b border-border/60 px-4 py-2.5">
+      <header
+        className={cn(
+          "flex shrink-0 items-center gap-2 border-b border-border/60 px-4",
+          focusLayout ? "min-h-11" : "py-2.5",
+        )}
+      >
         <div className="flex min-w-0 flex-1 items-baseline gap-2">
           <h2 className="text-ui-md font-semibold text-foreground">Thread</h2>
           <span
@@ -197,41 +210,43 @@ export function BotThreadPanel(props: {
             <span className="truncate">{botTitle}</span>
           </span>
         </div>
-        {threadId === null ? null : (
-          <BotThreadFollowControl
-            botId={props.botId}
-            hostId={props.hostId}
-            threadId={threadId}
-            postedByViewer={postedByViewer}
-          />
-        )}
-        {thread === null ? null : (
+        <div hidden={focusLayout} className="contents">
+          {threadId === null ? null : (
+            <BotThreadFollowControl
+              botId={props.botId}
+              hostId={props.hostId}
+              threadId={threadId}
+              postedByViewer={postedByViewer}
+            />
+          )}
+          {thread === null ? null : (
+            <Button
+              type="button"
+              variant="ghost"
+              size="xs"
+              data-testid="bot-thread-session"
+              onClick={() =>
+                onOpenSession({
+                  chatId: thread.sessionChatId,
+                  threadId: thread.threadId,
+                  messageId: null,
+                  sendPostId: null,
+                })
+              }
+            >
+              Thread session
+            </Button>
+          )}
           <Button
             type="button"
             variant="ghost"
             size="xs"
-            data-testid="bot-thread-session"
-            onClick={() =>
-              onOpenSession({
-                chatId: thread.sessionChatId,
-                threadId: thread.threadId,
-                messageId: null,
-                sendPostId: null,
-              })
-            }
+            data-testid="bot-thread-activity"
+            onClick={onOpenActivity}
           >
-            Thread session
+            Activity
           </Button>
-        )}
-        <Button
-          type="button"
-          variant="ghost"
-          size="xs"
-          data-testid="bot-thread-activity"
-          onClick={onOpenActivity}
-        >
-          Activity
-        </Button>
+        </div>
         <Button
           type="button"
           variant="ghost"
@@ -243,15 +258,16 @@ export function BotThreadPanel(props: {
           <X aria-hidden="true" />
         </Button>
       </header>
-      <ThreadOrigin {...props} sendFailure={sendFailure} />
       {threadId === null ? null : (
-        <ThreadTasks
-          botId={props.botId}
-          hostId={props.hostId}
-          threadId={threadId}
-          thread={thread}
-          tasks={props.tasks}
-        />
+        <div hidden={focusLayout} className="contents">
+          <ThreadTasks
+            botId={props.botId}
+            hostId={props.hostId}
+            threadId={threadId}
+            thread={thread}
+            tasks={props.tasks}
+          />
+        </div>
       )}
       <ThreadPanelBody {...props} sendFailure={sendFailure} />
     </section>
@@ -423,7 +439,7 @@ function ThreadOrigin(props: ThreadPanelBodyProps): ReactNode {
         });
         return origin === null ? null : (
           <div
-            className="shrink-0 px-2 pt-2"
+            className="px-2"
             data-testid="bot-thread-anchor"
             data-loaded={origin.loaded ? "true" : "false"}
           >
@@ -443,6 +459,21 @@ function ThreadOrigin(props: ThreadPanelBodyProps): ReactNode {
         );
       }}
     </ChannelPost>
+  );
+}
+
+/**
+ * The post where no list of replies holds it: a scroll region of its own, as
+ * tall as the post and no taller than the pane leaves it.
+ */
+function ThreadPostScroll(props: { readonly children: ReactNode }): ReactNode {
+  return (
+    <div
+      className="min-h-0 overflow-y-auto pt-2"
+      data-testid="bot-thread-post-scroll"
+    >
+      {props.children}
+    </div>
   );
 }
 
@@ -580,14 +611,11 @@ function ThreadPanelBody(props: ThreadPanelBodyProps): ReactNode {
   // What the box holds unsent, kept under the bot: what the person typed,
   // or a draft Discuss put there, from the channel's card or this thread's.
   const { botId, originMessageId } = props;
-  const kept = useBotDraftsStore(
-    (state) => state.threadBoxes[botId]?.[originMessageId] ?? null,
-  );
+  // Stable across what the box does to this component's own state, so typing
+  // does not hand the replies' list a new header on every key.
+  const origin = useMemo(() => <ThreadOrigin {...props} />, [props]);
+  const { kept, seed, keptDraft } = useKeptBoxDraft(botId, originMessageId);
   const seedThreadBox = useBotDraftsStore((state) => state.seedThreadBox);
-  const typeThreadBox = useBotDraftsStore((state) => state.typeThreadBox);
-  const spendThreadBox = useBotDraftsStore((state) => state.spendThreadBox);
-  const seed: BotComposerSeed | null =
-    kept === null ? null : { id: kept.seedId, text: kept.text };
   // A draft Discuss puts in the box is a new message: an edit the box held
   // ends, so the draft replaces nothing.
   const [heldSeedId, setHeldSeedId] = useState(kept?.seedId ?? null);
@@ -595,32 +623,32 @@ function ThreadPanelBody(props: ThreadPanelBodyProps): ReactNode {
     setHeldSeedId(kept?.seedId ?? null);
     if (kept !== null) setEdit(null);
   }
-  const keptDraft = useMemo<BotKeptDraft>(
-    () => ({
-      keep: (text) => typeThreadBox(botId, originMessageId, text),
-      revision: () =>
-        useBotDraftsStore.getState().threadBoxes[botId]?.[originMessageId]
-          ?.revision ?? null,
-      spend: (revision) => spendThreadBox(botId, originMessageId, revision),
-    }),
-    [botId, originMessageId, spendThreadBox, typeThreadBox],
-  );
   const discuss = useCallback(
     (_questionMessageId: string, draft: string) =>
       seedThreadBox(botId, originMessageId, draft),
     [botId, originMessageId, seedThreadBox],
   );
   if (thread.kind === "pending" || thread.kind === "failed") {
-    return <UnlistedThread thread={thread} sendFailure={props.sendFailure} />;
+    return (
+      <UnlistedThread
+        origin={origin}
+        thread={thread}
+        sendFailure={props.sendFailure}
+      />
+    );
   }
   const box = boxOf(thread, props.originMessageId, props.conversationId);
   return (
     <>
       {box.threadId === null ? (
-        <ThreadListReadFailure retry={thread.retry} />
+        <>
+          <ThreadPostScroll>{origin}</ThreadPostScroll>
+          <ThreadListReadFailure retry={thread.retry} />
+        </>
       ) : (
         <KnownThread
           {...props}
+          origin={origin}
           threadId={box.threadId}
           conversationId={box.conversationId}
           listed={thread.kind === "listed" ? thread.thread : null}
@@ -712,17 +740,21 @@ function keepOpenThread(): boolean {
 }
 
 /**
- * The rule and reply count, the replies and the replying line of a thread
- * whose id is known, above the panel's box. A thread with no reply yet draws
- * neither the count nor room for replies, so the box follows the post; a
- * listed one's transcript stays subscribed with nothing drawn while it
- * connects, and takes the room once a reply is listed. A thread the list
- * has not returned yet (`listed: null`) has no replies to read, and still
- * says the bot is replying. A failed read of the list says so above the
- * replies, with Retry, and leaves what the list last returned in place.
+ * The post, the rule and reply count, the replies and the replying line of a
+ * thread whose id is known, above the panel's box. Once a reply is listed the
+ * post and the count are the first thing in the replies' list and scroll with
+ * it. A thread with no reply yet draws neither the count nor room for replies,
+ * so the box follows the post; a listed one's transcript stays subscribed with
+ * nothing drawn while it connects, and takes the room once a reply is listed.
+ * A thread the list has not returned yet (`listed: null`) has no replies to
+ * read, and still says the bot is replying. A failed read of the list says so
+ * above the replies, with Retry, and leaves what the list last returned in
+ * place.
  */
 function KnownThread(
   props: Omit<ThreadPanelBodyProps, "thread"> & {
+    /** The post the thread opens on, as `ThreadOrigin` draws it. */
+    readonly origin: ReactNode;
     readonly threadId: string;
     readonly listed: BotThreadSummary | null;
     readonly retry: (() => void) | null;
@@ -734,6 +766,7 @@ function KnownThread(
   },
 ): ReactNode {
   const {
+    origin,
     botId,
     hostId,
     boundHostId,
@@ -868,19 +901,27 @@ function KnownThread(
   );
   const replyCount = listed?.replyCount ?? 0;
   const hasReplies = replyCount > 0;
+  const listHeader = useMemo(
+    () =>
+      hasReplies ? (
+        <>
+          {origin}
+          <div
+            className="flex items-center gap-3 px-4 pt-2 text-ui-xs text-muted-foreground"
+            data-testid="bot-thread-reply-count"
+          >
+            <span className="shrink-0">
+              {replyCount === 1 ? "1 reply" : `${replyCount} replies`}
+            </span>
+            <span className="h-px flex-1 bg-border/60" aria-hidden="true" />
+          </div>
+        </>
+      ) : null,
+    [hasReplies, origin, replyCount],
+  );
   return (
     <>
-      {hasReplies ? (
-        <div
-          className="flex shrink-0 items-center gap-3 px-4 pt-2 text-ui-xs text-muted-foreground"
-          data-testid="bot-thread-reply-count"
-        >
-          <span className="shrink-0">
-            {replyCount === 1 ? "1 reply" : `${replyCount} replies`}
-          </span>
-          <span className="h-px flex-1 bg-border/60" aria-hidden="true" />
-        </div>
-      ) : null}
+      {hasReplies ? null : <ThreadPostScroll>{origin}</ThreadPostScroll>}
       <ThreadListReadFailure retry={retry} />
       {listed === null ? null : (
         <div
@@ -900,6 +941,7 @@ function KnownThread(
             surface={surface}
             resolveMember={resolveMember}
             showConnecting={hasReplies}
+            header={listHeader}
             landOn={landOn}
           />
         </div>
@@ -934,6 +976,7 @@ function ThreadListReadFailure(props: {
  * box here, a retry of the post above that the host refuses is said here.
  */
 function UnlistedThread(props: {
+  readonly origin: ReactNode;
   readonly thread: Extract<
     BotThreadPanelThread,
     { readonly kind: "pending" | "failed" }
@@ -948,6 +991,7 @@ function UnlistedThread(props: {
   if (props.thread.kind === "failed") {
     return (
       <>
+        <ThreadPostScroll>{props.origin}</ThreadPostScroll>
         {sendFailed}
         <div className="p-4">
           <BotReadFailure
@@ -961,6 +1005,7 @@ function UnlistedThread(props: {
   }
   return (
     <>
+      <ThreadPostScroll>{props.origin}</ThreadPostScroll>
       {sendFailed}
       <div
         className="flex flex-1 items-center justify-center py-10 text-muted-foreground"
