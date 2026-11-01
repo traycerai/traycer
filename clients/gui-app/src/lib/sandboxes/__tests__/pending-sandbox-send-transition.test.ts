@@ -2805,6 +2805,56 @@ describe("a wake already in flight", () => {
   );
 });
 
+describe("a sandbox that rested on its own while the stage waited", () => {
+  const restedFacts = (rowId: string): PendingSendFacts => ({
+    ...defaultFacts(rowId),
+    host: "resting",
+    stageRested: true,
+  });
+
+  it.each(["W.none", "W.host", "W.notsent", "W.wake"])(
+    "%s observed at rest withdraws the message, whatever held it",
+    (rowId) => {
+      const transition = run(
+        stateOf("chat", rowId),
+        "observe",
+        restedFacts(rowId),
+      );
+      expect(transition.state.phase).toBe("returned");
+      expect(transition.effects).toEqual(["return-message", "remove"]);
+    },
+  );
+
+  it.each(["W.none", "W.host", "W.notsent", "W.wake"])(
+    "%s observed at rest without the rested stage is held, not withdrawn",
+    (rowId) => {
+      const transition = run(stateOf("chat", rowId), "observe", {
+        ...restedFacts(rowId),
+        stageRested: false,
+      });
+      expect(transition.state.phase).toBe("waiting");
+      expect(transition.effects).toContain("poll");
+      expect(transition.effects).not.toContain("return-message");
+    },
+  );
+
+  it("a frozen account does not hold the message at rest", () => {
+    const transition = run(stateOf("chat", "W.notsent"), "observe", {
+      ...restedFacts("W.notsent"),
+      frozen: true,
+    });
+    expect(transition.effects).toEqual(["return-message", "remove"]);
+  });
+
+  it("a rested stage on an awake row withdraws nothing", () => {
+    const transition = run(stateOf("chat", "W.notsent"), "observe", {
+      ...restedFacts("W.notsent"),
+      host: "awake",
+    });
+    expect(transition.effects).not.toContain("return-message");
+  });
+});
+
 describe("guard: a stale local record whose stored record ended", () => {
   const LIVE = ROWS.filter(
     (row) =>

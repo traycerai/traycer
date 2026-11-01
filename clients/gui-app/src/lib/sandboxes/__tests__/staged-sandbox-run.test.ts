@@ -968,6 +968,40 @@ describe("runStagedSandbox on a resting sandbox", () => {
     });
   });
 
+  it("does not wake a sandbox that rested on its own after its settings step began", async () => {
+    const store = useStagedSandboxStore.getState();
+    store.stage(surfaceKey, PERSONAL_NEW);
+    store.begin(surfaceKey, false, 1_000_000, false);
+    store.report(surfaceKey, {
+      createdSandboxId: SANDBOX_ID,
+      createdHostId: NEW_HOST_ID,
+    });
+    const requestId = stageOf().clientRequestId;
+    // The first read finds it awake, but its host is not dialable yet, so the
+    // run waits at the settings step; the next read finds it suspended.
+    const { auth, wake, deps } = harness(
+      {
+        lists: [
+          listOf(row({ state: "awake", guestConfigured: true })),
+          listOf(row({ state: "suspended" })),
+        ],
+        entries: [null],
+      },
+      true,
+    );
+
+    await run(false, deps);
+
+    expect(auth.requests).toEqual([]);
+    expect(wake).not.toHaveBeenCalled();
+    expect(stageOf()).toMatchObject({
+      phase: "creating",
+      step: "applying",
+      clientRequestId: requestId,
+      createdSandboxId: SANDBOX_ID,
+    });
+  });
+
   it("re-wakes a staged landing terminal with the open-terminal gesture", async () => {
     const store = useStagedSandboxStore.getState();
     store.stage(surfaceKey, PERSONAL_NEW);

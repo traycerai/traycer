@@ -493,6 +493,77 @@ describe("SandboxSetupLine's failed start", () => {
   });
 });
 
+describe("SandboxSetupLine when the sandbox rested on its own", () => {
+  const RESTING_FACTS = { ...facts(false), sandboxResting: true };
+
+  it.each([
+    ["applying", null],
+    ["delivering", null],
+    ["applying", { kind: "timed-out", step: "applying" } as const],
+  ] as const)(
+    "draws nothing for a stage at step %s with failure %j",
+    (step, failure) => {
+      const { container } = render(
+        <SandboxSetupLine
+          stage={{ ...created(), step, failure }}
+          name="api-refactor"
+          facts={RESTING_FACTS}
+          actions={ACTIONS}
+        />,
+      );
+
+      expect(container.textContent).toBe("");
+    },
+  );
+
+  it("still draws the settings failure's own line", () => {
+    render(
+      <SandboxSetupLine
+        stage={{
+          ...created(),
+          step: "applying",
+          failure: {
+            kind: "settings",
+            code: "SBX-0520",
+            steps: { applied: [], notApplied: ["Providers"] },
+          },
+        }}
+        name="api-refactor"
+        facts={RESTING_FACTS}
+        actions={ACTIONS}
+      />,
+    );
+
+    expect(screen.getByTestId("sandbox-setup-line")).toBeDefined();
+  });
+
+  it("still says Resuming for a wake under way at the booting step", () => {
+    render(
+      <SandboxSetupLine
+        stage={{
+          ...created(),
+          step: "booting",
+          target: {
+            kind: "existing",
+            hostId: "host-1",
+            sandboxId: "sbx_made_1",
+            name: "api-refactor",
+            configuration: { kind: "personal" },
+            verb: "resume",
+          },
+        }}
+        name="api-refactor"
+        facts={{ ...RESTING_FACTS, sandboxStoppable: false }}
+        actions={ACTIONS}
+      />,
+    );
+
+    expect(screen.getByTestId("sandbox-setup-line").textContent).toContain(
+      "Resuming",
+    );
+  });
+});
+
 describe("SandboxSetupLine's Stop action", () => {
   it("stays available while the created sandbox's line is collapsed or expanded", () => {
     onStop.mockClear();

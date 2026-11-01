@@ -703,6 +703,10 @@ vi.mock("@/lib/host", () => ({
   useHostClient: () => null,
   useHostBinding: () => hostBinding,
 }));
+// A rested receipt reads its sandbox's state like the chat does; no host row is needed.
+vi.mock("@/hooks/host/use-host-directory-entry", () => ({
+  useHostDirectoryEntry: () => null,
+}));
 vi.mock("@/lib/sandboxes/sandbox-wake", () => ({
   startSandboxWake: (
     _queryClient: unknown,
@@ -5780,6 +5784,94 @@ describe("a send whose created sandbox stalled on settings, on a host with only 
   );
 });
 
+describe("a send whose sandbox rested on its own after the create timed out", () => {
+  const FRESH = Date.now() + 60_000;
+  let restoreLocks: () => void = () => undefined;
+  beforeEach(() => {
+    restoreLocks = installImmediateExclusiveLocks();
+  });
+  afterEach(() => {
+    restoreLocks();
+  });
+
+  function rowIn(state: SandboxSummary["state"]): SandboxSummary {
+    return sandboxSummaryFixture({
+      id: SANDBOX_ID,
+      hostId: SANDBOX_HOST,
+      state,
+      guestConfigured: true,
+    });
+  }
+
+  async function mountTimedOut(): Promise<void> {
+    seed({
+      ...SEEDED,
+      send: SEND_BY_KIND.chat,
+      phase: "creating",
+      created: true,
+    });
+    mocks.listSandboxes.mockResolvedValue(listAnswers([rowIn("awake")]));
+    answerSandboxRows([rowIn("awake")], FRESH);
+    answerHost(SANDBOX_HOST, CODEX_READY);
+    mount();
+    await screen.findByTestId("pending-sandbox-sends");
+    act(() => {
+      useStagedSandboxStore.getState().report(SURFACE, {
+        step: "applying",
+        stepAt: Date.now(),
+        failure: { kind: "timed-out", step: "applying" },
+      });
+    });
+    await screen.findByTestId("sandbox-setup-line");
+    expect(document.body.textContent).toContain("compute is charged");
+  }
+
+  it("ends the create line, gives the message back on that sandbox and says it is suspended", async () => {
+    await mountTimedOut();
+
+    answerSandboxRows([rowIn("suspended")], FRESH + 1);
+
+    await waitFor(() => {
+      expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+    });
+    expect(screen.queryByTestId("sandbox-setup-line")).toBeNull();
+    expect(document.body.textContent).not.toContain("compute is charged");
+    expect(document.body.textContent).not.toContain("taking longer");
+    expect(mocks.wake).not.toHaveBeenCalled();
+    expect(createChatCalls()).toEqual([]);
+    expect(
+      useNewConversationModalStore.getState().draftPatchesByEpicId["epic-1"],
+    ).toMatchObject({
+      content: MESSAGE_CONTENT,
+      returnedSandbox: {
+        target: {
+          kind: "existing",
+          hostId: SANDBOX_HOST,
+          sandboxId: SANDBOX_ID,
+          verb: "resume",
+        },
+      },
+    });
+    const line = await screen.findByTestId("sandbox-stopped-line");
+    expect(line.textContent).toContain(
+      "build-box is suspended · your next message resumes it",
+    );
+    expect(line.textContent).not.toContain("wasn't sent");
+  });
+
+  it("drops the footer once the sandbox is awake again", async () => {
+    await mountTimedOut();
+    answerSandboxRows([rowIn("suspended")], FRESH + 1);
+    await screen.findByTestId("sandbox-stopped-line");
+
+    answerSandboxRows([rowIn("awake")], FRESH + 2);
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("sandbox-stopped-line")).toBeNull();
+    });
+  });
+});
+
 describe("a send held on settings that didn't apply, once its sandbox leaves awake", () => {
   const FRESH = Date.now() + 60_000;
   let restoreLocks: () => void = () => undefined;
@@ -5875,8 +5967,9 @@ describe("a send held on settings that didn't apply, once its sandbox leaves awa
     expect(useNewConversationModalOpenStore.getState().request).toBeNull();
     const line = await screen.findByTestId("sandbox-stopped-line");
     expect(line.textContent).toContain(
-      "Your message wasn't sent; it's back in the composer.",
+      "build-box is suspended · your next message resumes it",
     );
+    expect(line.textContent).not.toContain("wasn't sent");
 
     fireEvent.click(within(line).getByRole("button", { name: "Open draft" }));
 
@@ -6019,8 +6112,9 @@ describe("a send held on settings that didn't apply, once its sandbox leaves awa
     expect(useNewConversationModalOpenStore.getState().request).toBeNull();
     const line = await screen.findByTestId("sandbox-stopped-line");
     expect(line.textContent).toContain(
-      "Your message wasn't sent; it's saved in your drafts.",
+      "build-box is suspended · your next message resumes it",
     );
+    expect(line.textContent).not.toContain("wasn't sent");
   });
 
   it("keeps the resting sandbox on the message's draft when the task's composer holds another message", async () => {

@@ -1143,6 +1143,49 @@ async function afterCommit(): Promise<void> {
   });
 }
 
+describe("useStagedSandboxSend when its sandbox rested on its own", () => {
+  function listCreated(state: "suspended" | "awake"): void {
+    mocks.sandboxes = [
+      sandboxSummaryFixture({ id: "sbx-1", hostId: NEW_HOST, state }),
+    ];
+  }
+
+  it("goes back to staged with its key and target kept, and draws no setup line", async () => {
+    stageCreated("applying", { kind: "timed-out", step: "applying" });
+    const clientRequestId = readStagedSandbox(SURFACE)?.clientRequestId;
+    listCreated("suspended");
+    mount(vi.fn());
+
+    await waitFor(() => {
+      expect(readStagedSandbox(SURFACE)?.phase).toBe("staged");
+    });
+    expect(readStagedSandbox(SURFACE)).toMatchObject({
+      clientRequestId,
+      target: { kind: "new", name: "api-refactor" },
+      failure: null,
+    });
+    expect(screen.queryByTestId("sandbox-setup-line")).toBeNull();
+    expect(document.body.textContent).not.toContain("compute is charged");
+  });
+
+  it("keeps waiting while the same sandbox is awake", () => {
+    stageCreated("applying", { kind: "timed-out", step: "applying" });
+    listCreated("awake");
+    mount(vi.fn());
+
+    expect(readStagedSandbox(SURFACE)?.phase).toBe("creating");
+    expect(screen.getByTestId("sandbox-setup-line")).toBeDefined();
+  });
+
+  it("does not cancel a wake under way at the booting step", () => {
+    stageCreated("booting", null);
+    listCreated("suspended");
+    mount(vi.fn());
+
+    expect(readStagedSandbox(SURFACE)?.phase).toBe("creating");
+  });
+});
+
 describe("useStagedSandboxSend's handoff", () => {
   it("drops a handoff whose sending draft is gone as it unmounts, and keeps one across a remount", async () => {
     handoffWaitingOn("draft-a");
