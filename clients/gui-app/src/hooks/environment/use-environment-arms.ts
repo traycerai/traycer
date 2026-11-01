@@ -60,9 +60,10 @@ export function publishEnvironmentArmScope(
 }
 
 /**
- * Says discovery has answered with no chat arm to read: the viewer is in no
- * team, or the pool does not serve them. A `null` scope alone does not say so,
- * since it is also what discovery still out publishes.
+ * Says discovery is over with no chat arm to read: the environment list
+ * answered or failed, and it names no team or the pool does not serve the
+ * arms. A `null` scope alone does not say so, since it is also what discovery
+ * still out publishes.
  */
 export function publishEnvironmentChatArmsAbsent(absent: boolean): void {
   if (chatArmsAbsent === absent) return;
@@ -274,8 +275,8 @@ export function useEnvironmentArmChats(
 
 /**
  * Whether every arm of `taskId` has answered with no row for this chat, so
- * none will name its owner. True once discovery says there are no arms, and
- * never while it is out.
+ * none will name its owner. True once discovery is over with no arms to read,
+ * and never while it is out.
  */
 export function useEnvironmentArmsLackChat(
   taskId: string,

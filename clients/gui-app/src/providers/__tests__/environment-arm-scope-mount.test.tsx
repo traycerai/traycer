@@ -8,7 +8,8 @@
  * no arms.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render } from "@testing-library/react";
+import type { ReactNode } from "react";
+import { cleanup, renderHook } from "@testing-library/react";
 import type { EnvironmentListResponseV11 } from "@traycer/protocol/host/environment/contracts";
 import type { StreamMethodSupport } from "@traycer-clients/shared/host-transport/ws-stream-client";
 import { FakeStreamClient } from "@traycer-clients/shared/host-transport/__testing__/fake-stream-client";
@@ -85,26 +86,20 @@ const TEAM: EnvironmentListResponseV11["environments"][number] = {
   providerHandle: "team",
 };
 
-function Probe(props: { readonly onRead: (lacks: boolean) => void }) {
-  props.onRead(useEnvironmentArmsLackChat("task-1", "chat-1", "host-1"));
-  return null;
-}
-
 /** What the chat tile reads once the mount has run. */
 function lacksChat(): boolean {
-  const read: { lacks: boolean | null } = { lacks: null };
-  render(
-    <>
-      <EnvironmentArmScopeMount />
-      <Probe
-        onRead={(value) => {
-          read.lacks = value;
-        }}
-      />
-    </>,
+  const { result } = renderHook(
+    () => useEnvironmentArmsLackChat("task-1", "chat-1", "host-1"),
+    {
+      wrapper: ({ children }: { readonly children: ReactNode }) => (
+        <>
+          <EnvironmentArmScopeMount />
+          {children}
+        </>
+      ),
+    },
   );
-  if (read.lacks === null) throw new Error("the probe did not render");
-  return read.lacks;
+  return result.current;
 }
 
 describe("EnvironmentArmScopeMount's absence of chat arms", () => {
