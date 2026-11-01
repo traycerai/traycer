@@ -1,4 +1,5 @@
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+import { useLayoutEffect } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -174,5 +175,68 @@ describe("useSandboxEndRead", () => {
     // not wait for it.
     expect(reads.thisCalls).toBe(2);
     expect(queryClient.isFetching()).toBeGreaterThan(0);
+  });
+  it("holds on every commit after the state turns unknown, though an earlier read had already failed, until this edge's own read fails", async () => {
+    let failThird: (error: HostTransportFailureError) => void = () => {
+      throw new Error("the third read has not started");
+    };
+    const third = new Promise<ListTaskHostsResponse>((_resolve, reject) => {
+      failThird = reject;
+    });
+    reads.thisTask = [
+      () => Promise.resolve(EMPTY),
+      () => Promise.reject(transientFailure()),
+      () => third,
+    ];
+    // Every commit's reading, taken as the commit lands: the defect this pins
+    // exists on the first commit only, so the last value cannot show it.
+    const commits: Array<{ unknown: boolean; holding: boolean }> = [];
+    const latest: {
+      failureCount: number;
+      refetch: () => Promise<unknown>;
+    } = { failureCount: 0, refetch: () => Promise.resolve() };
+    const view = renderHook(
+      (props: { readonly unknown: boolean }) => {
+        const task = useTaskHosts(client, THIS_TASK);
+        const holding = useSandboxEndRead(THIS_TASK, props.unknown);
+        latest.failureCount = task.failureCount;
+        latest.refetch = task.refetch;
+        useLayoutEffect(() => {
+          commits.push({ unknown: props.unknown, holding });
+        });
+        return holding;
+      },
+      { wrapper, initialProps: { unknown: false } },
+    );
+    await waitFor(() => expect(reads.thisCalls).toBe(1));
+
+    // An earlier read fails once: the query's failure count is 1 while its
+    // retry waits.
+    act(() => {
+      void latest.refetch();
+    });
+    await waitFor(() => expect(latest.failureCount).toBe(1));
+    expect(reads.thisCalls).toBe(2);
+
+    const commitsBeforeEdge = commits.length;
+    view.rerender({ unknown: true });
+    await waitFor(() => expect(reads.thisCalls).toBe(3));
+
+    // From the first commit with the state unknown to the dispatch of this
+    // edge's own read, nothing released the hold.
+    const sinceEdge = commits.slice(commitsBeforeEdge);
+    expect(sinceEdge.length).toBeGreaterThan(0);
+    expect(sinceEdge.every((commit) => commit.unknown)).toBe(true);
+    expect(sinceEdge.map((commit) => commit.holding)).toEqual(
+      sinceEdge.map(() => true),
+    );
+    expect(view.result.current).toBe(true);
+
+    // This edge's own read fails once: the first-failure bound still ends it.
+    await act(async () => {
+      failThird(transientFailure());
+      await third.catch(() => undefined);
+    });
+    await waitFor(() => expect(view.result.current).toBe(false));
   });
 });

@@ -19,6 +19,7 @@ export function useSandboxEndRead(
     epicId,
   );
   const [seen, setSeen] = useState({ unknown: false, reads: 0 });
+  const [sent, setSent] = useState(0);
   const [answered, setAnswered] = useState(0);
   if (seen.unknown !== stateUnknown) {
     setSeen({
@@ -35,9 +36,14 @@ export function useSandboxEndRead(
     void refetch().finally(() => {
       if (active) setAnswered(reads);
     });
+    queueMicrotask(() => {
+      if (active) setSent(reads);
+    });
     return () => {
       active = false;
     };
   }, [isEnabled, reads, refetch]);
-  return stateUnknown && isEnabled && answered < reads && failureCount === 0;
+  // A failure counted before this read was sent is not its answer.
+  const unanswered = sent < reads || failureCount === 0;
+  return stateUnknown && isEnabled && answered < reads && unanswered;
 }
