@@ -424,6 +424,8 @@ function SandboxListSection(props: SandboxListSectionProps): ReactNode {
       configuration={configuration}
     />
   );
+  // The same slot in both returns: the list emptying or a sign-in change must
+  // not remount a confirmation whose batch is running or whose results show.
   const destroyDialog = (
     <SandboxDestroyAllIdleDialog
       targets={destroyAllTargets ?? []}
@@ -459,70 +461,73 @@ function SandboxListSection(props: SandboxListSectionProps): ReactNode {
   const destroyAllOffered = sandboxDestroyAllIdleOffered(filter);
   const idleTargets = shown.filter((row) => row.kind !== "automation");
   return (
-    <section aria-label="Sandboxes" data-testid="sandboxes-list">
-      <div className="flex flex-col gap-3 border-b border-border/60 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
-        <SandboxListHeading
-          configuration={configuration}
-          summary={summary}
-          rows={configurationRows}
-          unstartedAutomations={unstartedAutomations}
-          figures={figures}
-        />
-        <div className="flex min-w-0 items-center gap-2">
-          <div className="relative min-w-0 flex-1 sm:w-56 sm:flex-none">
-            <Search
-              className="pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2 text-muted-foreground"
-              aria-hidden
-            />
-            <Input
-              value={filter.search}
-              placeholder="Search by name or task"
-              aria-label="Search by name or task"
-              className="pl-7"
-              data-testid="sandboxes-search"
-              onChange={(event) =>
-                setFilter({ ...filter, search: event.target.value })
-              }
-            />
+    <>
+      <section aria-label="Sandboxes" data-testid="sandboxes-list">
+        <div className="flex flex-col gap-3 border-b border-border/60 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+          <SandboxListHeading
+            configuration={configuration}
+            summary={summary}
+            rows={configurationRows}
+            unstartedAutomations={unstartedAutomations}
+            figures={figures}
+          />
+          <div className="flex min-w-0 items-center gap-2">
+            <div className="relative min-w-0 flex-1 sm:w-56 sm:flex-none">
+              <Search
+                className="pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2 text-muted-foreground"
+                aria-hidden
+              />
+              <Input
+                value={filter.search}
+                placeholder="Search by name or task"
+                aria-label="Search by name or task"
+                className="pl-7"
+                data-testid="sandboxes-search"
+                onChange={(event) =>
+                  setFilter({ ...filter, search: event.target.value })
+                }
+              />
+            </div>
+            <SandboxFilterMenu filter={filter} onChange={setFilter} />
+            {!destroyAllOffered ? null : (
+              <Button
+                type="button"
+                variant="destructive"
+                size="sm"
+                data-testid="sandboxes-destroy-all-idle"
+                disabled={idleTargets.length === 0}
+                onClick={() => setDestroyAllTargets(idleTargets)}
+              >
+                Destroy all idle
+              </Button>
+            )}
           </div>
-          <SandboxFilterMenu filter={filter} onChange={setFilter} />
-          {!destroyAllOffered ? null : (
-            <Button
-              type="button"
-              variant="destructive"
-              size="sm"
-              data-testid="sandboxes-destroy-all-idle"
-              disabled={idleTargets.length === 0}
-              onClick={() => setDestroyAllTargets(idleTargets)}
-            >
-              Destroy all idle
-            </Button>
-          )}
         </div>
-      </div>
-      <ul className="divide-y divide-border/60">
-        {shown.map((row) => (
-          <SandboxListRow
-            key={row.id}
-            summary={row}
-            list={list}
-            configuration={configuration}
-            cost={
-              costs.data?.sandboxes.find((cost) => cost.sandboxId === row.id) ??
-              null
-            }
-            viewerUserId={viewerUserId}
-          />
-        ))}
-        {unstartedShown ? (
-          <UnstartedAutomationsRow
-            configuration={configuration}
-            teamEnvironmentId={automationEnvironmentId}
-          />
-        ) : null}
-      </ul>
+        <ul className="divide-y divide-border/60">
+          {shown.map((row) => (
+            <SandboxListRow
+              key={row.id}
+              summary={row}
+              list={list}
+              configuration={configuration}
+              cost={
+                costs.data?.sandboxes.find(
+                  (cost) => cost.sandboxId === row.id,
+                ) ?? null
+              }
+              viewerUserId={viewerUserId}
+            />
+          ))}
+          {unstartedShown ? (
+            <UnstartedAutomationsRow
+              configuration={configuration}
+              teamEnvironmentId={automationEnvironmentId}
+            />
+          ) : null}
+        </ul>
+      </section>
       {destroyDialog}
-    </section>
+    </>
   );
 }
 
