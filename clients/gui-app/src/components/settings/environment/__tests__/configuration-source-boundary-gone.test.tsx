@@ -636,14 +636,19 @@ describe("a team the environment list no longer carries", () => {
         throw new Error("down");
       },
     });
-    const element = (
+    // Built fresh per render on purpose. React bails out of a child whose
+    // element is the same object when no context it reads has changed, so
+    // re-rendering with one shared element would skip this subtree entirely
+    // and the re-ask assertion below would hold without the page having
+    // rendered at all.
+    const tree = (): ReactNode => (
       <HeldValueHostRuntime>
         <PersonalPageFrame section="secrets">
           <Probe />
         </PersonalPageFrame>
       </HeldValueHostRuntime>
     );
-    const view = render(element, { wrapper: harness.Wrapper });
+    const view = render(tree(), { wrapper: harness.Wrapper });
 
     // The list says the team is gone, but a read that failed is no answer
     // about an invitation: nothing is claimed, and the selection the person
@@ -668,7 +673,7 @@ describe("a team the environment list no longer carries", () => {
     // A failed reply ends the asking rather than starting another, so a page
     // left on this state does not turn into a stream of account-wide
     // requests. Rendering again is the cheapest thing that would restart one.
-    view.rerender(element);
+    view.rerender(tree());
     await waitFor(() => {
       expect(harness.queryClient.isFetching()).toBe(0);
     });
