@@ -391,7 +391,8 @@ function makeEmptySessionMeta(epicId: string): SnapshotMetaEpic {
 /**
  * A live, loaded Epic session with an EMPTY tree - the projection a remote
  * deletion leaves behind once it has synced. No `tuiAgents`/`chats` entry is
- * ever seeded for the closed row this suite proves dead.
+ * ever seeded for the closed row, and `epic.listTuiAgents` has not answered
+ * until a case says so.
  */
 function newEmptyEpicSession(
   epicId: string,
