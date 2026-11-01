@@ -21,7 +21,9 @@ import type { EnvironmentListResponseV11 } from "@traycer/protocol/host/environm
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { TalkControl } from "@/components/layout/voice/talk-control";
+import { useInstalledAppLevel2Form } from "@/hooks/ui/use-installed-app-level2-form";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
+import type { MobileLevel2Form } from "@/lib/layout/mobile-layout-form";
 import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
@@ -87,11 +89,11 @@ import {
   type BotOpenSession,
 } from "@/components/bots/bot-session-view";
 import type { BotThreadSummary } from "@traycer/protocol/host/bot/conversation-schemas";
+import type { BotThreadsViewState } from "@/components/bots/bot-channel-sidebar";
 import {
-  BotChannelSidebar,
-  type BotThreadsViewState,
-} from "@/components/bots/bot-channel-sidebar";
-import { BotResizablePane } from "@/components/bots/bot-resizable-pane";
+  BotChannelColumn,
+  BotChannelTitle,
+} from "@/components/bots/bot-channel-level2";
 import { BotActivityPage } from "@/components/bots/bot-activity-page";
 import { BotThreadsView } from "@/components/bots/bot-threads-view";
 import { useBotThreadListQuery } from "@/hooks/bots/use-bot-thread-list-query";
@@ -227,6 +229,7 @@ function TracySurfaceShell(props: {
     [leaveThreads, threadsShown],
   );
 
+  const level2 = useInstalledAppLevel2Form(1);
   const shown = usePaneVisible();
   const select = useCallback(
     (next: string | null) => selectTracyChannel(navigate, next, shown),
@@ -252,20 +255,12 @@ function TracySurfaceShell(props: {
 
   return (
     <div className="@container flex h-full min-h-0" data-testid="bot-tab">
-      <BotResizablePane
-        pane="sidebar"
-        edge="right"
-        label="Resize channels"
-        className="hidden min-h-0 w-(--bot-pane-width) max-w-[40%] shrink-0 flex-col border-r border-canvas-border/70 @3xl:flex"
-        handleClassName=""
-        testId="bot-channel-sidebar-pane"
-      >
-        <BotChannelSidebar
-          activeBotId={botId}
-          hostId={hostId}
-          threadsView={threadsView}
-        />
-      </BotResizablePane>
+      <BotChannelColumn
+        level2={level2}
+        activeBotId={botId}
+        hostId={hostId}
+        threadsView={threadsView}
+      />
       <div
         className="relative flex min-h-0 min-w-0 flex-1 md:bg-canvas"
         data-testid="bot-tab-content-pane"
@@ -294,8 +289,8 @@ function TracySurfaceShell(props: {
             key={botId}
             botId={botId}
             hostId={hostId}
-            threadsShown={threadsShown}
-            onLeaveThreads={leaveThreads}
+            level2={level2}
+            threadsView={threadsView}
             onGone={forgetChannel}
           />
         )}
@@ -575,11 +570,14 @@ function useChannelRoute(
 function TracyChannelPane(props: {
   readonly botId: string;
   readonly hostId: string;
-  readonly threadsShown: boolean;
-  readonly onLeaveThreads: () => void;
+  /** The shell's level-2 form, which the channel's title follows. */
+  readonly level2: MobileLevel2Form | null;
+  /** The shell's Threads, shown in place of the channel's views. */
+  readonly threadsView: BotThreadsViewState;
   readonly onGone: (botId: string) => void;
 }): ReactNode {
-  const { botId, hostId, threadsShown } = props;
+  const { botId, hostId, level2, threadsView } = props;
+  const threadsShown = threadsView.shown;
   const client = useTabHostClient();
   // The channel shows: it is visited. Before any passive effect of the
   // pane's, so a channel reported gone on its first commit is forgotten after
@@ -600,7 +598,14 @@ function TracyChannelPane(props: {
   if (threadsShown && route.kind !== "bot") return null;
   if (route.kind === "connecting") return <BotTabConnecting />;
   if (route.kind === "setup") {
-    return <TeamSetupChannel setup={route.setup} client={client} />;
+    return (
+      <TeamSetupChannel
+        setup={route.setup}
+        client={client}
+        hostId={hostId}
+        level2={level2}
+      />
+    );
   }
   if (route.kind === "unresolved") {
     return (
@@ -617,8 +622,8 @@ function TracyChannelPane(props: {
       hostId={hostId}
       listedBots={botList.data?.bots}
       mainBotIds={botList.data?.mainBotIds}
-      threadsShown={threadsShown}
-      onLeaveThreads={props.onLeaveThreads}
+      level2={level2}
+      threadsView={threadsView}
       onGone={props.onGone}
     />
   );
@@ -630,12 +635,12 @@ function BotTabBody(props: {
   /** `bot.list`'s bots; `undefined` until the list answers. */
   readonly listedBots: ReadonlyArray<BotRecord> | undefined;
   readonly mainBotIds: MainBotIds | undefined;
-  readonly threadsShown: boolean;
-  readonly onLeaveThreads: () => void;
+  readonly level2: MobileLevel2Form | null;
+  readonly threadsView: BotThreadsViewState;
   readonly onGone: (botId: string) => void;
 }): ReactNode {
-  const { botId, hostId, listedBots, threadsShown, onLeaveThreads, onGone } =
-    props;
+  const { botId, hostId, listedBots, threadsView, onGone } = props;
+  const { shown: threadsShown, onLeave: onLeaveThreads } = threadsView;
   const subscription = useBotSubscriptionForHost({
     botId,
     hostId,
@@ -765,7 +770,8 @@ function BotTabBody(props: {
       onRetry={resubscribe}
       view={view}
       onViewChange={changeView}
-      threadsShown={threadsShown}
+      level2={props.level2}
+      threadsView={threadsView}
       onDeleted={deleted}
       mainBotIds={props.mainBotIds}
     />
@@ -1203,8 +1209,10 @@ function BotTabContent(props: {
   readonly onRetry: () => void;
   readonly view: BotTabView;
   readonly onViewChange: (view: BotTabView) => void;
+  /** The shell's level-2 form, which the channel's title follows. */
+  readonly level2: MobileLevel2Form | null;
   /** Threads, from the column, shows in place of the channel's views. */
-  readonly threadsShown: boolean;
+  readonly threadsView: BotThreadsViewState;
   /** The bot was deleted from its settings. */
   readonly onDeleted: () => void;
   /** `bot.list`'s main bots; `undefined` until the list answers. */
@@ -1221,10 +1229,12 @@ function BotTabContent(props: {
     onRetry,
     view,
     onViewChange,
-    threadsShown,
+    level2,
+    threadsView,
     onDeleted,
     mainBotIds,
   } = props;
+  const threadsShown = threadsView.shown;
   const client = useTabHostClient();
   const isMain = isMainBot(mainBotIds, snapshot.bot);
   const environments = useEnvironmentListQuery(client, true);
@@ -1421,6 +1431,10 @@ function BotTabContent(props: {
                   className="flex min-h-0 min-w-0 flex-1 flex-col gap-0"
                 >
                   <BotChannelHeader
+                    level2={level2}
+                    botId={botId}
+                    hostId={hostId}
+                    threadsView={threadsView}
                     title={snapshot.bot.title}
                     isMain={isMain === true}
                     settingsOpen={settingsOpen}
@@ -1608,6 +1622,10 @@ function ErrorNotice(props: {
  * and first, what runs and the tasks it tracks.
  */
 function BotChannelHeader(props: {
+  readonly level2: MobileLevel2Form | null;
+  readonly botId: string;
+  readonly hostId: string;
+  readonly threadsView: BotThreadsViewState;
   readonly title: string;
   readonly isMain: boolean;
   readonly settingsOpen: boolean;
@@ -1636,12 +1654,13 @@ function BotChannelHeader(props: {
             <BotAvatar size="sm" />
           </button>
         </BotIdentityTrigger>
-        <h1
-          className="min-w-0 truncate text-ui-md font-bold text-foreground"
-          data-testid="bot-tab-title"
-        >
-          {props.title}
-        </h1>
+        <BotChannelTitle
+          level2={props.level2}
+          title={props.title}
+          activeBotId={props.botId}
+          hostId={props.hostId}
+          threadsView={props.threadsView}
+        />
         {props.isMain ? (
           <MainBotBadge testId="bot-tab-main" tone="muted" />
         ) : null}

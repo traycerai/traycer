@@ -248,6 +248,49 @@ describe("The Skills page", () => {
     expect(await screen.findByText("Review a change.")).toBeTruthy();
   });
 
+  it("mounts a host switch beside the upload only once the host refuses it as not-served, and never names a host for the room's list", async () => {
+    negotiateMethods({
+      ...BASE_METHODS,
+      "environment.configuration.skills.upload": LIST,
+    });
+    const harness = mountTeamPage(poolSource("editor"), {
+      ...handlers({ list: listed([BUILT_IN], null), hostSkills: [] }),
+      // Two eligible hosts, so a picker drawn here would have a switch in it.
+      "environment.host.list": () => ({
+        hosts: [
+          reachableHost,
+          { ...reachableHost, hostId: "host-b", hostLabel: "Studio" },
+        ],
+      }),
+      "environment.configuration.skills.upload": () => ({
+        outcome: "not_served" as const,
+        reason: null,
+      }),
+    });
+    render(<EnvironmentSkillsPage />, { wrapper: harness.Wrapper });
+
+    // The list comes from the room, so the page names no host for it.
+    await userEvent.type(await screen.findByLabelText("Skill name"), "review");
+    expect(screen.queryByText(/as reported by/)).toBeNull();
+    expect(screen.queryAllByRole("combobox")).toHaveLength(0);
+
+    await userEvent.upload(
+      screen.getByLabelText("Skill folder archive"),
+      new File([new Uint8Array([1, 2, 3, 4])], "review.tar.gz", {
+        type: "application/gzip",
+      }),
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Add a skill" }));
+
+    // The refusal is the one moment this page needs a host of its own: a
+    // switch mounts and opens on the hosts it can switch to. (Its trigger is
+    // aria-hidden while the list is open, so the options are what to read.)
+    expect(await screen.findByRole("option", { name: "Studio" })).toBeTruthy();
+    // Still the switch alone: the skills on screen came from the room, and
+    // `as reported by <host>` was never true of them.
+    expect(screen.queryByText(/as reported by/)).toBeNull();
+  });
+
   describe("a skill's files that cannot be read", () => {
     async function openReview(
       nativeSkills: () => readonly ProviderSkill[],
@@ -570,20 +613,83 @@ describe("The Skills page", () => {
     expect(screen.queryByRole("button", { name: "Remove" })).toBeNull();
   });
 
-  it("says skills need a host when the viewing host does not serve the configuration", async () => {
-    negotiateMethods(BASE_METHODS);
-    const harness = mountTeamPage(
-      poolSource("editor"),
-      handlers({ list: { outcome: "not_served" }, hostSkills: [] }),
-    );
-    render(<EnvironmentSkillsPage />, { wrapper: harness.Wrapper });
+  it.each([
+    {
+      what: "the only host there is, is the one being read",
+      hosts: [reachableHost],
+      line: "Skills need a host running Acme.",
+      verb: false,
+    },
+    {
+      what: "another host could be read instead",
+      hosts: [
+        reachableHost,
+        { ...reachableHost, hostId: "host-b", hostLabel: "Studio" },
+      ],
+      line: "Skills need a host running Acme.Pick one.",
+      verb: true,
+    },
+  ])(
+    "offers Pick one. only where the picker has something to switch to: $what",
+    async ({ hosts, line, verb }) => {
+      negotiateMethods(BASE_METHODS);
+      const harness = mountTeamPage(poolSource("editor"), {
+        ...handlers({ list: { outcome: "not_served" }, hostSkills: [] }),
+        "environment.host.list": () => ({ hosts }),
+      });
+      render(<EnvironmentSkillsPage />, { wrapper: harness.Wrapper });
 
-    await waitFor(() => {
-      expect(screen.getByRole("status").textContent).toBe(
-        "Skills need a host running Acme.Pick one.",
+      await waitFor(() => {
+        expect(screen.getByRole("status").textContent).toBe(line);
+      });
+      // The verb and the picker's own Select answer the same question, so
+      // neither is ever drawn without the other.
+      const select = screen.queryAllByRole("combobox");
+      expect(screen.queryByRole("button", { name: "Pick one." }) !== null).toBe(
+        verb,
       );
-    });
-  });
+      expect(select.length > 0).toBe(verb);
+    },
+  );
+
+  it.each([
+    {
+      source: personalPoolSource(),
+      line: "No computer running Personal can be reached.Retry",
+      picked: "Skills need a host running Personal.",
+    },
+    {
+      source: poolSource("editor"),
+      line: "No host running Acme can be reached.Retry",
+      picked: "Skills need a host running Acme.",
+    },
+  ])(
+    "says no host can be reached, with Retry and no dead Pick one, while the configuration's hosts do not answer: $line",
+    async ({ source, line, picked }) => {
+      negotiateMethods(BASE_METHODS);
+      const world = { reachable: false };
+      const harness = mountTeamPage(source, {
+        ...handlers({ list: { outcome: "not_served" }, hostSkills: [] }),
+        "environment.host.list": () => ({
+          hosts: [{ ...reachableHost, reachable: world.reachable }],
+        }),
+      });
+      render(<EnvironmentSkillsPage />, { wrapper: harness.Wrapper });
+
+      await waitFor(() => {
+        expect(screen.getByRole("status").textContent).toBe(line);
+      });
+      expect(screen.queryByRole("button", { name: "Pick one." })).toBeNull();
+
+      // Retry reads the host list again, and the remedy follows the answer.
+      world.reachable = true;
+      await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+
+      await waitFor(() => {
+        expect(screen.getByRole("status").textContent).toBe(picked);
+      });
+    },
+  );
 
   it("names Personal on Personal's page and lists for Personal's environment", async () => {
     negotiateMethods(BASE_METHODS);
@@ -604,10 +710,172 @@ describe("The Skills page", () => {
       );
     });
     expect(
-      await screen.findByText(
-        "Skills give agents instructions for a kind of task.",
-      ),
+      await screen.findByText("No skills added to Personal."),
     ).toBeTruthy();
+  });
+
+  it("names no host, and offers no host picker, for a list that came from the room", async () => {
+    negotiateMethods(BASE_METHODS);
+    const harness = mountTeamPage(
+      personalPoolSource(),
+      handlers({ list: listed([REVIEW], null), hostSkills: [] }),
+    );
+    render(<EnvironmentSkillsPage />, { wrapper: harness.Wrapper });
+
+    expect(await screen.findByText("review")).toBeTruthy();
+    expect(screen.queryByText(/as reported by/)).toBeNull();
+    expect(screen.queryByText("Use another host")).toBeNull();
+    expect(screen.queryByRole("combobox")).toBeNull();
+  });
+
+  it("reads the page's own line on the first paint, not a bare spinner", async () => {
+    // No negotiated manifest: the list method's version is unknown, which is
+    // the state the page opens in.
+    const harness = mountTeamPage(
+      personalPoolSource(),
+      handlers({ list: listed([REVIEW], null), hostSkills: [] }),
+    );
+    render(<EnvironmentSkillsPage />, { wrapper: harness.Wrapper });
+
+    expect(await screen.findByText("Reading Personal's skills…")).toBeTruthy();
+  });
+
+  it("says no skills are added, naming the team, when the list is empty", async () => {
+    negotiateMethods(BASE_METHODS);
+    const harness = mountTeamPage(
+      poolSource("editor"),
+      handlers({ list: listed([], null), hostSkills: [] }),
+    );
+    render(<EnvironmentSkillsPage />, { wrapper: harness.Wrapper });
+
+    expect(await screen.findByText("No skills added to Acme.")).toBeTruthy();
+    expect(
+      screen.queryByText("Skills give agents instructions for a kind of task."),
+    ).toBeNull();
+  });
+
+  it("marks the row being removed until the list no longer holds it", async () => {
+    negotiateMethods(BASE_METHODS);
+    let listedSkills: readonly EnvironmentSkillV11[] = [REVIEW];
+    let release: () => void = () => undefined;
+    const removal = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const harness = mountTeamPage(poolSource("editor"), {
+      ...handlers({ list: listed([REVIEW], null), hostSkills: [] }),
+      "environment.configuration.skills.list": () => listed(listedSkills, null),
+      "environment.configuration.skills.remove": async () => {
+        await removal;
+        return { outcome: "removed" as const, reason: null };
+      },
+    });
+    render(<EnvironmentSkillsPage />, { wrapper: harness.Wrapper });
+
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Remove" }),
+    );
+    await userEvent.click(
+      within(await screen.findByRole("dialog")).getByRole("button", {
+        name: "Remove skill",
+      }),
+    );
+
+    const row = async (): Promise<HTMLElement> => {
+      const found = (await screen.findByText("review")).closest("li");
+      if (found === null) throw new Error("no row for review");
+      return found;
+    };
+    // In flight.
+    await waitFor(async () => {
+      expect(within(await row()).getByText("Removing…")).toBeTruthy();
+    });
+    expect(
+      within(await row()).queryByRole("button", { name: "Remove" }),
+    ).toBeNull();
+    expect(
+      within(await row()).queryByRole("button", { name: "Edit" }),
+    ).toBeNull();
+
+    // Accepted, and the read that follows still lists the skill: the row must
+    // keep saying so rather than offering its verbs again.
+    await act(async () => {
+      release();
+      await removal;
+    });
+    await waitFor(() => {
+      expect(harness.queryClient.isMutating()).toBe(0);
+    });
+    expect(within(await row()).getByText("Removing…")).toBeTruthy();
+
+    listedSkills = [];
+    await act(async () => {
+      await harness.queryClient.refetchQueries({
+        predicate: (query) =>
+          query.queryKey.includes("environment.configuration.skills.list"),
+      });
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByText("review")).toBeNull();
+    });
+  });
+
+  it("holds each removed row on its own, so a second removal releases neither the first nor itself when it is refused", async () => {
+    negotiateMethods(BASE_METHODS);
+    const SECOND: EnvironmentSkillV11 = {
+      ...REVIEW,
+      name: "second",
+      description: null,
+    };
+    // The list keeps holding both names, as it does until a read catches up.
+    const world = { refuse: false };
+    const harness = mountTeamPage(poolSource("editor"), {
+      ...handlers({ list: listed([REVIEW, SECOND], null), hostSkills: [] }),
+      "environment.configuration.skills.remove": () =>
+        world.refuse
+          ? { outcome: "refused" as const, reason: null }
+          : { outcome: "removed" as const, reason: null },
+    });
+    render(<EnvironmentSkillsPage />, { wrapper: harness.Wrapper });
+
+    const rowOf = async (skill: string): Promise<HTMLElement> => {
+      const found = (await screen.findByText(skill)).closest("li");
+      if (found === null) throw new Error(`no row for ${skill}`);
+      return found;
+    };
+    const removeFrom = async (skill: string): Promise<void> => {
+      await userEvent.click(
+        within(await rowOf(skill)).getByRole("button", { name: "Remove" }),
+      );
+      await userEvent.click(
+        within(await screen.findByRole("dialog")).getByRole("button", {
+          name: "Remove skill",
+        }),
+      );
+      await waitFor(() => {
+        expect(screen.queryByRole("dialog")).toBeNull();
+      });
+    };
+
+    await removeFrom("review");
+    await waitFor(async () => {
+      expect(within(await rowOf("review")).getByText("Removing…")).toBeTruthy();
+    });
+
+    // The second removal is refused: it goes back to its verbs, and the first
+    // one — still accepted, still listed — keeps saying it is going.
+    world.refuse = true;
+    await removeFrom("second");
+
+    await waitFor(async () => {
+      expect(
+        within(await rowOf("second")).getByRole("button", { name: "Remove" }),
+      ).toBeTruthy();
+    });
+    expect(within(await rowOf("review")).getByText("Removing…")).toBeTruthy();
+    expect(
+      within(await rowOf("review")).queryByRole("button", { name: "Remove" }),
+    ).toBeNull();
   });
 
   it("says the read failed, naming the configuration, and Retry reads again", async () => {
@@ -790,27 +1058,111 @@ describe("A provider's Skills tab on Personal or a team", () => {
     },
   );
 
-  it("says a built-in skill comes with Traycer on the provider's tab, and says nothing on a written one", async () => {
+  it("says once above the list that built-ins come with Traycer, and marks each built-in row", async () => {
     negotiateMethods(SWITCHES);
     const harness = mountTeamPage(
       poolSource("editor"),
-      handlers({ list: listed([REVIEW, BUILT_IN], "pol-1"), hostSkills: [] }),
+      handlers({
+        list: listed(
+          [REVIEW, BUILT_IN, { ...BUILT_IN, name: "second-built" }],
+          "pol-1",
+        ),
+        hostSkills: [],
+      }),
     );
     render(<EnvironmentProviderSkillsTab providerId="claude-code" />, {
       wrapper: harness.Wrapper,
     });
 
-    const builtIn = (await screen.findByText("find-skills")).closest("li");
+    expect(
+      await screen.findByText(
+        "Built-in skills come with Traycer. Switch one off for any provider that shouldn't use it.",
+      ),
+    ).toBeTruthy();
+    const builtIn = screen.getByText("find-skills").closest("li");
     const written = screen.getByText("review").closest("li");
     expect(builtIn).not.toBeNull();
     expect(written).not.toBeNull();
     if (builtIn === null || written === null) return;
+    expect(within(builtIn).getByText("Built-in")).toBeTruthy();
+    expect(within(builtIn).queryByText(/come with Traycer/)).toBeNull();
+    expect(within(written).queryByText(/come with Traycer/)).toBeNull();
+    // Two built-in rows, and the line is said once for the list above them.
+    expect(screen.getAllByText(/come with Traycer/)).toHaveLength(1);
+  });
+
+  it.each([
+    { source: personalPoolSource(), word: "Personal" },
+    { source: poolSource("editor"), word: "Acme" },
+  ])(
+    "says a built-in the configuration replaced is used instead of it, on $word",
+    async ({ source, word }) => {
+      negotiateMethods(SWITCHES);
+      const replaced: EnvironmentSkillV11 = {
+        ...BUILT_IN,
+        name: "traycer-epic-brief",
+        edited: true,
+      };
+      const harness = mountTeamPage(
+        source,
+        handlers({ list: listed([replaced], null), hostSkills: [] }),
+      );
+      render(<EnvironmentProviderSkillsTab providerId="claude-code" />, {
+        wrapper: harness.Wrapper,
+      });
+
+      const row = (await screen.findByText("traycer-epic-brief")).closest("li");
+      expect(row).not.toBeNull();
+      if (row === null) return;
+      expect(
+        within(row).getByText(
+          `${word} · used instead of the built-in traycer-epic-brief`,
+        ),
+      ).toBeTruthy();
+    },
+  );
+
+  it("labels a replaced built-in with a word in its badge and the clause in its row", async () => {
+    negotiateMethods(SWITCHES);
+    const replaced: EnvironmentSkillV11 = {
+      ...BUILT_IN,
+      name: "traycer-epic-brief",
+      edited: true,
+    };
+    const harness = mountTeamPage(
+      poolSource("editor"),
+      handlers({
+        list: listed([replaced], null),
+        hostSkills: [
+          {
+            name: "traycer-epic-brief",
+            description: null,
+            path: "/skills/traycer-epic-brief",
+            source: "managed",
+          },
+        ],
+      }),
+    );
+    render(<EnvironmentSkillsPage />, { wrapper: harness.Wrapper });
+
+    const row = (await screen.findByText("traycer-epic-brief")).closest("li");
+    expect(row).not.toBeNull();
+    if (row === null) return;
+    // The row has room for what the source means; its line carries the
+    // providers after it, so this is the clause inside that line.
     expect(
-      within(builtIn).getByText(
-        "Comes with Traycer. Switch it off for any provider that shouldn't use it.",
-      ),
+      within(row).getByText(/used instead of the built-in traycer-epic-brief/),
     ).toBeTruthy();
-    expect(within(written).queryByText(/Comes with Traycer/)).toBeNull();
+
+    await userEvent.click(within(row).getByRole("button", { name: "Preview" }));
+
+    // The dialog's badge is a word's worth of room, and the clause would name
+    // the skill the badge sits beside.
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText("Built-in")).toBeTruthy();
+    expect(
+      within(dialog).queryByText(/used instead of the built-in/),
+    ).toBeNull();
   });
 
   it.each([

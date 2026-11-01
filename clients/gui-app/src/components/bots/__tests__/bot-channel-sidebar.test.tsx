@@ -372,6 +372,8 @@ function row(botId: string): HTMLElement {
   return found;
 }
 
+const channelOpened = vi.fn<() => void>();
+
 function mount(activeBotId: string): void {
   mountWithThreads(activeBotId, null);
 }
@@ -394,6 +396,7 @@ function mountWithThreads(
         activeBotId={activeBotId}
         hostId={TAB_HOST}
         threadsView={threadsView}
+        onChannelOpened={channelOpened}
       />
     </QueryClientProvider>,
   );
@@ -798,6 +801,16 @@ describe("<BotChannelSidebar /> opening a channel", () => {
       open: true,
       hostId: TAB_HOST,
     });
+  });
+
+  it("reports a channel pick to its surface, so a picker's menu can close, for the open channel and for another's", async () => {
+    const user = userEvent.setup();
+    mount("bot-release");
+
+    await user.click(row("bot-triage"));
+    await user.click(row("bot-release"));
+
+    expect(channelOpened).toHaveBeenCalledTimes(2);
   });
 
   it("does nothing when the channel in view is clicked", async () => {

@@ -33,7 +33,7 @@ import { useEmptyShellDropActive } from "@/components/epic-canvas/dnd/dnd-store"
 import { MobileEpicTileView } from "@/components/epic-canvas/mobile/mobile-epic-tile-view";
 import { MobileDrawerTaskPaintReporter } from "@/components/layout/shell/mobile-drawer-history-gate";
 import { usePaneVisible } from "@/components/epic-tabs/pane-visibility-context";
-import { MobileTabSwitcherMount } from "@/components/epic-canvas/mobile/mobile-tab-switcher-mount";
+import { MobileEmptyPaneLevel2 } from "@/components/epic-canvas/mobile/mobile-empty-pane-level2";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { PendingSandboxSendStrip } from "@/components/sandboxes/pending-sandbox-sends";
 import { remeasureTileSurfaceGeometry } from "@/components/epic-canvas/surface-host/tile-surface-geometry-coordinator";
@@ -179,16 +179,17 @@ function TileCanvasLive(
     if (!hasRecords) {
       return <EmptyEpicRoot tabId={tabId} />;
     }
-    // A phone reaches its tabs through the header's switcher trigger, so the
-    // sheet has to be mounted here too - the empty shell's "drag from the
-    // sidebar" is a desktop answer, and without this the trigger would open
-    // nothing on the one screen with no tabs to switch between.
+    // A phone reaches its tabs through level 2, so the list has to be here too -
+    // the empty shell's "drag from the sidebar" is a desktop answer, and without
+    // this the switcher would open nothing on the one screen with no tabs to
+    // switch between.
     if (isMobile) {
       return (
         <>
           <MobileDrawerTaskPaintReporter ready={paneVisible} />
-          <EmptyShell epicId={epicId} tabId={tabId} />
-          <MobileTabSwitcherMount epicId={epicId} tabId={tabId} />
+          <MobileEmptyPaneLevel2 epicId={epicId} tabId={tabId}>
+            <EmptyShell epicId={epicId} tabId={tabId} />
+          </MobileEmptyPaneLevel2>
         </>
       );
     }

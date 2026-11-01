@@ -3,6 +3,8 @@ import { labelWithUnreadCount } from "@/lib/notifications/unread-count";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
 import {
+  Bell,
+  History,
   House,
   LayersPlus,
   LogOut,
@@ -10,8 +12,8 @@ import {
   Settings,
   SquareArrowOutUpRight,
 } from "lucide-react";
-import { SignOutConfirmDialog } from "@/components/auth/sign-out-confirm-dialog";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -28,6 +30,7 @@ import {
 } from "@/components/epics/history-row-provenance";
 import { NotificationIndicatorsProvider } from "@/components/notifications/notification-indicators-provider";
 import { useNotificationIndicators } from "@/hooks/notifications/use-notification-indicators-query";
+import { useOpenMobileNotificationCenter } from "@/hooks/notifications/use-open-mobile-notification-center";
 import "@/components/layout/shell/mobile-shell-touch-targets.css";
 import { MobileNavDrawerSurface } from "@/components/layout/shell/mobile-nav-drawer-surface";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
@@ -60,7 +63,9 @@ import { hasActiveHistoryFilters } from "@/lib/history-search";
 import { formatRelativeTimestamp, useSampledNow } from "@/lib/relative-time";
 import type { HistoryItem } from "@/components/home/data/home-page.data";
 import { useHistoryQuery } from "@/hooks/home/use-history-query";
-import { useAuthStore } from "@/stores/auth/auth-store";
+import { admitsLocalPlane, useAuthStore } from "@/stores/auth/auth-store";
+import { useMergedNotificationUnreadCount } from "@/stores/notifications/merged-notifications";
+import { useSignOutConfirmStore } from "@/stores/auth/sign-out-confirm-store";
 import { useEpicDeleteInFlightReader } from "@/hooks/epic/use-epic-batch-delete-mutation";
 import { useMobileNavStore } from "@/stores/layout/mobile-nav-store";
 import { useFirstTaskGuideStore } from "@/stores/onboarding/first-task-guide-store";
@@ -81,24 +86,23 @@ const LIST_FADE_CLASS =
 /**
  * Left hamburger drawer for the mobile shell. It re-homes the global controls
  * that the desktop header carries (Settings, identity / account) into a single
- * menu, plus a "New task" entry and an inline recent task list (the same
- * `useHistoryQuery` source the landing page renders), since the tab strip and
- * header right-cluster are hidden on phones. Sign out rides the identity row as
- * an icon, joined by Manage subscription on every shell EXCEPT the installed
- * mobile app (see the identity row below); notifications stay in the header
- * next to the other status controls (`MobileNotificationsButton`). Every action
- * reuses the same helper the desktop surfaces call. Mounted only on mobile (see
- * AppShell), so desktop is untouched.
+ * menu. Its rows follow the vertical tab strip's order, so the drawer and the
+ * strip are one list in two frames: Notifications, All tasks, Home, Tracy, New
+ * task, then an inline recent task list (the same `useHistoryQuery` source the
+ * landing page renders). Sign out rides the identity row as an icon, joined by
+ * Manage subscription on every shell EXCEPT the installed mobile app (see the
+ * identity row below). Every action reuses the same helper the desktop surfaces
+ * call. Mounted only on mobile while the form is the drawer (see AppShell), so
+ * desktop is untouched.
  */
 export function MobileNavDrawer(): ReactNode {
   const open = useMobileNavStore((state) => state.open);
   const setOpen = useMobileNavStore((state) => state.setOpen);
   const navigate = useNavigate();
   const profile = useAuthStore((state) => state.profile);
-  const { openSettings } = useSystemTabModalActions();
+  const { openSettings, openHistory } = useSystemTabModalActions();
   const billingUrl = usePlatformBillingUrl();
   const openLink = useOpenLink();
-  const [signOutOpen, setSignOutOpen] = useState(false);
   // Latched on the first open: closing before the first task paint must not
   // unmount the list (and its query) out from under the closing panel.
   const [drawerRequested, setDrawerRequested] = useState(open);
@@ -109,6 +113,13 @@ export function MobileNavDrawer(): ReactNode {
   useEffect(() => {
     if (open) taskPaintGate?.markDrawerRequested();
   }, [open, taskPaintGate]);
+  // A rotation into the strip's form unmounts the drawer while it may be open,
+  // and the store's open flag also hides the footer.
+  useEffect(() => {
+    return () => {
+      setOpen(false);
+    };
+  }, [setOpen]);
   // Immutable after boot, so a plain read is stable for this component's
   // whole life - no resize can flip it the way the viewport hook flips.
   const installedApp = isMobileApp();
@@ -206,7 +217,7 @@ export function MobileNavDrawer(): ReactNode {
             aria-label="Sign out"
             data-testid="mobile-nav-sign-out"
             onClick={() => {
-              setSignOutOpen(true);
+              useSignOutConfirmStore.getState().setOpen(true);
             }}
           >
             <LogOut className="size-4" />
@@ -216,6 +227,20 @@ export function MobileNavDrawer(): ReactNode {
       {/* "New task" sits outside the scroll container so it stays pinned
             while the recent-task list below it scrolls. */}
       <nav className="flex min-h-0 flex-1 flex-col p-2">
+        <MobileNavNotificationsRow onOpen={close} />
+        <Button
+          type="button"
+          variant="ghost"
+          className={cn(ROW_CLASS, "mb-1 shrink-0")}
+          data-testid="mobile-nav-all-tasks"
+          onClick={() => {
+            close();
+            openHistory();
+          }}
+        >
+          <History className="size-4" />
+          <span className="flex-1 text-left">All tasks</span>
+        </Button>
         {/* Above "New task": on the phone this row is the whole tab strip's
             job - the one way back to what is happening across every task. It
             stays a flat ghost row so the create action keeps the drawer's only
@@ -282,46 +307,69 @@ export function MobileNavDrawer(): ReactNode {
     </>
   );
 
-  return (
-    <>
-      {/* Outside the drawer, so the confirm can't be unmounted out from under
-          the user by an unrelated drawer close. */}
-      <SignOutConfirmDialog
-        open={signOutOpen}
-        onOpenChange={setSignOutOpen}
-        onConfirm={close}
-      />
-      {installedApp ? (
-        /* A hand-driven surface rather than a dialog primitive, for one
-           reason: dismissal has to follow the finger and stay interruptible
-           mid-flight. Every dialog primitive available here plays a canned
-           exit the hand cannot catch or reverse, and no amount of
-           configuration produces one - a panel that tracks a pointer 1:1 has
-           to own its transform outright.
+  return installedApp ? (
+    /* A hand-driven surface rather than a dialog primitive, for one
+       reason: dismissal has to follow the finger and stay interruptible
+       mid-flight. Every dialog primitive available here plays a canned
+       exit the hand cannot catch or reverse, and no amount of
+       configuration produces one - a panel that tracks a pointer 1:1 has
+       to own its transform outright.
 
-           Branched on the PRODUCT flag, not the viewport, because the drawer
-           itself is mounted by form factor: a narrow desktop window renders
-           this component too, and it has a pointer rather than a finger. A
-           surface whose only dismissal is a drag would be a surface that
-           window cannot close, so it takes the Sheet. */
-        <MobileNavDrawerSurface open={open} onOpenChange={setOpen}>
-          {panel}
-        </MobileNavDrawerSurface>
-      ) : (
-        <Sheet open={open} onOpenChange={setOpen}>
-          <SheetContent
-            side="left"
-            showCloseButton={false}
-            className="gap-0 pb-safe-bottom"
-            data-testid="mobile-nav-drawer"
-            data-mobile-shell-touch-scope=""
-          >
-            <SheetTitle className="sr-only">Menu</SheetTitle>
-            {panel}
-          </SheetContent>
-        </Sheet>
-      )}
-    </>
+       Branched on the PRODUCT flag, not the viewport, because the drawer
+       itself is mounted by form factor: a narrow desktop window renders
+       this component too, and it has a pointer rather than a finger. A
+       surface whose only dismissal is a drag would be a surface that
+       window cannot close, so it takes the Sheet. */
+    <MobileNavDrawerSurface open={open} onOpenChange={setOpen}>
+      {panel}
+    </MobileNavDrawerSurface>
+  ) : (
+    <Sheet open={open} onOpenChange={setOpen}>
+      <SheetContent
+        side="left"
+        showCloseButton={false}
+        className="gap-0 pb-safe-bottom"
+        data-testid="mobile-nav-drawer"
+        data-mobile-shell-touch-scope=""
+      >
+        <SheetTitle className="sr-only">Menu</SheetTitle>
+        {panel}
+      </SheetContent>
+    </Sheet>
+  );
+}
+
+/**
+ * The strip's Notifications row in the drawer: it opens the notifications sheet,
+ * as the header's bell does, and it is gated as the strip's row is.
+ */
+function MobileNavNotificationsRow(props: {
+  readonly onOpen: () => void;
+}): ReactNode {
+  const admitted = useAuthStore((state) => admitsLocalPlane(state.status));
+  const unreadCount = useMergedNotificationUnreadCount();
+  const openNotifications = useOpenMobileNotificationCenter();
+  if (!admitted) return null;
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      className={cn(ROW_CLASS, "mb-1 shrink-0")}
+      data-testid="mobile-nav-notifications"
+      aria-label={labelWithUnreadCount("Notifications", unreadCount)}
+      onClick={() => {
+        props.onOpen();
+        openNotifications();
+      }}
+    >
+      <Bell className="size-4" />
+      <span className="flex-1 text-left">Notifications</span>
+      {unreadCount > 0 ? (
+        <Badge variant="muted" size="sm" aria-hidden>
+          <span className="tabular-nums">{unreadCount}</span>
+        </Badge>
+      ) : null}
+    </Button>
   );
 }
 
@@ -432,13 +480,12 @@ function DrawerRowProvenanceLabel(props: {
  * page's embedded list (`useHistoryQuery` → `useCloudEpicTasksQuery`) and the
  * same ambient search memory every history surface shares - the drawer shows
  * the list the way the user last filtered it, with no filter/sort/selection
- * chrome of its own; the full surface stays one tap away through "View all".
+ * chrome of its own; the full surface stays one tap away through All tasks.
  */
 function DrawerTaskList(props: DrawerTaskListProps): ReactNode {
   const navigate = useNavigate();
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const isEpicDeleteInFlight = useEpicDeleteInFlightReader();
-  const { openHistory } = useSystemTabModalActions();
   // One subscription to the shared 60s clock for the whole list, then the pure
   // formatter per row - rather than a per-row `useRelativeTimestamp`, which
   // would take one subscription each to re-render the same list anyway.
@@ -710,26 +757,12 @@ function DrawerTaskList(props: DrawerTaskListProps): ReactNode {
           className="flex flex-col gap-1 pb-8"
           data-testid="mobile-nav-task-list"
         >
-          {/* Pinned while the rows scroll: the caption and the History entry
-          stay reachable at any scroll depth. Solid drawer background
+          {/* Pinned while the rows scroll. Solid drawer background
           (`bg-popover`) so rows slide under it rather than through it. */}
-          <div className="sticky top-0 z-10 flex items-center justify-between bg-popover px-3 py-1">
+          <div className="sticky top-0 z-10 flex items-center bg-popover px-3 py-1">
             <span className="text-overline text-muted-foreground">
               Recent tasks
             </span>
-            {/* Entry to the full history surface (search / filters / bulk
-            actions) - the inline list is only the top of the feed. */}
-            <button
-              type="button"
-              data-testid="mobile-nav-view-all-tasks"
-              className="text-ui-xs text-muted-foreground transition-colors active:text-foreground"
-              onClick={() => {
-                props.onNavigate();
-                openHistory();
-              }}
-            >
-              View all
-            </button>
           </div>
           <NotificationIndicatorsProvider indicators={notificationIndicators}>
             {body}

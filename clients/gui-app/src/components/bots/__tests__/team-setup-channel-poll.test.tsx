@@ -26,6 +26,12 @@ import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-polic
 import { createAppQueryClient } from "@/lib/query-client";
 import { PaneVisibilityContext } from "@/components/epic-tabs/pane-visibility-context";
 import { TeamSetupChannel } from "@/components/bots/team-setup-channel";
+import { useInstalledAppLevel2Form } from "@/hooks/ui/use-installed-app-level2-form";
+import {
+  installShellForm,
+  SHELL_WIDTH_COLUMN_256,
+  SHELL_WIDTH_MENU,
+} from "../../../../__tests__/mobile-level2-form-harness";
 
 // The channel list beside the post reads every bot and team on its own; it
 // is not what this file is about.
@@ -103,15 +109,7 @@ function rig(): Rig {
   const channel = (visible: boolean): ReactNode => (
     <QueryClientProvider client={queryClient}>
       <PaneVisibilityContext value={visible}>
-        <TeamSetupChannel
-          setup={{
-            environmentId: "env-team",
-            teamName: "Acme",
-            botId: MAIN_BOT_ID,
-            title: "Tracy",
-          }}
-          client={client}
-        />
+        <SetupWithLevel2Form client={client} />
       </PaneVisibilityContext>
     </QueryClientProvider>
   );
@@ -194,3 +192,43 @@ describe("TeamSetupChannel on-screen poll", () => {
     expect(harness.reads()).toBe(2);
   });
 });
+
+describe("TeamSetupChannel level 2 in the installed app", () => {
+  // The column is the Tracy surface's, beside this pane; the pane's title is
+  // the picker where the surface draws none.
+  it("names the bot as a plain title beside the column at 256, and as a picker without one", () => {
+    const shell = installShellForm(SHELL_WIDTH_COLUMN_256);
+    try {
+      rig().mount(true);
+      expect(screen.getByTestId("bot-tab-title").textContent).toBe("Tracy");
+      expect(screen.queryByTestId("bot-channel-picker-trigger")).toBeNull();
+
+      shell.set({ width: SHELL_WIDTH_MENU, portrait: false });
+      expect(screen.getByTestId("bot-channel-picker-trigger").textContent).toBe(
+        "Tracy",
+      );
+    } finally {
+      shell.dispose();
+    }
+  });
+});
+
+/** The setup pane with the form the surface would hand it. */
+function SetupWithLevel2Form(props: {
+  readonly client: HostClient<HostRpcRegistry>;
+}): ReactNode {
+  const level2 = useInstalledAppLevel2Form(1);
+  return (
+    <TeamSetupChannel
+      setup={{
+        environmentId: "env-team",
+        teamName: "Acme",
+        botId: MAIN_BOT_ID,
+        title: "Tracy",
+      }}
+      client={props.client}
+      hostId={mockLocalHostEntry.hostId}
+      level2={level2}
+    />
+  );
+}

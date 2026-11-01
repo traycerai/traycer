@@ -25,15 +25,17 @@ export interface AppColumnFrameSlots {
 
 /**
  * The slots plus the EFFECTIVE placement (`useTabStripPlacement`) and its title
- * band, typed as a pair so a side strip can never come with the header.
+ * band, typed as a pair so only the phone shell's strip comes with the header.
  */
 export type AppColumnFrameProps = AppColumnFrameSlots & AppColumnChrome;
 
 /**
  * The app column's structure: the header or title band at the top, a side tab
  * strip at the left or right edge, and the content (banners over `<main>`)
- * beside it. DOM order is visual order, so Tab order and screen readers follow
- * the screen.
+ * beside it. In the phone shell the strip takes the full height and the header
+ * sits over the content beside it, because a landscape phone has no height to
+ * spare. DOM order is visual order, so Tab order and screen readers follow the
+ * screen.
  *
  * The column is the screen as a history swipe understands one: the header and
  * the content viewport travel together, because a transition that moved only
@@ -64,11 +66,12 @@ export function AppColumnFrame(props: AppColumnFrameProps): ReactNode {
       className="relative flex h-safe-dvh min-w-0 flex-1 flex-col [anchor-scope:--sheet-joined,--task-frame] md:bg-shell-ground"
       {...{ [SWIPE_NAV_SCREEN_ATTRIBUTE]: "" }}
     >
-      {titleBand === "header" ? props.header : null}
+      {titleBand === "header" && edge === null ? props.header : null}
       {titleBand === "band" ? <DesktopMenuHeader variant="title-band" /> : null}
       <div className="flex min-h-0 flex-1 flex-row">
         {edge === "left" ? props.strip : null}
         <div className="flex min-w-0 flex-1 flex-col">
+          {titleBand === "header" && edge !== null ? props.header : null}
           {props.banners}
           <main className="relative flex min-h-0 flex-1 flex-col">
             {/* The app's content viewport. Individual surfaces
