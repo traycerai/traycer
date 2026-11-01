@@ -754,13 +754,15 @@ function retry(
     (state.phase === "waiting" && !LATCHED_BLOCKERS.has(state.blocker))
   )
     return result(state, [], facts);
+  // Settings are said of an awake sandbox: a claim at rest needs its wake first.
+  const settingsHold =
+    state.blocker === "settings" &&
+    !(claimed(state) && facts.host === "resting");
   const next: PendingSendState = {
     ...state,
     phase: claimed(state) ? "sending" : state.phase,
     blocker:
-      state.blocker === "credits" || state.blocker === "settings"
-        ? state.blocker
-        : "none",
+      state.blocker === "credits" || settingsHold ? state.blocker : "none",
   };
   // Retry requests a new model read; the previous negative cache entry cannot
   // refuse that read before it starts. All earlier readiness gates still apply.

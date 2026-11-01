@@ -108,6 +108,8 @@ export interface PendingSandboxSendDispatch {
   /** A transport failure cannot say whether the host accepted the request. */
   readonly status: "sending" | "uncertain";
   readonly blocker?: PendingSendBlocker;
+  /** A request left for the host; a repeat can't prove what the last one did. */
+  readonly attempted?: true;
 }
 
 /**
@@ -198,6 +200,8 @@ interface PendingSandboxSendStoreState {
     id: string,
     dispatch: PendingSandboxSendDispatch,
   ) => boolean;
+  /** Records a request about to leave; whether it is the claim's first. */
+  readonly beginDispatchAttempt: (id: string) => boolean;
   readonly markDispatchUncertain: (
     id: string,
     dispatch: PendingSandboxSendDispatch,
@@ -839,6 +843,25 @@ export const usePendingSandboxSendStore =
             pendingSandboxDispatchCurrent(id, dispatch) &&
             storedSend(id)?.observationRequestedAt === boundary
           );
+        },
+        beginDispatchAttempt: (id) => {
+          const { sends } = get();
+          if (!Object.hasOwn(sends, id)) return false;
+          const send = sends[id];
+          const dispatch = send.dispatch ?? null;
+          if (dispatch === null || dispatch.attempted === true) return false;
+          try {
+            set({
+              sends: {
+                ...sends,
+                [id]: { ...send, dispatch: { ...dispatch, attempted: true } },
+              },
+            });
+          } catch {
+            /* Readback decides whether this counts as the first. */
+          }
+          const stored = storedSend(id)?.dispatch;
+          return isRecord(stored) && stored.attempted === true;
         },
         markDispatchUncertain: (id, captured) => {
           try {

@@ -27,7 +27,10 @@ import {
 import { useQueryClient } from "@tanstack/react-query";
 import { useIsMutatingOf } from "@/hooks/use-mutation-state-of";
 import { v5 as uuidv5 } from "uuid";
-import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import {
+  HostRpcError,
+  mayHaveReachedHost,
+} from "@traycer-clients/shared/host-transport/host-messenger";
 import { useStore } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -118,6 +121,7 @@ import {
   recordSandboxStateSend,
   recordStoppedSandboxSend,
 } from "@/stores/sandboxes/stopped-sandbox-send-receipt-store";
+import { appLogger } from "@/lib/logger";
 import { startSandboxWake } from "@/lib/sandboxes/sandbox-wake";
 import type { StageConfiguration } from "@/lib/sandboxes/sandbox-stage-model";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
@@ -2106,8 +2110,6 @@ function usePendingDispatchLifecycle(
       decision.effects.includes("remove")
     )
       returnPendingSandboxSend(send.id);
-    if (decision.state.blocker === "wake" || environment.host !== "resting")
-      wakeRequested.current = false;
     if (!decision.effects.includes("wake") || wakeRequested.current) return;
     const wakeBoundary = usePendingSandboxSendStore
       .getState()
@@ -2120,17 +2122,25 @@ function usePendingDispatchLifecycle(
       dispatch.input.hostId,
       "send",
     ).then((outcome) => {
-      const settled = usePendingSandboxSendStore
-        .getState()
-        .dispatchEvent(
-          send.id,
-          outcome?.kind === "awake" ? "observe" : "wake-failed",
-          {
-            ...environment,
-            wakeInFlight: true,
-            observation: { kind: "wake-result", requestedAt: wakeBoundary },
-          },
-        );
+      // A row can read `suspended` until the wake's verb moves it, so only the
+      // wake's own answer ends the wait; no row read does.
+      wakeRequested.current = false;
+      const store = usePendingSandboxSendStore.getState();
+      const settled = store.dispatchEvent(
+        send.id,
+        outcome?.kind === "awake" ? "observe" : "wake-failed",
+        {
+          ...environment,
+          wakeInFlight: true,
+          observation: { kind: "wake-result", requestedAt: wakeBoundary },
+        },
+      );
+      // A read sent before the sandbox woke can't call the claim rested.
+      if (
+        outcome?.kind === "awake" &&
+        store.sends[send.id]?.observationRequestedAt === wakeBoundary
+      )
+        store.holdObservation(send.id, decision);
       if (settled?.effects.includes("poll")) void refetch();
     });
   }, [
@@ -2177,6 +2187,9 @@ async function runPendingDispatch(
   )
     return;
   dispatchesInFlight.add(send.id);
+  const firstAttempt = usePendingSandboxSendStore
+    .getState()
+    .beginDispatchAttempt(send.id);
   try {
     const response = await createChat(dispatch.input);
     if (response.refusal !== undefined) {
@@ -2211,9 +2224,13 @@ async function runPendingDispatch(
     useStagedSandboxStore.getState().clear(pendingSendSurfaceKey(send.id));
     finishDispatchUi(send, dispatch, response, navigateNestedFocus);
   } catch (error: unknown) {
+    appLogger.warn("Pending sandbox dispatch rejected", {
+      code: error instanceof HostRpcError ? error.code : "unknown",
+    });
     if (
       error instanceof HostRpcError &&
-      error.code === "E_FORK_BOUNDARY_NOT_PUBLISHED"
+      (error.code === "E_FORK_BOUNDARY_NOT_PUBLISHED" ||
+        (firstAttempt && refusedBeforeCreate(error)))
     ) {
       refusePendingDispatch(send, dispatch);
     } else {
@@ -2224,6 +2241,15 @@ async function runPendingDispatch(
   } finally {
     dispatchesInFlight.delete(send.id);
   }
+}
+
+/**
+ * The host's own `UNAUTHORIZED` comes from `epic.createChat`'s access check,
+ * before the create runs. That check also answers a repeat of a create that
+ * landed, so it clears only a claim's first attempt.
+ */
+function refusedBeforeCreate(error: HostRpcError): boolean {
+  return error.code === "UNAUTHORIZED" && !mayHaveReachedHost(error);
 }
 
 function registerDispatchHandoff(
