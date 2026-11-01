@@ -249,6 +249,61 @@ describe("Tracy surface records per desktop window", () => {
         restartedB: { open: false, hostId: null, botId: null },
       });
     });
+
+    it("keeps the channel a closed surface had selected", async () => {
+      window.localStorage.setItem(
+        SURFACE_KEY,
+        JSON.stringify({
+          state: { open: false, hostId: null, botId: "bot-release" },
+          version: 2,
+        }),
+      );
+      const snapshot = snapshotWithTracyTab("bot-release");
+
+      const boundFirst = await bindWindow("win-a");
+      const first = settleWindow(boundFirst, snapshot);
+      const globalAfterFirst = window.localStorage.getItem(SURFACE_KEY);
+      boundFirst.surfaceModule.useTracySurfaceStore
+        .getState()
+        .openSurface("host-1");
+      const restarted = await bootWindow("win-a", snapshot);
+
+      expect({
+        first: first.surface,
+        globalAfterFirst,
+        restarted: restarted.surface,
+        restartedRefs: restarted.refs,
+      }).toEqual({
+        first: { open: false, hostId: null, botId: "bot-release" },
+        globalAfterFirst: null,
+        restarted: { open: true, hostId: "host-1", botId: "bot-release" },
+        restartedRefs: [TRACY_REF],
+      });
+    });
+
+    it("keeps the host the entry opened while the list was pending", async () => {
+      window.localStorage.setItem(
+        SURFACE_KEY,
+        JSON.stringify({
+          state: { open: true, hostId: "host-1", botId: "bot-release" },
+          version: 2,
+        }),
+      );
+
+      const bound = await bindWindow("win-a");
+      bound.surfaceModule.useTracySurfaceStore
+        .getState()
+        .openSurface("host-entry");
+      const settled = settleWindow(bound, snapshotWithTracyTab("bot-release"));
+
+      expect({
+        surface: settled.surface,
+        globalKey: window.localStorage.getItem(SURFACE_KEY),
+      }).toEqual({
+        surface: { open: true, hostId: "host-entry", botId: "bot-release" },
+        globalKey: null,
+      });
+    });
   });
 
   it("forgets the records of windows that are gone and nothing else", () => {
