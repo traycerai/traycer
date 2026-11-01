@@ -74,4 +74,21 @@ describe("<NeedsYouItem />", () => {
     expect(button.textContent).toContain("Deploy checkout fix");
     expect(button.textContent).not.toContain("·");
   });
+
+  it.each([
+    ["Untitled agent", "New agent"],
+    ["", "New agent"],
+    ["Untitled chat", "Untitled chat"],
+  ])("renders a filed agent title %j as %j", (agentTitle, shown) => {
+    render(
+      <NeedsYouItem
+        item={buildItem({ agentTitle })}
+        onActivate={() => undefined}
+      />,
+    );
+
+    expect(screen.getByTestId("needs-you-item").textContent).toContain(
+      `Deploy checkout fix · ${shown}`,
+    );
+  });
 });

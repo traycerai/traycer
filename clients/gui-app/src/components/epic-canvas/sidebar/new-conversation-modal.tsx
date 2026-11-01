@@ -1765,7 +1765,7 @@ export function NewConversationModalBody(props: {
       // eager-opened tab back down: without `markFailed` the handoff stayed
       // non-terminal, `pendingCreateArtifactIds` kept the tile exempt from the
       // record sweep, and a create the host had DEFINITIVELY rejected left an
-      // "Untitled agent" tab that spun for 15s and then told the user "that host
+      // "New agent" tab that spun for 15s and then told the user "that host
       // hasn't answered" - about a host that had answered, with a refusal. Only
       // `useInitialChatHandoff`'s 60s orphan deadline eventually cleared it, a
       // backstop written for a host that says NOTHING.

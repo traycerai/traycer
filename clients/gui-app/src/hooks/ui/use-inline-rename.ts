@@ -53,7 +53,7 @@ export interface InlineRename {
  * and actually changed; pass a stable (memoised) callback to keep `inputProps`
  * referentially stable. The seed left as it was is not a change, even if `value`
  * moved during the edit: an agent's title landing mid-edit must not lose to a
- * stale seed, which for an untitled agent is the "Untitled agent" fallback.
+ * stale seed, which for an untitled agent is the "New agent" fallback.
  */
 export function useInlineRename(args: {
   readonly value: string;

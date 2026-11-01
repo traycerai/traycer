@@ -1,3 +1,4 @@
+import { displayTitle } from "@/lib/display-title";
 import { useUltracodeCarrierSupported } from "@/components/home/data/model-ultracode";
 import { signedInUserId } from "@/lib/sandboxes/sandbox-account-fence";
 import {
@@ -320,7 +321,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
 
   // The rare case where the source itself is still untitled: there is no name
   // to inherit, so the dialog defaults to EMPTY instead of baking the
-  // "Untitled agent" render fallback into a permanent stored title. An empty
+  // "New agent" render fallback into a permanent stored title. An empty
   // submit stores "" and the fork is AI-titled from its first message, same
   // as the automatic fork paths; the input's placeholder says what happens.
   const sourceUntitled =
@@ -1300,7 +1301,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
               }}
               disabled={createChat.isPending || attachEnvironment.isPending}
               aria-label="Fork agent title"
-              placeholder={sourceUntitled ? "Untitled agent" : ""}
+              placeholder={sourceUntitled ? displayTitle("", "agent") : ""}
             />
           </label>
           <RestingHostStage
@@ -1500,7 +1501,7 @@ function releaseForkWorkspaceSession(
 
 function displayChatTitle(title: string): string {
   const trimmed = title.trim();
-  return trimmed.length === 0 ? "Untitled agent" : trimmed;
+  return displayTitle(trimmed, "agent");
 }
 
 // Whether the Fork dialog can submit. Extracted from the component to keep its
@@ -1548,7 +1549,7 @@ function canSubmitFork(input: {
   readonly trimmedTitle: string;
   /** The source chat's stored title is empty - the one case an empty title
    *  field may submit: it stores "" and the fork is AI-titled on its first
-   *  send, instead of freezing the "Untitled agent" render fallback. */
+   *  send, instead of freezing the "New agent" render fallback. */
   readonly sourceUntitled: boolean;
   readonly modelResolved: boolean;
   readonly hasStagedPreselection: boolean;

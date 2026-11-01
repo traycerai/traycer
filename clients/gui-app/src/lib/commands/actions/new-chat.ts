@@ -294,7 +294,7 @@ function buildCreateChatRequest(args: {
     hostId,
     parentId,
     // Ordinary chats are created with an empty stored title ("no title yet");
-    // the "Untitled agent" fallback is applied at render via the display
+    // the "New agent" fallback is applied at render via the display
     // helper, never baked into the stored title. The AI-generated title
     // overwrites the empty store only while it is still empty. The clone flow
     // passes a fork-decorated source title instead, which (when non-empty)
@@ -329,7 +329,7 @@ function openProjectedChat(
     instanceId: uuidv4(),
     type: "chat" as const,
     // Snapshot fallback label for the node: the raw title when present, else
-    // the "Untitled agent" render fallback (a durable Agent, addressed as such
+    // the "New agent" render fallback (a durable Agent, addressed as such
     // regardless of its Chat interface). Never the "New chat" placeholder.
     name: displayTitle(chat.title, "agent"),
     hostId: intent.hostId,

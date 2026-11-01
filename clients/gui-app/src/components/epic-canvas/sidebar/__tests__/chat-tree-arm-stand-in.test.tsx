@@ -3,8 +3,8 @@
  *
  * THE PROOF: the creator holds the chat as an untitled stand-in until its
  * first publication, while the environment arm already serves it, titled, as
- * a cloud row. The tree lists it once, under the arm row's title - not as an
- * "Untitled agent" beside it.
+ * a cloud row. The tree lists it once, under the arm row's title - not as a
+ * "New agent" beside it.
  *
  * The real `ChatTreePanelBody` over a real epic store and a real `HostClient`
  * (the `chat-tree-task-hosts-refusal.test.tsx` harness). The arm, a team
@@ -341,7 +341,7 @@ describe("the Agents tree over a sent team-host chat", () => {
     });
     expect(screen.queryByTestId(`epic-sidebar-item-${CHAT_ID}`)).toBeNull();
     expect(screen.getAllByText(ARM_TITLE)).toHaveLength(1);
-    expect(screen.queryByText("Untitled agent")).toBeNull();
+    expect(screen.queryByText("New agent")).toBeNull();
   });
   it("keeps the stand-in while the list that would draw the arm row has not answered", async () => {
     const queryClient = createAppQueryClient();
@@ -390,7 +390,7 @@ describe("the Agents tree over a sent team-host chat", () => {
     ).toBeNull();
   });
 
-  describe("while the chat's first title is awaited", () => {
+  describe("while the chat has no title", () => {
     function renderTree(
       session: OpenedStoreForTest,
       queryClient: QueryClient,
@@ -433,7 +433,21 @@ describe("the Agents tree over a sent team-host chat", () => {
       });
     }
 
-    it("names the row New agent, then the title in the same single row", async () => {
+    /** Moves the record's `updatedAt` past the mark's start, title untouched. */
+    function touchRecord(session: OpenedStoreForTest): void {
+      act(() => {
+        const state = session.store.getState();
+        const held = state.chats.byId[CHAT_ID];
+        session.store.setState({
+          chats: {
+            allIds: [CHAT_ID],
+            byId: { [CHAT_ID]: { ...held, updatedAt: Date.now() + 1_000 } },
+          },
+        });
+      });
+    }
+
+    it("names the row New agent when a record write passes the first-title mark with the title still empty, then takes the title in the same single row", async () => {
       const queryClient = createAppQueryClient();
       const session = createSession();
       opened.push(session);
@@ -445,7 +459,6 @@ describe("the Agents tree over a sent team-host chat", () => {
       act(() => {
         useEpicCanvasStore.getState().markChatTitlePending(CHAT_ID, "");
       });
-
       await vi.waitFor(() => {
         expect(
           screen
@@ -453,35 +466,13 @@ describe("the Agents tree over a sent team-host chat", () => {
             .getAttribute("aria-label"),
         ).toContain("New agent");
       });
+
+      touchRecord(session);
+
       expect(screen.getAllByText("New agent")).toHaveLength(1);
       expect(screen.queryByText("Untitled agent")).toBeNull();
 
-      // The tree reads its node's title from the tree slice, which the
-      // projection rebuilds alongside the chat record: land both.
-      act(() => {
-        const state = session.store.getState();
-        const held = state.chats.byId[CHAT_ID];
-        const node = state.tree.nodeById[CHAT_ID];
-        session.store.setState({
-          chats: {
-            allIds: [CHAT_ID],
-            byId: {
-              [CHAT_ID]: {
-                ...held,
-                title: "Generated title",
-                updatedAt: Date.now() + 1_000,
-              },
-            },
-          },
-          tree: {
-            ...state.tree,
-            nodeById: {
-              ...state.tree.nodeById,
-              [CHAT_ID]: { ...node, title: "Generated title" },
-            },
-          },
-        });
-      });
+      landTitle(session, "Generated title");
 
       await vi.waitFor(() => {
         expect(screen.getAllByText("Generated title")).toHaveLength(1);
@@ -497,7 +488,30 @@ describe("the Agents tree over a sent team-host chat", () => {
       ).toHaveLength(1);
     });
 
-    it("opens the row's tile and seeds its rename with the raw name, never New agent", async () => {
+    it("names the row New agent with no mark at all, then the title in the same single row", async () => {
+      const queryClient = createAppQueryClient();
+      const session = createSession();
+      opened.push(session);
+      await holdSentChat(session, SANDBOX_HOST_ID);
+      renderTree(session, queryClient);
+
+      await vi.waitFor(() => {
+        expect(screen.getAllByText("New agent")).toHaveLength(1);
+      });
+      expect(screen.queryByText("Untitled agent")).toBeNull();
+
+      landTitle(session, "Generated title");
+
+      await vi.waitFor(() => {
+        expect(screen.getAllByText("Generated title")).toHaveLength(1);
+      });
+      expect(screen.queryByText("New agent")).toBeNull();
+      expect(
+        screen.getAllByTestId(`epic-sidebar-item-${CHAT_ID}`),
+      ).toHaveLength(1);
+    });
+
+    it("opens the row's tile named New agent and seeds its rename with it", async () => {
       const queryClient = createAppQueryClient();
       const session = createSession();
       opened.push(session);
@@ -523,7 +537,7 @@ describe("the Agents tree over a sent team-host chat", () => {
       const names = Object.values(canvas?.tilesByInstanceId ?? {}).map(
         (tile) => tile?.name,
       );
-      expect(names).toEqual(["Untitled agent"]);
+      expect(names).toEqual(["New agent"]);
 
       fireEvent.contextMenu(row);
       fireEvent.click(
@@ -534,10 +548,10 @@ describe("the Agents tree over a sent team-host chat", () => {
       );
       if (!(input instanceof HTMLInputElement))
         throw new Error("expected input");
-      expect(input.value).toBe("Untitled agent");
+      expect(input.value).toBe("New agent");
     });
 
-    async function startRenameWhileAwaiting(): Promise<{
+    async function startRenameWhileUntitled(): Promise<{
       readonly session: OpenedStoreForTest;
       readonly row: HTMLElement;
     }> {
@@ -593,13 +607,13 @@ describe("the Agents tree over a sent team-host chat", () => {
     }
 
     it("stores nothing when a title lands mid-rename and the seed is left untouched, and still stores a typed name", async () => {
-      const { session } = await startRenameWhileAwaiting();
+      const { session } = await startRenameWhileUntitled();
       expect(
         (
           await screen.findByTestId(`epic-sidebar-rename-input-${CHAT_ID}`)
         ).getAttribute("aria-label"),
-      ).toBe("Rename Untitled agent");
-      expect(renameInput().value).toBe("Untitled agent");
+      ).toBe("Rename New agent");
+      expect(renameInput().value).toBe("New agent");
       landTitle(session, "Generated title");
 
       fireEvent.keyDown(renameInput(), { key: "Enter" });
@@ -625,13 +639,10 @@ describe("the Agents tree over a sent team-host chat", () => {
       expect(renameChatTitles).toEqual(["Typed name"]);
     });
 
-    it("names the rename input after the resolved title, not the New agent label, before and after the title lands", async () => {
-      const { session } = await startRenameWhileAwaiting();
+    it("names the rename input after the row, before and after the title lands", async () => {
+      const { session } = await startRenameWhileUntitled();
 
-      expect(renameInput().getAttribute("aria-label")).toBe(
-        "Rename Untitled agent",
-      );
-      expect(screen.queryByLabelText("Rename New agent")).toBeNull();
+      expect(renameInput().getAttribute("aria-label")).toBe("Rename New agent");
 
       landTitle(session, "Generated title");
 
@@ -642,7 +653,7 @@ describe("the Agents tree over a sent team-host chat", () => {
       });
     });
 
-    it("never labels a terminal agent whose record holds no title", async () => {
+    it("names a terminal agent whose record holds no title New agent", async () => {
       const queryClient = createAppQueryClient();
       const session = createSessionFrom(seedDocWithTitlelessTerminalAgent());
       opened.push(session);
@@ -658,12 +669,12 @@ describe("the Agents tree over a sent team-host chat", () => {
           screen.getByTestId(`epic-sidebar-item-${TERMINAL_AGENT_ID}`),
         ).toBeTruthy();
       });
-      expect(screen.queryByText("New agent")).toBeNull();
       expect(
         screen
           .getByTestId(`epic-sidebar-item-${TERMINAL_AGENT_ID}`)
           .getAttribute("aria-label"),
-      ).not.toContain("New agent");
+      ).toContain("New agent");
+      expect(screen.queryByText("Untitled terminal agent")).toBeNull();
     });
   });
 });

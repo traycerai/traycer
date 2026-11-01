@@ -44,17 +44,14 @@ import type {
   IStreamWebSocketFactory,
   StreamWebSocketLike,
   StreamWebSocketMessageEvent,
-} from "../host-transport/ws-stream-factory";
+} from "../../ws-stream-factory";
 import type {
   WebSocketCloseEvent,
   WebSocketErrorEvent,
   WebSocketOpenEvent,
-} from "../host-transport/ws-factory";
-import {
-  RemoteSession,
-  type RemoteSessionOptions,
-} from "../host-transport/remote/remote-session";
-import { TEST_CLIENT_IDENTITY } from "./client-identity";
+} from "../../ws-factory";
+import { RemoteSession, type RemoteSessionOptions } from "../remote-session";
+import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
 
 /**
  * The relay + host end of the remote wire, shared by the transport suites in

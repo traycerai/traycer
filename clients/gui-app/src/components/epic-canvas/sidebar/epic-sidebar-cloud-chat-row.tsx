@@ -5,7 +5,7 @@ import { v4 as uuidv4 } from "uuid";
 import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
 import { cn } from "@/lib/utils";
 import { EPIC_NODE_ICONS } from "@/lib/artifacts/node-display";
-import { displayTitle, NEW_AGENT_TITLE } from "@/lib/display-title";
+import { displayTitle } from "@/lib/display-title";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { useCompactRelativeTime } from "@/lib/relative-time";
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
@@ -24,7 +24,6 @@ import {
   type UnifiedCloudChatEntry,
 } from "@/lib/chats/unified-chat-list";
 import {
-  useHasPendingChatTitle,
   useIsActiveEpicArtifact,
   useIsActiveTile,
 } from "@/stores/epics/canvas/store";
@@ -99,23 +98,6 @@ export interface EpicSidebarCloudChatRowProps {
   readonly selectionMode: boolean;
 }
 
-/**
- * The title the row paints: "New agent" while this client waits on the chat's
- * first title. Painted only: the tiles the row opens keep `title`, so the label
- * never reaches a tab snapshot. An unreachable owner sends no title here, and
- * the row opens a published copy named `title`, so it says the same.
- */
-function useCloudRowPaintedTitle(
-  chat: CloudChatSummary,
-  title: string,
-  ownerReachable: boolean,
-): string {
-  const awaitingFirstTitle = useHasPendingChatTitle(
-    chat.title === null && ownerReachable ? chat.identity.chatId : null,
-  );
-  return awaitingFirstTitle ? NEW_AGENT_TITLE : title;
-}
-
 export function EpicSidebarCloudChatRow(
   props: EpicSidebarCloudChatRowProps,
 ): ReactNode {
@@ -168,7 +150,6 @@ export function EpicSidebarCloudChatRow(
   const ownerSandboxOpensLive = useOwnerSandboxOpensLive(chat.ownerHostId);
   const ownerReachable =
     ownerReachability.status === "reachable" || ownerSandboxOpensLive;
-  const rowTitle = useCloudRowPaintedTitle(chat, title, ownerReachable);
   // Reach, not connectivity: the owner host belongs to another principal, so
   // agents here cannot work with it. Independent of the lock - a host can be
   // online and out of reach, or offline and not.
@@ -303,7 +284,7 @@ export function EpicSidebarCloudChatRow(
         // announcing exactly like a live one, though the two open different
         // surfaces.
         aria-label={cloudRowAriaLabel(
-          rowTitle,
+          title,
           ownerReachable,
           lockCopy,
           ownerNotReachable,
@@ -342,7 +323,7 @@ export function EpicSidebarCloudChatRow(
           style={chatIconDisplay.style}
         />
         <span className="flex min-w-0 flex-1 items-center gap-1.5">
-          <span className="min-w-0 flex-1 truncate">{rowTitle}</span>
+          <span className="min-w-0 flex-1 truncate">{title}</span>
           {/* The lock states what is true of the CHAT - its owner is out of
               reach - so it travels with the row rather than with a section, and
               it is absent when that is not true of this chat. */}

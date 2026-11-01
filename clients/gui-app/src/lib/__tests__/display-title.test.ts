@@ -3,6 +3,7 @@ import {
   chatDisplayTitle,
   displayTitle,
   epicDisplayTitle,
+  isAgentFallbackName,
   UNTITLED_EPIC_TITLE,
 } from "@/lib/display-title";
 
@@ -13,11 +14,21 @@ describe("displayTitle", () => {
 
   it("falls back to the per-kind label when empty", () => {
     expect(displayTitle("", "epic")).toBe("Untitled task");
-    expect(displayTitle("", "chat")).toBe("Untitled chat");
-    expect(displayTitle("", "terminal-agent")).toBe("Untitled terminal agent");
-    // The interface-agnostic durable-Agent fallback, used for both Chat- and
-    // Terminal-interface Agent rows on durable surfaces.
-    expect(displayTitle("", "agent")).toBe("Untitled agent");
+  });
+
+  it("names an untitled Agent 'New agent' under every Agent kind", () => {
+    expect(displayTitle("", "agent")).toBe("New agent");
+    expect(displayTitle("", "chat")).toBe("New agent");
+    expect(displayTitle("", "terminal-agent")).toBe("New agent");
+  });
+
+  it("reads the baked 'Untitled agent' as no title under the agent kind only", () => {
+    expect(displayTitle("Untitled agent", "agent")).toBe("New agent");
+    expect(displayTitle("Untitled agent", "chat")).toBe("Untitled agent");
+  });
+
+  it("keeps a historical 'Untitled chat' title as data", () => {
+    expect(displayTitle("Untitled chat", "agent")).toBe("Untitled chat");
   });
 
   it("exposes the single-sourced empty-epic literal", () => {
@@ -78,12 +89,27 @@ describe("chatDisplayTitle", () => {
     ).toBe("How do I do X?");
   });
 
-  it("falls back to 'Untitled chat' when no first message is available", () => {
+  it("falls back to 'New agent' when no first message is available", () => {
     expect(chatDisplayTitle({ title: "", firstUserMessage: null })).toBe(
-      "Untitled chat",
+      "New agent",
     );
     expect(chatDisplayTitle({ title: "", firstUserMessage: "" })).toBe(
-      "Untitled chat",
+      "New agent",
     );
+  });
+});
+
+describe("isAgentFallbackName", () => {
+  it.each([
+    "New agent",
+    "Untitled agent",
+    "Untitled chat",
+    "Untitled terminal agent",
+  ])("recognises %s", (name) => {
+    expect(isAgentFallbackName(name)).toBe(true);
+  });
+
+  it("does not recognise a real title", () => {
+    expect(isAgentFallbackName("Planner")).toBe(false);
   });
 });

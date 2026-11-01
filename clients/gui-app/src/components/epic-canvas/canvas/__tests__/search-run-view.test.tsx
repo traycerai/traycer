@@ -549,6 +549,29 @@ describe("SearchRunView - artifact target (workspace.searchText)", () => {
     expect(state.toast).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["chat", "New agent"],
+    ["terminal-agent", "New agent"],
+    ["ticket", "Untitled ticket"],
+  ] as const)(
+    "names an untitled %s hit %s on the tile it opens",
+    (kind, expected) => {
+      state.artifactIndex = {
+        "x/untitled": { id: "art-u", kind, title: "" },
+      };
+      state.artifactResult = artifactResponse(
+        "ready",
+        [artifactMatch("x/untitled")],
+        false,
+      );
+      renderView(ARTIFACT_TARGET, "body");
+
+      fireEvent.click(screen.getByRole("option"));
+      const opened = state.openTileIntoTargetGroup.mock.calls.at(0)?.[0];
+      expect(opened === undefined ? null : opened.ref.name).toBe(expected);
+    },
+  );
+
   it("stamps the opened artifact with the EPIC SESSION's host, not the app-wide pointer", () => {
     // A retained Epic stays bound to the machine its session runs on, while
     // Settings ▸ Activate moves the app-wide pointer out from under it. The

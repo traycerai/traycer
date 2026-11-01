@@ -82,7 +82,7 @@ export interface CloneChatOnHostSwitchArgs {
   readonly sourceOwnerUserId: string | null;
   readonly sourceHostId: string;
   /** The source chat's RAW stored title from the local projection - `""` for
-   *  a still-untitled source, never the rendered "Untitled agent" fallback.
+   *  a still-untitled source, never the rendered "New agent" fallback.
    *  Decorated into the clone's stamped title by {@link cloneChatTitle};
    *  passed client-side (not left to the host's fork-seed gap-fill) so the
    *  title survives the settings-only retry, where no fork seed exists at

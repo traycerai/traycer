@@ -23,6 +23,7 @@ import type {
   ChatSearchMessageHit,
   ChatSearchRange,
 } from "@traycer/protocol/host/chat-search/schemas";
+import { displayTitle } from "@/lib/display-title";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -783,5 +784,5 @@ export function ChatSearchHighlightedText(props: {
 }
 
 function displayChatTitle(title: string): string {
-  return title.trim().length === 0 ? "Untitled chat" : title;
+  return title.trim().length === 0 ? displayTitle("", "agent") : title;
 }
