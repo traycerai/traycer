@@ -22,6 +22,7 @@ import {
   deriveHostHealth,
   type HostHealth,
 } from "@/components/settings/host-scope/host-health";
+import { hostLastReport } from "@/components/settings/host-scope/host-last-report";
 
 /**
  * ONE host, as every settings surface should see it.
@@ -178,6 +179,7 @@ export function buildHostScopeOptions(
     const entry = entries.get(hostId) ?? null;
     const item = items.get(hostId) ?? null;
     const lease = leases.get(hostId) ?? null;
+    const summary = sandboxes?.get(hostId) ?? null;
     const isLocalMachine = hostId === input.localHostId;
     return {
       hostId,
@@ -195,13 +197,14 @@ export function buildHostScopeOptions(
         hasLiveSession: input.hasLiveSession(hostId),
         service: isLocalMachine ? input.localService : undefined,
         lease,
+        lastReport: hostLastReport(item, summary),
         authorityAttached: input.authorityAttached,
         nowMs: input.nowMs,
       }),
       updateState: item?.status.updateState ?? null,
       entry,
       item,
-      ...sandboxFactsOf(entry, item, sandboxes?.get(hostId) ?? null),
+      ...sandboxFactsOf(entry, item, summary),
     };
   });
   const listed = new Set(hostIds);
@@ -256,6 +259,7 @@ function unenrolledSandboxOption(
       hasLiveSession: false,
       service: undefined,
       lease: null,
+      lastReport: hostLastReport(null, summary),
       authorityAttached: input.authorityAttached,
       nowMs: input.nowMs,
     }),

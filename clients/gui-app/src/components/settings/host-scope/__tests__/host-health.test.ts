@@ -50,6 +50,7 @@ function registryItem(connectivity: HostConnectivity): HostListItem {
 const BASE = {
   item: registryItem("offline"),
   hasLiveSession: false,
+  lastReport: { kind: "reported", at: 0 } as const,
   lease: null,
   authorityAttached: false,
   nowMs: NOW_MS,
