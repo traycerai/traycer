@@ -214,12 +214,13 @@ export const CLI_ERROR_CODES = {
   // The target host build reads an on-disk store format OLDER than one this
   // machine's host data is already written in, so landing it would make those
   // chats unreadable - and a host that meets a store it cannot open crash-
-  // loops instead of reporting it. Raised before anything is downloaded,
-  // stopped or swapped, and equally when the target's format cannot be
-  // established at all: an unprovable move is refused, not assumed safe.
+  // loops instead of reporting it. Raised before anything is stopped or
+  // swapped, before anything is downloaded wherever the target can already be
+  // placed, and equally when the target's format cannot be established at
+  // all: an unprovable move is refused, not assumed safe.
   //
-  // Deliberately NOT HOST_CLIENT_FLOOR_UNMET, which is the other pre-download
-  // refusal: that one is about the CLI being too old for the host, and its
+  // Deliberately NOT HOST_CLIENT_FLOOR_UNMET, which is the other refusal of a
+  // target host: that one is about the CLI being too old for the host, and its
   // remedy is to update Traycer. This one is about DATA, the target is
   // typically older on purpose, and the only remedies are to update forward or
   // to accept the loss explicitly with `--accept-store-format-loss`.
