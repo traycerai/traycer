@@ -198,6 +198,26 @@ describe("writeHostUpdateLastAttempt", () => {
     it.each([
       ["outside the usual roots", "/var/lib/ali", "/var/lib/ali/x", "~/x"],
       ["named by one letter", "/data/a", "open /data/a/lock", "open ~/lock"],
+      ["in another case", "/data/ali", "/DATA/ALI/x", "~/x"],
+      [
+        "with its name in another case",
+        "/data/alice",
+        "/mnt/ALICE/x",
+        "/mnt/<redacted>/x",
+      ],
+      ["inside a longer path", "/root", "/opt/root/x", "/opt/<redacted>/x"],
+      [
+        "inside a URL",
+        "/root",
+        "GET https://example.com/root/file failed",
+        "GET https://example.com/<redacted>/file failed",
+      ],
+      [
+        "under another volume",
+        "/Users/alice",
+        "/Volumes/Backup/Users/alice/x",
+        "/Volumes/Backup/Users/<redacted>/x",
+      ],
       [
         "a sibling sharing its prefix",
         "/data/ali",
@@ -350,6 +370,17 @@ describe("a download's failure", () => {
       expect(await readHostUpdateLastAttempt(home)).toMatchObject({ outcome });
     },
   );
+
+  it("goes whichever version the update delivered", async () => {
+    await writeHostUpdateLastAttempt(home, failure, { info: vi.fn() });
+    await writeHostUpdateLastAttempt(
+      home,
+      { ...parked, outcome: "complete", targetVersion: "1.0.0" },
+      { info: vi.fn() },
+    );
+
+    expect(await readHostDownloadFailure(home)).toBeNull();
+  });
 
   it.each(["no-op", "parked", "refused", "failed"] as const)(
     "stays when an update ends %s",

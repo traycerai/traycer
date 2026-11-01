@@ -41,8 +41,8 @@ import type { HostUpdateTrigger } from "./record";
  * A download has a file of its own. It runs in the background whether or not
  * anyone asked, so in this one it would replace the update that mattered, a
  * parked one included, and hide the apply Desktop is waiting to conclude. It
- * records only how it failed, and that goes when a download or an update gets
- * through.
+ * records only how it failed, and that goes when a download stages something or
+ * an update delivers.
  */
 const UPDATE_LAST_ATTEMPT_FILENAME = "update-last-attempt.json";
 const HOST_DOWNLOAD_FAILURE_FILENAME = "update-last-download-failure.json";
@@ -114,7 +114,10 @@ function recordableText(text: string): string {
   // An empty or root home has no name and stands for nothing to strip.
   if (name !== "") {
     redacted = redacted.replace(
-      new RegExp(`${escapedForPattern(home)}(?![^\\\\/\\s"':,)])`, "gi"),
+      new RegExp(
+        `(?<![\\w.-])${escapedForPattern(home)}(?![^\\\\/\\s"':,)])`,
+        "gi",
+      ),
       "~",
     );
   }
@@ -162,8 +165,8 @@ export async function writeHostUpdateLastAttempt(
       { encoding: "utf8", mode: 0o600 },
     );
     await renameWithWindowsRetry(temporary, path, 0);
-    // The bytes arrived, whichever way, so a download that failed no longer
-    // stands between this install and them.
+    // Whichever version each named: this install has moved on from what the
+    // failed download was fetching.
     if (attempt.outcome === "complete" || attempt.outcome === "applied") {
       await clearHostDownloadFailure(hostHome);
     }
@@ -204,7 +207,7 @@ export function readHostDownloadFailure(
   return readAttemptAt(lastAttemptPath(hostHome, "host download"));
 }
 
-/** The bytes got through: the failure it replaces is no longer true. */
+/** Something was delivered since: the failure no longer describes this install. */
 export async function clearHostDownloadFailure(
   hostHome: string,
 ): Promise<void> {

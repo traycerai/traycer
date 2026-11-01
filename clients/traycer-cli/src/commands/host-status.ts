@@ -78,7 +78,7 @@ interface HostStatusOutput {
    * `updateAttempt` above is only ever one still standing.
    */
   readonly lastUpdateAttempt: HostUpdateLastAttempt | null;
-  /** Why the last download did not get through, until a download or update has. */
+  /** Why the last download failed, until one stages or an update delivers. */
   readonly lastDownloadFailure: HostUpdateLastAttempt | null;
   /**
    * Who holds the update lock right now and what they are doing, or `null`

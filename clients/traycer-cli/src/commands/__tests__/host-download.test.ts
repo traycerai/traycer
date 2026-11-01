@@ -243,17 +243,75 @@ describe("the record a download leaves", () => {
     code: null,
     message: "connection reset",
   } as const;
-  const noOp = {
-    outcome: "short-circuit",
-    reason: "installed-up-to-date",
-    installedVersion: "1.5.0",
-  } as HostDownloadOutcome;
 
-  it("one that gets through clears the failure before it", async () => {
+  it.each<[string, HostDownloadOutcome]>([
+    [
+      "staged",
+      {
+        outcome: "promoted",
+        stagedVersion: "1.5.0",
+        installedVersion: "1.4.0",
+      },
+    ],
+    [
+      "already staged",
+      {
+        outcome: "short-circuit",
+        reason: "already-staged",
+        targetVersion: "1.5.0",
+        stagedVersion: "1.5.0",
+        installedVersion: "1.4.0",
+      },
+    ],
+  ])("one that ends %s clears the failure before it", async (_name, result) => {
     await writeHostUpdateLastAttempt(home(), failure, { info: vi.fn() });
-    mocks.downloadAndStageHostMock.mockResolvedValue(noOp);
+    mocks.downloadAndStageHostMock.mockResolvedValue(result);
     await download(null);
     expect(await last()).toBeNull();
+  });
+
+  it.each<[string, HostDownloadOutcome]>([
+    [
+      "up to date",
+      {
+        outcome: "short-circuit",
+        reason: "installed-up-to-date",
+        targetVersion: "1.4.0",
+        stagedVersion: null,
+        installedVersion: "1.4.0",
+      },
+    ],
+    [
+      "refused automatically",
+      {
+        outcome: "short-circuit",
+        reason: "automatic-refused-incomparable-installed",
+        targetVersion: "1.5.0",
+        stagedVersion: null,
+        installedVersion: "local-1",
+      },
+    ],
+    [
+      "discarded as no longer newer",
+      {
+        outcome: "discarded",
+        reason: "not-strictly-newer",
+        targetVersion: "1.5.0",
+      },
+    ],
+    [
+      "discarded by an uninstall",
+      {
+        outcome: "discarded",
+        reason: "install-record-vanished",
+        targetVersion: "1.5.0",
+      },
+    ],
+  ])("one that ends %s leaves it standing", async (_name, result) => {
+    await writeHostUpdateLastAttempt(home(), failure, { info: vi.fn() });
+    mocks.downloadAndStageHostMock.mockResolvedValue(result);
+    await download(null);
+    expect(await last()).toMatchObject({ message: "connection reset" });
   });
 
   it("one that is refused leaves the update it found standing", async () => {

@@ -492,8 +492,8 @@ const HOME_PATH_OPENER_LOOKBACK = 16;
 
 /**
  * The segment right after a `Users` (macOS, Windows) or `home`/`homes` (Linux)
- * root * that starts an absolute path, under either separator, and under doubled ones
- * (a JSON-escaped Windows path). Where a separator follows, or a delimiter
+ * root that starts an absolute path, under either separator, and under doubled
+ * ones (a JSON-escaped Windows path). Where a separator follows, or a delimiter
  * that closes the path's quote or bracket, the whole segment goes, with any
  * run of spaces or tabs before or between its words (a macOS full-name folder,
  * `/Users/Mary Jane/...`, `scandir '/Users/Mary Jane'`); where neither does,

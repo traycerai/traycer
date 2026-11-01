@@ -4158,6 +4158,27 @@ describe("platform matrix", () => {
       });
     });
 
+    it("an apply of bytes this app activates, whose child died, is recorded here", async () => {
+      vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+      const controller = stagedUpdate();
+      vi.mocked(streamBundledTraycerCliJson).mockImplementation(
+        async (opts) => {
+          if (opts.args.includes("apply")) throw silentDeath();
+          return { data: {} };
+        },
+      );
+
+      await controller.applyStaged("manual", false);
+
+      expect(await lastAttempt()).toMatchObject({
+        command: "host apply",
+        initiator: "desktop",
+        outcome: "failed",
+        targetVersion: "1.8.0",
+        message: "traycer-cli was killed by SIGKILL",
+      });
+    });
+
     it("a download whose child died before reporting is recorded here", async () => {
       const controller = stagedUpdate();
       vi.mocked(streamBundledTraycerCliJson).mockImplementation(
