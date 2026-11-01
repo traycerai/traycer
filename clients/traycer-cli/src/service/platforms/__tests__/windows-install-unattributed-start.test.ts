@@ -101,15 +101,18 @@ const installOptions = {
   enableLinger: false,
 };
 
-/** A task registered by this build, running as `userId`. */
-function taskXml(userId: string): string {
+/**
+ * A task registered by this build, running as `userId`, with the TASK-level
+ * `<Settings><Enabled>` Task Scheduler's "Disable" writes.
+ */
+function taskXml(userId: string, enabled: "true" | "false"): string {
   return `<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <Triggers><LogonTrigger><Enabled>true</Enabled></LogonTrigger></Triggers>
   <Principals>
     <Principal id="Author"><UserId>${userId}</UserId><LogonType>InteractiveToken</LogonType></Principal>
   </Principals>
-  <Settings><Enabled>true</Enabled><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy></Settings>
+  <Settings><Enabled>${enabled}</Enabled><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy></Settings>
   <Actions Context="Author"><Exec><Command>C:\\x\\wscript.exe</Command></Exec></Actions>
 </Task>`;
 }
@@ -225,7 +228,7 @@ beforeEach(() => {
   staged = 0;
   // The pre-claim reads of the field run: the task is there and it is this
   // account's, which is why the update was not parked before its claim.
-  registered = { kind: "xml", xml: taskXml(CALLER_SID) };
+  registered = { kind: "xml", xml: taskXml(CALLER_SID, "true") };
   hostComesUp();
   setWindowsTaskUserSidReaderForTests(() => CALLER_SID);
   setWindowsAccountSidResolverForTests(async () => null);
@@ -275,34 +278,16 @@ async function readBeforeTheClaimThenBreakTheRead(
   registered = after;
 }
 
+// That the install issues the `/Run` and stages nothing is pinned once, in
+// `windows-task-ownership.test.ts`'s verb-by-verb map ("install over a task it
+// could not attribute"). What only this suite can show is what the install
+// then REPORTS, since every such report is read by a caller that decides how
+// long to wait for a host and what to blame.
 describe("the post-swap actuator over a registration whose ownership read stopped answering", () => {
-  it("issues the /Run and verifies the start, while writing no definition at all", async () => {
-    await readBeforeTheClaimThenBreakTheRead(READ_TIMED_OUT);
-    const publish = vi.fn(async (): Promise<null> => null);
-    const { runner, calls } = recordingRunner({ runFails: false });
-
-    await runWithLeaseAtServiceSpawnEdge(publish, () =>
-      createWindowsController(runner, { now: () => 0 }).install(installOptions),
-    );
-
-    // The start the field run never requested.
-    expect(verbCalls(calls, "/Run")).toEqual([
-      { command: "schtasks", args: ["/Run", "/TN", taskName] },
-    ]);
-    // ...and the definition refresh it was right to skip: no staging, no
-    // launcher rewrite, no `/Create`.
-    expect(verbCalls(calls, "/Create")).toHaveLength(0);
-    expect(staged).toBe(0);
-    expect(await exists(launcherPath())).toBe(false);
-    // One grant, published at the `/Run` edge: the install edge is skipped
-    // with the write it guards.
-    expect(publish).toHaveBeenCalledTimes(1);
-  });
-
   it("control: the same flip to another account's SID still issues no /Run and keeps the refusal", async () => {
     await readBeforeTheClaimThenBreakTheRead({
       kind: "xml",
-      xml: taskXml(OTHER_SID),
+      xml: taskXml(OTHER_SID, "true"),
     });
     const publish = vi.fn(async (): Promise<null> => null);
     const { runner, calls } = recordingRunner({ runFails: false });
@@ -343,14 +328,69 @@ describe("the post-swap actuator over a registration whose ownership read stoppe
       code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
       message: expect.stringContaining(`schtasks /Run failed for ${taskName}`),
       // The task exists and may already be starting, so a lease-holding
-      // caller honours its grant before surfacing this. Nothing read an
-      // `<Enabled>` off a task the gate could not attribute, so the committed
-      // answer stands.
-      details: { registrationCommitted: true, registrationDisabled: false },
+      // caller honours its grant before surfacing this.
+      details: { registrationCommitted: true },
     });
     expect(verbCalls(calls, "/Run")).toHaveLength(1);
     expect(verbCalls(calls, "/Create")).toHaveLength(0);
   });
+
+  // `registrationDisabled` is what stops the caller waiting out its whole
+  // adoption window, and then escalating to a re-registration, for a task
+  // whose `/Run` its own `<Enabled>` already explains. Ownership being
+  // undecided is NOT the same question: three of the four unconfirmed
+  // verdicts are read off XML the gate holds, so the answer is there - and
+  // claiming `false` for the fourth would have the caller skip the read that
+  // would have found it.
+  for (const c of [
+    {
+      name: "a principal this account could not be compared with, task disabled",
+      // `caller-sid-unreadable`: the XML read fine, the SID read did not.
+      after: { kind: "xml", xml: taskXml(CALLER_SID, "false") } as const,
+      sid: null,
+      disabled: true,
+      committed: false,
+    },
+    {
+      name: "a principal this account could not be compared with, task enabled",
+      after: { kind: "xml", xml: taskXml(CALLER_SID, "true") } as const,
+      sid: null,
+      disabled: false,
+      committed: true,
+    },
+    {
+      name: "a definition that could not be read at all",
+      // `definition-read-failed`: no XML, so no answer to give.
+      after: READ_TIMED_OUT,
+      sid: CALLER_SID,
+      disabled: null,
+      committed: true,
+    },
+  ]) {
+    it(`a refused /Run over ${c.name} reports registrationDisabled ${String(c.disabled)}`, async () => {
+      await readBeforeTheClaimThenBreakTheRead(c.after);
+      setWindowsTaskUserSidReaderForTests(() => c.sid);
+      const { runner, calls } = recordingRunner({ runFails: true });
+
+      await expect(
+        runWithLeaseAtServiceSpawnEdge(
+          async (): Promise<null> => null,
+          () =>
+            createWindowsController(runner, { now: () => 0 }).install(
+              installOptions,
+            ),
+        ),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        details: {
+          registrationDisabled: c.disabled,
+          registrationCommitted: c.committed,
+        },
+      });
+      expect(verbCalls(calls, "/Run")).toHaveLength(1);
+      expect(verbCalls(calls, "/Create")).toHaveLength(0);
+    });
+  }
 
   it("a /Run the scheduler accepts but no host answers fails on the missing evidence, not on the read", async () => {
     await readBeforeTheClaimThenBreakTheRead(READ_TIMED_OUT);

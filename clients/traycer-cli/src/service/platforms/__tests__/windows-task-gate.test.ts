@@ -696,7 +696,10 @@ describe("gateWindowsTaskRun: the write-free verb's own door", () => {
         hidden: false,
       }).deps,
     );
-    if (gate.kind !== "unattributed") throw new Error("unreachable");
+    if (gate.kind !== "permitted") throw new Error("unreachable");
+    // A definition that could not be read at all leaves `<Enabled>` genuinely
+    // unanswered, and the verdict says so rather than carry someone else's.
+    expect(gate.task).toEqual({ kind: "unattributed", xml: null });
     const run = vi.fn<WindowsTaskVerbRunner>(async () => ({
       stdout: "",
       stderr: "",
@@ -719,6 +722,25 @@ describe("gateWindowsTaskRun: the write-free verb's own door", () => {
       reason: "unconfirmed",
       probe: "definition-read-failed",
     });
+  });
+
+  // Ownership being undecided is a different question from the definition
+  // being unreadable: three of the four unconfirmed verdicts are read OFF the
+  // XML, so the verdict carries it and `<Enabled>` is still answerable from
+  // the read that already happened.
+  it("a task whose owner could not be confirmed FROM its XML carries that XML", async () => {
+    const xml = taskXml(principal("A", CALLER_SID), "A");
+    const gate = await gateWindowsTaskRun(
+      label,
+      harness({
+        query: { kind: "xml", xml },
+        callerSid: null,
+        resolve: () => null,
+        hidden: false,
+      }).deps,
+    );
+    if (gate.kind !== "permitted") throw new Error("unreachable");
+    expect(gate.task).toEqual({ kind: "unattributed", xml });
   });
 
   it("another account's task is still refused, with the other-owner copy and no /Run", async () => {

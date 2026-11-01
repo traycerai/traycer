@@ -118,6 +118,15 @@ export type WindowsTaskOwnership =
       readonly reason: WindowsTaskNotOwnedReason;
       /** Which read branch decided it; INFO-safe (names no account). */
       readonly probe: WindowsTaskOwnershipProbe;
+      /**
+       * The definition this verdict was read FROM, when the read produced one.
+       * Most not-owned verdicts have it: only a definition that could not be
+       * read at all (`definition-read-failed`, `hidden-from-caller`) has no
+       * XML, and every verdict decided from a principal was decided on XML
+       * that was read successfully. `/Run` answers `<Enabled>` from it rather
+       * than claiming a task it could not attribute is not disabled.
+       */
+      readonly xml: string | null;
       /** DEBUG only: why, in words that name no account. */
       readonly detail: string;
     };
@@ -281,68 +290,74 @@ export async function readWindowsTaskOwnership(
   // denied. Task Scheduler lets a task's own principal read it, so a task
   // that is there and hidden from this account is another account's.
   if (query.kind !== "xml" && (await deps.taskHiddenFromCaller(taskName))) {
-    return notOwned(
-      "other-owner",
-      "hidden-from-caller",
-      "the task is hidden from this account: its stored definition exists and this account may not open it",
-    );
+    return notOwned({
+      reason: "other-owner",
+      probe: "hidden-from-caller",
+      xml: null,
+      detail:
+        "the task is hidden from this account: its stored definition exists and this account may not open it",
+    });
   }
   if (query.kind === "absent") return { kind: "absent" };
   if (query.kind === "failed") {
-    return notOwned(
-      "unconfirmed",
-      "definition-read-failed",
-      `the task could not be read (${query.reason})`,
-    );
+    return notOwned({
+      reason: "unconfirmed",
+      probe: "definition-read-failed",
+      xml: null,
+      detail: `the task could not be read (${query.reason})`,
+    });
   }
   const principal = parseTaskPrincipalUserId(query.xml);
   if (principal === null) {
-    return notOwned(
-      "unconfirmed",
-      "no-principal",
-      "the task names no principal account",
-    );
+    return notOwned({
+      reason: "unconfirmed",
+      probe: "no-principal",
+      xml: query.xml,
+      detail: "the task names no principal account",
+    });
   }
   const caller = deps.callerSid();
   if (caller === null) {
-    return notOwned(
-      "unconfirmed",
-      "caller-sid-unreadable",
-      "this account's SID could not be read",
-    );
+    return notOwned({
+      reason: "unconfirmed",
+      probe: "caller-sid-unreadable",
+      xml: query.xml,
+      detail: "this account's SID could not be read",
+    });
   }
   const principalSid = isSidShaped(principal)
     ? principal
     : await deps.resolveAccountSid(principal);
   if (principalSid === null) {
-    return notOwned(
-      "unconfirmed",
-      "principal-name-unresolved",
-      "the task's principal account name resolves to no SID",
-    );
+    return notOwned({
+      reason: "unconfirmed",
+      probe: "principal-name-unresolved",
+      xml: query.xml,
+      detail: "the task's principal account name resolves to no SID",
+    });
   }
   if (principalSid.toUpperCase() === caller.toUpperCase()) {
     return { kind: "caller", xml: query.xml };
   }
   return isSidShaped(principal)
-    ? notOwned(
-        "other-owner",
-        "principal-other-sid",
-        "the task's principal SID is another account's",
-      )
-    : notOwned(
-        "other-owner",
-        "principal-name-other-account",
-        "the task's principal account name resolves to another account",
-      );
+    ? notOwned({
+        reason: "other-owner",
+        probe: "principal-other-sid",
+        xml: query.xml,
+        detail: "the task's principal SID is another account's",
+      })
+    : notOwned({
+        reason: "other-owner",
+        probe: "principal-name-other-account",
+        xml: query.xml,
+        detail: "the task's principal account name resolves to another account",
+      });
 }
 
 function notOwned(
-  reason: WindowsTaskNotOwnedReason,
-  probe: WindowsTaskOwnershipProbe,
-  detail: string,
+  verdict: Omit<Extract<WindowsTaskOwnership, { kind: "not-owned" }>, "kind">,
 ): WindowsTaskOwnership {
-  return { kind: "not-owned", reason, probe, detail };
+  return { kind: "not-owned", ...verdict };
 }
 
 /** Every verb that touches the task (or the folder it lives in). */
@@ -481,23 +496,37 @@ export async function gateWindowsTaskVerb<V extends GatedWindowsTaskVerb>(
   return { kind: "permitted", task: ownership, exec };
 }
 
-/** What `gateWindowsTaskRun` decided about the one write-free verb. */
+/**
+ * The task a permitted `/Run` acts on, as the gate's own read found it: the
+ * three `PermittedWindowsTask` answers a write may act on, plus the one only
+ * this write-free verb may - a task that is there and could not be attributed
+ * to this account.
+ */
+export type StartedWindowsTask =
+  | PermittedWindowsTask
+  | {
+      readonly kind: "unattributed";
+      /**
+       * The definition the verdict was read from, or `null` when the read
+       * produced none. Ownership was not decided from it, but `<Enabled>` is
+       * still whatever it says: only a definition that could not be read at
+       * all leaves that question genuinely unanswered, and a caller must then
+       * say so rather than claim the task is not disabled.
+       */
+      readonly xml: string | null;
+    };
+
+/**
+ * What `gateWindowsTaskRun` decided about the one write-free verb: issue it on
+ * the task its read found, or refuse. Two outcomes, not three - whether the
+ * task was attributable is a fact about the TASK (`task.kind`), not about
+ * whether this account may ask the scheduler to start it.
+ */
 export type WindowsTaskRunGate =
   | {
       readonly kind: "permitted";
       /** The task as the gate's read found it, for its `<Enabled>`. */
-      readonly task: PermittedWindowsTask;
-      readonly exec: WindowsTaskRunExecutor;
-    }
-  | {
-      /**
-       * A task that is there and could not be attributed to this account. The
-       * `/Run` is issued anyway and Task Scheduler's own permissions decide
-       * it, so a failure is reported from the verb's own result rather than
-       * from a read that could not be made. No `task`: nothing was read off
-       * it, its `<Enabled>` included.
-       */
-      readonly kind: "unattributed";
+      readonly task: StartedWindowsTask;
       readonly exec: WindowsTaskRunExecutor;
     }
   | {
@@ -538,7 +567,11 @@ export async function gateWindowsTaskRun(
     ownership,
     "The host's Scheduled Task's owner could not be confirmed as this account; starting it anyway, since a run changes no definition and the task's own permissions decide it",
   );
-  return { kind: "unattributed", exec };
+  return {
+    kind: "permitted",
+    task: { kind: "unattributed", xml: ownership.xml },
+    exec,
+  };
 }
 
 /**

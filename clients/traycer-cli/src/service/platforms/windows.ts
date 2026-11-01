@@ -96,6 +96,7 @@ import {
   serviceTaskNotOwnedError,
   type PermittedWindowsTask,
   type ScheduledTaskXmlQuery,
+  type StartedWindowsTask,
   type WindowsTaskCreateStager,
   type WindowsTaskOwnership,
   type WindowsTaskOwnershipDeps,
@@ -1967,10 +1968,11 @@ async function runTaskAndVerifyStart(
       tolerateNonZeroExit: false,
     });
   } catch (cause) {
-    // Post-registration: `/Create` succeeded, so the task exists with its
-    // logon trigger whether or not this `/Run` was accepted. A caller holding
-    // a host-start adoption lease honours it before surfacing this
-    // (`didServiceRegistrationCommit`) rather than refusing a child the
+    // Post-registration: the task exists with its logon trigger whether or not
+    // this `/Run` was accepted - either `/Create` succeeded above, or the task
+    // was already registered and this start left its definition alone. A
+    // caller holding a host-start adoption lease honours it before surfacing
+    // this (`didServiceRegistrationCommit`) rather than refusing a child the
     // scheduler may already be starting - an authority loss landing here
     // included, which keeps its identity and is marked by reference.
     if (isServiceMutationAuthorityError(cause)) {
@@ -1981,22 +1983,19 @@ async function runTaskAndVerifyStart(
     // Marked committed, the lease waited its whole acknowledgement window for
     // that child and the start was retried into the same refusal - about
     // 100 s on a real host before the disabled-task refusal reached anyone.
-    // Answered from the gate's own definition read - one for this verb -
-    // and carried as `registrationDisabled`, so the caller deciding what to
-    // do about the refusal does not query again either. A setting that
-    // cannot be read keeps the committed answer, and so does a task the gate
-    // could not attribute: it read no `<Enabled>` off it either.
-    const disabled =
-      start.kind === "permitted" &&
-      start.task.kind === "caller" &&
-      taskXmlEnabledState(start.task.xml).kind === "disabled";
+    // Answered from the gate's own definition read - one for this verb - and
+    // carried as `registrationDisabled`, so the caller deciding what to do
+    // about the refusal does not query again either.
+    const disabled = startedRegistrationDisabled(start.task);
     throw cliError({
       code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
       message: `schtasks /Run failed for ${taskName}: ${describeCause(cause)}`,
       details: {
         task: taskName,
         cause: describeCause(cause),
-        registrationCommitted: !disabled,
+        // Committed unless this read PROVED the task disabled: an unanswered
+        // `<Enabled>` keeps the committed answer, as it always has.
+        registrationCommitted: disabled !== true,
         registrationDisabled: disabled,
       },
       exitCode: 1,
@@ -2043,6 +2042,26 @@ async function runTaskAndVerifyStart(
     },
     exitCode: 1,
   });
+}
+
+/**
+ * Whether the task this `/Run` was issued on is switched off in Task
+ * Scheduler, from the definition the gate's own read produced - or `null` when
+ * that read produced none, which only a definition that could not be read at
+ * all does. `null` is not "enabled": the caller that acts on the refusal
+ * (`startRefusedOverDisabledRegistration`) reads it as "no answer" and takes
+ * its own read, where `false` would have it skip the question and escalate to
+ * a re-registration instead. A task the gate could not ATTRIBUTE is a
+ * different thing from one it could not READ: ownership is undecided, while
+ * `<Enabled>` is whatever the XML it holds says.
+ */
+function startedRegistrationDisabled(task: StartedWindowsTask): boolean | null {
+  // No task at all is not a disabled one, and never was: `/Run` fails here
+  // because the task is absent, which `registrationDisabled: false` says
+  // correctly and this call has always said.
+  if (task.kind === "absent") return false;
+  if (task.xml === null) return null;
+  return taskXmlEnabledState(task.xml).kind === "disabled";
 }
 
 /**
