@@ -108,6 +108,9 @@ vi.mock(
   },
 );
 
+/** The titles `epic.renameChat` was asked to store, in order. */
+const renameChatTitles = vi.hoisted((): string[] => []);
+
 const armRows = vi.hoisted((): { value: readonly CloudChatSummary[] } => ({
   value: [],
 }));
@@ -238,6 +241,10 @@ function createHostClient(
       requestId: () => "arm-stand-in",
       handlers: {
         "epic.listCloudChats": listCloudChats,
+        "epic.renameChat": (request) => {
+          renameChatTitles.push(request.title);
+          return Promise.resolve({ updated: true });
+        },
       },
     }),
   });
@@ -283,6 +290,7 @@ describe("the Agents tree over a sent team-host chat", () => {
     for (const handle of opened.splice(0)) handle.dispose();
     useAuthStore.setState(useAuthStore.getInitialState(), true);
     armRows.value = [];
+    renameChatTitles.length = 0;
     useEpicCanvasStore.getState().clearAllTitleGenerationPending();
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   });
@@ -407,10 +415,13 @@ describe("the Agents tree over a sent team-host chat", () => {
       );
     }
 
-    async function holdSentChat(session: OpenedStoreForTest): Promise<void> {
+    async function holdSentChat(
+      session: OpenedStoreForTest,
+      hostId: string,
+    ): Promise<void> {
       session.store.getState().beginPendingChatCreation({
         chatId: CHAT_ID,
-        hostId: SANDBOX_HOST_ID,
+        hostId,
         parentChatId: null,
         title: "",
         ownerUserId: USER_ID,
@@ -426,7 +437,7 @@ describe("the Agents tree over a sent team-host chat", () => {
       const queryClient = createAppQueryClient();
       const session = createSession();
       opened.push(session);
-      await holdSentChat(session);
+      await holdSentChat(session, SANDBOX_HOST_ID);
       renderTree(session, queryClient);
       await vi.waitFor(() => {
         expect(screen.getByTestId(`epic-sidebar-item-${CHAT_ID}`)).toBeTruthy();
@@ -490,7 +501,7 @@ describe("the Agents tree over a sent team-host chat", () => {
       const queryClient = createAppQueryClient();
       const session = createSession();
       opened.push(session);
-      await holdSentChat(session);
+      await holdSentChat(session, SANDBOX_HOST_ID);
       useEpicCanvasStore.getState().openEpicTabWithId(TAB_ID, EPIC_ID, "Epic");
       renderTree(session, queryClient);
       await vi.waitFor(() => {
@@ -524,6 +535,111 @@ describe("the Agents tree over a sent team-host chat", () => {
       if (!(input instanceof HTMLInputElement))
         throw new Error("expected input");
       expect(input.value).toBe("Untitled agent");
+    });
+
+    async function startRenameWhileAwaiting(): Promise<{
+      readonly session: OpenedStoreForTest;
+      readonly row: HTMLElement;
+    }> {
+      const queryClient = createAppQueryClient();
+      const session = createSession();
+      opened.push(session);
+      // The session's own host: a rename is sent to the owner, and only the
+      // session's client is wired in this harness.
+      await holdSentChat(session, mockLocalHostEntry.hostId);
+      renderTree(session, queryClient);
+      await vi.waitFor(() => {
+        expect(screen.getByTestId(`epic-sidebar-item-${CHAT_ID}`)).toBeTruthy();
+      });
+      act(() => {
+        useEpicCanvasStore.getState().markChatTitlePending(CHAT_ID, "");
+      });
+      const row = await screen.findByLabelText(/^New agent/);
+      fireEvent.contextMenu(row);
+      fireEvent.click(
+        await screen.findByTestId(`epic-sidebar-context-rename-${CHAT_ID}`),
+      );
+      return { session, row };
+    }
+
+    function renameInput(): HTMLInputElement {
+      const input = screen.getByTestId(`epic-sidebar-rename-input-${CHAT_ID}`);
+      if (!(input instanceof HTMLInputElement))
+        throw new Error("expected input");
+      return input;
+    }
+
+    function landTitle(session: OpenedStoreForTest, title: string): void {
+      act(() => {
+        const state = session.store.getState();
+        const held = state.chats.byId[CHAT_ID];
+        const node = state.tree.nodeById[CHAT_ID];
+        session.store.setState({
+          chats: {
+            allIds: [CHAT_ID],
+            byId: {
+              [CHAT_ID]: { ...held, title, updatedAt: Date.now() + 1_000 },
+            },
+          },
+          tree: {
+            ...state.tree,
+            nodeById: {
+              ...state.tree.nodeById,
+              [CHAT_ID]: { ...node, title },
+            },
+          },
+        });
+      });
+    }
+
+    it("stores nothing when a title lands mid-rename and the seed is left untouched, and still stores a typed name", async () => {
+      const { session } = await startRenameWhileAwaiting();
+      expect(
+        (
+          await screen.findByTestId(`epic-sidebar-rename-input-${CHAT_ID}`)
+        ).getAttribute("aria-label"),
+      ).toBe("Rename Untitled agent");
+      expect(renameInput().value).toBe("Untitled agent");
+      landTitle(session, "Generated title");
+
+      fireEvent.keyDown(renameInput(), { key: "Enter" });
+      await vi.waitFor(() => {
+        expect(
+          screen.queryByTestId(`epic-sidebar-rename-input-${CHAT_ID}`),
+        ).toBeNull();
+      });
+
+      // A typed name afterwards is the barrier: the rename path is ordered, so
+      // once it has reached the host an earlier seed rename would have too.
+      const row = await screen.findByLabelText(/^Generated title/);
+      fireEvent.contextMenu(row);
+      fireEvent.click(
+        await screen.findByTestId(`epic-sidebar-context-rename-${CHAT_ID}`),
+      );
+      fireEvent.change(renameInput(), { target: { value: "Typed name" } });
+      fireEvent.keyDown(renameInput(), { key: "Enter" });
+
+      await vi.waitFor(() => {
+        expect(renameChatTitles).toContain("Typed name");
+      });
+      expect(renameChatTitles).toEqual(["Typed name"]);
+    });
+
+    it("names the rename input after the resolved title, not the New agent label, before and after the title lands", async () => {
+      const { session } = await startRenameWhileAwaiting();
+
+      expect(renameInput().getAttribute("aria-label")).toBe(
+        "Rename Untitled agent",
+      );
+      expect(screen.queryByLabelText("Rename New agent")).toBeNull();
+
+      landTitle(session, "Generated title");
+
+      await vi.waitFor(() => {
+        expect(renameInput().getAttribute("aria-label")).toBe(
+          "Rename Generated title",
+        );
+      });
     });
 
     it("never labels a terminal agent whose record holds no title", async () => {

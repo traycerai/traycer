@@ -792,4 +792,63 @@ describe("TabStrip title", () => {
     expect(onRenameSpy).not.toHaveBeenCalled();
     expect(persistedTileName(tile.instanceId)).toBe("Untitled agent");
   });
+
+  describe("a title landing while Edit Title is open on an awaited chat", () => {
+    async function startEditWhileAwaiting(): Promise<{
+      readonly tile: typeof TAB;
+      readonly input: HTMLInputElement;
+    }> {
+      installUntitledChat();
+      const tile = seedChatTile("Untitled agent");
+      renderTabStrip(tile, true);
+      await flushEpicSnapshot();
+      awaitFirstTitle();
+      await waitFor(() => {
+        expect(screen.getAllByRole("tab", { name: "New agent" })).toHaveLength(
+          1,
+        );
+      });
+      fireEvent.contextMenu(screen.getByTestId(`tab-item-${tile.instanceId}`));
+      fireEvent.click(await screen.findByText("Edit Title"));
+      const input = await screen.findByTestId(
+        `tab-title-input-${tile.instanceId}`,
+      );
+      if (!(input instanceof HTMLInputElement))
+        throw new Error("expected input");
+      expect(input.value).toBe("Untitled agent");
+      const handle = __getOpenEpicRegistryForTests().get(EPIC_ID);
+      if (handle === null) throw new Error("expected open epic handle");
+      await act(async () => {
+        await handle.store
+          .getState()
+          .renameArtifact(CHAT_ID, "Generated title");
+      });
+      await waitFor(() => {
+        expect(persistedTileName(tile.instanceId)).toBe("Generated title");
+      });
+      return { tile, input };
+    }
+
+    it("commits nothing when the seed is left untouched, and the snapshot keeps the landed title", async () => {
+      const { tile, input } = await startEditWhileAwaiting();
+
+      fireEvent.keyDown(input, { key: "Enter" });
+
+      expect(onRenameSpy).not.toHaveBeenCalled();
+      expect(persistedTileName(tile.instanceId)).toBe("Generated title");
+    });
+
+    it("still commits a name the person typed", async () => {
+      const { tile, input } = await startEditWhileAwaiting();
+
+      fireEvent.change(input, { target: { value: "My own name" } });
+      fireEvent.keyDown(input, { key: "Enter" });
+
+      expect(onRenameSpy).toHaveBeenCalledExactlyOnceWith(
+        GROUP_ID,
+        tile.instanceId,
+        "My own name",
+      );
+    });
+  });
 });
