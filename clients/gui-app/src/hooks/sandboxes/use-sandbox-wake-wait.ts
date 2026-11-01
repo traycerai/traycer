@@ -55,7 +55,10 @@ export function useSandboxWakeWait(
     answers: answered || relayAnswers,
     answeredWake,
   });
-  return wait === null ? null : (watched ?? wait);
+  if (wait === null) return null;
+  // A row that records its move is right about this wake; a watched move may
+  // be an earlier one's.
+  return summary.operation === null ? (watched ?? wait) : wait;
 }
 
 /** The move this surface saw take the row toward awake, until it rests. */

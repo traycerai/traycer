@@ -663,4 +663,58 @@ describe("an awake wait across wake identity, rollback and surfaces", () => {
 
     expect(mounted.result.current.kind).toBe("unreachable");
   });
+
+  it("names a later Resume after a first create when this observer missed the resting row", () => {
+    const later = WAKE + 60_000;
+    sources.sandboxes = [row({ state: "creating", operation: null })];
+    const transport = { reachable: false };
+    const mounted = renderHook(() => {
+      const state = useChatSandboxState("epic-1", HOST, transport.reachable);
+      return resolveChatSandbox(state, {
+        reachable: transport.reachable,
+        canEdit: true,
+        ownedByViewer: true,
+        environmentOwned: false,
+      });
+    });
+    sources.readySession = true;
+    transport.reachable = true;
+    sources.sandboxes = [
+      row({
+        state: "awake",
+        lastTransitionAt: WAKE,
+        lastActivityAt: WAKE,
+        operation: sandboxOperationFixture({
+          at: WAKE,
+          fromState: "creating",
+          state: "awake",
+        }),
+      }),
+    ];
+    mounted.rerender();
+    expect(mounted.result.current.line).toBeNull();
+
+    // This device misses the idle suspend and the next Resume, and receives
+    // the newer awake row with its own wake operation.
+    sources.readySession = false;
+    transport.reachable = false;
+    sources.sandboxes = [
+      row({
+        state: "awake",
+        lastTransitionAt: later,
+        lastActivityAt: later,
+        operation: sandboxOperationFixture({
+          at: later,
+          fromState: "suspended",
+          state: "awake",
+          cause: "wake",
+        }),
+      }),
+    ];
+    mounted.rerender();
+
+    expect(mounted.result.current.line?.text).toBe(
+      "Resuming e2e-sbx · pending",
+    );
+  });
 });
