@@ -762,6 +762,7 @@ describe("StableTileSurfaceHost geometry under StrictMode replay", () => {
             geometryAnchorElement: slot,
             panePortalContainer: null,
             isPaneFocusedNow: () => false,
+            mobileOpenTarget: null,
           },
         }),
       );
@@ -831,6 +832,7 @@ describe("StableTileSurfaceHost geometry retention while hidden (confirmed scrol
           geometryAnchorElement: slot,
           panePortalContainer: null,
           isPaneFocusedNow: () => false,
+          mobileOpenTarget: null,
         },
       }),
     );

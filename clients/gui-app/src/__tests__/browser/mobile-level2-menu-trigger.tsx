@@ -110,8 +110,13 @@ useTileMinimapStore.getState().registerTarget({
 
 export function TileBarSurface(): React.ReactElement {
   return (
-    <MobileTileMenu epicId={EPIC_ID} tabId={TAB_ID} drawn>
-      <MobileCurrentTileBar epicId={EPIC_ID} tile={TILE} level2="menu" />
+    <MobileTileMenu slot="primary" epicId={EPIC_ID} tabId={TAB_ID} drawn>
+      <MobileCurrentTileBar
+        epicId={EPIC_ID}
+        tile={TILE}
+        level2="menu"
+        trailing={null}
+      />
     </MobileTileMenu>
   );
 }

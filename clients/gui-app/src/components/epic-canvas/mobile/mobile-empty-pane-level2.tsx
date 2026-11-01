@@ -16,7 +16,7 @@ export function MobileEmptyPaneLevel2(props: {
   readonly children: ReactNode;
 }): ReactNode {
   const { epicId, tabId, children } = props;
-  const level2 = useMobileTileLevel2Form();
+  const level2 = useMobileTileLevel2Form(tabId);
   if (level2 === "bar") {
     return (
       <>
@@ -30,7 +30,7 @@ export function MobileEmptyPaneLevel2(props: {
       <MobileTileColumn epicId={epicId} tabId={tabId} level2={level2} />
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         {level2 === "menu" ? (
-          <MobileTileMenu epicId={epicId} tabId={tabId} drawn>
+          <MobileTileMenu epicId={epicId} tabId={tabId} slot="primary" drawn>
             <div
               data-mobile-shell-touch-scope=""
               className="flex min-h-11 shrink-0 items-center border-b border-canvas-border/70 px-3"

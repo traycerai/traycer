@@ -1,4 +1,12 @@
-import { Suspense, lazy, useCallback, useEffect, useMemo, useRef } from "react";
+import {
+  Suspense,
+  lazy,
+  use,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+} from "react";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { SwitcherCategoryTabs } from "@/components/epic-canvas/mobile/switcher-category-tabs";
@@ -13,8 +21,9 @@ import { SwitcherBrowsersList } from "@/components/epic-canvas/mobile/switcher-b
 import { SwitcherSimulatorsList } from "@/components/epic-canvas/mobile/switcher-simulators-list";
 import { SwitcherArtifactsList } from "@/components/epic-canvas/mobile/switcher-artifacts-list";
 import { SwitcherCommentsList } from "@/components/epic-canvas/mobile/switcher-comments-list";
-import { selectMobileTile } from "@/components/epic-canvas/mobile/mobile-tile-selection";
-import { useEpicCanvas } from "@/stores/epics/canvas/store";
+import { SwitcherLastTileRow } from "@/components/epic-canvas/mobile/switcher-last-tile-row";
+import { useMobileTileReading } from "@/components/epic-canvas/mobile/use-mobile-tile-level2-form";
+import { MobileTileOpenTargetContext } from "@/lib/canvas/tile-open/mobile-tile-open-target-context";
 import {
   isGitDiffTileRef,
   isPrDetailTileRef,
@@ -110,11 +119,13 @@ export function TileSwitcherList(props: TileSwitcherListProps) {
   // re-resolve, cross-window nav on the shared canvas store) also changes the
   // shown tile, but must NOT close the surface under the user mid-browse - those
   // row opens close via their own `onClose`.
-  const canvas = useEpicCanvas(tabId);
-  const shownTile = useMemo(
-    () => selectMobileTile(canvas)?.ref ?? null,
-    [canvas],
-  );
+  //
+  // The tile this list chooses for: the second slot's menu watches the second.
+  const reading = useMobileTileReading(tabId);
+  const listsForSecondary =
+    use(MobileTileOpenTargetContext)?.slot === "secondary";
+  const shownTile =
+    (listsForSecondary ? reading.secondary : reading.primary)?.ref ?? null;
   const shownInstanceId = shownTile?.instanceId ?? null;
   const shownInstanceIdRef = useRef<ShownInstanceObservation>(UNOBSERVED);
   useEffect(() => {
@@ -135,6 +146,7 @@ export function TileSwitcherList(props: TileSwitcherListProps) {
       onValueChange={handleCategoryChange}
       className="min-h-0 flex-1 gap-0"
     >
+      <SwitcherLastTileRow epicId={epicId} tabId={tabId} onClose={onClose} />
       <div className="shrink-0 border-b border-canvas-border/70">
         <SwitcherCategoryTabs
           categories={categories}
