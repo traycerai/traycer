@@ -5,7 +5,10 @@ import {
   sandboxSettingsSteps,
   sandboxSettingsStepsLine,
 } from "@traycer/protocol/host/sandbox-settings";
-import { unusedSettingLabel } from "@/components/settings/details/details-unused-setting";
+import {
+  oneLinePerAgent,
+  unusedSettingLabel,
+} from "@/components/settings/details/details-unused-setting";
 import { Button } from "@/components/ui/button";
 import {
   Sheet,
@@ -256,7 +259,7 @@ function SandboxDetailsSections(props: {
 
 /**
  * What the sandbox's host says of its configuration's settings: what applied
- * and what didn't, then each setting for an agent sandboxes don't run, apart.
+ * and what didn't, then each agent sandboxes don't run, apart.
  * Read only while the sandbox is awake; reading it never wakes one.
  */
 function SandboxSettingsDeliverySection(props: {
@@ -265,7 +268,10 @@ function SandboxSettingsDeliverySection(props: {
   const status = useSandboxSettingsStatus(props.summary).data;
   if (status === undefined || props.summary.state !== "awake") return null;
   const steps = sandboxSettingsStepsLine(sandboxSettingsSteps(status.items));
-  const unused = status.items.filter((item) => item.status === "not_used");
+  const unused = oneLinePerAgent(
+    status.items.filter((item) => item.status === "not_used"),
+    (item) => unusedSettingLabel(item.key),
+  );
   if (steps.length === 0 && unused.length === 0) return null;
   return (
     <section
