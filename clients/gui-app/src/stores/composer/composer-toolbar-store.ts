@@ -199,6 +199,13 @@ export interface ComposerToolbarState extends ComposerToolbarDerived {
    * writes.
    */
   readonly onShownPickKept: ((settings: ChatRunSettings) => void) | null;
+  /** The stage in place is a pick, not a draft's returned sandbox restored. */
+  readonly stageKeepsShownPick: boolean;
+  /**
+   * A kept pick still owed to `onShownPickKept`, waiting for its model to
+   * resolve so `model: ""` never reaches a draft.
+   */
+  readonly keptPickUnwritten: boolean;
 }
 
 /**
@@ -374,6 +381,8 @@ export function createComposerToolbarStore(
       pendingSettingsEmit: false,
       sandboxRunTarget: null,
       onShownPickKept: null,
+      stageKeepsShownPick: false,
+      keptPickUnwritten: false,
 
       setPermission: (next) => {
         update({ permission: next });
@@ -460,6 +469,7 @@ export function createComposerToolbarStore(
           ...derived,
           // A new seed supersedes any edit queued under the previous one.
           pendingSettingsEmit: false,
+          keptPickUnwritten: false,
         });
       },
 
@@ -474,27 +484,34 @@ export function createComposerToolbarStore(
         );
         // A catalog push touches `values` only to keep the pick on screen
         // when a stage starts keeping picks (`shownPickValues`).
-        const values =
-          shownPickValues(state, catalog, keptDerived) ?? state.values;
+        const kept = shownPickValues(state, catalog, keptDerived);
+        const values = kept ?? state.values;
         const derived =
-          values === state.values
+          kept === null
             ? keptDerived
-            : deriveToolbarState(values, catalog, state, policy);
-        // The emit decision lives in one named, testable place.
-        const emit = decideCatalogTransition({ ...state, values }, derived);
+            : deriveToolbarState(kept, catalog, state, policy);
+        // The emit decision lives in one named, testable place. A kept pick
+        // takes any deferred edit with it to the draft: its emit would carry
+        // the kept pick to the host's settings too.
+        const emit = kept === null && decideCatalogTransition(state, derived);
+        const keptPickOwed = kept !== null || state.keptPickUnwritten;
+        const keptPickWritable =
+          keptPickOwed && derived.selection.modelSlug.length > 0;
         set({
           catalog,
           values,
           ...derived,
           // Only an emit clears the deferred flag; a silent push leaves it as-is.
-          pendingSettingsEmit: emit ? false : state.pendingSettingsEmit,
+          pendingSettingsEmit:
+            emit || kept !== null ? false : state.pendingSettingsEmit,
+          keptPickUnwritten: keptPickOwed && !keptPickWritable,
         });
         if (emit) {
           const settings = settingsFromDerived(derived);
           state.onSettingsChange?.(settings);
           state.onUserSettingsChange?.(settings);
         }
-        if (values !== state.values)
+        if (keptPickWritable)
           state.onShownPickKept?.(settingsFromDerived(derived));
       },
 
@@ -694,16 +711,17 @@ function classifyResolvedSlug(
 /**
  * The values that keep the pick on screen when a sandbox is staged on this
  * composer's host, or `null` to keep `values` as they are. That host shows a
- * reroute when it cannot run the raw pick, and the stage keeping the raw pick
- * would put one the person never saw on the toolbar. The pick shown is the
+ * reroute or a healed model when it cannot run the raw pick, and the stage
+ * would put a pick the person never saw on the toolbar. The pick shown is the
  * person's, so it becomes the raw one: a stage that does not offer it refuses
  * it at Send.
  *
- * Only a stage: a resting chat keeps its own pick, and a sandbox host's
- * reroute is an install still running, which keeping exists to ride out.
- * Written to this store and the surface's draft (`onShownPickKept`), never
- * emitted: the surface's emit also writes per-host last-used settings and
- * harness memory, which are not this composer's to move.
+ * Only a stage the person picked: a restored stage returns its draft's own
+ * pick, a resting chat keeps its own, and a sandbox host's reroute is an
+ * install still running, which keeping exists to ride out. Written to this
+ * store and the surface's draft (`onShownPickKept`), never emitted: the
+ * surface's emit also writes per-host last-used settings and harness memory,
+ * which are not this composer's to move.
  */
 function shownPickValues(
   state: ComposerToolbarState,
@@ -712,12 +730,12 @@ function shownPickValues(
 ): ComposerToolbarValues | null {
   const shown = state.selection;
   if (
-    state.sandboxRunTarget !== "staged" ||
+    !state.stageKeepsShownPick ||
     catalog.hostId !== state.catalog.hostId ||
     state.catalog.keepsUnavailablePick ||
     !catalog.keepsUnavailablePick ||
-    shown.harnessId === state.values.selection.harnessId ||
-    kept.selection.harnessId === shown.harnessId
+    sameShownPick(shown, state.values.selection) ||
+    sameShownPick(shown, kept.selection)
   )
     return null;
   return {
@@ -726,6 +744,13 @@ function shownPickValues(
     reasoning: state.reasoning,
     serviceTier: state.serviceTier,
   };
+}
+
+function sameShownPick(
+  a: HarnessModelSelection,
+  b: HarnessModelSelection,
+): boolean {
+  return a.harnessId === b.harnessId && a.modelSlug === b.modelSlug;
 }
 
 /**

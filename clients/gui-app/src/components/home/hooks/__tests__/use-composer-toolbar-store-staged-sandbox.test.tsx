@@ -12,12 +12,17 @@ const host = vi.hoisted(() => {
     harnesses: [
       { id: "claude", available: claude },
       { id: "codex", available: codex },
+      { id: "traycer", available: true },
     ],
   });
   return {
     available,
     harnesses: available(true, false),
     offeredAgents: undefined as ReadonlyArray<string> | undefined,
+    /** The cloud's Traycer catalogue: `undefined` while it loads. */
+    cloudTraycer: undefined as
+      | ReadonlyArray<{ readonly slug: string }>
+      | undefined,
   };
 });
 
@@ -45,10 +50,16 @@ function modelOption(harnessId: string, slug: string) {
 // every render.
 const CLAUDE_MODELS = { models: [modelOption("claude", "sonnet-5.5")] };
 const CODEX_MODELS = { models: [modelOption("codex", "gpt-6-astra")] };
+// The host's own Traycer list: it does not hold the person's saved model.
+const TRAYCER_HOST_MODELS = {
+  models: [modelOption("traycer", "traycer-default")],
+};
 
 // The cloud's Traycer catalog, read only for a Traycer pick sent to a sandbox.
 vi.mock("@/hooks/sandboxes/use-sandbox-traycer-models-query", () => ({
-  useSandboxTraycerModels: () => ({ data: undefined }),
+  useSandboxTraycerModels: () => ({
+    data: host.cloudTraycer?.map((m) => modelOption("traycer", m.slug)),
+  }),
 }));
 
 vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
@@ -56,7 +67,12 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
   useGuiHarnessModelsQueryForClient: (
     _client: HostClient<HostRpcRegistry> | null,
     harnessId: string,
-  ) => ({ data: harnessId === "claude" ? CLAUDE_MODELS : CODEX_MODELS }),
+  ) => {
+    if (harnessId === "claude") return { data: CLAUDE_MODELS };
+    return {
+      data: harnessId === "traycer" ? TRAYCER_HOST_MODELS : CODEX_MODELS,
+    };
+  },
 }));
 
 vi.mock("@/hooks/sandboxes/use-sandbox-catalogue-query", () => ({
@@ -188,11 +204,12 @@ function sent(state: ComposerToolbarStoreState) {
 
 function renderLandingToolbar(
   onSettingsChange: ((settings: ChatRunSettings) => void) | null,
+  pick: ChatRunSettings,
 ) {
   return renderHook(() =>
     useComposerToolbarStore(
       "landing",
-      fallbackSeedSource(PICK, HOST_CLIENT),
+      fallbackSeedSource(pick, HOST_CLIENT),
       onSettingsChange,
       {
         hostClient: HOST_CLIENT,
@@ -212,6 +229,7 @@ beforeEach(() => {
   useStagedSandboxStore.setState({ bySurface: {} });
   host.harnesses = host.available(true, false);
   host.offeredAgents = undefined;
+  host.cloudTraycer = undefined;
   useComposerHarnessMemoryStore.getState().resetForTests();
 });
 
@@ -228,7 +246,7 @@ const CLAUDE_SHOWN = {
 describe("a composer with a sandbox staged (E19)", () => {
   it("keeps the shown reroute through every shape, and writes no other store", async () => {
     const onSettingsChange = vi.fn<(settings: ChatRunSettings) => void>();
-    const { result } = renderLandingToolbar(onSettingsChange);
+    const { result } = renderLandingToolbar(onSettingsChange, PICK);
     const store = result.current;
 
     // No stage: this host cannot run Codex, so the chip shows Claude.
@@ -269,7 +287,7 @@ describe("a composer with a sandbox staged (E19)", () => {
 
   it("keeps a pick the host can run, untouched", async () => {
     host.harnesses = host.available(true, true);
-    const { result } = renderLandingToolbar(null);
+    const { result } = renderLandingToolbar(null, PICK);
     const store = result.current;
     const codex = {
       harnessId: "codex",
@@ -292,7 +310,7 @@ describe("a composer with a sandbox staged (E19)", () => {
   });
 
   it("returns to the host's decision when the stage is dropped", async () => {
-    const { result, rerender } = renderLandingToolbar(null);
+    const { result, rerender } = renderLandingToolbar(null, PICK);
     const store = result.current;
     await waitFor(() => expect(chip(store.getState())).toEqual(CLAUDE_SHOWN));
     act(() => {
@@ -320,7 +338,7 @@ describe("a composer with a sandbox staged (E19)", () => {
 
   it("refuses the shown pick at Send when the sandbox does not offer it", async () => {
     host.offeredAgents = ["codex"];
-    const { result } = renderLandingToolbar(null);
+    const { result } = renderLandingToolbar(null, PICK);
     const store = result.current;
     await waitFor(() => expect(chip(store.getState())).toEqual(CLAUDE_SHOWN));
     act(() => {
@@ -346,5 +364,47 @@ describe("a composer with a sandbox staged (E19)", () => {
     expect((await gate.beforeSend(stage))?.message).toBe(
       "Claude Code doesn't run on sandboxes. Choose a Traycer model to run agents here.",
     );
+  });
+
+  it("keeps the shown model when the saved one is not on the host, through the cloud catalogue loading and answering", async () => {
+    const saved: ChatRunSettings = {
+      ...PICK,
+      harnessId: "traycer",
+      model: "traycer-saved",
+      reasoningEffort: null,
+    };
+    const { result, rerender } = renderLandingToolbar(null, saved);
+    const store = result.current;
+    const shown = {
+      harnessId: "traycer",
+      model: "traycer-default",
+      reasoningEffort: "",
+    };
+    await waitFor(() =>
+      expect(store.getState().selection.modelSlug).toBe("traycer-default"),
+    );
+
+    // The stage: the cloud's catalogue is still loading.
+    act(() => {
+      useStagedSandboxStore.getState().stage(SURFACE, newTarget("linux", 2));
+    });
+    await waitFor(() =>
+      expect(store.getState().catalog.keepsUnavailablePick).toBe(true),
+    );
+    expect(store.getState().selection.modelSlug).toBe("traycer-default");
+    expect(sent(store.getState()).model).toBe("traycer-default");
+
+    // It answers with a list that holds the saved model.
+    host.cloudTraycer = [
+      { slug: "traycer-saved" },
+      { slug: "traycer-default" },
+    ];
+    rerender();
+    await waitFor(() =>
+      expect(store.getState().catalog.modelsLoaded).toBe(true),
+    );
+
+    expect(chip(store.getState()).model).toBe(shown.model);
+    expect(sent(store.getState()).model).toBe("traycer-default");
   });
 });

@@ -20,8 +20,11 @@ const host = vi.hoisted(() => ({
     harnesses: [
       { id: "claude", available: true },
       { id: "codex", available: false },
+      { id: "traycer", available: false },
     ],
   },
+  /** Whether Claude's models have been answered by the host. */
+  claudeModelsLoaded: true,
   toolbar: null as ComposerToolbarStore | null,
   editContent: null as ComposerBodyProps["onDocumentChange"] | null,
 }));
@@ -54,12 +57,17 @@ function modelOption(harnessId: string, slug: string) {
 // every render.
 const CLAUDE_MODELS = { models: [modelOption("claude", "sonnet-5.5")] };
 const CODEX_MODELS = { models: [modelOption("codex", "gpt-6-astra")] };
+const TRAYCER_MODELS = {
+  models: [modelOption("traycer", "traycer-default")],
+};
 
 vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
   useGuiHarnessesQueryForClient: () => ({ data: host.harnesses }),
-  useGuiHarnessModelsQueryForClient: (_client: unknown, harnessId: string) => ({
-    data: harnessId === "claude" ? CLAUDE_MODELS : CODEX_MODELS,
-  }),
+  useGuiHarnessModelsQueryForClient: (_client: unknown, harnessId: string) => {
+    if (harnessId === "claude")
+      return { data: host.claudeModelsLoaded ? CLAUDE_MODELS : undefined };
+    return { data: harnessId === "traycer" ? TRAYCER_MODELS : CODEX_MODELS };
+  },
 }));
 vi.mock("@/hooks/sandboxes/use-sandbox-traycer-models-query", () => ({
   useSandboxTraycerModels: () => ({ data: undefined }),
@@ -263,6 +271,7 @@ import { LandingComposer } from "../landing-composer";
 import { pickedRunSettings } from "@/lib/sandboxes/pending-sandbox-send";
 import { useComposerHarnessMemoryStore } from "@/stores/composer/composer-harness-memory-store";
 import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import {
   useStagedSandboxStore,
@@ -301,6 +310,25 @@ const TYPED: JsonContent = {
   type: "doc",
   content: [{ type: "paragraph", content: [{ type: "text", text: "hello" }] }],
 };
+
+const TRAYCER_PICK: ChatRunSettings = {
+  ...PICK,
+  harnessId: "traycer",
+  model: "traycer-saved",
+  reasoningEffort: null,
+};
+
+/** The draft's give-back record, as a reload finds it. */
+function signInAndReturnSandbox(draftId: string): void {
+  useAuthStore.setState({
+    status: "signed-in",
+    contextMetadata: { userId: "user-a", username: "user-a" },
+  });
+  useLandingDraftStore.getState().setDraftReturnedSandbox(draftId, {
+    target: NEW_STAGE,
+    clientRequestId: null,
+  });
+}
 
 function render(ui: ReactElement) {
   const queryClient = new QueryClient({
@@ -347,6 +375,7 @@ beforeEach(() => {
   localStorage.clear();
   host.toolbar = null;
   host.editContent = null;
+  host.claudeModelsLoaded = true;
   useStagedSandboxStore.setState({ bySurface: {} });
   useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
   useComposerHarnessMemoryStore.getState().resetForTests();
@@ -356,6 +385,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  useAuthStore.setState({ status: "signed-out", contextMetadata: null });
 });
 
 describe("a landing composer with a sandbox staged", () => {
@@ -377,8 +407,11 @@ describe("a landing composer with a sandbox staged", () => {
     expect(lastRunSettings()).toBe(lastRun);
     expect(useComposerHarnessMemoryStore.getState().byHost).toEqual({});
 
-    // The reload: a fresh composer on the draft, the stage still up.
+    // The reload: a composer's stage is in memory only, so the store starts
+    // empty and the draft's give-back record restores it.
     first.unmount();
+    useStagedSandboxStore.setState({ bySurface: {} });
+    signInAndReturnSandbox(draftId);
     mount(draftId, draftSettings(draftId));
     await waitFor(() =>
       expect(toolbar().getState().catalog.keepsUnavailablePick).toBe(true),
@@ -425,5 +458,103 @@ describe("a landing composer with a sandbox staged", () => {
     const minted = useLandingDraftStore.getState().drafts;
     expect(minted).toHaveLength(1);
     expect(minted[0]?.settings?.harnessId).toBe("codex");
+  });
+
+  it("leaves a restored stage's draft on its own pick", async () => {
+    const draftId = useLandingDraftStore.getState().createDraft(TRAYCER_PICK);
+    signInAndReturnSandbox(draftId);
+    const before = draftSettings(draftId);
+
+    // A reload: no stage in memory, Traycer unavailable here, so the first
+    // catalog shows a local reroute; then the draft's give-back is restored.
+    mount(draftId, before);
+    await waitFor(() =>
+      expect(useStagedSandboxStore.getState().bySurface[SURFACE]).toBeDefined(),
+    );
+    await waitFor(() =>
+      expect(toolbar().getState().catalog.keepsUnavailablePick).toBe(true),
+    );
+
+    expect(draftSettings(draftId)).toBe(before);
+    expect(draftSettings(draftId)?.harnessId).toBe("traycer");
+    expect(pickedRunSettings(toolbar().getState()).harnessId).toBe("traycer");
+  });
+
+  it("takes a deferred edit to the draft with the kept pick, and emits nothing", async () => {
+    const draftId = useLandingDraftStore.getState().createDraft(PICK);
+    const lastRun = lastRunSettings();
+    mount(draftId, draftSettings(draftId));
+    await waitFor(() =>
+      expect(toolbar().getState().selection.harnessId).toBe("claude"),
+    );
+    // On a rerouted pick the edit defers until the catalog confirms it.
+    act(() => {
+      toolbar().getState().setPermission("full_access");
+    });
+    expect(toolbar().getState().pendingSettingsEmit).toBe(true);
+
+    act(() => {
+      useStagedSandboxStore.getState().stage(SURFACE, NEW_STAGE);
+    });
+
+    await waitFor(() =>
+      expect(draftSettings(draftId)?.harnessId).toBe("claude"),
+    );
+    expect(draftSettings(draftId)?.permissionMode).toBe("full_access");
+    expect(toolbar().getState().pendingSettingsEmit).toBe(false);
+    expect(lastRunSettings()).toBe(lastRun);
+    expect(useComposerHarnessMemoryStore.getState().byHost).toEqual({});
+
+    // A later catalog push that changes nothing about the pick emits nothing.
+    act(() => {
+      const state = toolbar().getState();
+      state.setCatalog({
+        ...state.catalog,
+        ultracodeCarried: !state.catalog.ultracodeCarried,
+      });
+    });
+    expect(lastRunSettings()).toBe(lastRun);
+    expect(useComposerHarnessMemoryStore.getState().byHost).toEqual({});
+  });
+
+  it("writes the kept pick to the draft once its model has resolved, never an empty one", async () => {
+    host.claudeModelsLoaded = false;
+    const draftId = useLandingDraftStore.getState().createDraft(PICK);
+    const written: Array<string | undefined> = [draftSettings(draftId)?.model];
+    const stop = useLandingDraftStore.subscribe((state) => {
+      const model = state.drafts.find((d) => d.id === draftId)?.settings?.model;
+      if (written[written.length - 1] !== model) written.push(model);
+    });
+    const view = mount(draftId, draftSettings(draftId));
+    await waitFor(() =>
+      expect(toolbar().getState().selection.harnessId).toBe("claude"),
+    );
+    expect(toolbar().getState().selection.modelSlug).toBe("");
+
+    act(() => {
+      useStagedSandboxStore.getState().stage(SURFACE, NEW_STAGE);
+    });
+    await waitFor(() =>
+      expect(toolbar().getState().catalog.keepsUnavailablePick).toBe(true),
+    );
+    expect(draftSettings(draftId)?.harnessId).toBe("codex");
+
+    // The host answers Claude's models.
+    host.claudeModelsLoaded = true;
+    view.rerender(
+      <LandingComposer
+        draftId={draftId}
+        pendingCreateId={null}
+        initialSettings={draftSettings(draftId)}
+        workspaceControls={() => null}
+      />,
+    );
+    await waitFor(() =>
+      expect(draftSettings(draftId)?.model).toBe("sonnet-5.5"),
+    );
+    stop();
+
+    expect(draftSettings(draftId)?.harnessId).toBe("claude");
+    expect(written).toEqual(["gpt-6-astra", "sonnet-5.5"]);
   });
 });

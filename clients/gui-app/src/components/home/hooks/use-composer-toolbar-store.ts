@@ -43,6 +43,7 @@ import {
   serviceTierFromChatRunSettings,
 } from "@/lib/composer/chat-run-settings";
 import { useTeamSandboxHarnessGate } from "@/hooks/sandboxes/use-team-sandbox-harness-blocked";
+import { returnedSandboxRestoredOn } from "@/lib/sandboxes/returned-sandbox";
 import { useSandboxHostConfiguration } from "@/hooks/sandboxes/use-on-team-sandbox";
 import { useSandboxTraycerModels } from "@/hooks/sandboxes/use-sandbox-traycer-models-query";
 import { useStagedSandboxStore } from "@/stores/composer/staged-sandbox-store";
@@ -297,11 +298,18 @@ export function useComposerToolbarStore(
   const modelsLoaded = modelsData !== undefined;
   const keepsUnavailablePick =
     useSandboxHostConfiguration(hostId) !== null || sandboxRunTarget !== null;
-  // Before the catalog push below: a stage's push reads it to keep the pick
-  // on screen.
+  // Before the catalog push below: a stage's push reads these to keep the pick
+  // on screen. Read here, not in render: a restore marks its stage after
+  // writing it, and the mark lives outside React.
   useEffect(() => {
-    store.setState({ sandboxRunTarget });
-  }, [store, sandboxRunTarget]);
+    store.setState({
+      sandboxRunTarget,
+      stageKeepsShownPick:
+        sandboxRunTarget === "staged" &&
+        stagedSurfaceKey !== null &&
+        !returnedSandboxRestoredOn(stagedSurfaceKey),
+    });
+  }, [store, sandboxRunTarget, stagedSurfaceKey]);
   useEffect(() => {
     store.getState().setCatalog({
       hostId,

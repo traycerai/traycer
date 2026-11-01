@@ -260,6 +260,7 @@ import { NewConversationModalBody } from "../new-conversation-modal";
 import { NewConversationTransientContext } from "../new-conversation-transient-context";
 import { pickedRunSettings } from "@/lib/sandboxes/pending-sandbox-send";
 import { useComposerHarnessMemoryStore } from "@/stores/composer/composer-harness-memory-store";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
 import {
   useStagedSandboxStore,
@@ -360,6 +361,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  useAuthStore.setState({ status: "signed-out", contextMetadata: null });
   useNewConversationModalStore.getState().resetForTests();
 });
 
@@ -378,9 +380,19 @@ describe("a new-conversation modal with a sandbox staged", () => {
     await waitFor(() => expect(draftSettings()?.harnessId).toBe("claude"));
     expect(useComposerHarnessMemoryStore.getState().byHost).toEqual({});
 
-    // The reload: a fresh modal on the same draft, the stage still up.
+    // The reload: a stage is in memory only, so the store starts empty and the
+    // draft's give-back record restores it.
     first.unmount();
     host.toolbar = null;
+    useStagedSandboxStore.setState({ bySurface: {} });
+    useAuthStore.setState({
+      status: "signed-in",
+      contextMetadata: { userId: "user-a", username: "user-a" },
+    });
+    useNewConversationModalStore.getState().setReturnedSandbox(EPIC_ID, {
+      target: NEW_STAGE,
+      clientRequestId: null,
+    });
     renderModal();
     await waitFor(() =>
       expect(toolbar().getState().catalog.keepsUnavailablePick).toBe(true),
