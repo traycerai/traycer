@@ -1,0 +1,109 @@
+import { useEffect, useMemo } from "react";
+import { useHostReachability } from "@/hooks/agent/use-host-reachability";
+import { useBotListChangedSubscriptionForHost } from "@/hooks/bots/use-bot-list-changed-subscription";
+import { useBotListQuery } from "@/hooks/bots/use-bot-list-query";
+import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
+import { useRereadEnvironmentListOnFocus } from "@/hooks/bots/use-reread-environment-list-on-focus";
+import { useTeamSetups, type TeamSetup } from "@/hooks/bots/use-team-setups";
+import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
+import { useBoundedHostLoad } from "@/hooks/host/use-bounded-host-load";
+import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
+import { useNotificationResolveHost } from "@/hooks/notifications/use-notification-host";
+import { buildHomeBotsModel } from "@/lib/home-bots/bots-model";
+import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
+import { useStandaloneBotsStore } from "@/stores/bots/standalone-bots-store";
+
+function sameSetups(
+  a: ReadonlyArray<TeamSetup>,
+  b: ReadonlyArray<TeamSetup>,
+): boolean {
+  return (
+    a.length === b.length &&
+    a.every((setup, index) => {
+      const other = b[index];
+      return (
+        setup.environmentId === other.environmentId &&
+        setup.teamName === other.teamName &&
+        setup.botId === other.botId &&
+        setup.title === other.title
+      );
+    })
+  );
+}
+
+/**
+ * Keeps the standalone names' directory current. Every read is the same from
+ * any host, so the host that serves the notification feed asks them. It settles
+ * once each read has answered or failed; a failed read leaves the directory
+ * short, which only ever means the plain name. So does a wait that outlives the
+ * host-load budget, or a host known to be gone, whatever kept the reads from
+ * being sent (no handshake, no usable client): the cloud feed does not depend
+ * on this host and keeps delivering. Running out of budget says nothing about
+ * the host, which may be up for another window, and a read that answers later
+ * still names what arrives after it.
+ */
+export function StandaloneBotsBridge(): null {
+  const { hostId, client } = useNotificationResolveHost();
+  const support = useHostMethodSupport(hostId, "bot.list");
+  const supported = support === true;
+  const viewerUserId = useCloudChatViewerId();
+  useRereadEnvironmentListOnFocus(supported);
+  // With Show Tracy off and neither Home nor a bot tab open, nothing else keeps
+  // the list current when a main bot is created or archived elsewhere. On the
+  // host that serves the list: the active host may be another, and one that
+  // does not answer the method would silently leave the list stale.
+  const hostKey = hostId ?? UNKNOWN_HOST_PLACEHOLDER;
+  useBotListChangedSubscriptionForHost(hostKey, supported);
+  const environments = useEnvironmentListQuery(client, supported);
+  const bots = useBotListQuery(client, supported);
+  const environmentData = environments.data;
+  const botData = bots.data;
+  const model = useMemo(
+    () =>
+      buildHomeBotsModel({
+        environments: environmentData?.environments ?? [],
+        bots: botData?.bots ?? [],
+        mainBotIds: botData?.mainBotIds ?? null,
+      }),
+    [environmentData, botData],
+  );
+  // A signed-out viewer never reads the environments, and has no feed to name.
+  const listsSettled =
+    (environments.isFetched || viewerUserId.length === 0) && bots.isFetched;
+  const teamSetups = useTeamSetups({
+    client,
+    hostId,
+    groups: listsSettled ? model.groups : null,
+  });
+  const setups = teamSetups.setups;
+  const readsSettled =
+    hostId === null || support === false || (supported && teamSetups.settled);
+  const reachability = useHostReachability(hostKey);
+  const directoryWait = useBoundedHostLoad({
+    hostId: hostKey,
+    hostLabel: null,
+    pending: !readsSettled,
+  });
+  const settled =
+    readsSettled ||
+    reachability.status === "unreachable" ||
+    directoryWait.kind === "dead" ||
+    directoryWait.kind === "timed-out";
+  // `useTeamSetups` answers a new array each render: an equal one is no change
+  // to everything reading the store.
+  useEffect(() => {
+    const current = useStandaloneBotsStore.getState();
+    if (
+      current.settled === settled &&
+      current.directory.model === model &&
+      sameSetups(current.directory.setups, setups)
+    ) {
+      return;
+    }
+    useStandaloneBotsStore.setState({
+      directory: { model, setups },
+      settled,
+    });
+  }, [model, setups, settled]);
+  return null;
+}

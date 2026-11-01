@@ -14,6 +14,13 @@ import {
 } from "@/lib/notifications/notification-display";
 import type { MergedNotificationRow } from "@/stores/notifications/merged-notifications";
 import type { NotificationShowOutcome } from "@traycer-clients/shared/platform/runner-host";
+import {
+  EMPTY_DIRECTORY_STATE,
+  ONE_TEAM_MAIN_BOT_DIRECTORY,
+  TEAM_MAIN_BOT_ID,
+  TWO_MAIN_BOTS_DIRECTORY,
+} from "@/lib/home-bots/__tests__/standalone-bots-fixtures";
+import { useStandaloneBotsStore } from "@/stores/bots/standalone-bots-store";
 
 vi.mock("next-themes", () => ({
   useTheme: () => ({ theme: "dark" }),
@@ -39,6 +46,22 @@ const NOTIFICATION: MergedNotificationRow = {
   category: "task",
 };
 
+const BOT_NOTIFICATION: MergedNotificationRow = {
+  ...NOTIFICATION,
+  title: "Tracy",
+  body: "Tracy answered • The release is out",
+  payload: {
+    kind: "chat",
+    epicId: TEAM_MAIN_BOT_ID,
+    chatId: "thread-1",
+    bot: {
+      botId: TEAM_MAIN_BOT_ID,
+      threadId: "thread-1",
+      messageId: "message-1",
+    },
+  },
+};
+
 describe("notification toast interactions", () => {
   beforeEach(() => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
@@ -51,6 +74,7 @@ describe("notification toast interactions", () => {
   afterEach(() => {
     toast.dismiss();
     cleanup();
+    useStandaloneBotsStore.setState(EMPTY_DIRECTORY_STATE);
     vi.useRealTimers();
     vi.restoreAllMocks();
   });
@@ -83,6 +107,52 @@ describe("notification toast interactions", () => {
 
     expect(onToastClick).toHaveBeenCalledOnce();
     expect(onToastClick).toHaveBeenCalledWith(NOTIFICATION);
+  });
+
+  it("names a team's bot with its environment on the toast and the native notification when two main bots are visible", async () => {
+    useStandaloneBotsStore.setState({
+      directory: TWO_MAIN_BOTS_DIRECTORY,
+      settled: true,
+    });
+    const showNotification = vi.fn<
+      NotificationDisplayTarget["showNotification"]
+    >(() => Promise.resolve<NotificationShowOutcome>("presented"));
+    render(<Toaster />);
+
+    act(() => {
+      displayNotificationRows(
+        [BOT_NOTIFICATION],
+        { showNotification, playChime: vi.fn(), onToastClick: vi.fn() },
+        null,
+      );
+    });
+
+    expect(await screen.findByText("Tracy · traycerai")).toBeTruthy();
+    expect(showNotification.mock.calls[0]?.[0].title).toBe("Tracy · traycerai");
+  });
+
+  it("keeps a bot's plain name on the toast when one main bot is visible", async () => {
+    useStandaloneBotsStore.setState({
+      directory: ONE_TEAM_MAIN_BOT_DIRECTORY,
+      settled: true,
+    });
+    render(<Toaster />);
+
+    act(() => {
+      displayNotificationRows(
+        [BOT_NOTIFICATION],
+        {
+          showNotification: vi.fn(() =>
+            Promise.resolve<NotificationShowOutcome>("presented"),
+          ),
+          playChime: vi.fn(),
+          onToastClick: vi.fn(),
+        },
+        null,
+      );
+    });
+
+    expect(await screen.findByText("Tracy")).toBeTruthy();
   });
 
   it("does not activate when the close control is clicked", async () => {

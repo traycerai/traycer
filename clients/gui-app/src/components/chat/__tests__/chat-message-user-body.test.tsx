@@ -13,6 +13,17 @@ import { useState, type ReactNode } from "react";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import { ChatExpansionTestProviders } from "@/components/chat/__tests__/chat-expansion-test-providers";
 import { deriveA2AReceivedCollapsibleKey } from "@/components/chat/chat-collapsible-key";
+import type { AgentMessagePeer } from "@traycer/protocol/host/agent/message-peer";
+import { ChatContainerContext } from "@/components/chat/chat-container-context";
+import { ChatTranscriptProvider } from "@/components/chat/chat-transcript-context";
+import {
+  EMPTY_DIRECTORY_STATE,
+  ONE_TEAM_MAIN_BOT_DIRECTORY,
+  TEAM_MAIN_BOT_ID,
+  TWO_MAIN_BOTS_DIRECTORY,
+} from "@/lib/home-bots/__tests__/standalone-bots-fixtures";
+import type { StandaloneBotsDirectory } from "@/lib/home-bots/standalone-bot-name";
+import { useStandaloneBotsStore } from "@/stores/bots/standalone-bots-store";
 import { UserMessageBody } from "@/components/chat/chat-message-user-body";
 import { CHAT_TIMELINE_SCROLLER_MOVED_EVENT } from "@/components/chat/chat-timeline-follow-latch";
 import type { SetupWorkspaceState } from "@/components/chat/segments/setup-card-segment";
@@ -208,8 +219,23 @@ function expectCrossTaskActivation(node: {
   expect(tileNavigationMocks.openTile).not.toHaveBeenCalled();
 }
 
+// The one host read the real `useA2AMessagePeer` makes for a cross-task sender.
+const peerRpc = vi.hoisted(() => ({
+  peer: null as AgentMessagePeer | null,
+}));
+
 vi.mock("@/hooks/host/use-host-query", () => ({
-  useHostQuery: () => ({ data: undefined }),
+  useHostQuery: (input: {
+    readonly method: string;
+    readonly options: { readonly enabled: boolean };
+  }) => ({
+    data:
+      input.method === "agent.resolveMessagePeer" &&
+      input.options.enabled &&
+      peerRpc.peer !== null
+        ? { peer: peerRpc.peer }
+        : undefined,
+  }),
 }));
 
 vi.mock("@/lib/epic-selectors", () => ({
@@ -1450,6 +1476,48 @@ describe("<UserMessageBody /> agent messages", () => {
       expect(
         useChatTranscriptJumpStore.getState().requestsByChatId[key]?.target,
       ).toEqual({ kind: "receipt", messageId: message.id });
+    });
+
+    describe("a bot sender resolved by the host", () => {
+      afterEach(() => {
+        peerRpc.peer = null;
+        useStandaloneBotsStore.setState(EMPTY_DIRECTORY_STATE);
+      });
+
+      function renderTeamBotSender(directory: StandaloneBotsDirectory): void {
+        peerRpc.peer = {
+          epicId: TEAM_MAIN_BOT_ID,
+          agentId: CROSS_ID,
+          hostId: "host-2",
+          title: "Tracy",
+          surface: "gui",
+          bot: { botId: TEAM_MAIN_BOT_ID, title: "Tracy" },
+        };
+        useStandaloneBotsStore.setState({ directory, settled: true });
+        render(
+          <ChatContainerContext value="epic-1">
+            <ChatTranscriptProvider
+              value={{ chatId: "chat-1", hostId: "host-1" }}
+            >
+              <UserMessageBody actions={null} message={crossMessage(null)} />
+            </ChatTranscriptProvider>
+          </ChatContainerContext>,
+        );
+      }
+
+      it("places a team's bot by its environment when two main bots are visible", () => {
+        renderTeamBotSender(TWO_MAIN_BOTS_DIRECTORY);
+
+        expect(
+          screen.getByRole("button", { name: "Tracy · traycerai" }),
+        ).toBeTruthy();
+      });
+
+      it("keeps a team's bot to its name when it is the only main bot", () => {
+        renderTeamBotSender(ONE_TEAM_MAIN_BOT_DIRECTORY);
+
+        expect(screen.getByRole("button", { name: "Tracy" })).toBeTruthy();
+      });
     });
 
     it("opens a cross-task terminal sender without parking a jump", () => {
