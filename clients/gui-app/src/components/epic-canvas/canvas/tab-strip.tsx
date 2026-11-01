@@ -44,7 +44,7 @@ import {
 } from "@/components/ui/tooltip";
 import { NEW_AGENT_TITLE } from "@/lib/display-title";
 import {
-  useEpicChatAwaitingFirstTitle,
+  useEpicTabAwaitingFirstTitle,
   useEpicTabDisplayTitle,
   useEpicLiveArtifactTitleGenerating,
   useRegisteredEpicNodeArchived,
@@ -605,22 +605,19 @@ function useTabRenameControl(args: {
     isTerminalTab && terminalTabUsesLegacyReads(terminalControl)
       ? resolvedHostClient
       : null;
+  const titleNode = {
+    id: tab.id,
+    name: tab.name,
+    type: tab.type,
+    hostId: tabHostId(tab),
+  };
   const fallbackDisplayTitle = useEpicTabDisplayTitle(
-    {
-      id: tab.id,
-      name: tab.name,
-      type: tab.type,
-      hostId: tabHostId(tab),
-    },
+    titleNode,
     epicId,
     terminalHostClient,
   );
   useRecordTitleWriteThrough(tab, epicId, viewTabId, fallbackDisplayTitle);
-  const awaitingFirstTitle = useEpicChatAwaitingFirstTitle(
-    tab.type === "chat" ? tab.id : null,
-    epicId,
-    tabHostId(tab),
-  );
+  const awaitingFirstTitle = useEpicTabAwaitingFirstTitle(titleNode, epicId);
   const resolvedTitle =
     browserPresentation?.title ??
     (terminalControl?.mode === "capable" || terminalControl?.mode === "unknown"

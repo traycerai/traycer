@@ -5,7 +5,7 @@ import { v4 as uuidv4 } from "uuid";
 import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
 import { cn } from "@/lib/utils";
 import { EPIC_NODE_ICONS } from "@/lib/artifacts/node-display";
-import { NEW_AGENT_TITLE } from "@/lib/display-title";
+import { displayTitle, NEW_AGENT_TITLE } from "@/lib/display-title";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { useCompactRelativeTime } from "@/lib/relative-time";
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
@@ -118,7 +118,7 @@ export function EpicSidebarCloudChatRow(
   props: EpicSidebarCloudChatRowProps,
 ): ReactNode {
   const { chat, childEntries, expansion } = props;
-  const title = chat.title ?? "Untitled chat";
+  const title = chat.title ?? displayTitle("", "agent");
   const rowTitle = useCloudRowPaintedTitle(chat, title);
   const placement = useColumnOverlayPlacement("row");
   const branch = useCloudRowBranch(chat, childEntries, expansion);

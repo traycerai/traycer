@@ -22,7 +22,7 @@ import { NO_STREAM_SYNCING_SPELL } from "@/lib/sync/stream-syncing-state";
 import "@/components/layout/shell/mobile-shell-touch-targets.css";
 import { NEW_AGENT_TITLE } from "@/lib/display-title";
 import {
-  useEpicChatAwaitingFirstTitle,
+  useEpicTabAwaitingFirstTitle,
   useEpicTabDisplayTitle,
   useEpicLiveArtifactTitleGenerating,
 } from "@/lib/epic-selectors";
@@ -143,13 +143,14 @@ function MobileCurrentTileBarBody(
     isTerminal && terminalTabUsesLegacyReads(terminalControl)
       ? resolvedHostClient
       : null;
+  const titleNode = {
+    id: tile.id,
+    name: tile.name,
+    type: tile.type,
+    hostId: tile.hostId,
+  };
   const fallbackDisplayTitle = useEpicTabDisplayTitle(
-    {
-      id: tile.id,
-      name: tile.name,
-      type: tile.type,
-      hostId: tile.hostId,
-    },
+    titleNode,
     epicId,
     terminalHostClient,
   );
@@ -158,11 +159,7 @@ function MobileCurrentTileBarBody(
     epicId,
     tile.hostId,
   );
-  const awaitingFirstTitle = useEpicChatAwaitingFirstTitle(
-    tile.type === "chat" ? tile.id : null,
-    epicId,
-    tile.hostId,
-  );
+  const awaitingFirstTitle = useEpicTabAwaitingFirstTitle(titleNode, epicId);
   const displayTitle =
     browserPresentation?.title ??
     terminalTabDisplayTitle(

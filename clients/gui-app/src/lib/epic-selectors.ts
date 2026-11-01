@@ -2192,6 +2192,24 @@ export function useEpicChatAwaitingFirstTitle(
   );
 }
 
+/**
+ * {@link useEpicChatAwaitingFirstTitle} for a tab, whose title has one more
+ * source: the cloud list answers for a chat the projection holds no record of,
+ * and a tab showing that title is not waiting for one.
+ */
+export function useEpicTabAwaitingFirstTitle(
+  node: EpicTabDisplayTitleNode,
+  epicId: string,
+): boolean {
+  const awaitingFirstTitle = useEpicChatAwaitingFirstTitle(
+    node.type === "chat" ? node.id : null,
+    epicId,
+    node.hostId,
+  );
+  const cloudChatTitle = useCloudChatTitleForAbsentRecord(node, epicId);
+  return awaitingFirstTitle && cloudChatTitle === null;
+}
+
 type ChatTitleGeneration = "idle" | "generating" | "awaiting-first-title";
 
 function useChatTitleGeneration(
