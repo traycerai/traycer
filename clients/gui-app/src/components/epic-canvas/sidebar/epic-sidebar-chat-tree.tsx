@@ -161,12 +161,14 @@ import {
   clearSidebarNodeRevealRequest,
   useSidebarNodeRevealRequest,
 } from "@/stores/epics/sidebar-node-reveal-store";
+import { NEW_AGENT_TITLE } from "@/lib/display-title";
 import {
   useAncestorIds,
   useEpicAgentRoleClaims,
   useEpicAgentSessionFacet,
   useEpicAgentActivityTiers,
   type AgentActivityTier,
+  useEpicChatAwaitingFirstTitle,
   useEpicChatIds,
   useEpicChatIdsNamedByCloudRows,
   useEpicConnectionStatus,
@@ -1732,6 +1734,13 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
   ]);
 
   const ownerHostId = useEpicNodeHostId(nodeId);
+  // Painted only: the rename seed and the tile a click opens keep `nodeName`,
+  // so "New agent" never reaches a stored title or a tab snapshot.
+  const awaitingFirstTitle = useEpicChatAwaitingFirstTitle(
+    artifactType === "chat" ? nodeId : null,
+    epicId,
+    ownerHostId,
+  );
   const sessionHostId = useEpicSessionHostId();
   const mutationHostId = ownerHostId ?? sessionHostId;
   // Gated on the host the archive will be SENT to: a live stand-in when the
@@ -2071,7 +2080,7 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
       tabId={tabId}
       nodeId={nodeId}
       ownerHostId={ownerHostId}
-      nodeName={nodeName}
+      nodeName={awaitingFirstTitle ? NEW_AGENT_TITLE : nodeName}
       artifactType={artifactType}
       depth={depth}
       expansion={expansion}

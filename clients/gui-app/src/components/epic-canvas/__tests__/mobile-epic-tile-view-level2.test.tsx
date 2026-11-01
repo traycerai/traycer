@@ -35,6 +35,7 @@ vi.mock("@/lib/epic-selectors", () => ({
   useEpicTuiAgentRetraction: () => null,
   useEpicTabDisplayTitle: (node: { readonly name: string }) => node.name,
   useEpicLiveArtifactTitleGenerating: () => false,
+  useEpicChatAwaitingFirstTitle: () => false,
   useEpicPermissionRole: () => "owner",
   useEpicSnapshotLoaded: () => true,
   useEpicHostTransportStatus: () => "open",

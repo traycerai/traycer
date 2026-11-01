@@ -2170,6 +2170,35 @@ export function useEpicLiveArtifactTitleGenerating(
   epicId: string,
   boundHostId: string | null,
 ): boolean {
+  return useChatTitleGeneration(artifactId, epicId, boundHostId) !== "idle";
+}
+
+/**
+ * Whether a chat's first title is on its way and none is known yet: the
+ * generation {@link useEpicLiveArtifactTitleGenerating} spins for, on a chat
+ * whose projection and arm both still hold no title. The tab and the tree
+ * render "New agent" for exactly this window, and the "Untitled agent"
+ * fallback once it closes without a title. Render-only: the caller must never
+ * hand the label it picks from this to a snapshot or a rename.
+ */
+export function useEpicChatAwaitingFirstTitle(
+  artifactId: string | null,
+  epicId: string,
+  boundHostId: string | null,
+): boolean {
+  return (
+    useChatTitleGeneration(artifactId, epicId, boundHostId) ===
+    "awaiting-first-title"
+  );
+}
+
+type ChatTitleGeneration = "idle" | "generating" | "awaiting-first-title";
+
+function useChatTitleGeneration(
+  artifactId: string | null,
+  epicId: string,
+  boundHostId: string | null,
+): ChatTitleGeneration {
   const projectedTitle = useEpicStore((s) => {
     if (artifactId === null) return null;
     if (Object.hasOwn(s.chats.byId, artifactId)) {
@@ -2187,17 +2216,19 @@ export function useEpicLiveArtifactTitleGenerating(
     }
     return null;
   });
-  return useEpicCanvasStore((s) => {
-    if (artifactId === null) return false;
+  return useEpicCanvasStore((s): ChatTitleGeneration => {
+    if (artifactId === null) return "idle";
     const entry = Object.hasOwn(s.pendingChatTitles, artifactId)
       ? s.pendingChatTitles[artifactId]
       : undefined;
-    return pendingTitleVisibleAutoPurge(
+    const generating = pendingTitleVisibleAutoPurge(
       entry,
       currentTitle,
       currentUpdatedAt,
       () => s.clearChatTitlePending(artifactId),
     );
+    if (!generating) return "idle";
+    return currentTitle === null ? "awaiting-first-title" : "generating";
   });
 }
 

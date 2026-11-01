@@ -73,6 +73,15 @@ const UNTITLED_LABELS: Readonly<Record<DisplayTitleKind, string>> = {
   file: "Untitled file",
 };
 
+/**
+ * What the tab and the tree call an Agent while its first title is being
+ * generated (`useEpicChatAwaitingFirstTitle`). Render-only and outside
+ * `UNTITLED_LABELS` on purpose: an Agent whose title never comes keeps the
+ * "Untitled agent" fallback, so this label must never reach a snapshot, a
+ * tree record or a stored title.
+ */
+export const NEW_AGENT_TITLE = "New agent";
+
 /** User-facing literal for an empty epic title. Single-sourced from the map. */
 export const UNTITLED_EPIC_TITLE = UNTITLED_LABELS.epic;
 

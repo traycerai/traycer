@@ -42,7 +42,9 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { NEW_AGENT_TITLE } from "@/lib/display-title";
 import {
+  useEpicChatAwaitingFirstTitle,
   useEpicTabDisplayTitle,
   useEpicLiveArtifactTitleGenerating,
   useRegisteredEpicNodeArchived,
@@ -614,11 +616,20 @@ function useTabRenameControl(args: {
     terminalHostClient,
   );
   useRecordTitleWriteThrough(tab, epicId, viewTabId, fallbackDisplayTitle);
-  const displayTitle =
+  const awaitingFirstTitle = useEpicChatAwaitingFirstTitle(
+    tab.type === "chat" ? tab.id : null,
+    epicId,
+    tabHostId(tab),
+  );
+  const resolvedTitle =
     browserPresentation?.title ??
     (terminalControl?.mode === "capable" || terminalControl?.mode === "unknown"
       ? terminalControl.displayTitle
       : fallbackDisplayTitle);
+  // "New agent" is painted only. The snapshot above and the rename below both
+  // read the resolved title: the label is true for a first Send's few
+  // seconds, and stored it would outlive a title that never comes.
+  const displayTitle = awaitingFirstTitle ? NEW_AGENT_TITLE : resolvedTitle;
   const canRename = canRenameCanvasTab(tab, canRenameTabs, terminalControl);
   const renameTerminal = useTerminalRenameFor(terminalHostClient);
   const { mutate: renameTerminalMutate } = renameTerminal;
@@ -637,7 +648,7 @@ function useTabRenameControl(args: {
     onRename(groupId, tab.instanceId, next);
   };
   const rename = useInlineRename({
-    value: displayTitle,
+    value: resolvedTitle,
     canEdit: canRename,
     onCommit: handleRename,
   });
