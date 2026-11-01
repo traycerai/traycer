@@ -1,6 +1,7 @@
 import { useLayoutEffect, useState, type ReactNode } from "react";
 import { AlertCircle, Check, ChevronDown, ChevronRight } from "lucide-react";
 import { sandboxSupportReference } from "@traycer/protocol/host/sandbox-control";
+import { useTileBodyVisible } from "@/components/epic-canvas/hooks/use-tile-body-visible";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { useConfigurationBillingUrl } from "@/hooks/sandboxes/use-configuration-billing-url";
@@ -1017,13 +1018,17 @@ function SetupSteps(props: {
   );
 }
 
-/** Stop on the line, held for the sandbox so nothing else offers a second. */
+/**
+ * Stop on the line, held for the sandbox so nothing else offers a second. A
+ * line out of sight holds nothing: its Stop is not on screen.
+ */
 function SetupStopButton(props: {
   readonly sandboxId: string | null;
   readonly onClick: (() => void) | null;
 }): ReactNode {
   const { sandboxId, onClick } = props;
-  const shown = onClick !== null;
+  const visible = useTileBodyVisible();
+  const shown = onClick !== null && visible;
   useLayoutEffect(() => {
     if (sandboxId === null || !shown) return undefined;
     return useSandboxWakeReportStore.getState().claimSetupStop(sandboxId);

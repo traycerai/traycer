@@ -632,4 +632,35 @@ describe("an awake wait across wake identity, rollback and surfaces", () => {
 
     expect(mounted.result.current.kind).toBe("unreachable");
   });
+
+  it("keeps an answer witnessed while the list still says creating", () => {
+    const landed = WAKE + 60_000;
+    // A first create records no operation until it lands.
+    sources.sandboxes = [
+      row({ state: "creating", lastTransitionAt: WAKE, operation: null }),
+    ];
+    const transport = { reachable: false };
+    const mounted = view(transport);
+    sources.readySession = true;
+    transport.reachable = true;
+    mounted.rerender();
+    sources.readySession = false;
+    transport.reachable = false;
+    sources.sandboxes = [
+      row({
+        state: "awake",
+        lastTransitionAt: landed,
+        lastActivityAt: landed,
+        operation: sandboxOperationFixture({
+          at: landed,
+          fromState: "creating",
+          state: "awake",
+          cause: "verb",
+        }),
+      }),
+    ];
+    mounted.rerender();
+
+    expect(mounted.result.current.kind).toBe("unreachable");
+  });
 });

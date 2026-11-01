@@ -53,8 +53,17 @@ export function sandboxWakeWait(
   return sandboxWakeMove(summary);
 }
 
-/** One wake, the same while the row is moving and once it lands awake. */
+/**
+ * One wake, the same while the row is moving and once it lands awake. A first
+ * create records no operation until it lands, so its row names it instead.
+ */
 export function sandboxWakeId(summary: SandboxSummary): number {
+  if (
+    summary.state === "creating" ||
+    summary.operation?.fromState === "creating"
+  ) {
+    return summary.createdAt;
+  }
   return summary.operation?.at ?? summary.lastTransitionAt;
 }
 

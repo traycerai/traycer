@@ -2,6 +2,7 @@ import type { HostSandboxState } from "@traycer/protocol/host/host-status";
 import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { isRemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
+import { hostLastReport } from "@/components/settings/host-scope/host-last-report";
 import {
   useTaskSandboxHost,
   type TaskSandboxHost,
@@ -13,7 +14,6 @@ import {
   useSandboxConfigurations,
 } from "@/hooks/sandboxes/use-sandbox-configurations";
 import type { ChatSandboxState } from "@/lib/sandboxes/chat-sandbox-state";
-import { sandboxReportedAt } from "@/lib/sandboxes/sandbox-row-lines";
 import { useSandboxWakeWait } from "@/hooks/sandboxes/use-sandbox-wake-wait";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
@@ -67,13 +67,14 @@ export function useChatSandboxState(
     if (reachable) return { kind: "none" };
     return wakeWait !== null
       ? { kind: "moving", sandbox, state: wakeWait }
-      : {
-          kind: "unreachable",
-          sandbox,
-          lastContactAt: sandboxReportedAt(sandbox.lastActivityAt),
-        };
+      : { kind: "unreachable", sandbox, lastContactAt: lastContactAt(sandbox) };
   }
   return unsettledSandboxState(sandbox, sandbox.state);
+}
+
+function lastContactAt(sandbox: SandboxSummary): number | null {
+  const report = hostLastReport(null, sandbox);
+  return report.kind === "reported" ? report.at : null;
 }
 
 /** A listed sandbox neither resting nor awake. */

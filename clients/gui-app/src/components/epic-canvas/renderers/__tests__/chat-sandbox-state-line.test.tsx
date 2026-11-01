@@ -16,6 +16,9 @@ import {
 } from "@/components/composer/sandbox-setup-line";
 import type { StagedSandbox } from "@/stores/composer/staged-sandbox-store";
 import { useSandboxWakeReportStore } from "@/stores/sandboxes/sandbox-wake-report-store";
+import { StrictMode } from "react";
+import { TabBodySelectedContext } from "@/components/epic-canvas/canvas/tab-body-selected-context";
+import { PaneVisibilityContext } from "@/components/epic-tabs/pane-visibility-context";
 import { chatSandboxStateLine } from "@/components/epic-canvas/renderers/chat-sandbox-state-line";
 import {
   createFakeSandboxBinding,
@@ -426,25 +429,33 @@ describe("only one Stop on screen", () => {
   function SetupAndStateLines(props: {
     readonly summary: SandboxSummary;
     readonly withdrawalAllowed: boolean;
+    /** Which kept-mounted layer hides the setup line, if any. */
+    readonly concealed: "none" | "tab" | "pane";
   }) {
     return (
       <QueryClientProvider client={client}>
-        <SandboxSetupLine
-          stage={heldSend(props.summary.id)}
-          name="build-box"
-          facts={{
-            costLine: "",
-            regionLabel: "US East",
-            shapeLabel: "2 vCPU · 4 GB",
-            smallerShapeAffordable: false,
-            offeredAgents: null,
-            sandboxAwake: true,
-            sandboxStoppable: true,
-            sandboxResting: false,
-          }}
-          actions={ACTIONS}
-          withdrawalAllowed={props.withdrawalAllowed}
-        />
+        <TabBodySelectedContext value={props.concealed !== "tab"}>
+          <PaneVisibilityContext value={props.concealed !== "pane"}>
+            <div hidden={props.concealed !== "none"}>
+              <SandboxSetupLine
+                stage={heldSend(props.summary.id)}
+                name="build-box"
+                facts={{
+                  costLine: "",
+                  regionLabel: "US East",
+                  shapeLabel: "2 vCPU · 4 GB",
+                  smallerShapeAffordable: false,
+                  offeredAgents: null,
+                  sandboxAwake: true,
+                  sandboxStoppable: true,
+                  sandboxResting: false,
+                }}
+                actions={ACTIONS}
+                withdrawalAllowed={props.withdrawalAllowed}
+              />
+            </div>
+          </PaneVisibilityContext>
+        </TabBodySelectedContext>
         <MovingChatLine summary={props.summary} state="resuming" />
       </QueryClientProvider>
     );
@@ -453,17 +464,80 @@ describe("only one Stop on screen", () => {
   it("shows the setup line's Stop alone, then the pending line's when the setup line drops its own", () => {
     const summary = sandboxSummaryFixture({ state: "awake" });
     const view = render(
-      <SetupAndStateLines summary={summary} withdrawalAllowed />,
+      <SetupAndStateLines
+        summary={summary}
+        withdrawalAllowed
+        concealed="none"
+      />,
     );
     expect(screen.getAllByRole("button", { name: "Stop" })).toHaveLength(1);
     expect(screen.getByTestId("sandbox-setup-stop")).toBeTruthy();
 
     // A send that can no longer be withdrawn drops the setup line's Stop.
     view.rerender(
-      <SetupAndStateLines summary={summary} withdrawalAllowed={false} />,
+      <SetupAndStateLines
+        summary={summary}
+        withdrawalAllowed={false}
+        concealed="none"
+      />,
     );
 
     expect(screen.queryByTestId("sandbox-setup-stop")).toBeNull();
     expect(screen.getAllByRole("button", { name: "Stop" })).toHaveLength(1);
+  });
+
+  it.each(["tab", "pane"] as const)(
+    "restores the pending line's Stop when the setup line sits in a concealed %s",
+    (concealed) => {
+      const summary = sandboxSummaryFixture({ state: "awake" });
+      useSandboxWakeReportStore.setState({ setupStops: {} });
+      const view = render(
+        <SetupAndStateLines
+          summary={summary}
+          withdrawalAllowed
+          concealed="none"
+        />,
+      );
+      expect(screen.getAllByRole("button", { name: "Stop" })).toHaveLength(1);
+      expect(screen.getByTestId("sandbox-setup-stop")).toBeTruthy();
+
+      view.rerender(
+        <SetupAndStateLines
+          summary={summary}
+          withdrawalAllowed
+          concealed={concealed}
+        />,
+      );
+
+      // The concealed line's Stop is off screen, so the pending line offers one.
+      expect(screen.getAllByRole("button", { name: "Stop" })).toHaveLength(1);
+      expect(
+        screen.getByRole("button", { name: "Stop" }).dataset.testid,
+      ).not.toBe("sandbox-setup-stop");
+    },
+  );
+
+  it("releases the setup line's claim after a StrictMode mount and unmount", () => {
+    const summary = sandboxSummaryFixture({ state: "awake" });
+    useSandboxWakeReportStore.setState({ setupStops: {} });
+    const first = render(
+      <StrictMode>
+        <SetupAndStateLines
+          summary={summary}
+          withdrawalAllowed
+          concealed="none"
+        />
+      </StrictMode>,
+    );
+    expect(screen.getAllByRole("button", { name: "Stop" })).toHaveLength(1);
+
+    first.unmount();
+    render(
+      <QueryClientProvider client={client}>
+        <MovingChatLine summary={summary} state="resuming" />
+      </QueryClientProvider>,
+    );
+
+    expect(screen.getByRole("button", { name: "Stop" })).toBeTruthy();
   });
 });

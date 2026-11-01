@@ -7,6 +7,7 @@ import { useChatServing } from "@/lib/chats/chat-serving-witness";
 import { useChatStreamSyncState } from "@/hooks/chats/use-chat-stream-sync-state";
 import { useExistingChatSessionFatalClose } from "@/lib/registries/chat-session-registry";
 import { useChatSandboxState } from "@/hooks/sandboxes/use-chat-sandbox-state";
+import { useSandboxWakeWait } from "@/hooks/sandboxes/use-sandbox-wake-wait";
 import {
   sandboxListQueryOptions,
   useSandboxList,
@@ -16,6 +17,9 @@ import type { ChatSandboxState } from "@/lib/sandboxes/chat-sandbox-state";
 import type { SandboxWakeWait } from "@/lib/sandboxes/sandbox-wake-wait";
 import { authQueryKeys, sandboxQueryKeys } from "@/lib/query-keys";
 import { useAuthStore } from "@/stores/auth/auth-store";
+
+/** A live tile reads the host through its own stream, not this hook's. */
+const LIVE_WAKE_SURFACE = { hostAnswered: null, wakeSent: false };
 
 interface LifecycleActivity {
   readonly hostId: string;
@@ -125,9 +129,11 @@ export function useLiveChatSandboxState(
     atRest,
   );
 
+  const wakeWait = useSandboxWakeWait(sandbox ?? null, LIVE_WAKE_SURFACE);
   const opensAfterWake = useOpensAfterWake(
     { epicId, chatId, hostId },
     state,
+    wakeWait,
     stream.status === "open" && stream.hasContent,
   );
   const held = wakeHeldState(sandbox, opensAfterWake);
@@ -142,10 +148,11 @@ export function useLiveChatSandboxState(
 }
 
 /**
- * Whether this tile watched its sandbox wake and has not opened the chat
- * since. The host can answer before the chat's stream does, and those moments
- * are the same wait to the reader. A chat the host refused ends it, for its
- * own line to say so; a tile that opens on an awake sandbox never waits here.
+ * Whether this tile's sandbox woke and the chat has not opened since. The host
+ * can answer before the chat's stream does, and those moments are the same
+ * wait to the reader, so a tile that missed the move takes it from the wake's
+ * own wait. A chat the host refused ends it, for its own line to say so; a
+ * tile that opens on a host that has reported never waits here.
  */
 function useOpensAfterWake(
   chat: {
@@ -154,6 +161,7 @@ function useOpensAfterWake(
     readonly hostId: string;
   },
   state: ChatSandboxState,
+  wakeWait: SandboxWakeWait | null,
   opened: boolean,
 ): SandboxWakeWait | null {
   const fatalClose = useExistingChatSessionFatalClose(
@@ -163,7 +171,8 @@ function useOpensAfterWake(
   );
   const [waiting, setWaiting] = useState<SandboxWakeWait | null>(null);
   const awake = state.kind === "none" || state.kind === "unreachable";
-  const held = awake && !opened && fatalClose === null ? waiting : null;
+  const held =
+    awake && !opened && fatalClose === null ? (wakeWait ?? waiting) : null;
   const next = wakeMoveOf(state) ?? held;
   if (next !== waiting) setWaiting(next);
   return next;

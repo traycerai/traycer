@@ -12,7 +12,10 @@ import {
   createFakeSandboxBinding,
   type FakeSandboxBinding,
 } from "./sandbox-binding-fixture";
-import { sandboxSummaryFixture } from "./sandbox-fixtures";
+import {
+  sandboxOperationFixture,
+  sandboxSummaryFixture,
+} from "./sandbox-fixtures";
 
 const sources = vi.hoisted(
   (): {
@@ -513,5 +516,116 @@ describe("a live tile's wait against a fatal chat close", () => {
     await waitFor(() => expect(live.result.current.listedState).toBe("awake"));
 
     expect(live.result.current.state.kind).not.toBe("moving");
+  });
+});
+
+describe("a live tile that mounts on an awake sandbox", () => {
+  const WAKE = 1_791_000_010_000;
+  const FATAL: FatalErrorDetails = {
+    code: "chat-refused",
+    reason: "The host refused this chat.",
+    incompatibleMethods: null,
+    upgradeGuidance: null,
+  };
+
+  /** An awake row of a Resume, `reported` once its host posted activity. */
+  function awakeAfterResume(reported: boolean): SandboxListResponse {
+    return {
+      sandboxes: [
+        sandboxSummaryFixture({
+          hostId: HOST,
+          displayName: "test-box",
+          state: "awake",
+          lastTransitionAt: WAKE,
+          lastActivityAt: reported ? WAKE + 1 : null,
+          operation: sandboxOperationFixture({
+            at: WAKE,
+            fromState: "suspended",
+            state: "awake",
+            cause: "wake",
+          }),
+        }),
+      ],
+    };
+  }
+
+  beforeEach(() => {
+    useSandboxWakeReportStore.setState({ answeredWakes: {}, setupStops: {} });
+    sources.hasContent = false;
+    sources.readySession = false;
+  });
+
+  it("keeps an unreported wake pending when the list skipped resuming", async () => {
+    const live = setup(awakeAfterResume(false));
+    await waitFor(() => expect(live.result.current.listedState).toBe("awake"));
+
+    expect(live.result.current.view.line?.text).toBe(
+      "Resuming test-box · pending",
+    );
+  });
+
+  it("never holds when the host already reported after the wake", async () => {
+    const live = setup(awakeAfterResume(true));
+    await waitFor(() => expect(live.result.current.listedState).toBe("awake"));
+
+    expect(live.result.current.state.kind).toBe("none");
+    expect(live.result.current.view.line).toBeNull();
+  });
+
+  it("never holds when this device saw the host answer in this wake", async () => {
+    sources.readySession = true;
+    const live = setup(awakeAfterResume(false));
+    await waitFor(() => expect(live.result.current.listedState).toBe("awake"));
+    sources.readySession = false;
+    live.rerender();
+
+    expect(live.result.current.state.kind).toBe("none");
+  });
+
+  it("ends the seeded wait when the host refuses the chat", async () => {
+    const live = setup(awakeAfterResume(false));
+    await waitFor(() => expect(live.result.current.listedState).toBe("awake"));
+    expect(live.result.current.state.kind).toBe("moving");
+
+    sources.fatalClose = FATAL;
+    live.rerender();
+
+    expect(live.result.current.state.kind).not.toBe("moving");
+  });
+
+  it("holds the seeded wait through the session becoming ready until the stream opens with content", async () => {
+    const live = setup(awakeAfterResume(false));
+    await waitFor(() => expect(live.result.current.listedState).toBe("awake"));
+    expect(live.result.current.view.line?.text).toBe(
+      "Resuming test-box · pending",
+    );
+
+    sources.readySession = true;
+    live.rerender();
+    expect(live.result.current.view.line?.text).toBe(
+      "Resuming test-box · pending",
+    );
+
+    sources.hasContent = true;
+    live.rerender();
+    expect(live.result.current.state.kind).toBe("none");
+  });
+
+  it("does not read a task that ended as moving while its row still lists awake", async () => {
+    const ended = {
+      name: "test-box",
+      end: {
+        state: "destroyed",
+        destroyedAt: Date.UTC(2026, 9, 28, 12),
+        cause: "verb",
+        actor: "you",
+        idleMinutes: null,
+      },
+    } as const;
+    sources.task = { kind: "ended", ended };
+    const live = setup(awakeAfterResume(false));
+    await waitFor(() => expect(live.result.current.listedState).toBe("awake"));
+
+    expect(live.result.current.state).toEqual({ kind: "destroyed", ended });
   });
 });
