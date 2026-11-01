@@ -16,15 +16,22 @@ import {
   type HostLifecycleSnapshot,
 } from "../host/lifecycle-snapshot";
 import {
+  probeAttemptHolder,
+  readHostUpdateLastAttempt,
   readUpdateAttemptRecord,
+  type HostUpdateAttemptInitiator,
+  type HostUpdateAttemptOutcome,
   type HostUpdateAttemptRecord,
+  type HostUpdateLastAttempt,
 } from "@traycer-clients/shared/host-update";
 import { bootstrapLogPath, hostHomeDir } from "../store/paths";
 import {
   describeNonterminalRecordRecovery,
   parkedActivationRelaunchable,
 } from "../host/parked-activation-relaunch";
+import { describeUpdateLockHolder } from "../host/update-contender";
 import { makeColorizer, shouldUseColor, type Colorizer } from "../runner/ansi";
+import type { Environment } from "../runner/environment";
 import type { CommandFn, CommandResult } from "../runner/runner";
 import type { RuntimeContext } from "../runner/runtime";
 
@@ -65,6 +72,17 @@ interface HostStatusOutput {
    * cannot point at the command that works.
    */
   readonly updateAttempt: HostStatusUpdateAttempt | null;
+  /**
+   * How the last `host update` or `host apply` ended, whoever ran it.
+   * `updateAttempt` above is only ever one still standing.
+   */
+  readonly lastUpdateAttempt: HostUpdateLastAttempt | null;
+  /**
+   * Who holds the update lock right now and what they are doing, or `null`
+   * when nobody does. A download holds it and writes no record, so this is the
+   * only thing here that moves while one runs.
+   */
+  readonly updateLockHolder: string | null;
 }
 
 export interface HostStatusUpdateAttempt {
@@ -141,8 +159,9 @@ async function readNonterminalUpdateAttempt(
 // same reason; this removes the last one.
 //
 // Nothing here writes: the reads below touch pid.json, bootstrap.log, the
-// lifecycle records (`host/lifecycle-snapshot.ts`), and the update attempt
-// record with the install record it is compared against, and nothing else, so
+// lifecycle records (`host/lifecycle-snapshot.ts`), the update attempt record
+// with the install record it is compared against, the last-attempt record and
+// the update lock's holder, and nothing else, so
 // `host status` is safe to poll, safe in CI, and safe on a machine whose host
 // is deliberately uninstalled.
 //
@@ -185,6 +204,10 @@ export const hostStatusCommand: CommandFn = async (
       running,
     ),
     updateAttempt: updateAttempt === null ? null : updateAttempt.summary,
+    lastUpdateAttempt: await readHostUpdateLastAttempt(
+      hostHomeDir(ctx.runtime.environment),
+    ),
+    updateLockHolder: await readUpdateLockHolder(ctx.runtime.environment),
   };
 
   return {
@@ -197,6 +220,19 @@ export const hostStatusCommand: CommandFn = async (
     exitCode: 0,
   };
 };
+
+async function readUpdateLockHolder(
+  environment: Environment,
+): Promise<string | null> {
+  const probe = await probeAttemptHolder({
+    hostHomeDir: hostHomeDir(environment),
+    nowMs: Date.now(),
+    cacheTtlMs: 0,
+  });
+  return probe.kind === "holder-live"
+    ? describeUpdateLockHolder(probe.holder)
+    : null;
+}
 
 // ---------------------------------------------------------------- formatting
 
@@ -260,6 +296,17 @@ function renderHumanStatus(
   lines.push(c.bold("Lifecycle"));
   lines.push(...kvBlock(c, lifecycleSnapshotRows(output.lifecycle)));
 
+  if (output.updateLockHolder !== null) {
+    lines.push("");
+    lines.push(`${output.updateLockHolder}.`);
+  }
+
+  if (output.lastUpdateAttempt !== null) {
+    lines.push("");
+    lines.push(c.bold("Last update"));
+    lines.push(...kvBlock(c, lastUpdateRows(c, output.lastUpdateAttempt)));
+  }
+
   // Reading a status is no longer what starts a host (CLI-001), so the
   // not-running branch has to SAY what does. Without this the command is
   // observational and unhelpful in the same breath: it reports a stopped host
@@ -290,6 +337,38 @@ function renderHumanStatus(
   lines.push("");
   lines.push(c.dim("Run with --json for the full structured payload."));
   return lines.join("\n");
+}
+
+const LAST_UPDATE_OUTCOME_LABELS: Record<HostUpdateAttemptOutcome, string> = {
+  complete: "updated",
+  applied: "installed, host not confirmed running",
+  "no-op": "nothing to do",
+  parked: "waiting",
+  refused: "did not run",
+  failed: "failed",
+};
+
+const LAST_UPDATE_INITIATOR_LABELS: Record<HostUpdateAttemptInitiator, string> =
+  {
+    manual: "a command",
+    automatic: "automatic update",
+    "support-floor": "required update",
+    desktop: "Traycer app",
+  };
+
+function lastUpdateRows(
+  c: Colorizer,
+  attempt: HostUpdateLastAttempt,
+): readonly (readonly [string, string])[] {
+  const rows: (readonly [string, string])[] = [
+    ["Result", LAST_UPDATE_OUTCOME_LABELS[attempt.outcome]],
+    ["Version", attempt.targetVersion ?? "unknown"],
+    ["Started by", LAST_UPDATE_INITIATOR_LABELS[attempt.initiator]],
+    ["When", formatStartedAt(attempt.recordedAt, c)],
+  ];
+  return attempt.message === null
+    ? rows
+    : [...rows, ["Detail", attempt.message]];
 }
 
 function nextMoveHint(updateRecovery: string | null): string {
