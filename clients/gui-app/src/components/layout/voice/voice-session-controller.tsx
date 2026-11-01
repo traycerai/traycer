@@ -125,6 +125,7 @@ import {
   sameFocus,
   useVoiceSessionStore,
   type VoiceEndReason,
+  type VoiceRefusal,
   type VoiceFocus,
 } from "@/stores/voice/voice-session-store";
 
@@ -170,7 +171,7 @@ interface Attempt {
   /** When the engine reported started; `0` until then. */
   startedAt: number;
   /** What the mint refused with, so a pre-start failure keeps its reason. */
-  failure: VoiceEndReason | null;
+  failure: "credits" | "unavailable" | null;
   cancelled: boolean;
 }
 
@@ -826,21 +827,32 @@ export function VoiceSessionController(): ReactNode {
    * scheduler's items, the say loop and the feeds' memory. Synchronous, so
    * a page going away releases the microphone before it is gone.
    */
+  const releaseLocal = useCallback(() => {
+    clearTimers();
+    releaseAudio();
+    resetQueue();
+    speechRef.current?.reset();
+    // What the loop scheduled (a confirmation's answer window) dies with
+    // the session, so nothing of it reaches the next one.
+    sayLoopRef.current?.dispose();
+    sayLoopRef.current = null;
+    watchMemories.clear();
+    setShellVoiceLive(false);
+  }, [clearTimers, releaseAudio, resetQueue, setShellVoiceLive, watchMemories]);
   const finishLocal = useCallback(
     (reason: VoiceEndReason | null) => {
-      clearTimers();
-      releaseAudio();
-      resetQueue();
-      speechRef.current?.reset();
-      // What the loop scheduled (a confirmation's answer window) dies with
-      // the session, so nothing of it reaches the next one.
-      sayLoopRef.current?.dispose();
-      sayLoopRef.current = null;
-      watchMemories.clear();
-      setShellVoiceLive(false);
+      releaseLocal();
       useVoiceSessionStore.getState().sessionEnded(reason);
     },
-    [clearTimers, releaseAudio, resetQueue, setShellVoiceLive, watchMemories],
+    [releaseLocal],
+  );
+  /** The same, for a start that never became a session. */
+  const refuseLocal = useCallback(
+    (refusal: VoiceRefusal) => {
+      releaseLocal();
+      useVoiceSessionStore.getState().sessionRefused(refusal);
+    },
+    [releaseLocal],
   );
 
   /**
@@ -866,7 +878,10 @@ export function VoiceSessionController(): ReactNode {
 
   /** Opens an engine on the current microphone; `input` is what it opens knowing. */
   const connectEngine = useCallback(
-    async (input: string): Promise<boolean> => {
+    async (
+      input: string,
+      opening: "first" | "replacement",
+    ): Promise<boolean> => {
       const stream = micStreamRef.current;
       const micTrack = stream?.getAudioTracks()[0] ?? null;
       if (micTrack === null) return false;
@@ -1036,7 +1051,12 @@ export function VoiceSessionController(): ReactNode {
         appLogger.warn("[voice] session connect failed", {
           error: describeLogError(error),
         });
-        finishLocal(attempt.failure ?? "connection");
+        // The first opening never was a session, so nothing ended. A
+        // replacement is the live session ending: credits say so, and anything
+        // else is the connection it was running on.
+        if (opening === "first") refuseLocal(attempt.failure ?? "unavailable");
+        else
+          finishLocal(attempt.failure === "credits" ? "credits" : "connection");
         void settleAttempt(attempt);
         return false;
       }
@@ -1072,6 +1092,7 @@ export function VoiceSessionController(): ReactNode {
       finishLocal,
       mintAsync,
       queryClient,
+      refuseLocal,
       sayLoop,
       setShellVoiceLive,
       settleAttempt,
@@ -1133,6 +1154,7 @@ export function VoiceSessionController(): ReactNode {
           botTitle: botTitleRef.current,
           queue: now.queue,
         }),
+        "replacement",
       );
     },
     [clearTimers, connectEngine, ensureSpeech, finishLocal, settleAttempt],
@@ -1194,12 +1216,12 @@ export function VoiceSessionController(): ReactNode {
       appLogger.warn("[voice] microphone access request failed", {
         error: describeLogError(error),
       });
-      if (stillStarting()) finishLocal("microphone");
+      if (stillStarting()) refuseLocal("microphone");
       return;
     }
     if (!stillStarting()) return;
     if (access === "denied") {
-      finishLocal("microphone-denied");
+      refuseLocal("microphone-denied");
       return;
     }
     let stream: MediaStream;
@@ -1212,7 +1234,7 @@ export function VoiceSessionController(): ReactNode {
         error: describeLogError(error),
       });
       if (stillStarting()) {
-        finishLocal(
+        refuseLocal(
           isPermissionRefusal(error) ? "microphone-denied" : "microphone",
         );
       }
@@ -1229,16 +1251,16 @@ export function VoiceSessionController(): ReactNode {
       if (micStreamRef.current === stream) end("interrupted");
     });
     applyCapture();
-    await connectEngine(briefing);
+    await connectEngine(briefing, "first");
   }, [
     appHostId,
     applyCapture,
     beginQueue,
     connectEngine,
     end,
-    finishLocal,
     microphoneAccessAsync,
     navigate,
+    refuseLocal,
   ]);
 
   const setMuted = useCallback(

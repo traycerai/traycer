@@ -3,15 +3,14 @@ import {
   VoicePhoneBar,
   VoicePhoneView,
 } from "@/components/layout/voice/voice-phone-view";
-import { VoiceSessionStrip } from "@/components/layout/voice/voice-session-strip";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { useVoiceSessionStore } from "@/stores/voice/voice-session-store";
 
 /**
- * The live session's chrome for the layout in use: the strip on desktop
- * (V6); on the phone the full-screen view, and the bar while that view is
- * down (V5). The view is a portal, so where this mounts places only the
- * strip and the bar.
+ * The live session's chrome under the header on the phone: the full-screen
+ * view, and the bar while that view is down (V5). The view is a portal, so
+ * where this mounts places only the bar. On desktop the strip is in the top
+ * row (`VoiceTopRowControl`) and nothing is drawn here.
  */
 export function VoiceSessionChrome(): ReactNode {
   const phoneLayout = useIsMobileViewport();
@@ -21,7 +20,7 @@ export function VoiceSessionChrome(): ReactNode {
   useEffect(() => {
     if (!phoneLayout) useVoiceSessionStore.getState().leavePushToTalkMuted();
   }, [phoneLayout]);
-  if (!phoneLayout) return <VoiceSessionStrip />;
+  if (!phoneLayout) return null;
   return (
     <>
       <VoicePhoneBar />

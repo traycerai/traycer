@@ -316,7 +316,7 @@ export interface RouterCard {
 
 export type VoicePhase = "idle" | "connecting" | "live" | "ending";
 
-/** Why the last session ended, for the strip's one line about it. */
+/** Why the last live session ended, for the strip's one line about it. */
 export type VoiceEndReason =
   /** The person ended it, or the shell is going away. */
   | "ended"
@@ -327,11 +327,16 @@ export type VoiceEndReason =
   | "background"
   /** A call or another app took the sound while the session was live. */
   | "interrupted"
+  /** The voice's sound could not be played, so nothing could be heard. */
+  | "playback";
+
+/** Why a session never began; nothing ended, so this is not a `VoiceEndReason`. */
+export type VoiceRefusal =
+  /** The mint answered that the account has no credits for voice. */
+  | "credits"
   | "microphone"
   /** The person refused the microphone; only the OS settings repair it. */
   | "microphone-denied"
-  /** The voice's sound could not be played, so nothing could be heard. */
-  | "playback"
   | "unavailable";
 
 export type VoiceAvailability =
@@ -371,6 +376,7 @@ const CAPTION_LINES_KEPT = 4;
 export interface VoiceSessionState {
   readonly phase: VoicePhase;
   readonly endReason: VoiceEndReason | null;
+  readonly refusal: VoiceRefusal | null;
   readonly availability: VoiceAvailability;
   readonly session: VoiceSessionRecord | null;
   /**
@@ -473,8 +479,12 @@ export interface VoiceSessionState {
    * pending action are forgotten; the availability and the driver stay.
    */
   readonly sessionEnded: (reason: VoiceEndReason | null) => void;
+  /** A start that never became a session: the same reset, with the refusal said. */
+  readonly sessionRefused: (refusal: VoiceRefusal) => void;
   /** The strip's line about the last end was read; the strip leaves. */
   readonly clearEndReason: () => void;
+  /** The line about the refusal was read; Talk returns. */
+  readonly clearRefusal: () => void;
   /**
    * A focus the voice wrote (a session start, a post whose thread opened):
    * the selection follows it, so the generation does not move.
@@ -551,9 +561,33 @@ const NO_HOLDS: ReadonlySet<string> = new Set();
 /** One per window; a segment's `seq` never repeats within it. */
 let nextSegmentSeq = 1;
 
+/** What every way out of a session leaves behind, whatever the line says about it. */
+function idleSession(state: VoiceSessionState): Partial<VoiceSessionState> {
+  return {
+    phase: "idle",
+    session: null,
+    sessionToken: state.sessionToken + 1,
+    focus: null,
+    segments: NO_SEGMENTS,
+    pendingDelegationId: null,
+    activity: CLEAR_ACTIVITY,
+    queue: NO_QUEUE,
+    pendingAction: null,
+    activeCard: null,
+    captionLines: NO_CAPTIONS,
+    muted: false,
+    pushToTalk: false,
+    talkHeld: false,
+    phoneViewOpen: false,
+    dictationPauseLatched: false,
+    pausedForDictation: state.dictationHolds.size > 0,
+  };
+}
+
 export const useVoiceSessionStore = create<VoiceSessionState>()((set, get) => ({
   phase: "idle",
   endReason: null,
+  refusal: null,
   availability: "unknown",
   session: null,
   sessionToken: 0,
@@ -586,6 +620,7 @@ export const useVoiceSessionStore = create<VoiceSessionState>()((set, get) => ({
     set({
       phase: "connecting",
       endReason: null,
+      refusal: null,
       session: null,
       sessionToken: get().sessionToken + 1,
       engineGeneration: get().engineGeneration + 1,
@@ -600,31 +635,24 @@ export const useVoiceSessionStore = create<VoiceSessionState>()((set, get) => ({
       engineGeneration: get().engineGeneration + 1,
     }),
   sessionLive: (session) =>
-    set({ phase: "live", session, availability: "live", endReason: null }),
-  sessionEnded: (reason) =>
     set({
-      phase: "idle",
-      endReason: reason,
-      session: null,
-      sessionToken: get().sessionToken + 1,
-      focus: null,
-      segments: NO_SEGMENTS,
-      pendingDelegationId: null,
-      activity: CLEAR_ACTIVITY,
-      queue: NO_QUEUE,
-      pendingAction: null,
-      activeCard: null,
-      captionLines: NO_CAPTIONS,
-      muted: false,
-      pushToTalk: false,
-      talkHeld: false,
-      phoneViewOpen: false,
-      dictationPauseLatched: false,
-      pausedForDictation: get().dictationHolds.size > 0,
+      phase: "live",
+      session,
+      availability: "live",
+      endReason: null,
+      refusal: null,
     }),
+  sessionEnded: (reason) =>
+    set({ ...idleSession(get()), endReason: reason, refusal: null }),
+  sessionRefused: (refusal) =>
+    set({ ...idleSession(get()), endReason: null, refusal }),
   clearEndReason: () => {
     if (get().endReason === null) return;
     set({ endReason: null });
+  },
+  clearRefusal: () => {
+    if (get().refusal === null) return;
+    set({ refusal: null });
   },
   setFocus: (focus) => {
     if (sameFocus(get().focus, focus)) return;

@@ -41,23 +41,22 @@ export function TalkShortcutBridge(): ReactNode {
 }
 
 /**
- * How Talk is drawn: the glyph with its name (`label`), the glyph alone in
- * a strip's box (`glyph`), or the glyph alone in a box a finger can find
- * (`touch`, the phone's channel header).
+ * How Talk is drawn: the glyph with its name (`label`, the window's top row),
+ * or the glyph alone in a box a finger can find (`touch`, the phone's channel
+ * header).
  */
-export type TalkControlForm = "label" | "glyph" | "touch";
+export type TalkControlForm = "label" | "touch";
 
 const TALK_CONTROL_SIZE = {
   label: "xs",
-  glyph: "icon-xs",
   touch: "icon-sm",
 } as const satisfies Record<TalkControlForm, string>;
 
 /**
- * The "Talk" control beside the fixed Tracy entry in the tab strip (V6),
- * wherever the strip is: beside the entry in the header strip, under it in
- * the vertical strip, the glyph alone in the collapsed rail; on the phone,
- * in every bot channel's header, the Tracy tab's included (V5).
+ * The "Talk" control, once per window: centred in the top row of the content
+ * column on desktop and web, whatever the tab strip's placement and whatever
+ * the surface; on the phone, in every bot channel's header, the Tracy tab's
+ * included (V5).
  * Starts a voice session over the bot surface, and ends it while one is
  * live. Never in the composer, whose microphone stays "Dictate". Hidden
  * until the server says this deployment offers voice (and again when a mint
@@ -65,7 +64,7 @@ const TALK_CONTROL_SIZE = {
  * mounted.
  */
 export function TalkControl(props: {
-  /** The glyph alone outside `label`; the label stays its name. */
+  /** The glyph alone on `touch`; the label stays its name. */
   readonly form: TalkControlForm;
 }): ReactNode {
   const availability = useVoiceSessionStore((state) => state.availability);
