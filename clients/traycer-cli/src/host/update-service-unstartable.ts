@@ -3,7 +3,7 @@ import { dirname, join } from "node:path";
 import { HOST_UPDATE_SERVICE_UNSTARTABLE_EXIT_CODE } from "@traycer/protocol/host/lifecycle-constants";
 import type { ILogger } from "../logger";
 import type { Environment } from "../runner/environment";
-import { CLI_ERROR_CODES, cliError } from "../runner/errors";
+import { CLI_ERROR_CODES, cliError, type CliError } from "../runner/errors";
 import { serviceLabelFor } from "../service/label";
 import {
   readWindowsServiceTaskOwnership,
@@ -71,6 +71,11 @@ const PARK_MARKERS: Readonly<Record<UnstartableService, string>> = {
   disabled: "update-deferred-service-disabled",
   "not-owned": "update-deferred-service-not-owned",
 };
+
+/** Whether a thrown error is this refusal, for a caller reporting how it ended. */
+export function isUnstartableServiceRefusal(err: CliError): boolean {
+  return err.exitCode === HOST_UPDATE_SERVICE_UNSTARTABLE_EXIT_CODE;
+}
 
 /**
  * THE refusal: an update whose stop and restart go through a service this
