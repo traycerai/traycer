@@ -243,8 +243,7 @@ export const DOCTOR_ISSUE_CODES = {
   // process-group or Job-object membership proof). So it answers
   // `indeterminate` forever and no acquisition breaks it: every
   // `host maintenance-lease` - every scripted desktop install and uninstall -
-  // is refused as "another host update contender is in progress" until the
-  // file is removed. Fail-closed by design, because a reparented installer may
+  // is refused as if an update were running until the file is removed. Fail-closed by design, because a reparented installer may
   // still be mutating the install; this is the repair that design relies on.
   //
   // Warning, not error: the running host is not affected. Not reported for a

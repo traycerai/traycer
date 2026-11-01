@@ -2434,9 +2434,10 @@ export async function runHostStart(
         // `host download` holds the update-attempt execution segment across its
         // whole transfer (documented in CONTENDER_INVENTORY.md; the inner
         // cli-lock is already narrow). If the host child crashes during that
-        // window, the supervisor's relaunch takes `waitMs: 0` and is refused
-        // `busy` - mutual exclusion on the attempt lock is unconditional on
-        // admission, decided before `dispositionFor` is ever consulted. Exiting
+        // window, the supervisor's relaunch waits `SUPERVISOR_ADMISSION_WAIT_MS`
+        // and is refused `busy` if the transfer outlasts it - mutual exclusion
+        // on the attempt lock is unconditional on admission, decided before
+        // `dispositionFor` is ever consulted. Exiting
         // 0 then tells the service manager the job finished successfully, and
         // the shipped LaunchAgent sets `KeepAlive.SuccessfulExit = false`
         // (inject-host-launch-agent.cjs), which means launchd relaunches on a

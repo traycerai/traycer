@@ -13,6 +13,8 @@ import type { HostUpdateAttemptRecord } from "@traycer-clients/shared/host-updat
 
 const mocks = vi.hoisted(() => ({
   withUpdateContenderMock: vi.fn(),
+  withSupervisorRelaunchContenderMock: vi.fn(),
+  withLifecycleTeardownContenderMock: vi.fn(),
 }));
 
 vi.mock("@traycer-clients/shared/host-update", async (importOriginal) => {
@@ -20,12 +22,20 @@ vi.mock("@traycer-clients/shared/host-update", async (importOriginal) => {
     await importOriginal<
       typeof import("@traycer-clients/shared/host-update")
     >();
-  return { ...actual, withUpdateContender: mocks.withUpdateContenderMock };
+  return {
+    ...actual,
+    withUpdateContender: mocks.withUpdateContenderMock,
+    withSupervisorRelaunchContender: mocks.withSupervisorRelaunchContenderMock,
+    withLifecycleTeardownContender: mocks.withLifecycleTeardownContenderMock,
+  };
 });
 
 import {
   describeUpdateLockHolder,
   updateLockBusyMessage,
+  withCliAttemptExecutor,
+  withCliLifecycleTeardownSegment,
+  withCliSupervisorRelaunchSegment,
   withCliUpdateContenderContext,
   withCliUpdateExecutionSegment,
 } from "../update-contender";
@@ -126,6 +136,7 @@ describe("who holds the update lock", () => {
   it.each([
     ["desktop:host-download", "The Traycer app is downloading a host update"],
     ["desktop:host-apply", "The Traycer app is installing a host update"],
+    ["desktop:host-update-verify", "The Traycer app is checking a host update"],
     ["host-controller-activate", "The Traycer app is changing the host"],
     [
       "desktop-force-restart-continuation",
@@ -195,4 +206,46 @@ describe("who holds the update lock", () => {
       });
     },
   );
+
+  const lockOptions = {
+    environment: "production",
+    reason: "host-update-verify",
+    waitMs: 0,
+    pollIntervalMs: 25,
+  } as const;
+
+  it.each([
+    [
+      "the attempt executor",
+      mocks.withUpdateContenderMock,
+      () => withCliAttemptExecutor(lockOptions, async () => undefined),
+    ],
+    [
+      "a supervisor relaunch",
+      mocks.withSupervisorRelaunchContenderMock,
+      () =>
+        withCliSupervisorRelaunchSegment(lockOptions, async () => undefined),
+    ],
+    [
+      "a lifecycle teardown",
+      mocks.withLifecycleTeardownContenderMock,
+      () =>
+        withCliLifecycleTeardownSegment(
+          { ...lockOptions, admission: "stage-maintenance" },
+          async () => undefined,
+        ),
+    ],
+  ])("%s takes the lock as the app's", async (_name, contender, enter) => {
+    contender.mockClear();
+    contender.mockResolvedValue({ kind: "ran", result: undefined });
+    vi.stubEnv("TRAYCER_HOST_UPDATE_INITIATOR", "desktop");
+    try {
+      await enter();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+    expect(contender.mock.calls[0]?.[0]).toMatchObject({
+      reason: "desktop:host-update-verify",
+    });
+  });
 });
