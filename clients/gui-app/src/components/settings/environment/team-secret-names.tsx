@@ -8,6 +8,12 @@ import type { ReactNode } from "react";
  */
 export function TeamSecretNames(props: {
   readonly secrets: readonly {
+    /**
+     * The secret's own id, which is what keys the row: a secret removed and
+     * set again under the same name — the ordinary hand rotation — puts two
+     * entries of that name in this list until the old copy is destroyed.
+     */
+    readonly id: string;
     readonly name: string;
     readonly revoked: boolean;
   }[];
@@ -28,7 +34,7 @@ export function TeamSecretNames(props: {
       aria-label="Secrets"
     >
       {props.secrets.map((secret) => (
-        <li key={secret.name} className="flex flex-col gap-1 p-3">
+        <li key={secret.id} className="flex flex-col gap-1 p-3">
           <span className="font-mono text-ui-sm">{secret.name}</span>
           <span className="text-ui-xs text-muted-foreground">
             {secret.revoked ? "Removing · no longer usable" : "Set"}

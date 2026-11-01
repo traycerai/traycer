@@ -40,6 +40,14 @@ const reads = vi.hoisted(
     }>;
     acceptOutcome: "accepted" | "not_found";
     accepted: string[];
+    /** The account's configurations, as `environment.list` answers them. */
+    environments: Array<{
+      environmentId: string;
+      ownerKind: "user" | "organization";
+      label: string;
+    }>;
+    /** How many times anything asked for the invitations read. */
+    invitationReads: number;
   } => ({
     statuses: new Map<string, unknown>(),
     versions: new Map<string, unknown>(),
@@ -47,6 +55,8 @@ const reads = vi.hoisted(
     invitations: [],
     acceptOutcome: "accepted",
     accepted: [],
+    environments: [],
+    invitationReads: 0,
   }),
 );
 // The hosts running Personal come from one hook (its list is tested on its
@@ -66,9 +76,10 @@ vi.mock("@/hooks/host/use-host-negotiated-method-version", () => ({
 // The invited rows and the Accept behind Review are the host's; this suite
 // answers them directly.
 vi.mock("@/hooks/environment/use-environment-invitations", () => ({
-  useEnvironmentInvitationsQuery: () => ({
-    data: { invitations: reads.invitations },
-  }),
+  useEnvironmentInvitationsQuery: () => {
+    reads.invitationReads += 1;
+    return { data: { invitations: reads.invitations } };
+  },
   useEnvironmentInvitationAcceptMutation: () => ({
     isPending: false,
     mutate: (
@@ -84,7 +95,9 @@ vi.mock("@/hooks/environment/use-environment-invitations", () => ({
 }));
 // The team rows read the account's configuration list; this suite has none.
 vi.mock("@/hooks/bots/use-environment-list-query", () => ({
-  useEnvironmentListQuery: () => ({ data: { environments: [] } }),
+  useEnvironmentListQuery: () => ({
+    data: { environments: reads.environments },
+  }),
 }));
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
@@ -190,6 +203,8 @@ beforeEach(() => {
   reads.invitations = [];
   reads.acceptOutcome = "accepted";
   reads.accepted = [];
+  reads.environments = [];
+  reads.invitationReads = 0;
   runningOn([], {});
   navigation.navigate.mockClear();
   useSettingsEnvironmentPickStore.setState({
@@ -468,6 +483,49 @@ describe("<EnvironmentPicker />", () => {
       hostName: "Old laptop",
     });
     expect(navigation.navigate).toHaveBeenCalledWith("providers");
+  });
+
+  // The invitations read is account-wide. The only thing that needs it before
+  // the dropdown opens is the trigger with a pick no membership can name, so
+  // a trigger naming a team the person is in must not ask for it: otherwise
+  // every Settings visit carries that request, for everyone, invited or not.
+  it("asks for no invitations while the membership list names the pick", () => {
+    reads.environments = [
+      { environmentId: "env-a", ownerKind: "organization", label: "Acme" },
+    ];
+    useSettingsEnvironmentPickStore.setState({
+      pick: { kind: "team", environmentId: "env-a" },
+    });
+    answer("mac", running, V11);
+    renderPicker("mac");
+
+    expect(
+      screen.getByTestId("environment-picker-trigger").textContent,
+    ).toContain("Acme");
+    expect(reads.invitationReads).toBe(0);
+  });
+
+  // And where no membership can name it — the pick the person was removed
+  // from and invited back to — the invitation still names it, which is the
+  // whole reason that read is reachable from here.
+  it("names a team only an invitation can name", () => {
+    reads.invitations = [
+      {
+        environmentId: "env-beta",
+        teamName: "Beta",
+        role: "editor",
+        paidPlan: true,
+      },
+    ];
+    useSettingsEnvironmentPickStore.setState({
+      pick: { kind: "team", environmentId: "env-beta" },
+    });
+    answer("mac", running, V11);
+    renderPicker("mac");
+
+    expect(
+      screen.getByTestId("environment-picker-trigger").textContent,
+    ).toContain("Beta");
   });
 
   describe("an invited team", () => {

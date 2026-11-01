@@ -74,9 +74,12 @@ export const CONFIGURATION_READS = [
  *
  * The cost is an account-wide read, refetched once per active
  * `environment.list` key — one on a pooled build, one per host scope
- * otherwise — each time this runs: on a revision change, on focus, on
- * stale-write recovery, and after the writes that call it. The list itself
- * never polls; the revision does, and only a revision that moved gets here.
+ * otherwise — each time this runs, and this runs from fifteen places: the
+ * revision tick, focus, stale-write recovery, and every configuration write,
+ * which is most of them (skills and their uploads, MCP servers, the guide,
+ * the policy, plan link and unlink, promotion to Personal and the item
+ * mutations). None of it polls: the revision does, and only a revision that
+ * moved gets here.
  */
 export function invalidateConfigurationReads(
   queryClient: QueryClient,

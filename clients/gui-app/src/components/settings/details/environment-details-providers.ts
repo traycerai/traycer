@@ -330,7 +330,18 @@ async function loadEnvironmentDetails(
   // configuration, where the newest `delete` is as likely to be a secret's as
   // a member's: that drawer keeps the delivery summary and claims nothing
   // about a person.
-  if (subject.kind === "member" && subject.key.length > 0) {
+  //
+  // A reader the server answers with `status_only` is given no entries at
+  // all, so nothing here can say anything about the role or who set it. That
+  // reader keeps the delivery summary they have always had, because a `Now`
+  // heading with an empty line under it reads as a broken panel — where a
+  // readable history with no entry for this person says nothing rather than
+  // putting a host's state where their role belongs.
+  if (
+    subject.kind === "member" &&
+    subject.key.length > 0 &&
+    history.readerScope !== "status_only"
+  ) {
     // A member is not a setting delivered to hosts: their `Now` is their own
     // role, and it carries the time and the actor, so the change line below it
     // would only repeat them.

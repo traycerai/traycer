@@ -278,6 +278,7 @@ function mountVariables(
   );
   render(
     <ConfigurationSourceBoundary
+      section={null}
       target={
         environment.kind === "team"
           ? { kind: "team", environmentId: environment.environmentId }
@@ -295,6 +296,7 @@ function secretsPage(harness: TeamPageHarness, environment: EnvironmentRow) {
   const client = requireTeamHostClient();
   render(
     <ConfigurationSourceBoundary
+      section={null}
       target={
         environment.kind === "team"
           ? { kind: "team", environmentId: environment.environmentId }
@@ -452,6 +454,7 @@ describe("a Variables page on a host that does not advertise the revision method
     );
     render(
       <ConfigurationSourceBoundary
+        section={null}
         target={{ kind: "team", environmentId: "env-a" }}
       >
         <TeamVariablesAndShells />

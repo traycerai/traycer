@@ -72,8 +72,13 @@ export function removePreviewFailed(memberName: string): string {
   return `Couldn't load what removing ${memberName} interrupts, so Remove stays off until it loads.`;
 }
 
+/**
+ * The plan check says what a demotion interrupts. It does not decide whether
+ * the demotion can be made, so this line says what failed and claims nothing
+ * about the button beside it.
+ */
 export function demotionPreviewFailed(memberName: string): string {
-  return `Couldn't load what changing ${memberName}'s role interrupts, so Change role stays off until it loads.`;
+  return `Couldn't load what changing ${memberName}'s role interrupts.`;
 }
 
 export function membersHeaderLine(teamName: string): string {

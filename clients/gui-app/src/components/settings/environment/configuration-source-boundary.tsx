@@ -17,7 +17,11 @@ import {
   useEnvironmentInvitationsQuery,
 } from "@/hooks/environment/use-environment-invitations";
 import { useHostClient } from "@/lib/host";
-import { PERSONAL_PICK } from "@/lib/settings-environment-pages";
+import {
+  moveEnvironmentPick,
+  PERSONAL_PICK,
+} from "@/lib/settings-environment-pages";
+import type { SettingsSectionId } from "@/lib/settings-sections";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import { TeamReadFailed } from "./team-read-failed";
 import { useConfigurationRevision } from "@/hooks/environment/use-configuration-revision";
@@ -76,6 +80,12 @@ export type CloudConfigurationTarget =
  */
 export function ConfigurationSourceBoundary(props: {
   readonly target: CloudConfigurationTarget;
+  /**
+   * The page this boundary wraps, so a removal can take the surface off a
+   * page Personal does not offer. `null` where the caller is not a page of
+   * the Environment group and nothing needs moving.
+   */
+  readonly section: SettingsSectionId | null;
   readonly children: ReactNode;
 }): ReactNode {
   const { target } = props;
@@ -110,6 +120,7 @@ export function ConfigurationSourceBoundary(props: {
     // The answer that raises the question, so the answer that settles it can
     // be held to being no older.
     listedAt: list.dataUpdatedAt,
+    section: props.section,
   });
 
   if (descriptor === undefined) {
@@ -184,14 +195,20 @@ type ReadLabel = {
 };
 
 /**
- * The invitations read asked for on account of one membership answer, named by
- * when that answer arrived: `asking` while its reply is outstanding,
- * `answered` once it arrives, `unanswered` when it fails. Only an `answered`
- * reply to the current membership answer can say a team is gone.
+ * The question asked on account of one membership answer: when that answer
+ * arrived, and what the invitations read had last answered at the moment it
+ * was asked.
+ *
+ * The reply is that read's next answer, and never the promise `refetch` hands
+ * back. That promise resolves with the OBSERVER's state, not with this
+ * request's outcome: `QueryObserver.fetch` swallows the rejection and returns
+ * `#currentResult`, so a request cancelled by anything else — another page
+ * asking its own question, a sweep — resolves it with the answer already in
+ * cache and `isSuccess` true. That is the answer from before the question.
  */
 type AskedInvitations = {
   readonly listedAt: number;
-  readonly state: "asking" | "answered" | "unanswered";
+  readonly answeredAt: number;
 };
 
 /**
@@ -254,8 +271,10 @@ function useGoneConfiguration(input: {
   readonly settled: boolean;
   /** When the membership list that no longer carries it was answered. */
   readonly listedAt: number;
+  /** The page this is happening on, which Personal may not offer. */
+  readonly section: SettingsSectionId | null;
 }): { readonly invitation: EnvironmentInvitation | null } {
-  const { target, listed, settled, listedAt } = input;
+  const { target, listed, settled, listedAt, section } = input;
   const client = useHostClient();
   const invitations = useEnvironmentInvitationsQuery(client);
   const setPick = useSettingsEnvironmentPickStore((state) => state.setPick);
@@ -276,30 +295,36 @@ function useGoneConfiguration(input: {
   // Asked once per membership answer, and only once the list stops carrying
   // the team: the read is account-wide, and nothing else has reason to
   // refresh it. Marked while rendering, like the label above it, so the
-  // request below has one state to act on and cannot be started twice for
-  // the same answer.
-  if (absent && answer === null) setAsked({ listedAt, state: "asking" });
+  // request below is started once for one question, and the answer it is
+  // waiting for is named before anything can arrive.
+  if (absent && answer === null)
+    setAsked({ listedAt, answeredAt: invitations.dataUpdatedAt });
 
   useEffect(() => {
-    if (answer?.state !== "asking") return;
-    // Whatever is in flight is cancelled before the request that answers this
-    // question is made, because a read already running would be JOINED rather
-    // than replaced, and its reply can carry a snapshot the server assembled
-    // before the membership answer — an invitation that already existed would
-    // be missing from it. What lands here is this question's own answer.
+    if (answer === null) return;
+    // Cancelled and asked in one step, with nothing awaited in between: the
+    // cancel marks every retryer rejected before the read below looks at
+    // them, so the read starts a request of its own instead of JOINING one
+    // whose reply can carry a snapshot from before the membership answer —
+    // and no observer is left sitting between a cancelled read and its
+    // replacement.
     //
-    // A reply that fails ends the asking rather than starting another, so a
-    // read that keeps failing cannot turn into a stream of requests; the next
-    // membership answer is a new question, and asks again.
-    void cancelEnvironmentInvitationReads(queryClient)
-      .then(() => readInvitations({ cancelRefetch: true }))
-      .then((result) => {
-        setAsked({
-          listedAt,
-          state: result.isSuccess ? "answered" : "unanswered",
-        });
-      });
-  }, [answer?.state, listedAt, queryClient, readInvitations]);
+    // The promise is dropped on the floor, deliberately. What answers this
+    // question is the read's next answer, below.
+    cancelEnvironmentInvitationReads(queryClient);
+    void readInvitations({ cancelRefetch: true });
+  }, [answer, queryClient, readInvitations]);
+
+  // Answered once the read has answered AGAIN since the question was asked.
+  // With nothing in flight at the ask, an answer later than that one can only
+  // come from a request started after the membership answer — which is the
+  // provenance a timestamp cannot carry on its own, and the reason the cancel
+  // above is load-bearing rather than tidiness. A read that fails moves
+  // `errorUpdatedAt` and not this, so a failure is not an answer, and the one
+  // thing a tie of the two stamps can cost is this question: the next
+  // membership answer asks a new one.
+  const answered =
+    answer !== null && invitations.dataUpdatedAt > answer.answeredAt;
 
   // The team that is gone, where one is. Nothing is gone until the read asked
   // for this answer has answered: an invitation the page could not read is
@@ -322,9 +347,7 @@ function useGoneConfiguration(input: {
   // team is a row there, marked `invited`, carrying the same Review that opens
   // `InviteAcceptDialog`.
   const goneId =
-    absent && answer?.state === "answered" && invitation === null
-      ? environmentId
-      : null;
+    absent && answered && invitation === null ? environmentId : null;
 
   // Captured while rendering, as the members page captures its settled read,
   // so the name is already in hand on the render that finds the team gone.
@@ -338,11 +361,20 @@ function useGoneConfiguration(input: {
     // nothing else can say which team it was.
     if (label !== null)
       toast(noLongerInLine(label), { id: leftToastId(goneId) });
+    // Personal has no Members page, and Members is the likeliest page to be
+    // reading when a membership changes, so the move goes through the same
+    // guard the picker's own moves do: it takes the surface off a page the
+    // selection it lands on does not offer.
+    //
     // The selection is a store every page and the picker's trigger read, so
     // it moves after the render that found the team gone, never during it. It
     // moves whether or not the team can be named: no page can read it.
-    setPick(PERSONAL_PICK);
-  }, [goneId, label, setPick]);
+    moveEnvironmentPick({
+      next: PERSONAL_PICK,
+      activeSection: section,
+      setPick,
+    });
+  }, [goneId, label, section, setPick]);
 
   return { invitation };
 }

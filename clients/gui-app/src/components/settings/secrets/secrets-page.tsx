@@ -162,8 +162,16 @@ export function SecretsPage(props: {
       {secrets !== null && !canEdit ? (
         <TeamSecretNames
           secrets={[
-            ...secrets,
-            ...removing.map((entry) => ({ name: entry.name, revoked: true })),
+            ...secrets.map((secret) => ({
+              id: secret.secretId,
+              name: secret.name,
+              revoked: secret.revoked,
+            })),
+            ...removing.map((entry) => ({
+              id: entry.id,
+              name: entry.name,
+              revoked: true,
+            })),
           ]}
         />
       ) : null}

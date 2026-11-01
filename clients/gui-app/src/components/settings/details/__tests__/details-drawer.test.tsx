@@ -1095,6 +1095,28 @@ describe("a member's Now", () => {
     expect(screen.queryByText(/Last change/)).toBeNull();
   });
 
+  // A reader the server answers with `status_only` gets no entries at all, so
+  // there is nothing to say about the role or who set it. The delivery summary
+  // is what that reader has always had, and it stays: a "Now" heading with an
+  // empty line under it reads as a broken panel.
+  it("keeps the delivery summary for a reader the history is closed to", async () => {
+    const harness = mountTeamPage(poolSource("admin"), {
+      "environment.history": () =>
+        history({
+          readerScope: "status_only",
+          hostStates: [{ ...brokenHost, state: "applied", reason: null }],
+        }),
+    });
+    openDrawer(
+      harness,
+      { kind: "member", key: "u-2", roleLabel: "Editor" },
+      "Member details",
+    );
+
+    expect(await screen.findByText("Applied on 1 host")).toBeTruthy();
+    expect(screen.queryByText(/since/)).toBeNull();
+  });
+
   it("claims no role the row did not name", async () => {
     const harness = mountTeamPage(poolSource("admin"), {
       "environment.history": () =>

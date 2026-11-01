@@ -1,4 +1,5 @@
 import type { SettingsSectionId } from "@/lib/settings-sections";
+import { navigateToSettingsSection } from "@/lib/settings-navigation";
 
 /**
  * The pages of Settings ▸ Environment, addressed by the configuration they
@@ -119,6 +120,30 @@ export function environmentSectionShown(
 ): boolean {
   const pageId = pageIdForSection(section);
   return pageId === null || !PAGES_HIDDEN_BY_PICK[pick.kind].has(pageId);
+}
+
+/**
+ * Moves the selection, and the surface off a page the selection it lands on
+ * does not offer.
+ *
+ * Both movers go through here, because the second half is not optional:
+ * Personal has no Members page, so a person removed from the team they were
+ * reading would otherwise be left on a panel that renders nothing, with the
+ * sidebar row they were standing on gone from under them. `activeSection` is
+ * `null` where the mover does not know the page — nothing is navigated then.
+ */
+export function moveEnvironmentPick(input: {
+  readonly next: EnvironmentPick;
+  readonly activeSection: SettingsSectionId | null;
+  readonly setPick: (next: EnvironmentPick) => void;
+}): void {
+  input.setPick(input.next);
+  if (
+    input.activeSection !== null &&
+    !environmentSectionShown(input.next, input.activeSection)
+  ) {
+    navigateToSettingsSection("providers");
+  }
 }
 
 /** The pick an address names; a Local row is never addressed by one. */

@@ -172,6 +172,78 @@ describe("DemotionPreviewDialog", () => {
     return screen.getByTestId("members-demotion-preview").textContent;
   }
 
+  function renderFailedCheck(options: {
+    readonly currentRole: TeamRole;
+    readonly nextRole: TeamRole;
+  }): void {
+    render(
+      <DemotionPreviewDialog
+        open
+        memberName="Priya"
+        teamName="Acme"
+        currentRole={options.currentRole}
+        nextRole={options.nextRole}
+        preview={{ status: "failed" }}
+        busy={false}
+        blockedReason={null}
+        onOpenChange={() => undefined}
+        onRetry={() => undefined}
+        onConfirm={() => undefined}
+      />,
+    );
+  }
+
+  // The plan check says what a demotion interrupts. The demotion itself is a
+  // change of role, so a check that cannot be read does not take the change
+  // away: the ruled sentence about what the person loses needs no read, and
+  // the admin can still make it. Both kinds, because a failed read is no more
+  // informative about one than the other.
+  it("still lets an admin go to editor when the plan check cannot be read", () => {
+    renderFailedCheck({ currentRole: "admin", nextRole: "editor" });
+    expect(
+      screen.getByTestId("members-demotion-confirm").hasAttribute("disabled"),
+    ).toBe(false);
+    expect(screen.getByTestId("members-demotion-loss").textContent).toBe(
+      "Priya can no longer invite people, change roles or edit the approval policy.",
+    );
+    // The line says what failed and claims nothing about the button, which is
+    // on.
+    expect(
+      screen.getByTestId("members-demotion-preview-failed").textContent,
+    ).toBe("Couldn't load what changing Priya's role interrupts.");
+  });
+
+  it("still lets an editor go to viewer when the plan check cannot be read", () => {
+    renderFailedCheck({ currentRole: "editor", nextRole: "viewer" });
+    expect(
+      screen.getByTestId("members-demotion-confirm").hasAttribute("disabled"),
+    ).toBe(false);
+    expect(screen.getByTestId("members-demotion-loss").textContent).toBe(
+      "Priya can no longer change Acme's settings. They can still see them.",
+    );
+  });
+
+  it("keeps the confirm off only while the plan check is loading", () => {
+    render(
+      <DemotionPreviewDialog
+        open
+        memberName="Priya"
+        teamName="Acme"
+        currentRole="admin"
+        nextRole="editor"
+        preview={{ status: "loading" }}
+        busy={false}
+        blockedReason={null}
+        onOpenChange={() => undefined}
+        onRetry={() => undefined}
+        onConfirm={() => undefined}
+      />,
+    );
+    expect(
+      screen.getByTestId("members-demotion-confirm").hasAttribute("disabled"),
+    ).toBe(true);
+  });
+
   it("asks the question, says what is lost and names the role on the button", () => {
     const text = renderDemotion({
       currentRole: "admin",

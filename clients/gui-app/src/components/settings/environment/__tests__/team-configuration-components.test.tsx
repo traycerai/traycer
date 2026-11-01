@@ -70,8 +70,8 @@ describe("TeamSecretNames", () => {
     render(
       <TeamSecretNames
         secrets={[
-          { name: "OPENAI_API_KEY", revoked: false },
-          { name: "OLD_TOKEN", revoked: true },
+          { id: "sec-1", name: "OPENAI_API_KEY", revoked: false },
+          { id: "sec-2", name: "OLD_TOKEN", revoked: true },
         ]}
       />,
     );
@@ -88,7 +88,7 @@ describe("TeamSecretNames", () => {
   it("heads nothing and claims nothing about editors", () => {
     render(
       <TeamSecretNames
-        secrets={[{ name: "OPENAI_API_KEY", revoked: false }]}
+        secrets={[{ id: "sec-1", name: "OPENAI_API_KEY", revoked: false }]}
       />,
     );
 

@@ -6,22 +6,33 @@ import { useConfigurationSource } from "./configuration-source";
 /**
  * The picker and its pages name the same account-scoped configuration: a
  * team by its label, and the person's own configuration as "Personal", as
- * the dropdown names it.
- *
- * A team that has only invited the person is in no membership list, so its
- * name comes from the invitation: without it the picker's trigger has nothing
- * to draw for a pick made before a removal and re-invitation.
+ * the dropdown names it. A pick no membership carries has no name here —
+ * `useInvitedTeamName` is the one place that looks further, and only where a
+ * missing name costs something.
  */
 export function usePickedTeamLabel(environmentId: string): string | null {
   const client = useHostClient();
   const query = useEnvironmentListQuery(client, true);
-  const invitations = useEnvironmentInvitationsQuery(client);
   const entry = query.data?.environments.find(
     (row) => row.environmentId === environmentId,
   );
-  if (entry !== undefined) {
-    return entry.ownerKind === "user" ? "Personal" : entry.label;
-  }
+  if (entry === undefined) return null;
+  return entry.ownerKind === "user" ? "Personal" : entry.label;
+}
+
+/**
+ * The name a team that has only INVITED the person goes by: it is in no
+ * membership list, so without this the picker's trigger has nothing to draw
+ * for a pick made before a removal and re-invitation, and sits on a spinner.
+ *
+ * It is a hook of its own, and the trigger mounts it only on the render where
+ * the membership list came back without a name, because the read behind it is
+ * account-wide. Mounted beside every label instead, it would put that request
+ * on essentially every Settings visit, for everyone, invited or not.
+ */
+export function useInvitedTeamName(environmentId: string): string | null {
+  const client = useHostClient();
+  const invitations = useEnvironmentInvitationsQuery(client);
   return (
     invitations.data?.invitations.find(
       (invitation) => invitation.environmentId === environmentId,

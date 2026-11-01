@@ -79,8 +79,12 @@ export function DemotionPreviewDialog(props: {
   readonly onConfirm: () => void;
 }): ReactNode {
   const preview = props.preview;
-  const unlinksPlan =
-    preview.status === "ready" && preview.preview.planLabel.length > 0;
+  // The plan rows, where this demotion actually unlinks a plan. Only they
+  // need the check's answer; the question and the loss line do not.
+  const planRows =
+    preview.status === "ready" && preview.preview.planLabel.length > 0
+      ? demotionRows(props.teamName, preview.preview)
+      : null;
   return (
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
       <DialogContent
@@ -95,11 +99,11 @@ export function DemotionPreviewDialog(props: {
               props.nextRole,
             )}
           </DialogTitle>
-          {unlinksPlan ? (
+          {planRows === null ? null : (
             <DialogDescription>
               {planUnlinkLead(props.teamName)}
             </DialogDescription>
-          ) : null}
+          )}
         </DialogHeader>
         {preview.status === "loading" ? (
           <AgentSpinningDots
@@ -123,27 +127,25 @@ export function DemotionPreviewDialog(props: {
             </Button>
           </div>
         ) : null}
-        {preview.status === "ready" ? (
-          <>
-            {unlinksPlan ? (
-              <PreviewTable
-                testId="members-demotion-preview-table"
-                rows={demotionRows(props.teamName, preview.preview)}
-              />
-            ) : null}
-            <p
-              className="max-w-[72ch] text-ui-sm"
-              data-testid="members-demotion-loss"
-            >
-              {demotionConfirmBody(
-                props.memberName,
-                props.teamName,
-                props.currentRole,
-                props.nextRole,
-              )}
-            </p>
-          </>
-        ) : null}
+        {planRows === null ? null : (
+          <PreviewTable
+            testId="members-demotion-preview-table"
+            rows={planRows}
+          />
+        )}
+        {preview.status === "loading" ? null : (
+          <p
+            className="max-w-[72ch] text-ui-sm"
+            data-testid="members-demotion-loss"
+          >
+            {demotionConfirmBody(
+              props.memberName,
+              props.teamName,
+              props.currentRole,
+              props.nextRole,
+            )}
+          </p>
+        )}
         {props.blockedReason === null ? null : (
           <p
             className="max-w-[72ch] text-ui-sm text-destructive"
@@ -164,9 +166,13 @@ export function DemotionPreviewDialog(props: {
           <Button
             type="button"
             onClick={props.onConfirm}
+            // Off while the plan check is loading, because what it finds
+            // belongs in the question. A check that FAILED does not take the
+            // change away: the role is the person's to set, the ruled line
+            // about what they lose needs no read, and only the plan rows do.
             disabled={
               props.busy ||
-              preview.status !== "ready" ||
+              preview.status === "loading" ||
               props.blockedReason !== null
             }
             data-testid="members-demotion-confirm"

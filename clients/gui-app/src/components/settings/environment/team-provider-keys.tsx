@@ -81,7 +81,13 @@ export function TeamProviderKeys(): ReactNode {
           ))}
         </ul>
       ) : (
-        <TeamSecretNames secrets={keys} />
+        <TeamSecretNames
+          secrets={keys.map((secret) => ({
+            id: secret.secretId,
+            name: secret.name,
+            revoked: secret.revoked,
+          }))}
+        />
       )}
       {canEdit ? (
         <AddSecretDialog

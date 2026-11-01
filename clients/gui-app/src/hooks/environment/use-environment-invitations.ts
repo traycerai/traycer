@@ -86,32 +86,37 @@ export function useEnvironmentInvitationsQuery(
 }
 
 /**
- * Stops every invitations read in flight, in both routes' slots, so the caller's
- * own request is the next one made.
+ * Stops every invitations read in flight, in both routes' slots, so the
+ * caller's own request is the next one made.
  *
  * A caller that has to know whether an invitation exists *now* needs that: a
  * read already in flight is joined rather than replaced — TanStack cancels for
  * `cancelRefetch` only when the query has data to fall back on
- * (`Query.fetch`), and otherwise hands back the running request's promise — and
- * the reply it would join can carry a snapshot the server assembled before
- * whatever prompted the call. Cancelling first costs that read's own wait: its
- * observers wait for the replacement instead, which arrives on the same key.
+ * (`Query.fetch`), and otherwise hands back the running request's promise —
+ * and the reply it would join can carry a snapshot the server assembled before
+ * whatever prompted the call.
+ *
+ * It returns nothing on purpose, and the caller asks in the same synchronous
+ * step. `cancelQueries` rejects each retryer as it walks the matches, and a
+ * rejected retryer is what makes the next `fetch` start a request instead of
+ * joining one, so there is nothing to wait for — and nothing to wait for means
+ * no observer is left between a cancelled read and its replacement. The cost
+ * is the cancelled read's own wait: its observers wait for the replacement,
+ * which arrives on the same key.
  */
-export async function cancelEnvironmentInvitationReads(
+export function cancelEnvironmentInvitationReads(
   queryClient: QueryClient,
-): Promise<void> {
-  await Promise.all([
-    queryClient.cancelQueries({
-      predicate: (query) =>
-        hostQueryKeys.matchesMethodOnAnyHost(
-          query.queryKey,
-          "environment.invitations.list",
-        ),
-    }),
-    queryClient.cancelQueries({
-      queryKey: authQueryKeys.environmentInvitationsAll(),
-    }),
-  ]);
+): void {
+  void queryClient.cancelQueries({
+    predicate: (query) =>
+      hostQueryKeys.matchesMethodOnAnyHost(
+        query.queryKey,
+        "environment.invitations.list",
+      ),
+  });
+  void queryClient.cancelQueries({
+    queryKey: authQueryKeys.environmentInvitationsAll(),
+  });
 }
 
 /** Accepts one invitation; the team then lists among the person's environments. */

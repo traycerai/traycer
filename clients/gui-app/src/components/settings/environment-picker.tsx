@@ -15,7 +15,10 @@ import {
 } from "@/components/settings/environment/hosts-running-configuration-model";
 import { useHostsRunningPersonal } from "@/components/settings/environment/use-hosts-running-configuration";
 import { EnvironmentPickerRow } from "@/components/settings/environment/environment-picker-row";
-import { usePickedTeamLabel } from "@/components/settings/environment/team-pick-label";
+import {
+  useInvitedTeamName,
+  usePickedTeamLabel,
+} from "@/components/settings/environment/team-pick-label";
 import { TeamRows } from "@/components/settings/environment/team-rows";
 import { useEnvironmentStatusModel } from "@/components/settings/environment/use-environment-status-model";
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
@@ -33,7 +36,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import {
   environmentPickValue,
-  environmentSectionShown,
+  moveEnvironmentPick,
   PERSONAL_PICK,
   type EnvironmentPick,
 } from "@/lib/settings-environment-pages";
@@ -96,13 +99,11 @@ export function EnvironmentPicker(props: {
     (state) => state.setScopedHostId,
   );
   const choose = (next: EnvironmentPick): void => {
-    setPick(next);
-    if (
-      props.activeSection !== null &&
-      !environmentSectionShown(next, props.activeSection)
-    ) {
-      navigateToSettingsSection("providers");
-    }
+    moveEnvironmentPick({
+      next,
+      activeSection: props.activeSection,
+      setPick,
+    });
   };
   // Finish moving and Rename both continue on that host's Overview.
   const openHostOverview = (hostId: string): void => {
@@ -264,7 +265,12 @@ function EnvironmentPickerTrigger(props: {
     label = pick.hostName;
     local = true;
   } else if (pick.kind === "team") {
-    label = teamLabel ?? <AgentSpinningDotsLabel />;
+    // A pick the membership list cannot name is either an invitation the
+    // person has not accepted, or a read that has not landed. Only then is
+    // the account-wide invitations read mounted, by the component below.
+    label = teamLabel ?? (
+      <InvitedTeamNameLabel environmentId={pick.environmentId} />
+    );
   }
   return (
     <DropdownMenuTrigger asChild>
@@ -294,6 +300,18 @@ function EnvironmentPickerTrigger(props: {
       </Button>
     </DropdownMenuTrigger>
   );
+}
+
+/**
+ * The name of a team that has only invited the person, and the spinner until
+ * that read lands. Its own component so the read it mounts belongs to the one
+ * render that needs it.
+ */
+function InvitedTeamNameLabel(props: {
+  readonly environmentId: string;
+}): ReactNode {
+  const invited = useInvitedTeamName(props.environmentId);
+  return invited ?? <AgentSpinningDotsLabel />;
 }
 
 function AgentSpinningDotsLabel(): ReactNode {

@@ -20,7 +20,10 @@ import type {
 import { resetNegotiatedManifests } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { ConfigurationSourceBoundary } from "@/components/settings/environment/configuration-source-boundary";
 import { useConfigurationSource } from "@/components/settings/environment/configuration-source";
-import { usePickedTeamLabel } from "@/components/settings/environment/team-pick-label";
+import {
+  useInvitedTeamName,
+  usePickedTeamLabel,
+} from "@/components/settings/environment/team-pick-label";
 import { HeldValueHostRuntime } from "@/components/settings/personal/__tests__/held-value-host-runtime";
 import { PersonalPageFrame } from "@/components/settings/personal/personal-page-frame";
 import { PERSONAL_PICK } from "@/lib/settings-environment-pages";
@@ -41,6 +44,10 @@ import {
  * cloud-read page at once.
  */
 
+const navigation = vi.hoisted(() => ({ navigate: vi.fn() }));
+vi.mock("@/lib/settings-navigation", () => ({
+  navigateToSettingsSection: navigation.navigate,
+}));
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useHostClient: () => requireTeamHostClient(),
@@ -60,6 +67,7 @@ afterEach(() => {
   cleanup();
   resetTeamPageHarness();
   resetNegotiatedManifests();
+  navigation.navigate.mockClear();
   useSettingsEnvironmentPickStore.setState({
     pick: null,
     defaultPick: PERSONAL_PICK,
@@ -136,6 +144,7 @@ function mountBoundary(options: {
   });
   render(
     <ConfigurationSourceBoundary
+      section={null}
       target={{ kind: "team", environmentId: "env-a" }}
     >
       <Probe />
@@ -143,7 +152,12 @@ function mountBoundary(options: {
     { wrapper: harness.Wrapper },
   );
   return {
-    rerenderList: () => harness.queryClient.invalidateQueries(),
+    // Only the membership list, so the case cannot pass by refreshing the
+    // invitations read as a side effect of the removal.
+    rerenderList: () =>
+      harness.queryClient.invalidateQueries({
+        predicate: (query) => query.queryKey.includes("environment.list"),
+      }),
   };
 }
 
@@ -179,7 +193,13 @@ function mountFrame(options: {
     </HeldValueHostRuntime>,
     { wrapper: harness.Wrapper },
   );
-  return { rerenderList: () => harness.queryClient.invalidateQueries() };
+  return {
+    // Only the membership list, as above.
+    rerenderList: () =>
+      harness.queryClient.invalidateQueries({
+        predicate: (query) => query.queryKey.includes("environment.list"),
+      }),
+  };
 }
 
 describe("a team the environment list no longer carries", () => {
@@ -369,6 +389,162 @@ describe("a team the environment list no longer carries", () => {
     expect(asked).toBe(2);
   });
 
+  // Personal has no Members page, and Members is the likeliest page to be on
+  // while a membership changes. Moving the selection there without moving the
+  // surface leaves the person on a panel that renders nothing, with the
+  // sidebar row they were standing on gone from under them.
+  it("moves the surface off a page the selection it lands on does not offer", async () => {
+    negotiateMethods({
+      "environment.invitations.list": V10,
+      "environment.invitations.accept": V10,
+    });
+    useSettingsEnvironmentPickStore.setState({
+      pick: { kind: "team", environmentId: "env-a" },
+    });
+    const harness = mountTeamPage(poolSource("editor"), {
+      "environment.list": () => ({ environments: [PERSONAL] }),
+      "environment.invitations.list": () => ({ invitations: [] }),
+    });
+    render(
+      <HeldValueHostRuntime>
+        <PersonalPageFrame section="members">
+          <Probe />
+        </PersonalPageFrame>
+      </HeldValueHostRuntime>,
+      { wrapper: harness.Wrapper },
+    );
+
+    await waitFor(
+      () =>
+        expect(useSettingsEnvironmentPickStore.getState().pick).toEqual(
+          PERSONAL_PICK,
+        ),
+      { timeout: 5000 },
+    );
+    expect(navigation.navigate).toHaveBeenCalledWith("providers");
+  });
+
+  // A page the selection still offers is left where it is.
+  it("leaves the surface alone when the selection it lands on offers the page", async () => {
+    negotiateMethods({
+      "environment.invitations.list": V10,
+      "environment.invitations.accept": V10,
+    });
+    useSettingsEnvironmentPickStore.setState({
+      pick: { kind: "team", environmentId: "env-a" },
+    });
+    const harness = mountTeamPage(poolSource("editor"), {
+      "environment.list": () => ({ environments: [PERSONAL] }),
+      "environment.invitations.list": () => ({ invitations: [] }),
+    });
+    render(
+      <HeldValueHostRuntime>
+        <PersonalPageFrame section="secrets">
+          <Probe />
+        </PersonalPageFrame>
+      </HeldValueHostRuntime>,
+      { wrapper: harness.Wrapper },
+    );
+
+    // The removal settles through a cancel and a read of its own, so the wait
+    // is generous: what this case is about is which page the person lands on,
+    // never how quickly.
+    await waitFor(
+      () =>
+        expect(useSettingsEnvironmentPickStore.getState().pick).toEqual(
+          PERSONAL_PICK,
+        ),
+      { timeout: 5000 },
+    );
+    expect(navigation.navigate).not.toHaveBeenCalled();
+  });
+
+  // `refetch`'s promise resolves with the OBSERVER's state, so a request
+  // cancelled by anything else resolves it with the answer already in cache
+  // and `isSuccess` true. Nothing about that is evidence the page's own
+  // question was answered, and a removal claimed on it is claimed on the
+  // answer from before the question.
+  it("claims nothing when its own request is cancelled by another reader", async () => {
+    negotiateMethods({
+      "environment.invitations.list": V10,
+      "environment.invitations.accept": V10,
+    });
+    useSettingsEnvironmentPickStore.setState({
+      pick: { kind: "team", environmentId: "env-a" },
+    });
+    // The page's own request is held open, so the cancellation below lands
+    // while it is still out. The answer the cache already holds is the one
+    // from before the question — the state the person is being asked about.
+    const ownRead = Promise.withResolvers<{
+      readonly invitations: EnvironmentInvitation[];
+    }>();
+    let asked = 0;
+    const listed = { current: [PERSONAL, team("editor")] };
+    const harness = mountTeamPage(poolSource("editor"), {
+      "environment.list": () => ({ environments: listed.current }),
+      "environment.invitations.list": () => {
+        asked += 1;
+        if (asked === 2) return ownRead.promise;
+        return { invitations: asked === 1 ? [] : [INVITATION] };
+      },
+    });
+    render(
+      <HeldValueHostRuntime>
+        <PersonalPageFrame section="secrets">
+          <Probe />
+        </PersonalPageFrame>
+      </HeldValueHostRuntime>,
+      { wrapper: harness.Wrapper },
+    );
+    // The page has an answer in hand — so the next read has data to fall back
+    // on, which is what makes a cancellation resolve as a success.
+    await waitFor(() => expect(asked).toBe(1));
+
+    listed.current = [PERSONAL];
+    await act(async () => {
+      await harness.queryClient.invalidateQueries({
+        predicate: (query) => query.queryKey.includes("environment.list"),
+      });
+    });
+    await waitFor(() => expect(asked).toBe(2));
+
+    // Anything else that cancels that read — another page asking its own
+    // question, a sweep on sign-out — settles the page's `refetch` promise
+    // with the answer the cache already holds, and `isSuccess` on it is true.
+    // Nothing has answered the page's own question, so nothing may be claimed
+    // on it: the selection stays, and the page goes on saying only that it
+    // cannot be read.
+    await act(async () => {
+      await harness.queryClient.cancelQueries({
+        predicate: (query) =>
+          query.queryKey.includes("environment.invitations.list"),
+      });
+    });
+    expect(hoisted.toasts).toEqual([]);
+    expect(useSettingsEnvironmentPickStore.getState().pick).toEqual({
+      kind: "team",
+      environmentId: "env-a",
+    });
+    expect(
+      screen.getByText("These settings are no longer available."),
+    ).toBeTruthy();
+
+    // The next membership answer asks again, and that read answers: the
+    // invitation was there all along.
+    await act(async () => {
+      await harness.queryClient.invalidateQueries({
+        predicate: (query) => query.queryKey.includes("environment.list"),
+      });
+    });
+    expect(
+      await screen.findByText(
+        "You're invited to Acme. Accept to see and change its settings.",
+      ),
+    ).toBeTruthy();
+    expect(hoisted.toasts).toEqual([]);
+    ownRead.resolve({ invitations: [] });
+  });
+
   it("acts on its own request, not on a read that was already in flight", async () => {
     negotiateMethods({
       "environment.invitations.list": V10,
@@ -527,6 +703,7 @@ describe("a team the environment list no longer carries", () => {
     });
     render(
       <ConfigurationSourceBoundary
+        section={null}
         target={{ kind: "team", environmentId: "env-a" }}
       >
         <Probe />
@@ -541,11 +718,20 @@ describe("a team the environment list no longer carries", () => {
   });
 });
 
-// NEW-154-6: the trigger reads this label, so an invited team must have one.
+// NEW-154-6: the trigger has to name an invited team, and the two halves of
+// that name come from different reads — the membership label, and the
+// invitation where no membership carries one. They are separate hooks so the
+// account-wide invitations read is mounted only where the second half is
+// actually needed; the picker's trigger is the one place, and
+// `environment-picker.test.tsx` holds it to asking for neither more nor less.
 describe("the name a picked configuration is called", () => {
   function Label(): ReactNode {
+    const listed = usePickedTeamLabel("env-a");
+    const invited = useInvitedTeamName("env-a");
     return (
-      <span data-testid="label">{usePickedTeamLabel("env-a") ?? "none"}</span>
+      <span data-testid="label">
+        {`${listed ?? "none"}/${invited ?? "none"}`}
+      </span>
     );
   }
 
@@ -570,12 +756,12 @@ describe("the name a picked configuration is called", () => {
     });
   }
 
-  it("names a team the list carries by its label", async () => {
+  it("names a team the list carries by its label, and asks no invitation", async () => {
     await mountLabel({
       environments: [PERSONAL, team("editor")],
       invitations: [],
     });
-    expect(await screen.findByText("Acme")).toBeTruthy();
+    expect(await screen.findByText("Acme/none")).toBeTruthy();
   });
 
   it("names a team that has only invited the person by the invitation", async () => {
@@ -583,12 +769,12 @@ describe("the name a picked configuration is called", () => {
       environments: [PERSONAL],
       invitations: [INVITATION],
     });
-    expect(await screen.findByText("Acme")).toBeTruthy();
+    expect(await screen.findByText("none/Acme")).toBeTruthy();
   });
 
   it("names nothing for an id neither the list nor an invitation knows", async () => {
     await mountLabel({ environments: [PERSONAL], invitations: [] });
-    expect(await screen.findByText("none")).toBeTruthy();
+    expect(await screen.findByText("none/none")).toBeTruthy();
   });
 });
 
@@ -603,6 +789,7 @@ describe("the viewer's standing line", () => {
     });
     render(
       <ConfigurationSourceBoundary
+        section={null}
         target={{ kind: "team", environmentId: "env-a" }}
       >
         <Probe />
@@ -633,7 +820,7 @@ describe("the viewer's standing line", () => {
       "environment.list": () => ({ environments: [PERSONAL] }),
     });
     render(
-      <ConfigurationSourceBoundary target={{ kind: "personal" }}>
+      <ConfigurationSourceBoundary target={{ kind: "personal" }} section={null}>
         <Probe />
       </ConfigurationSourceBoundary>,
       { wrapper: harness.Wrapper },
