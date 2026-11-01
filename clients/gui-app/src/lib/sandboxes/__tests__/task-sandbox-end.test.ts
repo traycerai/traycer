@@ -44,6 +44,12 @@ describe("taskSandboxEndLine", () => {
       "e2e-sbx-p1 was destroyed on Oct 28 at 01:27 after its idle period. Its files are gone; this chat stays readable.",
     ],
   ])("states the end %s, in local time", (_case, ended, line) => {
-    expect(taskSandboxEndLine("e2e-sbx-p1", ended)).toBe(line);
+    expect(taskSandboxEndLine("e2e-sbx-p1", ended, true)).toBe(line);
+  });
+
+  it("leaves the promise out where nothing shows the chat has a copy", () => {
+    expect(taskSandboxEndLine("e2e-sbx-p1", end({ actor: "you" }), false)).toBe(
+      "e2e-sbx-p1 was destroyed on Oct 28 at 01:27 by you. Its files are gone.",
+    );
   });
 });

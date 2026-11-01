@@ -36,14 +36,19 @@ function sandboxRow(sandboxEnd: TaskHostRow["sandboxEnd"]): TaskHostRow {
   };
 }
 
-function lineWith(taskHosts: TaskHostsView, locked: boolean): string | null {
+function lineWith(
+  taskHosts: TaskHostsView,
+  locked: boolean,
+  published: boolean,
+): string | null {
   const wrapper = ({ children }: { readonly children: ReactNode }) => (
     <TaskHostsViewContext.Provider value={taskHosts}>
       {children}
     </TaskHostsViewContext.Provider>
   );
-  return renderHook(() => useChatSandboxRowLine(HOST, locked), { wrapper })
-    .result.current;
+  return renderHook(() => useChatSandboxRowLine(HOST, locked, published), {
+    wrapper,
+  }).result.current;
 }
 
 describe("useChatSandboxRowLine", () => {
@@ -72,7 +77,10 @@ describe("useChatSandboxRowLine", () => {
       });
     });
 
-    expect(lineWith({ kind: "none" }, true)).toBe(SEEN_LINE);
+    expect(lineWith({ kind: "none" }, true, true)).toBe(SEEN_LINE);
+    expect(lineWith({ kind: "none" }, true, false)).toBe(
+      "e2e-sbx was destroyed on Oct 28 at 01:27 after resting. Its files are gone.",
+    );
   });
 
   it("says the task's record once it lands, over what this device saw", () => {
@@ -98,7 +106,7 @@ describe("useChatSandboxRowLine", () => {
       ],
     };
 
-    expect(lineWith(hosts, true)).toBe(
+    expect(lineWith(hosts, true, true)).toBe(
       "e2e-sbx was destroyed on Oct 28 at 01:27 by Dana. Its files are gone; this chat stays readable.",
     );
   });
@@ -114,6 +122,6 @@ describe("useChatSandboxRowLine", () => {
       });
     });
 
-    expect(lineWith({ kind: "none" }, false)).toBeNull();
+    expect(lineWith({ kind: "none" }, false, true)).toBeNull();
   });
 });

@@ -1001,8 +1001,9 @@ describe("AgentHoverTooltip host section", () => {
     const details = await screen.findByTestId("task-sandbox-end-details");
     expect(details.textContent).toContain("team-box");
     expect(details.textContent).toContain(
-      "team-box was destroyed on Oct 27 at 06:21 by Ada. Its files are gone; this chat stays readable.",
+      "team-box was destroyed on Oct 27 at 06:21 by Ada. Its files are gone.",
     );
+    expect(details.textContent).not.toContain("stays readable");
     // A destroyed host has no sandbox row to open: the viewer's sandbox
     // details are never asked for.
     expect(h.openDetails).not.toHaveBeenCalled();

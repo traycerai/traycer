@@ -2,7 +2,15 @@ import type { ReactNode } from "react";
 import { parseTileRef } from "@/stores/epics/canvas/tile-schema";
 import type { SandboxCatalogue } from "@traycer/protocol/host/sandbox-control";
 import { TestRouterProvider } from "@/__tests__/with-test-router";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type MockInstance,
+} from "vitest";
 import {
   act,
   cleanup,
@@ -618,8 +626,8 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import * as Y from "yjs";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { RequestOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
-import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
 import type { HostRpcRegistry } from "@/lib/host";
+import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
 import {
   ChatTile,
   ChatTileSessionView,
@@ -705,7 +713,18 @@ import {
   remoteEntry,
   sandboxFacts,
 } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
-import { FakeStreamClient } from "@traycer-clients/shared/host-transport/__testing__/fake-stream-client";
+import {
+  FakeStreamClient,
+  FakeStreamSession,
+} from "@traycer-clients/shared/host-transport/__testing__/fake-stream-client";
+import {
+  CHAT_INDEX_UNAVAILABLE_CODE,
+  CHAT_NOT_VISIBLE_CODE,
+} from "@/lib/chats/chat-session-close-codes";
+import {
+  publishEnvironmentArmScope,
+  publishEnvironmentChatArmsAbsent,
+} from "@/hooks/environment/use-environment-arms";
 import { ChatServingWitnessContext } from "@/lib/chats/chat-serving-witness";
 import { PoolChatServingWitness } from "@/lib/chats/pool-chat-serving-witness";
 import {
@@ -2512,6 +2531,392 @@ describe("<ChatTile />", () => {
         ),
       ).toHaveLength(1);
       witness.dispose();
+    });
+
+    describe("with no owner row, so the tile stays live", () => {
+      const FULL_LINE = `${SANDBOX_NAME} was destroyed on Oct 28 at 01:27 by you. Its files are gone; this chat stays readable.`;
+      const SHORT_LINE = `${SANDBOX_NAME} was destroyed on Oct 28 at 01:27 by you. Its files are gone.`;
+      // Calls through: it only records which handler each session was given.
+      let statusSpy: MockInstance<FakeStreamSession["onStatusChange"]>;
+
+      beforeEach(() => {
+        statusSpy = vi.spyOn(FakeStreamSession.prototype, "onStatusChange");
+        directoryListTestState.entries = [];
+        setDirectoryRows([poolEntry]);
+        taskHostsTestState.view = {
+          kind: "hosts",
+          hosts: [
+            {
+              hostId: HOST_ID,
+              label: SANDBOX_NAME,
+              principal: { kind: "team", id: "team-1" },
+              reach: "same_principal",
+              sandboxEnd: {
+                state: "destroyed",
+                destroyedAt: DESTROYED_AT,
+                cause: "verb",
+                actor: "you",
+                idleMinutes: null,
+              },
+            },
+          ],
+        };
+      });
+
+      afterEach(() => {
+        statusSpy.mockRestore();
+      });
+
+      function chatSession(): FakeStreamSession | undefined {
+        return opened.find(
+          (t) =>
+            t.hostId === POOL_HOST_ID &&
+            t.client.subscribes.some((sub) => sub.method === "chat.subscribe"),
+        )?.client.sessions[0];
+      }
+
+      /** Opens the tile and answers the serving stream at rest; the chat stream stays unanswered. */
+      async function openUntilSubscribed(): Promise<{
+        readonly witness: PoolChatServingWitness;
+        readonly session: FakeStreamSession;
+      }> {
+        const { witness, client } = poolWitnessAtRest();
+        render(tree(newQueryClient(), witness));
+        let answered = false;
+        const session = await waitFor(() => {
+          const serving = client.sessions.at(0);
+          if (serving !== undefined && !answered) {
+            answered = true;
+            act(() => {
+              serving.emit(
+                {
+                  kind: "serving",
+                  hasBinaryPayload: false,
+                  serving: {
+                    ownerHostId: HOST_ID,
+                    state: "at-rest",
+                    catchingUp: null,
+                  },
+                },
+                null,
+              );
+            });
+          }
+          const chat = chatSession();
+          if (chat === undefined) throw new Error("no chat.subscribe yet");
+          return chat;
+        });
+        return { witness, session };
+      }
+
+      /** The host's refusal of the chat's open, under `code`. */
+      function terminateWith(session: FakeStreamSession, code: string): void {
+        const at = statusSpy.mock.contexts.lastIndexOf(session);
+        if (at === -1) throw new Error("no status handler");
+        const handler = statusSpy.mock.calls[at][0];
+        act(() => {
+          handler(
+            "closed",
+            {
+              kind: "fatalError",
+              details: {
+                code,
+                reason: "The host refused this chat.",
+                incompatibleMethods: null,
+                upgradeGuidance: null,
+              },
+            },
+            null,
+            null,
+          );
+        });
+      }
+
+      it("says only the file loss once the subscribe terminates as not visible, with Continue and Details", async () => {
+        const { witness, session } = await openUntilSubscribed();
+
+        terminateWith(session, CHAT_NOT_VISIBLE_CODE);
+
+        await waitFor(() => {
+          expect(screen.getAllByText(SHORT_LINE)).toHaveLength(1);
+        });
+        expect(
+          screen.getAllByRole("button", { name: "Continue on another host" }),
+        ).toHaveLength(1);
+        expect(screen.getAllByRole("button", { name: "Details" })).toHaveLength(
+          1,
+        );
+        expect(document.body.textContent).not.toContain("stays readable");
+        witness.dispose();
+      });
+
+      it("promises the chat stays readable while its read is in flight, then withdraws it when the terminate lands", async () => {
+        const seen: string[] = [];
+        const line =
+          /e2e-sbx-t1 was destroyed[^.]*\. Its files are gone[^.]*\./;
+        const record = (): void => {
+          const found = line.exec(document.body.textContent)?.[0];
+          if (found !== undefined && seen.at(-1) !== found) seen.push(found);
+        };
+        const observer = new MutationObserver(record);
+        observer.observe(document.body, {
+          subtree: true,
+          childList: true,
+          characterData: true,
+        });
+        const { witness, session } = await openUntilSubscribed();
+        await waitFor(() => {
+          expect(screen.getAllByText(FULL_LINE)).toHaveLength(1);
+        });
+        record();
+
+        terminateWith(session, CHAT_NOT_VISIBLE_CODE);
+        await waitFor(() => {
+          expect(screen.getAllByText(SHORT_LINE)).toHaveLength(1);
+        });
+        record();
+        observer.disconnect();
+
+        expect(seen).toEqual([FULL_LINE, SHORT_LINE]);
+        witness.dispose();
+      });
+
+      it("keeps the promise when the not-visible close lands after a transcript loaded", async () => {
+        const { witness, session } = await openUntilSubscribed();
+        act(() => {
+          session.emit(
+            chatSnapshotFrame({
+              access: "owner",
+              queueItems: [],
+              settings: null,
+              messages: [hostUserMessage()],
+              activeTurn: null,
+            }),
+            null,
+          );
+        });
+        await waitFor(() => {
+          expect(screen.getByText("Host chat content")).not.toBeNull();
+        });
+
+        terminateWith(session, CHAT_NOT_VISIBLE_CODE);
+
+        await waitFor(() => {
+          expect(screen.getAllByText(FULL_LINE)).toHaveLength(1);
+        });
+        expect(screen.queryByText(SHORT_LINE)).toBeNull();
+        witness.dispose();
+      });
+
+      describe("refused because the pool has no index for the chat", () => {
+        const ENVIRONMENT_ID = "env-1";
+        let arms: FakeStreamClient;
+
+        function armChat(
+          chatId: string,
+          ownerHostId: string,
+        ): CloudChatSummary {
+          return {
+            identity: {
+              taskId: EPIC_ID,
+              chatId,
+              ownerUserId: ENVIRONMENT_ID,
+            },
+            ownerHostId,
+            createdAt: 1,
+            visibility: "private",
+            title: chatId,
+            isTitleEditedByUser: false,
+            parentChatId: null,
+            isArchived: false,
+            runSettingsSummary: null,
+            metadataUpdatedAt: 1,
+            headSha256: null,
+            publishedAt: null,
+            throughRecordSeq: null,
+            isOwnedByViewer: false,
+          };
+        }
+
+        /** The environment's chat arm answers with `chats`. */
+        function answerArm(chats: readonly CloudChatSummary[]): void {
+          const session = arms.sessions.at(-1);
+          if (session === undefined) throw new Error("the arm is not open");
+          act(() => {
+            session.emit(
+              {
+                kind: "snapshot",
+                hasBinaryPayload: false,
+                generation: 0,
+                chats: [...chats],
+              },
+              null,
+            );
+          });
+        }
+
+        function publishScope(): void {
+          act(() => {
+            publishEnvironmentArmScope({
+              poolHostId: "pool-host-id",
+              client: arms,
+              viewerId: VIEWER,
+              environmentIds: [ENVIRONMENT_ID],
+              environmentIdByTeamId: new Map(),
+              supported: new Set(["environment.chats.subscribe"]),
+            });
+          });
+        }
+
+        beforeEach(() => {
+          arms = new FakeStreamClient(true);
+          publishScope();
+        });
+
+        afterEach(() => {
+          publishEnvironmentArmScope(null);
+          publishEnvironmentChatArmsAbsent(false);
+        });
+
+        it("says only the file loss once every arm has answered with no row for the chat", async () => {
+          const { witness, session } = await openUntilSubscribed();
+
+          terminateWith(session, CHAT_INDEX_UNAVAILABLE_CODE);
+          await waitFor(() => {
+            expect(arms.sessions).toHaveLength(1);
+          });
+          answerArm([]);
+
+          await waitFor(() => {
+            expect(screen.getAllByText(SHORT_LINE)).toHaveLength(1);
+          });
+          expect(
+            screen.getAllByRole("button", { name: "Continue on another host" }),
+          ).toHaveLength(1);
+          expect(document.body.textContent).not.toContain("stays readable");
+          witness.dispose();
+        });
+
+        it("keeps the promise until the arm answers, then withdraws it", async () => {
+          const seen: string[] = [];
+          const line =
+            /e2e-sbx-t1 was destroyed[^.]*\. Its files are gone[^.]*\./;
+          const record = (): void => {
+            const found = line.exec(document.body.textContent)?.[0];
+            if (found !== undefined && seen.at(-1) !== found) seen.push(found);
+          };
+          const observer = new MutationObserver(record);
+          observer.observe(document.body, {
+            subtree: true,
+            childList: true,
+            characterData: true,
+          });
+          const { witness, session } = await openUntilSubscribed();
+
+          terminateWith(session, CHAT_INDEX_UNAVAILABLE_CODE);
+          await waitFor(() => {
+            expect(arms.sessions).toHaveLength(1);
+          });
+          await waitFor(() => {
+            expect(screen.getAllByText(FULL_LINE)).toHaveLength(1);
+          });
+          answerArm([]);
+          await waitFor(() => {
+            expect(screen.getAllByText(SHORT_LINE)).toHaveLength(1);
+          });
+          record();
+          observer.disconnect();
+
+          expect(seen).toEqual([FULL_LINE, SHORT_LINE]);
+          witness.dispose();
+        });
+
+        it("keeps the promise when an arm names this chat on this host", async () => {
+          const { witness, session } = await openUntilSubscribed();
+
+          terminateWith(session, CHAT_INDEX_UNAVAILABLE_CODE);
+          await waitFor(() => {
+            expect(arms.sessions).toHaveLength(1);
+          });
+          answerArm([armChat(CHAT_ARTIFACT.id, HOST_ID)]);
+
+          await waitFor(() => {
+            expect(screen.getAllByText(FULL_LINE)).toHaveLength(1);
+          });
+          expect(screen.queryByText(SHORT_LINE)).toBeNull();
+          witness.dispose();
+        });
+
+        it("keeps the promise through discovery, however the arm then answers", async () => {
+          const seen: string[] = [];
+          const line =
+            /e2e-sbx-t1 was destroyed[^.]*\. Its files are gone[^.]*\./;
+          const record = (): void => {
+            const found = line.exec(document.body.textContent)?.[0];
+            if (found !== undefined && seen.at(-1) !== found) seen.push(found);
+          };
+          const observer = new MutationObserver(record);
+          observer.observe(document.body, {
+            subtree: true,
+            childList: true,
+            characterData: true,
+          });
+          act(() => {
+            publishEnvironmentArmScope(null);
+          });
+          const { witness, session } = await openUntilSubscribed();
+
+          terminateWith(session, CHAT_INDEX_UNAVAILABLE_CODE);
+          await waitFor(() => {
+            expect(screen.getAllByText(FULL_LINE)).toHaveLength(1);
+          });
+          // Discovery is still out: no scope, and no word that there are no arms.
+          publishScope();
+          await waitFor(() => {
+            expect(arms.sessions).toHaveLength(1);
+          });
+          answerArm([armChat(CHAT_ARTIFACT.id, HOST_ID)]);
+          await waitFor(() => {
+            expect(screen.getAllByText(FULL_LINE)).toHaveLength(1);
+          });
+          record();
+          observer.disconnect();
+
+          expect(seen).toEqual([FULL_LINE]);
+          witness.dispose();
+        });
+
+        it("says only the file loss once discovery has answered that there are no arms", async () => {
+          act(() => {
+            publishEnvironmentArmScope(null);
+            publishEnvironmentChatArmsAbsent(true);
+          });
+          const { witness, session } = await openUntilSubscribed();
+
+          terminateWith(session, CHAT_INDEX_UNAVAILABLE_CODE);
+
+          await waitFor(() => {
+            expect(screen.getAllByText(SHORT_LINE)).toHaveLength(1);
+          });
+          expect(arms.sessions).toHaveLength(0);
+          witness.dispose();
+        });
+
+        it("withdraws the promise when the arm names the chat only on another host", async () => {
+          const { witness, session } = await openUntilSubscribed();
+
+          terminateWith(session, CHAT_INDEX_UNAVAILABLE_CODE);
+          await waitFor(() => {
+            expect(arms.sessions).toHaveLength(1);
+          });
+          answerArm([armChat(CHAT_ARTIFACT.id, "another-host")]);
+
+          await waitFor(() => {
+            expect(screen.getAllByText(SHORT_LINE)).toHaveLength(1);
+          });
+          witness.dispose();
+        });
+      });
     });
   });
 

@@ -245,6 +245,7 @@ const RECEIPT_VIEWER = {
   canEdit: false,
   ownedByViewer: false,
   environmentOwned: false,
+  staysReadable: false,
 } as const;
 
 /** Capture the host-bound mutation here; a background toast renders outside that provider. */

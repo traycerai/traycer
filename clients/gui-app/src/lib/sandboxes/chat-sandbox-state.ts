@@ -107,6 +107,12 @@ export interface ChatSandboxViewer {
   readonly canEdit: boolean;
   readonly ownedByViewer: boolean;
   readonly environmentOwned: boolean;
+  /**
+   * Whether a line may promise this chat stays readable: until its read
+   * settles on no copy, on a surface that reads the chat. A surface with no
+   * read of its own has nothing to prove it by.
+   */
+  readonly staysReadable: boolean;
 }
 
 const ORDINARY: ChatSandboxView = {
@@ -130,7 +136,7 @@ export function resolveChatSandbox(
       // A host that answers is serving the chat; its own path speaks.
       return viewer.reachable
         ? ORDINARY
-        : slotLine(state, unknownSandboxLine(state.name));
+        : slotLine(state, unknownSandboxLine(state.name, viewer.staysReadable));
     case "moving":
       return slotLine(state, movingSandboxLine(state));
     case "failed":
@@ -143,7 +149,11 @@ export function resolveChatSandbox(
     case "destroyed":
       return slotLine(
         state,
-        taskSandboxEndLine(state.ended.name, state.ended.end),
+        taskSandboxEndLine(
+          state.ended.name,
+          state.ended.end,
+          viewer.staysReadable,
+        ),
       );
     case "resting":
       return restingView(state, viewer);
@@ -198,8 +208,10 @@ const MOVING_VERB: Record<SandboxMovingState, string> = {
 };
 
 /** A sandbox whose state this device cannot tell yet. */
-function unknownSandboxLine(name: string): string {
-  return `${name} isn't available — this chat stays readable.`;
+function unknownSandboxLine(name: string, staysReadable: boolean): string {
+  return staysReadable
+    ? `${name} isn't available — this chat stays readable.`
+    : `${name} isn't available.`;
 }
 
 /** A moving sandbox's line, as its row and setup line say it. */
