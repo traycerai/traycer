@@ -6,6 +6,7 @@ import type {
   ProcessIdentityToken,
   ProcessIdentityVerdict,
 } from "@traycer-clients/shared/host-lock/process-identity";
+import { updateLockBusyMessage } from "../host/update-contender";
 import { DOCTOR_ISSUE_CODES, type DoctorIssue } from "./issues";
 
 // The update-attempt lock as a doctor probe, for the two states its own
@@ -21,13 +22,16 @@ import { DOCTOR_ISSUE_CODES, type DoctorIssue } from "./issues";
 // for that record forever - fail-closed on purpose, and the only thing that
 // ends it is a person confirming no installer is running and removing the
 // file. Every later `host maintenance-lease`, which is every scripted desktop
-// install and uninstall, is refused meanwhile with "another host update
-// contender is in progress", and nothing else says why.
+// install and uninstall, is refused meanwhile as a live contender, and nothing
+// else says why.
 //
 // A lock this user cannot read reads the same way to an acquisition: only
 // positive evidence breaks a lock, so it answers busy for as long as the read
-// fails. The lock is created 0600, so this is also what a running installer
-// started with administrator rights looks like to an ordinary doctor.
+// fails. The lock is created 0600, so on POSIX this is also what a live
+// contender started with administrator rights looks like to an ordinary
+// doctor. One failed read proves nothing: on Windows a healthy release or
+// rewrite can fail the read's identity check, and the remedy here is deleting
+// the file, so a failure is reported only when a second read repeats it.
 //
 // Read-only. Doctor never removes the file: the remedy needs the one fact no
 // probe here can establish, that no installer is running.
@@ -63,7 +67,10 @@ export async function probeUpdateAttemptLock(
   opts: ProbeUpdateAttemptLockOptions,
 ): Promise<DoctorIssue | null> {
   const first = await readLockHolder(opts.lockPath);
-  if (first.kind === "read-error") return unreadableIssue(opts.lockPath);
+  if (first.kind === "read-error") {
+    const again = await readLockHolder(opts.lockPath);
+    return again.kind === "read-error" ? unreadableIssue(opts.lockPath) : null;
+  }
   if (first.kind !== "held") return null;
   const holder = first.holder;
   const publisher = await opts.verifyPublisher({
@@ -89,7 +96,7 @@ function unreadableIssue(lockPath: string): DoctorIssue {
     code: DOCTOR_ISSUE_CODES.HOST_UPDATE_ATTEMPT_LOCK_UNREADABLE,
     severity: "warning",
     title: "Host update-attempt lock cannot be read",
-    message: `The host update-attempt lock at ${lockPath} exists but could not be read, so nothing can tell who holds it and no install, update or uninstall will break it. While it stays, every 'traycer host maintenance-lease' - every scripted desktop install and uninstall - is refused with "another host update contender is in progress". A Traycer installer running with administrator rights leaves a lock an ordinary user cannot read, so wait for one that is running to finish. If none is running, check the file's ownership and permissions and remove it, with administrator rights if it needs them; the next one then proceeds.`,
+    message: `The host update-attempt lock at ${lockPath} exists but could not be read, so doctor cannot tell who holds it. While it stays, a Traycer install, update or uninstall that cannot read it will not break it, and is refused with "${updateLockBusyMessage(null)}" A Traycer installer, uninstaller or update running with administrator rights can leave a lock an ordinary user cannot read, so if one is running, let it finish and leave the file alone. Only when none is running, check the file's ownership and permissions and remove it, with administrator rights if it needs them; the next one then proceeds.`,
     fixAction: null,
     terminalCommand: null,
     details: { lockPath },
@@ -114,7 +121,7 @@ function unbreakableIssue(
     severity: "warning",
     title:
       "Host update-attempt lock was left by an interrupted install and will not be released",
-    message: `The host update-attempt lock at ${lockPath} was left by pid ${String(holder.pid)} (${holder.reason}, since ${holder.startedAt}), ${gone}. ${tree}, so no install, update or uninstall will break the lock. While it stays, every 'traycer host maintenance-lease' - every scripted desktop install and uninstall - is refused with "another host update contender is in progress". If no Traycer installer, uninstaller or update is running, remove the file; the next one then proceeds.`,
+    message: `The host update-attempt lock at ${lockPath} was left by pid ${String(holder.pid)} (${holder.reason}, since ${holder.startedAt}), ${gone}. ${tree}, so no install, update or uninstall will break the lock. While it stays, every 'traycer host maintenance-lease' - every scripted desktop install and uninstall - is refused with "${updateLockBusyMessage(holder)}" If no Traycer installer, uninstaller or update is running, remove the file; the next one then proceeds.`,
     fixAction: null,
     terminalCommand: null,
     details: {

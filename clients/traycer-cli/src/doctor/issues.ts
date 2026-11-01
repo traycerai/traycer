@@ -237,8 +237,7 @@ export const DOCTOR_ISSUE_CODES = {
   // process-group or Job-object membership proof). So it answers
   // `indeterminate` forever and no acquisition breaks it: every
   // `host maintenance-lease` - every scripted desktop install and uninstall -
-  // is refused as "another host update contender is in progress" until the
-  // file is removed. Fail-closed by design, because a reparented installer may
+  // is refused as a live contender until the file is removed. Fail-closed by design, because a reparented installer may
   // still be mutating the install; this is the repair that design relies on.
   //
   // Warning, not error: the running host is not affected. Not reported for a
@@ -249,8 +248,7 @@ export const DOCTOR_ISSUE_CODES = {
   // error, not a missing file). Its own code for the marker lock's reason: the
   // remedy above removes a record doctor read, and here there is no record, so
   // the first step is the file's ownership and permissions. Fail-closed like
-  // the case above: an acquisition reads it as busy, and every
-  // `host maintenance-lease` is refused until a read succeeds.
+  // the case above: an acquisition that cannot read it answers busy.
   HOST_UPDATE_ATTEMPT_LOCK_UNREADABLE: "HOST_UPDATE_ATTEMPT_LOCK_UNREADABLE",
   // `lifecycle-policy.json` exists but is corrupt or cannot be read. It reads
   // as Background - the upgrade-safe default, so nothing parks - which is

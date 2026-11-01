@@ -361,6 +361,7 @@ describe("probeUpdateAttemptLock", () => {
     expect(issue?.details).toEqual({ lockPath });
     expect(issue?.message).toContain(lockPath);
     expect(issue?.message).toContain("check the file's ownership");
+    expect(issue?.message).toContain("so this did not run");
     expect(verifyPublisher).not.toHaveBeenCalled();
   });
 
