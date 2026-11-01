@@ -18,6 +18,10 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
+import {
+  KEYBOARD_FOCUS_OWNER_PROPS,
+  useKeyboardFocusLayoutWithin,
+} from "@/hooks/ui/use-keyboard-focus-layout";
 import { useBotConversationSendMutation } from "@/hooks/bots/use-bot-mutations";
 import type { BotSendFailure } from "@/hooks/bots/use-bot-send-failure";
 import {
@@ -29,8 +33,26 @@ import {
   appendQuoteMarkdown,
   type QuoteTextSnapshot,
 } from "@/components/chat/quote/append-quote-to-draft";
+import { cn } from "@/lib/utils";
 
 const MESSAGE_MAX = 100_000;
+
+const BOX_FULL = {
+  name: "full",
+  form: "px-4 pt-1 pb-3",
+  frame: "flex flex-col",
+  input: "max-h-60",
+  send: "pb-1.5",
+};
+
+/** 44 tall: the field's 40, its frame's border and the form's padding. */
+const BOX_ONE_ROW = {
+  name: "one-row",
+  form: "px-2 py-px",
+  frame: "grid grid-cols-[minmax(0,1fr)_auto] items-center",
+  input: "max-h-10",
+  send: "",
+};
 
 /**
  * Slack's message box, for a bot's channel and its threads (Tracy Bots): a
@@ -67,6 +89,10 @@ const MESSAGE_MAX = 100_000;
  * `@` completes a member of the team's environment (decision 137); the box
  * shows their name and the send writes their token, so the bot's host knows
  * who was mentioned.
+ *
+ * With the keyboard up on a short viewport the box is one row, the field beside
+ * Send, and a longer draft scrolls inside the field. The same elements restyle,
+ * so the field keeps its focus.
  */
 export function BotMessageComposer(props: {
   readonly botId: string;
@@ -131,6 +157,8 @@ export function BotMessageComposer(props: {
   const send = useBotConversationSendMutation(client);
   const [text, setText] = useState("");
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const [form, setForm] = useState<HTMLFormElement | null>(null);
+  const box = useKeyboardFocusLayoutWithin(form) ? BOX_ONE_ROW : BOX_FULL;
   const mentionListId = useId();
   const mentions = useBotMentionCompletion({
     text,
@@ -254,21 +282,29 @@ export function BotMessageComposer(props: {
 
   return (
     <form
-      className="flex shrink-0 flex-col gap-1 px-4 pt-1 pb-3"
+      ref={setForm}
+      className={cn("flex shrink-0 flex-col gap-1", box.form)}
       data-testid={testId}
+      data-box-form={box.name}
+      {...KEYBOARD_FOCUS_OWNER_PROPS}
       onSubmit={(event) => {
         event.preventDefault();
         submit();
       }}
     >
-      <div className="relative flex flex-col rounded-lg border border-border bg-background transition-colors focus-within:border-ring">
+      <div
+        className={cn(
+          "relative rounded-lg border border-border bg-background transition-colors focus-within:border-ring",
+          box.frame,
+        )}
+      >
         {mentions.list}
         <label htmlFor={inputId} className="sr-only">
           {label}
         </label>
         {edit === null ? null : (
           <div
-            className="flex items-center gap-2 px-3 pt-2 text-ui-xs text-muted-foreground"
+            className="col-span-2 flex items-center gap-2 px-3 pt-2 text-ui-xs text-muted-foreground"
             data-testid={`${testId}-editing`}
           >
             <span className="min-w-0 flex-1">
@@ -298,7 +334,7 @@ export function BotMessageComposer(props: {
           placeholder={placeholder}
           disabled={send.isPending}
           maxLength={MESSAGE_MAX}
-          className="max-h-60 min-h-10"
+          className={cn("min-h-10", box.input)}
           data-testid={`${testId}-input`}
           aria-autocomplete="list"
           aria-controls={mentions.listOpen ? mentionListId : undefined}
@@ -317,7 +353,9 @@ export function BotMessageComposer(props: {
           }}
           onKeyDown={onKeyDown}
         />
-        <div className="flex items-center justify-end gap-2 px-2 pb-1.5">
+        <div
+          className={cn("flex items-center justify-end gap-2 px-2", box.send)}
+        >
           <Button
             type="submit"
             size="icon-sm"

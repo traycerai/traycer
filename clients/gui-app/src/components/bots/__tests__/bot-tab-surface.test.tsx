@@ -16,6 +16,14 @@
  */
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { setPhoneLayoutOnly } from "@/lib/mobile-app";
+import { KEYBOARD_FOCUS_OWNER_PROPS } from "@/hooks/ui/use-keyboard-focus-layout";
+import {
+  holdScreenLandscape,
+  IPHONE_17,
+  lowerNativeKeyboard,
+  raiseNativeKeyboard,
+  restoreKeyboardEnvironment,
+} from "../../../../__tests__/short-keyboard-viewport-harness";
 import {
   installShellForm,
   SHELL_WIDTH_COLUMN_256,
@@ -510,6 +518,16 @@ vi.mock("@/components/bots/bot-channel-view", () => ({
         }
       />
       {props.setupHistory}
+      {/* The two boxes' places in the real view: the channel's own, and one
+          inside the thread panel, which the header tells apart by its marker. */}
+      <div {...KEYBOARD_FOCUS_OWNER_PROPS}>
+        <textarea aria-label="Channel box" />
+      </div>
+      <section data-bot-thread-panel="">
+        <div {...KEYBOARD_FOCUS_OWNER_PROPS}>
+          <textarea aria-label="Thread box" />
+        </div>
+      </section>
     </div>
   ),
 }));
@@ -3898,5 +3916,59 @@ describe("<BotTabSurface /> stream error", () => {
     render(surface());
 
     expect(screen.getByTestId("bot-tab-connecting")).toBeTruthy();
+  });
+});
+
+describe("<BotTabSurface /> header on a short viewport under the keyboard", () => {
+  beforeEach(() => {
+    setPhoneLayoutOnly(true);
+    holdScreenLandscape();
+    raiseNativeKeyboard(IPHONE_17);
+  });
+
+  afterEach(() => {
+    setPhoneLayoutOnly(false);
+    restoreKeyboardEnvironment();
+  });
+
+  function hiddenAway(element: HTMLElement): boolean {
+    return element.closest("[hidden]") !== null;
+  }
+
+  it("keeps the name and gives the tabs up while the channel's box has the focus, and restores with the keyboard down", () => {
+    render(surface());
+    act(() => screen.getByLabelText("Channel box").focus());
+
+    expect(hiddenAway(screen.getByTestId("bot-tab-title"))).toBe(false);
+    expect(hiddenAway(screen.getByTestId("bot-tab-view-messages"))).toBe(true);
+    expect(hiddenAway(screen.getByTestId("bot-tab-view-activity"))).toBe(true);
+
+    lowerNativeKeyboard();
+    expect(hiddenAway(screen.getByTestId("bot-tab-view-messages"))).toBe(false);
+  });
+
+  it("keeps the whole header while a thread outside this surface has the focus", () => {
+    render(
+      <>
+        {surface()}
+        <section data-bot-thread-panel="">
+          <div {...KEYBOARD_FOCUS_OWNER_PROPS}>
+            <textarea aria-label="Another pane's thread box" />
+          </div>
+        </section>
+      </>,
+    );
+    act(() => screen.getByLabelText("Another pane's thread box").focus());
+
+    expect(hiddenAway(screen.getByTestId("bot-tab-title"))).toBe(false);
+    expect(hiddenAway(screen.getByTestId("bot-tab-view-messages"))).toBe(false);
+  });
+
+  it("gives the whole header up while a thread's box has the focus", () => {
+    render(surface());
+    act(() => screen.getByLabelText("Thread box").focus());
+
+    expect(hiddenAway(screen.getByTestId("bot-tab-title"))).toBe(true);
+    expect(hiddenAway(screen.getByTestId("bot-tab-view-messages"))).toBe(true);
   });
 });

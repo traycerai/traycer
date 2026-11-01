@@ -29,6 +29,8 @@ import {
   type MessengerFactory,
 } from "@/lib/host";
 import { UNRESOLVED_BOT_MEMBERS } from "@/lib/bots/bot-member-names";
+import { setPhoneLayoutOnly } from "@/lib/mobile-app";
+import { setNativeKeyboardState } from "@/lib/native-keyboard";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { WindowsBridgeContext } from "@/providers/windows-bridge-context";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -55,6 +57,9 @@ import "@/index.css";
  * `?thread=` for the state it is in: `listed` (default, three replies, the
  * session connecting), `zero` (listed with no reply) or `posted` (not listed
  * yet). `?tasks=none` leaves the Tasks section out.
+ *
+ * The focus-layout spec adds `?keyboard=<px>`: the installed app with the
+ * keyboard up, written the way its native bridge writes it.
  */
 const HOST_ID = "bot-thread-tasks-bound-host";
 const THREAD_ID = "thread-1";
@@ -152,6 +157,16 @@ const thread: BotThreadSummary = {
 function noop(): void {}
 
 const params = new URLSearchParams(window.location.search);
+
+const keyboardInset = params.get("keyboard");
+if (keyboardInset !== null) {
+  setPhoneLayoutOnly(true);
+  document.documentElement.style.setProperty(
+    "--keyboard-inset",
+    `${keyboardInset}px`,
+  );
+  setNativeKeyboardState({ open: true, transitioning: false });
+}
 
 /** A post taller than any pane the spec makes, ending in a marker. */
 const LONG_POST = `${Array.from(

@@ -30,6 +30,8 @@ import {
   type ChatComposerSubmitInput,
 } from "@/components/chat/composer/chat-composer";
 import { ChatComposerBannerPortalProvider } from "@/components/chat/composer/chat-composer-banner-portal";
+import { ComposerFocusLayoutContext } from "@/components/home/composer/composer-focus-layout-context";
+import { useKeyboardFocusLayoutWithin } from "@/hooks/ui/use-keyboard-focus-layout";
 import { SubagentContinueAsChatButton } from "@/components/chat/segments/subagent-continue-as-chat-button";
 import type { SubagentDockView } from "@/components/chat/segments/subagent-open-as-chat";
 import { Badge } from "@/components/ui/badge";
@@ -538,7 +540,12 @@ export function ChatLowerInteractionSurfaces(
   });
   const activeAgentsVisible =
     stopControls.self !== null && activeAgents.length > 0;
-  const dockShown = props.subagentView === null;
+  // With the keyboard up on a short viewport and this chat's composer focused,
+  // only its one row stays over the transcript, so the dock gives its height up
+  // and nothing around the row spaces itself against it.
+  const [lowerSurfaces, setLowerSurfaces] = useState<HTMLElement | null>(null);
+  const focusLayout = useKeyboardFocusLayoutWithin(lowerSurfaces);
+  const dockShown = dockDrawn(props.subagentView, focusLayout);
   const chrome = useChatDockChrome({
     snapshotLoaded: props.runtime.snapshotLoaded,
     chatId: props.chatId,
@@ -568,7 +575,8 @@ export function ChatLowerInteractionSurfaces(
   } = lowerSurfaceFrame({
     folded: chrome.folded,
     // The dock is not drawn under a subagent's conversation (see
-    // `subagentView`), so none of its members shapes the spacing below it.
+    // `subagentView`) or on the focus layout, so none of its members shapes the
+    // spacing below it.
     openSection: dockShown ? chrome.openSection : null,
     todoHasContent:
       dockShown && props.runtime.snapshotLoaded && props.todo !== null,
@@ -652,108 +660,120 @@ export function ChatLowerInteractionSurfaces(
 
   return (
     <ChatComposerBannerPortalProvider>
-      <ChatDockCompactStripProvider value={chrome.strip}>
-        <RuntimeGatedApprovalSurface
-          model={composerModel}
-          layout={approvalLayout}
-        />
-        {/* Hidden, never unmounted, under a subagent's conversation (see
-            `subagentView`): the dock holds state a remount would lose - which
+      <div ref={setLowerSurfaces} className="contents">
+        <ChatDockCompactStripProvider value={chrome.strip}>
+          <RuntimeGatedApprovalSurface
+            model={composerModel}
+            layout={approvalLayout}
+          />
+          {/* Hidden, never unmounted, under a subagent's conversation (see
+            `subagentView`) and on the focus layout: the dock holds state a remount would lose - which
             panel is open, where it is scrolled, the Background rows' own
             memory of their parents. */}
-        <div
-          className={cn(dockShown ? "contents" : "hidden")}
-          inert={!dockShown}
-        >
-          <ChatLowerDock
-            snapshotLoaded={props.runtime.snapshotLoaded}
-            epicId={props.epicId}
-            chatId={props.chatId}
-            viewTabId={props.viewTabId}
-            selfAgent={stopControls.self}
-            activeAgents={activeAgents}
-            todo={props.todo}
-            restore={props.restoreContext}
-            queue={props.queue.value}
-            folded={chrome.folded}
-            dockOrder={chrome.dockOrder}
-            hotspots={chrome.hotspots}
-            backgroundItems={props.backgroundItems}
-            runningManagedCommandCount={runningManagedCommandCount}
-            heldManagedCommandCount={heldManagedCommandCount}
-            portForwardCount={portForwardCount}
-            backgroundStopPendingTaskIds={props.backgroundStopPendingTaskIds}
-            backgroundStopAllPending={props.backgroundStopAllPending}
-            backgroundSessionStopPending={props.backgroundSessionStopPending}
-            activeTurnStatus={props.turn.activeTurnStatus}
-            canAct={props.access.canAct}
-            queueResumeRequested={props.queue.resumeRequested}
-            queueKeepPausedRequested={props.queue.keepPausedRequested}
-            readOnly={props.access.isViewer}
-            editingQueueItemId={props.queue.editingItemId}
-            topSpacing={pinnedStackTopSpacing}
-            scrollRegionMaxHeightClass={scrollRegionMaxHeightClass}
-            onQueuePause={props.queue.onPause}
-            onQueueResume={props.queue.onResume}
-            onQueueEdit={props.queue.onEdit}
-            onQueueCancel={props.queue.onCancel}
-            onQueueAbortSteer={props.queue.onAbortSteer}
-            onQueueReorder={props.queue.onReorder}
-            onQueueSteerNow={props.queue.onSteerNow}
-            onBackgroundItemClick={props.onBackgroundItemClick}
-            onBackgroundItemStop={props.queue.onStopBackgroundItem}
-            onBackgroundItemsStopAll={props.queue.onStopAllBackgroundItems}
-            onBackgroundSessionStop={props.queue.onStopBackgroundSession}
+          <div
+            className={cn(dockShown ? "contents" : "hidden")}
+            inert={!dockShown}
+          >
+            <ChatLowerDock
+              snapshotLoaded={props.runtime.snapshotLoaded}
+              epicId={props.epicId}
+              chatId={props.chatId}
+              viewTabId={props.viewTabId}
+              selfAgent={stopControls.self}
+              activeAgents={activeAgents}
+              todo={props.todo}
+              restore={props.restoreContext}
+              queue={props.queue.value}
+              folded={chrome.folded}
+              dockOrder={chrome.dockOrder}
+              hotspots={chrome.hotspots}
+              backgroundItems={props.backgroundItems}
+              runningManagedCommandCount={runningManagedCommandCount}
+              heldManagedCommandCount={heldManagedCommandCount}
+              portForwardCount={portForwardCount}
+              backgroundStopPendingTaskIds={props.backgroundStopPendingTaskIds}
+              backgroundStopAllPending={props.backgroundStopAllPending}
+              backgroundSessionStopPending={props.backgroundSessionStopPending}
+              activeTurnStatus={props.turn.activeTurnStatus}
+              canAct={props.access.canAct}
+              queueResumeRequested={props.queue.resumeRequested}
+              queueKeepPausedRequested={props.queue.keepPausedRequested}
+              readOnly={props.access.isViewer}
+              editingQueueItemId={props.queue.editingItemId}
+              topSpacing={pinnedStackTopSpacing}
+              scrollRegionMaxHeightClass={scrollRegionMaxHeightClass}
+              onQueuePause={props.queue.onPause}
+              onQueueResume={props.queue.onResume}
+              onQueueEdit={props.queue.onEdit}
+              onQueueCancel={props.queue.onCancel}
+              onQueueAbortSteer={props.queue.onAbortSteer}
+              onQueueReorder={props.queue.onReorder}
+              onQueueSteerNow={props.queue.onSteerNow}
+              onBackgroundItemClick={props.onBackgroundItemClick}
+              onBackgroundItemStop={props.queue.onStopBackgroundItem}
+              onBackgroundItemsStopAll={props.queue.onStopAllBackgroundItems}
+              onBackgroundSessionStop={props.queue.onStopBackgroundSession}
+            />
+          </div>
+          <ComposerFocusLayoutContext value={focusLayout}>
+            <ChatComposerRegion model={composerModel} layout={composerLayout} />
+          </ComposerFocusLayoutContext>
+          <StopChildrenDialog
+            open={stopConfirmation?.kind === "children"}
+            onOpenChange={(open) => {
+              if (!open) setStopConfirmation(null);
+            }}
+            agents={activeAgents}
+            onStopAll={() => {
+              setStopConfirmation(null);
+              if (!isConfirmedTurnCurrent()) return;
+              agentStop.mutate({
+                epicId: props.epicId,
+                agentId: props.chatId,
+                cascade: true,
+              });
+            }}
+            onStopOnlyThis={() => {
+              setStopConfirmation(null);
+              if (!isConfirmedTurnCurrent()) return;
+              turnOnStopTurn();
+            }}
           />
-        </div>
-        <ChatComposerRegion model={composerModel} layout={composerLayout} />
-        <StopChildrenDialog
-          open={stopConfirmation?.kind === "children"}
-          onOpenChange={(open) => {
-            if (!open) setStopConfirmation(null);
-          }}
-          agents={activeAgents}
-          onStopAll={() => {
-            setStopConfirmation(null);
-            if (!isConfirmedTurnCurrent()) return;
-            agentStop.mutate({
-              epicId: props.epicId,
-              agentId: props.chatId,
-              cascade: true,
-            });
-          }}
-          onStopOnlyThis={() => {
-            setStopConfirmation(null);
-            if (!isConfirmedTurnCurrent()) return;
-            turnOnStopTurn();
-          }}
-        />
-        <ConfirmDestructiveDialog
-          open={stopConfirmation?.kind === "turn"}
-          onOpenChange={(open) => {
-            if (!open) setStopConfirmation(null);
-          }}
-          title="Stop this turn?"
-          description="The agent will stop working on its current response."
-          cascadeSummary={null}
-          actionLabel="Stop"
-          blockedReason={null}
-          isPending={false}
-          onConfirm={() => {
-            setStopConfirmation(null);
-            if (stopConfirmation === null || !isConfirmedTurnCurrent()) return;
-            // A sub-agent can start while this dialog is open. Go back through
-            // the same gate, retaining the turn this confirmation belongs to.
-            if (activeAgents.length > 0) {
-              setStopConfirmation({ ...stopConfirmation, kind: "children" });
-              return;
-            }
-            turnOnStopTurn();
-          }}
-        />
-      </ChatDockCompactStripProvider>
+          <ConfirmDestructiveDialog
+            open={stopConfirmation?.kind === "turn"}
+            onOpenChange={(open) => {
+              if (!open) setStopConfirmation(null);
+            }}
+            title="Stop this turn?"
+            description="The agent will stop working on its current response."
+            cascadeSummary={null}
+            actionLabel="Stop"
+            blockedReason={null}
+            isPending={false}
+            onConfirm={() => {
+              setStopConfirmation(null);
+              if (stopConfirmation === null || !isConfirmedTurnCurrent())
+                return;
+              // A sub-agent can start while this dialog is open. Go back through
+              // the same gate, retaining the turn this confirmation belongs to.
+              if (activeAgents.length > 0) {
+                setStopConfirmation({ ...stopConfirmation, kind: "children" });
+                return;
+              }
+              turnOnStopTurn();
+            }}
+          />
+        </ChatDockCompactStripProvider>
+      </div>
     </ChatComposerBannerPortalProvider>
   );
+}
+
+function dockDrawn(
+  subagentView: SubagentDockView | null,
+  focusLayout: boolean,
+): boolean {
+  return subagentView === null && !focusLayout;
 }
 
 function approvalSurfaceVisible(
@@ -948,6 +968,7 @@ function LiveChatComposer(props: {
   const { model } = props;
   const tabHostId = useTabHostId();
   const sandboxSays = useContext(ChatSandboxLineContext);
+  const focusLayout = useContext(ComposerFocusLayoutContext);
   const restingMessage =
     model.access.restingSandbox !== undefined &&
     model.queue.editingItem === null;
@@ -998,11 +1019,13 @@ function LiveChatComposer(props: {
       // for as long as it is true rather than behind a tooltip.
       topSlot={
         <>
-          <TeamEpicPersonalLine
-            epicId={model.composer.currentEpicId}
-            tabHostId={tabHostId}
-            onContinue={model.composer.onContinueOnTeamHosts}
-          />
+          <div hidden={focusLayout} className="contents">
+            <TeamEpicPersonalLine
+              epicId={model.composer.currentEpicId}
+              tabHostId={tabHostId}
+              onContinue={model.composer.onContinueOnTeamHosts}
+            />
+          </div>
           <ChatComposerDeliveryStatus hideReconnecting={sandboxSays} />
           <ChatComposerOpencodeLineHeld />
         </>

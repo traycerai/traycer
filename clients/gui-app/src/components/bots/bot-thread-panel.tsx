@@ -63,6 +63,7 @@ import type {
   BotTurnOpen,
 } from "@/stores/bots/bot-open-thread-store";
 import type { BotSentPost } from "@/stores/bots/bot-open-thread-store";
+import { useKeyboardFocusLayoutWithin } from "@/hooks/ui/use-keyboard-focus-layout";
 import { cn } from "@/lib/utils";
 
 /**
@@ -179,14 +180,25 @@ export function BotThreadPanel(props: {
     props.thread.kind === "posted" ||
     (viewerUserId !== null &&
       (thread?.anchor?.senderUserId ?? null) === viewerUserId);
+  // With the keyboard up on a short viewport the panel is its identity row, the
+  // scroll region and the box's one row: what it hides stays mounted.
+  const [panel, setPanel] = useState<HTMLElement | null>(null);
+  const focusLayout = useKeyboardFocusLayoutWithin(panel);
   return (
     <section
+      ref={setPanel}
       aria-label="Thread"
       data-testid="bot-thread-panel"
+      data-bot-thread-panel=""
       data-thread-id={threadId ?? undefined}
       className="flex min-h-0 flex-1 flex-col"
     >
-      <header className="flex shrink-0 items-center gap-2 border-b border-border/60 px-4 py-2.5">
+      <header
+        className={cn(
+          "flex shrink-0 items-center gap-2 border-b border-border/60 px-4",
+          focusLayout ? "min-h-11" : "py-2.5",
+        )}
+      >
         <div className="flex min-w-0 flex-1 items-baseline gap-2">
           <h2 className="text-ui-md font-semibold text-foreground">Thread</h2>
           <span
@@ -198,41 +210,43 @@ export function BotThreadPanel(props: {
             <span className="truncate">{botTitle}</span>
           </span>
         </div>
-        {threadId === null ? null : (
-          <BotThreadFollowControl
-            botId={props.botId}
-            hostId={props.hostId}
-            threadId={threadId}
-            postedByViewer={postedByViewer}
-          />
-        )}
-        {thread === null ? null : (
+        <div hidden={focusLayout} className="contents">
+          {threadId === null ? null : (
+            <BotThreadFollowControl
+              botId={props.botId}
+              hostId={props.hostId}
+              threadId={threadId}
+              postedByViewer={postedByViewer}
+            />
+          )}
+          {thread === null ? null : (
+            <Button
+              type="button"
+              variant="ghost"
+              size="xs"
+              data-testid="bot-thread-session"
+              onClick={() =>
+                onOpenSession({
+                  chatId: thread.sessionChatId,
+                  threadId: thread.threadId,
+                  messageId: null,
+                  sendPostId: null,
+                })
+              }
+            >
+              Thread session
+            </Button>
+          )}
           <Button
             type="button"
             variant="ghost"
             size="xs"
-            data-testid="bot-thread-session"
-            onClick={() =>
-              onOpenSession({
-                chatId: thread.sessionChatId,
-                threadId: thread.threadId,
-                messageId: null,
-                sendPostId: null,
-              })
-            }
+            data-testid="bot-thread-activity"
+            onClick={onOpenActivity}
           >
-            Thread session
+            Activity
           </Button>
-        )}
-        <Button
-          type="button"
-          variant="ghost"
-          size="xs"
-          data-testid="bot-thread-activity"
-          onClick={onOpenActivity}
-        >
-          Activity
-        </Button>
+        </div>
         <Button
           type="button"
           variant="ghost"
@@ -245,13 +259,15 @@ export function BotThreadPanel(props: {
         </Button>
       </header>
       {threadId === null ? null : (
-        <ThreadTasks
-          botId={props.botId}
-          hostId={props.hostId}
-          threadId={threadId}
-          thread={thread}
-          tasks={props.tasks}
-        />
+        <div hidden={focusLayout} className="contents">
+          <ThreadTasks
+            botId={props.botId}
+            hostId={props.hostId}
+            threadId={threadId}
+            thread={thread}
+            tasks={props.tasks}
+          />
+        </div>
       )}
       <ThreadPanelBody {...props} sendFailure={sendFailure} />
     </section>
