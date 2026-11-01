@@ -3953,6 +3953,23 @@ describe("<BotTabSurface /> header on a short viewport under the keyboard", () =
     expect(hiddenAway(screen.getByTestId("bot-tab-view-messages"))).toBe(false);
   });
 
+  it("keeps the whole header while a thread outside this surface has the focus", () => {
+    render(
+      <>
+        {surface()}
+        <section data-bot-thread-panel="">
+          <div {...KEYBOARD_FOCUS_OWNER_PROPS}>
+            <textarea aria-label="Another pane's thread box" />
+          </div>
+        </section>
+      </>,
+    );
+    act(() => screen.getByLabelText("Another pane's thread box").focus());
+
+    expect(hiddenAway(screen.getByTestId("bot-tab-title"))).toBe(false);
+    expect(hiddenAway(screen.getByTestId("bot-tab-view-messages"))).toBe(false);
+  });
+
   it("gives the whole header up while a thread's box has the focus", () => {
     render(surface());
     act(() => screen.getByLabelText("Thread box").focus());

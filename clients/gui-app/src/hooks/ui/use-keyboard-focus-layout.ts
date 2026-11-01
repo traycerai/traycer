@@ -135,8 +135,17 @@ export function useKeyboardFocusOwner(): Element | null {
   return short ? owner : null;
 }
 
+/** That element, only when it sits inside `scope`. */
+export function useKeyboardFocusOwnerWithin(
+  scope: Element | null,
+): Element | null {
+  const owner = useKeyboardFocusOwner();
+  return owner !== null && scope !== null && scope.contains(owner)
+    ? owner
+    : null;
+}
+
 /** Whether the focus layout is serving something inside `scope`. */
 export function useKeyboardFocusLayoutWithin(scope: Element | null): boolean {
-  const owner = useKeyboardFocusOwner();
-  return owner !== null && scope !== null && scope.contains(owner);
+  return useKeyboardFocusOwnerWithin(scope) !== null;
 }

@@ -22,7 +22,7 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { TalkControl } from "@/components/layout/voice/talk-control";
 import { useInstalledAppTileForm } from "@/hooks/ui/use-installed-app-level2-form";
-import { useKeyboardFocusOwner } from "@/hooks/ui/use-keyboard-focus-layout";
+import { useKeyboardFocusOwnerWithin } from "@/hooks/ui/use-keyboard-focus-layout";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import type {
   MobileLevel2Form,
@@ -1702,8 +1702,10 @@ function BotChannelHeader(props: {
   const phoneLayout = useIsMobileViewport();
   // With the keyboard up on a short viewport: the name row alone while the
   // channel's box has the focus, and nothing while a thread's does, since the
-  // thread's own header is the identity row then.
-  const focusOwner = useKeyboardFocusOwner();
+  // thread's own header is the identity row then. Only a box under this header
+  // counts, so a parent's children are the header and the panes it heads.
+  const [header, setHeader] = useState<HTMLElement | null>(null);
+  const focusOwner = useKeyboardFocusOwnerWithin(header?.parentElement ?? null);
   const threadHasFocus =
     focusOwner !== null &&
     focusOwner.closest("[data-bot-thread-panel]") !== null;
@@ -1716,6 +1718,7 @@ function BotChannelHeader(props: {
   }, [settingsOpen]);
   return (
     <header
+      ref={setHeader}
       hidden={threadHasFocus}
       className={cn(
         "flex shrink-0 flex-col gap-1 px-4",
