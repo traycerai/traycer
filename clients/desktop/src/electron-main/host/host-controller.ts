@@ -4922,15 +4922,15 @@ export class HostController {
   ): Promise<void> {
     const concluded = concludedOutcome(outcome, hostRunning);
     if (concluded === null) return;
-    if (concluded !== "complete") {
-      const recorded = await readHostUpdateLastAttempt(this.layout.rootDir);
-      if (!awaitsConclusion(recorded, targetVersion)) return;
-    }
+    const recorded = await readHostUpdateLastAttempt(this.layout.rootDir);
+    const waiting = waitingApply(recorded, targetVersion);
+    if (concluded !== "complete" && waiting === null) return;
     await writeHostUpdateLastAttempt(
       this.layout.rootDir,
       {
         command: "host apply",
-        initiator: "desktop",
+        // Who asked for the apply, which a person's own `host apply` may be.
+        initiator: waiting?.initiator ?? "desktop",
         targetVersion,
         attemptId: null,
         code: null,
@@ -5280,7 +5280,7 @@ export class HostController {
             );
             if (
               installed !== null &&
-              awaitsConclusion(recorded, installed.version)
+              waitingApply(recorded, installed.version) !== null
             ) {
               await this.concludeLastAttempt(
                 installed.version,
@@ -6887,15 +6887,15 @@ function concludedOutcome(
 }
 
 /** A `host apply` of this version whose bytes have not been seen running. */
-function awaitsConclusion(
+function waitingApply(
   recorded: HostUpdateLastAttempt | null,
   targetVersion: string,
-): boolean {
-  return (
-    recorded?.command === "host apply" &&
+): HostUpdateLastAttempt | null {
+  return recorded?.command === "host apply" &&
     recorded.targetVersion === targetVersion &&
     (recorded.outcome === "applied" || recorded.outcome === "parked")
-  );
+    ? recorded
+    : null;
 }
 
 function describeError(err: unknown): string {
