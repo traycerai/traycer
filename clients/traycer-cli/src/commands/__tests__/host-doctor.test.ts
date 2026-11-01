@@ -319,6 +319,36 @@ describe("hostDoctorCommand asks the running host", () => {
     expect(result.exitCode).toBe(1);
   });
 
+  it("reports this process's PATH check, not the host's", async () => {
+    const shell = {
+      ...issue("CLI_SHADOWED_ON_PATH", "warning"),
+      message: "this shell's PATH",
+    };
+    mocks.runDoctorMock.mockResolvedValue(
+      doctorResult({ issues: [issue("HOST_NOT_INSTALLED", "error"), shell] }),
+    );
+    const hostOnly = hostIssue("HOST_CREDENTIAL_SAVE_FAILED", "warning");
+    const hostsPath = hostIssue("CLI_SHADOWED_ON_PATH", "warning");
+    mocks.callHostRpcMock.mockResolvedValue(hostOk([hostOnly, hostsPath]));
+
+    const result = await hostDoctorCommand(makeCtx());
+
+    expect(result.data).toMatchObject({ issues: [hostOnly, shell] });
+    expect(result.human).toContain("this shell's PATH");
+    expect(result.human).not.toContain(hostsPath.message);
+  });
+
+  it("drops the host's PATH check when this process's PATH is clean", async () => {
+    const hostOnly = hostIssue("HOST_CREDENTIAL_SAVE_FAILED", "warning");
+    const hostsPath = hostIssue("CLI_SHADOWED_ON_PATH", "warning");
+    mocks.callHostRpcMock.mockResolvedValue(hostOk([hostOnly, hostsPath]));
+
+    const result = await hostDoctorCommand(makeCtx());
+
+    expect(result.data).toMatchObject({ issues: [hostOnly] });
+    expect(result.human).not.toContain("CLI_SHADOWED_ON_PATH");
+  });
+
   it("lets the host's warning-only list replace a local error", async () => {
     mocks.runDoctorMock.mockResolvedValue(
       doctorResult({ issues: [issue("HOST_NOT_INSTALLED", "error")] }),
