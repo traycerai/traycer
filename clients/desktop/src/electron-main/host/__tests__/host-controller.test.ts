@@ -4335,6 +4335,98 @@ describe("platform matrix", () => {
       },
     );
 
+    it("a person's apply keeps its initiator through a busy activation to the one that completes it", async () => {
+      vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+      const controller = stagedUpdate();
+      appliesTheBytes();
+      vi.mocked(probeHostActivityBusy).mockResolvedValue(true);
+      await controller.applyStaged("manual", false);
+      await writeHostUpdateLastAttempt(
+        getHostFsLayout("production").rootDir,
+        {
+          command: "host apply",
+          initiator: "manual",
+          outcome: "applied",
+          targetVersion: "1.8.0",
+          attemptId: null,
+          code: null,
+          message: null,
+        },
+        { info: vi.fn() },
+      );
+
+      await controller.activateInstalled(false, false);
+      expect(await lastAttempt()).toMatchObject({
+        initiator: "manual",
+        outcome: "parked",
+      });
+
+      vi.mocked(probeHostActivityBusy).mockResolvedValue(false);
+      vi.mocked(waitForHostReady).mockResolvedValue({
+        ready: true,
+        version: "1.8.0",
+        pid: process.pid,
+        startedAt: "2026-01-01T00:00:00.000Z",
+        reason: "ready",
+      });
+      await controller.activateInstalled(false, false);
+      expect(await lastAttempt()).toMatchObject({
+        initiator: "manual",
+        outcome: "complete",
+      });
+    });
+
+    it("a complete over a record that was not waiting names the app", async () => {
+      vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+      const controller = stagedUpdate();
+      await writeHostUpdateLastAttempt(
+        getHostFsLayout("production").rootDir,
+        {
+          command: "host apply",
+          initiator: "manual",
+          outcome: "failed",
+          targetVersion: "1.8.0",
+          attemptId: null,
+          code: null,
+          message: null,
+        },
+        { info: vi.fn() },
+      );
+      vi.mocked(streamBundledTraycerCliJson).mockImplementation(
+        async (opts) => {
+          if (opts.args.includes("apply")) {
+            writeInstallRecord("production", {
+              version: "1.8.0",
+              runtimeVersion: "1.8.0",
+            });
+            return {
+              data: {
+                outcome: "applied",
+                record: { version: "1.8.0", runtimeVersion: "1.8.0" },
+                runningActivated: false,
+                installGeneration: null,
+              },
+            };
+          }
+          return { data: {} };
+        },
+      );
+      vi.mocked(waitForHostReady).mockResolvedValue({
+        ready: true,
+        version: "1.8.0",
+        pid: process.pid,
+        startedAt: "2026-01-01T00:00:00.000Z",
+        reason: "ready",
+      });
+
+      await controller.applyStaged("manual", false);
+
+      expect(await lastAttempt()).toMatchObject({
+        initiator: "desktop",
+        outcome: "complete",
+      });
+    });
+
     it("a later activation that also fails ends the waiting apply failed", async () => {
       vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
       const controller = stagedUpdate();

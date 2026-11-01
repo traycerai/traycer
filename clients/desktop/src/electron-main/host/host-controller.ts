@@ -4923,7 +4923,7 @@ export class HostController {
     const concluded = concludedOutcome(outcome, hostRunning);
     if (concluded === null) return;
     const recorded = await readHostUpdateLastAttempt(this.layout.rootDir);
-    const waiting = awaitsConclusion(recorded, targetVersion) ? recorded : null;
+    const waiting = waitingApply(recorded, targetVersion);
     if (concluded !== "complete" && waiting === null) return;
     await writeHostUpdateLastAttempt(
       this.layout.rootDir,
@@ -5280,7 +5280,7 @@ export class HostController {
             );
             if (
               installed !== null &&
-              awaitsConclusion(recorded, installed.version)
+              waitingApply(recorded, installed.version) !== null
             ) {
               await this.concludeLastAttempt(
                 installed.version,
@@ -6887,15 +6887,15 @@ function concludedOutcome(
 }
 
 /** A `host apply` of this version whose bytes have not been seen running. */
-function awaitsConclusion(
+function waitingApply(
   recorded: HostUpdateLastAttempt | null,
   targetVersion: string,
-): recorded is HostUpdateLastAttempt {
-  return (
-    recorded?.command === "host apply" &&
+): HostUpdateLastAttempt | null {
+  return recorded?.command === "host apply" &&
     recorded.targetVersion === targetVersion &&
     (recorded.outcome === "applied" || recorded.outcome === "parked")
-  );
+    ? recorded
+    : null;
 }
 
 function describeError(err: unknown): string {
