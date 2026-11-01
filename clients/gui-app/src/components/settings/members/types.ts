@@ -74,7 +74,12 @@ export interface PlanUnlinkPreviewModel {
   readonly whatKeepsWorking: string;
 }
 
-/** A dialog's preview: still being read, read, or refused. */
+/**
+ * A dialog's preview: still being read, read, or refused. What `loading` means
+ * depends on when its dialog opens. The remove confirm opens before its read,
+ * so there it is a first load; the demotion confirm opens only once the read
+ * has answered, so there it is only ever a Retry already in flight.
+ */
 export type PreviewState<Preview> =
   | { readonly status: "loading" }
   | { readonly status: "ready"; readonly preview: Preview }
@@ -89,11 +94,30 @@ export type MembersReadState = "loading" | "failed" | "unsupported" | "ready";
 /**
  * The drawer subject. Members rows use kind `member` and key = userId;
  * the legacy notice / page uses kind `member` and an empty key.
+ *
+ * `roleLabel` is the role the row holds, which the drawer cannot read for
+ * itself: a member's role is committed inside the item's value and
+ * `environment.history` ships no values. `null` for the page's own subject,
+ * which names no member.
  */
 export interface MembersDetailsSubject {
   readonly environmentId: string;
   readonly kind: "member";
   readonly key: string;
+  readonly roleLabel: string | null;
+}
+
+/**
+ * A role change picked in a row whose check has not answered yet. Its confirm
+ * is deferred until the answer lands, so for that while the row is the only
+ * place the pick exists: `running` names the role being checked, since the
+ * select still shows the one the member holds, and `cancelLabel` names what
+ * the control beside it drops.
+ */
+export interface PendingRoleCheck {
+  readonly userId: string;
+  readonly running: string;
+  readonly cancelLabel: string;
 }
 
 export function isTeamRole(value: string): value is TeamRole {

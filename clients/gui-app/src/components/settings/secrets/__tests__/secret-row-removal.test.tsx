@@ -628,11 +628,61 @@ describe("a removed secret the list has moved to removed", () => {
     expect(screen.queryByTestId("secrets-empty")).toBeNull();
   });
 
-  it("shows the empty state to a viewer who cannot see a pending removal row", async () => {
+  // NEW-154-24: a viewer saw an empty page while a removal was still under
+  // way. They see the name and its state, and none of the editor's row.
+  it("shows a viewer a removal still under way, without the editor's row", async () => {
     mountRowAs(removedHost(removal("cleanup_requested")), "viewer");
 
-    expect(await screen.findByTestId("secrets-empty")).toBeTruthy();
+    expect(await screen.findByText("STRIPE_KEY")).toBeTruthy();
+    expect(screen.getByText("Removing · no longer usable")).toBeTruthy();
     expect(screen.queryByTestId("removed-secret-row")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    expect(screen.queryByTestId("secrets-empty")).toBeNull();
+    expect(screen.queryByText("No secrets.")).toBeNull();
+  });
+
+  // The ordinary way a secret is rotated by hand: remove it, set it again
+  // under the same name. For the span before the old copy is destroyed the
+  // list carries both, and a viewer's list is the one place they are rendered
+  // side by side — so the two have to be two rows, not one name twice.
+  it("gives a viewer both rows when a removed secret's name is set again", async () => {
+    const keyWarnings: unknown[][] = [];
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation((...args: unknown[]) => {
+        keyWarnings.push(args);
+      });
+    try {
+      mountRowAs(
+        freshHost({
+          secrets: [{ ...secretFixture(), secretId: "sec-2" }],
+          removed: [
+            {
+              id: "sec-1",
+              name: "STRIPE_KEY",
+              removal: removal("cleanup_requested"),
+            },
+          ],
+          removal: removal("cleanup_requested"),
+        }),
+        "viewer",
+      );
+
+      expect(
+        await screen.findByText("Removing · no longer usable"),
+      ).toBeTruthy();
+      expect(screen.getByText("Set")).toBeTruthy();
+      expect(screen.getAllByText("STRIPE_KEY")).toHaveLength(2);
+      expect(
+        keyWarnings.filter((args) =>
+          args.some(
+            (arg) => typeof arg === "string" && arg.includes("same key"),
+          ),
+        ),
+      ).toEqual([]);
+    } finally {
+      consoleError.mockRestore();
+    }
   });
 
   it("counts the hosts still holding a copy", async () => {

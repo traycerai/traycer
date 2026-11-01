@@ -40,6 +40,14 @@ const reads = vi.hoisted(
     }>;
     acceptOutcome: "accepted" | "not_found";
     accepted: string[];
+    /** The account's configurations, as `environment.list` answers them. */
+    environments: Array<{
+      environmentId: string;
+      ownerKind: "user" | "organization";
+      label: string;
+    }>;
+    /** How many times anything asked for the invitations read. */
+    invitationReads: number;
   } => ({
     statuses: new Map<string, unknown>(),
     versions: new Map<string, unknown>(),
@@ -47,6 +55,8 @@ const reads = vi.hoisted(
     invitations: [],
     acceptOutcome: "accepted",
     accepted: [],
+    environments: [],
+    invitationReads: 0,
   }),
 );
 // The hosts running Personal come from one hook (its list is tested on its
@@ -66,9 +76,11 @@ vi.mock("@/hooks/host/use-host-negotiated-method-version", () => ({
 // The invited rows and the Accept behind Review are the host's; this suite
 // answers them directly.
 vi.mock("@/hooks/environment/use-environment-invitations", () => ({
-  useEnvironmentInvitationsQuery: () => ({
-    data: { invitations: reads.invitations },
-  }),
+  useEnvironmentInvitationsQuery: () => {
+    reads.invitationReads += 1;
+    return { data: { invitations: reads.invitations } };
+  },
+  useEnvironmentInvitationsEntryHash: () => "invitations-entry",
   useEnvironmentInvitationAcceptMutation: () => ({
     isPending: false,
     mutate: (
@@ -84,15 +96,32 @@ vi.mock("@/hooks/environment/use-environment-invitations", () => ({
 }));
 // The team rows read the account's configuration list; this suite has none.
 vi.mock("@/hooks/bots/use-environment-list-query", () => ({
-  useEnvironmentListQuery: () => ({ data: { environments: [] } }),
+  useEnvironmentListQuery: () => ({
+    data: { environments: reads.environments },
+  }),
 }));
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useHostClient: () => null,
 }));
-const navigation = vi.hoisted(() => ({ navigate: vi.fn() }));
-vi.mock("@/lib/settings-navigation", () => ({
-  navigateToSettingsSection: navigation.navigate,
+/**
+ * The press arm of the surface move, asserted as the command it issues rather
+ * than as a call to the helper that issues it: the removal gate deliberately
+ * takes a non-activating path, so which path a PRESS takes is a claim worth
+ * holding here. `navigateToSettingsSection` is real and reaches this bridge.
+ */
+const surface = vi.hoisted(() => ({
+  openSettings: vi.fn(),
+  setSection: vi.fn(),
+}));
+vi.mock("@/stores/tabs/system-tab-modal-bridge", () => ({
+  getSystemTabModalApi: () => ({
+    isOverlayActive: () => false,
+    openSettings: surface.openSettings,
+    setSection: surface.setSection,
+    active: null,
+    close: () => undefined,
+  }),
 }));
 
 const V11 = { major: 1, minor: 1 } as const;
@@ -194,8 +223,11 @@ beforeEach(() => {
   reads.invitations = [];
   reads.acceptOutcome = "accepted";
   reads.accepted = [];
+  reads.environments = [];
+  reads.invitationReads = 0;
   runningOn([], {});
-  navigation.navigate.mockClear();
+  surface.openSettings.mockClear();
+  surface.setSection.mockClear();
   useSettingsEnvironmentPickStore.setState({
     pick: null,
     defaultPick: PERSONAL_PICK,
@@ -287,7 +319,9 @@ describe("<EnvironmentPicker />", () => {
 
     fireEvent.click(screen.getByTestId("environment-picker-finish-old"));
     expect(useSettingsHostScopeStore.getState().scopedHostId).toBe("old");
-    expect(navigation.navigate).toHaveBeenCalledWith("host");
+    expect(surface.openSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ section: "host" }),
+    );
   });
 
   it("greys a host that cannot show its settings, and gives an applied 1.0 host no row", () => {
@@ -440,7 +474,9 @@ describe("<EnvironmentPicker />", () => {
     );
     fireEvent.click(line);
     expect(useSettingsHostScopeStore.getState().scopedHostId).toBe("mac");
-    expect(navigation.navigate).toHaveBeenCalledWith("host");
+    expect(surface.openSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ section: "host" }),
+    );
     cleanup();
 
     useSettingsHostScopeStore.setState({ scopedHostId: null });
@@ -460,6 +496,9 @@ describe("<EnvironmentPicker />", () => {
     expect(useSettingsHostScopeStore.getState().scopedHostId).toBe("other");
   });
 
+  // A press takes the surface with it, which is the whole point of pressing:
+  // the person is looking at Settings and asked for this. That is the opposite
+  // of what the removal gate does, so it is asserted as the command.
   it("picking a row that hides the open page leaves it for Providers", () => {
     answer("old", awaiting, V11);
     renderPicker("mac");
@@ -473,7 +512,52 @@ describe("<EnvironmentPicker />", () => {
       hostId: "old",
       hostName: "Old laptop",
     });
-    expect(navigation.navigate).toHaveBeenCalledWith("providers");
+    expect(surface.openSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ section: "providers" }),
+    );
+  });
+
+  // The invitations read is account-wide. The only thing that needs it before
+  // the dropdown opens is the trigger with a pick no membership can name, so
+  // a trigger naming a team the person is in must not ask for it: otherwise
+  // every Settings visit carries that request, for everyone, invited or not.
+  it("asks for no invitations while the membership list names the pick", () => {
+    reads.environments = [
+      { environmentId: "env-a", ownerKind: "organization", label: "Acme" },
+    ];
+    useSettingsEnvironmentPickStore.setState({
+      pick: { kind: "team", environmentId: "env-a" },
+    });
+    answer("mac", running, V11);
+    renderPicker("mac");
+
+    expect(
+      screen.getByTestId("environment-picker-trigger").textContent,
+    ).toContain("Acme");
+    expect(reads.invitationReads).toBe(0);
+  });
+
+  // And where no membership can name it — the pick the person was removed
+  // from and invited back to — the invitation still names it, which is the
+  // whole reason that read is reachable from here.
+  it("names a team only an invitation can name", () => {
+    reads.invitations = [
+      {
+        environmentId: "env-beta",
+        teamName: "Beta",
+        role: "editor",
+        paidPlan: true,
+      },
+    ];
+    useSettingsEnvironmentPickStore.setState({
+      pick: { kind: "team", environmentId: "env-beta" },
+    });
+    answer("mac", running, V11);
+    renderPicker("mac");
+
+    expect(
+      screen.getByTestId("environment-picker-trigger").textContent,
+    ).toContain("Beta");
   });
 
   describe("an invited team", () => {

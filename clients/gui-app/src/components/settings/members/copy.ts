@@ -72,8 +72,13 @@ export function removePreviewFailed(memberName: string): string {
   return `Couldn't load what removing ${memberName} interrupts, so Remove stays off until it loads.`;
 }
 
+/**
+ * The plan check says what a demotion interrupts. It does not decide whether
+ * the demotion can be made, so this line says what failed and claims nothing
+ * about the button beside it.
+ */
 export function demotionPreviewFailed(memberName: string): string {
-  return `Couldn't load what changing ${memberName}'s role interrupts, so Change role stays off until it loads.`;
+  return `Couldn't load what changing ${memberName}'s role interrupts.`;
 }
 
 export function membersHeaderLine(teamName: string): string {
@@ -108,26 +113,32 @@ export function pendingInviteTitle(): string {
   return "Invited";
 }
 
-export function gainedEditingSentence(names: readonly string[]): string {
-  if (names.length === 0) return "Nobody gained editing.";
-  if (names.length === 1) {
-    return `One person gained editing: ${names[0]}.`;
-  }
-  return `${String(names.length)} people gained editing: ${joinNames(names)}.`;
-}
-
+/**
+ * The one-time notice over the Members list. It says what the update did and
+ * whether anyone's access actually changed: with nobody named, every member
+ * could already edit, and the notice says so rather than leaving the reader to
+ * read "Nobody gained editing." as a loss.
+ */
 export function legacyRoleNotice(
   teamName: string,
   names: readonly string[],
 ): string {
-  return `With this update every existing member can edit ${teamName}'s settings. ${gainedEditingSentence(names)} Set a role beside each name.`;
+  const lead = `With this update every existing member can edit ${teamName}'s settings`;
+  const tail = "Set a role beside each name to change that.";
+  if (names.length === 0) return `${lead}, as each one already could. ${tail}`;
+  return `${lead}. ${joinNames(names)} can now edit. ${tail}`;
+}
+
+/** The standing line on a configuration a viewer may read and not change. */
+export function viewerCanSeeLine(teamName: string): string {
+  return `You can see ${teamName}'s settings but not change them.`;
 }
 
 export function roleGrantPrefix(role: TeamRole, teamName: string): string {
   const editor = `You can change ${teamName}'s settings; every change reaches every ${teamName} sandbox.`;
   switch (role) {
     case "viewer":
-      return `You can see ${teamName}'s settings but not change them.`;
+      return viewerCanSeeLine(teamName);
     case "editor":
       return editor;
     case "admin":
@@ -375,12 +386,96 @@ export function removeConfirmLabel(firstName: string): string {
   return `Remove ${firstName}`;
 }
 
-export function demotionLossLine(memberName: string): string {
-  return `${memberName} can no longer invite, change roles or edit the approval policy.`;
+/** The removal's own tell, by the name the row and the preview use. */
+export const MEMBER_REMOVED_TOAST = "Member removed";
+
+export function memberRemovedToastBody(
+  memberName: string,
+  teamName: string,
+): string {
+  return `${memberName} is no longer in ${teamName}.`;
 }
 
-export function demotionTitle(memberName: string, teamName: string): string {
-  return `Change ${memberName}'s role in ${teamName}`;
+/** How much a role may change: a lower one is a demotion, and confirms. */
+const ROLE_RANK: Readonly<Record<TeamRole, number>> = {
+  viewer: 0,
+  editor: 1,
+  admin: 2,
+};
+
+/** The role's own word, as the confirm's question and button say it. */
+const ROLE_WORDS: Readonly<Record<TeamRole, string>> = {
+  admin: "admin",
+  editor: "editor",
+  viewer: "viewer",
+};
+
+/**
+ * Whether changing `from` to `to` takes something away. Only a demotion asks:
+ * a promotion gives, so it is written straight through.
+ */
+export function isRoleDemotion(from: TeamRole, to: TeamRole): boolean {
+  return ROLE_RANK[to] < ROLE_RANK[from];
+}
+
+export function demotionLossLine(memberName: string): string {
+  return `${memberName} can no longer invite people, change roles or edit the approval policy.`;
+}
+
+export function demotionViewerLossLine(
+  memberName: string,
+  teamName: string,
+): string {
+  return `${memberName} can no longer change ${teamName}'s settings. They can still see them.`;
+}
+
+export function demotionConfirmTitle(
+  memberName: string,
+  teamName: string,
+  nextRole: TeamRole,
+): string {
+  return `Change ${memberName}'s role in ${teamName} to ${ROLE_WORDS[nextRole]}?`;
+}
+
+/**
+ * What the demotion takes away: the admin powers, the editing, or both when
+ * an admin goes straight to viewer.
+ */
+export function demotionConfirmBody(
+  memberName: string,
+  teamName: string,
+  currentRole: TeamRole,
+  nextRole: TeamRole,
+): string {
+  const lines: string[] = [];
+  if (currentRole === "admin" && nextRole !== "admin") {
+    lines.push(demotionLossLine(memberName));
+  }
+  if (ROLE_RANK[nextRole] < ROLE_RANK.editor) {
+    lines.push(demotionViewerLossLine(memberName, teamName));
+  }
+  return lines.join(" ");
+}
+
+export function demotionConfirmLabel(nextRole: TeamRole): string {
+  return `Change to ${ROLE_WORDS[nextRole]}`;
+}
+
+/**
+ * The row's tell while a picked demotion's check is still out. It names the
+ * role, because the select still shows the role the person HAS: without it the
+ * row says only that something is being checked.
+ */
+export function roleCheckRunning(nextRole: TeamRole): string {
+  return `Checking ${ROLE_WORDS[nextRole]}…`;
+}
+
+/** The row's way out of that wait, named for what it drops. */
+export function cancelRoleChangeAriaLabel(
+  memberName: string,
+  nextRole: TeamRole,
+): string {
+  return `Cancel the change to ${ROLE_WORDS[nextRole]} for ${memberName}`;
 }
 
 export function planUnlinkTitle(planLabel: string, teamName: string): string {
@@ -485,8 +580,6 @@ export function inviteSentBody(
 export const DONE_LABEL = "Done";
 
 export const CANCEL_LABEL = "Cancel";
-
-export const CHANGE_ROLE_LABEL = "Change role";
 
 export function memberRoleAriaLabel(name: string): string {
   return `Role for ${name}`;
