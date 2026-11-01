@@ -330,7 +330,7 @@ export function SecretRow(props: {
   // The computers running Personal hold a copy of Personal's; a team's
   // computers and every sandbox use the value without one.
   const onPersonal = useEnvironmentPick().kind === "personal";
-  const running = useHostsRunningPersonal();
+  const running = useHostsRunningPersonal(true);
   const holders = onPersonal
     ? running.hosts.filter((host) => host.kind === "personal")
     : [];

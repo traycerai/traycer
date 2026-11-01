@@ -202,6 +202,11 @@ Application. It uses the first settings leader digit; General uses the second.
 The start page offers the checklist through a persistent, dismissible toast once
 the first-task guide ends. Dismissing it is remembered locally across reloads;
 the checklist remains available in Settings. Completed checklists hide the toast.
+While this computer's settings are not in Personal, the move's own invitation
+stands there instead, under an id of its own
+(`MOVE_INVITATION_TOAST_ID`): "This computer's settings aren't in Personal." ·
+Show me what moves · Not now. Only the person takes it down - a status that
+stops naming a move does not, and the reminder never stands in its place.
 
 The Home tab draws the checklist itself, above its task sections
 (`home-focus/home-getting-started-section.tsx`), from the same cards
@@ -6239,7 +6244,8 @@ set-state-in-effect` forbids the effect form, and an effect would also
     closes or the host changes.
   - **Access and setup** (`host-overview-access-tab.tsx`, tab id `access`).
     The picked host's own access and setup, read
-    through that host (`environment.status`, re-read every 5 s while open). A
+    through that host (`environment.status`, re-read every 5 s while open, and
+    on the move's own pace while a move into Personal is still running). A
     host without the method shows only "Update this host to use your
     settings."; an unreachable one says its values need a connection. Top to
     bottom, each only while it applies:

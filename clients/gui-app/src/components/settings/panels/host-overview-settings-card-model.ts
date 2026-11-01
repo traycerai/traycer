@@ -4,6 +4,10 @@ import {
   localRowCohort,
   type LocalRowVerb,
 } from "@/components/settings/environment/local-row-cohort";
+import {
+  moveIsPastTheAccept,
+  MOVE_STOPPED_REASONS,
+} from "@/lib/environment/move-in-progress";
 
 /**
  * Where this computer's settings stand against Personal, as the Overview's
@@ -35,12 +39,6 @@ export type HostSettingsCardState =
   | { readonly kind: "moved"; readonly acceptedAt: number }
   | { readonly kind: "other" };
 
-/** Why a move stopped, by `setup.state`: it ran out of time, or it failed. */
-const MOVE_STOPPED_REASONS: Readonly<Partial<Record<string, string>>> = {
-  stalled: "it timed out",
-  failed: "it couldn't finish",
-};
-
 /** `Moving stopped: it timed out. 3 items left.` */
 export function moveStoppedText(reason: string, left: number): string {
   return `Moving stopped: ${reason}. ${left === 1 ? "1 item" : `${String(left)} items`} left.`;
@@ -50,11 +48,7 @@ export function hostSettingsCardState(
   status: EnvironmentStatusResponseV11,
 ): HostSettingsCardState {
   const setup = status.setup;
-  if (
-    setup !== null &&
-    setup.stage === "moving_settings" &&
-    setup.state !== "awaiting_consent"
-  ) {
+  if (setup !== null && moveIsPastTheAccept(status)) {
     const items = status.items.filter((item) => isReportedItemKind(item.kind));
     const applied = items.filter((item) => item.status === "applied").length;
     const total = items.length + status.pendingUploads.length;
@@ -65,7 +59,7 @@ export function hostSettingsCardState(
     return { kind: "moving", applied, total };
   }
   const cohort = localRowCohort(status);
-  if (cohort !== null && cohort.kind === "local") {
+  if (cohort.kind === "local") {
     return { kind: "local", verb: cohort.verb ?? "move_to_personal" };
   }
   return status.consent === null

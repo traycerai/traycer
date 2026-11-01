@@ -13,6 +13,7 @@ function facts(overrides: Partial<GettingStartedFacts>): GettingStartedFacts {
     hasSecondPersonalComputer: false,
     sandboxStaged: false,
     creditsAboveZero: false,
+    thisComputersMove: "unknown",
     ...overrides,
   };
 }
@@ -46,6 +47,33 @@ describe("gettingStartedGuideIsComplete", () => {
       "install",
       "credits",
     ]);
+  });
+
+  it("invites the move while this computer's settings are not in Personal", () => {
+    const notMoved = facts({
+      ...ALL_BUT_CREDITS,
+      thisComputersMove: "not_moved",
+    });
+    expect(gettingStartedVisibleCards(notMoved).map((card) => card.id)).toEqual(
+      ["provider", "task", "secret", "move", "install"],
+    );
+    expect(gettingStartedGuideIsComplete(notMoved)).toBe(false);
+  });
+
+  it("checks the move off once this computer's settings are in Personal", () => {
+    const moved = facts({ ...ALL_BUT_CREDITS, thisComputersMove: "moved" });
+    expect(gettingStartedVisibleCards(moved).map((card) => card.id)).toContain(
+      "move",
+    );
+    expect(gettingStartedGuideIsComplete(moved)).toBe(true);
+  });
+
+  it("leaves the move out where this computer cannot answer it", () => {
+    // No local host, a host without the method, or a read that failed: a card
+    // nobody can finish would hold the checklist open for ever.
+    expect(
+      gettingStartedVisibleCards(ALL_BUT_CREDITS).map((card) => card.id),
+    ).not.toContain("move");
   });
 
   it("is complete once a staged sandbox's credits balance is above zero and every other step is done", () => {
