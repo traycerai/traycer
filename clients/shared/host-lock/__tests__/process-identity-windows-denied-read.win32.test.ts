@@ -224,6 +224,30 @@ function isoFromUtcMicros(utcMicros: number, seventhDigit: string): string {
   return `${isoPrefix}.${sixDigits}${seventhDigit}Z`;
 }
 
+const DEFINITE_MATCH_ATTEMPTS = 3;
+
+/**
+ * The first DEFINITE answer `matchLiveProcessStartIdentity` gives. `"unknown"`
+ * is the reader's honest "no comparison was made": one of its PowerShell reads
+ * (the exact read, then the WMI fallback, each with a 5s timeout) missed its
+ * budget, as a loaded runner can make it do (CI once: 23.5s for a run that
+ * normally takes 3-7s). Every production caller maps that to
+ * `"indeterminate"` and asks again on its next poll, so this asks again too.
+ * What the test pins is that a definite answer arrives and is the right one.
+ */
+function firstDefiniteMatch(
+  pid: number,
+  recordedToken: string,
+): "same" | "different" {
+  for (let attempt = 1; attempt <= DEFINITE_MATCH_ATTEMPTS; attempt += 1) {
+    const match = matchLiveProcessStartIdentity(pid, recordedToken);
+    if (match !== "unknown") return match;
+  }
+  throw new Error(
+    `matchLiveProcessStartIdentity(${String(pid)}) made no comparison in ${String(DEFINITE_MATCH_ATTEMPTS)} attempts`,
+  );
+}
+
 function tokenFromUtcMicros(utcMicros: number, seventhDigit: string): string {
   const token = formatWindowsProcessStartIdentity(
     isoFromUtcMicros(utcMicros, seventhDigit),
@@ -241,11 +265,12 @@ describe.skipIf(process.platform !== "win32")(
     // (clients/shared), so the effective outer budget is vitest's 5_000ms
     // default. Retained CI (cold review, 2026-09-29): 3 successful runs at
     // 3_224/4_123/2_849ms, all under 5_000; the branch-head run timed out at
-    // 5_947ms. 85_000ms below is a conservative first-owned-child-route
-    // ALLOCATION (a sum of configured subprocess timeout ALLOWANCES, not an
-    // observed or expected elapsed time) - its headroom over the measured
-    // runs is by design, not evidence that the route normally takes anywhere
-    // near 85s.
+    // 5_947ms; another (2026-10-02) took 23_470ms, its second comparison
+    // answering "unknown" (see firstDefiniteMatch). 125_000ms below is a
+    // conservative first-owned-child-route ALLOCATION (a sum of configured
+    // subprocess timeout ALLOWANCES, not an observed or expected elapsed
+    // time) - its headroom over the measured runs is by design, not evidence
+    // that the route normally takes anywhere near 125s.
     //
     // This budget is sized for ONE specific normal passing route - the
     // OWNED-CHILD route, where `spawnDeniedReadChild()` succeeds on its
@@ -269,17 +294,19 @@ describe.skipIf(process.platform !== "win32")(
     // Owned-child route, sequential:
     //  - seDebugHeld(): execFileSync timeout 15_000.
     //  - spawnDeniedReadChild() (one attempt): execFileSync timeout 30_000.
-    //  - Two matchLiveProcessStartIdentity() calls (production, in
-    //    clients/shared/host-lock/process-identity.ts): each first tries
-    //    processStartIdentityReader() (win32: execFileSync powershell,
-    //    timeout 5_000), and - since the DACL-denied pid's exact read never
-    //    succeeds - always falls through to windowsDeniedReadCreationReader()
-    //    (execFileSync powershell, WINDOWS_START_IDENTITY_TIMEOUT_MS=5_000);
-    //    2 * (5_000 + 5_000) = 20_000.
+    //  - Two comparisons through firstDefiniteMatch(), each up to
+    //    DEFINITE_MATCH_ATTEMPTS = 3 matchLiveProcessStartIdentity() calls
+    //    (production, in clients/shared/host-lock/process-identity.ts). Each
+    //    call first tries processStartIdentityReader() (win32: execFileSync
+    //    powershell, timeout 5_000), and - since the DACL-denied pid's exact
+    //    read never succeeds - always falls through to
+    //    windowsDeniedReadCreationReader() (execFileSync powershell,
+    //    WINDOWS_START_IDENTITY_TIMEOUT_MS=5_000); 2 * 3 * (5_000 + 5_000) =
+    //    60_000. A retry is spent only when a call made no comparison.
     //  - One readProcessStartIdentity() call: processStartIdentityReader()
     //    again, win32 execFileSync timeout 5_000.
-    //  Total: 15_000 + 30_000 + 20_000 + 5_000 = 70_000ms.
-    //  +15_000ms margin for process spawn/teardown overhead => 85_000ms. This
+    //  Total: 15_000 + 30_000 + 60_000 + 5_000 = 110_000ms.
+    //  +15_000ms margin for process spawn/teardown overhead => 125_000ms. This
     //  margin is headroom for the owned-child route's own variance (spawn
     //  jitter, WMI query latency under load), not a claim that it also
     //  covers a fallback/retry pass.
@@ -291,19 +318,15 @@ describe.skipIf(process.platform !== "win32")(
       const candidate = await requireDeniedReadCandidate();
 
       const recordedToken = tokenFromUtcMicros(candidate.creationMicros, "5");
-      expect(matchLiveProcessStartIdentity(candidate.pid, recordedToken)).toBe(
-        "same",
-      );
+      expect(firstDefiniteMatch(candidate.pid, recordedToken)).toBe("same");
 
       const movedToken = tokenFromUtcMicros(candidate.creationMicros + 2, "5");
-      expect(matchLiveProcessStartIdentity(candidate.pid, movedToken)).toBe(
-        "different",
-      );
+      expect(firstDefiniteMatch(candidate.pid, movedToken)).toBe("different");
 
       // The RECORDING read stays exact-only even now - a denied read must
       // never be recorded as a token, or a WMI creation time would compare
       // as `different` against every later exact read of the same process.
       expect(readProcessStartIdentity(candidate.pid)).toBeNull();
-    }, 85_000);
+    }, 125_000);
   },
 );
