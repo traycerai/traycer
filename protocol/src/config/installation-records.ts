@@ -240,6 +240,23 @@ export const cliPendingUpgradeSchema = lazySchema(() =>
     stagedBinaryPath: z.string(),
     stagedAt: z.string(),
     reason: z.enum(["binary-locked", "awaiting-service-restart"]),
+    // Whether the person asked for THIS version by name with
+    // `--allow-downgrade`. Carried on the record because the publish happens
+    // in a later process: staging defers the swap when the live binary is
+    // locked, and by the time `host restart` publishes it, the only thing
+    // left of the request is this file. Without the bit, a consented
+    // downgrade and a pre-floor accidental one (an older `cli upgrade` that
+    // staged the feed's stable over an installed prerelease) are the same
+    // two versions in the same two fields, and no publisher can honour one
+    // while refusing the other.
+    //
+    // Defaulted rather than required, which covers both writers that omit
+    // it: an older CLI that predates the field, and desktop's reconcile,
+    // which stages only when its bundled build is NEWER and so has no
+    // downgrade to consent to. FALSE is the safe direction - an unconsented
+    // backwards publish is the defect, and a consented one the person can
+    // always ask for again.
+    allowDowngrade: z.boolean().default(false),
   }),
 );
 export type CliPendingUpgrade = z.infer<typeof cliPendingUpgradeSchema>;
