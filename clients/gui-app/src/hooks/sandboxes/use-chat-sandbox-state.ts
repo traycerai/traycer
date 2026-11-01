@@ -2,6 +2,7 @@ import type { HostSandboxState } from "@traycer/protocol/host/host-status";
 import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { isRemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
+import { hostLastReport } from "@/components/settings/host-scope/host-last-report";
 import {
   useTaskSandboxHost,
   type TaskSandboxHost,
@@ -13,13 +14,18 @@ import {
   useSandboxConfigurations,
 } from "@/hooks/sandboxes/use-sandbox-configurations";
 import type { ChatSandboxState } from "@/lib/sandboxes/chat-sandbox-state";
+import { useSandboxWakeWait } from "@/hooks/sandboxes/use-sandbox-wake-wait";
 import { useAuthStore } from "@/stores/auth/auth-store";
+
+/** A chat's reach to its host is `reachable`; the list shows the wake. */
+const CHAT_WAKE_SURFACE = { hostAnswered: null, wakeSent: false };
 
 /**
  * Sandbox state precedes generic transport reachability on every chat copy:
  * the task's end record, then a listed row's state, then a sandbox something
  * names. A host nothing names as a sandbox is not one: the surface takes its
- * own path.
+ * own path. An awake row whose host has not first reported is still moving;
+ * only a host that reported and then stopped reads as unreachable.
  */
 export function useChatSandboxState(
   epicId: string,
@@ -31,10 +37,12 @@ export function useChatSandboxState(
   const configurations = useSandboxConfigurations();
   const entry = useHostDirectoryEntry(hostId);
   const viewerId = useAuthStore((state) => state.profile?.userId ?? null);
+  const sandbox =
+    list.data?.sandboxes.find((row) => row.hostId === hostId) ?? null;
+  const wakeWait = useSandboxWakeWait(sandbox, CHAT_WAKE_SURFACE);
   if (hostId === null) return { kind: "none" };
   if (task.kind === "ended") return { kind: "destroyed", ended: task.ended };
-  const sandbox = list.data?.sandboxes.find((row) => row.hostId === hostId);
-  if (sandbox === undefined) return unlistedHostState(task, entry);
+  if (sandbox === null) return unlistedHostState(task, entry);
   if (
     sandbox.state === "suspended" ||
     sandbox.state === "stopped" ||
@@ -56,15 +64,17 @@ export function useChatSandboxState(
     };
   }
   if (sandbox.state === "awake") {
-    return reachable
-      ? { kind: "none" }
-      : {
-          kind: "unreachable",
-          sandbox,
-          lastSeenAt: lastSeenAt(entry),
-        };
+    if (reachable) return { kind: "none" };
+    return wakeWait !== null
+      ? { kind: "moving", sandbox, state: wakeWait }
+      : { kind: "unreachable", sandbox, lastContactAt: lastContactAt(sandbox) };
   }
   return unsettledSandboxState(sandbox, sandbox.state);
+}
+
+function lastContactAt(sandbox: SandboxSummary): number | null {
+  const report = hostLastReport(null, sandbox);
+  return report.kind === "reported" ? report.at : null;
 }
 
 /** A listed sandbox neither resting nor awake. */
@@ -105,14 +115,4 @@ export function unlistedHostState(
     entry.sandbox !== null
     ? { kind: "pending", name: entry.label }
     : { kind: "none" };
-}
-
-function lastSeenAt(entry: HostDirectoryEntry | null): number | null {
-  const seen =
-    entry !== null && isRemoteHostDirectoryEntry(entry)
-      ? entry.remoteStatus.lastSeenAt
-      : null;
-  if (seen === null) return null;
-  const at = Date.parse(seen);
-  return Number.isFinite(at) ? at : null;
 }

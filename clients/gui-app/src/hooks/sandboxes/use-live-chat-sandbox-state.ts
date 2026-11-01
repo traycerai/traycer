@@ -1,18 +1,25 @@
 import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
 import type { AuthService } from "@/lib/auth/auth-service";
 import { useHostBinding } from "@/lib/host";
 import { useChatServing } from "@/lib/chats/chat-serving-witness";
 import { useChatStreamSyncState } from "@/hooks/chats/use-chat-stream-sync-state";
+import { useExistingChatSessionFatalClose } from "@/lib/registries/chat-session-registry";
 import { useChatSandboxState } from "@/hooks/sandboxes/use-chat-sandbox-state";
+import { useSandboxWakeWait } from "@/hooks/sandboxes/use-sandbox-wake-wait";
 import {
   sandboxListQueryOptions,
   useSandboxList,
 } from "@/hooks/sandboxes/use-sandbox-list-query";
 import { useSandboxControlUnavailableReason } from "@/hooks/sandboxes/use-sandbox-control-unavailable-reason";
 import type { ChatSandboxState } from "@/lib/sandboxes/chat-sandbox-state";
+import type { SandboxWakeWait } from "@/lib/sandboxes/sandbox-wake-wait";
 import { authQueryKeys, sandboxQueryKeys } from "@/lib/query-keys";
 import { useAuthStore } from "@/stores/auth/auth-store";
+
+/** A live tile reads the host through its own stream, not this hook's. */
+const LIVE_WAKE_SURFACE = { hostAnswered: null, wakeSent: false };
 
 interface LifecycleActivity {
   readonly hostId: string;
@@ -122,6 +129,15 @@ export function useLiveChatSandboxState(
     atRest,
   );
 
+  const wakeWait = useSandboxWakeWait(sandbox ?? null, LIVE_WAKE_SURFACE);
+  const opensAfterWake = useOpensAfterWake(
+    { epicId, chatId, hostId },
+    state,
+    wakeWait,
+    stream.status === "open" && stream.hasContent,
+  );
+  const held = wakeHeldState(sandbox, opensAfterWake);
+  if (held !== null) return { state: held, reachable: false };
   if (state.kind === "unreachable" && (atRest || reading)) {
     return {
       state: { kind: "pending", name: state.sandbox.displayName },
@@ -129,6 +145,59 @@ export function useLiveChatSandboxState(
     };
   }
   return { state, reachable };
+}
+
+/**
+ * Whether this tile's sandbox woke and the chat has not opened since. The host
+ * can answer before the chat's stream does, and those moments are the same
+ * wait to the reader, so a tile that missed the move takes it from the wake's
+ * own wait. A chat the host refused ends it, for its own line to say so; a
+ * tile that opens on a host that has reported never waits here.
+ */
+function useOpensAfterWake(
+  chat: {
+    readonly epicId: string;
+    readonly chatId: string;
+    readonly hostId: string;
+  },
+  state: ChatSandboxState,
+  wakeWait: SandboxWakeWait | null,
+  opened: boolean,
+): SandboxWakeWait | null {
+  const fatalClose = useExistingChatSessionFatalClose(
+    chat.epicId,
+    chat.chatId,
+    chat.hostId,
+  );
+  const [waiting, setWaiting] = useState<SandboxWakeWait | null>(null);
+  const awake = state.kind === "none" || state.kind === "unreachable";
+  const held =
+    awake && !opened && fatalClose === null ? (wakeWait ?? waiting) : null;
+  const next = wakeMoveOf(state) ?? held;
+  if (next !== waiting) setWaiting(next);
+  return next;
+}
+
+function wakeHeldState(
+  sandbox: SandboxSummary | undefined,
+  move: SandboxWakeWait | null,
+): ChatSandboxState | null {
+  return move !== null && sandbox?.state === "awake"
+    ? { kind: "moving", sandbox, state: move }
+    : null;
+}
+
+function wakeMoveOf(state: ChatSandboxState): SandboxWakeWait | null {
+  if (state.kind !== "moving") return null;
+  switch (state.state) {
+    case "resuming":
+      return "resuming";
+    case "creating":
+    case "starting":
+      return "starting";
+    default:
+      return null;
+  }
 }
 
 /** Reconcile each lifecycle edge with a read sent after it, under its account. */

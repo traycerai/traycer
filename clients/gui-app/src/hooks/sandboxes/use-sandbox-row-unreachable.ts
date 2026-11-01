@@ -20,11 +20,13 @@ interface ReachabilityObservation {
  * before calling it unreachable, keeping the lifecycle line during the read.
  * One read per outage; refetch joins the list's existing in-flight request,
  * including across directory flaps and other rows checking at the same time.
+ * A host that has not first reported since it woke is not missing.
  */
 export function useSandboxRowUnreachable(
   summary: SandboxSummary,
   statusFailed: boolean,
   list: UseQueryResult<SandboxListResponse | null>,
+  awaitingFirstReport: boolean,
 ): boolean {
   const entry = useHostDirectoryEntry(summary.hostId);
   const userId = useAuthStore((s) => s.contextMetadata?.userId ?? null);
@@ -33,6 +35,7 @@ export function useSandboxRowUnreachable(
     summary.state === "awake" &&
     !summary.frozen &&
     summary.guestConfigured !== false &&
+    !awaitingFirstReport &&
     (statusFailed || entry === null || hostUnavailability(entry) === "offline");
   const [observation, setObservation] = useState<ReachabilityObservation>({
     sandboxId: summary.id,

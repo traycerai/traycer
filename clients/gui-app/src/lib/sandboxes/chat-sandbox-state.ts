@@ -24,8 +24,8 @@ export type SandboxMovingState =
  *   the viewer's sandbox list), or an awake sandbox this device reaches.
  * - `resting` - suspended, stopped or frozen. `configuration` is `null` until
  *   the team configuration it bills under resolves.
- * - `moving` - between two states, or destroyed before the task records the
- *   end.
+ * - `moving` - between two states, awake with a host yet to first report, or
+ *   destroyed before the task records the end.
  * - `pending` - a sandbox the task or the directory names, its state not
  *   known here.
  */
@@ -49,8 +49,8 @@ export type ChatSandboxState =
   | {
       readonly kind: "unreachable";
       readonly sandbox: SandboxSummary;
-      /** When the directory last saw it, epoch ms; `null` when it never has. */
-      readonly lastSeenAt: number | null;
+      /** When its host last reported, epoch ms; `null` when it never has. */
+      readonly lastContactAt: number | null;
     };
 
 /**

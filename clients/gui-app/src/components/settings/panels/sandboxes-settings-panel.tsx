@@ -53,7 +53,10 @@ import {
   sandboxSettingsEvidence,
   sandboxSettingsStepsLine,
 } from "@traycer/protocol/host/sandbox-settings";
+import { useSandboxOperation } from "@/hooks/sandboxes/use-sandbox-operation";
 import { useSandboxRowUnreachable } from "@/hooks/sandboxes/use-sandbox-row-unreachable";
+import { useSandboxWakeWait } from "@/hooks/sandboxes/use-sandbox-wake-wait";
+import type { SandboxWakeWait } from "@/lib/sandboxes/sandbox-wake-wait";
 import { useOpenLink } from "@/lib/links/open-link";
 import { useSampledNow } from "@/lib/relative-time";
 import {
@@ -918,6 +921,28 @@ function UnstartedAutomationsRow(props: {
   );
 }
 
+/** A wake this row sent waits from the send: the list may not show it yet. */
+function useSandboxRowWakeWait(
+  summary: SandboxSummary,
+  hostAnswered: boolean,
+): SandboxWakeWait | null {
+  const operation = useSandboxOperation(summary.id);
+  return useSandboxWakeWait(summary, {
+    hostAnswered,
+    wakeSent:
+      operation?.kind === "pending" &&
+      (operation.verb === "resume" || operation.verb === "start"),
+  });
+}
+
+const SANDBOX_WAKE_VERB = { resuming: "resume", starting: "start" } as const;
+
+function sandboxWakeVerb(
+  wait: SandboxWakeWait | null,
+): "resume" | "start" | undefined {
+  return wait === null ? undefined : SANDBOX_WAKE_VERB[wait];
+}
+
 function SandboxListRow(props: {
   readonly summary: SandboxSummary;
   readonly list: UseQueryResult<SandboxListResponse | null>;
@@ -934,13 +959,14 @@ function SandboxListRow(props: {
   const sessions = useSandboxRowSessionReport(summary);
   const wake = useSandboxWakeString(summary);
   const now = useSampledNow();
+  const wakeWait = useSandboxRowWakeWait(summary, sessions.hasReported);
   const unreachable = useSandboxRowUnreachable(
     summary,
     sessions.failed && sessions.report.kind !== "live",
     props.list,
+    wakeWait !== null,
   );
-  const resumePending =
-    sessions.resumePending && !settingsFailed && !unreachable;
+  const wakePending = settingsFailed ? undefined : sandboxWakeVerb(wakeWait);
   const reachability = {
     unreachable,
     lastContactAt: summary.lastActivityAt,
@@ -996,7 +1022,7 @@ function SandboxListRow(props: {
                 wakeString: wake,
                 viewerUserId,
                 reachability,
-                resumePending,
+                wakePending,
                 now,
               })}
             </span>
@@ -1014,7 +1040,7 @@ function SandboxListRow(props: {
               </p>
             </div>
           ) : null}
-          {awake && !unreachable && !resumePending ? (
+          {awake && !unreachable && wakePending === undefined ? (
             <SandboxRowSessions report={sessions.report} now={now} />
           ) : null}
         </div>
