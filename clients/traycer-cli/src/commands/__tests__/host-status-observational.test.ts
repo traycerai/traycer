@@ -344,6 +344,7 @@ describe("hostStatusCommand - observational (CLI-001)", () => {
       lifecycle: lifecycleSnapshot,
       updateAttempt: null,
       lastUpdateAttempt: null,
+      lastDownloadFailure: null,
       updateLockHolder: null,
     });
     expect(mocks.readHostLifecycleSnapshotMock).toHaveBeenCalledWith(
@@ -422,26 +423,63 @@ describe("hostStatusCommand - observational (CLI-001)", () => {
     }
   });
 
-  it("human output says a failed download was a download", async () => {
-    await writeHostUpdateLastAttempt(
-      hostHomeDir("production"),
-      {
-        command: "host download",
-        initiator: "desktop",
-        outcome: "failed",
-        targetVersion: "1.5.2",
-        attemptId: null,
-        code: null,
-        message: null,
-      },
-      { info: vi.fn() },
-    );
-    try {
-      const result = await hostStatusCommand(makeCtx(makeRuntime({})));
-      expect(result.human).toContain("download failed");
-    } finally {
+  describe("the last download", () => {
+    const failure = {
+      command: "host download",
+      initiator: "desktop",
+      outcome: "failed",
+      targetVersion: "1.5.2",
+      attemptId: null,
+      code: null,
+      message: "connection reset",
+    } as const;
+    const update = {
+      ...failure,
+      command: "host update",
+      initiator: "manual",
+      outcome: "complete",
+      message: null,
+    } as const;
+    const write = (attempt: typeof failure | typeof update): Promise<void> =>
+      writeHostUpdateLastAttempt(hostHomeDir("production"), attempt, {
+        info: vi.fn(),
+      });
+
+    afterEach(async () => {
+      vi.useRealTimers();
       await removeHostUpdateLastAttempt(hostHomeDir("production"));
-    }
+    });
+
+    it("shows beside the last update, not over it", async () => {
+      vi.useFakeTimers({
+        now: Date.parse("2026-11-01T07:00:00.000Z"),
+        toFake: ["Date"],
+      });
+      await write(update);
+      vi.setSystemTime(Date.parse("2026-11-01T08:00:00.000Z"));
+      await write(failure);
+
+      const result = await hostStatusCommand(makeCtx(makeRuntime({})));
+
+      expect(result.human).toContain("Last update");
+      expect(result.human).toContain("Last download");
+      expect(result.human).toContain("connection reset");
+    });
+
+    it("goes quiet once an update has run since", async () => {
+      vi.useFakeTimers({
+        now: Date.parse("2026-11-01T07:00:00.000Z"),
+        toFake: ["Date"],
+      });
+      await write(failure);
+      vi.setSystemTime(Date.parse("2026-11-01T08:00:00.000Z"));
+      await write(update);
+
+      const result = await hostStatusCommand(makeCtx(makeRuntime({})));
+
+      expect(result.data).toMatchObject({ lastDownloadFailure: null });
+      expect(result.human).not.toContain("Last download");
+    });
   });
 
   it("human output on the not-running branch includes the 'host ensure' hint", async () => {

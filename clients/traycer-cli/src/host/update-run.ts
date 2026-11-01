@@ -408,6 +408,7 @@ export async function runHostUpdate(
     initiator: trigger,
     targetVersion: args.versionRequest,
     claimedAttemptId: null,
+    concluded: null,
   };
   // FIRST, before anything is read or written: a run dispatched with a nonce
   // this build cannot honour has already lost the correlation its caller is
@@ -540,13 +541,15 @@ export async function runHostUpdate(
           preSwapWarning,
         }),
     );
+    // Ahead of the projection, which can throw over the attempt it concluded.
+    concludeAttempt(attempt, segment);
     const outcome = await projectSegment({
       args,
       settlement,
       selection,
       segment,
     });
-    await recordReturnedAttempt(args, attempt, outcome, segment);
+    await recordReturnedAttempt(args, attempt, outcome);
     return outcome;
   } catch (err) {
     await settlement.refused(refusedAckReason(err));
@@ -625,6 +628,8 @@ interface RunAttemptFacts {
   /** The request, then the plan's target once there is one. */
   targetVersion: string | null;
   claimedAttemptId: string | null;
+  /** The interrupted attempt this run settled, when that is what it did. */
+  concluded: HostUpdateAttemptRecord | null;
 }
 
 function attemptFields(
@@ -677,6 +682,25 @@ function concludedRecordOf(
 }
 
 /**
+ * Take on the attempt a release concluded as the one this run reports. Not one
+ * it closed in passing on the way to `nothing-to-do`: that run's own answer is
+ * that it owed no work, for a target the closed attempt never named.
+ */
+function concludeAttempt(
+  attempt: RunAttemptFacts,
+  segment: ExecutorSegmentOutcome<LegacyHostUpdateResult>,
+): void {
+  if (
+    segment.kind === "released" &&
+    baseDispatchAckReason(segment.reason) === "nothing-to-do"
+  ) {
+    return;
+  }
+  attempt.concluded = concludedRecordOf(segment);
+  attempt.claimedAttemptId ??= attempt.concluded?.attemptId ?? null;
+}
+
+/**
  * What a returned run came to. A park never returns: every park here throws.
  * A release is read from the record it concluded, if it did: its reason is
  * written for the dispatcher, and carries no outcome. `foreignRuntimeVersion`
@@ -706,17 +730,14 @@ async function recordReturnedAttempt(
   args: HostUpdateRunArgs,
   attempt: RunAttemptFacts,
   outcome: HostUpdateRunOutcome,
-  segment: ExecutorSegmentOutcome<LegacyHostUpdateResult>,
 ): Promise<void> {
-  const concluded = concludedRecordOf(segment);
   await writeHostUpdateLastAttempt(
     attempt.home,
     {
       ...attemptFields(attempt),
-      ...returnedOutcome(outcome, concluded),
+      ...returnedOutcome(outcome, attempt.concluded),
       targetVersion: attempt.targetVersion ?? outcome.legacy.version,
-      attemptId: attempt.claimedAttemptId ?? concluded?.attemptId ?? null,
-      message: concluded?.error?.message ?? null,
+      message: attempt.concluded?.error?.message ?? null,
     },
     args.logger,
   );
@@ -1711,7 +1732,7 @@ function requestedVersion(args: HostUpdateRunArgs): string | null {
  * reports as `E_HOST_UPDATE_NOT_NEWER`, so it carries that code and the same
  * remedies - and, like it, is a SUPERSEDED request: `writeFailure` ends the
  * attempt `superseded` and the mirror withdraws the marker, rather than
- * stamping a `failed` no stale rule would ever clear (D-46). Any other
+ * stamping a `failed` over a request nothing went wrong with (D-46). Any other
  * mismatch is `E_UNEXPECTED`, a failure before any disruption that IS stamped
  * over this run's own record, naming the version it announced.
  */
@@ -2002,9 +2023,11 @@ class AttemptRecordWriter {
    * carries NO `error`, and both GUI legs already read it the way this needs -
    * the live projection maps it to `idle`, the record leg drops it, so nothing
    * renders a red "Update to X failed" over a host serving Y. Stamping
-   * `failed` here is exactly what round 14 removed: no stale rule clears a
-   * `failed` whose target is not the running version, so it would stand until
-   * some later update happened to do work.
+   * `failed` here is exactly what round 14 removed: nothing failed, and the
+   * CLI clears a `failed` only when its target is the running version, so it
+   * would stand until some later update happened to do work. A current host
+   * stops reporting it once it runs that target or newer; an older host does
+   * not.
    *
    * Carries the same `held` identity discipline as every other advance - it
    * goes through `barrier` and the segment's own closure - so a segment whose
@@ -2313,9 +2336,10 @@ async function revalidateInstallIdentity(
   // a record another actor moved ABOVE it is that request OUTGROWN, not a
   // corrupted handoff. Thrown rather than written, so `writeFailure` ends the
   // attempt `superseded` with the marker withdrawn - a `failed {install-
-  // changed}` naming 2.0.0 over a host at 3.0.0 is exactly the red banner no
-  // stale rule would ever clear. An implicit request has nothing to be
-  // outgrown and keeps the terminal below.
+  // changed}` naming 2.0.0 over a host at 3.0.0 is exactly the red banner
+  // round 14 removed, and a host older than the at-or-newer rule never clears
+  // it. An implicit request has nothing to be outgrown and keeps the terminal
+  // below.
   if (live !== null) {
     const outgrown = installedVersionMismatch(
       requestedVersion(input.args),
@@ -4479,11 +4503,13 @@ async function classifyActivationAgainst(
  * reported, not swallowed.
  *
  * "Names it" is STRING identity of the record with the target, the grain the
- * version binding uses (`installedVersionMismatch`) and the rule the host's
- * `isStaleUpdateProgress` applies to the same marker: `2.0.0+foo` is another
+ * version binding uses (`installedVersionMismatch`): `2.0.0+foo` is another
  * artifact than `2.0.0+bar`, and a run for one that finds the other running
  * was not delivered - its failure stands, whatever the catalog comparator
- * (build-metadata-blind, and right for ORDERING) would call equal. Another
+ * (build-metadata-blind, and right for ORDERING) would call equal. The host's
+ * `isStaleUpdateProgress` agrees on that pair; it also stops reporting a
+ * `failed` once it runs a strictly newer version, which answers whether the
+ * failure still matters, not whether this run delivered its target. Another
  * actor delivering the same registry artifact writes the same string, so a
  * real match is never defeated. The activation reading above it keeps the
  * comparator for its own question: running-vs-record is a runtime-stamp
@@ -4856,11 +4882,11 @@ function createMarkerMirror(
    * The attempt's target was outgrown by another actor's newer install
    * (D-46). The marker follows main's round-14 rule verbatim: this run's own
    * record is WITHDRAWN by conditional delete and nothing is created. Not a
-   * `failed`: neither stale-failed rule - this file's `clearStaleFailedMarker`
-   * or the host's `isStaleUpdateProgress` - clears a `failed` whose target is
-   * not the running version, so one stamped here would render "Update to X
-   * failed" in red over a host serving Y until some later update happened to
-   * do work.
+   * `failed`: nothing failed, and this file's `clearStaleFailedMarker` clears
+   * only a `failed` naming the running version. The host's
+   * `isStaleUpdateProgress` also stops reporting one once it runs a newer
+   * version, but an older host would render "Update to X failed" in red over a
+   * host serving Y until some later update happened to do work.
    *
    * A LIVE writer's record this run took over is put BACK instead, exactly as
    * a park does and for the same reason: this run did no disruptive work, so
@@ -5166,11 +5192,13 @@ async function markUpdateFailed(
  * `updating` in between, and deleting that would erase the only progress
  * signal for the whole download → swap → restart.
  *
- * "Contradicts" is the rule the host's `isStaleUpdateProgress` applies to the
- * same marker: a `failed` is stale when the version it NAMES is the one now
+ * "Contradicts" is narrower here than in the host's `isStaleUpdateProgress`:
+ * the CLI clears a `failed` only when the version it NAMES is the one now
  * running - STRING identity, the artifact grain (see `targetObservedRunning`).
- * A `failed` for another target is not contradicted by this reading and is
- * left alone; it may still be exactly true. `observedInstalledVersion` is the
+ * The host also stops reporting one once it runs a strictly newer version, and
+ * leaves the file alone. A `failed` for another target is not contradicted by
+ * this reading and is left alone here; it may still be exactly true.
+ * `observedInstalledVersion` is the
  * INSTALL RECORD the `activated` reading named, never the runtime stamp: the
  * host compares against the runtime version it publishes, and a staging host's
  * `staging.<epoch>.<sha>` would never match a catalog target here.

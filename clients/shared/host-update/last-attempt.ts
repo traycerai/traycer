@@ -1,14 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { renameWithWindowsRetry } from "@traycer/protocol/config/credentials-fs";
 import { redactSensitiveText } from "../platform/sensitive-text";
 import type { HostUpdateTrigger } from "./record";
 
 /**
- * What the last `host update`, `host apply` or failed `host download` came to,
- * whoever ran it.
+ * What the last `host update` or `host apply` came to, whoever ran it, and
+ * beside it why the last `host download` did not get through.
  *
  * ## Why this is not `update-attempt.json`
  *
@@ -35,16 +35,21 @@ import type { HostUpdateTrigger } from "./record";
  * error text is quoted here, and error text carries paths with the account name
  * in them, emails and signed URLs. See `recordableText`.
  *
- * A download records only how it failed. It runs in the background whether or
- * not anyone asked, so a clean one would overwrite the update that mattered with
- * "nothing to do"; it clears its own failure instead (`clearHostDownloadFailure`).
+ * A download has a file of its own. It runs in the background whether or not
+ * anyone asked, so in this one it would replace the update that mattered, a
+ * parked one included, and hide the apply Desktop is waiting to conclude. It
+ * records only how it failed, and clears that when one gets through.
  */
 const UPDATE_LAST_ATTEMPT_FILENAME = "update-last-attempt.json";
+const HOST_DOWNLOAD_FAILURE_FILENAME = "update-last-download-failure.json";
+/** The patterns are not linear, so what they scan is bounded first. */
+const MAX_SCANNED_TEXT_LENGTH = 16_000;
 const MAX_RECORDED_TEXT_LENGTH = 2_000;
 
-// Whoever's home it is: a lock or service error can name another account's.
+// Whoever's home it is, in any case: a lock or service error can name another
+// account's, Windows paths are case-insensitive, and JSON doubles a backslash.
 const HOME_DIRECTORY_PATTERN =
-  /((?:[A-Za-z]:)?[\\/](?:Users|home)[\\/])[^\\/"'\n]+/g;
+  /((?:[A-Za-z]:)?[\\/]+(?:Users|homes?)[\\/]+)[^\\/"'\n]+/gi;
 const EMAIL_PATTERN = /[^\s@"'<>/:[\]]+@[^\s@"'<>/]+\.[A-Za-z]{2,}/g;
 
 export type HostUpdateAttemptInitiator = HostUpdateTrigger | "desktop";
@@ -75,15 +80,46 @@ export interface HostUpdateLastAttempt {
   readonly recordedAt: string;
 }
 
-function lastAttemptPath(hostHome: string): string {
-  return join(hostHome, UPDATE_LAST_ATTEMPT_FILENAME);
+function lastAttemptPath(
+  hostHome: string,
+  command: HostUpdateLastAttempt["command"],
+): string {
+  return join(
+    hostHome,
+    command === "host download"
+      ? HOST_DOWNLOAD_FAILURE_FILENAME
+      : UPDATE_LAST_ATTEMPT_FILENAME,
+  );
+}
+
+function escapedForPattern(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * This account's home wherever it is, and its name wherever a path or domain
+ * puts it. An empty or root home names nothing, and `replaceAll("", ...)` would
+ * shred the text before any pattern could read it.
+ */
+function withoutThisAccount(text: string): string {
+  const home = homedir();
+  const name = basename(home);
+  if (home.length <= 1 || name.length <= 1) return text;
+  return text
+    .replace(
+      new RegExp(`${escapedForPattern(home)}(?![^\\\\/\\s"':,)])`, "gi"),
+      "~",
+    )
+    .replace(
+      new RegExp(`(?<![\\w.-])${escapedForPattern(name)}(?![\\w.-])`, "gi"),
+      "[redacted]",
+    );
 }
 
 /** What of an error's text may be kept: no credential and no account name. */
 function recordableText(text: string): string {
-  const home = homedir();
-  const redacted = redactSensitiveText(
-    home === "/" ? text : text.replaceAll(home, "~"),
+  const redacted = withoutThisAccount(
+    redactSensitiveText(text.slice(0, MAX_SCANNED_TEXT_LENGTH)),
   )
     .replace(HOME_DIRECTORY_PATTERN, "$1[redacted]")
     .replace(EMAIL_PATTERN, "[redacted]");
@@ -102,7 +138,7 @@ export async function writeHostUpdateLastAttempt(
     ) => void;
   },
 ): Promise<void> {
-  const path = lastAttemptPath(hostHome);
+  const path = lastAttemptPath(hostHome, attempt.command);
   const temporary = `${path}.${randomUUID()}.tmp`;
   try {
     await mkdir(dirname(path), { recursive: true });
@@ -130,12 +166,12 @@ export async function writeHostUpdateLastAttempt(
   }
 }
 
-export async function readHostUpdateLastAttempt(
-  hostHome: string,
+async function readAttemptAt(
+  path: string,
 ): Promise<HostUpdateLastAttempt | null> {
   let raw: string;
   try {
-    raw = await readFile(lastAttemptPath(hostHome), "utf8");
+    raw = await readFile(path, "utf8");
   } catch {
     return null;
   }
@@ -146,21 +182,35 @@ export async function readHostUpdateLastAttempt(
   }
 }
 
+export function readHostUpdateLastAttempt(
+  hostHome: string,
+): Promise<HostUpdateLastAttempt | null> {
+  return readAttemptAt(lastAttemptPath(hostHome, "host update"));
+}
+
+export function readHostDownloadFailure(
+  hostHome: string,
+): Promise<HostUpdateLastAttempt | null> {
+  return readAttemptAt(lastAttemptPath(hostHome, "host download"));
+}
+
 /** A download that got through: the failure it replaces is no longer true. */
 export async function clearHostDownloadFailure(
   hostHome: string,
 ): Promise<void> {
-  const recorded = await readHostUpdateLastAttempt(hostHome);
-  if (recorded?.command === "host download") {
-    await removeHostUpdateLastAttempt(hostHome);
-  }
+  await rm(lastAttemptPath(hostHome, "host download"), { force: true }).catch(
+    () => undefined,
+  );
 }
 
 /** Removed with the install it describes. */
 export async function removeHostUpdateLastAttempt(
   hostHome: string,
 ): Promise<void> {
-  await rm(lastAttemptPath(hostHome), { force: true }).catch(() => undefined);
+  await rm(lastAttemptPath(hostHome, "host update"), { force: true }).catch(
+    () => undefined,
+  );
+  await clearHostDownloadFailure(hostHome);
 }
 
 function isStringOrNull(value: unknown): value is string | null {

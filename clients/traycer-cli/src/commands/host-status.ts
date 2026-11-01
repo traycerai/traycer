@@ -17,6 +17,7 @@ import {
 } from "../host/lifecycle-snapshot";
 import {
   probeAttemptHolder,
+  readHostDownloadFailure,
   readHostUpdateLastAttempt,
   readUpdateAttemptRecord,
   type HostUpdateAttemptInitiator,
@@ -77,6 +78,8 @@ interface HostStatusOutput {
    * `updateAttempt` above is only ever one still standing.
    */
   readonly lastUpdateAttempt: HostUpdateLastAttempt | null;
+  /** Why the last download did not get through, unless an update has since. */
+  readonly lastDownloadFailure: HostUpdateLastAttempt | null;
   /**
    * Who holds the update lock right now and what they are doing, or `null`
    * when nobody does. A download holds it and writes no record, so this is the
@@ -192,6 +195,9 @@ export const hostStatusCommand: CommandFn = async (
   const updateAttempt = await readNonterminalUpdateAttempt(
     ctx.runtime.environment,
   );
+  const hostHome = hostHomeDir(ctx.runtime.environment);
+  const lastUpdateAttempt = await readHostUpdateLastAttempt(hostHome);
+  const lastDownloadFailure = await readHostDownloadFailure(hostHome);
   const output: HostStatusOutput = {
     running,
     pidMetadata,
@@ -204,9 +210,14 @@ export const hostStatusCommand: CommandFn = async (
       running,
     ),
     updateAttempt: updateAttempt === null ? null : updateAttempt.summary,
-    lastUpdateAttempt: await readHostUpdateLastAttempt(
-      hostHomeDir(ctx.runtime.environment),
-    ),
+    lastUpdateAttempt,
+    lastDownloadFailure:
+      lastDownloadFailure !== null &&
+      lastUpdateAttempt !== null &&
+      Date.parse(lastUpdateAttempt.recordedAt) >=
+        Date.parse(lastDownloadFailure.recordedAt)
+        ? null
+        : lastDownloadFailure,
     updateLockHolder: await readUpdateLockHolder(ctx.runtime.environment),
   };
 
@@ -307,6 +318,12 @@ function renderHumanStatus(
     lines.push(...kvBlock(c, lastUpdateRows(c, output.lastUpdateAttempt)));
   }
 
+  if (output.lastDownloadFailure !== null) {
+    lines.push("");
+    lines.push(c.bold("Last download"));
+    lines.push(...kvBlock(c, lastUpdateRows(c, output.lastDownloadFailure)));
+  }
+
   // Reading a status is no longer what starts a host (CLI-001), so the
   // not-running branch has to SAY what does. Without this the command is
   // observational and unhelpful in the same breath: it reports a stopped host
@@ -361,12 +378,7 @@ function lastUpdateRows(
   attempt: HostUpdateLastAttempt,
 ): readonly (readonly [string, string])[] {
   const rows: (readonly [string, string])[] = [
-    [
-      "Result",
-      attempt.command === "host download"
-        ? `download ${LAST_UPDATE_OUTCOME_LABELS[attempt.outcome]}`
-        : LAST_UPDATE_OUTCOME_LABELS[attempt.outcome],
-    ],
+    ["Result", LAST_UPDATE_OUTCOME_LABELS[attempt.outcome]],
     ["Version", attempt.targetVersion ?? "unknown"],
     ["Started by", LAST_UPDATE_INITIATOR_LABELS[attempt.initiator]],
     ["When", formatStartedAt(attempt.recordedAt, c)],

@@ -1,7 +1,7 @@
-import { rm } from "node:fs/promises";
-import { join } from "node:path";
 import {
+  readHostDownloadFailure,
   readHostUpdateLastAttempt,
+  removeHostUpdateLastAttempt,
   writeHostUpdateLastAttempt,
 } from "@traycer-clients/shared/host-update";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -172,7 +172,7 @@ describe("buildHostDownloadCommand", () => {
 
 describe("the record a download leaves", () => {
   const home = (): string => hostHomeDir("production");
-  const last = () => readHostUpdateLastAttempt(home());
+  const last = () => readHostDownloadFailure(home());
   const busy = cliError({
     code: CLI_ERROR_CODES.CLI_LOCK_BUSY,
     message: "Another Traycer command is updating the host",
@@ -181,7 +181,7 @@ describe("the record a download leaves", () => {
   });
 
   beforeEach(async () => {
-    await rm(join(home(), "update-last-attempt.json"), { force: true });
+    await removeHostUpdateLastAttempt(home());
   });
 
   afterEach(() => {
@@ -256,17 +256,17 @@ describe("the record a download leaves", () => {
     expect(await last()).toBeNull();
   });
 
-  it("one with nothing to do leaves the update before it standing", async () => {
+  it("one that is refused leaves the update it found standing", async () => {
     await writeHostUpdateLastAttempt(
       home(),
-      { ...failure, command: "host apply", outcome: "complete" },
+      { ...failure, command: "host update", outcome: "parked" },
       { info: vi.fn() },
     );
-    mocks.downloadAndStageHostMock.mockResolvedValue(noOp);
-    await download(null);
-    expect(await last()).toMatchObject({
-      command: "host apply",
-      outcome: "complete",
+    mocks.downloadAndStageHostMock.mockRejectedValue(busy);
+    await expect(download(null)).rejects.toBe(busy);
+    expect(await readHostUpdateLastAttempt(home())).toMatchObject({
+      command: "host update",
+      outcome: "parked",
     });
   });
 });

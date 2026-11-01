@@ -171,6 +171,7 @@ export type {
   HostUpdateLastAttempt,
 } from "./last-attempt";
 export {
+  readHostDownloadFailure,
   readHostUpdateLastAttempt,
   removeHostUpdateLastAttempt,
   clearHostDownloadFailure,

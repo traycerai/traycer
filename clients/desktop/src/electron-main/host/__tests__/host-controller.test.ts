@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { SERVICE_REGISTRATION_DISABLED_CODE } from "../host-controller-types";
 import {
   chmodSync,
   existsSync,
@@ -382,6 +383,7 @@ import {
   type AttemptHolderEvidence,
   type HostUpdateAttemptIdentity,
   type LockMetadata,
+  readHostDownloadFailure,
   readHostUpdateLastAttempt,
   writeHostUpdateLastAttempt,
 } from "@traycer-clients/shared/host-update";
@@ -3936,7 +3938,7 @@ describe("platform matrix", () => {
       );
     const lastAttempt = () =>
       readHostUpdateLastAttempt(getHostFsLayout("production").rootDir);
-    const recordApply = (outcome: "applied" | "refused"): Promise<void> =>
+    const recordApply = (outcome: "applied"): Promise<void> =>
       writeHostUpdateLastAttempt(
         getHostFsLayout("production").rootDir,
         {
@@ -4109,7 +4111,19 @@ describe("platform matrix", () => {
       vi.mocked(streamBundledTraycerCliJson).mockImplementation(
         async (opts) => {
           if (opts.args.includes("apply")) {
-            await recordApply("refused");
+            await writeHostUpdateLastAttempt(
+              getHostFsLayout("production").rootDir,
+              {
+                command: "host apply",
+                initiator: "desktop",
+                outcome: "refused",
+                targetVersion: null,
+                attemptId: null,
+                code: "E_HOST_NOT_INSTALLED",
+                message: "not installed",
+              },
+              { info: vi.fn() },
+            );
             throw new TraycerCliError("E_HOST_NOT_INSTALLED", "not installed");
           }
           return { data: {} };
@@ -4118,7 +4132,10 @@ describe("platform matrix", () => {
 
       await controller.applyStaged("manual", false);
 
-      expect(await lastAttempt()).toMatchObject({ outcome: "refused" });
+      expect(await lastAttempt()).toMatchObject({
+        outcome: "refused",
+        code: "E_HOST_NOT_INSTALLED",
+      });
     });
 
     it("an apply whose child died before reporting is recorded here", async () => {
@@ -4152,10 +4169,96 @@ describe("platform matrix", () => {
 
       await controller.stageLatest();
 
-      expect(await lastAttempt()).toMatchObject({
+      expect(
+        await readHostDownloadFailure(getHostFsLayout("production").rootDir),
+      ).toMatchObject({
         command: "host download",
         initiator: "desktop",
         outcome: "failed",
+      });
+    });
+
+    it("a failed download leaves a waiting apply for its activation to conclude", async () => {
+      vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+      const controller = stagedUpdate();
+      appliesTheBytes();
+      vi.mocked(probeHostActivityBusy).mockResolvedValue(true);
+      await controller.applyStaged("manual", false);
+
+      vi.mocked(probeHostActivityBusy).mockResolvedValue(false);
+      vi.mocked(waitForHostReady).mockResolvedValue({
+        ready: true,
+        version: "1.8.0",
+        pid: process.pid,
+        startedAt: "2026-01-01T00:00:00.000Z",
+        reason: "ready",
+      });
+      vi.mocked(streamBundledTraycerCliJson).mockImplementation(
+        async (opts) => {
+          if (opts.args.includes("download")) throw silentDeath();
+          return { data: {} };
+        },
+      );
+      await controller.activateInstalled(false, false);
+
+      expect(await lastAttempt()).toMatchObject({
+        command: "host apply",
+        outcome: "complete",
+        targetVersion: "1.8.0",
+      });
+    });
+
+    it("a later activation that also fails ends the waiting apply failed", async () => {
+      vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+      const controller = stagedUpdate();
+      appliesTheBytes();
+      vi.mocked(probeHostActivityBusy).mockResolvedValue(true);
+      await controller.applyStaged("manual", false);
+      expect(await lastAttempt()).toMatchObject({ outcome: "parked" });
+
+      vi.mocked(probeHostActivityBusy).mockResolvedValue(false);
+      vi.mocked(registerHostLoginItem).mockRejectedValue(
+        new Error("login item refused"),
+      );
+      const retried = await controller.activateInstalled(false, false);
+
+      expect(retried.kind).toBe("failed");
+      expect(await lastAttempt()).toMatchObject({
+        outcome: "failed",
+        targetVersion: "1.8.0",
+      });
+    });
+
+    it("bytes installed over a service its owner disabled are waiting on it", async () => {
+      const controller = stagedUpdate();
+      vi.mocked(streamBundledTraycerCliJson).mockImplementation(
+        async (opts) => {
+          if (opts.args.includes("apply")) {
+            await recordApply("applied");
+            return {
+              data: {
+                outcome: "applied",
+                record: { version: "1.8.0", runtimeVersion: "1.8.0" },
+                runningActivated: false,
+                installGeneration: null,
+                postSwapWarning: {
+                  code: SERVICE_REGISTRATION_DISABLED_CODE,
+                  message: "disabled",
+                  details: null,
+                },
+              },
+            };
+          }
+          return { data: {} };
+        },
+      );
+
+      const outcome = await controller.applyStaged("manual", false);
+
+      expect(outcome.kind).toBe("deferred");
+      expect(await lastAttempt()).toMatchObject({
+        outcome: "parked",
+        targetVersion: "1.8.0",
       });
     });
 
@@ -4172,7 +4275,9 @@ describe("platform matrix", () => {
 
       await controller.stageLatest();
 
-      expect(await lastAttempt()).toBeNull();
+      expect(
+        await readHostDownloadFailure(getHostFsLayout("production").rootDir),
+      ).toBeNull();
     });
   });
 

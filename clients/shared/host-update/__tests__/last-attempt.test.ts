@@ -4,7 +4,9 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearHostDownloadFailure,
+  readHostDownloadFailure,
   readHostUpdateLastAttempt,
+  removeHostUpdateLastAttempt,
   writeHostUpdateLastAttempt,
 } from "../last-attempt";
 
@@ -71,7 +73,7 @@ describe("writeHostUpdateLastAttempt", () => {
   });
 
   const attempt = {
-    command: "host download",
+    command: "host update",
     initiator: "desktop",
     outcome: "failed",
     targetVersion: "1.5.2",
@@ -130,6 +132,60 @@ describe("writeHostUpdateLastAttempt", () => {
     expect(await recorded(message)).toBe(expected);
   });
 
+  it.each([
+    ["any case", "c:\\users\\alice\\x", "c:\\users\\[redacted]\\x"],
+    [
+      "a JSON-escaped path",
+      "C:\\\\Users\\\\alice",
+      "C:\\\\Users\\\\[redacted]",
+    ],
+    ["a plural mount", "/homes/alice/x", "/homes/[redacted]/x"],
+  ])("keeps a home out of %s", async (_name, message, expected) => {
+    expect(await recorded(message)).toBe(expected);
+  });
+
+  describe("with this account's home somewhere unusual", () => {
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
+    function homeIs(path: string): void {
+      vi.stubEnv("HOME", path);
+      vi.stubEnv("USERPROFILE", path);
+    }
+
+    it.each([
+      ["outside the usual roots", "/var/lib/ali", "/var/lib/ali/x", "~/x"],
+      [
+        "a sibling sharing its prefix",
+        "/data/ali",
+        "/data/alicia/x",
+        "/data/alicia/x",
+      ],
+      ["behind a domain", "/data/alice", "CORP\\alice", "CORP\\[redacted]"],
+      ["on another path", "/data/alice", "/mnt/alice/x", "/mnt/[redacted]/x"],
+    ])("%s", async (_name, path, message, expected) => {
+      homeIs(path);
+      expect(await recorded(message)).toBe(expected);
+    });
+
+    it.each([
+      ["an empty", ""],
+      ["the root", "/"],
+    ])("%s home leaves the other rules working", async (_name, path) => {
+      homeIs(path);
+      expect(await recorded("sent Bearer abc at /Users/bob/x")).toBe(
+        "sent Bearer [redacted] at /Users/[redacted]/x",
+      );
+    });
+  });
+
+  it("does not spend seconds on one enormous token", async () => {
+    const startedAt = Date.now();
+    await recorded("x".repeat(200_000));
+    expect(Date.now() - startedAt).toBeLessThan(2_000);
+  });
+
   it("keeps a home out of a target typed on the command line", async () => {
     await writeHostUpdateLastAttempt(
       home,
@@ -161,7 +217,7 @@ describe("writeHostUpdateLastAttempt", () => {
   });
 });
 
-describe("clearHostDownloadFailure", () => {
+describe("a download's failure", () => {
   let home = "";
 
   beforeEach(async () => {
@@ -172,17 +228,47 @@ describe("clearHostDownloadFailure", () => {
     await rm(home, { recursive: true, force: true });
   });
 
-  it.each([
-    ["clears", "host download", null],
-    ["leaves", "host apply", "host apply"],
-  ])("%s a %s record", async (_verb, command, remaining) => {
-    await writeFile(
-      join(home, "update-last-attempt.json"),
-      JSON.stringify({ ...valid, command }),
-    );
+  const failure = {
+    command: "host download",
+    initiator: "desktop",
+    outcome: "failed",
+    targetVersion: "1.5.2",
+    attemptId: null,
+    code: null,
+    message: null,
+  } as const;
+  const parked = {
+    ...failure,
+    command: "host update",
+    outcome: "parked",
+    attemptId: "attempt-1",
+  } as const;
+
+  it("leaves the update it ran beside standing", async () => {
+    await writeHostUpdateLastAttempt(home, parked, { info: vi.fn() });
+    await writeHostUpdateLastAttempt(home, failure, { info: vi.fn() });
+
+    expect(await readHostUpdateLastAttempt(home)).toMatchObject(parked);
+    expect(await readHostDownloadFailure(home)).toMatchObject(failure);
+  });
+
+  it("is cleared alone when a download gets through", async () => {
+    await writeHostUpdateLastAttempt(home, parked, { info: vi.fn() });
+    await writeHostUpdateLastAttempt(home, failure, { info: vi.fn() });
+
     await clearHostDownloadFailure(home);
-    expect((await readHostUpdateLastAttempt(home))?.command ?? null).toBe(
-      remaining,
-    );
+
+    expect(await readHostDownloadFailure(home)).toBeNull();
+    expect(await readHostUpdateLastAttempt(home)).toMatchObject(parked);
+  });
+
+  it("goes with the install", async () => {
+    await writeHostUpdateLastAttempt(home, parked, { info: vi.fn() });
+    await writeHostUpdateLastAttempt(home, failure, { info: vi.fn() });
+
+    await removeHostUpdateLastAttempt(home);
+
+    expect(await readHostDownloadFailure(home)).toBeNull();
+    expect(await readHostUpdateLastAttempt(home)).toBeNull();
   });
 });

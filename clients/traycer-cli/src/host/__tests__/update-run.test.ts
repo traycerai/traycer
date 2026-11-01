@@ -6251,6 +6251,45 @@ describe("acceptance: cells with no legacy ancestor", () => {
     expect(outcome).toMatchObject({ releasedReason: "recovered-failed" });
   });
 
+  it("a recovery that settled the attempt failed with no host running still says so", async () => {
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    const crashed = await crashAtRestarting("2.0.0");
+    await seedInstalled("3.0.0");
+    world.latest = "3.0.0";
+    world.runningVersion = null;
+
+    await expect(
+      runUpdate({ intent: "continue", expectAttempt: crashed.attemptId }),
+    ).rejects.toMatchObject({ code: CLI_ERROR_CODES.HOST_NOT_RUNNING });
+
+    expect((await requireRecord()).phase).toBe("failed");
+    expect(await readHostUpdateLastAttempt(currentHome.value)).toMatchObject({
+      outcome: "failed",
+      attemptId: crashed.attemptId,
+    });
+  });
+
+  it("an attempt closed on the way to nothing-to-do is not this run's outcome", async () => {
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    await crashAtRestarting("2.0.0");
+    await seedInstalled("3.0.0");
+    world.latest = "3.0.0";
+    world.runningVersion = "3.0.0";
+
+    const outcome = await runUpdate({});
+
+    expect(outcome.releasedReason).toBe("nothing-to-do-stale-attempt-closed");
+    expect((await requireRecord()).phase).toBe("failed");
+    expect(await readHostUpdateLastAttempt(currentHome.value)).toMatchObject({
+      outcome: "no-op",
+      targetVersion: "3.0.0",
+      attemptId: null,
+      message: null,
+    });
+  });
+
   it("Q26: an `updating` marker is LEFT ALONE when the closed record settled `failed`", async () => {
     // THE ROW THAT CHANGED SIDES, and it is the reason arm 2 is keyed on the
     // record rather than the reason string (cold review C).
