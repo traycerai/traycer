@@ -3,10 +3,11 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
+  readlinkSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 import {
   afterEach,
@@ -27,15 +28,16 @@ import type { CommandContext, CommandFn } from "../../runner/runner";
 // The read-only contract of the commands that ask about the OS service, on
 // each service manager, with a host installed, its job ABSENT and the default
 // lifecycle mode: the state a converging path would answer by registering. The
-// commands and the platform controllers are real; every way they could start a
-// process is replaced and recorded, so each row pins its exact list of calls
-// and a new call fails whichever route it takes. A changed read has to change
-// the list here, which is where it gets looked at.
+// commands and the platform controllers are real; every `node:child_process`
+// export they could start a process with is replaced and recorded, so each row
+// pins its exact list of calls and a new call fails whichever export it takes.
+// A changed read has to change the list here, which is where it gets looked at.
 
 const mocks = vi.hoisted(() => {
   const calls: string[] = [];
-  const record = (command: string, args: readonly string[] | undefined) => {
-    calls.push([command, ...(args ?? [])].join(" "));
+  // A refused route's second argument may be an options object or a callback.
+  const record = (command: string, args: unknown) => {
+    calls.push([command, ...(Array.isArray(args) ? args : [])].join(" "));
   };
   return {
     platform: process.platform as NodeJS.Platform,
@@ -55,11 +57,10 @@ const mocks = vi.hoisted(() => {
       }
       // This process's own identity, read once for a lock's metadata.
       if (command === "ps") {
-        return {
-          stdout: "Sun Nov  1 07:00:00 2026\n",
-          stderr: "",
-          exitCode: 0,
-        };
+        const stdout = args.includes("lstart=")
+          ? "Sun Nov  1 07:00:00 2026\n"
+          : "00:00\n";
+        return { stdout, stderr: "", exitCode: 0 };
       }
       // The task-definition read's own "no such task".
       if (command === "powershell") {
@@ -70,7 +71,7 @@ const mocks = vi.hoisted(() => {
     // A route nothing here is meant to use: recorded first, because the caller
     // may swallow the throw.
     refuse(route: string) {
-      return (command: string, args: readonly string[] | undefined) => {
+      return (command: string, args: unknown) => {
         record(command, args);
         throw new Error(`unexpected ${route}`);
       };
@@ -91,8 +92,7 @@ vi.mock("node:child_process", async (importOriginal) => {
     stdout: string,
     stderr: string,
   ) => void;
-  return {
-    ...actual,
+  const fake = {
     spawn: mocks.refuse("spawn"),
     spawnSync: mocks.refuse("spawnSync"),
     exec: mocks.refuse("exec"),
@@ -130,6 +130,9 @@ vi.mock("node:child_process", async (importOriginal) => {
       return result.stdout;
     },
   };
+  const faked = { ...actual, ...fake };
+  // The default export too: `...actual` alone leaves it real.
+  return { ...faked, default: faked };
 });
 
 // Reads this process's `/proc/self/cgroup`, which has no answer off Linux and
@@ -170,6 +173,7 @@ vi.mock("../../service/process-runner", async (importOriginal) => {
   };
 });
 
+import { config } from "../../config";
 import { DOCTOR_ISSUE_CODES } from "../../doctor/issues";
 import { captureSpawnEvidenceBaseline } from "../../host/spawn-evidence";
 import { writeHostInstallRecord } from "../../manifest/host-install";
@@ -183,7 +187,11 @@ import {
   setWindowsStartEvidenceDepsForTests,
   setWindowsTaskUserSidReaderForTests,
 } from "../../service/platforms/windows";
-import { cliCredentialsPath, hostDoctorLeasePath } from "../../store/paths";
+import {
+  cliCredentialsPath,
+  cliLogPath,
+  hostDoctorLeasePath,
+} from "../../store/paths";
 import { hostDoctorCommand } from "../host-doctor";
 import { hostStatusCommand } from "../host-status";
 import { serviceStatusCommand } from "../service-status";
@@ -192,7 +200,10 @@ const label = serviceLabelFor("production");
 const credentialsPath = cliCredentialsPath("production");
 
 // The CLI's own log and the doctor's lease change on a read by design.
-const BOOKKEEPING = ["cli.log", basename(hostDoctorLeasePath("production"))];
+const BOOKKEEPING = [
+  cliLogPath(config.environment),
+  hostDoctorLeasePath(config.environment),
+];
 
 function homeFiles(): Record<string, string> {
   const files: Record<string, string> = {};
@@ -201,9 +212,11 @@ function homeFiles(): Record<string, string> {
     withFileTypes: true,
   });
   for (const entry of entries) {
-    if (!entry.isFile() || BOOKKEEPING.includes(entry.name)) continue;
     const path = join(entry.parentPath, entry.name);
-    files[path] = readFileSync(path, "base64");
+    if (BOOKKEEPING.includes(path)) continue;
+    // A link counts: it is all `systemctl enable` leaves.
+    if (entry.isSymbolicLink()) files[path] = `-> ${readlinkSync(path)}`;
+    else if (entry.isFile()) files[path] = readFileSync(path, "base64");
   }
   return files;
 }
@@ -247,7 +260,6 @@ beforeAll(async () => {
 let filesBefore: Record<string, string>;
 
 beforeEach(async () => {
-  setWindowsTaskUserSidReaderForTests(() => "S-1-5-21-1-2-3-1001");
   await writeHostInstallRecord("production", {
     installId: "install-1",
     version: "1.2.3",
@@ -263,6 +275,7 @@ beforeEach(async () => {
     sizeBytes: 1234,
     executablePath: join(homedir(), "traycer-host"),
   });
+  // Without one the doctor's Windows ACL probe has nothing to read.
   mkdirSync(dirname(credentialsPath), { recursive: true });
   writeFileSync(credentialsPath, "{}");
   filesBefore = homeFiles();
@@ -379,6 +392,7 @@ describe.each([
       usePlatform(platform);
       const cli = join(homedir(), "traycer");
       writeFileSync(cli, "", { mode: 0o755 });
+      setWindowsTaskUserSidReaderForTests(() => "S-1-5-21-1-2-3-1001");
       // No host answers the fake's `/Run`; the install would wait out the
       // proof that one started.
       setWindowsStartEvidenceDepsForTests({
