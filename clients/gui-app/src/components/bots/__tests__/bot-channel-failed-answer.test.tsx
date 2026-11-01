@@ -174,7 +174,10 @@ vi.mock("@/hooks/bots/use-bot-activity", async (importOriginal) => ({
 vi.mock("@/components/chat/chat-messages", async () => {
   const { ChatExpansionTestProviders: Providers } =
     await import("@/components/chat/__tests__/chat-expansion-test-providers");
+  const { use } = await import("react");
   const { ChatMessage } = await import("@/components/chat/chat-message");
+  const { ChatTimelineHeaderContext } =
+    await import("@/components/chat/chat-timeline-header-context");
   const noBackgroundToolBlockIds: ReadonlySet<string> = new Set();
   return {
     ChatMessages: (props: {
@@ -183,6 +186,7 @@ vi.mock("@/components/chat/chat-messages", async () => {
     }) => (
       <Providers tileInstanceId={props.instanceId}>
         <div data-testid="chat-messages-stub">
+          {use(ChatTimelineHeaderContext)}
           {props.messages.map((message) => (
             <ChatMessage
               key={message.id}
@@ -858,11 +862,12 @@ describe("<BotChannelView /> Edit on a post the bot failed to answer", () => {
     );
     const panel = screen.getByTestId("bot-thread-panel");
     const messages = within(panel).getByTestId("chat-messages-stub");
-    await user.click(
-      within(within(messages).getByTestId("bot-member-row")).getByTestId(
-        "bot-message-edit",
-      ),
-    );
+    // The reply's row, not the post the list opens on.
+    const anchor = within(panel).getByTestId("bot-thread-anchor");
+    const [replyRow] = within(messages)
+      .getAllByTestId("bot-member-row")
+      .filter((row) => !anchor.contains(row));
+    await user.click(within(replyRow).getByTestId("bot-message-edit"));
     const box = within(panel).getByTestId("bot-thread-composer-input");
     if (!(box instanceof HTMLTextAreaElement))
       throw new Error("not a textarea");

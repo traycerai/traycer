@@ -266,6 +266,7 @@ function mountTranscript(
           surface={surface}
           resolveMember={members}
           showConnecting
+          header={null}
           landOn={null}
         />
       </QueryClientProvider>

@@ -240,6 +240,7 @@ export function BotSessionView(props: {
               surface={null}
               resolveMember={resolveMember}
               showConnecting
+              header={null}
               landOn={session.landOn}
             />
           </QuoteSinkContext>
