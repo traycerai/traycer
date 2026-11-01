@@ -937,6 +937,13 @@ describe("useStagedSandboxSend's line after a refusal", () => {
   });
 });
 
+/** A failed line makes no claim about what was or wasn't charged. */
+function expectNoFailureCostSentence(text: string): void {
+  expect(text).not.toContain("Compute is charged while it is awake.");
+  expect(text).not.toContain("Nothing was charged");
+  expect(text).not.toContain("Nothing was billed");
+}
+
 describe("useStagedSandboxSend's setup line prices and names what it stages", () => {
   function stageExisting(): void {
     stageCreated("booting", null);
@@ -1018,7 +1025,7 @@ describe("useStagedSandboxSend's setup line prices and names what it stages", ()
   });
 
   it.each(["applying", "delivering"] as const)(
-    "says compute is charged while it is awake when the sandbox failed at %s, not that nothing was billed",
+    "says no cost sentence at all when the sandbox failed at %s",
     (step) => {
       stageExisting();
       useStagedSandboxStore.getState().report(SURFACE, {
@@ -1028,13 +1035,11 @@ describe("useStagedSandboxSend's setup line prices and names what it stages", ()
       });
       mount(vi.fn());
 
-      const text = shownDetail();
-      expect(text).toContain("Compute is charged while it is awake.");
-      expect(text).not.toContain("Nothing was");
+      expectNoFailureCostSentence(shownDetail());
     },
   );
 
-  it("still says nothing was billed for a sandbox that failed before it woke", () => {
+  it("says no cost sentence for a resume that failed before it woke", () => {
     stageExisting();
     useStagedSandboxStore.getState().report(SURFACE, {
       failure: {
@@ -1045,7 +1050,20 @@ describe("useStagedSandboxSend's setup line prices and names what it stages", ()
     });
     mount(vi.fn());
 
-    expect(shownDetail()).toContain("Nothing was charged for this wake.");
+    expectNoFailureCostSentence(shownDetail());
+  });
+
+  it("says exactly that the message is still pending, and no cost, for a create that failed before it woke", () => {
+    stageCreated("creating", {
+      kind: "failed",
+      code: "PROVIDER_CREATE_FAILED",
+      step: "creating",
+    });
+    mount(vi.fn());
+
+    const text = shownDetail();
+    expect(text).toContain("Your message is still pending.");
+    expectNoFailureCostSentence(text);
   });
 
   it("never prints the id of a region the catalogue does not list in the shape refusal", () => {
@@ -1142,6 +1160,49 @@ async function afterCommit(): Promise<void> {
     await Promise.resolve();
   });
 }
+
+describe("useStagedSandboxSend when its sandbox rested on its own", () => {
+  function listCreated(state: "suspended" | "awake"): void {
+    mocks.sandboxes = [
+      sandboxSummaryFixture({ id: "sbx-1", hostId: NEW_HOST, state }),
+    ];
+  }
+
+  it("goes back to staged with its key and target kept, and draws no setup line", async () => {
+    stageCreated("applying", { kind: "timed-out", step: "applying" });
+    const clientRequestId = readStagedSandbox(SURFACE)?.clientRequestId;
+    listCreated("suspended");
+    mount(vi.fn());
+
+    await waitFor(() => {
+      expect(readStagedSandbox(SURFACE)?.phase).toBe("staged");
+    });
+    expect(readStagedSandbox(SURFACE)).toMatchObject({
+      clientRequestId,
+      target: { kind: "new", name: "api-refactor" },
+      failure: null,
+    });
+    expect(screen.queryByTestId("sandbox-setup-line")).toBeNull();
+    expect(document.body.textContent).not.toContain("compute is charged");
+  });
+
+  it("keeps waiting while the same sandbox is awake", () => {
+    stageCreated("applying", { kind: "timed-out", step: "applying" });
+    listCreated("awake");
+    mount(vi.fn());
+
+    expect(readStagedSandbox(SURFACE)?.phase).toBe("creating");
+    expect(screen.getByTestId("sandbox-setup-line")).toBeDefined();
+  });
+
+  it("does not cancel a wake under way at the booting step", () => {
+    stageCreated("booting", null);
+    listCreated("suspended");
+    mount(vi.fn());
+
+    expect(readStagedSandbox(SURFACE)?.phase).toBe("creating");
+  });
+});
 
 describe("useStagedSandboxSend's handoff", () => {
   it("drops a handoff whose sending draft is gone as it unmounts, and keeps one across a remount", async () => {

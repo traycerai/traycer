@@ -53,6 +53,7 @@ function facts(smallerShapeAffordable: boolean): SandboxSetupLineFacts {
     offeredAgents: null,
     sandboxAwake: null,
     sandboxStoppable: true,
+    sandboxResting: false,
   };
 }
 
@@ -489,6 +490,137 @@ describe("SandboxSetupLine's failed start", () => {
     await waitFor(() => {
       expect(writeText).toHaveBeenCalledWith("SBX-0412 · sbx_made_1");
     });
+  });
+});
+
+describe("SandboxSetupLine when the sandbox rested on its own", () => {
+  const RESTING_FACTS = { ...facts(false), sandboxResting: true };
+
+  it.each([
+    ["applying", null],
+    ["delivering", null],
+    ["applying", { kind: "timed-out", step: "applying" } as const],
+  ] as const)(
+    "draws nothing for a stage at step %s with failure %j",
+    (step, failure) => {
+      const { container } = render(
+        <SandboxSetupLine
+          stage={{ ...created(), step, failure }}
+          name="api-refactor"
+          facts={RESTING_FACTS}
+          actions={ACTIONS}
+        />,
+      );
+
+      expect(container.textContent).toBe("");
+    },
+  );
+
+  it.each([true, undefined])(
+    "draws nothing for a rested stage whose send can go back (withdrawalAllowed %s)",
+    (withdrawalAllowed) => {
+      const { container } = render(
+        <SandboxSetupLine
+          stage={{ ...created(), step: "applying" }}
+          name="api-refactor"
+          facts={RESTING_FACTS}
+          actions={ACTIONS}
+          withdrawalAllowed={withdrawalAllowed}
+        />,
+      );
+
+      expect(container.textContent).toBe("");
+    },
+  );
+
+  it("says the message is still pending, with Retry, when this window can't give it back", () => {
+    const onRetry = vi.fn();
+    render(
+      <SandboxSetupLine
+        stage={{ ...created(), step: "applying" }}
+        name="api-refactor"
+        facts={RESTING_FACTS}
+        actions={{ ...ACTIONS, onRetry }}
+        withdrawalAllowed={false}
+      />,
+    );
+
+    const line = screen.getByTestId("sandbox-rested-held-line");
+    expect(line.textContent).toContain("Your message is still pending.");
+    expect(screen.queryByTestId("sandbox-setup-line")).toBeNull();
+    fireEvent.click(within(line).getByTestId("sandbox-rested-held-retry"));
+    expect(onRetry).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps waiting on the progress line, not an alert, for a recorded rest once the row no longer rests", () => {
+    render(
+      <SandboxSetupLine
+        stage={{
+          ...created(),
+          step: "booting",
+          failure: { kind: "rested" },
+        }}
+        name="api-refactor"
+        facts={{ ...RESTING_FACTS, sandboxResting: false }}
+        actions={ACTIONS}
+      />,
+    );
+
+    expect(screen.getByTestId("sandbox-setup-line")).toBeDefined();
+    expect(screen.getByTestId("sandbox-setup-keep-waiting")).toBeDefined();
+    expect(screen.getByTestId("sandbox-setup-cancel")).toBeDefined();
+    expect(
+      screen.getByTestId("sandbox-setup-choose-another-host"),
+    ).toBeDefined();
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByTestId("sandbox-refusal-line")).toBeNull();
+  });
+
+  it("still draws the settings failure's own line", () => {
+    render(
+      <SandboxSetupLine
+        stage={{
+          ...created(),
+          step: "applying",
+          failure: {
+            kind: "settings",
+            code: "SBX-0520",
+            steps: { applied: [], notApplied: ["Providers"] },
+          },
+        }}
+        name="api-refactor"
+        facts={RESTING_FACTS}
+        actions={ACTIONS}
+      />,
+    );
+
+    expect(screen.getByTestId("sandbox-setup-line")).toBeDefined();
+  });
+
+  it("still says Resuming for a wake under way at the booting step", () => {
+    render(
+      <SandboxSetupLine
+        stage={{
+          ...created(),
+          step: "booting",
+          target: {
+            kind: "existing",
+            hostId: "host-1",
+            sandboxId: "sbx_made_1",
+            name: "api-refactor",
+            configuration: { kind: "personal" },
+            verb: "resume",
+          },
+        }}
+        name="api-refactor"
+        facts={{ ...RESTING_FACTS, sandboxStoppable: false }}
+        actions={ACTIONS}
+      />,
+    );
+
+    expect(screen.getByTestId("sandbox-setup-line").textContent).toContain(
+      "Resuming",
+    );
   });
 });
 

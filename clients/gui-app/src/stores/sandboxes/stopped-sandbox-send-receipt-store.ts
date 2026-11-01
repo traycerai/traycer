@@ -31,6 +31,12 @@ type ReceiptOutcome =
       readonly sandboxId: string;
       readonly name: string;
       readonly confirmedAt: number;
+    }
+  | {
+      readonly kind: "rested" | "ended";
+      readonly sandboxId: string;
+      readonly hostId: string;
+      readonly confirmedAt: number;
     };
 
 export type StoppedSandboxSendReceipt = ReceiptOutcome & {
@@ -95,6 +101,26 @@ export function recordStoppedSandboxSend(
     kind: "stopped",
     sandboxId: stage.createdSandboxId,
     name,
+    confirmedAt: Date.now(),
+  });
+}
+
+/**
+ * A send its sandbox's own state ended went back: the task says that state
+ * where the setup line was, as its chat would. `rested` lasts as long as the
+ * rest; `ended` is final.
+ */
+export function recordSandboxStateSend(
+  send: PendingSandboxSend,
+  stage: StagedSandbox,
+  returned: ReturnedPendingSandboxSend,
+  kind: "rested" | "ended",
+): void {
+  if (stage.createdSandboxId === null || stage.createdHostId === null) return;
+  recordReturnedSandboxSend(send, returned, {
+    kind,
+    sandboxId: stage.createdSandboxId,
+    hostId: stage.createdHostId,
     confirmedAt: Date.now(),
   });
 }

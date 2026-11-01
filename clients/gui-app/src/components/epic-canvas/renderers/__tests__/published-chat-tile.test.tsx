@@ -2567,7 +2567,7 @@ describe("PublishedChatTile - a sandbox chat's state, by precedence", () => {
         failureCode: "boot-timeout",
         lastTransitionAt: FAILED_AT,
       },
-      `Couldn't start e2e-sbx-p1 at ${FAILED_TIME} · SBX-0414 · nothing was chargedRetry`,
+      `Couldn't start e2e-sbx-p1 at ${FAILED_TIME} · SBX-0414Retry`,
     ],
     [
       "released",

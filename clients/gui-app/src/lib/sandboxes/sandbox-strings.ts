@@ -534,6 +534,10 @@ export function stoppedSandboxLine(
 export function returnedSandboxMessageLine(savedInDrafts: boolean): string {
   return `Your message wasn't sent; ${savedInDrafts ? "it's saved in your drafts." : "it's back in the composer."}`;
 }
+/** A rest's give-back the composer had no room for, after its state line. */
+export function restedDraftLine(restingLine: string): string {
+  return `${restingLine}. ${returnedSandboxMessageLine(true)}`;
+}
 export function couldntStopLine(name: string): string {
   return `Couldn't stop ${name}`;
 }
@@ -575,9 +579,6 @@ export function couldntStartLine(name: string): string {
 export function couldntResumeLine(name: string): string {
   return `Couldn't resume ${name}`;
 }
-export const NOTHING_BILLED_NEVER_WOKE =
-  "Nothing was billed for a sandbox that never woke";
-export const NOTHING_CHARGED_FOR_WAKE = "Nothing was charged for this wake.";
 export const MESSAGE_STILL_PENDING = "Your message is still pending.";
 export const RETRY_CREATION = "Retry creation";
 export const CANCEL_THE_MESSAGE = "Cancel the message";

@@ -970,7 +970,7 @@ describe("<SandboxesSettingsPanel />", () => {
 
     const failed = within(rowOf("build-box"));
     expect(failed.getByTestId("sandboxes-row-clock").textContent).toBe(
-      "Couldn't start build-box at 11:01 · SBX-0412 · nothing was charged",
+      "Couldn't start build-box at 11:01 · SBX-0412",
     );
     expect(
       failed.getByRole("button", { name: "Retry" }).hasAttribute("disabled"),

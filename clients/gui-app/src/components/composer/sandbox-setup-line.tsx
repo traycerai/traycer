@@ -24,8 +24,6 @@ import {
   COULDNT_VERIFY_BALANCE,
   KEEP_WAITING,
   MESSAGE_STILL_PENDING,
-  NOTHING_BILLED_NEVER_WOKE,
-  NOTHING_CHARGED_FOR_WAKE,
   OPEN_TERMINAL,
   OPEN_TERMINAL_INSTEAD,
   RESUMING_SANDBOX,
@@ -59,10 +57,11 @@ import {
   takingLongerDetail,
 } from "@/lib/sandboxes/sandbox-strings";
 import { cn } from "@/lib/utils";
-import type {
-  StagedSandbox,
-  StagedSandboxFailure,
-  StagedSandboxStep,
+import {
+  stagedSandboxRested,
+  type StagedSandbox,
+  type StagedSandboxFailure,
+  type StagedSandboxStep,
 } from "@/stores/composer/staged-sandbox-store";
 import { sandboxAgentDisplayName } from "@/lib/sandboxes/sandbox-agent-refusal";
 import { openActiveModelPickerForHarness } from "@/lib/commands/active-model-picker-registry";
@@ -189,6 +188,8 @@ export interface SandboxSetupLineFacts {
    * under way: Stop is offered only then.
    */
   readonly sandboxStoppable: boolean;
+  /** The stage's sandbox is listed suspended or stopped. */
+  readonly sandboxResting: boolean;
 }
 
 /**
@@ -239,6 +240,25 @@ export function SandboxSetupLine(props: {
     );
   }
   if (stage.phase === "staged" || stage.startedAt === null) return null;
+  // A sandbox that rested on its own is said by its state footer, never by
+  // a create still on its way. A send this window can't give back stays
+  // here, with the person's way to wake it.
+  if (stagedSandboxRested(stage, props.facts.sandboxResting)) {
+    return props.withdrawalAllowed === false ? (
+      <div
+        role="status"
+        className="flex w-full min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1 text-ui-xs"
+        data-testid="sandbox-rested-held-line"
+      >
+        <span className="text-foreground/85">{MESSAGE_STILL_PENDING}</span>
+        <LineButton
+          label={RETRY}
+          testId="sandbox-rested-held-retry"
+          onClick={actions.onRetry}
+        />
+      </div>
+    ) : null;
+  }
   return (
     <SandboxProgressLine
       stage={stage}
@@ -569,13 +589,18 @@ function isTakingLonger(
   failure: StagedSandboxFailure | null,
   elapsedSeconds: number,
 ): boolean {
-  if (failure !== null) return failure.kind === "timed-out";
+  if (failure !== null) return waitEnded(failure);
   return elapsedSeconds * 1000 >= STAGED_TAKING_LONGER_MS;
 }
 
-/** The run is still going: no failure, or only the budget ran out. */
+/** The run stopped waiting with nothing wrong with the sandbox. */
+function waitEnded(failure: StagedSandboxFailure): boolean {
+  return failure.kind === "timed-out" || failure.kind === "rested";
+}
+
+/** The run is still going: no failure, or only the wait ended. */
 function stillWaiting(failure: StagedSandboxFailure | null): boolean {
-  return failure === null || failure.kind === "timed-out";
+  return failure === null || waitEnded(failure);
 }
 
 function progressTitle(view: ProgressView, name: string): string {
@@ -709,17 +734,8 @@ function FailureSentence(props: {
   readonly sandboxAwake: boolean | null;
 }): ReactNode {
   if (props.failure?.kind === "failed") {
-    // A sandbox that failed after it woke was charged while it was awake.
-    if (stepAfterWake(props.failure.step)) {
-      return <p className="m-0">{COMPUTE_CHARGED_WHILE_AWAKE}</p>;
-    }
-    return (
-      <p className="m-0">
-        {props.resuming
-          ? NOTHING_CHARGED_FOR_WAKE
-          : `${NOTHING_BILLED_NEVER_WOKE}. ${MESSAGE_STILL_PENDING}`}
-      </p>
-    );
+    if (props.resuming || stepAfterWake(props.failure.step)) return null;
+    return <p className="m-0">{MESSAGE_STILL_PENDING}</p>;
   }
   if (props.failure?.kind === "settings" && props.sandboxAwake !== false) {
     return <p className="m-0">{COMPUTE_CHARGED_WHILE_AWAKE}</p>;
@@ -797,7 +813,7 @@ function ProgressBranchButtons(props: {
       </>
     );
   }
-  if (failure?.kind === "timed-out") {
+  if (failure !== null && waitEnded(failure)) {
     return (
       <>
         <LineButton

@@ -57,7 +57,6 @@ import {
   useNewHostActions,
   useSetupLineFacts,
   useStagedSandboxRunner,
-  useStagedSandboxWaker,
   type StagedSandboxRunner,
 } from "@/components/composer/use-staged-sandbox-send";
 import {
@@ -108,6 +107,7 @@ import {
 } from "@/stores/epics/new-conversation-modal-store";
 import {
   recordCancelledSandboxSend,
+  recordSandboxStateSend,
   recordStoppedSandboxSend,
 } from "@/stores/sandboxes/stopped-sandbox-send-receipt-store";
 import { startSandboxWake } from "@/lib/sandboxes/sandbox-wake";
@@ -176,6 +176,7 @@ import {
   holdHandoffOwner,
   readStagedSandbox,
   stagedCreateNeedsFreshKey,
+  stagedSandboxRested,
   useStagedSandbox,
   useStagedSandboxStore,
   type HandoffOwnerWatch,
@@ -218,16 +219,62 @@ const READINESS_POLL_MS = 2_000;
 const STOP_INTENT_CODE = "pending-send-stop";
 const STOP_FAILED_CODE = "stop";
 const stopsInFlight = new Map<string, { returned: boolean }>();
-const stopAttention = new Map<
-  string,
-  {
-    readonly userId: string | null;
-    readonly giveBack: () => ReturnedPendingSandboxSend;
+interface StopAttention {
+  readonly userId: string | null;
+  readonly giveBack: (rowState: HostSandboxState) => ReturnedPendingSandboxSend;
+}
+const stopAttention = new Map<string, StopAttention>();
+
+/**
+ * "Stopped" is only for a Stop that happened. A send that a suspend reached
+ * first is an ordinary rest: Stop may yet fail, and Start would not fit.
+ */
+function recordStopReceipt(
+  send: PendingSandboxSend,
+  stage: StagedSandbox,
+  returned: ReturnedPendingSandboxSend,
+  rowState: HostSandboxState | null,
+): void {
+  if (rowState !== "suspended") {
+    recordStoppedSandboxSend(
+      send,
+      stage,
+      stage.target.name.length > 0
+        ? stage.target.name
+        : stagedSandboxFallbackName(send.text),
+      returned,
+    );
+    return;
   }
->();
+  if (send.request.kind === "chat")
+    recordSandboxStateSend(send, stage, returned, "rested");
+}
+
+/** A suspend is an ordinary rest whoever is watching: the message stays on its sandbox. */
+function giveBackStopped(
+  send: PendingSandboxSend,
+  stage: StagedSandbox | undefined,
+  attention: StopAttention | undefined,
+  rowState: HostSandboxState | null,
+): ReturnedPendingSandboxSend {
+  if (attention === undefined) {
+    return rowState === "suspended" && stage !== undefined
+      ? returnPendingSandboxSendToSandbox(
+          send.id,
+          returnedSandboxPick(send, stage, rowState),
+        )
+      : returnPendingSandboxSendToDraft(send.id);
+  }
+  return attention.userId === (useAuthStore.getState().profile?.userId ?? null)
+    ? attention.giveBack(rowState === "suspended" ? "suspended" : "stopped")
+    : returnPendingSandboxSendToDraft(send.id);
+}
 
 /** Attention is local to the requesting mounted strip and never persisted. */
-function returnStoppedPendingSend(id: string): void {
+function returnStoppedPendingSend(
+  id: string,
+  rowState: HostSandboxState | null,
+): void {
   const attention = stopAttention.get(id);
   const { sends } = usePendingSandboxSendStore.getState();
   if (!Object.hasOwn(sends, id)) return;
@@ -244,29 +291,18 @@ function returnStoppedPendingSend(id: string): void {
         const attempt = stopsInFlight.get(id);
         if (attempt !== undefined) attempt.returned = true;
         if (stage !== undefined)
-          recordStoppedSandboxSend(send, stage, stage.target.name, returned);
+          recordStopReceipt(send, stage, returned, rowState);
       })
       .catch(() => undefined);
     stopAttention.delete(id);
     return;
   }
-  const returned =
-    attention !== undefined &&
-    attention.userId === (useAuthStore.getState().profile?.userId ?? null)
-      ? attention.giveBack()
-      : returnPendingSandboxSendToDraft(id);
+  const returned = giveBackStopped(send, stage, attention, rowState);
   if (!Object.hasOwn(usePendingSandboxSendStore.getState().sends, id)) {
     const attempt = stopsInFlight.get(id);
     if (attempt !== undefined) attempt.returned = true;
     if (stage !== undefined) {
-      recordStoppedSandboxSend(
-        send,
-        stage,
-        stage.target.name.length > 0
-          ? stage.target.name
-          : stagedSandboxFallbackName(send.text),
-        returned,
-      );
+      recordStopReceipt(send, stage, returned, rowState);
     }
   }
   stopAttention.delete(id);
@@ -1102,6 +1138,19 @@ function stageBlocker(stage: StagedSandbox | null): PendingSendBlocker {
   }
 }
 
+function stageRestedAt(
+  stage: StagedSandbox | null,
+  rowState: HostSandboxState | null,
+): boolean {
+  return (
+    stage !== null &&
+    stagedSandboxRested(
+      stage,
+      rowState === "suspended" || rowState === "stopped",
+    )
+  );
+}
+
 function useWatchedSandboxRow(
   sandboxId: string | null,
   surfaceKey: string,
@@ -1129,6 +1178,7 @@ function useWatchedSandboxRow(
     stageStatus: stage?.phase ?? "missing",
     stageCurrent: stage?.phase === "handoff",
     wakeInFlight: stagedRunActive(surfaceKey),
+    stageRested: stageRestedAt(stage, rowState),
   });
   const decision =
     send === null
@@ -1138,13 +1188,17 @@ function useWatchedSandboxRow(
           sandboxObservation(stageBlocker(stage), environment),
           pendingSandboxSendFacts(send.id, environment),
         );
-  const wake = useStagedSandboxWaker();
   useEffect(() => {
     if (send === null || decision === null) return;
     projectSandboxBlocker(surfaceKey, decision.state.blocker, row.failure);
+    if (
+      environment.stageRested &&
+      !decision.effects.includes("return-message") &&
+      pendingSandboxSendFacts(send.id, environment).host === "resting"
+    )
+      projectSandboxRest(surfaceKey, stage);
     if (decision.effects.includes("open-terminal"))
       clearPendingSandboxFailure(surfaceKey);
-    if (decision.effects.includes("wake")) wake(surfaceKey);
     if (decision.effects.includes("end-host")) {
       if (
         usePendingSandboxSendStore
@@ -1162,16 +1216,7 @@ function useWatchedSandboxRow(
     ) {
       returnWatchedSend(send, stage, rowState);
     }
-  }, [
-    decision,
-    environment,
-    row.failure,
-    rowState,
-    send,
-    stage,
-    surfaceKey,
-    wake,
-  ]);
+  }, [decision, environment, row.failure, rowState, send, stage, surfaceKey]);
   return {
     failed: row.failure !== null,
     ready: row.ready,
@@ -1189,8 +1234,9 @@ function clearPendingSandboxFailure(surfaceKey: string): void {
 
 /**
  * A new agent's message withdrawn because its sandbox rests goes back to its
- * task's composer, still on that sandbox, and the task says so where its
- * setup line was. Nothing opens: a rest is nobody's gesture.
+ * task's composer, still on that sandbox; one whose sandbox ended goes back
+ * without it. Either way the task says the sandbox's state where its setup
+ * line was. Nothing opens: neither is anybody's gesture.
  */
 function returnWatchedSend(
   send: PendingSandboxSend,
@@ -1198,7 +1244,7 @@ function returnWatchedSend(
   rowState: HostSandboxState | null,
 ): void {
   if (send.stopRequested === true) {
-    returnStoppedPendingSend(send.id);
+    returnStoppedPendingSend(send.id, rowState);
     return;
   }
   // Ended with its sandbox still up: its task is gone, so the saved draft
@@ -1210,20 +1256,19 @@ function returnWatchedSend(
     returnPendingSandboxSendOnItsSandbox(send.id);
     return;
   }
-  if (
-    send.request.kind !== "chat" ||
-    stage === null ||
-    restingVerb(rowState) === null
-  ) {
+  if (send.request.kind !== "chat" || stage === null) {
     returnPendingSandboxSend(send.id);
     return;
   }
-  const returned = returnPendingSandboxSendToSandbox(
-    send.id,
-    returnedSandboxPick(send, stage, rowState),
-  );
+  const resting = restingVerb(rowState) !== null;
+  const returned = resting
+    ? returnPendingSandboxSendToSandbox(
+        send.id,
+        returnedSandboxPick(send, stage, rowState),
+      )
+    : returnPendingSandboxSend(send.id);
   if (!Object.hasOwn(usePendingSandboxSendStore.getState().sends, send.id))
-    recordCancelledSandboxSend(send, returned);
+    recordSandboxStateSend(send, stage, returned, resting ? "rested" : "ended");
 }
 
 /**
@@ -1279,6 +1324,22 @@ function projectSandboxBlocker(
   )
     return;
   useStagedSandboxStore.getState().report(surfaceKey, { failure });
+}
+
+/**
+ * A send this window can't give back keeps the person's way to wake its
+ * sandbox: a stopped stage, which Retry runs again. A refusal already on the
+ * stage has its own remedy; "ready, but nothing was sent" no longer holds.
+ */
+function projectSandboxRest(
+  surfaceKey: string,
+  stage: StagedSandbox | null,
+): void {
+  if (stage === null) return;
+  if (stage.failure !== null && stage.failure.kind !== "not-sent") return;
+  useStagedSandboxStore
+    .getState()
+    .report(surfaceKey, { phase: "creating", failure: { kind: "rested" } });
 }
 
 /**
@@ -2278,11 +2339,21 @@ function PendingDispatchItem(props: {
     agentReady: true,
     modelReady: true,
   });
+  const stored = pendingSendState(send, "none");
+  const facts = pendingSandboxSendFacts(props.id, environment);
   const { view } = transitionPendingSend(
-    pendingSendState(send, "none"),
+    stored,
     sandboxObservation(props.dispatch.blocker ?? "none", environment),
-    pendingSandboxSendFacts(props.id, environment),
+    facts,
   );
+  // The view can run ahead of the stored record, which is what a Retry asks.
+  const retryable =
+    view.canRetry &&
+    transitionPendingSend(
+      stored,
+      "request-dispatch-retry",
+      facts,
+    ).effects.includes("request-dispatch-retry");
   if (stage !== null && (view.line === "waiting" || view.line === "creating"))
     return <PendingStagedSendItem send={send} tabId={props.tabId} />;
   return (
@@ -2320,7 +2391,7 @@ function PendingDispatchItem(props: {
             failure={view.line}
           />
         ) : null}
-        {view.canRetry ? (
+        {retryable ? (
           <Button
             type="button"
             variant="link"
@@ -2705,7 +2776,7 @@ async function stopPendingSend(
   if (!plan?.effects.includes("stop-host")) {
     if (plan?.effects.includes("remove")) {
       requested();
-      returnStoppedPendingSend(id);
+      returnStoppedPendingSend(id, null);
     }
     return;
   }
@@ -2742,8 +2813,10 @@ function observePendingStopResult(
 ): void {
   const id = originalSend.id;
   const host = stoppedHostObservation(outcome);
+  const rowState = outcome.kind === "settled" ? outcome.state : null;
   const settled = pendingStopDecision(id, "stop-result", host, boundary);
-  if (settled?.effects.includes("remove")) returnStoppedPendingSend(id);
+  if (settled?.effects.includes("remove"))
+    returnStoppedPendingSend(id, rowState);
   else if (
     settled === null &&
     stopsInFlight.get(id)?.returned !== true &&
@@ -2759,13 +2832,11 @@ function observePendingStopResult(
         .getState()
         .drafts.some((draft) => draft.id === draftId)
     ) {
-      recordStoppedSandboxSend(
+      recordStopReceipt(
         originalSend,
         originalStage,
-        originalStage.target.name.length > 0
-          ? originalStage.target.name
-          : stagedSandboxFallbackName(originalSend.text),
         { kind: "landing-draft", draftId },
+        rowState,
       );
     }
   }
@@ -2983,10 +3054,7 @@ function PendingStagedSendItem(props: {
   const surfaceKey = pendingSendSurfaceKey(send.id);
   const observedStage = useStagedSandbox(surfaceKey);
   const stage = observedStage ?? send.stopStage ?? null;
-  const attention = useRef<{
-    readonly userId: string | null;
-    readonly giveBack: () => ReturnedPendingSandboxSend;
-  } | null>(null);
+  const attention = useRef<StopAttention | null>(null);
   useEffect(
     () => () => {
       if (stopAttention.get(send.id) === attention.current)
@@ -3086,10 +3154,10 @@ function PendingStagedSendItem(props: {
       () => {
         attention.current = {
           userId: send.userId,
-          // Back in this task's composer, still on the stopped sandbox: its
-          // send starts it again.
-          giveBack: () =>
-            backToComposer(false, returnedSandboxPick(send, stage, "stopped")),
+          // Back in this task's composer, still on its sandbox: its send
+          // wakes it again.
+          giveBack: (rowState) =>
+            backToComposer(false, returnedSandboxPick(send, stage, rowState)),
         };
         stopAttention.set(send.id, attention.current);
       },
