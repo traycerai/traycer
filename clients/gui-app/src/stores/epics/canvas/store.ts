@@ -83,6 +83,7 @@ import {
   ensureEmptyCanvasPane,
   openTile,
   evictTileWithoutClosing,
+  promotePreviewTile,
   openTileInBackgroundTab as openTileInBackgroundTabCanvas,
   openTileInPane as openTileInPaneCanvas,
   findPaneTabForRef,
@@ -2169,19 +2170,23 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
               state.mobileSecondaryTileByTabId;
             const slots = next === null ? others : { ...others, [tabId]: next };
             const canvas = state.canvasByTabId[tabId];
-            if (
-              canvas === undefined ||
-              held === undefined ||
-              !held.transient ||
-              held.instanceId === next?.instanceId ||
-              held.instanceId === selectMobileTile(canvas)?.ref.instanceId
-            ) {
-              return { mobileSecondaryTileByTabId: slots };
-            }
+            const evicted =
+              canvas !== undefined &&
+              held?.transient === true &&
+              held.instanceId !== next?.instanceId &&
+              held.instanceId !== selectMobileTile(canvas)?.ref.instanceId
+                ? held.instanceId
+                : null;
             return {
-              ...updateTabCanvas(state, tabId, (current) =>
-                evictTileWithoutClosing(current, held.instanceId),
-              ),
+              ...updateTabCanvas(state, tabId, (current) => {
+                const without =
+                  evicted === null
+                    ? current
+                    : evictTileWithoutClosing(current, evicted);
+                return next === null
+                  ? without
+                  : promotePreviewTile(without, next.instanceId);
+              }),
               mobileSecondaryTileByTabId: slots,
             };
           });

@@ -20,6 +20,18 @@ import { collectPanes } from "@/stores/epics/canvas/tile-tree";
 import { tileIntent, type TileOpenIntent } from "@/lib/canvas/tile-open/intent";
 import { setPhoneLayoutOnly } from "@/lib/mobile-app";
 import {
+  commitWithoutNavigation,
+  MANUAL_TILE_OPEN,
+  openTileWithNavigation,
+} from "@/lib/canvas/tile-open/open-tile";
+import { StableTileSurfaceHost } from "@/components/epic-canvas/surface-host/stable-tile-surface-host";
+import { renderHostedChatSurfaceBody } from "@/components/epic-canvas/surface-host/hosted-chat-surface-body";
+import { resetTileSurfaceMembershipForTesting } from "@/components/epic-canvas/surface-host/tile-surface-membership";
+import { resetTileSurfaceEnvironmentRegistryForTesting } from "@/components/epic-canvas/surface-host/tile-surface-environment-registry";
+import { resetTileSurfaceGeometryCoordinatorForTesting } from "@/components/epic-canvas/surface-host/tile-surface-geometry-coordinator";
+import { useTabsStore } from "@/stores/tabs/store";
+import type { HtmlArtifactVersionSelection } from "@traycer/protocol/host/epic/html-artifact-versions";
+import {
   installShellForm,
   SHELL_WIDTH_COLUMN_256,
   SHELL_WIDTH_TWO_TILES,
@@ -207,6 +219,49 @@ vi.mock("@/components/epic-canvas/renderers/use-chat-tile-host-label", () => ({
   useChatTileHostLabel: () => null,
 }));
 
+// A hosted chat paints in the stable surface host, outside its pane. Its body is
+// a probe that reports whether it is the active surface and opens `pendingOpen`
+// through the real navigation hook from where the chat renders.
+vi.mock("@/components/epic-canvas/renderers/browser-sessions-provider", () => ({
+  BrowserOpenSessionsProvider: (props: { children: ReactNode }) =>
+    props.children,
+  BrowserSessionsHostProvider: (props: { children: ReactNode }) =>
+    props.children,
+}));
+vi.mock("@/components/epic-canvas/renderers/tile-render", async () => {
+  const { useEpicTileNavigation } =
+    await import("@/hooks/epic/use-epic-tile-navigation");
+  function HostedProbe(props: {
+    readonly node: EpicCanvasTileRef;
+    readonly isActive: boolean;
+  }): ReactNode {
+    const { openTile } = useEpicTileNavigation();
+    return (
+      <div
+        data-testid={`hosted-${props.node.id}`}
+        data-active={String(props.isActive)}
+      >
+        <input data-testid={`input-${props.node.id}`} />
+        <button
+          type="button"
+          data-testid={`open-from-${props.node.id}`}
+          onClick={() => {
+            if (pendingOpen.value.intent !== null) {
+              openTile(pendingOpen.value.intent);
+            }
+          }}
+        />
+      </div>
+    );
+  }
+  return {
+    renderTile: (props: {
+      readonly node: EpicCanvasTileRef;
+      readonly isActive: boolean;
+    }) => <HostedProbe {...props} />,
+  };
+});
+
 // A bound Epic session, so the published wake has something real to reach.
 const epicHandleMock = vi.hoisted(() => ({
   hostId: "host-A",
@@ -292,6 +347,7 @@ function seed(canvas: EpicCanvasState): void {
       [VIEW_TAB_ID]: { tabId: VIEW_TAB_ID, epicId: "epic-1", name: "Epic 1" },
     },
     canvasByTabId: { [VIEW_TAB_ID]: canvas },
+    activeTabId: VIEW_TAB_ID,
   });
 }
 
@@ -744,6 +800,302 @@ describe("<MobileEpicTileView />", () => {
       expect(screen.queryByTestId("tile-spec-4")).not.toBeNull();
       expect(screen.queryByTestId("tile-spec-1")).toBeNull();
       expect(renderedTileCount()).toBe(1);
+    });
+  });
+});
+
+describe("<MobileEpicTileView /> with two tiles and chats painted by the stable host", () => {
+  let shell: ShellFormHarness;
+
+  function chat(n: number): EpicCanvasTileRef {
+    return {
+      id: `chat-${n}`,
+      instanceId: `chat-inst-${n}`,
+      type: "chat",
+      name: `Chat ${n}`,
+      hostId: "host-A",
+    };
+  }
+
+  function versionOf(n: number): HtmlArtifactVersionSelection {
+    return {
+      entryPath: "index.html",
+      versionNumber: n,
+      manifest: {
+        capturedAt: n,
+        files: {
+          "index.html": {
+            sha256: String(n).repeat(64),
+            byteLength: 10,
+            mediaType: "text/html",
+          },
+        },
+      },
+    };
+  }
+
+  function html(n: number): EpicCanvasTileRef {
+    return {
+      id: "html-1",
+      instanceId: "html-inst-1",
+      type: "html",
+      name: "Page",
+      hostId: "host-A",
+      htmlVersion: versionOf(n),
+    };
+  }
+
+  /** One pane holding `tiles`; `history` spells out which were active, most recent first. */
+  function paneCanvas(
+    tiles: ReadonlyArray<EpicCanvasTileRef>,
+    activeInstanceId: string,
+    history: ReadonlyArray<string>,
+  ): EpicCanvasState {
+    return {
+      root: {
+        ...makePane("pane-A", tiles, activeInstanceId),
+        activationHistory: history,
+      },
+      activePaneId: "pane-A",
+      tilesByInstanceId: Object.fromEntries(
+        tiles.map((tile) => [tile.instanceId, tile]),
+      ),
+      sizesByGroupId: {},
+    };
+  }
+
+  function mountHosted(canvas: EpicCanvasState): void {
+    seed(canvas);
+    useEpicCanvasStore.setState({ openTabOrder: [VIEW_TAB_ID] });
+    useTabsStore.setState({
+      items: [
+        {
+          kind: "tab",
+          id: "strip-1",
+          ref: { kind: "epic", id: VIEW_TAB_ID },
+        },
+      ],
+      activeItemId: "strip-1",
+      stripOrder: [{ kind: "epic", id: VIEW_TAB_ID }],
+    });
+    render(
+      <>
+        <MobileEpicTileView epicId="epic-1" tabId={VIEW_TAB_ID} />
+        <StableTileSurfaceHost renderRecordBody={renderHostedChatSurfaceBody} />
+      </>,
+    );
+  }
+
+  function reset(): void {
+    useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    useTabsStore.setState(useTabsStore.getInitialState(), true);
+    resetTileSurfaceMembershipForTesting();
+    resetTileSurfaceEnvironmentRegistryForTesting();
+    resetTileSurfaceGeometryCoordinatorForTesting();
+    pendingOpen.value = { intent: null };
+  }
+
+  function openFrom(
+    testId: string,
+    node: EpicCanvasTileRef,
+    gesture: "single" | "explicit",
+  ): void {
+    pendingOpen.value = {
+      intent: tileIntent(node, { tabId: VIEW_TAB_ID }, gesture, "direct_ui"),
+    };
+    fireEvent.click(screen.getByTestId(testId));
+  }
+
+  function showSecond(instanceId: string, transient: boolean): void {
+    act(() => {
+      useEpicCanvasStore
+        .getState()
+        .setMobileSecondaryTile(VIEW_TAB_ID, { instanceId, transient });
+    });
+  }
+
+  function slot() {
+    return useEpicCanvasStore.getState().mobileSecondaryTileByTabId[
+      VIEW_TAB_ID
+    ];
+  }
+
+  function canvasOf(): EpicCanvasState {
+    const canvas = useEpicCanvasStore.getState().canvasByTabId[VIEW_TAB_ID];
+    if (canvas === undefined) throw new Error("canvas not seeded");
+    return canvas;
+  }
+
+  function activeOf(chatId: string): string | null {
+    return screen.getByTestId(`hosted-${chatId}`).getAttribute("data-active");
+  }
+
+  beforeEach(() => {
+    reset();
+    shell = installShellForm(SHELL_WIDTH_TWO_TILES);
+  });
+  afterEach(() => {
+    cleanup();
+    shell.dispose();
+    reset();
+  });
+
+  describe("a chat in the second slot", () => {
+    it("paints for a chat newly opened there, with no activation of its own", () => {
+      mountHosted(paneCanvas([spec(1)], "inst-1", ["inst-1"]));
+      openFrom("open-from-spec-1", chat(2), "single");
+      expect(screen.queryByTestId("mobile-epic-second-tile")).not.toBeNull();
+      expect(screen.queryByTestId("hosted-chat-2")).not.toBeNull();
+      const pane = collectPanes(canvasOf().root)[0];
+      expect(pane.activationHistory).not.toContain("chat-inst-2");
+    });
+
+    it("stays painted while the pane's retention window is full of two other chats", () => {
+      mountHosted(
+        paneCanvas([chat(1), chat(2), chat(3)], "chat-inst-1", [
+          "chat-inst-1",
+          "chat-inst-2",
+        ]),
+      );
+      showSecond("chat-inst-3", false);
+      expect(screen.queryByTestId("hosted-chat-3")).not.toBeNull();
+    });
+  });
+
+  describe("an open from a hosted chat", () => {
+    it("lands in the second slot from the first tile's chat, leaving the first tile", () => {
+      mountHosted(paneCanvas([chat(1)], "chat-inst-1", ["chat-inst-1"]));
+      openFrom("open-from-chat-1", spec(2), "single");
+      expect(slot()?.instanceId).toBe("inst-2");
+      expect(selectMobileTile(canvasOf())?.ref.id).toBe("chat-1");
+    });
+
+    it("replaces the first tile from the second tile's chat, leaving the second", () => {
+      mountHosted(
+        paneCanvas([spec(1), chat(1)], "inst-1", ["inst-1", "chat-inst-1"]),
+      );
+      showSecond("chat-inst-1", false);
+      openFrom("open-from-chat-1", spec(2), "single");
+      expect(
+        within(screen.getByTestId("mobile-epic-tile-view")).queryByTestId(
+          "tile-spec-2",
+        ),
+      ).not.toBeNull();
+      expect(slot()?.instanceId).toBe("chat-inst-1");
+      expect(screen.queryByTestId("hosted-chat-1")).not.toBeNull();
+    });
+  });
+
+  describe("engaging a hosted chat", () => {
+    function mountTwoChats(): void {
+      mountHosted(
+        paneCanvas([chat(1), chat(2)], "chat-inst-1", [
+          "chat-inst-1",
+          "chat-inst-2",
+        ]),
+      );
+      showSecond("chat-inst-2", false);
+    }
+
+    it("hands the active surface over on a pointerdown, and back", () => {
+      mountTwoChats();
+      expect(activeOf("chat-1")).toBe("true");
+      fireEvent.pointerDown(screen.getByTestId("input-chat-2"));
+      expect(activeOf("chat-2")).toBe("true");
+      expect(activeOf("chat-1")).toBe("false");
+      fireEvent.pointerDown(screen.getByTestId("input-chat-1"));
+      expect(activeOf("chat-1")).toBe("true");
+      expect(activeOf("chat-2")).toBe("false");
+    });
+
+    it("hands the active surface over when focus alone moves into the other chat", () => {
+      mountTwoChats();
+      fireEvent.focusIn(screen.getByTestId("input-chat-2"));
+      expect(activeOf("chat-2")).toBe("true");
+      expect(activeOf("chat-1")).toBe("false");
+    });
+  });
+
+  describe("a preview", () => {
+    it("moved to the second slot survives the first tile opening another preview", () => {
+      shell.set({ width: SHELL_WIDTH_COLUMN_256, portrait: false });
+      mountHosted(paneCanvas([spec(1)], "inst-1", ["inst-1"]));
+      openFrom("open-from-spec-1", spec(2), "single");
+      openFrom("list-pick", spec(1), "explicit");
+      shell.set({ width: SHELL_WIDTH_TWO_TILES, portrait: false });
+      openFrom("open-from-spec-1", spec(2), "explicit");
+      const second = screen.getByTestId("mobile-epic-second-tile");
+      openFrom("open-from-spec-2", spec(3), "single");
+      expect(
+        within(screen.getByTestId("mobile-epic-second-tile")).queryByTestId(
+          "tile-spec-2",
+        ),
+      ).not.toBeNull();
+      expect(screen.getByTestId("mobile-epic-second-tile")).toBe(second);
+    });
+
+    it("that was the first tile and traded to the second slot by the last-open row stays on screen", () => {
+      shell.set({ width: SHELL_WIDTH_COLUMN_256, portrait: false });
+      mountHosted(paneCanvas([spec(1)], "inst-1", ["inst-1"]));
+      openFrom("open-from-spec-1", spec(2), "single");
+      showSecond("inst-1", false);
+      fireEvent.click(screen.getByTestId("switcher-last-tile-select"));
+      shell.set({ width: SHELL_WIDTH_TWO_TILES, portrait: false });
+      openFrom("open-from-spec-2", spec(3), "single");
+      const first = screen.getByTestId("mobile-epic-tile-view");
+      const second = screen.getByTestId("mobile-epic-second-tile");
+      expect(within(first).queryByTestId("tile-spec-3")).not.toBeNull();
+      expect(within(second).queryByTestId("tile-spec-2")).not.toBeNull();
+    });
+  });
+
+  describe("an open that names an HTML version", () => {
+    it.each([false, true])(
+      "adopts it on the tile in the second slot (already displayed there: %s)",
+      (displayed) => {
+        mountHosted(paneCanvas([spec(1), html(1)], "inst-1", ["inst-1"]));
+        if (displayed) showSecond("html-inst-1", false);
+        openFrom("open-from-spec-1", html(2), "explicit");
+        expect(canvasOf().tilesByInstanceId["html-inst-1"]).toMatchObject({
+          htmlVersion: versionOf(2),
+        });
+        expect(slot()?.instanceId).toBe("html-inst-1");
+      },
+    );
+
+    it("leaves how a tile got into the slot alone when it is opened there again", () => {
+      mountHosted(paneCanvas([spec(1), spec(3)], "inst-1", ["inst-1"]));
+      showSecond("inst-3", true);
+      openFrom("open-from-spec-1", spec(3), "explicit");
+      expect(slot()).toEqual({ instanceId: "inst-3", transient: true });
+    });
+  });
+
+  it("focuses a tile in the second slot of a task behind another tab, instead of dropping the open", () => {
+    seed(twoPaneCanvas("pane-A"));
+    useEpicCanvasStore.setState({
+      tabsById: {
+        ...useEpicCanvasStore.getState().tabsById,
+        "other-tab": { tabId: "other-tab", epicId: "epic-2", name: "Epic 2" },
+      },
+      canvasByTabId: {
+        ...useEpicCanvasStore.getState().canvasByTabId,
+        "other-tab": paneCanvas([spec(9)], "inst-9", ["inst-9"]),
+      },
+      activeTabId: "other-tab",
+    });
+    showSecond("inst-3", false);
+    const target = openTileWithNavigation(
+      tileIntent(spec(3), { tabId: VIEW_TAB_ID }, "explicit", "direct_ui"),
+      commitWithoutNavigation,
+      {
+        ...MANUAL_TILE_OPEN,
+        mobileTarget: { tabId: VIEW_TAB_ID, slot: "secondary" },
+      },
+    );
+    expect(target).toMatchObject({
+      paneId: "pane-B",
+      tileInstanceId: "inst-3",
     });
   });
 });

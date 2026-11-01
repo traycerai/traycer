@@ -69,25 +69,50 @@ function trackIfCanvasChanged(
 }
 
 /**
+ * An intent that names an HTML version (the chat's inline Expand) wants THAT
+ * bundle on screen, so the tile it lands on adopts it instead of staying on
+ * whatever version it was showing. An intent with no version (the sidebar row)
+ * leaves the tile's choice alone.
+ */
+function adoptIntentHtmlVersion(
+  args: Pick<ExecuteTileOpenArgs, "node" | "store">,
+  tabId: string,
+  instanceId: string,
+): void {
+  const { node, store } = args;
+  if (node.type === "html" && node.htmlVersion !== undefined) {
+    store.updateHtmlArtifactVersionInTab(tabId, instanceId, node.htmlVersion);
+  }
+}
+
+/**
  * No focus to commit: the activation, and so the route, stays on the tile the
  * person is reading. `openTileInBackgroundTab` keeps the intent's instance id,
- * which is what the slot then names.
+ * which is what the slot then names. A tile already in the slot keeps how it got
+ * there.
  */
 function showInMobileSecondary(
   plan: Extract<TileOpenPlan, { kind: "show-in-mobile-secondary" }>,
-  node: EpicCanvasTileRef,
-  source: AnalyticsSource,
-  store: EpicCanvasStore,
+  args: Pick<ExecuteTileOpenArgs, "node" | "source" | "store">,
 ): void {
-  if (plan.existingInstanceId === null) {
+  const { node, source, store } = args;
+  const { existingInstanceId, tabId } = plan;
+  if (existingInstanceId === null) {
     store.prepareOpenTileInBackgroundTabFocusTargetFromSource(
-      plan.tabId,
+      tabId,
       node,
       source,
     );
+  } else {
+    adoptIntentHtmlVersion(args, tabId, existingInstanceId);
+    if (
+      store.mobileSecondaryTileByTabId[tabId]?.instanceId === existingInstanceId
+    ) {
+      return;
+    }
   }
-  store.setMobileSecondaryTile(plan.tabId, {
-    instanceId: plan.existingInstanceId ?? node.instanceId,
+  store.setMobileSecondaryTile(tabId, {
+    instanceId: existingInstanceId ?? node.instanceId,
     transient: plan.transient,
   });
 }
@@ -127,7 +152,7 @@ export function executeTileOpen(
   const tabId = plan.tabId;
 
   if (plan.kind === "show-in-mobile-secondary") {
-    showInMobileSecondary(plan, node, source, store);
+    showInMobileSecondary(plan, args);
     return null;
   }
 
@@ -137,17 +162,7 @@ export function executeTileOpen(
     epicId === null ? prepare() : navigateNested(epicId, tabId, prepare);
 
   if (plan.kind === "focus-existing") {
-    // An intent that names an HTML version (the chat's inline Expand) wants
-    // THAT bundle on screen, so the tile it lands on adopts it instead of
-    // staying on whatever version it was showing. An intent with no version
-    // (the sidebar row) leaves the tile's choice alone.
-    if (node.type === "html" && node.htmlVersion !== undefined) {
-      store.updateHtmlArtifactVersionInTab(
-        tabId,
-        plan.instanceId,
-        node.htmlVersion,
-      );
-    }
+    adoptIntentHtmlVersion(args, tabId, plan.instanceId);
     // No `<kind>Opened` here: nothing entered the canvas, and counting a
     // focus as an open inflates every open metric.
     const target = commit(() =>

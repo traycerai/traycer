@@ -4,6 +4,7 @@ import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
 import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
 import { useBotSurfaceActionsStore } from "@/stores/bots/bot-surface-actions-store";
 import { useBotOpenThreadStore } from "@/stores/bots/bot-open-thread-store";
+import { useMobileTabOriginStore } from "@/stores/epics/mobile-tab-origin-store";
 import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 
 /**
@@ -108,6 +109,7 @@ export const useBotTabsStore = create<BotTabsState>()(
         useBotOpenThreadStore.getState().setRail(botId, null);
         useBotDraftsStore.getState().forgetBot(botId);
         useBotSurfaceActionsStore.getState().forgetBot(botId);
+        useMobileTabOriginStore.getState().forgetBot(botId);
       },
       setBotTabTitle: (botId, title) => {
         const existing = lookupBotTab(get().tabs, botId);

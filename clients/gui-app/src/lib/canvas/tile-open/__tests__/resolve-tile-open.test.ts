@@ -1115,11 +1115,16 @@ describe("mobile second tile", () => {
   });
 
   it.each<MobileTileSlot>(["primary", "secondary"])(
-    "does nothing for a tile the second slot already holds, aimed at the %s",
+    "keeps a tile the second slot already holds there, aimed at the %s",
     (target) => {
       expect(
         resolveMobile(intentFor(SPEC_B, {}), slots(target, SPEC_B.instanceId)),
-      ).toEqual({ kind: "noop" });
+      ).toEqual({
+        kind: "show-in-mobile-secondary",
+        tabId: TAB_ID,
+        existingInstanceId: SPEC_B.instanceId,
+        transient: false,
+      });
     },
   );
 

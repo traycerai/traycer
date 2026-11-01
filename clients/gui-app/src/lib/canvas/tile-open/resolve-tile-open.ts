@@ -291,8 +291,8 @@ function resolveConfiguredPlan(args: {
 
 /**
  * A dedupe hit, where two tiles fit. A tile already beside the current one stays
- * where it is: focusing it would make it the current tile, and the two would
- * collapse into one. `null` leaves the hit to the plain focus.
+ * where it is, whichever slot asked: focusing it would make it the current tile,
+ * and the two would collapse into one. `null` leaves the hit to the plain focus.
  */
 function resolveMobileSlotHit(
   slots: MobileTileOpenSlots | null,
@@ -300,8 +300,11 @@ function resolveMobileSlotHit(
   tabId: string,
 ): TileOpenPlan | null {
   if (slots === null) return null;
-  if (instanceId === slots.secondaryInstanceId) return { kind: "noop" };
-  if (slots.target === "primary" || instanceId === slots.primaryInstanceId) {
+  const inSecondary = instanceId === slots.secondaryInstanceId;
+  if (
+    !inSecondary &&
+    (slots.target === "primary" || instanceId === slots.primaryInstanceId)
+  ) {
     return null;
   }
   return {

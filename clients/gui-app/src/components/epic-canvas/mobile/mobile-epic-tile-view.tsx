@@ -1,4 +1,11 @@
-import { useCallback, useMemo, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useEffectEvent,
+  useMemo,
+  useState,
+  type ReactNode,
+} from "react";
 import { ActiveTabBody } from "@/components/epic-canvas/canvas/tab-group-view";
 import { TabBodySelectedContext } from "@/components/epic-canvas/canvas/tab-body-selected-context";
 import { PaneOpener } from "@/components/epic-canvas/canvas/pane-opener";
@@ -14,6 +21,7 @@ import {
 } from "@/components/epic-canvas/mobile/mobile-tile-header-actions";
 import type { MobileTileSelection } from "@/components/epic-canvas/mobile/mobile-tile-selection";
 import { useMobileTileReading } from "@/components/epic-canvas/mobile/use-mobile-tile-level2-form";
+import { resolveHostedTileOwnership } from "@/components/epic-canvas/surface-host/hosted-tile-resolver";
 import { usePaneVisible } from "@/components/epic-tabs/pane-visibility-context";
 import { MobileDrawerTaskPaintReporter } from "@/components/layout/shell/mobile-drawer-history-gate";
 import { isEpicArtifactKind } from "@/lib/artifacts/node-display";
@@ -75,6 +83,12 @@ export function MobileEpicTileView(props: MobileEpicTileViewProps) {
   // Which tile the person last touched is the one the epic's focused surface
   // follows; with one tile on screen, it is that one.
   const [engagedSlot, setEngagedSlot] = useState<MobileTileSlot>("primary");
+  useHostedTileEngagement({
+    tabId,
+    primary: selection,
+    secondary,
+    onEngage: setEngagedSlot,
+  });
   // Must be called before the empty-pane early return (hooks are
   // unconditional); it is 0 everywhere except an overlay-keyboard browser.
   const keyboardInset = useVirtualKeyboardInset();
@@ -196,6 +210,40 @@ export function MobileEpicTileView(props: MobileEpicTileViewProps) {
       )}
     </div>
   );
+}
+
+/**
+ * A chat paints in the stable surface host, outside its pane in both the DOM and
+ * the React tree, so the pane's capture handlers never see it. Both slots can
+ * share a pane id, so `claimHostedPaneActivation`'s pane-keyed claim cannot tell
+ * them apart either; the record's own instance can. Listened for only while two
+ * tiles show.
+ */
+function useHostedTileEngagement(args: {
+  readonly tabId: string;
+  readonly primary: MobileTileSelection | null;
+  readonly secondary: MobileTileSelection | null;
+  readonly onEngage: (slot: MobileTileSlot) => void;
+}): void {
+  const { tabId, primary, secondary, onEngage } = args;
+  const engageFrom = useEffectEvent((target: EventTarget | null) => {
+    if (!(target instanceof Element)) return;
+    const owner = resolveHostedTileOwnership(target);
+    if (owner === null || owner.viewTabId !== tabId) return;
+    if (owner.instanceId === primary?.ref.instanceId) onEngage("primary");
+    if (owner.instanceId === secondary?.ref.instanceId) onEngage("secondary");
+  });
+  const twoTiles = secondary !== null;
+  useEffect(() => {
+    if (!twoTiles) return undefined;
+    const listener = (event: Event): void => engageFrom(event.target);
+    document.addEventListener("pointerdown", listener, true);
+    document.addEventListener("focusin", listener, true);
+    return () => {
+      document.removeEventListener("pointerdown", listener, true);
+      document.removeEventListener("focusin", listener, true);
+    };
+  }, [twoTiles]);
 }
 
 /** What an open from inside each slot's tile lands in: the other one. */

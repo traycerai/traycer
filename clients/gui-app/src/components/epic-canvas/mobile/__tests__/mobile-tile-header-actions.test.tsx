@@ -51,17 +51,15 @@ function resetStores(): void {
 }
 
 /** A task opened from the bot's focused tab, as a chip in Tracy's messages opens it. */
-function openTaskFromBot(title: string): string {
-  useBotTabsStore
-    .getState()
-    .openBotTab({ botId: "bot-1", hostId: "host-A", title });
-  TabNav.navigateToTabIntent(navigateFn, botTabIntent("bot-1"), undefined);
+function openTaskFromBot(title: string, botId: string, epicId: string): string {
+  useBotTabsStore.getState().openBotTab({ botId, hostId: "host-A", title });
+  TabNav.navigateToTabIntent(navigateFn, botTabIntent(botId), undefined);
   TabNav.navigateToTabIntent(
     navigateFn,
-    openEpicTabIntent({ epicId: "epic-1", focus: undefined }),
+    openEpicTabIntent({ epicId, focus: undefined }),
     undefined,
   );
-  const tabId = useEpicCanvasStore.getState().resolveTabIdForEpic("epic-1");
+  const tabId = useEpicCanvasStore.getState().resolveTabIdForEpic(epicId);
   if (tabId === null) throw new Error("the task did not get a tab");
   return tabId;
 }
@@ -78,7 +76,7 @@ describe("<MobileTileOriginCrumb />", () => {
   });
 
   it("draws the way back to the bot a task was opened from", () => {
-    const tabId = openTaskFromBot("Tracy");
+    const tabId = openTaskFromBot("Tracy", "bot-1", "epic-1");
     render(<MobileTileOriginCrumb tabId={tabId} />);
     expect(
       screen.getByRole("button", { name: "Back to Tracy" }),
@@ -86,7 +84,7 @@ describe("<MobileTileOriginCrumb />", () => {
   });
 
   it("draws nothing for a task opened from another tab", () => {
-    const tabId = openTaskFromBot("Tracy");
+    const tabId = openTaskFromBot("Tracy", "bot-1", "epic-1");
     TabNav.navigateToTabIntent(navigateFn, homeTabIntent(), undefined);
     TabNav.navigateToTabIntent(
       navigateFn,
@@ -98,14 +96,14 @@ describe("<MobileTileOriginCrumb />", () => {
   });
 
   it("draws nothing once the bot's tab is gone", () => {
-    const tabId = openTaskFromBot("Tracy");
+    const tabId = openTaskFromBot("Tracy", "bot-1", "epic-1");
     render(<MobileTileOriginCrumb tabId={tabId} />);
     act(() => useBotTabsStore.getState().closeBotTab("bot-1"));
     expect(screen.queryByTestId("mobile-tile-origin-crumb")).toBeNull();
   });
 
   it("goes back to the bot's tab and spends the origin", () => {
-    const tabId = openTaskFromBot("Tracy");
+    const tabId = openTaskFromBot("Tracy", "bot-1", "epic-1");
     render(<MobileTileOriginCrumb tabId={tabId} />);
     navigate.mockClear();
     fireEvent.click(screen.getByRole("button", { name: "Back to Tracy" }));
@@ -116,5 +114,24 @@ describe("<MobileTileOriginCrumb />", () => {
       tabId,
     );
     expect(screen.queryByTestId("mobile-tile-origin-crumb")).toBeNull();
+  });
+  it("does not bring the way back with a reopened bot tab, and leaves another bot's origin alone", () => {
+    const closedBotTask = openTaskFromBot("Tracy", "bot-1", "epic-1");
+    const otherBotTask = openTaskFromBot("Helper", "bot-2", "epic-2");
+    act(() => useBotTabsStore.getState().closeBotTab("bot-1"));
+    useBotTabsStore
+      .getState()
+      .openBotTab({ botId: "bot-1", hostId: "host-A", title: "Tracy" });
+
+    render(
+      <>
+        <MobileTileOriginCrumb tabId={closedBotTask} />
+        <MobileTileOriginCrumb tabId={otherBotTask} />
+      </>,
+    );
+    expect(screen.queryByRole("button", { name: "Back to Tracy" })).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Back to Helper" }),
+    ).not.toBeNull();
   });
 });

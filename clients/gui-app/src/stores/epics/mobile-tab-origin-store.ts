@@ -12,6 +12,8 @@ import type { TabRef } from "@/stores/tabs/types";
 interface MobileTabOriginState {
   readonly botIdByTabId: Readonly<Record<string, string>>;
   readonly clear: (tabId: string) => void;
+  /** The bot's tab closed: reopening it later is not the tab these tasks came from. */
+  readonly forgetBot: (botId: string) => void;
 }
 
 export const useMobileTabOriginStore = create<MobileTabOriginState>((set) => ({
@@ -21,6 +23,16 @@ export const useMobileTabOriginStore = create<MobileTabOriginState>((set) => ({
       if (!Object.hasOwn(state.botIdByTabId, tabId)) return state;
       const { [tabId]: _cleared, ...others } = state.botIdByTabId;
       return { botIdByTabId: others };
+    });
+  },
+  forgetBot: (botId) => {
+    set((state) => {
+      const kept = Object.entries(state.botIdByTabId).filter(
+        ([, origin]) => origin !== botId,
+      );
+      return kept.length === Object.keys(state.botIdByTabId).length
+        ? state
+        : { botIdByTabId: Object.fromEntries(kept) };
     });
   },
 }));

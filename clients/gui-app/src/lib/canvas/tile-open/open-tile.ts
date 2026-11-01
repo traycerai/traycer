@@ -66,19 +66,21 @@ export const MANUAL_TILE_OPEN: OpenTileOptions = {
 };
 
 /**
- * The slots, where two tiles fit. A surface's target speaks for its own task's
- * canvas only: an open into another task takes that task's current tile.
+ * The slots, where two tiles fit, of the task on screen: an open into a task
+ * behind another tab has to bring its tile forward there, and has no pair on
+ * screen to keep. A surface's target speaks for its own task's canvas only.
  */
 function mobileSlotsForOpen(
   canvas: EpicCanvasState,
   tabId: string,
   mobileTarget: MobileTileOpenTarget | null,
 ): MobileTileOpenSlots | null {
-  if (!readMobileTwoTilesFit()) return null;
+  const store = useEpicCanvasStore.getState();
+  if (store.activeTabId !== tabId || !readMobileTwoTilesFit()) return null;
   const primary = selectMobileTile(canvas);
   const secondary = selectMobileSecondaryTile(
     canvas,
-    useEpicCanvasStore.getState().mobileSecondaryTileByTabId[tabId],
+    store.mobileSecondaryTileByTabId[tabId],
     primary,
   );
   return {
