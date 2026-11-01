@@ -70,6 +70,7 @@ import {
 import { readCliFeedCompatibilityEpoch } from "../registry/cli-versions";
 import type { IncompatibilityUpgradeGuidance } from "@traycer/protocol/framework/index";
 import type { Environment } from "../runner/environment";
+import { probeCliShadowedOnPath } from "./cli-on-path";
 import { probeUpdateMarkerLock } from "./update-marker-lock";
 import { probeUpdateAttemptLock } from "./update-attempt-lock";
 import {
@@ -830,6 +831,10 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
   // repair is the app's own cli-reconcile at its next successful launch.
   const cliSlotIssue = await probeDanglingCliSlotBinary(opts.environment);
   if (cliSlotIssue !== null) issues.push(cliSlotIssue);
+
+  // ---- 4b-path. The CLI a bare `traycer` runs ----
+  const cliOnPathIssue = await probeCliShadowedOnPath(opts.environment);
+  if (cliOnPathIssue !== null) issues.push(cliOnPathIssue);
 
   // ---- 4c. Host delegated-credential health ----
   // Local, cheap, and the only surface that reports this at all: the host
