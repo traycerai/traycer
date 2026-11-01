@@ -18,6 +18,7 @@ vi.mock("sonner", () => {
 import { toast } from "sonner";
 import {
   toastFromHostError,
+  toastFromHostErrorOnGesture,
   toastFromHostErrorWithDetail,
 } from "@/lib/host-error-toast";
 import {
@@ -745,5 +746,67 @@ describe("transport-class causes never reach a reportable toast", () => {
 
     expect(toast).not.toHaveBeenCalled();
     expect(toast.error).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("toastFromHostErrorOnGesture", () => {
+  afterEach(() => {
+    vi.mocked(toast.error).mockClear();
+    __resetAppLocalNotificationsStoreForTests();
+  });
+
+  it.each([
+    ["E_SHARE_PENDING_BUSY", "Send"],
+    ["E_SHARE_PENDING_RECENT_ATTEMPT", "Send"],
+    ["E_SHARE_PENDING_BUSY", "Fork"],
+  ] as const)(
+    "tells %s to press %s again in a moment, never about an invite",
+    (code, gesture) => {
+      toastFromHostErrorOnGesture(
+        makeError(code, "refused"),
+        "Couldn't continue on the team host.",
+        gesture,
+      );
+
+      expect(toast.error).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(toast.error).mock.calls[0]?.[0]).toBe(
+        `This task is still being set up. ${gesture} again in a moment.`,
+      );
+    },
+  );
+
+  it("gives any other share refusal the caller's fallback", () => {
+    toastFromHostErrorOnGesture(
+      makeError("E_SHARE_NOT_OWNED", "refused"),
+      "Couldn't continue on the team host.",
+      "Send",
+    );
+
+    expect(vi.mocked(toast.error).mock.calls[0]?.[0]).toBe(
+      "Couldn't continue on the team host.",
+    );
+  });
+
+  it("leaves a non-share error to the shared mapping", () => {
+    toastFromHostErrorOnGesture(
+      makeError("FORBIDDEN", "test error"),
+      "fallback",
+      "Send",
+    );
+
+    expect(toast.error).toHaveBeenCalledWith(
+      "You don't have permission to do that.",
+    );
+  });
+
+  it("keeps the invite copy on toastFromHostError for the same busy refusal", () => {
+    toastFromHostError(
+      makeError("E_SHARE_PENDING_BUSY", "refused"),
+      "Couldn't share.",
+    );
+
+    expect(vi.mocked(toast.error).mock.calls[0]?.[0]).toBe(
+      "This epic is busy right now, so it hasn't finished reaching the cloud. Let the current work settle, then invite again.",
+    );
   });
 });

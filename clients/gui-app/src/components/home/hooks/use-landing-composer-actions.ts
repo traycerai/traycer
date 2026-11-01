@@ -33,6 +33,7 @@ import {
   useEpicAttachmentClient,
   useEpicAttachEnvironment,
 } from "@/hooks/epic/use-epic-attach-environment-mutation";
+import { useEpicDiscardCreated } from "@/hooks/epic/use-epic-batch-delete-mutation";
 import { useCreateTuiAgentForClient } from "@/hooks/agent/use-create-tui-agent";
 import {
   authorizesCloudCapability,
@@ -234,9 +235,8 @@ export interface LandingStagedSandboxTaskArgs {
    * task is created and attached to the sandbox's team, which lets the sandbox
    * start; `giveBack` returns the message to a draft that records its
    * sandbox if setup fails, for the composer showing it to stage. A
-   * reused source keeps its newer choice: the pending send stays with a
-   * created task, and with none the message is saved in Drafts. `null` when
-   * there was nothing to hand, and nothing is created.
+   * reused source keeps its newer choice, and the message is saved in
+   * Drafts. `null` when there was nothing to hand, and nothing is created.
    */
   readonly hand: (epicId: string) => LandingSandboxSendHandoff | null;
 }
@@ -361,8 +361,9 @@ export function useLandingComposerActions(
   const queryClient = useQueryClient();
   const createEpic = useEpicCreateForClient(target.client);
   const attachClient = useEpicAttachmentClient(target.client);
-  const attachEnvironment = useEpicAttachEnvironment(attachClient);
+  const attachEnvironment = useEpicAttachEnvironment(attachClient, "Send");
   const attachEnvironmentAsync = attachEnvironment.mutateAsync;
+  const discardCreatedAsync = useEpicDiscardCreated().mutateAsync;
   const terminalAgentCreate = useCreateTuiAgentForClient(
     target.client,
     target.resolvedHostId ?? UNKNOWN_HOST_PLACEHOLDER,
@@ -1649,10 +1650,11 @@ export function useLandingComposerActions(
       const sameAccount = (): boolean =>
         (useAuthStore.getState().profile?.userId ?? null) === dispatchUserId;
       // A create or attachment refusal returns the only message copy. An
-      // attachment refusal leaves the already-created task on its placement.
-      const giveBack = (taskCreated: boolean): void => {
+      // attachment refusal then deletes the task it created, which holds
+      // nothing yet: the next Send creates its own.
+      const giveBack = (): void => {
         if (!sameAccount() || !handed.isCurrent()) return;
-        const returned = handed.giveBack(taskCreated);
+        const returned = handed.giveBack();
         if (returned === null) return;
         const { draftId } = returned;
         if (returned.kind === "opened") {
@@ -1670,7 +1672,19 @@ export function useLandingComposerActions(
       const refused = (): void => {
         if (!sameAccount()) return;
         unmarkEpicCreatedThisSession(epicId);
-        giveBack(false);
+        giveBack();
+      };
+      const attachRefused = (): void => {
+        if (!sameAccount() || !handed.isCurrent()) return;
+        giveBack();
+        // `useEpicDiscardCreated` says when this rejects.
+        void discardCreatedAsync({ epicId, hostId })
+          .then((response) => {
+            if (response.results.some((row) => row.success)) {
+              unmarkEpicCreatedThisSession(epicId);
+            }
+          })
+          .catch(() => undefined);
       };
       void createLandingEpic({
         epicId,
@@ -1703,7 +1717,7 @@ export function useLandingComposerActions(
               await attachEnvironmentAsync({ epicId, teamId: attachTeamId });
             } catch (error) {
               if (!isAttachEnvironmentUnsupported(error)) {
-                giveBack(true);
+                attachRefused();
                 return;
               }
             }
@@ -1717,6 +1731,7 @@ export function useLandingComposerActions(
       attachClient,
       attachEnvironmentAsync,
       createLandingEpic,
+      discardCreatedAsync,
       navigate,
       resolveAdmittedPlacement,
     ],

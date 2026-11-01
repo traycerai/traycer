@@ -527,7 +527,11 @@ function forkButton(): HTMLButtonElement {
 }
 
 function rpcError(
-  code: "FORBIDDEN" | "E_HOST_UNSUPPORTED" | "RPC_ERROR",
+  code:
+    | "FORBIDDEN"
+    | "E_HOST_UNSUPPORTED"
+    | "RPC_ERROR"
+    | "E_SHARE_PENDING_BUSY",
 ): HostRpcError {
   return new HostRpcError({
     code,
@@ -647,6 +651,21 @@ describe("ChatForkDialog continuing a personal task on a team host", () => {
     expect(
       screen.getByRole("textbox", { name: "Fork agent title" }),
     ).toBeTruthy();
+  });
+
+  it("says the task is still being set up, in Fork's words, creates nothing and stays open when the share is busy", async () => {
+    await startFork();
+
+    attachCalls[0]?.settle(rpcError("E_SHARE_PENDING_BUSY"));
+    await waitFor(() => {
+      expect(dialogMocks.toastError).toHaveBeenCalledTimes(1);
+    });
+
+    expect(dialogMocks.toastError.mock.calls[0]?.[0]).toBe(
+      "This task is still being set up. Fork again in a moment.",
+    );
+    expect(dialogMocks.creates).toHaveLength(0);
+    expect(onOpenChange).not.toHaveBeenCalled();
   });
 
   it("goes on to create on the team host, with no toast, when the host predates the attachment", async () => {

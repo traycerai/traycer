@@ -6,7 +6,10 @@ import { reopenEnvironmentArms } from "@/hooks/environment/use-environment-arms"
 import { useHostMutation } from "@/hooks/host/use-host-query";
 import { useHostOwnerTeamId } from "@/hooks/sandboxes/use-on-team-sandbox";
 import { useHostClient } from "@/lib/host";
-import { toastFromHostError } from "@/lib/host-error-toast";
+import {
+  toastFromHostErrorOnGesture,
+  type HostWriteGesture,
+} from "@/lib/host-error-toast";
 import { epicMutationKeys } from "@/lib/query-keys/epic-mutation-keys";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
@@ -54,9 +57,11 @@ interface EpicAttachmentContext {
  * `epic.attachEnvironment` on the person's own host: attaches the task to a
  * team so that team's hosts may serve it, before a chat continues on one of
  * them. Unsupported is left to the caller, which continues as before.
+ * `gesture` is the button that asked for it, which a refusal's copy names.
  */
 export function useEpicAttachEnvironment(
   client: HostClient<HostRpcRegistry> | null,
+  gesture: HostWriteGesture,
 ) {
   return useHostMutation<
     HostRpcRegistry,
@@ -92,7 +97,11 @@ export function useEpicAttachEnvironment(
           toast.error(ATTACH_ENVIRONMENT_REFUSED_COPY);
           return;
         }
-        toastFromHostError(error, "Couldn't continue on the team host.");
+        toastFromHostErrorOnGesture(
+          error,
+          "Couldn't continue on the team host.",
+          gesture,
+        );
       },
     },
   });

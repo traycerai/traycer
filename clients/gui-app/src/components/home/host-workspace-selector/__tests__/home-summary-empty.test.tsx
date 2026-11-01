@@ -295,6 +295,7 @@ vi.mock("@/lib/host", () => ({
 
 vi.mock("@tanstack/react-router", () => ({
   useNavigate: () => mocks.navigate,
+  useRouter: () => ({ state: { location: { pathname: "/" } } }),
 }));
 
 vi.mock("@/hooks/agent/use-create-tui-agent", () => ({

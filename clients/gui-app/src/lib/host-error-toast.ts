@@ -331,6 +331,44 @@ export function toastFromHostError(
   );
 }
 
+/** The button a person pressed for a write that refused before it ran. */
+export type HostWriteGesture = "Send" | "Fork";
+
+/**
+ * {@link toastFromHostError} for a press of Send or Fork that has to attach
+ * the task to a team first. The attachment answers with the share gate's
+ * refusals, whose copy is written for an invite; here a task still on its
+ * way to the cloud is a task still being set up, and the advice is to press
+ * the same button again. Any other share refusal gets `fallback`.
+ */
+export function toastFromHostErrorOnGesture(
+  error: HostRpcError,
+  fallback: string,
+  gesture: HostWriteGesture,
+): void {
+  const shareRefusal = epicShareRefusalFromErrorCode(error.code);
+  if (shareRefusal === null) {
+    toastFromHostError(error, fallback);
+    return;
+  }
+  const settingUp =
+    shareRefusal.kind === "promotion-pending" &&
+    (shareRefusal.reason === "busy" ||
+      shareRefusal.reason === "recent-attempt");
+  reportableErrorToast(
+    settingUp
+      ? `This task is still being set up. ${gesture} again in a moment.`
+      : fallback,
+    undefined,
+    createReportIssueContext({
+      title: "Host operation failed",
+      message: null,
+      code: error.code,
+      source: "Host",
+    }),
+  );
+}
+
 /**
  * The advice a batch notice carries for its refusals: each DISTINCT piece
  * once, in the order it first appears in the batch.
