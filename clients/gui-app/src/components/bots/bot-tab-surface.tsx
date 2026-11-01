@@ -232,10 +232,11 @@ function TracySurfaceShell(props: {
     (next: string | null) => selectTracyChannel(navigate, next, shown),
     [navigate, shown],
   );
-  const forgetChannel = useTracyChannelUpkeep({
+  const { forget: forgetChannel, unavailable } = useTracyChannelUpkeep({
     botId,
     groups,
     listed: botList.status === "success" ? botList.data.bots : null,
+    listedAt: botList.dataUpdatedAt,
     select,
   });
   useSenderLandingSpentOnDeparture(botId);
@@ -281,6 +282,7 @@ function TracySurfaceShell(props: {
         {botId === null && !threadsShown ? (
           <TracyUnselected
             groups={groups}
+            unavailable={unavailable}
             listsFailed={
               botList.status === "error" || environments.status === "error"
             }
@@ -351,18 +353,39 @@ function useSenderLandingSpentOnDeparture(botId: string | null): void {
  * The default is the surface's own choice, never an opener's: while a
  * navigation to the surface is in flight (a channel someone opened, not yet
  * acknowledged) it waits, so it never supersedes that navigation, and a
- * selected bot that goes away meanwhile is only deselected.
+ * selected bot that goes away meanwhile is only deselected. A bot reported
+ * gone is never the default (`unavailable`) until a list read newer than the
+ * report settles it: the list it was reported against still carries it.
  */
 function useTracyChannelUpkeep(input: {
   readonly botId: string | null;
   readonly groups: ReadonlyArray<HomeBotsGroup> | null;
   /** The bots of the last list read that succeeded; `null` before one. */
   readonly listed: ReadonlyArray<BotRecord> | null;
+  /** When the last list read that succeeded answered; `0` before one. */
+  readonly listedAt: number;
   readonly select: (botId: string | null) => void;
-}): (botId: string) => void {
-  const { botId, groups, listed, select } = input;
+}): {
+  readonly forget: (botId: string) => void;
+  readonly unavailable: ReadonlySet<string>;
+} {
+  const { botId, groups, listed, listedAt, select } = input;
+  // Each bot reported gone, with the list read it was reported against.
+  const [goneReports, setGoneReports] = useState<ReadonlyMap<string, number>>(
+    () => new Map(),
+  );
+  const unavailable = useMemo(
+    () =>
+      new Set(
+        [...goneReports]
+          .filter(([, reportedAt]) => reportedAt === listedAt)
+          .map(([goneBotId]) => goneBotId),
+      ),
+    [goneReports, listedAt],
+  );
   const forget = useCallback(
     (goneBotId: string): void => {
+      setGoneReports((reports) => new Map(reports).set(goneBotId, listedAt));
       const surface = useTracySurfaceStore.getState();
       surface.forgetBot(goneBotId);
       if (goneBotId !== surface.botId) return;
@@ -370,9 +393,13 @@ function useTracyChannelUpkeep(input: {
         surface.selectChannel(null);
         return;
       }
-      select(groups === null ? null : defaultTracyChannelOf(groups, goneBotId));
+      select(
+        groups === null
+          ? null
+          : defaultTracyChannelOf(groups, new Set([...unavailable, goneBotId])),
+      );
     },
-    [groups, select],
+    [groups, listedAt, select, unavailable],
   );
   const visitedBotIds = useTracySurfaceStore((state) => state.visitedBotIds);
   const seenListedRef = useRef(new Set<string>());
@@ -390,7 +417,7 @@ function useTracyChannelUpkeep(input: {
     }
   }, [forget, listed, visitedBotIds]);
   const defaultBotId =
-    groups === null ? null : defaultTracyChannelOf(groups, null);
+    groups === null ? null : defaultTracyChannelOf(groups, unavailable);
   const navigationPending = useSyncExternalStore(
     subscribeTabNavigationPending,
     tracyNavigationPending,
@@ -399,7 +426,7 @@ function useTracyChannelUpkeep(input: {
     if (botId !== null || defaultBotId === null || navigationPending) return;
     select(defaultBotId);
   }, [botId, defaultBotId, navigationPending, select]);
-  return forget;
+  return { forget, unavailable };
 }
 
 /** The channel column's groups; `null` until both lists answer. */
@@ -427,11 +454,13 @@ function useBotsGroups(
  * The pane with no channel selected. Until both lists have answered: the
  * connecting state, or, when a read failed, the failure and a Retry of both
  * (the default channel is chosen from them, so nothing else would recover).
- * Then: that there are no bots, when there are none; otherwise nothing, as
- * the default channel (or a navigation in flight) is on its way.
+ * Then: that there are no bots, when there are none but the `unavailable`
+ * ones; otherwise nothing, as the default channel (or a navigation in
+ * flight) is on its way.
  */
 function TracyUnselected(props: {
   readonly groups: ReadonlyArray<HomeBotsGroup> | null;
+  readonly unavailable: ReadonlySet<string>;
   readonly listsFailed: boolean;
   readonly onRetry: () => void;
 }): ReactNode {
@@ -447,7 +476,7 @@ function TracyUnselected(props: {
       <BotTabConnecting />
     );
   }
-  return defaultTracyChannelOf(groups, null) === null ? (
+  return defaultTracyChannelOf(groups, props.unavailable) === null ? (
     <TracyNoChannel />
   ) : null;
 }

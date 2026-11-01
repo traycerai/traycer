@@ -65,6 +65,10 @@ const script = vi.hoisted(() => {
   const listeners = new Set<() => void>();
   const state: {
     list: ListScript;
+    /** The `dataUpdatedAt` the list read reports. */
+    listUpdatedAt: number;
+    /** Bots whose subscription reports `deleted`; replaced, never mutated. */
+    deletedBotIds: ReadonlySet<string>;
     /** Replaced, never mutated, like `list`. */
     environmentsRead: EnvironmentsScript;
     environments: ReadonlyArray<EnvironmentDescriptor>;
@@ -74,6 +78,8 @@ const script = vi.hoisted(() => {
     threadLists: Readonly<Record<string, ThreadListScript>>;
   } = {
     list: { status: "pending", bots: [], mainBotIds: null, hasData: false },
+    listUpdatedAt: 1_000,
+    deletedBotIds: new Set(),
     environmentsRead: { status: "success", hasData: true },
     environments: [],
     openFails: new Set(),
@@ -94,6 +100,8 @@ const script = vi.hoisted(() => {
 
 const mocks = vi.hoisted(() => ({
   client: { stub: "tab-host-client" },
+  /** The bot of each `bot.open` call, in order. */
+  opened: new Array<string>(),
   /** One stable mutation object, like TanStack's `mutate`. */
   openMutation: {
     mutate: (
@@ -103,6 +111,10 @@ const mocks = vi.hoisted(() => ({
         onError: (error: { message: string }) => void;
       },
     ): void => {
+      mocks.opened.push(variables.botId);
+      // A reselect loop is all microtasks and never yields to a timeout, so it
+      // would hang the file; fail it here instead.
+      if (mocks.opened.length > 100) throw new Error("bot.open in a loop");
       if (script.state.openFails.has(variables.botId)) {
         options.onError({ message: "the host refused" });
         return;
@@ -120,6 +132,14 @@ function useEnvironmentsScript(): EnvironmentsScript {
     script.subscribe,
     () => script.state.environmentsRead,
     () => script.state.environmentsRead,
+  );
+}
+
+function useDeletedScript(): ReadonlySet<string> {
+  return useSyncExternalStore(
+    script.subscribe,
+    () => script.state.deletedBotIds,
+    () => script.state.deletedBotIds,
   );
 }
 
@@ -155,7 +175,7 @@ vi.mock("@/hooks/bots/use-bot-list-query", () => ({
       data: list.hasData
         ? { bots: list.bots, mainBotIds: list.mainBotIds }
         : undefined,
-      dataUpdatedAt: 1_000,
+      dataUpdatedAt: script.state.listUpdatedAt,
       errorUpdatedAt: 0,
       isFetchedAfterMount: true,
       isFetching: false,
@@ -234,13 +254,16 @@ vi.mock("@/hooks/bots/use-bot-thread-list-query", () => ({
   },
 }));
 vi.mock("@/hooks/bots/use-bot-subscription", () => ({
-  useBotSubscriptionForHost: (input: { botId: string }) => ({
-    snapshot: snapshotOf(input.botId),
-    deleted: false,
-    error: null,
-    isPending: false,
-    resubscribe: () => undefined,
-  }),
+  useBotSubscriptionForHost: (input: { botId: string }) => {
+    const deletedBotIds = useDeletedScript();
+    return {
+      snapshot: snapshotOf(input.botId),
+      deleted: deletedBotIds.has(input.botId),
+      error: null,
+      isPending: false,
+      resubscribe: () => undefined,
+    };
+  },
 }));
 vi.mock("@/hooks/host/use-connectable-host-ids", () => ({
   useConnectableHostIds: () => ({
@@ -414,6 +437,16 @@ function answerList(
   mainBotIds: Readonly<Record<string, string>> | null,
 ): void {
   script.state.list = { status: "success", bots, mainBotIds, hasData: true };
+  script.notify();
+}
+
+/** Set before the list read it belongs to, which then notifies. */
+function setListUpdatedAt(at: number): void {
+  script.state.listUpdatedAt = at;
+}
+
+function setDeletedBotIds(botIds: ReadonlySet<string>): void {
+  script.state.deletedBotIds = botIds;
   script.notify();
 }
 
@@ -599,6 +632,9 @@ function resetStores(): void {
     mainBotIds: null,
     hasData: false,
   };
+  script.state.listUpdatedAt = 1_000;
+  script.state.deletedBotIds = new Set();
+  mocks.opened.length = 0;
   script.state.environmentsRead = { status: "success", hasData: true };
   script.state.environments = ENVIRONMENTS;
   script.refetch.bots.mockReset();
@@ -822,6 +858,54 @@ describe("the Tracy surface shell", () => {
     expect(screen.getByTestId("bot-channel-sidebar")).toBeTruthy();
     expect(screen.queryByTestId("stub-channel")).toBeNull();
     expect(useTracySurfaceStore.getState().botId).toBeNull();
+  });
+
+  it("leaves the empty state, opening nothing, for the only bot its subscription reports gone while the list still carries it, until a newer list read settles it", async () => {
+    answerList([RELEASE], null);
+    const mounted = await mount();
+    act(() => {
+      openTracyEntry(mounted.navigate, null);
+    });
+    await shownChannel("bot-release");
+    const opensBefore = mocks.opened.length;
+    expect(opensBefore).toBeGreaterThan(0);
+
+    // The stream says the bot is deleted; the refresh of the list that would
+    // say so too fails, and keeps the list it had.
+    act(() => setDeletedBotIds(new Set(["bot-release"])));
+    act(() =>
+      setList({
+        status: "error",
+        bots: [RELEASE],
+        mainBotIds: null,
+        hasData: true,
+      }),
+    );
+    await screen.findByTestId("bot-tab-no-channel");
+    for (let flush = 0; flush < 3; flush += 1) {
+      await act(() => Promise.resolve());
+    }
+    expect(screen.getByTestId("bot-tab-no-channel")).toBeTruthy();
+    expect(screen.queryByTestId("stub-channel")).toBeNull();
+    expect(useTracySurfaceStore.getState().botId).toBeNull();
+    expect(mocks.opened.length).toBe(opensBefore);
+
+    // A list that answered, without the bot, leaves nothing to select.
+    act(() => {
+      setListUpdatedAt(2_000);
+      answerList([], null);
+    });
+    await screen.findByTestId("bot-tab-no-channel");
+    expect(screen.queryByTestId("stub-channel")).toBeNull();
+
+    // A list that answers with the bot again was a false alarm.
+    act(() => {
+      setListUpdatedAt(3_000);
+      setDeletedBotIds(new Set());
+      answerList([RELEASE], null);
+    });
+    await shownChannel("bot-release");
+    expect(screen.queryByTestId("bot-tab-no-channel")).toBeNull();
   });
 
   describe("no channel selected while the lists have not answered", () => {

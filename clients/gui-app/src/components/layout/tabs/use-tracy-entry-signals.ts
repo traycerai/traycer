@@ -8,7 +8,10 @@ import { useNotificationIndicators } from "@/hooks/notifications/use-notificatio
 import { useArrangedBotsModel } from "@/hooks/bots/use-arranged-bots-model";
 import { useBotListQuery } from "@/hooks/bots/use-bot-list-query";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
-import { defaultTracyChannelOf } from "@/lib/bots/tracy-channel";
+import {
+  defaultTracyChannelOf,
+  NO_EXCLUDED_CHANNELS,
+} from "@/lib/bots/tracy-channel";
 import { buildHomeBotsModel } from "@/lib/home-bots/bots-model";
 import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
 import { useBotChannelMuted } from "@/hooks/bots/use-bot-notification-level";
@@ -84,7 +87,7 @@ function useTracyEntryChannel(
   const fallback =
     botList === undefined || environments === undefined
       ? null
-      : defaultTracyChannelOf(model.groups, null);
+      : defaultTracyChannelOf(model.groups, NO_EXCLUDED_CHANNELS);
   return selected ?? fallback;
 }
 
