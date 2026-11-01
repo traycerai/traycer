@@ -83,6 +83,11 @@ export function MobileEpicTileView(props: MobileEpicTileViewProps) {
   // Which tile the person last touched is the one the epic's focused surface
   // follows; with one tile on screen, it is that one.
   const [engagedSlot, setEngagedSlot] = useState<MobileTileSlot>("primary");
+  // The second tile leaving (a rotation, its close) leaves the person in the
+  // first, and that does not change when a second tile shows again.
+  if (secondary === null && engagedSlot !== "primary") {
+    setEngagedSlot("primary");
+  }
   useHostedTileEngagement({
     tabId,
     primary: selection,
@@ -216,8 +221,8 @@ export function MobileEpicTileView(props: MobileEpicTileViewProps) {
  * A chat paints in the stable surface host, outside its pane in both the DOM and
  * the React tree, so the pane's capture handlers never see it. Both slots can
  * share a pane id, so `claimHostedPaneActivation`'s pane-keyed claim cannot tell
- * them apart either; the record's own instance can. Listened for only while two
- * tiles show.
+ * them apart either; the record's own instance can. Only while two tiles show:
+ * with one, it is the engaged tile whatever is touched.
  */
 function useHostedTileEngagement(args: {
   readonly tabId: string;
@@ -236,6 +241,8 @@ function useHostedTileEngagement(args: {
   const twoTiles = secondary !== null;
   useEffect(() => {
     if (!twoTiles) return undefined;
+    // What holds focus as two tiles start to show already engaged its tile.
+    engageFrom(document.activeElement);
     const listener = (event: Event): void => engageFrom(event.target);
     document.addEventListener("pointerdown", listener, true);
     document.addEventListener("focusin", listener, true);

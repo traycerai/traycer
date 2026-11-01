@@ -69,7 +69,10 @@ const pendingOpen = vi.hoisted(() => {
 // ActiveTabBody reads permission/snapshot/artifact state through epic-selectors;
 // stub them so the shared tile body mounts without a HostRuntimeProvider /
 // EpicSessionProvider (mirrors tab-group-view.test).
-vi.mock("@/lib/epic-selectors", () => ({
+vi.mock("@/lib/epic-selectors", async (importOriginal) => ({
+  // The rest answer as they do with no session (the retained chat's row in the
+  // list reads a few of them).
+  ...(await importOriginal<typeof import("@/lib/epic-selectors")>()),
   useEpicArtifact: (id: string) => ({ id }),
   useEpicTitle: () => "Epic 1",
   useEpicChatRecordListAuthoritative: () => true,
@@ -1011,6 +1014,43 @@ describe("<MobileEpicTileView /> with two tiles and chats painted by the stable 
     it("hands the active surface over when focus alone moves into the other chat", () => {
       mountTwoChats();
       fireEvent.focusIn(screen.getByTestId("input-chat-2"));
+      expect(activeOf("chat-2")).toBe("true");
+      expect(activeOf("chat-1")).toBe("false");
+    });
+
+    it("keeps the first chat engaged after it is used while the second is away, once two tiles show again", () => {
+      mountTwoChats();
+      fireEvent.pointerDown(screen.getByTestId("input-chat-2"));
+      expect(activeOf("chat-2")).toBe("true");
+      shell.set({ width: SHELL_WIDTH_COLUMN_256, portrait: false });
+      expect(screen.queryByTestId("mobile-epic-second-tile")).toBeNull();
+      const firstInput = screen.getByTestId("input-chat-1");
+      fireEvent.pointerDown(firstInput);
+      act(() => firstInput.focus());
+      shell.set({ width: SHELL_WIDTH_TWO_TILES, portrait: false });
+      expect(document.activeElement).toBe(firstInput);
+      expect(activeOf("chat-1")).toBe("true");
+      expect(activeOf("chat-2")).toBe("false");
+    });
+
+    it("engages the first chat, not a new second tile, after the engaged second is closed and replaced", () => {
+      mountTwoChats();
+      fireEvent.pointerDown(screen.getByTestId("input-chat-2"));
+      fireEvent.click(screen.getByTestId("mobile-secondary-tile-close"));
+      openFrom("open-from-chat-1", spec(5), "single");
+      expect(
+        within(screen.getByTestId("mobile-epic-second-tile")).queryByTestId(
+          "tile-spec-5",
+        ),
+      ).not.toBeNull();
+      expect(activeOf("chat-1")).toBe("true");
+    });
+
+    it("engages the second chat when two tiles return with focus held in its retained input", () => {
+      mountTwoChats();
+      shell.set({ width: SHELL_WIDTH_COLUMN_256, portrait: false });
+      act(() => screen.getByTestId("input-chat-2").focus());
+      shell.set({ width: SHELL_WIDTH_TWO_TILES, portrait: false });
       expect(activeOf("chat-2")).toBe("true");
       expect(activeOf("chat-1")).toBe("false");
     });
