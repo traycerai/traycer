@@ -46,6 +46,7 @@ vi.mock("@/hooks/host/use-reactive-local-host-entry", () => ({
 }));
 vi.mock("@/hooks/agent/use-host-reachability", () => ({
   useRemoteSessionPollReadiness: () => false,
+  useHostReachability: () => ({ status: "reachable" }),
 }));
 vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHostOrNull: () => null,

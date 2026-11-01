@@ -52,10 +52,7 @@ import {
 } from "@/lib/notifications/notification-chime";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { standaloneBotName } from "@/lib/home-bots/standalone-bot-name";
-import {
-  standaloneBotsSettled,
-  useStandaloneBotsStore,
-} from "@/stores/bots/standalone-bots-store";
+import { useStandaloneBotsStore } from "@/stores/bots/standalone-bots-store";
 
 export interface NotificationDisplayTarget {
   readonly showNotification: NotificationShow;
@@ -178,13 +175,14 @@ function eligibleForegroundDisplay(
   return projection === null ? null : { ...display, ...projection };
 }
 
+function currentAccountId(): string | null {
+  return useAuthStore.getState().contextMetadata?.userId ?? null;
+}
+
 function feedOccurrenceMatchesAccount(
   occurrence: NotificationFeedOccurrence,
 ): boolean {
-  return (
-    occurrence.userId ===
-    (useAuthStore.getState().contextMetadata?.userId ?? null)
-  );
+  return occurrence.userId === currentAccountId();
 }
 
 function feedOccurrenceIsFocused(
@@ -504,11 +502,12 @@ export async function displayHostChannelEmission(
   }
   await displayOnceBotNamesSettle(
     rows,
-    () =>
+    (userId) =>
       rows.map((row, index) =>
         feedOccurrenceDisplay({
           row,
           key: kept[index].key,
+          userId,
           originHostId,
           feedSource: "host",
           entry: kept[index].entry,
@@ -519,19 +518,43 @@ export async function displayHostChannelEmission(
 }
 
 /**
+ * Resolves once the directory is an answer, or `userId` is no longer the
+ * signed-in account and the arrival waiting on it is not theirs to see.
+ */
+function botNamesSettledOrAccountLeft(userId: string | null): Promise<void> {
+  const ended = (): boolean =>
+    useStandaloneBotsStore.getState().settled || currentAccountId() !== userId;
+  if (ended()) return Promise.resolve();
+  return new Promise((resolve) => {
+    const listener = (): void => {
+      if (!ended()) return;
+      leaveDirectory();
+      leaveAuth();
+      resolve();
+    };
+    const leaveDirectory = useStandaloneBotsStore.subscribe(listener);
+    const leaveAuth = useAuthStore.subscribe(listener);
+  });
+}
+
+/**
  * The first accepted occurrence's title is the one the native banner keeps, so
  * a bot's row is not named until the directory has answered; any other row
- * goes straight on.
+ * goes straight on. The occurrence keeps the account the arrival came to, so
+ * one whose account left during the wait fails the account fence below it.
  */
 async function displayOnceBotNamesSettle(
   rows: ReadonlyArray<MergedNotificationRow>,
-  occurrences: () => ReadonlyArray<NotificationFeedOccurrence>,
+  occurrences: (
+    userId: string | null,
+  ) => ReadonlyArray<NotificationFeedOccurrence>,
   target: NotificationDisplayTarget,
 ): Promise<void> {
+  const userId = currentAccountId();
   if (rows.some((row) => notificationRowBotId(row) !== null)) {
-    await standaloneBotsSettled();
+    await botNamesSettledOrAccountLeft(userId);
   }
-  await displayFeedOccurrences(rows, occurrences(), target);
+  await displayFeedOccurrences(rows, occurrences(userId), target);
 }
 
 /** Cloud copies use the origin's semantic key, never their replica row id. */
@@ -569,10 +592,11 @@ export async function displayCloudSnapshotArrivals(
     deliveries.push(
       displayOnceBotNamesSettle(
         [row],
-        () => [
+        (userId) => [
           feedOccurrenceDisplay({
             row,
             key,
+            userId,
             originHostId: entry.originHostId,
             feedSource: "cloud",
             entry: entry.entry,
@@ -588,12 +612,14 @@ export async function displayCloudSnapshotArrivals(
 function feedOccurrenceDisplay({
   row,
   key,
+  userId,
   originHostId,
   feedSource,
   entry,
 }: {
   readonly row: MergedNotificationRow;
   readonly key: string;
+  readonly userId: string | null;
   readonly originHostId: string | null;
   readonly feedSource: "host" | "cloud";
   readonly entry: HostNotificationCloudEntryV26;
@@ -601,7 +627,7 @@ function feedOccurrenceDisplay({
   const content = buildNotificationToastContent([row]);
   return {
     key,
-    userId: useAuthStore.getState().contextMetadata?.userId ?? null,
+    userId,
     chimeEventType: content.chimeEventType,
     title: content.title,
     body: content.body,

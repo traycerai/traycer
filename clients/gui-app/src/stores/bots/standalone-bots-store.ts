@@ -21,15 +21,3 @@ export const useStandaloneBotsStore = create<StandaloneBotsState>(() => ({
   directory: { model: EMPTY_HOME_BOTS_MODEL, setups: [] },
   settled: false,
 }));
-
-/** Resolves once the directory is an answer, at once if it already is. */
-export function standaloneBotsSettled(): Promise<void> {
-  if (useStandaloneBotsStore.getState().settled) return Promise.resolve();
-  return new Promise((resolve) => {
-    const unsubscribe = useStandaloneBotsStore.subscribe((state) => {
-      if (!state.settled) return;
-      unsubscribe();
-      resolve();
-    });
-  });
-}

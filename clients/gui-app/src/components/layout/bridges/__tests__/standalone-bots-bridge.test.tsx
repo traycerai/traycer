@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
+import { toast } from "sonner";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
@@ -38,10 +39,14 @@ import {
   displayCloudSnapshotArrivals,
   resetNotificationFeedDisplayReceiptsForTests,
 } from "@/lib/notifications/notification-display";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import { useStandaloneBotsStore } from "@/stores/bots/standalone-bots-store";
 
 const host = vi.hoisted(() => ({
   client: null as HostClient<HostRpcRegistry> | null,
+  support: true as boolean | null,
+  reachability: "reachable",
+  leaseStatus: null as string | null,
 }));
 
 vi.mock("next-themes", () => ({
@@ -63,8 +68,16 @@ vi.mock("@/hooks/notifications/use-notification-host", () => ({
   }),
 }));
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
-  useHostMethodSupport: () => true,
-  useHostMethodSchemaVersion: () => ({ major: 1, minor: 1 }),
+  useHostMethodSupport: () => host.support,
+  useHostMethodSchemaVersion: () =>
+    host.support === true ? { major: 1, minor: 1 } : null,
+}));
+vi.mock("@/hooks/agent/use-host-reachability", () => ({
+  useHostReachability: () => ({ status: host.reachability }),
+}));
+vi.mock("@/hooks/host/use-host-lease", () => ({
+  useHostLease: () =>
+    host.leaseStatus === null ? null : { status: host.leaseStatus },
 }));
 
 type EnvironmentRow = EnvironmentListResponseV11["environments"][number];
@@ -243,15 +256,28 @@ function deferred<T>(): {
   return { promise, resolve, reject };
 }
 
+function signIn(userId: string): void {
+  useAuthStore.setState({
+    status: "signed-in",
+    contextMetadata: { userId, username: userId },
+  });
+}
+
 beforeEach(() => {
   vi.spyOn(document, "hasFocus").mockReturnValue(true);
   resetNotificationFeedDisplayReceiptsForTests();
+  host.support = true;
+  host.reachability = "reachable";
+  host.leaseStatus = null;
+  signIn("user-a");
 });
 
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  toast.dismiss();
   useStandaloneBotsStore.setState(EMPTY_DIRECTORY_STATE);
+  useAuthStore.setState({ status: "signed-out", contextMetadata: null });
 });
 
 describe("<StandaloneBotsBridge /> on window focus", () => {
@@ -403,6 +429,114 @@ describe("a bot's notification before the directory has answered", () => {
       target,
     );
     lists.reject(new Error("bot.list failed"));
+    await act(async () => {
+      await delivery;
+    });
+
+    expect(target.showNotification.mock.calls[0]?.[0].title).toBe("Tracy");
+  });
+
+  it("shows the old account nothing once it has left, whatever the lists do after", async () => {
+    const lists = deferred<BotListResponse>();
+    const app = mountHost({
+      environments: () => ({
+        environments: [personal(), team("traycerai")],
+      }),
+      bots: () => lists.promise,
+    });
+    render(app(<Toaster />));
+    const target = nativeTarget();
+
+    const delivery = displayCloudSnapshotArrivals(
+      [verdictArrival(TEAM_MAIN_BOT_ID)],
+      target,
+    );
+    act(() => {
+      signIn("user-b");
+    });
+    // Ends with the account's departure: nothing keeps waiting on the lists.
+    await act(async () => {
+      await delivery;
+    });
+
+    lists.resolve(BOTH_BOTS);
+    await waitFor(() => {
+      expect(useStandaloneBotsStore.getState().settled).toBe(true);
+    });
+    expect(target.showNotification).not.toHaveBeenCalled();
+    expect(screen.queryByText("Tracy")).toBeNull();
+    expect(screen.queryByText("Tracy · traycerai")).toBeNull();
+  });
+});
+
+describe("a bot's notification while the serving host has no handshake", () => {
+  function nativeTarget() {
+    return {
+      showNotification: vi.fn((_request: { readonly title: string }) =>
+        Promise.resolve<NotificationShowOutcome>("presented"),
+      ),
+      playChime: vi.fn(),
+      onToastClick: vi.fn(),
+    };
+  }
+
+  function appWithNoAnswers(): ReactNode {
+    return mountHost({
+      environments: () => ({ environments: [] }),
+      bots: () => ({ bots: [], mainBotIds: {} }),
+    })(<Toaster />);
+  }
+
+  it("shows the plain name when the host is unreachable", async () => {
+    host.support = null;
+    host.reachability = "unreachable";
+    render(appWithNoAnswers());
+    const target = nativeTarget();
+
+    await act(async () => {
+      await displayCloudSnapshotArrivals(
+        [verdictArrival(TEAM_MAIN_BOT_ID)],
+        target,
+      );
+    });
+
+    expect(target.showNotification.mock.calls[0]?.[0].title).toBe("Tracy");
+    expect(await screen.findByText("Tracy")).toBeTruthy();
+  });
+
+  it("shows the plain name when the host's lease says it is dead", async () => {
+    host.support = null;
+    host.leaseStatus = "dead";
+    render(appWithNoAnswers());
+    const target = nativeTarget();
+
+    await act(async () => {
+      await displayCloudSnapshotArrivals(
+        [verdictArrival(TEAM_MAIN_BOT_ID)],
+        target,
+      );
+    });
+
+    expect(target.showNotification.mock.calls[0]?.[0].title).toBe("Tracy");
+  });
+
+  it("keeps waiting while the handshake is still under way, and goes on when it fails", async () => {
+    host.support = null;
+    host.reachability = "checking";
+    const { rerender } = render(appWithNoAnswers());
+    const target = nativeTarget();
+
+    const delivery = displayCloudSnapshotArrivals(
+      [verdictArrival(TEAM_MAIN_BOT_ID)],
+      target,
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(target.showNotification).not.toHaveBeenCalled();
+
+    host.reachability = "unreachable";
+    rerender(appWithNoAnswers());
     await act(async () => {
       await delivery;
     });
