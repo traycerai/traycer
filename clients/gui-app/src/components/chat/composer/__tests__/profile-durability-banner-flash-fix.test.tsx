@@ -265,7 +265,7 @@ function ChatComposerLikeHarness(props: {
     chatLineCarriesAutoMode: null,
     ultracodeCarried: false,
     stagedSurfaceKey: null,
-    sendsToRestingSandbox: false,
+    restingSandbox: null,
   });
   const harnessId = useStore(toolbarStore, (s) => s.selection.harnessId);
   const profileId = useStore(toolbarStore, (s) => s.selection.profileId);

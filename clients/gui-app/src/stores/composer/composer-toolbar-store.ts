@@ -27,6 +27,7 @@ import {
 import { buildChatRunSettings } from "@/lib/composer/chat-run-settings";
 import { sortGuiHarnessesByProviderOrder } from "@/lib/provider-ordering";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
+import type { RestingSandboxHost } from "@/hooks/sandboxes/use-resting-sandbox-host";
 
 /**
  * Per-composer toolbar state (model/permission/reasoning/tier).
@@ -189,10 +190,12 @@ export interface ComposerToolbarState extends ComposerToolbarDerived {
    * The sandbox this composer's send runs on instead of its host: one staged
    * for a new task, or the resting sandbox a chat's next message wakes;
    * `null` when the send runs on the host. Its Traycer models are the cloud
-   * catalog's, so the picker labels and lists Traycer from there, and a
-   * resting one is never described as an offline host.
+   * catalog's, so the picker labels and lists Traycer from there, and neither
+   * is described as an offline host.
    */
   readonly sandboxRunTarget: "staged" | "resting" | null;
+  /** That sandbox while it rests; `null` for one a stage is yet to create. */
+  readonly restingRunHost: RestingSandboxHost | null;
   /**
    * Where a stage's kept pick (`shownPickValues`) is written: the surface's
    * own draft, so a reload that shows the draft shows that pick. `null` on a
@@ -201,7 +204,7 @@ export interface ComposerToolbarState extends ComposerToolbarDerived {
    */
   readonly onShownPickKept: ((settings: ChatRunSettings) => void) | null;
   /**
-   * Whether the last catalog push derived under a stage's model hold. A stage
+   * Whether the last catalog push derived under a sandbox's model hold. One
    * can come or go with no change to the catalog, on a sandbox host.
    */
   readonly modelHeld: boolean;
@@ -327,11 +330,11 @@ export function createComposerToolbarStore(
   const policy: ToolbarSurfacePolicy = {
     purpose,
     reasoningFallback: input.reasoningFallback,
-    staged: false,
+    pickHeld: false,
   };
   const policyFor = (state: ComposerToolbarState): ToolbarSurfacePolicy => ({
     ...policy,
-    staged: state.sandboxRunTarget === "staged",
+    pickHeld: state.sandboxRunTarget !== null,
   });
   const initialCatalog: ComposerToolbarCatalog = {
     hostId: input.hostId,
@@ -396,6 +399,7 @@ export function createComposerToolbarStore(
       onSettingsChange: input.onSettingsChange,
       pendingSettingsEmit: false,
       sandboxRunTarget: null,
+      restingRunHost: null,
       onShownPickKept: null,
       modelHeld: false,
       stageKeepsShownPick: false,
@@ -492,8 +496,8 @@ export function createComposerToolbarStore(
 
       setCatalog: (catalog) => {
         const state = get();
-        const { staged } = policyFor(state);
-        if (settledOn(state, catalog, staged)) return;
+        const { pickHeld } = policyFor(state);
+        if (settledOn(state, catalog, pickHeld)) return;
         const keptDerived = deriveToolbarState(
           state.values,
           catalog,
@@ -523,7 +527,7 @@ export function createComposerToolbarStore(
         set({
           catalog,
           values,
-          modelHeld: staged,
+          modelHeld: pickHeld,
           ...derived,
           // Only an emit clears the deferred flag; a silent push leaves it as-is.
           pendingSettingsEmit:
@@ -573,11 +577,11 @@ interface ToolbarSurfacePolicy {
   readonly purpose: ComposerToolbarPurpose;
   readonly reasoningFallback: ReasoningFallback;
   /**
-   * A sandbox is staged, so the pick's model is held as it is, name included,
-   * whatever this catalog lists. No catalog moves the chip off it; a model the
-   * sandbox does not run is refused at Send.
+   * The send runs on a sandbox, so the pick's model is held as it is, name
+   * included, whatever this catalog lists. No catalog moves the chip off it; a
+   * model the sandbox does not run is refused at Send.
    */
-  readonly staged: boolean;
+  readonly pickHeld: boolean;
 }
 
 function deriveToolbarState(
@@ -586,7 +590,7 @@ function deriveToolbarState(
   previous: ComposerToolbarDerived | null,
   policy: ToolbarSurfacePolicy,
 ): ComposerToolbarDerived {
-  const { purpose, reasoningFallback, staged } = policy;
+  const { purpose, reasoningFallback, pickHeld } = policy;
   const availabilitySelection = presentedHarnessSelection(
     values.selection,
     catalog,
@@ -624,7 +628,7 @@ function deriveToolbarState(
       models,
       catalogLoadedForHarness,
     );
-  const selectedModel = presentedModel(models, selection, previous, staged);
+  const selectedModel = presentedModel(models, selection, previous, pickHeld);
   // Harness-level capabilities (currently just supportedPermissionModes) come
   // from `listGuiHarnesses`. `null` covers both "catalog still loading" and
   // "selected harness id isn't in it"; `normalizePermissionMode`
@@ -800,15 +804,15 @@ function keptPickSettings(
     : null;
 }
 
-/** The model listed for `selection`, or the one a stage holds it on. */
+/** The model listed for `selection`, or the one a held pick stands on. */
 function presentedModel(
   models: ReadonlyArray<ModelOption>,
   selection: HarnessModelSelection,
   previous: ComposerToolbarDerived | null,
-  staged: boolean,
+  pickHeld: boolean,
 ): ModelOption | null {
   const listed = findSelectedModel(models, selection);
-  if (listed !== null || !staged || previous === null) return listed;
+  if (listed !== null || !pickHeld || previous === null) return listed;
   return sameShownPick(previous.selection, selection)
     ? previous.selectedModel
     : null;
@@ -857,9 +861,9 @@ function decideCatalogTransition(
 function settledOn(
   state: ComposerToolbarState,
   catalog: ComposerToolbarCatalog,
-  staged: boolean,
+  pickHeld: boolean,
 ): boolean {
-  return state.modelHeld === staged && sameCatalog(state.catalog, catalog);
+  return state.modelHeld === pickHeld && sameCatalog(state.catalog, catalog);
 }
 
 function sameCatalog(
@@ -970,7 +974,7 @@ function presentedModelSlug(
   policy: ToolbarSurfacePolicy,
 ): string {
   if (
-    (policy.purpose === "setting" || policy.staged) &&
+    (policy.purpose === "setting" || policy.pickHeld) &&
     selection.modelSlug.length > 0
   ) {
     return selection.modelSlug;

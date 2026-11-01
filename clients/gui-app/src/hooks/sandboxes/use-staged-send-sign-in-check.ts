@@ -23,9 +23,9 @@ import {
   sandboxAgentNotOfferedNotice,
   sandboxAgentsUncheckedNotice,
   sandboxModelNotOfferedNotice,
+  traycerModelRefused,
   type SandboxAgentRemedies,
 } from "@/lib/sandboxes/sandbox-agent-refusal";
-import { modelCoveredByCatalog } from "@/stores/composer/composer-toolbar-store";
 import type { StagedSandbox } from "@/stores/composer/staged-sandbox-store";
 
 export interface StagedSendSignInCheck {
@@ -86,11 +86,7 @@ export function useStagedSendSignInCheck(
   const modelNotice = useCallback(
     (remedies: SandboxAgentRemedies): ComposerHostNoticeState | null => {
       if (modelsPending) return CHECKING_NOTICE;
-      if (
-        models === undefined ||
-        modelCoveredByCatalog(models, "traycer", modelSlug)
-      )
-        return null;
+      if (!traycerModelRefused(models, modelSlug)) return null;
       return sandboxModelNotOfferedNotice(
         modelName,
         offeredAgents ?? null,

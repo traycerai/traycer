@@ -1,6 +1,8 @@
 import { useCallback } from "react";
 import type { ChatComposerSubmitInput } from "@/components/chat/composer/chat-composer";
 import { useSandboxCatalogue } from "@/hooks/sandboxes/use-sandbox-catalogue-query";
+import { useSandboxTraycerModels } from "@/hooks/sandboxes/use-sandbox-traycer-models-query";
+import { traycerModelRefused } from "@/lib/sandboxes/sandbox-agent-refusal";
 import type { RestingChatSandbox } from "@/lib/sandboxes/chat-sandbox-state";
 import { handPendingSandboxSend } from "@/lib/sandboxes/pending-sandbox-send";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -11,9 +13,10 @@ import { usePendingSandboxSendStore } from "@/stores/sandboxes/pending-sandbox-s
 /**
  * Capture a bound chat's send before the ordinary pending driver wakes it.
  *
- * An agent the cloud catalogue says sandboxes don't run is refused here, before
- * anything is staged, so the sandbox is never woken for it - the same check a
- * new sandbox's Send makes (`useStagedSendSignInCheck`). So is every send while
+ * An agent the cloud catalogue says sandboxes don't run, or a Traycer model
+ * their list leaves out, is refused here, before anything is staged, so the
+ * sandbox is never woken for it - the same check a new sandbox's Send makes
+ * (`useStagedSendSignInCheck`). So is every send while
  * there is no catalogue to check against (still reading, or a read that
  * failed); an older server's catalogue that names no agents lets it through.
  * The composer's gate shows those refusals; this is the backstop at the send
@@ -26,6 +29,7 @@ export function useBoundSandboxSend(input: {
 }): (submission: ChatComposerSubmitInput) => boolean {
   const { epicId, chatId, target } = input;
   const catalogue = useSandboxCatalogue(target !== null).data;
+  const traycerModels = useSandboxTraycerModels(target !== null).data;
   return useCallback(
     (submission: ChatComposerSubmitInput): boolean => {
       if (target === null || catalogue === undefined) return false;
@@ -33,6 +37,11 @@ export function useBoundSandboxSend(input: {
       if (
         offeredAgents !== undefined &&
         !offeredAgents.includes(submission.settings.harnessId)
+      )
+        return false;
+      if (
+        submission.settings.harnessId === "traycer" &&
+        traycerModelRefused(traycerModels, submission.settings.model)
       )
         return false;
       const userId = useAuthStore.getState().profile?.userId ?? null;
@@ -88,6 +97,6 @@ export function useBoundSandboxSend(input: {
         }) !== null
       );
     },
-    [catalogue, chatId, epicId, target],
+    [catalogue, chatId, epicId, target, traycerModels],
   );
 }

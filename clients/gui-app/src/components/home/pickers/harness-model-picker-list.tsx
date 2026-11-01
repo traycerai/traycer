@@ -5,6 +5,7 @@ import {
 } from "react-virtuoso";
 import type { HarnessModelRow } from "@/components/home/data/harness-model-search";
 import type { MaxModeContext } from "@/components/home/data/model-max-mode";
+import type { RestingSandboxHost } from "@/hooks/sandboxes/use-resting-sandbox-host";
 import type { GuiHarnessCatalogEntry } from "@/hooks/harnesses/use-gui-harness-catalog";
 import { HarnessModelPickerItem } from "@/components/home/pickers/harness-model-picker-item";
 import { ModelRowsState } from "@/components/home/pickers/harness-model-picker-empty";
@@ -26,6 +27,7 @@ interface HarnessModelPickerListProps {
   readonly initialTopMostItemIndex: IndexLocationWithAlign;
   readonly catalogLoading: boolean;
   readonly catalogError: boolean;
+  readonly restingModelPrompt: RestingSandboxHost | null;
   readonly hostUnavailableLabel: string | null;
   readonly activeProvider: GuiHarnessCatalogEntry | null;
   readonly activeProviderState: ProviderCliState | null;
@@ -57,6 +59,7 @@ export function HarnessModelPickerList(
     initialTopMostItemIndex,
     catalogLoading,
     catalogError,
+    restingModelPrompt,
     hostUnavailableLabel,
     activeProvider,
     activeProviderState,
@@ -73,6 +76,7 @@ export function HarnessModelPickerList(
   const stateRow = ModelRowsState({
     catalogLoading,
     catalogError,
+    restingModelPrompt,
     hostUnavailableLabel,
     hasQuery,
     activeProvider,

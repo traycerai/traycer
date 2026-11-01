@@ -1,4 +1,4 @@
-import { useCallback, useMemo, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, type ReactNode } from "react";
 import { create } from "zustand";
 import type { AuthenticatedUser } from "@traycer/protocol/auth";
 import type {
@@ -38,6 +38,11 @@ import {
 import { useStageFallbackHostLine } from "@/hooks/sandboxes/use-stage-fallback-host-line";
 import { useSandboxCatalogue } from "@/hooks/sandboxes/use-sandbox-catalogue-query";
 import { useSandboxCosts } from "@/hooks/sandboxes/use-sandbox-costs-query";
+import { useRestingSandboxHost } from "@/hooks/sandboxes/use-resting-sandbox-host";
+import { useSandboxHostConfiguration } from "@/hooks/sandboxes/use-on-team-sandbox";
+import { useSandboxList } from "@/hooks/sandboxes/use-sandbox-list-query";
+import { useSandboxTraycerModels } from "@/hooks/sandboxes/use-sandbox-traycer-models-query";
+import { traycerModelsUnknown } from "@/lib/sandboxes/sandbox-agent-refusal";
 import { useMaybeEpicStore } from "@/hooks/use-epic-store";
 import { useSampledNow } from "@/lib/relative-time";
 import { stagedSandboxName } from "@/lib/sandboxes/staged-sandbox-name";
@@ -79,6 +84,7 @@ import {
   reachSentence,
   sandboxOsLabel,
   sandboxShapeLabel,
+  restingPickLabel,
   stagedChipLabel,
   stoppedPickLabel,
   suspendedPickLabel,
@@ -200,6 +206,70 @@ export function stagingSurfaceKey(
   return surface === null ? null : surface.surfaceKey;
 }
 
+export interface RestingHostStageInput {
+  readonly surfaceKey: string | null;
+  readonly hostId: string | null;
+  readonly named: boolean;
+}
+
+/**
+ * Stages the sandbox a composer already rests on, which it reached by naming
+ * or by default rather than by a pick: its gates ask a host that answers
+ * nothing, and only a stage's Send wakes it. Taken off again if the sandbox
+ * wakes or the surface goes unsent; a send has moved it by then. A named host
+ * takes the place of a stage still waiting, since naming it is the request.
+ */
+export function useRestingHostStage(input: RestingHostStageInput): void {
+  const { surfaceKey, hostId, named } = input;
+  const resting = useRestingSandboxHost(hostId);
+  const verb = resting === null ? null : resting.verb;
+  const configuration = useSandboxHostConfiguration(hostId);
+  const row = useSandboxList().data?.sandboxes.find(
+    (sandbox) => sandbox.hostId === hostId,
+  );
+  const sandboxId = row === undefined ? null : row.id;
+  const name = row === undefined ? null : row.displayName;
+  useEffect(() => {
+    if (
+      surfaceKey === null ||
+      hostId === null ||
+      verb === null ||
+      configuration === null ||
+      sandboxId === null ||
+      name === null
+    )
+      return;
+    const current = readStagedSandbox(surfaceKey);
+    if (current !== null && (!named || current.phase !== "staged")) return;
+    const store = useStagedSandboxStore.getState();
+    store.stage(surfaceKey, {
+      kind: "existing",
+      hostId,
+      sandboxId,
+      name,
+      configuration,
+      verb,
+    });
+    const stage = readStagedSandbox(surfaceKey);
+    return () => {
+      if (readStagedSandbox(surfaceKey) === stage) {
+        useStagedSandboxStore.getState().clear(surfaceKey);
+      }
+    };
+  }, [configuration, hostId, name, named, sandboxId, surfaceKey, verb]);
+}
+
+/**
+ * The host a request names, for staging: none while it rests, since a resting
+ * sandbox takes a stage however it was reached (`useRestingHostStage`).
+ */
+export function useUnstagedNamedHost(
+  namedHostId: string | null,
+  resolvedHostId: string | null,
+): string | null {
+  return useRestingSandboxHost(resolvedHostId) === null ? namedHostId : null;
+}
+
 /** A composer surface's staging, as the picker, the block and the sheet read it. */
 export interface SandboxStaging {
   readonly composer: HostSwitcherComposerMode;
@@ -272,6 +342,7 @@ export function useSandboxStaging(input: {
     (s) => s.lastConfigurationByHost,
   );
   const stage = useStagedSandbox(surfaceKey);
+  const modelsUnknown = useStagedModelsUnknown(stage, reads);
   const { openSettings } = useSystemTabModalActions();
   const sheetKey = useShapeSheetStore((s) => s.openFor[surfaceKey] ?? null);
   const setSheetKey = useCallback(
@@ -496,7 +567,9 @@ export function useSandboxStaging(input: {
           ? null
           : stageConfigurationKey(stage.target.configuration),
       stagedLabel:
-        stage === null ? null : stagedLabel(stage, stagedFacts, input.hosts),
+        stage === null
+          ? null
+          : stagedLabel(stage, stagedFacts, input.hosts, modelsUnknown),
       // Running, not settled: a refusal or a failure ends the wait.
       stagedBusy:
         stage !== null && stage.phase !== "staged" && stage.failure === null,
@@ -547,6 +620,7 @@ export function useSandboxStaging(input: {
     input.hosts,
     lastConfigurationByHost,
     memoryHostId,
+    modelsUnknown,
     now,
     openSettings,
     reachFor,
@@ -624,6 +698,15 @@ export function useSandboxStaging(input: {
     },
     chooseAnotherHostLabel,
   };
+}
+
+/** Whether a staged sandbox's Send has no model list to go on. */
+function useStagedModelsUnknown(
+  stage: StagedSandbox | null,
+  reads: boolean,
+): boolean {
+  const staged = stage !== null && stage.target.kind === "existing";
+  return traycerModelsUnknown(useSandboxTraycerModels(reads && staged));
 }
 
 function newRowFacts(input: {
@@ -737,6 +820,7 @@ function stagedLabel(
   stage: StagedSandbox,
   facts: NewRowFacts | null,
   hosts: readonly HostScopeOption[],
+  modelsUnknown: boolean,
 ): string {
   const { target } = stage;
   if (target.kind === "existing") {
@@ -754,6 +838,7 @@ function stagedLabel(
     const verb =
       row === undefined || row === null ? target.verb : restingVerb(row.state);
     if (verb === null) return awakePickLabel(target.name);
+    if (modelsUnknown) return restingPickLabel(target.name, verb);
     return verb === "resume"
       ? suspendedPickLabel(target.name)
       : stoppedPickLabel(target.name);

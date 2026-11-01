@@ -265,7 +265,7 @@ function Composer(props: { readonly pick: ChatRunSettings }): ReactNode {
       chatLineCarriesAutoMode: null,
       ultracodeCarried: false,
       stagedSurfaceKey: SURFACE,
-      sendsToRestingSandbox: false,
+      restingSandbox: null,
     },
   );
   return (

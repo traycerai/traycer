@@ -182,7 +182,9 @@ import { ActiveHostWorkspaceControls } from "@/components/home/host-workspace-se
 import {
   stagingSurfaceKey,
   useInTaskSandboxStagingSurface,
+  useUnstagedNamedHost,
 } from "@/components/composer/use-sandbox-staging";
+import { RestingHostStage } from "@/components/composer/resting-host-stage";
 import {
   useStagedSandboxHandoff,
   useStagedSandboxSend,
@@ -1123,6 +1125,7 @@ export function NewConversationModalBody(props: {
     resolvedHostId,
     "epic.createChat",
   );
+  const unstagedHostId = useUnstagedNamedHost(hostId, resolvedHostId);
   const toolbarStore = useComposerToolbarStore(
     null,
     fallbackSeedSource(draftSettings, hostClient),
@@ -1134,10 +1137,10 @@ export function NewConversationModalBody(props: {
       chatLineCarriesAutoMode: null,
       ultracodeCarried,
       // The key `useInTaskSandboxStagingSurface` stages under below; a named
-      // host stages nothing.
+      // host stages nothing unless it rests.
       stagedSurfaceKey:
-        hostId === null ? newConversationSurfaceKey(epicId) : null,
-      sendsToRestingSandbox: false,
+        unstagedHostId === null ? newConversationSurfaceKey(epicId) : null,
+      restingSandbox: null,
     },
   );
   // A stage's kept pick goes to this modal's draft, as its own emit does,
@@ -1256,10 +1259,10 @@ export function NewConversationModalBody(props: {
   const sandboxStaging = useInTaskSandboxStagingSurface(
     epicId,
     newConversationSurfaceKey(epicId),
-    hostId,
+    unstagedHostId,
     openTerminalInstead,
   );
-  useNewConversationReturnedSandbox(epicId, hostId);
+  const draftHoldsSandbox = useNewConversationReturnedSandbox(epicId, hostId);
   const workspaceGate = useStagedWorkspaceGate(
     stagingSurfaceKey(sandboxStaging),
     workspaceAvailability,
@@ -2535,6 +2538,12 @@ export function NewConversationModalBody(props: {
     <ComposerStagedSurfaceKeyProvider
       surfaceKey={stagingSurfaceKey(sandboxStaging)}
     >
+      <RestingHostStage
+        surfaceKey={stagingSurfaceKey(sandboxStaging)}
+        hostId={resolvedHostId}
+        named={hostId !== null}
+        draftHoldsSandbox={draftHoldsSandbox}
+      />
       <ComposerBody
         pickerStore={pickerStore}
         editorRef={editorRef}

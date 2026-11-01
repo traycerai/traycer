@@ -208,7 +208,7 @@ function catalogScope(tuiOnly: boolean): ComposerToolbarCatalogScope {
     chatLineCarriesAutoMode: null,
     ultracodeCarried: false,
     stagedSurfaceKey: null,
-    sendsToRestingSandbox: false,
+    restingSandbox: null,
   };
 }
 
@@ -1719,7 +1719,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
         chatLineCarriesAutoMode: null,
         ultracodeCarried: false,
         stagedSurfaceKey: null,
-        sendsToRestingSandbox: false,
+        restingSandbox: null,
       }),
     );
 
@@ -1743,7 +1743,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
         chatLineCarriesAutoMode: null,
         ultracodeCarried: false,
         stagedSurfaceKey: null,
-        sendsToRestingSandbox: false,
+        restingSandbox: null,
       }),
     );
 
@@ -1775,7 +1775,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
           chatLineCarriesAutoMode: null,
           ultracodeCarried: false,
           stagedSurfaceKey: null,
-          sendsToRestingSandbox: false,
+          restingSandbox: null,
         }),
       { initialProps: { hostClient: hostAClient, hostId: "host-a" } },
     );
@@ -1805,7 +1805,7 @@ describe("useComposerToolbarStore on a sandbox host", () => {
       chatLineCarriesAutoMode: null,
       ultracodeCarried: false,
       stagedSurfaceKey: null,
-      sendsToRestingSandbox: false,
+      restingSandbox: null,
     };
   }
 

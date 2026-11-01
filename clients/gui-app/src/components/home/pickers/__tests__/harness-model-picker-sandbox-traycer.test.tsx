@@ -570,7 +570,10 @@ function SandboxComposerPicker(props: {
       chatLineCarriesAutoMode: null,
       ultracodeCarried: false,
       stagedSurfaceKey: props.target === "staged" ? STAGED_SURFACE : null,
-      sendsToRestingSandbox: props.target === "resting",
+      restingSandbox:
+        props.target === "resting"
+          ? { hostId: props.hostId, name: props.hostId, verb: "resume" }
+          : null,
     },
   );
   return (

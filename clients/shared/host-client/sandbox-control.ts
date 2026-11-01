@@ -983,7 +983,9 @@ export function isSandboxAsleep(state: HostSandboxState | null): boolean {
  * plane is already bringing it up (a wake arriving mid-suspend is resumed by
  * the server once the suspend lands, so `suspending` takes `resume` too).
  */
-function wakeVerbFor(state: HostSandboxState | null): SandboxWakeVerb | null {
+export function wakeVerbFor(
+  state: HostSandboxState | null,
+): SandboxWakeVerb | null {
   switch (state) {
     case "suspending":
     case "suspended":

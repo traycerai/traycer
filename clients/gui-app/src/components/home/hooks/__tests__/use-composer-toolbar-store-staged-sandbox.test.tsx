@@ -279,7 +279,7 @@ function renderLandingToolbar(
         chatLineCarriesAutoMode: null,
         ultracodeCarried: false,
         stagedSurfaceKey: SURFACE,
-        sendsToRestingSandbox: false,
+        restingSandbox: null,
       },
     ),
   );
