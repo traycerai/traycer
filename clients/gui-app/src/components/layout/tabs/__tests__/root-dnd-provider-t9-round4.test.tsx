@@ -1,5 +1,5 @@
 /**
- * T9 round-4 real-wiring coverage. Round 1-3 caught divider/chooser/pair/
+ * Real-wiring coverage. Round 1-3 caught divider/chooser/pair/
  * DnD bugs whose retained tests only exercised helpers and pure machines
  * (`resolveValidatedTopLevelTabDrop`) directly - hiding regressions in the
  * actual `RootDndProvider` wiring (the DnD commit's activation seam). These

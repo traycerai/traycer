@@ -107,6 +107,7 @@ const CONTENT: JsonContent = {
 };
 
 const SETTINGS: ChatRunSettings = {
+  ultracode: false,
   harnessId: "claude",
   model: "claude-sonnet-4-5",
   permissionMode: "supervised",
@@ -176,7 +177,7 @@ function emptyChat(): Chat {
 }
 
 function emitSnapshot(callbacks: ChatStreamCallbacks): void {
-  callbacks.onConnectionStatus("open", null, null);
+  callbacks.onConnectionStatus("open", null, null, null);
   callbacks.onSnapshot({
     kind: "snapshot",
     hasBinaryPayload: false,

@@ -50,6 +50,7 @@ vi.mock("@dnd-kit/sortable", () => ({
 }));
 
 const SETTINGS: ChatRunSettings = {
+  ultracode: false,
   harnessId: "codex",
   model: "codex-test",
   permissionMode: "supervised",

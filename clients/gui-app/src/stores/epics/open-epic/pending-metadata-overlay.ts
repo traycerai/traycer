@@ -223,7 +223,7 @@ interface ResolvedPendingChain {
  * The overcorrection - "if the row's value equals one of our targets, that's
  * our write landing, keep applying the rest" - infers causality from VALUE
  * EQUALITY, and a peer independently writing the same value is
- * indistinguishable from our echo. The first review of this file shipped that
+ * indistinguishable from our echo. This file first shipped that
  * inference and it let a stale local patch outrank an authoritative peer
  * write.
  *

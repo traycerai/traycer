@@ -3178,17 +3178,6 @@ describe("<HomeFocusView /> a split task with a prompt on one host", () => {
   });
 });
 
-/**
- * The phone layout, asserted as STRUCTURE and CLASSES rather than as geometry.
- *
- * jsdom has no layout engine and no container queries, so nothing here can
- * measure an overlap - which is the failure this suite is about. What it can
- * pin down is the mechanism: the section is a container, every row carries the
- * fold, the two fixed tracks release inside it, the badge cluster dissolves
- * into the meta line instead of overflowing a collapsed box, and the name is
- * the item that grows. Those five together are what the overlap was the absence
- * of.
- */
 /** 64 characters, which is what a GCE internal DNS name actually looks like -
  * and the label that ran off the edge of the reported screenshot. */
 const LONG_HOST_LABEL =
@@ -3201,6 +3190,17 @@ const LONG_TASK_TITLE = "Configure the release status bar presets";
  * `via <parent>` trail and a `driven by <agent>` status note are made of. */
 const LONG_AGENT_NAME = "Status bar layout reviewer and final approver";
 
+/**
+ * The phone layout, asserted as STRUCTURE and CLASSES rather than as geometry.
+ *
+ * jsdom has no layout engine and no container queries, so nothing here can
+ * measure an overlap - which is the failure this suite is about. What it can
+ * pin down is the mechanism: the section is a container, every row carries the
+ * fold, the two fixed tracks release inside it, the badge cluster dissolves
+ * into the meta line instead of overflowing a collapsed box, and the name is
+ * the item that grows. Those five together are what the overlap was the absence
+ * of.
+ */
 describe("<HomeFocusView /> narrow rows", () => {
   /** One task with every row shape under it, so a class assertion covers the
    * whole family rather than the one shape that happened to be checked. */

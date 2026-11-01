@@ -158,6 +158,11 @@ const HOST_START_COMPAT_LAUNCHER = `${PRODUCT_NAME} Host`;
 // whoever finds it next, and `launchctl print` is where operators look.
 const HOST_NODE_OPTIONS = "--max-semi-space-size=64";
 const HOST_SOFT_FILE_DESCRIPTOR_LIMIT = 8_192;
+// launchd's SIGKILL bound after the SIGTERM of a `bootout` or `kickstart -k`.
+// The CLI's `buildPlist` writes `LAUNCHD_EXIT_TIMEOUT_SECONDS`
+// (`shared/host-start-adoption/spawn-edge-bounds.ts`); this file cannot import
+// TypeScript, so its test pins the two to each other.
+const HOST_EXIT_TIMEOUT_SECONDS = 47;
 // Matches `PRODUCTION_LABEL.id` in `src/electron-main/host/host-paths.ts`.
 // Release builds derive this label from their target stamp; the fallbacks below
 // retain the production identity for the historical unstamped package path.
@@ -257,6 +262,8 @@ ${programArgsXml}
   </dict>
   <key>ThrottleInterval</key>
   <integer>10</integer>
+  <key>ExitTimeOut</key>
+  <integer>${HOST_EXIT_TIMEOUT_SECONDS}</integer>
   <key>ProcessType</key>
   <string>Interactive</string>
   <key>SoftResourceLimits</key>

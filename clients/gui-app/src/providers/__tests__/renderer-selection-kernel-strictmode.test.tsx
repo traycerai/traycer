@@ -25,8 +25,8 @@ import { transportEvidenceRelay } from "@/lib/host/transport-evidence";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 
 /**
- * The window's kernel must survive a StrictMode remount (redesign P1.3, review
- * finding F2 - the fourth test class: cross-owner composition).
+ * The window's kernel must survive a StrictMode remount (redesign P1.3,
+ * F2 - the fourth test class: cross-owner composition).
  *
  * Neither half of this is visible to a test of either piece alone. The kernel
  * is correct; `HostRuntimeProvider`'s effect is correct; the client's
@@ -66,7 +66,7 @@ function buildAuthority(): TestAuthority {
     // A PROVISIONABLE local host, so the derivation this test reads is the
     // ordinary one. The `unavailable` port would be honest about a shell that
     // owns no host process, but here it just makes the local host `dead` and
-    // fails the window over to the remote - a real behaviour (registry §5),
+    // fails the window over to the remote - a real behaviour,
     // and a distraction from what is under test.
     localHostEnsure: { ensureReady: () => Promise.resolve({ ok: true }) },
     localOutage: inertLocalHostOutageSignal,

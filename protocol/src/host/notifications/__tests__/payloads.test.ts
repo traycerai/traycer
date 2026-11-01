@@ -3,6 +3,7 @@ import {
   deriveHostNotificationStoppedReason,
   HOST_NOTIFICATION_STOPPED_REASONS,
   HOST_OPERATION_MANAGED_COMMAND_DELIVERY,
+  isBotConversationAttention,
   parseKnownHostNotificationPayload,
   parseKnownHostNotificationPayloadForKind,
 } from "@traycer/protocol/host/notifications/payloads";
@@ -394,5 +395,130 @@ describe("parseKnownHostNotificationPayloadForKind", () => {
         legacy,
       ),
     ).toBeNull();
+  });
+});
+
+describe("a bot's row under host.operation.finished", () => {
+  const FINISHED = "host.operation.finished";
+  const VERDICT = {
+    kind: "bot_thread_verdict",
+    operation: "bot.thread.verdict",
+    title: "Tracy answered",
+    message: "Your question about the release",
+    botId: "bot-1",
+    threadId: "thread-1",
+    replyMessageId: "reply-1",
+  };
+  const CONVERSATION = {
+    kind: "bot_conversation",
+    event: "bot.reply",
+    operation: "bot.reply",
+    title: "Tracy",
+    message: "Something in the thread",
+    botId: "bot-1",
+    conversationId: "conversation-1",
+    threadId: null,
+    messageId: "message-1",
+    authorUserId: null,
+    mention: false,
+    botTitle: "Tracy",
+  };
+
+  it("parses a thread verdict", () => {
+    expect(
+      parseKnownHostNotificationPayloadForKind(FINISHED, VERDICT),
+    ).toMatchObject({
+      kind: "bot_thread_verdict",
+      botId: "bot-1",
+      threadId: "thread-1",
+      replyMessageId: "reply-1",
+    });
+  });
+
+  it("parses a conversation row, keeping a field a newer producer added", () => {
+    expect(
+      parseKnownHostNotificationPayloadForKind(FINISHED, CONVERSATION),
+    ).toMatchObject({
+      kind: "bot_conversation",
+      conversationId: "conversation-1",
+      threadId: null,
+      botTitle: "Tracy",
+    });
+  });
+
+  it("rejects each under another notification kind", () => {
+    expect(
+      parseKnownHostNotificationPayloadForKind("agent.stopped", VERDICT),
+    ).toBeNull();
+    expect(
+      parseKnownHostNotificationPayloadForKind("agent.stopped", CONVERSATION),
+    ).toBeNull();
+  });
+
+  it("leaves an unrelated finished operation with an unknown payload unparsed", () => {
+    expect(
+      parseKnownHostNotificationPayloadForKind(FINISHED, {
+        kind: "test_box",
+        operation: "testbox.provision",
+        title: "Test box ready",
+        message: "Provisioned 1 test box.",
+      }),
+    ).toBeNull();
+  });
+});
+
+describe("isBotConversationAttention", () => {
+  const FINISHED = "host.operation.finished";
+
+  function conversation(operation: string, mention: boolean): unknown {
+    return { kind: "bot_conversation", operation, mention };
+  }
+
+  it("is true for a reply in a bot's thread, mention or not", () => {
+    expect(
+      isBotConversationAttention({
+        kind: FINISHED,
+        payload: conversation("bot.reply", false),
+      }),
+    ).toBe(true);
+  });
+
+  it("is true for a row that mentions the person", () => {
+    expect(
+      isBotConversationAttention({
+        kind: FINISHED,
+        payload: conversation("bot.post", true),
+      }),
+    ).toBe(true);
+  });
+
+  it("is false for a post that mentions no one", () => {
+    expect(
+      isBotConversationAttention({
+        kind: FINISHED,
+        payload: conversation("bot.post", false),
+      }),
+    ).toBe(false);
+  });
+
+  it("is false for another payload kind that carries a mention, another entry kind, or no payload", () => {
+    expect(
+      isBotConversationAttention({
+        kind: FINISHED,
+        payload: { kind: "bot_thread_verdict", operation: "x", mention: true },
+      }),
+    ).toBe(false);
+    expect(
+      isBotConversationAttention({
+        kind: "chat.stopped",
+        payload: conversation("bot.reply", true),
+      }),
+    ).toBe(false);
+    expect(isBotConversationAttention({ kind: FINISHED, payload: null })).toBe(
+      false,
+    );
+    expect(
+      isBotConversationAttention({ kind: FINISHED, payload: "bot.reply" }),
+    ).toBe(false);
   });
 });

@@ -22,7 +22,7 @@ const directoryEntries = new Map<string, { hostId: string }>([
 
 vi.mock("@/lib/host", () => ({
   useHostClient: () => defaultHostClient,
-  // The SPINE, a separate export since redesign P2.1.
+  // The SPINE, a separate export.
   useHostRuntimeClient: () => defaultHostClient,
   useHostDirectory: () => ({
     findById: (hostId: string) => directoryEntries.get(hostId) ?? null,

@@ -133,7 +133,7 @@ interface BrowserPeekTileProps {
 }
 
 /**
- * The streamed browser viewer, for both pointer grades (decision #13).
+ * The streamed browser viewer, for both pointer grades.
  *
  * The transport, arm/epoch protocol, viewport bridge and nav-state derivation
  * are device-agnostic, and so is the input path: the controller translates a

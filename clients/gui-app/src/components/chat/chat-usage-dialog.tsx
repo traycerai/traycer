@@ -42,7 +42,7 @@ type UsageSummaryQueryResult = UseQueryResult<
 const FILLER_WINDOW_DAYS = 30;
 
 /**
- * Ticket 12's chat cost line: mounted ONCE (not per-tab), driven by
+ * The chat cost line: mounted ONCE (not per-tab), driven by
  * `useChatUsageDialogStore` - the tab strip's "Usage" context-menu item
  * writes a target there instead of threading dialog-open state through the
  * strip's own already-large prop chain. Always the chat's FULL lifetime

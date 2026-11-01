@@ -352,7 +352,7 @@ describe("<MobileEpicHeaderTitle />", () => {
 
   // Replaces "refuses the rename when the session names a host the app-wide
   // client is not on". Nothing refuses anymore - the host-comparison branch
-  // that used to guard this was deleted at T11 (`0d4f8e1c`) because the
+  // that used to guard this was deleted (`0d4f8e1c`) because the
   // hazard it guarded against became unreachable by construction:
   // `epic-session-provider.tsx` resolves a registered session's
   // `commandRequester` for THAT session's own host

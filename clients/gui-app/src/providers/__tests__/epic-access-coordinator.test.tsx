@@ -60,6 +60,7 @@ vi.mock("sonner", () => ({ toast: { info: toastInfo } }));
 
 const NOOP_CANVAS: EpicCanvasState = createEmptyCanvas();
 const TEST_SETTINGS: ChatRunSettings = {
+  ultracode: false,
   harnessId: "codex",
   model: "gpt-5-codex",
   permissionMode: "supervised",
@@ -554,8 +555,7 @@ describe("EpicAccessCoordinator", () => {
   });
 
   it("scopes a broadcast's host-scoped deletion to the host that deleted it: caches, settings, announcement, teardown and navigation", async () => {
-    // Codex thread 4303240636 on d74e2198 and the round-7 cold review: a
-    // local-homed Task deleted on one host must stay open, announced as
+    // A local-homed Task deleted on one host must stay open, announced as
     // nothing and with its settings, where this window holds it on another.
     useCloudEpicTasksPagesStore.setState({ deletedEpicIdsByScope: {} });
     // This window holds its epics on "test-host" (`openStoreForTest`'s).
@@ -673,11 +673,11 @@ describe("EpicAccessCoordinator", () => {
     );
 
     // Both epics behind the split are deleted together, in ONE notification -
-    // exactly the shape a real batch delete produces. Plan §9 requires this
+    // exactly the shape a real batch delete produces. It must be
     // routed through ONE coordinated command, not one `handleEpicAccessLoss`
     // call per epic: firing a separate coordinator transaction (and a
     // separate persistence flush) per epic for what is semantically one
-    // event is exactly the bypass this ticket closes.
+    // event is exactly the bypass this change closes.
     dispatchDeletedEpicStorageEvent(
       "user-1",
       ["epic-left", "epic-right"],

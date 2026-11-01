@@ -76,6 +76,7 @@ function renderEval(imageResult: ImageGenerationResult) {
           managedCommand={null}
           agentMessageReceipt={null}
           agentMessageDelivery={null}
+          botSendReceipt={null}
           isStreaming={false}
           endState={null}
           stopped={false}

@@ -7,7 +7,7 @@ import { streamedBrowserChordsFor } from "@/lib/browser-view/reserved-chords-reg
 import type { ActionId } from "@/lib/keybindings/actions";
 
 /**
- * One app chord a sandboxed page must not keep (D11). The frame's bootstrap
+ * One app chord a sandboxed page must not keep. The frame's bootstrap
  * matches keydowns against these physically (`KeyboardEvent.code` plus exact
  * modifiers), swallows a match and forwards it; every other key is the page's.
  */

@@ -123,14 +123,14 @@ describe("bot-tabs store", () => {
       kind: "thread",
       anchorMessageId: "post-a",
       announcement: false,
-      answer: false,
+      anchorKind: null,
       sent: null,
     });
     setRail(BOT_B, {
       kind: "thread",
       anchorMessageId: "post-b",
       announcement: false,
-      answer: false,
+      anchorKind: null,
       sent: null,
     });
 
@@ -142,7 +142,7 @@ describe("bot-tabs store", () => {
         kind: "thread",
         anchorMessageId: "post-b",
         announcement: false,
-        answer: false,
+        anchorKind: null,
         sent: null,
       },
     });

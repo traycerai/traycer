@@ -51,6 +51,7 @@ function mountSubmit(args: {
     reasoningFallback: "model-default",
     seedKey: `side-chat-submit-test-${args.taskId}`,
     values: {
+      ultracode: false,
       permission: "supervised",
       selection: {
         harnessId: "claude",
@@ -63,6 +64,7 @@ function mountSubmit(args: {
     onSettingsChange: null,
     tuiOnly: false,
     chatLineCarriesAutoMode: null,
+    ultracodeCarried: false,
     hostId: null,
   });
 
@@ -87,7 +89,7 @@ function mountSubmit(args: {
       onSideChat: args.onSideChat,
       targetHostId: null,
       queueEditTargetId: null,
-      // T5's gate is off in these fixtures: they predate it and assert the
+      // The gate is off in these fixtures: they predate it and assert the
       // inline behaviour, which is what `false` preserves exactly.
       getDraftBlobBridgeSupported: () => false,
     }),

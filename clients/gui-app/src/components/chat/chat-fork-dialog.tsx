@@ -1,3 +1,4 @@
+import { useUltracodeCarrierSupported } from "@/components/home/data/model-ultracode";
 import { signedInUserId } from "@/lib/sandboxes/sandbox-account-fence";
 import {
   useCallback,
@@ -194,7 +195,7 @@ export interface ChatForkDialogTarget {
    */
   readonly onlyHostIds: ReadonlySet<string> | null;
   /**
-   * A New sandbox the chat host chip picked (sandboxes redesign D9): the
+   * A New sandbox the chat host chip picked (the sandboxes redesign): the
    * dialog opens with it staged, its consequences under the host list, and
    * Fork creates it, waits for the agent there and forks onto it. `null`
    * stages nothing; `initialHostId` and `onlyHostIds` are `null` with it.
@@ -247,6 +248,7 @@ function ChatForkModelPicker(props: {
   );
   return (
     <HarnessModelPicker
+      withUltracode
       openForHarnessRef={props.openForHarnessRef}
       labelDisplay="responsive"
       store={props.store}
@@ -563,6 +565,10 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
   // against the SELECTED host's live `providers.list` and corrects a dead
   // profile to ambient, and reads the harness/model catalog through the same
   // client, so the fork offers the target host's harnesses and models.
+  const ultracodeCarried = useUltracodeCarrierSupported(
+    selectedHostId,
+    "epic.createChat",
+  );
   const toolbarStore = useComposerToolbarStore(
     null,
     fallbackSeedSource(target?.settingsSeed ?? null, selectedHostClient),
@@ -578,6 +584,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
       // A fork CREATES a chat; nothing has negotiated a `chat.subscribe` line
       // for it yet, so the harness-catalog line decides `auto` alone.
       chatLineCarriesAutoMode: null,
+      ultracodeCarried,
       stagedSurfaceKey: forkSurfaceKey,
       sendsToRestingSandbox: false,
     },
@@ -1038,6 +1045,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
       permission: toolbar.permission,
       reasoning: toolbar.reasoning,
       serviceTier: toolbar.serviceTier,
+      ultracode: toolbar.ultracode,
     });
     const submittedBy = useAuthStore.getState().profile?.userId ?? null;
     const createForkChat = (): void => {
@@ -1183,7 +1191,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
   //
   // `ChatForkDialogBody` stays mounted for the life of the chat tile and the
   // mutation key is constant, so `error` and `variables` outlive every
-  // transition this ticket made variable: retargeting to another host, and
+  // transition that is now variable: retargeting to another host, and
   // reopening the dialog on a different assistant message. Scoping by host
   // alone fixed the first and left the second — turn M1's refusal rendering as
   // "M2 is still syncing" before M2 had been attempted at all. So the notice

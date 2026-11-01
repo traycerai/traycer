@@ -107,6 +107,7 @@ const HOST_CLIENT = buildTestHostClient(HOST_ID);
 
 // The person's own pick, as their last run left it.
 const PICK: ChatRunSettings = {
+  ultracode: false,
   harnessId: "codex",
   model: "gpt-6-astra",
   permissionMode: "supervised",
@@ -164,6 +165,7 @@ function renderLandingToolbar() {
         hostId: HOST_ID,
         tuiOnly: false,
         chatLineCarriesAutoMode: null,
+        ultracodeCarried: false,
         stagedSurfaceKey: SURFACE,
         sendsToRestingSandbox: false,
       },

@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 /**
- * The sheet-shell surface frames (ticket 02), asserted on the stylesheet's
+ * The sheet-shell surface frames, asserted on the stylesheet's
  * text: jsdom applies no Tailwind utilities, so the margin/border/radius a
  * sheet owes cannot be read back from computed style.
  */

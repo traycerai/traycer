@@ -220,7 +220,7 @@ function createLegacyArm(): AvailabilityArm {
   return {
     handle,
     open(): void {
-      live().onConnectionStatus("open", null, false);
+      live().onConnectionStatus("open", null, false, null);
       // The snapshot is what names this artifact's ROOM. Without it the
       // fan-out has no mapping and no room frame could ever reach the tile.
       live().onSnapshot(buildMeta(), rootDocNamingArtifactRoom());
@@ -229,8 +229,8 @@ function createLegacyArm(): AvailabilityArm {
     reportGivenUp: () => live().onArtifactRoomState(ROOM, "unavailable"),
     reportRetrying: () => live().onArtifactRoomState(ROOM, "retrying"),
     cycleTransport(): void {
-      live().onConnectionStatus("reconnecting", null, false);
-      live().onConnectionStatus("open", null, false);
+      live().onConnectionStatus("reconnecting", null, false, null);
+      live().onConnectionStatus("open", null, false, null);
     },
     // NOTHING, and deliberately not "unimplemented". A `@1` room that went
     // unavailable can be called ready again on the same stream, with no
@@ -392,8 +392,8 @@ function createLaneArm(): AvailabilityArm {
       // the retained handle across a drop. Deliberately not the control lane -
       // that is a different stimulus with a different meaning, and it has its
       // own member below.
-      liveBody().onConnectionStatus("reconnecting", null);
-      liveBody().onConnectionStatus("open", null);
+      liveBody().onConnectionStatus("reconnecting", null, null, null);
+      liveBody().onConnectionStatus("open", null, null, null);
       if (releaseLease === null) throw new Error("no lease was taken");
     },
     reopenAfterGivingUp(): void {
@@ -408,8 +408,8 @@ function createLaneArm(): AvailabilityArm {
       // from a known not-open ends the world a terminal refusal was scoped to,
       // and a first `"open"` is not a reconnect.
       const before = bodySubscribes;
-      statusCallbacks.onConnectionStatus("reconnecting", null);
-      statusCallbacks.onConnectionStatus("open", null);
+      statusCallbacks.onConnectionStatus("reconnecting", null, null, null);
+      statusCallbacks.onConnectionStatus("open", null, null, null);
       // The lease is still held, so the reattach has a demand to satisfy - if
       // it did not, this would pass for the wrong reason.
       if (releaseLease === null) throw new Error("no lease was taken");
@@ -429,15 +429,20 @@ function createLaneArm(): AvailabilityArm {
       // Falling back to `@1` IS the accepted answer here, so the guard is
       // lifted for exactly this transition and the open is then counted.
       legacyMayOpen = true;
-      liveBody().onConnectionStatus("closed", {
-        kind: "fatalError",
-        details: {
-          code: "INCOMPATIBLE",
-          reason: "artifact.subscribe is not served by this host",
-          incompatibleMethods: null,
-          upgradeGuidance: null,
+      liveBody().onConnectionStatus(
+        "closed",
+        {
+          kind: "fatalError",
+          details: {
+            code: "INCOMPATIBLE",
+            reason: "artifact.subscribe is not served by this host",
+            incompatibleMethods: null,
+            upgradeGuidance: null,
+          },
         },
-      });
+        null,
+        null,
+      );
     },
     legacyOpenCount: () => legacyOpens,
   };

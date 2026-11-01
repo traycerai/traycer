@@ -4,7 +4,6 @@ import { chatApprovalStateSchema } from "@traycer/protocol/host/agent/gui/subscr
 import type { ChatApprovalState } from "@traycer/protocol/host/agent/gui/subscribe";
 import { ComposerSlotApprovalQueue } from "@/components/chat/segments/composer-slot-approval-queue";
 import type { AutoModeRuleDraftWorkspace } from "@/lib/auto-mode/auto-mode-rule-copy";
-import { APPROVAL_PAUSED_LINE } from "@/components/chat/segments/approval-card-disclosure";
 
 afterEach(() => {
   cleanup();
@@ -47,7 +46,9 @@ describe("<ComposerSlotApprovalQueue /> attended wait line", () => {
 
     const row = screen.getByTestId("approval-row");
     const waitLine = within(row).getByTestId("approval-wait-line");
-    expect(waitLine.textContent).toContain(APPROVAL_PAUSED_LINE);
+    expect(waitLine.textContent).toMatch(
+      /^Waiting for you since .+ · 12 minutes\. This turn is paused until you answer\.$/,
+    );
   });
 
   it("shows no wait line for a fresh answerable row", () => {

@@ -326,9 +326,9 @@ export function createArtifactLaneAdapter(
           state: frame.state,
         });
       },
-      onConnectionStatus: (status, reason) => {
+      onConnectionStatus: (status, reason, _retryCause, continuity) => {
         if (!accepts(generation)) return;
-        if (status !== "open") {
+        if (status !== "open" && continuity !== "held") {
           // A body that is not connected is not being served, so the next
           // `doc` frame is a recovery transition and must re-announce
           // readiness. Without this the reattach after a reconnect would be
@@ -338,6 +338,7 @@ export function createArtifactLaneAdapter(
         }
         host?.reportStatus({
           connection: status,
+          continuity,
           closeReason: status === "closed" ? reason : null,
         });
       },

@@ -126,7 +126,7 @@ export interface HostReachability {
  * carries `basis: "starting-deadline"` - read it before driving anything
  * destructive off "unreachable".
  *
- * An EXPECTED restart holds it (D4): while the host's lease says
+ * An EXPECTED restart holds it: while the host's lease says
  * `restarting-expected`, a directory `offline` reads "host-starting" too, and
  * the budget above does not run. The lease's own bounds end the hold - one
  * restart episode for any host, the mutation lane's ceiling for this machine -
@@ -338,7 +338,7 @@ export function useHostReachability(hostId: string): HostReachability {
     poolRestartExpected,
   ]);
 
-  // D4. An announced restart is not an outage. While the lease says
+  // An announced restart is not an outage. While the lease says
   // `restarting-expected`, the authority expects the host back: inside a
   // restart episode, which only a host that announces its restart opens
   // (`RESTART_INTENT_EPISODE_MS`, 60 s), or for this machine while its
@@ -368,7 +368,7 @@ export function useHostReachability(hostId: string): HostReachability {
     };
   }, [directoryVerdict, restartExpected]);
 
-  // F4/S2. `host-starting` was the one arm with no way out: the directory
+  // S2. `host-starting` was the one arm with no way out: the directory
   // cannot distinguish "this machine's host is three seconds from publishing"
   // from "it is never going to", and it answered the optimistic one FOREVER.
   // A chat bound to a host that never came back therefore sat behind
@@ -386,7 +386,7 @@ export function useHostReachability(hostId: string): HostReachability {
   // so the persisted "Terminal permanently closed" notification stays gated on
   // directory evidence. See `HostReachabilityBasis`.
   //
-  // The budget does not run while the lease vouches for a restart (D4, above):
+  // The budget does not run while the lease vouches for a restart (above):
   // the lease's own bounds end that wait, and the 15 s start when it stops
   // vouching, so a restart that outlives its episode still reaches the fall.
   const startingBudgetElapsed = useLoadDeadline(

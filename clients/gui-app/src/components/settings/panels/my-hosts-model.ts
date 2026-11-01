@@ -11,7 +11,7 @@ import { busyWorkPhrase } from "@/components/host/host-restart-copy";
  *
  * This is step 3 of `deriveHostHealth`'s precedence and nothing renders it
  * directly. That distinction is the whole point of the redesign's
- * single-vocabulary rule (connection registry §1, quoted at
+ * single-vocabulary rule (quoted at
  * `hooks/host/use-host-lease.ts`): a person reads ONE set of status words,
  * and those words come from `HostHealth`. What lives here is one of the
  * inputs that produces them, which is why its type is named for the source
@@ -19,7 +19,7 @@ import { busyWorkPhrase } from "@/components/host/host-restart-copy";
  *
  * It used to be a second vocabulary in fact as well as in shape — a
  * `HostPresenceTone` rendered beside a `HostHealthState` derived from it —
- * and P3.4's vocabulary census recorded the pair as the unfinished half of
+ * and the redesign's vocabulary census recorded the pair as the unfinished half of
  * its sweep. The pair is gone: the only caller is `deriveHostHealth`, and the
  * only escape hatch (`formatHostMeta`) had no production reader left and went
  * with it.
@@ -102,7 +102,7 @@ export function deriveHostPresence(
   }
   switch (status.connectivity) {
     // The host's own leg is up - AS OF THE LAST LEASE REFRESH, which is the
-    // entire content of the claim and, until F26, not what it said.
+    // entire content of the claim; the previous wording said more.
     //
     // This arm returned `Online` with `showLiveDot: true`, and the dot is the
     // part that mattered: the lease TTL is 15 minutes, so a host that died
@@ -122,7 +122,7 @@ export function deriveHostPresence(
     // lights it, from the arm above, where the evidence actually is.
     //
     // There was a second arm here - "reachable, but THIS viewer's path to it
-    // is failing" - keyed on a per-viewer probe that was never built (F9): the
+    // is failing" - keyed on a per-viewer probe that was never built: the
     // store behind it had a getter and no writer, so the arm was unreachable
     // code and the pill it drew had never once rendered. Deleted with that
     // machinery in P3.4; if a real viewer-path probe is ever built, it comes
@@ -157,9 +157,8 @@ export interface HostUpdatePill {
 }
 
 /**
- * Maps the update lifecycle to a pill (Architecture §7/§13). `current` shows
- * nothing. S1 populates `current`/`pending`/`required`; the remaining states
- * are rendered for completeness once the S3 reconciler emits them.
+ * Maps the update lifecycle to a pill. `current` shows
+ * nothing; the remaining states are rendered for completeness.
  */
 export function deriveUpdatePill(
   updateState: HostUpdateState,
@@ -181,7 +180,7 @@ export function deriveUpdatePill(
 }
 
 // -----------------------------------------------------------------------------
-// Update affordances (Architecture §13, T16): "Update now" version input,
+// Update affordances (T16): "Update now" version input,
 // auto-policy toggle, and the "Apply now — ends N sessions" drain-gate force.
 // -----------------------------------------------------------------------------
 
@@ -412,7 +411,7 @@ function pluralizeSessions(count: number): string {
 }
 
 /**
- * Derives the update affordances (Architecture §13) from two sources with
+ * Derives the update affordances from two sources with
  * deliberately different reliability, and the split is the whole point.
  *
  * The registry-backed half of this — the free-text "Update to version…" pin and

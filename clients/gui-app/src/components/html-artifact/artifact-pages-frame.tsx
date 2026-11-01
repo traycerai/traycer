@@ -53,6 +53,12 @@ export function ArtifactPagesFrame(props: {
   readonly className: string;
   /** The page's height in px, or `null` to fill what the row leaves. */
   readonly height: number | null;
+  /**
+   * Whether the zoom cluster is offered. A filling page zooms through its
+   * viewer script; a document served without that script has nothing to
+   * answer the buttons.
+   */
+  readonly pageZoom: boolean;
   readonly onSize: (size: SandboxSize) => void;
   readonly onStatus: (status: SandboxStatus) => void;
   readonly onBridge: ((bridge: SandboxBridgeHost | null) => void) | null;
@@ -66,6 +72,14 @@ export function ArtifactPagesFrame(props: {
    * entry page's bytes, so they are told when another page is showing.
    */
   readonly renderOverlay: ((onEntryPage: boolean) => ReactNode) | null;
+  /**
+   * Keeps the mounted document through a source change it already carries,
+   * such as the entry page's own first-comment id; `null` reloads on every
+   * change. See the frame's own `sourceEquivalent`.
+   */
+  readonly sourceEquivalent:
+    | ((previous: SandboxSource, next: SandboxSource) => boolean)
+    | undefined;
   readonly toolbarControls?: ReactNode;
 }) {
   const {
@@ -73,12 +87,14 @@ export function ArtifactPagesFrame(props: {
     title,
     className,
     height,
+    pageZoom,
     onSize,
     onStatus,
     onBridge,
     onTextSelection,
     onFrame,
     renderOverlay,
+    sourceEquivalent,
   } = props;
   const entryPath = source.entryPath === "" ? "index.html" : source.entryPath;
   const bridgeRef = useRef<SandboxBridgeHost | null>(null);
@@ -141,19 +157,18 @@ export function ArtifactPagesFrame(props: {
   };
 
   const fills = height === null;
+  const zooms = fills && pageZoom;
+  const navigated = currentPath !== entryPath || backStack.length > 0;
   return (
     <div className={cn("relative flex w-full flex-col", fills && "h-full")}>
-      {fills ||
-      currentPath !== entryPath ||
-      backStack.length > 0 ||
-      props.toolbarControls ? (
+      {zooms || navigated || props.toolbarControls ? (
         <div className="pointer-events-none absolute top-2 right-2 z-30 flex max-w-[calc(100%-1rem)] items-start">
           <div
             role="toolbar"
             aria-label="HTML artifact controls"
             className="pointer-events-auto flex flex-wrap items-center justify-end gap-1 rounded-md border border-border/60 bg-canvas p-0.5 shadow-sm"
           >
-            {currentPath !== entryPath || backStack.length > 0 ? (
+            {navigated ? (
               <>
                 <TooltipWrapper
                   label="Back"
@@ -190,7 +205,7 @@ export function ArtifactPagesFrame(props: {
                 </TooltipWrapper>
               </>
             ) : null}
-            {fills ? (
+            {zooms ? (
               <HtmlPageZoomControls
                 ready={ready}
                 scale={scale}
@@ -234,6 +249,7 @@ export function ArtifactPagesFrame(props: {
           }}
           onTextSelection={(selection) => onTextSelection?.(selection)}
           pageNavigation={pageNavigation}
+          sourceEquivalent={sourceEquivalent}
           ref={onFrame}
         />
         {renderOverlay?.(currentPath === entryPath && !missing)}

@@ -290,8 +290,8 @@ describe("<UsageSettingsPanel />", () => {
     ).toBeTruthy();
     expect(screen.queryByTestId("usage-unsupported-notice")).toBeNull();
 
-    // Ticket 11 dashboard build-out: per-harness split and stat tiles render
-    // off the same summary. Fixup-01: no standing cost-quality panel.
+    // Dashboard build-out: per-harness split and stat tiles render
+    // off the same summary. No standing cost-quality panel.
     expect(screen.getByTestId("usage-harness-split")).toBeTruthy();
     expect(screen.getByTestId("usage-harness-split-row-claude")).toBeTruthy();
     expect(screen.getByTestId("usage-stat-tiles")).toBeTruthy();

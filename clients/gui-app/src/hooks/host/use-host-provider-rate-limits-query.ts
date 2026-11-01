@@ -25,7 +25,7 @@ import {
  *
  * Uses `useHostQueryWithResponseMap` (not the plain `useHostQuery` every other
  * host RPC hook in this app uses) rather than the raw wire response, so the
- * cached `data` is the `ProviderRateLimitEnvelope` this ticket's retention
+ * cached `data` is the `ProviderRateLimitEnvelope` the retention
  * treatment needs: a transient failure (`usage_fetch_failed` and friends)
  * must retain the last good reading instead of the raw response overwriting
  * it outright. `provider-rate-limit-query-options.ts`'s `httpFetch` branch is

@@ -14,9 +14,13 @@ import type { JsonContent } from "@traycer/protocol/common/registry";
 import { ChatExpansionTestProviders } from "@/components/chat/__tests__/chat-expansion-test-providers";
 import { deriveA2AReceivedCollapsibleKey } from "@/components/chat/chat-collapsible-key";
 import { UserMessageBody } from "@/components/chat/chat-message-user-body";
+import { CHAT_TIMELINE_SCROLLER_MOVED_EVENT } from "@/components/chat/chat-timeline-follow-latch";
 import type { SetupWorkspaceState } from "@/components/chat/segments/setup-card-segment";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { botTabIntent } from "@/lib/tab-navigation/intents";
+import { useBotTabLandingStore } from "@/stores/bots/bot-tab-landing-store";
+import { useBotTabsStore } from "@/stores/bots/bot-tabs-store";
 import {
   buildComposerClipboardHtml,
   composerClipboardPlainText,
@@ -54,7 +58,7 @@ import { formatFullTimestamp, formatMessageTime } from "@/lib/relative-time";
 import { useWorkspaceFoldersStore } from "@/stores/workspace/workspace-folders-store";
 import { installFreshIndexedDb } from "@/lib/composer/__tests__/fake-idb";
 
-// T4: the inline edit composer now runs `reingestPendingImages` on mount and
+// The inline edit composer now runs `reingestPendingImages` on mount and
 // a real file paste through `putImage` - both write to the window's image
 // partition (IndexedDB), which this environment has none of by default.
 // Every test in this file that touches the edit composer needs one, the same
@@ -154,6 +158,12 @@ const navigationMocks = vi.hoisted(() => ({
   navigate: vi.fn(),
   activateTabIntent:
     vi.fn<(navigate: unknown, intent: unknown, extra: unknown) => void>(),
+  navigateToTabIntent:
+    vi.fn<(navigate: unknown, intent: unknown, options: unknown) => void>(),
+}));
+
+vi.mock("@/hooks/host/use-connectable-host-ids", () => ({
+  useConnectableHostIds: () => ({ hostIds: [], resolved: false }),
 }));
 
 vi.mock("@tanstack/react-router", async (importOriginal) => {
@@ -164,7 +174,11 @@ vi.mock("@tanstack/react-router", async (importOriginal) => {
 
 vi.mock("@/lib/tab-navigation", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/tab-navigation")>();
-  return { ...actual, activateTabIntent: navigationMocks.activateTabIntent };
+  return {
+    ...actual,
+    activateTabIntent: navigationMocks.activateTabIntent,
+    navigateToTabIntent: navigationMocks.navigateToTabIntent,
+  };
 });
 
 function expectCrossTaskActivation(node: {
@@ -215,7 +229,7 @@ vi.mock("@/lib/epic-selectors", () => ({
     }
     return null;
   },
-  useOpenEpicId: () => "epic-1",
+  useMaybeOpenEpicId: () => "epic-1",
 }));
 
 const tileNavigationMocks = vi.hoisted(() => ({
@@ -235,6 +249,7 @@ const peerMocks = vi.hoisted(() => ({
       hostId: string;
       title: string | null;
       surface: "gui" | "tui";
+      bot: { botId: string; title: string } | null;
     } | null
   >,
 }));
@@ -896,6 +911,30 @@ describe("<UserMessageBody /> agent messages", () => {
       const scroller = screen.getByTestId("scroller");
       const scrollTo = vi.fn();
       scroller.scrollTo = scrollTo;
+      const moves: unknown[] = [];
+      // The edited row sits inside the viewport until the reveal is asked
+      // for, so only the focus restores write the scroller before it.
+      let rowBottomPx = 480;
+      rectSpy = vi
+        .spyOn(Element.prototype, "getBoundingClientRect")
+        .mockImplementation(function (this: Element) {
+          const bottom = this === scroller ? 500 : rowBottomPx;
+          const height = this === scroller ? 100 : 60;
+          return {
+            x: 0,
+            y: bottom - height,
+            width: 400,
+            height,
+            top: bottom - height,
+            right: 400,
+            bottom,
+            left: 0,
+            toJSON: () => ({}),
+          };
+        });
+      scroller.addEventListener(CHAT_TIMELINE_SCROLLER_MOVED_EVENT, (event) => {
+        if (event instanceof CustomEvent) moves.push(event.detail);
+      });
       const editor = await screen.findByRole("textbox", {
         name: "Edit message",
       });
@@ -903,31 +942,25 @@ describe("<UserMessageBody /> agent messages", () => {
       // it asks for; run them all before the offset is replaced so a late
       // restore neither throws nor overwrites it.
       drainFrames();
+      // Each restore is the app's write to the transcript's scroller, and is
+      // announced as the list announces its own.
+      expect(moves).not.toHaveLength(0);
+      moves.length = 0;
       Object.defineProperty(scroller, "scrollTop", {
         configurable: true,
         writable: true,
         value: 300,
       });
-      // The scroller's viewport ends at 500; the edited row ends 120px below
-      // it. iOS WebKit lands a relative `scrollBy` twice, so the reveal must
-      // write the absolute target: the current offset plus the overflow and
-      // padding.
-      rectSpy = vi
-        .spyOn(Element.prototype, "getBoundingClientRect")
-        .mockImplementation(function (this: Element) {
-          const bottom = this === scroller ? 500 : 620;
-          return {
-            x: 0,
-            y: bottom - 100,
-            width: 400,
-            height: 100,
-            top: bottom - 100,
-            right: 400,
-            bottom,
-            left: 0,
-            toJSON: () => ({}),
-          };
-        });
+      // A real scroller lands on the offset it is asked for, so the announced
+      // move's end is the write's own target.
+      scrollTo.mockImplementation((options: ScrollToOptions) => {
+        if (options.top !== undefined) scroller.scrollTop = options.top;
+      });
+      // The scroller's viewport ends at 500; the edited row will end 120px
+      // below it. iOS WebKit lands a relative `scrollBy` twice, so the reveal
+      // must write the absolute target: the current offset plus the overflow
+      // and padding.
+      rowBottomPx = 620;
       fireEvent.paste(editor, {
         clipboardData: {
           files: [],
@@ -940,6 +973,11 @@ describe("<UserMessageBody /> agent messages", () => {
         drainFrames();
         expect(scrollTo).toHaveBeenCalledWith({ top: 436, behavior: "auto" });
       });
+      // The fixture lays out no scroll range, so the target clamps to it. The
+      // reveal writes the offset, so it announces `cause: "offset"`.
+      expect(moves).toEqual([
+        { from: 300, fromEnd: 0, to: 436, intended: 0, cause: "offset" },
+      ]);
       expect(scrollTo).not.toHaveBeenCalledWith(
         expect.objectContaining({ top: 620 - 500 + 16 }),
       );
@@ -1008,7 +1046,7 @@ describe("<UserMessageBody /> agent messages", () => {
     expect(Array.from((await getImageBytes(hash)) ?? [])).toEqual([1, 2, 3]);
   });
 
-  // T4 format fallback: a declared MIME type outside the host's storable set
+  // Format fallback: a declared MIME type outside the host's storable set
   // (PNG/JPEG/GIF/WebP/SVG) is never hashed - it takes the inline path for that
   // file alone, and still arrives as `b64content` with a null `hash`.
   //
@@ -1055,7 +1093,7 @@ describe("<UserMessageBody /> agent messages", () => {
     ]);
   });
 
-  // T4: a storable PNG paste reads `file.arrayBuffer()` and `putImage`s the
+  // A storable PNG paste reads `file.arrayBuffer()` and `putImage`s the
   // bytes; `FileReader` is not involved on any paste path any more. The
   // "blocked until it finishes" contract still holds; only the mechanism under
   // it changed, so the delay is injected at `arrayBuffer()`.
@@ -1085,7 +1123,7 @@ describe("<UserMessageBody /> agent messages", () => {
     // appearing and the send button re-enabling are two different state
     // updates - and asserting the second synchronously after awaiting the
     // first raced the gap. That gap is real and correct: the button must stay
-    // disabled until ingest has genuinely settled, which since T4 includes the
+    // disabled until ingest has genuinely settled, which includes the
     // `putImage` write, not just the byte read.
     const readySend = await screen.findByRole("button", { name: "Send edit" });
     await waitFor(() => {
@@ -1331,6 +1369,9 @@ describe("<UserMessageBody /> agent messages", () => {
 
     afterEach(() => {
       navigationMocks.activateTabIntent.mockClear();
+      navigationMocks.navigateToTabIntent.mockClear();
+      useBotTabsStore.setState({ tabs: {}, fixedBotId: null });
+      useBotTabLandingStore.setState({ byBotId: {} });
       peerMocks.byId = {};
       peerMocks.origins = [];
     });
@@ -1363,6 +1404,7 @@ describe("<UserMessageBody /> agent messages", () => {
         hostId: "host-2",
         title: "Cross Task Sender",
         surface: "gui",
+        bot: null,
       };
       const message = crossMessage(null);
       render(<UserMessageBody actions={null} message={message} />);
@@ -1394,6 +1436,7 @@ describe("<UserMessageBody /> agent messages", () => {
         hostId: "host-2",
         title: "Cross Terminal",
         surface: "tui",
+        bot: null,
       };
       render(<UserMessageBody actions={null} message={crossMessage(null)} />);
 
@@ -1407,6 +1450,40 @@ describe("<UserMessageBody /> agent messages", () => {
       expect(useChatTranscriptJumpStore.getState().requestsByChatId).toEqual(
         {},
       );
+    });
+
+    it("opens a bot sender's channel, landing on the session, and parks no transcript jump", () => {
+      peerMocks.byId[CROSS_ID] = {
+        epicId: "bot-1",
+        agentId: CROSS_ID,
+        hostId: "host-2",
+        title: "Release bot",
+        surface: "gui",
+        bot: { botId: "bot-1", title: "Release bot" },
+      };
+      render(<UserMessageBody actions={null} message={crossMessage(null)} />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Release bot" }));
+
+      expect(useBotTabsStore.getState().tabs["bot-1"]).toMatchObject({
+        botId: "bot-1",
+        hostId: TAB_HOST_ID,
+        title: "Release bot",
+      });
+      expect(navigationMocks.navigateToTabIntent).toHaveBeenCalledWith(
+        navigationMocks.navigate,
+        botTabIntent("bot-1"),
+        undefined,
+      );
+      expect(useBotTabLandingStore.getState().byBotId["bot-1"]).toEqual({
+        kind: "sender",
+        chatId: CROSS_ID,
+      });
+      expect(useChatTranscriptJumpStore.getState().requestsByChatId).toEqual(
+        {},
+      );
+      expect(tileNavigationMocks.openTile).not.toHaveBeenCalled();
+      expect(navigationMocks.activateTabIntent).not.toHaveBeenCalled();
     });
 
     it("renders the stamped title as plain text when the peer cannot be resolved", () => {
@@ -1735,7 +1812,7 @@ function plainUserMessage(content: string): ChatMessageModel {
 }
 
 function imageNode(id: string, fileName: string): JsonContent {
-  // A REAL base64 payload, not the bare id: T4's `reingestPendingImages` now
+  // A REAL base64 payload, not the bare id: `reingestPendingImages` now
   // runs on every editor mount and decodes any surviving `b64content` node
   // through `decodeValidatedPastedImage`, which rejects a non-base64 string
   // (the bare id used to contain a `-`, which is not in the standard
@@ -2358,7 +2435,7 @@ describe("<ChatMessage /> sender overline timestamp", () => {
     },
   );
 
-  // Layout > Chat > Timestamps (audit R1, R3): the stamp and the " · " that
+  // Layout > Chat > Timestamps: the stamp and the " · " that
   // joins it to the sender label are one region, and hiding it must not
   // strand the separator any more than an unrepresentable instant does above.
   it("renders the stamp and its ' · ' separator when Timestamps is shown, neither when hidden", () => {

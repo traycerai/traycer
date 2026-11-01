@@ -15,6 +15,19 @@ import {
   settleLegendList,
 } from "./legend-list-test-environment";
 
+/** The measurement an assertion below is about. `positionAtIndex` and
+ *  `sizeAtIndex` answer `undefined` for a row the list has not laid out or
+ *  has never measured; every caller here settles the list first, so an
+ *  `undefined` means the fixture stopped exercising what the test claims,
+ *  not that the number is zero. Reading it as one would make the
+ *  surrounding arithmetic `NaN` and the comparison pass vacuously. */
+function measured(value: number | undefined): number {
+  if (value === undefined) {
+    throw new Error("the list has not measured this row");
+  }
+  return value;
+}
+
 class ControllableResizeObserver implements ResizeObserver {
   readonly callback: ResizeObserverCallback;
   readonly observed = new Set<Element>();
@@ -139,8 +152,11 @@ function positionGapsAndSizes(list: LegendListRef): {
   const gaps: number[] = [];
   const sizes: number[] = [];
   for (let index = 0; index < 11; index += 1) {
-    gaps.push(state.positionAtIndex(index + 1) - state.positionAtIndex(index));
-    sizes.push(state.sizeAtIndex(index));
+    gaps.push(
+      measured(state.positionAtIndex(index + 1)) -
+        measured(state.positionAtIndex(index)),
+    );
+    sizes.push(measured(state.sizeAtIndex(index)));
   }
   return { gaps, sizes };
 }
@@ -174,7 +190,9 @@ describe("LegendList estimate recovery", () => {
     if (list === null) throw new Error("LegendList ref did not mount");
 
     const captureDataChangedEstimate = (position: number): void => {
-      dataChangedEstimates.push(position - list.getState().positionAtIndex(50));
+      dataChangedEstimates.push(
+        position - measured(list.getState().positionAtIndex(50)),
+      );
     };
 
     // Thresholds are expressed against the settled measurement rather than
@@ -200,7 +218,8 @@ describe("LegendList estimate recovery", () => {
     await settleLegendList();
 
     const poisonedEstimate =
-      list.getState().positionAtIndex(51) - list.getState().positionAtIndex(50);
+      measured(list.getState().positionAtIndex(51)) -
+      measured(list.getState().positionAtIndex(50));
     expect(poisonedEstimate).toBeGreaterThan(grosslyOff);
 
     act(() => {
@@ -495,7 +514,10 @@ describe("LegendList estimate recovery", () => {
 
       const effectiveSizeAt = (index: number): number => {
         const state = list.getState();
-        return state.positionAtIndex(index + 1) - state.positionAtIndex(index);
+        return (
+          measured(state.positionAtIndex(index + 1)) -
+          measured(state.positionAtIndex(index))
+        );
       };
 
       // Poison the live average through a row this test never mounts or
@@ -630,12 +652,12 @@ describe("LegendList estimate recovery", () => {
       // reader cannot see them move; this row is what the reader is looking at.
       const state = list.getState();
       let anchorIndex = 0;
-      while (state.positionAtIndex(anchorIndex) < SCROLL_TARGET) {
+      while (measured(state.positionAtIndex(anchorIndex)) < SCROLL_TARGET) {
         anchorIndex += 1;
       }
       const offsetOf = (): number => {
         const current = list.getState();
-        return current.positionAtIndex(anchorIndex) - current.scroll;
+        return measured(current.positionAtIndex(anchorIndex)) - current.scroll;
       };
       const before = offsetOf();
 
@@ -728,12 +750,12 @@ describe("LegendList estimate recovery", () => {
 
       const state = list.getState();
       let anchorIndex = 0;
-      while (state.positionAtIndex(anchorIndex) < state.scroll) {
+      while (measured(state.positionAtIndex(anchorIndex)) < state.scroll) {
         anchorIndex += 1;
       }
       const offsetOf = (): number => {
         const current = list.getState();
-        return current.positionAtIndex(anchorIndex) - current.scroll;
+        return measured(current.positionAtIndex(anchorIndex)) - current.scroll;
       };
       const before = offsetOf();
 
@@ -759,7 +781,7 @@ describe("LegendList estimate recovery", () => {
 
       const rowCount = 70;
       const positionsBefore = Array.from({ length: rowCount }, (_, index) =>
-        list.getState().positionAtIndex(index),
+        measured(list.getState().positionAtIndex(index)),
       );
 
       act(() => {
@@ -912,11 +934,11 @@ describe("LegendList estimate recovery", () => {
 
       // A row above the reader grows while the command is in flight. The
       // list holds that growth back as the anchor shift for the scroller.
-      const sizeBefore = list.getState().sizeAtIndex(19);
+      const sizeBefore = measured(list.getState().sizeAtIndex(19));
       act(() => {
         list.setItemSize("row-19", { height: measuredSize * 3, width: 800 });
       });
-      const growth = list.getState().sizeAtIndex(19) - sizeBefore;
+      const growth = measured(list.getState().sizeAtIndex(19)) - sizeBefore;
       expect(growth).toBeGreaterThan(0);
 
       // The reader's wheel moves the scroller; its scroll event has not
@@ -1048,6 +1070,185 @@ describe("LegendList estimate recovery", () => {
       expect(scrollNode.scrollTop).toBeGreaterThan(away);
       expect(list.getState().isAtEnd).toBe(true);
       expect(settled).toBe(true);
+    });
+  });
+
+  /**
+   * An end-aligned command keeps its landing correct as its target row grows:
+   * the growth reaches the scroller as an adjust, which is how the transcript
+   * stays pinned to a streaming reply. A loaded machine still holds that
+   * command behind its layout when the reader presses Home, and the command
+   * then no longer owns the view - the growth is far below where the reader
+   * put themselves, and carrying them by it takes them off the top they asked
+   * for. The two cases differ only in whether the reader moved.
+   */
+  describe("an end command whose target row grows", () => {
+    /** The list at the end, with a `scrollToEnd` still held for its layout,
+     *  as the transcript's follow correction issues on every growth. Its own
+     *  write is mocked away; the returned `land` lets later writes through,
+     *  which is how a scroll adjust reaches the scroller. */
+    async function heldEndCommandAtTheEnd(): Promise<{
+      readonly scrollNode: HTMLElement;
+      readonly endBefore: number;
+      readonly land: () => void;
+      readonly resize: (index: number, delta: number) => number;
+      readonly clampLikeBrowser: () => number;
+    }> {
+      const listRef = createRef<LegendListRef | null>();
+      render(
+        createTranscriptList(rows(70), listRef, { data: false, size: true }),
+      );
+      act(() => {
+        fireAllResizeObservers();
+      });
+      await settleLegendList();
+      const list = listRef.current;
+      if (list === null) throw new Error("LegendList ref did not mount");
+
+      act(() => {
+        void list.scrollToEnd({ animated: false });
+      });
+      await settleLegendList();
+      const scrollNode = list.getScrollableNode();
+      const endBefore = scrollNode.scrollTop;
+      expect(endBefore).toBeGreaterThan(0);
+
+      const held = vi
+        .spyOn(scrollNode, "scrollTo")
+        .mockImplementation(() => undefined);
+      act(() => {
+        void list.scrollToEnd({ animated: false });
+      });
+      await advanceLegendListFrames(1);
+
+      return {
+        clampLikeBrowser: () => {
+          const furthest = Math.max(
+            0,
+            list.getState().contentLength - scrollNode.clientHeight,
+          );
+          if (scrollNode.scrollTop > furthest) {
+            scrollNode.scrollTop = furthest;
+            act(() => {
+              scrollNode.dispatchEvent(new Event("scroll"));
+            });
+          }
+          return scrollNode.scrollTop;
+        },
+        endBefore,
+        resize: (index: number, delta: number) => {
+          const before = measured(list.getState().sizeAtIndex(index));
+          act(() => {
+            list.setItemSize(`row-${String(index)}`, {
+              height: before + delta,
+              width: 800,
+            });
+          });
+          return measured(list.getState().sizeAtIndex(index)) - before;
+        },
+        land: () => {
+          held.mockImplementation(
+            (options: ScrollToOptions | number | undefined) => {
+              if (typeof options === "object" && options.top !== undefined) {
+                scrollNode.scrollTop = options.top;
+              }
+            },
+          );
+        },
+        scrollNode,
+      };
+    }
+
+    /** The reader presses Home: an absolute write to the scroller, reported. */
+    function pressHome(scrollNode: HTMLElement): void {
+      scrollNode.scrollTop = 0;
+      act(() => {
+        scrollNode.dispatchEvent(new Event("scroll"));
+      });
+    }
+
+    it("leaves the reader at the top they wrote, which the command did not", async () => {
+      const { scrollNode, land, resize } = await heldEndCommandAtTheEnd();
+      pressHome(scrollNode);
+      land();
+
+      expect(resize(69, 28)).toBeGreaterThan(0);
+      await advanceLegendListFrames(3);
+
+      expect(scrollNode.scrollTop).toBe(0);
+    });
+
+    // The command anchors on its own target row, so a row ABOVE that row is the
+    // other route to the same symptom: the reader is nowhere near the growth,
+    // and the target's own shift would carry them off the top just the same.
+    it("leaves the reader at the top when a row above the target grows", async () => {
+      const { scrollNode, land, resize } = await heldEndCommandAtTheEnd();
+      pressHome(scrollNode);
+      land();
+
+      expect(resize(68, 28)).toBeGreaterThan(0);
+      await advanceLegendListFrames(3);
+
+      expect(scrollNode.scrollTop).toBe(0);
+    });
+
+    it("pins the view to the new end while that command still holds it", async () => {
+      const { scrollNode, endBefore, land, resize } =
+        await heldEndCommandAtTheEnd();
+      land();
+
+      // Nobody else moved the view, so the command still owns it: every growth
+      // of its target row carries the view to the end that growth made. The
+      // second one needs the command's own record of where it put the view to
+      // have come along with the first, or it reads the view as somebody
+      // else's.
+      const first = resize(69, 28);
+      await advanceLegendListFrames(3);
+      expect(scrollNode.scrollTop).toBe(endBefore + first);
+
+      const second = resize(69, 28);
+      await advanceLegendListFrames(3);
+      expect(scrollNode.scrollTop).toBe(endBefore + first + second);
+    });
+
+    // A row above the target can also take the content below the view. The list
+    // then moves the view to the clamped end by writing its own offset, with no
+    // adjust to carry the command's record along, and a browser clamps its
+    // scroller to the same place and reports it (jsdom has no layout, so the
+    // test does what the browser would). The reader is following a streaming
+    // reply throughout, and the row that shrank grows back: they have to be at
+    // the end it ends up at.
+    it("keeps pinning after a row above the target shrank the content", async () => {
+      const { scrollNode, endBefore, land, resize, clampLikeBrowser } =
+        await heldEndCommandAtTheEnd();
+      land();
+
+      const shrunk = resize(68, -28);
+      expect(shrunk).toBeLessThan(0);
+      await advanceLegendListFrames(3);
+      expect(clampLikeBrowser()).toBe(endBefore + shrunk);
+
+      expect(resize(69, 28)).toBeGreaterThan(0);
+      await advanceLegendListFrames(3);
+      expect(scrollNode.scrollTop).toBe(endBefore);
+    });
+
+    // A row above the target moves the target itself, so the view travels by
+    // that shift as well. That shift has to come along too, or the command
+    // reads every later growth as somebody else's and the pin to a streaming
+    // reply dies after the first row above it settles its estimate.
+    it("keeps pinning after a row above the target has moved the view", async () => {
+      const { scrollNode, endBefore, land, resize } =
+        await heldEndCommandAtTheEnd();
+      land();
+
+      const above = resize(68, 28);
+      await advanceLegendListFrames(3);
+      expect(scrollNode.scrollTop).toBe(endBefore + above);
+
+      const tail = resize(69, 28);
+      await advanceLegendListFrames(3);
+      expect(scrollNode.scrollTop).toBe(endBefore + above + tail);
     });
   });
 });

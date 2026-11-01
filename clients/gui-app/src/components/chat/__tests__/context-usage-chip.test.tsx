@@ -368,7 +368,7 @@ describe("ContextUsageChip", () => {
     ).toBe("25%");
   });
 
-  // G6: the chip mounted unconditionally, so Layout â¸ Chat â¸ Context usage's
+  // The chip mounted unconditionally, so Layout â¸ Chat â¸ Context usage's
   // Shown switch had no reader. `useRegionShown` now gates it, with the same
   // L-14 ghost exception every hideable region gets: the editor can still
   // materialise it as a preview while pointing at the region.
@@ -1065,7 +1065,7 @@ describe("ContextUsageChip indicator styles", () => {
     },
   );
 
-  // The consistency this ticket exists to buy: one primitive at every place
+  // The consistency at stake: one primitive at every place
   // the percentage appears, so a turn that moves the reading moves all four
   // the same way. Each site is asserted through the primitive's OWN test id,
   // which is absent if a site went back to printing `{percent}` itself.

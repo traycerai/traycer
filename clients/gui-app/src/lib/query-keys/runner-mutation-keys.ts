@@ -73,10 +73,10 @@ export const runnerMutationKeys = {
   supportFreezeEvidence: () => ["runner.support.freezeEvidence"] as const,
   supportSaveDiagnosticBundle: () =>
     ["runner.support.saveDiagnosticBundle"] as const,
-  // Builds the scrubbed public draft for the publish preview (ticket 09/07).
+  // Builds the scrubbed public draft for the publish preview.
   supportBuildPublicDraft: () => ["runner.support.buildPublicDraft"] as const,
   // Opens the previewed draft's GitHub issue-form URL in the browser
-  // (ticket 07's publish preview - Flow 3b), separate from the fetch above so
+  // (the publish preview), separate from the fetch above so
   // the preview can render before the user opts to leave the app.
   supportPublicDraftOpen: () => ["runner.support.publicDraftOpen"] as const,
   // Reveal a log file in the OS file manager (Diagnostics → Logs).
@@ -289,8 +289,8 @@ export const runnerQueryKeys = {
     ] as const,
   hostRegistryUpdate: (management: object) =>
     ["runner.host.registryUpdate", management] as const,
-  // Canonical two-lane `HostController` status (Host Update Layer Redesign
-  // Tech Plan). Primed once via `getHostControllerStatus()` on mount, then
+  // Canonical two-lane `HostController` status.
+  // Primed once via `getHostControllerStatus()` on mount, then
   // pushed by `HostControllerStatusListener` - never refetched by TanStack's
   // normal mechanisms, since it is entirely event-sourced.
   hostControllerStatus: (management: object) =>
@@ -357,7 +357,7 @@ export const runnerQueryKeys = {
   // identity so shell swaps never reuse another bridge's cached state.
   supportSnapshot: (supportScopeId: number | null) =>
     ["runner.support.snapshot", supportScopeId] as const,
-  // Report-issue consent panel's log "view" affordance (ticket 07/04): reads
+  // Report-issue consent panel's log "view" affordance: reads
   // the tail FROZEN at report-open, not a live tail, so what the user reviews
   // is exactly what a submit would send. Scoped by draftId (frozen evidence
   // is per-draft) as well as support identity.
@@ -378,7 +378,7 @@ export const runnerQueryKeys = {
     ["runner.pushMutedSeverities", userId] as const,
   // Every account's entry, for the phone's "re-read" signal.
   pushMutedSeveritiesAll: () => ["runner.pushMutedSeverities"] as const,
-  // Report-issue evidence strip's "Nth time on this install" line (ticket 06
+  // Report-issue evidence strip's "Nth time on this install" line (a
   // ledger read). Scoped by fingerprint - each distinct defect caches
   // independently.
   supportFingerprintOccurrence: (

@@ -1,7 +1,7 @@
 /**
  * `use-chat-queue-actions.ts`'s custody-seeding half: `editQueuedItem` puts a
  * re-opened queued prompt's image hashes into the host-held set (against the
- * REAL `host-held-image-hashes` module - not mocked, per the ticket) so
+ * REAL `host-held-image-hashes` module - not mocked) so
  * submit's byte resolver never re-inlines megabytes the host already holds.
  * `restoreQueuedEditDraft` (reachable via `cancelQueueEditMode`) is the other
  * half: it must clear that claim when the queue-edit is abandoned.
@@ -32,13 +32,14 @@ import { landingLiveImageRootHashes } from "@/lib/composer/landing-image-budget"
 // Side-effect only: registers the composer-draft-row root source the real
 // app always has loaded by the time a chat tile runs. Without it this
 // file's isolated module graph has no reader for the RESTORED row, and the
-// F3 "custody transfers to the row" assertion would fail for a reason that
+// "custody transfers to the row" assertion would fail for a reason that
 // has nothing to do with `use-chat-queue-actions.ts`.
 import "@/lib/drafts/draft-mirror-coordinator";
 
 const NODE_ID = "chat-queue-1";
 const IMAGE_HASH = "a".repeat(64);
 const SETTINGS: ChatRunSettings = {
+  ultracode: false,
   harnessId: "codex",
   model: "gpt-5-codex",
   permissionMode: "supervised",
@@ -228,7 +229,7 @@ describe("editQueuedItem seeds host-held custody", () => {
 });
 
 /**
- * F3 (batch-1 review, P2): the composer draft saved underneath a queue edit
+ * The composer draft saved underneath a queue edit
  * has no image root of its own. `editQueuedItem` replaces the persisted row
  * with the queued prompt's content, so `draft-mirror-coordinator.ts`'s root
  * source (which reads the CURRENT row only) stops seeing the saved
@@ -346,7 +347,7 @@ describe("the saved draft snapshot underneath a queue edit is a GC root", () => 
 });
 
 /**
- * R1 (re-review): a SUCCESSFUL queue-edit save left the saved draft's root
+ * R1: a SUCCESSFUL queue-edit save left the saved draft's root
  * installed forever. The discard effect (triggered when `editingQueueItemId`
  * goes back to `null`) used to clear `queuedEditRestoreDraftRef` directly,
  * without releasing `queue-edit-saved-draft:<nodeId>` - so the ref-clear and

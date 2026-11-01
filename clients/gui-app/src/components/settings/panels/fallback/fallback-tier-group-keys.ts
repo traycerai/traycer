@@ -37,7 +37,7 @@ export interface KeyedCandidate {
  * ## Why `id` cannot be the identity
  *
  * `id` is the group's NAME, and the name is an editable text field. The parent
- * used to key the card on it (D174, on the argument that
+ * used to key the card on it (on the argument that
  * `fallbackPolicySchema` refines group ids to be unique, so the id IS an
  * identity). Uniqueness is not identity while the value is being typed:
  * renaming "fast" to "fastest" changes the key on every keystroke, so React
@@ -457,7 +457,7 @@ export function applyGroupsInverse(
     // "would putting this row back produce a policy the schema rejects", and
     // `fallbackPolicySchema` refines group ids to be unique, so a name
     // collision answers exactly that. A name is not an identity - that is the
-    // whole of D174 and why `draftKey` exists - and it does not have to be to
+    // whole point and why `draftKey` exists - and it does not have to be to
     // answer this one.
     if (
       groups.some(

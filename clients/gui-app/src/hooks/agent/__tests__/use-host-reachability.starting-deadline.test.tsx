@@ -80,7 +80,7 @@ afterEach(() => {
 });
 
 /**
- * F4/S2: `host-starting` was the one arm with no way out. These pin the
+ * S2: `host-starting` was the one arm with no way out. These pin the
  * deadline that closes it - the fall to `unreachable` at the budget, that the
  * fall carries `basis: "starting-deadline"` (the field that gates the
  * persisted "Terminal permanently closed" notification, see
@@ -164,7 +164,7 @@ describe("useHostReachability - starting-deadline basis", () => {
     },
   );
 
-  // S4(a): `indeterminate` connectivity means the cloud could not read
+  // `indeterminate` connectivity means the cloud could not read
   // liveness - we learned NOTHING - and the cost of guessing wrong is
   // asymmetric (`use-host-reachability.ts:150-157`). Guessing dead replaces a
   // working chat with a Clone offer and fires a PERSISTED terminal-closed
@@ -195,7 +195,7 @@ function publishLease(status: "restarting-expected" | "connecting"): void {
 }
 
 /**
- * D4: an announced restart holds the wait on every tile. While the lease says
+ * An announced restart holds the wait on every tile. While the lease says
  * `restarting-expected`, `host-starting` does not fall at the budget, and a
  * directory `offline` reads `host-starting`. The lease's own bounds end the
  * hold, and the budget starts when it stops vouching. The fall with no lease at

@@ -21,7 +21,7 @@ import { canvasRetypeTarget } from "./canvas-inline-text-edit";
 import { CANVAS_SCRIPT_TEXT_NOTE } from "./canvas-text-validation";
 import type { CanvasElementLocator } from "@/lib/sandbox/canvas-bridge";
 import { CanvasStructureOverlay } from "./canvas-structure-overlay";
-import { CanvasSelectionMenu } from "./canvas-element-menu";
+import { selectCanvasParentElement } from "./canvas-select-parent";
 
 function currentRetype(
   selection: CanvasSelection | null,
@@ -163,8 +163,20 @@ export function CanvasEditingOverlay(props: {
   const commenting = props.registry.view?.commenting === true;
   if (commenting)
     return (
-      <CanvasSelectionOverlay {...props} commenting hideAction hideHandles />
+      <CanvasSelectionOverlay
+        {...props}
+        commenting
+        hideAction
+        hideHandles
+        onSelectParent={null}
+      />
     );
+  const selectParent =
+    selection === null || request !== null
+      ? null
+      : () => {
+          void selectCanvasParentElement(selection, props.registry);
+        };
   const controls =
     selection === null ? null : (
       <EditingControls
@@ -206,15 +218,7 @@ export function CanvasEditingOverlay(props: {
           />
         ) : null
       }
-      menuControls={
-        selection !== null && request === null ? (
-          <CanvasSelectionMenu
-            selection={selection}
-            registry={props.registry}
-            document={boardDocument}
-          />
-        ) : null
-      }
+      onSelectParent={selectParent}
       hideAction={request !== null || additional.length > 0}
       hideHandles
     />

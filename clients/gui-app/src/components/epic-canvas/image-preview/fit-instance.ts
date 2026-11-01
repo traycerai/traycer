@@ -6,7 +6,7 @@ import { fitScaleFor } from "./image-preview-transform";
  * `ImagePreview` from outside (the image diff's linked sides, the chat
  * lightbox's floating cluster) has no natural size of its own to fit from,
  * so it reads the live content and wrapper boxes instead. Never a shared
- * number forced onto a differently-sized peer (ticket 07).
+ * number forced onto a differently-sized peer.
  */
 export function fitInstance(
   instance: ReactZoomPanPinchRef,

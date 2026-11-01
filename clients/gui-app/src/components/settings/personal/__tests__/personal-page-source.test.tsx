@@ -171,7 +171,9 @@ function mountSection(options: {
     "environment.configuration.skills.list": () => ({
       outcome: "listed" as const,
       revision: null,
+      policyRevision: null,
       skills: [],
+      deletedBundled: [],
     }),
     "environment.host.list": () => ({ hosts: [] }),
     "environment.members": () => ({

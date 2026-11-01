@@ -1,5 +1,5 @@
 /**
- * R5F1: `buildUnrecordedPromptHandoff` through the REAL landing draft store
+ * `buildUnrecordedPromptHandoff` through the REAL landing draft store
  * and the REAL landing image partition (fake-indexeddb), not a mocked write.
  *
  * A mocked destination cannot see the defect this round fixed: the old handoff
@@ -8,7 +8,7 @@
  * `.catch` swallowed the rejection and NOTHING was ever written, the text
  * included. Only an install that actually runs against the store observes it.
  *
- * The destination is now a closed start-page draft (D01/D03), so what these
+ * The destination is now a closed start-page draft, so what these
  * assert is a row in `useLandingDraftStore` whose content carries the words,
  * the qualification, and - when the bytes were resolvable - a LANDING hash.
  */

@@ -571,6 +571,7 @@ function viewerSurfacesProps(): ChatLowerInteractionSurfacesProps {
     steerCapable: false,
     steerProtocolSupported: true,
     autoPermissionModeProtocolSupported: null,
+    ultracodeProtocolSupported: false,
     getDraftBlobBridgeSupported: () => false,
     getActiveTurnForSteer: () => null,
     // Unused by this suite - it covers composer/overlay layout, not Stop.

@@ -23,7 +23,7 @@ import {
 } from "@/stores/layout/layout-store";
 
 /**
- * The page's safety net (L-20, P-6).
+ * The page's safety net (L-20).
  *
  * The full-width host has no session, so it has no Undo, no Discard and no
  * Cmd+Z, and applying a preset clears the delta by construction. These
@@ -211,11 +211,11 @@ describe("Reset layout (L-20)", () => {
         providerLimits: { [PROVIDER]: { limitKeys: ["5h"] } },
         dock: [...DEFAULT_ARRANGEMENT.dock].reverse(),
         usageProviders: [...DEFAULT_ARRANGEMENT.usageProviders].reverse(),
-        // S-29: "Reset layout" restores the tab strip placement and the
+        // "Reset layout" restores the tab strip placement and the
         // sidebar side too.
         tabStripPlacement: "right",
         sidebarSide: "right",
-        // D8: and the vertical strip's view.
+        // And the vertical strip's view.
         sideStripView: "activity",
         wideReadingWidthPx: 1600,
       },

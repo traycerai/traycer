@@ -447,6 +447,7 @@ describe("<SessionImportRunController />", () => {
       useComposerRunSettingsStore.getState().setGlobalRunSettings(
         startTarget().hostId,
         {
+          ultracode: false,
           harnessId: "claude",
           model: "claude-money",
           permissionMode: "auto_accept_edits",

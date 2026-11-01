@@ -505,6 +505,7 @@ describe("<EpicSessionLifecycleBridge />", () => {
     // own account's driver alone, which gives it back on that account's next
     // sign-in. Delivered, only its ready line is left, and that goes.
     const settings = {
+      ultracode: false,
       harnessId: "codex",
       model: "gpt-6.1-sol",
       permissionMode: "supervised",
@@ -538,6 +539,7 @@ describe("<EpicSessionLifecycleBridge />", () => {
       content: { type: "doc", content: [] },
       text: "fix the login bug",
       settings: {
+        ultracode: false,
         harnessId: "codex",
         model: "gpt-6.1-sol",
         permissionMode: "supervised",

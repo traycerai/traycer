@@ -273,7 +273,7 @@ function registerEditableEpic(writes: EpicWriteCommandIntent[]): void {
     },
   });
   if (captured.value === null) throw new Error("factory not invoked");
-  captured.value.onConnectionStatus("open", null, false);
+  captured.value.onConnectionStatus("open", null, false, null);
   captured.value.onSnapshot(snapshotMeta(), Y.encodeStateAsUpdate(new Y.Doc()));
   __getOpenEpicRegistryForTests().acquire(EPIC_ID, () => handle);
 }

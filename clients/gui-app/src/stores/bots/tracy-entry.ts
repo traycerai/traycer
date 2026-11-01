@@ -9,7 +9,7 @@ import {
 import type { TabRef } from "@/stores/tabs/types";
 
 /**
- * The fixed Tracy entry (Tracy Bots T58): the personal main bot's tab, held
+ * The fixed Tracy entry: the personal main bot's tab, held
  * first in the strip and drawn beside Home rather than among the tabs. Its
  * bot is `fixedBotId` on the bot-tabs store; `TracyEntryController` sets it
  * from "Show Tracy" and the bot list.

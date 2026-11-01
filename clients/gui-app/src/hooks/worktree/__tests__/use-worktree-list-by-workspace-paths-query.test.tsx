@@ -76,7 +76,7 @@ describe("useWorktreeListByWorkspacePathsForClient", () => {
     expect(rendered.result.current.isPlaceholderData).toBe(false);
   });
 
-  // D1: after a host switch the previous host's summaries must not render as
+  // After a host switch the previous host's summaries must not render as
   // the new host's truth. Same-host path-set edits still retain (test above).
   it("drops placeholder data when the bound host changes", async () => {
     const fixture = createFixture();

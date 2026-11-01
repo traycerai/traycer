@@ -34,8 +34,8 @@ import type {
 /**
  * Every link this policy opens is a single-click on rendered markdown, so it
  * carries the `single` gesture and no explicit placement - the tile-placement
- * setting decides tab-vs-split, and dedupe focuses an already-open instance
- * (C4, C6, C11). Modifiers stay `null`: the markdown anchor hands the policy a
+ * setting decides tab-vs-split, and dedupe focuses an already-open instance.
+ * Modifiers stay `null`: the markdown anchor hands the policy a
  * link, not the mouse event.
  */
 function chatLinkOpenIntent(
@@ -70,7 +70,11 @@ export interface ChatLinkPolicyDeps {
   readonly activeHostId: string | null;
   /** The currently-open epic id; same-epic links preview, others navigate. */
   readonly openEpicId: string;
-  readonly epicHandle: OpenEpicStoreHandle;
+  /**
+   * The open epic's store, for a same-epic preview; `null` on a surface that
+   * is no task (a bot's channel), where every artifact link navigates.
+   */
+  readonly epicHandle: OpenEpicStoreHandle | null;
   readonly queryClient: QueryClient;
   /**
    * Client for the ARTIFACT-resolve RPC, bound to `activeHostId` and used to
@@ -146,7 +150,7 @@ export type ChatLinkHandler = (
  *   `openChatWorkspaceFilePreview` with out-of-root synthesis DISABLED, so an
  *   artifact `index.md` (which normally lives under `~/.traycer`, outside the
  *   chat's roots) stays a safe no-op rather than opening a raw / error tile
- *   (D5 / CL-1).
+ *   (CL-1).
  * - **Plain file links** resolve against the chat's working directories and
  *   open as a replaceable workspace-file preview tab, stamped with the chat's
  *   own `hostId` for life. An ABSOLUTE path belonging to no bound root is still
@@ -244,17 +248,18 @@ export function openResolvedArtifact(
 ): void {
   const { artifact, target, onUnavailable } = resolved;
   const { artifactEpicId, resolveHostId } = target;
-  if (artifactEpicId === deps.openEpicId) {
+  const epicHandle = deps.epicHandle;
+  if (artifactEpicId === deps.openEpicId && epicHandle !== null) {
     // Same epic: open a replaceable PREVIEW tile stamped with the active
     // host. Route through the projection waiter (passing the PREVIEW
-    // opener, D3) so an artifact not yet projected opens as soon as it
+    // opener) so an artifact not yet projected opens as soon as it
     // lands, and the tile name comes from the loaded projection. Any prior
     // wait was already silently cancelled at click time (supersession at
     // the top of the handler); retain the new handle so a later superseding
     // click or an unmount can tear down the subscribe + 30s timeout.
     lifecycle.setPendingProjectedOpenCancel(
       openProjectedSidebarNodeInTabWhenAvailable({
-        epicHandle: deps.epicHandle,
+        epicHandle,
         nodeId: artifact.artifactId,
         fallbackHostId: resolveHostId,
         openNode: (node) => {
@@ -366,7 +371,7 @@ function resolveAndOpenArtifactLink(
  * deliberate "open any agent-emitted file" capability. Only the plain-file
  * branch passes `true`; the artifact-resolve fallbacks pass `false`, so a
  * deleted / not-yet-minted artifact whose `index.md` is out-of-root stays a safe
- * no-op rather than opening an error tile (D5 / CL-1).
+ * no-op rather than opening an error tile (CL-1).
  *
  * Returns `false` (unhandled) for a torn-down tab, a missing host, a directory,
  * or a path that resolves to neither a bound root nor (when permitted) an

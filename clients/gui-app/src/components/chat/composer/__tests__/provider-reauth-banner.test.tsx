@@ -1542,7 +1542,7 @@ describe("<ProviderReauthBanner />", () => {
 
     // `awaitLogin` then resolves - the call went through, but the re-probed
     // status is still not authenticated. Presence of a completed call is
-    // not success; only an authenticated status is (fixup review finding 2).
+    // not success; only an authenticated status is.
     const [, awaitOptions] = latestAwaitLoginCall();
     await act(() => {
       awaitOptions.onSuccess({

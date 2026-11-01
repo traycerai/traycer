@@ -10,13 +10,7 @@
  */
 import { StrictMode, type ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import {
-  act,
-  cleanup,
-  fireEvent,
-  render,
-  screen,
-} from "@testing-library/react";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -190,7 +184,6 @@ function panel(bot: BotRecord): ReactNode {
       <QueryClientProvider client={queryClient}>
         <BotChannelSettingsPanel
           bot={bot}
-          isMain={null}
           personal={false}
           channelId={null}
           environmentBots={null}
@@ -232,7 +225,6 @@ describe("<BotChannelSettingsPanel /> model, over the real toolbar store", () =>
   it("applies the pick through the tab host's client, then moves the picker to the refetched row's tuple", async () => {
     const user = userEvent.setup();
     const { rerender } = render(panel(BOT));
-    fireEvent.click(screen.getByTestId("bot-settings-advanced-toggle"));
     expect(liveStore().getState().selection).toMatchObject({
       harnessId: "claude",
       modelSlug: "model-b",

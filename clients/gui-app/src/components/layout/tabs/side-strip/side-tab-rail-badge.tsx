@@ -9,7 +9,7 @@ import {
 import { StatusGlyph } from "@/components/notifications/status-glyph";
 
 /**
- * The one state that needs the user, as a badge (D5). On a rail tile it is the
+ * The one state that needs the user, as a badge. On a rail tile it is the
  * status glyph on a 14px disc of the strip's ground, so it reads as cut out of
  * the tile; on an expanded group header it is the same glyph at 14px, the
  * header's trailing status.

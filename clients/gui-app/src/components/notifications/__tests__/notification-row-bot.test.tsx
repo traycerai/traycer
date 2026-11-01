@@ -1,6 +1,6 @@
 /**
  * A bell row about one of the person's bots shows the bot's picture, a
- * squircle, where other rows show their glyph (Tracy Bots, T62). The real
+ * squircle, where other rows show their glyph. The real
  * `NotificationRow` under the real `NotificationBotsProvider`; the row and
  * the host's `bot.list` answer are the boundaries.
  */
@@ -9,6 +9,7 @@ import { cleanup, render, screen, within } from "@testing-library/react";
 import type { BotListResponse } from "@traycer/protocol/host/bot/schemas";
 import type { MergedNotificationRow } from "@/stores/notifications/merged-notifications";
 import { avatarShape } from "@/components/bots/__tests__/avatar-shape";
+import { creatureMark, drawCreatureMark } from "@/lib/bots/creature-mark";
 
 const BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
 
@@ -134,7 +135,11 @@ describe("<NotificationRow /> about a bot", () => {
 
     const avatar = within(entry).getByTestId("bot-avatar");
     expect(avatarShape(avatar)).toBe("squircle");
-    expect(avatar.textContent).toBe("TR");
+    expect(
+      avatar
+        .querySelector('[data-slot="bot-creature"] path')
+        ?.getAttribute("d"),
+    ).toBe(drawCreatureMark(creatureMark(BOT_ID), 24).path);
     expect(mocks.listEnabled).toContain(true);
   });
 

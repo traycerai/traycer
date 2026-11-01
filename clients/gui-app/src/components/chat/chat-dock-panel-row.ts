@@ -45,7 +45,7 @@ import {
  *
  * **Not only the dock.** `AgentStopList` is ONE list drawn on two surfaces -
  * the Active agents panel and the TUI agent tile's popover - and both take
- * this metric deliberately (R6H-06): a list does not change its row height
+ * this metric deliberately: a list does not change its row height
  * because of what is mounted around it, and keying the class off that list's
  * `surface` prop would mean two metrics for one list. The popover's rows grew
  * from 26.25px to 30px with the dock's, which is the point.
@@ -115,8 +115,8 @@ export const CHAT_DOCK_PANEL_ROW_TEXT = "text-ui-xs";
  * `BASE_PAD_LEFT` and `INDENT_PX` in raw pixels. {@link CHAT_DOCK_PANEL_ROW}'s
  * `px-2` is 7.5px at this app's 15px root, so the two disagree by half a
  * pixel. The rail wins, deliberately: a row that is a rem off the rail drawn
- * through it is a visible break, and half a pixel between two panels is not
- * (R6H-11). Stating it here is what makes it a decision rather than an inline
+ * through it is a visible break, and half a pixel between two panels is not.
+ * Stating it here is what makes it a decision rather than an inline
  * style that silently outranks the recipe.
  *
  * The LENGTH rather than a style object, so each row keeps a literal

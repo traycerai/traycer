@@ -11,7 +11,7 @@ import {
 import type { FallbackPolicyPatternLines } from "@/hooks/providers/use-fallback-policy-pattern-lines";
 
 /**
- * The Test a model panel's request shape (ticket 05, clause 2): the FULL
+ * The Test a model panel's request shape: the FULL
  * `blocked` tuple travels, the draft's `defaultTierGroupId` travels, and the
  * query is disabled while `request` is `null`.
  */

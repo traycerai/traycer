@@ -27,6 +27,7 @@ import type {
   StatusChangeHandler,
   StreamCloseReason,
   StreamConnectionStatus,
+  StreamContinuity,
 } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type { ParamsOf } from "@traycer-clients/shared/host-transport/ws-stream-client";
 import type { StreamProxyWorkerEvent } from "./bridge-protocol";
@@ -64,6 +65,7 @@ export interface WorkerStreamClientHandle {
     status: StreamConnectionStatus,
     reason: StreamCloseReason | null,
     retryCause: FatalErrorDetails | null,
+    continuity: StreamContinuity,
   ): void;
   /** The per-session negotiated version, pushed before its status. */
   deliverSessionVersion(streamId: number, version: SchemaVersion | null): void;
@@ -160,8 +162,8 @@ export function createWorkerStreamClient(
       deliverFrame: (envelope, binaryPayload) => {
         frameHandler?.(envelope, binaryPayload);
       },
-      deliverStatus: (status, reason, retryCause) => {
-        statusHandler?.(status, reason, retryCause);
+      deliverStatus: (status, reason, retryCause, continuity) => {
+        statusHandler?.(status, reason, retryCause, continuity);
       },
       setVersion: (version) => {
         negotiated = version;
@@ -228,10 +230,10 @@ export function createWorkerStreamClient(
         .get(parsed.frame.streamId)
         ?.deliverFrame(parsed.frame.envelope, parsed.frame.binaryPayload);
     },
-    deliverStatus(streamId, status, reason, retryCause): void {
+    deliverStatus(streamId, status, reason, retryCause, continuity): void {
       const entry = sessions.get(streamId);
       if (entry === undefined) return;
-      entry.deliverStatus(status, reason, retryCause);
+      entry.deliverStatus(status, reason, retryCause, continuity);
       // A status transition is when a re-declare becomes imminent, so it is
       // where a params provider is re-read. Pushed AFTER the handler runs: the
       // handler is what applies the state the provider reads, so reading first

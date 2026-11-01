@@ -12,7 +12,7 @@ import { conversationRequestMessageId } from "@traycer/protocol/persistence/epic
 import type { EpicAgentActivity } from "@/lib/agent-activity";
 
 /**
- * What a bot's Activity page reads (Tracy Bots T86, decision 115): one page
+ * What a bot's Activity page reads (Tracy Bots, decision 115): one page
  * for the bot, across its trunk and every thread. A row is the bot's when
  * the bot, through its trunk or any thread, started the thing or owns it:
  * the tasks on its task list (T82), and the chats that live under the bot
@@ -21,7 +21,7 @@ import type { EpicAgentActivity } from "@/lib/agent-activity";
  */
 
 /** The Activity page's "this week", the window the host keeps check-ins for. */
-export const ACTIVITY_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+const ACTIVITY_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 
 /** Check-ins shown under an automation before "All N check-ins". */
 export const RECENT_CHECKINS_SHOWN = 5;
@@ -209,16 +209,6 @@ export function trackingTasksOf(
   tasks: ReadonlyArray<BotTaskEntry>,
 ): ReadonlyArray<BotTaskEntry> {
   return tasks.filter((task) => task.state === "tracking");
-}
-
-/** A task's kind in words. */
-export function taskKindOf(task: BotTaskEntry): string {
-  return task.cadence.kind === "every" ? "Automation" : "One-off task";
-}
-
-/** An automation the bot still runs: what Run now, Pause and Stop act on (T92). */
-export function isRunningAutomation(task: BotTaskEntry): boolean {
-  return task.state === "tracking" && task.cadence.kind === "every";
 }
 
 /**

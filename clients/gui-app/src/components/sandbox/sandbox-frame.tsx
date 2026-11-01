@@ -348,7 +348,7 @@ function useServedPage(
 }
 
 /**
- * The one frame every agent page, wireframe and MCP App renders in (D12).
+ * The one frame every agent page, wireframe and MCP App renders in.
  *
  * HTML sources use the bundled loader; artifacts use a registered document
  * URL. Both stay opaque (`sandbox="allow-scripts allow-forms"`, never

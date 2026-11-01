@@ -83,6 +83,7 @@ function snapshotWith(activity: BotActivity | null): BotSubscriptionSnapshot {
     openRequestCount: 0,
     conversationsRevision: null,
     notificationSubscriptions: null,
+    surfaceActions: null,
     stoppedNotificationWatches: null,
     boundHost: { hostId: OWN, epoch: 1, isThisHost: false },
     activity,
@@ -159,7 +160,6 @@ function mountRow(input: Mount): void {
         environmentOwnerKind={input.environmentOwnerKind}
         createdBy={input.createdBy}
         isMain={input.isMain}
-        entryLocked={false}
       />
     </StrictMode>,
   );
@@ -338,6 +338,7 @@ describe("<HomeBotRow /> state", () => {
       openRequestCount: 0,
       conversationsRevision: null,
       notificationSubscriptions: null,
+      surfaceActions: null,
       stoppedNotificationWatches: null,
       boundHost: { hostId: null, epoch: 2, isThisHost: false },
       activity: null,
@@ -485,6 +486,7 @@ describe("<HomeBotRow /> tasks", () => {
     originRequestId: null,
     createdByChatId: null,
     checkins: null,
+    inputNeeded: null,
     pause: null,
     stop: null,
     runRequest: null,

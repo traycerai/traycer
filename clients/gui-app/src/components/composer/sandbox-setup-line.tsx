@@ -193,7 +193,7 @@ export interface SandboxSetupLineFacts {
 
 /**
  * The setup line a staged sandbox's first action draws above the draft
- * (sandboxes plan D2): the worktree setup line's look (a hairline rule each
+ * (the sandboxes plan): the worktree setup line's look (a hairline rule each
  * side, a spinner, `Starting sandbox · <name> · m:ss`, a chevron), driven by
  * the stage instead of persisted `setup.*` events, since no chat exists
  * before the host does. The elapsed counter is its only timing. A refusal
@@ -1041,8 +1041,8 @@ function failedStepOf(
 }
 
 /**
- * The setup line once the message was handed to the agent (sandboxes
- * redesign Flow 1 step 2): `Sandbox ready · name · 24 s`, collapsed, above the
+ * The setup line once the message was handed to the agent:
+ * `Sandbox ready · name · 24 s`, collapsed, above the
  * chat's first message. Expanded, the idle rule with the sandbox's own idle
  * period, once its row says it.
  */

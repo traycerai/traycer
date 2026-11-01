@@ -124,9 +124,40 @@ function CanvasTextNote({
     element: HTMLElement;
     height: number;
   } | null>(null);
+  const titleMeasure = useRef<HTMLSpanElement>(null);
+  const fontSize = note.size ?? (title ? 30 : 14);
+  useLayoutEffect(() => {
+    const container = content.current;
+    const measureText = titleMeasure.current;
+    if (!title || container === null || measureText === null) return;
+    const fit = (): void => {
+      const editor = container.querySelector("textarea");
+      measureText.textContent =
+        (editor?.value ?? note.text ?? "").replace(/\s*\n\s*/g, " ") ||
+        "Type something";
+      const width = measureText.offsetWidth;
+      if (width === 0) return;
+      container.style.fontSize = `${fontSize * Math.min(1, container.clientWidth / width)}px`;
+    };
+    fit();
+    const observer = new ResizeObserver(fit);
+    observer.observe(container);
+    observer.observe(measureText);
+    container.addEventListener("input", fit);
+    return () => {
+      observer.disconnect();
+      container.removeEventListener("input", fit);
+      container.style.removeProperty("font-size");
+    };
+  }, [title, fontSize, note.text, editing]);
   useLayoutEffect(() => {
     const element = content.current?.querySelector("[data-canvas-note-text]");
-    if (!(element instanceof HTMLElement) || onGrow === undefined || viewOnly)
+    if (
+      title ||
+      !(element instanceof HTMLElement) ||
+      onGrow === undefined ||
+      viewOnly
+    )
       return;
     const measure = (): void => {
       const height = element.scrollHeight;
@@ -142,25 +173,37 @@ function CanvasTextNote({
     const observer = new ResizeObserver(measure);
     observer.observe(element);
     return () => observer.disconnect();
-  }, [onGrow, editing, viewOnly]);
+  }, [onGrow, editing, viewOnly, title]);
   return (
     <div
       ref={content}
       className={cn(
         "h-full w-full text-(--canvas-note-color) text-(length:--canvas-note-size) leading-normal",
-        title && "font-heading font-semibold",
+        title && "relative font-heading font-semibold",
       )}
       style={
         {
           "--canvas-note-color": title
             ? (note.color ?? "var(--foreground)")
             : stickyTextColor(note.color),
-          "--canvas-note-size": `${note.size ?? (title ? 30 : 14)}px`,
+          "--canvas-note-size": `${fontSize}px`,
         } as CSSProperties
       }
     >
+      {title ? (
+        <span
+          ref={titleMeasure}
+          aria-hidden
+          className="pointer-events-none invisible absolute w-max whitespace-pre"
+          style={{ fontSize }}
+        />
+      ) : null}
       {editing && !viewOnly ? (
-        <CanvasTextNoteEditor note={note} onCommit={onCommit} onGrow={onGrow} />
+        <CanvasTextNoteEditor
+          note={note}
+          onCommit={onCommit}
+          onGrow={title ? undefined : onGrow}
+        />
       ) : (
         <CanvasTextNoteDisplay
           note={note}
@@ -186,7 +229,12 @@ function CanvasTextNoteDisplay({
       role={viewOnly ? undefined : "button"}
       tabIndex={viewOnly ? undefined : 0}
       aria-label={viewOnly ? undefined : label}
-      className="min-h-full w-full whitespace-pre-wrap break-words"
+      className={cn(
+        "min-h-full w-full",
+        note.type === "title"
+          ? "whitespace-pre"
+          : "whitespace-pre-wrap break-words",
+      )}
       onDoubleClick={() => {
         if (!viewOnly) onEdit?.();
       }}
@@ -200,7 +248,9 @@ function CanvasTextNoteDisplay({
     >
       {/* Measure intrinsic text, never the minimum height inherited from the note. */}
       <div data-canvas-note-text="">
-        {note.text || <span className="opacity-50">Type something</span>}
+        {(note.type === "title"
+          ? note.text?.replace(/\s*\n\s*/g, " ")
+          : note.text) || <span className="opacity-50">Type something</span>}
       </div>
     </div>
   );
@@ -234,15 +284,38 @@ function CanvasTextNoteEditor({
       data-canvas-note-text=""
       aria-label={note.type === "title" ? "Title text" : "Sticky note text"}
       placeholder="Type something"
-      defaultValue={note.text ?? ""}
+      defaultValue={
+        note.type === "title"
+          ? (note.text ?? "").replace(/\s*\n\s*/g, " ")
+          : (note.text ?? "")
+      }
+      wrap={note.type === "title" ? "off" : "soft"}
       rows={1}
       // Canvas typography is document content, not the app's form-control scale.
-      className="touch-auto canvas-nopan canvas-nowheel field-sizing-content block w-full resize-none overflow-hidden border-0 bg-transparent p-0 whitespace-pre-wrap break-words outline-none placeholder:text-current placeholder:opacity-50"
-      onInput={(event) => onGrow?.(event.currentTarget.scrollHeight)}
+      className={cn(
+        "touch-auto canvas-nopan canvas-nowheel field-sizing-content block w-full resize-none overflow-hidden border-0 bg-transparent p-0 outline-none placeholder:text-current placeholder:opacity-50",
+        note.type === "title"
+          ? "whitespace-pre"
+          : "whitespace-pre-wrap break-words",
+      )}
+      onInput={(event) => {
+        if (note.type === "title") {
+          event.currentTarget.value = event.currentTarget.value.replace(
+            /\s*\n\s*/g,
+            " ",
+          );
+        } else {
+          onGrow?.(event.currentTarget.scrollHeight);
+        }
+      }}
       onBlur={(event) => onCommit(event.currentTarget.value)}
       onKeyDown={(event) => {
         event.stopPropagation();
-        if (event.code === "Escape" && !event.nativeEvent.isComposing) {
+        if (
+          (event.code === "Escape" ||
+            (note.type === "title" && event.code === "Enter")) &&
+          !event.nativeEvent.isComposing
+        ) {
           event.preventDefault();
           event.currentTarget.blur();
         }

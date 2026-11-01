@@ -6,7 +6,7 @@ type NavigateFn = UseNavigateResult<string>;
 
 /**
  * Restore a retained start-task draft from a list of them: reopen the row
- * (T10's `openDraft` — closed:false, active, dirty+flush) then activate
+ * (`openDraft` — closed:false, active, dirty+flush) then activate
  * through the tab controller so the strip item is a real activation, not a
  * source-ref that never originated there.
  */

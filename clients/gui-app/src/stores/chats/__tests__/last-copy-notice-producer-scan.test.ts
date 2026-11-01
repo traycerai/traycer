@@ -1,7 +1,7 @@
 /// <reference types="node" />
 
 /**
- * R6F2 enumeration/source-scan: every construction site of a "last copy"
+ * Enumeration/source-scan: every construction site of a "last copy"
  * notice (`unrecoverableSendNotice` / `displacedRestorationNotice`) must be
  * accompanied by a write into `lastCopyPrompts` - directly, through
  * `recordLastCopyPrompt`/`withLastCopyPrompts`, or (for a call buried inside
@@ -9,14 +9,14 @@
  *
  * The notice is rendered text; `lastCopyPrompts` is the document behind it
  * that `handOffUnrecordedPromptToStash` actually reads at teardown. A notice
- * with no matching record is exactly R6F2: the user sees "your prompt was
+ * with no matching record leaves nothing to hand off: the user sees "your prompt was
  * lost", and an hour later there is nothing left to hand off.
  *
  * Follows `src/__tests__/muted-fill-on-raised-surface-lint.test.ts`'s shape:
  * a static source scan, not a runtime test, so a FUTURE producer that forgets
  * the record is caught before it ships.
  *
- * R8N2: the scope-finding used to be raw brace matching over the source
+ * The scope-finding used to be raw brace matching over the source
  * text. Two defects with that: a template literal containing a `{` throws
  * the brace count off, and a NESTED, UNCALLED arrow function's body is plain
  * text inside the enclosing block, so a producer sitting inside one vouches
@@ -134,7 +134,7 @@ function isProducerProperty(node: ts.Node): boolean {
  * a NESTED function-like body - that body runs on its own schedule (later,
  * elsewhere, or never), so its contents are not this block's effect.
  *
- * R9N1: the enumerated check (function expression / arrow / declaration)
+ * The enumerated check (function expression / arrow / declaration)
  * missed every OTHER function-like shape TypeScript's own AST recognizes -
  * a class or object-literal METHOD, a get/set accessor, a constructor. A
  * producer sitting inside an uncalled one of those still vouched for a
@@ -414,7 +414,7 @@ function noticeThenRecord(state: S) {
   });
 
   it("EVERY-CALLER CONTROL: a pure-helper notice builder with two callers, only one of which records, is reported (DRIVE RED on every->some)", () => {
-    // Reproduces the reviewer's finding: `helperCalls.some(...)` would let a
+    // Reproduces the defect: `helperCalls.some(...)` would let a
     // SECOND, forgetful caller of the same notice-building helper through as
     // long as some OTHER caller records. `every` is the only version that
     // actually enforces "every call site must record".

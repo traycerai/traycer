@@ -484,7 +484,7 @@ type OfficeErrand =
  * as it ends a walk to a moved desk. A second name for "sitting down" would be
  * a second answer to a question already answered.
  *
- * C1 is why `civic-*` belongs on this side of the line: a claim is WALKED LIKE
+ * `civic-*` belongs on this side of the line because a claim is WALKED LIKE
  * A SUMMONS. A crashed agent that had to wait for an errand slot would sit at
  * its desk with a crashed screen while thirty-two colleagues watered plants,
  * and the bed it had already been given would stand empty for as long as that
@@ -1201,7 +1201,6 @@ function seatedCharacter(agentId: string, seat: OfficeSeat): OfficeCharacter {
   };
 }
 
-/** An agent and the seat it is actually in - the claim, or the assignment. */
 /** A seat the PAINTER is asked about; `null` where nobody is in it. */
 interface SeatedAgent {
   /** `null` for an unoccupied reserve, which is furniture with nobody in it. */
@@ -1901,7 +1900,7 @@ export class OfficeScene {
     this.pulse = input.pulse;
     this.partition = input.partition;
     // The archive's counter, taken here because this is where every part of it
-    // arrives. Not from the walk-outs (C5): a floor opened at a cursor where
+    // arrives. Not from the walk-outs: a floor opened at a cursor where
     // three hundred records were already archived has watched nobody leave.
     // And not from `statusById` either - that says how a desk is PAINTED, and
     // an archived agent carrying a failure or an unanswered request is painted
@@ -2728,7 +2727,7 @@ export class OfficeScene {
    * storey where that storey has one, ELSE ANY ARCHIVE IN ITS OWN BUILDING, and
    * through the storey's own entrance only where its building has none at all.
    *
-   * C5: the archive is a door with a counter rather than a room somebody sits
+   * The archive is a door with a counter rather than a room somebody sits
    * in, so walking into it is the whole of being archived. Every view that plans
    * no civic rooms keeps the entrance, which is what it always used.
    *
@@ -2781,7 +2780,7 @@ export class OfficeScene {
   }
 
   /**
-   * C4: A CRASHED AGENT GOES TO THE INFIRMARY, NOT TO THE COUNTER.
+   * A CRASHED AGENT GOES TO THE INFIRMARY, NOT TO THE COUNTER.
    *
    * This read `attention || failure`, because before there was an infirmary the
    * counter was the only place an office could send somebody who needed help.
@@ -2930,7 +2929,7 @@ export class OfficeScene {
    * The civic seat this agent's STATUS asks for, or `null` for a status that
    * asks for nothing.
    *
-   * C4: a crash goes to a bed, a wait goes to a chair, and `attention` is the
+   * A crash goes to a bed, a wait goes to a chair, and `attention` is the
    * one that still wants a person rather than a room - it queues at the counter
    * instead, which is `needsReception`.
    */
@@ -2947,7 +2946,7 @@ export class OfficeScene {
    * Who gets the next free bed: the agent that has been waiting for one
    * longest.
    *
-   * C3, and it is a list for the same reason the reception queue is one -
+   * It is a list for the same reason the reception queue is one -
    * "who started needing this first" is not recoverable from the statuses,
    * which say only who needs it NOW. Newcomers within a single sync break their
    * tie by id, so the order is still a function of the data and two runs of the
@@ -2968,7 +2967,7 @@ export class OfficeScene {
    * and `civicArrivalOrder` concatenates per-key lists in `characters` order:
    * arrival order kept inside each key and thrown away across them, so a freed
    * bed went to whoever sorted first in character order. Keying at the pool's
-   * granularity makes key and pool one-to-one, and C3 holds again.
+   * granularity makes key and pool one-to-one, preserving arrival order.
    *
    * A FLOOR KEY IS NOT EVEN STABLE FOR ONE AGENT ACROSS ITS OWN CLAIM, which
    * is the sharper form of the same point: `effectiveSeat` moves
@@ -2989,7 +2988,7 @@ export class OfficeScene {
   /**
    * WHO WANTS A ROOM, and the order in which they asked - per `(host, kind)`.
    *
-   * C3. "Who started needing this first" is not recoverable from the statuses,
+   * "Who started needing this first" is not recoverable from the statuses,
    * which say only who needs one now, so the order is KEPT rather than
    * re-derived: an agent that has been waiting keeps its place, one that has
    * stopped asking is dropped from it, and newcomers within a single sync break
@@ -3141,7 +3140,7 @@ export class OfficeScene {
         roomId: null,
         floorIndex: this.floorIndexOfAgent(agentId),
         wants: want,
-        // C2: the ward is as big as it is. An agent that finds it full keeps
+        // The ward is as big as it is. An agent that finds it full keeps
         // its desk and its glyph and stays on this list, so the next bed to
         // come free is its rather than whoever sorts first.
         shortfall: "none",
@@ -3226,7 +3225,7 @@ export class OfficeScene {
    */
   private startCivicWalk(character: OfficeCharacter, seat: OfficeSeat): void {
     const start = this.startTileOf(character);
-    // NO HANDOVER, deliberately, and this is C1's "walked like a SUMMONS"
+    // NO HANDOVER, deliberately: "walked like a SUMMONS" is
     // read as a rule about the desk rather than about the walk.
     //
     // The handover is for a seat an agent has genuinely left for a new home -
@@ -3402,11 +3401,6 @@ export class OfficeScene {
   }
 
   /**
-   * Whether this agent is running for its chair: latched while it walks, and
-   * true for a seated one that still has a message in the air or on the desk,
-   * which is what keeps it from wandering off in the middle of a delivery.
-   */
-  /**
    * Parked in the QUIET STACK: seated in a cubby rather than at a desk.
    *
    * A cubby is a waiting slot, not a workstation. Its occupant is cold by
@@ -3421,6 +3415,11 @@ export class OfficeScene {
     return this.seats.effectiveSeat(agentId)?.kind === "cubby";
   }
 
+  /**
+   * Whether this agent is running for its chair: latched while it walks, and
+   * true for a seated one that still has a message in the air or on the desk,
+   * which is what keeps it from wandering off in the middle of a delivery.
+   */
   private isHurrying(agentId: string): boolean {
     const character = this.characters.get(agentId);
     if (character !== undefined && character.hurrying) return true;
@@ -3685,14 +3684,6 @@ export class OfficeScene {
   }
 
   /**
-   * The whole world moved. Everything the scene holds that names a tile or a
-   * point moves with it, so a building that grew a storey does not leave its
-   * people standing where the storey used to be.
-   *
-   * The camera is the renderer's and is left for it to collect, which is what
-   * keeps the office from appearing to jump while nothing in it moved.
-   */
-  /**
    * Carry everybody, and everything they were headed for, by a whole-tile
    * shift. Positions, paths, queue slots and errand targets all name tiles, so
    * all of them move together or the office tears.
@@ -3727,6 +3718,14 @@ export class OfficeScene {
     }
   }
 
+  /**
+   * The whole world moved. Everything the scene holds that names a tile or a
+   * point moves with it, so a building that grew a storey does not leave its
+   * people standing where the storey used to be.
+   *
+   * The camera is the renderer's and is left for it to collect, which is what
+   * keeps the office from appearing to jump while nothing in it moved.
+   */
   private applyShift(
     shift: OfficeTilePos | null,
     before: OfficeProjector | null,
@@ -5834,14 +5833,6 @@ export class OfficeScene {
   }
 
   /**
-   * The floor inside a tile rect, from the painter, remembered.
-   *
-   * A still office asks for the same floor sixty times a second - same plan,
-   * same band, same rectangle - and the floor is the largest thing in a frame
-   * by an order of magnitude. Handing back the SAME array is also what tells
-   * the renderer's bitmap cache it has nothing to repaint.
-   */
-  /**
    * How far this painter's blocks reach past their tiles, on this plan.
    *
    * Keyed on `layoutVersion` exactly as the floor is: the number is a function
@@ -5858,6 +5849,13 @@ export class OfficeScene {
     return px;
   }
 
+  /**
+   * The floor inside a tile rect, from the painter, remembered.
+   *
+   * A still office asks for the same floor sixty times a second - same plan,
+   * same band, same rectangle - and the floor is the largest thing in a frame
+   * by an order of magnitude.
+   */
   private floorIn(
     layout: OfficeLayout,
     tiles: OfficeTileRect,
@@ -6592,22 +6590,6 @@ export class OfficeScene {
   }
 
   /**
-   * The same regions, ordered by the DEPTH the world stream is drawn in.
-   *
-   * A `layered` painter draws every prop and then every actor, so reversing the
-   * two lists is already the front-most-first order and `buildHitRegions` is
-   * exact. A `world` painter does not: it interleaves desks and people by
-   * depth, so on Campus or City the nearer of two overlapping buildings can be
-   * the one with the LOWER row, and an order taken from row/column disagrees
-   * with what the eye sees. Taken from the depths the merge itself sorts by,
-   * the pointer always resolves to whatever was painted last.
-   *
-   * Ties keep emission order - props before actors, and within each the order
-   * the painter produced - which is exactly how `mergeByDepth`'s stable sort
-   * leaves them, so a foreground drawable a painter deliberately emitted late
-   * at the same depth stays in front here too.
-   */
-  /**
    * WHERE A SEAT'S BOX SORTS, or `null` for a seat that gets no region at all.
    *
    * AN ORDINARY SEAT sorts with the art it drew: the shallowest depth of its own
@@ -6643,6 +6625,22 @@ export class OfficeScene {
     return answer(layout, seat);
   }
 
+  /**
+   * The same regions, ordered by the DEPTH the world stream is drawn in.
+   *
+   * A `layered` painter draws every prop and then every actor, so reversing the
+   * two lists is already the front-most-first order and `buildHitRegions` is
+   * exact. A `world` painter does not: it interleaves desks and people by
+   * depth, so on Campus or City the nearer of two overlapping buildings can be
+   * the one with the LOWER row, and an order taken from row/column disagrees
+   * with what the eye sees. Taken from the depths the merge itself sorts by,
+   * the pointer always resolves to whatever was painted last.
+   *
+   * Ties keep emission order - props before actors, and within each the order
+   * the painter produced - which is exactly how `mergeByDepth`'s stable sort
+   * leaves them, so a foreground drawable a painter deliberately emitted late
+   * at the same depth stays in front here too.
+   */
   private worldHitRegions(args: {
     readonly characters: ReadonlyArray<OfficeCharacter>;
     readonly seats: ReadonlyArray<SeatedAgent>;
@@ -6654,7 +6652,7 @@ export class OfficeScene {
     const actorDepths = deepestByOwner(actors);
     const entries: DepthOrderedRegion[] = [];
     // THE WHOLE SEAT, at the only depth all of it is at least as deep as. Its
-    // declared box (D53) is what culling, hover and the camera already use, and
+    // declared box is what culling, hover and the camera already use, and
     // where a seat gets a region at all, every point of that box still resolves
     // to its occupant - just no longer at the depth of whichever part happened to
     // be drawn last. WHERE IT GETS ONE is `seatRegionDepth`'s answer: a painter
@@ -6856,20 +6854,6 @@ export class OfficeScene {
   }
 
   /**
-   * WAKING. A cold agent in a cubby whose status turns hot takes the first free
-   * reserve seat it can, and gives it back once it has gone quiet and is home.
-   *
-   * The claim waits for RECEPTION. An attention or failure agent queues at the
-   * counter first, and a desk it is not walking to yet is a desk nobody else
-   * can have: claiming at the moment the wake is decided held a seat empty for
-   * however long the queue took. It is claimed on the sync that ends the
-   * reception stop - which is this one, since `needsReception` is false from
-   * the moment the status stops calling for a person. The cost is real and
-   * accepted: a wake that reaches the counter and finds the office full while
-   * it waited stays where it is and asks the next plan for capacity, exactly
-   * as any other agent that cannot find a seat does.
-   */
-  /**
    * This agent has gone cold: it wants its reserve no longer.
    *
    * Two calls, because a released seat is only FREE once the character is out
@@ -6887,6 +6871,20 @@ export class OfficeScene {
     if (home) this.seats.vacated(agentId);
   }
 
+  /**
+   * WAKING. A cold agent in a cubby whose status turns hot takes the first free
+   * reserve seat it can, and gives it back once it has gone quiet and is home.
+   *
+   * The claim waits for RECEPTION. An attention agent queues at the
+   * counter first, and a desk it is not walking to yet is a desk nobody else
+   * can have: claiming at the moment the wake is decided held a seat empty for
+   * however long the queue took. It is claimed on the sync that ends the
+   * reception stop - which is this one, since `needsReception` is false from
+   * the moment the status stops calling for a person. The cost is real and
+   * accepted: a wake that reaches the counter and finds the office full while
+   * it waited stays where it is and asks the next plan for capacity, exactly
+   * as any other agent that cannot find a seat does.
+   */
   private updateSeatClaims(): void {
     const rehome: string[] = [];
     for (const agentId of this.seats.knownAgentIds()) {
@@ -6904,7 +6902,7 @@ export class OfficeScene {
       // WANTING ONE IS ENOUGH - the wake pass is not for an agent the civic
       // pass is handling, whether or not that pass found it a seat.
       //
-      // Two things go wrong without this, and the second is the worse. C2:
+      // Two things go wrong without this, and the second is the worse:
       // an agent whose civic claim came back empty is the WARD being full,
       // not the office being short of desks, so waking it here takes a desk
       // shortfall and asks the planner to grow the storey on a status flip -
@@ -6949,7 +6947,7 @@ export class OfficeScene {
     layout: OfficeLayout,
     character: OfficeCharacter,
   ): string {
-    // C7: the counter people queue at IS the help desk, so it is called that
+    // The counter people queue at IS the help desk, so it is called that
     // wherever it is named - there was never a second reception.
     if (this.inReceptionQueue(character)) return "Help desk";
     if (character.errand === "arriving" || character.errand === "leaving") {

@@ -279,7 +279,7 @@ interface EpicRegistrySession {
   /**
    * Whether the teardown about to happen is a PARK - the epic went unwatched
    * for the park window and is releasing its subscriptions with its tabs still
-   * open (plan C, decision C1).
+   * open.
    *
    * Recorded on the session for the same reason `pendingRetention` is: the fact
    * lives at the call that knows it, and `onBeforeDispose` sees only the shared
@@ -347,6 +347,28 @@ export function holdsNothingToLose(state: OpenEpicState): boolean {
 }
 
 /**
+ * The strict park gate over every host an Epic has live state on, not just the
+ * one its own session is bound to. A park disposes the chat plane too, and a
+ * chat can be served from a different host - coverage is per host, so checking
+ * only the epic's host can pass while the plane is blind to the host whose
+ * chats are about to go.
+ */
+function epicIsBusyAcrossHosts(
+  epicId: string,
+  hostIds: Iterable<string>,
+): boolean {
+  return epicBusyReason(epicId, hostIds) !== null;
+}
+
+/**
+ * Which arm of {@link epicIsBusyAcrossHosts} holds, or `null` when none does.
+ */
+type EpicBusyReason =
+  | "activity-plane-blind"
+  | "turn-in-progress"
+  | "host-not-covered";
+
+/**
  * The strict parking gate: an agent turn is running in the epic, OR the
  * activity plane cannot currently say that none is. Background-only work does
  * not count - see {@link hasActiveAgentWork}. The cap has its own bounded
@@ -379,28 +401,6 @@ export function holdsNothingToLose(state: OpenEpicState): boolean {
  * `OpenEpicStoreHandle.hostId` closes that - every session's own host is now
  * checked, open transport or not.
  */
-/**
- * The strict park gate over every host an Epic has live state on, not just the
- * one its own session is bound to. A park disposes the chat plane too, and a
- * chat can be served from a different host - coverage is per host, so checking
- * only the epic's host can pass while the plane is blind to the host whose
- * chats are about to go.
- */
-function epicIsBusyAcrossHosts(
-  epicId: string,
-  hostIds: Iterable<string>,
-): boolean {
-  return epicBusyReason(epicId, hostIds) !== null;
-}
-
-/**
- * Which arm of {@link epicIsBusyAcrossHosts} holds, or `null` when none does.
- */
-type EpicBusyReason =
-  | "activity-plane-blind"
-  | "turn-in-progress"
-  | "host-not-covered";
-
 function epicBusyReason(
   epicId: string,
   hostIds: Iterable<string>,
@@ -518,7 +518,7 @@ export function setEpicChatWorkProbe(probe: EpicChatWorkProbe | null): void {
 
 /**
  * Per-Epic unsynced-edits summary, aggregated across every live session
- * in the registry. T8 (desktop app-quit intercept) subscribes to this so
+ * in the registry. The desktop app-quit intercept subscribes to this so
  * it can render the "these tabs have unsynced edits" confirmation sheet
  * without knowing which browser hooks live in which provider.
  */
@@ -1266,9 +1266,8 @@ export class OpenEpicSessionRegistry {
    *
    * Re-acquisition on show is the provider's, through `acquireMounted`, which
    * builds a fresh handle because this one is gone. Nothing here has to arrange
-   * that: a park is indistinguishable from a cold open on the way back, which
-   * is decision C5 ("the existing establishing presentation, as after a host
-   * reconnect").
+   * that: a park is indistinguishable from a cold open on the way back, with
+   * the existing establishing presentation used after a host reconnect.
    */
   park(epicId: string): boolean {
     return this.sessions.transact(() => {
@@ -1359,11 +1358,6 @@ export class OpenEpicSessionRegistry {
   }
 
   /**
-   * Move a dirty handle out of the registry and into the retention, transport
-   * first. The caller has already installed the replacement, or is closing the
-   * tab, so this is only ever an outgoing handle the registry no longer tracks.
-   */
-  /**
    * Transfers a merged-from handle's root state into its target, and disposes
    * it ONLY once the target has affirmatively taken the update.
    *
@@ -1405,7 +1399,7 @@ export class OpenEpicSessionRegistry {
    * BEFORE calling here, and the session has left the registry by then - so a
    * source is merged exactly once, structurally. A guard was written here and
    * removed: it read as protection while its condition was excluded, which is
-   * the same defect as the `reparentArtifact` catch this ticket deleted.
+   * the same defect as the `reparentArtifact` catch this change deleted.
    *
    * ## The disposal fence is NOT that guard
    *
@@ -1470,6 +1464,11 @@ export class OpenEpicSessionRegistry {
       });
   }
 
+  /**
+   * Move a dirty handle out of the registry and into the retention, transport
+   * first. The caller has already installed the replacement, or is closing the
+   * tab, so this is only ever an outgoing handle the registry no longer tracks.
+   */
   private retainDirtyHandle(
     session: EpicRegistrySession,
     identity: RetainedHandleIdentity,
@@ -1658,8 +1657,7 @@ export class OpenEpicSessionRegistry {
    * destructive than the cross-identity MERGE `findMergeTarget` refuses three
    * methods up on the grounds that the result has no owner it could honestly
    * flush to.
-   */
-  /**
+   *
    * `dirtyLiveHandle` is the identity to RETAIN the live entry under when it
    * holds unsynced edits, or `null` to destroy it with them.
    *
@@ -1821,12 +1819,6 @@ export class OpenEpicSessionRegistry {
   }
 
   /**
-   * Snapshot of every live session that currently has unsynced edits.
-   * Keyed by epicId; value carries the best-available title (live Y.Doc
-   * title, falling back to snapshot-meta epicLight). Empty array means
-   * every tab is either fully synced or has no unresolved local dirty state.
-   */
-  /**
    * The ONE walk over both collections. `getUnsyncedEdits()` and
    * {@link hasUnsyncedEdits} are both projections of it, and nothing else may
    * traverse the entries to answer "does this epic have unsynced work".
@@ -1914,6 +1906,13 @@ export class OpenEpicSessionRegistry {
     return this.collectUnsyncedRows().some((row) => row.epicId === epicId);
   }
 
+  /**
+   * Snapshot of every epic with unsynced edits anywhere - live session or
+   * retained buffer.
+   * Keyed by epicId; value carries the best-available title (live Y.Doc
+   * title, falling back to snapshot-meta epicLight). Empty array means
+   * every tab is either fully synced or has no unresolved local dirty state.
+   */
   getUnsyncedEdits(): ReadonlyArray<UnsyncedEditsEntry> {
     // Mapped rather than returned as-is: `UnsyncedRow` is structurally
     // assignable to `UnsyncedEditsEntry`, so handing the walk's rows straight

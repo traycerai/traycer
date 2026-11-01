@@ -7,7 +7,7 @@ import {
 import type { PlacementEdge } from "@/components/layout-editor/canvas/surface-placement";
 
 /**
- * Dragging a placement surface to an edge (D14): the tab strip to the top,
+ * Dragging a placement surface to an edge: the tab strip to the top,
  * left or right of the app, the sidebar to either side of the content.
  *
  * The press arms through the drag engine's shared arm phase and holds its one

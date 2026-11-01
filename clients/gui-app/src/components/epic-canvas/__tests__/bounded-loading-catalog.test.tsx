@@ -17,7 +17,7 @@ import type { HostLeaseSnapshot } from "@traycer-clients/shared/host-selection/s
 import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
 
 /**
- * THE S1-S6 SPINNER-FOREVER CATALOG — the regression suite for the audit's
+ * THE SPINNER-FOREVER CATALOG — the regression suite for the audit's
  * "Spinner-forever paths (catalogued)" table, and the acceptance artifact for
  * invariant 6 (every host-dependent loading state carries a deadline AND a
  * terminal presentation).
@@ -29,11 +29,11 @@ import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-reg
  *
  * | Row | What it was | Pinned in |
  * | --- | --- | --- |
- * | S1 | epic re-point: snapshot never arrives | `providers/__tests__/epic-session-provider.test.tsx` — "bounds an authority that never attaches at the establishing deadline". Closed by P2.4's `ESTABLISHING_DEADLINE_MS`; pinned, not re-proved. |
+ * | Epic re-point | epic re-point: snapshot never arrives | `providers/__tests__/epic-session-provider.test.tsx` — "bounds an authority that never attaches at the establishing deadline". Closed by `ESTABLISHING_DEADLINE_MS`; pinned, not re-proved. |
  * | S2 | `host-starting` forever, Clone withheld | **HERE** — it needed a real `<ChatTile>` and had no existing harness that could drive reachability. |
- * | S3 | null tab client ⇒ `enabled:false` ⇒ forever `isPending` | `renderers/__tests__/published-chat-tile.test.tsx` (bounded words + `data-load-kind`, not "no spinner") |
- * | S4 | `indeterminate` ⇒ optimistic retry, no banner | `hooks/agent/__tests__/use-host-reachability.starting-deadline.test.tsx` (stays `reachable` — deliberately) + `hooks/host/__tests__/use-bounded-host-load.test.tsx` (content reaches `timed-out`) |
- * | S5 | terminal/TUI/shell-output bare skeletons | each tile's own suite: `terminal-tile-close-navigation`, `terminal-agent-tile-exit-close`, `managed-command-output-tile`, `terminal-panel/__tests__/landing-terminal-tile-bounded-load` |
+ * | Null tab client | null tab client ⇒ `enabled:false` ⇒ forever `isPending` | `renderers/__tests__/published-chat-tile.test.tsx` (bounded words + `data-load-kind`, not "no spinner") |
+ * | Indeterminate connectivity | `indeterminate` ⇒ optimistic retry, no banner | `hooks/agent/__tests__/use-host-reachability.starting-deadline.test.tsx` (stays `reachable` — deliberately) + `hooks/host/__tests__/use-bounded-host-load.test.tsx` (content reaches `timed-out`) |
+ * | Terminal loads | terminal/TUI/shell-output bare skeletons | each tile's own suite: `terminal-tile-close-navigation`, `terminal-agent-tile-exit-close`, `managed-command-output-tile`, `terminal-panel/__tests__/landing-terminal-tile-bounded-load` |
  * | S6 | Clone CTA silent no-op on same host | `renderers/__tests__/use-chat-clone-on-host-switch.test.tsx` (asserts the refusal TOAST, not merely that no clone happened — "no clone happened" is also true when the button is unwired) |
  *
  * The mechanism this whole family shares was diagnosed correctly at ONE call
@@ -246,7 +246,7 @@ async function settleEpicSession(): Promise<void> {
 }
 
 /**
- * S2 — the audit's permanent trap, and F4's presentation half.
+ * S2 — the audit's permanent trap for the presentation layer.
  *
  * An EMPTY host directory means this machine's own host has not published yet,
  * which the reachability hook answers `host-starting` for - correctly, because
@@ -320,7 +320,7 @@ describe("S2 — host-starting is bounded, and Clone arrives AT the deadline", (
 });
 
 /**
- * S2's body half (G2). Under either strip the body says what happens to THIS
+ * The body half. Under either strip the body says what happens to THIS
  * agent and never repeats the strip, and the handle-pending wait no longer
  * ends at the shared 15 s tile budget: only the strip falls there.
  */

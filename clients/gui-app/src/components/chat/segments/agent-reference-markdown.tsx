@@ -3,19 +3,33 @@ import { TraycerMarkdown } from "@/markdown";
 import { AgentReferenceChip } from "@/components/chat/agent-reference-chip";
 import { CodeBlock } from "@/markdown/components/code-block";
 import { extractText } from "@/markdown/components/extract-react-node-text";
-import { TRAYCER_AGENT_TAG } from "@/markdown/plugins/const";
+import {
+  TRAYCER_AGENT_TAG,
+  TRAYCER_MENTION_TAG,
+} from "@/markdown/plugins/const";
+import { rehypeBotMentions } from "@/markdown/plugins/rehype-bot-mentions";
+import { BotMentionChip } from "@/components/bots/bot-mention-chip";
 import {
   isUuidReferenceCandidate,
   rehypeTraycerAgentReferences,
 } from "@/markdown/plugins/rehype-traycer-agent-references";
+import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 
-const AGENT_REFERENCE_REHYPE_PLUGINS = [rehypeTraycerAgentReferences];
+// Mentions first: a member's token holds their id, which the agent-reference
+// pass would otherwise read as an id to chip. Without the features there are
+// no bot mentions, and the pass stays the one the release before had.
+const AGENT_REFERENCE_REHYPE_PLUGINS = UNRELEASED_FEATURES_ENABLED
+  ? [rehypeBotMentions, rehypeTraycerAgentReferences]
+  : [rehypeTraycerAgentReferences];
 
 const AGENT_REFERENCE_MARKDOWN_COMPONENTS: Record<
   string,
   ComponentType<Record<string, unknown>>
 > = {
   [TRAYCER_AGENT_TAG]: AgentReferenceMarkdownNode as ComponentType<
+    Record<string, unknown>
+  >,
+  [TRAYCER_MENTION_TAG]: MentionMarkdownNode as ComponentType<
     Record<string, unknown>
   >,
   code: AgentAwareCodeBlock as ComponentType<Record<string, unknown>>,
@@ -89,6 +103,14 @@ function AgentReferenceMarkdownNode(props: Record<string, unknown>) {
   const display = props["data-display"] === "code" ? "code" : "text";
   if (agentId === null) return <>{props.children as ReactNode}</>;
   return <AgentReferenceChip agentId={agentId} display={display} />;
+}
+
+function MentionMarkdownNode(props: Record<string, unknown>) {
+  const userId =
+    typeof props["data-user-id"] === "string" ? props["data-user-id"] : null;
+  const children = props.children as ReactNode;
+  if (userId === null) return <>{children}</>;
+  return <BotMentionChip userId={userId}>{children}</BotMentionChip>;
 }
 
 function AgentAwareCodeBlock(props: Record<string, unknown>) {

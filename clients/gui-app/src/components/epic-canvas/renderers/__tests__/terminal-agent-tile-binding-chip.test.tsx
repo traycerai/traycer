@@ -32,7 +32,7 @@ vi.mock("@/lib/host", () => {
     // asks the SPINE for the tab's entry (live directory first, then the
     // active entry) before handing it to `useHostClientFor` - mocked below to
     // return the same stub client for any entry. Spine and app-wide client
-    // are separate exports since redesign P2.1; one stub serves both here.
+    // are separate exports; one stub serves both here.
     resolveHostById: () => entry,
     getActiveHost: () => entry,
     getRequestContextUserId: () => "user-test",

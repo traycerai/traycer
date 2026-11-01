@@ -289,7 +289,7 @@ vi.mock("@/lib/host", () => ({
     directory: { selectById: mocks.selectHost },
   }),
   useHostClient: () => mocks.hostClient.current,
-  // The SPINE, a separate export since redesign P2.1.
+  // The SPINE, a separate export.
   useHostRuntimeClient: () => mocks.hostClient.current,
 }));
 
@@ -319,15 +319,15 @@ vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => "host-home",
 }));
 
-// Every host-scoped surface resolves its client through this hook now
-// (redesign P1.2). Mocked at that boundary rather than standing up a real
+// Every host-scoped surface resolves its client through this hook now.
+// Mocked at that boundary rather than standing up a real
 // `<HostRuntimeProvider>`, matching how this suite already fakes the host
 // list and the workspace queries.
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: () => mocks.hostClient.current,
 }));
 
-// The composer's picker resolves `pin ?? effective` now (redesign P1.2). This
+// The composer's picker resolves `pin ?? effective` now. This
 // suite is about workspace/folder handling, not selection derivation, so the
 // effective host is mocked at the same boundary as the host list above.
 vi.mock("@/hooks/host/use-effective-host-id", () => ({
@@ -551,7 +551,7 @@ function seedOneRecentWorkspace(): void {
   };
 }
 
-/** The composer's resolved placement (P1.2), pointed at the mocked host. */
+/** The composer's resolved placement, pointed at the mocked host. */
 function useTestPlacementTarget(): LandingPlacementTarget {
   return {
     resolvedHostId: "host-home",
@@ -587,6 +587,7 @@ function DelayedBranchValidationHarness() {
             teamSandboxHarnessBlocked: false,
             settled: null,
             toolbar: {
+              ultracode: false,
               selection: {
                 harnessId: "codex",
                 modelSlug: "gpt-5-codex",

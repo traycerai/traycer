@@ -1,8 +1,8 @@
 /**
- * The absolute property the T2 fixup requires of the board text ladder: it
+ * The absolute property required of the board text ladder: it
  * never emits a rung wider than the board it names, at ANY supported width
- * or zoom. `office-signs.test.ts` pins the three specific reproductions the
- * reviewer found; this file is the general property run over every real
+ * or zoom. `office-signs.test.ts` pins the three specific reproductions
+ * found; this file is the general property run over every real
  * view's real plan, so a fourth reproduction nobody thought to write down
  * cannot slip back in.
  */

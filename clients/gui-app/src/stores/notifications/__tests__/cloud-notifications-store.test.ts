@@ -5,6 +5,7 @@ import type {
   ServerFrameHandler,
   StatusChangeHandler,
   StreamCloseReason,
+  StreamContinuity,
   StreamFrameEnvelope,
 } from "@traycer-clients/shared/host-transport/i-stream-session";
 import {
@@ -155,6 +156,32 @@ function cloudBotAnswerRow(
   };
 }
 
+/** An unread row a bot's conversation wrote to the person's mailbox. */
+function cloudBotConversationRow(
+  entryId: string,
+  createdAt: number,
+  operation: "bot.reply" | "bot.post",
+  mention: boolean,
+): HostNotificationsCloudFeedRowV16 {
+  return {
+    ...cloudBotAnswerRow(entryId, createdAt),
+    entry: {
+      ...cloudBotAnswerRow(entryId, createdAt).entry,
+      payload: {
+        outcome: "completed",
+        kind: "bot_conversation",
+        operation,
+        title: "Tracy",
+        message: "Something in the thread",
+        botId: "bot-1",
+        threadId: "chat-1",
+        messageId: entryId,
+        mention,
+      },
+    },
+  };
+}
+
 class ControlledSession implements IStreamSession {
   private statusChangeHandler: StatusChangeHandler | null = null;
   private serverFrameHandler: ServerFrameHandler | null = null;
@@ -185,7 +212,14 @@ class ControlledSession implements IStreamSession {
   }
 
   emitClosed(reason: StreamCloseReason): void {
-    this.statusChangeHandler?.("closed", reason, null);
+    this.statusChangeHandler?.("closed", reason, null, null);
+  }
+
+  emitContinuityStatus(
+    status: "open" | "reconnecting",
+    continuity: StreamContinuity,
+  ): void {
+    this.statusChangeHandler?.(status, null, null, continuity);
   }
 
   emitServerFrame(envelope: StreamFrameEnvelope): void {
@@ -524,6 +558,72 @@ describe("cloud notifications store", () => {
     });
   });
 
+  it("removes an unread bot reply, then an unread mention, from the attention count", () => {
+    const reply = cloudBotConversationRow(
+      "entry-reply",
+      10,
+      "bot.reply",
+      false,
+    );
+    const mention = cloudBotConversationRow(
+      "entry-mention",
+      20,
+      "bot.post",
+      true,
+    );
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [reply, mention],
+      summary: { totalCount: 2, unreadCount: 2, attentionCount: 2 },
+      version: 1,
+    });
+
+    useCloudNotificationsStore.getState().markReadLocally(reply.entryId, 40);
+    expect(useCloudNotificationsStore.getState().summary).toEqual({
+      totalCount: 2,
+      unreadCount: 1,
+      attentionCount: 1,
+    });
+
+    useCloudNotificationsStore
+      .getState()
+      .beginEntityRead([mention.entryId], 50);
+    expect(useCloudNotificationsStore.getState().summary).toEqual({
+      totalCount: 2,
+      unreadCount: 0,
+      attentionCount: 0,
+    });
+  });
+
+  it("lowers only the unread count when a post that mentions no one is read", () => {
+    const reply = cloudBotConversationRow(
+      "entry-reply",
+      10,
+      "bot.reply",
+      false,
+    );
+    const plainPost = cloudBotConversationRow(
+      "entry-post",
+      30,
+      "bot.post",
+      false,
+    );
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [reply, plainPost],
+      summary: { totalCount: 2, unreadCount: 2, attentionCount: 1 },
+      version: 1,
+    });
+
+    useCloudNotificationsStore
+      .getState()
+      .markReadLocally(plainPost.entryId, 40);
+
+    expect(useCloudNotificationsStore.getState().summary).toEqual({
+      totalCount: 2,
+      unreadCount: 1,
+      attentionCount: 1,
+    });
+  });
+
   it("moves unresolved needs-action rows out of attention after optimistic mark-all-read", () => {
     const failure = cloudFailureRow("entry-failure", 10);
     const prompt = cloudPromptRow("entry-prompt", 20);
@@ -679,6 +779,113 @@ describe("cloud notifications store", () => {
     });
     expect(useCloudNotificationsStore.getState().rows).toEqual({});
     close();
+  });
+
+  describe("while the host holds the stream", () => {
+    function openConnectedFeed() {
+      const client = new ControlledWsStreamClient();
+      const close = openCloudNotificationsStream(
+        reconnectEngine,
+        client,
+        "user-a",
+        null,
+        null,
+      );
+      const session = client.sessions[0];
+      const row = cloudRow("entry-a", 4, "host-a");
+      session.emitServerFrame({
+        kind: "snapshot",
+        hasBinaryPayload: false,
+        connectionState: "connected",
+        version: 4,
+        rows: [row],
+        summary,
+      });
+      return { session, close, row };
+    }
+
+    it("reports reconnecting while held and restores the prior state on a continued open", () => {
+      const { session, close, row } = openConnectedFeed();
+
+      session.emitContinuityStatus("reconnecting", "held");
+      expect(useCloudNotificationsStore.getState().connectionState).toBe(
+        "reconnecting",
+      );
+
+      session.emitContinuityStatus("open", "continued");
+      expect(useCloudNotificationsStore.getState().connectionState).toBe(
+        "connected",
+      );
+      expect(useCloudNotificationsStore.getState().rows).toEqual({
+        [cloudNotificationFeedId("entry-a")]: row,
+      });
+      close();
+    });
+
+    it("keeps the cloud's own reconnecting report after a continued open", () => {
+      const { session, close } = openConnectedFeed();
+
+      session.emitContinuityStatus("reconnecting", "held");
+      session.emitServerFrame({
+        kind: "connectionState",
+        hasBinaryPayload: false,
+        connectionState: "reconnecting",
+      });
+      session.emitContinuityStatus("open", "continued");
+
+      expect(useCloudNotificationsStore.getState().connectionState).toBe(
+        "reconnecting",
+      );
+      close();
+    });
+
+    it("keeps a snapshot replayed while held from reading as connected until the continued open", () => {
+      const { session, close } = openConnectedFeed();
+
+      session.emitContinuityStatus("reconnecting", "held");
+      session.emitServerFrame({
+        kind: "snapshot",
+        hasBinaryPayload: false,
+        connectionState: "connected",
+        version: 5,
+        rows: [],
+        summary: { totalCount: 0, unreadCount: 0, attentionCount: 0 },
+      });
+      expect(useCloudNotificationsStore.getState().rows).toEqual({});
+      expect(useCloudNotificationsStore.getState().connectionState).toBe(
+        "reconnecting",
+      );
+
+      session.emitContinuityStatus("open", "continued");
+      expect(useCloudNotificationsStore.getState().connectionState).toBe(
+        "connected",
+      );
+      close();
+    });
+
+    it("reads a snapshot as connected again once the hold ends", () => {
+      const { session, close } = openConnectedFeed();
+
+      session.emitContinuityStatus("reconnecting", "held");
+      session.emitContinuityStatus("reconnecting", null);
+      session.emitContinuityStatus("open", null);
+      expect(useCloudNotificationsStore.getState().connectionState).toBe(
+        "reconnecting",
+      );
+      session.emitServerFrame({
+        kind: "snapshot",
+        hasBinaryPayload: false,
+        connectionState: "connected",
+        version: 5,
+        rows: [],
+        summary: { totalCount: 0, unreadCount: 0, attentionCount: 0 },
+      });
+
+      expect(useCloudNotificationsStore.getState().connectionState).toBe(
+        "connected",
+      );
+      close();
+    });
   });
 
   it("lands a snapshot carrying a dropped environments kind, without its row, instead of rejecting the feed", () => {

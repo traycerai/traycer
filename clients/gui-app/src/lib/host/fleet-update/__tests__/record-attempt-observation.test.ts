@@ -3,7 +3,7 @@ import type { LocalAttemptFacts } from "@traycer-clients/shared/platform/runner-
 import { recordObservationFromLocalAttempt } from "@/lib/host/fleet-update/record-attempt-observation";
 
 // `recordObservationFromLocalAttempt` turns Desktop's published durable-record
-// FACTS into the projector's record-derived arm (Ticket 07 §5.2.7). See the
+// FACTS into the projector's record-derived arm. See the
 // module's own doc: FACTS ONLY — nothing here may invent `execution`,
 // `trigger`, busy counts, or an error, since those are things only a RUNNING
 // host can report. `liveness` and its stamp are the one pair a reader on this
@@ -83,7 +83,7 @@ describe("recordObservationFromLocalAttempt", () => {
     },
   );
 
-  // Codex round 3. `failed` used to be dropped with the other two, which meant
+  // `failed` used to be dropped with the other two, which meant
   // the one terminal phase the LIVE path renders (it maps `failed` -> `failed`
   // and only collapses `superseded` -> `idle`) was discarded exactly when the
   // host is unreachable and this record is the only evidence there is -

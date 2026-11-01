@@ -7,7 +7,10 @@ import {
 } from "@traycer/protocol/host/index";
 import {
   botSubscribeServerFrameSchema,
+  botSurfaceActionStateSchema,
   botTaskEntrySchema,
+  type BotInputNeeded,
+  type BotSurfaceActionState,
   type BotActivity,
   type BotSessionActivity,
   type BotTaskCheckinRecord,
@@ -29,6 +32,7 @@ const TRACKING_EVERY: BotTaskEntry = {
   originRequestId: null,
   createdByChatId: null,
   checkins: null,
+  inputNeeded: null,
   pause: null,
   stop: null,
   runRequest: null,
@@ -48,6 +52,7 @@ const TRACKING_ON_COMPLETION: BotTaskEntry = {
   originRequestId: null,
   createdByChatId: null,
   checkins: null,
+  inputNeeded: null,
   pause: null,
   stop: null,
   runRequest: null,
@@ -448,6 +453,7 @@ describe("bot.subscribe@1.3 task provenance", () => {
 
     const {
       checkins: _checkins,
+      inputNeeded: _inputNeeded,
       pause: _pause,
       stop: _stop,
       runRequest: _runRequest,
@@ -521,10 +527,10 @@ describe("bot.subscribe@1.4 check-in history", () => {
       [{ ...WATCH, since: 1_759_000_000_000 }],
     );
 
-    expect(line.latestMinor).toBe(4);
+    const { inputNeeded: _inputNeeded, ...v14Entry } = TRACKING_EVERY;
     const latest = line.versions[4].contract.serverFrameSchema.parse(frame);
     expect(latest.kind === "snapshot" ? latest.tasks : null).toEqual([
-      { ...TRACKING_EVERY, checkins: HISTORY },
+      { ...v14Entry, checkins: HISTORY },
     ]);
     expect(
       latest.kind === "snapshot" ? latest.notificationSubscriptions : null,
@@ -547,7 +553,11 @@ describe("bot.subscribe@1.4 check-in history", () => {
   });
 
   it("reads an entry and a watch from a host that predates them as unknown", () => {
-    const { checkins: _omitted, ...withoutHistory } = TRACKING_EVERY;
+    const {
+      checkins: _omitted,
+      inputNeeded: _later,
+      ...withoutHistory
+    } = TRACKING_EVERY;
     const parsed = botSubscribeServerFrameSchema.parse(
       snapshotWith([withoutHistory], [WATCH]),
     );
@@ -562,6 +572,110 @@ describe("bot.subscribe@1.4 check-in history", () => {
       botTaskEntrySchema.safeParse({
         ...TRACKING_EVERY,
         checkins: [{ ...HISTORY[0], reason: "host-asleep" }],
+      }).success,
+    ).toBe(false);
+  });
+});
+
+describe("bot.subscribe@1.5 open surfaces and card actions", () => {
+  const line = hostStreamRpcRegistry["bot.subscribe"][1];
+  const OPEN: BotInputNeeded[] = [
+    {
+      hostId: "host-1",
+      hostName: "laptop",
+      agentChatId: "chat-1",
+      surfaceId: "block-1",
+      surface: {
+        kind: "question",
+        blockId: "block-1",
+        questions: [
+          {
+            questionId: "q-1",
+            text: "Which branch?",
+            options: ["main", "dev"],
+            allowsFreeText: true,
+          },
+        ],
+        askedAt: 1_760_000_000_000,
+      },
+      reportedAt: 1_760_000_000_500,
+      acceptsActions: true,
+    },
+    {
+      hostId: "host-2",
+      hostName: "pod",
+      agentChatId: "chat-2",
+      surfaceId: "approval-1",
+      surface: {
+        kind: "approval",
+        approvalId: "approval-1",
+        tool: "Bash",
+        summary: "npm publish",
+        tier: "hard",
+        requiresPerson: true,
+        askedAt: 1_760_000_000_000,
+      },
+      reportedAt: 1_760_000_000_600,
+      acceptsActions: false,
+    },
+  ];
+  const ACTIONS: BotSurfaceActionState[] = [
+    { actionId: "action-1", messageId: "m-1", state: "sending", code: null },
+    {
+      actionId: "action-2",
+      messageId: "m-2",
+      state: "refused",
+      code: "NOT_SUPPORTED",
+    },
+  ];
+
+  function snapshotWithOpen(): object {
+    return {
+      ...snapshotFrame([], null),
+      tasks: [{ ...TRACKING_EVERY, inputNeeded: OPEN }],
+      surfaceActions: ACTIONS,
+    };
+  }
+
+  it.each([5, 6] as const)(
+    "carries a task's open surfaces and the subscriber's actions to a 1.%i subscriber",
+    (minor) => {
+      const parsed =
+        line.versions[minor].contract.serverFrameSchema.parse(
+          snapshotWithOpen(),
+        );
+      if (parsed.kind !== "snapshot") throw new Error("not a snapshot");
+      expect(parsed.tasks[0]?.inputNeeded).toEqual(OPEN);
+      expect(parsed.surfaceActions).toEqual(ACTIONS);
+    },
+  );
+
+  it("strips both for a 1.4 subscriber", () => {
+    const parsed =
+      line.versions[4].contract.serverFrameSchema.parse(snapshotWithOpen());
+    if (parsed.kind !== "snapshot") throw new Error("not a snapshot");
+    expect(parsed.tasks[0]).not.toHaveProperty("inputNeeded");
+    expect(parsed).not.toHaveProperty("surfaceActions");
+  });
+
+  it("reads a host that predates them as unknown", () => {
+    const { inputNeeded: _omitted, ...withoutOpen } = TRACKING_EVERY;
+    const parsed = botSubscribeServerFrameSchema.parse({
+      ...snapshotFrame([], null),
+      tasks: [withoutOpen],
+    });
+    if (parsed.kind !== "snapshot") throw new Error("not a snapshot");
+    expect(parsed.tasks[0]?.inputNeeded).toBeNull();
+    expect(parsed.surfaceActions).toBeNull();
+  });
+
+  it("refuses a refusal code it does not know", () => {
+    expect(
+      botSurfaceActionStateSchema.safeParse({
+        actionId: "a",
+        messageId: "m",
+        state: "refused",
+        code: "SOMETHING_ELSE",
       }).success,
     ).toBe(false);
   });
@@ -608,17 +722,19 @@ describe("bot.subscribe@1.4 member actions", () => {
     stoppedByUserId: "member-1",
     digests: [DIGEST],
   } as const;
+  // A 1.4 entry: the `@1.5` open surfaces are not on it.
+  const { inputNeeded: _inputNeeded, ...entryV14 } = TRACKING_EVERY;
   const frame = {
     ...snapshotFrame([], null),
     tasks: [
       {
-        ...TRACKING_EVERY,
+        ...entryV14,
         pause: PAUSE,
         runRequest: RUN,
         checkins: [{ ...RECEIVED, requestedByUserId: "member-1" }],
       },
       {
-        ...TRACKING_EVERY,
+        ...entryV14,
         taskId: "task-stopped",
         state: "ended",
         endedReason: "by-bot",

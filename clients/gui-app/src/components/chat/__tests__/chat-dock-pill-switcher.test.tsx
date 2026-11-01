@@ -612,7 +612,7 @@ describe("the attached panel's motion", () => {
     expect(slotMotion().height).toBe("instant");
 
     // The keyboard step moves the cap, which moves the height, through the
-    // same observer - and `motion-opportunities.md` R7 rejected easing it by
+    // same observer - and `motion-opportunities.md` rejected easing it by
     // name.
     fireEvent.keyDown(screen.getByTestId("chat-dock-attached-panel-resize"), {
       key: "ArrowUp",
@@ -643,7 +643,7 @@ describe("the attached panel's motion", () => {
     expect(livePanelSections()).toEqual(["background"]);
   });
 
-  // R5D-02: `useMotionEnabled` includes pane visibility, and `TopLevelTabHost`
+  // `useMotionEnabled` includes pane visibility, and `TopLevelTabHost`
   // keeps inactive panes mounted under `display: none`. A presence root that
   // was mounted conditionally on that would reconcile a different element
   // every time the user switched tabs, destroying the open panel's scroll

@@ -21,7 +21,7 @@ interface ScrollToEndPillProps {
   readonly state: ScrollToEndPillState;
   readonly onClick: () => void;
   /** Pixel offset from the container's bottom edge - keeps the pill clear of
-   *  the overlaid composer/queue dock (decision #13, #16: `endInset + 4`). */
+   *  the overlaid composer/queue dock (`endInset + 4`). */
   readonly bottomOffsetPx: number;
 }
 

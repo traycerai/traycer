@@ -15,7 +15,9 @@ import type {
 import type {
   BotAnnouncement,
   BotQuestion,
+  BotSurfaceReference,
 } from "@traycer/protocol/persistence/epic/messages";
+import type { BotSendReceipt } from "@traycer/protocol/persistence/epic/content-blocks";
 import type {
   ChatActiveTurn,
   ChatApprovalState,
@@ -520,8 +522,7 @@ function checkpointSignature(view: CheckpointManifestView | null): string {
  * rendered rows. `withTurnCompletion` upgrades this into the UI-facing
  * `ChatMessageStoppedInfo` (adding `turnHadOutput`) once it has row
  * visibility, which this pure scan does not.
- */
-/*
+ *
  * `turn.stopped` folding lives in the shared row projection: a stopped turn can
  * ADD a row (the synthesized boundary after a trailing steer) and can BE a row
  * (a Stop that landed before any assistant record), so the host numbers
@@ -2055,8 +2056,7 @@ function pinImportedChatMarkers(
  * Filtered and identified THROUGH the projection's own helpers: the host
  * numbers this row's ordinal from `importedChatMarkerRowSource`, and a row that
  * existed here but not there is exactly what the windowed transcript used to
- * lose - an event no row needs is never served on reopen (spec
- * `session-import.md` §8e).
+ * lose - an event no row needs is never served on reopen.
  */
 function buildImportedChatMarkerMessages(
   events: ReadonlyArray<OpenChatEvent>,
@@ -2390,6 +2390,8 @@ interface AssistantTurnAccumulator {
   options: ReadonlyArray<string> | null;
   /** The questions a bot's row asks and their settlements; `null` on every other turn. */
   question: BotQuestion | null;
+  /** What in a task a bot's post points at, with its resolution; `null` on every other turn. */
+  surface: BotSurfaceReference | null;
   /** The member's post a bot's direct reply answers; `null` on every other turn. */
   repliesTo: string | null;
   imageResolutionsByBlockId: Map<
@@ -2578,11 +2580,6 @@ function userMessagesByIdFromMessages(
   return usersById;
 }
 
-/*
- * Steered-user suppression decides whether a persisted user record occupies a
- * top-level row, so it decides an ordinal. Shared with the host - see
- * `row-projection.ts`.
- */
 /**
  * Which user rows render the completed-steer badge.
  *
@@ -2626,6 +2623,11 @@ function completedSteerMessageIds(
   return widened;
 }
 
+/*
+ * Steered-user suppression decides whether a persisted user record occupies a
+ * top-level row, so it decides an ordinal. Shared with the host - see
+ * `row-projection.ts`.
+ */
 function nestedSteeredMessageIdsFromTurns(
   turnAccumulator: ReadonlyMap<string, AssistantTurnAccumulator>,
   usersById: ReadonlyMap<string, OpenUserMessage>,
@@ -2913,6 +2915,7 @@ function renderPersistedAssistantMessageTurn(
     turnPauseSignature(pause),
     stoppedSignature(stopped),
     questionSignature(acc.question),
+    surfaceSignature(acc.surface),
   ].join(":");
   const cached = turnCache.get(turnKey);
   if (cached !== undefined && cached.cacheKey === cacheKey) {
@@ -2951,6 +2954,11 @@ function questionSignature(question: BotQuestion | null): string {
   return question === null ? "question:none" : JSON.stringify(question);
 }
 
+/** A bot post's surface as the turn cache keys it: its resolution lands on the same row. */
+function surfaceSignature(surface: BotSurfaceReference | null): string {
+  return surface === null ? "surface:none" : JSON.stringify(surface);
+}
+
 /**
  * A bot row's announcement, options, question and the post it answers, first
  * non-null: the host writes them on the one record a bot row is, and a
@@ -2963,6 +2971,7 @@ function mergeBotRowFields(
   existing.announcement = existing.announcement ?? message.announcement ?? null;
   existing.options = existing.options ?? message.options ?? null;
   existing.question = existing.question ?? message.question ?? null;
+  existing.surface = existing.surface ?? message.surface ?? null;
   existing.repliesTo = existing.repliesTo ?? message.repliesTo ?? null;
 }
 
@@ -3035,13 +3044,15 @@ function addAssistantMessageToAccumulator(
     serviceTier: message.serviceTier,
     envCredentialVar: message.envCredentialVar,
     costUsd: message.usage?.costUsd ?? null,
-    announcement: message.announcement ?? null,
-    options: message.options ?? null,
-    question: message.question ?? null,
-    repliesTo: message.repliesTo ?? null,
+    announcement: null,
+    options: null,
+    question: null,
+    surface: null,
+    repliesTo: null,
     imageResolutionsByBlockId: new Map(),
     generatedImageBlockIdByHash: new Map(),
   };
+  mergeBotRowFields(created, message);
   addAssistantImageProjection(
     created,
     message.blocks,
@@ -3836,6 +3847,8 @@ function renderAssistantTurnSlice(
     ...(input.acc.options === null ? {} : { options: input.acc.options }),
     // Only a bot's row that asks without waiting carries it; absent everywhere else.
     ...(input.acc.question === null ? {} : { question: input.acc.question }),
+    // Only a bot post that points into a task carries it; absent everywhere else.
+    ...(input.acc.surface === null ? {} : { surface: input.acc.surface }),
     // Only a bot's direct reply in its channel carries it; absent everywhere else.
     ...(input.acc.repliesTo === null ? {} : { repliesTo: input.acc.repliesTo }),
     // Assistant rows render no provider/model label above the bubble (it moved
@@ -4215,6 +4228,7 @@ function renderLiveAssistant(
     announcement: null,
     options: null,
     question: null,
+    surface: null,
     repliesTo: null,
     imageResolutionsByBlockId: new Map(),
     generatedImageBlockIdByHash: new Map(),
@@ -5269,6 +5283,17 @@ function absentAsNull<T>(value: T | null): T | null {
   return read === undefined ? null : value;
 }
 
+/**
+ * A bot send's receipt, or `null`, normalizing older records: one from
+ * before the receipt's `slack` member (S4b) names a Traycer post.
+ */
+function botSendReceiptOf(
+  receipt: BotSendReceipt | null,
+): BotSendReceipt | null {
+  const read = absentAsNull(receipt);
+  return read === null ? null : { ...read, slack: absentAsNull(read.slack) };
+}
+
 /** A tool call's app stamp, or `null`, normalizing older records that omit the field. */
 function toolCallMcpAppStamp(
   block: Extract<OpenContentBlock, { type: "tool_call" }>,
@@ -5342,6 +5367,7 @@ const BLOCK_HANDLERS: {
     managedCommand: block.managedCommand,
     agentMessageReceipt: absentAsNull(block.agentMessageReceipt),
     agentMessageDelivery: absentAsNull(block.agentMessageDelivery),
+    botSendReceipt: botSendReceiptOf(block.botSendReceipt),
     isStreaming: block.status === "streaming",
     endState: segmentEndState(block.status),
     stopped: block.stopped,

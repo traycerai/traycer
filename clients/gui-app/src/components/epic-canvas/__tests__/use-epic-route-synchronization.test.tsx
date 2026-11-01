@@ -82,7 +82,7 @@ interface TestState {
   canvasTiles: Readonly<Record<string, EpicCanvasTileRef>>;
   records: ReadonlyArray<{ readonly id: string; readonly type?: string }>;
   /** Chat ids the `useCloudChatList` mock answers as present
-   * (chat-sync-v2 ticket 36's same-host cloud-known reap exemption). */
+   * (the same-host cloud-known reap exemption). */
   cloudChatIds: ReadonlySet<string>;
   /** Chat ids the mock answers as present but owned by a COLLABORATOR
    * (`isOwnedByViewer: false`) - rows the sweep's liveness set must ignore,
@@ -139,7 +139,7 @@ const testState = vi.hoisted<TestState>(() => ({
 
 const tileNavigationMocks = vi.hoisted(() => ({
   openTile: vi.fn(),
-  /** The navigation seam each open was committed through (C6). */
+  /** The navigation seam each open was committed through. */
   navigationSeams: [] as Array<
     (
       epicId: string,
@@ -250,8 +250,8 @@ vi.mock("@/lib/epic-auto-open", () => ({
   resolveAutoOpenTarget: () => testState.autoOpenTarget,
 }));
 
-// The reap effect's same-host cloud-known exemption (chat-sync-v2 ticket
-// 36) reads these two - stubbed at the hook boundary, same reason as every
+// The reap effect's same-host cloud-known exemption reads these two -
+// stubbed at the hook boundary, same reason as every
 // other seam in this provider-less suite.
 vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
@@ -1568,7 +1568,7 @@ describe("useEpicRouteSynchronization", () => {
     );
   });
 
-  // chat-sync-v2 ticket 36: a chat with no local record but still known to
+  // A chat with no local record but still known to
   // `epic.listCloudChats` must NOT be reaped - a leased identity that never
   // adopted this chat's rows, not a genuine deletion.
   it("does not close a record-less chat tile that is still cloud-known", async () => {
@@ -1645,7 +1645,7 @@ describe("useEpicRouteSynchronization", () => {
     );
   });
 
-  // T17: an `unverified` session's cloud-chat list is disabled for want of
+  // An `unverified` session's cloud-chat list is disabled for want of
   // AUTHORIZATION, not because there is nothing left to ask - the cloud rows
   // exist and this session simply may not look. `cloudChatListAuthorizesRecordSweep`
   // must fail closed on that ignorance, so a restored record-less chat tab
@@ -2217,7 +2217,7 @@ describe("useEpicRouteSynchronization", () => {
 
     // No hosted record anywhere - mirrors the switch-off / non-chat-tile
     // shape, where `findHostedTileElement` always misses and the ORIGINAL
-    // physical lookup must still resolve exactly as it did before F4.
+    // physical lookup must still resolve as before.
     const selectedWrapperEl = document.createElement("div");
     selectedWrapperEl.setAttribute("data-tab-instance-id", "tile-unhosted");
     selectedWrapperEl.setAttribute("data-selected", "true");

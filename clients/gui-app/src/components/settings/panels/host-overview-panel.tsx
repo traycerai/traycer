@@ -829,7 +829,7 @@ export function HostOverviewPanel(props: {
   // ATTEMPT-AWARE, with the coarse field as the fallback — and the difference
   // is a lockout bug, not a refinement.
   //
-  // Ticket 04's coarse derivation maps a PARKED attempt
+  // The coarse derivation maps a PARKED attempt
   // (`waiting-for-work`/`waiting-to-activate`) to `{state:"updating"}`, which is
   // right for what that field means. But this gate reads "updating" as "a
   // mutation is in flight, lock the page", and `waiting-to-activate` is designed
@@ -960,7 +960,7 @@ export function HostOverviewPanel(props: {
   const updatesExternallyManaged =
     statusQuery.data?.updatesExternallyManaged === true;
 
-  // DISPATCH OWNERSHIP (D8). One token per mount, registered while this panel
+  // DISPATCH OWNERSHIP. One token per mount, registered while this panel
   // is on screen, captured by every update dispatch at arm time.
   //
   // It answers one question and gates one thing: may THIS page open a dialog
@@ -994,7 +994,7 @@ export function HostOverviewPanel(props: {
           },
     );
   }, [scope.hostId, reportedOperation]);
-  // THE DISPATCH SLOT'S UNSEEN-TTL CLEAR (D8) - the first of the two the
+  // THE DISPATCH SLOT'S UNSEEN-TTL CLEAR - the first of the two the
   // status stream cannot express, beside the deregister clear in
   // `host-overview-rpc.ts`, and the third of the slot's four in total. An
   // acknowledged attempt that no frame ever named.
@@ -1183,7 +1183,7 @@ export function HostOverviewPanel(props: {
   // the projector's, which already qualifies a read that aged, and its
   // dispatch revalidates against the record on the host.
 
-  // THE BOUND-DISPATCH OFFER (D8, D17): one state and one dialog for both
+  // THE BOUND-DISPATCH OFFER: one state and one dialog for both
   // intents, because the decision has the same shape either way — live work
   // stands between the person and the update, and they choose whether to end
   // it. What "force" DOES differs, which is what the intent selects: an
@@ -1247,7 +1247,7 @@ export function HostOverviewPanel(props: {
   if (!usable && boundOffer !== null) {
     setBoundOffer(null);
   }
-  // THE ONE-SHOT AUTO-OPEN (D8). A dispatch this page made, acknowledged by
+  // THE ONE-SHOT AUTO-OPEN. A dispatch this page made, acknowledged by
   // the host, then SEEN on a status frame, that has parked waiting for a
   // restart: the person pressed a button and the answer is "one more click".
   // Putting that click in front of them is the whole point of tracking
@@ -1444,7 +1444,7 @@ export function HostOverviewPanel(props: {
 
   const registryItem = host.item;
 
-  // ATTEMPT-DERIVED CARD CONTROLS (D17). When the view carries an attempt AND
+  // ATTEMPT-DERIVED CARD CONTROLS. When the view carries an attempt AND
   // this host advertises the matching bound method, the card's control comes
   // from the attempt's own continuation rather than from the install records:
   // the attempt knows what it was doing and what it is waiting for, where the
@@ -2557,7 +2557,7 @@ function deriveAttemptControl(input: {
  * What a bound dispatch's confirmation says, by intent.
  *
  * WHAT DEFER PROMISES IS THE PART THAT DIFFERS, and the two arms differ
- * because the evidence does. Round 11 rewrote the staged-wait force's Defer
+ * because the evidence does. The staged-wait force's Defer was rewritten
  * (`forceUpdateMessage` below) for exactly this reason: a stage on disk has
  * nobody scheduled to install it, so "it continues on its own" was a promise
  * this page had no evidence of. The lesson is the unevidenced promise, not
