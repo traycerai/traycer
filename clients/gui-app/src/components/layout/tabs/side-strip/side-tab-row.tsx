@@ -182,10 +182,12 @@ const REVEAL_CLASS =
 /**
  * Hides what yields its place while the row is hovered or focused: the status
  * glyph, to the close. It crossfades with the close under the same timing as
- * `REVEAL_CLASS`.
+ * `REVEAL_CLASS`, and lets go of the pointer while it yields: at opacity 0 it
+ * still paints, and hit-tests, above the close sharing its cell, so a click
+ * on the close landed on the glyph and activated the row.
  */
 const YIELD_TO_CLOSE_CLASS =
-  "transition-opacity duration-100 motion-reduce:transition-none group-hover/side-tab:opacity-0 group-focus-visible/side-tab:opacity-0 group-focus-visible/side-tab:duration-0 group-has-[:focus-visible]/side-tab:opacity-0 group-has-[:focus-visible]/side-tab:duration-0";
+  "transition-opacity duration-100 motion-reduce:transition-none group-hover/side-tab:pointer-events-none group-hover/side-tab:opacity-0 group-focus-visible/side-tab:pointer-events-none group-focus-visible/side-tab:opacity-0 group-focus-visible/side-tab:duration-0 group-has-[:focus-visible]/side-tab:pointer-events-none group-has-[:focus-visible]/side-tab:opacity-0 group-has-[:focus-visible]/side-tab:duration-0";
 
 /**
  * The room of a trailing control that joins the row's content: none at rest,
