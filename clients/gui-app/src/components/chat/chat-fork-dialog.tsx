@@ -713,7 +713,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
     appWideHostTeamId === null ? appWideClient : null;
   const attachClient =
     tabHostTeamId === null ? tabHostClient : personalAppWideClient;
-  const attachEnvironment = useEpicAttachEnvironment(attachClient);
+  const attachEnvironment = useEpicAttachEnvironment(attachClient, "fork");
   const sourceOwnerUserId = useCloneSourceOwnerUserId({
     client: appWideClient,
     epicId,

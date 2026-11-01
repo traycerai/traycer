@@ -11,13 +11,22 @@ import { handLandingSandboxSend } from "@/components/home/hooks/landing-sandbox-
 import { useLandingComposerActions } from "@/components/home/hooks/use-landing-composer-actions";
 import type { LandingPlacementTarget } from "@/lib/composer/landing-placement";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
-import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import {
+  HostRequestAbortedError,
+  HostRpcError,
+  HostTransportFailureError,
+  RetryableTransportError,
+} from "@traycer-clients/shared/host-transport/host-messenger";
 import { returnedSandboxMessageLine } from "@/lib/sandboxes/sandbox-strings";
 import { sandboxHostEntry } from "@/lib/sandboxes/__tests__/sandbox-host-directory-fixture";
 // Type-only, so it is erased before `vi.hoisted` runs and cannot re-enter the
 // module this file mocks.
 import type { ImageReclaimOutcome } from "@/lib/composer/landing-image-store";
-import { useHostClient } from "@/lib/host";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { useHostClient, type HostRpcRegistry } from "@/lib/host";
+import { toast } from "sonner";
+import { wasEpicCreatedThisSession } from "@/lib/epics/session-created-epics";
+import { DISCARD_CREATED_EPIC_FAILED_COPY } from "@/hooks/epic/use-epic-batch-delete-mutation";
 import type { ImageBytes } from "@/lib/attachments/image-bytes";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
@@ -43,7 +52,14 @@ import { setSystemTabModalApi } from "@/stores/tabs/system-tab-modal-bridge";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { useWorkspaceFoldersStore } from "@/stores/workspace/workspace-folders-store";
 import { useWorktreeIntentStagingStore } from "@/stores/worktree/worktree-intent-staging-store";
-import { returnPendingSandboxSend } from "@/lib/sandboxes/pending-sandbox-send";
+import {
+  returnPendingSandboxSend,
+  returnPendingSandboxSendToSandbox,
+} from "@/lib/sandboxes/pending-sandbox-send";
+import {
+  recordCancelledSandboxSend,
+  useStoppedSandboxSendReceiptStore,
+} from "@/stores/sandboxes/stopped-sandbox-send-receipt-store";
 import {
   readStagedSandbox,
   useStagedSandboxStore,
@@ -73,7 +89,43 @@ interface CapturedNavigation {
 }
 
 const landingMocks = vi.hoisted(() => ({
+  /** The binding the rollback's delete resolves its placement host's requester through. */
+  binding: {
+    directory: {
+      list: (): Promise<readonly []> => Promise.resolve([]),
+      onChange: () => ({ dispose: () => undefined }),
+    },
+    hostClient: {
+      createRequesterForHostId: (hostId: string) => ({
+        request: (method: string, payload: unknown): Promise<unknown> => {
+          if (method === "epic.batchDelete") {
+            return landingMocks.deleteRequest(hostId, payload);
+          }
+          if (
+            method === "epic.listChatRecords" ||
+            method === "epic.listTuiAgents"
+          ) {
+            return landingMocks.readRequest(hostId, method, payload);
+          }
+          return Promise.reject(new Error(`unexpected ${method}`));
+        },
+        getActiveHostId: () => hostId,
+        getRequestContextUserId: () => "user-landing",
+      }),
+    },
+  },
   request: vi.fn<(method: string, payload: unknown) => Promise<unknown>>(),
+  /**
+   * The rollback's reads of what the task holds, by the host id their
+   * requester was made for. They answer an empty snapshot unless a test says.
+   */
+  readRequest:
+    vi.fn<
+      (hostId: string, method: string, payload: unknown) => Promise<unknown>
+    >(),
+  /** The rollback's `epic.batchDelete`, by the host id its requester was made for. */
+  deleteRequest:
+    vi.fn<(hostId: string, payload: unknown) => Promise<unknown>>(),
   createTerminalAgent: vi.fn<(input: unknown) => Promise<void>>(),
   navigate: vi.fn<(options: CapturedNavigation) => void>(),
   getActiveHostId: vi.fn<() => string | null>(() => "host-landing"),
@@ -91,10 +143,11 @@ const landingMocks = vi.hoisted(() => ({
 
 vi.mock("@tanstack/react-router", () => ({
   useNavigate: () => landingMocks.navigate,
+  useRouter: () => ({ state: { location: { pathname: "/" } } }),
 }));
 
 vi.mock("@/lib/host", () => ({
-  useHostBinding: () => null,
+  useHostBinding: () => landingMocks.binding,
   useHostClient: () => ({
     request: landingMocks.request,
     requestWithSignalRequiringHostMethodVersion: (
@@ -110,6 +163,7 @@ vi.mock("@/lib/host", () => ({
 }));
 
 vi.mock("@/lib/host/runtime", () => ({
+  activeHostIdOrNull: () => landingMocks.getActiveHostId(),
   getHostBindingSnapshot: () => ({
     hostClient: { getActiveHostId: landingMocks.getActiveHostId },
     directory: { getLocalHostId: landingMocks.getLocalHostId },
@@ -122,6 +176,18 @@ vi.mock("@/hooks/agent/use-create-tui-agent", () => ({
     isPending: false,
   }),
 }));
+
+/** Narrowed on the members a landing create reads rather than cast. */
+function isStubHostClient(
+  value: unknown,
+): value is HostClient<HostRpcRegistry> {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "getActiveHostId" in value &&
+    "getRequestContextUserId" in value
+  );
+}
 
 function useTestPlacementTarget(): LandingPlacementTarget {
   return {
@@ -138,16 +204,41 @@ interface OpenDraftToastOptions {
   readonly action: { readonly label: string; readonly onClick: () => void };
 }
 
-const { toastMessage } = vi.hoisted(() => ({
+/** One toast the person was shown, in the order it was shown. */
+interface ShownToast {
+  readonly via: "toast" | "error" | "info";
+  readonly message: string;
+  /** The label of its action, when it has one. */
+  readonly action: string | null;
+}
+
+const { toastMessage, toastLog } = vi.hoisted(() => ({
   toastMessage:
-    vi.fn<(message: string, options: OpenDraftToastOptions) => void>(),
+    vi.fn<
+      (message: string, options: OpenDraftToastOptions | undefined) => void
+    >(),
+  toastLog: [] as ShownToast[],
 }));
 
 vi.mock("sonner", () => ({
-  toast: Object.assign(toastMessage, {
-    error: vi.fn(),
-    info: vi.fn(),
-  }),
+  toast: Object.assign(
+    (message: string, options: OpenDraftToastOptions | undefined) => {
+      toastLog.push({
+        via: "toast",
+        message,
+        action: options === undefined ? null : options.action.label,
+      });
+      toastMessage(message, options);
+    },
+    {
+      error: vi.fn((message: string) => {
+        toastLog.push({ via: "error", message, action: null });
+      }),
+      info: vi.fn((message: string) => {
+        toastLog.push({ via: "info", message, action: null });
+      }),
+    },
+  ),
 }));
 
 const imageStoreMocks = vi.hoisted(() => ({
@@ -237,6 +328,72 @@ async function flushPending(): Promise<void> {
   });
 }
 
+function deletedIdsOf(payload: unknown): string[] {
+  if (typeof payload !== "object" || payload === null) return [];
+  if (!("ids" in payload) || !Array.isArray(payload.ids)) return [];
+  return payload.ids.filter((id): id is string => typeof id === "string");
+}
+
+/** The task id `epic.create` was sent with. */
+function createdEpicId(): string {
+  const id = epicIdFromCreatePayload(epicCreatePayload());
+  if (id === null) throw new Error("epic.create was never sent");
+  return id;
+}
+
+/** The `snapshot` arm `epic.listChatRecords` / `epic.listTuiAgents` answer. */
+function heldRows(method: string, rows: ReadonlyArray<object>): unknown {
+  return method === "epic.listChatRecords"
+    ? { kind: "snapshot", listStamp: null, chats: rows }
+    : { kind: "snapshot", listStamp: null, tuiAgents: rows };
+}
+
+const READ_METHODS = ["epic.listChatRecords", "epic.listTuiAgents"] as const;
+
+/** The share gate's refusals that mean the task is still being set up. */
+const PROMOTION_PENDING_CODES = [
+  "E_SHARE_PENDING_BUSY",
+  "E_SHARE_PENDING_RECENT_ATTEMPT",
+  "E_SHARE_PENDING_OFFLINE",
+  "E_SHARE_PENDING_UNVERIFIED",
+  "E_SHARE_PENDING_FAILED",
+] as const;
+
+const SETTING_UP_LINE =
+  "This task was still being set up. Send again in a moment.";
+const BACK_IN_COMPOSER_LINE =
+  "Couldn't send your message. It's back in the composer.";
+const NOT_SENT_LINE = "Couldn't send your message.";
+const SAVED_IN_DRAFTS_LINE =
+  "Your message wasn't sent; it's saved in your drafts.";
+const STORAGE_FULL_LINE =
+  "The host computer is out of disk space. Free some space on it, then try again.";
+
+function errorToast(message: string): ShownToast {
+  return { via: "error", message, action: null };
+}
+
+const DRAFTS_TOAST: ShownToast = {
+  via: "toast",
+  message: SAVED_IN_DRAFTS_LINE,
+  action: "Open draft",
+};
+
+/** `epic.attachEnvironment` refused because the task is still being set up. */
+function attachBusy(): HostRpcError {
+  return attachRefusal("E_SHARE_PENDING_BUSY");
+}
+
+function attachRefusal(code: HostRpcError["code"]): HostRpcError {
+  return new HostRpcError({
+    code,
+    message: "This task cannot be attached to that team.",
+    requestId: "request-attach-refused",
+    method: "epic.attachEnvironment",
+    fatalDetails: null,
+  });
+}
+
 function newQueryClient(): QueryClient {
   return new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
@@ -257,9 +414,26 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
         { userId: "user-landing", username: "U" },
         [],
       );
+    toastLog.length = 0;
+    useStoppedSandboxSendReceiptStore.setState({ receipts: {}, strips: {} });
     landingMocks.request.mockReset();
     landingMocks.createTerminalAgent.mockReset();
     landingMocks.navigate.mockReset();
+    landingMocks.getRequestContextUserId.mockReset();
+    landingMocks.getRequestContextUserId.mockReturnValue("user-landing");
+    landingMocks.readRequest.mockReset();
+    landingMocks.readRequest.mockImplementation((_hostId, method) =>
+      Promise.resolve(heldRows(method, [])),
+    );
+    landingMocks.deleteRequest.mockReset();
+    landingMocks.deleteRequest.mockImplementation((_hostId, payload) =>
+      Promise.resolve({
+        results: deletedIdsOf(payload).map((taskId) => ({
+          taskId,
+          success: true,
+        })),
+      }),
+    );
     landingMocks.request.mockResolvedValue({ roomInfo: null });
     landingMocks.createTerminalAgent.mockResolvedValue(undefined);
     landingMocks.getActiveHostId.mockReset();
@@ -583,15 +757,7 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
       useStagedSandboxStore.getState().stage(SURFACE, target);
       landingMocks.request.mockImplementation((method: string) => {
         if (method === "epic.attachEnvironment") {
-          return Promise.reject(
-            new HostRpcError({
-              code: "FORBIDDEN",
-              message: "This task cannot be attached to that team.",
-              requestId: "request-attach-refused",
-              method,
-              fatalDetails: null,
-            }),
-          );
+          return Promise.reject(attachBusy());
         }
         return Promise.resolve({ roomInfo: null });
       });
@@ -614,6 +780,20 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
       await waitFor(() => {
         expect(usePendingSandboxSendStore.getState().sends).toEqual({});
       });
+      // The task the refused Send created is deleted on its placement, so the
+      // second Send below starts its own.
+      const firstEpicId = createdEpicId();
+      await waitFor(() => {
+        expect(landingMocks.deleteRequest).toHaveBeenCalledWith(TEST_HOST_ID, {
+          ids: [firstEpicId],
+        });
+      });
+      await waitFor(() => {
+        expect(wasEpicCreatedThisSession(firstEpicId)).toBe(false);
+      });
+      expect(
+        Object.values(useEpicCanvasStore.getState().tabsById),
+      ).toHaveLength(0);
       // The give-back records the sandbox on the draft and stages nothing.
       expect(readStagedSandbox(SURFACE)).toBeNull();
       expect(useLandingDraftStore.getState().drafts).toHaveLength(1);
@@ -683,6 +863,10 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
         ([method]) => method === "epic.create",
       );
       expect(creates).toHaveLength(2);
+      expect(
+        new Set(creates.map(([, payload]) => epicIdFromCreatePayload(payload)))
+          .size,
+      ).toBe(2);
       for (const [, payload] of creates)
         expect(chatFromCreatePayload(payload)).toBeNull();
       queryClient.clear();
@@ -849,7 +1033,7 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
     queryClient.clear();
   });
 
-  it("keeps a late refusal with its pending send when the source has a newer explicit stage", async () => {
+  it("saves the message in Drafts and deletes the task when a late refusal lands after the source staged another sandbox", async () => {
     useStagedSandboxStore.getState().stage(SURFACE, TEAM_TARGET);
     const attach = deferred<unknown>();
     landingMocks.request.mockImplementation((method: string) =>
@@ -878,24 +1062,762 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
         ),
       ).toBe(true),
     );
-    const send = onlyPendingSend();
+    const epicId = createdEpicId();
     useStagedSandboxStore.getState().stage(SURFACE, NEW_TARGET);
     const newerStage = readStagedSandbox(SURFACE);
     await act(async () => {
-      attach.reject(new Error("attachment refused"));
+      attach.reject(attachBusy());
       await attach.promise.catch(() => undefined);
     });
     await waitFor(() => expect(result.current.isPending).toBe(false));
+    // The composer keeps the newer choice; the refused message is in Drafts
+    // with its own sandbox, and no pending send or task is left behind.
     expect(readStagedSandbox(SURFACE)).toBe(newerStage);
-    expect(onlyPendingSend()).toEqual(send);
-    expect(readStagedSandbox(pendingSendSurfaceKey(send.id))?.target).toEqual(
-      TEAM_TARGET,
-    );
-    expect(useLandingDraftStore.getState().drafts).toEqual([]);
+    expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+    expect(useLandingDraftStore.getState().drafts).toHaveLength(1);
+    expect(useLandingDraftStore.getState().drafts[0]).toMatchObject({
+      content: MESSAGE_CONTENT,
+      returnedSandbox: { target: TEAM_TARGET },
+    });
+    await waitFor(() => {
+      expect(landingMocks.deleteRequest).toHaveBeenCalledWith(TEST_HOST_ID, {
+        ids: [epicId],
+      });
+    });
     queryClient.clear();
   });
 
-  it("keeps a refused attachment with its pending send when the account changes", async () => {
+  it("sends the rollback's delete to the placement host by its id, never to the app-wide host", async () => {
+    const PLACEMENT_HOST_ID = "host-placement";
+    useStagedSandboxStore.getState().stage(SURFACE, TEAM_TARGET);
+    const placementRequest =
+      vi.fn<(method: string, payload: unknown) => Promise<unknown>>();
+    placementRequest.mockImplementation((method: string) =>
+      method === "epic.attachEnvironment"
+        ? Promise.reject(attachBusy())
+        : Promise.resolve({ roomInfo: null }),
+    );
+    const placementClient = {
+      request: placementRequest,
+      requestWithSignalRequiringHostMethodVersion: (
+        method: string,
+        payload: unknown,
+      ): Promise<unknown> => placementRequest(method, payload),
+      requestWithOptions: (
+        method: string,
+        payload: unknown,
+      ): Promise<unknown> => placementRequest(method, payload),
+      getActiveHostId: () => PLACEMENT_HOST_ID,
+      getRequestContextUserId: landingMocks.getRequestContextUserId,
+    };
+    if (!isStubHostClient(placementClient)) {
+      throw new Error("The placement stub is not a host client.");
+    }
+    const queryClient = newQueryClient();
+    const { result } = renderHook(
+      () => ({
+        actions: useLandingComposerActions({
+          resolvedHostId: PLACEMENT_HOST_ID,
+          client: placementClient,
+          hostLabel: "Placement",
+          isPinned: true,
+          namedHostDead: false,
+        }),
+      }),
+      { wrapper: queryClientWrapper(queryClient) },
+    );
+
+    act(() => {
+      result.current.actions.startTaskOnStagedSandbox({
+        draftId: null,
+        owner: null,
+        sandboxTeamId: "team-9",
+        text: SUBMITTED_PROMPT,
+        hand,
+      });
+    });
+
+    await waitFor(() => {
+      expect(landingMocks.deleteRequest).toHaveBeenCalledTimes(1);
+    });
+    const createCall = placementRequest.mock.calls.find(
+      ([method]) => method === "epic.create",
+    );
+    const epicId = epicIdFromCreatePayload(createCall?.[1]);
+    expect(epicId).not.toBeNull();
+    expect(landingMocks.deleteRequest).toHaveBeenCalledWith(PLACEMENT_HOST_ID, {
+      ids: [epicId],
+    });
+    // The two reads that decided the delete went to the placement host too.
+    expect(
+      landingMocks.readRequest.mock.calls.map(([hostId, method, payload]) => [
+        hostId,
+        method,
+        payload,
+      ]),
+    ).toEqual(
+      expect.arrayContaining(
+        READ_METHODS.map((method) => [
+          PLACEMENT_HOST_ID,
+          method,
+          { epicId, hasDocReplica: false, knownRevision: null },
+        ]),
+      ),
+    );
+    // The app-wide host (TEST_HOST_ID) is a different machine: it was asked
+    // for nothing, a delete or a read included.
+    expect(
+      landingMocks.readRequest.mock.calls.filter(
+        ([hostId]) => hostId === TEST_HOST_ID,
+      ),
+    ).toEqual([]);
+    expect(landingMocks.getActiveHostId()).toBe(TEST_HOST_ID);
+    expect(
+      landingMocks.request.mock.calls.filter(
+        ([method]) => method === "epic.batchDelete",
+      ),
+    ).toEqual([]);
+    expect(
+      landingMocks.deleteRequest.mock.calls.filter(
+        ([hostId]) => hostId === TEST_HOST_ID,
+      ),
+    ).toEqual([]);
+    queryClient.clear();
+  });
+
+  /**
+   * A staged team Send whose `epic.attachEnvironment` is held open, so a test
+   * can change the world while the Send waits and then refuse it.
+   */
+  async function startSendWithHeldAttach(): Promise<{
+    readonly epicId: string;
+    readonly refuseAttach: (error: HostRpcError) => Promise<void>;
+    readonly queryClient: QueryClient;
+  }> {
+    useStagedSandboxStore.getState().stage(SURFACE, TEAM_TARGET);
+    const attach = deferred<unknown>();
+    landingMocks.request.mockImplementation((method: string) =>
+      method === "epic.attachEnvironment"
+        ? attach.promise
+        : Promise.resolve({ roomInfo: null }),
+    );
+    const queryClient = newQueryClient();
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      { wrapper: queryClientWrapper(queryClient) },
+    );
+    act(() => {
+      result.current.startTaskOnStagedSandbox({
+        draftId: null,
+        owner: null,
+        sandboxTeamId: "team-9",
+        text: SUBMITTED_PROMPT,
+        hand,
+      });
+    });
+    await waitFor(() => {
+      expect(
+        landingMocks.request.mock.calls.some(
+          ([method]) => method === "epic.attachEnvironment",
+        ),
+      ).toBe(true);
+    });
+    return {
+      epicId: createdEpicId(),
+      queryClient,
+      refuseAttach: async (error) => {
+        await act(async () => {
+          attach.reject(error);
+          await attach.promise.catch(() => undefined);
+        });
+      },
+    };
+  }
+
+  /** The message is a draft again with its sandbox, and nothing was sent. */
+  function expectMessageBackUnsent(): void {
+    expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+    expect(useLandingDraftStore.getState().drafts).toHaveLength(1);
+    expect(useLandingDraftStore.getState().drafts[0]).toMatchObject({
+      content: MESSAGE_CONTENT,
+      settings: PICKED_SETTINGS,
+      closed: false,
+      returnedSandbox: { target: TEAM_TARGET },
+    });
+    expect(landingMocks.createTerminalAgent).not.toHaveBeenCalled();
+    expect(landingMocks.request.mock.calls.map(([method]) => method)).toEqual([
+      "epic.create",
+      "epic.attachEnvironment",
+    ]);
+  }
+
+  /**
+   * The attachment is refused and the rollback, when there is one, is over:
+   * no mutation of the Send's client is left pending.
+   */
+  async function refusalSettled(queryClient: QueryClient): Promise<void> {
+    await waitFor(() => {
+      expect(queryClient.isMutating()).toBe(0);
+    });
+  }
+
+  async function bothReadsSent(): Promise<void> {
+    await waitFor(() => {
+      expect(
+        landingMocks.readRequest.mock.calls.map(([, method]) => method).sort(),
+      ).toEqual([...READ_METHODS].sort());
+    });
+  }
+
+  it.each(PROMOTION_PENDING_CODES)(
+    "a Send refused while the task is still being set up leaves no empty task, and the message comes back unsent (%s)",
+    async (code) => {
+      const { epicId, refuseAttach, queryClient } =
+        await startSendWithHeldAttach();
+      await refuseAttach(attachRefusal(code));
+
+      await waitFor(() => {
+        expect(landingMocks.deleteRequest).toHaveBeenCalledWith(TEST_HOST_ID, {
+          ids: [epicId],
+        });
+      });
+      await waitFor(() => {
+        expect(wasEpicCreatedThisSession(epicId)).toBe(false);
+      });
+      expect(
+        Object.values(useEpicCanvasStore.getState().tabsById),
+      ).toHaveLength(0);
+      expectMessageBackUnsent();
+      queryClient.clear();
+    },
+  );
+
+  it.each([
+    ["a chat", "epic.listChatRecords", { chatId: "chat-started" }],
+    ["a terminal agent", "epic.listTuiAgents", { tuiAgentId: "tui-started" }],
+  ] as const)(
+    "a Send refused while the task is still being set up keeps a task with an agent in it, and the message comes back unsent (%s)",
+    async (_label, readMethod, row) => {
+      vi.mocked(toast.error).mockClear();
+      const { epicId, refuseAttach, queryClient } =
+        await startSendWithHeldAttach();
+      // The person starts the agent while the attachment is pending.
+      landingMocks.readRequest.mockImplementation((_hostId, method) =>
+        Promise.resolve(heldRows(method, method === readMethod ? [row] : [])),
+      );
+      await refuseAttach(attachBusy());
+
+      await bothReadsSent();
+      await refusalSettled(queryClient);
+      expect(landingMocks.deleteRequest).not.toHaveBeenCalled();
+      expect(wasEpicCreatedThisSession(epicId)).toBe(true);
+      expect(
+        Object.values(useEpicCanvasStore.getState().tabsById),
+      ).toHaveLength(1);
+      expect(toast.error).not.toHaveBeenCalledWith(
+        DISCARD_CREATED_EPIC_FAILED_COPY,
+      );
+      expectMessageBackUnsent();
+      queryClient.clear();
+    },
+  );
+
+  it.each([
+    ["E_SHARE_NOT_OWNED", attachRefusal("E_SHARE_NOT_OWNED")],
+    ["E_SHARE_NEEDS_CLOUD_SYNC", attachRefusal("E_SHARE_NEEDS_CLOUD_SYNC")],
+    ["E_SHARE_REFUSED", attachRefusal("E_SHARE_REFUSED")],
+    ["FORBIDDEN", attachRefusal("FORBIDDEN")],
+    ["a plain RPC_ERROR", attachRefusal("RPC_ERROR")],
+    [
+      "a transport failure",
+      new HostTransportFailureError({
+        code: "RPC_ERROR",
+        message: "Host is unreachable",
+        requestId: "request-attach-transport",
+        method: "epic.attachEnvironment",
+        fatalDetails: null,
+      }),
+    ],
+  ] as const)(
+    "a Send refused for any other reason keeps its empty task, and the message comes back unsent (%s)",
+    async (_label, error) => {
+      const { epicId, refuseAttach, queryClient } =
+        await startSendWithHeldAttach();
+      await refuseAttach(error);
+
+      // Nothing follows the message's return but the refusal's own line.
+      await waitFor(() => {
+        expect(useLandingDraftStore.getState().drafts).toHaveLength(1);
+      });
+      await refusalSettled(queryClient);
+      // Nothing was asked of the host about the task, let alone deleted.
+      expect(landingMocks.readRequest).not.toHaveBeenCalled();
+      expect(landingMocks.deleteRequest).not.toHaveBeenCalled();
+      expect(wasEpicCreatedThisSession(epicId)).toBe(true);
+      expect(
+        Object.values(useEpicCanvasStore.getState().tabsById),
+      ).toHaveLength(1);
+      expectMessageBackUnsent();
+      queryClient.clear();
+    },
+  );
+
+  /**
+   * Where the refused Send's message goes, set while the attachment is held:
+   * the composer (the default), Drafts (the source composer holds a newer
+   * stage), nowhere (its pending stage is gone), or back to the person who
+   * took it back.
+   */
+  type MessageFate =
+    | "composer"
+    | "drafts"
+    | "nowhere"
+    | "taken-back"
+    | "cancelled";
+
+  /** Refuses the held attachment and returns every toast that came after. */
+  async function toastsFromRefusal(
+    fate: MessageFate,
+    error: HostRpcError,
+  ): Promise<ShownToast[]> {
+    const { refuseAttach, queryClient } = await startSendWithHeldAttach();
+    const pending = pendingSendSurfaceKey(onlyPendingSend().id);
+    if (fate === "drafts") {
+      useStagedSandboxStore.getState().stage(SURFACE, NEW_TARGET);
+    }
+    if (fate === "nowhere") {
+      useStagedSandboxStore.setState((state) => ({
+        bySurface: Object.fromEntries(
+          Object.entries(state.bySurface).filter(([key]) => key !== pending),
+        ),
+      }));
+    }
+    if (fate === "taken-back") {
+      returnPendingSandboxSend(onlyPendingSend().id);
+    }
+    if (fate === "cancelled") {
+      // The setup line's Cancel: the message goes to Drafts on its sandbox
+      // while the attachment is held, and the cancellation keeps its receipt.
+      const send = onlyPendingSend();
+      const returned = returnPendingSandboxSendToSandbox(send.id, {
+        kind: "stage",
+        target: TEAM_TARGET,
+        clientRequestId: null,
+      });
+      if (
+        !Object.hasOwn(usePendingSandboxSendStore.getState().sends, send.id)
+      ) {
+        recordCancelledSandboxSend(send, returned);
+      }
+    }
+    const shownBefore = toastLog.length;
+    await refuseAttach(error);
+    // A task still being set up is rolled back unless the Send was taken back:
+    // its delete is the last thing that can follow.
+    if (
+      fate !== "taken-back" &&
+      fate !== "cancelled" &&
+      PROMOTION_PENDING_CODES.some((code) => code === error.code)
+    ) {
+      await waitFor(() => {
+        expect(landingMocks.deleteRequest).toHaveBeenCalledTimes(1);
+      });
+    }
+    await refusalSettled(queryClient);
+    queryClient.clear();
+    return toastLog.slice(shownBefore);
+  }
+
+  it.each([
+    ["E_SHARE_PENDING_BUSY"],
+    ["E_SHARE_PENDING_RECENT_ATTEMPT"],
+  ] as const)(
+    "a Send refused while the task is still being set up says to Send again, once, with the message in the composer (%s)",
+    async (code) => {
+      expect(await toastsFromRefusal("composer", attachRefusal(code))).toEqual([
+        errorToast(SETTING_UP_LINE),
+      ]);
+    },
+  );
+
+  it("says both that the task was still being set up and that the message is in Drafts when the composer holds a newer message", async () => {
+    expect(await toastsFromRefusal("drafts", attachBusy())).toEqual([
+      DRAFTS_TOAST,
+      errorToast(SETTING_UP_LINE),
+    ]);
+  });
+
+  it.each([
+    "E_SHARE_PENDING_OFFLINE",
+    "E_SHARE_PENDING_UNVERIFIED",
+    "E_SHARE_PENDING_FAILED",
+    "E_SHARE_NOT_OWNED",
+    "E_SHARE_NEEDS_CLOUD_SYNC",
+    "E_SHARE_REFUSED",
+    "FORBIDDEN",
+    "RPC_ERROR",
+  ] as const)(
+    "a Send refused with nothing to act on says the message is back in the composer, once (%s)",
+    async (code) => {
+      expect(await toastsFromRefusal("composer", attachRefusal(code))).toEqual([
+        errorToast(BACK_IN_COMPOSER_LINE),
+      ]);
+    },
+  );
+
+  it("says only that the message is saved in Drafts, with no refusal line, for a refusal with nothing to act on", async () => {
+    expect(
+      await toastsFromRefusal(
+        "drafts",
+        attachRefusal("E_SHARE_PENDING_OFFLINE"),
+      ),
+    ).toEqual([DRAFTS_TOAST]);
+  });
+
+  it("keeps a transport failure a plain notice, not an error, with the message in the composer", async () => {
+    expect(
+      await toastsFromRefusal(
+        "composer",
+        new HostTransportFailureError({
+          code: "RPC_ERROR",
+          message: "Host is unreachable",
+          requestId: "request-attach-transport",
+          method: "epic.attachEnvironment",
+          fatalDetails: null,
+        }),
+      ),
+    ).toEqual([{ via: "toast", message: BACK_IN_COMPOSER_LINE, action: null }]);
+  });
+
+  it.each([
+    [
+      "an aborted request",
+      new HostRequestAbortedError({
+        message: "authority replaced",
+        requestId: "request-attach-abort",
+        method: "epic.attachEnvironment",
+        mayHaveDispatched: false,
+      }),
+    ],
+    [
+      "a recoverable sign-in check",
+      new HostRpcError({
+        code: "UNAUTHORIZED",
+        message: "token refresh in flight",
+        requestId: "request-attach-auth",
+        method: "epic.attachEnvironment",
+        fatalDetails: null,
+      }),
+    ],
+  ] as const)(
+    "says only that the message is saved in Drafts when the attachment is silent and the composer holds a newer message (%s)",
+    async (_label, error) => {
+      expect(await toastsFromRefusal("drafts", error)).toEqual([DRAFTS_TOAST]);
+      expect(useLandingDraftStore.getState().drafts).toHaveLength(1);
+      expect(useLandingDraftStore.getState().drafts[0]).toMatchObject({
+        content: MESSAGE_CONTENT,
+        settings: PICKED_SETTINGS,
+        returnedSandbox: { target: TEAM_TARGET },
+      });
+    },
+  );
+
+  it.each([
+    [
+      "an aborted request",
+      new HostRequestAbortedError({
+        message: "authority replaced",
+        requestId: "request-attach-abort",
+        method: "epic.attachEnvironment",
+        mayHaveDispatched: false,
+      }),
+    ],
+    [
+      "a recoverable sign-in check",
+      new HostRpcError({
+        code: "UNAUTHORIZED",
+        message: "token refresh in flight",
+        requestId: "request-attach-auth",
+        method: "epic.attachEnvironment",
+        fatalDetails: null,
+      }),
+    ],
+  ] as const)(
+    "says nothing and saves no draft when the attachment is silent and nothing was returned (%s)",
+    async (_label, error) => {
+      expect(await toastsFromRefusal("nowhere", error)).toEqual([]);
+      expect(useLandingDraftStore.getState().drafts).toEqual([]);
+    },
+  );
+
+  it("adds no second toast to a refusal after the person cancelled the Send into Drafts", async () => {
+    expect(await toastsFromRefusal("cancelled", attachBusy())).toEqual([]);
+    // The cancellation's own receipt says the message is in Drafts: the
+    // setup line renders `returnedSandboxMessageLine` from this record.
+    const receipts = Object.values(
+      useStoppedSandboxSendReceiptStore.getState().receipts,
+    );
+    expect(receipts).toHaveLength(1);
+    expect(receipts[0]).toMatchObject({
+      kind: "cancelled",
+      returned: { kind: "landing-draft" },
+    });
+    expect(useLandingDraftStore.getState().drafts).toHaveLength(1);
+    expect(useLandingDraftStore.getState().drafts[0]).toMatchObject({
+      content: MESSAGE_CONTENT,
+      returnedSandbox: { target: TEAM_TARGET },
+    });
+    // The Send was withdrawn, so the refusal rolled nothing back.
+    expect(landingMocks.deleteRequest).not.toHaveBeenCalled();
+  });
+
+  it("says nothing, saves no draft and leaves the pending send alone when the account changed and the composer held a newer message", async () => {
+    const { refuseAttach, queryClient } = await startSendWithHeldAttach();
+    const sendBefore = onlyPendingSend();
+    useStagedSandboxStore.getState().stage(SURFACE, NEW_TARGET);
+    act(() => {
+      useAuthStore
+        .getState()
+        .setSignedIn(
+          { userId: "other-user", userName: "Other", email: "o@example.com" },
+          { userId: "other-user", username: "Other" },
+          [],
+        );
+    });
+    const shownBefore = toastLog.length;
+    await refuseAttach(attachBusy());
+    await refusalSettled(queryClient);
+    expect(toastLog.slice(shownBefore)).toEqual([]);
+    expect(useLandingDraftStore.getState().drafts).toEqual([]);
+    expect(onlyPendingSend()).toEqual(sendBefore);
+    expect(landingMocks.deleteRequest).not.toHaveBeenCalled();
+    queryClient.clear();
+  });
+
+  it("keeps a retryable attestation a plain notice, with the host's raw reason shown nowhere", async () => {
+    const shown = await toastsFromRefusal(
+      "composer",
+      new RetryableTransportError({
+        replaySafetyFromKey: false,
+        code: "RPC_ERROR",
+        message: "Host timed out awaiting the request frame",
+        requestId: "request-attach-attestation",
+        method: "epic.attachEnvironment",
+        fatalDetails: {
+          code: "RPC_REQUEST_TIMEOUT",
+          reason: "Host timed out awaiting the request frame",
+          incompatibleMethods: null,
+          upgradeGuidance: null,
+          retryable: true,
+        },
+      }),
+    );
+    expect(shown).toEqual([
+      { via: "toast", message: BACK_IN_COMPOSER_LINE, action: null },
+    ]);
+    expect(JSON.stringify(shown)).not.toContain("timed out");
+  });
+
+  it.each([
+    ["a task still being set up", attachBusy()],
+    ["a plain failure", attachRefusal("RPC_ERROR")],
+  ] as const)(
+    "says nothing at all when the person took the message back before the refusal (%s)",
+    async (_label, error) => {
+      expect(await toastsFromRefusal("taken-back", error)).toEqual([]);
+    },
+  );
+
+  it.each([
+    ["a task still being set up", attachBusy()],
+    ["a plain failure", attachRefusal("RPC_ERROR")],
+  ] as const)(
+    "says only that the message was not sent when nothing was returned (%s)",
+    async (_label, error) => {
+      expect(await toastsFromRefusal("nowhere", error)).toEqual([
+        errorToast(NOT_SENT_LINE),
+      ]);
+    },
+  );
+
+  it("says nothing when the account changed during the wait", async () => {
+    const { refuseAttach, queryClient } = await startSendWithHeldAttach();
+    act(() => {
+      useAuthStore
+        .getState()
+        .setSignedIn(
+          { userId: "other-user", userName: "Other", email: "o@example.com" },
+          { userId: "other-user", username: "Other" },
+          [],
+        );
+    });
+    const shownBefore = toastLog.length;
+    await refuseAttach(attachBusy());
+    await refusalSettled(queryClient);
+    expect(toastLog.slice(shownBefore)).toEqual([]);
+    queryClient.clear();
+  });
+
+  it("says the host is out of disk space, and nothing more, when the composer holds the message", async () => {
+    expect(
+      await toastsFromRefusal("composer", attachRefusal("E_HOST_STORAGE_FULL")),
+    ).toEqual([errorToast(STORAGE_FULL_LINE)]);
+  });
+
+  it("says the host is out of disk space after the Drafts line when the message was saved there", async () => {
+    expect(
+      await toastsFromRefusal("drafts", attachRefusal("E_HOST_STORAGE_FULL")),
+    ).toEqual([DRAFTS_TOAST, errorToast(STORAGE_FULL_LINE)]);
+  });
+
+  it.each([
+    [
+      "an aborted request",
+      new HostRequestAbortedError({
+        message: "authority replaced",
+        requestId: "request-attach-abort",
+        method: "epic.attachEnvironment",
+        mayHaveDispatched: false,
+      }),
+    ],
+    [
+      "a recoverable sign-in check",
+      new HostRpcError({
+        code: "UNAUTHORIZED",
+        message: "token refresh in flight",
+        requestId: "request-attach-auth",
+        method: "epic.attachEnvironment",
+        fatalDetails: null,
+      }),
+    ],
+  ] as const)(
+    "says nothing from the attachment for %s, the message back in the composer",
+    async (_label, error) => {
+      expect(await toastsFromRefusal("composer", error)).toEqual([]);
+    },
+  );
+
+  it.each(READ_METHODS)(
+    "a refused Send keeps the task, tells the person, and gives the message back when %s cannot be read",
+    async (failing) => {
+      landingMocks.readRequest.mockImplementation((_hostId, method) =>
+        method === failing
+          ? Promise.reject(
+              new HostRpcError({
+                code: "RPC_ERROR",
+                message: "unreadable",
+                requestId: "request-read",
+                method,
+                fatalDetails: null,
+              }),
+            )
+          : Promise.resolve(heldRows(method, [])),
+      );
+      vi.mocked(toast.error).mockClear();
+      const { epicId, refuseAttach, queryClient } =
+        await startSendWithHeldAttach();
+      await refuseAttach(attachBusy());
+
+      await waitFor(() => {
+        expect(toastLog.map(({ message }) => message)).toEqual([
+          SETTING_UP_LINE,
+          "This Send may have left an empty task. Delete it from your tasks if you don't need it.",
+        ]);
+      });
+      expect(landingMocks.deleteRequest).not.toHaveBeenCalled();
+      expect(wasEpicCreatedThisSession(epicId)).toBe(true);
+      expectMessageBackUnsent();
+      queryClient.clear();
+    },
+  );
+
+  it("deletes nothing when the account changes while the task's agents are being read", async () => {
+    const reads = new Map<string, Deferred<unknown>>();
+    landingMocks.readRequest.mockImplementation((_hostId, method) => {
+      const held = deferred<unknown>();
+      reads.set(method, held);
+      return held.promise;
+    });
+    const { epicId, refuseAttach, queryClient } =
+      await startSendWithHeldAttach();
+    await refuseAttach(attachBusy());
+    await bothReadsSent();
+
+    landingMocks.getRequestContextUserId.mockReturnValue("other-user");
+    await act(async () => {
+      for (const [method, held] of reads) held.resolve(heldRows(method, []));
+      await Promise.all([...reads.values()].map((held) => held.promise));
+    });
+    await refusalSettled(queryClient);
+
+    expect(landingMocks.deleteRequest).not.toHaveBeenCalled();
+    expect(wasEpicCreatedThisSession(epicId)).toBe(true);
+    queryClient.clear();
+  });
+
+  it.each([
+    [
+      "the host rejects the delete",
+      () =>
+        Promise.reject(
+          new HostRpcError({
+            code: "RPC_ERROR",
+            message: "disk unavailable",
+            requestId: "request-discard",
+            method: "epic.batchDelete",
+            fatalDetails: null,
+          }),
+        ),
+    ],
+    [
+      "the host answers that the task was not deleted",
+      (payload: unknown) =>
+        Promise.resolve({
+          results: deletedIdsOf(payload).map((taskId) => ({
+            taskId,
+            success: false,
+          })),
+        }),
+    ],
+  ] as const)(
+    "tells the person the empty task stayed when %s",
+    async (_label, answer) => {
+      useStagedSandboxStore.getState().stage(SURFACE, TEAM_TARGET);
+      landingMocks.request.mockImplementation((method: string) =>
+        method === "epic.attachEnvironment"
+          ? Promise.reject(attachBusy())
+          : Promise.resolve({ roomInfo: null }),
+      );
+      landingMocks.deleteRequest.mockImplementation((_hostId, payload) =>
+        answer(payload),
+      );
+      vi.mocked(toast.error).mockClear();
+      const queryClient = newQueryClient();
+      const { result } = renderHook(
+        () => useLandingComposerActions(useTestPlacementTarget()),
+        { wrapper: queryClientWrapper(queryClient) },
+      );
+      act(() => {
+        result.current.startTaskOnStagedSandbox({
+          draftId: null,
+          owner: null,
+          sandboxTeamId: "team-9",
+          text: SUBMITTED_PROMPT,
+          hand,
+        });
+      });
+      await waitFor(() => {
+        expect(toast.error).toHaveBeenCalledWith(
+          DISCARD_CREATED_EPIC_FAILED_COPY,
+        );
+      });
+      // The message is still given back.
+      expect(useLandingDraftStore.getState().drafts).toHaveLength(1);
+      queryClient.clear();
+    },
+  );
+
+  it("keeps a refused attachment with its pending send, and deletes nothing, when the account changes", async () => {
     useStagedSandboxStore.getState().stage(SURFACE, TEAM_TARGET);
     const attach = deferred<unknown>();
     landingMocks.request.mockImplementation((method: string) => {
@@ -938,11 +1860,13 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
       );
     });
     await act(async () => {
-      attach.reject(new Error("attachment refused"));
+      attach.reject(attachBusy());
       await attach.promise.catch(() => undefined);
     });
 
     await waitFor(() => expect(result.current.isPending).toBe(false));
+    // The other account's window deletes nothing of this account's.
+    expect(landingMocks.deleteRequest).not.toHaveBeenCalled();
     expect(useLandingDraftStore.getState().drafts).toEqual([]);
     expect(readStagedSandbox(SURFACE)).toBeNull();
     expect(usePendingSandboxSendStore.getState().sends[send.id]).toMatchObject({
@@ -1133,9 +2057,11 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
     const toastCall = toastMessage.mock.calls.at(-1);
     if (toastCall === undefined) throw new Error("expected a toast");
     expect(toastCall[0]).toBe(returnedSandboxMessageLine(true));
-    expect(toastCall[1].action.label).toBe("Open draft");
+    const toastOptions = toastCall[1];
+    if (toastOptions === undefined) throw new Error("expected an action");
+    expect(toastOptions.action.label).toBe("Open draft");
     act(() => {
-      toastCall[1].action.onClick();
+      toastOptions.action.onClick();
     });
     expect(landingMocks.navigate).toHaveBeenLastCalledWith(
       expect.objectContaining({
@@ -1241,11 +2167,13 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
   });
 });
 
-function deferred<T>(): {
+interface Deferred<T> {
   readonly promise: Promise<T>;
   readonly resolve: (value: T) => void;
   readonly reject: (reason: Error) => void;
-} {
+}
+
+function deferred<T>(): Deferred<T> {
   let resolve: (value: T) => void = () => undefined;
   let reject: (reason: Error) => void = () => undefined;
   const promise = new Promise<T>((next, fail) => {
