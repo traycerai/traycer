@@ -137,6 +137,7 @@ import {
   newConversationSurfaceKey,
   useSurfaceHostSelectionStore,
 } from "@/stores/host/surface-host-selection-store";
+import { browserTabId } from "@/lib/browser-tab-identity";
 import { persistKey, STORE_KEYS } from "@/lib/persist";
 import { createRecordMapStorage } from "@/lib/persist/record-map-storage";
 import {
@@ -335,6 +336,8 @@ vi.mock("sonner", async (importOriginal) => {
 });
 
 const SANDBOX_HOST = "sbx-host";
+const TASK_PIN_HOST = "task-pin-host";
+const START_PAGE_PIN_HOST = "start-page-pin-host";
 const SANDBOX_ID = "sbx-1";
 const SEND_ID = "send-1";
 const SURFACE = pendingSendSurfaceKey(SEND_ID);
@@ -409,6 +412,8 @@ const mocks = vi.hoisted(() => ({
   },
   listSandboxes: vi.fn<() => Promise<SandboxListFetchResult>>(),
   findById: vi.fn<(hostId: string) => HostDirectoryEntry | null>(),
+  /** The account's host directory, as the host chips and "Use <host>" read it. */
+  directoryRows: [] as HostDirectoryEntry[],
   /** The account's sandbox rows the ready line is read from. */
   sandboxes: [] as SandboxSummary[],
   /** When the list was last read (epoch ms); `0` is a read before any mount. */
@@ -723,6 +728,8 @@ const hostBinding = vi.hoisted(() => ({
   directory: {
     refresh: () => Promise.resolve(),
     findById: (hostId: string) => mocks.findById(hostId),
+    list: () => Promise.resolve(mocks.directoryRows),
+    onChange: () => ({ dispose: () => undefined }),
   },
 }));
 vi.mock("@/lib/host", () => ({
@@ -1289,6 +1296,12 @@ beforeEach(() => {
   mocks.verbState = { isPending: false, error: null };
   mocks.listSandboxes.mockReset();
   mocks.findById.mockReset();
+  // The task's new-agent composer and the Start Page each pin a host the
+  // directory names, so "Use <host>" says whose chip the message goes back to.
+  mocks.directoryRows = [
+    { ...dialableHost(TASK_PIN_HOST), label: "Task host" },
+    { ...dialableHost(START_PAGE_PIN_HOST), label: "Start host" },
+  ];
   mocks.findById.mockImplementation((hostId) => dialableHost(hostId));
   // Every dispatch waits on an affirmative row read since mount: the default
   // is the staged sandbox, awake, read after any mount.
@@ -1328,6 +1341,12 @@ beforeEach(() => {
   useNewConversationModalStore.getState().resetForTests();
   useNewConversationModalOpenStore.getState().close();
   useSurfaceHostSelectionStore.getState().resetForTests();
+  useSurfaceHostSelectionStore.setState({
+    selections: {
+      [newConversationSurfaceKey("epic-1")]: TASK_PIN_HOST,
+      [composerSurfaceKey(browserTabId())]: START_PAGE_PIN_HOST,
+    },
+  });
   useSettingsEnvironmentPickStore.setState({ pick: null });
   useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
   useComposerDraftStore.setState({ drafts: {} });
@@ -1956,7 +1975,7 @@ describe("a send waiting for the requested agent on its sandbox", () => {
           harnessId: "codex",
         });
         expect(
-          within(line).getByRole("button", { name: "Choose another host" }),
+          within(line).getByRole("button", { name: "Use Task host" }),
         ).toBeDefined();
       });
       expect(
@@ -2001,7 +2020,7 @@ describe("a send waiting for the requested agent on its sandbox", () => {
           openTerminalButton.disabled,
       ).toBe(false);
       const chooseAnotherHostButton = within(line).getByRole("button", {
-        name: "Choose another host",
+        name: "Use Start host",
       });
       expect(
         chooseAnotherHostButton instanceof HTMLButtonElement &&
@@ -2814,7 +2833,7 @@ describe("a send whose sandbox cannot take it", () => {
 
       fireEvent.click(
         within(screen.getByTestId("sandbox-refusal-line")).getByRole("button", {
-          name: "Choose another host",
+          name: "Use Task host",
         }),
       );
 
@@ -4428,7 +4447,7 @@ describe("a send whose message carries images, delivered on its sandbox", () => 
       const line = screen.getByTestId("sandbox-refusal-line");
       expect(within(line).getByRole("button", { name: "Retry" })).toBeDefined();
       expect(
-        within(line).getByRole("button", { name: "Choose another host" }),
+        within(line).getByRole("button", { name: "Use Task host" }),
       ).toBeDefined();
     } finally {
       restoreLocks();
@@ -6444,7 +6463,7 @@ describe("a send held on settings that didn't apply, once its sandbox leaves awa
     expect(readStagedSandbox(taskSurface)).toBeNull();
     expect(
       useSurfaceHostSelectionStore.getState().selections[taskSurface],
-    ).toBeUndefined();
+    ).toBe(TASK_PIN_HOST);
     // A rest is nobody's gesture: nothing opens on its own.
     expect(useNewConversationModalOpenStore.getState().request).toBeNull();
     const line = await screen.findByTestId("sandbox-stopped-line");
@@ -8749,7 +8768,7 @@ describe("choosing Stop on an unclaimed send", () => {
       useSurfaceHostSelectionStore.getState().selections[
         newConversationSurfaceKey("epic-1")
       ],
-    ).toBeUndefined();
+    ).toBe(TASK_PIN_HOST);
     expect(document.body.textContent).toContain(BACK_IN_COMPOSER_RECEIPT);
     expect(screen.getByRole("button", { name: "Start" })).toBeDefined();
     expect(
@@ -8795,8 +8814,8 @@ describe("choosing Stop on an unclaimed send", () => {
       ).toBeDefined();
       expect(within(line).getByRole("button", { name: "Start" })).toBeDefined();
       expect(
-        within(line).getByRole("button", { name: "Choose another host" }),
-      ).toBeDefined();
+        within(line).queryByRole("button", { name: "Choose another host" }),
+      ).toBeNull();
       expect(line.textContent).not.toContain("api-refactor is stopped");
       expect(screen.queryByTestId("rested-task-message-line")).toBeNull();
     }
@@ -8809,7 +8828,7 @@ describe("choosing Stop on an unclaimed send", () => {
       ).toBeDefined();
     });
 
-    it("keeps the line, with all three actions, after the person closes Add agent", async () => {
+    it("keeps the line, with its two actions, after the person closes Add agent", async () => {
       await stopWithOpenComposer([]);
 
       act(() => {
@@ -8916,8 +8935,8 @@ describe("choosing Stop on an unclaimed send", () => {
       ).toBeDefined();
       expect(within(line).getByRole("button", { name: "Start" })).toBeDefined();
       expect(
-        within(line).getByRole("button", { name: "Choose another host" }),
-      ).toBeDefined();
+        within(line).queryByRole("button", { name: "Choose another host" }),
+      ).toBeNull();
       expect(
         useStoppedSandboxSendReceiptStore.getState().receipts[SEND_ID],
       ).toBeDefined();
@@ -8994,8 +9013,8 @@ describe("choosing Stop on an unclaimed send", () => {
     expect(screen.getByRole("button", { name: "Open draft" })).toBeDefined();
     expect(screen.getByRole("button", { name: "Start" })).toBeDefined();
     expect(
-      screen.getByRole("button", { name: "Choose another host" }),
-    ).toBeDefined();
+      screen.queryByRole("button", { name: "Choose another host" }),
+    ).toBeNull();
   });
 
   it("clears the stopped receipt when the person chooses another host", async () => {
@@ -9127,10 +9146,10 @@ describe("choosing Stop on an unclaimed send", () => {
       }),
     ).toBeDefined();
     expect(
-      within(updatedView.container).getByRole("button", {
+      within(updatedView.container).queryByRole("button", {
         name: "Choose another host",
       }),
-    ).toBeDefined();
+    ).toBeNull();
     expect(
       useStoppedSandboxSendReceiptStore.getState().receipts[SEND_ID],
     ).toBeDefined();
@@ -9330,10 +9349,10 @@ describe("choosing Stop on an unclaimed send", () => {
       within(toastView.container).getByRole("button", { name: "Start" }),
     ).toBeDefined();
     expect(
-      within(toastView.container).getByRole("button", {
+      within(toastView.container).queryByRole("button", {
         name: "Choose another host",
       }),
-    ).toBeDefined();
+    ).toBeNull();
     fireEvent.click(
       within(toastView.container).getByRole("button", { name: "Start" }),
     );
@@ -9832,7 +9851,7 @@ describe("choosing Stop on an unclaimed send", () => {
     expectNoStoppedReceipt();
   });
 
-  it("still says Stopped, with Start and Choose another host, when the row reads stopped before the Stop answers", async () => {
+  it("still says Stopped, with Start and no host choice, when the row reads stopped before the Stop answers", async () => {
     act(() => {
       useNewConversationModalStore
         .getState()
@@ -9868,8 +9887,8 @@ describe("choosing Stop on an unclaimed send", () => {
     expect(line.textContent).toContain(SAVED_DRAFT_RECEIPT);
     expect(screen.getByRole("button", { name: "Start" })).toBeDefined();
     expect(
-      screen.getByRole("button", { name: "Choose another host" }),
-    ).toBeDefined();
+      screen.queryByRole("button", { name: "Choose another host" }),
+    ).toBeNull();
   });
 
   it("returns a chat's message to its composer with no Stopped receipt and no state receipt when a fresh row reads suspended before the Stop answers", async () => {
