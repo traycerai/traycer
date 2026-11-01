@@ -18,9 +18,7 @@ import { appendBlocks } from "./append-quote-to-draft";
  * counterpart worth preserving. So each block flattens to the text a reader
  * saw, one paragraph per block, and an empty draft yields nothing.
  */
-export function commentDraftParagraphs(
-  doc: JsonContent,
-): ReadonlyArray<JsonContent> {
+function commentDraftParagraphs(doc: JsonContent): ReadonlyArray<JsonContent> {
   return (doc.content ?? [])
     .flatMap(flattenToLines)
     .map((line) => line.trim())

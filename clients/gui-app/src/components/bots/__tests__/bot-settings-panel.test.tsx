@@ -56,10 +56,6 @@ import {
   type BotMemoryAccess,
 } from "@/components/bots/bot-memory-context";
 import type { BotMemoryReading } from "@/hooks/bots/use-bot-memory";
-import {
-  memoryRailOver,
-  useBotOpenThreadStore,
-} from "@/stores/bots/bot-open-thread-store";
 import type { ComposerSeedSource } from "@/lib/composer/composer-seed-source";
 import type { ComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
 import type { ModelOption } from "@/components/home/data/landing-options";
@@ -931,21 +927,17 @@ describe("<BotChannelSettingsPanel /> as the channel's settings", () => {
   });
 
   describe("what it knows", () => {
-    function mountKnowingPanel(): Mock<() => void> {
+    function mountKnowingPanel(): {
+      onClose: Mock<() => void>;
+      open: Mock<() => void>;
+    } {
       const onClose = vi.fn<() => void>();
+      const open = vi.fn<() => void>();
       const access: BotMemoryAccess = {
         hostId: "host-1",
         botId: BOT.botId,
         environmentId: BOT.environmentId,
-        open: () =>
-          useBotOpenThreadStore
-            .getState()
-            .setRail(
-              BOT.botId,
-              memoryRailOver(
-                useBotOpenThreadStore.getState().byBotId[BOT.botId] ?? null,
-              ),
-            ),
+        open,
       };
       render(
         inProviders(
@@ -961,17 +953,13 @@ describe("<BotChannelSettingsPanel /> as the channel's settings", () => {
           </BotMemoryContext>,
         ),
       );
-      return onClose;
+      return { onClose, open };
     }
 
-    beforeEach(() => {
-      useBotOpenThreadStore.setState({ byBotId: {} });
-    });
-
-    it("counts the memories and opens them where the bot's card opens them, closing the settings", async () => {
+    it("counts the memories and opens them through the memory opener, closing the settings", async () => {
       const user = userEvent.setup();
       mocks.memoryEntries = 3;
-      const onClose = mountKnowingPanel();
+      const { onClose, open } = mountKnowingPanel();
 
       const usage = screen.getByTestId("bot-settings-usage");
       expect(
@@ -982,10 +970,7 @@ describe("<BotChannelSettingsPanel /> as the channel's settings", () => {
       await user.click(entry);
 
       expect(onClose).toHaveBeenCalledTimes(1);
-      expect(useBotOpenThreadStore.getState().byBotId[BOT.botId]).toEqual({
-        kind: "memory",
-        back: null,
-      });
+      expect(open).toHaveBeenCalledTimes(1);
     });
 
     it("sits beside View usage where the host can read usage", () => {

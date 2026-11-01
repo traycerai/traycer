@@ -342,10 +342,7 @@ function placeName(target: BoundTarget): string {
 }
 
 /** What the voice asks before a routed post it confirms. */
-export function confirmQuestion(
-  target: BoundTarget,
-  uncertain: boolean,
-): string {
+function confirmQuestion(target: BoundTarget, uncertain: boolean): string {
   const scoped = `${placeName(target)} in ${target.environmentLabel}`;
   return uncertain
     ? `Did you mean ${scoped}? Say yes to post it there, or no.`

@@ -71,13 +71,18 @@ function botRecord(
   };
 }
 
+/** A thread summary whose anchor is present. */
+type AnchoredThreadSummary = BotThreadSummary & {
+  readonly anchor: NonNullable<BotThreadSummary["anchor"]>;
+};
+
 /** A thread whose anchor post `messageId` was sent by `senderUserId` at `sentAt`. */
 function threadSummary(
   threadId: string,
   messageId: string,
   senderUserId: string | null,
   sentAt: number,
-): BotThreadSummary {
+): AnchoredThreadSummary {
   return {
     threadId,
     conversationId: `conv-${threadId}`,
@@ -99,10 +104,9 @@ function threadSummary(
 
 /** The summary with its anchor carrying `excerpt`, as a 1.2 host lists it. */
 function withExcerpt(
-  summary: BotThreadSummary,
+  summary: AnchoredThreadSummary,
   excerpt: string | null,
-): BotThreadSummary {
-  if (summary.anchor === null) return summary;
+): AnchoredThreadSummary {
   return { ...summary, anchor: { ...summary.anchor, excerpt } };
 }
 

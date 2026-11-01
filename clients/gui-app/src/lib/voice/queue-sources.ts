@@ -300,7 +300,6 @@ export interface StoppedAnswer {
   /** The dedupe key: the bot and the request it holds. */
   readonly requestId: string;
   readonly threadId: string | null;
-  readonly state: "failed" | "parked";
   /** When the session started the answer; `null` when the stream does not say. */
   readonly at: number | null;
 }
@@ -317,7 +316,6 @@ export function stoppedAnswersOf(
     stopped.push({
       requestId: session.requestId,
       threadId,
-      state: session.state,
       at: session.startedAt,
     });
   };

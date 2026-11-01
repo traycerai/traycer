@@ -97,7 +97,6 @@ fi
 # `stapler validate` looks the ticket up at Apple's ticket-delivery service on
 # every call, so a dropped connection there (NSURLErrorDomain -1005, "The
 # network connection was lost", exit 68) fails an app whose staple is fine.
-# Two staging trains in a row lost their macOS desktop to it on 2026-10-31.
 # A staple that is really missing or invalid fails every attempt the same
 # way, so the retries change nothing for a bad app.
 STAPLER_VALIDATE_ATTEMPTS=5

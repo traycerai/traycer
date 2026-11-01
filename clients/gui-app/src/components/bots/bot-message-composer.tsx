@@ -101,7 +101,7 @@ export function BotMessageComposer(props: {
   /** A quote to add to what the box shows; `null` for none. */
   readonly quote: BotComposerQuote | null;
   /**
-   * The host accepted `text`, what the box held, and the box was cleared.
+   * The host accepted `text`, what the box sent.
    * Answers whether the owner says the send's delivery itself, where the
    * person now looks; the box says it only when it does not.
    */

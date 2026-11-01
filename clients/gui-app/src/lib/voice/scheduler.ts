@@ -22,8 +22,7 @@
  *
  * Priorities, highest first: an `ask` (the voice has a question for the
  * person), the `focused` reply they are waiting on, a reply `elsewhere`, the
- * `briefing`. The queue and the interjections that fill the lower tiers are a
- * later work; the interface admits them now.
+ * `briefing`.
  */
 
 export type SpeechPriority = "ask" | "focused" | "elsewhere" | "briefing";
@@ -175,8 +174,8 @@ export const OUTPUT_HANGOVER_WITHOUT_LEVEL_MS = 4_000;
  * has run, nothing else is appended: an append during that audio is the one
  * the probe says is never spoken.
  */
-export const SPEECH_LEAD_MS = 1_000;
-export const SPEECH_MS_PER_WORD = 300;
+const SPEECH_LEAD_MS = 1_000;
+const SPEECH_MS_PER_WORD = 300;
 
 /** The time the voice is held to need for `text`, without a detector. */
 export function estimateSpeechMs(text: string): number {
@@ -942,7 +941,7 @@ function spokenNumeral(numeral: string): ReadonlyArray<string> {
  * Whether an output transcript is nothing but acknowledgement: every word a
  * backchannel or filler. Such output proves no item was spoken.
  */
-export function isBackchannelOnly(transcript: string): boolean {
+function isBackchannelOnly(transcript: string): boolean {
   const words = wordsOf(transcript);
   return words.every(
     (word) => BACKCHANNEL_WORDS.has(word) || STOP_WORDS.has(word),

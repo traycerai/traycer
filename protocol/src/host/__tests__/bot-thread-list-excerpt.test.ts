@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
+import {
+  SERVES_EVERY_INSTALLED_MAJOR,
+  splitConnectionManifest,
+} from "@traycer/protocol/framework/index";
 import { hostRpcRegistry } from "@traycer/protocol/host/index";
+import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
 import {
   botThreadListV10,
   botThreadListV11,
@@ -50,11 +55,16 @@ const LISTED_V11 = {
 describe("bot.thread.list@1.2 anchor excerpts", () => {
   const line = hostRpcRegistry["bot.thread.list"][1];
 
-  it("is the registry head, above the frozen 1.1 and 1.0", () => {
-    expect(line.latestMinor).toBe(2);
-    expect(line.versions[2].contract).toBe(botThreadListV12);
-    expect(line.versions[1].contract).toBe(botThreadListV11);
-    expect(line.versions[0].contract).toBe(botThreadListV10);
+  it("is advertised at 1.2 in a connection manifest", () => {
+    const { manifest, optionalManifest } = splitConnectionManifest(
+      hostRpcRegistry,
+      RELEASED_FLOOR_METHOD_NAMES,
+      SERVES_EVERY_INSTALLED_MAJOR,
+    );
+    expect({ ...manifest, ...optionalManifest }["bot.thread.list"]).toEqual({
+      major: 1,
+      minor: 2,
+    });
   });
 
   it("upgrades a 1.1 host's answer to anchors with a null excerpt, keeping a gone anchor null", () => {

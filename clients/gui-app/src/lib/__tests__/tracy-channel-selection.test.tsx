@@ -85,15 +85,7 @@ async function mount(initialPath: string): Promise<Mounted> {
   };
 }
 
-function open(navigate: UseNavigateResult<string>, botId: string): boolean {
-  return openBotChannel(navigate, botId, {
-    landing: null,
-    isConnectable: null,
-    onRejected: null,
-  });
-}
-
-function openWithLanding(
+function open(
   navigate: UseNavigateResult<string>,
   botId: string,
   landing: BotTabLanding | null,
@@ -174,9 +166,9 @@ describe("Tracy channel selection commits on navigation acknowledgement", () => 
     const router = await mount("/");
 
     act(() => {
-      open(router.navigate, "bot-a");
-      open(router.navigate, "bot-b");
-      open(router.navigate, "bot-c");
+      open(router.navigate, "bot-a", null);
+      open(router.navigate, "bot-b", null);
+      open(router.navigate, "bot-c", null);
     });
 
     await waitFor(() => {
@@ -192,7 +184,7 @@ describe("Tracy channel selection commits on navigation acknowledgement", () => 
   it("keeps the previous channel selected, under its own URL, when the history refuses the switch", async () => {
     const router = await mount("/");
     act(() => {
-      open(router.navigate, "bot-a");
+      open(router.navigate, "bot-a", null);
     });
     await waitFor(() => {
       expect(selection(router)).toEqual({
@@ -211,7 +203,7 @@ describe("Tracy channel selection commits on navigation acknowledgement", () => 
     });
     let accepted = false;
     act(() => {
-      accepted = open(router.navigate, "bot-b");
+      accepted = open(router.navigate, "bot-b", null);
     });
     await waitFor(() => {
       expect(refused).toEqual(["/bot/bot-b"]);
@@ -229,7 +221,7 @@ describe("Tracy channel selection commits on navigation acknowledgement", () => 
   it("keeps the previous channel selected, under its own URL, when the navigation is rejected", async () => {
     const router = await mount("/");
     act(() => {
-      open(router.navigate, "bot-a");
+      open(router.navigate, "bot-a", null);
     });
     await waitFor(() => {
       expect(selection(router)).toEqual({
@@ -241,7 +233,7 @@ describe("Tracy channel selection commits on navigation acknowledgement", () => 
     const rejection = Promise.reject<void>(new Error("navigation refused"));
     const rejecting: UseNavigateResult<string> = () => rejection;
     await act(async () => {
-      open(rejecting, "bot-b");
+      open(rejecting, "bot-b", null);
       // The controller subscribed to the rejection first, so its handling has
       // run once this settles.
       await rejection.catch(() => undefined);
@@ -258,7 +250,7 @@ describe("Tracy channel selection commits on navigation acknowledgement", () => 
     const router = await mount("/");
     for (const botId of ["bot-a", "bot-b"]) {
       act(() => {
-        open(router.navigate, botId);
+        open(router.navigate, botId, null);
       });
       await waitFor(() => {
         expect(selection(router)).toEqual({
@@ -320,7 +312,7 @@ describe("Tracy channel selection commits on navigation acknowledgement", () => 
     async function mountOnChannelA(): Promise<Mounted> {
       const router = await mount("/");
       act(() => {
-        open(router.navigate, "bot-a");
+        open(router.navigate, "bot-a", null);
       });
       await waitFor(() => {
         expect(selection(router)).toEqual({
@@ -340,7 +332,7 @@ describe("Tracy channel selection commits on navigation acknowledgement", () => 
       const rejection = Promise.reject<void>(new Error("navigation refused"));
       const rejecting: UseNavigateResult<string> = () => rejection;
       await act(async () => {
-        openWithLanding(rejecting, "bot-b", LANDING_B);
+        open(rejecting, "bot-b", LANDING_B);
         await rejection.catch(() => undefined);
       });
 
@@ -356,7 +348,7 @@ describe("Tracy channel selection commits on navigation acknowledgement", () => 
         useTracySurfaceStore.getState().closeSurface();
       });
       act(() => {
-        openWithLanding(router.navigate, "bot-b", null);
+        open(router.navigate, "bot-b", null);
       });
       await waitFor(() => {
         expect(selection(router)).toEqual({
@@ -371,12 +363,12 @@ describe("Tracy channel selection commits on navigation acknowledgement", () => 
       const router = await mountOnChannelA();
       const held = holdNavigation(router);
       act(() => {
-        openWithLanding(held.navigate, "bot-b", LANDING_B);
+        open(held.navigate, "bot-b", LANDING_B);
       });
       expect(landingOf("bot-b")).toBe(LANDING_B);
 
       act(() => {
-        open(router.navigate, "bot-c");
+        open(router.navigate, "bot-c", null);
       });
       await waitFor(() => {
         expect(selection(router)).toEqual({
@@ -401,8 +393,8 @@ describe("Tracy channel selection commits on navigation acknowledgement", () => 
       const earlier = holdNavigation(router);
       const newer = holdNavigation(router);
       act(() => {
-        openWithLanding(earlier.navigate, "bot-b", LANDING_B);
-        openWithLanding(newer.navigate, "bot-b", LANDING_B_NEWER);
+        open(earlier.navigate, "bot-b", LANDING_B);
+        open(newer.navigate, "bot-b", LANDING_B_NEWER);
       });
 
       await act(() => Promise.resolve(newer.release()));
@@ -424,7 +416,7 @@ describe("Tracy channel selection commits on navigation acknowledgement", () => 
       const router = await mountOnChannelA();
       const held = holdNavigation(router);
       act(() => {
-        openWithLanding(held.navigate, "bot-b", LANDING_B);
+        open(held.navigate, "bot-b", LANDING_B);
       });
       expect(landingOf("bot-b")).toBe(LANDING_B);
 
@@ -450,7 +442,7 @@ describe("Tracy channel selection commits on navigation acknowledgement", () => 
     async function mountOnChannelAAfterVisitingB(): Promise<Mounted> {
       const router = await mount("/");
       act(() => {
-        open(router.navigate, "bot-b");
+        open(router.navigate, "bot-b", null);
       });
       await waitFor(() => {
         expect(selection(router)).toEqual({
@@ -462,7 +454,7 @@ describe("Tracy channel selection commits on navigation acknowledgement", () => 
         useTracySurfaceStore.getState().markVisited("bot-b");
       });
       act(() => {
-        open(router.navigate, "bot-a");
+        open(router.navigate, "bot-a", null);
       });
       await waitFor(() => {
         expect(selection(router)).toEqual({
@@ -482,7 +474,7 @@ describe("Tracy channel selection commits on navigation acknowledgement", () => 
       const rejection = Promise.reject<void>(new Error("navigation refused"));
       const rejecting: UseNavigateResult<string> = () => rejection;
       await act(async () => {
-        openWithLanding(rejecting, "bot-b", {
+        open(rejecting, "bot-b", {
           kind: "thread",
           threadId: "t-1",
           messageId: null,
@@ -495,7 +487,7 @@ describe("Tracy channel selection commits on navigation acknowledgement", () => 
       });
 
       act(() => {
-        openWithLanding(router.navigate, "bot-b", null);
+        open(router.navigate, "bot-b", null);
       });
       await waitFor(() => {
         expect(selection(router)).toEqual({
@@ -510,7 +502,7 @@ describe("Tracy channel selection commits on navigation acknowledgement", () => 
       const router = await mountOnChannelAAfterVisitingB();
       const held = holdNavigation(router);
       act(() => {
-        openWithLanding(held.navigate, "bot-b", {
+        open(held.navigate, "bot-b", {
           kind: "thread",
           threadId: "t-1",
           messageId: null,
@@ -518,7 +510,7 @@ describe("Tracy channel selection commits on navigation acknowledgement", () => 
       });
 
       act(() => {
-        open(router.navigate, "bot-c");
+        open(router.navigate, "bot-c", null);
       });
       await waitFor(() => {
         expect(selection(router)).toEqual({

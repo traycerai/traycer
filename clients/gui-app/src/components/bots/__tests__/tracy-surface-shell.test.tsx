@@ -520,15 +520,7 @@ interface Mounted {
   readonly pathname: () => string;
 }
 
-async function mount(): Promise<Mounted> {
-  return mountWith(SurfaceHost, "/");
-}
-
-async function mountPaneAware(): Promise<Mounted> {
-  return mountWith(PaneAwareSurfaceHost, "/home");
-}
-
-async function mountWith(
+async function mount(
   Host: () => ReactNode,
   initialPath: string,
 ): Promise<Mounted> {
@@ -675,7 +667,7 @@ afterEach(() => {
 describe("the Tracy surface shell", () => {
   it("keeps the channel column mounted and each channel's open thread across a channel switch", async () => {
     answerList([NOTES, RELEASE, TRIAGE], { "env-me": "bot-notes" });
-    const mounted = await mount();
+    const mounted = await mount(SurfaceHost, "/");
     open(mounted, "bot-release");
     await shownChannel("bot-release");
     useBotOpenThreadStore.getState().setRail("bot-release", {
@@ -711,7 +703,7 @@ describe("the Tracy surface shell", () => {
   it("lets the person switch away, through the column, from a channel whose bot.open fails", async () => {
     answerList([NOTES, RELEASE, TRIAGE], { "env-me": "bot-notes" });
     script.state.openFails.add("bot-triage");
-    const mounted = await mount();
+    const mounted = await mount(SurfaceHost, "/");
     open(mounted, "bot-release");
     await shownChannel("bot-release");
 
@@ -728,7 +720,7 @@ describe("the Tracy surface shell", () => {
 
   it("forgets an inactive visited channel's state once a successful list no longer carries it, and keeps the other inactive channel's", async () => {
     answerList([NOTES, RELEASE, TRIAGE], { "env-me": "bot-notes" });
-    const mounted = await mount();
+    const mounted = await mount(SurfaceHost, "/");
     open(mounted, "bot-release");
     await shownChannel("bot-release");
     fireEvent.click(row("bot-triage"));
@@ -753,7 +745,7 @@ describe("the Tracy surface shell", () => {
 
   it("deletes nothing while the list read is pending or has failed, only once a list that answered lacks the bot", async () => {
     answerList([NOTES, RELEASE, TRIAGE], { "env-me": "bot-notes" });
-    const mounted = await mount();
+    const mounted = await mount(SurfaceHost, "/");
     open(mounted, "bot-release");
     await shownChannel("bot-release");
     fireEvent.click(row("bot-triage"));
@@ -807,7 +799,7 @@ describe("the Tracy surface shell", () => {
     "selects $name when the selected bot goes away",
     async ({ bots, remaining, mainBotIds, selected }) => {
       answerList(bots, mainBotIds);
-      const mounted = await mount();
+      const mounted = await mount(SurfaceHost, "/");
       open(mounted, "bot-release");
       await shownChannel("bot-release");
 
@@ -831,7 +823,7 @@ describe("the Tracy surface shell", () => {
       },
     });
     answerList([RELEASE, TRIAGE, DEPLOY], null);
-    const mounted = await mount();
+    const mounted = await mount(SurfaceHost, "/");
     open(mounted, "bot-release");
     await shownChannel("bot-release");
 
@@ -846,7 +838,7 @@ describe("the Tracy surface shell", () => {
 
   it("shows the empty state, with the column still there, when there are no bots", async () => {
     answerList([], null);
-    const mounted = await mount();
+    const mounted = await mount(SurfaceHost, "/");
 
     act(() => {
       openTracyEntry(mounted.navigate, null);
@@ -862,7 +854,7 @@ describe("the Tracy surface shell", () => {
 
   it("leaves the empty state, opening nothing, for the only bot its subscription reports gone while the list still carries it, until a newer list read settles it", async () => {
     answerList([RELEASE], null);
-    const mounted = await mount();
+    const mounted = await mount(SurfaceHost, "/");
     act(() => {
       openTracyEntry(mounted.navigate, null);
     });
@@ -882,9 +874,6 @@ describe("the Tracy surface shell", () => {
       }),
     );
     await screen.findByTestId("bot-tab-no-channel");
-    for (let flush = 0; flush < 3; flush += 1) {
-      await act(() => Promise.resolve());
-    }
     expect(screen.getByTestId("bot-tab-no-channel")).toBeTruthy();
     expect(screen.queryByTestId("stub-channel")).toBeNull();
     expect(useTracySurfaceStore.getState().botId).toBeNull();
@@ -897,9 +886,6 @@ describe("the Tracy surface shell", () => {
       answerList([RELEASE], null);
     });
     await screen.findByTestId("bot-tab-no-channel");
-    for (let flush = 0; flush < 3; flush += 1) {
-      await act(() => Promise.resolve());
-    }
     expect(screen.queryByTestId("stub-channel")).toBeNull();
     expect(useTracySurfaceStore.getState().botId).toBeNull();
     expect(mocks.opened.length - opensBefore).toBeLessThanOrEqual(1);
@@ -958,7 +944,7 @@ describe("the Tracy surface shell", () => {
       "shows the failure with a Retry when the $failing fails before answering, and Retry selects the default once both answer",
       async ({ fail, answerOnRetry }) => {
         fail();
-        const mounted = await mount();
+        const mounted = await mount(SurfaceHost, "/");
         act(() => {
           openTracyEntry(mounted.navigate, null);
         });
@@ -987,7 +973,7 @@ describe("the Tracy surface shell", () => {
 
     it("shows the connecting state while the lists have not answered", async () => {
       setEnvironmentsRead({ status: "pending", hasData: false });
-      const mounted = await mount();
+      const mounted = await mount(SurfaceHost, "/");
       act(() => {
         openTracyEntry(mounted.navigate, null);
       });
@@ -1028,7 +1014,7 @@ describe("the Tracy surface shell", () => {
 
     it("is not superseded by the shell's default channel while the navigation is held, and ends on the opened channel", async () => {
       answerList([NOTES, RELEASE], { "env-me": "bot-notes" });
-      const mounted = await mount();
+      const mounted = await mount(SurfaceHost, "/");
       const selected: Array<string | null> = [];
       const unsubscribe = useTracySurfaceStore.subscribe((state) => {
         selected.push(state.botId);
@@ -1055,7 +1041,7 @@ describe("the Tracy surface shell", () => {
       // Home is the tab the window is on, as in the running app: a refused
       // activation returns to it.
       useLayoutStore.setState({ overrides: { homeTab: { shown: "shown" } } });
-      const mounted = await mountPaneAware();
+      const mounted = await mount(PaneAwareSurfaceHost, "/home");
       const held = holdNavigation(mounted);
 
       await openHeld(mounted, held, "/home");
@@ -1092,7 +1078,7 @@ describe("the Tracy surface shell", () => {
         costUsd: null,
       };
       answerList([NOTES, RELEASE, TRIAGE], { "env-me": "bot-notes" });
-      const mounted = await mount();
+      const mounted = await mount(SurfaceHost, "/");
       open(mounted, "bot-release");
       await shownChannel("bot-release");
       act(() =>
@@ -1169,7 +1155,7 @@ describe("the Tracy surface shell", () => {
      */
     async function leaveWithWaitingLanding(): Promise<Mounted> {
       answerList([RELEASE, TRIAGE], null);
-      const mounted = await mount();
+      const mounted = await mount(SurfaceHost, "/");
       open(mounted, "bot-release");
       await shownChannel("bot-release");
       act(() =>

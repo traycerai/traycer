@@ -25,7 +25,7 @@ export function BotChannelColumn(props: {
   /** The channel shown; `null` while the surface shows none. */
   readonly activeBotId: string | null;
   readonly hostId: string;
-  /** The tab's Threads view; `null` where the tab has no channel to swap it for. */
+  /** The surface's Threads view; `null` where no Threads entry is offered. */
   readonly threadsView: BotThreadsViewState | null;
 }): ReactNode {
   const { level2, activeBotId, hostId, threadsView } = props;
@@ -106,7 +106,7 @@ export function BotChannelTitle(props: {
   /** The channel shown; `null` while the surface shows none. */
   readonly activeBotId: string | null;
   readonly hostId: string;
-  /** The tab's Threads view; `null` where the tab has no channel to swap it for. */
+  /** The surface's Threads view; `null` where no Threads entry is offered. */
   readonly threadsView: BotThreadsViewState | null;
 }): ReactNode {
   const { level2, title } = props;
