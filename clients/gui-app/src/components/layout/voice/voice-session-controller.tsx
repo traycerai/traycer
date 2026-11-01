@@ -648,6 +648,8 @@ export function VoiceSessionController(): ReactNode {
   const shortSessionsRef = useRef(0);
   const requestRemintWhenClearRef = useRef<() => void>(() => undefined);
   const endRef = useRef<(reason: VoiceEndReason) => void>(() => undefined);
+  /** From a start until its first engine goes live: nothing can end yet. */
+  const firstOpeningRef = useRef(false);
 
   /** What the shell's voice item shows for this window's live session. */
   const reportShellIndicator = useCallback(() => {
@@ -867,10 +869,15 @@ export function VoiceSessionController(): ReactNode {
       if (store.phase === "idle" && attempt === null) return;
       attemptRef.current = null;
       if (attempt !== null) attempt.cancelled = true;
-      finishLocal(reason === "ended" ? null : reason);
+      if (reason === "ended") finishLocal(null);
+      // Whatever stops the first opening before it goes live ends nothing: the
+      // session never began.
+      else if (firstOpeningRef.current) {
+        refuseLocal(reason === "playback" ? "playback" : "unavailable");
+      } else finishLocal(reason);
       if (attempt !== null) void settleAttempt(attempt);
     },
-    [finishLocal, settleAttempt],
+    [finishLocal, refuseLocal, settleAttempt],
   );
   useEffect(() => {
     endRef.current = end;
@@ -878,10 +885,7 @@ export function VoiceSessionController(): ReactNode {
 
   /** Opens an engine on the current microphone; `input` is what it opens knowing. */
   const connectEngine = useCallback(
-    async (
-      input: string,
-      opening: "first" | "replacement",
-    ): Promise<boolean> => {
+    async (input: string): Promise<boolean> => {
       const stream = micStreamRef.current;
       const micTrack = stream?.getAudioTracks()[0] ?? null;
       if (micTrack === null) return false;
@@ -1054,7 +1058,8 @@ export function VoiceSessionController(): ReactNode {
         // The first opening never was a session, so nothing ended. A
         // replacement is the live session ending: credits say so, and anything
         // else is the connection it was running on.
-        if (opening === "first") refuseLocal(attempt.failure ?? "unavailable");
+        if (firstOpeningRef.current)
+          refuseLocal(attempt.failure ?? "unavailable");
         else
           finishLocal(attempt.failure === "credits" ? "credits" : "connection");
         void settleAttempt(attempt);
@@ -1063,6 +1068,7 @@ export function VoiceSessionController(): ReactNode {
       if (!owns() || attempt.sessionId === null) return false;
       attempt.started = true;
       attempt.startedAt = Date.now();
+      firstOpeningRef.current = false;
       useVoiceSessionStore.getState().sessionLive({
         id: attempt.sessionId,
         expiresAt: attempt.expiresAt,
@@ -1154,7 +1160,6 @@ export function VoiceSessionController(): ReactNode {
           botTitle: botTitleRef.current,
           queue: now.queue,
         }),
-        "replacement",
       );
     },
     [clearTimers, connectEngine, ensureSpeech, finishLocal, settleAttempt],
@@ -1194,6 +1199,7 @@ export function VoiceSessionController(): ReactNode {
       readSelection() ?? openMainBot(mainBotRef.current, appHostId, navigate);
     if (destination === null) return;
     store.sessionConnecting();
+    firstOpeningRef.current = true;
     shortSessionsRef.current = 0;
     const { sessionToken: token, engineGeneration: generation } =
       useVoiceSessionStore.getState();
@@ -1251,7 +1257,7 @@ export function VoiceSessionController(): ReactNode {
       if (micStreamRef.current === stream) end("interrupted");
     });
     applyCapture();
-    await connectEngine(briefing, "first");
+    await connectEngine(briefing);
   }, [
     appHostId,
     applyCapture,

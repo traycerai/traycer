@@ -8,6 +8,7 @@ declare global {
       readonly fillTabs: (width: number) => void;
       readonly offerVoice: () => void;
       readonly goLive: () => void;
+      readonly openTabs: (count: number) => void;
     };
   }
 }
@@ -26,6 +27,23 @@ async function open(page: Page, query: string): Promise<void> {
   await page.locator("main").waitFor();
   await page.evaluate(() => window.__voiceTopRowProbe?.offerVoice());
   await talk(page).waitFor();
+}
+
+interface Box {
+  readonly x: number;
+  readonly y: number;
+  readonly width: number;
+  readonly height: number;
+}
+
+async function boxOf(locator: Locator): Promise<Box> {
+  const box = await locator.boundingBox();
+  if (box === null) throw new Error("no box");
+  return box;
+}
+
+function rightOf(box: Box): number {
+  return box.x + box.width;
 }
 
 async function middleOf(locator: Locator): Promise<number> {
@@ -127,3 +145,46 @@ test("the strip takes Talk's place, and captions hang over the content", async (
   );
   expect(beside).toBe(true);
 });
+
+for (const width of [1400, 1100, 900, 800, 768]) {
+  test(`with 12 real tabs at ${String(width)}px every control of a live session is on screen`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width, height: 800 });
+    await open(page, "placement=top");
+    await page.evaluate(() => window.__voiceTopRowProbe?.openTabs(12));
+    await page.getByTestId("header-tab-strip-scroll").waitFor();
+    await page.evaluate(() => window.__voiceTopRowProbe?.goLive());
+    const end = page.getByTestId("voice-strip-end");
+    await end.waitFor();
+    for (const control of [
+      page.getByTestId("voice-strip-state"),
+      page.getByTestId("voice-strip-mute"),
+      page.getByTestId("voice-strip-captions"),
+      end,
+    ]) {
+      await expect
+        .poll(async () => rightOf(await boxOf(control)))
+        .toBeLessThanOrEqual(width);
+      expect((await boxOf(control)).x).toBeGreaterThanOrEqual(0);
+    }
+    // Each control takes the pointer: nothing lies over it.
+    for (const control of [page.getByTestId("voice-strip-mute"), end]) {
+      const box = await boxOf(control);
+      const hit = await control.evaluate(
+        (node, [x, y]) => node.contains(document.elementFromPoint(x, y)),
+        [box.x + box.width / 2, box.y + box.height / 2],
+      );
+      expect(hit).toBe(true);
+    }
+    // The tabs stop before the zone and the header's own controls fit after it.
+    const zone = await boxOf(page.getByTestId("app-header-centre-zone"));
+    const scroller = await boxOf(page.getByTestId("header-tab-strip-scroll"));
+    expect(rightOf(scroller)).toBeLessThanOrEqual(zone.x);
+    const actions = await boxOf(
+      page.getByTestId("app-header").locator("> :last-child"),
+    );
+    expect(rightOf(actions)).toBeLessThanOrEqual(width);
+    expect(actions.x).toBeGreaterThanOrEqual(rightOf(zone));
+  });
+}

@@ -54,63 +54,72 @@ export function VoiceSessionStrip(): ReactNode {
       data-state={state.phase}
       className="relative flex min-w-0 self-stretch text-ui-xs text-muted-foreground"
     >
-      <div className="flex min-w-0 items-center gap-3">
-        <span
-          aria-hidden="true"
-          data-testid="voice-strip-pulse"
-          className={cn(
-            "size-2 shrink-0 rounded-full",
-            listening ? "bg-success" : "bg-muted-foreground/40",
-            listening && state.inputActive && "animate-pulse",
-          )}
-        />
-        <span
-          role="status"
-          data-testid="voice-strip-state"
-          className="shrink-0 font-medium text-foreground"
-        >
-          {stateLabel(state.phase, state.muted, state.pausedForDictation)}
-        </span>
-        <ResumeAfterDictation />
-        {state.focus === null ? null : <FocusLine focus={state.focus} />}
-        <VoiceWaitingControl />
-        <Button
-          type="button"
-          variant="ghost"
-          size="xs"
-          aria-pressed={state.muted}
-          data-testid="voice-strip-mute"
-          disabled={driver === null || state.phase !== "live"}
-          onClick={() => driver?.setMuted(!state.muted)}
-        >
-          {state.muted ? (
-            <MicOff aria-hidden="true" />
-          ) : (
-            <Mic aria-hidden="true" />
-          )}
-          {state.muted ? "Unmute" : "Mute"}
-        </Button>
-        <Button
-          type="button"
-          variant="ghost"
-          size="xs"
-          aria-pressed={state.captions}
-          aria-label="Captions"
-          data-testid="voice-strip-captions"
-          onClick={() => setCaptions(!state.captions)}
-        >
-          <Captions aria-hidden="true" />
-        </Button>
-        <Button
-          type="button"
-          variant="outline"
-          size="xs"
-          data-testid="voice-strip-end"
-          disabled={driver === null || state.phase === "ending"}
-          onClick={() => driver?.end()}
-        >
-          End
-        </Button>
+      {/* The middle column has no floor, so the state and the controls are this
+          grid's minimum width: the top row can take the focus line and Waiting
+          away, and never a control. */}
+      <div className="grid min-w-0 grid-cols-[auto_minmax(0,max-content)_auto] items-center">
+        <div className="flex items-center gap-3">
+          <span
+            aria-hidden="true"
+            data-testid="voice-strip-pulse"
+            className={cn(
+              "size-2 shrink-0 rounded-full",
+              listening ? "bg-success" : "bg-muted-foreground/40",
+              listening && state.inputActive && "animate-pulse",
+            )}
+          />
+          <span
+            role="status"
+            data-testid="voice-strip-state"
+            className="shrink-0 font-medium text-foreground"
+          >
+            {stateLabel(state.phase, state.muted, state.pausedForDictation)}
+          </span>
+          <ResumeAfterDictation />
+        </div>
+        <div className="flex min-w-0 items-center gap-3 overflow-hidden not-empty:pl-3">
+          {state.focus === null ? null : <FocusLine focus={state.focus} />}
+          <VoiceWaitingControl />
+        </div>
+        <div className="flex items-center gap-3 pl-3">
+          <Button
+            type="button"
+            variant="ghost"
+            size="xs"
+            aria-pressed={state.muted}
+            data-testid="voice-strip-mute"
+            disabled={driver === null || state.phase !== "live"}
+            onClick={() => driver?.setMuted(!state.muted)}
+          >
+            {state.muted ? (
+              <MicOff aria-hidden="true" />
+            ) : (
+              <Mic aria-hidden="true" />
+            )}
+            {state.muted ? "Unmute" : "Mute"}
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="xs"
+            aria-pressed={state.captions}
+            aria-label="Captions"
+            data-testid="voice-strip-captions"
+            onClick={() => setCaptions(!state.captions)}
+          >
+            <Captions aria-hidden="true" />
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="xs"
+            data-testid="voice-strip-end"
+            disabled={driver === null || state.phase === "ending"}
+            onClick={() => driver?.end()}
+          >
+            End
+          </Button>
+        </div>
       </div>
       {state.captions ? (
         <ul

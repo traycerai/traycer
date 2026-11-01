@@ -1057,6 +1057,70 @@ describe("pagehide", () => {
   });
 });
 
+describe("a start stopped before its first engine goes live", () => {
+  function refusePlayback(): void {
+    vi.stubGlobal(
+      "Audio",
+      class {
+        autoplay = false;
+        srcObject: unknown = null;
+        play = () => Promise.reject(new Error("blocked"));
+        pause = () => undefined;
+      },
+    );
+  }
+
+  it("is a refusal when the sound cannot play, and the attempt is settled", async () => {
+    refusePlayback();
+    await startTalk();
+    await grantMicrophone();
+    await openMicrophone();
+    await settle();
+
+    await act(async () => {
+      fake.engines[0]?.onRemoteAudio?.(fake.remoteStream);
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    const state = useVoiceSessionStore.getState();
+    expect(state.phase).toBe("idle");
+    expect(state.refusal).toBe("playback");
+    expect(state.endReason).toBeNull();
+    expect(fake.track.stop).toHaveBeenCalled();
+    expect(fake.endVoiceSession).toHaveBeenCalledWith("vs1");
+  });
+
+  it("is a refusal when the track ends under it", async () => {
+    await startTalk();
+    await grantMicrophone();
+    await openMicrophone();
+    await settle();
+
+    act(() => {
+      fake.track.dispatchEvent(new Event("ended"));
+    });
+
+    const state = useVoiceSessionStore.getState();
+    expect(state.phase).toBe("idle");
+    expect(state.refusal).toBe("unavailable");
+    expect(state.endReason).toBeNull();
+  });
+
+  it("still ends a session that went live when its sound stops playing", async () => {
+    await bringLive();
+    refusePlayback();
+
+    await act(async () => {
+      fake.engines[0]?.onRemoteAudio?.(fake.remoteStream);
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    const state = useVoiceSessionStore.getState();
+    expect(state.endReason).toBe("playback");
+    expect(state.refusal).toBeNull();
+  });
+});
+
 describe("the app leaving or the OS taking the sound", () => {
   it.each<SystemSuspendCause>(["background", "interrupted"])(
     "%s ends a live session with that cause and stops the microphone before the end route answers",

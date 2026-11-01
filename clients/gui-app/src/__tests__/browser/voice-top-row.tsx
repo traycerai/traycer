@@ -27,6 +27,11 @@ import {
 } from "@/lib/host";
 import type { TabStripPlacement } from "@/lib/layout/layout-arrangement";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
+import { WindowsBridgeContext } from "@/providers/windows-bridge-context";
+import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { tabItemId, type StripItem } from "@/stores/tabs/layout";
+import { useTabsStore } from "@/stores/tabs/store";
+import type { TabRef } from "@/stores/tabs/types";
 import { useVoiceSessionStore } from "@/stores/voice/voice-session-store";
 import "@/lib/theme-applier";
 import "@/index.css";
@@ -45,6 +50,7 @@ declare global {
       readonly fillTabs: (width: number) => void;
       readonly offerVoice: () => void;
       readonly goLive: () => void;
+      readonly openTabs: (count: number) => void;
     };
   }
 }
@@ -79,6 +85,8 @@ if (MAC) {
   Reflect.set(window, "runnerHost", runnerHost);
   document.documentElement.classList.add("wco");
 }
+
+const WINDOWS_BRIDGE = { bridge: null, hasHydrated: true } as const;
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -140,7 +148,37 @@ window.__voiceTopRowProbe = {
     });
   },
   goLive: () => {
-    useVoiceSessionStore.setState({ phase: "live", captions: true });
+    useVoiceSessionStore.setState({
+      phase: "live",
+      captions: true,
+      focus: {
+        botId: "fixture-bot",
+        hostId: "fixture-host",
+        threadId: null,
+        anchorMessageId: null,
+        anchorThread: null,
+      },
+    });
+  },
+  openTabs: (count) => {
+    const refs: TabRef[] = [];
+    for (let index = 0; index < count; index += 1) {
+      const id = `fixture-tab-${String(index)}`;
+      useEpicCanvasStore
+        .getState()
+        .seedEpic(id, { tabId: id, name: `Task ${String(index)}` }, []);
+      refs.push({ kind: "epic", id });
+    }
+    const items: StripItem[] = refs.map((ref) => ({
+      kind: "tab",
+      id: tabItemId(ref),
+      ref,
+    }));
+    useTabsStore.setState({
+      items,
+      activeItemId: items[0]?.id ?? null,
+      stripOrder: refs,
+    });
   },
 };
 
@@ -181,7 +219,9 @@ function buildRouter() {
           >
             <LazyMotion features={domAnimation}>
               <TooltipProvider>
-                <Fixture />
+                <WindowsBridgeContext.Provider value={WINDOWS_BRIDGE}>
+                  <Fixture />
+                </WindowsBridgeContext.Provider>
               </TooltipProvider>
             </LazyMotion>
           </HostRuntimeProvider>

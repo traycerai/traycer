@@ -337,6 +337,8 @@ export type VoiceRefusal =
   | "microphone"
   /** The person refused the microphone; only the OS settings repair it. */
   | "microphone-denied"
+  /** The voice's sound could not be played, so nothing could be heard. */
+  | "playback"
   | "unavailable";
 
 export type VoiceAvailability =

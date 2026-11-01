@@ -142,6 +142,8 @@ function refusalLine(refusal: VoiceRefusal): string {
       return "Voice did not start: the microphone is not available.";
     case "microphone-denied":
       return "Voice needs the microphone. Allow it in Settings.";
+    case "playback":
+      return "Voice did not start: the sound could not be played.";
     case "unavailable":
       return "Voice did not start. Try again in a moment.";
   }

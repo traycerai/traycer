@@ -1,9 +1,16 @@
 import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  render,
+  renderHook,
+  waitFor,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { voiceQueryKeys } from "@/lib/query-keys";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { VoiceAvailabilityLifecycleBridge } from "@/providers/voice-availability-lifecycle-bridge";
 import { useVoiceAvailabilityQuery } from "../use-voice-availability-query";
 
 const HOST_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
@@ -86,6 +93,51 @@ describe("useVoiceAvailabilityQuery", () => {
 
     expect(result.current.data).toBe(true);
     expect(fake.getVoiceAvailability).toHaveBeenCalledTimes(1);
+  });
+
+  it("reads again when the same person signs out and back in, and not across an unverified spell", async () => {
+    render(<VoiceAvailabilityLifecycleBridge />, { wrapper });
+    const first = renderHook(() => useVoiceAvailabilityQuery(true), {
+      wrapper,
+    });
+    await waitFor(() => expect(first.result.current.data).toBe(true));
+    const signedIn = useAuthStore.getState();
+    first.unmount();
+
+    act(() => useAuthStore.setState({ status: "unverified" }));
+    act(() => useAuthStore.setState({ status: "signed-in" }));
+    const held = renderHook(() => useVoiceAvailabilityQuery(true), {
+      wrapper,
+    });
+    expect(held.result.current.data).toBe(true);
+    expect(fake.getVoiceAvailability).toHaveBeenCalledTimes(1);
+    held.unmount();
+
+    act(() =>
+      useAuthStore.setState({
+        status: "signed-out",
+        signedOutCause: "retired",
+        profile: null,
+        contextMetadata: null,
+      }),
+    );
+    bindFreshAuth(HOST_ID);
+    act(() =>
+      useAuthStore.setState({
+        status: "signed-in",
+        signedOutCause: null,
+        profile: signedIn.profile,
+        contextMetadata: signedIn.contextMetadata,
+      }),
+    );
+    const again = renderHook(() => useVoiceAvailabilityQuery(true), {
+      wrapper,
+    });
+
+    await waitFor(() =>
+      expect(fake.getVoiceAvailability).toHaveBeenCalledTimes(2),
+    );
+    await waitFor(() => expect(again.result.current.data).toBe(true));
   });
 
   it("reads again when a dormant mint invalidates every availability entry", async () => {

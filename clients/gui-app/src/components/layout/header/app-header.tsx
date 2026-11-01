@@ -160,9 +160,9 @@ function tabStripBoxClass(
   return cn(
     "relative z-10 flex items-center",
     // With a centre zone the box is as wide as its tabs, so they give up only
-    // the width the zone needs; the box still shrinks to its floor.
+    // the width the zone needs, and it gives way before the zone's controls do.
     centreZone ? "flex-[0_1_auto]" : "flex-1",
-    showTabStrip ? "min-w-[30%]" : "min-w-0",
+    showTabStrip && !centreZone ? "min-w-[30%]" : "min-w-0",
     draggable && "[-webkit-app-region:drag]",
   );
 }
@@ -185,7 +185,9 @@ function trailingSpacerClass(
  * Talk, or the session strip, centred on the header. The gap before it is what
  * puts the zone's middle on the header's middle, and it closes as the tabs reach
  * the zone, so a long strip of tabs pushes the zone right rather than losing
- * width to it. Measured because that gap depends on how wide the tabs
+ * width to it. The zone starts at its minimum (Talk, or the strip's controls)
+ * and grows to the whole strip with the room left over, so the tabs keep their
+ * width before the focus line and Waiting keep theirs. Measured because that gap depends on how wide the tabs
  * are, which CSS cannot subtract from half the header. Direct children of
  * `<header>`, for the drag-region reason given in `DesktopAppHeader`.
  */
@@ -209,7 +211,7 @@ function HeaderCentreZone(props: {
       const middle = headerBox.left + headerBox.width / 2;
       const zoneStart = middle - zone.getBoundingClientRect().width / 2;
       const tabsEnd = tabStripBox.getBoundingClientRect().right;
-      gap.style.flexBasis = `${Math.max(0, zoneStart - tabsEnd)}px`;
+      gap.style.flexBasis = `${Math.max(0, Math.round(zoneStart - tabsEnd))}px`;
     };
     place();
     const observer = new ResizeObserver(place);
@@ -233,7 +235,7 @@ function HeaderCentreZone(props: {
       <div
         ref={zoneRef}
         data-testid="app-header-centre-zone"
-        className="relative z-10 flex min-w-0 shrink items-center self-stretch px-2"
+        className="relative z-10 flex max-w-max min-w-min flex-1 items-center self-stretch px-2"
         style={props.framelessDesktop ? NO_DRAG_STYLE : undefined}
       >
         <VoiceTopRowControl />
