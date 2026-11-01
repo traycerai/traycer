@@ -1,5 +1,9 @@
 import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
-import type { HomeBotsGroup, HomeBotsModel } from "@/lib/home-bots/bots-model";
+import {
+  EMPTY_HOME_BOTS_MODEL,
+  type HomeBotsGroup,
+} from "@/lib/home-bots/bots-model";
+import type { StandaloneBotsDirectory } from "@/lib/home-bots/standalone-bot-name";
 
 export const PERSONAL_MAIN_BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
 export const TEAM_MAIN_BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAW";
@@ -48,17 +52,33 @@ const PERSONAL_GROUP = mainBotGroup(
   "user",
 );
 
+const TEAM_GROUP = mainBotGroup(
+  TEAM_MAIN_BOT_ID,
+  "env-team",
+  "traycerai",
+  "organization",
+);
+
 /** A person with their personal Tracy and the team traycerai's. */
-export const TWO_MAIN_BOTS_MODEL: HomeBotsModel = {
-  groups: [
-    PERSONAL_GROUP,
-    mainBotGroup(TEAM_MAIN_BOT_ID, "env-team", "traycerai", "organization"),
-  ],
-  botCount: 2,
+export const TWO_MAIN_BOTS_DIRECTORY: StandaloneBotsDirectory = {
+  model: { groups: [PERSONAL_GROUP, TEAM_GROUP], botCount: 2 },
+  setups: [],
 };
 
-/** A person with only their personal Tracy. */
-export const ONE_MAIN_BOT_MODEL: HomeBotsModel = {
-  groups: [PERSONAL_GROUP],
-  botCount: 1,
+/** A person whose only main bot is their team's. */
+export const ONE_TEAM_MAIN_BOT_DIRECTORY: StandaloneBotsDirectory = {
+  model: { groups: [TEAM_GROUP], botCount: 1 },
+  setups: [],
+};
+
+/** A person whose only main bot is their personal Tracy. */
+export const ONE_PERSONAL_MAIN_BOT_DIRECTORY: StandaloneBotsDirectory = {
+  model: { groups: [PERSONAL_GROUP], botCount: 1 },
+  setups: [],
+};
+
+/** No directory: what the store starts from. */
+export const EMPTY_DIRECTORY_STATE = {
+  directory: { model: EMPTY_HOME_BOTS_MODEL, setups: [] },
+  settled: false,
 };

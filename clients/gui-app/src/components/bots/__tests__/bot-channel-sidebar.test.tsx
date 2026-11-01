@@ -28,11 +28,8 @@ import {
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import {
-  buildHomeBotsModel,
-  EMPTY_HOME_BOTS_MODEL,
-} from "@/lib/home-bots/bots-model";
-import { standaloneBotName } from "@/lib/home-bots/standalone-bot-name";
+import { EMPTY_DIRECTORY_STATE } from "@/lib/home-bots/__tests__/standalone-bots-fixtures";
+import { buildHomeBotsModel } from "@/lib/home-bots/bots-model";
 import { useStandaloneBotsStore } from "@/stores/bots/standalone-bots-store";
 import {
   afterEach,
@@ -669,19 +666,21 @@ describe("<BotChannelSidebar /> main bot", () => {
       "env-me": "bot-notes",
       "env-team": "bot-release",
     };
-    const model = buildHomeBotsModel({
-      environments: mocks.state.environments,
-      bots: mocks.state.bots,
-      mainBotIds: mocks.state.mainBotIds,
+    useStandaloneBotsStore.setState({
+      directory: {
+        model: buildHomeBotsModel({
+          environments: mocks.state.environments,
+          bots: mocks.state.bots,
+          mainBotIds: mocks.state.mainBotIds,
+        }),
+        setups: [],
+      },
+      settled: true,
     });
-    expect(standaloneBotName(model, "bot-release", "release-bot")).toBe(
-      "release-bot · Acme",
-    );
-    useStandaloneBotsStore.setState({ model });
     mount("bot-release", null);
 
     expect(row("bot-release").textContent).toBe("release-bot");
-    useStandaloneBotsStore.setState({ model: EMPTY_HOME_BOTS_MODEL });
+    useStandaloneBotsStore.setState(EMPTY_DIRECTORY_STATE);
   });
 
   it("stars the environment's main bot after its name and no other channel", () => {

@@ -52,7 +52,10 @@ import {
 } from "@/lib/notifications/notification-chime";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { standaloneBotName } from "@/lib/home-bots/standalone-bot-name";
-import { useStandaloneBotsStore } from "@/stores/bots/standalone-bots-store";
+import {
+  standaloneBotsSettled,
+  useStandaloneBotsStore,
+} from "@/stores/bots/standalone-bots-store";
 
 export interface NotificationDisplayTarget {
   readonly showNotification: NotificationShow;
@@ -477,7 +480,10 @@ export async function displayHostChannelEmission(
 ): Promise<void> {
   const focused = readFocusedHostNotificationPresence();
   const rows: MergedNotificationRow[] = [];
-  const occurrences: NotificationFeedOccurrence[] = [];
+  const kept: {
+    readonly key: string;
+    readonly entry: HostNotificationCloudEntryV26;
+  }[] = [];
   for (const entry of entries) {
     if (!isLiveAnnouncedNotification(entry, null)) continue;
     const key = feedOccurrenceKey(originHostId, entry.id, entry);
@@ -493,19 +499,39 @@ export async function displayHostChannelEmission(
     ) {
       continue;
     }
-    const row = rowFromHostEntry(entry);
-    rows.push(row);
-    occurrences.push(
-      feedOccurrenceDisplay({
-        row,
-        key,
-        originHostId,
-        feedSource: "host",
-        entry,
-      }),
-    );
+    rows.push(rowFromHostEntry(entry));
+    kept.push({ key, entry });
   }
-  await displayFeedOccurrences(rows, occurrences, target);
+  await displayOnceBotNamesSettle(
+    rows,
+    () =>
+      rows.map((row, index) =>
+        feedOccurrenceDisplay({
+          row,
+          key: kept[index].key,
+          originHostId,
+          feedSource: "host",
+          entry: kept[index].entry,
+        }),
+      ),
+    target,
+  );
+}
+
+/**
+ * The first accepted occurrence's title is the one the native banner keeps, so
+ * a bot's row is not named until the directory has answered; any other row
+ * goes straight on.
+ */
+async function displayOnceBotNamesSettle(
+  rows: ReadonlyArray<MergedNotificationRow>,
+  occurrences: () => ReadonlyArray<NotificationFeedOccurrence>,
+  target: NotificationDisplayTarget,
+): Promise<void> {
+  if (rows.some((row) => notificationRowBotId(row) !== null)) {
+    await standaloneBotsSettled();
+  }
+  await displayFeedOccurrences(rows, occurrences(), target);
 }
 
 /** Cloud copies use the origin's semantic key, never their replica row id. */
@@ -541,9 +567,9 @@ export async function displayCloudSnapshotArrivals(
     }
     const row = rowFromCloudFeedRow(entry);
     deliveries.push(
-      displayFeedOccurrences(
+      displayOnceBotNamesSettle(
         [row],
-        [
+        () => [
           feedOccurrenceDisplay({
             row,
             key,
@@ -751,7 +777,7 @@ function buildNotificationToastContent(
   if (rows.length === 1) {
     return {
       title: standaloneBotName(
-        useStandaloneBotsStore.getState().model,
+        useStandaloneBotsStore.getState().directory,
         notificationRowBotId(first),
         first.title,
       ),

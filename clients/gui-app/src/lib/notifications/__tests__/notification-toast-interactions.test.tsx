@@ -15,11 +15,11 @@ import {
 import type { MergedNotificationRow } from "@/stores/notifications/merged-notifications";
 import type { NotificationShowOutcome } from "@traycer-clients/shared/platform/runner-host";
 import {
-  ONE_MAIN_BOT_MODEL,
+  EMPTY_DIRECTORY_STATE,
+  ONE_TEAM_MAIN_BOT_DIRECTORY,
   TEAM_MAIN_BOT_ID,
-  TWO_MAIN_BOTS_MODEL,
+  TWO_MAIN_BOTS_DIRECTORY,
 } from "@/lib/home-bots/__tests__/standalone-bots-fixtures";
-import { EMPTY_HOME_BOTS_MODEL } from "@/lib/home-bots/bots-model";
 import { useStandaloneBotsStore } from "@/stores/bots/standalone-bots-store";
 
 vi.mock("next-themes", () => ({
@@ -74,7 +74,7 @@ describe("notification toast interactions", () => {
   afterEach(() => {
     toast.dismiss();
     cleanup();
-    useStandaloneBotsStore.setState({ model: EMPTY_HOME_BOTS_MODEL });
+    useStandaloneBotsStore.setState(EMPTY_DIRECTORY_STATE);
     vi.useRealTimers();
     vi.restoreAllMocks();
   });
@@ -110,7 +110,10 @@ describe("notification toast interactions", () => {
   });
 
   it("names a team's bot with its environment on the toast and the native notification when two main bots are visible", async () => {
-    useStandaloneBotsStore.setState({ model: TWO_MAIN_BOTS_MODEL });
+    useStandaloneBotsStore.setState({
+      directory: TWO_MAIN_BOTS_DIRECTORY,
+      settled: true,
+    });
     const showNotification = vi.fn<
       NotificationDisplayTarget["showNotification"]
     >(() => Promise.resolve<NotificationShowOutcome>("presented"));
@@ -129,7 +132,10 @@ describe("notification toast interactions", () => {
   });
 
   it("keeps a bot's plain name on the toast when one main bot is visible", async () => {
-    useStandaloneBotsStore.setState({ model: ONE_MAIN_BOT_MODEL });
+    useStandaloneBotsStore.setState({
+      directory: ONE_TEAM_MAIN_BOT_DIRECTORY,
+      settled: true,
+    });
     render(<Toaster />);
 
     act(() => {

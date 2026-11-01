@@ -11,11 +11,11 @@ import type { EnvironmentDescriptor } from "@traycer/protocol/host/environment/c
 import type { MergedNotificationRow } from "@/stores/notifications/merged-notifications";
 import { avatarShape } from "@/components/bots/__tests__/avatar-shape";
 import {
+  EMPTY_DIRECTORY_STATE,
   PERSONAL_MAIN_BOT_ID,
   TEAM_MAIN_BOT_ID,
   tracyRecord,
 } from "@/lib/home-bots/__tests__/standalone-bots-fixtures";
-import { EMPTY_HOME_BOTS_MODEL } from "@/lib/home-bots/bots-model";
 import { useStandaloneBotsStore } from "@/stores/bots/standalone-bots-store";
 import { creatureMark, drawCreatureMark } from "@/lib/bots/creature-mark";
 
@@ -63,12 +63,19 @@ vi.mock("@/hooks/host/use-host-supports-method", () => ({
 vi.mock("@/hooks/bots/use-environment-list-query", () => ({
   useEnvironmentListQuery: () => ({
     data: { environments: mocks.environments },
+    isFetched: true,
   }),
+}));
+vi.mock("@/hooks/bots/use-reread-environment-list-on-focus", () => ({
+  useRereadEnvironmentListOnFocus: () => undefined,
+}));
+vi.mock("@/hooks/bots/use-team-setups", () => ({
+  useTeamSetups: () => ({ settled: true, setups: [] }),
 }));
 vi.mock("@/hooks/bots/use-bot-list-query", () => ({
   useBotListQuery: (_client: unknown, enabled: boolean) => {
     mocks.listEnabled.push(enabled);
-    return { data: enabled ? mocks.bots : undefined };
+    return { data: enabled ? mocks.bots : undefined, isFetched: enabled };
   },
 }));
 
@@ -144,7 +151,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   cleanup();
-  useStandaloneBotsStore.setState({ model: EMPTY_HOME_BOTS_MODEL });
+  useStandaloneBotsStore.setState(EMPTY_DIRECTORY_STATE);
 });
 
 function environment(
@@ -213,14 +220,14 @@ describe("<NotificationRow /> title and the environment", () => {
     expect(titleOf(conversationRow(PERSONAL_MAIN_BOT_ID))).toBe("Tracy");
   });
 
-  it("keeps the plain name when the person sees one main bot", () => {
-    mocks.environments = [PERSONAL];
+  it("keeps a team's bot to its name when it is the only main bot", () => {
+    mocks.environments = [TEAM];
     mocks.bots = {
-      bots: [tracyRecord(PERSONAL_MAIN_BOT_ID, "env-me")],
-      mainBotIds: { "env-me": PERSONAL_MAIN_BOT_ID },
+      bots: [tracyRecord(TEAM_MAIN_BOT_ID, "env-team")],
+      mainBotIds: { "env-team": TEAM_MAIN_BOT_ID },
     };
 
-    expect(titleOf(conversationRow(PERSONAL_MAIN_BOT_ID))).toBe("Tracy");
+    expect(titleOf(conversationRow(TEAM_MAIN_BOT_ID))).toBe("Tracy");
   });
 
   it("leaves a row about a task's chat alone", () => {

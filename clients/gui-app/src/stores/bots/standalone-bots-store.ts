@@ -1,18 +1,35 @@
 import { create } from "zustand";
-import {
-  EMPTY_HOME_BOTS_MODEL,
-  type HomeBotsModel,
-} from "@/lib/home-bots/bots-model";
+import { EMPTY_HOME_BOTS_MODEL } from "@/lib/home-bots/bots-model";
+import type { StandaloneBotsDirectory } from "@/lib/home-bots/standalone-bot-name";
 
 interface StandaloneBotsState {
-  readonly model: HomeBotsModel;
+  readonly directory: StandaloneBotsDirectory;
+  /**
+   * Whether `directory` is an answer: every read it comes from has answered
+   * or failed. Unsettled, an empty directory says nothing about the person's
+   * bots.
+   */
+  readonly settled: boolean;
 }
 
 /**
- * The bots model every standalone name reads, so a toast, which renders
- * outside React, agrees with a row or a chip. `StandaloneBotsBridge` is its
- * only writer.
+ * The directory every standalone name reads, so a toast, which renders outside
+ * React, agrees with a row or a chip. `StandaloneBotsBridge` is its only
+ * writer.
  */
 export const useStandaloneBotsStore = create<StandaloneBotsState>(() => ({
-  model: EMPTY_HOME_BOTS_MODEL,
+  directory: { model: EMPTY_HOME_BOTS_MODEL, setups: [] },
+  settled: false,
 }));
+
+/** Resolves once the directory is an answer, at once if it already is. */
+export function standaloneBotsSettled(): Promise<void> {
+  if (useStandaloneBotsStore.getState().settled) return Promise.resolve();
+  return new Promise((resolve) => {
+    const unsubscribe = useStandaloneBotsStore.subscribe((state) => {
+      if (!state.settled) return;
+      unsubscribe();
+      resolve();
+    });
+  });
+}
