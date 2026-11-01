@@ -849,9 +849,14 @@ function useBotTabRail(
  * channel - on a post, or with a thread beside it - in Messages; its back
  * button returns to the view it was opened from, the channel where it was.
  * The channel lands on a post once: leaving Messages drops the landing.
+ * Threads takes the place of a session as well: leaving it shows the
+ * channel, since a session open when Threads was chosen is not where either
+ * way back says it goes.
  */
 function useBotTabSession(args: {
   readonly threads: ReadonlyArray<BotThreadSummary> | null;
+  /** The shell's Threads shows in place of the channel's views. */
+  readonly threadsShown: boolean;
   readonly onViewChange: (view: BotTabView) => void;
   readonly setOpenThread: (open: BotOpenThread | null) => void;
 }): {
@@ -865,12 +870,17 @@ function useBotTabSession(args: {
   readonly landChannel: (messageId: string | null) => void;
   readonly showThread: (threadId: string, messageId: string | null) => void;
 } {
-  const { threads, onViewChange, setOpenThread } = args;
+  const { threads, threadsShown, onViewChange, setOpenThread } = args;
   const [shown, setShown] = useState<{
     readonly session: BotOpenSession | null;
     readonly channelLanding: BotChannelLanding | null;
     readonly visits: number;
   }>({ session: null, channelLanding: null, visits: 0 });
+  const [threadsSeen, setThreadsSeen] = useState(threadsShown);
+  if (threadsSeen !== threadsShown) {
+    setThreadsSeen(threadsShown);
+    if (threadsShown) setShown({ ...shown, session: null });
+  }
   const openSession = useCallback<BotSessionOpen>((target) => {
     setShown((previous) => {
       const visit = previous.visits + 1;
@@ -1190,21 +1200,6 @@ function useChannelSetupHistory(input: {
   );
 }
 
-/**
- * Threads takes the place of a session as well: leaving it shows the
- * channel, since a session open when Threads was chosen is not where either
- * way back says it goes.
- */
-function useCloseSessionForThreads(
-  threadsShown: boolean,
-  closeSession: () => void,
-): void {
-  const [threadsSeen, setThreadsSeen] = useState(threadsShown);
-  if (threadsSeen === threadsShown) return;
-  setThreadsSeen(threadsShown);
-  if (threadsShown) closeSession();
-}
-
 function BotTabContent(props: {
   readonly botId: string;
   readonly hostId: string;
@@ -1321,7 +1316,7 @@ function BotTabContent(props: {
     showChannel,
     landChannel,
     showThread,
-  } = useBotTabSession({ threads, onViewChange, setOpenThread });
+  } = useBotTabSession({ threads, threadsShown, onViewChange, setOpenThread });
   // Threads is the shell's, shown in place of the channel: a move too.
   const place = useMemo(
     (): BotTabPlace => ({
@@ -1347,7 +1342,6 @@ function BotTabContent(props: {
     openSession,
     onViewChange,
   });
-  useCloseSessionForThreads(threadsShown, closeSession);
   const openActivity = useCallback(() => changeView("activity"), [changeView]);
   const activitySummary = useBotActivitySummary({
     botId,
