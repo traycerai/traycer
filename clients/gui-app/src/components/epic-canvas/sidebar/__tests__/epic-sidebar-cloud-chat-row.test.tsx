@@ -59,6 +59,7 @@ import {
   recordEndedSandboxHost,
   useEndedSandboxHostsStore,
 } from "@/stores/sandboxes/ended-sandbox-hosts-store";
+import { chatRecordKey } from "@/stores/epics/open-epic/chat-record-head";
 import { TaskHostsViewContext } from "@/hooks/sandboxes/use-chat-sandbox-row-line";
 
 /**
@@ -1073,6 +1074,43 @@ describe("EpicSidebarCloudChatRow for a collaborator's chat", () => {
         name: "Walkthrough — e2e-sbx-p1 isn't available. — not reachable from this host",
       }),
     ).toBeTruthy();
+  });
+
+  it("promises the copy for a row whose list entry has no head but whose record table holds one", async () => {
+    entries = [collaboratorRow({ displayName: "Ada Lovelace", email: "" })];
+    session.store.setState({
+      chatRecordHeads: {
+        [chatRecordKey(OWNER_USER_ID, collaboratorChat.identity.chatId)]: {
+          headSha256: "a".repeat(64),
+          publishedAt: 123,
+          throughRecordSeq: 1,
+        },
+      },
+    });
+    recordEndedSandboxHost("host-b", {
+      name: "e2e-sbx-p1",
+      at: new Date(2026, 9, 28, 1, 27).getTime(),
+      cause: "resting",
+      actor: null,
+      idleMinutes: null,
+    });
+    expect(collaboratorChat.headSha256).toBeNull();
+    renderCollaboratorRow(collaboratorChat, { kind: "none" });
+
+    await userEvent.hover(
+      screen.getByTestId(
+        `epic-sidebar-cloud-lock-${collaboratorChat.identity.chatId}`,
+      ),
+    );
+
+    expect(
+      (
+        await screen.findAllByText(
+          "e2e-sbx-p1 was destroyed on Oct 28 at 01:27 after resting. Its files are gone; this chat stays readable. Opens read-only from the last published copy.",
+          { exact: true },
+        )
+      ).length,
+    ).toBeGreaterThan(0);
   });
 
   it("keeps the offline wording, and the reach line after it, for the viewer's own chat", async () => {

@@ -33,7 +33,10 @@ import {
   useChatServing,
   useChatServingHostId,
 } from "@/lib/chats/chat-serving-witness";
-import { CHAT_NOT_VISIBLE_CODE } from "@/lib/chats/chat-not-visible-code";
+import {
+  CHAT_INDEX_UNAVAILABLE_CODE,
+  CHAT_NOT_VISIBLE_CODE,
+} from "@/lib/chats/chat-session-close-codes";
 import { useExistingChatSessionFatalClose } from "@/lib/registries/chat-session-registry";
 import {
   cloudChatListAuthorizesRecordSweep,
@@ -574,15 +577,6 @@ export interface ActiveTabBodyProps {
   readonly selected: boolean;
   readonly globallyActive: boolean;
 }
-
-/**
- * The pool's `chat.subscribe` refusal for a chat at rest its index cannot open
- * (not yet indexed, or parked: `reason` is `unindexed` or `parked`). The
- * pool serves the whole-download pair (`epic.resolveCloudChatHead`,
- * `epic.readCloudChatPart`) for exactly this case, so the tab reads the
- * published copy through the pool instead.
- */
-const CHAT_INDEX_UNAVAILABLE_CODE = "CHAT_INDEX_UNAVAILABLE";
 
 /**
  * The revoked banner's clone handler. Module-level so it is reference-stable,

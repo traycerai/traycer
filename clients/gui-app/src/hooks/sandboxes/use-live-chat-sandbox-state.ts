@@ -6,8 +6,12 @@ import type { AuthService } from "@/lib/auth/auth-service";
 import { useHostBinding } from "@/lib/host";
 import { useChatServing } from "@/lib/chats/chat-serving-witness";
 import { useChatStreamSyncState } from "@/hooks/chats/use-chat-stream-sync-state";
-import { CHAT_NOT_VISIBLE_CODE } from "@/lib/chats/chat-not-visible-code";
+import {
+  CHAT_INDEX_UNAVAILABLE_CODE,
+  CHAT_NOT_VISIBLE_CODE,
+} from "@/lib/chats/chat-session-close-codes";
 import { useExistingChatSessionFatalClose } from "@/lib/registries/chat-session-registry";
+import { useEnvironmentArmsLackChat } from "@/hooks/environment/use-environment-arms";
 import { useChatSandboxState } from "@/hooks/sandboxes/use-chat-sandbox-state";
 import { useSandboxEndRead } from "@/hooks/sandboxes/use-sandbox-end-read";
 import { useSandboxWakeWait } from "@/hooks/sandboxes/use-sandbox-wake-wait";
@@ -154,9 +158,10 @@ export function useLiveChatSandboxState(
 }
 
 /**
- * Whether the chat's own open settled on nothing to show: what serves it said
- * it is not readable, with no transcript loaded. The tile stays live for this
- * only when no owner is known to read a copy under.
+ * Whether the chat's own open settled on nothing to show, with no transcript
+ * loaded: what serves it said it is not readable, or the pool has no index
+ * and no arm names an owner to read a copy under. The tile stays live for
+ * either only when no owner is known.
  */
 function useChatOpenRefused(
   chat: {
@@ -171,7 +176,16 @@ function useChatOpenRefused(
     chat.chatId,
     chat.hostId,
   );
-  return !hasContent && fatalClose?.code === CHAT_NOT_VISIBLE_CODE;
+  const indexUnavailable = fatalClose?.code === CHAT_INDEX_UNAVAILABLE_CODE;
+  const noOwner = useEnvironmentArmsLackChat(
+    indexUnavailable ? chat.epicId : "",
+    chat.chatId,
+    chat.hostId,
+  );
+  if (hasContent) return false;
+  return (
+    fatalClose?.code === CHAT_NOT_VISIBLE_CODE || (indexUnavailable && noOwner)
+  );
 }
 
 function servingKeyOf(serving: ChatServing | null): string | null {

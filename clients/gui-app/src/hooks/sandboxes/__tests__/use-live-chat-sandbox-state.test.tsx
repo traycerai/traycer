@@ -90,7 +90,7 @@ vi.mock("@/hooks/sandboxes/use-sandbox-control-unavailable-reason", () => ({
 
 import { useLiveChatSandboxState } from "@/hooks/sandboxes/use-live-chat-sandbox-state";
 import { useSandboxList } from "@/hooks/sandboxes/use-sandbox-list-query";
-import { CHAT_NOT_VISIBLE_CODE } from "@/lib/chats/chat-not-visible-code";
+import { CHAT_NOT_VISIBLE_CODE } from "@/lib/chats/chat-session-close-codes";
 import { resolveChatSandbox } from "@/lib/sandboxes/chat-sandbox-state";
 import { sandboxQueryKeys } from "@/lib/query-keys";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";

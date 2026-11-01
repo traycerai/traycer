@@ -2,6 +2,7 @@ import { use, useCallback, type MouseEvent, type ReactNode } from "react";
 import { Lock } from "lucide-react";
 import { m } from "motion/react";
 import { v4 as uuidv4 } from "uuid";
+import type { ChatRecordHeadStamp } from "@traycer/protocol/host/epic/chat-records";
 import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
 import { cn } from "@/lib/utils";
 import { EPIC_NODE_ICONS } from "@/lib/artifacts/node-display";
@@ -155,16 +156,17 @@ export function EpicSidebarCloudChatRow(
   // online and out of reach, or offline and not.
   const ownerNotReachable = useOwnerHostNotReachable(chat.ownerHostId);
   // A sandbox owner's own line replaces the offline wording on the lock.
+  const published = cloudRowIsPublished(chat, recordHead);
   const sandboxLine = useChatSandboxRowLine(
     chat.ownerHostId,
     !ownerReachable,
-    chat.headSha256 !== null,
+    published,
   );
   const lockCopy = useCloudRowLockCopy(
     chat,
     epicId,
     ownerReachability.hostLabel,
-    sandboxLine,
+    { line: sandboxLine, published },
   );
   // Openable-live = the owner answers. Host ids are unique (2026-08-07
   // ruling), so a reachable owner IS the machine that holds this chat, and
@@ -483,6 +485,14 @@ interface LockedRowCopy {
   readonly coversReach: boolean;
 }
 
+/** A head the record table holds is proof before the polled list says so. */
+function cloudRowIsPublished(
+  chat: CloudChatSummary,
+  recordHead: ChatRecordHeadStamp | null,
+): boolean {
+  return chat.headSha256 !== null || recordHead !== null;
+}
+
 /**
  * {@link lockedRowCopy} for one row. A collaborator's chat names its owner on
  * the lock instead of a host: the same owner facts and the same name the tile
@@ -492,7 +502,7 @@ function useCloudRowLockCopy(
   chat: CloudChatSummary,
   epicId: string,
   ownerLabel: string,
-  sandboxLine: string | null,
+  sandbox: { readonly line: string | null; readonly published: boolean },
 ): LockedRowCopy {
   const ownership = useChatOwnerCopyFacts(
     chat.identity.ownerUserId,
@@ -509,8 +519,8 @@ function useCloudRowLockCopy(
       : { name: collaboratorName };
   return lockedRowCopy(
     ownerLabel,
-    sandboxLine,
-    chat.headSha256 !== null,
+    sandbox.line,
+    sandbox.published,
     collaborator,
   );
 }
