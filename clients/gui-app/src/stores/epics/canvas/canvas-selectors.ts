@@ -148,8 +148,9 @@ export interface TileRefLivenessCheck {
   readonly recordListAuthorizesChatAbsence: boolean;
   /**
    * Whether `epic.listTuiAgents` has answered, so a same-host terminal agent's
-   * absence is evidence. Its record lives in the host's registry and reaches
-   * this device on that list alone, so before the answer a missing row says
+   * absence is evidence. A doc entry or a push delta can add a row, and a delta
+   * can retract one it names, but only the answered list can show that a row
+   * which never arrived is gone, so before the answer a missing row says
    * nothing about the agent.
    */
   readonly recordListAuthorizesTuiAgentAbsence: boolean;

@@ -161,10 +161,11 @@ async function readNonterminalUpdateAttempt(
 // `traycer login` had already dropped its own auto-bootstrap call for the
 // same reason; this removes the last one.
 //
-// Nothing here writes: the reads below touch pid.json, bootstrap.log, the
-// lifecycle records (`host/lifecycle-snapshot.ts`), the update attempt record
-// with the install record it is compared against, the last-attempt record and
-// the update lock's holder, and nothing else, so
+// The command body writes nothing; the entry's slot refresh runs before it, as
+// it does for every command (`index.ts`). The reads below touch pid.json,
+// bootstrap.log, the lifecycle records (`host/lifecycle-snapshot.ts`), the
+// update attempt record with the install record it is compared against, the
+// last-attempt record and the update lock's holder, and nothing else, so
 // `host status` is safe to poll, safe in CI, and safe on a machine whose host
 // is deliberately uninstalled.
 //
