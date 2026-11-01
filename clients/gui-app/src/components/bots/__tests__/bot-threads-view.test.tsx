@@ -37,6 +37,7 @@ import type {
 } from "@traycer/protocol/host/bot/schemas";
 import { conversationRequestMessageId } from "@traycer/protocol/persistence/epic/messages";
 import type { ChatSessionStoreHandle } from "@/stores/chats/chat-session-store";
+import type { MobileLevel2Form } from "@/lib/layout/mobile-layout-form";
 import { chatSessionWithPosts } from "./bot-channel-rows-test-support";
 
 /** What the host answers for one bot. */
@@ -197,6 +198,9 @@ const FOLLOWING: BotThreadFollow = {
   reason: "participated",
 };
 
+/** The installed app's form the next mount draws in; `null` where the container decides. */
+let mountLevel2: MobileLevel2Form | null = null;
+
 function mount(): void {
   const queryClient = new QueryClient({
     defaultOptions: {
@@ -244,7 +248,7 @@ function mount(): void {
   render(
     <QueryClientProvider client={queryClient}>
       <BotThreadsView
-        level2={null}
+        level2={mountLevel2}
         hostId="host-1"
         channelTitle="Tracy"
         onBack={mocks.back}
@@ -269,6 +273,7 @@ function item(threadId: string): HTMLElement {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mountLevel2 = null;
   mocks.bots = [bot(TRACY, "Tracy"), bot(TEAM, "Team Tracy")];
   mocks.botList = "listed";
   mocks.refetchBots.mockResolvedValue(undefined);
@@ -396,6 +401,26 @@ describe("<BotThreadsView /> header", () => {
     await user.click(back);
 
     expect(mocks.back).toHaveBeenCalledTimes(1);
+  });
+
+  it("draws no back control beside a level 2 column, whose channel row is the way back", () => {
+    mountLevel2 = { column: 256 };
+    mocks.hosted[TRACY] = script([], {});
+    mocks.hosted[TEAM] = script([], {});
+    mount();
+
+    expect(screen.queryByTestId("bot-threads-back")).toBeNull();
+  });
+
+  it("draws the back control at every width of the menu form", () => {
+    mountLevel2 = "menu";
+    mocks.hosted[TRACY] = script([], {});
+    mocks.hosted[TEAM] = script([], {});
+    mount();
+
+    expect(screen.getByTestId("bot-threads-back").className).not.toContain(
+      "@3xl",
+    );
   });
 });
 

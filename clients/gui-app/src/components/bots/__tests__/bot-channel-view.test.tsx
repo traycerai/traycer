@@ -5,6 +5,7 @@
  * the channel PASSES them is what is asserted: the thread line it draws under
  * each post, the chat the thread panel reads, and where each box writes.
  */
+import type { MobileTileCount } from "@/lib/layout/mobile-layout-form";
 import type { ReactNode } from "react";
 import { act, cleanup, render, screen, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -477,6 +478,9 @@ const QUESTION_1: BotOpenThread = {
 /** Where the next mount lands the channel; `null` for where it opens. */
 let mountLanding: BotChannelLanding | null = null;
 
+/** How many tiles the next mount is told the installed app shows; `null` off it. */
+let mountTiles: MobileTileCount | null = null;
+
 function mount(options: MountOptions): {
   readonly onOpenThread: Mock<(open: BotOpenThread | null) => void>;
   readonly onOpenActivity: Mock<() => void>;
@@ -493,7 +497,7 @@ function mount(options: MountOptions): {
       <TooltipProvider>
         <ChatExpansionTestProviders tileInstanceId="tile-1">
           <BotChannelView
-            tiles={null}
+            tiles={mountTiles}
             botId={BOT_ID}
             hostId={HOST_ID}
             boundHostId={mocks.state.binding.hostId}
@@ -551,6 +555,7 @@ function lastThreadListCall(): ThreadListCall {
 beforeEach(() => {
   vi.clearAllMocks();
   mountLanding = null;
+  mountTiles = null;
   mocks.threadListCalls.length = 0;
   mocks.state.paneVisible = true;
   mocks.state.threadListSupported = true;
@@ -1715,6 +1720,57 @@ describe("<BotChannelView tiles={null} /> channel read mark beside an open threa
     mount({ openThreadPostId: "post-a" });
     expect(screen.getByTestId("bot-thread-panel")).toBeTruthy();
     expect(mocks.markRead).not.toHaveBeenCalled();
+  });
+});
+
+describe("<BotChannelView /> open thread by the tiles the installed app shows", () => {
+  beforeEach(() => {
+    mocks.state.threads = [
+      thread("thread-a", "post-a", {
+        conversationId: "conversation-channel",
+        sessionChatId: "session-a",
+        replyCount: 2,
+        lastReplyAt: 7_000,
+        costUsd: 0.42,
+      }),
+    ];
+    mocks.postIds = ["post-a"];
+  });
+
+  function classesOf(testId: string): ReadonlyArray<string> {
+    return screen.getByTestId(testId).className.split(/\s+/);
+  }
+
+  it("draws the messages and the thread side by side at two tiles, with no handle to drag", () => {
+    mountTiles = 2;
+    mount({ openThreadPostId: "post-a" });
+
+    expect(screen.getByTestId("bot-thread-pane")).toBeTruthy();
+    expect(classesOf("bot-channel")).not.toContain("hidden");
+    expect(classesOf("bot-thread-pane-resize-handle")).toContain("hidden");
+    expect(classesOf("bot-thread-pane-resize-handle")).not.toContain(
+      "@3xl:block",
+    );
+  });
+
+  it("lets the thread replace the messages at one tile, which stay mounted underneath", () => {
+    mountTiles = 1;
+    mount({ openThreadPostId: "post-a" });
+
+    expect(screen.getByTestId("bot-thread-pane")).toBeTruthy();
+    expect(classesOf("bot-channel")).toContain("hidden");
+    for (const testId of ["bot-channel", "bot-thread-pane"]) {
+      expect(classesOf(testId).filter((c) => c.startsWith("@3xl"))).toEqual([]);
+    }
+  });
+
+  it("keeps the container-decided classes off the installed app", () => {
+    mountTiles = null;
+    mount({ openThreadPostId: "post-a" });
+
+    expect(classesOf("bot-channel")).toContain("@3xl:flex");
+    expect(classesOf("bot-thread-pane")).toContain("@3xl:flex-none");
+    expect(classesOf("bot-thread-pane-resize-handle")).toContain("@3xl:block");
   });
 });
 

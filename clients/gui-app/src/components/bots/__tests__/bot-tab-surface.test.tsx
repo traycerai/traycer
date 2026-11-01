@@ -19,6 +19,7 @@ import {
   installShellForm,
   SHELL_WIDTH_COLUMN_256,
   SHELL_WIDTH_MENU,
+  SHELL_WIDTH_TWO_TILES,
   type ShellFormHarness,
 } from "../../../../__tests__/mobile-level2-form-harness";
 import { StrictMode, type ReactNode } from "react";
@@ -429,9 +430,11 @@ vi.mock("@/components/bots/bot-channel-view", () => ({
       userId: string,
     ) => { displayName: string | null; avatarUrl: string | null } | null;
     setupHistory: ReactNode;
+    tiles: number | null;
   }) => (
     <div
       data-testid="stub-channel"
+      data-tiles={String(props.tiles)}
       data-host-id={props.hostId}
       data-bound-host-id={props.boundHostId ?? "none"}
       data-bot-title={props.botTitle}
@@ -1904,6 +1907,33 @@ describe("<BotTabSurface /> bot.open", () => {
         expect(screen.queryByTestId("bot-channel-picker")).toBeNull();
       },
     );
+
+    it("draws the bots column at 256 and the channel as one tile while no thread is open at a two-tile width", () => {
+      shell.set({ width: SHELL_WIDTH_TWO_TILES, portrait: false });
+      render(surface());
+
+      expect(screen.getByTestId("bot-channel-sidebar-pane").style.width).toBe(
+        "256px",
+      );
+      expect(screen.queryByTestId("bot-channel-picker-trigger")).toBeNull();
+      expect(screen.getByTestId("stub-channel").dataset.tiles).toBe("1");
+    });
+
+    it("folds the bots column to the picker and tells the channel two tiles show once a thread is open at a two-tile width", () => {
+      shell.set({ width: SHELL_WIDTH_TWO_TILES, portrait: false });
+      useBotOpenThreadStore.getState().setRail(BOT_ID, {
+        kind: "thread",
+        anchorMessageId: "post-7",
+        announcement: false,
+        anchorKind: null,
+        sent: null,
+      });
+      render(surface());
+
+      expect(screen.queryByTestId("bot-channel-sidebar-pane")).toBeNull();
+      expect(screen.getByTestId("bot-channel-picker-trigger")).toBeTruthy();
+      expect(screen.getByTestId("stub-channel").dataset.tiles).toBe("2");
+    });
 
     it("keeps the resizable pane and the plain title off the installed app", () => {
       setPhoneLayoutOnly(false);
