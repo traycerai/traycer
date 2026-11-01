@@ -120,6 +120,7 @@ export async function installHostDowngradeInSegment(
     targetVersion: input.version,
     installedVersion: installed.version,
     installedStoreFormats: installed.storeFormats,
+    installedProvenance: installed.provenance,
     consultRegistry: true,
     acceptStoreFormatLoss: input.acceptStoreFormatLoss,
     site: "host update",
