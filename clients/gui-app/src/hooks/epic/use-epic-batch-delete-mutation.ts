@@ -60,6 +60,7 @@ import {
   clearDeletedEpicRunSettings,
   epicIdsLostInWindow,
 } from "@/lib/epics/deleted-epic-scope";
+import { TUI_AGENTS_REMAINDER_MINOR } from "@/stores/epics/open-epic/doc-record-arms";
 import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
 import { pickNeighborAfterRemovingTabs } from "@/stores/tabs/neighbor";
 import { tabResolveIntent } from "@/stores/tabs/registry";
@@ -845,6 +846,12 @@ interface DiscardCreatedEpicContext {
  * being set up, so the person may have started an agent in it, and any row
  * keeps it, as does a read that fails. Answers whether it was deleted.
  *
+ * Below `epic.listTuiAgents@1.1` a host leaves doc-only agents off its list, so
+ * an empty answer proves nothing there. The floor rides the read, because only
+ * the connection carrying it can say which host process answers, and the
+ * refused attach says nothing about this host: it may have gone to another. A
+ * host below the floor, or without either list, refuses the read: a failed read.
+ *
  * The two lists are that host's own view, which is the whole of the Task only
  * while it has not reached the cloud: call this only for such a Task
  * (`isAttachPromotionPending`).
@@ -893,6 +900,10 @@ export function useEpicDiscardCreatedIfEmpty(): (
       epicId,
       hasDocReplica: false,
       knownRevision: null,
+    }),
+    requiredHostMethodVersion: () => ({
+      method: "epic.listTuiAgents",
+      version: { major: 1, minor: TUI_AGENTS_REMAINDER_MINOR },
     }),
     options: null,
   }).mutateAsync;

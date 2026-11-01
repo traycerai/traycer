@@ -12,13 +12,20 @@ import { useLandingComposerActions } from "@/components/home/hooks/use-landing-c
 import type { LandingPlacementTarget } from "@/lib/composer/landing-placement";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import {
+  HostMethodVersionUnsatisfiedError,
   HostRequestAbortedError,
   HostRpcError,
   HostTransportFailureError,
+  negotiatedVersionMeetsRequirement,
   RetryableTransportError,
+  type RequiredHostMethodVersion,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import { returnedSandboxMessageLine } from "@/lib/sandboxes/sandbox-strings";
-import { sandboxHostEntry } from "@/lib/sandboxes/__tests__/sandbox-host-directory-fixture";
+import {
+  installHostDirectoryRows,
+  resetHostDirectoryRows,
+  sandboxHostEntry,
+} from "@/lib/sandboxes/__tests__/sandbox-host-directory-fixture";
 // Type-only, so it is erased before `vi.hoisted` runs and cannot re-enter the
 // module this file mocks.
 import type { ImageReclaimOutcome } from "@/lib/composer/landing-image-store";
@@ -97,22 +104,68 @@ const landingMocks = vi.hoisted(() => ({
     },
     hostClient: {
       createRequesterForHostId: (hostId: string) => ({
-        request: (method: string, payload: unknown): Promise<unknown> => {
-          if (method === "epic.batchDelete") {
-            return landingMocks.deleteRequest(hostId, payload);
+        /**
+         * A read that carries a version floor is answered by what this
+         * host's connection negotiated, as the transport does before it
+         * writes a frame: below the floor it is refused and nothing is sent.
+         */
+        requestWithSignalRequiringHostMethodVersion: (
+          method: string,
+          payload: unknown,
+          _signal: AbortSignal | undefined,
+          requirement: RequiredHostMethodVersion,
+        ): Promise<unknown> => {
+          landingMocks.floors.push({ hostId, method, requirement });
+          const negotiated = (landingMocks.connections.get(hostId) ??
+            landingMocks.modernConnection)[requirement.method];
+          if (!negotiatedVersionMeetsRequirement(negotiated, requirement)) {
+            return Promise.reject(
+              new HostMethodVersionUnsatisfiedError({
+                requirement,
+                negotiated,
+                requestId: "request-floor",
+                method,
+                hostId,
+              }),
+            );
           }
-          if (
-            method === "epic.listChatRecords" ||
-            method === "epic.listTuiAgents"
-          ) {
-            return landingMocks.readRequest(hostId, method, payload);
-          }
-          return Promise.reject(new Error(`unexpected ${method}`));
+          return landingMocks.routed(hostId, method, payload);
         },
+        request: (method: string, payload: unknown): Promise<unknown> =>
+          landingMocks.routed(hostId, method, payload),
         getActiveHostId: () => hostId,
         getRequestContextUserId: () => "user-landing",
       }),
     },
+  },
+  /** What a host that serves both record lists to the end negotiates. */
+  modernConnection: {
+    "epic.listChatRecords": { major: 1, minor: 3 },
+    "epic.listTuiAgents": { major: 1, minor: 3 },
+  } as Readonly<Record<string, { major: number; minor: number }>>,
+  /** What a host's connection negotiated, where a test says it differs. */
+  connections: new Map<
+    string,
+    Readonly<Record<string, { major: number; minor: number }>>
+  >(),
+  /** Every call that carried a version floor, by the host it reached. */
+  floors: [] as Array<{
+    hostId: string;
+    method: string;
+    requirement: RequiredHostMethodVersion;
+  }>,
+  routed: (
+    hostId: string,
+    method: string,
+    payload: unknown,
+  ): Promise<unknown> => {
+    if (method === "epic.batchDelete") {
+      return landingMocks.deleteRequest(hostId, payload);
+    }
+    if (method === "epic.listChatRecords" || method === "epic.listTuiAgents") {
+      return landingMocks.readRequest(hostId, method, payload);
+    }
+    return Promise.reject(new Error(`unexpected ${method}`));
   },
   request: vi.fn<(method: string, payload: unknown) => Promise<unknown>>(),
   /**
@@ -288,6 +341,8 @@ registerExtraImageRootSource({ hashes: () => [...composerLiveImageRoots] });
 
 const SUBMITTED_PROMPT = "Plan the host chat bootstrap";
 const TEST_HOST_ID = "host-landing";
+const PLACEMENT_HOST_ID = "host-placement";
+
 const ACME_OWNER = { teamId: "t1", slug: "acme" } as const;
 
 const HOST_TOO_OLD = "This host can't create team tasks yet. Update the host.";
@@ -415,6 +470,9 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
         [],
       );
     toastLog.length = 0;
+    resetNegotiatedManifests();
+    landingMocks.connections.clear();
+    landingMocks.floors.length = 0;
     useStoppedSandboxSendReceiptStore.setState({ receipts: {}, strips: {} });
     landingMocks.request.mockReset();
     landingMocks.createTerminalAgent.mockReset();
@@ -492,6 +550,7 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
     cleanup();
     useAuthStore.getState().setSignedOut();
     resetNegotiatedManifests();
+    resetHostDirectoryRows();
     resetCloudDraftImageRecoveryForTests();
     resetLandingImageBudgetReservationsForTesting();
     composerLiveImageRoots.clear();
@@ -1088,7 +1147,6 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
   });
 
   it("sends the rollback's delete to the placement host by its id, never to the app-wide host", async () => {
-    const PLACEMENT_HOST_ID = "host-placement";
     useStagedSandboxStore.getState().stage(SURFACE, TEAM_TARGET);
     const placementRequest =
       vi.fn<(method: string, payload: unknown) => Promise<unknown>>();
@@ -1164,6 +1222,18 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
         ]),
       ),
     );
+    // Only the terminal-agent list carries a version floor, and it reached the
+    // placement host's connection; the chat list carries none.
+    expect(landingMocks.floors).toEqual([
+      {
+        hostId: PLACEMENT_HOST_ID,
+        method: "epic.listTuiAgents",
+        requirement: {
+          method: "epic.listTuiAgents",
+          version: { major: 1, minor: 1 },
+        },
+      },
+    ]);
     // The app-wide host (TEST_HOST_ID) is a different machine: it was asked
     // for nothing, a delete or a read included.
     expect(
@@ -1697,14 +1767,189 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
     },
   );
 
+  /**
+   * The rollback of a refused Send has ended: the gate told the person the
+   * task stays, or, with no gate, the delete went out. Waiting on either
+   * lets a delete be asserted before the toasts it would shadow.
+   */
+  async function rollbackEnded(queryClient: QueryClient): Promise<void> {
+    await waitFor(() => {
+      expect(
+        toastLog.length >= 2 ||
+          landingMocks.deleteRequest.mock.calls.length > 0,
+      ).toBe(true);
+    });
+    await refusalSettled(queryClient);
+  }
+
+  /** What a refused Send on a host that cannot prove its lists complete leaves. */
+  async function expectTaskKeptUnread(
+    queryClient: QueryClient,
+    epicId: string,
+  ): Promise<void> {
+    await rollbackEnded(queryClient);
+    expect(landingMocks.deleteRequest).not.toHaveBeenCalled();
+    // The read below the floor never reached the host: only the other list did.
+    expect(
+      landingMocks.readRequest.mock.calls.map(([, method]) => method),
+    ).not.toContain("epic.listTuiAgents");
+    expect(toastLog.map(({ message }) => message)).toEqual([
+      SETTING_UP_LINE,
+      "This Send may have left an empty task. Delete it from your tasks if you don't need it.",
+    ]);
+    expect(toastLog.map(({ via }) => via)).toEqual(["error", "error"]);
+    expect(wasEpicCreatedThisSession(epicId)).toBe(true);
+    expect(Object.values(useEpicCanvasStore.getState().tabsById)).toHaveLength(
+      1,
+    );
+    expectMessageBackUnsent();
+    queryClient.clear();
+  }
+
+  it.each([
+    [
+      "negotiated epic.listTuiAgents@1.0, which withholds agents only the doc holds",
+      (): void => undefined,
+      {
+        "epic.listChatRecords": { major: 1, minor: 3 },
+        "epic.listTuiAgents": { major: 1, minor: 0 },
+      },
+    ],
+    [
+      "does not advertise epic.listTuiAgents",
+      (): void => undefined,
+      { "epic.listChatRecords": { major: 1, minor: 3 } },
+    ],
+    [
+      "negotiated epic.listTuiAgents@1.0 though the cached manifest still says @1.3 (the host was replaced mid-Send)",
+      (): void =>
+        recordNegotiatedHostManifest(TEST_HOST_ID, {
+          "epic.listChatRecords": { major: 1, minor: 3 },
+          "epic.listTuiAgents": { major: 1, minor: 3 },
+        }),
+      {
+        "epic.listChatRecords": { major: 1, minor: 3 },
+        "epic.listTuiAgents": { major: 1, minor: 0 },
+      },
+    ],
+  ] as const)(
+    "a Send refused while the task is still being set up keeps its task, and says so, when the placement connection %s",
+    async (_label, seedCachedManifest, negotiated) => {
+      seedCachedManifest();
+      landingMocks.connections.set(TEST_HOST_ID, negotiated);
+      const { epicId, refuseAttach, queryClient } =
+        await startSendWithHeldAttach();
+      await refuseAttach(attachBusy());
+
+      await expectTaskKeptUnread(queryClient, epicId);
+    },
+  );
+
+  it("judges the rollback by the placement host's connection, not by the host the attachment went to", async () => {
+    // The placement is a team's sandbox, so the attachment goes to the
+    // person's own app-wide host instead; only the placement holds the task.
+    installHostDirectoryRows([
+      sandboxHostEntry(PLACEMENT_HOST_ID, { id: "team-9", name: "Acme" }),
+    ]);
+    landingMocks.connections.set(PLACEMENT_HOST_ID, {
+      "epic.listChatRecords": { major: 1, minor: 3 },
+      "epic.listTuiAgents": { major: 1, minor: 0 },
+    });
+    landingMocks.connections.set(TEST_HOST_ID, landingMocks.modernConnection);
+    useStagedSandboxStore.getState().stage(SURFACE, TEAM_TARGET);
+    const attach = deferred<unknown>();
+    const placementRequest =
+      vi.fn<(method: string, payload: unknown) => Promise<unknown>>();
+    placementRequest.mockImplementation((method: string) =>
+      Promise.resolve(method === "epic.create" ? { roomInfo: null } : {}),
+    );
+    landingMocks.request.mockImplementation((method: string) =>
+      method === "epic.attachEnvironment"
+        ? attach.promise
+        : Promise.reject(new Error(`unexpected ${method} on the attach host`)),
+    );
+    const placementClient = {
+      request: placementRequest,
+      requestWithSignalRequiringHostMethodVersion: (
+        method: string,
+        payload: unknown,
+      ): Promise<unknown> => placementRequest(method, payload),
+      requestWithOptions: (
+        method: string,
+        payload: unknown,
+      ): Promise<unknown> => placementRequest(method, payload),
+      getActiveHostId: () => PLACEMENT_HOST_ID,
+      getRequestContextUserId: landingMocks.getRequestContextUserId,
+    };
+    if (!isStubHostClient(placementClient)) {
+      throw new Error("The placement stub is not a host client.");
+    }
+    const queryClient = newQueryClient();
+    const { result } = renderHook(
+      () =>
+        useLandingComposerActions({
+          resolvedHostId: PLACEMENT_HOST_ID,
+          client: placementClient,
+          hostLabel: "Placement",
+          isPinned: true,
+          namedHostDead: false,
+        }),
+      { wrapper: queryClientWrapper(queryClient) },
+    );
+    act(() => {
+      result.current.startTaskOnStagedSandbox({
+        draftId: null,
+        owner: null,
+        sandboxTeamId: "team-9",
+        text: SUBMITTED_PROMPT,
+        hand,
+      });
+    });
+    // The attachment is sent on the app-wide host, the create on the placement.
+    await waitFor(() => {
+      expect(landingMocks.request.mock.calls.map(([method]) => method)).toEqual(
+        ["epic.attachEnvironment"],
+      );
+    });
+    const createCall = placementRequest.mock.calls.find(
+      ([method]) => method === "epic.create",
+    );
+    const epicId = epicIdFromCreatePayload(createCall?.[1]);
+    if (epicId === null) throw new Error("epic.create was never sent");
+
+    await act(async () => {
+      attach.reject(attachBusy());
+      await attach.promise.catch(() => undefined);
+    });
+
+    await rollbackEnded(queryClient);
+    // The floor reached the placement's connection, not the app-wide host's
+    // modern one, and nothing was deleted anywhere.
+    expect(landingMocks.deleteRequest).not.toHaveBeenCalled();
+    expect(landingMocks.floors.map(({ hostId }) => hostId)).toEqual([
+      PLACEMENT_HOST_ID,
+    ]);
+    expect(
+      landingMocks.readRequest.mock.calls.filter(
+        ([hostId]) => hostId === TEST_HOST_ID,
+      ),
+    ).toEqual([]);
+    expect(toastLog.map(({ message }) => message)).toEqual([
+      SETTING_UP_LINE,
+      "This Send may have left an empty task. Delete it from your tasks if you don't need it.",
+    ]);
+    expect(wasEpicCreatedThisSession(epicId)).toBe(true);
+    queryClient.clear();
+  });
+
   it.each(READ_METHODS)(
-    "a refused Send keeps the task, tells the person, and gives the message back when %s cannot be read",
+    "a refused Send keeps the task, tells the person, and gives the message back when the host rejects %s as unsupported although its connection met the floor",
     async (failing) => {
       landingMocks.readRequest.mockImplementation((_hostId, method) =>
         method === failing
           ? Promise.reject(
               new HostRpcError({
-                code: "RPC_ERROR",
+                code: "E_HOST_UNSUPPORTED",
                 message: "unreadable",
                 requestId: "request-read",
                 method,
