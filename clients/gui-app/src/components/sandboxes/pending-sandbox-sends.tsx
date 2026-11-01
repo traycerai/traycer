@@ -258,9 +258,7 @@ function giveBackStopped(
   rowState: HostSandboxState | null,
 ): ReturnedPendingSandboxSend {
   if (attention === undefined) {
-    return rowState === "suspended" &&
-      send.request.kind === "chat" &&
-      stage !== undefined
+    return rowState === "suspended" && stage !== undefined
       ? returnPendingSandboxSendToSandbox(
           send.id,
           returnedSandboxPick(send, stage, rowState),
