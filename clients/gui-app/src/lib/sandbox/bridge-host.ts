@@ -155,6 +155,8 @@ export interface SandboxServedPages {
   readonly onNavigate: (path: string) => void;
   /** The frame moved to something the artifact does not have as a page. */
   readonly onPageMissing: () => void;
+  /** A page the artifact has, whose bytes the host would not hand over. */
+  readonly onPageUnreachable: () => void;
 }
 
 export interface SandboxBridgeHostOptions {
@@ -770,13 +772,38 @@ export class SandboxBridgeHost {
     this.timers.add(timer);
   }
 
+  /**
+   * A stand-in page saying what it stands in for, proven by the armed nonce
+   * like every other claim a served document makes. The page handshake also
+   * reports a missing page on its own, from the timeout, which is why that
+   * answer keeps a method of its own.
+   */
+  private reportStandInPage(method: string, params: unknown): void {
+    if (!isRecord(params) || params.nonce !== this.options.document.nonce) {
+      return;
+    }
+    if (method === "traycer/notifications/page-unreachable") {
+      this.reportPageAnswer((pages) => pages.onPageUnreachable());
+      return;
+    }
+    this.reportPageMissing();
+  }
+
   private reportPageMissing(): void {
+    this.reportPageAnswer((pages) => pages.onPageMissing());
+  }
+
+  /**
+   * Clearing the two timers is what keeps a stand-in an ANSWER rather than a
+   * hang: the page proved itself and said what it is, so neither the page
+   * handshake nor the load watchdog may go on to call it a crash.
+   */
+  private reportPageAnswer(tell: (pages: SandboxServedPages) => void): void {
     const pages = this.servedPages();
     if (pages === null || this.phase === "disposed") return;
-    // A missing page is an answer, not a hang: it must not turn into a crash.
     this.clearTimer(this.pageHandshakeTimer);
     this.clearTimer(this.loadWatchdog);
-    pages.onPageMissing();
+    tell(pages);
   }
 
   get status(): SandboxStatus {
@@ -1047,9 +1074,10 @@ export class SandboxBridgeHost {
       case "traycer/notifications/document-ready":
         this.onDocumentReady(params);
         return;
+      // Both stand-in reports carry the same proof; see `reportStandInPage`.
       case "traycer/notifications/page-missing":
-        if (isRecord(params) && params.nonce === this.options.document.nonce)
-          this.reportPageMissing();
+      case "traycer/notifications/page-unreachable":
+        this.reportStandInPage(method, params);
         return;
       case "traycer/notifications/early-error":
         if (this.phase === "delivered") this.earlyError = true;
