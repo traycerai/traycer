@@ -146,6 +146,11 @@ test("a click on a hovered pending-title row's close closes the tab and does not
     zeta.getByTestId("header-tab-title-generating-fixture-zeta"),
   ).toBeVisible();
   await expect(zeta).toHaveAttribute("data-active", "false");
+  // Not zeta's neighbour, the seeded active tab: closing an active zeta lands
+  // there anyway, so it could not tell a close that activated its row first.
+  await page.evaluate('window.__sideTabStripProbe.activate("fixture-alpha")');
+  const alpha = row(page, "alpha");
+  await expect(alpha).toHaveAttribute("data-active", "true");
 
   await zeta.hover();
   await expect(closeWrapper(page, "zeta")).toHaveCSS("opacity", "1");
@@ -168,4 +173,8 @@ test("a click on a hovered pending-title row's close closes the tab and does not
   expect(
     await page.evaluate("window.__sideTabStripProbe.items().flat()"),
   ).not.toContain("epic:fixture-zeta");
+  await expect(
+    alpha,
+    "the tab active before the click must still be the active one",
+  ).toHaveAttribute("data-active", "true");
 });
