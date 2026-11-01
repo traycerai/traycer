@@ -16,6 +16,7 @@ import type {
   HostNotificationsMarkReadRequest,
 } from "@traycer/protocol/host/notifications/contracts";
 import type { HostDirectoryService } from "@/lib/host/host-directory-service";
+import type { ReactNode } from "react";
 
 /**
  * Visit-to-clear in cloud mode.
@@ -165,7 +166,11 @@ import {
   CLOUD_ENTITY_READ_RETRY_BASE_MS,
   resetCloudEntityReadDriver,
 } from "@/lib/notifications/cloud-entity-read-driver";
-import { usePublishPresentedBotConversation } from "@/hooks/notifications/use-publish-presented-bot-conversation";
+import { PaneSurfaceActivityContext } from "@/components/epic-tabs/pane-visibility-context";
+import {
+  useClaimBotSurfaceFocus,
+  usePublishPresentedBotConversation,
+} from "@/hooks/notifications/use-publish-presented-bot-conversation";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { makeOpenableNodeRef } from "@/stores/epics/canvas/types";
 
@@ -773,18 +778,12 @@ describe("cloud-mode view consumption", () => {
   });
 });
 
-/**
- * Retrying is safe by construction (set-once, min-merged markers), so these
- * pin the PACING rather than any suppression: one request in flight, growing
- * gaps between failures, and a clean stop once the server accepts.
- *
- * `Math.random` is stubbed so the jitter window is deterministic; the clock is
- * faked so a five-minute cap does not mean a five-minute test.
- */
 describe("cloud-mode consumption of a presented bot conversation", () => {
   const BOT_ID = EPIC_ID;
   const CHANNEL_ID = CHAT_ID;
   const OTHER_CHANNEL_ID = SIBLING_CHAT_ID;
+  const BEHIND_EPIC_ID = "epic-behind";
+  const BEHIND_CHAT_ID = "chat-behind";
 
   function PresentedConversation(props: {
     readonly conversationId: string | null;
@@ -793,7 +792,32 @@ describe("cloud-mode consumption of a presented bot conversation", () => {
     return null;
   }
 
+  /** The Tracy surface over a retained task chat: the surface stays, its views change. */
+  function TracySurface(props: {
+    readonly conversationId: string | null;
+  }): ReactNode {
+    useClaimBotSurfaceFocus();
+    return <PresentedConversation conversationId={props.conversationId} />;
+  }
+
+  async function visitTaskChatBehindTracy(): Promise<void> {
+    focusChat(BEHIND_EPIC_ID, BEHIND_CHAT_ID, mockLocalHostEntry.hostId);
+    await waitFor(() => {
+      expect(calls.hostMarkRead.length).toBeGreaterThan(0);
+    });
+  }
+
   /** A bot post: a cloud row from the bot's bound host, not the serving one. */
+  function taskChatRow(entryId: string) {
+    const row = cloudRow({
+      entryId,
+      originHostId: mockLocalHostEntry.hostId,
+      severity: "done",
+      chatId: BEHIND_CHAT_ID,
+    });
+    return { ...row, entry: { ...row.entry, epicId: BEHIND_EPIC_ID } };
+  }
+
   function botPost(entryId: string, chatId: string) {
     return cloudRow({
       entryId,
@@ -845,6 +869,79 @@ describe("cloud-mode consumption of a presented bot conversation", () => {
     });
   });
 
+  it("consumes nothing of the task chat behind Tracy when the channel withdraws while Tracy stays focused", async () => {
+    renderProvider();
+    await visitTaskChatBehindTracy();
+    const { rerender } = render(<TracySurface conversationId={CHANNEL_ID} />);
+    await waitFor(() => {
+      expect(calls.hostMarkRead.at(-1)).toEqual({
+        kind: "entity",
+        entity: { epicId: BOT_ID, chatId: CHANNEL_ID },
+      });
+    });
+    calls.hostMarkRead.length = 0;
+
+    // Choosing Tracy's Activity unmounts the channel view; the surface stays.
+    rerender(<TracySurface conversationId={null} />);
+    applyCloudSnapshot(
+      [taskChatRow("entry-behind"), botPost("entry-channel", CHANNEL_ID)],
+      1,
+    );
+
+    // Coming back drains the marks in order, so anything the withdrawal
+    // consumed would be here ahead of the channel's.
+    rerender(<TracySurface conversationId={CHANNEL_ID} />);
+    await waitFor(() => {
+      expect(calls.cloudMarkRead).toEqual(["entry-channel"]);
+    });
+    expect(calls.hostMarkRead).toEqual([
+      { kind: "entity", entity: { epicId: BOT_ID, chatId: CHANNEL_ID } },
+    ]);
+    expect(readAtFor("entry-behind")).toBeNull();
+  });
+
+  it("consumes nothing of the task chat behind Tracy while Tracy has no conversation, across a window refocus", async () => {
+    renderProvider();
+    await visitTaskChatBehindTracy();
+    const { rerender } = render(<TracySurface conversationId={null} />);
+    calls.hostMarkRead.length = 0;
+
+    applyCloudSnapshot(
+      [taskChatRow("entry-behind"), botPost("entry-channel", CHANNEL_ID)],
+      1,
+    );
+    setWindowFocused(false);
+    setWindowFocused(true);
+
+    rerender(<TracySurface conversationId={CHANNEL_ID} />);
+    await waitFor(() => {
+      expect(calls.cloudMarkRead).toEqual(["entry-channel"]);
+    });
+    expect(calls.hostMarkRead).toEqual([
+      { kind: "entity", entity: { epicId: BOT_ID, chatId: CHANNEL_ID } },
+    ]);
+    expect(readAtFor("entry-behind")).toBeNull();
+  });
+
+  it("hands focus back to the task chat when Tracy's pane loses it", async () => {
+    renderProvider();
+    await visitTaskChatBehindTracy();
+    const tracy = (focused: boolean): ReactNode => (
+      <PaneSurfaceActivityContext.Provider value={{ visible: true, focused }}>
+        <TracySurface conversationId={null} />
+      </PaneSurfaceActivityContext.Provider>
+    );
+    const { rerender } = render(tracy(true));
+    applyCloudSnapshot([taskChatRow("entry-behind")], 1);
+    expect(calls.cloudMarkRead).toEqual([]);
+
+    rerender(tracy(false));
+
+    await waitFor(() => {
+      expect(calls.cloudMarkRead).toEqual(["entry-behind"]);
+    });
+  });
+
   it("does not pass through the canvas's chat when the channel switches", async () => {
     renderProvider();
     focusChat("epic-behind", "chat-behind", mockLocalHostEntry.hostId);
@@ -875,6 +972,14 @@ describe("cloud-mode consumption of a presented bot conversation", () => {
   });
 });
 
+/**
+ * Retrying is safe by construction (set-once, min-merged markers), so these
+ * pin the PACING rather than any suppression: one request in flight, growing
+ * gaps between failures, and a clean stop once the server accepts.
+ *
+ * `Math.random` is stubbed so the jitter window is deterministic; the clock is
+ * faked so a five-minute cap does not mean a five-minute test.
+ */
 describe("cloud-mode view-consumption teardown", () => {
   /**
    * The retry timer re-arms on every failure, so a persistently failing server

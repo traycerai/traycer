@@ -1,6 +1,23 @@
 import { useEffect } from "react";
 import { usePaneFocused } from "@/components/epic-tabs/pane-visibility-context";
-import { setPresentedBotConversation } from "@/lib/notifications/notification-presence";
+import {
+  setBotSurfaceFocused,
+  setPresentedBotConversation,
+} from "@/lib/notifications/notification-presence";
+
+/**
+ * Holds the bot surface as this window's focused surface while its pane is
+ * focused, whichever view it shows, so a view with no conversation never reads
+ * as the canvas tile retained behind it.
+ */
+export function useClaimBotSurfaceFocus(): void {
+  const paneFocused = usePaneFocused();
+  useEffect(() => {
+    if (!paneFocused) return;
+    setBotSurfaceFocused(true);
+    return () => setBotSurfaceFocused(false);
+  }, [paneFocused]);
+}
 
 /**
  * Publishes the conversation a bot surface presents as this window's focused

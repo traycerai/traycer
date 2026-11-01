@@ -26,20 +26,30 @@ export interface FocusedHostNotificationPresence {
   readonly entity: HostNotificationsPresenceEntity;
 }
 
+let botSurfaceFocused = false;
 let presentedBotConversation: HostNotificationsPresenceEntity | null = null;
-const presentedBotConversationListeners = new Set<() => void>();
+const botPresenceListeners = new Set<() => void>();
+
+/**
+ * Whether this window's focused pane is the bot surface. The canvas keeps its
+ * active tab while the bot surface is in front, so until the surface names a
+ * conversation it stands for no entity rather than the canvas's unseen tile.
+ */
+export function setBotSurfaceFocused(focused: boolean): void {
+  botSurfaceFocused = focused;
+  for (const listener of botPresenceListeners) listener();
+}
 
 /**
  * Names the bot conversation this window's focused pane is showing, or `null`
- * when it shows none. A bot surface has no canvas tile to read, and the canvas
- * keeps its active tab while the bot surface is in front, so a named
+ * when it shows none. A bot surface has no canvas tile to read, so a named
  * conversation wins over the canvas.
  */
 export function setPresentedBotConversation(
   entity: HostNotificationsPresenceEntity | null,
 ): void {
   presentedBotConversation = entity;
-  for (const listener of presentedBotConversationListeners) listener();
+  for (const listener of botPresenceListeners) listener();
 }
 
 export function readHostNotificationPresenceFrame(
@@ -58,7 +68,7 @@ export function readHostNotificationPresenceFrame(
 export function subscribeHostNotificationPresence(
   sendPresence: () => void,
 ): () => void {
-  presentedBotConversationListeners.add(sendPresence);
+  botPresenceListeners.add(sendPresence);
   const unsubscribeCanvas = useEpicCanvasStore.subscribe((state, previous) => {
     if (
       state.activeTabId !== previous.activeTabId ||
@@ -69,7 +79,7 @@ export function subscribeHostNotificationPresence(
     }
   });
   const unsubscribeSources = (): void => {
-    presentedBotConversationListeners.delete(sendPresence);
+    botPresenceListeners.delete(sendPresence);
     unsubscribeCanvas();
   };
   if (typeof window === "undefined" || typeof document === "undefined") {
@@ -88,9 +98,9 @@ export function subscribeHostNotificationPresence(
 
 /**
  * The entity this window is actively looking at, or `null` when the window is
- * blurred or neither a bot conversation nor an epic/chat tile is active. Read
- * live (presented bot conversation + canvas store + document focus) so
- * display-time gates see the current state rather than the last presence frame
+ * blurred, the bot surface is focused without a conversation, or neither a bot
+ * conversation nor an epic/chat tile is active. Read live (bot surface + canvas
+ * store + document focus) so display-time gates see the current state rather than the last presence frame
  * that happened to be sent.
  */
 export function readFocusedHostNotificationPresenceEntity(): HostNotificationsPresenceEntity | null {
@@ -124,6 +134,7 @@ function readActiveHostNotificationPresence(): FocusedHostNotificationPresence |
   if (presentedBotConversation !== null) {
     return { originHostId: null, entity: presentedBotConversation };
   }
+  if (botSurfaceFocused) return null;
   const state = useEpicCanvasStore.getState();
   const activeTab =
     state.activeTabId === null ? null : state.tabsById[state.activeTabId];
