@@ -124,6 +124,39 @@ describe("deriveHostHealth — absence of evidence is not death", () => {
 
     expect(health.state).toBe("reported-reachable");
   });
+
+  /**
+   * ONE detail serves every way the lease step declines — that is the
+   * contract, and it needs every path in one case to be expressed at all.
+   *
+   * It is what makes the detail unable to say whether anything has dialled the
+   * host. `connecting` is `deriveLease`'s fall-through, derived for every
+   * registered host once the authority attaches (`transport-evidence.ts`: "with
+   * nothing reporting, every lease reads `connecting`"), AND what a host reads
+   * while a re-dial is in flight. A path-dependent sentence — either
+   * direction — fails here instead of passing on the path its author had in
+   * mind. The `state` is left to the cases above: this string is produced by no
+   * other arm.
+   */
+  it.each([
+    [
+      "a connecting lease",
+      { lease: lease("connecting"), authorityAttached: true },
+    ],
+    ["no lease", { lease: null, authorityAttached: true }],
+    [
+      "an unattached authority",
+      { lease: lease("connecting"), authorityAttached: false },
+    ],
+    ["neither", { lease: null, authorityAttached: false }],
+  ] as const)(
+    "says only what the account reported, declining through %s",
+    (_label, options) => {
+      expect(deriveHostHealth({ ...BASE, ...options }).detail).toBe(
+        "Your account last heard from this host.",
+      );
+    },
+  );
 });
 
 describe("deriveHostHealth — the lease outranks the cloud DTO", () => {
