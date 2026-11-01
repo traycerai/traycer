@@ -382,9 +382,18 @@ function answerProviders(
 // The Terminal-account line reads the host picker's options for the run's
 // host; with none named it is this computer.
 vi.mock("@/components/settings/host-scope/use-host-options", async () => {
-  const { hostOptionsFixture } =
+  const { hostOptionsFixture, hostScopeOptionFixture } =
     await import("@/components/settings/host-scope/host-scope-fixture");
-  return { useHostOptions: () => hostOptionsFixture({ hosts: [] }) };
+  const options = hostOptionsFixture({
+    hosts: [
+      hostScopeOptionFixture({
+        hostId: "host-test",
+        name: "Hardiks-MacBook-Pro---Traycer.local",
+        isLocalMachine: true,
+      }),
+    ],
+  });
+  return { useHostOptions: () => options };
 });
 vi.mock("@/hooks/sandboxes/use-sandbox-agent-gate", () => ({
   useSandboxAgentGate: () => testState.agentGate,
@@ -554,19 +563,6 @@ vi.mock("@/hooks/composer/use-landing-image-fetcher", () => ({
 // one hook. These suites are about paste/gating/banner behaviour, not
 // selection derivation, so it is stubbed at that single boundary - the same
 // treatment the other host-backed hooks above get.
-vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
-  useHostDirectoryList: () => ({
-    data: [
-      {
-        hostId: "host-test",
-        kind: "local",
-        label: "This computer",
-        transportDialability: "dialable",
-        websocketUrl: "ws://127.0.0.1:0",
-      },
-    ],
-  }),
-}));
 vi.mock("@/hooks/host/use-composer-placement", () => ({
   useComposerPlacement: () => ({
     pin: {

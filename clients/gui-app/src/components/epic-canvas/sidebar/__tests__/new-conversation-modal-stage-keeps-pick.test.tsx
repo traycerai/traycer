@@ -231,18 +231,22 @@ vi.mock("@/lib/epic-selectors", () => ({
 vi.mock("@/lib/host", () => ({ useHostClient: () => stubHostClient }));
 vi.mock("@/lib/host/runtime", () => ({ useHostClient: () => stubHostClient }));
 vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
-  useHostDirectoryList: () => ({
-    data: [
-      {
-        hostId: "host-a",
-        kind: "local",
-        label: "Laptop",
-        transportDialability: "dialable",
-        websocketUrl: "ws://127.0.0.1:0",
-      },
-    ],
-  }),
+  useHostDirectoryList: () => ({ data: [] }),
 }));
+vi.mock("@/components/settings/host-scope/use-host-options", async () => {
+  const { hostOptionsFixture, hostScopeOptionFixture } =
+    await import("@/components/settings/host-scope/host-scope-fixture");
+  const options = hostOptionsFixture({
+    hosts: [
+      hostScopeOptionFixture({
+        hostId: "host-a",
+        name: "Laptop",
+        isLocalMachine: false,
+      }),
+    ],
+  });
+  return { useHostOptions: () => options };
+});
 vi.mock("@/hooks/worktree/use-latest-conversation-workspace-seed", () => ({
   useLatestConversationWorkspaceSeed: () => null,
   latestCreatedConversationOwner: () => null,

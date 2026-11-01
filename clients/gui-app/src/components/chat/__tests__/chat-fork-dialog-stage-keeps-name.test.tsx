@@ -38,6 +38,7 @@ const dialogMocks = vi.hoisted(() => ({
 }));
 
 // The cloud's Traycer catalog, read only for a Traycer pick sent to a sandbox.
+import type { HostOptions } from "@/components/settings/host-scope/use-host-options";
 vi.mock("@/hooks/sandboxes/use-sandbox-traycer-models-query", () => ({
   // The query's own shape; this dialog's list is always answered.
   useSandboxTraycerModels: () => {
@@ -110,6 +111,33 @@ vi.mock("@/lib/host", async (importOriginal) => {
   };
 });
 
+vi.mock("@/components/settings/host-scope/use-host-options", async () => {
+  const { hostOptionsFixture, hostScopeOptionFixture } =
+    await import("@/components/settings/host-scope/host-scope-fixture");
+  // The directory's rows as host options, one object per list.
+  let cached: {
+    readonly from: readonly HostDirectoryEntry[];
+    readonly options: HostOptions;
+  } | null = null;
+  return {
+    useHostOptions: () => {
+      if (cached?.from !== dialogMocks.directoryHosts)
+        cached = {
+          from: dialogMocks.directoryHosts,
+          options: hostOptionsFixture({
+            hosts: dialogMocks.directoryHosts.map((entry) =>
+              hostScopeOptionFixture({
+                hostId: entry.hostId,
+                name: entry.label,
+                isLocalMachine: false,
+              }),
+            ),
+          }),
+        };
+      return cached.options;
+    },
+  };
+});
 vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
   useHostDirectoryList: () => ({ data: dialogMocks.directoryHosts }),
 }));

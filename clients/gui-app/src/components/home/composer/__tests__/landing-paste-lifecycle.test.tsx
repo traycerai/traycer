@@ -65,6 +65,12 @@ const mocks = vi.hoisted(() => ({
   },
 }));
 
+vi.mock("@/components/settings/host-scope/use-host-options", async () => {
+  const { hostOptionsFixture } =
+    await import("@/components/settings/host-scope/host-scope-fixture");
+  const options = hostOptionsFixture({ hosts: [] });
+  return { useHostOptions: () => options };
+});
 vi.mock("@/hooks/providers/use-provider-pack-gate", () => ({
   // Host-backed readiness hook, stubbed to its fail-open answer - the same
   // treatment this suite already gives every other host-dependent hook. It

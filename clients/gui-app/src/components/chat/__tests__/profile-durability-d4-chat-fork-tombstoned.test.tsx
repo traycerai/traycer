@@ -49,6 +49,12 @@ const dialogMocks = vi.hoisted(() => ({
 }));
 
 // The cloud's Traycer catalog, read only for a Traycer pick sent to a sandbox.
+vi.mock("@/components/settings/host-scope/use-host-options", async () => {
+  const { hostOptionsFixture } =
+    await import("@/components/settings/host-scope/host-scope-fixture");
+  const options = hostOptionsFixture({ hosts: [] });
+  return { useHostOptions: () => options };
+});
 vi.mock("@/hooks/sandboxes/use-sandbox-traycer-models-query", () => ({
   useSandboxTraycerModels: () => ({ data: undefined }),
 }));
