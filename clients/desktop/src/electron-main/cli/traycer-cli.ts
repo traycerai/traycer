@@ -9,6 +9,10 @@ import {
   type FileHandle,
 } from "node:fs/promises";
 import { join } from "node:path";
+import {
+  HOST_UPDATE_INITIATOR_DESKTOP,
+  HOST_UPDATE_INITIATOR_ENV_VAR,
+} from "@traycer-clients/shared/host-update";
 import { log } from "../app/logger";
 import {
   CLI_INVOCATION_PROBE_TIMEOUT_MS,
@@ -795,7 +799,11 @@ async function streamTraycerCliJsonWithInvocation<T>(
   const allArgs = [...inv.args, ...augmentedArgs];
   return new Promise<StreamTraycerCliResult<T>>((resolve, reject) => {
     const child = spawn(inv.command, allArgs, {
-      env: opts.env === null ? process.env : { ...process.env, ...opts.env },
+      env: {
+        ...process.env,
+        ...opts.env,
+        [HOST_UPDATE_INITIATOR_ENV_VAR]: HOST_UPDATE_INITIATOR_DESKTOP,
+      },
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
     });

@@ -1,4 +1,10 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -38,7 +44,10 @@ const mocks = vi.hoisted(() => ({
   createServiceControllerMock: vi.fn(),
   readHostLifecycleSnapshotMock: vi.fn(),
   readUpdateAttemptRecordMock: vi.fn(),
-  hostInstallRecordPathValue: "/tmp/test-host-home/absent-install.json",
+  // Unique to this run and removed around every test: a path on the machine
+  // that another run left behind must not decide what these tests see.
+  hostHome: `/tmp/test-host-home-${String(process.pid)}`,
+  hostInstallRecordPathValue: "",
 }));
 
 vi.mock("../../host/pid-metadata", async () => {
@@ -61,14 +70,14 @@ vi.mock("../../host/bootstrap-log", () => ({
 // Spread the real module: `host status` now reads the install record (through
 // `manifest/host-install`) to tell a resumable park from a stale one, and that
 // module imports further path helpers. Only the two the command's own reads
-// resolve are redirected; `/tmp/test-host-home` holds no install record, so a
+// resolve are redirected; `mocks.hostHome` holds no install record, so a
 // parked fixture reads as "does not match the install" unless it is claim-less.
 vi.mock("../../store/paths", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../store/paths")>();
   return {
     ...actual,
     bootstrapLogPath: () => "/tmp/test-bootstrap.log",
-    hostHomeDir: () => "/tmp/test-host-home",
+    hostHomeDir: () => mocks.hostHome,
     // `manifest/host-install` resolves its own path through this helper, not
     // through `hostHomeDir`; without the override these tests read the
     // machine's REAL install record (CodeRabbit, traycer#2208). Overridden per
@@ -120,6 +129,12 @@ vi.mock("@traycer-clients/shared/host-update", async (importOriginal) => {
 });
 
 import { hostStatusCommand } from "../host-status";
+import {
+  acquireUpdateAttemptLock,
+  removeHostUpdateLastAttempt,
+  writeHostUpdateLastAttempt,
+} from "@traycer-clients/shared/host-update";
+import { hostHomeDir } from "../../store/paths";
 import type { HostLifecycleSnapshot } from "../../host/lifecycle-snapshot";
 
 function makeRuntime(overrides: Partial<RuntimeContext>): RuntimeContext {
@@ -227,7 +242,7 @@ function validRead(
 // not point `hostInstallRecordPath` at a temp file - deliberately absent, so
 // `readHostInstallRecord` reads it as "no host installed" (ENOENT) rather
 // than the machine's real install record.
-const ABSENT_INSTALL_RECORD_PATH = "/tmp/test-host-home/absent-install.json";
+const ABSENT_INSTALL_RECORD_PATH = join(mocks.hostHome, "absent-install.json");
 
 // Mirrors `host-restart.test.ts`'s `writeInstallRecordForAttestation` fixture
 // shape - only the fields these tests override differ per case.
@@ -246,7 +261,7 @@ function installRecordFixture(
     signatureVerifiedAt: "2026-01-01T00:00:00.000Z",
     signatureKeyId: "test-key",
     sizeBytes: 1,
-    executablePath: "/tmp/test-host-home/host/traycer-host",
+    executablePath: join(mocks.hostHome, "host", "traycer-host"),
     executableSha256: null,
     ...overrides,
   };
@@ -283,6 +298,7 @@ function pointInstallRecordAtTempDirectory(): void {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  rmSync(mocks.hostHome, { recursive: true, force: true });
   mocks.readHostPidMetadataMock.mockResolvedValue(null);
   mocks.readBootstrapMarkersMock.mockResolvedValue(bootstrapMarkers);
   mocks.readBootstrapLogTailMock.mockResolvedValue("");
@@ -295,6 +311,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  rmSync(mocks.hostHome, { recursive: true, force: true });
   if (installRecordTmpDir !== null) {
     rmSync(installRecordTmpDir, { recursive: true, force: true });
     installRecordTmpDir = null;
@@ -326,6 +343,8 @@ describe("hostStatusCommand - observational (CLI-001)", () => {
       bootstrap: null,
       lifecycle: lifecycleSnapshot,
       updateAttempt: null,
+      lastUpdateAttempt: null,
+      updateLockHolder: null,
     });
     expect(mocks.readHostLifecycleSnapshotMock).toHaveBeenCalledWith(
       "production",
@@ -343,6 +362,64 @@ describe("hostStatusCommand - observational (CLI-001)", () => {
     expect(result.exitCode).toBe(0);
     expect(result.data).toMatchObject({ running: false, bootstrap: null });
     expect(mocks.provisionHostMock).not.toHaveBeenCalled();
+  });
+
+  it("reads a machine with no update lock as no holder, and creates nothing", async () => {
+    const result = await hostStatusCommand(makeCtx(makeRuntime({})));
+
+    expect(result.data).toMatchObject({ updateLockHolder: null });
+    expect(existsSync(mocks.hostHome)).toBe(false);
+  });
+
+  it("says who is changing the host while they are at it", async () => {
+    mkdirSync(mocks.hostHome, { recursive: true });
+    const held = await acquireUpdateAttemptLock({
+      hostHomeDir: hostHomeDir("production"),
+      reason: "desktop:host-download",
+      waitMs: 0,
+      pollIntervalMs: 25,
+    });
+    if (held.kind !== "acquired") throw new Error("the lock was not free");
+    try {
+      const result = await hostStatusCommand(makeCtx(makeRuntime({})));
+      expect(result.data).toMatchObject({
+        updateLockHolder: "The Traycer app is downloading a host update",
+      });
+      expect(result.human).toContain(
+        "The Traycer app is downloading a host update.",
+      );
+    } finally {
+      await held.handle.release();
+    }
+  });
+
+  it("says how the last update ended, and who started it", async () => {
+    const attempt = {
+      command: "host update",
+      initiator: "manual",
+      outcome: "refused",
+      targetVersion: "1.5.2",
+      attemptId: null,
+      code: "E_CLI_LOCK_BUSY",
+      message: "The Traycer app is downloading a host update",
+      recordedAt: "2026-11-01T06:57:02.000Z",
+    } as const;
+    await writeHostUpdateLastAttempt(hostHomeDir("production"), attempt, {
+      info: vi.fn(),
+    });
+    try {
+      const result = await hostStatusCommand(makeCtx(makeRuntime({})));
+      expect(result.data).toMatchObject({
+        lastUpdateAttempt: { ...attempt, recordedAt: expect.any(String) },
+      });
+      expect(result.human).toContain("Last update");
+      expect(result.human).toContain("did not run");
+      expect(result.human).toContain("1.5.2");
+      expect(result.human).toContain("a command");
+      expect(result.human).toContain(attempt.message);
+    } finally {
+      await removeHostUpdateLastAttempt(hostHomeDir("production"));
+    }
   });
 
   it("human output on the not-running branch includes the 'host ensure' hint", async () => {
