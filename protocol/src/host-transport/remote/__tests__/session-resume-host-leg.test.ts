@@ -43,9 +43,11 @@ import {
   MuxFrameType,
   NOISE_PROLOGUE,
   QosClass,
+  SESSION_CAPABILITY_MEMBER_CREDENTIAL,
   SESSION_CAPABILITY_RESUME,
   SESSION_CONTROL_STREAM_ID,
   type EncodeMuxFrameInput,
+  type MemberCredentialHandoff,
   type ResumePayload,
 } from "../../mux";
 import type {
@@ -259,6 +261,8 @@ class FakeHost {
   /** Every RESUME the client sent, as parsed. */
   readonly resumes: ResumePayload[] = [];
   readonly openCapabilities: unknown[] = [];
+  /** The `memberCredential` of every CREDENTIAL_UPDATE read, in order. */
+  readonly credentialUpdates: unknown[] = [];
   readonly subscribedStreams: number[] = [];
   /** Method of every REQUEST read, in order. */
   readonly requestMethods: string[] = [];
@@ -270,6 +274,7 @@ class FakeHost {
   handshakes = 0;
   opens = 0;
   advertiseResume = true;
+  advertiseMemberCredential = false;
   /** The host deduplicates unary idempotency keys. */
   advertiseIdempotencyKey = false;
   resumeReply: ResumeReply = "answer";
@@ -589,6 +594,9 @@ class FakeHost {
           },
           capabilities: [
             ...(this.advertiseResume ? [SESSION_CAPABILITY_RESUME] : []),
+            ...(this.advertiseMemberCredential
+              ? [SESSION_CAPABILITY_MEMBER_CREDENTIAL]
+              : []),
             ...(this.advertiseIdempotencyKey
               ? [UNARY_CAPABILITY_IDEMPOTENCY_KEY]
               : []),
@@ -596,6 +604,10 @@ class FakeHost {
         },
         binary: null,
       });
+      return;
+    }
+    if (message.type === MuxFrameType.CREDENTIAL_UPDATE) {
+      this.credentialUpdates.push(json.memberCredential);
       return;
     }
     if (message.type === MuxFrameType.SUBSCRIBE) {
@@ -716,6 +728,10 @@ function hostAuth(): RemoteSessionAuth {
 
 interface FixtureConfig {
   readonly advertiseResume: boolean;
+  readonly advertiseMemberCredential: boolean;
+  readonly mintMemberCredential:
+    | ((hostId: string) => Promise<MemberCredentialHandoff | null>)
+    | null;
   readonly advertiseIdempotencyKey: boolean;
   readonly autoTick: boolean;
   readonly livenessProbe: SessionLivenessProbe | null;
@@ -723,6 +739,8 @@ interface FixtureConfig {
 
 const LIVE: FixtureConfig = {
   advertiseResume: true,
+  advertiseMemberCredential: false,
+  mintMemberCredential: null,
   advertiseIdempotencyKey: false,
   autoTick: true,
   livenessProbe: null,
@@ -789,6 +807,7 @@ async function advanceUntil(
 async function readyFixture(config: FixtureConfig): Promise<Fixture> {
   const host = new FakeHost();
   host.advertiseResume = config.advertiseResume;
+  host.advertiseMemberCredential = config.advertiseMemberCredential;
   host.advertiseIdempotencyKey = config.advertiseIdempotencyKey;
   host.autoTick = config.autoTick;
   const spies = buildEvidence();
@@ -820,7 +839,7 @@ async function readyFixture(config: FixtureConfig): Promise<Fixture> {
       appVersion: "0.0.0-test",
     },
     livenessProbe: config.livenessProbe,
-    mintMemberCredential: null,
+    mintMemberCredential: config.mintMemberCredential,
   });
   opened.push(session);
   const ticks: number[] = [];
@@ -1999,10 +2018,73 @@ describe("RemoteSession host-leg resume", () => {
     });
   });
 
+  describe("member credential re-ask", () => {
+    it("holds a re-ask answered during a resumable outage and sends it once on the resume", async () => {
+      const handoff: MemberCredentialHandoff = {
+        token: "member-token",
+        refreshToken: "member-refresh-token",
+        familyId: "family-1",
+        provisionedAt: "2026-10-19T00:00:00.000Z",
+      };
+      // Calls 1-5 are refused; the sixth is the last re-ask, at +112 s.
+      let mintCalls = 0;
+      const mint = vi.fn<
+        (hostId: string) => Promise<MemberCredentialHandoff | null>
+      >(() => {
+        mintCalls += 1;
+        return Promise.resolve(mintCalls === 6 ? handoff : null);
+      });
+      const fixture = await readyFixture({
+        ...LIVE,
+        advertiseMemberCredential: true,
+        mintMemberCredential: mint,
+      });
+      const { host, session } = fixture;
+      expect(mint).toHaveBeenCalledTimes(1);
+
+      await step(2_000);
+      await step(5_000);
+      await step(15_000);
+      await step(30_000);
+      expect(mint).toHaveBeenCalledTimes(5);
+
+      await step(50_000);
+      expect(mint).toHaveBeenCalledTimes(5);
+      const socket = host.live().socket;
+      const sendsAtDetach = socket.binarySends;
+      host.detach();
+      // The 5 s mask expires inside this step, and the last re-ask lands in
+      // the outage that follows it.
+      await step(10_000);
+      expect(mint).toHaveBeenCalledTimes(6);
+      expect(session.isReady()).toBe(false);
+      expect(socket.binarySends).toBe(sendsAtDetach);
+      expect(host.credentialUpdates).toEqual([]);
+
+      host.attach();
+      await until(() => host.resumes.length === 1);
+      await host.settle();
+
+      expect(mint).toHaveBeenCalledTimes(6);
+      expect(host.opens).toBe(1);
+      expect(host.resumes).toHaveLength(1);
+      expect(host.connections).toHaveLength(1);
+      expect(session.isReady()).toBe(true);
+      expect(
+        host.clientFrames.filter(
+          (frame) => frame.type === MuxFrameType.CREDENTIAL_UPDATE,
+        ),
+      ).toHaveLength(1);
+      expect(host.credentialUpdates).toEqual([handoff]);
+    });
+  });
+
   describe("silence", () => {
     const probe: SessionLivenessProbe = { method: STATUS_METHOD, params: {} };
     const SILENT: FixtureConfig = {
       advertiseResume: true,
+      advertiseMemberCredential: false,
+      mintMemberCredential: null,
       advertiseIdempotencyKey: false,
       autoTick: false,
       livenessProbe: probe,
