@@ -7,8 +7,10 @@ import {
 import { useMobileLayoutForm } from "@/hooks/ui/use-mobile-layout-form";
 
 /**
- * Answers level 1 for everything under the shell. It asks with one tile because
- * level 1 does not depend on the tile count.
+ * Answers level 1 for the whole window. It sits above the app shell because the
+ * command palette, the Settings modal and the notifications sheet mount outside
+ * the shell and read the same answer. It asks with one tile because level 1 does
+ * not depend on the tile count.
  */
 export function MobileStripFormScope(props: {
   readonly children: ReactNode;

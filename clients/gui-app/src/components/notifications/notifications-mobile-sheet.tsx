@@ -2,7 +2,7 @@ import { useCallback, useRef, type ReactNode } from "react";
 import { Drawer, DrawerContent, DrawerTitle } from "@/components/ui/drawer";
 import { NotificationsPopover } from "@/components/notifications/notifications-popover";
 import { useNotificationsPopoverStore } from "@/stores/notifications/notifications-popover-store";
-import { useMobileLayoutForm } from "@/hooks/ui/use-mobile-layout-form";
+import { useMobileStripForm } from "@/components/layout/tabs/mobile-strip-form-context";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import "@/components/layout/shell/mobile-shell-touch-targets.css";
 
@@ -25,12 +25,11 @@ import "@/components/layout/shell/mobile-shell-touch-targets.css";
  *
  * Renders nothing on desktop, where the header bell + anchored popover stay
  * exactly as before, nor where the phone shell draws the strip, whose
- * Notifications row opens the center beside it. Asks the form itself because it
- * mounts above the shell's `MobileStripFormScope`.
+ * Notifications row opens the center beside it.
  */
 export function NotificationsMobileSheet(): ReactNode {
   const isMobile = useIsMobileViewport();
-  const { level1 } = useMobileLayoutForm(1);
+  const stripMounted = useMobileStripForm() !== null;
   const open = useNotificationsPopoverStore((state) => state.open);
   const setOpen = useNotificationsPopoverStore((state) => state.setOpen);
   // main's popover is purely presentational: the caller owns outer sizing via
@@ -42,7 +41,7 @@ export function NotificationsMobileSheet(): ReactNode {
   // No ancestor popover to keep open here, so the filter menu's open state is
   // irrelevant - the sheet owns its own dismissal.
   const handleFilterMenuOpenChange = useCallback(() => undefined, []);
-  if (!isMobile || level1 !== "drawer") return null;
+  if (!isMobile || stripMounted) return null;
   return (
     <Drawer direction="bottom" open={open} onOpenChange={setOpen}>
       <DrawerContent

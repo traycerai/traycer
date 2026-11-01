@@ -175,6 +175,7 @@ vi.mock("@/components/epics/history-surface", () => ({
 
 import { useSignOutConfirmStore } from "@/stores/auth/sign-out-confirm-store";
 import { AppShell } from "@/components/layout/app-shell";
+import { MobileStripFormScope } from "@/components/layout/tabs/mobile-strip-form-scope";
 import {
   hostRpcRegistry,
   HostRuntimeProvider,
@@ -243,9 +244,11 @@ function renderAppShell(): QueryClient {
           remoteFetcher={() => Promise.resolve({ kind: "hosts", entries: [] })}
           fallback={<div data-testid="runtime-fallback" />}
         >
-          <AppShell>
-            <div data-testid="app-shell-child" />
-          </AppShell>
+          <MobileStripFormScope>
+            <AppShell>
+              <div data-testid="app-shell-child" />
+            </AppShell>
+          </MobileStripFormScope>
         </HostRuntimeProvider>
       </QueryClientProvider>
     </RunnerHostProvider>,

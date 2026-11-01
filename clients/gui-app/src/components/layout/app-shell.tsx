@@ -17,7 +17,6 @@ import {
 } from "@/components/layout/header/app-title-band-kind";
 import { useAppColumnChromeInput } from "@/components/layout/use-app-column-chrome-input";
 import { useMobileStripForm } from "@/components/layout/tabs/mobile-strip-form-context";
-import { MobileStripFormScope } from "@/components/layout/tabs/mobile-strip-form-scope";
 import { SideTabStrip } from "@/components/layout/tabs/side-strip/side-tab-strip";
 import { TabStripKeybindingBridge } from "@/components/layout/tabs/tab-strip-keybinding-bridge";
 import { MobileNavDrawer } from "@/components/layout/shell/mobile-nav-drawer";
@@ -63,9 +62,7 @@ interface AppShellProps {
 export function AppShell(props: AppShellProps) {
   return (
     <MobileDrawerHistoryGateProvider>
-      <MobileStripFormScope>
-        <AppShellBody>{props.children}</AppShellBody>
-      </MobileStripFormScope>
+      <AppShellBody>{props.children}</AppShellBody>
     </MobileDrawerHistoryGateProvider>
   );
 }
