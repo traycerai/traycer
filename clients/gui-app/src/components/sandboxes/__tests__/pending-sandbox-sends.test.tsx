@@ -67,6 +67,12 @@ import type {
   SandboxListFetchResult,
 } from "@traycer-clients/shared/host-client/sandbox-control";
 import type { CreateChatMutationInput } from "@/hooks/epic/use-epic-chat-mutations";
+import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
+import type {
+  EpicStreamClientFactory,
+  OpenEpicStoreHandle,
+} from "@/stores/epics/open-epic/store";
+import { openStoreForTest } from "@/stores/epics/open-epic/test-support/open-store-for-test";
 import { RunnerHostContext } from "@/providers/runner-host-context";
 import { createFakeRunnerHost } from "../../../../__tests__/create-fake-runner-host";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
@@ -120,7 +126,11 @@ import {
   type PendingSandboxSend,
   type PendingSandboxSendDispatch,
 } from "@/stores/sandboxes/pending-sandbox-send-store";
-import { useStoppedSandboxSendReceiptStore } from "@/stores/sandboxes/stopped-sandbox-send-receipt-store";
+import {
+  recordCancelledSandboxSend,
+  recordStoppedSandboxSend,
+  useStoppedSandboxSendReceiptStore,
+} from "@/stores/sandboxes/stopped-sandbox-send-receipt-store";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import {
   composerSurfaceKey,
@@ -10674,5 +10684,354 @@ describe("the record of an accepted create and the row it was seen as", () => {
     expect(stored()).toBeUndefined();
     expect(markSeen(SANDBOX_ID, freshList(Date.now() + 60_000))).toBe(false);
     expect(stored()).toBeUndefined();
+  });
+});
+
+describe("a task with no chat whose message came back to its own composer on a sandbox at rest", () => {
+  const FRESH = Date.now() + 60_000;
+  const EXACT_SUSPENDED =
+    "build-box is suspended. Your message wasn't sent; it's in Add agent.";
+  const EXACT_STOPPED =
+    "build-box is stopped. Your message wasn't sent; it's in Add agent.";
+  const LINE = "rested-task-message-line";
+
+  const noopStreamClientFactory: EpicStreamClientFactory = () => ({
+    applyUpdate: () => undefined,
+    awareness: () => undefined,
+    applyArtifactRoomUpdate: () => undefined,
+    artifactRoomAwareness: () => undefined,
+    retryMigration: () => undefined,
+    close: () => undefined,
+  });
+
+  afterEach(() => {
+    __getOpenEpicRegistryForTests().disposeAll();
+  });
+
+  function rowIn(state: SandboxSummary["state"]): SandboxSummary {
+    return sandboxSummaryFixture({
+      id: SANDBOX_ID,
+      hostId: SANDBOX_HOST,
+      state,
+      guestConfigured: true,
+    });
+  }
+
+  /** The task's real open-epic store, its snapshot loaded or not, holding `chatIds`. */
+  function openTask(
+    snapshotLoaded: boolean,
+    chatIds: readonly string[],
+  ): OpenEpicStoreHandle {
+    const handle = __getOpenEpicRegistryForTests().acquire("epic-1", () =>
+      openStoreForTest({
+        epicId: "epic-1",
+        userId: null,
+        factories: {
+          streamClientFactory: noopStreamClientFactory,
+          laneSelection: null,
+        },
+        writeCommand: null,
+      }),
+    );
+    act(() => {
+      handle.store.setState({
+        snapshotLoaded,
+        chats: { allIds: [...chatIds], byId: {} },
+      });
+    });
+    return handle;
+  }
+
+  /** What a give-back to the task's own composer leaves: the message and its sandbox. */
+  function messageBackOn(target: StagedSandboxTarget): void {
+    const modal = useNewConversationModalStore.getState();
+    modal.setContent("epic-1", MESSAGE_CONTENT);
+    modal.setReturnedSandbox("epic-1", { target, clientRequestId: null });
+  }
+
+  function atRest(state: "suspended" | "stopped"): void {
+    answerSandboxRows([rowIn(state)], FRESH);
+  }
+
+  it.each([
+    ["suspended", EXACT_SUSPENDED],
+    ["stopped", EXACT_STOPPED],
+  ] as const)(
+    "says the message is in Add agent on a %s sandbox, with the action and no toast",
+    async (state, exact) => {
+      openTask(true, []);
+      messageBackOn(RESUME_TARGET);
+      atRest(state);
+      mount();
+
+      const line = await screen.findByTestId(LINE);
+      expect(line.textContent).toContain(exact);
+      expect(
+        within(line).getByRole("button", { name: "Add agent" }),
+      ).toBeDefined();
+      expect(toastSpies.show).not.toHaveBeenCalled();
+    },
+  );
+
+  it("says it again after the draft is rehydrated as a reload would", async () => {
+    openTask(true, []);
+    messageBackOn(RESUME_TARGET);
+    atRest("suspended");
+    await reloadTaskDrafts();
+    mount();
+
+    const line = await screen.findByTestId(LINE);
+    expect(line.textContent).toContain(EXACT_SUSPENDED);
+  });
+
+  it("opens this task's new-conversation modal on Add agent, unnamed, with the message in place", async () => {
+    openTask(true, []);
+    messageBackOn(RESUME_TARGET);
+    atRest("suspended");
+    mount();
+
+    fireEvent.click(
+      within(await screen.findByTestId(LINE)).getByRole("button", {
+        name: "Add agent",
+      }),
+    );
+
+    expect(useNewConversationModalOpenStore.getState().request).toMatchObject({
+      epicId: "epic-1",
+      tabId: "tab-1",
+      placement: null,
+      parentId: null,
+      hostId: null,
+    });
+    expect(
+      useNewConversationModalStore.getState().draftPatchesByEpicId["epic-1"],
+    ).toMatchObject({ content: MESSAGE_CONTENT });
+  });
+
+  describe("says nothing", () => {
+    /** The strip has rendered with every input in place and shows no line. */
+    async function expectNoLine(): Promise<void> {
+      mount();
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(screen.queryByTestId(LINE)).toBeNull();
+    }
+
+    it("for a draft the person typed", async () => {
+      openTask(true, []);
+      useNewConversationModalStore
+        .getState()
+        .setContent("epic-1", MESSAGE_CONTENT);
+      atRest("suspended");
+      await expectNoLine();
+    });
+
+    it("for a returned sandbox with an empty message", async () => {
+      openTask(true, []);
+      messageBackOn(RESUME_TARGET);
+      useNewConversationModalStore.getState().setContent("epic-1", {
+        type: "doc",
+        content: [{ type: "paragraph" }],
+      });
+      atRest("suspended");
+      await expectNoLine();
+    });
+
+    it("once the sandbox has been woken", async () => {
+      openTask(true, []);
+      messageBackOn(RESUME_TARGET);
+      atRest("suspended");
+      mount();
+      await screen.findByTestId(LINE);
+
+      answerSandboxRows([rowIn("awake")], FRESH + 1);
+
+      await waitFor(() => {
+        expect(screen.queryByTestId(LINE)).toBeNull();
+      });
+    });
+
+    it("once the message has been sent", async () => {
+      openTask(true, []);
+      messageBackOn(RESUME_TARGET);
+      atRest("suspended");
+      mount();
+      await screen.findByTestId(LINE);
+
+      act(() => {
+        useNewConversationModalStore.getState().clearDraft("epic-1");
+      });
+
+      await waitFor(() => {
+        expect(screen.queryByTestId(LINE)).toBeNull();
+      });
+    });
+
+    it("for a task that has a chat", async () => {
+      openTask(true, ["chat-1"]);
+      messageBackOn(RESUME_TARGET);
+      atRest("suspended");
+      await expectNoLine();
+    });
+
+    it("until the task's snapshot has loaded", async () => {
+      const handle = openTask(false, []);
+      messageBackOn(RESUME_TARGET);
+      atRest("suspended");
+      await expectNoLine();
+
+      act(() => {
+        handle.store.setState({ snapshotLoaded: true });
+      });
+
+      expect((await screen.findByTestId(LINE)).textContent).toContain(
+        EXACT_SUSPENDED,
+      );
+    });
+
+    it("for another account's returned sandbox", async () => {
+      openTask(true, []);
+      messageBackOn(RESUME_TARGET);
+      useNewConversationModalStore.setState((state) => {
+        const draft = state.draftPatchesByEpicId["epic-1"];
+        if (draft?.returnedSandbox === undefined) return state;
+        return {
+          draftPatchesByEpicId: {
+            ...state.draftPatchesByEpicId,
+            "epic-1": {
+              ...draft,
+              returnedSandbox: { ...draft.returnedSandbox, userId: "user-2" },
+            },
+          },
+        };
+      });
+      atRest("suspended");
+      await expectNoLine();
+    });
+
+    it("for an awake sandbox the account has frozen", async () => {
+      openTask(true, []);
+      messageBackOn(RESUME_TARGET);
+      answerSandboxRows(
+        [
+          sandboxSummaryFixture({
+            id: SANDBOX_ID,
+            hostId: SANDBOX_HOST,
+            state: "awake",
+            frozen: true,
+          }),
+        ],
+        FRESH,
+      );
+      await expectNoLine();
+    });
+
+    it("for a returned sandbox that is not yet created", async () => {
+      openTask(true, []);
+      messageBackOn(NEW_TARGET);
+      atRest("suspended");
+      await expectNoLine();
+    });
+
+    it("while the task has a pending send", async () => {
+      openTask(true, []);
+      messageBackOn(RESUME_TARGET);
+      atRest("suspended");
+      const creation = deferred<SandboxCreateFetchResult>();
+      mocks.createSandbox.mockReturnValue(creation.promise);
+      seed({
+        ...SEEDED,
+        send: { epicConfirmed: true },
+        phase: "creating",
+        created: false,
+      });
+      mount();
+
+      await screen.findByTestId("pending-sandbox-sends");
+      expect(screen.queryByTestId(LINE)).toBeNull();
+      await act(async () => {
+        creation.resolve(CREDITS_REFUSED);
+        await creation.promise;
+      });
+    });
+  });
+
+  describe("beside a receipt for the same message", () => {
+    /** A send found at rest on a restart: its message goes back to the composer. */
+    async function recoverSendFoundAtRest(): Promise<void> {
+      onTestFinished(installImmediateExclusiveLocks());
+      seed({
+        ...SEEDED,
+        target: RESUME_TARGET,
+        send: { request: { kind: "chat", parentId: null, placement: null } },
+        phase: "creating",
+        created: true,
+      });
+      mocks.listReadAt = FRESH;
+      mocks.sandboxes = [rowIn("suspended")];
+      mocks.listSandboxes.mockResolvedValue(listAnswers([rowIn("suspended")]));
+      answerHost(SANDBOX_HOST, CODEX_READY);
+      mount();
+      await waitFor(() => {
+        expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+      });
+    }
+
+    it("shows only the task's line for a rested receipt that returned to the task", async () => {
+      openTask(true, []);
+      await recoverSendFoundAtRest();
+
+      expect((await screen.findByTestId(LINE)).textContent).toContain(
+        EXACT_SUSPENDED,
+      );
+      expect(screen.queryByTestId("sandbox-stopped-line")).toBeNull();
+    });
+
+    it("keeps the rested receipt's own line for a task that has a chat", async () => {
+      openTask(true, ["chat-1"]);
+      await recoverSendFoundAtRest();
+
+      const line = await screen.findByTestId("sandbox-stopped-line");
+      expect(line.textContent).toContain(
+        "build-box is suspended · your next message resumes it",
+      );
+      expect(screen.queryByTestId(LINE)).toBeNull();
+    });
+
+    it.each(["stopped", "cancelled"] as const)(
+      "keeps a %s receipt's own line and hides the task's",
+      async (kind) => {
+        openTask(true, []);
+        messageBackOn(RESUME_TARGET);
+        // Read before the receipt, so the list does not outlive it.
+        answerSandboxRows([rowIn("suspended")], 1);
+        const send = pendingSend({ id: SEND_ID, epicConfirmed: true });
+        const returned = {
+          kind: "task",
+          epicId: "epic-1",
+          parentId: null,
+          placement: null,
+          draftId: null,
+        } as const;
+        if (kind === "cancelled") {
+          recordCancelledSandboxSend(send, returned);
+        } else {
+          useStagedSandboxStore.getState().stage(SURFACE, RESUME_TARGET);
+          useStagedSandboxStore.getState().report(SURFACE, {
+            createdSandboxId: SANDBOX_ID,
+            createdHostId: SANDBOX_HOST,
+          });
+          const stage = readStagedSandbox(SURFACE);
+          if (stage === null) throw new Error("expected the send's stage");
+          recordStoppedSandboxSend(send, stage, "build-box", returned);
+        }
+        mount();
+
+        const line = await screen.findByTestId("sandbox-stopped-line");
+        expect(line.textContent).not.toContain("is suspended. Your message");
+        expect(screen.queryByTestId(LINE)).toBeNull();
+      },
+    );
   });
 });
