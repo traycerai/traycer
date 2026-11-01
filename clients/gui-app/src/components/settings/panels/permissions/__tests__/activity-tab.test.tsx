@@ -425,11 +425,11 @@ describe("ActivityTab", () => {
       expect(screen.getByText("Fix the build")).not.toBeNull();
     });
 
-    it("falls back to Untitled conversation when neither knows a title", () => {
+    it("falls back to New agent when neither knows a title", () => {
       recent.entries = [entry({ chatTitle: null })];
       defaultTab();
 
-      expect(screen.getByText("Untitled conversation")).not.toBeNull();
+      expect(screen.getByText("New agent")).not.toBeNull();
     });
   });
 

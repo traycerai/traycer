@@ -166,7 +166,8 @@ function createFixture(rows: readonly CloudChatSummary[]): Fixture {
 }
 
 // The tile as the canvas persisted it: opened before the title was generated,
-// so its snapshot name is the render fallback, and bound to the chat's host.
+// by a build that baked the "Untitled agent" fallback into its snapshot name,
+// and bound to the chat's host.
 const tile = {
   id: CHAT_ID,
   name: "Untitled agent",
@@ -174,8 +175,8 @@ const tile = {
   hostId: mockLocalHostEntry.hostId,
 };
 
-function renderTitle(fixture: Fixture) {
-  return renderHook(() => useEpicTabDisplayTitle(tile, EPIC_ID, null), {
+function renderTitle(fixture: Fixture, node: typeof tile) {
+  return renderHook(() => useEpicTabDisplayTitle(node, EPIC_ID, null), {
     wrapper: fixture.Wrapper,
   });
 }
@@ -206,10 +207,10 @@ describe("useEpicTabDisplayTitle cloud-list fallback", () => {
       cloudRow(true, mockLocalHostEntry.hostId, CLOUD_TITLE),
     ]);
     fixtures.push(fixture);
-    const rendered = renderTitle(fixture);
+    const rendered = renderTitle(fixture, tile);
 
     // Before the list answers the snapshot is all there is.
-    expect(rendered.result.current).toBe("Untitled agent");
+    expect(rendered.result.current).toBe("New agent");
     await waitFor(() => {
       expect(rendered.result.current).toBe(CLOUD_TITLE);
     });
@@ -235,7 +236,7 @@ describe("useEpicTabDisplayTitle cloud-list fallback", () => {
       cloudRow(true, mockLocalHostEntry.hostId, CLOUD_TITLE),
     ]);
     fixtures.push(fixture);
-    const rendered = renderTitle(fixture);
+    const rendered = renderTitle(fixture, tile);
 
     await waitFor(() => {
       expect(rendered.result.current).toBe(CLOUD_TITLE);
@@ -248,7 +249,7 @@ describe("useEpicTabDisplayTitle cloud-list fallback", () => {
       cloudRow(true, mockLocalHostEntry.hostId, CLOUD_TITLE),
     ]);
     fixtures.push(fixture);
-    const rendered = renderTitle(fixture);
+    const rendered = renderTitle(fixture, tile);
 
     await waitFor(() => {
       expect(rendered.result.current).toBe(CLOUD_TITLE);
@@ -263,7 +264,7 @@ describe("useEpicTabDisplayTitle cloud-list fallback", () => {
     fixture.handle.store.setState({
       chats: { allIds: [CHAT_ID], byId: { [CHAT_ID]: projectedChat("") } },
     });
-    const rendered = renderTitle(fixture);
+    const rendered = renderTitle(fixture, tile);
 
     // The projection's "untitled" is an answer, not an absence: the list is
     // never requested and the snapshot stands.
@@ -271,8 +272,25 @@ describe("useEpicTabDisplayTitle cloud-list fallback", () => {
       await Promise.resolve();
     });
     expect(fixture.requests.value).toBe(0);
-    expect(rendered.result.current).toBe("Untitled agent");
+    expect(rendered.result.current).toBe("New agent");
   });
+  it.each([
+    ["Untitled agent", "New agent"],
+    ["Untitled chat", "Untitled chat"],
+  ])(
+    "reads a tile snapshot named %j as %j when no source has a title",
+    async (name, shown) => {
+      const fixture = createFixture([]);
+      fixtures.push(fixture);
+      const rendered = renderTitle(fixture, { ...tile, name });
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      expect(rendered.result.current).toBe(shown);
+    },
+  );
+
   it("a team host's chat, held as the creator's untitled stand-in, takes the arm row's title", () => {
     const fixture = createFixture([]);
     fixtures.push(fixture);
@@ -282,7 +300,7 @@ describe("useEpicTabDisplayTitle cloud-list fallback", () => {
     fixture.handle.store.setState({
       chats: { allIds: [CHAT_ID], byId: { [CHAT_ID]: projectedChat("") } },
     });
-    const rendered = renderTitle(fixture);
+    const rendered = renderTitle(fixture, tile);
 
     expect(rendered.result.current).toBe(ARM_TITLE);
   });
@@ -291,7 +309,7 @@ describe("useEpicTabDisplayTitle cloud-list fallback", () => {
     const fixture = createFixture([]);
     fixtures.push(fixture);
     armRows.value = [armRow(mockLocalHostEntry.hostId, ARM_TITLE)];
-    const rendered = renderTitle(fixture);
+    const rendered = renderTitle(fixture, tile);
 
     expect(rendered.result.current).toBe(ARM_TITLE);
   });

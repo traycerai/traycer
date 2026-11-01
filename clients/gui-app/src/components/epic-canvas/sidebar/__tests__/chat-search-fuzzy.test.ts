@@ -62,12 +62,12 @@ function cloudChat(args: {
 }
 
 describe("chatSearchTitle", () => {
-  it("renders the same 'Untitled' fallback the row does", () => {
+  it("renders the same fallback the row does", () => {
     // Searching by the visible label is the whole contract: a user who reads
-    // "Untitled chat" on a row must be able to type it and find that row.
-    expect(chatSearchTitle({ title: "", type: "chat" })).toBe("Untitled chat");
+    // "New agent" on a row must be able to type it and find that row.
+    expect(chatSearchTitle({ title: "", type: "chat" })).toBe("New agent");
     expect(chatSearchTitle({ title: "", type: "terminal-agent" })).toBe(
-      "Untitled terminal agent",
+      "New agent",
     );
   });
 
@@ -202,17 +202,17 @@ describe("filterCloudChatsBySearch", () => {
   });
 
   it("matches a null-titled row by its rendered fallback", () => {
-    const matched = filterCloudChatsBySearch(chats, "untitled");
+    const matched = filterCloudChatsBySearch(chats, "new agent");
     expect(matched.map((chat) => chat.identity.chatId)).toEqual(["r3"]);
   });
 
-  it("finds a null-titled row by 'agent', the word of the label it paints, and not by 'chat'", () => {
+  it("finds a null-titled row by 'agent', the word of the label it paints, and not by the retired 'untitled'", () => {
     expect(
       filterCloudChatsBySearch(chats, "agent").map(
         (chat) => chat.identity.chatId,
       ),
     ).toEqual(["r3"]);
-    expect(filterCloudChatsBySearch(chats, "chat")).toEqual([]);
+    expect(filterCloudChatsBySearch(chats, "untitled")).toEqual([]);
   });
 });
 

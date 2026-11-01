@@ -11,6 +11,7 @@ import {
   ChatSandboxLineContext,
   ChatStateLineContext,
 } from "./chat-state-line";
+import { displayTitle } from "@/lib/display-title";
 import { ChatSandboxFooter } from "@/components/chat/chat-sandbox-footer";
 import { useChatSandboxState } from "@/hooks/sandboxes/use-chat-sandbox-state";
 import { useLiveChatSandboxState } from "@/hooks/sandboxes/use-live-chat-sandbox-state";
@@ -4288,7 +4289,9 @@ function useChatTileSessionViewModel(
     // announced every finished turn as "New agent" for the tile's life.
     taskTitle:
       projectedChatTitle ??
-      (chatStateTitle.length > 0 ? chatStateTitle : node.name),
+      (chatStateTitle.length > 0
+        ? chatStateTitle
+        : displayTitle(node.name, "agent")),
     viewTabId,
     tileId,
     tabHostId: activeHostId,

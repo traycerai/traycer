@@ -3093,7 +3093,7 @@ describe("ResourceMonitorPopover", () => {
     expect(tabNavigationMock.activateTabIntent).toHaveBeenCalledTimes(1);
   });
 
-  it("opens an untitled live-only agent under the untitled-agent fallback, not a blank tile", async () => {
+  it("opens an untitled live-only agent under the New agent fallback, not a blank tile", async () => {
     // `useEpicTabDisplayTitle` projects an untitled agent's live title as
     // `null` and lands on the tile's own `name`, so an unnamed record has to
     // carry the render-tier fallback itself or the tab strip renders blank.
@@ -3127,7 +3127,7 @@ describe("ResourceMonitorPopover", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Resources" }));
     const row = await screen.findByRole<HTMLButtonElement>("button", {
-      name: /^Untitled agent/,
+      name: /^New agent/,
     });
     expect(row.disabled).toBe(false);
     fireEvent.click(row);
@@ -3140,7 +3140,7 @@ describe("ResourceMonitorPopover", () => {
     if (!isRecord(input.preparation.node)) {
       throw new Error("expected resource tile node");
     }
-    expect(input.preparation.node.name).toBe("Untitled agent");
+    expect(input.preparation.node.name).toBe("New agent");
   });
 
   it("links an agent row that only the live epic projection knows (no tile, no canvas record)", async () => {
@@ -3236,7 +3236,7 @@ describe("ResourceMonitorPopover", () => {
     fireEvent.click(screen.getByRole("button", { name: "Resources" }));
     expect(screen.queryByText("Live Agent")).toBeNull();
     const row = await screen.findByRole<HTMLButtonElement>("button", {
-      name: /^Untitled agent/,
+      name: /^New agent/,
     });
     expect(row.disabled).toBe(true);
     fireEvent.click(row);
@@ -3319,7 +3319,7 @@ describe("ResourceMonitorPopover", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Resources" }));
     const row = await screen.findByRole<HTMLButtonElement>("button", {
-      name: /^Untitled agent/,
+      name: /^New agent/,
     });
     expect(row.disabled).toBe(true);
     fireEvent.click(row);

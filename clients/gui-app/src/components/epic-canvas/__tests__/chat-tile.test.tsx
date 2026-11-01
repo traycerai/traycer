@@ -7868,7 +7868,7 @@ describe("<ChatTile />", () => {
         liveTitle: "",
         stateTitle: "",
       });
-      expect(text).toBe("Untitled agent finished responding.");
+      expect(text).toBe("New agent finished responding.");
     });
   });
 

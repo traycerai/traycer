@@ -114,7 +114,7 @@ function resolvePrOwnerLabel(args: {
   }
   if (args.tuiAgent === null) return null;
   // Harness identity is interface metadata, never the title fallback (see
-  // `display-title.ts`), so an untitled owner reads "Untitled terminal agent".
+  // `display-title.ts`), so an untitled owner reads "New agent".
   return displayTitle(args.tuiAgent.title, "agent");
 }
 

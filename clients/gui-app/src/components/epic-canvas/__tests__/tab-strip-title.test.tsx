@@ -349,6 +349,24 @@ async function setChatArchived(archivedAt: number | null): Promise<void> {
   scratch.destroy();
 }
 
+/** Writes the chat record's `updatedAt` from outside the replica, title untouched. */
+async function setChatUpdatedAt(updatedAt: number): Promise<void> {
+  const handle = __getOpenEpicRegistryForTests().get(EPIC_ID);
+  if (handle === null) throw new Error("expected open epic handle");
+  await act(async () => {
+    const scratch = new Y.Doc();
+    Y.applyUpdate(scratch, await handle.encodeRootState());
+    const before = Y.encodeStateVector(scratch);
+    const chats: unknown = scratch.getMap("epic").get("chats");
+    if (!(chats instanceof Y.Map)) throw new Error("expected chats map");
+    const chat: unknown = chats.get(CHAT_ID);
+    if (!(chat instanceof Y.Map)) throw new Error("expected chat map");
+    chat.set("updatedAt", updatedAt);
+    await handle.applyRootUpdate(Y.encodeStateAsUpdate(scratch, before), true);
+    scratch.destroy();
+  });
+}
+
 describe("TabStrip title", () => {
   beforeEach(() => {
     queryClient = new QueryClient({
@@ -493,7 +511,7 @@ describe("TabStrip title", () => {
         isOwnedByViewer: false,
       },
     ];
-    renderTabStrip({ ...TAB, name: "Untitled agent" }, true);
+    renderTabStrip({ ...TAB, name: "New agent" }, true);
     await flushEpicSnapshot();
     const handle = __getOpenEpicRegistryForTests().get(EPIC_ID);
     if (handle === null) throw new Error("expected open epic handle");
@@ -746,20 +764,32 @@ describe("TabStrip title", () => {
     await waitFor(() => expect(document.activeElement).toBe(input));
   });
 
-  it("paints New agent while the first title is awaited and never stores it in the tile snapshot", async () => {
+  it("keeps New agent when the record is written past the first-title mark's start with the title still empty, then takes the title in place", async () => {
     installUntitledChat();
     const tile = seedChatTile("Untitled agent");
     renderTabStrip(tile, true);
     await flushEpicSnapshot();
     awaitFirstTitle();
-
     await waitFor(() => {
       expect(screen.getAllByRole("tab", { name: "New agent" })).toHaveLength(1);
     });
     expect(
+      screen.getByTestId(`tab-title-generating-${tile.instanceId}`),
+    ).toBeTruthy();
+
+    // The send's own write: it moves `updatedAt` past the mark's start and
+    // brings no title, which is what ended the mark and flipped the label.
+    await setChatUpdatedAt(Date.now() + 1_000);
+
+    await waitFor(() => {
+      expect(
+        screen.queryByTestId(`tab-title-generating-${tile.instanceId}`),
+      ).toBeNull();
+    });
+    expect(screen.getAllByRole("tab", { name: "New agent" })).toHaveLength(1);
+    expect(
       screen.queryAllByRole("tab", { name: "Untitled agent" }),
     ).toHaveLength(0);
-    expect(persistedTileName(tile.instanceId)).toBe("Untitled agent");
 
     const handle = __getOpenEpicRegistryForTests().get(EPIC_ID);
     if (handle === null) throw new Error("expected open epic handle");
@@ -772,33 +802,40 @@ describe("TabStrip title", () => {
         screen.getAllByRole("tab", { name: "Generated title" }),
       ).toHaveLength(1);
     });
-    expect(screen.queryAllByRole("tab", { name: "New agent" })).toHaveLength(0);
+    expect(screen.getAllByRole("tab")).toHaveLength(1);
     await waitFor(() => {
       expect(persistedTileName(tile.instanceId)).toBe("Generated title");
     });
   });
 
-  it("goes back to Untitled agent when the first-title mark ends with no title, and the snapshot never held New agent", async () => {
+  it("reads New agent for an untitled chat no window marked, from an old 'Untitled agent' snapshot, then takes the title in place", async () => {
     installUntitledChat();
     const tile = seedChatTile("Untitled agent");
     renderTabStrip(tile, true);
     await flushEpicSnapshot();
-    awaitFirstTitle();
+
     await waitFor(() => {
       expect(screen.getAllByRole("tab", { name: "New agent" })).toHaveLength(1);
     });
+    expect(
+      screen.queryAllByRole("tab", { name: "Untitled agent" }),
+    ).toHaveLength(0);
+    expect(
+      screen.queryByTestId(`tab-title-generating-${tile.instanceId}`),
+    ).toBeNull();
 
-    act(() => {
-      useEpicCanvasStore.getState().clearChatTitlePending(CHAT_ID);
+    const handle = __getOpenEpicRegistryForTests().get(EPIC_ID);
+    if (handle === null) throw new Error("expected open epic handle");
+    await act(async () => {
+      await handle.store.getState().renameArtifact(CHAT_ID, "Generated title");
     });
 
     await waitFor(() => {
       expect(
-        screen.getAllByRole("tab", { name: "Untitled agent" }),
+        screen.getAllByRole("tab", { name: "Generated title" }),
       ).toHaveLength(1);
     });
-    expect(screen.queryAllByRole("tab", { name: "New agent" })).toHaveLength(0);
-    expect(persistedTileName(tile.instanceId)).toBe("Untitled agent");
+    expect(screen.getAllByRole("tab")).toHaveLength(1);
   });
 
   it("keeps a titled chat's title under a pending mark", async () => {
@@ -814,7 +851,7 @@ describe("TabStrip title", () => {
     ).toBeTruthy();
   });
 
-  it("seeds Edit Title with the resolved title, not New agent, and commits nothing when left unchanged", async () => {
+  it("seeds Edit Title with the New agent label and commits nothing when left unchanged", async () => {
     installUntitledChat();
     const tile = seedChatTile("Untitled agent");
     renderTabStrip(tile, true);
@@ -830,16 +867,15 @@ describe("TabStrip title", () => {
       `tab-title-input-${tile.instanceId}`,
     );
     if (!(input instanceof HTMLInputElement)) throw new Error("expected input");
-    expect(input.value).toBe("Untitled agent");
+    expect(input.value).toBe("New agent");
 
     fireEvent.keyDown(input, { key: "Enter" });
 
     expect(onRenameSpy).not.toHaveBeenCalled();
-    expect(persistedTileName(tile.instanceId)).toBe("Untitled agent");
   });
 
-  describe("a title landing while Edit Title is open on an awaited chat", () => {
-    async function startEditWhileAwaiting(): Promise<{
+  describe("a title landing while Edit Title is open on an untitled chat", () => {
+    async function startEditWhileUntitled(): Promise<{
       readonly tile: typeof TAB;
       readonly input: HTMLInputElement;
     }> {
@@ -860,7 +896,7 @@ describe("TabStrip title", () => {
       );
       if (!(input instanceof HTMLInputElement))
         throw new Error("expected input");
-      expect(input.value).toBe("Untitled agent");
+      expect(input.value).toBe("New agent");
       const handle = __getOpenEpicRegistryForTests().get(EPIC_ID);
       if (handle === null) throw new Error("expected open epic handle");
       await act(async () => {
@@ -875,7 +911,7 @@ describe("TabStrip title", () => {
     }
 
     it("commits nothing when the seed is left untouched, and the snapshot keeps the landed title", async () => {
-      const { tile, input } = await startEditWhileAwaiting();
+      const { tile, input } = await startEditWhileUntitled();
 
       fireEvent.keyDown(input, { key: "Enter" });
 
@@ -884,7 +920,7 @@ describe("TabStrip title", () => {
     });
 
     it("still commits a name the person typed", async () => {
-      const { tile, input } = await startEditWhileAwaiting();
+      const { tile, input } = await startEditWhileUntitled();
 
       fireEvent.change(input, { target: { value: "My own name" } });
       fireEvent.keyDown(input, { key: "Enter" });
@@ -898,22 +934,29 @@ describe("TabStrip title", () => {
   });
 
   describe("a chat the projection holds no record of", () => {
-    it("keeps New agent while the cloud list has no row for it", async () => {
+    it("reads New agent while the cloud list has no row for it, and spins only under a held mark", async () => {
       installAbsentChat();
       const tile = seedChatTile("Untitled agent");
       renderTabStrip(tile, true);
       await flushEpicSnapshot();
-      awaitFirstTitle();
 
       await waitFor(() => {
         expect(screen.getAllByRole("tab", { name: "New agent" })).toHaveLength(
           1,
         );
       });
-      expect(persistedTileName(tile.instanceId)).toBe("Untitled agent");
       expect(
-        screen.getByTestId(`tab-title-generating-${tile.instanceId}`),
-      ).toBeTruthy();
+        screen.queryByTestId(`tab-title-generating-${tile.instanceId}`),
+      ).toBeNull();
+
+      awaitFirstTitle();
+
+      await waitFor(() => {
+        expect(
+          screen.getByTestId(`tab-title-generating-${tile.instanceId}`),
+        ).toBeTruthy();
+      });
+      expect(screen.getAllByRole("tab", { name: "New agent" })).toHaveLength(1);
     });
 
     it("shows the cloud list's title, not New agent, under a held mark", async () => {
