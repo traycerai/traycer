@@ -841,8 +841,15 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
           `${pendingUpgrade.pending.stagedBinaryPath}, but the installed cli is ` +
           `${pendingUpgrade.currentVersion}, which is newer. The swap will not be ` +
           `applied. To install ${pendingUpgrade.pending.version} anyway, run ` +
-          `'traycer cli upgrade --target ${pendingUpgrade.pending.version} ` +
-          "--allow-downgrade' while the release feed still serves it." +
+          // The whole quoted command stays inside ONE literal. The
+          // parseability guard scans this source for single-quoted traycer
+          // references and parses each against the real command tree;
+          // line-wrapping the quote across a `+` put the JS seam inside the
+          // command, which it read as three positionals to `cli upgrade`.
+          // (A quoted example in a comment is scanned too - this sentence
+          // deliberately carries none.)
+          `'traycer cli upgrade --target ${pendingUpgrade.pending.version} --allow-downgrade' ` +
+          "while the release feed still serves it." +
           (pendingMarkerServiceStartError === null
             ? ""
             : ` The finalize helper also could not restart the host service: ${pendingMarkerServiceStartError}`),
