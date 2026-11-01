@@ -96,15 +96,17 @@ interface Pull {
  * settles open or closed by how far the pull went. A tap or a wobble does
  * nothing, so a thumb landing on the edge never opens anything. The zone
  * covers the card's top padding and a little above it, never the first line
- * of the draft. Pointer capture keeps the pull on this element once it
- * starts; `preventDefault` on the press keeps the editor focused so the
- * keyboard does not dip mid-gesture. It is hidden from assistive technology;
+ * of the draft. On the focus layout's one row there is no top padding to cover,
+ * so the zone sits wholly above the card, clear of the editor and Send. Pointer
+ * capture keeps the pull on this element once it starts; `preventDefault` on
+ * the press keeps the editor focused so the keyboard does not dip mid-gesture. It is hidden from assistive technology;
  * `ComposerExpandButton` is its accessible twin.
  */
 function ComposerGrabber({
   expanded,
   onExpandedChange,
-}: ComposerExpansion): ReactNode {
+  focusRow,
+}: ComposerExpansion & { readonly focusRow: boolean }): ReactNode {
   const pull = useRef<Pull | null>(null);
 
   const onPointerDown = (event: PointerEvent<HTMLDivElement>): void => {
@@ -159,7 +161,10 @@ function ComposerGrabber({
     <div
       aria-hidden
       data-composer-grabber=""
-      className="absolute inset-x-0 -top-2 z-30 h-6 touch-none"
+      className={cn(
+        "absolute inset-x-0 z-30 touch-none",
+        focusRow ? "-top-3 h-3" : "-top-2 h-6",
+      )}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerEnd}
@@ -273,7 +278,7 @@ function ComposerAreaImpl({
         {overlay}
         {expansion === null ? null : (
           <>
-            <ComposerGrabber {...expansion} />
+            <ComposerGrabber {...expansion} focusRow={focusRow} />
             <ComposerExpandButton {...expansion} />
           </>
         )}
