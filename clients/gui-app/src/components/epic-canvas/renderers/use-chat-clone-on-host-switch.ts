@@ -215,8 +215,8 @@ export function useChatCloneOnHostSwitch(
         onHistoryUnavailable: (reason) => {
           toast(
             reason === "no-checkpoint"
-              ? "This agent hasn't replied yet, so its history can't be carried - continuing with settings only."
-              : "This device can't send this agent's history to that host version - continuing with settings only.",
+              ? "This agent's history can't be carried - continuing without it."
+              : "This device can't send this agent's history to that host version - continuing without it.",
           );
         },
         onCloneFailed: () => {
