@@ -8,6 +8,7 @@ import type { Environment } from "../runner/environment";
 import { createCliLogger, errorFromUnknown, type ILogger } from "../logger";
 import { rotateHostLogForPurgeWithVerifier } from "../host/host-log-rotation";
 import {
+  hostHomeDir,
   hostInstallDir,
   hostPidMetadataPath,
   hostStagedDir,
@@ -15,6 +16,7 @@ import {
 import { legacyMutationVerifier } from "./aside-dirs";
 import { sweepOldTrash } from "./install";
 import { resetHeldHostVersion } from "../host/held-host-version";
+import { removeHostUpdateLastAttempt } from "@traycer-clients/shared/host-update";
 
 // Uninstall the installed host directory for a single environment. Always
 // removes the install dir + record, AND the staged dir alongside it (Tech
@@ -194,6 +196,8 @@ export async function uninstallHost(
     await verify();
     await opts.discardAttemptRecord();
   }
+  await verify();
+  await removeHostUpdateLastAttempt(hostHomeDir(opts.environment));
 
   // The version hold names a deliberate downgrade of the install we just
   // removed; drop it so a later fresh install of that same version does not
