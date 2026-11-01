@@ -29,10 +29,11 @@ export function movedDataRoot(): string | null {
  *
  * Two floors, both judged before any transfer, staging or swap:
  *
- *  - the installed version (`installedVersion`, `null` when nothing is
- *    installed): a target must be at or above it. One this cannot order (a
- *    `local-*` build) is refused, because nothing proves the target is not
- *    such an older build. The same version re-installed passes;
+ *  - the installed build's version (`installedVersion`, from
+ *    `storeFormatFloorBuildVersion`, `null` when nothing is installed): a
+ *    target must be at or above it. One this cannot order (a `local-*` record
+ *    with no runtime version) is refused, because nothing proves the target is
+ *    not such an older build. The same version re-installed passes;
  *  - this CLI's stamped supported host (`configuredSupportedHostVersion`):
  *    the release pipeline stamps the exact host this CLI ships with, so a
  *    target below it may predate relocation - the registry's `latest` lags

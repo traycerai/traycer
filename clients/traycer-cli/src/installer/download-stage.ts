@@ -50,6 +50,7 @@ import {
   stageVerifiedSource,
 } from "./install";
 import { hashFileSha256 } from "./sha256";
+import { storeFormatFloorBuildVersion } from "../host/store-format-floor";
 import { refuseOlderHostWhileDataMoved } from "./moved-data-root-guard";
 import { invalidateAsideDir } from "./aside-dirs";
 import { renameWithRetry } from "./rename-retry";
@@ -1027,7 +1028,10 @@ export async function resolveUpdatePlan(
     refuseOlderHostWhileDataMoved({
       command: "host update",
       environment: opts.environment,
-      installedVersion: installed.version,
+      installedVersion: storeFormatFloorBuildVersion(
+        installed.runtimeVersion,
+        installed.version,
+      ),
       targetVersion: request.targetVersion,
     });
     if (!request.needsTransfer) {
@@ -1095,7 +1099,10 @@ export async function resolveUpdatePlan(
       refuseOlderHostWhileDataMoved({
         command: "host update",
         environment: opts.environment,
-        installedVersion: installed.version,
+        installedVersion: storeFormatFloorBuildVersion(
+          installed.runtimeVersion,
+          installed.version,
+        ),
         targetVersion,
       });
       return { kind: "downgrade", targetVersion, identity };
@@ -1132,7 +1139,10 @@ export async function resolveUpdatePlan(
   refuseOlderHostWhileDataMoved({
     command: "host update",
     environment: opts.environment,
-    installedVersion: installed.version,
+    installedVersion: storeFormatFloorBuildVersion(
+      installed.runtimeVersion,
+      installed.version,
+    ),
     targetVersion,
   });
   if (

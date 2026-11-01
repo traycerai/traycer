@@ -933,6 +933,7 @@ async function gateProvisionStoreFormatFloor(
     // again against whatever record is on disk at the swap.
     installedVersion: installed.version,
     installedStoreFormats: installed.storeFormats,
+    installedProvenance: installed.provenance,
     consultRegistry: opts.satisfaction.kind !== "own-build-minimum",
     acceptStoreFormatLoss: opts.acceptStoreFormatLoss,
     site: "host ensure",

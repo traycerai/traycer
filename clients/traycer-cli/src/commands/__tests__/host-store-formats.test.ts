@@ -196,6 +196,26 @@ describe("buildHostStoreFormatsCommand", () => {
     }
   });
 
+  it("places a --from install by its runtime version and still shows its label", async () => {
+    const label = "local-traycer-host.tar.gz-2026-11-01T07-54-28-844Z";
+    mocks.readHostInstallRecordMock.mockResolvedValue(
+      sampleRecord({
+        version: label,
+        runtimeVersion: "1.3.0-rc.4",
+        source: { kind: "local-file", value: "dl/traycer-host.tar.gz" },
+      }),
+    );
+
+    const command = buildHostStoreFormatsCommand();
+    const result = await command(fakeCtx());
+
+    expect(result.data).toMatchObject({
+      installedVersion: "1.3.0-rc.4",
+      installedRecordVersion: label,
+      installedChatDbFormat: 9,
+    });
+  });
+
   it("reports null installedDeclaredChatDbFormat when the tree declares nothing", async () => {
     const executableDir = await mkdtemp(
       join(tmpdir(), "host-store-formats-undeclared-"),

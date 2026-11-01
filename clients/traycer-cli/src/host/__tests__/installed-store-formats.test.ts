@@ -92,7 +92,7 @@ describe("readInstalledFloorOperands", () => {
 
     await expect(
       readInstalledFloorOperands("production", logger),
-    ).resolves.toEqual({ version: null, storeFormats: null });
+    ).resolves.toEqual({ version: null, storeFormats: null, provenance: null });
   });
 
   it("returns nothing known, with a warn, when the install record read throws", async () => {
@@ -103,7 +103,7 @@ describe("readInstalledFloorOperands", () => {
 
     await expect(
       readInstalledFloorOperands("production", logger),
-    ).resolves.toEqual({ version: null, storeFormats: null });
+    ).resolves.toEqual({ version: null, storeFormats: null, provenance: null });
 
     const warnCall = logger.calls.find((call) => call.level === "warn");
     expect(warnCall).toBeDefined();
@@ -124,7 +124,31 @@ describe("readInstalledFloorOperands", () => {
 
     await expect(
       readInstalledFloorOperands("production", logger),
-    ).resolves.toEqual({ version: "1.7.2", storeFormats: { chatDb: 9 } });
+    ).resolves.toMatchObject({ version: "1.7.2", storeFormats: { chatDb: 9 } });
+  });
+
+  it("takes a --from install's runtime version, keeping its label beside it", async () => {
+    const label = "local-traycer-host.tar.gz-2026-11-01T07-54-28-844Z";
+    mocks.readHostInstallRecordMock.mockResolvedValue(
+      sampleRecord({
+        version: label,
+        runtimeVersion: "1.5.2-rc.2",
+        source: { kind: "local-file", value: "dl/traycer-host.tar.gz" },
+      }),
+    );
+
+    await expect(
+      readInstalledFloorOperands("production", fakeLogger()),
+    ).resolves.toEqual({
+      version: "1.5.2-rc.2",
+      storeFormats: null,
+      provenance: {
+        recordVersion: label,
+        runtimeVersion: "1.5.2-rc.2",
+        sourceKind: "local-file",
+        archiveSha256: "a".repeat(64),
+      },
+    });
   });
 
   it("still returns the version, with storeFormats: null and a warn, when the record's executablePath is missing", async () => {
@@ -144,7 +168,7 @@ describe("readInstalledFloorOperands", () => {
 
     await expect(
       readInstalledFloorOperands("production", logger),
-    ).resolves.toEqual({ version: "1.7.2", storeFormats: null });
+    ).resolves.toMatchObject({ version: "1.7.2", storeFormats: null });
 
     const warnCall = logger.calls.find((call) => call.level === "warn");
     expect(warnCall).toBeDefined();

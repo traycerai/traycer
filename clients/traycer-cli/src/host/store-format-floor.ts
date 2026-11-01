@@ -85,9 +85,13 @@ import {
 } from "@traycer/protocol/host/store-formats";
 import type { ILogger, LogValue } from "../logger";
 import { errorFromUnknown } from "../logger";
-import { readHostInstallRecord } from "../manifest/host-install";
+import type {
+  HostInstallRecord,
+  HostInstallSourceKind,
+} from "../manifest/host-install";
 import { parseHostVersionsManifestWithWarnings } from "../registry/manifest-schema";
 import { resolveManifestUrl } from "../registry/manifest-url";
+import { currentHostPlatformKey } from "../registry/platform-key";
 import { fetchText } from "../registry/fetch-resource";
 import type { Environment } from "../runner/environment";
 import { CLI_ERROR_CODES, cliError, type CliError } from "../runner/errors";
@@ -117,11 +121,12 @@ export const STORE_FORMAT_FLOOR_LISTED_EPICS = 10;
 
 /**
  * How long the manifest read that resolves the TARGET's published formats may
- * take before the gate gives up on it and falls back to the fixed table.
+ * take before the early gate gives up on it.
  *
- * Short, and safe to be short: giving up means "unknown", and unknown REFUSES.
- * The only cost of a timeout is a refusal the user can override, never a
- * downgrade that proceeds unchecked.
+ * Short, and safe to be short: giving up never refuses. A target nobody can
+ * place yet is judged at the commit tail, from the registry entry the staged
+ * bytes were resolved through and the archive's own declaration. The cost of a
+ * timeout is a refusal that arrives after the transfer instead of before it.
  */
 const STORE_FORMATS_LOOKUP_TIMEOUT_MS = 5_000;
 
@@ -172,6 +177,30 @@ export type StoreFormatFloorSite =
  */
 export type StoreFloorTargetIdentity = "registry-artifact" | "local-archive";
 
+/** What `install.json` says about the installed build. */
+export interface InstalledProvenance {
+  /** The record's `version`, which for `--from` is a label, not a release. */
+  readonly recordVersion: string;
+  readonly runtimeVersion: string | null;
+  readonly sourceKind: HostInstallSourceKind;
+  readonly archiveSha256: string | null;
+}
+
+/** The registry entry a target's bytes were resolved through. */
+export interface TargetRegistryEntry {
+  readonly storeFormats: HostStoreFormats | null;
+}
+
+/** Where the floor's operands came from, beyond the versions it compares. */
+export interface StoreFloorProvenance {
+  /** `null` when nothing is installed, or the record could not be read. */
+  readonly installed: InstalledProvenance | null;
+  /** `null` when no entry was read: a local archive, a promoted stage. */
+  readonly targetEntry: TargetRegistryEntry | null;
+  /** The target's archive digest equals the installed archive's. */
+  readonly sameArchive: boolean;
+}
+
 export interface StoreFormatFloorInput {
   readonly environment: Environment;
   readonly targetIdentity: StoreFloorTargetIdentity;
@@ -206,10 +235,11 @@ export interface StoreFormatFloorInput {
    */
   readonly declaredStoreFormats: HostStoreFormats | null;
   /**
-   * `install.json`'s version, or `null` when nothing is installed. `null`
-   * still evaluates: a data directory outlives the install that wrote it (the
-   * uninstaller deliberately keeps user data), so "no host installed" is
-   * exactly the state in which a downgrade is most likely to be attempted.
+   * The installed build's version (`storeFormatFloorBuildVersion`), or `null`
+   * when nothing is installed. `null` still evaluates: a data directory
+   * outlives the install that wrote it (the uninstaller deliberately keeps
+   * user data), so "no host installed" is exactly the state in which a
+   * downgrade is most likely to be attempted.
    */
   readonly installedVersion: string | null;
   /**
@@ -222,6 +252,7 @@ export interface StoreFormatFloorInput {
    * `~/.traycer`.
    */
   readonly installedStoreFormats: HostStoreFormats | null;
+  readonly provenance: StoreFloorProvenance;
   /** `--accept-store-format-loss`. Never inferred from `--force`. */
   readonly acceptStoreFormatLoss: boolean;
   readonly site: StoreFormatFloorSite;
@@ -241,6 +272,10 @@ export interface StoreFormatFloorInput {
 export async function assertHostStoreFormatFloor(
   input: StoreFormatFloorInput,
 ): Promise<void> {
+  if (input.provenance.sameArchive) {
+    logFloorSameArchive(input);
+    return;
+  }
   const operands = applicabilityOperands(input);
   const applicability = storeFloorApplicability(
     input.targetVersion,
@@ -323,7 +358,13 @@ export async function assertHostStoreFormatFloor(
     settleTaskStoreFloor(input, taskStore);
     return;
   }
-  const refusal = storeFormatFloorRefusal(input, target, verdict, taskStore);
+  const refusal = storeFormatFloorRefusal(
+    input,
+    target,
+    installed,
+    verdict,
+    taskStore,
+  );
   if (input.acceptStoreFormatLoss) {
     // The SAME facts the refusal would have carried, at WARN. A run that
     // accepted the loss should leave behind exactly what a run that refused it
@@ -428,7 +469,7 @@ function taskStoreFloorRefusal(
 ): CliError {
   return cliError({
     code: CLI_ERROR_CODES.HOST_STORE_FORMAT_FLOOR,
-    message: `${input.site}: refusing to install host ${input.targetVersion} over ${describeInstalled(input.installedVersion)} - it reads task store format ${taskStore.targetReads}, and this machine's task store is at format ${taskStore.onDisk}. ${describeTaskStoreLoss(taskStore)} Install a host that reads format ${taskStore.onDisk} instead, or rerun with --accept-store-format-loss to install it anyway and go without local tasks until one is installed.`,
+    message: `${input.site}: refusing to install host ${input.targetVersion} over ${describeInstalled(input)} - it reads task store format ${taskStore.targetReads}, and this machine's task store is at format ${taskStore.onDisk}. ${describeTaskStoreLoss(taskStore)} Install a host that reads format ${taskStore.onDisk} instead, or rerun with --accept-store-format-loss to install it anyway and go without local tasks until one is installed.`,
     details: {
       environment: input.environment,
       site: input.site,
@@ -458,6 +499,25 @@ function taskStoreLogFields(taskStore: TaskStoreFloorBlock | null): {
     targetTaskStore: taskStore.targetReads,
     onDiskTaskStore: taskStore.onDisk,
   };
+}
+
+/** The target's archive is the installed one, so no store can be lost. */
+function logFloorSameArchive(input: {
+  readonly environment: Environment;
+  readonly site: StoreFormatFloorSite;
+  readonly targetVersion: string;
+  readonly installedVersion: string | null;
+  readonly logger: ILogger;
+}): void {
+  input.logger.info(
+    "Host store-format floor cleared: the target is the installed archive",
+    {
+      environment: input.environment,
+      site: input.site,
+      targetVersion: input.targetVersion,
+      installedVersion: input.installedVersion,
+    },
+  );
 }
 
 /**
@@ -500,10 +560,11 @@ function logFloorNotApplicable(args: {
 function storeFormatFloorRefusal(
   input: StoreFormatFloorInput,
   target: HostStoreFormatsKnowledge,
+  installed: HostStoreFormatsKnowledge | null,
   verdict: Exclude<StoreFormatFloorVerdict, { kind: "clear" }>,
   taskStore: TaskStoreFloorBlock | null,
 ): CliError {
-  const head = `${input.site}: refusing to install host ${input.targetVersion} over ${describeInstalled(input.installedVersion)}`;
+  const head = `${input.site}: refusing to install host ${input.targetVersion} over ${describeInstalled(input)}`;
   // Direction-NEUTRAL, both sentences, and deliberately so: this gate is not
   // downgrade-only. Over an installed side nobody can place - a build-stamped
   // archive with no sidecar - `storeFloorApplicability` evaluates a forward
@@ -517,11 +578,18 @@ function storeFormatFloorRefusal(
     taskStore === null
       ? ""
       : ` It also reads task store format ${taskStore.targetReads}, and this machine's task store is at format ${taskStore.onDisk}. ${describeTaskStoreLoss(taskStore)}`;
-  const remedy = `Install a host that can read them instead, or rerun with --accept-store-format-loss to install it anyway and lose access to those chats${taskStore === null ? "" : " and to local tasks"}.`;
+  //
+  // Only a blocked verdict has proved a loss, so only it says the flag loses
+  // those chats. An indeterminate one says what is actually known.
+  const flag =
+    verdict.kind === "blocked"
+      ? ` and lose access to those chats${taskStore === null ? "" : " and to local tasks"}`
+      : `, which may lose access to those chats${taskStore === null ? "" : " and will lose access to local tasks"}`;
+  const remedy = `Install a host that can read them instead, or rerun with --accept-store-format-loss to install it anyway${flag}.`;
   const message =
     verdict.kind === "blocked"
       ? `${head} - it reads chat store format ${verdict.targetChatDb}, and ${countedEpics(verdict.epics.length)} on this machine ${verdict.epics.length === 1 ? "carries" : "carry"} a newer one (${describeReadings(verdict.epics)}).${describeBlockedFailures(verdict.failures)} Those chats would be unreadable to it, and a host that meets a store it cannot open crash-loops rather than reporting it.${taskStoreSentence} ${remedy}`
-      : `${head} - ${describeIndeterminate(input, verdict)}, so it cannot be shown that those chats survive the swap.${taskStoreSentence} ${remedy}`;
+      : `${head} - ${describeIndeterminate(input, verdict)}, so it cannot be shown that those chats survive the swap.${describeUnplacedInstalled(input, installed)}${taskStoreSentence} ${remedy}`;
   return cliError({
     code: CLI_ERROR_CODES.HOST_STORE_FORMAT_FLOOR,
     message,
@@ -560,15 +628,45 @@ function describeIndeterminate(
   verdict: Extract<StoreFormatFloorVerdict, { kind: "indeterminate" }>,
 ): string {
   if (verdict.reason === "target-format-unknown") {
-    return `this CLI cannot tell which chat store format ${input.targetVersion} reads (its registry entry publishes none, and it is outside the versions this CLI has a built-in answer for)`;
+    // Reached past the point where the archive could answer: the early gate
+    // defers a target it cannot place, so the entry clause is what was READ.
+    const entry =
+      input.provenance.targetEntry === null
+        ? ""
+        : "its registry entry publishes none, ";
+    return `this CLI cannot tell which chat store format ${input.targetVersion} reads (${entry}its archive declares none, and it is newer than the versions this CLI has a built-in answer for)`;
   }
   return `${countedEpics(verdict.failures.length)} on this machine could not be read (${describeFailures(verdict.failures)})`;
 }
 
-function describeInstalled(installedVersion: string | null): string {
-  return installedVersion === null
-    ? "this machine's host data"
-    : `the installed ${installedVersion}`;
+function describeInstalled(input: {
+  readonly installedVersion: string | null;
+  readonly provenance: StoreFloorProvenance;
+}): string {
+  if (input.installedVersion === null) return "this machine's host data";
+  return input.provenance.installed?.sourceKind === "local-file"
+    ? `the installed ${input.installedVersion} (from a local archive)`
+    : `the installed ${input.installedVersion}`;
+}
+
+/**
+ * Why an unreadable store refused a move the installed side could have
+ * cleared: nothing placed that side, so every store had to answer for itself.
+ * Leading space included so the caller can concatenate an empty string away.
+ */
+function describeUnplacedInstalled(
+  input: StoreFormatFloorInput,
+  installed: HostStoreFormatsKnowledge | null,
+): string {
+  const record = input.provenance.installed;
+  if (record === null || installed?.kind !== "unknown") return "";
+  const runtime =
+    record.runtimeVersion === null
+      ? "no runtime version"
+      : `runtime version ${record.runtimeVersion}`;
+  const source =
+    record.sourceKind === "registry" ? "the registry" : "a local archive";
+  return ` The installed side gave no answer either: its record says ${record.recordVersion}, ${runtime}, from ${source}, and its files declare no store format.`;
 }
 
 function countedEpics(count: number): string {
@@ -655,8 +753,12 @@ function floorLogFields(
   return {
     targetVersion: input.targetVersion,
     installedVersion: input.installedVersion,
+    installedRecordVersion: input.provenance.installed?.recordVersion ?? null,
+    installedRuntimeVersion: input.provenance.installed?.runtimeVersion ?? null,
+    installedSource: input.provenance.installed?.sourceKind ?? null,
     targetChatDb: knownChatDb(target),
     targetFormatUnknownReason: target.kind === "unknown" ? target.reason : null,
+    targetEntryRead: input.provenance.targetEntry !== null,
     blockedEpicCount: blockedEpics.length,
     blockedEpics: blockedEpics
       .slice(0, STORE_FORMAT_FLOOR_LISTED_EPICS)
@@ -687,9 +789,8 @@ function knownChatDb(
  * stopped. This exists because `commitInstallFromSource` is the ONE funnel
  * every path shares, and a compatibility check whose coverage depends on every
  * caller having remembered to call it is not a floor. Threading the evidence
- * rather than re-deriving it is what keeps the late check from FALSELY
- * refusing a legitimate downgrade: the published formats live on a manifest
- * entry the commit tail has no access to.
+ * rather than re-deriving it keeps the late check from re-fetching, and from
+ * falsely refusing a legitimate downgrade of a tree no staged entry describes.
  */
 export interface StoreFormatFloorEvidence {
   /**
@@ -711,9 +812,9 @@ export interface StoreFormatFloorEvidence {
 }
 
 /**
- * The version the floor judges for a tree that is about to land: the ARCHIVE's
+ * The version the floor judges a tree by, landing or installed: the ARCHIVE's
  * own `version.json` stamp when it declares one, else the version the install
- * record will carry.
+ * record carries.
  *
  * The two are different strings for one shape of install, and only one of them
  * describes the bytes. `host install --from ./host-v1.2.0.tar.gz` records
@@ -730,11 +831,31 @@ export interface StoreFormatFloorEvidence {
  * declaration that names no formats still stands aside - so the preference can
  * only ever move a target from "unjudgeable" towards "judged".
  */
-export function storeFormatFloorTargetVersion(
+export function storeFormatFloorBuildVersion(
   declaredRuntimeVersion: string | null,
   recordVersion: string,
 ): string {
   return declaredRuntimeVersion ?? recordVersion;
+}
+
+/** The floor's view of an install record. */
+export function installedProvenanceOf(
+  record: HostInstallRecord,
+): InstalledProvenance {
+  return {
+    recordVersion: record.version,
+    runtimeVersion: record.runtimeVersion,
+    sourceKind: record.source.kind,
+    archiveSha256: record.archiveSha256,
+  };
+}
+
+/** Both archives are known and identical; a directory install has no digest. */
+export function isSameArchive(
+  targetSha256: string | null,
+  installedSha256: string | null,
+): boolean {
+  return targetSha256 !== null && targetSha256 === installedSha256;
 }
 
 /**
@@ -761,7 +882,7 @@ export async function assertStoreFormatFloorAtCommit(args: {
    * The archive's own `version.json` stamp, or `null` when it declares none.
    *
    * Takes precedence over `committingVersion` as the version this check
-   * judges (`storeFormatFloorTargetVersion`), because a record version can be
+   * judges (`storeFormatFloorBuildVersion`), because a record version can be
    * derived from a local filename while this one is read from the tree.
    */
   readonly declaredRuntimeVersion: string | null;
@@ -777,10 +898,11 @@ export async function assertStoreFormatFloorAtCommit(args: {
   readonly installedVersion: string | null;
   /** See `StoreFormatFloorInput.installedStoreFormats`. */
   readonly installedStoreFormats: HostStoreFormats | null;
+  readonly provenance: StoreFloorProvenance;
   readonly evidence: StoreFormatFloorEvidence;
   readonly logger: ILogger;
 }): Promise<void> {
-  const targetVersion = storeFormatFloorTargetVersion(
+  const targetVersion = storeFormatFloorBuildVersion(
     args.declaredRuntimeVersion,
     args.committingVersion,
   );
@@ -809,7 +931,8 @@ export async function assertStoreFormatFloorAtCommit(args: {
     targetIdentity: args.targetIdentity,
     surveyRoots: args.surveyRoots,
     targetVersion,
-    publishedStoreFormats: publishedStoreFormatsForTarget(
+    publishedStoreFormats: stagedOrEvidencedStoreFormats(
+      args.provenance.targetEntry,
       args.evidence,
       targetVersion,
     ),
@@ -819,6 +942,7 @@ export async function assertStoreFormatFloorAtCommit(args: {
     declaredStoreFormats: args.declaredStoreFormats,
     installedVersion: args.installedVersion,
     installedStoreFormats: args.installedStoreFormats,
+    provenance: args.provenance,
     acceptStoreFormatLoss: args.evidence.acceptStoreFormatLoss,
     site: args.evidence.site,
     logger: args.logger,
@@ -870,12 +994,31 @@ function applicabilityOperands(input: {
  * rather than written twice because the two checks disagreeing about which
  * build is landing is precisely the bug class this file keeps producing.
  */
-export function publishedStoreFormatsForTarget(
+function publishedStoreFormatsForTarget(
   evidence: StoreFormatFloorEvidence,
   targetVersion: string,
 ): HostStoreFormats | null {
   if (evidence.clearedVersion !== targetVersion) return null;
   return evidence.publishedStoreFormats;
+}
+
+/**
+ * What the post-stage checks resolve as published: the entry the staged bytes
+ * were resolved through, which needs no version test because those bytes passed
+ * that entry's digest, else what the early gate carried down.
+ *
+ * Staging reads the manifest under the registry client's own retry budget, so
+ * this is what still answers when the gate's short lookup did not.
+ */
+export function stagedOrEvidencedStoreFormats(
+  stagedEntry: TargetRegistryEntry | null,
+  evidence: StoreFormatFloorEvidence,
+  targetVersion: string,
+): HostStoreFormats | null {
+  return (
+    stagedEntry?.storeFormats ??
+    publishedStoreFormatsForTarget(evidence, targetVersion)
+  );
 }
 
 /**
@@ -916,13 +1059,14 @@ export async function assertStoreFormatFloorAfterStop(args: {
   readonly targetIdentity: StoreFloorTargetIdentity;
   /** See `StoreFormatFloorInput.surveyRoots`. */
   readonly surveyRoots: ChatStoreSurveyRoots;
-  /** Already resolved through {@link storeFormatFloorTargetVersion}. */
+  /** Already resolved through {@link storeFormatFloorBuildVersion}. */
   readonly targetVersion: string;
   readonly declaredStoreFormats: HostStoreFormats | null;
   readonly installedVersion: string | null;
   readonly installedStoreFormats: HostStoreFormats | null;
-  /** See `publishedStoreFormatsForTarget` - the same value the tail check used. */
+  /** See `stagedOrEvidencedStoreFormats` - the same value the tail check used. */
   readonly publishedStoreFormats: HostStoreFormats | null;
+  readonly provenance: StoreFloorProvenance;
   /**
    * The quiescence probe, LAZY: asked only once applicability and formats
    * have failed to settle the move. It can wait out the service manager's
@@ -936,6 +1080,10 @@ export async function assertStoreFormatFloorAfterStop(args: {
   readonly site: StoreFormatFloorSite;
   readonly logger: ILogger;
 }): Promise<void> {
+  if (args.provenance.sameArchive) {
+    logFloorSameArchive(args);
+    return;
+  }
   const operands = applicabilityOperands(args);
   const applicability = storeFloorApplicability(
     args.targetVersion,
@@ -996,9 +1144,7 @@ export async function assertStoreFormatFloorAfterStop(args: {
       // place (a release above its ceiling with no readable sidecar) is
       // INCOMPARABLE, and the refusal must not assert an ordering it never
       // established - a same-version repair reinstall reaches this arm.
-      target.kind === "known" && installed?.kind === "known"
-        ? "it reads an older chat store format"
-        : "its chat store format cannot be compared with the installed build's",
+      quiescenceFormatsVerdict(target, installed),
     );
     const fields = {
       environment: args.environment,
@@ -1034,10 +1180,21 @@ export async function assertStoreFormatFloorAfterStop(args: {
     declaredStoreFormats: args.declaredStoreFormats,
     installedVersion: args.installedVersion,
     installedStoreFormats: args.installedStoreFormats,
+    provenance: args.provenance,
     acceptStoreFormatLoss: args.acceptStoreFormatLoss,
     site: args.site,
     logger: args.logger,
   });
+}
+
+function quiescenceFormatsVerdict(
+  target: HostStoreFormatsKnowledge,
+  installed: HostStoreFormatsKnowledge | null,
+): string {
+  if (target.kind !== "known") return "its chat store format is unknown";
+  return installed?.kind === "known"
+    ? "it reads an older chat store format"
+    : "its chat store format cannot be compared with the installed build's";
 }
 
 function quiescenceRefusal(
@@ -1045,6 +1202,7 @@ function quiescenceRefusal(
     readonly environment: Environment;
     readonly targetVersion: string;
     readonly installedVersion: string | null;
+    readonly provenance: StoreFloorProvenance;
     readonly site: StoreFormatFloorSite;
   },
   reason: SwapQuiescenceGap,
@@ -1055,7 +1213,7 @@ function quiescenceRefusal(
   const message =
     reason === "service-manager-unreachable"
       ? `${args.site}: ${describeQuiescenceGap(reason)}. Nothing has been replaced. Run this from a desktop or login session.`
-      : `${args.site}: refusing to install host ${args.targetVersion} over ${describeInstalled(args.installedVersion)} - ${formatsVerdict}, and ${describeQuiescenceGap(reason)}. Nothing has been replaced. Stop the host and retry, or rerun with --accept-store-format-loss to install it anyway and lose access to any chats it cannot open.`;
+      : `${args.site}: refusing to install host ${args.targetVersion} over ${describeInstalled(args)} - ${formatsVerdict}, and ${describeQuiescenceGap(reason)}. Nothing has been replaced. Stop the host and retry, or rerun with --accept-store-format-loss to install it anyway and lose access to any chats it cannot open.`;
   return cliError({
     code: CLI_ERROR_CODES.HOST_STORE_FORMAT_FLOOR,
     message,
@@ -1073,7 +1231,8 @@ function quiescenceRefusal(
 
 /**
  * Evidence for a caller that could NOT gate early - it had no concrete version
- * before staging (`--from`, an implicit `latest`).
+ * before staging (`--from`, an implicit `latest`), or the early gate could not
+ * place the version it had.
  *
  * `clearedVersion: null` is a statement, not a placeholder: the commit tail
  * reads it as "nothing was pre-cleared", resolves the target through the fixed
@@ -1105,6 +1264,12 @@ export function ungatedStoreFormatFloorEvidence(
  * hoisted above the applicability test would put a manifest fetch on every
  * `host install --release`, including the ones that install something newer.
  *
+ * It refuses only what it can place. A target it cannot - the lookup timed out
+ * or failed, the entry is missing or silent, or no entry applies - goes to the
+ * commit tail, which every install passes through and which holds what this
+ * gate does not: the entry the bytes were resolved through and the archive's
+ * own declaration. The tail still refuses a target nothing can place.
+ *
  * Callers with no concrete version yet (`--from`, an implicit `latest`) skip
  * this and rely on `assertStoreFormatFloorAtCommit`, which sees the version
  * that actually resolved.
@@ -1124,6 +1289,7 @@ export async function gateStoreFormatFloor(args: {
   readonly consultRegistry: boolean;
   /** See `StoreFormatFloorInput.installedStoreFormats`. */
   readonly installedStoreFormats: HostStoreFormats | null;
+  readonly installedProvenance: InstalledProvenance | null;
   readonly acceptStoreFormatLoss: boolean;
   readonly site: StoreFormatFloorSite;
   readonly logger: ILogger;
@@ -1156,13 +1322,32 @@ export async function gateStoreFormatFloor(args: {
     });
     return { ...evidence, publishedStoreFormats: null };
   }
-  const publishedStoreFormats = args.consultRegistry
-    ? await lookupPublishedStoreFormats(
+  const entry = args.consultRegistry
+    ? await lookupTargetRegistryEntry(
         args.environment,
         args.targetVersion,
         args.logger,
       )
     : null;
+  const publishedStoreFormats = entry?.storeFormats ?? null;
+  const target = resolveHostStoreFormats(
+    args.targetVersion,
+    publishedStoreFormats,
+  );
+  if (target.kind === "unknown") {
+    args.logger.info("Host store-format floor deferred to the commit tail", {
+      environment: args.environment,
+      site: args.site,
+      targetVersion: args.targetVersion,
+      installedVersion: args.installedVersion,
+      targetEntryRead: entry !== null,
+      targetFormatUnknownReason: target.reason,
+    });
+    return ungatedStoreFormatFloorEvidence(
+      args.site,
+      args.acceptStoreFormatLoss,
+    );
+  }
   await assertHostStoreFormatFloor({
     environment: args.environment,
     // A pre-stage gate holds no archive tree and no install record yet - it
@@ -1180,6 +1365,14 @@ export async function gateStoreFormatFloor(args: {
     declaredStoreFormats: null,
     installedVersion: args.installedVersion,
     installedStoreFormats: args.installedStoreFormats,
+    provenance: {
+      installed: args.installedProvenance,
+      targetEntry: entry,
+      sameArchive: isSameArchive(
+        entry?.archiveSha256 ?? null,
+        args.installedProvenance?.archiveSha256 ?? null,
+      ),
+    },
     acceptStoreFormatLoss: args.acceptStoreFormatLoss,
     site: args.site,
     logger: args.logger,
@@ -1187,25 +1380,28 @@ export async function gateStoreFormatFloor(args: {
   return { ...evidence, publishedStoreFormats };
 }
 
+/** A target's entry, with the digest of this platform's archive. */
+interface LookedUpTargetEntry extends TargetRegistryEntry {
+  readonly archiveSha256: string | null;
+}
+
 /**
- * The TARGET's published `storeFormats`, looked up on the registry manifest.
+ * The TARGET's registry entry, looked up on the manifest, or `null` when the
+ * manifest has none or could not be read in time.
  *
- * Modelled on `createRegistryYankLookup`, with the opposite failure posture:
- * the yank lookup fails OPEN because refusing an install over an unreachable
- * manifest would be worse than installing a withdrawn build, while a floor
- * that fails open is not a floor. Every failure here yields `null`, which
- * sends the resolution to the fixed table - and a target the table does not
- * cover is then UNKNOWN, which refuses.
+ * Modelled on `createRegistryYankLookup`, which also never fails the command
+ * over an unreachable manifest. Every failure here yields `null`, which leaves
+ * the target to the fixed table and then to the commit tail.
  *
- * Only ever called on a path that has already decided the target is older than
- * the install, so an offline machine pays this timeout on a downgrade and
- * never on an ordinary update.
+ * Only ever called on a path that has already decided the target is not
+ * provably newer than the install, so an offline machine pays this timeout on
+ * a downgrade and never on an ordinary update.
  */
-export async function lookupPublishedStoreFormats(
+async function lookupTargetRegistryEntry(
   environment: Environment,
   version: string,
   logger: ILogger,
-): Promise<HostStoreFormats | null> {
+): Promise<LookedUpTargetEntry | null> {
   const manifestUrl = resolveManifestUrl().url;
   const controller = new AbortController();
   let watchdogExpired = false;
@@ -1224,18 +1420,19 @@ export async function lookupPublishedStoreFormats(
       manifestUrl,
     ).manifest;
     const entry = manifest.versions.find((row) => row.version === version);
-    return entry?.storeFormats ?? null;
+    if (entry === undefined) return null;
+    return {
+      storeFormats: entry.storeFormats,
+      archiveSha256: entry.platforms[currentHostPlatformKey()]?.sha256 ?? null,
+    };
   } catch (err) {
-    logger.warn(
-      "Host store-format lookup failed; falling back to the built-in table",
-      {
-        environment,
-        manifestUrl,
-        version,
-        watchdogExpired,
-        errorName: errorFromUnknown(err).name,
-      },
-    );
+    logger.warn("Host store-format lookup failed", {
+      environment,
+      manifestUrl,
+      version,
+      watchdogExpired,
+      errorName: errorFromUnknown(err).name,
+    });
     return null;
   } finally {
     clearTimeout(watchdog);

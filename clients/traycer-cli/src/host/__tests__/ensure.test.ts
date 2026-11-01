@@ -399,7 +399,10 @@ describe("ensureHost", () => {
   });
 
   it("fast no-op when installed + registered + running (no lock, no install)", async () => {
-    readHostInstallRecordMock.mockResolvedValue({ version: "1.5.0" });
+    readHostInstallRecordMock.mockResolvedValue({
+      version: "1.5.0",
+      source: { kind: "registry", value: "1.5.0" },
+    });
     const controller = makeController("running");
     createServiceControllerMock.mockReturnValue(controller);
 
@@ -479,7 +482,10 @@ describe("ensureHost", () => {
   });
 
   it("escalate-once: install's own recovery run is accepted without a duplicate IgnoreNew start", async () => {
-    readHostInstallRecordMock.mockResolvedValue({ version: "1.5.0" });
+    readHostInstallRecordMock.mockResolvedValue({
+      version: "1.5.0",
+      source: { kind: "registry", value: "1.5.0" },
+    });
     const controller = makeController("stopped");
     let startCalls = 0;
     let recovered = false;
@@ -527,7 +533,10 @@ describe("ensureHost", () => {
   });
 
   it("escalate-once: failed install launch gets one verified retry, then reports its honest retry error", async () => {
-    readHostInstallRecordMock.mockResolvedValue({ version: "1.5.0" });
+    readHostInstallRecordMock.mockResolvedValue({
+      version: "1.5.0",
+      source: { kind: "registry", value: "1.5.0" },
+    });
     const controller = makeController("stopped");
     const startError = cliError({
       code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
@@ -564,7 +573,10 @@ describe("ensureHost", () => {
   });
 
   it("surfaces a failed task-definition rewrite instead of retrying the stale task", async () => {
-    readHostInstallRecordMock.mockResolvedValue({ version: "1.5.0" });
+    readHostInstallRecordMock.mockResolvedValue({
+      version: "1.5.0",
+      source: { kind: "registry", value: "1.5.0" },
+    });
     const controller = makeController("stopped");
     controller.start = vi.fn(async () => {
       throw cliError({
@@ -665,7 +677,10 @@ describe("ensureHost", () => {
 
   it("reinstalls when the supported host version does not match the record", async () => {
     config.supportedHostVersion = "1.7.2";
-    readHostInstallRecordMock.mockResolvedValue({ version: "1.6.0" });
+    readHostInstallRecordMock.mockResolvedValue({
+      version: "1.6.0",
+      source: { kind: "registry", value: "1.6.0" },
+    });
     const controller = makeController("running");
     createServiceControllerMock.mockReturnValue(controller);
     commitHostInstallSourceMock.mockResolvedValue({
@@ -690,7 +705,10 @@ describe("ensureHost", () => {
 
   it("probes the busy check before reinstalling a running host (not forced)", async () => {
     config.supportedHostVersion = "1.7.2";
-    readHostInstallRecordMock.mockResolvedValue({ version: "1.6.0" });
+    readHostInstallRecordMock.mockResolvedValue({
+      version: "1.6.0",
+      source: { kind: "registry", value: "1.6.0" },
+    });
     createServiceControllerMock.mockReturnValue(makeController("running"));
 
     const result = await ensureHost(makeOpts({}));
@@ -701,7 +719,10 @@ describe("ensureHost", () => {
 
   it("aborts the reinstall when the busy probe throws E_HOST_BUSY, discarding the already-staged temp without ever committing", async () => {
     config.supportedHostVersion = "1.7.2";
-    readHostInstallRecordMock.mockResolvedValue({ version: "1.6.0" });
+    readHostInstallRecordMock.mockResolvedValue({
+      version: "1.6.0",
+      source: { kind: "registry", value: "1.6.0" },
+    });
     createServiceControllerMock.mockReturnValue(makeController("running"));
     assertHostNotBusyMock.mockRejectedValue(
       cliError({
@@ -724,7 +745,10 @@ describe("ensureHost", () => {
 
   it("--force skips the busy probe and reinstalls a running host", async () => {
     config.supportedHostVersion = "1.7.2";
-    readHostInstallRecordMock.mockResolvedValue({ version: "1.6.0" });
+    readHostInstallRecordMock.mockResolvedValue({
+      version: "1.6.0",
+      source: { kind: "registry", value: "1.6.0" },
+    });
     createServiceControllerMock.mockReturnValue(makeController("running"));
 
     const result = await ensureHost(makeOpts({ force: true }));
@@ -735,7 +759,10 @@ describe("ensureHost", () => {
 
   it("always consults the busy check when reinstalling (the check no-ops when no live host)", async () => {
     config.supportedHostVersion = "1.7.2";
-    readHostInstallRecordMock.mockResolvedValue({ version: "1.6.0" });
+    readHostInstallRecordMock.mockResolvedValue({
+      version: "1.6.0",
+      source: { kind: "registry", value: "1.6.0" },
+    });
     createServiceControllerMock.mockReturnValue(makeController("stopped"));
 
     const result = await ensureHost(makeOpts({}));
@@ -749,7 +776,10 @@ describe("ensureHost", () => {
 
   it("--force reinstalls even when the install record already matches (no satisfied no-op)", async () => {
     config.supportedHostVersion = "1.7.2";
-    readHostInstallRecordMock.mockResolvedValue({ version: "1.7.2" });
+    readHostInstallRecordMock.mockResolvedValue({
+      version: "1.7.2",
+      source: { kind: "registry", value: "1.7.2" },
+    });
     createServiceControllerMock.mockReturnValue(makeController("running"));
     commitHostInstallSourceMock.mockResolvedValue({
       record: {
@@ -791,7 +821,10 @@ describe("ensureHost", () => {
   });
 
   it("noServiceRegister no-ops when bytes already installed (ignores service state)", async () => {
-    readHostInstallRecordMock.mockResolvedValue({ version: "1.5.0" });
+    readHostInstallRecordMock.mockResolvedValue({
+      version: "1.5.0",
+      source: { kind: "registry", value: "1.5.0" },
+    });
     const controller = makeController("not-installed");
     createServiceControllerMock.mockReturnValue(controller);
 
@@ -877,7 +910,10 @@ describe("ensureHost", () => {
   });
 
   it("reinstalls when an explicit --release version does not match the record", async () => {
-    readHostInstallRecordMock.mockResolvedValue({ version: "1.5.0" });
+    readHostInstallRecordMock.mockResolvedValue({
+      version: "1.5.0",
+      source: { kind: "registry", value: "1.5.0" },
+    });
     const controller = makeController("running");
     createServiceControllerMock.mockReturnValue(controller);
 
@@ -896,7 +932,10 @@ describe("ensureHost", () => {
   // because `--keep-installed` is threaded all the way through `ensureHost`.
   it("regression: installed 1.2.0, pin 1.3.0-rc.4, --keep-installed - no-op, no reinstall", async () => {
     config.supportedHostVersion = "1.3.0-rc.4";
-    readHostInstallRecordMock.mockResolvedValue({ version: "1.2.0" });
+    readHostInstallRecordMock.mockResolvedValue({
+      version: "1.2.0",
+      source: { kind: "registry", value: "1.2.0" },
+    });
     const controller = makeController("running");
     createServiceControllerMock.mockReturnValue(controller);
 

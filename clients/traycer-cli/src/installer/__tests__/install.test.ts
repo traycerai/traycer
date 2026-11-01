@@ -378,7 +378,10 @@ type CommitSourceOptions = Parameters<
 // the actuator-reported disruption boundary (#1752 rounds 10/11), which every
 // call must STATE in production and which only the pins that assert the
 // boundary care about here. The sites that do assert it pass their own.
-type CommitDefaultedOptions = "verifyMutationCapability" | "onWillSwap";
+type CommitDefaultedOptions =
+  | "verifyMutationCapability"
+  | "onWillSwap"
+  | "targetRegistryEntry";
 const commitInstallFromSource = (
   options: Omit<CommitSourceOptions, CommitDefaultedOptions> &
     Partial<Pick<CommitSourceOptions, CommitDefaultedOptions>>,
@@ -388,6 +391,7 @@ const commitInstallFromSource = (
     verifyMutationCapability:
       options.verifyMutationCapability ?? testMutationVerifier,
     onWillSwap: options.onWillSwap ?? null,
+    targetRegistryEntry: options.targetRegistryEntry ?? null,
   });
 type StageSourceOptions = Parameters<typeof stageHostInstallSourceRaw>[0];
 const stageHostInstallSource = (
@@ -1689,7 +1693,10 @@ describe("stageHostInstallSource while the data folder is moved", () => {
     rmSync(sandboxRoot, { recursive: true, force: true });
   });
 
-  async function writeInstalled(version: string): Promise<void> {
+  async function writeInstalled(
+    version: string,
+    runtimeVersion: string | null,
+  ): Promise<void> {
     const installDir = installDirFor(ENV);
     mkdirSync(installDir, { recursive: true });
     const executablePath = join(installDir, "traycer-host");
@@ -1697,7 +1704,7 @@ describe("stageHostInstallSource while the data folder is moved", () => {
     await writeHostInstallRecord(ENV, {
       installId: null,
       version,
-      runtimeVersion: null,
+      runtimeVersion,
       platform: currentInstallPlatform(),
       arch: currentInstallArch(),
       installedAt: new Date().toISOString(),
@@ -1724,7 +1731,7 @@ describe("stageHostInstallSource while the data folder is moved", () => {
   }
 
   it("refuses an older registry source over the install before any download or owned temp dir", async () => {
-    await writeInstalled("2.0.0");
+    await writeInstalled("2.0.0", null);
     let downloads = 0;
     mocks.registryClient = registryFor("1.0.0", () => {
       downloads += 1;
@@ -1743,6 +1750,20 @@ describe("stageHostInstallSource while the data folder is moved", () => {
 
     expect(downloads).toBe(0);
     expect(existsSync(stagingRootFor(ENV))).toBe(false);
+  });
+
+  it("orders a side-loaded install by its runtime version, not its label", async () => {
+    await writeInstalled("local-host.tar.gz-2026-11-01T07-54-28-844Z", "1.0.0");
+    mocks.registryClient = registryFor("1.0.0", () => undefined);
+
+    const staged = await stageHostInstallSource({
+      environment: ENV,
+      source: { kind: "registry", versionRequest: "1.0.0" },
+      onProgress: () => undefined,
+      recordVersionOverride: null,
+    });
+
+    expect(staged.version).toBe("1.0.0");
   });
 
   it("with NO install record, refuses a registry source below the CLI's stamped supported host before any download or owned temp dir", async () => {
@@ -2238,6 +2259,7 @@ describe("commitHostInstallSource - reconcile runs BEFORE the commit (Finding 2)
       signatureVerifiedAt: new Date().toISOString(),
       signatureKeyId: "local-file:unsigned",
       sizeBytes: 0,
+      targetRegistryEntry: null,
     };
   }
 

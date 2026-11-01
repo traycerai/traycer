@@ -487,7 +487,7 @@ describe("applyHost", () => {
     // the exact synthetic string `host install --from` produces - only
     // `commitInstallFromSource`'s direct callers can. What IS reachable, and
     // what these tests pin instead, is `apply.ts`'s own wiring of
-    // `storeFormatFloorTargetVersion(staged.runtimeVersion, staged.version)`:
+    // `storeFormatFloorBuildVersion(staged.runtimeVersion, staged.version)`:
     // a staged record's own declared runtime stamp must be the version the
     // gate judges, not the record's `version` field, whenever the two
     // diverge.
@@ -520,6 +520,34 @@ describe("applyHost", () => {
       expect(onWillCommitStaged).not.toHaveBeenCalled();
       expect(mocks.callOrder).not.toContain("busy-check");
       expect(mocks.lifecycleCalls).toHaveLength(0);
+    });
+
+    it("judges a side-loaded install by its runtime version and clears the identical archive", async () => {
+      await writeInstall("local-host.tar.gz-2026-11-01T07-54-28-844Z", {
+        runtimeVersion: "1.3.0-rc.4",
+        archiveSha256: "a".repeat(64),
+      });
+      await writeStaged("1.4.0", {
+        runtimeVersion: "1.2.0",
+        archiveSha256: "a".repeat(64),
+      });
+      await writeStampedChatDbFor(ENV, "epic-on-disk", 9);
+
+      const result = await applyHost({
+        environment: ENV,
+        force: false,
+        noService: false,
+        expectedStageFingerprint: null,
+        onProgress: () => {},
+      });
+
+      expect(result.outcome).toBe("applied");
+      expect(
+        mocks.assertHostStoreFormatFloorMock.mock.calls[0]?.[0],
+      ).toMatchObject({
+        installedVersion: "1.3.0-rc.4",
+        provenance: { sameArchive: true },
+      });
     });
 
     it("applies when the staged tree's own version.json declares a storeFormats that clears the chat store on disk", async () => {

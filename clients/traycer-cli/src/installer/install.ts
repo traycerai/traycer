@@ -40,11 +40,15 @@ import {
 } from "./version-sidecar";
 import {
   assertStoreFormatFloorAfterStop,
+  type StoreFloorProvenance,
   type StoreFloorTargetIdentity,
   assertStoreFormatFloorAtCommit,
-  publishedStoreFormatsForTarget,
-  storeFormatFloorTargetVersion,
+  installedProvenanceOf,
+  isSameArchive,
+  stagedOrEvidencedStoreFormats,
+  storeFormatFloorBuildVersion,
   type StoreFormatFloorEvidence,
+  type TargetRegistryEntry,
 } from "../host/store-format-floor";
 import { observeSwapQuiescence } from "../host/swap-quiescence";
 import {
@@ -314,6 +318,10 @@ export interface StagedHostInstallSource {
   readonly signatureVerifiedAt: string;
   readonly signatureKeyId: string;
   readonly sizeBytes: number;
+  // The manifest entry these bytes were resolved through and verified against;
+  // `null` for a local source. Read under the registry client's retry budget,
+  // so the commit tail has an answer when the early gate's lookup had none.
+  readonly targetRegistryEntry: TargetRegistryEntry | null;
 }
 
 // Phase 1 (Tech Plan, "Lock-scope restructure"): download/verify/extract
@@ -347,7 +355,13 @@ export async function stageHostInstallSource(
     refuseOlderHostWhileDataMoved({
       command: "host install",
       environment: opts.environment,
-      installedVersion: installed?.version ?? null,
+      installedVersion:
+        installed === null
+          ? null
+          : storeFormatFloorBuildVersion(
+              installed.runtimeVersion,
+              installed.version,
+            ),
       targetVersion: plan.resolved.entry.version,
     });
   }
@@ -412,6 +426,10 @@ export async function stageHostInstallSource(
       signatureVerifiedAt: staging.signatureVerifiedAt,
       signatureKeyId: staging.signatureKeyId,
       sizeBytes: staging.sizeBytes,
+      targetRegistryEntry:
+        plan.kind === "registry"
+          ? { storeFormats: plan.resolved.entry.storeFormats }
+          : null,
     };
   } catch (err) {
     // The owner-tokened temp (and its archive, if separate) is
@@ -611,6 +629,7 @@ export async function commitHostInstallSource(
       lifecycle: opts.lifecycle,
       verifyMutationCapability: opts.verifyMutationCapability,
       onWillSwap: opts.onWillSwap,
+      targetRegistryEntry: opts.staged.targetRegistryEntry,
       storeFormatFloor: opts.storeFormatFloor,
       onCommitted: () => {
         swapped = true;
@@ -798,6 +817,8 @@ export interface CommitInstallFromSourceOptions {
    * hook by construction: its failure is captured and the swap proceeds.
    */
   readonly storeFormatFloor: StoreFormatFloorEvidence;
+  /** See `StagedHostInstallSource.targetRegistryEntry`. */
+  readonly targetRegistryEntry: TargetRegistryEntry | null;
 }
 
 export interface CommitInstallFromSourceResult {
@@ -826,6 +847,7 @@ interface CommitFloorOperands {
   readonly declaredStoreFormats: HostStoreFormats | null;
   readonly installedVersion: string | null;
   readonly installedStoreFormats: HostStoreFormats | null;
+  readonly provenance: StoreFloorProvenance;
 }
 
 /**
@@ -862,18 +884,20 @@ async function assertFloorAfterStopOrRestore(
       environment: opts.environment,
       targetIdentity: operands.targetIdentity,
       surveyRoots: operands.surveyRoots,
-      targetVersion: storeFormatFloorTargetVersion(
+      targetVersion: storeFormatFloorBuildVersion(
         opts.runtimeVersion,
         opts.version,
       ),
       declaredStoreFormats: operands.declaredStoreFormats,
       installedVersion: operands.installedVersion,
       installedStoreFormats: operands.installedStoreFormats,
+      provenance: operands.provenance,
       // The same published formats the check above resolved, through the same
       // rule - the two must not disagree about which build is landing.
-      publishedStoreFormats: publishedStoreFormatsForTarget(
+      publishedStoreFormats: stagedOrEvidencedStoreFormats(
+        opts.targetRegistryEntry,
         opts.storeFormatFloor,
-        storeFormatFloorTargetVersion(opts.runtimeVersion, opts.version),
+        storeFormatFloorBuildVersion(opts.runtimeVersion, opts.version),
       ),
       observeQuiescence: () =>
         observeSwapQuiescence(opts.environment, operands.surveyRoots, logger),
@@ -913,7 +937,7 @@ export async function commitInstallFromSource(
     opts.lifecycle.setMutationVerifier(verifyMutationCapability);
   }
   const previous = await readHostInstallRecord(opts.environment);
-  // Read ONCE and reused by the post-stop check below. Both need the same four
+  // Read ONCE and reused by the post-stop check below. Both need the same
   // operands, and re-deriving them after the stop would re-read two sidecars
   // for no gain - worse, it would let the two checks silently disagree about
   // which build is landing.
@@ -936,7 +960,13 @@ export async function commitInstallFromSource(
       opts.environment,
       logger,
     ),
-    installedVersion: previous?.version ?? null,
+    installedVersion:
+      previous === null
+        ? null
+        : storeFormatFloorBuildVersion(
+            previous.runtimeVersion,
+            previous.version,
+          ),
     installedStoreFormats:
       previous === null
         ? null
@@ -945,6 +975,14 @@ export async function commitInstallFromSource(
             opts.environment,
             logger,
           ),
+    provenance: {
+      installed: previous === null ? null : installedProvenanceOf(previous),
+      targetEntry: opts.targetRegistryEntry,
+      sameArchive: isSameArchive(
+        opts.archiveSha256,
+        previous?.archiveSha256 ?? null,
+      ),
+    },
   };
   // Before the record is materialized and before the lifecycle stops
   // anything: a refusal here has moved nothing and taken nothing down.
@@ -973,6 +1011,7 @@ export async function commitInstallFromSource(
     // record at the swap is the one that matters, and it may not be the one
     // the early gate saw.
     installedStoreFormats: floorOperands.installedStoreFormats,
+    provenance: floorOperands.provenance,
     evidence: opts.storeFormatFloor,
     logger,
   });
