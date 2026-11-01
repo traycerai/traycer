@@ -967,6 +967,78 @@ describe("runStagedSandbox on a resting sandbox", () => {
     });
   });
 
+  describe("a run resumed after a reload", () => {
+    const RESTING_ROW = (state: SandboxSummary["state"]) =>
+      row({
+        id: "sbx_resting",
+        hostId: "host-resting",
+        state,
+        guestConfigured: true,
+      });
+
+    function stageWoken(step: "applying" | "booting"): void {
+      const store = useStagedSandboxStore.getState();
+      store.stage(surfaceKey, RESTING);
+      store.begin(surfaceKey, false, 1_000_000, false);
+      store.report(surfaceKey, {
+        createdSandboxId: "sbx_resting",
+        createdHostId: "host-resting",
+        step,
+        failure: null,
+      });
+      store.report(surfaceKey, { sendTaken: true });
+      onTestFinished(holdHandoffOwner(surfaceKey, null, ownerGoneOnUnmount));
+    }
+
+    function runWith(resume: boolean, deps: StagedSandboxRunDeps) {
+      return runStagedSandbox(
+        surfaceKey,
+        false,
+        { taskId: "task-1", resume },
+        deps,
+      );
+    }
+
+    const resumable = (state: "suspended" | "awake") =>
+      harness(
+        {
+          lists: [listOf(RESTING_ROW(state))],
+          entries: [{ ...DIALABLE, hostId: "host-resting" }],
+        },
+        true,
+      );
+
+    it("makes no wake call for an existing sandbox it had already woken and finds suspended", async () => {
+      stageWoken("applying");
+      const { wake, deps } = resumable("suspended");
+
+      await runWith(true, deps);
+
+      expect(wake).not.toHaveBeenCalled();
+      expect(stageOf()).toMatchObject({ phase: "creating", step: "applying" });
+    });
+
+    it("wakes the same sandbox when the person's Keep waiting restarts the wait", async () => {
+      stageWoken("applying");
+      const { wake, deps } = resumable("awake");
+
+      await runWith(false, deps);
+
+      expect(wake).toHaveBeenCalledTimes(1);
+      expect(wake).toHaveBeenCalledWith("host-resting", "send");
+    });
+
+    it("still wakes at the booting step, where a wake under way at the reload is the person's send", async () => {
+      stageWoken("booting");
+      const { wake, deps } = resumable("awake");
+
+      await runWith(true, deps);
+
+      expect(wake).toHaveBeenCalledTimes(1);
+      expect(wake).toHaveBeenCalledWith("host-resting", "send");
+    });
+  });
+
   it("does not wake a sandbox that rested on its own after its settings step began", async () => {
     const store = useStagedSandboxStore.getState();
     store.stage(surfaceKey, PERSONAL_NEW);

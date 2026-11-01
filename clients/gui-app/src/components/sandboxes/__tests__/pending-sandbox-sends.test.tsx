@@ -66,6 +66,8 @@ import type {
   SandboxListFetchResult,
 } from "@traycer-clients/shared/host-client/sandbox-control";
 import type { CreateChatMutationInput } from "@/hooks/epic/use-epic-chat-mutations";
+import { RunnerHostContext } from "@/providers/runner-host-context";
+import { createFakeRunnerHost } from "../../../../__tests__/create-fake-runner-host";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 import {
   MESSAGE_CONTENT,
@@ -479,6 +481,7 @@ const clients = vi.hoisted(
 const refetchNothing = vi.hoisted(() => () => Promise.resolve(undefined));
 
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostDirectoryEntryForHostId: () => null,
   useHostClientForHostId: (hostId: string | null) => {
     if (hostId === null || mocks.nullClientHosts.has(hostId)) return null;
     const known = clients.get(hostId);
@@ -705,6 +708,12 @@ const hostBinding = vi.hoisted(() => ({
 vi.mock("@/lib/host", () => ({
   useHostClient: () => null,
   useHostBinding: () => hostBinding,
+  // The failed line's real actions read the control plane through it.
+  useAuthService: () => hostBinding.auth,
+}));
+// The real TabHostProvider mounts a draft mirror that needs a live stream client.
+vi.mock("@/hooks/drafts/use-tab-draft-mirror", () => ({
+  TabDraftMirrorMount: () => null,
 }));
 vi.mock("@/hooks/epic/use-task-hosts-view", () => ({
   useTaskHostsView: () =>
@@ -1022,15 +1031,20 @@ function seed(options: SeedOptions): void {
   });
 }
 
+// The failed line's real actions build their mutations over the runner host.
+const RUNNER_HOST = createFakeRunnerHost({});
+
 function mount() {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
   });
   return render(
-    <QueryClientProvider client={client}>
-      <PendingSandboxSendsDriver />
-      <PendingSandboxSendStrip epicId="epic-1" tabId="tab-1" />
-    </QueryClientProvider>,
+    <RunnerHostContext.Provider value={RUNNER_HOST}>
+      <QueryClientProvider client={client}>
+        <PendingSandboxSendsDriver />
+        <PendingSandboxSendStrip epicId="epic-1" tabId="tab-1" />
+      </QueryClientProvider>
+    </RunnerHostContext.Provider>,
   );
 }
 
@@ -5735,6 +5749,14 @@ describe("a send whose sandbox left awake on its own after the create timed out"
     expect(line.textContent).toContain("Couldn't start build-box");
     expect(line.textContent).not.toContain("nothing was charged");
     expect(line.textContent).not.toContain("wasn't sent");
+    // The line's own remedies mount under the sandbox's host, never crashing
+    // on the strip's missing tab provider.
+    expect(within(line).getByTestId("sandbox-row-retry")).toBeDefined();
+    fireEvent.keyDown(within(line).getByTestId("sandbox-row-menu"), {
+      key: "Enter",
+    });
+    expect(await screen.findByTestId("sandbox-row-menu-details")).toBeDefined();
+    expect(screen.getByTestId("sandbox-row-menu-destroy")).toBeDefined();
   });
 
   it("says a stopped sandbox's draft line in the stopped form when the composer is occupied", async () => {
@@ -6661,6 +6683,44 @@ describe("a durable dispatch claim and its sandbox's lifecycle", () => {
       expect(mocks.wake).toHaveBeenCalledTimes(1);
     },
   );
+
+  it("offers Retry only once the stored claim reads uncertain, so a click is never lost to a view that runs ahead", async () => {
+    await seedClaim("chat", "sending", SANDBOX_ID);
+    answerSandboxRows([rowIn("suspended")], FRESH);
+    answerHost(SANDBOX_HOST, CODEX_READY);
+    const state = usePendingSandboxSendStore.getState();
+    const project = state.dispatchEvent;
+    // Hold the store's projection, so it stays `sending` while the view
+    // already reads the rested claim as uncertain.
+    const held = vi
+      .spyOn(state, "dispatchEvent")
+      .mockImplementation(() => null);
+    onTestFinished(() => held.mockRestore());
+    mount();
+
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("pending-sandbox-dispatch").textContent,
+      ).toContain("Couldn't confirm the agent was created.");
+    });
+    expect(
+      usePendingSandboxSendStore.getState().sends[SEND_ID]?.dispatch,
+    ).toMatchObject({ status: "sending" });
+    expect(screen.queryByTestId("pending-sandbox-dispatch-retry")).toBeNull();
+
+    const projections = [...held.mock.calls];
+    held.mockRestore();
+    act(() => {
+      for (const call of projections) project(...call);
+    });
+    fireEvent.click(
+      await screen.findByTestId("pending-sandbox-dispatch-retry"),
+    );
+
+    await waitFor(() => {
+      expect(mocks.wake).toHaveBeenCalledWith(SANDBOX_HOST, "send");
+    });
+  });
 
   it.each(byKind(RESTING))(
     "wakes a %s sandbox when Retry replays an uncertain %s claim, and only then repeats its exact input",
