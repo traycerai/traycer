@@ -218,15 +218,24 @@ import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store"
 
 // TokenReauthForm reads/writes the TanStack Query cache (useQueryClient +
 // useTabRefreshProviders), so every banner render needs a QueryClient in scope.
-function QueryWrapper({ children }: { children: ReactNode }) {
-  return (
-    <QueryClientProvider client={new QueryClient()}>
-      {children}
-    </QueryClientProvider>
-  );
-}
+// One client per render() call, held by a stable wrapper, so view.rerender keeps
+// the same client (and its per-client coordinator) as the retained observer.
+const renderedClients: QueryClient[] = [];
+
+afterEach(() => {
+  cleanup();
+  for (const client of renderedClients) client.clear();
+  renderedClients.length = 0;
+});
 
 function render(ui: ReactElement) {
+  const client = new QueryClient();
+  renderedClients.push(client);
+  function QueryWrapper({ children }: { children: ReactNode }) {
+    return (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    );
+  }
   return baseRender(ui, { wrapper: QueryWrapper });
 }
 
@@ -534,10 +543,6 @@ describe("<ProviderReauthBanner />", () => {
     mocks.hostKind = "local";
     mocks.reportContexts.length = 0;
     useProvidersFocusStore.getState().clearFocusHarnessId();
-  });
-
-  afterEach(() => {
-    cleanup();
   });
 
   it("offers the OAuth button on a local host", () => {
@@ -2073,10 +2078,6 @@ describe("<ProviderReauthBanner /> when the provider refuses the sign-in", () =>
     mockStartLoginAlwaysSucceeds();
   });
 
-  afterEach(() => {
-    cleanup();
-  });
-
   function renderAntigravityBanner(): void {
     render(
       <ProviderReauthBanner
@@ -2213,10 +2214,6 @@ describe("<ProviderReauthBanner /> on a host that takes no credentials", () => {
     mocks.openSettings.mockClear();
     mocks.hostKind = "local";
     mocks.credentialRefusal = REFUSAL;
-  });
-
-  afterEach(() => {
-    cleanup();
   });
 
   it("renders the provider's message plus the refusal, and no OAuth, terminal or token form, for provider_unauthenticated", () => {
