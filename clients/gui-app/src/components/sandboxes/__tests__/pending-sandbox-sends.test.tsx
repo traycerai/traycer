@@ -479,13 +479,11 @@ const clients = vi.hoisted(
       }
     >(),
 );
-const requestedClientHosts = vi.hoisted(() => new Set<string>());
 const refetchNothing = vi.hoisted(() => () => Promise.resolve(undefined));
 
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostDirectoryEntryForHostId: () => null,
   useHostClientForHostId: (hostId: string | null) => {
-    if (hostId !== null) requestedClientHosts.add(hostId);
     if (hostId === null || mocks.nullClientHosts.has(hostId)) return null;
     const known = clients.get(hostId);
     if (known !== undefined) return known;
@@ -670,10 +668,14 @@ vi.mock("@/hooks/epic/use-epic-nested-focus-navigation", () => ({
 vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
   useEpicTileNavigation: () => ({ openTile: mocks.openTile }),
 }));
+// The failed line's actions read it through their tab host's client: it
+// records the host of each client it is handed.
+const environmentListClientHosts = vi.hoisted(() => [] as Array<string | null>);
 vi.mock("@/hooks/bots/use-environment-list-query", () => ({
-  useEnvironmentListQuery: () => ({
-    data: { environments: [] },
-  }),
+  useEnvironmentListQuery: (client: { readonly hostId: string } | null) => {
+    environmentListClientHosts.push(client === null ? null : client.hostId);
+    return { data: { environments: [] } };
+  },
 }));
 vi.mock("@/components/epic-canvas/sidebar/new-terminal-tile-ref", () => ({
   mintNewEpicTerminalTile: (target: {
@@ -5854,7 +5856,7 @@ describe("a send whose sandbox left awake on its own after the create timed out"
     answerSandboxRows([rowIn("awake")], FRESH);
     answerHost(SANDBOX_HOST, CODEX_READY);
     mirrorMountHosts.length = 0;
-    requestedClientHosts.clear();
+    environmentListClientHosts.length = 0;
     mountInTileBoundTo(TILE_HOST);
     await screen.findByTestId("sandbox-setup-line");
 
@@ -5863,8 +5865,10 @@ describe("a send whose sandbox left awake on its own after the create timed out"
     const line = await screen.findByTestId("sandbox-stopped-line");
     expect(line.textContent).toContain("Couldn't start build-box");
     expect(within(line).getByTestId("sandbox-row-retry")).toBeDefined();
-    // The actions resolved their host client for the sandbox's host...
-    expect(requestedClientHosts.has(SANDBOX_HOST)).toBe(true);
+    // The actions' own host-scoped read went out on the sandbox's host client,
+    // not the tile's...
+    expect(environmentListClientHosts).toContain(SANDBOX_HOST);
+    expect(environmentListClientHosts).not.toContain(TILE_HOST);
     // ...and no mirror of this tile's drafts was mounted for it.
     expect(mirrorMountHosts).not.toContain(SANDBOX_HOST);
   });
