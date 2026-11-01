@@ -15,7 +15,7 @@ export interface BotMentionCandidate {
 /** `<@userId>` in a message's text. */
 export const BOT_MENTION_TOKEN = /<@([^\s<>@]{1,64})>/g;
 
-export function botMentionToken(userId: string): string {
+function botMentionToken(userId: string): string {
   return `<@${userId}>`;
 }
 
@@ -268,7 +268,6 @@ export function mentionsToWire(
   }
   const names = [...byName.keys()].sort((a, b) => b.length - a.length);
   const pickAt = new Map(picks.map((pick) => [pick.start, pick]));
-  const endsName = (at: number): boolean => endsNameAt(text, at);
   let out = "";
   let index = 0;
   while (index < text.length) {
@@ -290,7 +289,7 @@ export function mentionsToWire(
     const name = names.find(
       (candidate) =>
         text.startsWith(candidate, at + 1) &&
-        endsName(at + 1 + candidate.length),
+        endsNameAt(text, at + 1 + candidate.length),
     );
     if (name === undefined) {
       out += "@";

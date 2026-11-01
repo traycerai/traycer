@@ -113,12 +113,11 @@ function nextRevision(): number {
 }
 
 /**
- * What a member has not sent yet on a bot's tab and must not lose to the
- * views that draw it: a card's answer, and what a thread's box or the
- * channel's holds, typed or put there by Discuss. Held above the tab's views, as the open thread is, so a
- * switch to another tab and back, or closing and reopening the thread,
- * keeps them; a send consumes what it carried. Closing the tab drops them
- * (`closeBotTab`). Not persisted.
+ * What a member has not sent yet: a card's answer, and what a thread's box
+ * or the channel's holds, typed or put there by Discuss. Kept above the
+ * channel panes, so switching channels or reopening a thread preserves it;
+ * a send consumes what it carried. Forgetting a bot or closing the Tracy
+ * surface drops its drafts (`forgetBotState`). Not persisted.
  */
 export const useBotDraftsStore = create<BotDraftsState>()((set) => ({
   answers: {},

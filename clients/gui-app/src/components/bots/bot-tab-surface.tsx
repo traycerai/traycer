@@ -1619,8 +1619,7 @@ function ErrorNotice(props: {
  * Slack's channel header: the bot's picture (its card on hover and click),
  * its name with the main bot's star, the ⋮ that opens the channel's settings,
  * and the channel's views under it. What the bot is for is the top of its channel; nothing else
- * sits here but, on the phone, Talk: the phone has no tab strip to carry it,
- * so every bot channel does (V5), and a session started here is focused on
+ * sits here but, on the phone, Talk. A session started here is focused on
  * this channel. Activity's label is the bot's indicator: what stopped, in red
  * and first, what runs and the tasks it tracks.
  */

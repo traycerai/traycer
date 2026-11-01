@@ -586,7 +586,7 @@ describe("read, asked before the offer's words came, across a dictation pause", 
 
 describe("a bot's stopped answer", () => {
   const stopped = (requestId: string): ReadonlyArray<StoppedAnswer> => [
-    { requestId, threadId: "thread-x", state: "failed", at: 5_000 },
+    { requestId, threadId: "thread-x", at: 5_000 },
   ];
   const sync = (answers: ReadonlyArray<StoppedAnswer>): void =>
     queue.syncStopped({
@@ -618,7 +618,7 @@ describe("a bot's stopped answer", () => {
 
   it("that the stream does not date is dated when first seen, and keeps that date", () => {
     const undated: ReadonlyArray<StoppedAnswer> = [
-      { requestId: "req-1", threadId: "thread-x", state: "failed", at: null },
+      { requestId: "req-1", threadId: "thread-x", at: null },
     ];
     const firstSeen = clock.now();
     sync(undated);

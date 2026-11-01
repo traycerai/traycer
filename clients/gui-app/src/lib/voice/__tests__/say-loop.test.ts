@@ -1,5 +1,5 @@
 import type { BotConversationSendResponse } from "@traycer/protocol/host/bot/conversation-schemas";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   useVoiceSessionStore,
   type VoiceFocus,
@@ -266,11 +266,12 @@ describe("a request closed while the anchor's thread is unresolved", () => {
       { focus: resolved, text: "please check the build" },
     ]);
     h.resolve(response({ threadId: "thread-q" }), 0);
-    await new Promise((settle) => setTimeout(settle, 0));
-    expect(h.sends.map((send) => send.text)).toEqual([
-      "please check the build",
-      "and the tests",
-    ]);
+    await vi.waitFor(() =>
+      expect(h.sends.map((send) => send.text)).toEqual([
+        "please check the build",
+        "and the tests",
+      ]),
+    );
     h.resolve(
       response({ messageId: "m-2", requestId: "r-2", threadId: "thread-q" }),
       1,

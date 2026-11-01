@@ -187,11 +187,11 @@ export const CARD_DECLINED_TEXT = "Okay, I did not send it.";
 export const CARD_WHICH_TEXT = "Which one? Say the choice.";
 export const CARD_FAILED_TEXT =
   "I could not tell whether that was sent. The card in the channel shows where it stands.";
-export const CARD_NO_POST_TEXT = "Okay, nothing was posted.";
+const CARD_NO_POST_TEXT = "Okay, nothing was posted.";
 export const CARD_STALE_ANSWER_TEXT =
   "Nothing was chosen: that answer was for a card that is no longer open.";
 const ON_ITS_WAY_TEXT = "Your answer to that is already on its way.";
-export const CARD_CANNOT_SEND_TEXT =
+const CARD_CANNOT_SEND_TEXT =
   "I cannot send that from here, so nothing was sent. The card in the channel can take it.";
 const OFFER_TEXT =
   "Want me to post your answer in the thread instead? Say yes or no.";
@@ -211,7 +211,7 @@ const REFUSAL_TEXT: Readonly<
     "The task's machine could not be reached, so nothing was sent.",
 };
 
-/** The choices a card's list names, in order: a question's options and Skip, or Allow and Deny. */
+/** The choices in order: a question's options, or Allow and Deny. Skip is handled separately. */
 function choicesOf(
   content: CardContent,
   question: CardQuestion | null,
@@ -380,10 +380,7 @@ function answerTail(question: CardQuestion): string {
 }
 
 /** The candidate read back alone, before a yes sends it. */
-export function cardCandidateText(
-  content: CardContent,
-  choice: CardChoice,
-): string {
+function cardCandidateText(content: CardContent, choice: CardChoice): string {
   if (content.family === "approval" && content.approval !== null) {
     const summary = content.approval.summary.trim();
     const what =
@@ -1280,7 +1277,6 @@ export function createCardDesk(deps: CardDeskDeps): CardDesk {
     return "appended";
   };
 
-  /** The router's answer to the card that listens; `true` when the card took it. */
   /** The newest of a choice's segments is the latest choice taken. */
   const noteChoice = (held: Desk, seqs: ReadonlyArray<number>): void => {
     held.latestChoiceSeq = Math.max(held.latestChoiceSeq, ...seqs);
@@ -1300,6 +1296,7 @@ export function createCardDesk(deps: CardDeskDeps): CardDesk {
     return seqs.length > 0 && Math.max(...seqs) <= held.latestChoiceSeq;
   };
 
+  /** The router's answer to the card that listens; `true` when the card took it. */
   const answerRoutedWith = (
     held: Desk,
     active: ActiveCard,

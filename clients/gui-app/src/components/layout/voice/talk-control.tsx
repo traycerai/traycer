@@ -10,7 +10,7 @@ import {
   useVoiceSessionStore,
 } from "@/stores/voice/voice-session-store";
 
-export const TALK_CONTROL_LABEL = "Talk";
+const TALK_CONTROL_LABEL = "Talk";
 
 /**
  * Talk's toggle, shared by the control and the `voice.talk.toggle` shortcut:

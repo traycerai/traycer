@@ -59,9 +59,9 @@ function setup() {
     Promise.resolve("the-answer"),
   );
   const push = (event: Record<string, unknown>): void => {
-    channel.onmessage?.({
-      data: JSON.stringify(event),
-    } as MessageEvent<unknown>);
+    channel.onmessage?.(
+      new MessageEvent("message", { data: JSON.stringify(event) }),
+    );
   };
   const connect = async (): Promise<void> => {
     const connecting = engine.connect({

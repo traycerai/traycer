@@ -1699,7 +1699,7 @@ describe("a card opened again while its act is out", () => {
     h.deliverItem(OTHER_ITEM);
     h.desk.open(ITEM, "d-again");
     h.deliver();
-    return { h, resolveAct: (response) => resolveAct(response) };
+    return { h, resolveAct };
   }
 
   it("shows that act as sending, says it is on its way, and never sends a second one", async () => {
@@ -1798,7 +1798,7 @@ describe("records that already carry the end of an act still out", () => {
     h.records.forwarded = records.forwarded;
     h.deliver();
     expect(h.card()?.state).toBe("sending");
-    return () => forward();
+    return forward;
   }
 
   it("closes the card when the call turns forwarded after the post already showed its resolution", async () => {

@@ -19,12 +19,13 @@ export type AnnotationImageAtom = {
 };
 
 function atomFor(
-  record: BrowserAnnotationRecord,
   bytes: Uint8Array,
+  fileName: string,
+  hash: string,
 ): AnnotationImageAtom {
   return {
     id: uuidv4(),
-    fileName: record.imageFileName ?? "annotation.png",
+    fileName,
     // SNIFFED, not assumed. A crop is a PNG when the browser view captures
     // it, and it is not one after a stash round trip: the stash canonicalizes
     // a large PNG to WebP and re-points the record at those bytes. Labelling
@@ -33,7 +34,7 @@ function atomFor(
     mimeType: sniffImageMimeType(bytes) ?? "image/png",
     size: bytes.byteLength,
     b64content: bytesToBase64(bytes),
-    hash: record.imageHash ?? "",
+    hash,
   };
 }
 
@@ -65,7 +66,7 @@ export async function resolveAnnotationImageAtoms(
       })) ??
       null;
     if (bytes === null) return null;
-    atoms.push(atomFor(record, bytes));
+    atoms.push(atomFor(bytes, record.imageFileName, record.imageHash));
   }
   return atoms;
 }
@@ -83,7 +84,7 @@ export function sessionAnnotationImageAtoms(
     if (record.imageHash === null || record.imageFileName === null) continue;
     const bytes = sessionImageBytes(record.imageHash);
     if (bytes === null) return null;
-    atoms.push(atomFor(record, bytes));
+    atoms.push(atomFor(bytes, record.imageFileName, record.imageHash));
   }
   return atoms;
 }
