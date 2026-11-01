@@ -333,7 +333,7 @@ describe("useChatSandboxState for a destroy this device saw", () => {
     if (state.kind !== "destroyed") {
       throw new Error(`expected a destroyed state, got ${state.kind}`);
     }
-    return taskSandboxEndLine(state.ended.name, state.ended.end);
+    return taskSandboxEndLine(state.ended.name, state.ended.end, true);
   }
 
   function destroying(
@@ -477,6 +477,7 @@ describe("an awake sandbox until its host first reports", () => {
           canEdit: true,
           ownedByViewer: true,
           environmentOwned: false,
+          staysReadable: true,
         }),
       };
     });
@@ -700,6 +701,7 @@ describe("an awake wait across wake identity, rollback and surfaces", () => {
         canEdit: true,
         ownedByViewer: true,
         environmentOwned: false,
+        staysReadable: true,
       }).line?.text;
     });
     const refreshed: RemoteHostDirectoryEntry = {
@@ -800,6 +802,7 @@ describe("an awake wait across wake identity, rollback and surfaces", () => {
         canEdit: true,
         ownedByViewer: true,
         environmentOwned: false,
+        staysReadable: true,
       });
     });
     sources.readySession = true;

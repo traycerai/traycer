@@ -108,6 +108,7 @@ function ChatHostStatus(): ReactNode {
     canEdit: true,
     ownedByViewer: true,
     environmentOwned: false,
+    staysReadable: true,
   });
   const options = useHostOptions();
   return (

@@ -3073,9 +3073,13 @@ function opensCopyWhileOwnerOffline(lock: OfflineRowLock | null): boolean {
 function offlineRowLockTooltip(
   lock: OfflineRowLock,
   sandboxLine: string | null,
+  published: boolean,
 ): string {
-  if (sandboxLine !== null)
-    return `${sandboxLine} Opens read-only from the last published copy.`;
+  if (sandboxLine !== null) {
+    return published
+      ? `${sandboxLine} Opens read-only from the last published copy.`
+      : sandboxLine;
+  }
   if (lock.reason === "host-older-than-data") {
     return `Lives on ${lock.hostLabel}, which needs a host update to read this agent. Opens read-only from the last published copy.`;
   }
@@ -3291,9 +3295,11 @@ function ChatRowButton(props: ChatRowButtonProps) {
     ownerRefusesStore,
     rowOwnerUserId,
   ]);
+  const recordHead = useEpicChatRecordHead(epicId, rowOwnerUserId, nodeId);
   const sandboxLine = useChatSandboxRowLine(
     ownerHostId,
     opensCopyWhileOwnerOffline(offlineLock),
+    recordHead !== null,
   );
   const dragData = useMemo<EpicCanvasSidebarNodeDragData | null>(
     () =>
@@ -3490,7 +3496,11 @@ function ChatRowButton(props: ChatRowButtonProps) {
             ) : null}
             {offlineLock !== null ? (
               <LazySidebarTooltipWrapper
-                label={offlineRowLockTooltip(offlineLock, sandboxLine)}
+                label={offlineRowLockTooltip(
+                  offlineLock,
+                  sandboxLine,
+                  recordHead !== null,
+                )}
                 side={popoverSide}
                 sideOffset={undefined}
                 align={placement?.align}

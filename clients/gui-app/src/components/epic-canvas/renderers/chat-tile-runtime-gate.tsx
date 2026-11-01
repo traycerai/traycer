@@ -30,6 +30,7 @@ import {
   type ChatTilePreContentFrame,
 } from "./chat-pre-content";
 import { useChatTileHostLabel } from "./use-chat-tile-host-label";
+import { ChatSandboxStateBody } from "./chat-sandbox-state-body";
 import { ChatStateLineContext } from "./chat-state-line";
 import { useChatTileHostUpdate } from "./use-chat-tile-host-update";
 
@@ -126,23 +127,7 @@ export function ChatTilePreContent(props: {
   // or unreachable one leaves the body to its footer. Neither is an offline
   // host or a failed load.
   if (stateLine !== null) {
-    return (
-      <div
-        data-testid={props.testId}
-        data-arm="sandbox-state"
-        role="status"
-        className="flex min-h-0 w-full flex-1 flex-col items-center justify-center gap-3 px-6 py-8 text-center"
-      >
-        <p className="max-w-md text-ui-sm text-muted-foreground">
-          {stateLine.line}
-        </p>
-        {stateLine.actions === null ? null : (
-          <div className="flex flex-wrap items-center justify-center gap-2">
-            {stateLine.actions}
-          </div>
-        )}
-      </div>
-    );
+    return <ChatSandboxStateBody testId={props.testId} />;
   }
   if (frame.sandboxFooter) {
     return <div data-testid={props.testId} className="min-h-0 flex-1" />;

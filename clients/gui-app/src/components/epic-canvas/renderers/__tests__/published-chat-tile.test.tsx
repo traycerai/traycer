@@ -2334,6 +2334,82 @@ describe("PublishedChatTile - the sandbox's own state", () => {
     expect(actions.getAttribute("data-source-host")).toBe("owner-host-1");
   });
 
+  describe("a destroyed sandbox whose chat has no copy to show", () => {
+    const SHORT_LINE =
+      "e2e-sbx-p3 was destroyed on Oct 28 at 00:55 after resting. Its files are gone.";
+
+    function destroyedSandbox(): void {
+      sandboxSurface.state = {
+        kind: "destroyed",
+        ended: {
+          name: "e2e-sbx-p3",
+          end: {
+            state: "destroyed",
+            destroyedAt: new Date(2026, 9, 28, 0, 55).getTime(),
+            cause: "resting",
+            actor: null,
+            idleMinutes: null,
+          },
+        },
+      };
+      signInAsOwner();
+    }
+
+    function tile(): ReactNode {
+      return (
+        <PublishedChatTile
+          node={NODE}
+          viewTabId="tab-1"
+          tileId="pane-1"
+          isActive
+          epicId="epic-1"
+        />
+      );
+    }
+
+    it("keeps today's load state while the replica read is open, then states the end alone once it answers with no copy", () => {
+      destroyedSandbox();
+      mockUseCloudChatTranscript.mockReturnValue(refusedUnpublished());
+      mockUseChatReplicaRead.mockReturnValue(replicaNotFetched());
+      const view = render(tile());
+
+      expect(
+        screen.queryByTestId(`published-chat-tile-load-${NODE.id}`),
+      ).not.toBeNull();
+      expect(screen.queryByTestId("published-chat-end-chat-1")).toBeNull();
+      expect(document.body.textContent).not.toContain("Its files are gone");
+
+      mockUseChatReplicaRead.mockReturnValue(replicaAbsent());
+      view.rerender(tile());
+
+      const body = screen.getByTestId("published-chat-end-chat-1");
+      expect(within(body).getByText(SHORT_LINE)).toBeTruthy();
+      expect(
+        within(body)
+          .getByTestId("sandbox-end-actions")
+          .getAttribute("data-source-host"),
+      ).toBe("owner-host-1");
+      expect(screen.queryByTestId("published-chat-notice")).toBeNull();
+      expect(
+        screen.queryByTestId(`published-chat-tile-load-${NODE.id}`),
+      ).toBeNull();
+      expect(document.body.textContent).not.toContain("stays readable");
+    });
+
+    it("does not read a failed replica lookup as no copy: the failure notice shows and no end line", () => {
+      destroyedSandbox();
+      mockUseCloudChatTranscript.mockReturnValue(refusedUnpublished());
+      mockUseChatReplicaRead.mockReturnValue(replicaFailed("RPC_ERROR"));
+      render(tile());
+
+      expect(
+        screen.getByTestId("published-chat-notice").dataset.stateKind,
+      ).toBe("failed");
+      expect(screen.queryByTestId("published-chat-end-chat-1")).toBeNull();
+      expect(document.body.textContent).not.toContain("Its files are gone");
+    });
+  });
+
   it("passes a resting sandbox to the session view so the composer can send, with no offline banner and no lock sentence", () => {
     sandboxSurface.state = RESTING;
     sandboxSurface.role = "editor";

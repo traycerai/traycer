@@ -174,7 +174,11 @@ export function EpicSidebarCloudChatRow(
   // online and out of reach, or offline and not.
   const ownerNotReachable = useOwnerHostNotReachable(chat.ownerHostId);
   // A sandbox owner's own line replaces the offline wording on the lock.
-  const sandboxLine = useChatSandboxRowLine(chat.ownerHostId, !ownerReachable);
+  const sandboxLine = useChatSandboxRowLine(
+    chat.ownerHostId,
+    !ownerReachable,
+    chat.headSha256 !== null,
+  );
   const lockCopy = useCloudRowLockCopy(
     chat,
     epicId,
@@ -522,7 +526,12 @@ function useCloudRowLockCopy(
     ownership.ownedByViewer || ownership.environmentOwned
       ? null
       : { name: collaboratorName };
-  return lockedRowCopy(ownerLabel, sandboxLine, collaborator);
+  return lockedRowCopy(
+    ownerLabel,
+    sandboxLine,
+    chat.headSha256 !== null,
+    collaborator,
+  );
 }
 
 /**
@@ -536,11 +545,14 @@ function useCloudRowLockCopy(
 function lockedRowCopy(
   ownerLabel: string,
   sandboxLine: string | null,
+  published: boolean,
   collaborator: { readonly name: string | null } | null,
 ): LockedRowCopy {
   if (sandboxLine !== null) {
     return {
-      tooltip: `${sandboxLine} Opens read-only from the last published copy.`,
+      tooltip: published
+        ? `${sandboxLine} Opens read-only from the last published copy.`
+        : sandboxLine,
       ariaLabel: sandboxLine,
       coversReach: false,
     };

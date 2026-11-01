@@ -23,7 +23,7 @@ export const TaskHostsViewContext = createContext<TaskHostsView>({
   kind: "none",
 });
 
-const ROW_VIEWER: ChatSandboxViewer = {
+const ROW_VIEWER: Omit<ChatSandboxViewer, "staysReadable"> = {
   reachable: false,
   canEdit: false,
   ownedByViewer: false,
@@ -35,11 +35,13 @@ const ROW_VIEWER: ChatSandboxViewer = {
  * names as a sandbox, no host or a row that is not locked: the resolver's
  * line, from what a row can read - the task's end record and names, a destroy
  * this device saw, and the host's directory row - so a row never calls a
- * sandbox an offline machine.
+ * sandbox an offline machine. A row reads no chat, so only a published head
+ * lets its line promise one.
  */
 export function useChatSandboxRowLine(
   ownerHostId: string | null,
   locked: boolean,
+  published: boolean,
 ): string | null {
   const hostId = locked ? ownerHostId : null;
   const taskHosts = use(TaskHostsViewContext);
@@ -60,7 +62,10 @@ export function useChatSandboxRowLine(
       ended === null
         ? unlistedHostState(task, readHostDirectoryEntry(hostId))
         : { kind: "destroyed", ended };
-    return resolveChatSandbox(state, ROW_VIEWER).line?.text ?? null;
-  }, [hostId, taskHosts, seenEnd, viewerUserId]);
+    return (
+      resolveChatSandbox(state, { ...ROW_VIEWER, staysReadable: published })
+        .line?.text ?? null
+    );
+  }, [hostId, taskHosts, seenEnd, viewerUserId, published]);
   return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }

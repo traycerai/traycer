@@ -6,6 +6,7 @@ import type { AuthService } from "@/lib/auth/auth-service";
 import { useHostBinding } from "@/lib/host";
 import { useChatServing } from "@/lib/chats/chat-serving-witness";
 import { useChatStreamSyncState } from "@/hooks/chats/use-chat-stream-sync-state";
+import { CHAT_NOT_VISIBLE_CODE } from "@/lib/chats/chat-not-visible-code";
 import { useExistingChatSessionFatalClose } from "@/lib/registries/chat-session-registry";
 import { useChatSandboxState } from "@/hooks/sandboxes/use-chat-sandbox-state";
 import { useSandboxEndRead } from "@/hooks/sandboxes/use-sandbox-end-read";
@@ -97,7 +98,12 @@ export function useLiveChatSandboxState(
   chatId: string,
   hostId: string,
   ownerReachable: boolean,
-): { readonly state: ChatSandboxState; readonly reachable: boolean } {
+): {
+  readonly state: ChatSandboxState;
+  readonly reachable: boolean;
+  /** `ChatSandboxViewer.staysReadable`: no refused open left the tile bare. */
+  readonly staysReadable: boolean;
+} {
   const list = useSandboxList();
   const serving = useChatServing({ hostId, epicId, chatId });
   const stream = useChatStreamSyncState(epicId, chatId, hostId);
@@ -131,15 +137,41 @@ export function useLiveChatSandboxState(
     wakeWait,
     stream.status === "open" && stream.hasContent,
   );
+  const staysReadable = !useChatOpenRefused(
+    { epicId, chatId, hostId },
+    stream.hasContent,
+  );
   const held = wakeHeldState(sandbox, opensAfterWake);
-  if (held !== null) return { state: held, reachable: false };
+  if (held !== null) return { state: held, reachable: false, staysReadable };
   if (state.kind === "unreachable" && (atRest || reading)) {
     return {
       state: { kind: "pending", name: state.sandbox.displayName },
       reachable: false,
+      staysReadable,
     };
   }
-  return { state, reachable: reachable || endRead };
+  return { state, reachable: reachable || endRead, staysReadable };
+}
+
+/**
+ * Whether the chat's own open settled on nothing to show: what serves it said
+ * it is not readable, with no transcript loaded. The tile stays live for this
+ * only when no owner is known to read a copy under.
+ */
+function useChatOpenRefused(
+  chat: {
+    readonly epicId: string;
+    readonly chatId: string;
+    readonly hostId: string;
+  },
+  hasContent: boolean,
+): boolean {
+  const fatalClose = useExistingChatSessionFatalClose(
+    chat.epicId,
+    chat.chatId,
+    chat.hostId,
+  );
+  return !hasContent && fatalClose?.code === CHAT_NOT_VISIBLE_CODE;
 }
 
 function servingKeyOf(serving: ChatServing | null): string | null {

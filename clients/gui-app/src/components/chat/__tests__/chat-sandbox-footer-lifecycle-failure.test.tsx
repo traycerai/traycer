@@ -64,6 +64,7 @@ function renderFooter(state: ChatSandboxState): void {
             canEdit: true,
             ownedByViewer: true,
             environmentOwned: false,
+            staysReadable: true,
           }).line
         }
       />

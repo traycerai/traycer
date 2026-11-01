@@ -81,7 +81,7 @@ function SessionReadsProbe(): ReactNode {
     <>
       <p data-testid="sandbox-line">
         {task.kind === "ended"
-          ? taskSandboxEndLine(task.ended.name, task.ended.end)
+          ? taskSandboxEndLine(task.ended.name, task.ended.end, true)
           : `not ended: ${task.kind}`}
       </p>
       <ul data-testid="collaborators">
@@ -229,7 +229,7 @@ describe("a hosted chat tile reads through the epic session's host", () => {
 
     await vi.waitFor(() => {
       expect(screen.getByTestId("sandbox-line").textContent).toBe(
-        taskSandboxEndLine(SANDBOX_NAME, SANDBOX_END),
+        taskSandboxEndLine(SANDBOX_NAME, SANDBOX_END, true),
       );
     });
     expect(screen.getByTestId("sandbox-line").textContent).toContain(

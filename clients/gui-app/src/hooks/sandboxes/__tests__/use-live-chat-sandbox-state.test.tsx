@@ -90,6 +90,7 @@ vi.mock("@/hooks/sandboxes/use-sandbox-control-unavailable-reason", () => ({
 
 import { useLiveChatSandboxState } from "@/hooks/sandboxes/use-live-chat-sandbox-state";
 import { useSandboxList } from "@/hooks/sandboxes/use-sandbox-list-query";
+import { CHAT_NOT_VISIBLE_CODE } from "@/lib/chats/chat-not-visible-code";
 import { resolveChatSandbox } from "@/lib/sandboxes/chat-sandbox-state";
 import { sandboxQueryKeys } from "@/lib/query-keys";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -168,6 +169,7 @@ function setup(response: SandboxListResponse) {
           canEdit: true,
           ownedByViewer: true,
           environmentOwned: false,
+          staysReadable: live.staysReadable,
         }),
         // A second list observer must receive the shared lifecycle answer.
         listedState: useSandboxList().data?.sandboxes[0]?.state,
@@ -742,5 +744,70 @@ describe("a live tile that mounts on an awake sandbox", () => {
     await waitFor(() => expect(live.result.current.listedState).toBe("awake"));
 
     expect(live.result.current.state).toEqual({ kind: "destroyed", ended });
+  });
+});
+
+describe("a live tile's promise that the chat stays readable", () => {
+  const ENDED = {
+    name: "test-box",
+    end: {
+      state: "destroyed",
+      destroyedAt: Date.UTC(2026, 9, 28, 12),
+      cause: "verb",
+      actor: "you",
+      idleMinutes: null,
+    },
+  } as const;
+  const NOT_VISIBLE: FatalErrorDetails = {
+    code: CHAT_NOT_VISIBLE_CODE,
+    reason: "This chat is not visible.",
+    incompatibleMethods: null,
+    upgradeGuidance: null,
+  };
+
+  function endedTile() {
+    sources.task = { kind: "ended", ended: ENDED };
+    return setup(listed("awake", true));
+  }
+
+  it("holds while the open is unanswered", async () => {
+    sources.hasContent = false;
+    const live = endedTile();
+    await waitFor(() => expect(live.result.current.listedState).toBe("awake"));
+
+    expect(live.result.current.staysReadable).toBe(true);
+    expect(live.result.current.view.line?.text).toMatch(
+      /Its files are gone; this chat stays readable\.$/,
+    );
+  });
+
+  it("is withdrawn when the open closes as not visible with nothing loaded", async () => {
+    sources.hasContent = false;
+    sources.fatalClose = NOT_VISIBLE;
+    const live = endedTile();
+    await waitFor(() => expect(live.result.current.listedState).toBe("awake"));
+
+    expect(live.result.current.staysReadable).toBe(false);
+    expect(live.result.current.view.line?.text).toMatch(
+      /Its files are gone\.$/,
+    );
+  });
+
+  it("holds when the close lands after a transcript loaded", async () => {
+    sources.hasContent = true;
+    sources.fatalClose = NOT_VISIBLE;
+    const live = endedTile();
+    await waitFor(() => expect(live.result.current.listedState).toBe("awake"));
+
+    expect(live.result.current.staysReadable).toBe(true);
+  });
+
+  it("holds for a refusal that is not the not-visible code", async () => {
+    sources.hasContent = false;
+    sources.fatalClose = { ...NOT_VISIBLE, code: "chat-refused" };
+    const live = endedTile();
+    await waitFor(() => expect(live.result.current.listedState).toBe("awake"));
+
+    expect(live.result.current.staysReadable).toBe(true);
   });
 });
