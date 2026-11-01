@@ -911,6 +911,9 @@ describe("TabStrip title", () => {
         );
       });
       expect(persistedTileName(tile.instanceId)).toBe("Untitled agent");
+      expect(
+        screen.getByTestId(`tab-title-generating-${tile.instanceId}`),
+      ).toBeTruthy();
     });
 
     it("shows the cloud list's title, not New agent, under a held mark", async () => {
@@ -931,6 +934,31 @@ describe("TabStrip title", () => {
         0,
       );
       expect(screen.queryByLabelText("Close New agent")).toBeNull();
+    });
+
+    it("stops the title spinner and releases the mark once the cloud list supplies the title", async () => {
+      installAbsentChat();
+      cloudListRows.value = [cloudRow("Cloud title")];
+      const tile = seedChatTile("Untitled agent");
+      renderTabStrip(tile, true);
+      await flushEpicSnapshot();
+      awaitFirstTitle();
+
+      await waitFor(() => {
+        expect(persistedTileName(tile.instanceId)).toBe("Cloud title");
+      });
+      expect(
+        screen.queryByTestId(`tab-title-generating-${tile.instanceId}`),
+      ).toBeNull();
+      // The purge is deferred to a microtask, so wait for it.
+      await waitFor(() => {
+        expect(
+          Object.hasOwn(
+            useEpicCanvasStore.getState().pendingChatTitles,
+            CHAT_ID,
+          ),
+        ).toBe(false);
+      });
     });
   });
 });

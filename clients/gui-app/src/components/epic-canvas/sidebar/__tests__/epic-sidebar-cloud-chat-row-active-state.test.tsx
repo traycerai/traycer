@@ -210,6 +210,29 @@ describe("EpicSidebarCloudChatRow first-title label (real canvas store)", () => 
     expect(row.textContent).not.toContain("New agent");
   });
 
+  it("paints Untitled agent, not New agent, for a title-less row under a mark whose owner is out of reach, and opens a published tile of the same name", () => {
+    reachability.status = "unreachable";
+    const tabId = useEpicCanvasStore
+      .getState()
+      .openEpicTab(CHAT.identity.taskId, "Epic");
+    act(() => {
+      useEpicCanvasStore
+        .getState()
+        .markChatTitlePending(CHAT.identity.chatId, "");
+    });
+
+    const row = renderRow(tabId, UNTITLED);
+
+    expect(row.getAttribute("aria-label")).toContain("Untitled agent");
+    expect(row.textContent).toContain("Untitled agent");
+    expect(row.textContent).not.toContain("New agent");
+    fireEvent.click(row);
+    const canvas = useEpicCanvasStore.getState().canvasByTabId[tabId];
+    const tiles = Object.values(canvas?.tilesByInstanceId ?? {});
+    expect(tiles.map((tile) => tile?.name)).toEqual(["Untitled agent"]);
+    expect(tiles.map((tile) => tile?.id)).not.toEqual([CHAT.identity.chatId]);
+  });
+
   it("keeps a titled row's title under a mark", () => {
     const tabId = useEpicCanvasStore
       .getState()
