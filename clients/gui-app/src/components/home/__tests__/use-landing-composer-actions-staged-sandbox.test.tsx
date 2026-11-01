@@ -18,7 +18,11 @@ import {
   RetryableTransportError,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import { returnedSandboxMessageLine } from "@/lib/sandboxes/sandbox-strings";
-import { sandboxHostEntry } from "@/lib/sandboxes/__tests__/sandbox-host-directory-fixture";
+import {
+  installHostDirectoryRows,
+  resetHostDirectoryRows,
+  sandboxHostEntry,
+} from "@/lib/sandboxes/__tests__/sandbox-host-directory-fixture";
 // Type-only, so it is erased before `vi.hoisted` runs and cannot re-enter the
 // module this file mocks.
 import type { ImageReclaimOutcome } from "@/lib/composer/landing-image-store";
@@ -288,6 +292,21 @@ registerExtraImageRootSource({ hashes: () => [...composerLiveImageRoots] });
 
 const SUBMITTED_PROMPT = "Plan the host chat bootstrap";
 const TEST_HOST_ID = "host-landing";
+const PLACEMENT_HOST_ID = "host-placement";
+
+/** What a host that serves both record lists to the end negotiates. */
+const MODERN_RECORD_METHODS = {
+  "epic.listChatRecords": { major: 1, minor: 3 },
+  "epic.listTuiAgents": { major: 1, minor: 3 },
+} as const;
+
+/** A host that has handshaken, whatever it negotiated. */
+function negotiate(
+  hostId: string,
+  methods: Readonly<Record<string, { major: number; minor: number }>>,
+): void {
+  recordNegotiatedHostManifest(hostId, methods);
+}
 const ACME_OWNER = { teamId: "t1", slug: "acme" } as const;
 
 const HOST_TOO_OLD = "This host can't create team tasks yet. Update the host.";
@@ -415,6 +434,9 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
         [],
       );
     toastLog.length = 0;
+    resetNegotiatedManifests();
+    negotiate(TEST_HOST_ID, MODERN_RECORD_METHODS);
+    negotiate(PLACEMENT_HOST_ID, MODERN_RECORD_METHODS);
     useStoppedSandboxSendReceiptStore.setState({ receipts: {}, strips: {} });
     landingMocks.request.mockReset();
     landingMocks.createTerminalAgent.mockReset();
@@ -492,6 +514,7 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
     cleanup();
     useAuthStore.getState().setSignedOut();
     resetNegotiatedManifests();
+    resetHostDirectoryRows();
     resetCloudDraftImageRecoveryForTests();
     resetLandingImageBudgetReservationsForTesting();
     composerLiveImageRoots.clear();
@@ -1088,7 +1111,6 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
   });
 
   it("sends the rollback's delete to the placement host by its id, never to the app-wide host", async () => {
-    const PLACEMENT_HOST_ID = "host-placement";
     useStagedSandboxStore.getState().stage(SURFACE, TEAM_TARGET);
     const placementRequest =
       vi.fn<(method: string, payload: unknown) => Promise<unknown>>();
@@ -1697,14 +1719,175 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
     },
   );
 
+  /**
+   * The rollback of a refused Send has ended: the gate told the person the
+   * task stays, or, with no gate, the delete went out. Waiting on either
+   * lets a delete be asserted before the toasts it would shadow.
+   */
+  async function rollbackEnded(queryClient: QueryClient): Promise<void> {
+    await waitFor(() => {
+      expect(
+        toastLog.length >= 2 ||
+          landingMocks.deleteRequest.mock.calls.length > 0,
+      ).toBe(true);
+    });
+    await refusalSettled(queryClient);
+  }
+
+  /** What a refused Send on a host that cannot prove its lists complete leaves. */
+  async function expectTaskKeptUnread(
+    queryClient: QueryClient,
+    epicId: string,
+  ): Promise<void> {
+    await rollbackEnded(queryClient);
+    expect(landingMocks.deleteRequest).not.toHaveBeenCalled();
+    expect(landingMocks.readRequest).not.toHaveBeenCalled();
+    expect(toastLog.map(({ message }) => message)).toEqual([
+      SETTING_UP_LINE,
+      "This Send may have left an empty task. Delete it from your tasks if you don't need it.",
+    ]);
+    expect(toastLog.map(({ via }) => via)).toEqual(["error", "error"]);
+    expect(wasEpicCreatedThisSession(epicId)).toBe(true);
+    expect(Object.values(useEpicCanvasStore.getState().tabsById)).toHaveLength(
+      1,
+    );
+    expectMessageBackUnsent();
+    queryClient.clear();
+  }
+
+  it.each([
+    [
+      "has no epic.listTuiAgents",
+      () =>
+        negotiate(TEST_HOST_ID, {
+          "epic.listChatRecords": { major: 1, minor: 3 },
+        }),
+    ],
+    [
+      "has no epic.listChatRecords",
+      () =>
+        negotiate(TEST_HOST_ID, {
+          "epic.listTuiAgents": { major: 1, minor: 3 },
+        }),
+    ],
+    [
+      "has epic.listTuiAgents@1.0, which withholds agents only the doc holds",
+      () =>
+        negotiate(TEST_HOST_ID, {
+          "epic.listChatRecords": { major: 1, minor: 3 },
+          "epic.listTuiAgents": { major: 1, minor: 0 },
+        }),
+    ],
+    ["recorded no handshake", () => resetNegotiatedManifests()],
+  ] as const)(
+    "a Send refused while the task is still being set up keeps its task, and says so, when the placement host %s",
+    async (_label, negotiateOldHost) => {
+      const { epicId, refuseAttach, queryClient } =
+        await startSendWithHeldAttach();
+      negotiateOldHost();
+      await refuseAttach(attachBusy());
+
+      await expectTaskKeptUnread(queryClient, epicId);
+    },
+  );
+
+  it("judges the rollback by the placement host, not by the host the attachment went to", async () => {
+    // The placement is a team's sandbox, so the attachment goes to the
+    // person's own app-wide host instead; only the placement holds the task.
+    installHostDirectoryRows([
+      sandboxHostEntry(PLACEMENT_HOST_ID, { id: "team-9", name: "Acme" }),
+    ]);
+    negotiate(TEST_HOST_ID, MODERN_RECORD_METHODS);
+    negotiate(PLACEMENT_HOST_ID, {
+      "epic.listChatRecords": { major: 1, minor: 3 },
+      "epic.listTuiAgents": { major: 1, minor: 0 },
+    });
+    useStagedSandboxStore.getState().stage(SURFACE, TEAM_TARGET);
+    const attach = deferred<unknown>();
+    const placementRequest =
+      vi.fn<(method: string, payload: unknown) => Promise<unknown>>();
+    placementRequest.mockImplementation((method: string) =>
+      Promise.resolve(method === "epic.create" ? { roomInfo: null } : {}),
+    );
+    landingMocks.request.mockImplementation((method: string) =>
+      method === "epic.attachEnvironment"
+        ? attach.promise
+        : Promise.reject(new Error(`unexpected ${method} on the attach host`)),
+    );
+    const placementClient = {
+      request: placementRequest,
+      requestWithSignalRequiringHostMethodVersion: (
+        method: string,
+        payload: unknown,
+      ): Promise<unknown> => placementRequest(method, payload),
+      requestWithOptions: (
+        method: string,
+        payload: unknown,
+      ): Promise<unknown> => placementRequest(method, payload),
+      getActiveHostId: () => PLACEMENT_HOST_ID,
+      getRequestContextUserId: landingMocks.getRequestContextUserId,
+    };
+    if (!isStubHostClient(placementClient)) {
+      throw new Error("The placement stub is not a host client.");
+    }
+    const queryClient = newQueryClient();
+    const { result } = renderHook(
+      () =>
+        useLandingComposerActions({
+          resolvedHostId: PLACEMENT_HOST_ID,
+          client: placementClient,
+          hostLabel: "Placement",
+          isPinned: true,
+          namedHostDead: false,
+        }),
+      { wrapper: queryClientWrapper(queryClient) },
+    );
+    act(() => {
+      result.current.startTaskOnStagedSandbox({
+        draftId: null,
+        owner: null,
+        sandboxTeamId: "team-9",
+        text: SUBMITTED_PROMPT,
+        hand,
+      });
+    });
+    // The attachment is sent on the app-wide host, the create on the placement.
+    await waitFor(() => {
+      expect(landingMocks.request.mock.calls.map(([method]) => method)).toEqual(
+        ["epic.attachEnvironment"],
+      );
+    });
+    const createCall = placementRequest.mock.calls.find(
+      ([method]) => method === "epic.create",
+    );
+    const epicId = epicIdFromCreatePayload(createCall?.[1]);
+    if (epicId === null) throw new Error("epic.create was never sent");
+
+    await act(async () => {
+      attach.reject(attachBusy());
+      await attach.promise.catch(() => undefined);
+    });
+
+    await rollbackEnded(queryClient);
+    // The attach host is modern, yet nothing was read or deleted anywhere.
+    expect(landingMocks.deleteRequest).not.toHaveBeenCalled();
+    expect(landingMocks.readRequest).not.toHaveBeenCalled();
+    expect(toastLog.map(({ message }) => message)).toEqual([
+      SETTING_UP_LINE,
+      "This Send may have left an empty task. Delete it from your tasks if you don't need it.",
+    ]);
+    expect(wasEpicCreatedThisSession(epicId)).toBe(true);
+    queryClient.clear();
+  });
+
   it.each(READ_METHODS)(
-    "a refused Send keeps the task, tells the person, and gives the message back when %s cannot be read",
+    "a refused Send keeps the task, tells the person, and gives the message back when the host rejects %s as unsupported despite its manifest",
     async (failing) => {
       landingMocks.readRequest.mockImplementation((_hostId, method) =>
         method === failing
           ? Promise.reject(
               new HostRpcError({
-                code: "RPC_ERROR",
+                code: "E_HOST_UNSUPPORTED",
                 message: "unreadable",
                 requestId: "request-read",
                 method,
