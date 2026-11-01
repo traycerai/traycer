@@ -266,6 +266,11 @@ export const CLI_ERROR_CODES = {
   CLI_UPGRADE_PACKAGE_MANAGER_OWNED: "E_CLI_UPGRADE_PACKAGE_MANAGER_OWNED",
   CLI_UPGRADE_NO_MANIFEST: "E_CLI_UPGRADE_NO_MANIFEST",
   CLI_UPGRADE_TARGET_UNAVAILABLE: "E_CLI_UPGRADE_TARGET_UNAVAILABLE",
+  // The CLI-side twin of HOST_UPDATE_NOT_NEWER, deliberately the same
+  // shape: an EXPLICITLY requested version below the installed one, with
+  // no downgrade consent. Both name `--allow-downgrade` as the way
+  // through, so the two updaters refuse a backwards move identically.
+  CLI_UPGRADE_NOT_NEWER: "E_CLI_UPGRADE_NOT_NEWER",
   CLI_UPGRADE_DOWNLOAD_FAILED: "E_CLI_UPGRADE_DOWNLOAD_FAILED",
   CLI_UPGRADE_REPLACE_FAILED: "E_CLI_UPGRADE_REPLACE_FAILED",
   CLI_UPGRADE_FINALIZE_HELPER_FAILED: "E_CLI_UPGRADE_FINALIZE_HELPER_FAILED",
@@ -307,6 +312,10 @@ export const EXPECTED_CLI_ERROR_CODES: ReadonlySet<CliErrorCode> =
     CLI_ERROR_CODES.HOST_INCOMPATIBLE,
     CLI_ERROR_CODES.HOST_UNSUPPORTED,
     CLI_ERROR_CODES.HOST_UPDATE_NOT_NEWER,
+    // Beside its host twin for the same reason: refusing a backwards move
+    // the caller asked for is a typed outcome the command answers for, and
+    // the person resolves it by re-running with `--allow-downgrade`.
+    CLI_ERROR_CODES.CLI_UPGRADE_NOT_NEWER,
     CLI_ERROR_CODES.HOST_CLIENT_FLOOR_UNMET,
     CLI_ERROR_CODES.HOST_STORE_FORMAT_FLOOR,
     CLI_ERROR_CODES.AGENT_NOT_FOUND,
