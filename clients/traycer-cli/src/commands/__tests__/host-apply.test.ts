@@ -9,6 +9,7 @@ import type { ApplyHostOutcome } from "../../installer/apply";
 
 const mocks = vi.hoisted(() => ({
   outcome: null as ApplyHostOutcome | null,
+  refusal: null as Error | null,
   applyHostCalls: 0,
   readHostHeldVersionMock: vi.fn(),
   readHostInstallRecordMock: vi.fn(),
@@ -17,8 +18,10 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../installer/apply", () => ({
-  applyHost: async () => {
+  applyHost: async (options: { readonly onWillDisruptHost: () => void }) => {
     mocks.applyHostCalls += 1;
+    if (mocks.refusal !== null) throw mocks.refusal;
+    options.onWillDisruptHost();
     if (mocks.outcome === null) throw new Error("test outcome not set");
     return mocks.outcome;
   },
@@ -77,14 +80,11 @@ vi.mock("../../registry/client", () => ({
 
 import {
   acquireUpdateAttemptLock,
-  commitAttemptMutation,
-  readUpdateAttemptRecord,
-  updateAttemptRecordPath,
+  readHostUpdateLastAttempt,
 } from "@traycer-clients/shared/host-update";
 import { rm } from "node:fs/promises";
 import { buildHostApplyCommand } from "../host-apply";
-import { readHostUpdateLastAttempt } from "../../host/update-last-attempt";
-import { CLI_ERROR_CODES } from "../../runner/errors";
+import { CLI_ERROR_CODES, cliError } from "../../runner/errors";
 import { hostHomeDir } from "../../store/paths";
 import type { CommandContext } from "../../runner/runner";
 import type { HostInstallRecord } from "../../manifest/host-install";
@@ -161,7 +161,7 @@ beforeEach(async () => {
   await rm(join(hostHomeDir("production"), "update-last-attempt.json"), {
     force: true,
   });
-  await rm(updateAttemptRecordPath(hostHomeDir("production")), { force: true });
+  mocks.refusal = null;
   mocks.applyHostCalls = 0;
   mocks.readHostHeldVersionMock.mockReset().mockResolvedValue(null);
   mocks.readHostInstallRecordMock.mockReset().mockResolvedValue(null);
@@ -524,103 +524,46 @@ describe("host apply - the last-attempt record", () => {
     postSwapWarning: null,
   });
 
-  async function seedFailedAttempt(): Promise<void> {
-    const held = await acquireUpdateAttemptLock({
-      hostHomeDir: home(),
-      reason: "seed",
-      waitMs: 0,
-      pollIntervalMs: 25,
-    });
-    if (held.kind !== "acquired") throw new Error("the lock was not free");
-    try {
-      const created = await commitAttemptMutation({
-        handle: held.handle,
-        intent: {
-          kind: "create",
-          request: {
-            newAttemptId: "attempt-1",
-            trigger: "manual",
-            targetVersion: "1.2.0",
-            action: "start",
-            expected: null,
-            nowIso: "2026-11-01T00:00:00.000Z",
-            initialPhase: "downloading",
-            initialContinuation: null,
-            claim: null,
-          },
-        },
-      });
-      if (created.kind !== "committed") throw new Error("seed failed");
-      const failed = await commitAttemptMutation({
-        handle: held.handle,
-        intent: {
-          kind: "advance",
-          held: created.identity,
-          advance: {
-            phase: "failed",
-            continuation: null,
-            progress: null,
-            error: { code: "x", message: "y", phase: "downloading" },
-            claimRefresh: null,
-            verification: null,
-            nowIso: "2026-11-01T00:01:00.000Z",
-          },
-        },
-      });
-      if (failed.kind !== "committed") throw new Error("seed failed");
-    } finally {
-      await held.handle.release();
-    }
-  }
-
-  it("the app's apply that started the host is complete, and retires the failure it replaced", async () => {
-    await seedFailedAttempt();
+  it("the app's apply with its start accepted is applied: nothing has seen the host yet", async () => {
     await runApply(applied(true, null), { lifecycleOrigin: "desktop" });
     expect(await last()).toEqual({
       command: "host apply",
       initiator: "desktop",
-      outcome: "complete",
+      outcome: "applied",
       targetVersion: "1.3.0",
       attemptId: null,
       code: null,
       message: null,
       recordedAt: expect.any(String),
     });
-    expect((await readUpdateAttemptRecord(home())).kind).toBe("absent");
   });
 
-  it("bytes in with no start is applied, and a person's apply says so", async () => {
-    await seedFailedAttempt();
+  it("a person's apply is theirs", async () => {
     await runApply(applied(false, null), {});
     expect(await last()).toMatchObject({
       initiator: "manual",
       outcome: "applied",
     });
-    expect((await readUpdateAttemptRecord(home())).kind).toBe("absent");
   });
 
-  it("a start that failed after the swap is failed, and leaves the old record", async () => {
-    await seedFailedAttempt();
+  it("a start that failed after the swap is failed", async () => {
     await runApply(applied(false, "the service would not start"), {});
     expect(await last()).toMatchObject({
       outcome: "failed",
       targetVersion: "1.3.0",
       message: "the service would not start",
     });
-    expect((await readUpdateAttemptRecord(home())).kind).toBe("valid");
   });
 
-  it("a no-op names the installed version and retires nothing", async () => {
-    await seedFailedAttempt();
+  it("a no-op names the installed version", async () => {
     await runApply({ outcome: "no-op", installedVersion: "1.2.0" }, {});
     expect(await last()).toMatchObject({
       outcome: "no-op",
       targetVersion: "1.2.0",
     });
-    expect((await readUpdateAttemptRecord(home())).kind).toBe("valid");
   });
 
-  it("a stage that changed is refused", async () => {
+  it("a stage that changed is refused, in words", async () => {
     await runApply(
       {
         outcome: "stage-fingerprint-mismatch",
@@ -630,14 +573,15 @@ describe("host apply - the last-attempt record", () => {
       },
       {},
     );
-    expect(await last()).toMatchObject({
+    const attempt = await last();
+    expect(attempt).toMatchObject({
       outcome: "refused",
-      message: "stage-fingerprint-mismatch",
+      code: "stage-fingerprint-mismatch",
     });
+    expect(attempt?.message).not.toBe("stage-fingerprint-mismatch");
   });
 
-  it("an apply that lost the lock is refused and the holder's failure stays", async () => {
-    await seedFailedAttempt();
+  it("an apply that lost the lock is refused", async () => {
     const held = await acquireUpdateAttemptLock({
       hostHomeDir: home(),
       reason: "host-update",
@@ -659,7 +603,32 @@ describe("host apply - the last-attempt record", () => {
     expect(mocks.applyHostCalls).toBe(0);
   });
 
-  it("an apply that throws once it holds the lock is failed", async () => {
+  it("a busy host is waiting, not failed", async () => {
+    mocks.refusal = cliError({
+      code: CLI_ERROR_CODES.HOST_BUSY,
+      message: "the host is busy",
+      details: null,
+      exitCode: 1,
+    });
+    await expect(runApply(applied(true, null), {})).rejects.toBe(mocks.refusal);
+    expect(await last()).toMatchObject({
+      outcome: "parked",
+      code: CLI_ERROR_CODES.HOST_BUSY,
+    });
+  });
+
+  it("a refusal under the lock that changed nothing did not run", async () => {
+    mocks.refusal = cliError({
+      code: CLI_ERROR_CODES.HOST_NOT_INSTALLED,
+      message: "no host installed",
+      details: null,
+      exitCode: 1,
+    });
+    await expect(runApply(applied(true, null), {})).rejects.toBe(mocks.refusal);
+    expect(await last()).toMatchObject({ outcome: "refused" });
+  });
+
+  it("an apply that throws once it has touched the host is failed", async () => {
     mocks.outcome = null;
     await expect(
       buildHostApplyCommand({

@@ -1,7 +1,6 @@
 import {
   HOST_UPDATE_INITIATOR_DESKTOP,
   HOST_UPDATE_INITIATOR_ENV_VAR,
-  retireFailedAttemptWithCapability,
   supervisorRelaunchInstalledIdentityOf,
   verifyUpdateMutationCapability,
   withLifecycleTeardownContender,
@@ -19,7 +18,6 @@ import type {
   LockMetadata,
   UpdateMutationCapabilityAdoption,
 } from "@traycer-clients/shared/host-update";
-import type { ILogger } from "../logger";
 import { readHostInstallRecord } from "../manifest/host-install";
 import type { Environment } from "../runner/environment";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
@@ -37,9 +35,7 @@ import { hostHomeDir } from "../store/paths";
  *
  * This is intentionally a shadow bridge: it never creates or advances a
  * schema-v2 attempt record. A nonterminal record is instead surfaced as a
- * conflict until the schema-v2 executor owns the legacy operation. The one
- * write it may make retires a `failed` record its own committed install has
- * moved past (`retireFailedAttemptWithCapability`).
+ * conflict until the schema-v2 executor owns the legacy operation.
  */
 export interface WithCliUpdateContenderOptions {
   readonly environment: Environment;
@@ -464,28 +460,6 @@ function describeNonterminalAttempt(record: HostUpdateAttemptRecord): string {
   return record.execution === "parked"
     ? `${where}; it is parked with no updater running - run 'traycer host update' to resume it, which also starts the host if none is running; if it exits reporting that the installed host changed, the stale record is retired and 'traycer host ensure' starts the host`
     : `${where}; wait for the running update to finish, or run 'traycer host update' to recover it if it was interrupted`;
-}
-
-/**
- * Retire the failure a committed install has replaced. Best-effort, and after
- * the commit: the bytes are in, so a record that will not go must not turn that
- * into a failed apply.
- */
-export async function retireFailedAttemptAfterInstall(
-  capability: UpdateMutationCapability,
-  options: WithCliUpdateContenderOptions,
-  logger: ILogger,
-): Promise<void> {
-  try {
-    await retireFailedAttemptWithCapability(
-      capability,
-      options.hostHomeDir ?? hostHomeDir(options.environment),
-    );
-  } catch (err) {
-    logger.info("Host apply left a failed update attempt record in place", {
-      error: err instanceof Error ? err.message : String(err),
-    });
-  }
 }
 
 function cliLockOptions(

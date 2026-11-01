@@ -537,6 +537,7 @@ vi.mock("../update-recovery-evidence", async (importOriginal) => {
 
 import {
   acquireUpdateAttemptLock,
+  readHostUpdateLastAttempt,
   readUpdateAttemptRecord,
   updateAttemptLockPath,
   updateAttemptRecordPath,
@@ -582,7 +583,6 @@ import type {
   RunningEvidenceDiagnosis,
 } from "../update-recovery-evidence";
 import type { HostPidMetadata } from "../pid-metadata";
-import { readHostUpdateLastAttempt } from "../update-last-attempt";
 import { withBoundedWaitProgress } from "../../runner/bounded-wait-progress";
 
 const ENVIRONMENT = "production";
@@ -9088,6 +9088,38 @@ describe("runHostUpdate - every exit records the attempt", () => {
       targetVersion: "2.0.0",
       attemptId: null,
     });
+  });
+
+  it("a bound run refused over a moved park says so, and is never 'nothing to do'", async () => {
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    mocks.applyHostWithAttempt.mockRejectedValueOnce(busyError());
+    await expect(runUpdate({})).rejects.toBeInstanceOf(CliError);
+    const { attemptId, generation } = await requireRecord();
+
+    await runUpdate({
+      intent: "continue",
+      expectAttempt: attemptId,
+      expectGeneration: String(generation + 1),
+      expectSequence: "1",
+    });
+
+    expect(await last()).toMatchObject({
+      outcome: "refused",
+      code: "refused-attempt-moved",
+    });
+  });
+
+  it("a host left on a developer's build started nothing, so it is no update", async () => {
+    await seedInstalled("2.0.0");
+    world.runningVersion = "1.0.0";
+    mocks.beforeAttemptMutation.mockImplementation((reason: string) => {
+      if (reason === "host-update-activate") {
+        world.runningVersion = "staging.1750000000.abc1234";
+      }
+    });
+    await runUpdate({ versionRequest: "2.0.0" });
+    expect(await last()).toMatchObject({ outcome: "no-op" });
   });
 
   it("a run that parked on a busy host is parked, not failed", async () => {

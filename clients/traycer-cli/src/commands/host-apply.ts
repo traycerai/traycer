@@ -1,15 +1,11 @@
 import type { ApplyHostOutcome } from "../installer/apply";
 import { NO_INSTALL_PHASE_HOOKS } from "../installer/install";
 import {
-  errorFacts,
-  outcomeOfThrow,
   writeHostUpdateLastAttempt,
   type HostUpdateAttemptOutcome,
-} from "../host/update-last-attempt";
-import {
-  retireFailedAttemptAfterInstall,
-  withCliUpdateContender,
-} from "../host/update-contender";
+} from "@traycer-clients/shared/host-update";
+import { errorFacts, outcomeOfThrow } from "../host/update-last-attempt";
+import { withCliUpdateContender } from "../host/update-contender";
 import type { WithCliUpdateContenderOptions } from "../host/update-contender";
 import { resolveAttemptAdoptionFromNonce } from "../host/update-adoption";
 import { refuseUpdateOverUnstartableService } from "../host/update-service-unstartable";
@@ -112,9 +108,9 @@ export interface HostApplyArgs {
 
 export function buildHostApplyCommand(args: HostApplyArgs): CommandFn {
   return async (ctx): Promise<CommandResult> => {
-    // Set once the update lock is won, which is what separates an apply that
-    // never started from one that failed.
-    const progress = { started: false };
+    // Set when the actuator is about to stop the host or swap its bytes, which
+    // is what separates an apply that changed nothing from one that failed.
+    const progress = { disturbed: false };
     const home = hostHomeDir(ctx.runtime.environment);
     const facts = {
       command: "host apply" as const,
@@ -152,7 +148,7 @@ export function buildHostApplyCommand(args: HostApplyArgs): CommandFn {
         home,
         {
           ...facts,
-          outcome: outcomeOfThrow(err, progress.started),
+          outcome: outcomeOfThrow(err, progress.disturbed),
           targetVersion: null,
           ...errorFacts(err),
         },
@@ -171,19 +167,13 @@ function lastAttemptOf(reported: ApplyHostOutcome): {
 } {
   switch (reported.outcome) {
     case "applied":
-      if (reported.postSwapError !== null) {
-        return {
-          outcome: "failed",
-          targetVersion: reported.record.version,
-          code: null,
-          message: reported.postSwapError,
-        };
-      }
+      // `applied` at best, even with the start accepted: that is a request and
+      // not a host seen running. Desktop, which goes on to see it, says so.
       return {
-        outcome: reported.runningActivated ? "complete" : "applied",
+        outcome: reported.postSwapError === null ? "applied" : "failed",
         targetVersion: reported.record.version,
         code: null,
-        message: null,
+        message: reported.postSwapError,
       };
     case "no-op":
       return {
@@ -196,8 +186,8 @@ function lastAttemptOf(reported: ApplyHostOutcome): {
       return {
         outcome: "refused",
         targetVersion: null,
-        code: null,
-        message: reported.outcome,
+        code: reported.outcome,
+        message: humanSummary(reported),
       };
   }
 }
@@ -205,7 +195,7 @@ function lastAttemptOf(reported: ApplyHostOutcome): {
 async function runHostApply(
   ctx: CommandContext,
   args: HostApplyArgs,
-  progress: { started: boolean },
+  progress: { disturbed: boolean },
 ): Promise<ApplyHostOutcome> {
   ctx.runtime.logger.info("Host apply command started", {
     environment: ctx.runtime.environment,
@@ -248,7 +238,6 @@ async function runHostApply(
   const outcome = await withCliUpdateContender(
     contenderOptions,
     async (capability) => {
-      progress.started = true;
       // Finding 3: the authoritative hold check for an IMPLICIT apply, made
       // HERE under the CLI mutation lock rather than trusting the desktop's
       // earlier preflight. A terminal downgrade that set the hold while the
@@ -301,7 +290,7 @@ async function runHostApply(
       // (`held !== installed`) rather than by deleting the record - so there
       // is nothing to clear and no clear/ABA race. The `respectHold` guard
       // above is this command's only hold interaction.
-      const applied = await applyHostWithAttempt(
+      return applyHostWithAttempt(
         capability,
         contenderOptions,
         args.lifecycleOrigin,
@@ -314,20 +303,14 @@ async function runHostApply(
           acceptStoreFormatLoss: args.acceptStoreFormatLoss,
           onProgress: (info) => ctx.progress(info),
           onWillCommitStaged: null,
-          onWillDisruptHost: null,
+          onWillDisruptHost: () => {
+            progress.disturbed = true;
+          },
           // `host apply` advances no attempt record of its own: Desktop
           // drives its own lane around this call and reads the outcome.
           hooks: NO_INSTALL_PHASE_HOOKS,
         },
       );
-      if (applied.outcome === "applied" && applied.postSwapError === null) {
-        await retireFailedAttemptAfterInstall(
-          capability,
-          contenderOptions,
-          ctx.runtime.logger,
-        );
-      }
-      return applied;
     },
   );
   // The swap ran over another account's task with no host of this

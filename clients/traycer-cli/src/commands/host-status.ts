@@ -16,21 +16,22 @@ import {
   type HostLifecycleSnapshot,
 } from "../host/lifecycle-snapshot";
 import {
+  probeAttemptHolder,
+  readHostUpdateLastAttempt,
   readUpdateAttemptRecord,
+  type HostUpdateAttemptInitiator,
+  type HostUpdateAttemptOutcome,
   type HostUpdateAttemptRecord,
+  type HostUpdateLastAttempt,
 } from "@traycer-clients/shared/host-update";
 import { bootstrapLogPath, hostHomeDir } from "../store/paths";
 import {
   describeNonterminalRecordRecovery,
   parkedActivationRelaunchable,
 } from "../host/parked-activation-relaunch";
-import {
-  readHostUpdateLastAttempt,
-  type HostUpdateAttemptInitiator,
-  type HostUpdateAttemptOutcome,
-  type HostUpdateLastAttempt,
-} from "../host/update-last-attempt";
+import { describeUpdateLockHolder } from "../host/update-contender";
 import { makeColorizer, shouldUseColor, type Colorizer } from "../runner/ansi";
+import type { Environment } from "../runner/environment";
 import type { CommandFn, CommandResult } from "../runner/runner";
 import type { RuntimeContext } from "../runner/runtime";
 
@@ -76,6 +77,12 @@ interface HostStatusOutput {
    * `updateAttempt` above is only ever one still standing.
    */
   readonly lastUpdateAttempt: HostUpdateLastAttempt | null;
+  /**
+   * Who holds the update lock right now and what they are doing, or `null`
+   * when nobody does. A download holds it and writes no record, so this is the
+   * only thing here that moves while one runs.
+   */
+  readonly updateLockHolder: string | null;
 }
 
 export interface HostStatusUpdateAttempt {
@@ -153,8 +160,8 @@ async function readNonterminalUpdateAttempt(
 //
 // Nothing here writes: the reads below touch pid.json, bootstrap.log, the
 // lifecycle records (`host/lifecycle-snapshot.ts`), the update attempt record
-// with the install record it is compared against, and the last-attempt record
-// (`host/update-last-attempt.ts`), and nothing else, so
+// with the install record it is compared against, the last-attempt record and
+// the update lock's holder, and nothing else, so
 // `host status` is safe to poll, safe in CI, and safe on a machine whose host
 // is deliberately uninstalled.
 //
@@ -200,6 +207,7 @@ export const hostStatusCommand: CommandFn = async (
     lastUpdateAttempt: await readHostUpdateLastAttempt(
       hostHomeDir(ctx.runtime.environment),
     ),
+    updateLockHolder: await readUpdateLockHolder(ctx.runtime.environment),
   };
 
   return {
@@ -212,6 +220,19 @@ export const hostStatusCommand: CommandFn = async (
     exitCode: 0,
   };
 };
+
+async function readUpdateLockHolder(
+  environment: Environment,
+): Promise<string | null> {
+  const probe = await probeAttemptHolder({
+    hostHomeDir: hostHomeDir(environment),
+    nowMs: Date.now(),
+    cacheTtlMs: 0,
+  });
+  return probe.kind === "holder-live"
+    ? describeUpdateLockHolder(probe.holder)
+    : null;
+}
 
 // ---------------------------------------------------------------- formatting
 
@@ -275,6 +296,11 @@ function renderHumanStatus(
   lines.push(c.bold("Lifecycle"));
   lines.push(...kvBlock(c, lifecycleSnapshotRows(output.lifecycle)));
 
+  if (output.updateLockHolder !== null) {
+    lines.push("");
+    lines.push(`${output.updateLockHolder}.`);
+  }
+
   if (output.lastUpdateAttempt !== null) {
     lines.push("");
     lines.push(c.bold("Last update"));
@@ -315,8 +341,8 @@ function renderHumanStatus(
 
 const LAST_UPDATE_OUTCOME_LABELS: Record<HostUpdateAttemptOutcome, string> = {
   complete: "updated",
-  applied: "installed, host not restarted",
-  "no-op": "already up to date",
+  applied: "installed, host not confirmed running",
+  "no-op": "nothing to do",
   parked: "waiting",
   refused: "did not run",
   failed: "failed",

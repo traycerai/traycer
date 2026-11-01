@@ -9,6 +9,7 @@ import {
   attemptIdentityOf,
   isParkedPhase,
   probeAttemptHolder,
+  writeHostUpdateLastAttempt,
   decideLegacyMarkerConcurrency,
   isTerminalPhase,
   readUpdateAttemptRecord,
@@ -23,6 +24,8 @@ import {
   type HostUpdateAttemptRead,
   type HostUpdateAttemptRecord,
   type AttemptHolderEvidence,
+  type HostUpdateAttemptOutcome,
+  type HostUpdateLastAttempt,
   type HostUpdateTrigger,
   type UpdateMutationCapability,
   decideHostStampPolicy,
@@ -93,13 +96,7 @@ import {
   type WithCliAttemptExecutorOptions,
   type WithCliUpdateContenderOptions,
 } from "./update-contender";
-import {
-  errorFacts,
-  outcomeOfThrow,
-  writeHostUpdateLastAttempt,
-  type HostUpdateAttemptOutcome,
-  type HostUpdateLastAttempt,
-} from "./update-last-attempt";
+import { errorFacts, outcomeOfThrow } from "./update-last-attempt";
 import {
   applyHostWithAttempt,
   relaunchHostAfterRestartWithAttempt,
@@ -569,10 +566,11 @@ export async function runHostUpdate(
  *
  * Why it waits at all rather than exiting: a loser used to queue for this
  * budget inside the acquisition, and a short holder - a `host ensure` at app
- * launch, a restart - frees the lock well inside it, so an update that would
- * have run still runs. What changes is that the wait happens here, in front of
- * the work, after a word, and not behind a plan that had already spent its
- * minutes.
+ * launch, a restart - frees the lock well inside it, so the update still runs.
+ * What changes is that the wait happens here, in front of the work, after a
+ * word, and not behind a plan that had already spent its minutes. Only a
+ * holder that needs longer than the budget is refused; the plan's own time no
+ * longer counts toward it.
  *
  * Read-only on purpose: a holder that died reads as `no-holder`, and breaking
  * its lock stays the acquisition's job. `indeterminate` is left to the
@@ -652,7 +650,25 @@ function outcomeOfPhase(
   return phase === "complete" || phase === "failed" ? phase : null;
 }
 
-/** A run that returned. A park never does: every park here throws. */
+/**
+ * What a returned run came to. A park never returns: every park here throws.
+ * A release with work still owed is a refusal, at exit 0, and only
+ * `nothing-to-do` means nothing was. `foreignRuntimeVersion` is a run that
+ * left a developer's build alone, which started nothing.
+ */
+function returnedOutcome(
+  outcome: HostUpdateRunOutcome,
+): Pick<HostUpdateLastAttempt, "outcome" | "code"> {
+  if (outcome.releasedReason === null) {
+    return outcome.foreignRuntimeVersion === null
+      ? { outcome: "complete", code: null }
+      : { outcome: "no-op", code: null };
+  }
+  return baseDispatchAckReason(outcome.releasedReason) === "nothing-to-do"
+    ? { outcome: "no-op", code: null }
+    : { outcome: "refused", code: outcome.releasedReason };
+}
+
 async function recordReturnedAttempt(
   args: HostUpdateRunArgs,
   attempt: RunAttemptFacts,
@@ -662,9 +678,8 @@ async function recordReturnedAttempt(
     attempt.home,
     {
       ...attemptFields(attempt),
+      ...returnedOutcome(outcome),
       targetVersion: attempt.targetVersion ?? outcome.legacy.version,
-      outcome: outcome.releasedReason === null ? "complete" : "no-op",
-      code: null,
       message: null,
     },
     args.logger,

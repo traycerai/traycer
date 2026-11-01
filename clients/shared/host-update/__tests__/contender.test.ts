@@ -34,7 +34,6 @@ import {
   parkedActivationMatchesInstall,
   verifyUpdateMutationCapability,
   withSupervisorRelaunchContender,
-  retireFailedAttemptWithCapability,
   withUpdateContender,
   withUpdateExecutorCompletionSegment,
   type ExecutorCompletionSession,
@@ -727,38 +726,6 @@ describe("withUpdateContender - canonical first-run boundary", () => {
       '"holder"',
     );
   }, 30_000);
-
-  it.each([
-    ["legacy-update-shadow", "failed", "absent"],
-    ["legacy-update-shadow", "complete", "valid"],
-    ["attempt-executor", "failed", "valid"],
-    ["service-maintenance", "failed", "valid"],
-  ] as const)(
-    "retiring under %s over a %s record leaves it %s",
-    async (admission, phase, expected) => {
-      const hostHomeDir = await freshHome();
-      await writeRecord(
-        hostHomeDir,
-        record({
-          phase,
-          execution: "terminal",
-          completedAt: new Date().toISOString(),
-          error:
-            phase === "failed"
-              ? { code: "x", message: "y", phase: "downloading" }
-              : null,
-        }),
-      );
-
-      await withUpdateContender(
-        options(hostHomeDir, admission),
-        async (capability) =>
-          retireFailedAttemptWithCapability(capability, hostHomeDir),
-      );
-
-      expect((await readUpdateAttemptRecord(hostHomeDir)).kind).toBe(expected);
-    },
-  );
 
   it("creates only the canonical parent, binds the capability to it, and preserves legacy absence", async () => {
     const hostHomeDir = await freshHome();

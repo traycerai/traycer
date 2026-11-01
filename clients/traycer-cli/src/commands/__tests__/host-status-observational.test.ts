@@ -121,9 +121,10 @@ vi.mock("@traycer-clients/shared/host-update", async (importOriginal) => {
 
 import { hostStatusCommand } from "../host-status";
 import {
+  acquireUpdateAttemptLock,
   removeHostUpdateLastAttempt,
   writeHostUpdateLastAttempt,
-} from "../../host/update-last-attempt";
+} from "@traycer-clients/shared/host-update";
 import { hostHomeDir } from "../../store/paths";
 import type { HostLifecycleSnapshot } from "../../host/lifecycle-snapshot";
 
@@ -332,6 +333,7 @@ describe("hostStatusCommand - observational (CLI-001)", () => {
       lifecycle: lifecycleSnapshot,
       updateAttempt: null,
       lastUpdateAttempt: null,
+      updateLockHolder: null,
     });
     expect(mocks.readHostLifecycleSnapshotMock).toHaveBeenCalledWith(
       "production",
@@ -351,6 +353,27 @@ describe("hostStatusCommand - observational (CLI-001)", () => {
     expect(mocks.provisionHostMock).not.toHaveBeenCalled();
   });
 
+  it("says who is changing the host while they are at it", async () => {
+    const held = await acquireUpdateAttemptLock({
+      hostHomeDir: hostHomeDir("production"),
+      reason: "desktop:host-download",
+      waitMs: 0,
+      pollIntervalMs: 25,
+    });
+    if (held.kind !== "acquired") throw new Error("the lock was not free");
+    try {
+      const result = await hostStatusCommand(makeCtx(makeRuntime({})));
+      expect(result.data).toMatchObject({
+        updateLockHolder: "The Traycer app is downloading a host update",
+      });
+      expect(result.human).toContain(
+        "The Traycer app is downloading a host update.",
+      );
+    } finally {
+      await held.handle.release();
+    }
+  });
+
   it("says how the last update ended, and who started it", async () => {
     const attempt = {
       command: "host update",
@@ -363,10 +386,7 @@ describe("hostStatusCommand - observational (CLI-001)", () => {
       recordedAt: "2026-11-01T06:57:02.000Z",
     } as const;
     await writeHostUpdateLastAttempt(hostHomeDir("production"), attempt, {
-      debug: vi.fn(),
       info: vi.fn(),
-      warn: vi.fn(),
-      error: vi.fn(),
     });
     try {
       const result = await hostStatusCommand(makeCtx(makeRuntime({})));

@@ -16,7 +16,7 @@ import {
 import { legacyMutationVerifier } from "./aside-dirs";
 import { sweepOldTrash } from "./install";
 import { resetHeldHostVersion } from "../host/held-host-version";
-import { removeHostUpdateLastAttempt } from "../host/update-last-attempt";
+import { removeHostUpdateLastAttempt } from "@traycer-clients/shared/host-update";
 
 // Uninstall the installed host directory for a single environment. Always
 // removes the install dir + record, AND the staged dir alongside it (Tech
