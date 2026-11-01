@@ -124,21 +124,23 @@ vi.mock("@/hooks/sandboxes/use-configuration-billing-url", () => ({
   useConfigurationBillingUrl: () => "https://example.test/billing",
 }));
 vi.mock("@/lib/links/open-link", () => ({ useOpenLink: () => vi.fn() }));
-vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
-  useHostDirectoryList: () => ({
-    data: mocks.directoryNamesHost
-      ? [
-          {
-            hostId: "laptop",
-            kind: "local",
-            label: "Laptop",
-            transportDialability: "dialable",
-            websocketUrl: "ws://127.0.0.1:0",
-          },
-        ]
-      : [],
-  }),
-}));
+vi.mock("@/components/settings/host-scope/use-host-options", async () => {
+  const { hostOptionsFixture, hostScopeOptionFixture } =
+    await import("@/components/settings/host-scope/host-scope-fixture");
+  const named = hostOptionsFixture({
+    hosts: [
+      hostScopeOptionFixture({
+        hostId: "laptop",
+        name: "Laptop",
+        isLocalMachine: false,
+      }),
+    ],
+  });
+  const unlisted = hostOptionsFixture({ hosts: [] });
+  return {
+    useHostOptions: () => (mocks.directoryNamesHost ? named : unlisted),
+  };
+});
 vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
   useSystemTabModalActions: () => ({ openSettings: mocks.openSettings }),
 }));

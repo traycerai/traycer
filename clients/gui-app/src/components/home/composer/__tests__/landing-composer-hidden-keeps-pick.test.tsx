@@ -217,21 +217,6 @@ vi.mock("@/components/home/composer/composer-body", async () => {
   };
 });
 
-vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
-  useHostDirectoryList: () => ({
-    data: host.directoryNamesHost
-      ? [
-          {
-            hostId: HOST_ID,
-            kind: "local",
-            label: "This computer",
-            transportDialability: "dialable",
-            websocketUrl: "ws://127.0.0.1:0",
-          },
-        ]
-      : [],
-  }),
-}));
 vi.mock("@/hooks/host/use-composer-placement", () => ({
   useComposerPlacement: () => ({
     pin: {

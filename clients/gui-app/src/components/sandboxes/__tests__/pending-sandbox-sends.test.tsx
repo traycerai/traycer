@@ -169,6 +169,7 @@ import {
   resetPaneOpenerFocusForTests,
 } from "@/lib/canvas/focus-pane-opener";
 
+import type { HostOptions } from "@/components/settings/host-scope/use-host-options";
 vi.mock("@dnd-kit/core", () => ({
   useDroppable: () => ({ setNodeRef: () => undefined }),
 }));
@@ -728,10 +729,35 @@ const hostBinding = vi.hoisted(() => ({
   directory: {
     refresh: () => Promise.resolve(),
     findById: (hostId: string) => mocks.findById(hostId),
-    list: () => Promise.resolve(mocks.directoryRows),
-    onChange: () => ({ dispose: () => undefined }),
   },
 }));
+// The hosts the "Use <host>" action names, as the host chips list them.
+vi.mock("@/components/settings/host-scope/use-host-options", async () => {
+  const { hostOptionsFixture, hostScopeOptionFixture } =
+    await import("@/components/settings/host-scope/host-scope-fixture");
+  let cached: {
+    readonly from: readonly HostDirectoryEntry[];
+    readonly options: HostOptions;
+  } | null = null;
+  return {
+    useHostOptions: () => {
+      if (cached?.from !== mocks.directoryRows)
+        cached = {
+          from: mocks.directoryRows,
+          options: hostOptionsFixture({
+            hosts: mocks.directoryRows.map((entry) =>
+              hostScopeOptionFixture({
+                hostId: entry.hostId,
+                name: entry.label,
+                isLocalMachine: false,
+              }),
+            ),
+          }),
+        };
+      return cached.options;
+    },
+  };
+});
 vi.mock("@/lib/host", () => ({
   useHostClient: () => null,
   useHostBinding: () => hostBinding,

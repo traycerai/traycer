@@ -139,6 +139,12 @@ const stagingStoreMocks = vi.hoisted(() => ({
     (key: WorktreeStagingKey) => WorktreeIntent | null
   >(() => null),
 }));
+vi.mock("@/components/settings/host-scope/use-host-options", async () => {
+  const { hostOptionsFixture } =
+    await import("@/components/settings/host-scope/host-scope-fixture");
+  const options = hostOptionsFixture({ hosts: [] });
+  return { useHostOptions: () => options };
+});
 vi.mock("@/stores/worktree/worktree-intent-staging-store", () => ({
   useWorktreeIntentStagingStore: {
     getState: () => ({
