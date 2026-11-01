@@ -21,9 +21,12 @@ import type { EnvironmentListResponseV11 } from "@traycer/protocol/host/environm
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { TalkControl } from "@/components/layout/voice/talk-control";
-import { useInstalledAppLevel2Form } from "@/hooks/ui/use-installed-app-level2-form";
+import { useInstalledAppTileForm } from "@/hooks/ui/use-installed-app-level2-form";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
-import type { MobileLevel2Form } from "@/lib/layout/mobile-layout-form";
+import type {
+  MobileLevel2Form,
+  MobileTileCount,
+} from "@/lib/layout/mobile-layout-form";
 import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
@@ -230,7 +233,7 @@ function TracySurfaceShell(props: {
     [leaveThreads, threadsShown],
   );
 
-  const level2 = useInstalledAppLevel2Form(1);
+  const { level2, tiles, onRailDrawn } = useSurfaceTileForm();
   const shown = usePaneVisible();
   const select = useCallback(
     (next: string | null) => selectTracyChannel(navigate, next, shown),
@@ -273,6 +276,7 @@ function TracySurfaceShell(props: {
             hostId={hostId}
             channelTitle={channelTitle}
             onBack={leaveThreads}
+            level2={level2}
           />
         ) : null}
         {botId === null && !threadsShown ? (
@@ -298,6 +302,8 @@ function TracySurfaceShell(props: {
             botId={botId}
             hostId={hostId}
             level2={level2}
+            tiles={tiles}
+            onRailDrawn={onRailDrawn}
             threadsView={threadsView}
             onGone={forgetChannel}
           />
@@ -305,6 +311,25 @@ function TracySurfaceShell(props: {
       </div>
     </div>
   );
+}
+
+/**
+ * The installed app's form for the surface, both halves `null` everywhere else.
+ * The second tile is the rail the channel draws beside itself, and only the
+ * channel's pane knows it is drawn, so the pane says.
+ */
+function useSurfaceTileForm(): {
+  readonly level2: MobileLevel2Form | null;
+  readonly tiles: MobileTileCount | null;
+  readonly onRailDrawn: (drawn: boolean) => void;
+} {
+  const [railDrawn, setRailDrawn] = useState(false);
+  const form = useInstalledAppTileForm(railDrawn ? 2 : 1);
+  return {
+    level2: form?.level2 ?? null,
+    tiles: form?.tiles ?? null,
+    onRailDrawn: setRailDrawn,
+  };
 }
 
 /**
@@ -580,6 +605,9 @@ function TracyChannelPane(props: {
   readonly hostId: string;
   /** The shell's level-2 form, which the channel's title follows. */
   readonly level2: MobileLevel2Form | null;
+  /** The shell's tile count, which places the rail beside the channel. */
+  readonly tiles: MobileTileCount | null;
+  readonly onRailDrawn: (drawn: boolean) => void;
   /** The shell's Threads, shown in place of the channel's views. */
   readonly threadsView: BotThreadsViewState;
   readonly onGone: (botId: string) => void;
@@ -632,6 +660,8 @@ function TracyChannelPane(props: {
       listedBots={botList.data?.bots}
       mainBotIds={botList.data?.mainBotIds}
       level2={level2}
+      tiles={props.tiles}
+      onRailDrawn={props.onRailDrawn}
       threadsView={threadsView}
       onGone={props.onGone}
     />
@@ -645,6 +675,8 @@ function BotTabBody(props: {
   readonly listedBots: ReadonlyArray<BotRecord> | undefined;
   readonly mainBotIds: MainBotIds | undefined;
   readonly level2: MobileLevel2Form | null;
+  readonly tiles: MobileTileCount | null;
+  readonly onRailDrawn: (drawn: boolean) => void;
   readonly threadsView: BotThreadsViewState;
   readonly onGone: (botId: string) => void;
 }): ReactNode {
@@ -780,6 +812,8 @@ function BotTabBody(props: {
       view={view}
       onViewChange={changeView}
       level2={props.level2}
+      tiles={props.tiles}
+      onRailDrawn={props.onRailDrawn}
       threadsView={threadsView}
       onDeleted={deleted}
       mainBotIds={props.mainBotIds}
@@ -1200,6 +1234,27 @@ function useChannelSetupHistory(input: {
   );
 }
 
+/**
+ * Says whether the rail is drawn beside the channel, before the paint it would
+ * otherwise be a frame late for. The rail draws only under Messages.
+ */
+function useRailDrawnReport(
+  place: BotTabPlace,
+  threadListSupported: boolean,
+  onRailDrawn: (drawn: boolean) => void,
+): void {
+  const railDrawn =
+    place.view === "messages" &&
+    place.session === null &&
+    !place.threadsShown &&
+    (place.openMemory !== null ||
+      (threadListSupported && place.openThread !== null));
+  useLayoutEffect(() => {
+    onRailDrawn(railDrawn);
+    return () => onRailDrawn(false);
+  }, [onRailDrawn, railDrawn]);
+}
+
 function BotTabContent(props: {
   readonly botId: string;
   readonly hostId: string;
@@ -1215,6 +1270,9 @@ function BotTabContent(props: {
   readonly onViewChange: (view: BotTabView) => void;
   /** The shell's level-2 form, which the channel's title follows. */
   readonly level2: MobileLevel2Form | null;
+  /** The shell's tile count, which places the rail beside the channel. */
+  readonly tiles: MobileTileCount | null;
+  readonly onRailDrawn: (drawn: boolean) => void;
   /** Threads, from the column, shows in place of the channel's views. */
   readonly threadsView: BotThreadsViewState;
   /** The bot was deleted from its settings. */
@@ -1234,6 +1292,8 @@ function BotTabContent(props: {
     view,
     onViewChange,
     level2,
+    tiles,
+    onRailDrawn,
     threadsView,
     onDeleted,
     mainBotIds,
@@ -1342,6 +1402,7 @@ function BotTabContent(props: {
     openSession,
     onViewChange,
   });
+  useRailDrawnReport(place, threadListSupported, onRailDrawn);
   const openActivity = useCallback(() => changeView("activity"), [changeView]);
   const activitySummary = useBotActivitySummary({
     botId,
@@ -1498,6 +1559,7 @@ function BotTabContent(props: {
                       botNameOf={botNameOf}
                       onOpenActivity={openActivity}
                       setupHistory={setupHistory}
+                      tiles={tiles}
                     />
                   </TabsContent>
                   <TabsContent

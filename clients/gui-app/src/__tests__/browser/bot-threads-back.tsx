@@ -93,6 +93,7 @@ export function Tab(): ReactElement {
       <TabHostContext.Provider value={HOST_ID}>
         {threadsShown ? (
           <BotThreadsView
+            level2={null}
             hostId={HOST_ID}
             channelTitle="Tracy"
             onBack={() => setThreadsShown(false)}

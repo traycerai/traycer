@@ -10,7 +10,11 @@ import {
   readSafeAreaInsets,
   subscribeToSafeAreaInsets,
 } from "@/lib/safe-area-insets";
-import { useSideStripCollapsed } from "@/stores/layout/side-tab-strip-store";
+import { isPhoneLayoutOnly } from "@/lib/mobile-app";
+import {
+  useSideStripCollapsed,
+  useSideTabStripStore,
+} from "@/stores/layout/side-tab-strip-store";
 
 // The prefixed form: range syntax needs WebKit 16.4, and on anything older the
 // query never matches, which would silently lose phone portrait in the band
@@ -122,4 +126,23 @@ export function useMobileLayoutForm(
     openTiles,
   });
   return { ...form, expandedFits: mobileExpandedStripFits(contentWidth) };
+}
+
+/**
+ * Whether the installed app's shell has room for a second tile right now: the
+ * command-time read an open decides by, which must not pin a call site to a
+ * measurement of the shell.
+ */
+export function readMobileTwoTilesFit(): boolean {
+  if (!isPhoneLayoutOnly()) return false;
+  const strip = useSideTabStripStore.getState();
+  return (
+    resolveMobileLayoutForm({
+      contentWidth: readShellContentWidth(),
+      phonePortrait: readPhonePortrait(),
+      stripPreference:
+        (strip.dragCollapsed ?? strip.collapsed) ? "rail" : "expanded",
+      openTiles: 2,
+    }).tiles === 2
+  );
 }

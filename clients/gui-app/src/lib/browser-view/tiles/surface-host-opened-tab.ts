@@ -289,7 +289,7 @@ export function surfaceHostOpenedTab(input: HostOpenedTabSurfacing): boolean {
       source: "direct_ui",
     },
     input.navigateNested,
-    { createTab: false, pipOrigin: "agent" },
+    { createTab: false, pipOrigin: "agent", mobileTarget: null },
   );
   return true;
 }
