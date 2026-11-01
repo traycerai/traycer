@@ -727,10 +727,16 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
     const stagedExists = await pendingUpgradeFinalisable({
       stagedBinaryPath: pendingUpgrade.pending.stagedBinaryPath,
     });
-    const supersededByOrdering = wouldDowngradeCli({
-      installedVersion: pendingUpgrade.currentVersion,
-      candidateVersion: pendingUpgrade.pending.version,
-    });
+    // The same pair `finalizePendingCliUpgrade` reads, in the same order:
+    // ordering AND consent. A record the person asked for by name with
+    // `--allow-downgrade` WILL be published on the next restart, so calling it
+    // superseded would be false - and would withhold the restart that
+    // completes it. Only an unconsented backwards record is stale.
+    const supersededByOrdering =
+      wouldDowngradeCli({
+        installedVersion: pendingUpgrade.currentVersion,
+        candidateVersion: pendingUpgrade.pending.version,
+      }) && !pendingUpgrade.pending.allowDowngrade;
     // ...with ONE exception, and it is the superseded record's own marker.
     // When `cli finalize-upgrade` declines a staged version below the install
     // it still hands the host back, and a service that will not start is

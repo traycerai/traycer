@@ -89,6 +89,7 @@ function makePendingManifest(opts: {
   readonly liveBinaryPath: string;
   readonly source: "manual" | "desktop";
   readonly reason: "binary-locked" | "awaiting-service-restart";
+  readonly allowDowngrade: boolean;
 }) {
   return {
     version: opts.installedVersion,
@@ -100,6 +101,7 @@ function makePendingManifest(opts: {
       stagedBinaryPath: opts.stagedBinaryPath,
       stagedAt: "2026-05-10T00:00:00Z",
       reason: opts.reason,
+      allowDowngrade: opts.allowDowngrade,
     },
   };
 }
@@ -143,6 +145,7 @@ describe("readPendingCliUpgrade", () => {
         liveBinaryPath,
         source: "manual",
         reason: "binary-locked",
+        allowDowngrade: false,
       }),
     );
     const { readPendingCliUpgrade } =
@@ -198,6 +201,7 @@ describe("finalizePendingCliUpgrade", () => {
         liveBinaryPath,
         source: "manual",
         reason: "binary-locked",
+        allowDowngrade: false,
       }),
     );
     const { finalizePendingCliUpgrade } =
@@ -238,6 +242,7 @@ describe("finalizePendingCliUpgrade", () => {
         liveBinaryPath,
         source: "manual",
         reason: "binary-locked",
+        allowDowngrade: false,
       }),
     );
     const { finalizePendingCliUpgrade } =
@@ -264,6 +269,81 @@ describe("finalizePendingCliUpgrade", () => {
     expect(reread.pendingUpgrade.version).toBe("1.5.1");
   });
 
+  // The other half of the floor, and the reason it reads consent at all. Same
+  // two versions as the case above - 1.5.1 staged under 1.5.2-rc.2 - but the
+  // person named that version with `--allow-downgrade`, and `cli upgrade`
+  // recorded it because the live binary was locked and the publish had to wait
+  // for a restart. Reading the ordering alone refused this too, which left
+  // `cli upgrade --target X --allow-downgrade` unable to complete at all on a
+  // locked binary while Doctor pointed at that very command.
+  it("publishes a staged version below the installed one when the record carries downgrade consent", async () => {
+    const liveBinaryPath = join(workHome, "bin", "traycer");
+    const stagedBinaryPath = join(workHome, "bin", "traycer-1.5.1");
+    mkdirSync(join(workHome, "bin"), { recursive: true });
+    writeFileSync(liveBinaryPath, "live-bytes-1.5.2-rc.2");
+    writeFileSync(stagedBinaryPath, "staged-bytes-1.5.1");
+    writeManifest(
+      "production",
+      makePendingManifest({
+        installedVersion: "1.5.2-rc.2",
+        version: "1.5.1",
+        stagedBinaryPath,
+        liveBinaryPath,
+        source: "manual",
+        reason: "binary-locked",
+        allowDowngrade: true,
+      }),
+    );
+    const { finalizePendingCliUpgrade } =
+      await import("../../commands/cli-upgrade");
+    const outcome = await finalizePendingCliUpgrade({
+      environment: "production",
+    });
+    expect(outcome.status).toBe("finalised");
+    if (outcome.status === "finalised") {
+      expect(outcome.version).toBe("1.5.1");
+      expect(outcome.previousVersion).toBe("1.5.2-rc.2");
+    }
+    expect(readFileSync(liveBinaryPath, "utf8")).toBe("staged-bytes-1.5.1");
+
+    const manifestPath = join(workHome, ".traycer", "cli", "manifest.json");
+    const reread = JSON.parse(readFileSync(manifestPath, "utf8"));
+    expect(reread.version).toBe("1.5.1");
+    expect(reread.pendingUpgrade).toBeNull();
+  });
+
+  // A record written before the consent field existed must read as
+  // UNCONSENTED, which is the whole population the floor was restored for:
+  // machines where a pre-floor `cli upgrade` staged the feed's older stable
+  // over an installed prerelease. The schema defaults it, so the absent key
+  // has to land on `false` rather than parse-fail or default permissive.
+  it("treats a record with no consent field as unconsented and declines it", async () => {
+    const liveBinaryPath = join(workHome, "bin", "traycer");
+    const stagedBinaryPath = join(workHome, "bin", "traycer-1.5.1");
+    mkdirSync(join(workHome, "bin"), { recursive: true });
+    writeFileSync(liveBinaryPath, "live-bytes-1.5.2-rc.2");
+    writeFileSync(stagedBinaryPath, "staged-bytes-1.5.1");
+    writeManifest("production", {
+      version: "1.5.2-rc.2",
+      installedAt: "2026-04-01T00:00:00Z",
+      binaryPath: liveBinaryPath,
+      source: "manual",
+      pendingUpgrade: {
+        version: "1.5.1",
+        stagedBinaryPath,
+        stagedAt: "2026-05-10T00:00:00Z",
+        reason: "binary-locked",
+      },
+    });
+    const { finalizePendingCliUpgrade } =
+      await import("../../commands/cli-upgrade");
+    const outcome = await finalizePendingCliUpgrade({
+      environment: "production",
+    });
+    expect(outcome.status).toBe("installed-newer");
+    expect(readFileSync(liveBinaryPath, "utf8")).toBe("live-bytes-1.5.2-rc.2");
+  });
+
   it("swaps the staged binary in place, clears pendingUpgrade, and updates the install record", async () => {
     const liveBinaryPath = join(workHome, "bin", "traycer");
     const stagedBinaryPath = join(workHome, "bin", "traycer-1.5.0");
@@ -279,6 +359,7 @@ describe("finalizePendingCliUpgrade", () => {
         liveBinaryPath,
         source: "manual",
         reason: "binary-locked",
+        allowDowngrade: false,
       }),
     );
     const { finalizePendingCliUpgrade } =
@@ -337,6 +418,7 @@ describe("finalizePendingCliUpgrade", () => {
         liveBinaryPath,
         source: "manual",
         reason: "binary-locked",
+        allowDowngrade: false,
       }),
     );
     // Strip write permission on the parent of the live binary so

@@ -508,12 +508,20 @@ export function buildCliUpgradeCommand(args: CliUpgradeArgs): CommandFn {
           };
         }
         // Locked - keep the staged binary and record pendingUpgrade.
+        //
+        // `allowDowngrade` carries the CONSENT forward. Reaching this line at
+        // all means the floor above either found no downgrade or found one the
+        // caller asked for by name, and the publish happens in a later process
+        // that sees only this record - so a consented downgrade that has to be
+        // deferred would otherwise arrive at the publisher indistinguishable
+        // from a pre-floor accidental one and be refused for ever.
         await updateCliManifest(ctx.runtime.environment, {
           pendingUpgrade: {
             version: targetVersion,
             stagedBinaryPath,
             stagedAt: new Date().toISOString(),
             reason: "binary-locked",
+            allowDowngrade: downgradeConsented,
           },
         });
         ctx.runtime.logger.warn("CLI upgrade staged pending upgrade", {
@@ -1093,11 +1101,21 @@ export async function finalizePendingCliUpgrade(opts: {
   // `pendingUpgrade` is RETAINED, like every other outcome here that does
   // not swap: the record is superseded, not false, and Doctor's card reads
   // the same ordering to say so (see `CLI_UPGRADE_PENDING`).
+  //
+  // `allowDowngrade` is the whole reason this is a floor and not a wall. The
+  // guard asks the ordering AND the consent, because the two states it has to
+  // separate carry identical versions: a pre-floor accidental record, and a
+  // downgrade the person asked for by name whose publish was deferred because
+  // the live binary was locked. Reading the ordering alone refused both -
+  // which made `cli upgrade --target X --allow-downgrade` unable to complete
+  // on a locked binary at all, and sent Doctor's own card at the command that
+  // could not finish. Consent travels on the record for exactly this hop.
   if (
     wouldDowngradeCli({
       installedVersion: manifest.version,
       candidateVersion: pending.version,
-    })
+    }) &&
+    !pending.allowDowngrade
   ) {
     logger.info("CLI pending upgrade is below the installed version", {
       environment: opts.environment,

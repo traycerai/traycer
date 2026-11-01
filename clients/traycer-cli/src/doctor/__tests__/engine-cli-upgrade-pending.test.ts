@@ -171,6 +171,7 @@ function writePendingManifest(opts: {
   readonly stagedBinaryPath: string;
   readonly liveBinaryPath: string;
   readonly stagedExists: boolean;
+  readonly allowDowngrade: boolean;
 }): void {
   const cliDir = join(workHome, ".traycer", "cli");
   mkdirSync(cliDir, { recursive: true, mode: 0o700 });
@@ -192,6 +193,7 @@ function writePendingManifest(opts: {
           stagedBinaryPath: opts.stagedBinaryPath,
           stagedAt: "2026-05-10T00:00:00Z",
           reason: "binary-locked",
+          allowDowngrade: opts.allowDowngrade,
         },
       },
       null,
@@ -213,6 +215,7 @@ describe("runDoctor pending CLI upgrade surface", () => {
       stagedBinaryPath,
       liveBinaryPath,
       stagedExists: true,
+      allowDowngrade: false,
     });
 
     const { runDoctor } = await import("../engine");
@@ -254,6 +257,7 @@ describe("runDoctor pending CLI upgrade surface", () => {
       stagedBinaryPath,
       liveBinaryPath,
       stagedExists: true,
+      allowDowngrade: false,
     });
 
     const { runDoctor } = await import("../engine");
@@ -300,6 +304,7 @@ describe("runDoctor pending CLI upgrade surface", () => {
       stagedBinaryPath,
       liveBinaryPath,
       stagedExists: true,
+      allowDowngrade: false,
     });
     const markerPath = join(workHome, ".traycer", "cli", "post-finalize.json");
     writeFileSync(
@@ -333,6 +338,35 @@ describe("runDoctor pending CLI upgrade surface", () => {
     );
   });
 
+  // Consent flips the same record back to an ordinary pending upgrade, and it
+  // has to: a record the person asked for by name WILL be published on the
+  // next restart, so calling it superseded would be false and would withhold
+  // the restart that completes it. Same two versions as the case above.
+  it("reports a CONSENTED downgrade as an ordinary pending upgrade, with the restart fix", async () => {
+    stageDoctorMocks();
+    const liveBinaryPath = join(workHome, "bin", "traycer");
+    const stagedBinaryPath = join(workHome, "bin", "traycer-1.5.1");
+    mkdirSync(join(workHome, "bin"), { recursive: true });
+    writePendingManifest({
+      installedVersion: "1.5.2-rc.2",
+      version: "1.5.1",
+      stagedBinaryPath,
+      liveBinaryPath,
+      stagedExists: true,
+      allowDowngrade: true,
+    });
+
+    const { runDoctor } = await import("../engine");
+    const result = await runDoctor({
+      environment: "production",
+      portConflictDeps: null,
+    });
+    const issue = result.issues.find((i) => i.code === "CLI_UPGRADE_PENDING");
+    expect(issue?.title).toBe("CLI upgrade pending (1.5.1)");
+    expect(issue?.fixAction).toBe("host-restart");
+    expect(issue?.message).not.toContain("superseded");
+  });
+
   // A matching `swapped` marker is the one that still outranks the ordering:
   // the swap HAPPENED, so the pending record is settled history and comparing
   // its version against the install says nothing about what to do next.
@@ -347,6 +381,7 @@ describe("runDoctor pending CLI upgrade surface", () => {
       stagedBinaryPath,
       liveBinaryPath,
       stagedExists: true,
+      allowDowngrade: false,
     });
     writeFileSync(
       join(workHome, ".traycer", "cli", "post-finalize.json"),
@@ -387,6 +422,7 @@ describe("runDoctor pending CLI upgrade surface", () => {
       stagedBinaryPath,
       liveBinaryPath,
       stagedExists: false,
+      allowDowngrade: false,
     });
 
     const { runDoctor } = await import("../engine");
@@ -466,6 +502,7 @@ describe("runDoctor pending CLI upgrade surface", () => {
       stagedBinaryPath,
       liveBinaryPath,
       stagedExists: true,
+      allowDowngrade: false,
     });
     // Helper marker written by a previous detached run.
     const markerPath = join(workHome, ".traycer", "cli", "post-finalize.json");
@@ -518,6 +555,7 @@ describe("runDoctor pending CLI upgrade surface", () => {
       stagedBinaryPath,
       liveBinaryPath,
       stagedExists: true,
+      allowDowngrade: false,
     });
     const markerPath = join(workHome, ".traycer", "cli", "post-finalize.json");
     const markerBody = JSON.stringify({
@@ -568,6 +606,7 @@ describe("runDoctor pending CLI upgrade surface", () => {
       stagedBinaryPath,
       liveBinaryPath,
       stagedExists: true,
+      allowDowngrade: false,
     });
     const markerPath = join(workHome, ".traycer", "cli", "post-finalize.json");
     const markerBody = JSON.stringify({
@@ -627,6 +666,7 @@ describe("runDoctor pending CLI upgrade surface", () => {
       stagedBinaryPath,
       liveBinaryPath,
       stagedExists: true,
+      allowDowngrade: false,
     });
     const markerPath = join(workHome, ".traycer", "cli", "post-finalize.json");
     // Marker from the PRIOR 1.5.0 swap, never consumed.
@@ -676,6 +716,7 @@ describe("runDoctor pending CLI upgrade surface", () => {
       stagedBinaryPath,
       liveBinaryPath,
       stagedExists: false,
+      allowDowngrade: false,
     });
     const markerPath = join(workHome, ".traycer", "cli", "post-finalize.json");
     writeFileSync(
@@ -989,6 +1030,7 @@ describe("runDoctor pending CLI upgrade surface", () => {
       stagedBinaryPath: pendingStagedPath,
       liveBinaryPath,
       stagedExists: true,
+      allowDowngrade: false,
     });
     writeFileSync(
       join(workHome, ".traycer", "cli", "post-finalize.json"),
