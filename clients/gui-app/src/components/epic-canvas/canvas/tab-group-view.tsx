@@ -1136,6 +1136,8 @@ export function ActiveTabBody(props: ActiveTabBodyProps) {
           // and declares `offersClone: false`, so no owner or clone flag can
           // render anything. Passed as the do-nothing values, like `noopClone`.
           ownedByViewer
+          ownerName={null}
+          cloneTargetLabel={null}
           environmentOwned={false}
           cloneAllowed={false}
           showsPublishedCopy={false}
