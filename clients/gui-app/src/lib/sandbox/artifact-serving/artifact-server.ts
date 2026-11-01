@@ -115,9 +115,12 @@ type HostObjectRefusal = Extract<
  * stand-in page that says so and offers the read again: a malformed span is a
  * host that answered wrongly, and asking it again gets the same wrong answer.
  *
- * Keyed on the wire union, so a reason added to the protocol fails to COMPILE
+ * Keyed on the wire union, so a reason ADDED to the protocol fails to compile
  * here rather than silently falling through to a raw status whose body the
- * frame would render as the whole page.
+ * frame would render as the whole page. The port's own `unavailable` is a bare
+ * `string` and stays one - a test feeds it an arbitrary reason to pin the
+ * pass-through - so this cannot be exhaustive over what a port might say, only
+ * over what the protocol defines.
  */
 const HOST_OBJECT_REFUSAL: Record<HostObjectRefusal, true> = {
   missing: true,

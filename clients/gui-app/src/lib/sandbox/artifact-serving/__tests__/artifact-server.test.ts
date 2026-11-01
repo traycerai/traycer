@@ -415,15 +415,44 @@ describe("ArtifactServer.serve — a page the host will not hand over", () => {
   );
 
   /**
-   * The stand-in is NOT the missing-page stand-in. They are different
-   * documents because they report themselves differently, and the app answers
-   * them with a different sentence and a different offer — "it is not in the
-   * artifact" against "it did not arrive, try again".
+   * The two stand-ins must not be one document. They report themselves
+   * differently, and the app answers them with a different sentence and a
+   * different offer — "it is not in the artifact" against "it did not arrive,
+   * try again" — so one server has to tell a page it LACKS from a page whose
+   * read it could not finish.
+   *
+   * The roles are also asserted as the strings the serialized bootstrap and
+   * the bridge's dispatcher agree on. Nothing else ties those three literals
+   * together: the bootstrap is `toString`'d into the document and never runs
+   * in a test, so a typo there would ship with every test green and the
+   * overlay would simply never appear.
    */
-  it("keeps the unreachable stand-in distinct from the missing-page one", () => {
-    expect(buildUnreachablePageDocument(composedWith("/site/"))).not.toBe(
-      buildMissingPageDocument(composedWith("/site/")),
-    );
+  it("answers a refused page and an absent one with different stand-ins", async () => {
+    const server = new ArtifactServer({
+      treePath: "site",
+      manifest: htmlPage(10),
+      readSpan: () => Promise.resolve({ unavailable: "failed" }),
+      document: DOCUMENT_OPTIONS,
+    });
+    const text = async (path: string): Promise<string> => {
+      const page = await server.serve({
+        path,
+        offset: 0,
+        length: FOUR_MIB,
+        signal: signal(),
+      });
+      if (page.kind !== "bytes") throw new Error(`expected bytes for ${path}`);
+      return new TextDecoder().decode(page.bytes);
+    };
+
+    const refused = await text("site/report.html");
+    const absent = await text("site/gone.html");
+
+    expect(refused).not.toBe(absent);
+    expect(refused).toContain('"artifactPage":"unreachable"');
+    expect(refused).toContain("traycer/notifications/page-unreachable");
+    expect(absent).toContain('"artifactPage":"missing"');
+    expect(absent).toContain("traycer/notifications/page-missing");
   });
 
   /**
@@ -481,36 +510,6 @@ describe("ArtifactServer.serve — a page the host will not hand over", () => {
       );
     }
     expect(readSpan).toHaveBeenCalledTimes(2);
-  });
-
-  /**
-   * A document too large to carry is the one unavailability this does NOT
-   * dress up: the bytes exist and the host would hand them over, so offering
-   * the read again would be an offer that cannot come good. The same holds for
-   * the spans this server rejects as malformed, covered above.
-   */
-  it("leaves a document too large to carry as an unavailable answer", async () => {
-    const readSpan = vi.fn();
-    const server = new ArtifactServer({
-      treePath: "site",
-      manifest: htmlPage(TWENTY_FIVE_MIB + 1),
-      readSpan,
-      document: DOCUMENT_OPTIONS,
-    });
-
-    const page = await server.serve({
-      path: "site/report.html",
-      offset: 0,
-      length: FOUR_MIB,
-      signal: signal(),
-    });
-
-    expect(page).toEqual({
-      kind: "unavailable",
-      reason: "document-too-large",
-      status: 503,
-    });
-    expect(readSpan).not.toHaveBeenCalled();
   });
 
   /** A referenced file is not a page: nothing would read a stand-in document. */

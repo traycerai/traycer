@@ -1413,4 +1413,32 @@ describe("served document: a folder of pages", () => {
     );
     expect(onPageUnreachable).not.toHaveBeenCalled();
   });
+
+  /**
+   * Every artifact surface but the pages frame renders with no page navigation
+   * - a canvas board, an MCP App row, a wireframe - and a stand-in there has
+   * nobody to tell. It must not be left standing as a healthy load: it proves
+   * its nonce and reports ready like any document, so the load watchdog that
+   * used to catch an unreadable page has already been cleared by the time the
+   * report arrives. A document that draws nothing is a crash, and every one of
+   * those surfaces answers a crash with an affordance.
+   */
+  it.each([
+    "traycer/notifications/page-unreachable",
+    "traycer/notifications/page-missing",
+  ])("crashes on a %s report that no page navigation can hear", (method) => {
+    const harness = createServedHarness({
+      nonce: NONCE,
+      appRequests: null,
+      pages: null,
+    });
+    harness.host.receive(documentReady(NONCE, 120));
+    harness.host.frameLoaded();
+    expect(harness.host.status).toBe("ready");
+
+    harness.host.receive(notification(method, { nonce: NONCE }));
+
+    expect(harness.host.status).toBe("crashed");
+    expect(harness.statuses).toContain("crashed");
+  });
 });

@@ -774,21 +774,21 @@ export class SandboxBridgeHost {
 
   /**
    * A stand-in page saying what it stands in for, proven by the armed nonce
-   * like every other claim a served document makes. The page handshake also
-   * reports a missing page on its own, from the timeout, which is why that
-   * answer keeps a method of its own.
+   * like every other claim a served document makes. The answer is passed in by
+   * the dispatcher that matched the method, so a role added later cannot fall
+   * through to the wrong one.
    */
-  private reportStandInPage(method: string, params: unknown): void {
+  private reportStandInPage(
+    params: unknown,
+    tell: (pages: SandboxServedPages) => void,
+  ): void {
     if (!isRecord(params) || params.nonce !== this.options.document.nonce) {
       return;
     }
-    if (method === "traycer/notifications/page-unreachable") {
-      this.reportPageAnswer((pages) => pages.onPageUnreachable());
-      return;
-    }
-    this.reportPageMissing();
+    this.reportPageAnswer(tell);
   }
 
+  /** The page handshake's own timeout, which has no document to be proven. */
   private reportPageMissing(): void {
     this.reportPageAnswer((pages) => pages.onPageMissing());
   }
@@ -797,10 +797,23 @@ export class SandboxBridgeHost {
    * Clearing the two timers is what keeps a stand-in an ANSWER rather than a
    * hang: the page proved itself and said what it is, so neither the page
    * handshake nor the load watchdog may go on to call it a crash.
+   *
+   * With no page port there is nobody to tell, and a stand-in must NOT be left
+   * standing as a healthy load: it proves its nonce and reports ready like any
+   * document, so `onDocumentReady` has already cleared the watchdog that used
+   * to catch this. Every surface that renders an artifact without page
+   * navigation - a canvas board, an MCP App row, a wireframe - has a crashed
+   * path with an affordance, and a document that draws nothing is a crash by
+   * any reading. Without this a refused board read would be a blank board the
+   * app called healthy, with no way back.
    */
   private reportPageAnswer(tell: (pages: SandboxServedPages) => void): void {
+    if (this.phase === "disposed") return;
     const pages = this.servedPages();
-    if (pages === null || this.phase === "disposed") return;
+    if (pages === null) {
+      this.markCrashed();
+      return;
+    }
     this.clearTimer(this.pageHandshakeTimer);
     this.clearTimer(this.loadWatchdog);
     tell(pages);
@@ -1074,10 +1087,11 @@ export class SandboxBridgeHost {
       case "traycer/notifications/document-ready":
         this.onDocumentReady(params);
         return;
-      // Both stand-in reports carry the same proof; see `reportStandInPage`.
       case "traycer/notifications/page-missing":
+        this.reportStandInPage(params, (pages) => pages.onPageMissing());
+        return;
       case "traycer/notifications/page-unreachable":
-        this.reportStandInPage(method, params);
+        this.reportStandInPage(params, (pages) => pages.onPageUnreachable());
         return;
       case "traycer/notifications/early-error":
         if (this.phase === "delivered") this.earlyError = true;

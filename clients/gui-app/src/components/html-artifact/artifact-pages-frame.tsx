@@ -304,7 +304,7 @@ function pageStandIn(
   if (history.unreachable) {
     return (
       <PageStandIn
-        sentence="Couldn't load this page from the host that holds it."
+        sentence="Couldn't load this page from its host."
         action="Retry"
         onAct={actions.readAgain}
       />

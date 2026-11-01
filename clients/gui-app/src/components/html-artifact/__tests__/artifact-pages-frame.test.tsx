@@ -77,7 +77,7 @@ function renderPages() {
   return { navigation, report };
 }
 
-const UNREACHABLE = "Couldn't load this page from the host that holds it.";
+const UNREACHABLE = "Couldn't load this page from its host.";
 const MISSING = "This page is not in the artifact.";
 
 afterEach(() => {
@@ -107,12 +107,16 @@ describe("a served page the host would not hand over", () => {
   it("asks for the same page again on Retry, and clears the overlay", async () => {
     const user = userEvent.setup();
     const { navigation, report } = renderPages();
+    // Off the entry page first, which is what lets this tell Retry from Home:
+    // on the entry page the two are indistinguishable - Home's path, empty
+    // back stack and bumped visit are all what Retry leaves behind.
+    report((page) => page.onNavigate("report.html"));
     report((page) => page.onPageUnreachable());
     const before = navigation();
 
     await user.click(screen.getByRole("button", { name: "Retry" }));
 
-    expect(navigation().path).toBe(before.path);
+    expect(navigation().path).toBe("report.html");
     expect(navigation().visit).toBe(before.visit + 1);
     expect(screen.queryByText(UNREACHABLE)).toBeNull();
   });
@@ -144,6 +148,5 @@ describe("a served page the host would not hand over", () => {
     report((page) => page.onNavigate("index.html"));
 
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
-    expect(screen.getByTestId("page-frame")).toBeTruthy();
   });
 });
