@@ -38,7 +38,12 @@ export function MobileLevel2MenuTrigger(props: {
         variant="muted"
         size="sm"
         data-testid={props.testId}
-        className={cn("min-w-0 justify-start", props.className)}
+        // `shrink` undoes the button's own `shrink-0`, and the cap gives a long
+        // name a width to truncate at, so what trails it stays in the row.
+        className={cn(
+          "min-w-0 max-w-full shrink justify-start",
+          props.className,
+        )}
       >
         {props.children}
         <ChevronDown aria-hidden="true" />
