@@ -118,7 +118,10 @@ import { useComposerToolbarStore } from "@/components/home/hooks/use-composer-to
 import { fallbackSeedSource } from "@/lib/composer/composer-seed-source";
 import { useStagedSendSignInCheck } from "@/hooks/sandboxes/use-staged-send-sign-in-check";
 import { pickedRunSettings } from "@/lib/sandboxes/pending-sandbox-send";
-import type { ComposerToolbarStoreState } from "@/stores/composer/composer-toolbar-store";
+import {
+  chipModelName,
+  type ComposerToolbarStoreState,
+} from "@/stores/composer/composer-toolbar-store";
 import { useComposerHarnessMemoryStore } from "@/stores/composer/composer-harness-memory-store";
 import {
   readStagedSandbox,
@@ -354,6 +357,8 @@ describe("a composer with a sandbox staged (E19)", () => {
     const gate = renderHook(() =>
       useStagedSendSignInCheck({
         harnessId: pickedRunSettings(store.getState()).harnessId,
+        modelSlug: pickedRunSettings(store.getState()).model,
+        modelName: chipModelName(store.getState()),
         active: true,
       }),
     ).result.current;
@@ -406,5 +411,62 @@ describe("a composer with a sandbox staged (E19)", () => {
 
     expect(chip(store.getState()).model).toBe(shown.model);
     expect(sent(store.getState()).model).toBe("traycer-default");
+  });
+
+  describe("the draft write of a kept pick whose saved model the catalogue lacks", () => {
+    const saved: ChatRunSettings = {
+      ...PICK,
+      harnessId: "traycer",
+      model: "traycer-saved",
+      reasoningEffort: null,
+    };
+
+    function renderWatched() {
+      const hook = renderLandingToolbar(null, saved);
+      const kept = vi.fn<(settings: ChatRunSettings) => void>();
+      hook.result.current.setState({ onShownPickKept: kept });
+      return { ...hook, store: hook.result.current, kept };
+    }
+
+    it("writes the model that was on screen, not the cached catalogue's heal of it", async () => {
+      // The cloud's list is already cached, and holds only the saved model.
+      host.cloudTraycer = [{ slug: "traycer-saved" }];
+      const { store, kept } = renderWatched();
+      await waitFor(() =>
+        expect(store.getState().selection.modelSlug).toBe("traycer-default"),
+      );
+
+      act(() => {
+        useStagedSandboxStore.getState().stage(SURFACE, newTarget("linux", 2));
+      });
+
+      await waitFor(() => expect(kept).toHaveBeenCalled());
+      expect(kept.mock.calls.map(([settings]) => settings.model)).toEqual([
+        "traycer-default",
+      ]);
+      expect(sent(store.getState()).model).toBe("traycer-default");
+    });
+
+    it("keeps writing it when the cloud list arrives after the stage", async () => {
+      const { store, kept, rerender } = renderWatched();
+      await waitFor(() =>
+        expect(store.getState().selection.modelSlug).toBe("traycer-default"),
+      );
+      act(() => {
+        useStagedSandboxStore.getState().stage(SURFACE, newTarget("linux", 2));
+      });
+      await waitFor(() => expect(kept).toHaveBeenCalled());
+
+      host.cloudTraycer = [{ slug: "traycer-saved" }];
+      rerender();
+      await waitFor(() =>
+        expect(store.getState().catalog.modelsLoaded).toBe(true),
+      );
+
+      expect(kept.mock.calls.map(([settings]) => settings.model)).toEqual([
+        "traycer-default",
+      ]);
+      expect(sent(store.getState()).model).toBe("traycer-default");
+    });
   });
 });

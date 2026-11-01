@@ -1,10 +1,14 @@
 import { useRef, useState, type ReactNode } from "react";
+import type { ModelOption } from "@/components/home/data/landing-options";
+import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import { QueryClientProvider } from "@tanstack/react-query";
 import {
   act,
   cleanup,
   render,
+  screen,
   waitFor,
+  within,
   type RenderResult,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -12,6 +16,9 @@ import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe
 import type { JsonContent } from "@traycer/protocol/common/registry";
 
 import type { ComposerBodyProps } from "@/components/home/composer/composer-body";
+import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
+import type { SandboxStagingSurface } from "@/components/composer/use-sandbox-staging";
+import { createComposerEditorIncarnation } from "@/lib/composer/composer-editor-incarnation";
 import type { ComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
 
 // What the host can run: the person's Codex pick is not among it, so Claude
@@ -24,15 +31,22 @@ const host = vi.hoisted(() => ({
     ],
   },
   toolbar: null as ComposerToolbarStore | null,
+  bodySubmit: null as (() => void) | null,
+  installEditor: null as (() => void) | null,
+  sandboxStaging: null as SandboxStagingSurface | null,
+  /** The sandbox's own Traycer list: `undefined` while it loads. */
+  cloudModels: undefined as ReadonlyArray<string> | undefined,
+  /** The host's Traycer list, by slug and chip label. */
+  traycerHostModels: [{ slug: "traycer-default", label: "traycer-default" }],
+  createChat: vi.fn(),
 }));
 
-function modelOption(harnessId: string, slug: string) {
+function modelOption(harnessId: GuiHarnessId, slug: string): ModelOption {
   return {
     harnessId,
     slug,
     label: slug,
     description: null,
-    isDefault: true,
     contextWindow: null,
     maxOutputTokens: null,
     defaultReasoningEffort: null,
@@ -51,15 +65,70 @@ function modelOption(harnessId: string, slug: string) {
 const CLAUDE_MODELS = { models: [modelOption("claude", "sonnet-5.5")] };
 const CODEX_MODELS = { models: [modelOption("codex", "gpt-6-astra")] };
 
+// Stable per answer: a fresh array per render would push a new catalog on
+// every render.
+let hostListCache: {
+  readonly from: typeof host.traycerHostModels;
+  readonly list: {
+    readonly models: ReadonlyArray<ModelOption>;
+  };
+} | null = null;
+const traycerHostList = () => {
+  if (hostListCache?.from !== host.traycerHostModels)
+    hostListCache = {
+      from: host.traycerHostModels,
+      list: {
+        models: host.traycerHostModels.map((m) => ({
+          ...modelOption("traycer", m.slug),
+          label: m.label,
+        })),
+      },
+    };
+  return hostListCache.list;
+};
+let cloudCache: {
+  readonly from: ReadonlyArray<string>;
+  readonly options: ReadonlyArray<ModelOption>;
+} | null = null;
+function cloudModelOptions() {
+  const slugs = host.cloudModels;
+  if (slugs === undefined) return undefined;
+  if (cloudCache?.from !== slugs)
+    cloudCache = {
+      from: slugs,
+      options: slugs.map((slug) => modelOption("traycer", slug)),
+    };
+  return cloudCache.options;
+}
+
 vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
   useGuiHarnessesQueryForClient: () => ({ data: host.harnesses }),
-  useGuiHarnessModelsQueryForClient: (_client: unknown, harnessId: string) => ({
-    data: harnessId === "claude" ? CLAUDE_MODELS : CODEX_MODELS,
-  }),
+  useGuiHarnessModelsQueryForClient: (_client: unknown, harnessId: string) => {
+    if (harnessId === "claude") return { data: CLAUDE_MODELS };
+    return { data: harnessId === "traycer" ? traycerHostList() : CODEX_MODELS };
+  },
 }));
 vi.mock("@/hooks/sandboxes/use-sandbox-traycer-models-query", () => ({
-  useSandboxTraycerModels: () => ({ data: undefined }),
+  useSandboxTraycerModels: () => ({
+    data: cloudModelOptions(),
+    isFetching: false,
+  }),
 }));
+vi.mock("@/hooks/sandboxes/use-sandbox-catalogue-query", () => ({
+  useSandboxCatalogue: () => ({
+    data: { providers: [] },
+    isFetching: false,
+    isError: false,
+    refetch: vi.fn(),
+  }),
+}));
+vi.mock("@/hooks/auth/use-auth-user-query", () => ({
+  useAuthUser: () => ({
+    data: null,
+    refetch: () => Promise.resolve({ data: null, isError: false }),
+  }),
+}));
+vi.mock("@/lib/links/open-link", () => ({ useOpenLink: () => vi.fn() }));
 vi.mock("@/hooks/command-palette/use-register-composer-controls", () => ({
   useRegisterFocusedComposerControls: () => undefined,
 }));
@@ -73,7 +142,16 @@ vi.mock("@/hooks/providers/use-resolved-seeded-profile-id", () => ({
 vi.mock("@/components/home/composer/composer-body", () => ({
   ComposerBody: (props: ComposerBodyProps) => {
     host.toolbar = props.toolbarStore;
-    return null;
+    host.bodySubmit = props.onSubmit;
+    host.installEditor = () => {
+      props.editorRef.current = editorHandle();
+    };
+    return (
+      <>
+        {props.workspaceControls}
+        {props.topBanner}
+      </>
+    );
   },
 }));
 
@@ -110,12 +188,6 @@ vi.mock("@/hooks/host/use-composer-placement", () => ({
 vi.mock("@/hooks/sandboxes/use-sandbox-agent-gate", () => ({
   useSandboxAgentGate: () => ({ blocked: false, hint: null, notice: null }),
 }));
-vi.mock("@/hooks/sandboxes/use-staged-send-sign-in-check", () => ({
-  useStagedSendSignInCheck: () => ({
-    check: () => null,
-    beforeSend: () => Promise.resolve(null),
-  }),
-}));
 vi.mock("@/components/composer/use-staged-sandbox-send", () => ({
   useStagedSandboxSend: () => ({ intercept: () => false, line: null }),
   useStagedSandboxHandoff: () => undefined,
@@ -133,7 +205,7 @@ vi.mock("@/hooks/epic/use-epic-session-host-id", () => ({
 vi.mock("@/hooks/epic/use-epic-chat-mutations", () => ({
   useEpicCreateChatForHostClient: () => ({
     isPending: false,
-    mutateAsync: vi.fn(),
+    mutateAsync: host.createChat,
   }),
 }));
 vi.mock("@/hooks/agent/use-create-tui-agent", () => ({
@@ -228,7 +300,14 @@ vi.mock("@/hooks/composer/use-workspace-mention-roots", () => ({
 }));
 vi.mock(
   "@/components/home/host-workspace-selector/host-workspace-selector",
-  () => ({ ActiveHostWorkspaceControls: () => null }),
+  () => ({
+    ActiveHostWorkspaceControls: (props: {
+      readonly sandboxStaging: SandboxStagingSurface | null;
+    }) => {
+      host.sandboxStaging = props.sandboxStaging;
+      return null;
+    },
+  }),
 );
 vi.mock("@/lib/attachments/use-attachment-blob-src", () => ({
   useEpicImageFetcher: () => vi.fn(),
@@ -259,6 +338,8 @@ import { createAppQueryClient } from "@/lib/query-client";
 import { NewConversationModalBody } from "../new-conversation-modal";
 import { NewConversationTransientContext } from "../new-conversation-transient-context";
 import { pickedRunSettings } from "@/lib/sandboxes/pending-sandbox-send";
+import { chipModelName } from "@/stores/composer/composer-toolbar-store";
+import { usePendingSandboxSendStore } from "@/stores/sandboxes/pending-sandbox-send-store";
 import { useComposerHarnessMemoryStore } from "@/stores/composer/composer-harness-memory-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
@@ -339,6 +420,30 @@ function renderModal(): RenderResult {
   return render(<Harness />, { wrapper: QueryWrapper });
 }
 
+function editorHandle(): ComposerPromptEditorHandle {
+  const editorIncarnation = createComposerEditorIncarnation();
+  return {
+    isReady: () => true,
+    getEditorIncarnation: () => editorIncarnation,
+    hasFocus: () => false,
+    focus: () => undefined,
+    focusAtEnd: () => undefined,
+    getJSON: () => DIRTY_CONTENT,
+    isEmpty: () => false,
+    clear: () => undefined,
+    setContent: () => undefined,
+    syncContent: () => undefined,
+    insertImageAttachments: () => undefined,
+    insertMentionAttachment: () => false,
+    beginPathInsertion: () => null,
+    rewriteImageAttachmentHashById: () => false,
+    removeImageAttachmentById: () => undefined,
+    insertDictatedText: () => undefined,
+    draftGeneration: () => 0,
+    dismissActiveSuggestion: () => false,
+  };
+}
+
 function toolbar(): ComposerToolbarStore {
   if (host.toolbar === null) throw new Error("the modal did not mount");
   return host.toolbar;
@@ -352,6 +457,20 @@ function draftSettings(): ChatRunSettings | null | undefined {
 beforeEach(() => {
   localStorage.clear();
   host.toolbar = null;
+  host.bodySubmit = null;
+  host.installEditor = null;
+  host.sandboxStaging = null;
+  host.cloudModels = undefined;
+  host.harnesses = {
+    harnesses: [
+      { id: "claude", available: true },
+      { id: "codex", available: false },
+    ],
+  };
+  host.traycerHostModels = [
+    { slug: "traycer-default", label: "traycer-default" },
+  ];
+  host.createChat.mockReset();
   useStagedSandboxStore.setState({ bySurface: {} });
   useComposerHarnessMemoryStore.getState().resetForTests();
   useNewConversationModalStore.getState().resetForTests();
@@ -399,5 +518,66 @@ describe("a new-conversation modal with a sandbox staged", () => {
     );
     expect(toolbar().getState().selection.harnessId).toBe("claude");
     expect(pickedRunSettings(toolbar().getState()).harnessId).toBe("claude");
+  });
+
+  it("refuses a Traycer model the sandbox's list leaves out at Send, keeping the chip and draft and creating nothing", async () => {
+    host.harnesses = {
+      harnesses: [
+        { id: "claude", available: true },
+        { id: "codex", available: false },
+        { id: "traycer", available: true },
+      ],
+    };
+    host.traycerHostModels = [{ slug: "trc-a", label: "Traycer A" }];
+    host.cloudModels = ["trc-s"];
+    useNewConversationModalStore.getState().setSettings(EPIC_ID, {
+      ...PICK,
+      harnessId: "traycer",
+      model: "trc-a",
+      reasoningEffort: null,
+    });
+    renderModal();
+    await waitFor(() =>
+      expect(chipModelName(toolbar().getState())).toBe("Traycer A"),
+    );
+    act(() => {
+      useStagedSandboxStore.getState().stage(SURFACE, NEW_STAGE);
+    });
+    await waitFor(() =>
+      expect(toolbar().getState().catalog.keepsUnavailablePick).toBe(true),
+    );
+    // The stage never moves the chip off the model on screen.
+    expect(chipModelName(toolbar().getState())).toBe("Traycer A");
+    const draft = draftSettings();
+    act(() => {
+      host.installEditor?.();
+    });
+
+    act(() => {
+      host.bodySubmit?.();
+    });
+
+    const notice = within(await screen.findByTestId("composer-host-notice"));
+    expect(
+      notice.getByText(
+        "Traycer A doesn't run on this sandbox. Choose another Traycer model to run agents here.",
+      ),
+    ).toBeDefined();
+    // The notice's icon-only dismiss button has no label; the actions do.
+    expect(
+      notice
+        .getAllByRole("button")
+        .map((b) => b.textContent)
+        .filter((label) => label !== ""),
+    ).toEqual([
+      "Choose a model",
+      "Open terminal instead",
+      "Choose another host",
+    ]);
+    expect(host.createChat).not.toHaveBeenCalled();
+    expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+    expect(draftSettings()).toBe(draft);
+    expect(chipModelName(toolbar().getState())).toBe("Traycer A");
+    expect(pickedRunSettings(toolbar().getState()).model).toBe("trc-a");
   });
 });

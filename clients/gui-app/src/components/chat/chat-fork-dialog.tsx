@@ -70,7 +70,10 @@ import {
 import { clearChatForkWorkspace } from "@/lib/worktree/chat-fork-workspace-staging";
 import { useSeededWorkspaceSnapshotStore } from "@/stores/worktree/seeded-workspace-snapshot-store";
 import { useWorktreeIntentMemoryStore } from "@/stores/worktree/worktree-intent-memory-store";
-import type { ComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
+import {
+  chipModelName,
+  type ComposerToolbarStore,
+} from "@/stores/composer/composer-toolbar-store";
 import type { ChatForkMode } from "@/components/chat/chat-message";
 import {
   chatForkHostRefusals,
@@ -638,8 +641,15 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
     (s) => s.values.selection.harnessId,
   );
   const forkModelPickerRef = useRef<OpenForHarness | null>(null);
+  const pickedModelSlug = useStore(
+    toolbarStore,
+    (s) => s.values.selection.modelSlug,
+  );
+  const chipModel = useStore(toolbarStore, chipModelName);
   const stagedSignInCheck = useStagedSendSignInCheck({
     harnessId: pickedHarnessId,
+    modelSlug: pickedModelSlug,
+    modelName: chipModel,
     active: activeWorkspaceTarget !== null && forkStage !== null,
     onChooseModel: (offeredAgents) =>
       forkModelPickerRef.current?.("traycer", offeredAgents),

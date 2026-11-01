@@ -14,6 +14,7 @@ import {
   CHOOSE_ANOTHER_HOST,
   COULDNT_CHECK_SANDBOX_AGENTS,
   DETAILS,
+  modelNotOnSandboxLine,
   OPEN_TERMINAL_INSTEAD,
   RETRY,
 } from "@/lib/sandboxes/sandbox-strings";
@@ -120,6 +121,20 @@ export function sandboxAgentRefusedNotice(
     },
     secondaryActions: extra === null ? exits : [...exits, extra],
   };
+}
+
+/** A Traycer model the sandbox's catalog does not list; the same remedies. */
+export function sandboxModelNotOfferedNotice(
+  modelName: string,
+  offeredAgents: ReadonlyArray<string> | null,
+  remedies: SandboxAgentRemedies,
+): ComposerHostNoticeState {
+  return sandboxAgentRefusedNotice(
+    modelNotOnSandboxLine(modelName),
+    offeredAgents,
+    remedies,
+    null,
+  );
 }
 
 export function sandboxAgentNotOfferedNotice(

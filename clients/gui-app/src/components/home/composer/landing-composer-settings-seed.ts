@@ -15,13 +15,17 @@ export function landingComposerSettingsSeedForDraft(
 
 /**
  * What a draft minted now starts from: the host's last-run settings, or under
- * a stage the pick that stage keeps, which those settings may not be.
+ * a stage the pick that stage keeps, which those settings may not be. A kept
+ * pick with no model yet cannot be stored: the draft starts as the composer was
+ * seeded, and the pick follows once its model resolves (`keptPickUnwritten`).
  */
 export function landingMintedDraftSettings(
   toolbar: ComposerToolbarState,
   lastRunSettings: ChatRunSettings | null,
 ): ChatRunSettings | null {
-  return toolbar.sandboxRunTarget === "staged"
-    ? pickedRunSettings(toolbar)
-    : lastRunSettings;
+  if (toolbar.sandboxRunTarget !== "staged") return lastRunSettings;
+  const picked = pickedRunSettings(toolbar);
+  return picked.model.length > 0
+    ? picked
+    : landingComposerSettingsSeedForDraft(null, null, lastRunSettings);
 }

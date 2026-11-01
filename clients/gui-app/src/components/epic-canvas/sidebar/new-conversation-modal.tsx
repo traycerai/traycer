@@ -225,7 +225,10 @@ import {
   type ComposerMode,
 } from "@/components/home/data/landing-options";
 import { useComposerToolbarStore } from "@/components/home/hooks/use-composer-toolbar-store";
-import { catalogSettledFor } from "@/stores/composer/composer-toolbar-store";
+import {
+  catalogSettledFor,
+  chipModelName,
+} from "@/stores/composer/composer-toolbar-store";
 import { fallbackSeedSource } from "@/lib/composer/composer-seed-source";
 import type { TerminalAgentLaunch } from "@/components/home/hooks/use-landing-composer-actions";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -1278,6 +1281,11 @@ export function NewConversationModalBody(props: {
     draftId: null,
   });
   const attachmentPending = isAttachmentIngestPending(paste);
+  const pickedModelSlug = useStore(
+    toolbarStore,
+    (state) => state.values.selection.modelSlug,
+  );
+  const chipModel = useStore(toolbarStore, chipModelName);
   const pickedHarnessId = useStore(
     toolbarStore,
     (state) => state.values.selection.harnessId,
@@ -1294,6 +1302,8 @@ export function NewConversationModalBody(props: {
     hostId: resolvedHostId,
     harnessId,
     pickedHarnessId,
+    pickedModelSlug,
+    chipModel,
     active: chatComposerActive,
     stagedAhead: workspaceGate.stagedAhead,
     stagedSurfaceKey: stagingSurfaceKey(sandboxStaging),
@@ -2791,6 +2801,8 @@ function usePlacementAgentGates(input: {
   readonly hostId: string | null;
   readonly harnessId: GuiHarnessId | null;
   readonly pickedHarnessId: GuiHarnessId | null;
+  readonly pickedModelSlug: string;
+  readonly chipModel: string;
   readonly active: boolean;
   readonly stagedAhead: boolean;
   readonly stagedSurfaceKey: string | null;
@@ -2814,6 +2826,8 @@ function usePlacementAgentGates(input: {
   });
   const stagedSignInCheck = useStagedSendSignInCheck({
     harnessId: input.pickedHarnessId,
+    modelSlug: input.pickedModelSlug,
+    modelName: input.chipModel,
     active: active && stagedAhead,
     onOpenTerminalInstead: input.onOpenTerminalInstead,
     onChooseAnotherHost: input.onChooseAnotherHost,

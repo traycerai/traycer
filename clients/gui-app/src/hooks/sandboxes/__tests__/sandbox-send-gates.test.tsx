@@ -112,6 +112,9 @@ vi.mock("@/hooks/providers/use-providers-list-query", () => ({
         : { providers: answers.providers },
   }),
 }));
+vi.mock("@/hooks/sandboxes/use-sandbox-traycer-models-query", () => ({
+  useSandboxTraycerModels: () => ({ data: undefined, isFetching: false }),
+}));
 vi.mock("@/hooks/sandboxes/use-sandbox-catalogue-query", () => ({
   useSandboxCatalogue: () => ({
     data: answers.catalogue,
@@ -552,6 +555,8 @@ function checkFor(harnessId: "codex" | "claude" | null) {
   return renderHook(() =>
     useStagedSendSignInCheck({
       harnessId,
+      modelSlug: "",
+      modelName: "",
       active: true,
       onOpenTerminalInstead: answers.onOpenTerminalInstead,
       onChooseAnotherHost: answers.onChooseAnotherHost,
@@ -653,7 +658,12 @@ describe("useStagedSendSignInCheck", () => {
         teamName: "Acme",
       });
       const gate = renderHook(() =>
-        useStagedSendSignInCheck({ harnessId: "codex", active: true }),
+        useStagedSendSignInCheck({
+          harnessId: "codex",
+          modelSlug: "",
+          modelName: "",
+          active: true,
+        }),
       ).result.current;
       const refusal = await gate.beforeSend(stage);
       if (stillShort)

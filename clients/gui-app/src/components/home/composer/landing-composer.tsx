@@ -55,7 +55,10 @@ import { isAttachmentIngestPending } from "@/hooks/composer/use-composer-paste";
 import { useLandingComposerMentionRoots } from "@/hooks/composer/use-workspace-mention-roots";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useComposerToolbarStore } from "@/components/home/hooks/use-composer-toolbar-store";
-import { catalogSettledFor } from "@/stores/composer/composer-toolbar-store";
+import {
+  catalogSettledFor,
+  chipModelName,
+} from "@/stores/composer/composer-toolbar-store";
 import { useProviderPackGateForClient } from "@/hooks/providers/use-provider-pack-gate";
 import { ComposerStagedSurfaceKeyProvider } from "@/components/composer/composer-staged-sandbox-context";
 import { useSandboxAgentGate } from "@/hooks/sandboxes/use-sandbox-agent-gate";
@@ -579,8 +582,15 @@ export function LandingComposer(props: LandingComposerProps) {
     (s) => s.values.selection.harnessId,
   );
   const openStagedTerminal = useOpenLandingStagedTerminal(composerSurfaceKey);
+  const pickedModelSlug = useStore(
+    toolbarStore,
+    (s) => s.values.selection.modelSlug,
+  );
+  const chipModel = useStore(toolbarStore, chipModelName);
   const stagedSignInCheck = useStagedSendSignInCheck({
     harnessId: pickedHarnessId,
+    modelSlug: pickedModelSlug,
+    modelName: chipModel,
     active: chatComposerActive && workspaceGate.stagedAhead,
     onOpenTerminalInstead: openStagedTerminal,
     onChooseAnotherHost: () => {
