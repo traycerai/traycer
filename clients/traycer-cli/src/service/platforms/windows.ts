@@ -87,6 +87,7 @@ import {
   reportServiceInstallKeptDisabled,
 } from "../registration-repair";
 import {
+  gateWindowsTaskRun,
   gateWindowsTaskVerb,
   isServiceRegistrationKeptChangingError,
   isServiceTaskNotOwnedError,
@@ -312,7 +313,43 @@ async function installService(
     "create",
     ownershipDeps,
   );
-  if (create.kind === "not-owned") throw create.error;
+  if (create.kind === "not-owned") {
+    // The install's two decisions, split: only the one that WRITES fails
+    // closed. Another account's task refuses the whole install - its
+    // definition is theirs, and starting their host under their account is
+    // not this account's to ask for either.
+    //
+    // A task whose owner could not be CONFIRMED refuses the definition
+    // refresh just the same - nothing staged, no `/Create`, no install edge -
+    // and then starts the host anyway, because the bytes a swap just put in
+    // place still have to come up and `/Run` changes no definition
+    // (`gateWindowsTaskRun`, which reads again for itself). Refusing both is
+    // what left a machine whose definition read timed out mid-update with the
+    // registration reported as applied, no `/Run` issued, and the update's
+    // verify leg failing for a start nobody had requested.
+    //
+    // The exception is the explicit repair (`traycer host service install`),
+    // whose whole deliverable IS the definition write: it must not report
+    // success for a registration it did not rewrite, so it keeps failing
+    // closed. The repair the refusal names therefore still refuses, and
+    // `traycer host service start` - a `/Run` and nothing else - still starts
+    // the host, each saying what it did.
+    //
+    // `absent` is the gate's only "there is no registration" answer, so an
+    // unconfirmed verdict means this read did not establish absence - the
+    // fail-closed reading this module already takes of it. On a machine whose
+    // definition read is broken AND that has no task, the start below fails
+    // with the scheduler's own "cannot find the task", which names the real
+    // problem where the refusal it replaces named only the read.
+    if (create.reason === "other-owner" || isExplicitRegistrationRepair()) {
+      throw create.error;
+    }
+    // No grant was published above and nothing was stopped in here, so this is
+    // the install's first and only edge and a refusal at it propagates as
+    // itself - exactly as a plain `traycer host service start` does.
+    await runTaskAndVerifyStart(options.label, run, null, ownershipDeps);
+    return;
+  }
   // A task its owner disabled in Task Scheduler stays disabled: the setting is
   // theirs, and only the explicit repair (`traycer host service install`)
   // writes it back on. Carried, the task is redefined and NOT started - a
@@ -1903,8 +1940,11 @@ async function runTaskAndVerifyStart(
   // The ownership gate, in front of the baseline and the edge: a task another
   // user owns is never started for them, and a refusal here has published no
   // grant and issued no `/Run`, so nothing is coming and nothing is marked
-  // committed.
-  const start = await gateWindowsTaskVerb(label, "run", ownershipDeps);
+  // committed. A task whose owner could not be confirmed is started - the
+  // `/Run` writes no definition, and the scheduler's own permissions on the
+  // task answer for it (`gateWindowsTaskRun`) - so its failure, if any, comes
+  // from the verb's own result below.
+  const start = await gateWindowsTaskRun(label, ownershipDeps);
   if (start.kind === "not-owned") throw start.error;
   // Capture evidence baseline BEFORE /Run so a pre-existing pid.json or
   // stale host.log residue cannot count as "spawned this attempt".
@@ -1944,8 +1984,10 @@ async function runTaskAndVerifyStart(
     // Answered from the gate's own definition read - one for this verb -
     // and carried as `registrationDisabled`, so the caller deciding what to
     // do about the refusal does not query again either. A setting that
-    // cannot be read keeps the committed answer.
+    // cannot be read keeps the committed answer, and so does a task the gate
+    // could not attribute: it read no `<Enabled>` off it either.
     const disabled =
+      start.kind === "permitted" &&
       start.task.kind === "caller" &&
       taskXmlEnabledState(start.task.xml).kind === "disabled";
     throw cliError({
@@ -2087,10 +2129,13 @@ async function restartService(
   run: ProcessRunner,
   deps: WindowsControllerDeps,
 ): Promise<void> {
-  // A restart's start half is a write on the task, so a task another user owns
-  // refuses the restart here, before its stop half has taken anything down:
-  // the only effect it could have had is the one it may not make. The start
-  // below asks the gate again on its own read.
+  // A restart takes this account's host down first, so it is refused here -
+  // before its stop half has taken anything down - unless this read proved the
+  // task is this account's: a restart that cannot be sure it can start the
+  // host again leaves the running one alone. Stricter than the `/Run` gate
+  // below, which starts a task it could not attribute, and deliberately so:
+  // there the host is already down, here it is not. The start below asks the
+  // gate again on its own read.
   const owner = await readWindowsServiceTaskOwnership(label);
   if (owner.kind === "not-owned") {
     throw serviceTaskNotOwnedError(label, "run", owner.reason);
