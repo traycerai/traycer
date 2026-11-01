@@ -6,6 +6,7 @@ import {
   screen,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { useState } from "react";
 import type { ReactElement, ReactNode } from "react";
 import type { ReportIssueContext } from "@/lib/report-issue-context";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -218,11 +219,19 @@ import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store"
 
 // TokenReauthForm reads/writes the TanStack Query cache (useQueryClient +
 // useTabRefreshProviders), so every banner render needs a QueryClient in scope.
+//
+// ONE client per mounted wrapper, held in state rather than built in the
+// render body. The banner reads `environment.status`, a condition-polled
+// method, so its observer carries the refetchInterval branded by the
+// coordinator OF ITS CLIENT; a client rebuilt on each render hands the next
+// one a fresh coordinator that has never seen that function, and the identity
+// guard then reports the observer as unbranded. Production builds its client
+// once (`createAppQueryClient`), so a per-render client is a shell no app
+// state can reach.
 function QueryWrapper({ children }: { children: ReactNode }) {
+  const [queryClient] = useState(() => new QueryClient());
   return (
-    <QueryClientProvider client={new QueryClient()}>
-      {children}
-    </QueryClientProvider>
+    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
   );
 }
 

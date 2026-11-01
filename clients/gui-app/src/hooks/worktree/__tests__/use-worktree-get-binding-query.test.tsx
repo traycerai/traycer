@@ -186,7 +186,7 @@ describe("useWorktreeGetBinding condition cadence", () => {
     );
   });
 
-  it("poll:false never installs branded cadence", async () => {
+  it("poll:false never installs branded cadence, and keeps the client's own retry", async () => {
     const fixture = createBindingFixture({
       setupState: "pending",
       fail: false,
@@ -215,7 +215,14 @@ describe("useWorktreeGetBinding condition cadence", () => {
     expect(query.options.meta).toMatchObject({
       hostRpcMethod: "worktree.getBinding",
     });
-    expect(query.options.retry).toBe(false);
+    // `retry: false` belongs to the BRANDED poller, whose episode re-asks on
+    // its error lanes. A reader that opts out owns no episode, so no lane can
+    // recover it: it keeps the app client's ordinary retry, the only recovery
+    // it has left. Pinned to `false` here, this asserted the opposite.
+    const clientRetry = fixture.queryClient.getDefaultOptions().queries?.retry;
+    // Not `undefined`, or the comparison below would hold of any override.
+    expect(clientRetry).not.toBeUndefined();
+    expect(query.options.retry).toBe(clientRetry);
     expect(refetchIntervalFor(query)).toBe(false);
   });
 
