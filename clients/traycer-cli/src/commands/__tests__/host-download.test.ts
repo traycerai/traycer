@@ -1,4 +1,10 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  readHostDownloadFailure,
+  readHostUpdateLastAttempt,
+  removeHostUpdateLastAttempt,
+  writeHostUpdateLastAttempt,
+} from "@traycer-clients/shared/host-update";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   downloadAndStageHostMock: vi.fn(),
@@ -11,6 +17,8 @@ vi.mock("../../installer/download-stage", () => ({
 import { buildHostDownloadCommand } from "../host-download";
 import type { CommandContext } from "../../runner/runner";
 import type { HostDownloadOutcome } from "../../installer/download-stage";
+import { CLI_ERROR_CODES, cliError } from "../../runner/errors";
+import { hostHomeDir } from "../../store/paths";
 
 function fakeCtx(): CommandContext {
   return {
@@ -160,4 +168,158 @@ describe("buildHostDownloadCommand", () => {
       expect(result.exitCode).toBe(0);
     },
   );
+});
+
+describe("the record a download leaves", () => {
+  const home = (): string => hostHomeDir("production");
+  const last = () => readHostDownloadFailure(home());
+  const busy = cliError({
+    code: CLI_ERROR_CODES.CLI_LOCK_BUSY,
+    message: "Another Traycer command is updating the host",
+    details: {},
+    exitCode: 75,
+  });
+
+  beforeEach(async () => {
+    await removeHostUpdateLastAttempt(home());
+  });
+
+  afterEach(() => {
+    vi.resetAllMocks();
+    vi.unstubAllEnvs();
+  });
+
+  function download(versionRequest: string | null): Promise<unknown> {
+    return buildHostDownloadCommand({ versionRequest, automatic: false })(
+      fakeCtx(),
+    );
+  }
+
+  it("one stopped before any transfer did not run", async () => {
+    mocks.downloadAndStageHostMock.mockRejectedValue(busy);
+    await expect(download("1.5.0")).rejects.toBe(busy);
+    expect(await last()).toMatchObject({
+      command: "host download",
+      initiator: "manual",
+      outcome: "refused",
+      targetVersion: "1.5.0",
+      code: CLI_ERROR_CODES.CLI_LOCK_BUSY,
+      message: busy.message,
+    });
+  });
+
+  it("one that broke in transfer failed, and names what it was fetching", async () => {
+    const lost = new Error("connection reset");
+    mocks.downloadAndStageHostMock.mockImplementation(
+      async (options: {
+        readonly onWillDownload: (version: string) => Promise<void>;
+      }) => {
+        await options.onWillDownload("1.6.0");
+        throw lost;
+      },
+    );
+    await expect(download(null)).rejects.toBe(lost);
+    expect(await last()).toMatchObject({
+      outcome: "failed",
+      targetVersion: "1.6.0",
+      code: null,
+      message: "connection reset",
+    });
+  });
+
+  it("one the app ran says so", async () => {
+    mocks.downloadAndStageHostMock.mockRejectedValue(busy);
+    vi.stubEnv("TRAYCER_HOST_UPDATE_INITIATOR", "desktop");
+    await expect(download(null)).rejects.toBe(busy);
+    expect(await last()).toMatchObject({ initiator: "desktop" });
+  });
+
+  const failure = {
+    command: "host download",
+    initiator: "desktop",
+    outcome: "failed",
+    targetVersion: "1.5.0",
+    attemptId: null,
+    code: null,
+    message: "connection reset",
+  } as const;
+
+  it("one that stages clears the failure before it", async () => {
+    await writeHostUpdateLastAttempt(home(), failure, { info: vi.fn() });
+    mocks.downloadAndStageHostMock.mockResolvedValue({
+      outcome: "promoted",
+      stagedVersion: "1.5.0",
+      installedVersion: "1.4.0",
+    });
+    await download(null);
+    expect(await last()).toBeNull();
+  });
+
+  it.each<[string, HostDownloadOutcome]>([
+    [
+      "already staged",
+      {
+        outcome: "short-circuit",
+        reason: "already-staged",
+        targetVersion: "1.4.0",
+        stagedVersion: "1.4.0",
+        installedVersion: "1.3.0",
+      },
+    ],
+    [
+      "up to date",
+      {
+        outcome: "short-circuit",
+        reason: "installed-up-to-date",
+        targetVersion: "1.4.0",
+        stagedVersion: null,
+        installedVersion: "1.4.0",
+      },
+    ],
+    [
+      "refused automatically",
+      {
+        outcome: "short-circuit",
+        reason: "automatic-refused-incomparable-installed",
+        targetVersion: "1.5.0",
+        stagedVersion: null,
+        installedVersion: "local-1",
+      },
+    ],
+    [
+      "discarded as no longer newer",
+      {
+        outcome: "discarded",
+        reason: "not-strictly-newer",
+        targetVersion: "1.5.0",
+      },
+    ],
+    [
+      "discarded by an uninstall",
+      {
+        outcome: "discarded",
+        reason: "install-record-vanished",
+        targetVersion: "1.5.0",
+      },
+    ],
+  ])("one that ends %s leaves it standing", async (_name, result) => {
+    await writeHostUpdateLastAttempt(home(), failure, { info: vi.fn() });
+    mocks.downloadAndStageHostMock.mockResolvedValue(result);
+    await download(null);
+    expect(await last()).toMatchObject({ message: "connection reset" });
+  });
+
+  it("one that is refused leaves the update it found standing", async () => {
+    await writeHostUpdateLastAttempt(
+      home(),
+      { ...failure, command: "host update", outcome: "parked" },
+      { info: vi.fn() },
+    );
+    mocks.downloadAndStageHostMock.mockRejectedValue(busy);
+    await expect(download(null)).rejects.toBe(busy);
+    expect(await readHostUpdateLastAttempt(home())).toMatchObject({
+      command: "host update",
+      outcome: "parked",
+    });
+  });
 });

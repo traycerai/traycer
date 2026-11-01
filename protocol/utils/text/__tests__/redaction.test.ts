@@ -180,6 +180,7 @@ describe("redactHomeDirectoryNames", () => {
       "C:\\Users\\<redacted>\\.traycer\\host\\install\\host-main.cjs",
     ],
     ["C:/Users/SyntheticUser/x", "C:/Users/<redacted>/x"],
+    ["/homes/SyntheticUser/x", "/homes/<redacted>/x"],
     ["C:\\\\Users\\\\SyntheticUser\\\\x", "C:\\\\Users\\\\<redacted>\\\\x"],
     ["file:///Users/synthetic-user/x.js", "file:///Users/<redacted>/x.js"],
     ["/Users/Synthetic User/.traycer/x", "/Users/<redacted>/.traycer/x"],

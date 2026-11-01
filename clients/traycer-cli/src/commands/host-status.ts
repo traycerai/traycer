@@ -17,6 +17,7 @@ import {
 } from "../host/lifecycle-snapshot";
 import {
   probeAttemptHolder,
+  readHostDownloadFailure,
   readHostUpdateLastAttempt,
   readUpdateAttemptRecord,
   type HostUpdateAttemptInitiator,
@@ -77,10 +78,12 @@ interface HostStatusOutput {
    * `updateAttempt` above is only ever one still standing.
    */
   readonly lastUpdateAttempt: HostUpdateLastAttempt | null;
+  /** Why the last download failed, until one stages or an update delivers. */
+  readonly lastDownloadFailure: HostUpdateLastAttempt | null;
   /**
    * Who holds the update lock right now and what they are doing, or `null`
-   * when nobody does. A download holds it and writes no record, so this is the
-   * only thing here that moves while one runs.
+   * when nobody does. A download holds it and records only how it failed, so
+   * this is the only thing here that moves while one runs.
    */
   readonly updateLockHolder: string | null;
 }
@@ -162,9 +165,9 @@ async function readNonterminalUpdateAttempt(
 // it does for every command (`index.ts`). The reads below touch pid.json,
 // bootstrap.log, the lifecycle records (`host/lifecycle-snapshot.ts`), the
 // update attempt record with the install record it is compared against, the
-// last-attempt record and the update lock's holder, and nothing else, so
-// `host status` is safe to poll, safe in CI, and safe on a machine whose host
-// is deliberately uninstalled.
+// last-attempt and download-failure records and the update lock's holder, and
+// nothing else, so `host status` is safe to poll, safe in CI, and safe on a
+// machine whose host is deliberately uninstalled.
 //
 // JSON mode emits the runner's NDJSON envelope; the legacy `--json`
 // pretty-print is replaced by the runner's `{ type:"result", status:"ok",
@@ -193,6 +196,7 @@ export const hostStatusCommand: CommandFn = async (
   const updateAttempt = await readNonterminalUpdateAttempt(
     ctx.runtime.environment,
   );
+  const hostHome = hostHomeDir(ctx.runtime.environment);
   const output: HostStatusOutput = {
     running,
     pidMetadata,
@@ -205,9 +209,8 @@ export const hostStatusCommand: CommandFn = async (
       running,
     ),
     updateAttempt: updateAttempt === null ? null : updateAttempt.summary,
-    lastUpdateAttempt: await readHostUpdateLastAttempt(
-      hostHomeDir(ctx.runtime.environment),
-    ),
+    lastUpdateAttempt: await readHostUpdateLastAttempt(hostHome),
+    lastDownloadFailure: await readHostDownloadFailure(hostHome),
     updateLockHolder: await readUpdateLockHolder(ctx.runtime.environment),
   };
 
@@ -306,6 +309,12 @@ function renderHumanStatus(
     lines.push("");
     lines.push(c.bold("Last update"));
     lines.push(...kvBlock(c, lastUpdateRows(c, output.lastUpdateAttempt)));
+  }
+
+  if (output.lastDownloadFailure !== null) {
+    lines.push("");
+    lines.push(c.bold("Last download"));
+    lines.push(...kvBlock(c, lastUpdateRows(c, output.lastDownloadFailure)));
   }
 
   // Reading a status is no longer what starts a host (CLI-001), so the

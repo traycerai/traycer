@@ -46,6 +46,11 @@ export interface CliPendingUpgrade {
   readonly stagedBinaryPath: string;
   readonly stagedAt: string;
   readonly reason: CliPendingUpgradeReason;
+  // The person named this exact version with `--allow-downgrade`. The
+  // publisher reads it to tell a consented backwards move from a pre-floor
+  // accidental one; see `cliPendingUpgradeSchema` for why it has to be
+  // persisted rather than held in the staging process.
+  readonly allowDowngrade: boolean;
 }
 
 export interface CliInstallManifest {

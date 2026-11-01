@@ -82,7 +82,7 @@ import {
   acquireUpdateAttemptLock,
   readHostUpdateLastAttempt,
 } from "@traycer-clients/shared/host-update";
-import { rm } from "node:fs/promises";
+import { mkdir, rm } from "node:fs/promises";
 import { buildHostApplyCommand } from "../host-apply";
 import { CLI_ERROR_CODES, cliError } from "../../runner/errors";
 import { hostHomeDir } from "../../store/paths";
@@ -582,6 +582,7 @@ describe("host apply - the last-attempt record", () => {
   });
 
   it("an apply that lost the lock is refused", async () => {
+    await mkdir(home(), { recursive: true });
     const held = await acquireUpdateAttemptLock({
       hostHomeDir: home(),
       reason: "host-update",

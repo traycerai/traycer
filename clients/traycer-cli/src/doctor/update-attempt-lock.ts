@@ -24,8 +24,8 @@ import { DOCTOR_ISSUE_CODES, type DoctorIssue } from "./issues";
 // for that record forever - fail-closed on purpose, and the only thing that
 // ends it is a person confirming no installer is running and removing the
 // file. Every later `host maintenance-lease`, which is every scripted desktop
-// install and uninstall, is refused meanwhile as a live contender, and nothing
-// else says why.
+// install and uninstall, is refused meanwhile as if an update were running,
+// and nothing else says why.
 //
 // A lock this user cannot read reads the same way to an acquisition: only
 // positive evidence breaks a lock, so it answers busy for as long as the read
@@ -130,7 +130,7 @@ function unbreakableIssue(
     severity: "warning",
     title:
       "Host update-attempt lock was left by an interrupted install and will not be released",
-    message: `The host update-attempt lock at ${lockPath} was left by pid ${String(holder.pid)} (${holder.reason}, since ${holder.startedAt}), ${gone}. ${tree}, so no install, update or uninstall will break the lock. While it stays, every 'traycer host maintenance-lease' - every scripted desktop install and uninstall - is refused with "${updateLockBusyMessage(holder)}" If no Traycer installer, uninstaller or update is running, remove the file; the next one then proceeds.`,
+    message: `The host update-attempt lock at ${lockPath} was left by pid ${String(holder.pid)} (${holder.reason}, since ${holder.startedAt}), ${gone}. ${tree}, so no install, update or uninstall will break the lock. While it stays, every 'traycer host maintenance-lease' - every scripted desktop install and uninstall - is refused as if an update were still running, and waiting will not clear it. If no Traycer installer, uninstaller or update is running, remove the file; the next one then proceeds.`,
     fixAction: null,
     terminalCommand: null,
     details: {

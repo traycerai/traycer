@@ -6,6 +6,7 @@ import {
   screen,
   within,
 } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
 import { EpicSidebarCloudChatRow } from "@/components/epic-canvas/sidebar/epic-sidebar-cloud-chat-row";
 import {
@@ -95,19 +96,21 @@ function renderParent(input: {
   readonly toggleExpanded: (id: string) => void;
 }): void {
   render(
-    <ul role="tree">
-      <EpicSidebarCloudChatRow
-        chat={PARENT}
-        childEntries={input.childEntries}
-        expansion={{
-          expandedIds: input.expandedIds,
-          toggleExpanded: input.toggleExpanded,
-        }}
-        tabId="tab-1"
-        depth={0}
-        selectionMode={false}
-      />
-    </ul>,
+    <QueryClientProvider client={new QueryClient()}>
+      <ul role="tree">
+        <EpicSidebarCloudChatRow
+          chat={PARENT}
+          childEntries={input.childEntries}
+          expansion={{
+            expandedIds: input.expandedIds,
+            toggleExpanded: input.toggleExpanded,
+          }}
+          tabId="tab-1"
+          depth={0}
+          selectionMode={false}
+        />
+      </ul>
+    </QueryClientProvider>,
   );
 }
 
