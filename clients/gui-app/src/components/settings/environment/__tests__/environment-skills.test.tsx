@@ -756,14 +756,14 @@ describe("The Skills page", () => {
 
   it("marks the row being removed until the list no longer holds it", async () => {
     negotiateMethods(BASE_METHODS);
-    let listedSkills: readonly EnvironmentSkill[] = [REVIEW];
+    let listedSkills: readonly EnvironmentSkillV11[] = [REVIEW];
     let release: () => void = () => undefined;
     const removal = new Promise<void>((resolve) => {
       release = resolve;
     });
     const harness = mountTeamPage(poolSource("editor"), {
       ...handlers({ list: listed([REVIEW], null), hostSkills: [] }),
-      "environment.configuration.skills.list": () => listed(listedSkills),
+      "environment.configuration.skills.list": () => listed(listedSkills, null),
       "environment.configuration.skills.remove": async () => {
         await removal;
         return { outcome: "removed" as const, reason: null };
@@ -822,7 +822,7 @@ describe("The Skills page", () => {
 
   it("holds each removed row on its own, so a second removal releases neither the first nor itself when it is refused", async () => {
     negotiateMethods(BASE_METHODS);
-    const SECOND: EnvironmentSkill = {
+    const SECOND: EnvironmentSkillV11 = {
       ...REVIEW,
       name: "second",
       description: null,
@@ -1098,7 +1098,7 @@ describe("A provider's Skills tab on Personal or a team", () => {
     "says a built-in the configuration replaced is used instead of it, on $word",
     async ({ source, word }) => {
       negotiateMethods(SWITCHES);
-      const replaced: EnvironmentSkill = {
+      const replaced: EnvironmentSkillV11 = {
         ...BUILT_IN,
         name: "traycer-epic-brief",
         edited: true,
@@ -1124,7 +1124,7 @@ describe("A provider's Skills tab on Personal or a team", () => {
 
   it("labels a replaced built-in with a word in its badge and the clause in its row", async () => {
     negotiateMethods(SWITCHES);
-    const replaced: EnvironmentSkill = {
+    const replaced: EnvironmentSkillV11 = {
       ...BUILT_IN,
       name: "traycer-epic-brief",
       edited: true,

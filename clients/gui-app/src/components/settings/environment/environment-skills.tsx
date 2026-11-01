@@ -238,14 +238,6 @@ function EnvironmentSkills(props: {
   const canEdit = useCanEditConfiguration();
   const canRemove = canEdit && served.removable;
   const [picking, setPicking] = useState(false);
-  // An upload the host refused as not-served is the one moment the listed
-  // page needs a host of its own: a switch mounts beside the add control from
-  // then on, and not before, so the room-read list carries no host line. It
-  // is the switch alone - `as reported by <host>` was never true of a list
-  // the room served - and it owns its own open state, so it and the card's
-  // picker can never be two controls opening as one.
-  const [uploadNeedsHost, setUploadNeedsHost] = useState(false);
-  const [uploadPicking, setUploadPicking] = useState(false);
   const picker = (
     <TeamViewingHostPicker open={picking} onOpenChange={setPicking} />
   );
@@ -285,11 +277,7 @@ function EnvironmentSkills(props: {
       />
     );
   if (query.data.outcome === "not_served")
-    return (
-      <section className="flex flex-col gap-3">
-        {noHost}
-      </section>
-    );
+    return <section className="flex flex-col gap-3">{noHost}</section>;
   const { skills, revision } = query.data;
   // An editor checks sources and imports on the viewing host, which only a
   // picked host offers.
@@ -334,26 +322,49 @@ function EnvironmentSkills(props: {
         list
       )}
       {props.providerId === null && canEdit ? (
-        <>
-          <AddSkill
-            uploadable={served.uploadable}
-            importable={importable}
-            searchable={served.searchable}
-            hostClient={served.scope.client}
-            onNotServed={() => {
-              setUploadNeedsHost(true);
-              setUploadPicking(true);
-            }}
-          />
-          {uploadNeedsHost ? (
-            <TeamViewingHostSwitch
-              open={uploadPicking}
-              onOpenChange={setUploadPicking}
-            />
-          ) : null}
-        </>
+        <AddSkillWithHost
+          uploadable={served.uploadable}
+          importable={importable}
+          searchable={served.searchable}
+          hostClient={served.scope.client}
+        />
       ) : null}
     </section>
+  );
+}
+
+/**
+ * The add control, and the host switch an upload the host refused as
+ * not-served asks for: it mounts from that refusal on, and not before, so the
+ * room-read list above it carries no host line. The switch alone, because
+ * `as reported by <host>` was never true of a list the room served, and with
+ * its own open state, so it and a card's picker can never be two controls
+ * opening as one.
+ */
+function AddSkillWithHost(props: {
+  readonly uploadable: boolean;
+  readonly importable: boolean;
+  readonly searchable: boolean;
+  readonly hostClient: HostClient<HostRpcRegistry> | null;
+}): ReactNode {
+  const [needsHost, setNeedsHost] = useState(false);
+  const [picking, setPicking] = useState(false);
+  return (
+    <>
+      <AddSkill
+        uploadable={props.uploadable}
+        importable={props.importable}
+        searchable={props.searchable}
+        hostClient={props.hostClient}
+        onNotServed={() => {
+          setNeedsHost(true);
+          setPicking(true);
+        }}
+      />
+      {needsHost ? (
+        <TeamViewingHostSwitch open={picking} onOpenChange={setPicking} />
+      ) : null}
+    </>
   );
 }
 
@@ -530,21 +541,13 @@ function SkillsPageList(props: {
   const [contentEpoch, setContentEpoch] = useState(0);
   const [deletedOpen, setDeletedOpen] = useState(false);
   const [removing, setRemoving] = useState<EnvironmentSkillV11 | null>(null);
-  // Every name a removal was sent for. A removal's own answer comes back
-  // before the list is read again, so each row says it is going until the list
-  // no longer holds it, rather than offering its verbs again in between - and
-  // one name per row, because a second removal must not release the first.
-  const [leaving, setLeaving] = useState<readonly string[]>([]);
   const [pending, setPending] = useState<PendingSkillChoice | null>(null);
   const [issue, setIssue] = useState<ConfigurationWriteIssue>(null);
   // A list read this page awaits before it acts on the answer: nothing else
   // starts meanwhile, so that answer never lands over a newer action's.
   const [rereading, setRereading] = useState(false);
   const { skills, deletedBundled } = props.listed;
-  const stillListed = leaving.filter((entry) =>
-    skills.some((skill) => skill.name === entry),
-  );
-  if (stillListed.length !== leaving.length) setLeaving(stillListed);
+  const leaving = useLeavingRows(skills);
   const open = rowNamed(skills, openName);
   // A detail holding unsaved changes stays open on the last row it showed
   // when its skill leaves the list (another editor removed it); a clean one
@@ -868,17 +871,15 @@ function SkillsPageList(props: {
           onConfirm={() => {
             if (source.kind !== "pool") return;
             const sent = removing.name;
-            setLeaving((names) => [...names, sent]);
+            leaving.hold(sent);
             // A removal that was refused releases its own row, and only its
             // own: another row's accepted removal is still under way.
-            const release = (): void =>
-              setLeaving((names) => names.filter((entry) => entry !== sent));
             remove.mutate(
               { environmentId: source.environmentId, name: sent },
               {
-                onError: release,
+                onError: () => leaving.release(sent),
                 onSuccess: (answer) => {
-                  if (answer.outcome !== "removed") release();
+                  if (answer.outcome !== "removed") leaving.release(sent);
                 },
                 onSettled: () => setRemoving(null),
               },
@@ -930,6 +931,33 @@ function useLastRow<Row>(row: Row | null, keep: boolean): Row | null {
   const [last, setLast] = useState<Row | null>(row);
   if (row !== null && row !== last) setLast(row);
   return row ?? (keep ? last : null);
+}
+
+/** The rows a removal was sent for, as the list sees them. */
+interface LeavingRows {
+  readonly includes: (name: string) => boolean;
+  readonly hold: (name: string) => void;
+  readonly release: (name: string) => void;
+}
+
+/**
+ * A removal's own answer comes back before the list is read again, so a row
+ * says it is going until the list no longer holds it, rather than offering
+ * its verbs again in between - and one name per row, because a second
+ * removal must not release the first.
+ */
+function useLeavingRows(skills: readonly EnvironmentSkillV11[]): LeavingRows {
+  const [leaving, setLeaving] = useState<readonly string[]>([]);
+  const stillListed = leaving.filter((entry) =>
+    skills.some((skill) => skill.name === entry),
+  );
+  if (stillListed.length !== leaving.length) setLeaving(stillListed);
+  return {
+    includes: (name: string): boolean => leaving.includes(name),
+    hold: (name: string): void => setLeaving((names) => [...names, name]),
+    release: (name: string): void =>
+      setLeaving((names) => names.filter((entry) => entry !== name)),
+  };
 }
 
 /** The row of the skill named `name`; `null` when none is named or the list no longer holds it. */
