@@ -49,6 +49,7 @@ function createPendingRetryStorage(
   matches: (item: Record<string, unknown>, retry: unknown) => boolean,
 ): StateStorage<void> {
   const storage = createRecordMapStorage(field);
+  let claimsSeen = new Set<string>();
   return {
     getItem: (name) => {
       const snapshot: unknown = parse(storage.getItem(name));
@@ -60,6 +61,7 @@ function createPendingRetryStorage(
         return null;
       const stages: Record<string, unknown> = {};
       const records = snapshot.state[field];
+      claimsSeen = new Set();
       for (const [key, stage] of Object.entries(records)) {
         if (
           key.startsWith(RETRY_REGISTER_PREFIX) ||
@@ -67,6 +69,7 @@ function createPendingRetryStorage(
           !record(stage)
         )
           continue;
+        if (record(stage.dispatch)) claimsSeen.add(key);
         const retry = records[`${RETRY_REGISTER_PREFIX}${key}`];
         stages[key] = matches(stage, retry)
           ? { ...stage, retryRequest: retry }
@@ -86,10 +89,22 @@ function createPendingRetryStorage(
       )
         return;
       const records: Record<string, unknown> = {};
+      const seen = new Set<string>();
       for (const [key, stage] of Object.entries(snapshot.state[field])) {
         if (!record(stage)) continue;
         const { retryRequest: _request, ...progress } = stage;
-        records[key] = progress;
+        // A window that never saw a claim can't be the one clearing it: the
+        // write is stale, and the claim is the only copy of the request. Only
+        // ending the send leaves it nothing to keep a claim for.
+        const durable: unknown =
+          record(stage.dispatch) || claimsSeen.has(key) || stage.ended === true
+            ? null
+            : parse(localStorage.getItem(recordMapStorageKey(name, key)));
+        records[key] =
+          record(durable) && record(durable.dispatch)
+            ? { ...progress, dispatch: durable.dispatch }
+            : progress;
+        if (record(stage.dispatch)) seen.add(key);
         const registerId = `${RETRY_REGISTER_PREFIX}${key}`;
         const retry: unknown = parse(
           localStorage.getItem(recordMapStorageKey(name, registerId)),
@@ -108,6 +123,7 @@ function createPendingRetryStorage(
           state: { ...snapshot.state, [field]: records },
         }),
       );
+      claimsSeen = seen;
     },
     removeItem: (name) => storage.removeItem(name),
   };

@@ -5627,21 +5627,28 @@ describe("a create the host's access check refused", () => {
 
     function sendJson(
       id: string,
-      dispatch: { readonly recordsRequests: true } | null,
+      dispatch: StampedClaim | null,
       text: string,
     ): Record<string, unknown> {
       return { id, userId: "user-1", delivery: null, text, dispatch };
     }
 
-    const STAMPED = { recordsRequests: true } as const;
+    interface StampedClaim {
+      readonly recordsRequests: true;
+      readonly generation: number;
+    }
+
+    const STAMPED: StampedClaim = { recordsRequests: true, generation: 1 };
 
     type Sends = Record<string, Record<string, unknown>>;
 
-    /** One window's storage over the shared localStorage, as the store holds it. */
-    function openWindow(): {
+    interface StorageWindow {
       readonly hydrate: () => string[];
       readonly write: (sends: Sends) => void;
-    } {
+    }
+
+    /** One window's storage over the shared localStorage, as the store holds it. */
+    function openWindow(): StorageWindow {
       const storage = createPendingSendStorage();
       return {
         hydrate: () => {
@@ -5676,7 +5683,7 @@ describe("a create the host's access check refused", () => {
     }
 
     function sends(
-      claim: { readonly recordsRequests: true } | null,
+      claim: StampedClaim | null,
       edited: "none" | "this" | "other",
     ): Sends {
       return {
@@ -5735,6 +5742,124 @@ describe("a create the host's access check refused", () => {
       },
     );
 
+    function durableDispatch(): unknown {
+      const stored: unknown = JSON.parse(
+        localStorage.getItem(recordMapStorageKey(SEND_RECORDS, SEND_ID)) ??
+          "null",
+      );
+      return typeof stored === "object" && stored !== null
+        ? (Reflect.get(stored, "dispatch") ?? null)
+        : null;
+    }
+
+    function durableText(): unknown {
+      const stored: unknown = JSON.parse(
+        localStorage.getItem(recordMapStorageKey(SEND_RECORDS, SEND_ID)) ??
+          "null",
+      );
+      return typeof stored === "object" && stored !== null
+        ? Reflect.get(stored, "text")
+        : null;
+    }
+
+    /** A window that hydrated the send before any claim, and another that claims it. */
+    function staleBesideClaimant(): { readonly stale: StorageWindow } {
+      openWindow().write(sends(null, "none"));
+      const stale = openWindow();
+      stale.hydrate();
+      const owner = openWindow();
+      owner.hydrate();
+      owner.write(sends(STAMPED, "none"));
+      return { stale };
+    }
+
+    it("keeps the durable claim, and still lands its own fields, when a window that never saw the claim writes the send", () => {
+      const { stale } = staleBesideClaimant();
+
+      stale.write(sends(null, "this"));
+
+      expect(durableDispatch()).toEqual(STAMPED);
+      expect(durableText()).toBe("edited");
+    });
+
+    it("lets a window that never saw the claim end the send, which leaves no claim to act on", () => {
+      const { stale } = staleBesideClaimant();
+      const written = sends(null, "this");
+
+      stale.write({
+        ...written,
+        [SEND_ID]: { ...written[SEND_ID], ended: true },
+      });
+
+      expect(durableDispatch()).toBeNull();
+    });
+
+    it("keeps the durable claim when a window that never saw it requests a stop, as the owner's own stop does", () => {
+      const { stale } = staleBesideClaimant();
+      const written = sends(null, "this");
+
+      stale.write({
+        ...written,
+        [SEND_ID]: { ...written[SEND_ID], stopRequested: true },
+      });
+
+      expect(durableDispatch()).toEqual(STAMPED);
+    });
+
+    it("keeps the durable claim through repeated stale writes, because a kept claim is not a seen one", () => {
+      const { stale } = staleBesideClaimant();
+
+      stale.write(sends(null, "this"));
+      stale.write(sends(null, "other"));
+      stale.write(sends(null, "this"));
+
+      expect(durableDispatch()).toEqual(STAMPED);
+    });
+
+    it("lets a window that hydrated the claim clear it", () => {
+      openWindow().write(sends(STAMPED, "none"));
+      const seeing = openWindow();
+      seeing.hydrate();
+
+      seeing.write(sends(null, "this"));
+
+      expect(durableDispatch()).toBeNull();
+      expect(durableText()).toBe("edited");
+    });
+
+    it("keeps a new claim another window makes after this one hydrated a real clear", () => {
+      openWindow().write(sends(STAMPED, "none"));
+      const window = openWindow();
+      window.hydrate();
+      const clearing = openWindow();
+      clearing.hydrate();
+      clearing.write(sends(null, "none"));
+      expect(durableDispatch()).toBeNull();
+      // Hydrated after the clear: this window has seen no claim.
+      window.hydrate();
+      const second: StampedClaim = { recordsRequests: true, generation: 2 };
+      const other = openWindow();
+      other.hydrate();
+      other.write(sends(second, "none"));
+
+      window.write(sends(null, "this"));
+
+      expect(durableDispatch()).toEqual(second);
+      expect(durableText()).toBe("edited");
+    });
+
+    it("lets a window clear a claim it wrote itself, with no rehydrate in between", () => {
+      openWindow().write(sends(null, "none"));
+      const window = openWindow();
+      window.hydrate();
+      window.write(sends(STAMPED, "none"));
+      expect(durableDispatch()).toEqual(STAMPED);
+
+      window.write(sends(null, "this"));
+
+      expect(durableDispatch()).toBeNull();
+    });
+
     it("never hydrates the request record as a send", () => {
       openWindow().write(sends(STAMPED, "none"));
       expect(recordPendingDispatchRequest(SEND_ID)).toBe("first");
@@ -5771,20 +5896,11 @@ describe("a create the host's access check refused", () => {
     onTestFinished(() => spy.mockRestore());
   }
 
-  it("stays uncertain on a refusal of the second create when a stale window's write nulled the durable claim after the first create left", async () => {
-    onTestFinished(installImmediateExclusiveLocks());
-    seed(SEEDED);
-    // A window that hydrated before any claim exists.
-    const stale = createPendingSendStorage();
-    const before = stale.getItem(SEND_RECORDS);
+  /** A window that hydrated the send before any claim exists, and the write it makes later. */
+  function openStaleWindow(): { readonly write: () => void } {
+    const storage = createPendingSendStorage();
+    const before = storage.getItem(SEND_RECORDS);
     if (typeof before !== "string") throw new Error("nothing hydrated");
-    mocks.createChatError = new Error("The reply was lost.");
-    answerHost(SANDBOX_HOST, CODEX_READY);
-    mount();
-    await waitFor(() => {
-      expect(dispatchOf()).toMatchObject({ status: "uncertain" });
-    });
-    await waitForCreateChats(1);
     const parsed: unknown = JSON.parse(before);
     if (typeof parsed !== "object" || parsed === null || !("state" in parsed))
       throw new Error("unexpected snapshot");
@@ -5798,29 +5914,144 @@ describe("a create the host's access check refused", () => {
       if (typeof staleSend === "object" && staleSend !== null)
         Reflect.set(staleSend, "text", "edited");
     }
-    void stale.setItem(SEND_RECORDS, JSON.stringify(parsed));
-    const durable: unknown = JSON.parse(
+    return {
+      write: () => {
+        void storage.setItem(SEND_RECORDS, JSON.stringify(parsed));
+      },
+    };
+  }
+
+  function durableSend(): Record<string, unknown> {
+    const stored: unknown = JSON.parse(
       localStorage.getItem(recordMapStorageKey(SEND_RECORDS, SEND_ID)) ??
         "null",
     );
-    // The stale write replaced the claim: the durable send holds no dispatch.
-    expect(durable).toMatchObject({ text: "edited" });
-    expect(durable).not.toHaveProperty("dispatch");
-    expect(requestRecord()).not.toBeNull();
+    if (typeof stored !== "object" || stored === null)
+      throw new Error("no durable send");
+    return Object.fromEntries(Object.entries(stored));
+  }
 
-    // The send re-claims, and the host's access check refuses the second create.
-    mocks.createChatError = unauthorized();
+  function suspendedRow(): SandboxSummary {
+    return sandboxSummaryFixture({
+      id: SANDBOX_ID,
+      hostId: SANDBOX_HOST,
+      state: "suspended",
+    });
+  }
+
+  it("keeps the claim when a stale window that never saw it writes the send: nothing re-claims, and a Retry delivers once", async () => {
+    onTestFinished(installImmediateExclusiveLocks());
+    seed(SEEDED);
+    const stale = openStaleWindow();
+    mocks.createChatError = new Error("The reply was lost.");
+    answerHost(SANDBOX_HOST, CODEX_READY);
+    mount();
+    await waitFor(() => {
+      expect(dispatchOf()).toMatchObject({ status: "uncertain" });
+    });
+    await waitForCreateChats(1);
+
+    stale.write();
+
+    // The stale write's own field landed; the claim it never saw stayed.
+    expect(durableSend()).toMatchObject({
+      text: "edited",
+      dispatch: { status: "uncertain", recordsRequests: true },
+    });
+    expect(requestRecord()).not.toBeNull();
     await usePendingSandboxSendStore.persist.rehydrate();
-    await waitForCreateChats(2);
     await waitFor(expectUncertainClaim);
-    expect(dispatchOf()).toMatchObject({ recordsRequests: true });
-    expect(createChatCalls()).toHaveLength(2);
+    expect(createChatCalls()).toHaveLength(1);
 
     mocks.createChatError = null;
     fireEvent.click(screen.getByTestId("pending-sandbox-dispatch-retry"));
-    await waitForCreateChats(3);
+    await waitForCreateChats(2);
     await waitFor(expectDelivered);
-    expect(createChatCalls()).toHaveLength(3);
+    expect(createChatCalls()).toHaveLength(2);
+  });
+
+  it("keeps a send whose create is in flight when a stale window writes it and a fresh read says the sandbox rests, then delivers it once", async () => {
+    onTestFinished(installImmediateExclusiveLocks());
+    seed(SEEDED);
+    const stale = openStaleWindow();
+    const create = deferred<CreateChatResponseV12>();
+    mocks.createChatDeferred = create.promise;
+    answerHost(SANDBOX_HOST, CODEX_READY);
+    mount();
+    await waitForCreateChats(1);
+
+    stale.write();
+    answerSandboxRows([suspendedRow()], Date.now() + 120_000);
+    await act(async () => {
+      await usePendingSandboxSendStore.persist.rehydrate();
+    });
+
+    expect(usePendingSandboxSendStore.getState().sends[SEND_ID]).toBeDefined();
+    expect(
+      useNewConversationModalStore.getState().draftPatchesByEpicId["epic-1"],
+    ).toBeUndefined();
+    expect(mocks.wake).not.toHaveBeenCalled();
+    expect(createChatCalls()).toHaveLength(1);
+
+    await act(async () => {
+      create.resolve({ chatId: createChatCalls()[0].input.chatId });
+      await create.promise;
+    });
+    await waitFor(expectDelivered);
+    expect(createChatCalls()).toHaveLength(1);
+    expect(mocks.wake).not.toHaveBeenCalled();
+  });
+
+  it("keeps an uncertain claim when a stale window writes it and the sandbox rests, and a Retry wakes it and delivers once", async () => {
+    onTestFinished(installImmediateExclusiveLocks());
+    seed(SEEDED);
+    const stale = openStaleWindow();
+    mocks.createChatError = new Error("The reply was lost.");
+    answerHost(SANDBOX_HOST, CODEX_READY);
+    mount();
+    await waitFor(() => {
+      expect(dispatchOf()).toMatchObject({ status: "uncertain" });
+    });
+    await waitForCreateChats(1);
+
+    stale.write();
+    answerSandboxRows([suspendedRow()], Date.now() + 120_000);
+    await act(async () => {
+      await usePendingSandboxSendStore.persist.rehydrate();
+    });
+
+    await waitFor(expectUncertainClaim);
+    expect(
+      useNewConversationModalStore.getState().draftPatchesByEpicId["epic-1"],
+    ).toBeUndefined();
+    expect(mocks.wake).not.toHaveBeenCalled();
+
+    const wake = deferred<SandboxWakeOutcome | null>();
+    mocks.wake.mockReturnValue(wake.promise);
+    mocks.createChatError = null;
+    fireEvent.click(screen.getByTestId("pending-sandbox-dispatch-retry"));
+    await waitFor(() => {
+      expect(mocks.wake).toHaveBeenCalledTimes(1);
+    });
+    expect(createChatCalls()).toHaveLength(1);
+    answerSandboxRows(
+      [
+        sandboxSummaryFixture({
+          id: SANDBOX_ID,
+          hostId: SANDBOX_HOST,
+          state: "awake",
+        }),
+      ],
+      Date.now() + 180_000,
+    );
+    await act(async () => {
+      wake.resolve({ kind: "awake" });
+      await wake.promise;
+    });
+    await waitForCreateChats(2);
+    await waitFor(expectDelivered);
+    expect(createChatCalls()).toHaveLength(2);
+    expect(mocks.wake).toHaveBeenCalledTimes(1);
   });
 
   it("forgets the request when the first request's own create is refused with a structured refusal", async () => {
