@@ -94,7 +94,7 @@ function unreachable(lastContactMinutes: number | null): ChatSandboxState {
       displayName: "e2e-sbx-live",
       state: "awake",
     }),
-    lastSeenAt:
+    lastContactAt:
       lastContactMinutes === null
         ? null
         : Date.now() - lastContactMinutes * 60_000 - 20_000,

@@ -1,6 +1,7 @@
-import { useState, type ReactNode } from "react";
+import { useLayoutEffect, useState, type ReactNode } from "react";
 import { AlertCircle, Check, ChevronDown, ChevronRight } from "lucide-react";
 import { sandboxSupportReference } from "@traycer/protocol/host/sandbox-control";
+import { useTileBodyVisible } from "@/components/epic-canvas/hooks/use-tile-body-visible";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { useConfigurationBillingUrl } from "@/hooks/sandboxes/use-configuration-billing-url";
@@ -69,6 +70,7 @@ import {
   sandboxSettingsFailureLine,
   sandboxSettingsStepsLine,
 } from "@traycer/protocol/host/sandbox-settings";
+import { useSandboxWakeReportStore } from "@/stores/sandboxes/sandbox-wake-report-store";
 
 /** The same ruled setup treatment and counter for a shell waiting on Automations. */
 export function SandboxStartingLine(props: {
@@ -549,9 +551,8 @@ function SandboxProgressLine(props: {
       expanded={expanded}
       onToggle={() => setManualExpanded(!expanded)}
       trailing={
-        <LineButton
-          label={STOP}
-          testId="sandbox-setup-stop"
+        <SetupStopButton
+          sandboxId={stage.createdSandboxId}
           onClick={
             failure?.kind === "settings" && expanded
               ? null
@@ -783,9 +784,8 @@ function ProgressBranchButtons(props: {
           testId="sandbox-setup-open-terminal"
           onClick={actions.onOpenTerminal}
         />
-        <LineButton
-          label={STOP}
-          testId="sandbox-setup-stop"
+        <SetupStopButton
+          sandboxId={props.view.stage.createdSandboxId}
           onClick={actions.onStop}
         />
         <LineButton
@@ -1015,6 +1015,26 @@ function SetupSteps(props: {
         );
       })}
     </ol>
+  );
+}
+
+/**
+ * Stop on the line, held for the sandbox so nothing else offers a second. A
+ * line out of sight holds nothing: its Stop is not on screen.
+ */
+function SetupStopButton(props: {
+  readonly sandboxId: string | null;
+  readonly onClick: (() => void) | null;
+}): ReactNode {
+  const { sandboxId, onClick } = props;
+  const visible = useTileBodyVisible();
+  const shown = onClick !== null && visible;
+  useLayoutEffect(() => {
+    if (sandboxId === null || !shown) return undefined;
+    return useSandboxWakeReportStore.getState().claimSetupStop(sandboxId);
+  }, [sandboxId, shown]);
+  return (
+    <LineButton label={STOP} testId="sandbox-setup-stop" onClick={onClick} />
   );
 }
 

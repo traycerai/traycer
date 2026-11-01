@@ -79,7 +79,7 @@ function unreachable(): ChatSandboxState {
       displayName: "e2e-sbx-live",
       state: "awake",
     }),
-    lastSeenAt: Date.now() - 7 * 60_000 - 20_000,
+    lastContactAt: Date.now() - 7 * 60_000 - 20_000,
   };
 }
 

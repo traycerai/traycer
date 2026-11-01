@@ -127,12 +127,12 @@ function FrozenSandboxFooter(props: {
 function UnreachableSandboxFooter(props: {
   readonly state: Extract<ChatSandboxState, { readonly kind: "unreachable" }>;
 }): ReactNode {
-  const { sandbox, lastSeenAt } = props.state;
+  const { sandbox, lastContactAt } = props.state;
   const now = useSampledNow();
   const lastContactMinutes =
-    lastSeenAt === null
+    lastContactAt === null
       ? null
-      : Math.max(0, Math.floor((now - lastSeenAt) / 60_000));
+      : Math.max(0, Math.floor((now - lastContactAt) / 60_000));
   const stop = useSandboxVerb(sandbox.id);
   const operation = useSandboxOperation(sandbox.id);
   const pending = operation?.kind === "pending";
