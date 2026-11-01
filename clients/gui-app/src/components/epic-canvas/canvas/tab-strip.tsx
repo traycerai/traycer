@@ -576,6 +576,15 @@ function TerminalTabItem(
   );
 }
 
+function tabTitleNode(tab: EpicCanvasTileRef) {
+  return {
+    id: tab.id,
+    name: tab.name,
+    type: tab.type,
+    hostId: tabHostId(tab),
+  };
+}
+
 function useTabRenameControl(args: {
   readonly tab: EpicCanvasTileRef;
   readonly epicId: string;
@@ -605,12 +614,7 @@ function useTabRenameControl(args: {
     isTerminalTab && terminalTabUsesLegacyReads(terminalControl)
       ? resolvedHostClient
       : null;
-  const titleNode = {
-    id: tab.id,
-    name: tab.name,
-    type: tab.type,
-    hostId: tabHostId(tab),
-  };
+  const titleNode = tabTitleNode(tab);
   const fallbackDisplayTitle = useEpicTabDisplayTitle(
     titleNode,
     epicId,
@@ -795,9 +799,8 @@ function TabItemBody(
     });
   const isArchived = useRegisteredEpicNodeArchived(epicId, tab.id);
   const titleGenerationPending = useEpicLiveArtifactTitleGenerating(
-    tab.type === "chat" ? tab.id : null,
+    tabTitleNode(tab),
     epicId,
-    tabHostId(tab),
   );
   const setRef = useMemo(
     () => mergeRefs<HTMLElement>(domRef, dragRef, dropRef),

@@ -155,9 +155,8 @@ function MobileCurrentTileBarBody(
     terminalHostClient,
   );
   const titleGenerationPending = useEpicLiveArtifactTitleGenerating(
-    tile.type === "chat" ? tile.id : null,
+    titleNode,
     epicId,
-    tile.hostId,
   );
   const awaitingFirstTitle = useEpicTabAwaitingFirstTitle(titleNode, epicId);
   const displayTitle =

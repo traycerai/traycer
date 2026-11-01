@@ -102,14 +102,16 @@ export interface EpicSidebarCloudChatRowProps {
 /**
  * The title the row paints: "New agent" while this client waits on the chat's
  * first title. Painted only: the tiles the row opens keep `title`, so the label
- * never reaches a tab snapshot.
+ * never reaches a tab snapshot. An unreachable owner sends no title here, and
+ * the row opens a published copy named `title`, so it says the same.
  */
 function useCloudRowPaintedTitle(
   chat: CloudChatSummary,
   title: string,
+  ownerReachable: boolean,
 ): string {
   const awaitingFirstTitle = useHasPendingChatTitle(
-    chat.title === null ? chat.identity.chatId : null,
+    chat.title === null && ownerReachable ? chat.identity.chatId : null,
   );
   return awaitingFirstTitle ? NEW_AGENT_TITLE : title;
 }
@@ -119,7 +121,6 @@ export function EpicSidebarCloudChatRow(
 ): ReactNode {
   const { chat, childEntries, expansion } = props;
   const title = chat.title ?? displayTitle("", "agent");
-  const rowTitle = useCloudRowPaintedTitle(chat, title);
   const placement = useColumnOverlayPlacement("row");
   const branch = useCloudRowBranch(chat, childEntries, expansion);
   // The Epic SESSION's host - not `useTabHostId()`, and not the app-wide one.
@@ -167,6 +168,7 @@ export function EpicSidebarCloudChatRow(
   const ownerSandboxOpensLive = useOwnerSandboxOpensLive(chat.ownerHostId);
   const ownerReachable =
     ownerReachability.status === "reachable" || ownerSandboxOpensLive;
+  const rowTitle = useCloudRowPaintedTitle(chat, title, ownerReachable);
   // Reach, not connectivity: the owner host belongs to another principal, so
   // agents here cannot work with it. Independent of the lock - a host can be
   // online and out of reach, or offline and not.

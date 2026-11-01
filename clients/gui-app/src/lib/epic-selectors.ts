@@ -2160,17 +2160,16 @@ function useManagedCommandOutputTitle(
 }
 
 /**
- * Whether a chat tab's title is still being generated. `epicId` and
- * `boundHostId` name the tab's task and host, so a team host's chat, whose
- * title reaches this client only on the environment arm's row, stops spinning
- * when that title arrives rather than at the backstop.
+ * Whether a chat tab's title is still being generated. `node` and `epicId`
+ * name the tab's chat, task and host, so a chat whose title reaches this client
+ * only on the environment arm's row or the cloud list stops spinning when that
+ * title arrives rather than at the backstop.
  */
 export function useEpicLiveArtifactTitleGenerating(
-  artifactId: string | null,
+  node: EpicTabDisplayTitleNode,
   epicId: string,
-  boundHostId: string | null,
 ): boolean {
-  return useChatTitleGeneration(artifactId, epicId, boundHostId) !== "idle";
+  return useTabChatTitleGeneration(node, epicId) !== "idle";
 }
 
 /**
@@ -2187,7 +2186,7 @@ export function useEpicChatAwaitingFirstTitle(
   boundHostId: string | null,
 ): boolean {
   return (
-    useChatTitleGeneration(artifactId, epicId, boundHostId) ===
+    useChatTitleGeneration(artifactId, epicId, boundHostId, null) ===
     "awaiting-first-title"
   );
 }
@@ -2201,21 +2200,29 @@ export function useEpicTabAwaitingFirstTitle(
   node: EpicTabDisplayTitleNode,
   epicId: string,
 ): boolean {
-  const awaitingFirstTitle = useEpicChatAwaitingFirstTitle(
-    node.type === "chat" ? node.id : null,
-    epicId,
-    node.hostId,
-  );
-  const cloudChatTitle = useCloudChatTitleForAbsentRecord(node, epicId);
-  return awaitingFirstTitle && cloudChatTitle === null;
+  return useTabChatTitleGeneration(node, epicId) === "awaiting-first-title";
 }
 
 type ChatTitleGeneration = "idle" | "generating" | "awaiting-first-title";
+
+function useTabChatTitleGeneration(
+  node: EpicTabDisplayTitleNode,
+  epicId: string,
+): ChatTitleGeneration {
+  const cloudChatTitle = useCloudChatTitleForAbsentRecord(node, epicId);
+  return useChatTitleGeneration(
+    node.type === "chat" ? node.id : null,
+    epicId,
+    node.hostId,
+    cloudChatTitle,
+  );
+}
 
 function useChatTitleGeneration(
   artifactId: string | null,
   epicId: string,
   boundHostId: string | null,
+  cloudChatTitle: string | null,
 ): ChatTitleGeneration {
   const projectedTitle = useEpicStore((s) => {
     if (artifactId === null) return null;
@@ -2226,7 +2233,7 @@ function useChatTitleGeneration(
     return null;
   });
   const armTitle = useArmChatTitle(epicId, artifactId, boundHostId);
-  const currentTitle = projectedTitle ?? armTitle;
+  const currentTitle = projectedTitle ?? armTitle ?? cloudChatTitle;
   const currentUpdatedAt = useEpicStore((s) => {
     if (artifactId === null) return null;
     if (Object.hasOwn(s.chats.byId, artifactId)) {
