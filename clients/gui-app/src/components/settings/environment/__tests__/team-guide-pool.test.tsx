@@ -216,7 +216,10 @@ describe("TeamGuide on a build with a server pool and no host running the team",
       ).toContain("Prefer sonnet");
     });
     expect(screen.queryByText(/The guide needs a host/)).toBeNull();
-    expect(screen.getByRole("combobox").textContent).toContain("Pick a host");
+    // The guide came from the pool, so the page names no host and offers no
+    // pick: there is none to make.
+    expect(screen.queryByRole("combobox")).toBeNull();
+    expect(screen.queryByText("Pick a host")).toBeNull();
     expect(
       new Set(hostIdsOf(harness, "environment.configuration.guide.get")),
     ).toEqual(new Set([POOL_HOST_ID]));

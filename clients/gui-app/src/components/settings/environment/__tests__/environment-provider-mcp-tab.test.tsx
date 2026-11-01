@@ -158,7 +158,7 @@ describe("A provider's MCP tab on Personal or a team", () => {
     expect(navigation.opened).toEqual(["mcp-servers"]);
   });
 
-  it("says the configuration has no servers yet", async () => {
+  it("says the configuration has no servers", async () => {
     negotiate();
     const harness = mountTeamPage(
       personalPoolSource(),
@@ -168,9 +168,7 @@ describe("A provider's MCP tab on Personal or a team", () => {
       wrapper: harness.Wrapper,
     });
 
-    expect(
-      await screen.findByText("Personal has no servers yet."),
-    ).toBeTruthy();
+    expect(await screen.findByText("Personal has no servers.")).toBeTruthy();
   });
 
   it("switches the server off for this provider alone, keeping the providers already off", async () => {

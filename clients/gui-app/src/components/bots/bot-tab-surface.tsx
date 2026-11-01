@@ -12,7 +12,9 @@ import type { BotOpenResponse } from "@traycer/protocol/host/bot/schemas";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { TalkControl } from "@/components/layout/voice/talk-control";
+import { useInstalledAppLevel2Form } from "@/hooks/ui/use-installed-app-level2-form";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
+import type { MobileLevel2Form } from "@/lib/layout/mobile-layout-form";
 import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
@@ -64,11 +66,11 @@ import {
   type BotOpenSession,
 } from "@/components/bots/bot-session-view";
 import type { BotThreadSummary } from "@traycer/protocol/host/bot/conversation-schemas";
+import type { BotThreadsViewState } from "@/components/bots/bot-channel-sidebar";
 import {
-  BotChannelSidebar,
-  type BotThreadsViewState,
-} from "@/components/bots/bot-channel-sidebar";
-import { BotResizablePane } from "@/components/bots/bot-resizable-pane";
+  BotChannelColumn,
+  BotChannelTitle,
+} from "@/components/bots/bot-channel-level2";
 import { BotActivityPage } from "@/components/bots/bot-activity-page";
 import { BotThreadsView } from "@/components/bots/bot-threads-view";
 import { useBotThreadListQuery } from "@/hooks/bots/use-bot-thread-list-query";
@@ -975,6 +977,7 @@ function BotTabContent(props: {
     }),
     [closeSession, tabThreadsView],
   );
+  const level2 = useInstalledAppLevel2Form(1);
   const openActivity = useCallback(() => changeView("activity"), [changeView]);
   const activitySummary = useBotActivitySummary({
     botId,
@@ -1046,20 +1049,12 @@ function BotTabContent(props: {
               className="@container flex h-full min-h-0"
               data-testid="bot-tab"
             >
-              <BotResizablePane
-                pane="sidebar"
-                edge="right"
-                label="Resize channels"
-                className="hidden min-h-0 w-(--bot-pane-width) max-w-[40%] shrink-0 flex-col border-r border-canvas-border/70 @3xl:flex"
-                handleClassName=""
-                testId="bot-channel-sidebar-pane"
-              >
-                <BotChannelSidebar
-                  activeBotId={botId}
-                  hostId={hostId}
-                  threadsView={threadsView}
-                />
-              </BotResizablePane>
+              <BotChannelColumn
+                level2={level2}
+                activeBotId={botId}
+                hostId={hostId}
+                threadsView={threadsView}
+              />
               <div
                 className="relative flex min-h-0 min-w-0 flex-1 md:bg-canvas"
                 data-testid="bot-tab-content-pane"
@@ -1096,6 +1091,10 @@ function BotTabContent(props: {
                       className="flex min-h-0 min-w-0 flex-1 flex-col gap-0"
                     >
                       <BotChannelHeader
+                        level2={level2}
+                        botId={botId}
+                        hostId={hostId}
+                        threadsView={threadsView}
                         title={snapshot.bot.title}
                         isMain={isMain === true}
                         settingsOpen={settingsOpen}
@@ -1286,6 +1285,10 @@ function ErrorNotice(props: {
  * and first, what runs and the tasks it tracks.
  */
 function BotChannelHeader(props: {
+  readonly level2: MobileLevel2Form | null;
+  readonly botId: string;
+  readonly hostId: string;
+  readonly threadsView: BotThreadsViewState;
   readonly title: string;
   readonly isMain: boolean;
   readonly settingsOpen: boolean;
@@ -1314,12 +1317,13 @@ function BotChannelHeader(props: {
             <BotAvatar size="sm" />
           </button>
         </BotIdentityTrigger>
-        <h1
-          className="min-w-0 truncate text-ui-md font-bold text-foreground"
-          data-testid="bot-tab-title"
-        >
-          {props.title}
-        </h1>
+        <BotChannelTitle
+          level2={props.level2}
+          title={props.title}
+          activeBotId={props.botId}
+          hostId={props.hostId}
+          threadsView={props.threadsView}
+        />
         {props.isMain ? (
           <MainBotBadge testId="bot-tab-main" tone="muted" />
         ) : null}

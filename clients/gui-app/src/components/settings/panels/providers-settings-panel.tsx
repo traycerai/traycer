@@ -344,8 +344,7 @@ const PROVIDER_DESCRIPTIONS: Record<ProviderId, string> = {
   "claude-code": "Anthropic's Claude Code CLI.",
   codex: "OpenAI's Codex CLI.",
   opencode: "OpenCode CLI agent.",
-  cursor:
-    "Cursor coding agent - SDK-driven agents authenticated with your Cursor API key.",
+  cursor: "Cursor's coding agent, signed in with your Cursor API key.",
   traycer:
     "Traycer's managed harness uses the selected OpenCode CLI binary. Turning it on or off changes this computer only.",
   openrouter:
@@ -1548,6 +1547,18 @@ function ProviderDetail({
           // by the body, the clip edge and the rule are the same line.
           className="flex flex-1 flex-col gap-0 md:min-h-0"
         >
+          {/* The one reason every OTHER tab is greyed, named once at the top
+              rather than left for the pointer-events-none pane to explain on
+              its own - the inert styling alone gave no reason at all. Usage
+              stays off this gate the same way it stays off the inert styling
+              below: it is deliberately still usable while the provider is
+              off, so a reader on it is not told to turn the provider on. */}
+          {detailPaneInert && activeTab !== "usage" ? (
+            <p className="px-0 pb-2 text-ui-xs text-muted-foreground">
+              {PROVIDER_DISPLAY_NAMES[providerId]} is off. Turn it on to add a
+              key or change its settings.
+            </p>
+          ) : null}
           {/* Two presentations of ONE selection, off the same `tabs` list and
               the same labels. The pointer-width rail is the line bar; below
               `md` it is a dropdown, because the bar's `flex-wrap` is what a

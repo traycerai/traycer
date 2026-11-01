@@ -16,14 +16,17 @@ import { isFramelessDesktop } from "@/components/layout/header/title-bar-drag";
 import { useMotionEnabled } from "@/lib/animation/use-motion-enabled";
 import { registerDynamicActionHandler } from "@/lib/keybindings/dispatch";
 import type { EdgeSide } from "@/lib/layout/layout-arrangement";
+import { useStatusBarVisible } from "@/lib/layout-overrides";
 import { cn } from "@/lib/utils";
 import { useWindowsBridgeHydrated } from "@/providers/windows-bridge-context";
-import {
-  useSideStripCollapsed,
-  useSideTabStripStore,
-} from "@/stores/layout/side-tab-strip-store";
+import { useSideTabStripStore } from "@/stores/layout/side-tab-strip-store";
 import { useTitleBarDraggingSuppressed } from "@/stores/layout/title-bar-drag-store";
 import { useTabsStore } from "@/stores/tabs/store";
+import {
+  useMobileStripForm,
+  useSideStripCollapseOffered,
+  useSideStripDrawnCollapsed,
+} from "../mobile-strip-form-context";
 import { useTabStripController } from "../tab-strip-controller";
 import { TabStripIndicatorScope } from "../tab-strip-indicator-scope";
 import { SideStripFoot } from "./side-strip-foot";
@@ -35,6 +38,7 @@ import { StripNeedsYouScope } from "./strip-needs-you-scope";
 import { StripSectionsScope } from "./strip-sections-scope";
 import type { SideTabRowVariant } from "./side-tab-row";
 import {
+  SIDE_STRIP_DEFAULT_WIDTH_PX,
   SIDE_STRIP_MAX_WIDTH_CLASS,
   SIDE_STRIP_RAIL_WIDTH_PX,
   SIDE_STRIP_TITLE_ROW_MIN_WIDTH_CLASS,
@@ -55,6 +59,12 @@ const NO_DRAG_REGION_CLASS = "[-webkit-app-region:no-drag]";
  *
  * `ownsTitleBar` is true only on macOS with the strip at the left, where the
  * top block's first row is the window's title bar.
+ *
+ * In the phone shell the form decides what draws. The expanded strip is always
+ * its default width and has no handle, because the width rule budgets exactly
+ * that. Below the width the expanded strip needs there is no collapse toggle or
+ * chord, so a stored choice that cannot draw is never flipped.
+ * The foot clears the home indicator when no status bar sits under the strip.
  */
 export function SideTabStrip(props: {
   readonly edge: EdgeSide;
@@ -64,23 +74,27 @@ export function SideTabStrip(props: {
   const controller = useTabStripController();
   const hydrated = useWindowsBridgeHydrated();
   const persistedStripCount = useTabsStore((state) => state.stripOrder.length);
-  const collapsed = useSideStripCollapsed();
-  const widthPx = useSideTabStripStore((state) => state.widthPx);
+  const mobileForm = useMobileStripForm();
+  const collapsed = useSideStripDrawnCollapsed();
+  const storedWidthPx = useSideTabStripStore((state) => state.widthPx);
+  const widthPx =
+    mobileForm === null ? storedWidthPx : SIDE_STRIP_DEFAULT_WIDTH_PX;
+  const collapseOffered = useSideStripCollapseOffered();
+  const statusBarShown = useStatusBarVisible();
   const variant: SideTabRowVariant = collapsed ? "collapsed" : "expanded";
   const stripRef = useRef<HTMLElement | null>(null);
   const widthEasing = useCollapseWidthEasing(stripRef);
   const stopWidthEasing = widthEasing.stop;
   // The keyboard's collapse is instant (L-165); only this strip registers it,
   // so the action exists exactly while the tabs are at the side.
-  useEffect(
-    () =>
-      registerDynamicActionHandler("app.tabs.vertical.collapse", () => {
-        stopWidthEasing();
-        const { collapsed, setCollapsed } = useSideTabStripStore.getState();
-        setCollapsed(!collapsed);
-      }),
-    [stopWidthEasing],
-  );
+  useEffect(() => {
+    if (!collapseOffered) return undefined;
+    return registerDynamicActionHandler("app.tabs.vertical.collapse", () => {
+      stopWidthEasing();
+      const { collapsed, setCollapsed } = useSideTabStripStore.getState();
+      setCollapsed(!collapsed);
+    });
+  }, [collapseOffered, stopWidthEasing]);
   const dragClass = useStripDragClass();
   const surfaceRef = useLayoutSurface("topBar");
   const bindStrip = useCallback(
@@ -118,6 +132,7 @@ export function SideTabStrip(props: {
             widthEasing.easing &&
               "transition-[width] duration-(--panel-motion-duration) ease-spring",
             dragClass,
+            mobileForm !== null && !statusBarShown && "pb-safe-bottom",
           )}
           style={{ width: collapsed ? SIDE_STRIP_RAIL_WIDTH_PX : widthPx }}
         >
@@ -132,7 +147,7 @@ export function SideTabStrip(props: {
               onHomeTab={controller.onHomeTab}
               tracy={controller.tracy}
               onNewTab={controller.onNewTab}
-              onToggleCollapsed={widthEasing.toggle}
+              onToggleCollapsed={collapseOffered ? widthEasing.toggle : null}
               taskCount={controller.tabs.length}
             />
             <TabStripIndicatorScope indicators={controller.indicators}>
@@ -164,12 +179,14 @@ export function SideTabStrip(props: {
             row and activated by the shared SheetJoinScope. */}
           <div data-strip-drag-overlay-host className="contents" />
           <SheetJoinBridge edge={edge} />
-          <SideStripResizeHandle
-            edge={edge}
-            stripRef={stripRef}
-            easeWidth={widthEasing.ease}
-            stopWidthEasing={widthEasing.stop}
-          />
+          {mobileForm === null ? (
+            <SideStripResizeHandle
+              edge={edge}
+              stripRef={stripRef}
+              easeWidth={widthEasing.ease}
+              stopWidthEasing={widthEasing.stop}
+            />
+          ) : null}
           {controller.dialogs}
         </nav>
       </HoverCardGroup>

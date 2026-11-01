@@ -487,6 +487,53 @@ describe("Export diagnostics", () => {
     );
   });
 
+  it("keeps a destroyed host out of the export's changed-by slot", async () => {
+    const harness = mountTeamPage(poolSource("admin"), {
+      "environment.history": () =>
+        history({
+          entries: [
+            // The newest event is a lifecycle one: its actor is the host the
+            // cleanup ran against, not a person who changed anything.
+            {
+              at: AT,
+              actor: { label: "dev-box", tombstoned: false },
+              operation: "secret_cleanup_confirmed",
+              outcome: "host_destroyed",
+            },
+            {
+              at: AT - DAY,
+              actor: { label: "Ada", tombstoned: false },
+              operation: "set",
+              outcome: "applied",
+            },
+          ],
+        }),
+    });
+    const user = userEvent.setup();
+    openDrawer(harness, { kind: "variable", key: "FOO" }, "FOO");
+
+    // The export is where the provenance is asserted: the drawer's Now is
+    // on its way to reading the time alone, with the actor in History, so a
+    // negative on the rendered line would stop being able to fail.
+    await user.click(
+      await screen.findByRole("tab", { name: "Export diagnostics" }),
+    );
+    await user.click(screen.getByRole("button", { name: "Save diagnostics" }));
+
+    const exported = await savedExport();
+    expect(exported).toMatchObject({
+      status: { changedBy: null, changedAt: AT },
+      // The event itself is not hidden, and a person's own label is not
+      // touched: only the provenance slot is.
+      history: {
+        entries: [
+          { at: AT, outcome: "host_destroyed", actor: { label: "dev-box" } },
+          { at: AT - DAY, outcome: "applied", actor: { label: "Ada" } },
+        ],
+      },
+    });
+  });
+
   it("projects a full history to metadata only", async () => {
     const harness = mountTeamPage(poolSource("admin"), {
       "environment.history": () => ({
@@ -599,7 +646,7 @@ describe("the Secrets header's Details", () => {
     openDrawer(harness, { kind: "secret", key: "" }, "Secrets");
 
     // No host has reported yet, so the page's Now says so.
-    expect(await screen.findByText("No hosts yet")).toBeTruthy();
+    expect(await screen.findByText("Not on any host")).toBeTruthy();
     const items = screen.getAllByRole("listitem").map((row) => row.textContent);
     expect(items).toEqual([
       expect.stringContaining("STRIPE_KEY"),
@@ -677,7 +724,7 @@ describe("the Secrets header's Details", () => {
 
     expect(await screen.findByText(/Cleanup requested/)).toBeTruthy();
     expect(screen.getByText("Version 2")).toBeTruthy();
-    expect(screen.getByText("1 of 2 copies removed")).toBeTruthy();
+    expect(screen.getByText("Removed from 1 host")).toBeTruthy();
     expect(harness.paramsOf("environment.secrets.versions")).toEqual([
       { environmentId: "env-a", secretId: "sec-cleanup" },
     ]);

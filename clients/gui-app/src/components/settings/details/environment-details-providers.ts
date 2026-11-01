@@ -95,7 +95,7 @@ export function detailsNowSummary(hosts: readonly DetailsHostStatus[]): string {
   const applying = usedHosts.find((host) => host.state !== "applied");
   if (applying !== undefined) return `Applying on ${applying.name}…`;
   const count = new Set(usedHosts.map((host) => host.hostId)).size;
-  if (count === 0) return "No hosts yet";
+  if (count === 0) return "Not on any host";
   return count === 1 ? "Applied on 1 host" : `Applied on ${count} hosts`;
 }
 
@@ -320,7 +320,14 @@ async function loadEnvironmentDetails(
   let status: DetailsStatus = {
     summary: detailsNowSummary(hosts),
     currentVersion: null,
-    changedBy: latest?.actor?.label ?? null,
+    // A lifecycle event names its subject in `actor`, not a person: a host
+    // the cleanup ran against is what changed, never who changed it. The
+    // guard is on the producer, so the export carries no such provenance
+    // either.
+    changedBy:
+      latest?.outcome === "host_destroyed"
+        ? null
+        : (latest?.actor?.label ?? null),
     changedAt: latest?.at ?? null,
     reason: null,
     hosts,

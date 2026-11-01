@@ -185,6 +185,7 @@ function runningOn(
   reads.running = {
     hosts: names.map((name) => runningHost(name, false)),
     state: "ready",
+    thisComputerUnread: false,
     collisions: [],
     retry: () => undefined,
     reread: () => undefined,
@@ -438,6 +439,7 @@ describe("<EnvironmentPicker />", () => {
     reads.running = {
       hosts: [runningHost("other", false), runningHost("mac", true)],
       state: "ready",
+      thisComputerUnread: false,
       collisions: [
         { hostName: "windows-test-machine", hostIds: ["other", "mac"] },
       ],
@@ -460,6 +462,7 @@ describe("<EnvironmentPicker />", () => {
     reads.running = {
       hosts: [runningHost("other", false), runningHost("third", false)],
       state: "ready",
+      thisComputerUnread: false,
       collisions: [
         { hostName: "windows-test-machine", hostIds: ["other", "third"] },
       ],

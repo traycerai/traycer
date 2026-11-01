@@ -270,14 +270,18 @@ describe("<MobileCurrentTileBar />", () => {
   });
 
   it("shows the current tile title and icon", () => {
-    render(<MobileCurrentTileBar epicId="epic-1" tile={SPEC_TILE} />);
+    render(
+      <MobileCurrentTileBar epicId="epic-1" tile={SPEC_TILE} level2="bar" />,
+    );
     const bar = screen.getByTestId("mobile-current-tile-bar");
     expect(bar.textContent).toContain("Life Philosophy");
     expect(screen.getByTestId("tab-icon")).not.toBeNull();
   });
 
   it("renders the title as a plain label that a tap never turns into an editor", () => {
-    render(<MobileCurrentTileBar epicId="epic-1" tile={CHAT_TILE} />);
+    render(
+      <MobileCurrentTileBar epicId="epic-1" tile={CHAT_TILE} level2="bar" />,
+    );
     const title = screen.getByTestId("mobile-current-tile-title");
     expect(title.tagName).toBe("SPAN");
     fireEvent.click(title);
@@ -297,7 +301,13 @@ describe("<MobileCurrentTileBar />", () => {
       // `<TabHostProvider>`, so selecting a terminal tile on a phone threw
       // above the tile's error boundary - and kept throwing on every reload,
       // since the same tile was re-selected.
-      render(<MobileCurrentTileBar epicId="epic-1" tile={TERMINAL_TILE} />);
+      render(
+        <MobileCurrentTileBar
+          epicId="epic-1"
+          tile={TERMINAL_TILE}
+          level2="bar"
+        />,
+      );
       expect(terminalAuthority.tabHostIds.length).toBeGreaterThan(0);
       expect(
         terminalAuthority.tabHostIds.every((hostId) => hostId === "host-A"),
@@ -307,7 +317,13 @@ describe("<MobileCurrentTileBar />", () => {
     it("on a capable host shows the authority's title and makes no legacy terminal.list read", () => {
       terminalAuthority.capability = "capable";
       terminalAuthority.displayTitle = "Authority title";
-      render(<MobileCurrentTileBar epicId="epic-1" tile={TERMINAL_TILE} />);
+      render(
+        <MobileCurrentTileBar
+          epicId="epic-1"
+          tile={TERMINAL_TILE}
+          level2="bar"
+        />,
+      );
       expect(screen.getByTestId("mobile-current-tile-title").textContent).toBe(
         "Authority title",
       );
@@ -319,7 +335,13 @@ describe("<MobileCurrentTileBar />", () => {
 
     it("on a legacy host keeps the legacy title read", () => {
       terminalAuthority.capability = "legacy";
-      render(<MobileCurrentTileBar epicId="epic-1" tile={TERMINAL_TILE} />);
+      render(
+        <MobileCurrentTileBar
+          epicId="epic-1"
+          tile={TERMINAL_TILE}
+          level2="bar"
+        />,
+      );
       expect(screen.getByTestId("mobile-current-tile-title").textContent).toBe(
         "Local presentation",
       );
@@ -329,7 +351,13 @@ describe("<MobileCurrentTileBar />", () => {
     it("while the capability is still unknown shows the authority's title and makes no legacy read", () => {
       terminalAuthority.capability = "unknown";
       terminalAuthority.displayTitle = "Deciding";
-      render(<MobileCurrentTileBar epicId="epic-1" tile={TERMINAL_TILE} />);
+      render(
+        <MobileCurrentTileBar
+          epicId="epic-1"
+          tile={TERMINAL_TILE}
+          level2="bar"
+        />,
+      );
       expect(terminalLegacy.titleReadClients.length).toBeGreaterThan(0);
       expect(
         terminalLegacy.titleReadClients.every((client) => client === null),
@@ -362,6 +390,7 @@ describe("<MobileCurrentTileBar />", () => {
           epicId="epic-1"
 
           tile={input.tile}
+          level2="bar"
         />,
       );
     }
@@ -453,7 +482,7 @@ describe("<MobileCurrentTileBar />", () => {
       // A closed surface is no longer a claim about anything; leaving the entry
       // behind would hold the indicator open over a stream nobody is watching.
       const view = render(
-        <MobileCurrentTileBar epicId="epic-1" tile={CHAT_TILE} />,
+        <MobileCurrentTileBar epicId="epic-1" tile={CHAT_TILE} level2="bar" />,
       );
       expect(published()).toBeDefined();
       view.unmount();
@@ -475,7 +504,7 @@ describe("<MobileCurrentTileBar />", () => {
           wake: chatWakeSpy,
         };
         const view = render(
-          <MobileCurrentTileBar epicId="epic-1" tile={aTile} />,
+          <MobileCurrentTileBar epicId="epic-1" tile={aTile} level2="bar" />,
         );
         act(() => {
           vi.advanceTimersByTime(LINK_DOWN_ESCALATION_MS);
@@ -484,7 +513,9 @@ describe("<MobileCurrentTileBar />", () => {
           publishedFor(`chat:host-A:${CHAT_TILE.id}`)?.spell.escalated,
         ).toBe(true);
 
-        view.rerender(<MobileCurrentTileBar epicId="epic-1" tile={bTile} />);
+        view.rerender(
+          <MobileCurrentTileBar epicId="epic-1" tile={bTile} level2="bar" />,
+        );
         expect(publishedFor(`chat:host-A:${CHAT_TILE.id}`)).toBeUndefined();
         const bEntry = publishedFor(`chat:host-B:${CHAT_TILE.id}`);
         expect(bEntry?.spell.syncing).toBe(true);

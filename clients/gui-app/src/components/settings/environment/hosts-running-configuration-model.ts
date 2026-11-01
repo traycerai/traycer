@@ -43,6 +43,16 @@ export interface HostsRunningConfiguration {
    * its last answer while a later read fails.
    */
   readonly state: "loading" | "ready" | "failed";
+  /**
+   * This window's own computer has an unresolved status (not yet in `hosts`
+   * either way), independent of `state`: the cloud's host list can answer
+   * (`state` goes `ready`) while this computer's own `environment.status`
+   * read is still in flight, so `hosts` can already hold other hosts without
+   * yet knowing whether this computer also runs the configuration. A reader
+   * that presents an exact count must hold it back while this is true, or it
+   * can understate the real total.
+   */
+  readonly thisComputerUnread: boolean;
   readonly collisions: readonly HostNameCollision[];
   readonly retry: () => void;
   /** Refreshes without cancelling an answer already on its way. */

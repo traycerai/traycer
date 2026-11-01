@@ -47,8 +47,11 @@ export interface SideStripTopBlockProps {
   /** The fixed Tracy entry, drawn right after Home; `null` with none. */
   readonly tracy: TracyStripEntry | null;
   readonly onNewTab: () => void;
-  /** Collapses the strip to the rail or expands it, easing the width. */
-  readonly onToggleCollapsed: () => void;
+  /**
+   * Collapses the strip to the rail or expands it, easing the width; `null`
+   * draws no toggle, where the phone shell has no room for the expanded strip.
+   */
+  readonly onToggleCollapsed: (() => void) | null;
   /** How many tabs the rows below list, for the "Tasks" label. */
   readonly taskCount: number;
 }
@@ -73,13 +76,14 @@ export function SideStripTopBlock(props: SideStripTopBlockProps): ReactNode {
   // The Activity rail opens each run of tiles with a hairline, which parts
   // them from New Task where Home does not.
   const sectionedRail = useSectionedStrip() && collapsed;
-  const toggle = (
-    <SideStripCollapseToggle
-      edge={props.edge}
-      collapsed={collapsed}
-      onToggle={props.onToggleCollapsed}
-    />
-  );
+  const toggle =
+    props.onToggleCollapsed === null ? null : (
+      <SideStripCollapseToggle
+        edge={props.edge}
+        collapsed={collapsed}
+        onToggle={props.onToggleCollapsed}
+      />
+    );
   const newTask = (
     <SideStripNewTask variant={props.variant} onNewTab={props.onNewTab} />
   );

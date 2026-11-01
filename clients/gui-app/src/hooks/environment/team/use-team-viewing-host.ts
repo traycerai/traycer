@@ -60,7 +60,7 @@ const useViewingHosts = create<ViewingHostState>((set) => ({
 const NO_HOSTS: readonly EnvironmentHostRecordV11[] = [];
 const NO_RECENT: readonly string[] = [];
 
-interface TeamViewingHost {
+export interface TeamViewingHost {
   readonly hosts: UseQueryResult<EnvironmentHostListResponseV11, HostRpcError>;
   readonly viewingHost: EnvironmentHostRecordV11 | null;
   readonly client: HostClient<HostRpcRegistry> | null;
@@ -132,6 +132,24 @@ export function useTeamViewingHost(): TeamViewingHost {
         pick(key, viewerId, hostId);
     },
   };
+}
+
+/**
+ * Whether there is anywhere to switch to: an eligible host that is not the
+ * one being viewed. The host switch, the picker's verb and a card's
+ * `Pick one.` are all drawn on this one answer, so none of them can offer a
+ * switch another would open empty.
+ */
+export function canSwitchViewingHost(scope: TeamViewingHost): boolean {
+  const viewing = scope.viewingHost;
+  if (viewing === null) return false;
+  const hosts = scope.hosts.isError
+    ? NO_HOSTS
+    : (scope.hosts.data?.hosts ?? NO_HOSTS);
+  return hosts.some(
+    (host) =>
+      host.hostId !== viewing.hostId && scope.canSelectHost(host.hostId),
+  );
 }
 
 /**
