@@ -100,6 +100,7 @@ import {
   type LandingDraftWorkspaceSnapshot,
 } from "@/stores/home/landing-draft-store";
 import { deriveWorkspaceMode } from "@/lib/worktree/workspace-mode";
+import type { PendingForkWorkspace } from "@/stores/sandboxes/pending-sandbox-send-store";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { usePrimaryActionShortcut } from "@/hooks/use-primary-action-shortcut";
 import { useInTaskSandboxStagingSurface } from "@/components/composer/use-sandbox-staging";
@@ -358,8 +359,11 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
   // A cross-host fork is a different operation: it cannot carry the source
   // machine's working tree, its folder paths, or the provider's on-disk
   // session. Everything below that changes shape keys on this one fact. A
-  // staged sandbox is another machine too.
-  const isCrossHost = selectedHostId !== tabHostId || forkStage !== null;
+  // staged sandbox is another machine too, unless it is the one the source
+  // already runs on, staged only because it has to wake.
+  const isCrossHost =
+    selectedHostId !== tabHostId ||
+    (forkStage !== null && stagedHostId(forkStage) !== tabHostId);
   // The target only exists as far as this dialog is concerned while it is
   // OPEN. `target` outlives a close (the opener keeps the last one), so every
   // read that costs something - the owner resolution's cloud-chat list, the
@@ -906,6 +910,28 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
     [],
   );
 
+  const readForkWorkspace = useCallback((): PendingForkWorkspace => {
+    const launchWorkspace = readSeededLaunchWorkspace({
+      stagingKey,
+      seedIntent,
+      // The same snapshot the picker was given, so a cross-host submit that
+      // never touched the folder rows resolves to the empty workspace rather
+      // than falling through to this machine's global folder list.
+      fallbackWorkspace: workspaceSeed,
+      // The launch host, so the global fallback below this one reads the
+      // TARGET machine's folder bucket. Folder paths are host-local; the
+      // source tab's bucket would seed paths that need not exist there.
+      hostId: selectedHostId,
+    });
+    return {
+      workspaceMode: deriveWorkspaceMode(
+        launchWorkspace.folderCount,
+        launchWorkspace.worktreeIntent,
+      ),
+      worktreeIntent: launchWorkspace.worktreeIntent,
+    };
+  }, [seedIntent, selectedHostId, stagingKey, workspaceSeed]);
+
   const submitStagedFork = useCallback(
     (staged: StagedSandbox, target: ChatForkDialogTarget): Promise<void> => {
       if (stagedSubmitAttempt.current !== null) return Promise.resolve();
@@ -958,6 +984,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
                 title: trimmedTitle,
                 forkSource: chatForkSource(target, sourceOwnerUserId),
                 tabId,
+                ...(isCrossHost ? {} : { workspace: readForkWorkspace() }),
               },
               content: createEmptyNewConversationContent(),
               text: trimmedTitle,
@@ -1001,6 +1028,8 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
       clearForkWorkspaces,
       epicId,
       forkSurfaceKey,
+      isCrossHost,
+      readForkWorkspace,
       onOpenChange,
       sourceOwnerUserId,
       stagedSignInCheck,
@@ -1030,23 +1059,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
     const hostId = selectedHostClient?.getActiveHostId() ?? null;
     if (hostId === null) return;
     const chatId = uuidv4();
-    const launchWorkspace = readSeededLaunchWorkspace({
-      stagingKey,
-      seedIntent,
-      // The same snapshot the picker was given, so a cross-host submit that
-      // never touched the folder rows resolves to the empty workspace rather
-      // than falling through to this machine's global folder list.
-      fallbackWorkspace: workspaceSeed,
-      // The launch host, so the global fallback below this one reads the
-      // TARGET machine's folder bucket. Folder paths are host-local; the
-      // source tab's bucket would seed paths that need not exist there.
-      hostId,
-    });
-    const workspaceMode = deriveWorkspaceMode(
-      launchWorkspace.folderCount,
-      launchWorkspace.worktreeIntent,
-    );
-    const worktreeIntent = launchWorkspace.worktreeIntent;
+    const { workspaceMode, worktreeIntent } = readForkWorkspace();
     // Same-host only. The per-epic memory is keyed by workspace PATH and holds
     // no host of its own, so remembering a cross-host pick would offer another
     // machine's branch/worktree choice to any later surface on this one that
@@ -1156,6 +1169,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
       },
     );
   }, [
+    readForkWorkspace,
     attachClient,
     attachEnvironment,
     attachTeamId,
@@ -1168,15 +1182,12 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
     submitStagedFork,
     sandboxAgentGate.notice,
     onOpenChange,
-    seedIntent,
     selectedHostClient,
     sourceOwnerUserId,
-    stagingKey,
     tabId,
     target,
     toolbarStore,
     trimmedTitle,
-    workspaceSeed,
     isCrossHost,
   ]);
   usePrimaryActionShortcut(activityEnabled, submit);

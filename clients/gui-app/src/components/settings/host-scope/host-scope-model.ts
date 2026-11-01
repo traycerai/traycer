@@ -167,6 +167,9 @@ export interface BuildHostScopeOptionsInput {
   readonly nowMs: number;
 }
 
+/** The directory's own tick: a read by then has heard of the wake. */
+const WAKE_MIRROR_LAG_MS = 60_000;
+
 export function buildHostScopeOptions(
   input: BuildHostScopeOptionsInput,
 ): readonly HostScopeOption[] {
@@ -208,7 +211,7 @@ export function buildHostScopeOptions(
       updateState: item?.status.updateState ?? null,
       entry,
       item,
-      ...sandboxFactsOf(entry, item, summary),
+      ...sandboxFactsOf(entry, item, summary, input.nowMs),
     };
   });
   const listed = new Set(hostIds);
@@ -325,6 +328,7 @@ function sandboxFactsOf(
   entry: HostDirectoryEntry | null,
   item: HostListItem | null,
   summary: SandboxSummary | null,
+  nowMs: number,
 ): Pick<HostScopeOption, "kind" | "sandbox"> {
   const entryFacts =
     entry !== null && isRemoteHostDirectoryEntry(entry) ? entry.sandbox : null;
@@ -334,7 +338,7 @@ function sandboxFactsOf(
   }
   const listed = item === null ? null : listedSandboxFacts(item);
   const known = listed ?? entryFacts;
-  const state = sandboxStateOf(known?.state ?? null, summary);
+  const state = sandboxStateOf(known?.state ?? null, summary, nowMs);
   return {
     kind,
     sandbox: {
@@ -360,6 +364,7 @@ function sandboxFactsOf(
 function sandboxStateOf(
   knownState: HostSandboxState | null,
   summary: SandboxSummary | null,
+  nowMs: number,
 ): HostSandboxState | null {
   if (summary === null) return knownState;
   if (knownState === null) return summary.state;
@@ -369,15 +374,26 @@ function sandboxStateOf(
     return summary.state;
   }
   // The registry mirrors the row and hears of a wake after it.
-  if (
-    (summary.state === "resuming" || summary.state === "starting") &&
-    isSandboxAsleep(knownState)
-  ) {
+  if (rowIsAheadOnAWake(summary, nowMs) && isSandboxAsleep(knownState)) {
     return summary.state;
   }
   return transitDestinationOf(summary.state) === knownState
     ? summary.state
     : knownState;
+}
+
+/**
+ * A wake the row shows: on its way, or landed so lately that a resting word
+ * from the registry can only be the mirror lagging. Past that it is a rest the
+ * row has not been re-read for, which keeps the registry's word.
+ */
+function rowIsAheadOnAWake(summary: SandboxSummary, nowMs: number): boolean {
+  if (summary.state === "resuming" || summary.state === "starting") return true;
+  return (
+    summary.state === "awake" &&
+    isSandboxAsleep(summary.operation?.fromState ?? null) &&
+    nowMs - summary.lastTransitionAt < WAKE_MIRROR_LAG_MS
+  );
 }
 
 /**
