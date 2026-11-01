@@ -482,9 +482,10 @@ export const PERSIST_STORES = [
     leaf: "team-continue-caution-seen",
     kind: "static",
   },
-  // The bot tabs open in this window, each with the host it is bound to for
-  // life (`bot-tabs-store.ts`). A bot id is a cloud entity, so no host scoping
-  // on the key; the host rides on each record instead.
+  // The Tracy surface: whether it is open, the host it is bound to and its
+  // selected channel (`tracy-surface-store.ts`; version 1 held one record per
+  // bot tab). A bot id is a cloud entity, so no host scoping on the key; the
+  // host rides in the value instead.
   {
     camelName: "botTabs",
     leaf: "bot-tabs",

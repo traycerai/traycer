@@ -357,6 +357,7 @@ function mountPanel(bot: BotRecord, personal: boolean): void {
           channelId={null}
           environmentBots={null}
           onClose={vi.fn()}
+          onDeleted={vi.fn()}
         />
       </StrictMode>,
     ),
@@ -828,6 +829,7 @@ describe("<BotChannelSettingsPanel /> as the channel's settings", () => {
             channelId={CHANNEL}
             environmentBots={input.environmentBots}
             onClose={onClose}
+            onDeleted={vi.fn()}
           />
         </BotIdentityContext>,
       ),
@@ -954,6 +956,7 @@ describe("<BotChannelSettingsPanel /> as the channel's settings", () => {
               channelId={CHANNEL}
               environmentBots={null}
               onClose={onClose}
+              onDeleted={vi.fn()}
             />
           </BotMemoryContext>,
         ),
@@ -1247,6 +1250,7 @@ describe("<BotChannelSettingsPanel /> Slack", () => {
           channelId={null}
           environmentBots={null}
           onClose={vi.fn()}
+          onDeleted={vi.fn()}
         />,
       ),
     );

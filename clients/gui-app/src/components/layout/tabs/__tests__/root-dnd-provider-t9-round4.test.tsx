@@ -43,9 +43,10 @@ import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { collectPanes } from "@/stores/epics/canvas/tile-tree";
 import type { EpicNodeRef } from "@/stores/epics/canvas/types";
-import { useBotTabsStore } from "@/stores/bots/bot-tabs-store";
+import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import { tabItemId } from "@/stores/tabs/layout";
+import { TRACY_TAB_REF } from "@/stores/tabs/kinds/tracy";
 import { useTabsStore } from "@/stores/tabs/store";
 import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
 import type { TabRef } from "@/stores/tabs/types";
@@ -53,7 +54,7 @@ import type { TabRef } from "@/stores/tabs/types";
 const SOURCE: TabRef = { kind: "draft", id: "source" };
 const TARGET: TabRef = { kind: "epic", id: "target" };
 const UNRELATED: TabRef = { kind: "draft", id: "unrelated-x" };
-const TRACY: TabRef = { kind: "bot", id: "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV" };
+const TRACY: TabRef = TRACY_TAB_REF;
 const SPLIT_ID = "split-source-target";
 const TILE: EpicNodeRef = {
   id: "spec-in-task",
@@ -226,7 +227,7 @@ describe("T9 round-4: RootDndProvider real wiring", () => {
   afterEach(() => {
     vi.useRealTimers();
     cleanup();
-    useBotTabsStore.setState({ tabs: {}, fixedBotId: null });
+    useTracySurfaceStore.setState(useTracySurfaceStore.getInitialState(), true);
     useTabsStore.setState(useTabsStore.getInitialState(), true);
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
     useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
@@ -307,13 +308,10 @@ describe("T9 round-4: RootDndProvider real wiring", () => {
       expected: ["tracy", "torn-off", "target", "unrelated"],
     },
   ])(
-    "tears a canvas tab onto the strip $label, where the fixed Tracy entry is not among the drawn slots",
+    "tears a canvas tab onto the strip $label, where the pinned Tracy entry is not among the drawn slots",
     async ({ slot, pointerX, drawnPosition, expected }) => {
       const dragData = seedCanvasTearOffSource();
-      useBotTabsStore
-        .getState()
-        .openBotTab({ botId: TRACY.id, hostId: "host-a", title: "Tracy" });
-      useBotTabsStore.getState().setFixedBotId(TRACY.id);
+      useTracySurfaceStore.getState().openSurface("host-a");
       useTabsStore.setState({
         version: 2,
         items: [TRACY, TARGET, UNRELATED].map((ref) => ({
@@ -371,7 +369,7 @@ describe("T9 round-4: RootDndProvider real wiring", () => {
       expect(
         useTabsStore.getState().items.map((item) => {
           if (item.kind !== "tab") return item.id;
-          if (item.ref.kind === "bot") return "tracy";
+          if (item.ref.kind === "tracy") return "tracy";
           if (item.ref.id === TARGET.id) return "target";
           if (item.ref.id === UNRELATED.id) return "unrelated";
           return "torn-off";

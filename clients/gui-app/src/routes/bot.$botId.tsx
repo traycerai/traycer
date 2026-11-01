@@ -3,12 +3,11 @@ import { requireSignedIn } from "@/lib/router-auth";
 import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 
 /**
- * Deep-linkable per-bot route (Tracy Bots). The tab-kind descriptor renders
- * the body once inside `TopLevelTabHost`, the way `/sample-workspace` does;
- * the navigation controller resolves the path to the bot tab's ref and
- * corrects to the landing route when no bot tab record exists for the id
- * (the record carries the host the tab is bound to, and a bare url cannot
- * name one).
+ * A channel of the Tracy surface (decision 150), deep-linkable. The tab-kind
+ * descriptor renders the surface once inside `TopLevelTabHost`, the way
+ * `/sample-workspace` does; the navigation controller resolves the path to
+ * the surface's one ref, opening it on this window's host when it is closed,
+ * and selects the channel.
  */
 export const Route = createFileRoute("/bot/$botId")({
   beforeLoad: ({ context }) => {

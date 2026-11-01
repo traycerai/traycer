@@ -21,7 +21,7 @@ import { WithTestQueryClient } from "@/__tests__/with-test-query-client";
 import { setPhoneLayoutOnly } from "@/lib/mobile-app";
 import { botTabIntent } from "@/lib/tab-navigation/intents";
 import { useBotOpenThreadStore } from "@/stores/bots/bot-open-thread-store";
-import { useBotTabsStore } from "@/stores/bots/bot-tabs-store";
+import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
 import {
   useVoiceSessionStore,
   type VoiceFocus,
@@ -38,9 +38,19 @@ const FOCUS: VoiceFocus = {
   anchorThread: null,
 };
 
-const navigation = vi.hoisted(() => ({ navigateToTabIntent: vi.fn() }));
+const navigation = vi.hoisted(() => ({
+  activateTabIntent: vi.fn<(intent: unknown) => void>(),
+}));
 vi.mock("@tanstack/react-router", () => ({ useNavigate: () => vi.fn() }));
-vi.mock("@/lib/tab-navigation", () => navigation);
+vi.mock("@/lib/tab-navigation", () => ({
+  activateTabIntent: (_navigate: unknown, intent: unknown) => {
+    navigation.activateTabIntent(intent);
+    return true;
+  },
+}));
+vi.mock("@/hooks/host/use-connectable-host-ids", () => ({
+  useConnectableHostIds: () => ({ hostIds: ["host-a"], resolved: true }),
+}));
 vi.mock("@/hooks/host/use-effective-host-id", () => ({
   useEffectiveHostId: () => "host-a",
 }));
@@ -114,7 +124,7 @@ const pointerCapture = Object.getOwnPropertyDescriptor(
 
 beforeEach(() => {
   useVoiceSessionStore.setState(initial, true);
-  navigation.navigateToTabIntent.mockReset();
+  navigation.activateTabIntent.mockReset();
   runnerHost.openMicrophoneSettings.mockReset();
   runnerHost.openMicrophoneSettings.mockResolvedValue(undefined);
   setPhoneLayoutOnly(true);
@@ -123,9 +133,9 @@ beforeEach(() => {
     writable: true,
     value: () => undefined,
   });
-  useBotTabsStore
-    .getState()
-    .openBotTab({ botId: BOT_ID, hostId: "host-a", title: "Tracy" });
+  useTracySurfaceStore.setState(useTracySurfaceStore.getInitialState(), true);
+  useTracySurfaceStore.getState().openSurface("host-a");
+  useTracySurfaceStore.getState().selectChannel(BOT_ID);
 });
 
 afterEach(() => {
@@ -229,10 +239,8 @@ describe("the phone voice view", () => {
       expect(screen.queryByTestId("voice-phone-view")).toBeNull(),
     );
     expect(useVoiceSessionStore.getState().phase).toBe("live");
-    expect(navigation.navigateToTabIntent).toHaveBeenCalledWith(
-      expect.anything(),
+    expect(navigation.activateTabIntent).toHaveBeenCalledWith(
       botTabIntent(BOT_ID),
-      undefined,
     );
     expect(screen.getByTestId("voice-phone-bar-state").textContent).toBe(
       "Listening · tap to mute",

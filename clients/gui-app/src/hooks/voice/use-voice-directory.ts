@@ -19,7 +19,7 @@ import {
 } from "@/lib/voice/directory";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useBotOpenThreadStore } from "@/stores/bots/bot-open-thread-store";
-import { lookupBotTab, useBotTabsStore } from "@/stores/bots/bot-tabs-store";
+import { tracySurfaceHostId } from "@/stores/bots/tracy-surface-store";
 import { useVoiceSessionStore } from "@/stores/voice/voice-session-store";
 
 /** The router's directory, read when a route is made, and read fresh before a far navigation. */
@@ -104,7 +104,6 @@ export function useVoiceDirectory(
     ): VoiceDirectory => {
       const read = latest.current;
       const voice = useVoiceSessionStore.getState();
-      const tabs = useBotTabsStore.getState().tabs;
       const followedThreads = new Set<string>();
       if (read.followed.kind === "listed") {
         for (const entry of read.followed.threads) {
@@ -113,8 +112,8 @@ export function useVoiceDirectory(
           );
         }
       }
-      const hostOf = (botId: string): string | null =>
-        lookupBotTab(tabs, botId)?.hostId ?? read.appHostId;
+      const surfaceHostId = tracySurfaceHostId();
+      const hostOf = (): string | null => surfaceHostId ?? read.appHostId;
       const sources: DirectorySources = {
         environments: read.environments,
         bots: read.bots,

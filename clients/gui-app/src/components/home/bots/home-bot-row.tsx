@@ -9,16 +9,11 @@ import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
 import { useBotSubscription } from "@/hooks/bots/use-bot-subscription";
 import { botWorkingOf, liveActivityOf } from "@/hooks/bots/use-bot-activity";
 import {
-  rebindUnreachableBotTab,
-  useBotTabsStore,
-} from "@/stores/bots/bot-tabs-store";
-import {
   buildHomeBotRow,
   homeBotState,
   type HomeBotState,
 } from "@/lib/home-bots/bots-model";
-import { botTabIntent } from "@/lib/tab-navigation/intents";
-import { navigateToTabIntent } from "@/lib/tab-navigation";
+import { openBotChannel } from "@/lib/bots/open-bot-channel";
 import type { TeamSetup } from "@/hooks/bots/use-team-setups";
 
 /**
@@ -116,7 +111,7 @@ export function HomeBotRow(props: {
       data-bot-id={row.botId}
       disabled={openTab === null}
       className="group flex w-full items-center gap-3 rounded-md px-2 py-2 text-left transition-colors hover:bg-foreground/6 focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2"
-      onClick={() => openTab?.(row.botId, row.title)}
+      onClick={() => openTab?.(row.botId)}
     >
       <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-foreground/6 text-muted-foreground">
         <Bot className="size-4" aria-hidden="true" />
@@ -179,7 +174,7 @@ export function HomeSetupBotRow(props: {
       data-bot-id={setup.botId}
       disabled={openTab === null}
       className="flex w-full items-center gap-3 rounded-md px-2 py-2 text-left transition-colors hover:bg-foreground/6 focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2"
-      onClick={() => openTab?.(setup.botId, setup.title)}
+      onClick={() => openTab?.(setup.botId)}
     >
       <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-foreground/6 text-muted-foreground">
         <Bot className="size-4" aria-hidden="true" />
@@ -195,26 +190,23 @@ export function HomeSetupBotRow(props: {
 }
 
 /**
- * Opens a bot's tab from Home through this window's host, first moving a tab
- * left on a host this client can no longer dial back to it; `null` while the
- * window has no host.
+ * Opens the Tracy surface on a bot's channel from Home, binding a closed
+ * surface to this window's host and first moving one left on a host this
+ * client can no longer dial back to it; `null` while the window has no host.
  */
 function useOpenHomeBotTab(
   hostReach: HomeBotHostReach,
-): ((botId: string, title: string) => void) | null {
+): ((botId: string) => void) | null {
   const hostId = useEffectiveHostId();
   const navigate = useNavigate();
-  const openBotTab = useBotTabsStore((s) => s.openBotTab);
   if (hostId === null) return null;
-  return (botId, title) => {
-    rebindUnreachableBotTab(
-      botId,
-      hostId,
-      hostReach.connectableResolved
+  return (botId) => {
+    openBotChannel(navigate, botId, {
+      landing: null,
+      isConnectable: hostReach.connectableResolved
         ? (id) => hostReach.connectableHostIds.has(id)
         : null,
-    );
-    openBotTab({ botId, hostId, title });
-    navigateToTabIntent(navigate, botTabIntent(botId), undefined);
+      onRejected: null,
+    });
   };
 }
