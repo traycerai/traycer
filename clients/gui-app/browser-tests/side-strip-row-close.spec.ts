@@ -1,6 +1,6 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
-import { fixture, nextFrames } from "./support/fixtures.ts";
+import { centreOf, fixture, nextFrames } from "./support/fixtures.ts";
 
 // The vertical strip's row trailing edge in real Chrome: what jsdom cannot
 // decide is what hovering and keyboard focus DO to the layout and the paint.
@@ -131,4 +131,50 @@ test("keyboard focus reveals the close at once, with no fade", async ({
       (node) => getComputedStyle(node).opacity,
     ),
   ).toBe("1");
+});
+
+test("a click on a hovered pending-title row's close closes the tab and does not activate it", async ({
+  page,
+}) => {
+  await openStrip(page);
+  await page.evaluate(
+    'window.__sideTabStripProbe.markTitlePending("fixture-zeta", "Zeta spike")',
+  );
+  const zeta = row(page, "zeta");
+  const close = zeta.getByTestId("tab-close-epic-fixture-zeta");
+  await expect(
+    zeta.getByTestId("header-tab-title-generating-fixture-zeta"),
+  ).toBeVisible();
+  await expect(zeta).toHaveAttribute("data-active", "false");
+  // Not zeta's neighbour, the seeded active tab: closing an active zeta lands
+  // there anyway, so it could not tell a close that activated its row first.
+  await page.evaluate('window.__sideTabStripProbe.activate("fixture-alpha")');
+  const alpha = row(page, "alpha");
+  await expect(alpha).toHaveAttribute("data-active", "true");
+
+  await zeta.hover();
+  await expect(closeWrapper(page, "zeta")).toHaveCSS("opacity", "1");
+  // The faded glyph shares the close's cell; its fade must be done so the
+  // centre below is the one the person sees.
+  await page.waitForFunction("document.getAnimations().length === 0");
+  const { x, y } = await centreOf(close);
+  expect(
+    await close.evaluate(
+      (node, point) =>
+        node.contains(document.elementFromPoint(point.x, point.y)),
+      { x, y },
+    ),
+    "the hit target at the close's centre must be the close",
+  ).toBe(true);
+
+  await page.mouse.click(x, y);
+
+  await expect(zeta, "the click must close the tab").toHaveCount(0);
+  expect(
+    await page.evaluate("window.__sideTabStripProbe.items().flat()"),
+  ).not.toContain("epic:fixture-zeta");
+  await expect(
+    alpha,
+    "the tab active before the click must still be the active one",
+  ).toHaveAttribute("data-active", "true");
 });
