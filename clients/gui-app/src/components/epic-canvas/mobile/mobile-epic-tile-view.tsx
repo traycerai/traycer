@@ -36,6 +36,10 @@ import {
 import { usePublishSurfaceSync } from "@/hooks/sync/use-publish-surface-sync";
 import { SURFACE_SYNC_RANK } from "@/stores/sync/surface-sync-store";
 import { useStreamSyncingSpell } from "@/hooks/sync/use-stream-syncing-spell";
+import {
+  KEYBOARD_FOCUS_OWNER_PROPS,
+  useShortKeyboardViewport,
+} from "@/hooks/ui/use-keyboard-focus-layout";
 import { useVirtualKeyboardInset } from "@/hooks/ui/use-virtual-keyboard-inset";
 import { useNativeKeyboardOpen } from "@/hooks/ui/use-native-keyboard-open";
 import { isMobileApp } from "@/lib/mobile-app";
@@ -281,6 +285,7 @@ function MobileTilePane(props: {
   const isTerminalTile =
     selection.ref.type === "terminal" ||
     selection.ref.type === "terminal-agent";
+  const shortKeyboardViewport = useShortKeyboardViewport();
   const openTarget = useMemo(
     () => ({ tabId, slot: OTHER_SLOT[slot] }),
     [slot, tabId],
@@ -323,7 +328,10 @@ function MobileTilePane(props: {
           trailing={trailing}
         />
       </MobileTileMenu>
-      <div className="relative min-h-0 flex-1">
+      <div
+        className="relative min-h-0 flex-1"
+        {...(isTerminalTile ? KEYBOARD_FOCUS_OWNER_PROPS : null)}
+      >
         <TabBodySelectedContext.Provider value>
           <MobileTileOpenTargetContext value={openTarget}>
             <ActiveTabBody
@@ -346,8 +354,9 @@ function MobileTilePane(props: {
       {/* Terminal TUIs are driven by keys phone keyboards don't have; the key
         bar injects them. Rendered as a shrink-0 sibling so its height comes
         out of the terminal box above, which drives the existing
-        ResizeObserver -> host resize sync automatically. */}
-      {isTerminalTile ? (
+        ResizeObserver -> host resize sync automatically. A terminal the keyboard
+        is not for gives it up altogether on a short viewport. */}
+      {isTerminalTile && (engaged || !shortKeyboardViewport) ? (
         <MobileTerminalKeyBar
           instanceId={selection.ref.instanceId}
           keyboardOpen={keyboardOpen}

@@ -65,6 +65,14 @@ import type { BotComposerEdit } from "@/components/bots/bot-message-composer";
 import type { BotSentPost } from "@/stores/bots/bot-open-thread-store";
 import type { BotTranscriptLanding } from "@/components/bots/bot-chat-transcript";
 import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
+import { setPhoneLayoutOnly } from "@/lib/mobile-app";
+import {
+  holdScreenLandscape,
+  IPHONE_17,
+  lowerNativeKeyboard,
+  raiseNativeKeyboard,
+  restoreKeyboardEnvironment,
+} from "../../../../__tests__/short-keyboard-viewport-harness";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 
 type ThreadTranscriptState = Pick<
@@ -2145,5 +2153,50 @@ describe("<BotThreadPanel /> the thread's tasks", () => {
     mountPanel(listed("user-teammate"), []);
 
     expect(screen.queryByTestId("bot-thread-tasks")).toBeNull();
+  });
+});
+
+describe("<BotThreadPanel /> on a short viewport under the keyboard", () => {
+  beforeEach(() => {
+    setPhoneLayoutOnly(true);
+    holdScreenLandscape();
+    raiseNativeKeyboard(IPHONE_17);
+  });
+
+  afterEach(() => {
+    setPhoneLayoutOnly(false);
+    restoreKeyboardEnvironment();
+  });
+
+  function shown(testId: string): boolean {
+    return screen.getByTestId(testId).closest("[hidden]") === null;
+  }
+
+  function composerForm(): HTMLElement {
+    return screen.getByTestId("bot-thread-composer");
+  }
+
+  it("becomes one row while its box has the focus, keeps the draft and the focused field, and restores with the keyboard down", async () => {
+    const user = userEvent.setup();
+    mountPanel(listed("user-teammate"), [botReply(null)]);
+    const box = screen.getByRole("textbox", { name: "Reply in the thread" });
+    expect(composerForm().getAttribute("data-box-form")).toBe("full");
+
+    await user.type(box, "Not yet");
+    expect(composerForm().getAttribute("data-box-form")).toBe("one-row");
+    expect(shown("bot-thread-activity")).toBe(false);
+    expect(shown("bot-thread-session")).toBe(false);
+    expect(shown("bot-thread-close")).toBe(true);
+    expect(shown("bot-thread-composer-send")).toBe(true);
+    expect(screen.getByRole("textbox", { name: "Reply in the thread" })).toBe(
+      box,
+    );
+    expect(document.activeElement).toBe(box);
+    expect((box as HTMLTextAreaElement).value).toBe("Not yet");
+
+    lowerNativeKeyboard();
+    expect(composerForm().getAttribute("data-box-form")).toBe("full");
+    expect(shown("bot-thread-activity")).toBe(true);
+    expect(shown("bot-thread-session")).toBe(true);
   });
 });

@@ -8,6 +8,7 @@ import {
   Delete,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { useShortKeyboardViewport } from "@/hooks/ui/use-keyboard-focus-layout";
 import { cn } from "@/lib/utils";
 import {
   getTerminalKeyBarModifiers,
@@ -39,7 +40,9 @@ interface MobileTerminalKeyBarProps {
 /**
  * On-screen terminal key bar for phones: the keys TUIs need that soft
  * keyboards don't have (Esc/Tab/arrows/Enter plus sticky Ctrl/Alt/Shift).
- * The layout is the two-row arrangement proven by Termux / Blink / Happy.
+ * The layout is the two-row arrangement proven by Termux / Blink / Happy. With
+ * the keyboard up on a short viewport it is one row of the keys the phone's
+ * keyboard does not have.
  *
  * Bar taps inject escape sequences into the tile's xterm engine via
  * `terminal-key-input-registry`; the engine is looked up per press, so the bar
@@ -50,6 +53,14 @@ interface MobileTerminalKeyBarProps {
  */
 export function MobileTerminalKeyBar(props: MobileTerminalKeyBarProps) {
   const { instanceId, keyboardOpen } = props;
+  const oneRow = useShortKeyboardViewport();
+  // One row has no Shift to show it latched or to cancel it, and a latch nobody
+  // can see would turn the next Tab into a back-tab.
+  useEffect(() => {
+    if (oneRow && getTerminalKeyBarModifiers().shift) {
+      toggleTerminalKeyBarModifier("shift");
+    }
+  }, [oneRow]);
   const latchedModifiers = useSyncExternalStore(
     subscribeTerminalKeyBarModifiers,
     getTerminalKeyBarModifiers,
@@ -165,8 +176,8 @@ export function MobileTerminalKeyBar(props: MobileTerminalKeyBarProps) {
           : "pb-[max(0.25rem,var(--safe-area-inset-bottom))]",
       )}
     >
-      <div className="grid grid-cols-6 gap-1">
-        {KEY_ROWS.flat().map((def) =>
+      <div className={cn("grid gap-1", oneRow ? "grid-cols-8" : "grid-cols-6")}>
+        {(oneRow ? ONE_ROW_KEYS : KEY_ROWS.flat()).map((def) =>
           def.kind === "action" ? (
             <Button
               key={def.testId}
@@ -353,3 +364,19 @@ const KEY_ROWS: readonly (readonly KeyDef[])[] = [
     },
   ],
 ];
+
+/** The keys of the rows above that the phone's own keyboard cannot type. */
+const ONE_ROW_KEY_IDS: ReadonlyArray<string> = [
+  "esc",
+  "tab",
+  "ctrl",
+  "alt",
+  "arrow-left",
+  "arrow-down",
+  "arrow-up",
+  "arrow-right",
+];
+
+const ONE_ROW_KEYS = ONE_ROW_KEY_IDS.flatMap((id) =>
+  KEY_ROWS.flat().filter((def) => def.testId === id),
+);

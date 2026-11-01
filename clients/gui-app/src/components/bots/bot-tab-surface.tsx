@@ -22,6 +22,7 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { TalkControl } from "@/components/layout/voice/talk-control";
 import { useInstalledAppTileForm } from "@/hooks/ui/use-installed-app-level2-form";
+import { useKeyboardFocusOwnerWithin } from "@/hooks/ui/use-keyboard-focus-layout";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import type {
   MobileLevel2Form,
@@ -1698,6 +1699,15 @@ function BotChannelHeader(props: {
 }): ReactNode {
   const { settingsOpen } = props;
   const phoneLayout = useIsMobileViewport();
+  // With the keyboard up on a short viewport: the name row alone while the
+  // channel's box has the focus, and nothing while a thread's does, since the
+  // thread's own header is the identity row then. Only a box under this header
+  // counts, so a parent's children are the header and the panes it heads.
+  const [header, setHeader] = useState<HTMLElement | null>(null);
+  const focusOwner = useKeyboardFocusOwnerWithin(header?.parentElement ?? null);
+  const threadHasFocus =
+    focusOwner !== null &&
+    focusOwner.closest("[data-bot-thread-panel]") !== null;
   // Focus goes back to the ⋮ when the settings close.
   const settingsButtonRef = useRef<HTMLButtonElement | null>(null);
   const wasOpenRef = useRef(settingsOpen);
@@ -1706,8 +1716,20 @@ function BotChannelHeader(props: {
     wasOpenRef.current = settingsOpen;
   }, [settingsOpen]);
   return (
-    <header className="flex shrink-0 flex-col gap-1 px-4 pt-3">
-      <div className="flex min-w-0 items-center gap-2">
+    <header
+      ref={setHeader}
+      hidden={threadHasFocus}
+      className={cn(
+        "flex shrink-0 flex-col gap-1 px-4",
+        focusOwner === null && "pt-3",
+      )}
+    >
+      <div
+        className={cn(
+          "flex min-w-0 items-center gap-2",
+          focusOwner !== null && "min-h-11",
+        )}
+      >
         <BotIdentityTrigger>
           <button
             type="button"
@@ -1749,7 +1771,11 @@ function BotChannelHeader(props: {
           <EllipsisVertical aria-hidden="true" />
         </Button>
       </div>
-      <TabsList variant="line" aria-label="Channel view">
+      <TabsList
+        hidden={focusOwner !== null}
+        variant="line"
+        aria-label="Channel view"
+      >
         <TabsTrigger value="messages" data-testid="bot-tab-view-messages">
           Messages
         </TabsTrigger>
