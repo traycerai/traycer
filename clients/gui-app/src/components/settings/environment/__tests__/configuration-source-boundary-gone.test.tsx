@@ -11,7 +11,7 @@ vi.mock("sonner", () => ({
 }));
 
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
-import type { ReactNode } from "react";
+import { useSyncExternalStore, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   EnvironmentDescriptorV11,
@@ -214,6 +214,39 @@ function WarmOtherHost(): ReactNode {
   useEnvironmentListQuery(client, true);
   useEnvironmentInvitationsQuery(client);
   return null;
+}
+
+/**
+ * A render of the page that is already mounted, which is the only re-render a
+ * case about the ask effect's dependencies can mean. An external store rather
+ * than a handle the component writes during render, which the hooks rules
+ * rightly refuse: {@link MountedPage} only reads.
+ */
+const rerenders = { tick: 0, listeners: new Set<() => void>() };
+
+function renderMountedPageAgain(): void {
+  rerenders.tick += 1;
+  for (const listener of rerenders.listeners) listener();
+}
+
+function useRerenderTick(): number {
+  return useSyncExternalStore(
+    (listener: () => void) => {
+      rerenders.listeners.add(listener);
+      return () => rerenders.listeners.delete(listener);
+    },
+    () => rerenders.tick,
+    () => rerenders.tick,
+  );
+}
+
+function MountedPage(): ReactNode {
+  useRerenderTick();
+  return (
+    <PersonalPageFrame section="secrets">
+      <Probe />
+    </PersonalPageFrame>
+  );
 }
 
 function Probe(): ReactNode {
@@ -636,19 +669,26 @@ describe("a team the environment list no longer carries", () => {
         throw new Error("down");
       },
     });
-    // Built fresh per render on purpose. React bails out of a child whose
-    // element is the same object when no context it reads has changed, so
-    // re-rendering with one shared element would skip this subtree entirely
-    // and the re-ask assertion below would hold without the page having
-    // rendered at all.
-    const tree = (): ReactNode => (
+    // The page renders again IN PLACE, which is the only re-render this case
+    // can mean. Two cheaper-looking ways of doing it measure something else:
+    // `rerender` with one shared element is skipped outright, because React
+    // bails out of a child whose element is the same object, and the count then
+    // holds without the page having rendered at all; `rerender` with a fresh
+    // element UNMOUNTS and remounts the subtree, which tears down the read's
+    // observer and builds a new one, and a new observer on a stale entry
+    // refetches by design (`refetchOnMount`, zero `staleTime` here). That is a
+    // request the page is right to make and not the one under test, so counting
+    // it reads TanStack's contract as this page's regression.
+    //
+    // Re-rendering from inside the mounted tree keeps the observer and the
+    // effect, so the count below is evidence about the effect's dependencies —
+    // which is what "does not ask again" claims.
+    render(
       <HeldValueHostRuntime>
-        <PersonalPageFrame section="secrets">
-          <Probe />
-        </PersonalPageFrame>
-      </HeldValueHostRuntime>
+        <MountedPage />
+      </HeldValueHostRuntime>,
+      { wrapper: harness.Wrapper },
     );
-    const view = render(tree(), { wrapper: harness.Wrapper });
 
     // The list says the team is gone, but a read that failed is no answer
     // about an invitation: nothing is claimed, and the selection the person
@@ -671,9 +711,14 @@ describe("a team the environment list no longer carries", () => {
     });
 
     // A failed reply ends the asking rather than starting another, so a page
-    // left on this state does not turn into a stream of account-wide
-    // requests. Rendering again is the cheapest thing that would restart one.
-    view.rerender(tree());
+    // left on this state does not turn into a stream of account-wide requests.
+    // A render of the mounted page is the cheapest thing that would restart
+    // one: every dependency of the ask effect has to be value-stable across it,
+    // and an unstable `readInvitations` — the hazard, since it comes off the
+    // query result — would cancel and ask again here.
+    act(() => {
+      renderMountedPageAgain();
+    });
     await waitFor(() => {
       expect(harness.queryClient.isFetching()).toBe(0);
     });
