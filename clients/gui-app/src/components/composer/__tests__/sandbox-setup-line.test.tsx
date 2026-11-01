@@ -34,6 +34,7 @@ const ACTIONS: SandboxSetupLineActions = {
   onKeepWaiting: vi.fn(),
   onCancel: vi.fn(),
   onChooseAnotherHost: vi.fn(),
+  chooseAnotherHostLabel: "Use This computer",
   onRetryCreation: vi.fn(),
   onRetry: vi.fn(),
   onSendAgain: vi.fn(),
@@ -196,7 +197,7 @@ describe("withdrawing a message from every refusal or failure", () => {
                 ? "Open terminal"
                 : "Open terminal instead",
             ]),
-        "Choose another host",
+        "Use This computer",
         "Cancel the message",
         "Details",
       ];
@@ -306,7 +307,7 @@ describe("SandboxSetupLine's refusal for credits", () => {
     expect(line.textContent).toContain("Not enough credits.");
     expect(buttonLabels(line)).toEqual([
       "Add credits ↗",
-      "Choose another host",
+      "Use This computer",
       "Cancel the message",
     ]);
   });
@@ -326,7 +327,7 @@ describe("SandboxSetupLine's refusal for credits", () => {
     ).toBeDefined();
     expect(buttonLabels(line)).toEqual([
       "Add credits ↗",
-      "Choose another host",
+      "Use This computer",
       "Cancel the message",
     ]);
   });
@@ -342,14 +343,14 @@ describe("SandboxSetupLine's refusal for credits", () => {
     expect(buttonLabels(line)).toEqual([
       "Add credits ↗",
       "Choose a smaller shape",
-      "Choose another host",
+      "Use This computer",
       "Cancel the message",
     ]);
   });
 });
 
 describe("SandboxSetupLine's refusal whose answer never came", () => {
-  it("keeps Retry beside Choose another host", () => {
+  it("keeps Retry beside Use This computer", () => {
     const line = mountRefusal(
       { kind: "personal" },
       { kind: "unverified" },
@@ -360,7 +361,7 @@ describe("SandboxSetupLine's refusal whose answer never came", () => {
     expect(line.textContent).toContain("Couldn't verify your balance.");
     expect(buttonLabels(line)).toEqual([
       "Retry",
-      "Choose another host",
+      "Use This computer",
       "Cancel the message",
     ]);
   });
@@ -389,7 +390,7 @@ describe("SandboxSetupLine's agent refusals", () => {
     expect(buttonLabels(line)).toEqual([
       "Choose a model",
       "Open terminal instead",
-      "Choose another host",
+      "Use This computer",
       "Cancel the message",
     ]);
     fireEvent.click(
@@ -436,7 +437,7 @@ describe("SandboxSetupLine's agent refusals", () => {
         expect(buttonLabels(line)).toEqual([
           "Choose a model",
           "Open terminal instead",
-          "Choose another host",
+          "Use This computer",
           "Cancel the message",
         ]);
         fireEvent.click(
@@ -716,7 +717,7 @@ describe("SandboxSetupLine when the settings did not apply", () => {
     expect(idle.textContent).not.toContain("waits until they apply");
   });
 
-  it("offers Retry applying, Open terminal, Stop, Choose another host and Details", () => {
+  it("offers Retry applying, Open terminal, Stop, Use This computer and Details", () => {
     const detail = mountSettings(true, {
       ...ACTIONS,
       onOpenTerminal: vi.fn(),
@@ -727,7 +728,7 @@ describe("SandboxSetupLine when the settings did not apply", () => {
       "Retry applying",
       "Open terminal",
       "Stop",
-      "Choose another host",
+      "Use This computer",
       "Details",
     ]) {
       expect(labels).toContain(label);

@@ -285,8 +285,17 @@ export function useStagedSandboxSend(input: {
    * gone draft's boot without its send.
    */
   readonly claimsSend: boolean;
+  /** What the line calls taking the stage off, for this surface's host. */
+  readonly chooseAnotherHostLabel: string;
 }): StagedSandboxSend {
-  const { surfaceKey, terminal, taskId, ownerId, claimsSend } = input;
+  const {
+    surfaceKey,
+    terminal,
+    taskId,
+    ownerId,
+    claimsSend,
+    chooseAnotherHostLabel,
+  } = input;
   const stage = useStagedSandbox(surfaceKey ?? "");
   const verb = useSandboxVerb(stage?.createdSandboxId ?? "");
   const runner = useStagedSandboxRunner();
@@ -414,6 +423,7 @@ export function useStagedSandboxSend(input: {
             onCancel: () => useStagedSandboxStore.getState().cancel(surfaceKey),
             onChooseAnotherHost: () =>
               useStagedSandboxStore.getState().clear(surfaceKey),
+            chooseAnotherHostLabel,
             onRetryCreation: () => runFromLine(true),
             onRetry: () => runFromLine(stagedCreateNeedsFreshKey(stage)),
             onSendAgain,

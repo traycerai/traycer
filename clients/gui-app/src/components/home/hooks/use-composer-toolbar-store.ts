@@ -300,16 +300,19 @@ export function useComposerToolbarStore(
     useSandboxHostConfiguration(hostId) !== null || sandboxRunTarget !== null;
   // Before the catalog push below: a stage's push reads these to keep the pick
   // on screen. Read here, not in render: a restore marks its stage after
-  // writing it, and the mark lives outside React.
+  // writing it, and the mark lives outside React. Only the composer on screen
+  // has a shown pick: retained drafts share the window's surface, and one
+  // showing nothing keeps its own.
   useEffect(() => {
     store.setState({
       sandboxRunTarget,
       stageKeepsShownPick:
+        activityEnabled &&
         sandboxRunTarget === "staged" &&
         stagedSurfaceKey !== null &&
         !returnedSandboxRestoredOn(stagedSurfaceKey),
     });
-  }, [store, sandboxRunTarget, stagedSurfaceKey]);
+  }, [activityEnabled, store, sandboxRunTarget, stagedSurfaceKey]);
   useEffect(() => {
     store.getState().setCatalog({
       hostId,

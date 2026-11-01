@@ -61,6 +61,7 @@ import {
 } from "@/stores/composer/composer-toolbar-store";
 import { useProviderPackGateForClient } from "@/hooks/providers/use-provider-pack-gate";
 import { ComposerStagedSurfaceKeyProvider } from "@/components/composer/composer-staged-sandbox-context";
+import { useStageFallbackHostLine } from "@/hooks/sandboxes/use-stage-fallback-host-line";
 import { useSandboxAgentGate } from "@/hooks/sandboxes/use-sandbox-agent-gate";
 import { useStagedSendSignInCheck } from "@/hooks/sandboxes/use-staged-send-sign-in-check";
 import { stagedSandboxCheckingNotice } from "@/lib/sandboxes/sandbox-agent-refusal";
@@ -587,11 +588,13 @@ export function LandingComposer(props: LandingComposerProps) {
     (s) => s.values.selection.modelSlug,
   );
   const chipModel = useStore(toolbarStore, chipModelName);
+  const chooseAnotherHostLabel = useStageFallbackHostLine(resolvedHostId);
   const stagedSignInCheck = useStagedSendSignInCheck({
     harnessId: pickedHarnessId,
     modelSlug: pickedModelSlug,
     modelName: chipModel,
     active: chatComposerActive && workspaceGate.stagedAhead,
+    chooseAnotherHostLabel,
     onOpenTerminalInstead: openStagedTerminal,
     onChooseAnotherHost: () => {
       useStagedSandboxStore.getState().clear(composerSurfaceKey);
@@ -712,6 +715,7 @@ export function LandingComposer(props: LandingComposerProps) {
     ownerId: stagedOwnerId,
     // Each draft is its own: a line action here never sends another's.
     claimsSend: false,
+    chooseAnotherHostLabel,
   });
 
   // Submit-time refusal copy. The G4 re-point used to

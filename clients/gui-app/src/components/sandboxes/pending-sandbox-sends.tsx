@@ -153,6 +153,7 @@ import {
   type RequestedAgentReadiness,
 } from "@/lib/sandboxes/pending-sandbox-send";
 import {
+  CHOOSE_ANOTHER_HOST,
   stoppingSandboxLine,
   couldntStopLine,
   RETRY,
@@ -3236,6 +3237,7 @@ function PendingStagedSendItem(props: {
                 recordCancelledSandboxSend(send, returned);
             },
             onChooseAnotherHost: lineRemedies.onChooseAnotherHost,
+            chooseAnotherHostLabel: CHOOSE_ANOTHER_HOST,
             onRetryCreation: () => retrySend("retry-creation"),
             onRetry: () => retrySend("retry-stage"),
             onSendAgain: () => retrySend("send-again"),

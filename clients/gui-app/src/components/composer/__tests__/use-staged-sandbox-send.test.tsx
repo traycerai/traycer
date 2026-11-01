@@ -330,6 +330,7 @@ function Harness(props: {
     taskId: "epic-1",
     ownerId: null,
     claimsSend: false,
+    chooseAnotherHostLabel: "Use This computer",
   });
   const runner = useStagedSandboxRunner();
   useEffect(() => {
@@ -868,7 +869,7 @@ describe("useStagedSandboxSend's line after a refusal", () => {
 
       expect(refusalButtons()).toEqual([
         "Add credits ↗",
-        "Choose another host",
+        "Use This computer",
         "Cancel the message",
       ]);
     });
@@ -883,7 +884,7 @@ describe("useStagedSandboxSend's line after a refusal", () => {
       expect(refusalButtons()).toEqual([
         "Add credits ↗",
         "Choose a smaller shape",
-        "Choose another host",
+        "Use This computer",
         "Cancel the message",
       ]);
     });
@@ -1105,6 +1106,7 @@ function DraftComposer(props: {
     taskId: null,
     ownerId: props.draftId,
     claimsSend: false,
+    chooseAnotherHostLabel: "Use This computer",
   });
   useStagedSandboxHandoff({
     surfaceKey: SURFACE,
@@ -1457,6 +1459,7 @@ describe("useStagedSandboxSend's refused resubmit", () => {
         taskId: null,
         ownerId: null,
         claimsSend: false,
+        chooseAnotherHostLabel: "Use This computer",
       });
       useStagedSandboxHandoff({
         surfaceKey: SURFACE,
@@ -1834,6 +1837,7 @@ function TabComposer(props: {
     taskId: null,
     ownerId: props.tabId,
     claimsSend: true,
+    chooseAnotherHostLabel: "Use This computer",
   });
   useStagedSandboxHandoff({
     surfaceKey: SURFACE,

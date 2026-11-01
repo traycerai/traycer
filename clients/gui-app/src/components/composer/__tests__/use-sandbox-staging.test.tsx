@@ -85,6 +85,8 @@ const mocks = vi.hoisted(() => ({
   defaults: {} as Record<string, SandboxConfigurationDefaults>,
   costs: null as UserSandboxCost | null,
   openSettings: vi.fn<(opts: { readonly section: string | null }) => void>(),
+  /** Whether the directory has a row for the composer's host. */
+  directoryNamesHost: true,
 }));
 
 vi.mock("@/hooks/auth/use-auth-user-query", () => ({
@@ -117,6 +119,25 @@ vi.mock("@/hooks/use-epic-store", async (importOriginal) => ({
       },
       tuiAgents: { byId: {} },
     }),
+}));
+vi.mock("@/hooks/sandboxes/use-configuration-billing-url", () => ({
+  useConfigurationBillingUrl: () => "https://example.test/billing",
+}));
+vi.mock("@/lib/links/open-link", () => ({ useOpenLink: () => vi.fn() }));
+vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
+  useHostDirectoryList: () => ({
+    data: mocks.directoryNamesHost
+      ? [
+          {
+            hostId: "laptop",
+            kind: "local",
+            label: "Laptop",
+            transportDialability: "dialable",
+            websocketUrl: "ws://127.0.0.1:0",
+          },
+        ]
+      : [],
+  }),
 }));
 vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
   useSystemTabModalActions: () => ({ openSettings: mocks.openSettings }),
@@ -288,6 +309,7 @@ beforeEach(() => {
   mocks.defaults = {};
   mocks.costs = null;
   mocks.openSettings.mockClear();
+  mocks.directoryNamesHost = true;
   useStagedSandboxStore.setState({ bySurface: {} });
   usePendingSandboxSendStore.setState({ sends: {} });
   useSandboxShapeMemoryStore.setState({
@@ -1214,6 +1236,7 @@ describe("useSandboxStaging a staged resting sandbox's block", () => {
         input={consequences}
         onMoveFirst={null}
         onOpenTerminalInstead={null}
+        chooseAnotherHostLabel={staging().chooseAnotherHostLabel}
       />,
     );
     return screen.getByTestId("consequences-price").textContent;
@@ -1235,6 +1258,52 @@ describe("useSandboxStaging a staged resting sandbox's block", () => {
     expect(
       stagedPrice(pricedHost("team-box", "suspended", teamOwnedItem())),
     ).toBe("Waking team-box uses your acme allowance and makes you the payer.");
+  });
+});
+
+describe("the allowance block under a stage", () => {
+  function shortAllowanceBlock(): void {
+    mocks.user = userWith(
+      userSubscription({
+        totalPlanCredits: 0,
+        consumedFromPlan: 0,
+        bonusCredits: 0,
+        consumedFromBonus: 0,
+        bundleRemaining: 0,
+      }),
+      [],
+    );
+    mount([LAPTOP]);
+    act(() => staging().composer.onPickNew("personal"));
+    const { consequences, chooseAnotherHost, chooseAnotherHostLabel } =
+      staging();
+    if (consequences === null) throw new Error("nothing was staged");
+    render(
+      <ConsequencesBlock
+        input={consequences}
+        onMoveFirst={null}
+        onOpenTerminalInstead={null}
+        onChooseAnotherHost={chooseAnotherHost}
+        chooseAnotherHostLabel={chooseAnotherHostLabel}
+      />,
+    );
+  }
+
+  it("offers the host the surface falls back to by name, and pressing it takes the stage off", () => {
+    shortAllowanceBlock();
+
+    fireEvent.click(screen.getByRole("button", { name: "Use Laptop" }));
+
+    expect(useStagedSandboxStore.getState().bySurface[SURFACE]).toBeUndefined();
+  });
+
+  it("says Use another host when the directory has no row for it", () => {
+    mocks.directoryNamesHost = false;
+    shortAllowanceBlock();
+
+    expect(
+      screen.getByRole("button", { name: "Use another host" }),
+    ).toBeDefined();
   });
 });
 

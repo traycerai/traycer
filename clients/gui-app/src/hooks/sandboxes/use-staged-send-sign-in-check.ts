@@ -11,7 +11,6 @@ import {
 import {
   ADD_CREDITS_LINK,
   CHECKING_SANDBOX_AGENTS,
-  CHOOSE_ANOTHER_HOST,
   notEnoughCreditsLine,
   teamAllowanceShortLine,
 } from "@/lib/sandboxes/sandbox-strings";
@@ -52,6 +51,7 @@ export function useStagedSendSignInCheck(
     readonly modelSlug: string;
     readonly modelName: string;
     readonly active: boolean;
+    readonly chooseAnotherHostLabel: string;
   } & SandboxAgentRemedies,
 ): StagedSendSignInCheck {
   const {
@@ -62,6 +62,7 @@ export function useStagedSendSignInCheck(
     onChooseModel,
     onOpenTerminalInstead,
     onChooseAnotherHost,
+    chooseAnotherHostLabel,
   } = input;
   const catalogue = useSandboxCatalogue(active);
   const checksModel = active && harnessId === "traycer" && modelSlug.length > 0;
@@ -142,7 +143,7 @@ export function useStagedSendSignInCheck(
                 ? []
                 : [
                     {
-                      label: CHOOSE_ANOTHER_HOST,
+                      label: chooseAnotherHostLabel,
                       onAction: onChooseAnotherHost,
                     },
                   ],
@@ -159,6 +160,7 @@ export function useStagedSendSignInCheck(
         onChooseModel,
         onOpenTerminalInstead,
         onChooseAnotherHost,
+        chooseAnotherHostLabel,
       };
       if (offeredAgents !== undefined && !offeredAgents.includes(harnessId))
         return sandboxAgentNotOfferedNotice(harnessId, offeredAgents, remedies);
@@ -179,6 +181,7 @@ export function useStagedSendSignInCheck(
       onChooseModel,
       onOpenTerminalInstead,
       onChooseAnotherHost,
+      chooseAnotherHostLabel,
     ],
   );
   const check = useCallback(

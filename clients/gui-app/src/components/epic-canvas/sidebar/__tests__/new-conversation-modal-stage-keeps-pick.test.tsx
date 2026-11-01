@@ -231,7 +231,17 @@ vi.mock("@/lib/epic-selectors", () => ({
 vi.mock("@/lib/host", () => ({ useHostClient: () => stubHostClient }));
 vi.mock("@/lib/host/runtime", () => ({ useHostClient: () => stubHostClient }));
 vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
-  useHostDirectoryList: () => ({ data: [] }),
+  useHostDirectoryList: () => ({
+    data: [
+      {
+        hostId: "host-a",
+        kind: "local",
+        label: "Laptop",
+        transportDialability: "dialable",
+        websocketUrl: "ws://127.0.0.1:0",
+      },
+    ],
+  }),
 }));
 vi.mock("@/hooks/worktree/use-latest-conversation-workspace-seed", () => ({
   useLatestConversationWorkspaceSeed: () => null,
@@ -576,11 +586,7 @@ describe("a new-conversation modal with a sandbox staged", () => {
         .getAllByRole("button")
         .map((b) => b.textContent)
         .filter((label) => label !== ""),
-    ).toEqual([
-      "Choose a model",
-      "Open terminal instead",
-      "Choose another host",
-    ]);
+    ).toEqual(["Choose a model", "Open terminal instead", "Use Laptop"]);
     expect(host.createChat).not.toHaveBeenCalled();
     expect(usePendingSandboxSendStore.getState().sends).toEqual({});
     expect(draftSettings()).toBe(draft);
