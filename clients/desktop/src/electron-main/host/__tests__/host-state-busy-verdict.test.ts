@@ -21,6 +21,7 @@ vi.mock(
 );
 
 import { probeHostActivityBusy } from "@traycer-clients/shared/host-client/host-activity-probe";
+import { readProcessStartIdentity } from "@traycer-clients/shared/host-lock/process-identity";
 import { getHostFsLayout } from "../host-paths";
 import { probeHostBusyVerdict } from "../host-state";
 import { exitedChildPid, liveChild } from "./child-pid-test-support";
@@ -70,6 +71,19 @@ function foreignStartIdentityForThisPlatform(): string {
   return `${process.platform}:not-the-stamp-of-any-live-process`;
 }
 
+/**
+ * A live process's own stamp, read the way a host reads its own before
+ * publishing it into `pid.json`. Throws rather than let a platform read that
+ * answered nothing degrade a matching-stamp row into the no-stamp one.
+ */
+function startIdentityOf(pid: number): string {
+  const identity = readProcessStartIdentity(pid);
+  if (identity === null) {
+    throw new Error(`no creation stamp readable for pid ${String(pid)}`);
+  }
+  return identity;
+}
+
 // `probeHostBusyVerdict`: "may this host be torn down?" for the desktop-held
 // lock sections around a packaged-macOS SMAppService cycle. A pid.json whose
 // publisher is provably gone - a force-killed host leaves exactly that - is no
@@ -95,6 +109,18 @@ describe("probeHostBusyVerdict", () => {
       probeHostBusyVerdict(getHostFsLayout("production")),
     ).resolves.toBe("no-host");
     expect(probeHostActivityBusy).not.toHaveBeenCalled();
+  });
+
+  it("dials the endpoint for a LIVE pid the record's creation stamp does name", async () => {
+    const child = liveChild();
+    cleanups.push(child.stop);
+    writePidMetadata(child.pid, startIdentityOf(child.pid));
+    vi.mocked(probeHostActivityBusy).mockResolvedValue(false);
+
+    await expect(
+      probeHostBusyVerdict(getHostFsLayout("production")),
+    ).resolves.toBe("idle");
+    expect(probeHostActivityBusy).toHaveBeenCalledWith(WEBSOCKET_URL);
   });
 
   it("is busy for a LIVE pid whose recorded stamp is not a stamp at all - an unreadable claim is not a mismatch", async () => {
@@ -124,6 +150,5 @@ describe("probeHostBusyVerdict", () => {
     await expect(
       probeHostBusyVerdict(getHostFsLayout("production")),
     ).resolves.toBe("idle");
-    expect(probeHostActivityBusy).toHaveBeenCalledWith(WEBSOCKET_URL);
   });
 });
