@@ -26,10 +26,17 @@ type RestoredMessage =
 
 type ReceiptOutcome =
   | { readonly kind: "cancelled" }
+  | { readonly kind: "recovered" }
   | {
       readonly kind: "stopped";
       readonly sandboxId: string;
       readonly name: string;
+      readonly confirmedAt: number;
+    }
+  | {
+      readonly kind: "rested" | "ended";
+      readonly sandboxId: string;
+      readonly hostId: string;
       readonly confirmedAt: number;
     };
 
@@ -99,12 +106,44 @@ export function recordStoppedSandboxSend(
   });
 }
 
+/**
+ * A send its sandbox's own state ended went back: the task says that state
+ * where the setup line was, as its chat would. `rested` lasts as long as the
+ * rest; `ended` is final.
+ */
+export function recordSandboxStateSend(
+  send: PendingSandboxSend,
+  stage: StagedSandbox,
+  returned: ReturnedPendingSandboxSend,
+  kind: "rested" | "ended",
+): void {
+  if (stage.createdSandboxId === null || stage.createdHostId === null) return;
+  recordReturnedSandboxSend(send, returned, {
+    kind,
+    sandboxId: stage.createdSandboxId,
+    hostId: stage.createdHostId,
+    confirmedAt: Date.now(),
+  });
+}
+
 /** Cancelling returns only the message; it makes no claim about the sandbox. */
 export function recordCancelledSandboxSend(
   send: PendingSandboxSend,
   returned: ReturnedPendingSandboxSend,
 ): void {
   recordReturnedSandboxSend(send, returned, { kind: "cancelled" });
+}
+
+/**
+ * Recovery returns a message with nobody at the keyboard, so unlike a Cancel
+ * no pick that arrives later answers it: a boot restores a draft's stage on
+ * its own.
+ */
+export function recordRecoveredSandboxSend(
+  send: PendingSandboxSend,
+  returned: ReturnedPendingSandboxSend,
+): void {
+  recordReturnedSandboxSend(send, returned, { kind: "recovered" });
 }
 
 function recordReturnedSandboxSend(

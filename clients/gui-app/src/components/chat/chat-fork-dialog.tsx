@@ -39,6 +39,7 @@ import { useFocusedPaneModalOpen } from "@/components/epic-tabs/pane-visibility-
 import { useComposerToolbarStore } from "@/components/home/hooks/use-composer-toolbar-store";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
+import { useStageFallbackHostLine } from "@/hooks/sandboxes/use-stage-fallback-host-line";
 import { useTeamSandboxHarnessBlocked } from "@/hooks/sandboxes/use-team-sandbox-harness-blocked";
 import { TEAM_SANDBOX_HARNESS_UNAVAILABLE } from "@/lib/sandboxes/team-sandbox-harness";
 import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
@@ -70,7 +71,10 @@ import {
 import { clearChatForkWorkspace } from "@/lib/worktree/chat-fork-workspace-staging";
 import { useSeededWorkspaceSnapshotStore } from "@/stores/worktree/seeded-workspace-snapshot-store";
 import { useWorktreeIntentMemoryStore } from "@/stores/worktree/worktree-intent-memory-store";
-import type { ComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
+import {
+  chipModelName,
+  type ComposerToolbarStore,
+} from "@/stores/composer/composer-toolbar-store";
 import type { ChatForkMode } from "@/components/chat/chat-message";
 import {
   chatForkHostRefusals,
@@ -638,9 +642,18 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
     (s) => s.values.selection.harnessId,
   );
   const forkModelPickerRef = useRef<OpenForHarness | null>(null);
+  const pickedModelSlug = useStore(
+    toolbarStore,
+    (s) => s.values.selection.modelSlug,
+  );
+  const chipModel = useStore(toolbarStore, chipModelName);
+  const chooseAnotherHostLabel = useStageFallbackHostLine(selectedHostId);
   const stagedSignInCheck = useStagedSendSignInCheck({
     harnessId: pickedHarnessId,
+    modelSlug: pickedModelSlug,
+    modelName: chipModel,
     active: activeWorkspaceTarget !== null && forkStage !== null,
+    chooseAnotherHostLabel,
     onChooseModel: (offeredAgents) =>
       forkModelPickerRef.current?.("traycer", offeredAgents),
     onChooseAnotherHost: () =>
@@ -713,7 +726,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
     appWideHostTeamId === null ? appWideClient : null;
   const attachClient =
     tabHostTeamId === null ? tabHostClient : personalAppWideClient;
-  const attachEnvironment = useEpicAttachEnvironment(attachClient);
+  const attachEnvironment = useEpicAttachEnvironment(attachClient, "fork");
   const sourceOwnerUserId = useCloneSourceOwnerUserId({
     client: appWideClient,
     epicId,

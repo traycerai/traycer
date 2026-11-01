@@ -20,6 +20,7 @@ import {
   toastRequestedRecordWrite,
 } from "@/lib/epics/record-write-outcome-toast";
 import { useHostMutation } from "@/hooks/host/use-host-query";
+import { epicMutationKeys } from "@/lib/query-keys";
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { toastFromOwnerHostWriteError } from "@/lib/owner-host-write-error-toast";
@@ -67,6 +68,7 @@ export function useEpicCreateTuiAgentForClient(
     method: "epic.createTuiAgent",
     mapVariables: (variables) => variables,
     options: {
+      mutationKey: epicMutationKeys.createTuiAgent(),
       onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),
       onSuccess: (_data, variables, ctx) => {
         // On a migrated host the created record lands in the registry and in

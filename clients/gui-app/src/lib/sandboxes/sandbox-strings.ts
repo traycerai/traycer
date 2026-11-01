@@ -479,6 +479,11 @@ export function agentNotOfferedOnSandboxesLine(agent: string): string {
   return `${agent} doesn't run on sandboxes. Choose a Traycer model to run agents here.`;
 }
 
+/** A Traycer model this sandbox's catalog does not list. */
+export function modelNotOnSandboxLine(model: string): string {
+  return `${model} doesn't run on this sandbox. Choose another Traycer model to run agents here.`;
+}
+
 /**
  * The sandbox's own Traycer Inference switch is off. A line that names the
  * sandbox passes its name; a composer on that sandbox passes `null`.
@@ -505,6 +510,13 @@ export function openProvidersLabel(configuration: string): string {
 
 export const RETRY = "Retry";
 export const CHOOSE_ANOTHER_HOST = "Choose another host";
+/**
+ * Takes a stage off its composer, which goes back to the host its chip then
+ * shows. `null`: that host has no name yet.
+ */
+export function stageFallbackHostLine(hostName: string | null): string {
+  return hostName === null ? "Use another host" : `Use ${hostName}`;
+}
 export const CHOOSE_A_SMALLER_SHAPE = "Choose a smaller shape";
 export const CHANGE_SHAPE_OR_REGION = "Change shape or region";
 export const OPEN_TERMINAL_INSTEAD = "Open terminal instead";
@@ -526,8 +538,20 @@ export function stoppedSandboxLine(
 ): string {
   return `Stopped ${name}. ${returnedSandboxMessageLine(savedInDrafts)}`;
 }
+/** A Stop on a task with no chat: its composer isn't on screen. */
+export function stoppedAddAgentLine(name: string): string {
+  return `Stopped ${name}. Your message wasn't sent; it's in Add agent.`;
+}
 export function returnedSandboxMessageLine(savedInDrafts: boolean): string {
   return `Your message wasn't sent; ${savedInDrafts ? "it's saved in your drafts." : "it's back in the composer."}`;
+}
+/** A rest's give-back the composer had no room for, after its state line. */
+export function restedDraftLine(restingLine: string): string {
+  return `${restingLine}. ${returnedSandboxMessageLine(true)}`;
+}
+/** A task with no chat, whose message waits in a composer that isn't on screen. */
+export function restedTaskMessageLine(name: string, stopped: boolean): string {
+  return `${name} is ${stopped ? "stopped" : "suspended"}. Your message wasn't sent; it's in Add agent.`;
 }
 export function couldntStopLine(name: string): string {
   return `Couldn't stop ${name}`;
@@ -570,9 +594,6 @@ export function couldntStartLine(name: string): string {
 export function couldntResumeLine(name: string): string {
   return `Couldn't resume ${name}`;
 }
-export const NOTHING_BILLED_NEVER_WOKE =
-  "Nothing was billed for a sandbox that never woke";
-export const NOTHING_CHARGED_FOR_WAKE = "Nothing was charged for this wake.";
 export const MESSAGE_STILL_PENDING = "Your message is still pending.";
 export const RETRY_CREATION = "Retry creation";
 export const CANCEL_THE_MESSAGE = "Cancel the message";

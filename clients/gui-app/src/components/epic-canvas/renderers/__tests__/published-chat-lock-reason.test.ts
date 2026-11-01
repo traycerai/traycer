@@ -25,6 +25,7 @@ describe("publishedChatLockReason", () => {
       ownerRefusesStore: false,
       ownerIsThisHost: false,
       ownedByViewer: true,
+      ownerName: null,
       environmentOwned: false,
       ownerLabel: "Ada's Mac",
       unreadableCount: 0,
@@ -45,6 +46,7 @@ describe("publishedChatLockReason", () => {
       ownerRefusesStore: false,
       ownerIsThisHost: true,
       ownedByViewer: true,
+      ownerName: null,
       environmentOwned: false,
       ownerLabel: "Ada's Mac",
       unreadableCount: 0,
@@ -72,6 +74,7 @@ describe("publishedChatLockReason", () => {
         ownerRefusesStore: false,
         ownerIsThisHost,
         ownedByViewer: true,
+        ownerName: null,
         environmentOwned: false,
         ownerLabel: "Ada's Mac",
         unreadableCount: 0,
@@ -97,6 +100,7 @@ describe("publishedChatLockReason", () => {
         ownerRefusesStore: false,
         ownerIsThisHost: false,
         ownedByViewer: false,
+        ownerName: null,
         environmentOwned: false,
         ownerLabel: "085b919a-f0a6-42e5-b05e-241738d3dd6a",
         unreadableCount: 0,
@@ -112,6 +116,55 @@ describe("publishedChatLockReason", () => {
     }
   });
 
+  it.each([
+    [
+      "Ada Lovelace",
+      "This agent belongs to Ada Lovelace — showing the last published copy.",
+    ],
+    [
+      null,
+      "This agent belongs to another collaborator — showing the last published copy.",
+    ],
+  ])("names the collaborator %s in the published footer", (ownerName, line) => {
+    for (const ownerIsReachable of [false, true]) {
+      expect(
+        publishedChatLockReason({
+          ownerIsReachable,
+          ownerRefusesStore: false,
+          ownerIsThisHost: false,
+          ownedByViewer: false,
+          ownerName,
+          environmentOwned: false,
+          ownerLabel: "085b919a-f0a6-42e5-b05e-241738d3dd6a",
+          unreadableCount: 0,
+          fidelityNotice: null,
+          publishedAt: null,
+          refresh: { kind: "idle" },
+        }),
+      ).toBe(line);
+    }
+  });
+
+  it("keeps the own-chat sentence for the viewer's chat, whatever name is known", () => {
+    expect(
+      publishedChatLockReason({
+        ownerIsReachable: false,
+        ownerRefusesStore: false,
+        ownerIsThisHost: false,
+        ownedByViewer: true,
+        ownerName: "Ada Lovelace",
+        environmentOwned: false,
+        ownerLabel: "Ada's Mac",
+        unreadableCount: 0,
+        fidelityNotice: null,
+        publishedAt: null,
+        refresh: { kind: "idle" },
+      }),
+    ).toBe(
+      "This agent lives on Ada's Mac, which is offline — showing the last published copy. Sending resumes when that host is back.",
+    );
+  });
+
   it("says the team sandbox is out - not a collaborator, not a machine - for an environment-owned chat", () => {
     // A team sandbox's chat is owned by the environment, so the viewer's
     // user id never matches it and `ownedByViewer` reads false. The
@@ -123,6 +176,7 @@ describe("publishedChatLockReason", () => {
         ownerRefusesStore: ownerIsReachable,
         ownerIsThisHost: false,
         ownedByViewer: false,
+        ownerName: null,
         environmentOwned: true,
         ownerLabel: "085b919a-f0a6-42e5-b05e-241738d3dd6a",
         unreadableCount: 0,
@@ -143,6 +197,7 @@ describe("publishedChatLockReason", () => {
       ownerRefusesStore: false,
       ownerIsThisHost: false,
       ownedByViewer: false,
+      ownerName: null,
       environmentOwned: false,
       ownerLabel: "some-host-id",
       unreadableCount: 2,
@@ -168,6 +223,7 @@ describe("publishedChatLockReason", () => {
         ownerRefusesStore: false,
         ownerIsThisHost: true,
         ownedByViewer: true,
+        ownerName: null,
         environmentOwned: false,
         ownerLabel: "Ada's Mac",
         unreadableCount: 2,
@@ -182,6 +238,7 @@ describe("publishedChatLockReason", () => {
         ownerRefusesStore: false,
         ownerIsThisHost: true,
         ownedByViewer: true,
+        ownerName: null,
         environmentOwned: false,
         ownerLabel: "Ada's Mac",
         unreadableCount: 0,
@@ -202,6 +259,7 @@ describe("publishedChatLockReason", () => {
         ownerRefusesStore: false,
         ownerIsThisHost: true,
         ownedByViewer: true,
+        ownerName: null,
         environmentOwned: false,
         ownerLabel: "Ada's Mac",
         unreadableCount: 0,
@@ -223,6 +281,7 @@ describe("publishedChatLockReason", () => {
         ownerRefusesStore: false,
         ownerIsThisHost: true,
         ownedByViewer: true,
+        ownerName: null,
         environmentOwned: false,
         ownerLabel: "Ada's Mac",
         unreadableCount: 0,
@@ -245,6 +304,7 @@ describe("publishedChatLockReason", () => {
         ownerRefusesStore: false,
         ownerIsThisHost: true,
         ownedByViewer: true,
+        ownerName: null,
         environmentOwned: false,
         ownerLabel: "Ada's Mac",
         unreadableCount: 2,
@@ -270,6 +330,7 @@ describe("publishedChatLockReason", () => {
         ownerRefusesStore: false,
         ownerIsThisHost: true,
         ownedByViewer: true,
+        ownerName: null,
         environmentOwned: false,
         ownerLabel: "Ada's Mac",
         unreadableCount: 0,
@@ -294,6 +355,7 @@ describe("publishedChatLockReason", () => {
         ownerRefusesStore: false,
         ownerIsThisHost: true,
         ownedByViewer: true,
+        ownerName: null,
         environmentOwned: false,
         ownerLabel: "Ada's Mac",
         unreadableCount: 0,
@@ -310,6 +372,7 @@ describe("publishedChatLockReason", () => {
         ownerRefusesStore: false,
         ownerIsThisHost: true,
         ownedByViewer: true,
+        ownerName: null,
         environmentOwned: false,
         ownerLabel: "Ada's Mac",
         unreadableCount: 0,
@@ -326,6 +389,7 @@ describe("publishedChatLockReason", () => {
         ownerRefusesStore: false,
         ownerIsThisHost: true,
         ownedByViewer: true,
+        ownerName: null,
         environmentOwned: false,
         ownerLabel: "Ada's Mac",
         unreadableCount: 0,
@@ -344,6 +408,7 @@ describe("publishedChatLockReason", () => {
         ownerRefusesStore: false,
         ownerIsThisHost: true,
         ownedByViewer: true,
+        ownerName: null,
         environmentOwned: false,
         ownerLabel: "Ada's Mac",
         unreadableCount: 0,
@@ -363,6 +428,7 @@ describe("publishedChatLockReason", () => {
         ownerRefusesStore: false,
         ownerIsThisHost: true,
         ownedByViewer: true,
+        ownerName: null,
         environmentOwned: false,
         ownerLabel: "Ada's Mac",
         unreadableCount: 2,
@@ -389,6 +455,7 @@ describe("publishedChatLockReason", () => {
         ownerRefusesStore: false,
         ownerIsThisHost: true,
         ownedByViewer: true,
+        ownerName: null,
         environmentOwned: false,
         ownerLabel: "Ada's Mac",
         unreadableCount: 0,
@@ -412,6 +479,7 @@ describe("publishedChatLockReason", () => {
         ownerRefusesStore: true,
         ownerIsThisHost: true,
         ownedByViewer: true,
+        ownerName: null,
         environmentOwned: false,
         ownerLabel: "Ada's Mac",
         unreadableCount: 0,
@@ -433,6 +501,7 @@ describe("publishedChatLockReason", () => {
         ownerRefusesStore: true,
         ownerIsThisHost: false,
         ownedByViewer: true,
+        ownerName: null,
         environmentOwned: false,
         ownerLabel: "Ada's Mac",
         unreadableCount: 0,
@@ -456,6 +525,7 @@ describe("publishedChatLockReason", () => {
           ownerRefusesStore: true,
           ownerIsThisHost,
           ownedByViewer: true,
+          ownerName: null,
           environmentOwned: false,
           ownerLabel: "Ada's Mac",
           unreadableCount: 0,
@@ -475,6 +545,7 @@ describe("publishedChatLockReason", () => {
           ownerRefusesStore: true,
           ownerIsThisHost: false,
           ownedByViewer: false,
+          ownerName: null,
           environmentOwned: false,
           ownerLabel: "085b919a-f0a6-42e5-b05e-241738d3dd6a",
           unreadableCount: 0,
@@ -497,6 +568,7 @@ describe("replicaChatLockReason", () => {
       ownerRefusesStore: false,
       ownerIsThisHost: false,
       ownedByViewer: true,
+      ownerName: null,
       environmentOwned: false,
       ownerLabel: "Ada's Mac",
       unreadableCount: 0,
@@ -514,6 +586,7 @@ describe("replicaChatLockReason", () => {
       ownerRefusesStore: false,
       ownerIsThisHost: true,
       ownedByViewer: true,
+      ownerName: null,
       environmentOwned: false,
       ownerLabel: "Ada's Mac",
       unreadableCount: 0,
@@ -526,6 +599,32 @@ describe("replicaChatLockReason", () => {
     expect(reason).not.toContain("from this device");
   });
 
+  it.each([
+    [
+      "Ada Lovelace",
+      "This agent belongs to Ada Lovelace — showing this device's synced copy.",
+    ],
+    [
+      null,
+      "This agent belongs to another collaborator — showing this device's synced copy.",
+    ],
+  ])("names the collaborator %s in the replica footer", (ownerName, line) => {
+    for (const ownerIsReachable of [false, true]) {
+      expect(
+        replicaChatLockReason({
+          ownerIsReachable,
+          ownerRefusesStore: false,
+          ownerIsThisHost: false,
+          ownedByViewer: false,
+          ownerName,
+          environmentOwned: false,
+          ownerLabel: "085b919a-f0a6-42e5-b05e-241738d3dd6a",
+          unreadableCount: 0,
+        }),
+      ).toBe(line);
+    }
+  });
+
   it("says whose agent it is for a collaborator's chat, same precedence as the published arm", () => {
     for (const ownerIsReachable of [false, true]) {
       const reason = replicaChatLockReason({
@@ -533,6 +632,7 @@ describe("replicaChatLockReason", () => {
         ownerRefusesStore: false,
         ownerIsThisHost: false,
         ownedByViewer: false,
+        ownerName: null,
         environmentOwned: false,
         ownerLabel: "085b919a-f0a6-42e5-b05e-241738d3dd6a",
         unreadableCount: 0,
@@ -551,6 +651,7 @@ describe("replicaChatLockReason", () => {
         ownerRefusesStore: false,
         ownerIsThisHost: false,
         ownedByViewer: false,
+        ownerName: null,
         environmentOwned: true,
         ownerLabel: "085b919a-f0a6-42e5-b05e-241738d3dd6a",
         unreadableCount: 0,
@@ -568,6 +669,7 @@ describe("replicaChatLockReason", () => {
         ownerRefusesStore: true,
         ownerIsThisHost: true,
         ownedByViewer: true,
+        ownerName: null,
         environmentOwned: false,
         ownerLabel: "Ada's Mac",
         unreadableCount: 0,
@@ -586,6 +688,7 @@ describe("replicaChatLockReason", () => {
         ownerRefusesStore: true,
         ownerIsThisHost: false,
         ownedByViewer: true,
+        ownerName: null,
         environmentOwned: false,
         ownerLabel: "Ada's Mac",
         unreadableCount: 0,
@@ -604,6 +707,7 @@ describe("replicaChatLockReason", () => {
           ownerRefusesStore: true,
           ownerIsThisHost,
           ownedByViewer: true,
+          ownerName: null,
           environmentOwned: false,
           ownerLabel: "Ada's Mac",
           unreadableCount: 0,
@@ -620,6 +724,7 @@ describe("replicaChatLockReason", () => {
           ownerRefusesStore: true,
           ownerIsThisHost: false,
           ownedByViewer: false,
+          ownerName: null,
           environmentOwned: false,
           ownerLabel: "085b919a-f0a6-42e5-b05e-241738d3dd6a",
           unreadableCount: 0,

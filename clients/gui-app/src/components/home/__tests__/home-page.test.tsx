@@ -117,6 +117,7 @@ vi.mock("@/components/layout/tab-surface-activity-hooks", () => ({
 
 vi.mock("@tanstack/react-router", () => ({
   useNavigate: () => homeMocks.navigate,
+  useRouter: () => ({ state: { location: { pathname: "/" } } }),
   useRouterState: ({
     select,
   }: {

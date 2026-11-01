@@ -1,11 +1,13 @@
 export const epicMutationKeys = {
   create: () => ["epic.create"] as const,
   batchDelete: () => ["epic.batchDelete"] as const,
+  discardCreated: () => ["epic.discardCreated"] as const,
   sweepWorktrees: () => ["epic.sweepWorktrees"] as const,
   setPinned: () => ["epic.setPinned"] as const,
   recordViewed: () => ["epic.recordViewed"] as const,
   sendQueuedInvites: () => ["epic.sendQueuedInvites"] as const,
   createChat: () => ["epic.createChat"] as const,
+  createTuiAgent: () => ["epic.createTuiAgent"] as const,
   attachEnvironment: () => ["epic.attachEnvironment"] as const,
   continueSubagent: () => ["epic.continueSubagent"] as const,
   exportArtifacts: () => ["epic.exportArtifacts"] as const,

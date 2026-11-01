@@ -297,6 +297,7 @@ vi.mock("@/stores/composer/composer-run-settings-store", () => {
 vi.mock("@/components/home/hooks/use-composer-toolbar-store", () => {
   const toolbarStore = createStore(() => ({
     ultracode: false,
+    selectedModel: null,
     selection: {
       get harnessId() {
         return testState.displayedHarness;
@@ -381,9 +382,18 @@ function answerProviders(
 // The Terminal-account line reads the host picker's options for the run's
 // host; with none named it is this computer.
 vi.mock("@/components/settings/host-scope/use-host-options", async () => {
-  const { hostOptionsFixture } =
+  const { hostOptionsFixture, hostScopeOptionFixture } =
     await import("@/components/settings/host-scope/host-scope-fixture");
-  return { useHostOptions: () => hostOptionsFixture({ hosts: [] }) };
+  const options = hostOptionsFixture({
+    hosts: [
+      hostScopeOptionFixture({
+        hostId: "host-test",
+        name: "Hardiks-MacBook-Pro---Traycer.local",
+        isLocalMachine: true,
+      }),
+    ],
+  });
+  return { useHostOptions: () => options };
 });
 vi.mock("@/hooks/sandboxes/use-sandbox-agent-gate", () => ({
   useSandboxAgentGate: () => testState.agentGate,
@@ -1558,7 +1568,7 @@ describe("LandingComposer direct submit gate", () => {
         for (const action of [
           "Choose a model",
           "Open terminal instead",
-          "Choose another host",
+          "Use This computer",
         ]) {
           expect(notice.getByRole("button", { name: action })).toHaveProperty(
             "disabled",
@@ -1629,7 +1639,7 @@ describe("LandingComposer direct submit gate", () => {
           ["traycer"],
         );
         fireEvent.click(
-          screen.getByRole("button", { name: "Choose another host" }),
+          screen.getByRole("button", { name: "Use This computer" }),
         );
         expect(readStagedSandbox("landing:window-test")).toBeNull();
       },
