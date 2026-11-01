@@ -53,6 +53,7 @@ function block(value: ConsequencesInput) {
       input={value}
       onMoveFirst={null}
       onOpenTerminalInstead={null}
+      chooseAnotherHostLabel="Use This computer"
     />
   );
 }
@@ -225,12 +226,11 @@ describe("<ConsequencesBlock />", () => {
         input={input({ needsCredits: true, shortfallMc: 210 })}
         onMoveFirst={null}
         onOpenTerminalInstead={vi.fn()}
+        chooseAnotherHostLabel="Use This computer"
         onChooseAnotherHost={choose}
       />,
     );
-    fireEvent.click(
-      screen.getByRole("button", { name: "Choose another host" }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Use This computer" }));
     expect(choose).toHaveBeenCalledOnce();
     expect(
       screen.queryByRole("button", { name: "Open terminal instead" }),
@@ -268,6 +268,7 @@ describe("<ConsequencesBlock />", () => {
         input={withMove}
         onMoveFirst={onMoveFirst}
         onOpenTerminalInstead={null}
+        chooseAnotherHostLabel="Use This computer"
       />,
     );
 

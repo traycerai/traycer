@@ -380,6 +380,14 @@ function ComposerDraftsControlImpl(props: ComposerDraftsControlProps) {
           layout="bare"
           className="max-h-[min(70dvh,var(--radix-popover-content-available-height))] w-[calc(100vw-2rem)] max-w-lg overflow-hidden"
           onOpenAutoFocus={(event) => event.preventDefault()}
+          // The editor is where this list keeps focus while it is open, so
+          // focus arriving there is not leaving. A toast returns focus to it
+          // when it goes (sonner refocuses whatever held focus before the
+          // toast took it), and that closed the list right after its Undo
+          // put the row back.
+          onFocusOutside={(event) => {
+            if (editorRef.current?.hasFocus() === true) event.preventDefault();
+          }}
           onCloseAutoFocus={(event) => {
             event.preventDefault();
             const shouldRestore = restoreEditorFocusRef.current;

@@ -12,7 +12,6 @@ import {
 } from "@/lib/sandboxes/sandbox-stage-model";
 import {
   ADD_CREDITS_LINK,
-  CHOOSE_ANOTHER_HOST,
   CONSEQUENCES_WORDING_VERSION,
   MOVE_THEM_FIRST,
   OPEN_TERMINAL_INSTEAD,
@@ -41,6 +40,7 @@ export function ConsequencesBlock(props: {
   /** `Open terminal instead`, beside Send; `null` offers none. */
   readonly onOpenTerminalInstead: (() => void) | null;
   readonly onChooseAnotherHost?: (() => void) | null;
+  readonly chooseAnotherHostLabel: string;
 }): ReactNode {
   const viewerUserId = useCloudChatViewerId();
   const subject = consequencesShownSubject(
@@ -59,6 +59,7 @@ export function ConsequencesBlock(props: {
       onMoveFirst={props.onMoveFirst}
       onOpenTerminalInstead={props.onOpenTerminalInstead}
       onChooseAnotherHost={props.onChooseAnotherHost}
+      chooseAnotherHostLabel={props.chooseAnotherHostLabel}
     />
   );
 }
@@ -70,6 +71,7 @@ function ConsequencesBlockBody(props: {
   readonly onMoveFirst: (() => void) | null;
   readonly onOpenTerminalInstead: (() => void) | null;
   readonly onChooseAnotherHost?: (() => void) | null;
+  readonly chooseAnotherHostLabel: string;
 }): ReactNode {
   const markSeen = useTeamHostDisclosureSeenStore((s) => s.markSeen);
   // Decided once per context: recording the full render must not collapse
@@ -124,7 +126,7 @@ function ConsequencesBlockBody(props: {
             size="inline-xs"
             onClick={props.onChooseAnotherHost}
           >
-            {CHOOSE_ANOTHER_HOST}
+            {props.chooseAnotherHostLabel}
           </Button>
         ) : null}
         {props.input.needsCredits ||

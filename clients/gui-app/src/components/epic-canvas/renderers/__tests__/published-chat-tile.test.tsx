@@ -26,6 +26,7 @@ import {
   servingBehaviour,
 } from "@traycer-clients/shared/cloud-chat/__tests__/__fixtures__/published-cloud-chat";
 import type { ChatReplicaReadResponse } from "@traycer/protocol/host/epic/chat-replica-read";
+import type { CollaboratorEntry } from "@traycer/protocol/host/epic/unary-schemas";
 import type {
   EnvironmentHostRecordV12,
   EnvironmentListResponse,
@@ -78,7 +79,11 @@ import {
   recordHostOlderThanDataRefusal,
   resetHostOlderThanDataRefusalsForTests,
 } from "@/lib/chats/host-older-than-data-refusals";
-import { EpicSessionContext } from "@/lib/registries/epic-session-registry";
+import {
+  EpicSessionContext,
+  EpicSessionHostClientContext,
+} from "@/lib/registries/epic-session-registry";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { collectPanes } from "@/stores/epics/canvas/tile-tree";
 import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
@@ -203,6 +208,9 @@ function runtimeClient(): HostClient<HostRpcRegistry> {
 
 // The app-wide client: none, as a tile under test usually has, unless a case
 // hands one in. The account's environment host lists are read through it.
+const collaboratorList = vi.hoisted((): { entries: CollaboratorEntry[] } => ({
+  entries: [],
+}));
 const appHost = vi.hoisted(
   (): {
     client: HostClient<HostRpcRegistry> | null;
@@ -405,6 +413,15 @@ vi.mock("@/components/epic-canvas/renderers/chat-tile", async () => {
     typeof import("@/components/epic-canvas/renderers/dead-tile-banner")
   >("@/components/epic-canvas/renderers/dead-tile-banner");
   const { useContext } = await import("react");
+  const { useChatOwnerCopyFacts } = await vi.importActual<
+    typeof import("@/hooks/environment/use-team-environment-ownership")
+  >("@/hooks/environment/use-team-environment-ownership");
+  const { useCollaboratorDisplayName } = await vi.importActual<
+    typeof import("@/hooks/epics/use-collaborator-display-name")
+  >("@/hooks/epics/use-collaborator-display-name");
+  const { useChatCloneTargetLabel } = await vi.importActual<
+    typeof import("@/components/epic-canvas/renderers/use-chat-clone-on-host-switch")
+  >("@/components/epic-canvas/renderers/use-chat-clone-on-host-switch");
   const { ChatStateLineContext } = await vi.importActual<
     typeof import("@/components/epic-canvas/renderers/chat-state-line")
   >("@/components/epic-canvas/renderers/chat-state-line");
@@ -439,21 +456,29 @@ vi.mock("@/components/epic-canvas/renderers/chat-tile", async () => {
     // offer's host-runtime subscription and the owner lookup's cloud query,
     // neither of which this suite mounts providers for. It records the props
     // and renders the REAL `ChatDeadTileBanner`, so the Clone affordance the
-    // tests assert on is the genuine article.
+    // tests assert on is the genuine article. Ownership, the collaborator's
+    // name and the clone target come from the container's own hooks.
     ChatDeadTileBannerContainer: (props: DeadTileBannerContainerProps) => {
       deadTileBannerContainerProps.push(props);
+      const ownerUserId = props.sourceOwnerUserId ?? null;
+      // The container's own owner facts, collaborator name and clone target,
+      // through the same hooks it reads; the role gate and the clone offer
+      // stay stubbed below.
+      const ownership = useChatOwnerCopyFacts(
+        ownerUserId,
+        props.sourceHostId,
+        props.chatId,
+      );
+      const ownerName = useCollaboratorDisplayName(props.epicId, ownerUserId);
+      const cloneTargetLabel = useChatCloneTargetLabel();
       return (
         <ChatDeadTileBanner
           hostLabel={props.hostLabel}
           reason={props.reason}
-          // The real container resolves these from the signed-in identity
-          // and the epic role; this suite mounts neither, and what it owns
-          // is the tile→container prop threading, so the banner renders the
-          // pre-collaborator defaults. `showsPublishedCopy` IS threading, so
-          // it forwards. The ownership wiring itself is pinned by
-          // `dead-tile-banner-container.test.tsx` against the real container.
-          ownedByViewer
-          environmentOwned={false}
+          ownedByViewer={ownership.ownedByViewer}
+          ownerName={ownerName}
+          cloneTargetLabel={cloneTargetLabel}
+          environmentOwned={ownership.environmentOwned}
           cloneAllowed
           showsPublishedCopy={props.showsPublishedCopy}
           onClone={() => undefined}
@@ -674,6 +699,10 @@ beforeEach(() => {
       "environment.host.list": ({ environmentId }) => ({
         hosts: appHost.hostsByEnvironmentId.get(environmentId) ?? [],
       }),
+      "epic.listCollaborators": () => ({
+        collaborators: collaboratorList.entries,
+        collaboratorsAvailable: true,
+      }),
     },
   });
   const client = new HostClient<HostRpcRegistry>({
@@ -703,6 +732,11 @@ afterEach(() => {
   runtime.messenger = null;
   appHost.client = null;
   appHost.hostsByEnvironmentId.clear();
+  collaboratorList.entries = [];
+  useSelectionAuthorityStore.setState(
+    useSelectionAuthorityStore.getInitialState(),
+    true,
+  );
   realDirectory.entries = null;
   resetNegotiatedManifests();
   vi.clearAllMocks();
@@ -1387,14 +1421,20 @@ describe("PublishedChatTile - an unlisted owner's name", () => {
   }
 
   /** The tile over a published copy, the copy the runner saw. */
-  async function renderTile(): Promise<RenderResult> {
+  function renderTile(): Promise<RenderResult> {
+    return renderTileFor(NODE);
+  }
+
+  async function renderTileFor(
+    node: PublishedChatTileRef,
+  ): Promise<RenderResult> {
     mockUseCloudChatTranscript.mockReturnValue(
       await readyState([FIRST_COHORT]),
     );
     mockUseChatReplicaRead.mockReturnValue(replicaNotFetched());
     return render(
       <PublishedChatTile
-        node={NODE}
+        node={node}
         viewTabId="tab-1"
         tileId="pane-1"
         isActive
@@ -1450,7 +1490,9 @@ describe("PublishedChatTile - an unlisted owner's name", () => {
       profile: { userId: "user-2", userName: "Bo", email: "bo@example.com" },
       contextMetadata: { userId: "user-2", username: "Bo" },
     });
-    const second = await renderTile();
+    // Its own agent on that same unlisted host: a chat the new account does
+    // not own reads as a collaborator's and names no host at all.
+    const second = await renderTileFor({ ...NODE, ownerUserId: "user-2" });
 
     // The first frame, before any refetch: the cached answer is user-1's.
     expect(
@@ -1713,6 +1755,156 @@ describe("PublishedChatTile - footer ownership", () => {
     environments.list = PERSONAL_ONLY_ENVIRONMENTS;
 
     expect(renderFooter()).toContain("belongs to another collaborator");
+  });
+
+  function collaboratorRow(
+    userId: string,
+    profile: { displayName: string; email: string } | null,
+  ): CollaboratorEntry {
+    return {
+      role: "editor",
+      accessType: "direct",
+      environmentId: null,
+      grantedAt: 1,
+      grantedBy: "viewer-user",
+      user: {
+        userId,
+        profile:
+          profile === null ? null : { ...profile, avatarUrl: "", handle: "" },
+      },
+      team: null,
+    };
+  }
+
+  /**
+   * The tile for a collaborator's chat, over the REAL `useHostQueries` asking
+   * the Epic session's client for `epic.listCollaborators`.
+   */
+  async function renderCollaboratorTile(
+    entries: CollaboratorEntry[],
+    state: "published" | "replica",
+  ): Promise<void> {
+    signInAsAnotherUser();
+    environments.list = PERSONAL_ONLY_ENVIRONMENTS;
+    collaboratorList.entries = entries;
+    recordNegotiatedHostMethods("host-1", ["epic.listCollaborators"]);
+    mockUseCloudChatTranscript.mockReturnValue(
+      state === "published"
+        ? await readyState([FIRST_COHORT])
+        : refusedUnpublished(),
+    );
+    mockUseChatReplicaRead.mockReturnValue(
+      state === "published" ? replicaNotFetched() : replicaOk(),
+    );
+    render(
+      <EpicSessionHostClientContext
+        value={runtimeClient().createRequesterForHostId("host-1")}
+      >
+        <PublishedChatTile
+          node={NODE}
+          viewTabId="tab-1"
+          tileId="pane-1"
+          isActive
+          epicId="epic-1"
+        />
+      </EpicSessionHostClientContext>,
+    );
+  }
+
+  function footerText(): string | null {
+    return screen.getByTestId("chat-tile-session-view").textContent;
+  }
+
+  function bannerText(): string | null {
+    return screen.getByTestId("published-chat-dead-tile-chat-1").textContent;
+  }
+
+  it("names the collaborator in the published footer and the banner once the list names them", async () => {
+    await renderCollaboratorTile(
+      [collaboratorRow("user-1", { displayName: "Ada Lovelace", email: "" })],
+      "published",
+    );
+
+    await waitFor(() => {
+      expect(footerText()).toContain("belongs to Ada Lovelace");
+    });
+    expect(footerText()).toMatch(
+      /^This agent belongs to Ada Lovelace — showing the last published copy\. Published [A-Z][a-z]{2} \d{1,2}, \d{1,2}:\d{2} [AP]M\./u,
+    );
+    expect(footerText()).not.toContain("It isn't available live from here.");
+    expect(bannerText()).toContain(
+      "This agent belongs to Ada Lovelace and runs on their computer, which isn't connected here. Showing the last published copy. Cloning creates your own agent on the active host.",
+    );
+  });
+
+  it("names the collaborator in the synced-copy footer", async () => {
+    await renderCollaboratorTile(
+      [collaboratorRow("user-1", { displayName: "Ada Lovelace", email: "" })],
+      "replica",
+    );
+
+    await waitFor(() => {
+      expect(footerText()).toBe(
+        "This agent belongs to Ada Lovelace — showing this device's synced copy.",
+      );
+    });
+  });
+
+  it("falls back to the email when the profile has no display name", async () => {
+    await renderCollaboratorTile(
+      [
+        collaboratorRow("user-1", {
+          displayName: "",
+          email: "ada@example.com",
+        }),
+      ],
+      "replica",
+    );
+
+    await waitFor(() => {
+      expect(footerText()).toBe(
+        "This agent belongs to ada@example.com — showing this device's synced copy.",
+      );
+    });
+  });
+
+  it("reads a list row that names nobody but the user id as no name", async () => {
+    await renderCollaboratorTile(
+      [collaboratorRow("user-1", null)],
+      "published",
+    );
+
+    // The list has answered: the cache holds the row the name would come from.
+    await waitFor(() => {
+      expect(queryClient.isFetching()).toBe(0);
+    });
+    expect(
+      runtime.messenger?.calls.some(
+        (call) => call.method === "epic.listCollaborators",
+      ),
+    ).toBe(true);
+    expect(footerText()).toMatch(
+      /^This agent belongs to another collaborator — showing the last published copy\./u,
+    );
+    expect(footerText()).not.toContain("user-1");
+    expect(bannerText()).toContain(
+      "This agent belongs to another collaborator and",
+    );
+    expect(bannerText()).not.toContain("user-1");
+  });
+
+  it("names the host a clone lands on when the active host has a name", async () => {
+    useSelectionAuthorityStore.setState({ effectiveHostId: "host-1" });
+    await renderCollaboratorTile(
+      [collaboratorRow("user-1", { displayName: "Ada Lovelace", email: "" })],
+      "published",
+    );
+
+    await waitFor(() => {
+      expect(bannerText()).toContain(
+        "belongs to Ada Lovelace and runs on their computer, which isn't connected here. Showing the last published copy. Cloning creates your own agent on Ada's Mac.",
+      );
+    });
   });
 
   it("says the sandbox is out when the owner host's row is a team sandbox, before the list answers", () => {
@@ -2375,7 +2567,7 @@ describe("PublishedChatTile - a sandbox chat's state, by precedence", () => {
         failureCode: "boot-timeout",
         lastTransitionAt: FAILED_AT,
       },
-      `Couldn't start e2e-sbx-p1 at ${FAILED_TIME} · SBX-0414 · nothing was chargedRetry`,
+      `Couldn't start e2e-sbx-p1 at ${FAILED_TIME} · SBX-0414Retry`,
     ],
     [
       "released",

@@ -46,10 +46,7 @@ describe("sandboxDetailsEntry", () => {
       now: NOW,
     });
     const rows = entry.status.map((row) => [row.label, row.value]);
-    expect(rows).toContainEqual([
-      "Failed",
-      "Failed to start (SBX-0412) · Nothing is billed for a sandbox that never woke",
-    ]);
+    expect(rows).toContainEqual(["Failed", "Failed to start (SBX-0412)"]);
     expect(rows).toContainEqual([
       "Support reference",
       "SBX-0412 · sbx_support_42",
@@ -505,9 +502,7 @@ describe("sandboxDetailsEntry History from the server's operations", () => {
     it("reads as Failed to start with its code and the first shell, never as Created", () => {
       const [event] = events([failedStart({})], { kind: "automation" });
       expect(event.label).toBe("Failed to start (SBX-0412)");
-      expect(event.value).toBe(
-        "by the first shell · Nothing is billed for a sandbox that never woke",
-      );
+      expect(event.value).toBe("by the first shell");
     });
 
     it("names the viewer when they started it", () => {

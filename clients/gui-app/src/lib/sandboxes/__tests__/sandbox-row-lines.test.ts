@@ -432,17 +432,13 @@ describe("sandboxClockLine", () => {
 
     it("reads by its support reference, never its raw code", () => {
       const line = failedLine("create:kube-create-service-account");
-      expect(line).toBe(
-        "Couldn't start build-box at 11:01 · SBX-0412 · nothing was charged",
-      );
+      expect(line).toBe("Couldn't start build-box at 11:01 · SBX-0412");
     });
 
     it.each(["zzz", null])(
       "omits the support-reference segment cleanly for %s",
       (code) => {
-        expect(failedLine(code)).toBe(
-          "Couldn't start build-box at 11:01 · nothing was charged",
-        );
+        expect(failedLine(code)).toBe("Couldn't start build-box at 11:01");
       },
     );
   });
@@ -699,6 +695,17 @@ describe("sandboxListHeader", () => {
         todayYoursMc: null,
       }),
     ).toBe("1 sandbox · $0.02 today (UTC day)");
+  });
+
+  it("keeps the sandbox count beside Automations when there is one", () => {
+    expect(
+      sandboxListHeader({
+        rows,
+        unstartedAutomations: true,
+        todayMc: null,
+        todayYoursMc: null,
+      }),
+    ).toBe("1 sandbox and Automations");
   });
 });
 

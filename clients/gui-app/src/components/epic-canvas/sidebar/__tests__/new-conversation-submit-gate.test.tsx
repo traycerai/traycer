@@ -63,6 +63,7 @@ interface GateCreateChatRequest {
 /** The toolbar slices the modal reads; the catalog is the new host's answer. */
 interface ToolbarMockState {
   readonly ultracode: boolean;
+  readonly selectedModel: null;
   readonly values: {
     readonly selection: {
       readonly harnessId: string;
@@ -123,6 +124,12 @@ const testState = vi.hoisted(() => ({
 
 // Sandbox staging has its own suites (`composer/__tests__`): here the picker
 // stages nothing and the send is never intercepted.
+vi.mock("@/components/settings/host-scope/use-host-options", async () => {
+  const { hostOptionsFixture } =
+    await import("@/components/settings/host-scope/host-scope-fixture");
+  const options = hostOptionsFixture({ hosts: [] });
+  return { useHostOptions: () => options };
+});
 vi.mock(
   "@/components/composer/use-sandbox-staging",
   async (importOriginal) => ({
@@ -224,6 +231,7 @@ vi.mock("@/hooks/auth/use-registered-hosts-query", async (importOriginal) => {
 
 const TOOLBAR_DEFAULTS = vi.hoisted((): ToolbarMockState => ({
   ultracode: false,
+  selectedModel: null,
   values: {
     selection: {
       harnessId: "claude",
