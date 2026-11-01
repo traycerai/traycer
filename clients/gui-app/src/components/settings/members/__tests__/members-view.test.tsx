@@ -191,6 +191,51 @@ const BASE = {
   preview: (): EnvironmentMembersRemovePreviewResponse => PREVIEW,
 };
 
+function rowOf(userId: string): HTMLElement {
+  const row = screen
+    .getAllByTestId("members-row")
+    .find((candidate) => candidate.dataset.memberId === userId);
+  if (row === undefined) throw new Error(`no row for ${userId}`);
+  return row;
+}
+
+/**
+ * Previews the test answers by hand, one per member. `delivered` says the
+ * answer has left the host boundary, so a case that expects an answer to
+ * change nothing can wait for it before asserting that nothing changed.
+ */
+function deferredPreviews(): {
+  readonly answer: PreviewAnswer;
+  readonly resolve: (
+    userId: string,
+    preview: EnvironmentMembersRemovePreviewResponse,
+  ) => void;
+  readonly delivered: (userId: string) => boolean;
+} {
+  const pending = new Map<
+    string,
+    (preview: EnvironmentMembersRemovePreviewResponse) => void
+  >();
+  const delivered = new Set<string>();
+  return {
+    answer: (userId) =>
+      new Promise<EnvironmentMembersRemovePreviewResponse>((resolve) => {
+        pending.set(userId, resolve);
+      }).then((preview) => {
+        delivered.add(userId);
+        return preview;
+      }),
+    resolve: (userId, preview) => {
+      const settle = pending.get(userId);
+      if (settle === undefined) throw new Error(`no preview for ${userId}`);
+      act(() => {
+        settle(preview);
+      });
+    },
+    delivered: (userId) => delivered.has(userId),
+  };
+}
+
 describe("MembersView", () => {
   it("shows an admin the header, seats link, Invite, role selects and Remove", () => {
     renderView({
@@ -345,13 +390,6 @@ describe("MembersView", () => {
       viewerRole: "admin",
       members: [ADMIN, EDITOR, emailOnly, unloaded],
     });
-    const rowOf = (userId: string): HTMLElement => {
-      const row = screen
-        .getAllByTestId("members-row")
-        .find((candidate) => candidate.dataset.memberId === userId);
-      if (row === undefined) throw new Error(`no row for ${userId}`);
-      return row;
-    };
     expect(within(rowOf("u-editor")).getByText("gained editing")).toBeTruthy();
     expect(within(rowOf("u-mail")).getByText("mail@acme.test")).toBeTruthy();
     expect(within(rowOf("u-mail")).queryByText("gained editing")).toBeNull();
@@ -466,6 +504,140 @@ describe("MembersView demotion", () => {
   });
 });
 
+/**
+ * What the accessible description says at the one moment it is announced.
+ * Radix reads `aria-describedby` when focus enters the dialog and the node is
+ * not a live region, so a consequence written into it after that is one a
+ * screen reader is never told: the question has to be whole when the dialog
+ * arrives, not merely by the time it settles. Hence the observer — a reading
+ * taken afterwards passes whatever order the sentences were written in.
+ */
+function describedAtFirstAppearance(): {
+  readonly text: () => string | null;
+  readonly stop: () => void;
+} {
+  let first: string | null = null;
+  const read = (): void => {
+    if (first !== null) return;
+    const dialog = document.querySelector(
+      '[data-testid="members-demotion-preview"]',
+    );
+    if (dialog === null) return;
+    const describedBy = dialog.getAttribute("aria-describedby");
+    first =
+      describedBy === null
+        ? ""
+        : (document.getElementById(describedBy)?.textContent ?? "");
+  };
+  const observer = new MutationObserver(read);
+  observer.observe(document.body, { childList: true, subtree: true });
+  return { text: () => first, stop: () => observer.disconnect() };
+}
+
+describe("MembersView demotion announcement", () => {
+  it("has the whole consequence in the description the moment the dialog appears", async () => {
+    const user = userEvent.setup();
+    const appearance = describedAtFirstAppearance();
+    renderView({
+      ...BASE,
+      viewerRole: "admin",
+      members: [ADMIN, SECOND_ADMIN, EDITOR],
+      preview: () => ({ ...PREVIEW, linkedPlan: "Claude Max" }),
+    });
+    await user.click(screen.getByRole("combobox", { name: "Role for Priya" }));
+    await user.click(await screen.findByRole("option", { name: "Viewer" }));
+
+    await screen.findByTestId("members-demotion-preview-table");
+    appearance.stop();
+    const described = appearance.text();
+    expect(described).not.toBeNull();
+    expect(described).toContain(
+      "Priya can no longer change Acme's settings. They can still see them.",
+    );
+    expect(described).toContain("Acme's agents stop using this plan.");
+  });
+
+  it("says the check is running on the row, and opens nothing, while the read is slow", async () => {
+    const user = userEvent.setup();
+    const previews = deferredPreviews();
+    renderView({
+      ...BASE,
+      viewerRole: "admin",
+      members: [ADMIN, SECOND_ADMIN, EDITOR],
+      preview: previews.answer,
+    });
+    await user.click(screen.getByRole("combobox", { name: "Role for Priya" }));
+    await user.click(await screen.findByRole("option", { name: "Viewer" }));
+
+    await waitFor(() =>
+      expect(
+        within(rowOf("u-editor")).getByTestId("members-role-checking"),
+      ).toBeTruthy(),
+    );
+    expect(screen.queryByTestId("members-demotion-preview")).toBeNull();
+
+    await waitFor(() => {
+      expect(() => {
+        previews.resolve("u-editor", { ...PREVIEW, linkedPlan: "Claude Max" });
+      }).not.toThrow();
+    });
+
+    await screen.findByTestId("members-demotion-preview");
+    expect(
+      within(rowOf("u-editor")).queryByTestId("members-role-checking"),
+    ).toBeNull();
+  });
+
+  // While the check is out there is no dialog to cancel, so the next pick is
+  // how the person takes the demotion back. The answer then belongs to a
+  // question nobody is asking any more.
+  it("drops a pending demotion when the person picks another role instead", async () => {
+    const user = userEvent.setup();
+    const previews = deferredPreviews();
+    const { onSetRole } = renderView({
+      ...BASE,
+      viewerRole: "admin",
+      members: [ADMIN, SECOND_ADMIN, EDITOR],
+      preview: previews.answer,
+    });
+    await user.click(screen.getByRole("combobox", { name: "Role for Priya" }));
+    await user.click(await screen.findByRole("option", { name: "Viewer" }));
+    await waitFor(() =>
+      expect(
+        within(rowOf("u-editor")).getByTestId("members-role-checking"),
+      ).toBeTruthy(),
+    );
+
+    await user.click(screen.getByRole("combobox", { name: "Role for Priya" }));
+    await user.click(await screen.findByRole("option", { name: "Admin" }));
+    await waitFor(() =>
+      expect(onSetRole).toHaveBeenCalledWith({
+        userId: "u-editor",
+        role: "admin",
+      }),
+    );
+    expect(screen.queryByTestId("members-demotion-preview")).toBeNull();
+
+    await waitFor(() => {
+      expect(() => {
+        previews.resolve("u-editor", { ...PREVIEW, linkedPlan: "Claude Max" });
+      }).not.toThrow();
+    });
+    await waitFor(() => expect(previews.delivered("u-editor")).toBe(true));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    // The answer belongs to a question nobody is asking any more, so it opens
+    // nothing. Asserted before the row's own tell on purpose: dropping the
+    // demotion is what both depend on, and this is the consequence that would
+    // put a dialog in front of someone who had moved on.
+    expect(screen.queryByTestId("members-demotion-preview")).toBeNull();
+    expect(
+      within(rowOf("u-editor")).queryByTestId("members-role-checking"),
+    ).toBeNull();
+  });
+});
+
 // NEW-154-2: the removal's own tell, named as the row and the preview name them.
 describe("MembersView removal toast", () => {
   it("says the member is no longer in the team, by name", async () => {
@@ -514,40 +686,6 @@ describe("MembersView removal toast", () => {
 });
 
 describe("MembersView preview completions", () => {
-  function deferredPreviews(): {
-    readonly answer: PreviewAnswer;
-    readonly resolve: (
-      userId: string,
-      preview: EnvironmentMembersRemovePreviewResponse,
-    ) => void;
-  } {
-    const pending = new Map<
-      string,
-      (preview: EnvironmentMembersRemovePreviewResponse) => void
-    >();
-    return {
-      answer: (userId) =>
-        new Promise((resolve) => {
-          pending.set(userId, resolve);
-        }),
-      resolve: (userId, preview) => {
-        const settle = pending.get(userId);
-        if (settle === undefined) throw new Error(`no preview for ${userId}`);
-        act(() => {
-          settle(preview);
-        });
-      },
-    };
-  }
-
-  function rowOf(userId: string): HTMLElement {
-    const row = screen
-      .getAllByTestId("members-row")
-      .find((candidate) => candidate.getAttribute("data-member-id") === userId);
-    if (row === undefined) throw new Error(`no row for ${userId}`);
-    return row;
-  }
-
   it("ignores a closed dialog's late preview for another member, and removes the member it names", async () => {
     const user = userEvent.setup();
     const previews = deferredPreviews();

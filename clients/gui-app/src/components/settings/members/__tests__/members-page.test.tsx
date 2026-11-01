@@ -607,12 +607,10 @@ describe("MembersPage offboarding previews", () => {
     await userEvent.click(
       await screen.findByRole("option", { name: "Viewer" }),
     );
+    // A refused read is an answer, so the dialog opens on it rather than
+    // staying shut — and it opens with the failure line already in it, which
+    // is why nothing here waits for the check to settle.
     const dialog = await screen.findByTestId("members-demotion-preview");
-    await vi.waitFor(() => {
-      expect(
-        within(dialog).queryByTestId("members-demotion-preview-busy"),
-      ).toBeNull();
-    });
     expect(dialog.textContent).not.toContain("0 turns");
     expect(
       within(dialog).getByTestId("members-demotion-preview-failed").textContent,

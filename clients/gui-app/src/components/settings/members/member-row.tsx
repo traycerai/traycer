@@ -18,6 +18,7 @@ import type {
 } from "@/components/settings/members/types";
 import { isTeamRole } from "@/components/settings/members/types";
 import { EnumSelect } from "@/components/settings/settings-enum-select";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 
@@ -27,6 +28,12 @@ export function MemberRow(props: {
   readonly isLastAdmin: boolean;
   readonly viewerIsAdmin: boolean;
   readonly gainedEditing: boolean;
+  /**
+   * A role change picked here whose check has not answered yet. The confirm it
+   * opens waits for that answer, so the pick needs a tell of its own until the
+   * dialog is up.
+   */
+  readonly checkingRole: boolean;
   readonly details: ReactNode;
   readonly onRoleChange: (role: TeamRole) => void;
   readonly onRemove: () => void;
@@ -107,6 +114,14 @@ export function MemberRow(props: {
             {ROLE_LABELS[props.member.effectiveRole]}
           </span>
         )}
+        {props.checkingRole ? (
+          <AgentSpinningDots
+            className={undefined}
+            testId="members-role-checking"
+            variant={undefined}
+            tone="muted"
+          />
+        ) : null}
         {showRemove ? (
           <Button
             type="button"

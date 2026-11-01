@@ -63,7 +63,11 @@ function demotionRows(
  * The confirm on a demotion: the question, what the role loses, and the
  * plan-unlink table only when this member linked a plan the demotion unlinks.
  * A promotion never opens it. A preview that could not be read says so and
- * offers Retry; the confirm waits only while the check is loading.
+ * offers Retry.
+ *
+ * Its caller opens it only once the check has answered, so everything the
+ * question is about is already in the description when focus arrives; while a
+ * Retry is in flight the confirm waits, and the dialog stays up.
  */
 export function DemotionPreviewDialog(props: {
   readonly open: boolean;
@@ -105,9 +109,9 @@ export function DemotionPreviewDialog(props: {
               reader never reaches — and both of these are about the
               consequence the question is asking to confirm: what the role
               loses, always, and that the team's agents stop using the plan
-              where this demotion unlinks one. The loss needs no read, so it is
-              here even while the plan check is out; the plan lead waits for the
-              rows, like the table does. */}
+              where this demotion unlinks one. The description is not a live
+              region, which is why the caller waits for the check before
+              opening: both sentences are here before focus is. */}
           <DialogDescription asChild>
             <div className="flex max-w-[72ch] flex-col gap-2">
               <span data-testid="members-demotion-loss">
@@ -124,14 +128,6 @@ export function DemotionPreviewDialog(props: {
             </div>
           </DialogDescription>
         </DialogHeader>
-        {preview.status === "loading" ? (
-          <AgentSpinningDots
-            className={undefined}
-            testId="members-demotion-preview-busy"
-            variant={undefined}
-            tone="muted"
-          />
-        ) : null}
         {preview.status === "failed" ? (
           <div className="flex flex-wrap items-center gap-2">
             <p
@@ -172,10 +168,12 @@ export function DemotionPreviewDialog(props: {
           <Button
             type="button"
             onClick={props.onConfirm}
-            // Off while the plan check is loading, because what it finds
-            // belongs in the question. A check that FAILED does not take the
-            // change away: the role is the person's to set, the ruled line
-            // about what they lose needs no read, and only the plan rows do.
+            // Off while a plan check is in flight — which here is a Retry,
+            // since the dialog does not open before the first answer — because
+            // what it finds belongs in the question. A check that FAILED does
+            // not take the change away: the role is the person's to set, the
+            // ruled line about what they lose needs no read, and only the plan
+            // rows do.
             disabled={
               props.busy ||
               preview.status === "loading" ||

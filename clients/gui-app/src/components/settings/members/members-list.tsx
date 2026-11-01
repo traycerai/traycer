@@ -25,6 +25,8 @@ export function MembersList(props: {
   readonly peopleCount: number;
   readonly legacyMembers: readonly string[];
   readonly rowDetails: (subject: MembersDetailsSubject) => ReactNode;
+  /** The member whose role change is waiting on its check, with no dialog yet. */
+  readonly checkingRoleUserId: string | null;
   readonly onRoleChange: (member: MembersListMember, role: TeamRole) => void;
   readonly onRemove: (member: MembersListMember) => void;
   readonly onRetry: () => void;
@@ -49,6 +51,7 @@ export function MembersList(props: {
               isLastAdmin={lastAdmin}
               viewerIsAdmin={props.viewerIsAdmin}
               gainedEditing={gainedEditing}
+              checkingRole={props.checkingRoleUserId === member.userId}
               details={props.rowDetails({
                 environmentId: props.environmentId,
                 kind: "member",

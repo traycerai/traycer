@@ -111,6 +111,28 @@ function previewState<Preview>(
   return { status: "ready", preview: model(query.data) };
 }
 
+/**
+ * How a demotion's confirm stands. It opens only once the check has ANSWERED,
+ * read or refused: the dialog's description is not a live region, so a
+ * consequence appended to it after focus has entered is one a screen reader is
+ * never told, and the plan lead can only be written once the rows are known.
+ *
+ * Answered is read from the query, not from `previewState`, which cannot tell
+ * an answer from a re-read in flight — both are `loading` there, so a Retry
+ * would close the dialog its own button is in. Until the answer lands the pick
+ * has no dialog to show for it, so the row it came from says so.
+ */
+function demotionGate(
+  query: UseQueryResult<EnvironmentMembersRemovePreviewResponse, HostRpcError>,
+  member: MembersListMember | null,
+): { readonly open: boolean; readonly checkingUserId: string | null } {
+  const answered = query.data !== undefined || query.isError;
+  return {
+    open: answered && member !== null,
+    checkingUserId: answered ? null : targetUserId(member),
+  };
+}
+
 function pendingInviteCount(members: readonly MembersListMember[]): number {
   return members.filter((member) => member.inviteState === "pending").length;
 }
@@ -345,6 +367,7 @@ export function MembersView(props: {
       whatKeepsWorking: demotionWhatKeepsWorking(),
     }),
   );
+  const demotionDialog = demotionGate(demotionQuery, demoting);
 
   const membersReady = membersRead === "ready";
   // Dismissed here: hidden at once, before the read that carries the seen
@@ -404,11 +427,15 @@ export function MembersView(props: {
   };
 
   const openRoleChange = (member: MembersListMember, role: TeamRole): void => {
+    // Every pick replaces the one before it. A demotion whose check has not
+    // answered has no dialog up to cancel, so the next pick is how it is taken
+    // back — and without this its answer would open a question about a role
+    // the person has already changed their mind about.
+    closeDemotion();
     if (role === member.effectiveRole) return;
     // Every demotion is confirmed, because it takes something away; a
     // promotion gives, so it is written straight through.
     if (isRoleDemotion(member.effectiveRole, role)) {
-      setDemotionRefusal(null);
       setDemotion({ member, nextRole: role });
       return;
     }
@@ -511,6 +538,7 @@ export function MembersView(props: {
           peopleCount={peopleCount}
           legacyMembers={legacyMembers}
           rowDetails={rowDetails}
+          checkingRoleUserId={demotionDialog.checkingUserId}
           onRoleChange={openRoleChange}
           onRemove={openRemove}
           onRetry={onRetryMembers}
@@ -549,7 +577,7 @@ export function MembersView(props: {
         onConfirm={confirmRemove}
       />
       <DemotionPreviewDialog
-        open={demoting !== null}
+        open={demotionDialog.open}
         memberName={targetName(demoting)}
         teamName={teamName}
         currentRole={demotionRoleChange.currentRole}
