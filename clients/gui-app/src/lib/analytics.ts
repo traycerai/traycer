@@ -193,8 +193,9 @@ export type AnalyticsHarness =
   | "traycer";
 
 /** Product vocabulary only - never the internal host/app-local/global source
- * seam. Callers pass `MergedNotificationRow.category`, already mapped at the
- * projection boundary by `categoryForNotificationSource`. */
+ * seam. Callers pass `MergedNotificationRow.category`, which the projection
+ * has already assigned from the row's source or, where its kind names its own
+ * category, from the kind. */
 export type AnalyticsNotificationCategory = "task" | "collaboration" | "system";
 
 /** Bounded count buckets for every notification-analytics count. `unknown`
