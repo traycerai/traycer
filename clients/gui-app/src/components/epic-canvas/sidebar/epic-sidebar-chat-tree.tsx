@@ -1671,9 +1671,10 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
   const renameTerminalAgent = useEpicRenameTuiAgent();
   const renameArtifactInTab = useEpicCanvasStore((s) => s.renameArtifactInTab);
 
-  // Whether every nested row is in the tree yet. A flat boolean, so this row
-  // re-renders on the one flip and never on a record arriving.
-  const nestedRowsKnown = useEpicChatRecordListAuthoritative();
+  // Whether every nested CHAT row has arrived. A flat boolean that flips once
+  // per session, so this row re-renders on that flip and never on a record
+  // arriving.
+  const nestedChatsKnown = useEpicChatRecordListAuthoritative();
   // What this row's delete dialog says about the agents nested under it (they
   // are kept and move to the top level), subscribed to its ANSWER rather than
   // to the record list it is computed from.
@@ -1698,7 +1699,7 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
         tree: state.tree,
         kind: "agent",
         nodeIds: [nodeId],
-        nestedRowsKnown,
+        nestedChatsKnown,
       }),
     ),
   );

@@ -89,7 +89,6 @@ import {
 import {
   useAncestorIds,
   useEpicArtifactStatus,
-  useEpicChatRecordListAuthoritative,
   useEpicConnectionStatus,
   useEpicFileArtifactViewer,
   useEpicPermissionRole,
@@ -877,17 +876,12 @@ const ArtifactNode = memo(function ArtifactNode(props: ArtifactNodeProps) {
   // `useShallow` is required, not decorative: a deriving selector returns a
   // fresh object each call, so without it `useSyncExternalStore` sees a change
   // on every notification and loops. See `epic-sidebar-filter.ts`.
-  //
-  // Whether every nested row is in the tree yet is a flat boolean, so this row
-  // re-renders on the one flip and never on a record arriving.
-  const nestedRowsKnown = useEpicChatRecordListAuthoritative();
   const deleteDisclosure = useEpicStore(
     useShallow((state: OpenEpicState) =>
       describeTreeDeleteDisclosure({
         tree: state.tree,
         kind: "artifact",
         nodeIds: [nodeId],
-        nestedRowsKnown,
       }),
     ),
   );

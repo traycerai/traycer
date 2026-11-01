@@ -2666,29 +2666,6 @@ describe("epic sidebar selection mode", () => {
   });
 
   /**
-   * A bulk agent delete never gets the count paragraph: its nested agents
-   * SURVIVE, so "This will also delete …" would name destruction that does not
-   * happen. `agent-root` is the whole selection's only childless row, and the
-   * other two are a parent and that parent's only child, so nothing is
-   * promoted either - the dialog is down to the bare sentence.
-   */
-  it("never claims a cascade when bulk-deleting agents", async () => {
-    seedChatTree();
-
-    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
-
-    fireEvent.click(screen.getByRole("menuitem", { name: "Select agents" }));
-    fireEvent.click(screen.getByRole("button", { name: "Select all" }));
-    fireEvent.click(screen.getByTestId("epic-sidebar-delete-selected-chats"));
-    const dialog = await screen.findByTestId("confirm-destructive-dialog");
-
-    expect(within(dialog).queryByTestId("confirm-cascade-meta")).toBeNull();
-    expect(
-      within(dialog).getByText("This action cannot be undone."),
-    ).toBeTruthy();
-  });
-
-  /**
    * "This will ALSO delete" is what the selection does not already name, so a
    * selection holding both the spec and its only ticket adds nothing. It used
    * to read "Nested items under selected rows may also be deleted." - a hedge
@@ -2762,20 +2739,6 @@ describe("epic sidebar selection mode", () => {
 
     expect(within(dialog).queryByTestId("confirm-cascade-meta")).toBeNull();
     expect(dialog.textContent).not.toContain("nested under it");
-  });
-
-  it("still says deleting an artifact deletes the artifacts nested under it", async () => {
-    seedArtifactTree();
-    testState.activePanelId = "artifacts";
-
-    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
-
-    fireEvent.click(dropdownItem("delete-spec-root"));
-    const dialog = await screen.findByTestId("confirm-destructive-dialog");
-
-    expect(within(dialog).getByTestId("confirm-cascade-meta").textContent).toBe(
-      "This will also delete 1 ticket nested under it.",
-    );
   });
 
   it("keeps artifact add inline and exposes ellipsis actions on right-click", async () => {
@@ -3386,6 +3349,12 @@ describe("epic sidebar selection mode", () => {
         "This action cannot be undone. 1 agent nested under it will be kept and moved to the top level.",
       ),
     ).toBeTruthy();
+    // A promoted agent SURVIVES, so it must never reach the count paragraph:
+    // routing agent rows through the artifact arm would render "This will also
+    // delete 1 agent nested under it." here. A whole-subtree selection cannot
+    // witness that - the artifact arm subtracts the selection and answers with
+    // the same bare sentence - so the claim lives on this strict subset.
+    expect(screen.queryByTestId("confirm-cascade-meta")).toBeNull();
   });
 
   /** What survives, not a per-row sum - see `countPromotedAgentChildren`. */
@@ -3472,11 +3441,14 @@ describe("epic sidebar selection mode", () => {
   });
 
   /**
-   * Before the chat record list answers, a persisted nested row can still be
-   * absent from the tree, so a number read off it would be low. The sentence
-   * names the consequence and states none - and the delete stays available.
+   * Before the chat record list answers - and a transient failure leaves it
+   * unanswered - a persisted nested chat can still be absent from the tree, so
+   * a number read off it would be low. The sentence names the consequence and
+   * states none, and the delete stays available: refusing a delete on a row
+   * that is visible and selectable, with a working row menu beside it, is the
+   * worse failure.
    */
-  it("states no agent count while the nested rows are not all known", () => {
+  it("states no agent count while the nested chats have not all arrived", () => {
     seedChatTree();
     testState.chatRecordListAuthoritative = false;
 
@@ -3492,8 +3464,15 @@ describe("epic sidebar selection mode", () => {
     );
   });
 
-  /** The same window withholds the artifact count the tree could state. */
-  it("states no artifact count while the nested rows are not all known", async () => {
+  /**
+   * The artifact arm does NOT take that readiness answer. An artifact's
+   * subtree is artifacts (the projector is family-separated) and artifacts are
+   * doc-sourced, so the chat list has nothing to say about this count - and
+   * the two signals are independent, so hedging here would withhold a known
+   * count for as long as that RPC is slow or failing, on every artifact row,
+   * including childless ones.
+   */
+  it("states the artifact count whatever the chat record list has answered", async () => {
     seedArtifactTree();
     testState.activePanelId = "artifacts";
     testState.chatRecordListAuthoritative = false;
@@ -3501,10 +3480,10 @@ describe("epic sidebar selection mode", () => {
     openArtifactDeleteDialog(["spec-root"]);
     const dialog = await screen.findByTestId("confirm-destructive-dialog");
 
-    expect(within(dialog).queryByTestId("confirm-cascade-meta")).toBeNull();
-    expect(dialog.textContent).toContain(
-      "Anything nested under it will also be deleted.",
+    expect(within(dialog).getByTestId("confirm-cascade-meta").textContent).toBe(
+      "This will also delete 1 ticket nested under it.",
     );
+    expect(dialog.textContent).not.toContain("Anything nested under");
   });
 });
 

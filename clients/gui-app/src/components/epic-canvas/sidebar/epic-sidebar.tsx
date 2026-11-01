@@ -1540,7 +1540,7 @@ function SidebarBulkDeleteController(props: {
   const selection = useSidebarBulkSelection();
   const liveRecords = useEpicArtifactRecords();
   const tree = useEpicTreeIndex();
-  const nestedRowsKnown = useEpicChatRecordListAuthoritative();
+  const nestedChatsKnown = useEpicChatRecordListAuthoritative();
   const navigateNested = useEpicNestedFocusNavigation();
   const closeCanvasTab = useEpicCanvasStore((s) => s.closeCanvasTab);
   const markArtifactSelfDeleted = useEpicCanvasStore(
@@ -1777,12 +1777,25 @@ function SidebarBulkDeleteController(props: {
     unmarkArtifactSelfDeleted,
   ]);
 
-  const disclosure = describeTreeDeleteDisclosure({
-    tree,
-    kind: panelId === "chats" ? "agent" : "artifact",
-    nodeIds: pendingDeleteIds ?? [],
-    nestedRowsKnown,
-  });
+  // Memoized for the same reason `blockedDeleteReason` above is: this
+  // controller subscribes to `useEpicArtifactRecords()`, whose identity moves
+  // on every chat-stream token, so an un-memoized walk of the whole
+  // selection's subtree would re-run several times a second while the dialog
+  // is open during a turn.
+  const disclosure = useMemo(() => {
+    const nodeIds = pendingDeleteIds ?? [];
+    // Only the agent arm has a readiness question to ask: an artifact's
+    // subtree is artifacts, which are doc-sourced and have no record plane to
+    // lag behind.
+    return panelId === "chats"
+      ? describeTreeDeleteDisclosure({
+          tree,
+          kind: "agent",
+          nodeIds,
+          nestedChatsKnown,
+        })
+      : describeTreeDeleteDisclosure({ tree, kind: "artifact", nodeIds });
+  }, [nestedChatsKnown, panelId, pendingDeleteIds, tree]);
 
   return (
     <ConfirmDestructiveDialog

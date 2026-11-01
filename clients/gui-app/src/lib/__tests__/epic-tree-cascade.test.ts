@@ -24,10 +24,20 @@ function makeRecord(
   };
 }
 
-/** Build a `TreeSlice` from a flat record list so the two count functions can
- * be checked against the same fixtures (the tree is the records' parent/child
- * graph). */
+/**
+ * Build a `TreeSlice` from a flat record list, as the projector would.
+ *
+ * REFUSES a cross-family pairing instead of building it. `resolveEffectiveParent`
+ * promotes an agent under an artifact (or the reverse) to the root, so a tree
+ * holding one is a tree production cannot emit - and a fixture built from one
+ * makes the sidebar's walk agree with something it will never be asked about.
+ * Throwing here keeps that trap disarmed for every future fixture, rather than
+ * leaving each one to remember.
+ */
 function treeFromRecords(records: ReadonlyArray<EpicTreeRecord>): TreeSlice {
+  const isAgent = (type: EpicTreeRecord["type"]): boolean =>
+    type === "chat" || type === "terminal-agent";
+  const typeById = new Map(records.map((r) => [r.id, r.type]));
   const nodeById: Record<string, TreeNode> = {};
   const childrenByParent: Record<string, string[]> = {};
   for (const r of records) {
@@ -40,9 +50,14 @@ function treeFromRecords(records: ReadonlyArray<EpicTreeRecord>): TreeSlice {
       createdAt: 0,
       updatedAt: 0,
     };
-    if (r.parentId !== null) {
-      (childrenByParent[r.parentId] ??= []).push(r.id);
+    if (r.parentId === null) continue;
+    const parentType = typeById.get(r.parentId);
+    if (parentType !== undefined && isAgent(parentType) !== isAgent(r.type)) {
+      throw new Error(
+        `${r.id} (${r.type}) under ${r.parentId} (${parentType}) is cross-family; the projector promotes that to the root`,
+      );
     }
+    (childrenByParent[r.parentId] ??= []).push(r.id);
   }
   const rootIds = records.flatMap((r) => (r.parentId === null ? [r.id] : []));
   return { rootIds, childrenByParent, nodeById };
@@ -258,7 +273,7 @@ describe("formatCascadeSummary", () => {
 describe("describeTreeDeleteDisclosure", () => {
   const UNDONE = "This action cannot be undone.";
 
-  /** The one function, for agent rows whose nested rows are all in the tree. */
+  /** The one function, for agent rows whose nested chats have all arrived. */
   function agentDelete(
     tree: TreeSlice,
     nodeIds: readonly string[],
@@ -267,21 +282,16 @@ describe("describeTreeDeleteDisclosure", () => {
       tree,
       kind: "agent",
       nodeIds,
-      nestedRowsKnown: true,
+      nestedChatsKnown: true,
     });
   }
 
-  /** The same, for artifact rows. */
+  /** The same, for artifact rows, which have no readiness question to take. */
   function artifactDelete(
     tree: TreeSlice,
     nodeIds: readonly string[],
   ): TreeDeleteDisclosure {
-    return describeTreeDeleteDisclosure({
-      tree,
-      kind: "artifact",
-      nodeIds,
-      nestedRowsKnown: true,
-    });
+    return describeTreeDeleteDisclosure({ tree, kind: "artifact", nodeIds });
   }
 
   function promotionSentence(nested: string, under: string): string {
@@ -375,62 +385,51 @@ describe("describeTreeDeleteDisclosure", () => {
   });
 
   describe("artifacts a delete takes with it", () => {
-    // Equivalence with the record-based count on the same fixtures: the tree is
-    // the canonical parent/child graph, and the mobile switcher summarises a
-    // single artifact from the records, so the two surfaces must agree.
-    const fixtures: ReadonlyArray<{
-      readonly name: string;
-      readonly records: ReadonlyArray<EpicTreeRecord>;
-      readonly root: string;
-    }> = [
-      {
-        name: "no children",
-        records: [makeRecord("root", "spec", null)],
-        root: "root",
-      },
-      {
-        name: "direct children by type",
-        records: [
-          makeRecord("root", "spec", null),
-          makeRecord("t1", "ticket", "root"),
-          makeRecord("t2", "ticket", "root"),
-          makeRecord("c1", "chat", "root"),
-        ],
-        root: "root",
-      },
-      {
-        name: "nested descendants",
-        records: [
-          makeRecord("root", "spec", null),
-          makeRecord("child-spec", "spec", "root"),
-          makeRecord("g-ticket", "ticket", "child-spec"),
-          makeRecord("g-story", "story", "child-spec"),
-        ],
-        root: "root",
-      },
-      {
-        name: "ignores other subtrees",
-        records: [
-          makeRecord("root", "spec", null),
-          makeRecord("other", "spec", null),
-          makeRecord("child", "ticket", "root"),
-          makeRecord("other-child", "ticket", "other"),
-        ],
-        root: "root",
-      },
-    ];
+    /**
+     * One differential case against the record-based walk, over an
+     * artifact-only subtree - what the family-separated projector can actually
+     * emit, and what the mobile switcher summarises for the same artifact.
+     *
+     * The expected string is a LITERAL, not `formatCascadeSummary` applied to
+     * the other walk: deriving it from the shared formatter would pass both
+     * sides on a bug inside the formatter, which has its own cases above.
+     */
+    it("summarises one artifact as the record-based walk does", () => {
+      const records = [
+        makeRecord("root", "spec", null),
+        makeRecord("child-spec", "spec", "root"),
+        makeRecord("g-ticket", "ticket", "child-spec"),
+        makeRecord("g-story", "story", "child-spec"),
+      ];
 
-    for (const { name, records, root } of fixtures) {
-      it(`summarises one artifact as the record-based count does: ${name}`, () => {
-        expect(artifactDelete(treeFromRecords(records), [root])).toEqual({
-          description: UNDONE,
-          cascadeSummary: formatCascadeSummary(
-            computeDescendantCounts(records, root),
-          ),
-          cascadeNestedUnder: "it",
-        });
+      expect(artifactDelete(treeFromRecords(records), ["root"])).toEqual({
+        description: UNDONE,
+        cascadeSummary: "1 spec, 1 ticket, and 1 story",
+        cascadeNestedUnder: "it",
       });
-    }
+      expect(
+        formatCascadeSummary(computeDescendantCounts(records, "root")),
+      ).toBe("1 spec, 1 ticket, and 1 story");
+    });
+
+    /**
+     * Where the two walks DIVERGE, and deliberately: the record walk reads raw
+     * `parentId` with no family rule, so a chat whose parent names an artifact
+     * counts as that artifact's descendant there. The projector promotes that
+     * pairing to the root instead, so the tree walk cannot see it - which is
+     * why `treeFromRecords` refuses to build one.
+     */
+    it("cannot reach an agent through an artifact, where the record walk can", () => {
+      const records = [
+        makeRecord("root", "spec", null),
+        makeRecord("c1", "chat", "root"),
+      ];
+
+      expect(
+        formatCascadeSummary(computeDescendantCounts(records, "root")),
+      ).toBe("1 agent");
+      expect(() => treeFromRecords(records)).toThrow("cross-family");
+    });
 
     /** "ALSO delete" is what the selection does not already name. */
     it("does not count a descendant that is itself selected", () => {
@@ -487,28 +486,34 @@ describe("describeTreeDeleteDisclosure", () => {
   });
 
   /**
-   * The record plane can leave a persisted child out of the tree for a window,
-   * so a number read off it would be low. The sentence then names the
-   * consequence and states no number - it never tells the reader a child does
+   * The chat record plane can leave a persisted chat child out of the tree for
+   * a window, so a number read off it would be low. The sentence then names
+   * the consequence and states none - it never tells the reader a child does
    * not exist, and it never refuses the delete.
+   *
+   * Artifacts have no counterpart here on purpose: the arm takes no readiness
+   * input, because an artifact's subtree is artifacts (the projector is
+   * family-separated) and artifacts are doc-sourced with no record plane to
+   * lag behind. Hedging there would assert destruction on a signal that says
+   * nothing about it - see the artifact cases above, which state their exact
+   * count with no flag to set.
    */
-  describe("while nested rows are not all known", () => {
-    function pending(
+  describe("while the nested chats have not all arrived", () => {
+    function pendingAgentDelete(
       tree: TreeSlice,
-      kind: "agent" | "artifact",
       nodeIds: readonly string[],
     ): TreeDeleteDisclosure {
       return describeTreeDeleteDisclosure({
         tree,
-        kind,
+        kind: "agent",
         nodeIds,
-        nestedRowsKnown: false,
+        nestedChatsKnown: false,
       });
     }
 
-    it("names the agent promotion without a count, even for a row the tree shows as a leaf", () => {
+    it("names the promotion without a count, even for a row the tree shows as a leaf", () => {
       const tree = treeFromRecords([makeRecord("a", "chat", null)]);
-      expect(pending(tree, "agent", ["a"])).toEqual({
+      expect(pendingAgentDelete(tree, ["a"])).toEqual({
         description: `${UNDONE} Any agents nested under it will be kept and moved to the top level.`,
         cascadeSummary: null,
         cascadeNestedUnder: "it",
@@ -520,28 +525,15 @@ describe("describeTreeDeleteDisclosure", () => {
         makeRecord("a", "chat", null),
         makeRecord("t", "terminal-agent", null),
       ]);
-      expect(pending(tree, "agent", ["a", "t"]).description).toBe(
+      expect(pendingAgentDelete(tree, ["a", "t"]).description).toBe(
         `${UNDONE} Any agents nested under them will be kept and moved to the top level.`,
       );
-    });
-
-    it("withholds the artifact count it could otherwise have stated", () => {
-      const tree = treeFromRecords([
-        makeRecord("spec-root", "spec", null),
-        makeRecord("ticket-child", "ticket", "spec-root"),
-      ]);
-      expect(pending(tree, "artifact", ["spec-root"])).toEqual({
-        description: `${UNDONE} Anything nested under it will also be deleted.`,
-        cascadeSummary: null,
-        cascadeNestedUnder: "it",
-      });
     });
 
     /** Nothing is selected, so there is nothing for anything to be nested in. */
     it("says only that the delete cannot be undone for an empty selection", () => {
       const tree = treeFromRecords([makeRecord("a", "chat", null)]);
-      expect(pending(tree, "agent", []).description).toBe(UNDONE);
-      expect(pending(tree, "artifact", []).description).toBe(UNDONE);
+      expect(pendingAgentDelete(tree, []).description).toBe(UNDONE);
     });
   });
 });
