@@ -361,7 +361,7 @@ function encodeBase64(bytes: Uint8Array): string {
   return btoa(String.fromCharCode(...bytes));
 }
 
-function makeDeadSessionMeta(epicId: string): SnapshotMetaEpic {
+function makeEmptySessionMeta(epicId: string): SnapshotMetaEpic {
   return {
     schemaVersion: "1.0",
     epicLight: {
@@ -393,7 +393,7 @@ function makeDeadSessionMeta(epicId: string): SnapshotMetaEpic {
  * deletion leaves behind once it has synced. No `tuiAgents`/`chats` entry is
  * ever seeded for the closed row this suite proves dead.
  */
-function newDeadEpicSession(
+function newEmptyEpicSession(
   epicId: string,
   hostId: string,
 ): OpenedStoreForTest {
@@ -417,7 +417,7 @@ function newDeadEpicSession(
   });
   if (captured.value === null) throw new Error("stream factory not invoked");
   captured.value.onSnapshot(
-    makeDeadSessionMeta(epicId),
+    makeEmptySessionMeta(epicId),
     Y.encodeStateAsUpdate(new Y.Doc()),
   );
   getOpenEpicRegistry().acquireMounted(epicId, () => handle);
@@ -429,7 +429,7 @@ function newDeadEpicSession(
   return handle;
 }
 
-describe("open-chat notification routing, a closed tile whose record is proven dead", () => {
+describe("open-chat notification routing, a closed tile with no record in the session", () => {
   afterEach(() => {
     __getOpenEpicRegistryForTests().disposeAll();
   });
@@ -471,9 +471,9 @@ describe("open-chat notification routing, a closed tile whose record is proven d
     const { tabId, closedAgent } = closeAgentTile();
 
     // A remote deletion has since synced: the session's own loaded tree no
-    // longer carries this agent, and its record reaches this device on
-    // `epic.listTuiAgents` alone, so the answered list is the proof.
-    const session = newDeadEpicSession("epic-1", "host-open");
+    // longer carries this agent, and the answered `epic.listTuiAgents` is what
+    // proves the row is missing rather than not here yet.
+    const session = newEmptyEpicSession("epic-1", "host-open");
     session.store.getState().markTuiAgentRecordListAuthoritative();
 
     const routed = routeAgentNotification();
@@ -491,7 +491,7 @@ describe("open-chat notification routing, a closed tile whose record is proven d
   /** A missing row proves nothing until the list that would carry it answers. */
   it("reopens a closed agent tile while its record list has not answered", () => {
     const { tabId, closedAgent } = closeAgentTile();
-    newDeadEpicSession("epic-1", "host-open");
+    newEmptyEpicSession("epic-1", "host-open");
 
     expect(routeAgentNotification()).toBe(true);
     expect(requirePane(tabId).previewTabId).toBe(closedAgent.instanceId);
