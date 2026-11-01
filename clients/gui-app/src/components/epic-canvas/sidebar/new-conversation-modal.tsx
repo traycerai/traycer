@@ -1136,6 +1136,14 @@ export function NewConversationModalBody(props: {
       sendsToRestingSandbox: false,
     },
   );
+  // A stage's kept pick goes to this modal's draft, as its own emit does,
+  // and skips the harness memory the emit also records.
+  useEffect(() => {
+    toolbarStore.setState({
+      onShownPickKept: (settings) => setSettings(epicId, settings),
+    });
+    return () => toolbarStore.setState({ onShownPickKept: null });
+  }, [epicId, setSettings, toolbarStore]);
   const harnessId = useStore(
     toolbarStore,
     (state) => state.selection.harnessId,

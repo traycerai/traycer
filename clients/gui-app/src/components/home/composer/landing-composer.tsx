@@ -88,7 +88,10 @@ import {
   useLandingComposerActions,
   type TerminalAgentLaunch,
 } from "@/components/home/hooks/use-landing-composer-actions";
-import { landingComposerSettingsSeedForDraft } from "@/components/home/composer/landing-composer-settings-seed";
+import {
+  landingComposerSettingsSeedForDraft,
+  landingMintedDraftSettings,
+} from "@/components/home/composer/landing-composer-settings-seed";
 import { contentIsSubmittable } from "@/lib/composer/composer-content";
 import {
   nextComposerMode,
@@ -410,6 +413,18 @@ export function LandingComposer(props: LandingComposerProps) {
       sendsToRestingSandbox: false,
     },
   );
+  // A stage's kept pick goes to this draft only, never to the host's
+  // last-run settings that seed every other draft.
+  useEffect(() => {
+    if (draftId === null) return;
+    toolbarStore.setState({
+      onShownPickKept: (settings) => {
+        setDraftSettings(draftId, settings);
+        authority.noteEdit();
+      },
+    });
+    return () => toolbarStore.setState({ onShownPickKept: null });
+  }, [authority, draftId, setDraftSettings, toolbarStore]);
   const harnessId = useStore(toolbarStore, (s) => s.selection.harnessId);
   const profileId = useStore(toolbarStore, (s) => s.selection.profileId);
   const selectedModel = useStore(toolbarStore, (s) => s.selectedModel);
@@ -764,12 +779,15 @@ export function LandingComposer(props: LandingComposerProps) {
     // to a fresh id when the caller has not pre-minted one.
     const createdDraftId = useLandingDraftStore.getState().createDraftWithId(
       props.pendingCreateId ?? uuidv4(),
-      useComposerRunSettingsStore
-        .getState()
-        // The composer's own resolved placement host - not the app
-        // binding: the seed should describe the machine this draft
-        // will create on.
-        .getGlobalRunSettings(activeHostId),
+      landingMintedDraftSettings(
+        toolbarStore.getState(),
+        useComposerRunSettingsStore
+          .getState()
+          // The composer's own resolved placement host - not the app
+          // binding: the seed should describe the machine this draft
+          // will create on.
+          .getGlobalRunSettings(activeHostId),
+      ),
     );
     // Keep the workspace aligned with the caller's captured placement, which
     // supplied the settings above, before accepting a submit.
@@ -791,7 +809,7 @@ export function LandingComposer(props: LandingComposerProps) {
         { surface: "landing", hostId: activeHostId, draftId: createdDraftId },
       );
     return createdDraftId;
-  }, [activeHostId, draftId, props.pendingCreateId]);
+  }, [activeHostId, draftId, props.pendingCreateId, toolbarStore]);
 
   // The start page whose terminal panel a picker-started setup terminal opens
   // in, keyed exactly as the panel keys its layouts. It BINDS the page rather

@@ -100,6 +100,12 @@ import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock
 import { hostRpcRegistry } from "@traycer/protocol/host/index";
 import { useComposerToolbarStore } from "@/components/home/hooks/use-composer-toolbar-store";
 import { fallbackSeedSource } from "@/lib/composer/composer-seed-source";
+import {
+  landingComposerSettingsSeedForDraft,
+  landingMintedDraftSettings,
+} from "@/components/home/composer/landing-composer-settings-seed";
+import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
+import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import { useStagedSendSignInCheck } from "@/hooks/sandboxes/use-staged-send-sign-in-check";
 import { pickedRunSettings } from "@/lib/sandboxes/pending-sandbox-send";
 import type { ComposerToolbarStoreState } from "@/stores/composer/composer-toolbar-store";
@@ -213,6 +219,7 @@ beforeEach(() => {
   host.harnesses = host.available(true, false);
   host.offeredAgents = undefined;
   useComposerHarnessMemoryStore.getState().resetForTests();
+  useComposerRunSettingsStore.getState().resetForTests();
 });
 
 afterEach(() => {
@@ -346,5 +353,139 @@ describe("a composer with a sandbox staged (E19)", () => {
     expect((await gate.beforeSend(stage))?.message).toBe(
       "Claude Code doesn't run on sandboxes. Choose a Traycer model to run agents here.",
     );
+  });
+});
+
+describe("a landing draft with a sandbox staged, then reloaded", () => {
+  /** What `LandingComposer` wires: the emit writes the host's last-run settings and the draft, the kept pick only the draft. */
+  function renderDraftToolbar(draftId: string | null) {
+    const draftSettings = () =>
+      useLandingDraftStore.getState().drafts.find((d) => d.id === draftId)
+        ?.settings ?? null;
+    const lastRun = () =>
+      useComposerRunSettingsStore.getState().getGlobalRunSettings(HOST_ID);
+    const hook = renderHook(() =>
+      useComposerToolbarStore(
+        "landing",
+        fallbackSeedSource(
+          landingComposerSettingsSeedForDraft(
+            draftId,
+            draftSettings(),
+            lastRun(),
+          ),
+          HOST_CLIENT,
+        ),
+        (settings) => {
+          useComposerRunSettingsStore
+            .getState()
+            .setGlobalRunSettings(HOST_ID, settings, Date.now());
+          if (draftId !== null)
+            useLandingDraftStore.getState().setDraftSettings(draftId, settings);
+        },
+        {
+          hostClient: HOST_CLIENT,
+          hostId: HOST_ID,
+          tuiOnly: false,
+          chatLineCarriesAutoMode: null,
+          ultracodeCarried: false,
+          stagedSurfaceKey: SURFACE,
+          sendsToRestingSandbox: false,
+        },
+      ),
+    );
+    // Installed only while a draft exists, as `LandingComposer` does.
+    if (draftId !== null)
+      hook.result.current.setState({
+        onShownPickKept: (settings) =>
+          useLandingDraftStore.getState().setDraftSettings(draftId, settings),
+      });
+    return { ...hook, draftSettings };
+  }
+
+  it("still shows the adopted pick after the reload, and the host's last-run settings never moved", async () => {
+    const draftId = useLandingDraftStore.getState().createDraft(PICK);
+    useComposerRunSettingsStore
+      .getState()
+      .setGlobalRunSettings(HOST_ID, PICK, 1);
+    const lastRun = useComposerRunSettingsStore
+      .getState()
+      .getGlobalRunSettings(HOST_ID);
+
+    const first = renderDraftToolbar(draftId);
+    await waitFor(() =>
+      expect(chip(first.result.current.getState())).toEqual(CLAUDE_SHOWN),
+    );
+    act(() => {
+      useStagedSandboxStore.getState().stage(SURFACE, newTarget("linux", 2));
+    });
+    await waitFor(() =>
+      expect(first.draftSettings()?.harnessId).toBe("claude"),
+    );
+    expect(
+      useComposerRunSettingsStore.getState().getGlobalRunSettings(HOST_ID),
+    ).toBe(lastRun);
+
+    // The reload: a fresh composer on the same draft, the stage still up.
+    first.unmount();
+    const reloaded = renderDraftToolbar(draftId);
+    await waitFor(() =>
+      expect(
+        reloaded.result.current.getState().catalog.keepsUnavailablePick,
+      ).toBe(true),
+    );
+    expect(chip(reloaded.result.current.getState())).toEqual(CLAUDE_SHOWN);
+    expect(sent(reloaded.result.current.getState())).toEqual(CLAUDE_SHOWN);
+  });
+
+  it("a draft minted under a stage holds the kept pick, not the host's last-run pick", async () => {
+    useComposerRunSettingsStore
+      .getState()
+      .setGlobalRunSettings(HOST_ID, PICK, 1);
+    const lastRun = useComposerRunSettingsStore
+      .getState()
+      .getGlobalRunSettings(HOST_ID);
+
+    // A fresh Start Page: no draft yet, so the kept pick has nowhere to land.
+    const first = renderDraftToolbar(null);
+    const toolbar = first.result.current;
+    await waitFor(() => expect(chip(toolbar.getState())).toEqual(CLAUDE_SHOWN));
+    // No stage: the mint starts from the host's last run, untouched.
+    expect(landingMintedDraftSettings(toolbar.getState(), lastRun)).toBe(
+      lastRun,
+    );
+    act(() => {
+      useStagedSandboxStore.getState().stage(SURFACE, newTarget("linux", 2));
+    });
+    await waitFor(() =>
+      expect(toolbar.getState().values.selection.harnessId).toBe("claude"),
+    );
+
+    // The first keystroke mints the draft, as `ensureBoundDraftId` does.
+    const draftId = "minted-draft";
+    useLandingDraftStore
+      .getState()
+      .createDraftWithId(
+        draftId,
+        landingMintedDraftSettings(toolbar.getState(), lastRun),
+      );
+    const minted = useLandingDraftStore
+      .getState()
+      .drafts.find((d) => d.id === draftId)?.settings;
+    expect(minted?.harnessId).toBe("claude");
+    expect(minted?.model).toBe("sonnet-5.5");
+    expect(
+      useComposerRunSettingsStore.getState().getGlobalRunSettings(HOST_ID),
+    ).toBe(lastRun);
+
+    // The reload: a fresh composer on that draft, the stage still up.
+    first.unmount();
+    const reloaded = renderDraftToolbar(draftId);
+    await waitFor(() =>
+      expect(
+        reloaded.result.current.getState().catalog.keepsUnavailablePick,
+      ).toBe(true),
+    );
+    expect(chip(reloaded.result.current.getState())).toEqual(CLAUDE_SHOWN);
+    expect(sent(reloaded.result.current.getState())).toEqual(CLAUDE_SHOWN);
   });
 });

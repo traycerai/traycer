@@ -192,6 +192,13 @@ export interface ComposerToolbarState extends ComposerToolbarDerived {
    * resting one is never described as an offline host.
    */
   readonly sandboxRunTarget: "staged" | "resting" | null;
+  /**
+   * Where a stage's kept pick (`shownPickValues`) is written: the surface's
+   * own draft, so a reload that shows the draft shows that pick. `null` on a
+   * surface with no draft. Never the per-host settings `onSettingsChange`
+   * writes.
+   */
+  readonly onShownPickKept: ((settings: ChatRunSettings) => void) | null;
 }
 
 /**
@@ -366,6 +373,7 @@ export function createComposerToolbarStore(
       onSettingsChange: input.onSettingsChange,
       pendingSettingsEmit: false,
       sandboxRunTarget: null,
+      onShownPickKept: null,
 
       setPermission: (next) => {
         update({ permission: next });
@@ -486,6 +494,8 @@ export function createComposerToolbarStore(
           state.onSettingsChange?.(settings);
           state.onUserSettingsChange?.(settings);
         }
+        if (values !== state.values)
+          state.onShownPickKept?.(settingsFromDerived(derived));
       },
 
       setOnSettingsChange: (onSettingsChange) => {
@@ -691,9 +701,9 @@ function classifyResolvedSlug(
  *
  * Only a stage: a resting chat keeps its own pick, and a sandbox host's
  * reroute is an install still running, which keeping exists to ride out.
- * Written to this store only, never emitted: the surface's emit also writes
- * per-host last-used settings and harness memory, which are not this
- * composer's to move.
+ * Written to this store and the surface's draft (`onShownPickKept`), never
+ * emitted: the surface's emit also writes per-host last-used settings and
+ * harness memory, which are not this composer's to move.
  */
 function shownPickValues(
   state: ComposerToolbarState,
