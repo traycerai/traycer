@@ -4,14 +4,22 @@ import type { HostRpcRegistry } from "@/lib/host";
 import type { ComposerControls } from "@/lib/commands/composer-controls-registry";
 import type { FocusedComposerKind } from "@/lib/commands/types";
 
-// The host the composer sits on reports the person's Codex pick unavailable
-// and Claude runnable, the state the Start page was in when E19 was seen.
-const HARNESSES = {
-  harnesses: [
-    { id: "claude", available: true },
-    { id: "codex", available: false },
-  ],
-};
+// What the host the composer sits on can run, and what the sandbox catalogue
+// offers. By default the host reports the person's Codex pick unavailable and
+// Claude runnable, the state the Start page was in when E19 was seen.
+const host = vi.hoisted(() => {
+  const available = (claude: boolean, codex: boolean) => ({
+    harnesses: [
+      { id: "claude", available: claude },
+      { id: "codex", available: codex },
+    ],
+  });
+  return {
+    available,
+    harnesses: available(true, false),
+    offeredAgents: undefined as ReadonlyArray<string> | undefined,
+  };
+});
 
 function modelOption(harnessId: string, slug: string) {
   return {
@@ -44,12 +52,34 @@ vi.mock("@/hooks/sandboxes/use-sandbox-traycer-models-query", () => ({
 }));
 
 vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
-  useGuiHarnessesQueryForClient: () => ({ data: HARNESSES }),
+  useGuiHarnessesQueryForClient: () => ({ data: host.harnesses }),
   useGuiHarnessModelsQueryForClient: (
     _client: HostClient<HostRpcRegistry> | null,
     harnessId: string,
   ) => ({ data: harnessId === "claude" ? CLAUDE_MODELS : CODEX_MODELS }),
 }));
+
+vi.mock("@/hooks/sandboxes/use-sandbox-catalogue-query", () => ({
+  useSandboxCatalogue: () => ({
+    data:
+      host.offeredAgents === undefined
+        ? undefined
+        : { providers: [], offeredAgents: host.offeredAgents },
+    isError: false,
+    isFetching: false,
+    refetch: vi.fn(),
+  }),
+}));
+vi.mock("@/providers/use-runner-host", () => ({
+  useRunnerHost: () => ({ signInUrl: "https://billing.test" }),
+}));
+vi.mock("@/hooks/auth/use-auth-user-query", () => ({
+  useAuthUser: () => ({
+    data: null,
+    refetch: () => Promise.resolve({ data: null, isError: false }),
+  }),
+}));
+vi.mock("@/lib/links/open-link", () => ({ useOpenLink: () => vi.fn() }));
 
 vi.mock("@/hooks/command-palette/use-register-composer-controls", () => ({
   useRegisterFocusedComposerControls: (
@@ -70,10 +100,12 @@ import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock
 import { hostRpcRegistry } from "@traycer/protocol/host/index";
 import { useComposerToolbarStore } from "@/components/home/hooks/use-composer-toolbar-store";
 import { fallbackSeedSource } from "@/lib/composer/composer-seed-source";
+import { useStagedSendSignInCheck } from "@/hooks/sandboxes/use-staged-send-sign-in-check";
 import { pickedRunSettings } from "@/lib/sandboxes/pending-sandbox-send";
 import type { ComposerToolbarStoreState } from "@/stores/composer/composer-toolbar-store";
 import { useComposerHarnessMemoryStore } from "@/stores/composer/composer-harness-memory-store";
 import {
+  readStagedSandbox,
   useStagedSandboxStore,
   type StagedSandboxTarget,
 } from "@/stores/composer/staged-sandbox-store";
@@ -154,12 +186,14 @@ function sent(state: ComposerToolbarStoreState) {
   };
 }
 
-function renderLandingToolbar() {
+function renderLandingToolbar(
+  onSettingsChange: ((settings: ChatRunSettings) => void) | null,
+) {
   return renderHook(() =>
     useComposerToolbarStore(
       "landing",
       fallbackSeedSource(PICK, HOST_CLIENT),
-      null,
+      onSettingsChange,
       {
         hostClient: HOST_CLIENT,
         hostId: HOST_ID,
@@ -176,6 +210,8 @@ function renderLandingToolbar() {
 beforeEach(() => {
   localStorage.clear();
   useStagedSandboxStore.setState({ bySurface: {} });
+  host.harnesses = host.available(true, false);
+  host.offeredAgents = undefined;
   useComposerHarnessMemoryStore.getState().resetForTests();
 });
 
@@ -183,20 +219,20 @@ afterEach(() => {
   cleanup();
 });
 
+const CLAUDE_SHOWN = {
+  harnessId: "claude",
+  model: "sonnet-5.5",
+  reasoningEffort: "low",
+};
+
 describe("a composer with a sandbox staged (E19)", () => {
-  it("shows the model the staged send runs, through every shape, until the stage is dropped", async () => {
-    const { result } = renderLandingToolbar();
+  it("keeps the shown reroute through every shape, and writes no other store", async () => {
+    const onSettingsChange = vi.fn<(settings: ChatRunSettings) => void>();
+    const { result } = renderLandingToolbar(onSettingsChange);
     const store = result.current;
 
-    // No stage: this host runs the send, so it still swaps in the agent it
-    // can run, and the send runs that one too.
-    await waitFor(() =>
-      expect(chip(store.getState())).toEqual({
-        harnessId: "claude",
-        model: "sonnet-5.5",
-        reasoningEffort: "low",
-      }),
-    );
+    // No stage: this host cannot run Codex, so the chip shows Claude.
+    await waitFor(() => expect(chip(store.getState())).toEqual(CLAUDE_SHOWN));
     // A stage on another surface keeps nothing here.
     act(() => {
       useStagedSandboxStore
@@ -205,41 +241,110 @@ describe("a composer with a sandbox staged (E19)", () => {
     });
     expect(chip(store.getState()).harnessId).toBe("claude");
 
-    // The New row: the send now runs on the sandbox with the person's pick,
-    // and the chip shows exactly that. Only `keepsUnavailablePick` moves in
-    // this catalog push.
+    const emitsBefore = onSettingsChange.mock.calls.length;
+    const memoryBefore = useComposerHarnessMemoryStore.getState().byHost;
+
+    // The New row: the pick on screen is the person's, and the send carries it.
     act(() => {
       useStagedSandboxStore.getState().stage(SURFACE, newTarget("linux", 2));
     });
-    const staged = {
+    await waitFor(() =>
+      expect(store.getState().values.selection.harnessId).toBe("claude"),
+    );
+    expect(chip(store.getState())).toEqual(CLAUDE_SHOWN);
+    expect(sent(store.getState())).toEqual(CLAUDE_SHOWN);
+
+    // The shape sheet's Use: Windows, a bigger size. The pick stays put.
+    act(() => {
+      useStagedSandboxStore.getState().stage(SURFACE, newTarget("windows", 4));
+    });
+    expect(chip(store.getState())).toEqual(CLAUDE_SHOWN);
+    expect(sent(store.getState())).toEqual(CLAUDE_SHOWN);
+
+    // Adopting the pick is this composer's own: neither the per-host
+    // last-run settings nor the harness memory heard of it.
+    expect(onSettingsChange).toHaveBeenCalledTimes(emitsBefore);
+    expect(useComposerHarnessMemoryStore.getState().byHost).toBe(memoryBefore);
+  });
+
+  it("keeps a pick the host can run, untouched", async () => {
+    host.harnesses = host.available(true, true);
+    const { result } = renderLandingToolbar(null);
+    const store = result.current;
+    const codex = {
       harnessId: "codex",
       model: "gpt-6-astra",
       reasoningEffort: "low",
     };
-    await waitFor(() => expect(chip(store.getState())).toEqual(staged));
-    expect(sent(store.getState())).toEqual(staged);
-    const selection = store.getState().selection;
+    await waitFor(() => expect(chip(store.getState())).toEqual(codex));
+    const values = store.getState().values;
 
-    // The shape sheet's Use: Windows, a bigger size. The model stays put.
     act(() => {
-      useStagedSandboxStore.getState().stage(SURFACE, newTarget("windows", 4));
-    });
-    expect(store.getState().selection).toBe(selection);
-    expect(chip(store.getState())).toEqual(staged);
-    expect(sent(store.getState())).toEqual(staged);
-    // Nothing was written over the person's pick.
-    expect(store.getState().values.selection).toEqual({
-      harnessId: "codex",
-      modelSlug: "gpt-6-astra",
-      profileId: null,
+      useStagedSandboxStore.getState().stage(SURFACE, newTarget("linux", 2));
     });
 
-    // Another host picked: the stage is dropped and this host decides again.
+    await waitFor(() =>
+      expect(store.getState().catalog.keepsUnavailablePick).toBe(true),
+    );
+    expect(store.getState().values).toBe(values);
+    expect(chip(store.getState())).toEqual(codex);
+    expect(sent(store.getState())).toEqual(codex);
+  });
+
+  it("returns to the host's decision when the stage is dropped", async () => {
+    const { result, rerender } = renderLandingToolbar(null);
+    const store = result.current;
+    await waitFor(() => expect(chip(store.getState())).toEqual(CLAUDE_SHOWN));
+    act(() => {
+      useStagedSandboxStore.getState().stage(SURFACE, newTarget("linux", 2));
+    });
+    await waitFor(() =>
+      expect(store.getState().values.selection.harnessId).toBe("claude"),
+    );
+
+    // Claude runs here, so the adopted pick stays once the stage is gone.
     act(() => {
       useStagedSandboxStore.getState().clear(SURFACE);
     });
     await waitFor(() =>
-      expect(chip(store.getState()).harnessId).toBe("claude"),
+      expect(store.getState().catalog.keepsUnavailablePick).toBe(false),
+    );
+    expect(chip(store.getState())).toEqual(CLAUDE_SHOWN);
+
+    // The host can no longer run the kept pick: the host reroutes again.
+    host.harnesses = host.available(false, true);
+    rerender();
+    await waitFor(() => expect(chip(store.getState()).harnessId).toBe("codex"));
+    expect(store.getState().values.selection.harnessId).toBe("claude");
+  });
+
+  it("refuses the shown pick at Send when the sandbox does not offer it", async () => {
+    host.offeredAgents = ["codex"];
+    const { result } = renderLandingToolbar(null);
+    const store = result.current;
+    await waitFor(() => expect(chip(store.getState())).toEqual(CLAUDE_SHOWN));
+    act(() => {
+      useStagedSandboxStore.getState().stage(SURFACE, newTarget("linux", 2));
+    });
+    await waitFor(() =>
+      expect(store.getState().catalog.keepsUnavailablePick).toBe(true),
+    );
+
+    // The gate reads the harness the send carries, as the landing composer does.
+    const stage = readStagedSandbox(SURFACE);
+    if (stage === null) throw new Error("the stage was not recorded");
+    const gate = renderHook(() =>
+      useStagedSendSignInCheck({
+        harnessId: pickedRunSettings(store.getState()).harnessId,
+        active: true,
+      }),
+    ).result.current;
+
+    expect(gate.check(stage)?.message).toBe(
+      "Claude Code doesn't run on sandboxes. Choose a Traycer model to run agents here.",
+    );
+    expect((await gate.beforeSend(stage))?.message).toBe(
+      "Claude Code doesn't run on sandboxes. Choose a Traycer model to run agents here.",
     );
   });
 });

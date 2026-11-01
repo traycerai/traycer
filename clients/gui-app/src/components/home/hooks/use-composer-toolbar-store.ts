@@ -297,6 +297,8 @@ export function useComposerToolbarStore(
   const modelsLoaded = modelsData !== undefined;
   const keepsUnavailablePick =
     useSandboxHostConfiguration(hostId) !== null || sandboxRunTarget !== null;
+  // Before the catalog push below: a stage's push reads it to keep the pick
+  // on screen.
   useEffect(() => {
     store.setState({ sandboxRunTarget });
   }, [store, sandboxRunTarget]);

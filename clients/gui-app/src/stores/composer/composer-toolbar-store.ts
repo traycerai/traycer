@@ -122,7 +122,8 @@ export interface ComposerToolbarCatalog {
    * the model the person chose with one they did not; the surface holds the
    * send until the install is done (the pack gate) and refuses a harness that
    * cannot run there (`useSandboxAgentGate`). Only the terminal surface's
-   * capability rule still applies.
+   * capability rule still applies. A stage turning it on keeps the pick
+   * shown at that moment, a reroute included (`shownPickValues`).
    */
   readonly keepsUnavailablePick: boolean;
 }
@@ -457,17 +458,25 @@ export function createComposerToolbarStore(
       setCatalog: (catalog) => {
         const state = get();
         if (sameCatalog(state.catalog, catalog)) return;
-        const derived = deriveToolbarState(
+        const keptDerived = deriveToolbarState(
           state.values,
           catalog,
           state,
           policy,
         );
-        // The emit decision lives in one named, testable place. A catalog push
-        // never touches `values`: the raw sticky selection is the user's.
-        const emit = decideCatalogTransition(state, derived);
+        // A catalog push touches `values` only to keep the pick on screen
+        // when a stage starts keeping picks (`shownPickValues`).
+        const values =
+          shownPickValues(state, catalog, keptDerived) ?? state.values;
+        const derived =
+          values === state.values
+            ? keptDerived
+            : deriveToolbarState(values, catalog, state, policy);
+        // The emit decision lives in one named, testable place.
+        const emit = decideCatalogTransition({ ...state, values }, derived);
         set({
           catalog,
+          values,
           ...derived,
           // Only an emit clears the deferred flag; a silent push leaves it as-is.
           pendingSettingsEmit: emit ? false : state.pendingSettingsEmit,
@@ -670,6 +679,43 @@ function classifyResolvedSlug(
     !selectionHealedForDisplay &&
     modelCoveredByCatalog(models, selection.harnessId, selection.modelSlug);
   return { selectionHealedForDisplay, selectionCatalogConfirmed };
+}
+
+/**
+ * The values that keep the pick on screen when a sandbox is staged on this
+ * composer's host, or `null` to keep `values` as they are. That host shows a
+ * reroute when it cannot run the raw pick, and the stage keeping the raw pick
+ * would put one the person never saw on the toolbar. The pick shown is the
+ * person's, so it becomes the raw one: a stage that does not offer it refuses
+ * it at Send.
+ *
+ * Only a stage: a resting chat keeps its own pick, and a sandbox host's
+ * reroute is an install still running, which keeping exists to ride out.
+ * Written to this store only, never emitted: the surface's emit also writes
+ * per-host last-used settings and harness memory, which are not this
+ * composer's to move.
+ */
+function shownPickValues(
+  state: ComposerToolbarState,
+  catalog: ComposerToolbarCatalog,
+  kept: ComposerToolbarDerived,
+): ComposerToolbarValues | null {
+  const shown = state.selection;
+  if (
+    state.sandboxRunTarget !== "staged" ||
+    catalog.hostId !== state.catalog.hostId ||
+    state.catalog.keepsUnavailablePick ||
+    !catalog.keepsUnavailablePick ||
+    shown.harnessId === state.values.selection.harnessId ||
+    kept.selection.harnessId === shown.harnessId
+  )
+    return null;
+  return {
+    ...state.values,
+    selection: shown,
+    reasoning: state.reasoning,
+    serviceTier: state.serviceTier,
+  };
 }
 
 /**
