@@ -760,6 +760,7 @@ export function BotChannelView(props: {
                 surface={surface}
                 resolveMember={resolveMember}
                 showConnecting
+                header={null}
                 landOn={landing}
               />
               <BotReplyingStrip

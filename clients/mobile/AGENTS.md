@@ -22,8 +22,8 @@ phone-layout product on iPad as much as iPhone — by product decision, not by
 measurement. This same entry is also served to a plain browser tab (the
 launcher's `gui-app` stream), and that tab is **not** phone-only: it decides
 by width like any other window, so `make dev-gui-app` still shows the desktop
-layout in a wide browser. Three pieces hold the native side, and all three
-have to move together or the app half-changes shell:
+layout in a wide browser. Two pieces hold the native side, and both have to
+move together or the app half-changes shell:
 
 - `src/web/main.tsx` calls `setPhoneLayoutOnly(Capacitor.isNativePlatform())`,
   and `useIsMobileViewport()` reads that before it consults a media query. It
@@ -41,18 +41,12 @@ have to move together or the app half-changes shell:
   that silently stops applying on a tablet running the phone shell. Either key
   it on the resolved layout, or override it in `index.native.css`, which is
   what the first-task coachmark's type scale does.
-- Both platforms are portrait-locked on tablets as well as phones. iOS:
-  `UISupportedInterfaceOrientations~ipad` in **both** `Info.plist` and
-  `Info-Dev.plist` (Debug builds use the latter, so they are what the lock is
-  actually exercised on), plus `UIRequiresFullScreen`, which Apple requires of
-  an app that drops an orientation. Treat that key as compatibility mode, not
-  a guarantee: Stage Manager and iPadOS 26 windowing still scale the app, and
-  it is deprecated against the iOS 27 SDK. Android:
-  `android:screenOrientation` on `MainActivity`, plus the
-  `PROPERTY_COMPAT_ALLOW_RESTRICTED_RESIZABILITY` opt-out, without which
-  targetSdk 36 ignores that lock on anything sw600dp or larger. The opt-out
-  disappears at targetSdk 37 and the comment in the manifest says what to do
-  then (delete both; the phone layout handles free rotation).
+
+Both platforms rotate freely, tablets as well as phones. iOS lists all four
+orientations in **both** `Info.plist` and `Info-Dev.plist` (Debug builds use the
+latter), and omits `UIRequiresFullScreen`, so an iPad can also give the app a
+Split View or Stage Manager window: layout reads the width it gets, never a
+device. Android sets no `android:screenOrientation`.
 
 ## Host and auth invariants
 

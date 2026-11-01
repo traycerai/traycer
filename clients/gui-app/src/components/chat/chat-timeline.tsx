@@ -508,7 +508,13 @@ export const ChatTimeline = memo(function ChatTimeline({
   }, [listRef]);
 
   if (rows.length === 0) {
-    return <ChatEmptyState />;
+    return header === null ? (
+      <ChatEmptyState />
+    ) : (
+      <div className="h-full overflow-y-auto overscroll-y-contain">
+        {listHeader}
+      </div>
+    );
   }
 
   return (
