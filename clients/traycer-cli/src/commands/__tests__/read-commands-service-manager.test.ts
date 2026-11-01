@@ -1,27 +1,48 @@
-import { existsSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { basename, dirname, join } from "node:path";
 import { homedir } from "node:os";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
+import {
+  ownProcessStartIdentityAsync,
+  ownProcessStartTimeMsAsync,
+} from "@traycer-clients/shared/host-lock/process-identity";
 import { noopLogger } from "../../logger";
 import type { CommandContext, CommandFn } from "../../runner/runner";
 
 // The read-only contract of the commands that ask about the OS service, on
-// each service manager: with a host installed and its job ABSENT - the lookup
-// miss a converging path would answer by registering - they report the miss
-// and issue no write. The commands and the platform controllers are real; only
-// the processes they would spawn are faked, at every spawn route they have
-// (`runCommand`, `runCommandForBytes`, and the doctor's own `execFile` and
-// `execFileSync` probes). A verb nothing here has listed as a read counts as a
-// write, so a new probe has to be declared rather than passing unnoticed.
+// each service manager, with a host installed, its job ABSENT and the default
+// lifecycle mode: the state a converging path would answer by registering. The
+// commands and the platform controllers are real; every way they could start a
+// process is replaced and recorded, so each row pins its exact list of calls
+// and a new call fails whichever route it takes. A changed read has to change
+// the list here, which is where it gets looked at.
 
 const mocks = vi.hoisted(() => {
-  const calls: { command: string; args: readonly string[] }[] = [];
+  const calls: string[] = [];
+  const record = (command: string, args: readonly string[] | undefined) => {
+    calls.push([command, ...(args ?? [])].join(" "));
+  };
   return {
-    platform: "darwin" as "darwin" | "linux" | "win32",
+    platform: process.platform as NodeJS.Platform,
     calls,
     // How each service manager answers for a job it does not have.
     run(command: string, args: readonly string[]) {
-      calls.push({ command, args });
+      record(command, args);
       if (command === "launchctl" && args[0] === "print") {
         return { stdout: "", stderr: "Could not find service", exitCode: 113 };
       }
@@ -32,15 +53,27 @@ const mocks = vi.hoisted(() => {
           exitCode: 1,
         };
       }
+      // This process's own identity, read once for a lock's metadata.
+      if (command === "ps") {
+        return {
+          stdout: "Sun Nov  1 07:00:00 2026\n",
+          stderr: "",
+          exitCode: 0,
+        };
+      }
       // The task-definition read's own "no such task".
       if (command === "powershell") {
         return { stdout: "", stderr: "", exitCode: 2 };
       }
-      if (command.endsWith("whoami.exe")) {
-        const account = '"PC\\person","S-1-5-21-1-2-3-1001"\n';
-        return { stdout: account, stderr: "", exitCode: 0 };
-      }
       return { stdout: "", stderr: "", exitCode: 0 };
+    },
+    // A route nothing here is meant to use: recorded first, because the caller
+    // may swallow the throw.
+    refuse(route: string) {
+      return (command: string, args: readonly string[] | undefined) => {
+        record(command, args);
+        throw new Error(`unexpected ${route}`);
+      };
     },
   };
 });
@@ -53,23 +86,44 @@ vi.mock("node:os", async (importOriginal) => {
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
   const { promisify } = await import("node:util");
-  const refuse = (route: string) => () => {
-    throw new Error(`unexpected ${route}: no route but the fakes may spawn`);
-  };
+  type ExecFileCallback = (
+    error: Error | null,
+    stdout: string,
+    stderr: string,
+  ) => void;
   return {
     ...actual,
-    spawn: refuse("spawn"),
-    execFile: Object.assign(refuse("callback execFile"), {
-      [promisify.custom]: async (command: string, args: readonly string[]) => {
-        const result = mocks.run(command, args);
-        if (result.exitCode === 0) return result;
-        throw Object.assign(new Error(`${command} failed`), {
-          code: result.exitCode,
-          stdout: result.stdout,
-          stderr: result.stderr,
-        });
+    spawn: mocks.refuse("spawn"),
+    spawnSync: mocks.refuse("spawnSync"),
+    exec: mocks.refuse("exec"),
+    execSync: mocks.refuse("execSync"),
+    fork: mocks.refuse("fork"),
+    execFile: Object.assign(
+      (
+        command: string,
+        args: readonly string[],
+        _options: object,
+        callback: ExecFileCallback,
+      ) => {
+        const { stdout, stderr, exitCode } = mocks.run(command, args);
+        const failure = exitCode === 0 ? null : new Error(`${command} failed`);
+        callback(failure, stdout, stderr);
       },
-    }),
+      {
+        [promisify.custom]: async (
+          command: string,
+          args: readonly string[],
+        ) => {
+          const result = mocks.run(command, args);
+          if (result.exitCode === 0) return result;
+          throw Object.assign(new Error(`${command} failed`), {
+            code: result.exitCode,
+            stdout: result.stdout,
+            stderr: result.stderr,
+          });
+        },
+      },
+    ),
     execFileSync: (command: string, args: readonly string[]) => {
       const result = mocks.run(command, args);
       if (result.exitCode !== 0) throw new Error(`${command} failed`);
@@ -117,60 +171,41 @@ vi.mock("../../service/process-runner", async (importOriginal) => {
 });
 
 import { DOCTOR_ISSUE_CODES } from "../../doctor/issues";
+import { captureSpawnEvidenceBaseline } from "../../host/spawn-evidence";
 import { writeHostInstallRecord } from "../../manifest/host-install";
 import {
   createServiceController,
   serviceLabelFor,
   serviceManifestPath,
+  windowsTaskName,
 } from "../../service";
-import { setWindowsStartEvidenceDepsForTests } from "../../service/platforms/windows";
-import { captureSpawnEvidenceBaseline } from "../../host/spawn-evidence";
+import {
+  setWindowsStartEvidenceDepsForTests,
+  setWindowsTaskUserSidReaderForTests,
+} from "../../service/platforms/windows";
+import { cliCredentialsPath, hostDoctorLeasePath } from "../../store/paths";
 import { hostDoctorCommand } from "../host-doctor";
 import { hostStatusCommand } from "../host-status";
 import { serviceStatusCommand } from "../service-status";
 
-type ServicePlatform = typeof mocks.platform;
-
-interface Call {
-  readonly command: string;
-  readonly args: readonly string[];
-}
-
-// PowerShell has no verb of its own: its scripts are read for the Task
-// Scheduler calls that change something.
-const TASK_SCHEDULER_WRITE =
-  /RegisterTask|DeleteTask|\.Run\(|\.Stop\(|\.Enabled\s*=/u;
-
-function isServiceManagerRead({ command, args }: Call): boolean {
-  switch (command) {
-    case "launchctl":
-      return args[0] === "print";
-    case "systemctl":
-      return [
-        "show",
-        "show-environment",
-        "is-active",
-        "is-system-running",
-      ].includes(args.find((arg) => !arg.startsWith("-")) ?? "");
-    case "loginctl":
-      return args[0] === "show-user";
-    case "schtasks":
-      return args[0] === "/Query";
-    case "powershell":
-      return !args.some((arg) => TASK_SCHEDULER_WRITE.test(arg));
-    default:
-      return ["reg", "icacls", "whoami.exe"].some((tool) =>
-        command.endsWith(tool),
-      );
-  }
-}
-
 const label = serviceLabelFor("production");
+const credentialsPath = cliCredentialsPath("production");
 
-// The file a registration leaves on POSIX. Windows has none: the task lives in
-// Task Scheduler, so there its `/Create` is the whole write.
-function manifestOn(platform: ServicePlatform): string | null {
-  return platform === "win32" ? null : serviceManifestPath(label);
+// The CLI's own log and the doctor's lease change on a read by design.
+const BOOKKEEPING = ["cli.log", basename(hostDoctorLeasePath("production"))];
+
+function homeFiles(): Record<string, string> {
+  const files: Record<string, string> = {};
+  const entries = readdirSync(homedir(), {
+    recursive: true,
+    withFileTypes: true,
+  });
+  for (const entry of entries) {
+    if (!entry.isFile() || BOOKKEEPING.includes(entry.name)) continue;
+    const path = join(entry.parentPath, entry.name);
+    files[path] = readFileSync(path, "base64");
+  }
+  return files;
 }
 
 function makeCtx(): CommandContext {
@@ -197,13 +232,22 @@ function makeCtx(): CommandContext {
 
 const realPlatform = process.platform;
 
-function usePlatform(platform: ServicePlatform): void {
+function usePlatform(platform: NodeJS.Platform): void {
   mocks.platform = platform;
   Object.defineProperty(process, "platform", { value: platform });
 }
 
+// Read once per process and kept, so otherwise whichever test ran first would
+// own these calls in its list.
+beforeAll(async () => {
+  await ownProcessStartTimeMsAsync();
+  await ownProcessStartIdentityAsync();
+});
+
+let filesBefore: Record<string, string>;
+
 beforeEach(async () => {
-  mocks.calls.length = 0;
+  setWindowsTaskUserSidReaderForTests(() => "S-1-5-21-1-2-3-1001");
   await writeHostInstallRecord("production", {
     installId: "install-1",
     version: "1.2.3",
@@ -219,100 +263,149 @@ beforeEach(async () => {
     sizeBytes: 1234,
     executablePath: join(homedir(), "traycer-host"),
   });
+  mkdirSync(dirname(credentialsPath), { recursive: true });
+  writeFileSync(credentialsPath, "{}");
+  filesBefore = homeFiles();
+  mocks.calls.length = 0;
 });
 
 afterEach(() => {
-  const manifest = manifestOn(mocks.platform);
-  if (manifest !== null) rmSync(manifest, { force: true });
+  for (const path of Object.keys(homeFiles())) {
+    if (!(path in filesBefore)) rmSync(path);
+  }
   setWindowsStartEvidenceDepsForTests(null);
-  Object.defineProperty(process, "platform", { value: realPlatform });
+  setWindowsTaskUserSidReaderForTests(null);
+  usePlatform(realPlatform);
 });
 
-const READ_COMMANDS: readonly (readonly [
-  string,
-  CommandFn,
-  // What only a run that reached the lookup miss can say.
-  (data: unknown) => void,
-])[] = [
-  [
-    "host status",
-    hostStatusCommand,
-    (data) => expect(data).toMatchObject({ running: false }),
-  ],
-  [
-    "host service status",
-    serviceStatusCommand,
-    (data) => expect(data).toMatchObject({ state: "not-installed" }),
-  ],
-  [
-    "host doctor",
-    hostDoctorCommand,
-    (data) =>
-      expect(data).toMatchObject({
-        issues: expect.arrayContaining([
-          expect.objectContaining({
-            code: DOCTOR_ISSUE_CODES.SERVICE_NOT_REGISTERED,
-          }),
-        ]),
-      }),
-  ],
+const gui = `gui/${process.getuid?.() ?? 0}`;
+const launchdLookups = [
+  `launchctl print ${gui}/${label.id}`,
+  `launchctl print ${gui}/${label.id}.agent`,
 ];
+const taskQuery = `schtasks /Query /TN ${windowsTaskName(label)}`;
+// The task-definition read, whole: PowerShell has no verb to compare, so the
+// script is the call.
+const taskDefinitionRead =
+  "powershell -NoProfile -NonInteractive -Command try{$s=New-Object -ComObject Schedule.Service;$s.Connect()}catch{[Console]::Error.Write('0x{0:X8}' -f $_.Exception.HResult);exit 4};try{$x=[string]$s.GetFolder('\\').GetTask($env:TRAYCER_TASK_NAME).Xml}catch{$e=$_.Exception;if($e.InnerException){$e=$e.InnerException};if(($e.HResult -eq -2147024894) -or ($e.HResult -eq -2147024893)){exit 2};[Console]::Error.Write('0x{0:X8}' -f $e.HResult);exit 4};[Console]::Out.Write([Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($x)));exit 0";
+
+interface ReadCommand {
+  readonly run: CommandFn;
+  // What only this command, run to its end on this state, can say.
+  readonly reports: object;
+}
+
+const HOST_STATUS: ReadCommand = {
+  run: hostStatusCommand,
+  reports: {
+    running: false,
+    pidMetadata: null,
+    bootstrap: null,
+    updateAttempt: null,
+    lastUpdateAttempt: null,
+    updateLockHolder: null,
+    lifecycle: { policy: { state: "absent", mode: "background" } },
+  },
+};
+const SERVICE_STATUS: ReadCommand = {
+  run: serviceStatusCommand,
+  reports: { state: "not-installed", pid: null, version: null },
+};
+const HOST_DOCTOR: ReadCommand = {
+  run: hostDoctorCommand,
+  reports: {
+    // By title too: the doctor files a failed status read under the same code.
+    issues: expect.arrayContaining([
+      expect.objectContaining({
+        code: DOCTOR_ISSUE_CODES.SERVICE_NOT_REGISTERED,
+        title: "Service not registered",
+      }),
+    ]),
+  },
+};
 
 describe.each([
-  ["darwin", "launchctl", "bootstrap"],
-  ["linux", "systemctl", "enable"],
-  ["win32", "schtasks", "/Create"],
-] as const)("%s, job absent", (platform, manager, registerVerb) => {
-  it.each(READ_COMMANDS)(
-    "%s reports the miss and writes nothing",
-    async (_name, command, reachedTheMiss) => {
+  {
+    platform: "darwin",
+    registers: "launchctl bootstrap",
+    serviceStatusCalls: launchdLookups,
+    doctorCalls: [...launchdLookups, ...launchdLookups],
+  },
+  {
+    platform: "linux",
+    registers: "systemctl --user enable",
+    serviceStatusCalls: [],
+    doctorCalls: ["systemctl --user show-environment"],
+  },
+  {
+    platform: "win32",
+    registers: "schtasks /Create",
+    serviceStatusCalls: [taskQuery],
+    doctorCalls: [
+      taskQuery,
+      taskDefinitionRead,
+      taskDefinitionRead,
+      `icacls ${credentialsPath}`,
+    ],
+  },
+] as const)(
+  "$platform, job absent",
+  ({ platform, registers, serviceStatusCalls, doctorCalls }) => {
+    it.each([
+      { name: "host status", command: HOST_STATUS, calls: [] },
+      {
+        name: "host service status",
+        command: SERVICE_STATUS,
+        calls: serviceStatusCalls,
+      },
+      { name: "host doctor", command: HOST_DOCTOR, calls: doctorCalls },
+    ])(
+      "$name issues exactly its reads and changes no file",
+      async ({ command, calls }) => {
+        usePlatform(platform);
+
+        const result = await command.run(makeCtx());
+
+        expect(result.data).toMatchObject(command.reports);
+        // Sorted: the doctor's probes run concurrently.
+        expect(mocks.calls.toSorted()).toEqual(calls.toSorted());
+        expect(homeFiles()).toEqual(filesBefore);
+      },
+    );
+
+    // The other half of the contract, on the same fake: the empty lists above
+    // are not an empty recorder.
+    it("install registers the job", async () => {
       usePlatform(platform);
-
-      const result = await command(makeCtx());
-
-      reachedTheMiss(result.data);
-      expect(mocks.calls.filter((c) => !isServiceManagerRead(c))).toEqual([]);
-      const manifest = manifestOn(platform);
-      if (manifest !== null) expect(existsSync(manifest)).toBe(false);
-    },
-  );
-
-  // The other half of the contract, and what gives the empty lists above their
-  // meaning: this fake and this classifier do see a registration.
-  it("install registers the job", async () => {
-    usePlatform(platform);
-    const cli = join(homedir(), "traycer");
-    writeFileSync(cli, "", { mode: 0o755 });
-    // No host answers the fake's `/Run`; the install would wait out the proof
-    // that one started.
-    setWindowsStartEvidenceDepsForTests({
-      captureBaseline: captureSpawnEvidenceBaseline,
-      createEvidenceReader: () => ({
-        collect: async () => ({
-          kind: "starting-marker",
-          reason: "post-baseline starting marker",
-          marker: null,
-          pid: null,
+      const cli = join(homedir(), "traycer");
+      writeFileSync(cli, "", { mode: 0o755 });
+      // No host answers the fake's `/Run`; the install would wait out the
+      // proof that one started.
+      setWindowsStartEvidenceDepsForTests({
+        captureBaseline: captureSpawnEvidenceBaseline,
+        createEvidenceReader: () => ({
+          collect: async () => ({
+            kind: "starting-marker",
+            reason: "post-baseline starting marker",
+            marker: null,
+            pid: null,
+          }),
         }),
-      }),
-      sleep: async () => undefined,
-      verifyTimeoutMs: 5_000,
-      verifyPollMs: 1,
-    });
+        sleep: async () => undefined,
+        verifyTimeoutMs: 5_000,
+        verifyPollMs: 1,
+      });
 
-    await createServiceController().install({
-      label,
-      cli: { command: cli, args: [] },
-      enableLinger: false,
-    });
+      await createServiceController().install({
+        label,
+        cli: { command: cli, args: [] },
+        enableLinger: false,
+      });
 
-    const writes = mocks.calls.filter((c) => !isServiceManagerRead(c));
-    expect(
-      writes.some(
-        (c) => c.command === manager && c.args.includes(registerVerb),
-      ),
-    ).toBe(true);
-    const manifest = manifestOn(platform);
-    if (manifest !== null) expect(existsSync(manifest)).toBe(true);
-  });
-});
+      expect(mocks.calls).toContainEqual(expect.stringContaining(registers));
+      if (platform !== "win32") {
+        expect(existsSync(serviceManifestPath(label))).toBe(true);
+      }
+    });
+  },
+);
