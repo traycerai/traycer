@@ -60,6 +60,9 @@ export function buildHostStoreFormatsCommand(): CommandFn {
       data: {
         hostHome,
         installedVersion,
+        // Reported beside it, not instead: for a `--from` install the record's
+        // version is a label, and support reads both off the same line.
+        installedRecordVersion: installed.provenance?.recordVersion ?? null,
         // Both halves of the knowledge, not a flattened number: "this build
         // writes 9" and "nothing here knows what this build writes" are
         // different answers, and a `null` chatDb alone cannot tell them apart.
