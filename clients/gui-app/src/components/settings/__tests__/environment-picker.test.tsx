@@ -127,7 +127,10 @@ const partlyMoved = environmentStatusFixture({
     },
   ],
   setup: { stage: "moving_settings", state: "running" },
-  consent: { acceptedAt: 1, planHash: "hash" },
+  // No consent while a move runs: the status serves the migration
+  // MARKER's consent and the host writes that marker only once the upload
+  // has finished (`traycer-host/.../migration/migrator.ts`, step 5). A
+  // fixture that sets it here invites a reader to key on it.
 });
 const running = environmentStatusFixture({ principal: { kind: "personal" } });
 
