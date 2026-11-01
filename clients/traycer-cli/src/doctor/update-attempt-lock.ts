@@ -8,7 +8,7 @@ import type {
 } from "@traycer-clients/shared/host-lock/process-identity";
 import { DOCTOR_ISSUE_CODES, type DoctorIssue } from "./issues";
 
-// The update-attempt lock as a doctor probe, for the one state its own
+// The update-attempt lock as a doctor probe, for the two states its own
 // acquisition path can never leave.
 //
 // A root maintenance lease hands the lock's liveness to its supervisor and
@@ -23,6 +23,11 @@ import { DOCTOR_ISSUE_CODES, type DoctorIssue } from "./issues";
 // file. Every later `host maintenance-lease`, which is every scripted desktop
 // install and uninstall, is refused meanwhile with "another host update
 // contender is in progress", and nothing else says why.
+//
+// A lock this user cannot read reads the same way to an acquisition: only
+// positive evidence breaks a lock, so it answers busy for as long as the read
+// fails. The lock is created 0600, so this is also what a running installer
+// started with administrator rights looks like to an ordinary doctor.
 //
 // Read-only. Doctor never removes the file: the remedy needs the one fact no
 // probe here can establish, that no installer is running.
@@ -46,17 +51,19 @@ export interface ProbeUpdateAttemptLockOptions {
 }
 
 /**
- * An issue only when the publisher has provably exited (dead, or its pid now
- * belongs to another process) AND the lock's rule still answers
- * `indeterminate` - a record no acquisition will ever break. `null` for no
- * lock, an unreadable or partial one, a publisher that is alive or cannot be
- * judged (a live installer is a real contender), a record the rule will break
- * now that its publisher is gone, and a lock that changed while it was read.
+ * An issue for a lock that cannot be read, and for one whose publisher has
+ * provably exited (dead, or its pid now belongs to another process) while the
+ * lock's rule still answers `indeterminate` - a record no acquisition will
+ * ever break. `null` for no lock, a partial one, a publisher that is alive or
+ * cannot be judged (a live installer is a real contender), a record the rule
+ * will break now that its publisher is gone, and a lock that changed while it
+ * was read.
  */
 export async function probeUpdateAttemptLock(
   opts: ProbeUpdateAttemptLockOptions,
 ): Promise<DoctorIssue | null> {
   const first = await readLockHolder(opts.lockPath);
+  if (first.kind === "read-error") return unreadableIssue(opts.lockPath);
   if (first.kind !== "held") return null;
   const holder = first.holder;
   const publisher = await opts.verifyPublisher({
@@ -75,6 +82,18 @@ export async function probeUpdateAttemptLock(
     return null;
   }
   return unbreakableIssue(opts.lockPath, holder, publisher);
+}
+
+function unreadableIssue(lockPath: string): DoctorIssue {
+  return {
+    code: DOCTOR_ISSUE_CODES.HOST_UPDATE_ATTEMPT_LOCK_UNREADABLE,
+    severity: "warning",
+    title: "Host update-attempt lock cannot be read",
+    message: `The host update-attempt lock at ${lockPath} exists but could not be read, so nothing can tell who holds it and no install, update or uninstall will break it. While it stays, every 'traycer host maintenance-lease' - every scripted desktop install and uninstall - is refused with "another host update contender is in progress". A Traycer installer running with administrator rights leaves a lock an ordinary user cannot read, so wait for one that is running to finish. If none is running, check the file's ownership and permissions and remove it, with administrator rights if it needs them; the next one then proceeds.`,
+    fixAction: null,
+    terminalCommand: null,
+    details: { lockPath },
+  };
 }
 
 function unbreakableIssue(

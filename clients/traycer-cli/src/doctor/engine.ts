@@ -868,11 +868,12 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
   });
   if (markerLockIssue !== null) issues.push(markerLockIssue);
 
-  // ---- 4f. Host update-attempt lock left by an interrupted install ----
+  // ---- 4f. Host update-attempt lock no acquisition will release ----
   // A maintenance lease whose supervisor died after handing liveness to the
   // installer tree leaves a record that, on Windows, the lock's own rule can
-  // never judge stale - so every later scripted install and uninstall is
-  // refused as a live contender, and this file is the only trace. Read-only:
+  // never judge stale, and a lock this user cannot read is never broken
+  // either - so every later scripted install and uninstall is refused as a
+  // live contender, and this file is the only trace. Read-only:
   // removing it needs a person to confirm no installer is running.
   const attemptLockIssue = await probeUpdateAttemptLock({
     lockPath: updateAttemptLockPath(hostHomeDir(opts.environment)),

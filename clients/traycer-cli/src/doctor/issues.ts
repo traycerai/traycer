@@ -245,6 +245,13 @@ export const DOCTOR_ISSUE_CODES = {
   // publisher that is alive or unverifiable, nor for a record the rule WILL
   // break once its publisher is gone - that lock heals on the next acquisition.
   HOST_UPDATE_ATTEMPT_LOCK_UNBREAKABLE: "HOST_UPDATE_ATTEMPT_LOCK_UNBREAKABLE",
+  // The update-attempt lock exists and cannot be read (a permission or I/O
+  // error, not a missing file). Its own code for the marker lock's reason: the
+  // remedy above removes a record doctor read, and here there is no record, so
+  // the first step is the file's ownership and permissions. Fail-closed like
+  // the case above: an acquisition reads it as busy, and every
+  // `host maintenance-lease` is refused until a read succeeds.
+  HOST_UPDATE_ATTEMPT_LOCK_UNREADABLE: "HOST_UPDATE_ATTEMPT_LOCK_UNREADABLE",
   // `lifecycle-policy.json` exists but is corrupt or cannot be read. It reads
   // as Background - the upgrade-safe default, so nothing parks - which is
   // exactly why it needs saying: a user who chose Linked or Ask gets

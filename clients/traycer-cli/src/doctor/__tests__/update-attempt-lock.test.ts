@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -341,6 +341,26 @@ describe("probeUpdateAttemptLock", () => {
       livenessGivenPublisher: lockHolderLivenessGivenPublisher,
     });
     expect(issue).toBeNull();
+    expect(verifyPublisher).not.toHaveBeenCalled();
+  });
+
+  it("names a lock path that exists but cannot be read, and never judges a publisher", async () => {
+    mkdirSync(lockPath);
+    const verifyPublisher = vi.fn(
+      async (_token: ProcessIdentityToken): Promise<ProcessIdentityVerdict> =>
+        "dead",
+    );
+    const issue = await probeUpdateAttemptLock({
+      lockPath,
+      verifyPublisher,
+      livenessGivenPublisher: lockHolderLivenessGivenPublisher,
+    });
+    expect(issue?.code).toBe(
+      DOCTOR_ISSUE_CODES.HOST_UPDATE_ATTEMPT_LOCK_UNREADABLE,
+    );
+    expect(issue?.details).toEqual({ lockPath });
+    expect(issue?.message).toContain(lockPath);
+    expect(issue?.message).toContain("check the file's ownership");
     expect(verifyPublisher).not.toHaveBeenCalled();
   });
 

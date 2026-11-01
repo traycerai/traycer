@@ -43,6 +43,11 @@ export function movedDataRoot(): string | null {
  *
  * Call it only where a registry target would be installed: a `--from` archive
  * is not its business.
+ *
+ * Both messages open `Traycer's data folder was moved to`, and the host's
+ * `classifyBoundIntentRejection` reads that phrase with the error's code to
+ * latch a parked `continue` this refuses. Change it there too, or the host
+ * spawns the same refusal on every idle tick.
  */
 export function refuseOlderHostWhileDataMoved(input: {
   readonly command: string;

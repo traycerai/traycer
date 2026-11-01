@@ -2830,6 +2830,8 @@ describe("downloadAndStageHost", () => {
         }),
       ).rejects.toMatchObject({
         code: CLI_ERROR_CODES.HOST_UPDATE_NOT_NEWER,
+        // The host's dispatch contract reads this phrase to latch the park.
+        message: expect.stringContaining("Traycer's data folder was moved to"),
       });
     });
 

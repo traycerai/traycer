@@ -2041,9 +2041,13 @@ function describeIndeterminateDispatch(
   }
   if (
     base === "refused-attempt-gone" ||
-    // No producer mints this literal — a moved install record on a park is
-    // written `failed {install-changed}` and arrives as the record's own
-    // failure. Kept as a defensive arm rather than deleted: it is a value the
+    // No producer mints this literal — a park whose install record moved is
+    // ended by the resumed CLI under its own claim (`superseded` above the
+    // target; `failed {install-changed}` when the install is gone or sits at
+    // the target under a generation this attempt did not write; `failed`
+    // `E_UNEXPECTED` otherwise) and arrives as the record's own outcome, or
+    // the `continue` is refused before its claim and the park stands. Kept as
+    // a defensive arm rather than deleted: it is a value the
     // generated `refused-<code>` grammar can still express, and a sentence that
     // misdescribes it is worse than one that does not.
     base === "refused-install-changed"
