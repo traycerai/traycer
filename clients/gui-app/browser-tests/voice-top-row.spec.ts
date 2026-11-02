@@ -202,9 +202,8 @@ for (const width of [1400, 1100, 900, 800, 768]) {
     await nextFrames(page, 3);
     expect(await page.evaluate(() => window.__voiceTopRowErrors)).toEqual([]);
     // The focus line is gone, so the state word's tooltip names the destination.
-    await expect(page.getByTestId("voice-strip-state")).toHaveAttribute(
-      "data-state",
-    );
+    await page.getByTestId("voice-strip-state").hover();
+    await expect(page.getByRole("tooltip")).toHaveCount(1);
   });
 }
 
@@ -223,8 +222,15 @@ test("with room to spare Waiting keeps its name", async ({ page }) => {
       return Math.abs(zone.x + zone.width / 2 - main);
     })
     .toBeLessThan(1);
-  // The focus line shows the destination, so the state word is no tooltip trigger.
-  await expect(page.getByTestId("voice-strip-state")).not.toHaveAttribute(
-    "data-state",
-  );
+  // The focus line shows the destination, so the state word opens no tooltip.
+  // Waiting's tooltip shows tooltips open here; right after it, the state word's
+  // would open at once, so its absence is not a matter of timing.
+  await page.getByTestId("voice-strip-waiting").hover();
+  await expect(page.getByRole("tooltip")).toHaveCount(1);
+  await page.locator("main").hover();
+  await page.locator("main").hover({ position: { x: 8, y: 8 } });
+  await expect(page.getByRole("tooltip")).toHaveCount(0);
+  await page.getByTestId("voice-strip-state").hover();
+  await nextFrames(page, 3);
+  await expect(page.getByRole("tooltip")).toHaveCount(0);
 });

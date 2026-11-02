@@ -77,7 +77,8 @@ export function VoiceSessionStrip(): ReactNode {
               state.muted,
               state.pausedForDictation,
             )}
-            focus={focusLineShown ? null : state.focus}
+            focus={state.focus}
+            focusLineShown={focusLineShown}
           />
           <ResumeAfterDictation />
         </div>
@@ -218,43 +219,50 @@ function destinationLine(
 }
 
 /**
- * The state word. `focus` is the destination while the focus line is hidden, the
- * first thing the top row takes away: its tooltip then keeps it reachable.
+ * The state word. While the focus line is hidden, the first thing the top row
+ * takes away, its tooltip keeps the destination reachable. The tooltip is always
+ * mounted and only its opening is gated: this span is the strip's live region,
+ * and a new node would be announced again.
  */
 function StateWord(props: {
   readonly word: string;
   readonly focus: VoiceFocus | null;
+  readonly focusLineShown: boolean;
 }): ReactNode {
-  const word = (
-    <span
-      role="status"
-      data-testid="voice-strip-state"
-      className="shrink-0 font-medium text-foreground"
-    >
-      {props.word}
-    </span>
-  );
-  if (props.focus === null) return word;
-  return <DestinationTooltip focus={props.focus}>{word}</DestinationTooltip>;
-}
-
-function DestinationTooltip(props: {
-  readonly focus: VoiceFocus;
-  readonly children: ReactNode;
-}): ReactNode {
-  const { environmentLabel, botTitle, threadLabel } = useVoiceFocusLabel(
-    props.focus,
-  );
+  const { focus } = props;
+  const [wantsOpen, setWantsOpen] = useState(false);
+  const open = wantsOpen && focus !== null && !props.focusLineShown;
   return (
     <TooltipWrapper
-      label={destinationLine(environmentLabel, botTitle, threadLabel)}
+      label={<DestinationLabel focus={focus} />}
       side="bottom"
       sideOffset={undefined}
       align={undefined}
+      open={open}
+      onOpenChange={setWantsOpen}
     >
-      {props.children}
+      <span
+        role="status"
+        data-testid="voice-strip-state"
+        className="shrink-0 font-medium text-foreground"
+      >
+        {props.word}
+      </span>
     </TooltipWrapper>
   );
+}
+
+function DestinationLabel(props: {
+  readonly focus: VoiceFocus | null;
+}): ReactNode {
+  return props.focus === null ? null : <FocusDestination focus={props.focus} />;
+}
+
+function FocusDestination(props: { readonly focus: VoiceFocus }): ReactNode {
+  const { environmentLabel, botTitle, threadLabel } = useVoiceFocusLabel(
+    props.focus,
+  );
+  return destinationLine(environmentLabel, botTitle, threadLabel);
 }
 
 /**

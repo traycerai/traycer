@@ -7,7 +7,7 @@ import {
   vi,
   type Mock,
 } from "vitest";
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { WithTestQueryClient } from "@/__tests__/with-test-query-client";
 import { botTabIntent } from "@/lib/tab-navigation/intents";
@@ -175,13 +175,45 @@ describe("VoiceSessionStrip", () => {
     );
   });
 
-  it("names the destination in the state word's tooltip, where the focus line can be hidden", async () => {
+  it("names the destination in the state word's tooltip only while the focus line is hidden, on one status node", async () => {
+    const observers: Array<() => void> = [];
+    vi.stubGlobal(
+      "ResizeObserver",
+      class implements ResizeObserver {
+        constructor(private readonly callback: ResizeObserverCallback) {
+          observers.push(() => this.callback([], this));
+        }
+        observe(): void {}
+        unobserve(): void {}
+        disconnect(): void {}
+      },
+    );
     goLive(makeDriver());
+    const status = screen.getByRole("status");
+    const lineWidth = vi.spyOn(
+      screen.getByTestId("voice-strip-focus"),
+      "getBoundingClientRect",
+    );
+    const setLineWidth = (width: number): void => {
+      lineWidth.mockReturnValue(new DOMRect(0, 0, width, 20));
+      act(() => {
+        for (const report of observers) report();
+      });
+    };
 
-    await userEvent.hover(screen.getByTestId("voice-strip-state"));
-
+    setLineWidth(0);
+    await userEvent.hover(status);
     const tooltip = await screen.findByRole("tooltip");
     expect(tooltip.textContent).toContain("Personal › Tracy");
+
+    setLineWidth(120);
+    await waitFor(() => expect(screen.queryByRole("tooltip")).toBeNull());
+    expect(screen.getByRole("status")).toBe(status);
+
+    setLineWidth(0);
+    await screen.findByRole("tooltip");
+    expect(screen.getByRole("status")).toBe(status);
+    vi.unstubAllGlobals();
   });
 
   it("mutes through the driver, then reads Muted and Unmute", async () => {

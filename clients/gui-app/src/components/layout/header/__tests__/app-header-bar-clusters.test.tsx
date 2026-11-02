@@ -355,7 +355,9 @@ describe("the header's centre zone for Talk", () => {
     });
     const reportResize = (): void => {
       act(() => {
-        for (const observer of resizeObservers) observer.report();
+        for (const observer of [...resizeObservers, ...resizeObservers]) {
+          observer.report();
+        }
       });
       // Nothing moves inside the observer's delivery: the write waits a frame,
       // and a second report before it runs asks for no second one.
