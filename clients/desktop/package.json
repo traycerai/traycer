@@ -286,7 +286,17 @@
       "@traycer/protocol",
       "@traycer-clients/shared",
       "traycer-clients-gui-app"
-    ]
+    ],
+    "targets": {
+      "test": {
+        "inputs": [
+          "default",
+          "^production",
+          "sharedGlobals",
+          "{workspaceRoot}/.github/workflows/test.yml"
+        ]
+      }
+    }
   },
   "productName": "Traycer"
 }

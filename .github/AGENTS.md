@@ -53,7 +53,8 @@ later merge never cancels an earlier merge's run.
   summary. It sends nothing anywhere: a failed `trunk-red` run is the signal,
   and the one thing an alert has to watch.
 - A merge run that narrows to what changed (`nx affected` in `pre-commit.yml`,
-  the `changes` jobs of `browser-regressions.yml` and `formal-regressions.yml`)
+  the `changes` jobs of `browser-regressions.yml` and `formal-regressions.yml`,
+  `macos-packaging-changes` in `test.yml`)
   compares against the last push its own workflow passed on (`scripts/ci-last-green-sha.sh`), not the
   push before. So the next merge's range still holds a break, and `main`
   stays red until a run covering everything since the last green push passes.

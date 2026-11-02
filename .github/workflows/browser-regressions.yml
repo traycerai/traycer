@@ -58,9 +58,13 @@ jobs:
     outputs:
       run: ${{ steps.filter.outputs.run }}
     steps:
+      # Every commit, for the range below, but no file contents: the diff reads
+      # trees only, and the job's one file is `scripts/ci-last-green-sha.sh`.
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 0
+          filter: blob:none
+          sparse-checkout: scripts
           persist-credentials: false
       # A push run is compared with the last push this workflow PASSED on, not
       # with the push before it. A team PR is not tested before it merges, so a
@@ -110,7 +114,9 @@ jobs:
               echo "A $EVENT run always runs the suite."
               exit 0 ;;
           esac
-          relevant=$(git diff --name-only "$range" | awk '
+          # `--no-renames`: rename detection would fetch the contents the
+          # blobless clone left out, and a rename lists both paths this way.
+          relevant=$(git diff --name-only --no-renames "$range" | awk '
             /\.md$/ || /\.test\.tsx?$/ { next }
             /^clients\/gui-app\// || /^clients\/shared\// || /^protocol\// ||
             /^packages\/html-source\// ||
@@ -163,13 +169,8 @@ jobs:
         with:
           package-manager-cache: false
           node-version: "24.20.0"
-      - name: Cache bun global install cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: ~/.bun/install/cache
-          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
-          restore-keys: |
-            bun-${{ runner.os }}-
+      # No package cache: restoring the shared 1.2 GB one took 31 to 60 s a
+      # shard, and an install from the registry takes 8 to 10 s.
       - run: bun install --frozen-lockfile
       - name: Browser regressions
         working-directory: clients/gui-app
