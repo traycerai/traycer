@@ -342,7 +342,7 @@ async function pressArrow(
 ): Promise<void> {
   await user.keyboard(`{${key}>}`);
   await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await new Promise((resolve) => setTimeout(resolve, 0));
   });
   await user.keyboard(`{/${key}}`);
 }
@@ -389,7 +389,7 @@ async function switchToCodexAndClose(user: UserEvent): Promise<void> {
 
 async function flushTicks(): Promise<void> {
   await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await new Promise((resolve) => setTimeout(resolve, 0));
   });
 }
 

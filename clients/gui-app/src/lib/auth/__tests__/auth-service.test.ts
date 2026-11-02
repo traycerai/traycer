@@ -3596,6 +3596,7 @@ describe("AuthService", () => {
     });
 
     it("stale reconcile does not clobber a concurrent signIn", async () => {
+      vi.useFakeTimers();
       const { service, host } = makeService();
       await service.start();
 
@@ -3629,7 +3630,7 @@ describe("AuthService", () => {
       });
       host.notifyTokenStoreChanged();
       // Let the reconcile start its validate await.
-      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      await vi.advanceTimersByTimeAsync(0);
 
       // Interactive sign-in wins (bumps identityGeneration).
       await service.signIn();
@@ -3645,7 +3646,7 @@ describe("AuthService", () => {
 
       // Release the stale reconcile's validation — it must drop on generation.
       deferredValidate.resolve(await okWithProfile());
-      await new Promise<void>((resolve) => setTimeout(resolve, 20));
+      await vi.advanceTimersByTimeAsync(20);
 
       expect(useAuthStore.getState().status).toBe("signed-in");
       expect(service.getCurrentSessionSnapshot().token).toBe("fresh-sign-in");

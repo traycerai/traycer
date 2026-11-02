@@ -39,6 +39,10 @@ vi.mock("@/hooks/auto-mode/use-auto-policy-query", () => ({
   useAutoPolicyQuery: () => harness.policy ?? { data: undefined },
 }));
 
+import {
+  advanceLegendListTime,
+  installLegendListTestClock,
+} from "@/components/chat/__tests__/legend-list-test-environment";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, render, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
@@ -303,6 +307,7 @@ describe("SupportEnvironmentBridge's states", () => {
   });
 
   it("asks a host that lacks environment.status for nothing else", async () => {
+    installLegendListTestClock();
     harness.methods.add("environment.setup.attempts");
     harness.methods.add("environment.secrets.list");
     let attempts = 0;
@@ -326,7 +331,7 @@ describe("SupportEnvironmentBridge's states", () => {
     await waitFor(() => {
       expect(getSupportEnvironmentSection()).toEqual({ status: "unavailable" });
     });
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await advanceLegendListTime(100);
     expect(attempts).toBe(0);
     expect(listed).toBe(0);
   });

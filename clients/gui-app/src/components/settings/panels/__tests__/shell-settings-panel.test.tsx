@@ -55,6 +55,10 @@ import {
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  advanceLegendListTime,
+  installLegendListTestClock,
+} from "@/components/chat/__tests__/legend-list-test-environment";
 import type {
   IRunnerHost,
   TraycerShellConfigSetInput,
@@ -2052,6 +2056,7 @@ function staleRefusal(requestId: string, method: string): HostRpcError {
 
 describe("<ShellSettingsPanel /> a save refused as stale", () => {
   it("after a save refused as stale, the field shows the latest value and leaving sends nothing more", async () => {
+    installLegendListTestClock();
     const cli = new MockTraycerCli();
     cli.shellConfig = {
       path: "/bin/zsh",
@@ -2094,9 +2099,7 @@ describe("<ShellSettingsPanel /> a save refused as stale", () => {
     cleanup();
     // A write sent on the way out is dispatched asynchronously; give it
     // room to reach the host before counting.
-    await act(async () => {
-      await new Promise<void>((resolve) => setTimeout(resolve, 100));
-    });
+    await advanceLegendListTime(100);
     expect(setCalls).toBe(1);
   });
 });

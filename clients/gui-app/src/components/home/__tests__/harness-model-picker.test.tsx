@@ -119,6 +119,10 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
+import {
+  advanceLegendListTime,
+  installLegendListTestClock,
+} from "@/components/chat/__tests__/legend-list-test-environment";
 import { matchDigitAction } from "@/lib/keybindings/dispatch";
 import type {
   HarnessModelSelection,
@@ -1888,6 +1892,7 @@ describe("<HarnessModelPicker />", () => {
   });
 
   it("does not use row-level scrollIntoView after a browsing rerender", async () => {
+    installLegendListTestClock();
     queryMock.cloneCatalogOnRead = true;
     const scrollSpy = vi
       .spyOn(Element.prototype, "scrollIntoView")
@@ -1912,9 +1917,7 @@ describe("<HarnessModelPicker />", () => {
       screen.getByRole("option", { name: /Claude Opus 4\.7/ }),
     );
 
-    await new Promise<void>((resolve) => {
-      window.setTimeout(resolve, 10);
-    });
+    await advanceLegendListTime(50);
     expect(scrollSpy).toHaveBeenCalledTimes(scrollCallCount);
   });
 
@@ -5452,7 +5455,7 @@ describe("<HarnessModelPicker />", () => {
         expect(spies.onOpenChange).toHaveBeenCalledTimes(5);
         // Radix arms its outside-press listener a tick after mounting.
         await act(async () => {
-          await new Promise((resolve) => setTimeout(resolve, 20));
+          await new Promise((resolve) => setTimeout(resolve, 0));
         });
         const outside = document.createElement("div");
         document.body.append(outside);
