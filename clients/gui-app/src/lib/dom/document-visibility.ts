@@ -1,5 +1,5 @@
 /**
- * Whether this WINDOW is on screen at all. Two inputs, AND-ed:
+ * Whether this WINDOW can be seen, from two inputs:
  *
  * 1. The Page Visibility API (`document.visibilityState`), which is what a
  *    plain browser tab hides on when it is backgrounded.
@@ -10,12 +10,21 @@
  * Desktop windows are background-throttled, so the first input reports a
  * minimised or hidden window as `"hidden"` there too, and a covered one on
  * macOS. Electron updates it on occlusion only there: on Windows and Linux a
- * covered window stays `"visible"` until it is minimised or hidden. The second
- * input covers the one exception: while a browser tile's WebRTC video plane
- * keeps throttling off (#1613,
+ * covered window stays `"visible"` until it is minimised or hidden. While a
+ * browser tile's WebRTC video plane keeps throttling off (#1613,
  * `lib/browser-view/tiles/desktop-background-rendering.ts`), DOM visibility
- * stays visible and only main can still report minimise/hide. A window covered
- * during that time is detected by neither input.
+ * stays visible and only main can still report minimise/hide.
+ *
+ * Two questions, so two answers:
+ *
+ * - {@link isDocumentVisible} - is anything here worth painting or polling?
+ *   Both inputs AND-ed, so a covered macOS window stops animating and polling.
+ * - {@link isWindowOnScreen} - may this window still claim the host state its
+ *   tasks hold (renderer parking and the cross-window report)? On the desktop
+ *   that is main's answer ALONE: a window the user has only covered with
+ *   another app is a window they are switching back to, and parking it makes
+ *   every return re-open its tasks on the host. Before the shell reports (a
+ *   plain browser, an older preload) it is the Page Visibility API.
  *
  * `visibilityState`, deliberately, and NOT `document.hasFocus()`. Focus answers
  * a different question: a window the user can plainly see loses focus the
@@ -28,13 +37,16 @@
  * desktop input is therefore PUSHED in by a setter rather than read from the
  * bridge here.
  *
- * A single module-level listener rather than one per component: this is one
- * fact about the window, every reader wants the same answer, and per-component
- * listeners would multiply with the surfaces they are meant to describe.
+ * A single module-level listener rather than one per component: these are facts
+ * about the window, every reader of one question wants the same answer, and
+ * per-component listeners would multiply with the surfaces they are meant to
+ * describe. Subscribers hear an edge of EITHER input and re-read the answer
+ * they use.
  *
  * NOT folded into `setEpicSurfaceVisibility`'s set, which stays per-renderer
- * surface PLACEMENT. Composition happens at the two consumers that want the
- * conjunction; see the comment on that setter for why the difference matters.
+ * surface PLACEMENT. Composition happens at the two consumers that combine the
+ * window with placement; see the comment on that setter for why the difference
+ * matters.
  */
 const listeners = new Set<() => void>();
 let installed = false;
@@ -42,9 +54,19 @@ let installed = false;
 // shell, and on the desktop a wrong "visible" only defers a reclaim, where a
 // wrong "hidden" would park something the user is looking at.
 let desktopWindowOnScreen = true;
+// Whether the desktop shell is reporting `desktopWindowOnScreen` for this
+// window at all. Until it is, the default `true` above is not an answer, so
+// `isWindowOnScreen` falls back to the Page Visibility API.
+let desktopShellReporting = false;
 
 export function isDocumentVisible(): boolean {
   return isBrowserDocumentVisible() && desktopWindowOnScreen;
+}
+
+export function isWindowOnScreen(): boolean {
+  return desktopShellReporting
+    ? desktopWindowOnScreen
+    : isBrowserDocumentVisible();
 }
 
 function isBrowserDocumentVisible(): boolean {
@@ -62,6 +84,18 @@ function isBrowserDocumentVisible(): boolean {
 export function setDesktopWindowOnScreen(onScreen: boolean): void {
   if (desktopWindowOnScreen === onScreen) return;
   desktopWindowOnScreen = onScreen;
+  notify();
+}
+
+/**
+ * Whether the desktop shell reports this window's on-screen state, which makes
+ * its answer the only input to {@link isWindowOnScreen}. Set once the bridge
+ * has delivered its first answer, cleared on teardown. Notifies only on a real
+ * change.
+ */
+export function setDesktopWindowOnScreenReporting(reporting: boolean): void {
+  if (desktopShellReporting === reporting) return;
+  desktopShellReporting = reporting;
   notify();
 }
 
@@ -91,6 +125,7 @@ function install(): void {
 export function __resetDocumentVisibilitySubscribersForTests(): void {
   listeners.clear();
   desktopWindowOnScreen = true;
+  desktopShellReporting = false;
 }
 
 /**
