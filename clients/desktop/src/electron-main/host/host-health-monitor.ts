@@ -325,11 +325,13 @@ export function startHostHealthMonitor(
   // Every busy episode leaves one line when it ends, so a report can tell a
   // 30 s hold from a 30 min one: the once-per-stall INFO says only that it
   // began. It names the host the episode was about and how it ended - the
-  // host answered, another host replaced it, or it died - and carries the
-  // holds the once-per-stall line stood for. Called before the episode's
-  // state is reset.
+  // host answered, another host replaced it, it died, or its snapshot was
+  // withdrawn (a stop, an uninstall, a respawn in progress) - and carries
+  // the holds the once-per-stall line stood for. Called before the episode's
+  // clock (`unreachableSince`) is reset; it closes the episode itself, so a
+  // second call for the same episode logs nothing.
   const noteBusyEpisodeEnded = (
-    outcome: "answered" | "replaced" | "died",
+    outcome: "answered" | "replaced" | "died" | "withdrawn",
     now: number,
   ): void => {
     if (busyLogged) {
@@ -341,6 +343,7 @@ export function startHostHealthMonitor(
           unreachableSince === null ? null : now - unreachableSince,
       });
     }
+    busyLogged = false;
     busyHolds = 0;
     busyPid = null;
   };
@@ -519,7 +522,6 @@ export function startHostHealthMonitor(
       // The process is gone - or its pid was recycled onto something else -
       // so fall through to the existing dead-host handling.
       noteBusyEpisodeEnded("died", Date.now());
-      busyLogged = false;
       longStallLogged = false;
       clearUnresponsive();
       return false;
@@ -584,6 +586,7 @@ export function startHostHealthMonitor(
         // nothing - whatever took the snapshot away (a stop, an uninstall, a
         // respawn in progress). The next published host starts a new outage,
         // even one that comes back under the same pid.
+        noteBusyEpisodeEnded("withdrawn", Date.now());
         outageHost = null;
         clearUnresponsive();
         // A deferred recovery intentionally demotes the snapshot before the
@@ -651,7 +654,6 @@ export function startHostHealthMonitor(
         // episode about the old one ended here, not when the new one answers.
         noteBusyEpisodeEnded("replaced", Date.now());
         unreachableSince = null;
-        busyLogged = false;
         longStallLogged = false;
         nextLivenessCheckAt = 0;
         clearUnresponsive();
@@ -668,7 +670,6 @@ export function startHostHealthMonitor(
       ) {
         consecutiveFailures = 0;
         noteBusyEpisodeEnded("answered", Date.now());
-        busyLogged = false;
         longStallLogged = false;
         clearUnresponsive();
         unreachableSince = null;
@@ -744,7 +745,6 @@ export function startHostHealthMonitor(
         // one probe (this reload's) and then stalls again would serve its next
         // long stall silently - the WARN latched by the previous outage never
         // cleared.
-        busyLogged = false;
         longStallLogged = false;
         clearUnresponsive();
         nextLivenessCheckAt = 0;

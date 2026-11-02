@@ -1947,6 +1947,67 @@ describe("startHostHealthMonitor", () => {
     }
   });
 
+  describe("a busy episode whose snapshot is withdrawn", () => {
+    const hostA: DesktopPublishedHostSnapshot = { ...SNAPSHOT, pid: 33321 };
+    const hostB: DesktopPublishedHostSnapshot = {
+      ...SNAPSHOT,
+      pid: 33322,
+      websocketUrl: "ws://127.0.0.1:55558/rpc",
+    };
+    const WITHDRAWN_END = {
+      pid: hostA.pid,
+      outcome: "withdrawn",
+      busyHolds: 5,
+      unreachableForMs: 10 * INTERVAL_MS,
+    };
+
+    /** Holds A busy for 10 ticks, withdraws it for 3, then returns `afterwards` for 5. */
+    async function withdrawA(
+      afterwards: DesktopPublishedHostSnapshot | null,
+    ): Promise<void> {
+      vi.mocked(log.info).mockClear();
+      const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+      let current: DesktopPublishedHostSnapshot | null = hostA;
+      publishThroughPidJson(() => current, PUBLISHED_IDENTITY);
+      const readLiveness = vi.fn(ALIVE);
+      const monitor = startHostHealthMonitor({
+        host: fakeHost({
+          getSnapshot: () => current,
+          reloadSnapshotFromDisk: vi.fn(async () => null),
+        }),
+        intervalMs: INTERVAL_MS,
+        probe: vi.fn(async (url: string) => url === hostB.websocketUrl),
+        readMetadata: vi.fn(async () => current),
+        respawn: vi.fn(async () => {}),
+        automaticRecoverySuspended: () => false,
+        governor: createHostRecoveryGovernor({ readLiveness, now: undefined }),
+        readLiveness,
+        readLiveSupervisorPid: () => Promise.resolve(null),
+        onHostUnresponsive: () => undefined,
+      });
+      try {
+        await ticks(10);
+        current = null;
+        await ticks(3);
+        current = afterwards;
+        await ticks(5);
+      } finally {
+        killSpy.mockRestore();
+        monitor.dispose();
+      }
+    }
+
+    it("logs its end as withdrawn, with a real duration, when the snapshot stays null", async () => {
+      await withdrawA(null);
+      expect(busyEpisodeEnds()).toEqual([WITHDRAWN_END]);
+    });
+
+    it("does not log it a second time as replaced when another host is published and answers", async () => {
+      await withdrawA(hostB);
+      expect(busyEpisodeEnds()).toEqual([WITHDRAWN_END]);
+    });
+  });
+
   it("hands a successful probe back to the lifecycle so a busy verdict can recover", async () => {
     // The recovery half of int #48. Probes against the wedged host succeeded
     // continuously for two hours on 2026-08-11 while the renderer was still
