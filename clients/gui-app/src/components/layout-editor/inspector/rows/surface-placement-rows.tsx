@@ -5,6 +5,7 @@ import {
   MoveHorizontal,
   Paintbrush,
   PanelLeft,
+  PanelLeftClose,
   PanelTop,
   Smartphone,
   UnfoldHorizontal,
@@ -71,9 +72,9 @@ import {
 /**
  * The rows that belong to an AREA rather than to a region: where the task tabs
  * sit, how they overflow and what their side strip shows; which side of the
- * task canvas the sidebar takes and whether agent rows carry resource
- * readings; the reading width; the composer toolbar's style; and the
- * small-screen status bar.
+ * task canvas the sidebar takes, whether a new task tab opens with it
+ * collapsed and whether agent rows carry resource readings; the reading
+ * width; the composer toolbar's style; and the small-screen status bar.
  *
  * Neither the tab strip nor the sidebar column is a region, so these rows sit
  * in their area's form in both hosts, drawn as a `LayoutFormRow`. Each reads
@@ -88,6 +89,7 @@ const TAB_STRIP_PLACEMENT_ROW = LAYOUT.definitions.tabStripPlacement;
 const SIDE_STRIP_VIEW_ROW = LAYOUT.definitions.sideStripView;
 const TAB_OVERFLOW_ROW = LAYOUT.definitions.taskTabLayout;
 const SIDEBAR_SIDE_ROW = LAYOUT.definitions.sidebarSide;
+const SIDEBAR_START_COLLAPSED_ROW = LAYOUT.definitions.sidebarStartCollapsed;
 const READING_WIDTH_ROW = LAYOUT.definitions.readingWidth;
 const RESOURCE_READINGS_ROW = LAYOUT.definitions.resourceReadings;
 const TOOLBAR_STYLE_ROW = LAYOUT.definitions.toolbarStyle;
@@ -140,6 +142,8 @@ function AreaRowView(
       return <SideStripViewRow {...placement} />;
     case "sidebarSide":
       return <SidebarSideRow {...placement} />;
+    case "sidebarStartCollapsed":
+      return <SidebarStartCollapsedRow {...placement} />;
     case "resourceReadings":
       return <ResourceReadingsRow {...placement} context={context} />;
     case "readingWidth":
@@ -328,6 +332,49 @@ export function SidebarSideRow(props: AreaRowPlacement): ReactNode {
           onChange={(next) => {
             if (next !== "left" && next !== "right") return;
             writeArrangementField("sidebarSide", next);
+          }}
+        />
+      }
+    />
+  );
+}
+
+/**
+ * Whether a task tab opened for the first time starts with its sidebar
+ * collapsed to the rail. Only the fallback for a tab with no collapse record
+ * of its own: a tab the user has collapsed or expanded keeps that
+ * (`mainCollapsedByTabId`), so flipping this never moves an open tab the user
+ * has already arranged.
+ */
+export function SidebarStartCollapsedRow(props: AreaRowPlacement): ReactNode {
+  const startCollapsed = useLayoutStore(
+    (state) => state.arrangement.sidebarStartCollapsed,
+  );
+  return (
+    <PlacementRow
+      {...props}
+      row={SIDEBAR_START_COLLAPSED_ROW}
+      icon={PanelLeftClose}
+      onRevert={
+        startCollapsed === DEFAULT_ARRANGEMENT.sidebarStartCollapsed
+          ? null
+          : () => {
+              writeArrangementField(
+                "sidebarStartCollapsed",
+                DEFAULT_ARRANGEMENT.sidebarStartCollapsed,
+              );
+            }
+      }
+      revertLabel="Reset sidebar collapsed in new tasks to default: Off"
+      description={SIDEBAR_START_COLLAPSED_ROW.description}
+      stacked={false}
+      selected={false}
+      control={
+        <Switch
+          aria-label={SIDEBAR_START_COLLAPSED_ROW.label}
+          checked={startCollapsed}
+          onCheckedChange={(next) => {
+            writeArrangementField("sidebarStartCollapsed", next);
           }}
         />
       }

@@ -178,6 +178,29 @@ export const LAYOUT = defineSettingsSection("layout", {
     keywords: ["sidebar", "left", "right", "side"],
   },
   /**
+   * Whether a task tab opened for the first time starts with the sidebar
+   * collapsed: a surface-level row, drawn by `SidebarStartCollapsedRow` on both
+   * hosts. A tab the user has collapsed or expanded keeps its own state.
+   */
+  sidebarStartCollapsed: {
+    kind: "row",
+    group: "sidebar",
+    search: { anchor: "layout-sidebar-start-collapsed" },
+    label: "Collapsed in new tasks",
+    description:
+      "New task tabs open with the sidebar collapsed to its icons. A tab you expand stays expanded.",
+    availableWhen: isDesktopLayoutRowAvailable,
+    keywords: [
+      "sidebar",
+      "collapsed",
+      "collapse",
+      "hidden",
+      "default",
+      "new task",
+      "start",
+    ],
+  },
+  /**
    * The resource readings beside each agent and terminal row, drawn by
    * `ResourceReadingsRow` on both hosts. Whether rows print is this switch;
    * which readings is the Resource monitor's Metrics choice (L-174).
