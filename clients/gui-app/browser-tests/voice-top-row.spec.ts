@@ -59,6 +59,34 @@ async function middleOf(locator: Locator): Promise<number> {
   return box.x + box.width / 2;
 }
 
+/**
+ * Reads the controls, not the box around them: that box may shrink for its
+ * readings, and whatever it cannot shrink spills out past its edge, so its own
+ * right edge stays in the window when the controls in it do not.
+ */
+async function expectHeaderControlsInWindow(
+  page: Page,
+  width: number,
+): Promise<void> {
+  const controls = page
+    .getByTestId("app-header")
+    .locator("> :last-child")
+    .locator("button, a");
+  await expect(controls.first()).toBeVisible();
+  await expect
+    .poll(() =>
+      controls.evaluateAll((nodes) =>
+        Math.max(...nodes.map((node) => node.getBoundingClientRect().right)),
+      ),
+    )
+    .toBeLessThanOrEqual(width);
+  const sideways = await page.evaluate(() => {
+    const root = document.documentElement;
+    return root.scrollWidth - root.clientWidth;
+  });
+  expect(sideways).toBe(0);
+}
+
 test("Talk is on the middle of the header with the tabs at the top", async ({
   page,
 }) => {
@@ -197,13 +225,28 @@ for (const width of [1400, 1100, 900, 800, 768]) {
     const actions = await boxOf(
       page.getByTestId("app-header").locator("> :last-child"),
     );
-    expect(rightOf(actions)).toBeLessThanOrEqual(width);
+    await expectHeaderControlsInWindow(page, width);
     expect(actions.x).toBeGreaterThanOrEqual(rightOf(zone));
     await nextFrames(page, 3);
     expect(await page.evaluate(() => window.__voiceTopRowErrors)).toEqual([]);
     // The focus line is gone, so the state word's tooltip names the destination.
     await page.getByTestId("voice-strip-state").hover();
     await expect(page.getByRole("tooltip")).toHaveCount(1);
+  });
+}
+
+for (const width of [1400, 1100, 900, 800, 768]) {
+  test(`with 12 real tabs at ${String(width)}px and no session the window does not scroll sideways`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width, height: 800 });
+    await open(page, "placement=top");
+    await page.evaluate(() => window.__voiceTopRowProbe?.openTabs(12));
+    await page.getByTestId("header-tab-strip-scroll").waitFor();
+    await expectHeaderControlsInWindow(page, width);
+    await expect
+      .poll(async () => rightOf(await boxOf(talk(page))))
+      .toBeLessThanOrEqual(width);
   });
 }
 

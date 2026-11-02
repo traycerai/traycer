@@ -161,7 +161,10 @@ function tabStripBoxClass(
     "relative z-10 flex items-center",
     // With a centre zone the box is as wide as its tabs, so they give up only
     // the width the zone needs, and it gives way before the zone's controls do.
-    centreZone ? "flex-[0_1_auto]" : "flex-1",
+    // Its shrink weight is what makes it give way first: flex shrinks by weight
+    // times base size, so at weight 1 the tabs' wide base would also squeeze the
+    // header's controls out past the window's edge.
+    centreZone ? "flex-[0_1000_auto]" : "flex-1",
     showTabStrip && !centreZone ? "min-w-[30%]" : "min-w-0",
     draggable && "[-webkit-app-region:drag]",
   );
