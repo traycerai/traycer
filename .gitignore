@@ -22,6 +22,7 @@ tmp
 coverage*.json
 /clients/gui-app/test-results*/
 /protocol/test-results/
+/clients/gui-app/test-results.json
 /clients/gui-app/playwright-report/
 .claude
 .agents

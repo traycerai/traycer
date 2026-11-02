@@ -148,15 +148,15 @@ const CASES = [
     name: "a: turn every 250ms, 1500px",
     turnMs: 250,
     upPx: 1500,
-    stopMs: 3000,
+    stopMs: 1500,
   },
   {
     name: "b: turn every 400ms, 1500px",
     turnMs: 400,
     upPx: 1500,
-    stopMs: 3000,
+    stopMs: 1500,
   },
-  { name: "c: turn every 250ms, 300px", turnMs: 250, upPx: 300, stopMs: 3000 },
+  { name: "c: turn every 250ms, 300px", turnMs: 250, upPx: 300, stopMs: 1500 },
   {
     name: "d: as a, stream stops 50ms after the click",
     turnMs: 250,
@@ -185,7 +185,7 @@ for (const c of CASES) {
         turnMs,
       );
     }, c.turnMs);
-    await page.waitForTimeout(600);
+    await nextFrames(page, 30);
     await page.mouse.move(195, 350);
     const steps = Math.ceil(c.upPx / 500);
     await wheelsDelivered(
@@ -197,7 +197,6 @@ for (const c of CASES) {
       2,
     );
     await nextFrames(page, 2);
-    await page.waitForTimeout(400);
     await expect
       .poll(() => page.evaluate(() => window.__chatScrollProbe.pillShown()))
       .toBe(true);
@@ -220,7 +219,7 @@ for (const c of CASES) {
       window.clearInterval(window.__pillTurnTimer);
     });
     // The stream is off: let any pill work in flight finish before reading.
-    await page.waitForTimeout(c.stopMs === 3000 ? 0 : 2000);
+    if (c.stopMs < 1500) await nextFrames(page, 60);
     const result = await page.evaluate(() => {
       const hook = window.__pillHook;
       if (hook === undefined) throw new Error("hook missing");

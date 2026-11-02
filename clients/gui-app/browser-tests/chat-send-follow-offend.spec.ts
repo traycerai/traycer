@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { streamRuns } from "./support/chat-send-follow.ts";
 import { fixture, nextFrames } from "./support/fixtures.ts";
 
 // Why does a frame read off the end during a streaming reply? Instruments the
@@ -356,10 +357,10 @@ for (const [reply, runs] of [
       await page.evaluate((kind) => {
         window.__ofStep = "stream";
         if (kind === "rich")
-          window.__followDriver?.host.streamRich("reply", 5, 40);
+          window.__followDriver?.host.streamRich("reply", 2, 20);
         else window.__followDriver?.host.streamReply(100, 40);
       }, reply);
-      await page.waitForTimeout(reply === "rich" ? 6000 : 2000);
+      await streamRuns(page, reply === "rich" ? 60 : 30);
       await page.evaluate(() => {
         window.__followDriver?.host.stopReply();
         window.__ofStep = "after";

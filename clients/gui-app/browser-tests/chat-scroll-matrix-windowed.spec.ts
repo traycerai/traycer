@@ -206,7 +206,7 @@ test.describe("W1: a reader parked in the cold region through a re-estimate", ()
       await page.evaluate(() => {
         window.__chatScrollProbe.send("A prompt from the scrollback");
       });
-      await page.waitForTimeout(150);
+      await nextFrames(page, 9);
       await page.evaluate(() => window.__chatScrollProbe.hostAccept());
       await expectAtRest(
         page,
@@ -223,7 +223,7 @@ test.describe("W1: a reader parked in the cold region through a re-estimate", ()
     const parked = await parkInCold(page, 40);
     await withTimeline(page, async () => {
       await remountVia(page, "remountLater");
-      await page.waitForTimeout(500);
+      await nextFrames(page, 30);
       await expectPositionKept(page, parked, "W1 remountLater(true)");
     });
   });
@@ -233,7 +233,7 @@ test.describe("W1: a reader parked in the cold region through a re-estimate", ()
     const intent = intentFrom(await parkInCold(page, 40));
     await withTimeline(page, async () => {
       await page.evaluate(() => window.__chatScrollProbe.evictCold());
-      await page.waitForTimeout(500);
+      await nextFrames(page, 30);
       await expectAtRest(page, intent, "W1 evictCold");
     });
   });
@@ -258,7 +258,7 @@ test.describe("W2: a reader parked on rows a completion snapshot dehydrates", ()
       await page.evaluate(() =>
         window.__chatScrollProbe.startParagraphStream(100),
       );
-      await page.waitForTimeout(1_500);
+      await nextFrames(page, 60);
       await page.evaluate(() => window.__chatScrollProbe.stopStream());
       await expectAtRest(
         page,
@@ -267,7 +267,7 @@ test.describe("W2: a reader parked on rows a completion snapshot dehydrates", ()
       );
       const stopWatch = await watchPlaceholder(page, intent.messageId);
       await page.evaluate(() => window.__chatScrollProbe.finishTurn());
-      await page.waitForTimeout(600);
+      await nextFrames(page, 36);
       const placeholderFrames = await stopWatch();
       test.info().annotations.push({
         type: "reading row placeholder frames",
@@ -298,7 +298,8 @@ test.describe("W3: evictCold while the reader is parked", () => {
       );
       await withTimeline(page, async () => {
         await page.evaluate(() => window.__chatScrollProbe.evictCold());
-        await page.waitForTimeout(latency + 500);
+        await page.waitForTimeout(latency);
+        await nextFrames(page, 30);
         await expectAtRest(
           page,
           intent,
@@ -324,9 +325,9 @@ test.describe("W4: minimap picks into cold turns", () => {
     await openAtRest(page, "");
     await withTimeline(page, async () => {
       await page.evaluate(() => window.__chatScrollProbe.startStream(50));
-      await page.waitForTimeout(300);
+      await nextFrames(page, 12);
       const intent = await pickItem(page, 30);
-      await page.waitForTimeout(1_000);
+      await nextFrames(page, 40);
       await page.evaluate(() => window.__chatScrollProbe.stopStream());
       await expectAtRest(page, intent, "W4 pick 30 while streaming");
     });
@@ -372,7 +373,7 @@ test.describe("W4: minimap picks into cold turns", () => {
     await openAtRest(page, "");
     await withTimeline(page, async () => {
       const intent = await pickItem(page, 50);
-      await page.waitForTimeout(300);
+      await nextFrames(page, 18);
       await page.evaluate(() => window.__chatScrollProbe.evictCold());
       await expectAtRest(page, intent, "W4 pick 50 then evictCold");
     });
@@ -412,7 +413,7 @@ test.describe("W5: the position family on the windowed line", () => {
       const parked = await parkInCold(page, 40);
       await withTimeline(page, async () => {
         await step.act(page);
-        await page.waitForTimeout(500);
+        await nextFrames(page, 30);
         await expectPositionKept(page, parked, `W5 ${step.name}`);
       });
     });
@@ -436,12 +437,12 @@ test.describe("W6: a send at the bottom with the dock changing and a wheel-down 
           window.setTimeout(() => probe.hostAccept(), 150);
           window.setTimeout(() => probe.assistantStarts(), 300);
           window.setTimeout(() => probe.startParagraphStream(100), 400);
-          window.setTimeout(() => probe.stopStream(), 2_400);
+          window.setTimeout(() => probe.stopStream(), 1_400);
         });
         const sentAt = Date.now();
         await page.waitForTimeout(delayMs);
         await wheelDownBurst(page);
-        await page.waitForTimeout(Math.max(0, 2_600 - (Date.now() - sentAt)));
+        await page.waitForTimeout(Math.max(0, 1_600 - (Date.now() - sentAt)));
         const view = await readView(page);
         await expectAtRest(
           page,
@@ -463,12 +464,12 @@ test.describe("W6 control: the same burst into a stream, with no send", () => {
       await page.evaluate(() => {
         const probe = window.__chatScrollProbe;
         probe.startParagraphStream(100);
-        window.setTimeout(() => probe.stopStream(), 2_000);
+        window.setTimeout(() => probe.stopStream(), 1_000);
       });
       const startedAt = Date.now();
       await page.waitForTimeout(16);
       await wheelDownBurst(page);
-      await page.waitForTimeout(Math.max(0, 2_200 - (Date.now() - startedAt)));
+      await page.waitForTimeout(Math.max(0, 1_200 - (Date.now() - startedAt)));
       await expectAtRest(
         page,
         { kind: "tail" },
