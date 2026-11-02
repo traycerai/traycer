@@ -5044,8 +5044,9 @@ export function createChatSessionStoreWithNotificationDependencies(
           lastSendSnapshotRevision: (state.sendHostFrameRevision ?? 0) + 1,
           runStatus: frame.snapshot.runStatus,
           activeTurn: frame.snapshot.activeTurn,
-          renamedTurnIds: snapshotRenamedTurnIds(
-            state,
+          renamedTurnIds: nextRenamedTurnIds(
+            state.renamedTurnIds,
+            state.activeTurn,
             frame.snapshot.activeTurn,
           ),
           turnInProgress: frame.snapshot.turnInProgress,
@@ -9567,10 +9568,11 @@ export function createChatSessionStoreWithNotificationDependencies(
             sendHostFrameRevision: (state.sendHostFrameRevision ?? 0) + 1,
             runStatus: frame.runStatus,
             activeTurn: frame.activeTurn,
-            renamedTurnIds: nextRenamedTurnIds(state.renamedTurnIds, {
-              previousTurnId,
-              nextTurnId,
-            }),
+            renamedTurnIds: nextRenamedTurnIds(
+              state.renamedTurnIds,
+              state.activeTurn,
+              frame.activeTurn,
+            ),
             turnInProgress: frame.turnInProgress ?? state.turnInProgress,
             turnLifecycleRevision: nextTurnLifecycleRevision(state, {
               activeTurn: frame.activeTurn,
@@ -15990,45 +15992,29 @@ function turnRemapFor(turnIds: {
 const NO_RENAMED_TURN_IDS: ReadonlyMap<string, string> = new Map();
 
 /**
- * The same rule as {@link turnRemapFor}, kept for a caller holding an older id.
+ * The older ids of the turn still running, kept for a caller holding one. The
+ * same start and the same user message mean the same execution under a new id,
+ * whether a frame names the change or a snapshot reports only where the turn
+ * ended up; anything else is another turn, and the old ids go with the old turn.
  * The turn's current id never has an entry of its own, so every chain ends at it.
  */
 function nextRenamedTurnIds(
   renamed: ReadonlyMap<string, string>,
-  turnIds: {
-    readonly previousTurnId: string | null;
-    readonly nextTurnId: string | null;
-  },
-): ReadonlyMap<string, string> {
-  const { previousTurnId, nextTurnId } = turnIds;
-  if (nextTurnId === null) return NO_RENAMED_TURN_IDS;
-  if (previousTurnId === null || turnRemapFor(turnIds) === null) return renamed;
-  const next = new Map(renamed);
-  next.delete(nextTurnId);
-  return next.set(previousTurnId, nextTurnId);
-}
-
-/**
- * A snapshot reports only where a turn ended up, and a frame that would have
- * named a rename may have been missed offline. The same start and the same user
- * message mean the same execution under a new id; anything else is another turn.
- */
-function snapshotRenamedTurnIds(
-  state: Pick<ChatSessionState, "activeTurn" | "renamedTurnIds">,
+  previousTurn: ChatActiveTurn | null,
   nextTurn: ChatActiveTurn | null,
 ): ReadonlyMap<string, string> {
-  const previousTurn = state.activeTurn;
-  if (previousTurn === null || nextTurn === null) return NO_RENAMED_TURN_IDS;
   if (
+    previousTurn === null ||
+    nextTurn === null ||
     previousTurn.startedAt !== nextTurn.startedAt ||
     previousTurn.userMessageId !== nextTurn.userMessageId
   ) {
     return NO_RENAMED_TURN_IDS;
   }
-  return nextRenamedTurnIds(state.renamedTurnIds, {
-    previousTurnId: previousTurn.turnId,
-    nextTurnId: nextTurn.turnId,
-  });
+  if (previousTurn.turnId === nextTurn.turnId) return renamed;
+  const next = new Map(renamed);
+  next.delete(nextTurn.turnId);
+  return next.set(previousTurn.turnId, nextTurn.turnId);
 }
 
 /** The id `turnId` goes by now, following the renames of the turn still running. */

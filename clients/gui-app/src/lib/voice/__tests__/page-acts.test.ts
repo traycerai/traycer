@@ -994,6 +994,43 @@ describe("a spoken stop that waits for its yes", () => {
     expect(h.notices).toEqual([]);
   });
 
+  describe("when a live frame replaces the turn with another execution", () => {
+    it.each([
+      { name: "started at another time", other: { startedAt: 2 } },
+      { name: "answers another message", other: { userMessageId: "m-2" } },
+    ])(
+      "does not stop a turn that $name, though no frame between named that the turn ended",
+      async ({ other }) => {
+        const session = openSession({ ...READY_TO_SEND, running: true });
+        const h = buildLoop(session);
+        await askToStop(h);
+        moveToTurn(session, { ...TURN_B, ...other });
+
+        await sayYes(h);
+
+        expect(stopFrames(session)).toEqual([]);
+        expect(h.notices).toEqual([
+          { text: TURN_ENDED_NOTICE, delegationId: "d-1" },
+        ]);
+      },
+    );
+
+    it("forgets a rename the live frames made once another execution takes over under the renamed turn's id", async () => {
+      const session = openSession({ ...READY_TO_SEND, running: true });
+      const h = buildLoop(session);
+      await askToStop(h);
+      moveToTurn(session, TURN_B);
+      moveToTurn(session, { ...TURN_B, startedAt: 2 });
+
+      await sayYes(h);
+
+      expect(stopFrames(session)).toEqual([]);
+      expect(h.notices).toEqual([
+        { text: TURN_ENDED_NOTICE, delegationId: "d-1" },
+      ]);
+    });
+  });
+
   describe("across a reconnect", () => {
     /** The stream drops and returns, and the host's snapshot names `turn`. */
     function reconnectOnto(session: Session, turn: ChatActiveTurn | null) {
