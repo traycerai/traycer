@@ -67,6 +67,7 @@ import {
   setEnvOverride,
   setAgentBrowserAccess,
   setAgentPages,
+  setAgentFeedbackEnabled,
   setAgentRolesEnabled,
   setAgentWorktreeCreatePolicy,
   setLogLevels,
@@ -96,10 +97,12 @@ describe("cli config store", () => {
     expect(await readFeatureSettings()).toEqual({
       agentRoles: false,
       artifactVersioning: false,
+      agentFeedback: true,
     });
     expect(readFeatureSettingsSync()).toEqual({
       agentRoles: false,
       artifactVersioning: false,
+      agentFeedback: true,
     });
   });
 
@@ -113,7 +116,11 @@ describe("cli config store", () => {
       },
       envOverrides: { FOO: "bar" },
       logs: { cliLogLevel: "info" as const, hostLogLevel: "info" as const },
-      features: { agentRoles: false, artifactVersioning: false },
+      features: {
+        agentRoles: false,
+        artifactVersioning: false,
+        agentFeedback: true,
+      },
       browser: { agentAccess: true },
       worktrees: { agentCreate: "allow" as const },
       catalog: { probeTimeoutSeconds: 60 },
@@ -188,6 +195,7 @@ describe("cli config store", () => {
     expect(readFeatureSettingsSync()).toEqual({
       agentRoles: false,
       artifactVersioning: false,
+      agentFeedback: false,
     });
 
     await writeRaw(
@@ -201,6 +209,7 @@ describe("cli config store", () => {
     expect(readFeatureSettingsSync()).toEqual({
       agentRoles: false,
       artifactVersioning: false,
+      agentFeedback: false,
     });
 
     await writeRaw(
@@ -214,6 +223,7 @@ describe("cli config store", () => {
     expect(readFeatureSettingsSync()).toEqual({
       agentRoles: false,
       artifactVersioning: false,
+      agentFeedback: false,
     });
   });
 
@@ -231,6 +241,7 @@ describe("cli config store", () => {
         expect(readFeatureSettingsSync()).toEqual({
           agentRoles: false,
           artifactVersioning: false,
+          agentFeedback: false,
         });
       } finally {
         await chmod(cliConfigPath(), 0o600);
@@ -247,6 +258,7 @@ describe("cli config store", () => {
     expect(await readFeatureSettings()).toEqual({
       agentRoles: true,
       artifactVersioning: false,
+      agentFeedback: true,
     });
     expect(await readCliConfig()).toMatchObject({
       shell: {
@@ -262,6 +274,7 @@ describe("cli config store", () => {
     expect(await readFeatureSettings()).toEqual({
       agentRoles: false,
       artifactVersioning: false,
+      agentFeedback: true,
     });
     expect(await readCliConfig()).toMatchObject({
       shell: {
@@ -270,7 +283,49 @@ describe("cli config store", () => {
       },
       envOverrides: { FOO: "bar" },
       logs: { cliLogLevel: "debug", hostLogLevel: "warn" },
-      features: { agentRoles: false, artifactVersioning: false },
+      features: {
+        agentRoles: false,
+        artifactVersioning: false,
+        agentFeedback: true,
+      },
+    });
+  });
+
+  it("defaults agent feedback on when the config does not set it", async () => {
+    await writeRaw(
+      JSON.stringify({
+        version: 1,
+        shell: { path: null, args: null },
+        envOverrides: {},
+        features: { agentRoles: true },
+      }),
+    );
+    expect(readFeatureSettingsSync()).toEqual({
+      agentRoles: true,
+      artifactVersioning: false,
+      agentFeedback: true,
+    });
+  });
+
+  it("sets agent feedback and preserves other settings", async () => {
+    await setShell("/bin/fish", ["-l"]);
+    await setAgentRolesEnabled(true);
+
+    await setAgentFeedbackEnabled(false);
+    expect(readFeatureSettingsSync().agentFeedback).toBe(false);
+    expect(await readFeatureSettings()).toEqual({
+      agentRoles: true,
+      artifactVersioning: false,
+      agentFeedback: false,
+    });
+    expect(await readCliConfig()).toMatchObject({
+      shell: { path: "/bin/fish", args: ["-l"] },
+    });
+
+    await setAgentFeedbackEnabled(true);
+    expect(await readFeatureSettings()).toMatchObject({
+      agentRoles: true,
+      agentFeedback: true,
     });
   });
 
@@ -477,7 +532,11 @@ describe("cli config store", () => {
       shell: { path: "/bin/zsh", args: null, entries: [] },
       envOverrides: {},
       logs: { cliLogLevel: "info", hostLogLevel: "info" },
-      features: { agentRoles: false, artifactVersioning: false },
+      features: {
+        agentRoles: false,
+        artifactVersioning: false,
+        agentFeedback: true,
+      },
       browser: { agentAccess: true },
       worktrees: { agentCreate: "allow" },
       catalog: { probeTimeoutSeconds: 60 },

@@ -1129,10 +1129,14 @@ export function readFeatureSettingsSync(): FeatureSettings {
     const raw = readFileSync(cliConfigPath(), "utf8");
     const result = parseCliConfig(JSON.parse(raw));
     if (result.success) return result.data.features;
-  } catch {
+  } catch (error) {
+    // No config file is the unset case, so agent feedback keeps its default.
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+      return { agentRoles: false, artifactVersioning: false, agentFeedback: true };
+    }
     // Feature gates must remain safe even when config cannot be read.
   }
-  return { agentRoles: false, artifactVersioning: false };
+  return { agentRoles: false, artifactVersioning: false, agentFeedback: false };
 }
 
 /** Enables or disables agent roles while preserving the rest of the config. */
@@ -1144,6 +1148,15 @@ export async function setAgentRolesEnabled(enabled: boolean): Promise<void> {
     },
     result: undefined,
   }));
+}
+
+/** Enables or disables agent feedback while preserving the rest of the config. */
+export async function setAgentFeedbackEnabled(enabled: boolean): Promise<void> {
+  const current = await readCliConfig();
+  await writeCliConfig({
+    ...current,
+    features: { ...current.features, agentFeedback: enabled },
+  });
 }
 
 /** Whether agents may drive the in-app browser (default on when unset). */

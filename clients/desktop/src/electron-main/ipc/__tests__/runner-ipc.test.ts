@@ -88,7 +88,10 @@ import {
   userBearerClaims,
 } from "../../auth/__tests__/jws-fixture";
 
-const featureSettings = vi.hoisted(() => ({ agentRoles: false }));
+const featureSettings = vi.hoisted(() => ({
+  agentRoles: false,
+  agentFeedback: true,
+}));
 /** The control-plane call the `runSandboxVerb` handler makes, observed. */
 const runSandboxVerbViaHttpMock = vi.hoisted(() =>
   vi.fn<typeof runSandboxVerbViaHttp>(async () => ({
@@ -238,17 +241,26 @@ const appEventState = vi.hoisted(() => ({
   listeners: new Map<string, Set<(...args: unknown[]) => void>>(),
 }));
 const readFeatureSettingsMock = vi.hoisted(() =>
-  vi.fn(async () => ({ agentRoles: featureSettings.agentRoles })),
+  vi.fn(async () => ({
+    agentRoles: featureSettings.agentRoles,
+    agentFeedback: featureSettings.agentFeedback,
+  })),
 );
 const setAgentRolesEnabledMock = vi.hoisted(() =>
   vi.fn(async (enabled: boolean) => {
     featureSettings.agentRoles = enabled;
   }),
 );
+const setAgentFeedbackEnabledMock = vi.hoisted(() =>
+  vi.fn(async (enabled: boolean) => {
+    featureSettings.agentFeedback = enabled;
+  }),
+);
 vi.mock("@traycer/protocol/config/store", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@traycer/protocol/config/store")>()),
   readFeatureSettings: readFeatureSettingsMock,
   setAgentRolesEnabled: setAgentRolesEnabledMock,
+  setAgentFeedbackEnabled: setAgentFeedbackEnabledMock,
 }));
 
 /**
@@ -734,8 +746,10 @@ beforeEach(() => {
   sentMessages.length = 0;
   vi.unstubAllGlobals();
   featureSettings.agentRoles = false;
+  featureSettings.agentFeedback = true;
   readFeatureSettingsMock.mockClear();
   setAgentRolesEnabledMock.mockClear();
+  setAgentFeedbackEnabledMock.mockClear();
 });
 
 afterEach(() => {
@@ -1018,6 +1032,7 @@ describe("RunnerIpcBridge", () => {
           RunnerHostInvoke.logLevelsSet,
           RunnerHostInvoke.featureSettingsGet,
           RunnerHostInvoke.agentRolesEnabledSet,
+          RunnerHostInvoke.agentFeedbackEnabledSet,
           RunnerHostInvoke.fontsList,
           RunnerHostInvoke.zoomGet,
           RunnerHostInvoke.zoomSet,
@@ -1102,18 +1117,54 @@ describe("RunnerIpcBridge", () => {
 
     await expect(getHandler(bareEvent())).resolves.toEqual({
       agentRoles: false,
+      agentFeedback: true,
     });
     await expect(setHandler(bareEvent(), true)).resolves.toEqual({
       agentRoles: true,
+      agentFeedback: true,
     });
     expect(setAgentRolesEnabledMock).toHaveBeenCalledWith(true);
     await expect(getHandler(bareEvent())).resolves.toEqual({
       agentRoles: true,
+      agentFeedback: true,
     });
     await expect(setHandler(bareEvent(), "yes")).rejects.toThrow(
       "featureSettings:agentRoles:set requires a boolean",
     );
     expect(setAgentRolesEnabledMock).toHaveBeenCalledTimes(1);
+    bridge.dispose();
+  });
+
+  it("updates agent feedback through the feature-settings IPC channel", async () => {
+    const mod = await import("../register-runner-ipc");
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      hostController: new FakeHostController(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      tray: null,
+      zoomController: undefined,
+      authTokenStore: undefined,
+      window: buildWindow(),
+    });
+    bridge.install();
+
+    const setHandler = ipcMainState.handlers.get(
+      RunnerHostInvoke.agentFeedbackEnabledSet,
+    );
+    if (setHandler === undefined) {
+      throw new Error("agent feedback IPC handler was not registered");
+    }
+
+    await expect(setHandler(bareEvent(), false)).resolves.toEqual({
+      agentRoles: false,
+      agentFeedback: false,
+    });
+    expect(setAgentFeedbackEnabledMock).toHaveBeenCalledWith(false);
+    await expect(setHandler(bareEvent(), "no")).rejects.toThrow(
+      "featureSettings:agentFeedback:set requires a boolean",
+    );
+    expect(setAgentFeedbackEnabledMock).toHaveBeenCalledTimes(1);
     bridge.dispose();
   });
 

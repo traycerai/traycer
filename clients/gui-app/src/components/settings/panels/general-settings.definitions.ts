@@ -173,6 +173,16 @@ export const GENERAL = defineSettingsSection("general", {
       "labs",
     ],
   },
+  agentFeedback: {
+    kind: "row",
+    group: "agents",
+    search: { anchor: "general-agent-feedback" },
+    label: "Agent feedback",
+    description:
+      "Let agents send Traycer's maintainers problems and suggestions about Traycer. Agents are told to describe the need in general terms, not your work, and reports carry no account or chat ids.",
+    availableWhen: alwaysAvailable,
+    keywords: ["feedback", "suggestions", "telemetry", "privacy", "sentry"],
+  },
   // Gated on the SELECTED HOST (both `chatAutoArchive.*` methods advertised),
   // which no shell-level predicate can decide, so it has no entry of its own:
   // its label and keywords fold into the Agents group, a destination drawn in

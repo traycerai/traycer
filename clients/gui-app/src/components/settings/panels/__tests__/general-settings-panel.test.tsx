@@ -114,10 +114,18 @@ const windowsBridgeMock = vi.hoisted(
 );
 
 interface TestFeatureSettingsBridge {
-  readonly get: Mock<() => Promise<{ readonly agentRoles: boolean }>>;
+  readonly get: Mock<() => Promise<TestFeatureSettings>>;
   readonly setAgentRolesEnabled: Mock<
-    (enabled: boolean) => Promise<{ readonly agentRoles: boolean }>
+    (enabled: boolean) => Promise<TestFeatureSettings>
   >;
+  readonly setAgentFeedbackEnabled: Mock<
+    (enabled: boolean) => Promise<TestFeatureSettings>
+  >;
+}
+
+interface TestFeatureSettings {
+  readonly agentRoles: boolean;
+  readonly agentFeedback: boolean;
 }
 
 const hostQueryMocks = vi.hoisted((): HostQueryMocks => ({
@@ -293,11 +301,14 @@ describe("GeneralSettingsPanel", () => {
   it("hydrates and updates Agent roles with an Experimental badge beside the label", async () => {
     let agentRoles = false;
     const bridge: TestFeatureSettingsBridge = {
-      get: vi.fn(() => Promise.resolve({ agentRoles })),
+      get: vi.fn(() => Promise.resolve({ agentRoles, agentFeedback: true })),
       setAgentRolesEnabled: vi.fn((enabled) => {
         agentRoles = enabled;
-        return Promise.resolve({ agentRoles });
+        return Promise.resolve({ agentRoles, agentFeedback: true });
       }),
+      setAgentFeedbackEnabled: vi.fn((enabled) =>
+        Promise.resolve({ agentRoles, agentFeedback: enabled }),
+      ),
     };
     (globalThis as { runnerHost?: unknown }).runnerHost = {
       platform: { featureSettings: bridge },
@@ -325,11 +336,40 @@ describe("GeneralSettingsPanel", () => {
     await waitFor(() => expect(bridge.get).toHaveBeenCalledTimes(2));
   });
 
+  it("reflects Agent feedback and calls setAgentFeedbackEnabled when toggled", async () => {
+    const bridge: TestFeatureSettingsBridge = {
+      get: vi.fn(() => Promise.resolve({ agentRoles: false, agentFeedback: true })),
+      setAgentRolesEnabled: vi.fn((enabled) =>
+        Promise.resolve({ agentRoles: enabled, agentFeedback: true }),
+      ),
+      setAgentFeedbackEnabled: vi.fn((enabled) =>
+        Promise.resolve({ agentRoles: false, agentFeedback: enabled }),
+      ),
+    };
+    (globalThis as { runnerHost?: unknown }).runnerHost = {
+      platform: { featureSettings: bridge },
+    };
+
+    renderPanel();
+
+    const toggle = screen.getByRole("switch", { name: "Agent feedback" });
+    await waitFor(() => expect(toggle.hasAttribute("disabled")).toBe(false));
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
+    fireEvent.click(toggle);
+    await waitFor(() =>
+      expect(bridge.setAgentFeedbackEnabled).toHaveBeenCalledWith(false),
+    );
+    expect(bridge.setAgentRolesEnabled).not.toHaveBeenCalled();
+  });
+
   it("surfaces feature-settings read failures and keeps Agent roles disabled", async () => {
     const bridge: TestFeatureSettingsBridge = {
       get: vi.fn(() => Promise.reject(new Error("invalid config"))),
       setAgentRolesEnabled: vi.fn((enabled) =>
-        Promise.resolve({ agentRoles: enabled }),
+        Promise.resolve({ agentRoles: enabled , agentFeedback: true }),
+      ),
+      setAgentFeedbackEnabled: vi.fn((enabled) =>
+        Promise.resolve({ agentRoles: false, agentFeedback: enabled }),
       ),
     };
     (globalThis as { runnerHost?: unknown }).runnerHost = {
@@ -339,8 +379,8 @@ describe("GeneralSettingsPanel", () => {
     renderPanel();
 
     expect(
-      await screen.findByText(/Couldn't read feature settings/),
-    ).toBeTruthy();
+      (await screen.findAllByText(/Couldn't read feature settings/)).length,
+    ).toBeGreaterThan(0);
     expect(
       screen
         .getByRole("switch", { name: "Agent roles" })
@@ -351,8 +391,11 @@ describe("GeneralSettingsPanel", () => {
 
   it("preserves the Agent roles value when the settings write fails", async () => {
     const bridge: TestFeatureSettingsBridge = {
-      get: vi.fn(() => Promise.resolve({ agentRoles: false })),
+      get: vi.fn(() => Promise.resolve({ agentRoles: false, agentFeedback: true })),
       setAgentRolesEnabled: vi.fn(() =>
+        Promise.reject(new Error("write failed")),
+      ),
+      setAgentFeedbackEnabled: vi.fn(() =>
         Promise.reject(new Error("write failed")),
       ),
     };
@@ -693,9 +736,12 @@ describe("GeneralSettingsPanel", () => {
 
   it("puts the four Agents rows in order, badges Agent roles as Experimental, and draws no old group headings or radios", () => {
     const featureSettings: TestFeatureSettingsBridge = {
-      get: vi.fn(() => Promise.resolve({ agentRoles: false })),
+      get: vi.fn(() => Promise.resolve({ agentRoles: false, agentFeedback: true })),
       setAgentRolesEnabled: vi.fn((enabled: boolean) =>
-        Promise.resolve({ agentRoles: enabled }),
+        Promise.resolve({ agentRoles: enabled , agentFeedback: true }),
+      ),
+      setAgentFeedbackEnabled: vi.fn((enabled) =>
+        Promise.resolve({ agentRoles: false, agentFeedback: enabled }),
       ),
     };
     const view = lifecycleView();
@@ -789,9 +835,12 @@ describe("GeneralSettingsPanel", () => {
 
     it("matches the index with only the feature-settings bridge", () => {
       const featureSettings: TestFeatureSettingsBridge = {
-        get: vi.fn(() => Promise.resolve({ agentRoles: false })),
+        get: vi.fn(() => Promise.resolve({ agentRoles: false, agentFeedback: true })),
         setAgentRolesEnabled: vi.fn((enabled: boolean) =>
-          Promise.resolve({ agentRoles: enabled }),
+          Promise.resolve({ agentRoles: enabled , agentFeedback: true }),
+        ),
+        setAgentFeedbackEnabled: vi.fn((enabled) =>
+          Promise.resolve({ agentRoles: false, agentFeedback: enabled }),
         ),
       };
       (globalThis as { runnerHost?: unknown }).runnerHost = {

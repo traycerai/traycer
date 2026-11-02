@@ -98,6 +98,7 @@ import {
 import {
   readFeatureSettings,
   readLogLevels,
+  setAgentFeedbackEnabled,
   setAgentRolesEnabled,
   setLogLevel,
 } from "@traycer/protocol/config/store";
@@ -551,6 +552,17 @@ export function registerPlatformIpc(
         throw new Error("featureSettings:agentRoles:set requires a boolean");
       }
       await setAgentRolesEnabled(enabled);
+      return readFeatureSettings();
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.agentFeedbackEnabledSet,
+    async (_event, enabled: unknown): Promise<FeatureSettingsSnapshot> => {
+      if (typeof enabled !== "boolean") {
+        throw new Error("featureSettings:agentFeedback:set requires a boolean");
+      }
+      await setAgentFeedbackEnabled(enabled);
       return readFeatureSettings();
     },
   );

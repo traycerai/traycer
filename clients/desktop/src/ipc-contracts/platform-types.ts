@@ -191,6 +191,7 @@ export interface LogLevelsSnapshot {
 
 export interface FeatureSettingsSnapshot {
   readonly agentRoles: boolean;
+  readonly agentFeedback: boolean;
 }
 
 /** A font family installed on this machine, offered by the Appearance font pickers. */

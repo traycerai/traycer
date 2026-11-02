@@ -372,8 +372,13 @@ export const featureSettingsSchema = lazySchema(() =>
     .object({
       agentRoles: z.boolean().default(false),
       artifactVersioning: z.boolean().default(false),
+      agentFeedback: z.boolean().default(true),
     })
-    .default({ agentRoles: false, artifactVersioning: false }),
+    .default({
+      agentRoles: false,
+      artifactVersioning: false,
+      agentFeedback: true,
+    }),
 );
 export type FeatureSettings = z.infer<typeof featureSettingsSchema>;
 
@@ -515,7 +520,7 @@ export const EMPTY_CLI_CONFIG: CliConfig = {
   shell: { path: null, args: null, entries: [] },
   envOverrides: {},
   logs: { cliLogLevel: DEFAULT_LOG_LEVEL, hostLogLevel: DEFAULT_LOG_LEVEL },
-  features: { agentRoles: false, artifactVersioning: false },
+  features: { agentRoles: false, artifactVersioning: false, agentFeedback: true },
   browser: { agentAccess: true },
   worktrees: { agentCreate: "allow" },
   catalog: { probeTimeoutSeconds: CATALOG_PROBE_TIMEOUT_DEFAULT_SECONDS },

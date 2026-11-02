@@ -42,9 +42,11 @@ export interface SettingsSearchFixture {
 }
 
 const FEATURE_SETTINGS: FeatureSettingsBridge = {
-  get: () => Promise.resolve({ agentRoles: false }),
+  get: () => Promise.resolve({ agentRoles: false, agentFeedback: true }),
+  setAgentFeedbackEnabled: (enabled: boolean) =>
+    Promise.resolve({ agentRoles: false, agentFeedback: enabled }),
   setAgentRolesEnabled: (enabled: boolean) =>
-    Promise.resolve({ agentRoles: enabled }),
+    Promise.resolve({ agentRoles: enabled, agentFeedback: true }),
 };
 
 const DESKTOP_ZOOM: DesktopZoomBridge = {

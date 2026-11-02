@@ -55,9 +55,11 @@ const MOBILE: SettingsAvailabilityContext = {
 
 /** A desktop feature-settings bridge: only its presence gates Experimental. */
 const FEATURE_SETTINGS = {
-  get: () => Promise.resolve({ agentRoles: false }),
+  get: () => Promise.resolve({ agentRoles: false, agentFeedback: true }),
+  setAgentFeedbackEnabled: (enabled: boolean) =>
+    Promise.resolve({ agentRoles: false, agentFeedback: enabled }),
   setAgentRolesEnabled: (enabled: boolean) =>
-    Promise.resolve({ agentRoles: enabled }),
+    Promise.resolve({ agentRoles: enabled, agentFeedback: true }),
 };
 
 /** The labels a query returns, in rank order. */
