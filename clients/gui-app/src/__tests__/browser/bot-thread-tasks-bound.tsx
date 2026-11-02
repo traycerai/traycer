@@ -103,6 +103,7 @@ const messengerFactory: MessengerFactory<HostRpcRegistry> = ({ registry }) =>
         crossHostMessaging: null,
         sessions: null,
         updatesExternallyManaged: null,
+        previousExit: null,
       }),
       "host.notifications.indicatorState": () => ({
         epics: {},

@@ -254,6 +254,7 @@ function statusWith(
     crossHostMessaging: null,
     sessions: null,
     updatesExternallyManaged: null,
+    previousExit: null,
   };
 }
 
@@ -326,6 +327,7 @@ function statusWithBusy(
     crossHostMessaging: null,
     sessions: null,
     updatesExternallyManaged: null,
+    previousExit: null,
   };
 }
 
@@ -351,6 +353,7 @@ function statusOperationNull(
     crossHostMessaging: null,
     sessions: null,
     updatesExternallyManaged: null,
+    previousExit: null,
   };
 }
 
