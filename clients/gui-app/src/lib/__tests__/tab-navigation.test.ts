@@ -40,7 +40,19 @@ import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import { useTabsStore } from "@/stores/tabs/store";
 import { tabItemId } from "@/stores/tabs/layout";
-import { installTabSyncCoordinator } from "@/lib/tab-sync/tab-sync-coordinator";
+import {
+  __resetTabSyncCoordinatorForTesting,
+  installTabSyncCoordinator,
+} from "@/lib/tab-sync/tab-sync-coordinator";
+import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
+import { browserTabId } from "@/lib/browser-tab-identity";
+import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import {
+  composerSurfaceKey,
+  useSurfaceHostSelectionStore,
+} from "@/stores/host/surface-host-selection-store";
+import { useWorkspaceFoldersStore } from "@/stores/workspace/workspace-folders-store";
 
 installTabSyncCoordinator({ readyPromise: Promise.resolve() });
 
@@ -317,4 +329,96 @@ describe("tab navigation single-path contract", () => {
     expect(useEpicCanvasStore.getState().openTabOrder).toContain(tabId);
     expect(recorded.intents).toHaveLength(0);
   });
+});
+
+describe("a landing draft minted by navigation on a pinned surface", () => {
+  const EFFECTIVE_HOST = "host-effective";
+  const PINNED_HOST = "host-pinned";
+  const EFFECTIVE_SETTINGS: ChatRunSettings = {
+    ultracode: false,
+    harnessId: "claude",
+    model: "effective-model",
+    permissionMode: "supervised",
+    reasoningEffort: null,
+    serviceTier: null,
+    agentMode: "regular",
+    profileId: null,
+  };
+  const PINNED_SETTINGS: ChatRunSettings = {
+    ...EFFECTIVE_SETTINGS,
+    model: "pinned-model",
+    profileId: "pinned-profile",
+  };
+  const PINNED_FOLDER = {
+    path: "/pinned/repo",
+    name: "repo",
+    repoIdentifier: null,
+    hostId: PINNED_HOST,
+  };
+
+  beforeEach(async () => {
+    resetStores();
+    __resetTabSyncCoordinatorForTesting();
+    installTabSyncCoordinator({ readyPromise: Promise.resolve() });
+    await Promise.resolve();
+    await Promise.resolve();
+    useComposerRunSettingsStore.getState().resetForTests();
+    useComposerRunSettingsStore
+      .getState()
+      .setGlobalRunSettings(EFFECTIVE_HOST, EFFECTIVE_SETTINGS, 1);
+    useComposerRunSettingsStore
+      .getState()
+      .setGlobalRunSettings(PINNED_HOST, PINNED_SETTINGS, 1);
+    useWorkspaceFoldersStore.setState({ byHost: {} });
+    useWorkspaceFoldersStore
+      .getState()
+      .addResolvedFolders(PINNED_HOST, [PINNED_FOLDER]);
+    useSelectionAuthorityStore.setState({
+      attached: true,
+      effectiveHostId: EFFECTIVE_HOST,
+      leases: [
+        { hostId: EFFECTIVE_HOST, status: "ready", dead: null },
+        { hostId: PINNED_HOST, status: "ready", dead: null },
+      ],
+    });
+    useSurfaceHostSelectionStore.getState().resetForTests();
+    useSurfaceHostSelectionStore
+      .getState()
+      .setSelection(composerSurfaceKey(browserTabId()), PINNED_HOST);
+  });
+
+  afterEach(() => {
+    useComposerRunSettingsStore.getState().resetForTests();
+    useWorkspaceFoldersStore.setState({ byHost: {} });
+    useSelectionAuthorityStore.setState({
+      attached: false,
+      effectiveHostId: null,
+      leases: [],
+    });
+    useSurfaceHostSelectionStore.getState().resetForTests();
+    resetStores();
+  });
+
+  it.each([
+    { entry: "/draft/new", pathname: "/draft/new", action: "REPLACE" },
+    { entry: "a step back onto the landing", pathname: "/", action: "BACK" },
+  ] as const)(
+    "$entry takes its settings from the host its folders come from",
+    ({ pathname, action }) => {
+      TabNav.tabNavigationController.observeLocation(
+        {
+          pathname,
+          state: { __TSR_key: "landing-entry", __TSR_index: 0 },
+          search: undefined,
+        },
+        action,
+        asNavigate(makeNavigate()),
+      );
+
+      const drafts = useLandingDraftStore.getState().drafts;
+      expect(drafts).toHaveLength(1);
+      expect(drafts[0].settings).toEqual(PINNED_SETTINGS);
+      expect(drafts[0].workspace.folders).toEqual([PINNED_FOLDER.path]);
+    },
+  );
 });

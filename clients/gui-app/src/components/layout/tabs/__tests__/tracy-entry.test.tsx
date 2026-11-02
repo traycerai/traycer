@@ -1394,6 +1394,30 @@ describe("the fixed Tracy entry - vertical strip", () => {
     });
   });
 
+  it("joins the strip's edge to its surface's canvas while selected, as a task row does", async () => {
+    openEpicTabs(["Alpha"]);
+    mountSideStrip("/epics/e-alpha/e-alpha");
+
+    const entry = await screen.findByTestId("tab-tracy");
+    const alpha = screen.getByTestId("tab-epic-e-alpha");
+    expect(alpha.getAttribute("data-sheet-joined")).toBe("left");
+    expect(entry.hasAttribute("data-sheet-joined")).toBe(false);
+
+    fireEvent.click(entry);
+    await waitFor(() => {
+      expect(entry.getAttribute("aria-selected")).toBe("true");
+    });
+
+    expect(entry.getAttribute("data-sheet-joined")).toBe("left");
+    expect(entry.getAttribute("data-join-pane")).toBe("canvas");
+    expect(alpha.hasAttribute("data-sheet-joined")).toBe(false);
+    expect(
+      document
+        .querySelector('[data-sheet-join-bridge="left"]')
+        ?.getAttribute("data-join-pane"),
+    ).toBe("canvas");
+  });
+
   it("draws no Talk under the entry or in the collapsed rail when voice is available", async () => {
     const initialVoice = useVoiceSessionStore.getInitialState();
     useVoiceSessionStore.setState({

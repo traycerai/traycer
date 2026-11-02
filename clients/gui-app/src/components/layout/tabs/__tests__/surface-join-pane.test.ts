@@ -55,7 +55,7 @@ const PANE_BY_KIND: ReadonlyArray<
 > = [
   { kind: "epic", top: "surface", left: "canvas", right: "canvas" },
   { kind: "draft", top: "surface", left: "surface", right: "surface" },
-  { kind: "tracy", top: "surface", left: "surface", right: "surface" },
+  { kind: "tracy", top: "surface", left: "canvas", right: "canvas" },
   { kind: "settings", top: "surface", left: "panel", right: "surface" },
   { kind: "home", top: "canvas", left: "canvas", right: "canvas" },
   { kind: "history", top: "canvas", left: "canvas", right: "canvas" },

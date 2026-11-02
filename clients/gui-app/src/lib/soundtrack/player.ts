@@ -15,7 +15,7 @@ const LOOKAHEAD_HORIZON_SECONDS = 0.6;
 const START_LEAD_SECONDS = 0.05;
 const SAMPLE_FADE_SECONDS = 0.01;
 const LAYER_RAMP_SECONDS = 1.5;
-const CROSSFADE_SECONDS = 2;
+export const CROSSFADE_SECONDS = 2;
 
 export interface TrackPlayerOptions {
   readonly track: VariableTrack;
@@ -24,6 +24,8 @@ export interface TrackPlayerOptions {
   readonly random: RandomSource;
   /** How long the silence between two plays of the track lasts. */
   readonly silenceSeconds: Range;
+  /** What `elapsed` answers until the first start; 0 for a track from its top. */
+  readonly resumeAt: number;
 }
 
 interface PlayingPhase {
@@ -67,7 +69,7 @@ export class TrackPlayer {
   /** Taken instead of a random roll when the next play begins. */
   private chosenState: State | null = null;
   private pauseMultiplier = 1;
-  private position = 0;
+  private position: number;
   private voices: ActiveVoice[] = [];
   private timer: number | null = null;
   private fadeOutEndsAt: number | null = null;
@@ -78,6 +80,7 @@ export class TrackPlayer {
     this.stems = options.stems;
     this.random = options.random;
     this.silenceSeconds = options.silenceSeconds;
+    this.position = options.resumeAt;
     this.bus = options.output.createBus(0);
     this.layerGains = options.track.layers.map(() => this.bus.createChild(0));
     this.layerTargets = options.track.layers.map(() => 1);
