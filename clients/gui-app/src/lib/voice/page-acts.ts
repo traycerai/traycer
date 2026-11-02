@@ -1,31 +1,27 @@
-import type { QueryClient } from "@tanstack/react-query";
 import { plainTextPromptContent } from "@traycer-clients/shared/epic/plain-text-content";
 import type { ChatQueueDeliveryPolicy } from "@traycer/protocol/host/agent/gui/subscribe";
-import type { HostRpcRegistry } from "@traycer/protocol/host/index";
-import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
 import {
   composerHasBlockingApprovals,
   humanActionableApprovals,
 } from "@/components/epic-canvas/renderers/chat-approval-visibility";
 import {
-  chatTileCanAct,
   shouldGenerateChatTitleForSubmittedMessage,
   userMessageSenderForProfile,
 } from "@/components/epic-canvas/renderers/chat-tile-session-state";
 import { chatActionsFor } from "@/hooks/chats/use-chat-actions";
+import {
+  composerModelUnresolved,
+  composerSendRefusal,
+  composerSendStateFor,
+  type ComposerSendRefusal,
+} from "@/lib/chats/composer-send-gates";
 import { decideSteerSettings } from "@/lib/chats/decide-steer-settings";
 import { resolveSubmitDeliveryPolicy } from "@/lib/chats/resolve-steer-submit";
 import { openTileIntoTargetGroup } from "@/lib/commands/actions/open-into-target";
 import { runCommandItem } from "@/lib/commands/dispatch";
 import type { CommandContext, CommandItem } from "@/lib/commands/types";
 import { buildSubmittedChatJSONContent } from "@/lib/composer/tiptap-json-content";
-import {
-  deriveWorktreeBindingWorkspaceAvailability,
-  effectiveMissingWorktreePaths,
-  workspaceComposerCanStart,
-} from "@/lib/composer/workspace-composer-availability";
 import { appLogger } from "@/lib/logger";
-import { queryKeys } from "@/lib/query-keys";
 import type { VerbOutcome } from "@/lib/voice/deferred-verbs";
 import type { VoiceViewRow } from "@/lib/voice/view";
 import { worktreeDraftCommitsRebind } from "@/lib/worktree/owner-teardown-snapshot";
@@ -35,9 +31,10 @@ import {
   resolvedTurnStatus,
   type ComposerTurnStatus,
 } from "@/stores/chats/chat-run-activity";
-import type {
-  ChatSessionState,
-  ChatSessionStoreHandle,
+import {
+  currentTurnIdOf,
+  type ChatSessionState,
+  type ChatSessionStoreHandle,
 } from "@/stores/chats/chat-session-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
@@ -78,14 +75,16 @@ export interface PageActReads {
 export const AGENT_GONE_NOTICE = "That agent is no longer on this page.";
 export const AGENT_STOPPING_NOTICE = "The agent is stopping.";
 export const AGENT_WAITING_NOTICE = "It is waiting on an approval.";
-export const AGENT_NO_ACCESS_NOTICE =
-  "That agent can't take a message from you right now.";
+export const AGENT_CANT_TAKE_NOTICE =
+  "The agent can't take a message right now.";
 export const AGENT_NO_WORKSPACE_NOTICE = "Its workspace isn't ready.";
 export const AGENT_WORKSPACE_CHANGE_NOTICE =
   "It has a workspace change waiting. Send this one from its message box.";
 export const AGENT_NOT_READY_NOTICE = "It isn't ready for a message yet.";
 export const NOT_DELIVERED_NOTICE = "That didn't reach the agent.";
 export const ALREADY_DECIDED_NOTICE = "That was already decided.";
+export const APPROVAL_NOT_WAITING_NOTICE =
+  "That approval isn't waiting on you right now.";
 export const DECISION_IN_FLIGHT_NOTICE =
   "Another decision is still going through. Say it again in a moment.";
 export const TURN_ENDED_NOTICE = "The agent's turn already ended.";
@@ -142,101 +141,68 @@ function deliveryPolicyOf(
   return policy;
 }
 
-/** The workspace half of the composer's blockers, from what the chat tile keeps warm. */
-function workspaceRefusal(
-  chat: ChatSessionState,
-  session: VoiceAgentSession,
-  queryClient: QueryClient,
-): string | null {
-  const staged = readStagedWorktreeIntent({
-    surface: "owner",
-    hostId: session.hostId,
-    epicId: session.epicId,
-    ownerKind: "chat",
-    ownerId: session.chatId,
-  });
-  // A send commits a staged change of folder, which the chat tile asks about
-  // first; the voice has no such question to put.
-  if (
-    worktreeDraftCommitsRebind({
-      binding: chat.worktreeBinding,
-      draft: staged,
-      removedWorkspacePaths: [],
-    })
-  ) {
-    return AGENT_WORKSPACE_CHANGE_NOTICE;
-  }
-  const listing = queryClient.getQueryData<
-    ResponseOfMethod<HostRpcRegistry, "worktree.listBindingsForEpic">
-  >(
-    queryKeys.hostMethod<HostRpcRegistry, "worktree.listBindingsForEpic">(
-      session.hostId,
-      "worktree.listBindingsForEpic",
-      { epicId: session.epicId },
-    ),
-  );
-  const availability = deriveWorktreeBindingWorkspaceAvailability(
-    chat.worktreeBinding,
-    chat.snapshotLoaded,
-    {
-      count: listing === undefined ? null : listing.rows.length,
-      didResolutionFail: false,
-    },
-    effectiveMissingWorktreePaths(
-      chat.missingWorktreePaths,
-      new Set(staged?.entries.map((entry) => entry.workspacePath) ?? []),
-    ),
-  );
-  return workspaceComposerCanStart(availability)
-    ? null
-    : AGENT_NO_WORKSPACE_NOTICE;
-}
+/** Each of the composer's refusals as the voice says it. */
+const COMPOSER_REFUSAL_NOTICE: Record<ComposerSendRefusal, string> = {
+  stopping: AGENT_STOPPING_NOTICE,
+  "pending-approval": AGENT_WAITING_NOTICE,
+  "send-disabled": AGENT_CANT_TAKE_NOTICE,
+  "workspace-blocked": AGENT_NO_WORKSPACE_NOTICE,
+  "images-unsupported": AGENT_CANT_TAKE_NOTICE,
+  "attachments-preparing": AGENT_CANT_TAKE_NOTICE,
+};
 
-/** What stops a send to this chat now, in the composer's words for the person. */
-function tellRefusal(
+/**
+ * A send commits a staged change of folder, which the chat tile asks about
+ * first; the voice has no such question to put.
+ */
+function commitsStagedRebind(
   chat: ChatSessionState,
   session: VoiceAgentSession,
-  queryClient: QueryClient,
-): string | null {
-  if (
-    !chatTileCanAct(
-      chat.connectionStatus,
-      chat.access?.canAct === true,
-      useAuthStore.getState().profile !== null,
-    )
-  ) {
-    return AGENT_NO_ACCESS_NOTICE;
-  }
-  if (stopRequested(chat) || turnStatusOf(chat) === "stopping") {
-    return AGENT_STOPPING_NOTICE;
-  }
-  if (
-    composerHasBlockingApprovals(
-      chat.pendingApprovals,
-      chat.pendingFileEditApprovals.length,
-    )
-  ) {
-    return AGENT_WAITING_NOTICE;
-  }
-  return workspaceRefusal(chat, session, queryClient);
+): boolean {
+  return worktreeDraftCommitsRebind({
+    binding: chat.worktreeBinding,
+    draft: readStagedWorktreeIntent({
+      surface: "owner",
+      hostId: session.hostId,
+      epicId: session.epicId,
+      ownerKind: "chat",
+      ownerId: session.chatId,
+    }),
+    removedWorkspacePaths: [],
+  });
 }
 
 function tellAgent(
   chatId: string,
   text: string,
   reads: PageActReads,
-  queryClient: QueryClient,
 ): VerbOutcome {
   const session = reads.agentSession(chatId);
   if (session === null) return refused(AGENT_GONE_NOTICE);
+  // No composer on the tile means no way to send from it by hand either.
+  const composer = composerSendStateFor(session.hostId, chatId);
+  if (composer === null) return refused(AGENT_CANT_TAKE_NOTICE);
   const chat = session.handle.store.getState();
-  const refusal = tellRefusal(chat, session, queryClient);
-  if (refusal !== null) return refused(refusal);
+  const refusal = composerSendRefusal({
+    activeTurnStatus: stopRequested(chat) ? "stopping" : turnStatusOf(chat),
+    hasPendingApprovals: composerHasBlockingApprovals(
+      chat.pendingApprovals,
+      chat.pendingFileEditApprovals.length,
+    ),
+    sendDisabled: composer.sendDisabled,
+    workspaceBlocked: composer.workspaceBlocked,
+    imagesUnsupported: false,
+    attachmentPreparationPending: false,
+  });
+  if (refusal !== null) return refused(COMPOSER_REFUSAL_NOTICE[refusal]);
+  if (commitsStagedRebind(chat, session)) {
+    return refused(AGENT_WORKSPACE_CHANGE_NOTICE);
+  }
   const sender = userMessageSenderForProfile(useAuthStore.getState().profile);
-  const settings = chat.currentComposerSettings ?? chat.chat?.settings ?? null;
-  if (sender === null || settings === null) {
+  if (sender === null || composerModelUnresolved(composer.modelSlug())) {
     return refused(AGENT_NOT_READY_NOTICE);
   }
+  const settings = composer.runSettings();
   const content = buildSubmittedChatJSONContent(
     plainTextPromptContent(text),
     null,
@@ -268,9 +234,10 @@ function tellAgent(
 
 /**
  * A stop acts on the turn it was asked of. The read-back can outlast that turn,
- * and a yes must not stop the next one, which nobody asked to stop. With no turn
- * on the wire when it was routed there is no such turn, and whatever runs by the
- * time of the yes is not what was asked about.
+ * and a yes must not stop the next one, which nobody asked to stop. The same
+ * turn renamed on the way is still that turn. With no turn on the wire when it
+ * was routed there is no such turn, and whatever runs by the time of the yes is
+ * not what was asked about.
  */
 function stopAgent(
   chatId: string,
@@ -285,7 +252,10 @@ function stopAgent(
   if (stopRequested(chat) || status === "stopping") {
     return refused(AGENT_STOPPING_NOTICE);
   }
-  if (status !== "running" || chat.activeTurn?.turnId !== routedTurnId) {
+  if (
+    status !== "running" ||
+    chat.activeTurn?.turnId !== currentTurnIdOf(chat, routedTurnId)
+  ) {
     return refused(TURN_ENDED_NOTICE);
   }
   return chatActionsFor(session.handle).stopTurn() === null
@@ -301,12 +271,14 @@ function decideApproval(
   const session = reads.agentSession(null);
   if (session === null) return refused(AGENT_GONE_NOTICE);
   const chat = session.handle.store.getState();
-  if (
-    !humanActionableApprovals(chat.pendingApprovals).some(
-      (approval) => approval.approvalId === approvalId,
-    )
-  ) {
+  const isThisOne = (approval: { readonly approvalId: string }): boolean =>
+    approval.approvalId === approvalId;
+  if (!chat.pendingApprovals.some(isThisOne)) {
     return refused(ALREADY_DECIDED_NOTICE);
+  }
+  // Still pending, and not a person's to answer: a check is deciding it.
+  if (!humanActionableApprovals(chat.pendingApprovals).some(isThisOne)) {
+    return refused(APPROVAL_NOT_WAITING_NOTICE);
   }
   // The approval card takes no second decision while one is out either.
   if (
@@ -380,14 +352,13 @@ interface PageActInput {
   /** The agent's turn as the route saw it. */
   readonly turnId: string | null;
   readonly reads: PageActReads;
-  readonly queryClient: QueryClient;
 }
 
 function runRow(input: PageActInput): VerbOutcome | Promise<VerbOutcome> {
-  const { row, text, turnId, reads, queryClient } = input;
+  const { row, text, turnId, reads } = input;
   const { action } = row;
   const tell = idAfter(action, "agent.tell");
-  if (tell !== null) return tellAgent(tell, text, reads, queryClient);
+  if (tell !== null) return tellAgent(tell, text, reads);
   const stop = idAfter(action, "agent.stop");
   if (stop !== null) return stopAgent(stop, turnId, reads);
   const approve = idAfter(action, "approval.approve");

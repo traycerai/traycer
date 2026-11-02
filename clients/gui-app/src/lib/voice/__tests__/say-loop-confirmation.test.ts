@@ -865,6 +865,129 @@ describe("a page action that needs a yes", () => {
   });
 });
 
+describe("a decision that waits for its yes, against a request that reaches it late", () => {
+  const ACT_BUSY =
+    "Nothing was done: an earlier request is still waiting for the person's yes or no. The person can say this one again after answering.";
+  const POST_BUSY =
+    "Nothing was posted: an earlier post is still waiting for the person's yes or no. The person can say this one again after answering.";
+
+  /** An answer the test releases by hand. */
+  function held() {
+    const gate: { release: (result: RouterResult) => void } = {
+      release: () => undefined,
+    };
+    const answer = () =>
+      new Promise<RouterResult>((resolve) => {
+        gate.release = resolve;
+      });
+    return { gate, answer };
+  }
+
+  it("keeps the newer act's question and its yes when an older request's route comes back for a page that has since moved", async () => {
+    const h = build();
+    const older = held();
+    h.wiring.routed = TASK_PAGE;
+    h.wiring.live = TASK_PAGE;
+    h.answers.push(older.answer);
+    h.answers.push(() =>
+      Promise.resolve(actRoute("action:tab.close", 2, false)),
+    );
+    speak("close", " this tab");
+    const first = h.loop.onDelegationCreated("d-1");
+    // The page moves on; the newer request is routed against the page now in front.
+    h.wiring.live = MOVED_PAGE;
+    h.wiring.routed = MOVED_PAGE;
+    speak("close", " the tab again");
+    await h.loop.onDelegationCreated("d-2");
+    h.asks[0]?.onDelivered();
+    expect(useVoiceSessionStore.getState().pendingAction).toMatchObject({
+      kind: "confirming",
+      text: "close the tab again",
+      delegationId: "d-2",
+    });
+
+    // The older route comes back, made against the page before the move.
+    h.wiring.routed = TASK_PAGE;
+    older.gate.release(actRoute("action:tab.close", 2, false));
+    await first;
+
+    expect(h.notices).toEqual([PAGE_CHANGED_ASK_TEXT]);
+    expect(h.noticeDelegations).toEqual(["d-1"]);
+    expect(h.askLog.map((ask) => ask.text)).toEqual([
+      "Close this tab: Main agent in Tracy Bots. Yes?",
+    ]);
+    expect(h.withdrawn).toEqual([]);
+    expect(useVoiceSessionStore.getState().pendingAction).toMatchObject({
+      kind: "confirming",
+      text: "close the tab again",
+      delegationId: "d-2",
+    });
+    // The older request's words are spent; only the held question's remain.
+    expect(
+      useVoiceSessionStore.getState().segments.map((segment) => segment.text),
+    ).toEqual(["close", " the tab again"]);
+
+    speak("yes");
+    await h.loop.onDelegationCreated("d-3");
+
+    expect(h.acts).toEqual([
+      {
+        row: rowOn(MOVED_PAGE, "action:tab.close"),
+        text: "close the tab again",
+      },
+    ]);
+    expect(h.notices).toEqual([PAGE_CHANGED_ASK_TEXT]);
+    expect(useVoiceSessionStore.getState().pendingAction).toBeNull();
+    expect(useVoiceSessionStore.getState().segments).toEqual([]);
+  });
+
+  it("says a post that reaches its read-back late is refused for the request already waiting, when that is an act", async () => {
+    const h = build();
+    const post = held();
+    h.wiring.routed = TASK_PAGE;
+    h.wiring.live = TASK_PAGE;
+    h.answers.push(post.answer);
+    h.answers.push(() =>
+      Promise.resolve(actRoute("action:tab.close", 2, false)),
+    );
+    speak("tell", " ci bot hello");
+    const first = h.loop.onDelegationCreated("d-1");
+    speak("close", " this tab");
+    await h.loop.onDelegationCreated("d-2");
+
+    post.gate.release(uncertainly(route("post", CI, PERSONAL, 2)));
+    await first;
+
+    expect(h.notices).toEqual([ACT_BUSY]);
+    expect(h.noticeDelegations).toEqual(["d-1"]);
+    expect(h.askLog).toHaveLength(1);
+    expect(h.sends).toEqual([]);
+  });
+
+  it("says an act that reaches its read-back late is refused for the post already waiting, when that is a post", async () => {
+    const h = build();
+    const act = held();
+    h.wiring.routed = TASK_PAGE;
+    h.wiring.live = TASK_PAGE;
+    h.answers.push(act.answer);
+    h.answers.push(() =>
+      Promise.resolve(uncertainly(route("post", CI, PERSONAL, 2))),
+    );
+    speak("close", " this tab");
+    const first = h.loop.onDelegationCreated("d-1");
+    speak("tell", " ci bot hello");
+    await h.loop.onDelegationCreated("d-2");
+
+    act.gate.release(actRoute("action:tab.close", 2, false));
+    await first;
+
+    expect(h.notices).toEqual([POST_BUSY]);
+    expect(h.noticeDelegations).toEqual(["d-1"]);
+    expect(h.askLog).toHaveLength(1);
+    expect(h.acts).toEqual([]);
+  });
+});
+
 describe("a page action that does not need a yes", () => {
   it("runs at once with the words of its span, says nothing, posts nothing and leaves the focus", async () => {
     const h = buildOnTaskPage("action:tab.next", false);

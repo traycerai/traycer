@@ -1380,6 +1380,12 @@ export interface ChatSessionState {
    */
   readonly runStatus: ChatRunStatus;
   readonly activeTurn: ChatActiveTurn | null;
+  /**
+   * What a running turn's earlier ids became, while it runs: the host renames a
+   * turn in place on a steer restart, a provider id backfill or a recovery.
+   * Emptied when the turn settles.
+   */
+  readonly renamedTurnIds: ReadonlyMap<string, string>;
   /** Counts observed turn boundaries, including separate ID-less activations. */
   readonly turnLifecycleRevision: number;
   /**
@@ -9557,6 +9563,10 @@ export function createChatSessionStoreWithNotificationDependencies(
             sendHostFrameRevision: (state.sendHostFrameRevision ?? 0) + 1,
             runStatus: frame.runStatus,
             activeTurn: frame.activeTurn,
+            renamedTurnIds: nextRenamedTurnIds(state.renamedTurnIds, {
+              previousTurnId,
+              nextTurnId,
+            }),
             turnInProgress: frame.turnInProgress ?? state.turnInProgress,
             turnLifecycleRevision: nextTurnLifecycleRevision(state, {
               activeTurn: frame.activeTurn,
@@ -10548,6 +10558,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           : { ...inheritedDeliveryRestoreAck, clientActionId: null },
       runStatus: "idle",
       activeTurn: null,
+      renamedTurnIds: NO_RENAMED_TURN_IDS,
       turnLifecycleRevision: 0,
       steerProtocolSupported: false,
       draftBlobBridgeSupported: false,
@@ -15968,6 +15979,43 @@ function turnRemapFor(turnIds: {
     message.role === "assistant" && message.turnId === previousTurnId
       ? { ...message, turnId: nextTurnId }
       : message;
+}
+
+const NO_RENAMED_TURN_IDS: ReadonlyMap<string, string> = new Map();
+
+/**
+ * The same rule as {@link turnRemapFor}, kept for a caller holding an older id.
+ * The turn's current id never has an entry of its own, so every chain ends at it.
+ */
+function nextRenamedTurnIds(
+  renamed: ReadonlyMap<string, string>,
+  turnIds: {
+    readonly previousTurnId: string | null;
+    readonly nextTurnId: string | null;
+  },
+): ReadonlyMap<string, string> {
+  const { previousTurnId, nextTurnId } = turnIds;
+  if (nextTurnId === null) return NO_RENAMED_TURN_IDS;
+  if (previousTurnId === null || turnRemapFor(turnIds) === null) return renamed;
+  const next = new Map(renamed);
+  next.delete(nextTurnId);
+  return next.set(previousTurnId, nextTurnId);
+}
+
+/** The id `turnId` goes by now, following the renames of the turn still running. */
+export function currentTurnIdOf(
+  state: Pick<ChatSessionState, "renamedTurnIds">,
+  turnId: string,
+): string {
+  let current = turnId;
+  for (
+    let next = state.renamedTurnIds.get(current);
+    next !== undefined;
+    next = state.renamedTurnIds.get(current)
+  ) {
+    current = next;
+  }
+  return current;
 }
 
 function messagesForTurnStateChange(

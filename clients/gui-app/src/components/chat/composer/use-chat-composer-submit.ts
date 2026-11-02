@@ -52,6 +52,11 @@ import {
   extractPlainTextFromComposerJSONContent,
 } from "@/lib/composer/tiptap-json-content";
 import { buildChatRunSettings } from "@/lib/composer/chat-run-settings";
+import {
+  composerModelUnresolved,
+  composerSendRefusal,
+  publishComposerSendState,
+} from "@/lib/chats/composer-send-gates";
 import { decideSteerSettings } from "@/lib/chats/decide-steer-settings";
 import {
   resolveSubmitDeliveryPolicy,
@@ -408,12 +413,14 @@ export function useChatComposerSubmit(
   // one path can never miss the other.
   const submitBlocked = useCallback(
     (): boolean =>
-      activeTurnStatus === "stopping" ||
-      hasPendingApprovals ||
-      sendDisabled === true ||
-      workspaceBlocked ||
-      imagesUnsupported ||
-      attachmentPreparationPending,
+      composerSendRefusal({
+        activeTurnStatus,
+        hasPendingApprovals,
+        sendDisabled,
+        workspaceBlocked,
+        imagesUnsupported,
+        attachmentPreparationPending,
+      }) !== null,
     [
       activeTurnStatus,
       attachmentPreparationPending,
@@ -423,6 +430,27 @@ export function useChatComposerSubmit(
       workspaceBlocked,
     ],
   );
+
+  // The voice sends to a chat with no composer of its own, and takes the same
+  // answer this one gives. Layout-timed for the reason `submitBlockedRef` is.
+  useLayoutEffect(() => {
+    if (targetHostId === null) return undefined;
+    return publishComposerSendState(targetHostId, taskId, {
+      sendDisabled,
+      workspaceBlocked,
+      modelSlug: () => toolbarStore.getState().selection.modelSlug,
+      runSettings: () => {
+        const toolbar = toolbarStore.getState();
+        return buildChatRunSettings({
+          selection: toolbar.selection,
+          permission: toolbar.permission,
+          reasoning: toolbar.reasoning,
+          serviceTier: toolbar.serviceTier,
+          ultracode: toolbar.ultracode,
+        });
+      },
+    });
+  }, [sendDisabled, targetHostId, taskId, toolbarStore, workspaceBlocked]);
 
   // The LIVE blocking predicate, for the deferred confirmation's continuation.
   // `submitBlocked` is rebuilt per render from props; a continuation holds the
@@ -504,7 +532,9 @@ export function useChatComposerSubmit(
         return { toolbar, editor, annotationRecords, editorContent };
       };
       const readSendableDraft = (): ReadDraft | null => {
-        if (toolbarStore.getState().selection.modelSlug.length === 0) {
+        if (
+          composerModelUnresolved(toolbarStore.getState().selection.modelSlug)
+        ) {
           return null;
         }
         return readDraftToSend();

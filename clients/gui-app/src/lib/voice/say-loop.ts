@@ -352,9 +352,9 @@ type LoopRefusal =
   | "gone"
   /** The request was bound to the focus, and the voice has since moved elsewhere. */
   | "moved-on"
-  /** Another post is already waiting for the person's yes or no. */
+  /** A post is already waiting for the person's yes or no. */
   | "confirm-busy"
-  /** A page action needs a yes while another decision already waits for one. */
+  /** A page action is already waiting for the person's yes or no. */
   | "act-confirm-busy"
   /** The tab navigation to the destination was refused or undone. */
   | "move-failed"
@@ -394,6 +394,11 @@ const UNANSWERED_TEXT: Record<ConfirmSubject["kind"], string> = {
   post: "Nothing was posted: no yes came for it. The person can say it again.",
   act: "Nothing was done: no yes came for it. The person can say it again.",
 };
+
+/** What the voice says of the decision already waiting, by what it is. */
+function busyRefusal(held: Confirming): LoopRefusal {
+  return held.subject.kind === "post" ? "confirm-busy" : "act-confirm-busy";
+}
 
 /** The destination as the voice names it: a channel, or a thread by its post. */
 function placeName(target: BoundTarget): string {
@@ -1044,8 +1049,19 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
     });
   }
 
-  /** The page moved under an act: it is dropped and its words handed back. */
+  /**
+   * The page moved under an act: it is dropped and its words handed back. With
+   * another decision waiting on a yes, that question keeps the one slot: words
+   * returned to the open utterance would land in its answer, so they are spent
+   * and the voice says this one's line without asking anything.
+   */
   function dropForMovedPage(entry: RoutingEntry): void {
+    if (confirming !== null) {
+      store.getState().consumeReservation(entry.seqs);
+      settleDelegation(entry.delegationId);
+      deps.notify(PAGE_CHANGED_ASK_TEXT, delegationOf(entry));
+      return;
+    }
     store.getState().releaseReservation(entry.seqs);
     interruptOpenWords(PAGE_CHANGED_ASK_TEXT, delegationOf(entry));
     settleDelegation(entry.delegationId);
@@ -1096,7 +1112,7 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
       return;
     }
     if (confirming !== null) {
-      refuse(entry, "act-confirm-busy");
+      refuse(entry, busyRefusal(confirming));
       return;
     }
     holdForYes(
@@ -1228,7 +1244,7 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
         // earlier question waits is dropped, so a yes can only ever answer
         // the question the person heard.
         if (confirming !== null) {
-          refuse(entry, "confirm-busy");
+          refuse(entry, busyRefusal(confirming));
           return;
         }
         holdForYes(

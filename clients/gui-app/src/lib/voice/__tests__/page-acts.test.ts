@@ -1,4 +1,3 @@
-import { QueryClient } from "@tanstack/react-query";
 import type {
   ChatActiveTurn,
   ChatApprovalState,
@@ -10,30 +9,29 @@ import {
   chatApprovalStateSchema,
   chatFileEditApprovalStateSchema,
 } from "@traycer/protocol/host/agent/gui/subscribe";
-import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import type {
   WorktreeBinding,
   WorktreeIntent,
 } from "@traycer/protocol/host/worktree-schemas";
 import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport/chat-stream-client";
-import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { extractPlainTextFromComposerJSONContent } from "@/lib/composer/tiptap-json-content";
 import type { CommandContext, CommandItem } from "@/lib/commands/types";
+import { publishComposerSendState } from "@/lib/chats/composer-send-gates";
 import { composeVoiceDirectory } from "@/lib/voice/directory";
 import type { ActionId } from "@/lib/keybindings/actions";
 import type { KeybindingRouter } from "@/lib/keybindings/dispatch";
-import { queryKeys } from "@/lib/query-keys";
 import {
   ACT_FAILED_NOTICE,
   AGENT_GONE_NOTICE,
+  AGENT_CANT_TAKE_NOTICE,
   AGENT_NOT_READY_NOTICE,
-  AGENT_NO_ACCESS_NOTICE,
   AGENT_NO_WORKSPACE_NOTICE,
   AGENT_STOPPING_NOTICE,
   AGENT_WAITING_NOTICE,
   AGENT_WORKSPACE_CHANGE_NOTICE,
   ALREADY_DECIDED_NOTICE,
+  APPROVAL_NOT_WAITING_NOTICE,
   DECISION_IN_FLIGHT_NOTICE,
   NOT_DELIVERED_NOTICE,
   NOTHING_TO_STOP_NOTICE,
@@ -405,15 +403,12 @@ function readsOver(
   };
 }
 
-let queryClient = new QueryClient();
-
 function run(action: string, text: string, reads: PageActReads) {
   return executePageAct({
     row: rowFor(action),
     text,
     turnId: null,
     reads,
-    queryClient,
   });
 }
 
@@ -424,12 +419,39 @@ function stop(session: Session, routedTurnId: string | null) {
     text: "",
     turnId: routedTurnId,
     reads: readsOver(session, []),
-    queryClient,
   });
 }
 
 function tell(session: Session, text: string) {
   return run(`agent.tell:${CHAT_ID}`, text, readsOver(session, []));
+}
+
+/** What the chat's mounted composer tells the voice, as `useChatComposerSubmit` publishes it. */
+interface PublishedComposer {
+  readonly sendDisabled: boolean | undefined;
+  readonly workspaceBlocked: boolean;
+  readonly modelSlug: string;
+  readonly settings: ChatRunSettings;
+}
+
+const OPEN_COMPOSER: PublishedComposer = {
+  sendDisabled: false,
+  workspaceBlocked: false,
+  modelSlug: SETTINGS.model,
+  settings: SETTINGS,
+};
+
+let retractComposer: () => void = () => undefined;
+
+/** The chat's composer as `composer` says, in place of the one before; every test starts with {@link OPEN_COMPOSER}. */
+function composerIs(composer: PublishedComposer): void {
+  retractComposer();
+  retractComposer = publishComposerSendState(HOST_ID, CHAT_ID, {
+    sendDisabled: composer.sendDisabled,
+    workspaceBlocked: composer.workspaceBlocked,
+    modelSlug: () => composer.modelSlug,
+    runSettings: () => composer.settings,
+  });
 }
 
 function refusedWith(say: string) {
@@ -440,8 +462,8 @@ const initialSettings = useSettingsStore.getInitialState();
 const initialAuth = useAuthStore.getInitialState();
 
 beforeEach(() => {
-  queryClient = new QueryClient();
   window.localStorage.clear();
+  composerIs(OPEN_COMPOSER);
   useAuthStore.setState({
     status: "signed-in",
     profile: { userId: USER_ID, userName: "Me", email: "me@example.com" },
@@ -453,6 +475,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  retractComposer();
   useAuthStore.setState(initialAuth, true);
   useWorktreeIntentStagingStore.getState().resetForTests();
 });
@@ -507,14 +530,27 @@ describe("telling the agent", () => {
     "queues instead of restarting the turn when the composer's $name differs from it",
     async ({ settings }) => {
       const session = openSession({ ...READY_TO_SEND, running: true });
-      session.handle.store.setState({ currentComposerSettings: settings });
+      composerIs({ ...OPEN_COMPOSER, settings });
 
       await tell(session, "switch to this one");
 
       expect(sendFrames(session).at(0)?.deliveryPolicy).toBe("auto");
-      expect(sendFrames(session).at(0)?.settings).toEqual(settings);
     },
   );
+
+  it("sends with the settings the composer holds now, not the chat's own", async () => {
+    const session = openSession(READY_TO_SEND);
+    const settings: ChatRunSettings = {
+      ...SETTINGS,
+      model: "model-b",
+      permissionMode: "auto",
+    };
+    composerIs({ ...OPEN_COMPOSER, settings });
+
+    await tell(session, "hello");
+
+    expect(sendFrames(session).at(0)?.settings).toEqual(settings);
+  });
 
   it("sends the span as the message, from the signed-in person, with no attachments", async () => {
     const session = openSession(READY_TO_SEND);
@@ -592,31 +628,20 @@ describe("what stops a message to the agent", () => {
       },
     },
     {
-      name: "a person with no access to act",
-      say: AGENT_NO_ACCESS_NOTICE,
-      open: () => openSession({ ...READY_TO_SEND, canAct: false }),
-      arrange: null,
-    },
-    {
-      name: "a closed connection",
-      say: AGENT_NO_ACCESS_NOTICE,
+      name: "a composer that cannot send",
+      say: AGENT_CANT_TAKE_NOTICE,
       open: () => openSession(READY_TO_SEND),
-      arrange: (session) => {
-        session.callbacks.onConnectionStatus("closed", null, null, null);
+      arrange: () => {
+        composerIs({ ...OPEN_COMPOSER, sendDisabled: true });
       },
     },
     {
-      name: "a bound folder missing on disk",
+      name: "a composer whose workspace is not ready",
       say: AGENT_NO_WORKSPACE_NOTICE,
-      open: () =>
-        openSession({ ...READY_TO_SEND, missingWorktreePaths: ["/repo"] }),
-      arrange: null,
-    },
-    {
-      name: "a chat bound to no folder whose epic listing has not loaded",
-      say: AGENT_NO_WORKSPACE_NOTICE,
-      open: () => openSession({ ...READY_TO_SEND, binding: null }),
-      arrange: null,
+      open: () => openSession(READY_TO_SEND),
+      arrange: () => {
+        composerIs({ ...OPEN_COMPOSER, workspaceBlocked: true });
+      },
     },
     {
       name: "a new worktree staged for the folder",
@@ -629,10 +654,12 @@ describe("what stops a message to the agent", () => {
       },
     },
     {
-      name: "a chat with no settings",
+      name: "a composer whose model is not chosen yet",
       say: AGENT_NOT_READY_NOTICE,
-      open: () => openSession({ ...READY_TO_SEND, settings: null }),
-      arrange: null,
+      open: () => openSession(READY_TO_SEND),
+      arrange: () => {
+        composerIs({ ...OPEN_COMPOSER, modelSlug: "" });
+      },
     },
   ];
 
@@ -646,55 +673,24 @@ describe("what stops a message to the agent", () => {
     expect(sendFrames(session)).toEqual([]);
   });
 
-  it("refuses when the person is signed out, though the chat itself can act", async () => {
+  it("refuses when no composer is mounted for the chat, though the chat itself can act", async () => {
+    const session = openSession(READY_TO_SEND);
+    retractComposer();
+
+    const outcome = await tell(session, "hello");
+
+    expect(outcome).toEqual(refusedWith(AGENT_CANT_TAKE_NOTICE));
+    expect(sendFrames(session)).toEqual([]);
+  });
+
+  it("refuses when the person is signed out, though the composer is open", async () => {
     const session = openSession(READY_TO_SEND);
     useAuthStore.setState({ profile: null });
 
     const outcome = await tell(session, "hello");
 
-    expect(outcome).toEqual(refusedWith(AGENT_NO_ACCESS_NOTICE));
+    expect(outcome).toEqual(refusedWith(AGENT_NOT_READY_NOTICE));
     expect(sendFrames(session)).toEqual([]);
-  });
-
-  it("sends to a chat bound to no folder once the epic's one-folder listing is in the cache", async () => {
-    const session = openSession({ ...READY_TO_SEND, binding: null });
-    const listing: ResponseOfMethod<
-      HostRpcRegistry,
-      "worktree.listBindingsForEpic"
-    > = {
-      rows: [
-        {
-          hostId: HOST_ID,
-          runningDir: "/repo",
-          workspacePath: "/repo",
-          worktreePath: null,
-          mode: "local",
-          isGitRepo: true,
-          repoIdentifier: null,
-          branch: null,
-          isPrimary: true,
-          isImported: false,
-          setupState: "not_required",
-          disabledReason: null,
-          sources: [],
-          isGitResolvePending: false,
-        },
-      ],
-      folderlessCwd: null,
-    };
-    queryClient.setQueryData(
-      queryKeys.hostMethod<HostRpcRegistry, "worktree.listBindingsForEpic">(
-        HOST_ID,
-        "worktree.listBindingsForEpic",
-        { epicId: EPIC_ID },
-      ),
-      listing,
-    );
-
-    const outcome = await tell(session, "hello");
-
-    expect(outcome).toEqual({ kind: "executed" });
-    expect(sendFrames(session)).toHaveLength(1);
   });
 
   it("is not stopped by an approval a judge is still deciding", async () => {
@@ -766,8 +762,9 @@ describe("stopping the agent", () => {
     expect(stopFrames(session)).toEqual([]);
   });
 
-  it("says the turn ended when the one running is another, and does not stop it", async () => {
+  it("says the turn ended when the one running began after it ended, and does not stop it", async () => {
     const session = openSession({ ...READY_TO_SEND, running: true });
+    moveToTurn(session, null);
     moveToTurn(session, TURN_B);
 
     const outcome = await stop(session, ACTIVE_TURN.turnId);
@@ -909,7 +906,6 @@ describe("a spoken stop that waits for its yes", () => {
           text,
           turnId,
           reads: readsOver(session, []),
-          queryClient,
         }),
     });
     return { loop, notices, asks };
@@ -932,6 +928,44 @@ describe("a spoken stop that waits for its yes", () => {
     const h = buildLoop(session);
     await askToStop(h);
     expect(h.asks).toHaveLength(1);
+
+    await sayYes(h);
+
+    expect(stopFrames(session)).toMatchObject([{ turnId: "turn-1" }]);
+    expect(h.notices).toEqual([]);
+  });
+
+  it("stops the turn the host renamed in place while the question waited", async () => {
+    const session = openSession({ ...READY_TO_SEND, running: true });
+    const h = buildLoop(session);
+    await askToStop(h);
+    moveToTurn(session, TURN_B);
+
+    await sayYes(h);
+
+    expect(stopFrames(session)).toMatchObject([{ turnId: "turn-2" }]);
+    expect(h.notices).toEqual([]);
+  });
+
+  it("stops the turn renamed twice while the question waited", async () => {
+    const session = openSession({ ...READY_TO_SEND, running: true });
+    const h = buildLoop(session);
+    await askToStop(h);
+    moveToTurn(session, TURN_B);
+    moveToTurn(session, { ...ACTIVE_TURN, turnId: "turn-3" });
+
+    await sayYes(h);
+
+    expect(stopFrames(session)).toMatchObject([{ turnId: "turn-3" }]);
+    expect(h.notices).toEqual([]);
+  });
+
+  it("stops the turn renamed away and back while the question waited", async () => {
+    const session = openSession({ ...READY_TO_SEND, running: true });
+    const h = buildLoop(session);
+    await askToStop(h);
+    moveToTurn(session, TURN_B);
+    moveToTurn(session, ACTIVE_TURN);
 
     await sayYes(h);
 
@@ -983,27 +1017,34 @@ describe("deciding an approval", () => {
     },
   );
 
-  it.each([
-    { name: "gone from the list", approvals: [] },
-    {
-      name: "moved under a judge",
-      approvals: [approval({ reviewing: "checking" })],
-    },
-  ])(
-    "says it was already decided when the approval is $name, and decides nothing",
-    async ({ approvals }) => {
-      const session = waitingOn(...approvals);
+  it("says it was already decided when the approval is gone from the list, and decides nothing", async () => {
+    const session = waitingOn();
 
-      const outcome = await run(
-        "approval.approve:ap-1",
-        "",
-        readsOver(session, []),
-      );
+    const outcome = await run(
+      "approval.approve:ap-1",
+      "",
+      readsOver(session, []),
+    );
 
-      expect(outcome).toEqual(refusedWith(ALREADY_DECIDED_NOTICE));
-      expect(decisionFrames(session)).toEqual([]);
-    },
-  );
+    expect(outcome).toEqual(refusedWith(ALREADY_DECIDED_NOTICE));
+    expect(decisionFrames(session)).toEqual([]);
+  });
+
+  it("says it isn't waiting on the person when a judge took the approval after the question, and decides nothing", async () => {
+    const session = waitingOn(approval({}));
+    session.handle.store.setState({
+      pendingApprovals: [approval({ reviewing: "checking" })],
+    });
+
+    const outcome = await run(
+      "approval.approve:ap-1",
+      "",
+      readsOver(session, []),
+    );
+
+    expect(outcome).toEqual(refusedWith(APPROVAL_NOT_WAITING_NOTICE));
+    expect(decisionFrames(session)).toEqual([]);
+  });
 
   it("waits for a decision that is still going through rather than sending a second", async () => {
     const session = waitingOn(approval({}), approval({ approvalId: "ap-2" }));

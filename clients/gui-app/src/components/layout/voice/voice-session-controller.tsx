@@ -603,13 +603,7 @@ export function VoiceSessionController(): ReactNode {
       control: (verb) => controlRef.current(verb),
       view: () => viewRef.current.current(),
       act: (row, text, turnId) =>
-        executePageAct({
-          row,
-          text,
-          turnId,
-          reads: viewRef.current,
-          queryClient,
-        }),
+        executePageAct({ row, text, turnId, reads: viewRef.current }),
       schedule: (fn, ms) => {
         const handle = window.setTimeout(fn, ms);
         return () => window.clearTimeout(handle);
@@ -625,7 +619,7 @@ export function VoiceSessionController(): ReactNode {
     });
     sayLoopRef.current = created;
     return created;
-  }, [ensureSpeech, queryClient]);
+  }, [ensureSpeech]);
 
   // A post the voice navigated for waits for the bot's channel: once it is
   // known, the loop sends what waits.
