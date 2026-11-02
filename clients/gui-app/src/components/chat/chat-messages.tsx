@@ -2295,15 +2295,17 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   // The cache is rewritten to the resolved coordinate in the same commit. The
   // persistence gate keeps the entry this mount read until the restore
   // validates, so a close before then saves nothing new; without this write
-  // that entry would still name the retired row.
+  // that entry would still name the retired row. Both dependencies are fixed
+  // for the mount, so this never re-runs over a position the reader has since
+  // scrolled to.
   useLayoutEffect(() => {
     if (!mountRestore.splitSettled) return;
     forgetPendingHydrationRestore(identity);
-    const commit = isEpicCanvasTileInstanceLive(instanceId)
+    const commit = isEpicCanvasTileInstanceLive(identity.tileInstanceId)
       ? saveChatTabState
       : commitChatTabStateToDurable;
     commit({ identity, ...mountRestore.restored });
-  }, [identity, instanceId, mountRestore.restored, mountRestore.splitSettled]);
+  }, [identity, mountRestore]);
   const pendingMeasuredFreeRestoreRef =
     useRef<PendingMeasuredFreeRestore | null>(
       resolvePendingMeasuredFreeRestore(restoredTabState),
