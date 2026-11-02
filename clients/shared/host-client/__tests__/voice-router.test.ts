@@ -1,5 +1,13 @@
 import { ACCOUNT_CONTEXT_HEADER } from "@traycer/protocol/common/schemas";
-import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type Mock,
+} from "vitest";
 import { voiceRouteViaHttp } from "../voice-router";
 
 const BASE = "https://server.example.test";
@@ -71,5 +79,62 @@ describe("voiceRouteViaHttp", () => {
       kind: "network-error",
       detail: "the voice router request did not complete",
     });
+  });
+});
+
+describe("voiceRouteViaHttp on a fetch that ignores its signal", () => {
+  // VOICE_ROUTE_FETCH_TIMEOUT_MS
+  const ROUTE_TIMEOUT_MS = 10_000;
+  const DID_NOT_COMPLETE = {
+    kind: "network-error",
+    detail: "the voice router request did not complete",
+  };
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("settles at the deadline as a network error when the request never completes", async () => {
+    // Like CapacitorHttp's patched fetch: the signal is dropped, so only the
+    // deadline can settle the request.
+    stubFetch(() => new Promise<Response>(() => undefined));
+    let settled = false;
+
+    const pending = voiceRouteViaHttp(BASE, BEARER, null, BODY);
+    void pending.then(() => {
+      settled = true;
+    });
+
+    await vi.advanceTimersByTimeAsync(ROUTE_TIMEOUT_MS - 1);
+    expect(settled).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(settled).toBe(true);
+    expect(await pending).toEqual(DID_NOT_COMPLETE);
+  });
+
+  it("settles at the deadline as a network error when a 200 body never arrives", async () => {
+    const response = new Response(null, { status: 200 });
+    const text = vi
+      .spyOn(response, "text")
+      .mockImplementation(() => new Promise<string>(() => undefined));
+    stubFetch(async () => response);
+    let settled = false;
+
+    const pending = voiceRouteViaHttp(BASE, BEARER, null, BODY);
+    void pending.then(() => {
+      settled = true;
+    });
+
+    await vi.advanceTimersByTimeAsync(ROUTE_TIMEOUT_MS - 1);
+    expect(text).toHaveBeenCalledTimes(1);
+    expect(settled).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(settled).toBe(true);
+    expect(await pending).toEqual(DID_NOT_COMPLETE);
   });
 });

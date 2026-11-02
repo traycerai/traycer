@@ -3,7 +3,7 @@ import {
   listCreditOffersResponseSchema,
   type CreditOffer,
 } from "@traycer/protocol/auth/credit-offers";
-import { composeRequestAbort } from "./request-abort";
+import { composeRequestAbort, untilAborted } from "./request-abort";
 
 /**
  * Credit offers HTTP client: the offers a signed-in user can claim, and the
@@ -80,17 +80,23 @@ async function request(
 ): Promise<ReadResponse | null> {
   const abort = composeRequestAbort(signal, CREDIT_OFFERS_FETCH_TIMEOUT_MS);
   try {
-    const response = await fetch(url, {
-      method: init.method,
-      headers: {
-        Authorization: `Bearer ${bearerToken}`,
-        Accept: "application/json",
-        ...(init.body === null ? {} : { "Content-Type": "application/json" }),
-      },
-      body: init.body,
-      signal: abort.signal,
-    });
-    const body: unknown = await response.json().catch(() => null);
+    const response = await untilAborted(
+      fetch(url, {
+        method: init.method,
+        headers: {
+          Authorization: `Bearer ${bearerToken}`,
+          Accept: "application/json",
+          ...(init.body === null ? {} : { "Content-Type": "application/json" }),
+        },
+        body: init.body,
+        signal: abort.signal,
+      }),
+      abort.signal,
+    );
+    const body: unknown = await untilAborted(
+      response.json(),
+      abort.signal,
+    ).catch(() => null);
     return { status: response.status, body };
   } catch {
     return null;

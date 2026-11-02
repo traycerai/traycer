@@ -1,4 +1,4 @@
-import { composeRequestAbort } from "../auth/request-abort";
+import { composeRequestAbort, untilAborted } from "../auth/request-abort";
 
 /**
  * "Remove from account" — the raw `POST /api/v3/hosts/:hostId/deregister` call.
@@ -79,14 +79,17 @@ export async function deregisterHostViaHttp(
   const abort = composeRequestAbort(null, HOST_DEREGISTER_FETCH_TIMEOUT_MS);
   let response: Response;
   try {
-    response = await fetch(hostDeregisterUrl(authnBaseUrl, hostId), {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${bearerToken}`,
-        Accept: "application/json",
-      },
-      signal: abort.signal,
-    });
+    response = await untilAborted(
+      fetch(hostDeregisterUrl(authnBaseUrl, hostId), {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${bearerToken}`,
+          Accept: "application/json",
+        },
+        signal: abort.signal,
+      }),
+      abort.signal,
+    );
   } catch {
     // A thrown `fetch` — transport failure or the per-attempt timeout — is
     // transient and retriable.

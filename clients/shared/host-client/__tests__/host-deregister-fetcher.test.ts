@@ -91,3 +91,28 @@ describe("deregisterHostViaHttp on a WebView without AbortSignal.timeout or Abor
     expect(await pending).toEqual({ kind: "network-error" });
   });
 });
+
+describe("deregisterHostViaHttp on a fetch that ignores its signal", () => {
+  it("settles at the deadline as a network error when the request never completes", async () => {
+    // Like CapacitorHttp's patched fetch: the signal is dropped, so only the
+    // deadline can settle the request.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(() => new Promise<Response>(() => undefined)),
+    );
+    let settled = false;
+
+    const pending = deregisterHostViaHttp(AUTHN, "jwt-abc", "host-1");
+    void pending.then(() => {
+      settled = true;
+    });
+
+    // HOST_DEREGISTER_FETCH_TIMEOUT_MS
+    await vi.advanceTimersByTimeAsync(9_999);
+    expect(settled).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(settled).toBe(true);
+    expect(await pending).toEqual({ kind: "network-error" });
+  });
+});

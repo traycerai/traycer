@@ -1,4 +1,4 @@
-import { composeRequestAbort } from "./request-abort";
+import { composeRequestAbort, untilAborted } from "./request-abort";
 
 /**
  * Device push-token registration against authn-v3 (`/api/v3/user/push-tokens`).
@@ -85,16 +85,19 @@ async function postPushTokens(
   const abort = composeRequestAbort(null, PUSH_TOKEN_FETCH_TIMEOUT_MS);
   let response: Response;
   try {
-    response = await fetch(authnApiUrl(authnBaseUrl, path), {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${bearerToken}`,
-        Accept: "application/json",
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(body),
-      signal: abort.signal,
-    });
+    response = await untilAborted(
+      fetch(authnApiUrl(authnBaseUrl, path), {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${bearerToken}`,
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(body),
+        signal: abort.signal,
+      }),
+      abort.signal,
+    );
   } catch {
     return { kind: "network-error" };
   } finally {

@@ -162,3 +162,33 @@ describe("push-token fetcher on a WebView without AbortSignal.timeout or AbortSi
     expect(await pending).toEqual({ kind: "network-error" });
   });
 });
+
+describe("registerDevicePushTokenViaHttp on a fetch that ignores its signal", () => {
+  it("settles at the deadline as a network error when the request never completes", async () => {
+    // Like CapacitorHttp's patched fetch: the signal is dropped, so only the
+    // deadline can settle the request.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(() => new Promise<Response>(() => undefined)),
+    );
+    let settled = false;
+
+    const pending = registerDevicePushTokenViaHttp(AUTHN, "jwt-abc", {
+      token: "apns-token",
+      platform: "ios",
+      environment: "production",
+      mutedSeverities: [],
+    });
+    void pending.then(() => {
+      settled = true;
+    });
+
+    // PUSH_TOKEN_FETCH_TIMEOUT_MS
+    await vi.advanceTimersByTimeAsync(9_999);
+    expect(settled).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(settled).toBe(true);
+    expect(await pending).toEqual({ kind: "network-error" });
+  });
+});

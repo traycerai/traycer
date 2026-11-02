@@ -2,7 +2,7 @@ import {
   hostVersionPolicyResponseSchema,
   type HostUpdatePolicy,
 } from "@traycer/protocol/host/host-status";
-import { composeRequestAbort } from "../auth/request-abort";
+import { composeRequestAbort, untilAborted } from "../auth/request-abort";
 
 /**
  * "Update now" / auto-policy toggle / "Apply now — ends N sessions"
@@ -118,23 +118,26 @@ async function updateHostVersionPolicyWithSignal(
 ): Promise<UpdateHostVersionPolicyFetchResult> {
   let response: Response;
   try {
-    response = await fetch(hostPatchUrl(authnBaseUrl, hostId), {
-      method: "PATCH",
-      headers: {
-        Authorization: `Bearer ${bearerToken}`,
-        Accept: "application/json",
-        "Content-Type": "application/json",
-      },
-      // `JSON.stringify` drops `undefined`-valued keys entirely, so an
-      // untouched field never reaches the server — exactly the tri-state
-      // contract `UpdateHostVersionPolicyInput` and authn-v3's parser share.
-      body: JSON.stringify({
-        updatePolicy: input.updatePolicy,
-        desiredVersion: input.desiredVersion,
-        force: input.force,
+    response = await untilAborted(
+      fetch(hostPatchUrl(authnBaseUrl, hostId), {
+        method: "PATCH",
+        headers: {
+          Authorization: `Bearer ${bearerToken}`,
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+        // `JSON.stringify` drops `undefined`-valued keys entirely, so an
+        // untouched field never reaches the server — exactly the tri-state
+        // contract `UpdateHostVersionPolicyInput` and authn-v3's parser share.
+        body: JSON.stringify({
+          updatePolicy: input.updatePolicy,
+          desiredVersion: input.desiredVersion,
+          force: input.force,
+        }),
+        signal,
       }),
       signal,
-    });
+    );
   } catch {
     // A thrown `fetch` — transport failure or the per-attempt timeout — is
     // transient and retriable.
@@ -156,7 +159,7 @@ async function updateHostVersionPolicyWithSignal(
 
   let body: unknown;
   try {
-    body = await response.json();
+    body = await untilAborted(response.json(), signal);
   } catch {
     return { kind: "network-error" };
   }

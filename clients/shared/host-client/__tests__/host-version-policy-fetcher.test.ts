@@ -201,3 +201,72 @@ describe("updateHostVersionPolicyViaHttp on a WebView without AbortSignal.timeou
     expect(await pending).toEqual({ kind: "network-error" });
   });
 });
+
+describe("updateHostVersionPolicyViaHttp on a fetch that ignores its signal", () => {
+  // HOST_VERSION_POLICY_FETCH_TIMEOUT_MS
+  const POLICY_TIMEOUT_MS = 10_000;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("settles at the deadline as a network error when the request never completes", async () => {
+    // Like CapacitorHttp's patched fetch: the signal is dropped, so only the
+    // deadline can settle the request.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(() => new Promise<Response>(() => undefined)),
+    );
+    let settled = false;
+
+    const pending = updateHostVersionPolicyViaHttp(
+      AUTHN,
+      "jwt-abc",
+      "host-1",
+      updateInput(),
+    );
+    void pending.then(() => {
+      settled = true;
+    });
+
+    await vi.advanceTimersByTimeAsync(POLICY_TIMEOUT_MS - 1);
+    expect(settled).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(settled).toBe(true);
+    expect(await pending).toEqual({ kind: "network-error" });
+  });
+
+  it("settles at the deadline as a network error when a 200 body never arrives", async () => {
+    const response = new Response(null, { status: 200 });
+    const json = vi
+      .spyOn(response, "json")
+      .mockImplementation(() => new Promise<unknown>(() => undefined));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async () => response),
+    );
+    let settled = false;
+
+    const pending = updateHostVersionPolicyViaHttp(
+      AUTHN,
+      "jwt-abc",
+      "host-1",
+      updateInput(),
+    );
+    void pending.then(() => {
+      settled = true;
+    });
+
+    await vi.advanceTimersByTimeAsync(POLICY_TIMEOUT_MS - 1);
+    expect(json).toHaveBeenCalledTimes(1);
+    expect(settled).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(settled).toBe(true);
+    expect(await pending).toEqual({ kind: "network-error" });
+  });
+});

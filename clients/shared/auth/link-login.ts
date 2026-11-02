@@ -10,7 +10,7 @@ import {
 } from "@traycer/protocol/auth/link-login";
 import type { z } from "zod";
 import { parseRetryAfterSeconds } from "./device-auth";
-import { composeRequestAbort } from "./request-abort";
+import { composeRequestAbort, untilAborted } from "./request-abort";
 
 /**
  * Link-login ("link mobile app") HTTP client for the confirm-gated flow: the
@@ -295,18 +295,21 @@ async function postJson(
 ): Promise<Response | null> {
   const abort = composeRequestAbort(signal, LINK_LOGIN_FETCH_TIMEOUT_MS);
   try {
-    return await fetch(authnApiUrl(authnBaseUrl, path), {
-      method: "POST",
-      headers: {
-        ...(bearerToken === null
-          ? {}
-          : { Authorization: `Bearer ${bearerToken}` }),
-        Accept: "application/json",
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(body),
-      signal: abort.signal,
-    });
+    return await untilAborted(
+      fetch(authnApiUrl(authnBaseUrl, path), {
+        method: "POST",
+        headers: {
+          ...(bearerToken === null
+            ? {}
+            : { Authorization: `Bearer ${bearerToken}` }),
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(body),
+        signal: abort.signal,
+      }),
+      abort.signal,
+    );
   } catch {
     return null;
   } finally {

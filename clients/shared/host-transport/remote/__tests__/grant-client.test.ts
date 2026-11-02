@@ -66,6 +66,101 @@ describe("mintAttachGrantViaHttp on a WebView without AbortSignal.timeout or Abo
   });
 });
 
+describe("mintAttachGrantViaHttp on a fetch that ignores its signal", () => {
+  // GRANT_FETCH_TIMEOUT_MS
+  const MINT_TIMEOUT_MS = 10_000;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("settles at the deadline as a network error when the request never completes", async () => {
+    // Like CapacitorHttp's patched fetch: the signal is dropped, so only the
+    // deadline can settle the request.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(() => new Promise<Response>(() => undefined)),
+    );
+    let settled = false;
+
+    const pending = mintAttachGrantViaHttp(AUTHN, HOST_ID, BEARER);
+    void pending.then(() => {
+      settled = true;
+    });
+
+    await vi.advanceTimersByTimeAsync(MINT_TIMEOUT_MS - 1);
+    expect(settled).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(settled).toBe(true);
+    expect(await pending).toEqual({
+      kind: "network-error",
+      detail: "the mint request never completed (TimeoutError)",
+      context: "The request timed out.",
+    });
+  });
+
+  it("settles at the deadline as a network error when a 200 body never arrives", async () => {
+    const response = new Response(null, { status: 200 });
+    const json = vi
+      .spyOn(response, "json")
+      .mockImplementation(() => new Promise<unknown>(() => undefined));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async () => response),
+    );
+    let settled = false;
+
+    const pending = mintAttachGrantViaHttp(AUTHN, HOST_ID, BEARER);
+    void pending.then(() => {
+      settled = true;
+    });
+
+    await vi.advanceTimersByTimeAsync(MINT_TIMEOUT_MS - 1);
+    expect(json).toHaveBeenCalledTimes(1);
+    expect(settled).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(settled).toBe(true);
+    expect(await pending).toEqual({
+      kind: "network-error",
+      detail: "authn answered HTTP 200 with a body that is not valid JSON",
+      context: "",
+    });
+  });
+
+  it("settles at the deadline as a network error when a failure body never arrives", async () => {
+    const pull = vi.fn(() => new Promise<void>(() => undefined));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(
+        async () => new Response(new ReadableStream({ pull }), { status: 500 }),
+      ),
+    );
+    let settled = false;
+
+    const pending = mintAttachGrantViaHttp(AUTHN, HOST_ID, BEARER);
+    void pending.then(() => {
+      settled = true;
+    });
+
+    await vi.advanceTimersByTimeAsync(MINT_TIMEOUT_MS - 1);
+    expect(pull).toHaveBeenCalled();
+    expect(settled).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(settled).toBe(true);
+    expect(await pending).toEqual({
+      kind: "network-error",
+      detail: "authn answered HTTP 500",
+      context: "",
+    });
+  });
+});
+
 describe("mintAttachGrantViaHttp", () => {
   it("parses T9's { grant, role, expires_in } shape and carries the TTL in seconds", async () => {
     const fetchMock = vi.fn<typeof fetch>(async () =>
