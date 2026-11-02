@@ -1,5 +1,6 @@
 import { scrubSentryEventInPlace } from "@traycer-clients/shared/platform/sentry-scrub";
 import { z } from "zod";
+import type { OfferedIds } from "../../miss-report";
 
 const filedMissSchema = z.object({
   message: z.string(),
@@ -10,6 +11,15 @@ const filedMissSchema = z.object({
     extra: z.record(z.string(), z.unknown()),
   }),
 });
+
+/** No id offered: every id an answer names is the model's own. */
+export const NO_OFFERED_IDS: OfferedIds = {
+  environmentIds: new Set(),
+  botIds: new Set(),
+  threadIds: new Set(),
+  itemIds: new Set(),
+  agentIds: new Set(),
+};
 
 /** One `captureMessage` call, read back typed. */
 export type FiledMiss = z.infer<typeof filedMissSchema>;

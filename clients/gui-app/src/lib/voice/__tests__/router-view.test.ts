@@ -24,7 +24,7 @@ import {
   type RouterResult,
 } from "../router";
 import type { VerbOutcome } from "../deferred-verbs";
-import { reportVoiceMiss, type RouteSeen } from "../miss-report";
+import { offeredIdsOf, reportVoiceMiss, type RouteSeen } from "../miss-report";
 import {
   createSayLoop,
   PAGE_CHANGED_ASK_TEXT,
@@ -1903,7 +1903,8 @@ describe("the say loop's report of a request the page could not serve", () => {
           rows: MISS_ROWS,
           route: {
             action: "act",
-            target: answer.target,
+            // The router named an action the page does not offer: its own writing.
+            target: { ...answer.target, actionId: "unlisted" },
             uncertain: true,
             choice: null,
             control: null,
@@ -2179,6 +2180,10 @@ describe("the say loop's report of a request the page could not serve", () => {
         route: NEXT_TAB,
         viewKind: "task",
         rowIds: MISS_ROWS,
+        offered: offeredIdsOf(
+          [DIRECTORY],
+          pageWithLabels(ROUTED_GENERATION, "agent"),
+        ),
         pageTakesWords: true,
         actTakesWords: false,
         segments: ["Close this", " tab please"],
@@ -2230,6 +2235,7 @@ function seenOf(
     route: parsed,
     viewKind: view.page.kind,
     rowIds: view.rows.map((row) => row.action),
+    offered: offeredIdsOf([DIRECTORY], view),
     pageTakesWords: view.rows.some((row) => row.takesWords),
     actTakesWords: decision.kind === "act" && decision.row.takesWords,
     segments,

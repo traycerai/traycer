@@ -67,6 +67,7 @@ import {
   TURN_ENDED_NOTICE,
 } from "@/lib/voice/page-acts";
 import { runVoiceQueueVerb } from "@/lib/voice/queue-verbs";
+import type { RouterResult } from "@/lib/voice/router";
 import { MOVED_ASK_TEXT, PAGE_CHANGED_ASK_TEXT } from "@/lib/voice/say-loop";
 import { voiceMutationKeys } from "@/lib/query-keys";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -4547,7 +4548,7 @@ describe("the page in front", () => {
   }
 
   /** The router's answer that nothing on the page does what was said, and no one is named. */
-  const MISSING_ROUTE = {
+  const MISSING_ROUTE: RouterResult = {
     action: "missing",
     target: {
       environmentId: null,
@@ -4564,14 +4565,17 @@ describe("the page in front", () => {
     choice: null,
   };
 
-  function missingAnswer(): unknown {
+  /** The missing answer, naming what `target` names. */
+  function missingAnswer(target: Partial<RouterResult["target"]>): unknown {
+    const route = {
+      ...MISSING_ROUTE,
+      target: { ...MISSING_ROUTE.target, ...target },
+    };
     return {
       output: [
         {
           type: "message",
-          content: [
-            { type: "output_text", text: JSON.stringify(MISSING_ROUTE) },
-          ],
+          content: [{ type: "output_text", text: JSON.stringify(route) }],
         },
       ],
     };
@@ -4624,7 +4628,7 @@ describe("the page in front", () => {
     focusOn(CHANNEL_FOCUS);
     fake.routeAnswer = (body) => {
       bodies.push(body);
-      return missingAnswer();
+      return missingAnswer({});
     };
 
     await say("Rename the sandbox.", "d1");
@@ -4656,6 +4660,40 @@ describe("the page in front", () => {
       },
       span: "Rename the sandbox.",
       spanWords: 3,
+    });
+  });
+
+  it.each([
+    {
+      name: "a bot of the directory and an action of the page, as themselves",
+      target: { botId: "bot-2", actionId: "action:app.history.open" },
+      shipped: { botId: "bot-2", actionId: "action:app.history.open" },
+    },
+    {
+      name: "a bot and an action the router made up, as unlisted",
+      target: { botId: "bot-made-up", actionId: "make the sandbox purple" },
+      shipped: { botId: "unlisted", actionId: "unlisted" },
+    },
+  ])("ships $name", async ({ target, shipped }) => {
+    await bringLive();
+    focusOn(CHANNEL_FOCUS);
+    fake.routeAnswer = () => missingAnswer(target);
+
+    await say("Rename the sandbox.", "d1");
+
+    const filed = filedMisses(sentry.captureMessage.mock.calls);
+    expect(filed).toHaveLength(1);
+    expect(filed[0]?.options.tags.spanDropped).toBe("target");
+    expect(
+      z
+        .object({ target: z.record(z.string(), z.string().nullable()) })
+        .parse(filed[0]?.options.extra.route).target,
+    ).toEqual({
+      environmentId: null,
+      threadId: null,
+      itemId: null,
+      agentId: null,
+      ...shipped,
     });
   });
 
@@ -5005,7 +5043,7 @@ describe("the page in front", () => {
       seedRunningAgent();
       fake.routeAnswer = (body) => {
         bodies.push(body);
-        return missingAnswer();
+        return missingAnswer({});
       };
 
       await say("use the other branch", "d1");

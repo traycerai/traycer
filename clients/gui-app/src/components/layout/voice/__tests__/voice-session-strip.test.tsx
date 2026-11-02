@@ -13,6 +13,7 @@ import { WithTestQueryClient } from "@/__tests__/with-test-query-client";
 import type { RouteSeen } from "@/lib/voice/miss-report";
 import {
   filedMisses,
+  NO_OFFERED_IDS,
   scrubbedMisses,
 } from "@/lib/voice/__tests__/fixtures/filed-misses";
 import { botTabIntent } from "@/lib/tab-navigation/intents";
@@ -145,6 +146,7 @@ const EXECUTED_ACT: RouteSeen = {
   },
   viewKind: "task",
   rowIds: ["action:tab.next", "action:tab.close"],
+  offered: NO_OFFERED_IDS,
   pageTakesWords: false,
   actTakesWords: false,
   segments: ["next tab"],

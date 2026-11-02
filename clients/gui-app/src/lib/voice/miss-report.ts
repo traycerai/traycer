@@ -1,6 +1,7 @@
 import { captureMessage, isInitialized } from "@sentry/browser";
+import type { VoiceDirectory } from "@/lib/voice/directory";
 import type { RouterResult } from "@/lib/voice/router";
-import type { VoicePage } from "@/lib/voice/view";
+import type { VoicePage, VoiceView } from "@/lib/voice/view";
 
 /**
  * Why a spoken request to the page is reported: the router found nothing on
@@ -31,6 +32,65 @@ export type VoiceMissCause = "missing" | "unknown-action" | "chosen-act";
  */
 let filedMisses = 0;
 
+/**
+ * The ids the router was shown, by the field of its answer that names one: a
+ * string the answer names that is not among them is the model's own writing.
+ */
+export interface OfferedIds {
+  readonly environmentIds: ReadonlySet<string>;
+  readonly botIds: ReadonlySet<string>;
+  readonly threadIds: ReadonlySet<string>;
+  readonly itemIds: ReadonlySet<string>;
+  readonly agentIds: ReadonlySet<string>;
+}
+
+/**
+ * Every id the directories and the view hold, by the answer field that names
+ * it: the bots, threads and queue items, the focus, the page and its agent.
+ */
+export function offeredIdsOf(
+  directories: ReadonlyArray<VoiceDirectory>,
+  view: VoiceView,
+): OfferedIds {
+  const environmentIds = new Set<string>();
+  const botIds = new Set<string>();
+  const threadIds = new Set<string>();
+  const itemIds = new Set<string>();
+  const agentIds = new Set<string>();
+  const addBot = (botId: string | null): void => {
+    if (botId !== null) botIds.add(botId);
+  };
+  const addThread = (threadId: string | null): void => {
+    if (threadId !== null) threadIds.add(threadId);
+  };
+  for (const directory of directories) {
+    for (const bot of directory.bots) {
+      botIds.add(bot.botId);
+      environmentIds.add(bot.environmentId);
+    }
+    for (const thread of directory.threads) {
+      threadIds.add(thread.threadId);
+      botIds.add(thread.botId);
+      environmentIds.add(thread.environmentId);
+    }
+    for (const item of directory.queue) {
+      itemIds.add(item.itemId);
+      botIds.add(item.botId);
+      addThread(item.threadId);
+    }
+    if (directory.focus !== null) {
+      botIds.add(directory.focus.botId);
+      addThread(directory.focus.threadId);
+    }
+  }
+  if (view.page.kind === "tracy") {
+    addBot(view.page.botId);
+    addThread(view.page.threadId);
+  }
+  if (view.agent !== null) agentIds.add(view.agent.chatId);
+  return { environmentIds, botIds, threadIds, itemIds, agentIds };
+}
+
 /** What the router was shown and what it answered, for one utterance. */
 export interface RouteSeen {
   /** The router's answer as it gave it; only its ids leave the app. */
@@ -39,6 +99,8 @@ export interface RouteSeen {
   readonly viewKind: VoicePage["kind"];
   /** The ids of the page's actions the router was offered; never their labels. */
   readonly rowIds: ReadonlyArray<string>;
+  /** The other ids the router was shown, which its answer may name. */
+  readonly offered: OfferedIds;
   /** Whether the page offered an action that passes the person's words on. */
   readonly pageTakesWords: boolean;
   /** Whether the action the router chose passes the person's words on. */
@@ -101,14 +163,34 @@ function spanDroppedFor(cause: VoiceMissCause, seen: RouteSeen): SpanDropped {
   return seen.route.uncertain ? "uncertain" : "none";
 }
 
+/** A string the answer names, if it is an id the router was shown. */
+function listed(
+  id: string | null,
+  offered: ReadonlySet<string>,
+): string | null {
+  if (id === null) return null;
+  return offered.has(id) ? id : "unlisted";
+}
+
 /**
  * The router's answer by its ids alone. Its question is the model's own text,
- * which can quote the person or a label on the page, so it never leaves.
+ * which can quote the person or a label on the page, so it never leaves; nor
+ * does an id it names that the router was not shown, which is the model's
+ * writing too.
  */
-function routeIds(route: RouterResult): Record<string, unknown> {
+function routeIds(seen: RouteSeen): Record<string, unknown> {
+  const { route, offered } = seen;
+  const { target } = route;
   return {
     action: route.action,
-    target: route.target,
+    target: {
+      environmentId: listed(target.environmentId, offered.environmentIds),
+      botId: listed(target.botId, offered.botIds),
+      threadId: listed(target.threadId, offered.threadIds),
+      itemId: listed(target.itemId, offered.itemIds),
+      actionId: listed(target.actionId, new Set(seen.rowIds)),
+      agentId: listed(target.agentId, offered.agentIds),
+    },
     uncertain: route.uncertain,
     choice: route.choice,
     control: route.control,
@@ -146,7 +228,7 @@ export function reportVoiceMiss(
       extra: {
         ...counts,
         rows: seen.rowIds,
-        route: routeIds(seen.route),
+        route: routeIds(seen),
         span: spanDropped === "none" ? text : null,
         spanWords: wordCount(text),
       },

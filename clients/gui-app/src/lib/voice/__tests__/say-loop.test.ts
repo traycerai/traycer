@@ -10,6 +10,7 @@ import type { RouteSeen } from "../miss-report";
 import type { RoutedDecision } from "../router";
 import type { VoiceViewRow } from "../view";
 import { EMPTY_VIEW } from "./fixtures/empty-view";
+import { NO_OFFERED_IDS } from "./fixtures/filed-misses";
 import {
   MOVED_ASK_TEXT,
   createSayLoop,
@@ -1006,6 +1007,7 @@ describe("the act Not what I meant is offered for", () => {
       },
       viewKind: "home",
       rowIds: [ROW.action],
+      offered: NO_OFFERED_IDS,
       pageTakesWords: false,
       actTakesWords: false,
       segments: [said],

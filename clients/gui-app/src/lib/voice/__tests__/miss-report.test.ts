@@ -9,6 +9,7 @@ import {
 import type { RouterResult } from "../router";
 import {
   filedMisses,
+  NO_OFFERED_IDS,
   onlyMiss,
   scrubbedMisses,
   type FiledMiss,
@@ -51,12 +52,22 @@ function seenOf(
     route,
     viewKind: "task",
     rowIds: ["action:tab.next", "agent.tell:chat_1"],
+    offered: NO_OFFERED_IDS,
     segments: ["Close this", " tab please"],
     ...words,
   };
 }
 
 const NO_WORDS = { pageTakesWords: false, actTakesWords: false };
+
+/** The ids of the router's answer, as they were shipped. */
+function shippedTarget(miss: FiledMiss): Record<string, string | null> {
+  return z
+    .object({
+      target: z.record(z.string(), z.string().nullable()),
+    })
+    .parse(miss.options.extra.route).target;
+}
 
 /** The one event filed. */
 function filedOnce() {
@@ -280,6 +291,120 @@ describe("reportVoiceMiss", () => {
         );
       },
     );
+  });
+
+  describe("the ids the router's answer names", () => {
+    it("ships a bot the router wrote itself as unlisted, drops the words, and leaves the sentence out of the whole event", () => {
+      const sentence =
+        "Tell Ada at ada.lovelace@example.com that my password is tangerine-oyster-42";
+
+      reportVoiceMiss(
+        "missing",
+        "missing",
+        seenOf(routeOf({}, { botId: sentence }), NO_WORDS),
+        null,
+      );
+
+      const filed = filedOnce();
+      expect(shippedTarget(filed).botId).toBe("unlisted");
+      expect(filed.options.tags.spanDropped).toBe("target");
+      const event = scrubbedMisses(captureMessage.mock.calls).join("\n");
+      expect(event).not.toContain("ada.lovelace@example.com");
+      expect(event).not.toContain("tangerine-oyster-42");
+    });
+
+    it.each([
+      {
+        name: "an action the page does not offer",
+        actionId: "wake ada.lovelace@example.com now",
+        shipped: "unlisted",
+      },
+      {
+        name: "an action the page offers",
+        actionId: "action:tab.next",
+        shipped: "action:tab.next",
+      },
+    ])("ships $name as $shipped", ({ actionId, shipped }) => {
+      reportVoiceMiss(
+        "refused",
+        "unknown-action",
+        seenOf(routeOf({ action: "act" }, { actionId }), NO_WORDS),
+        null,
+      );
+
+      expect(shippedTarget(filedOnce()).actionId).toBe(shipped);
+      expect(
+        scrubbedMisses(captureMessage.mock.calls).join("\n"),
+      ).not.toContain("ada.lovelace@example.com");
+    });
+
+    it.each([
+      {
+        field: "environmentId",
+        offered: { ...NO_OFFERED_IDS, environmentIds: new Set(["env-listed"]) },
+        listed: { environmentId: "env-listed" },
+        unlisted: { environmentId: "env-made-up" },
+      },
+      {
+        field: "threadId",
+        offered: { ...NO_OFFERED_IDS, threadIds: new Set(["th-listed"]) },
+        listed: { threadId: "th-listed" },
+        unlisted: { threadId: "th-made-up" },
+      },
+      {
+        field: "itemId",
+        offered: { ...NO_OFFERED_IDS, itemIds: new Set(["item-listed"]) },
+        listed: { itemId: "item-listed" },
+        unlisted: { itemId: "item-made-up" },
+      },
+      {
+        field: "agentId",
+        offered: { ...NO_OFFERED_IDS, agentIds: new Set(["agent-listed"]) },
+        listed: { agentId: "agent-listed" },
+        unlisted: { agentId: "agent-made-up" },
+      },
+    ])(
+      "ships a listed $field as itself and an unlisted one as unlisted",
+      ({ field, offered, listed, unlisted }) => {
+        for (const target of [listed, unlisted]) {
+          reportVoiceMiss(
+            "missing",
+            "missing",
+            { ...seenOf(routeOf({}, target), NO_WORDS), offered },
+            null,
+          );
+        }
+
+        const [shippedListed, shippedUnlisted] = filedMisses(
+          captureMessage.mock.calls,
+        ).map(shippedTarget);
+        expect(shippedListed[field]).toBe(Object.values(listed)[0]);
+        expect(shippedUnlisted[field]).toBe("unlisted");
+        expect(shippedUnlisted).toEqual({
+          environmentId: null,
+          botId: null,
+          threadId: null,
+          itemId: null,
+          actionId: null,
+          agentId: null,
+          [field]: "unlisted",
+        });
+      },
+    );
+
+    it("ships a listed bot as itself", () => {
+      reportVoiceMiss(
+        "missing",
+        "missing",
+        {
+          ...seenOf(routeOf({}, { botId: "bot_tracy" }), NO_WORDS),
+          offered: { ...NO_OFFERED_IDS, botIds: new Set(["bot_tracy"]) },
+        },
+        null,
+      );
+
+      expect(shippedTarget(filedOnce()).botId).toBe("bot_tracy");
+    });
   });
 
   describe("the counts", () => {

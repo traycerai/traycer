@@ -77,6 +77,7 @@ import {
   type ReplyWatchMemory,
 } from "@/lib/voice/focused-replies";
 import { createBrowserGptLiveEngine } from "@/lib/voice/gpt-live-engine";
+import { offeredIdsOf } from "@/lib/voice/miss-report";
 import { executePageAct } from "@/lib/voice/page-acts";
 import {
   parseRouterResponse,
@@ -460,7 +461,8 @@ export function VoiceSessionController(): ReactNode {
     recheckRef.current = directory.current;
     viewRef.current = view;
     decideRef.current = async (request) => {
-      let snapshot = directory.current();
+      const shown = directory.current();
+      let snapshot = shown;
       const viewSnapshot = view.current();
       const answer = await routeAsync(
         routerRequestBody(
@@ -508,6 +510,7 @@ export function VoiceSessionController(): ReactNode {
                 route: result,
                 viewKind: viewSnapshot.page.kind,
                 rowIds: viewSnapshot.rows.map((row) => row.action),
+                offered: offeredIdsOf([shown, snapshot], viewSnapshot),
                 pageTakesWords: viewSnapshot.rows.some((row) => row.takesWords),
                 actTakesWords:
                   decision.kind === "act" && decision.row.takesWords,
