@@ -5,14 +5,16 @@ import {
 import type { IpcManagedWindow, RunnerIpcBridge } from "./runner-ipc-bridge";
 
 /**
- * Main's shown/not-minimised signal, which the renderer ANDs with Page
- * Visibility. Windows are background-throttled
- * (`windows/background-rendering.ts`), so Page Visibility itself reports a
- * minimised, hidden or (macOS only) covered window - except while a WebRTC
- * video plane keeps throttling off (#1613). Then DOM visibility stays visible,
- * this signal is the only source for minimise/hide, and a covered window is
- * detected by neither. An absent isMinimized on a test double fails toward
- * keeping the window live.
+ * Main's shown/not-minimised signal. The renderer ANDs it with Page Visibility
+ * to decide what to paint and poll, and uses it ALONE to decide whether the
+ * window still holds its tasks' host state (renderer parking and the
+ * cross-window report), so a window that is only covered keeps them. Windows
+ * are background-throttled (`windows/background-rendering.ts`), so Page
+ * Visibility itself reports a minimised, hidden or (macOS only) covered
+ * window - except while a WebRTC video plane keeps throttling off (#1613),
+ * when DOM visibility stays visible and this signal is the only source for
+ * minimise/hide. An absent isMinimized on a test double fails toward keeping
+ * the window live.
  */
 export function windowOnScreen(window: IpcManagedWindow): boolean {
   if (window.isDestroyed()) return false;
