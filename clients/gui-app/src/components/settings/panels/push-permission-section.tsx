@@ -33,9 +33,10 @@ type PushPermissionView =
 
 // Which events exist at all is each host's choice (Notification events, the
 // row below); the status stays silent about that and describes only the OS
-// permission and the switches under it.
+// permission and the switches under it. "Only ... are sent" narrows and never
+// promises: a kind a host does not create is not sent either.
 const STATE_DESCRIPTIONS: { readonly [K in PushPermissionState]: string } = {
-  granted: "Sent for the kinds turned on below.",
+  granted: "Only the kinds turned on below are sent.",
   denied: "Turned off for Traycer in system Settings.",
   prompt: "Allow Traycer to send push notifications.",
 };

@@ -223,7 +223,7 @@ describe("<PushPermissionSection />", () => {
     expect(await screen.findByText("On")).toBeTruthy();
     expect(screen.getByText("Push notifications")).toBeTruthy();
     expect(
-      screen.getByText("Sent for the kinds turned on below."),
+      screen.getByText("Only the kinds turned on below are sent."),
     ).toBeTruthy();
     expect(screen.getByTestId("push-permission-state").dataset.state).toBe(
       "granted",
