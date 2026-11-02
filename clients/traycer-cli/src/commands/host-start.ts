@@ -51,6 +51,11 @@ import {
   StderrCaptureBuffer,
 } from "../host/crash-diagnostics";
 import {
+  buildPreviousExit,
+  crashKind,
+  writePreviousExitRecord,
+} from "../host/previous-exit-record";
+import {
   CRASH_REPORT_SCAN_TIMEOUT_MS,
   STDERR_END_WAIT_TIMEOUT_MS,
   STDERR_FLUSH_TIMEOUT_MS,
@@ -103,6 +108,7 @@ import {
 } from "../host/lifecycle-teardown";
 import { createLifecycleTeardownPlatform } from "../host/update-mutation";
 import { SUPERVISOR_CAPABILITY_LIFECYCLE_POLICY_V1 } from "@traycer/protocol/config/supervisor-record";
+import type { HostPreviousExit } from "@traycer/protocol/config/host-previous-exit";
 import type { ProcessStartIdentity } from "@traycer/protocol/host/lifecycle";
 import {
   isProcessAlive,
@@ -688,6 +694,9 @@ export interface RunHostStartDeps extends ResolveHostStartTargetDeps {
   readonly readEnvOverrides: () => Promise<Record<string, EnvOverrideValue>>;
   readonly writeMarker: typeof writeBootstrapMarker;
   readonly writeTerminalMarker: typeof writeBootstrapTerminalMarker;
+  // The previous-exit record the next host reads at boot
+  // (`host/previous-exit-record.ts`). Synchronous, like the marker.
+  readonly writePreviousExit: typeof writePreviousExitRecord;
   // `process.exit` itself returns `never`, but the dependency is typed
   // `void` so test stubs can record the requested exit code without
   // throwing from inside event-handler callbacks. Real callers should
@@ -915,6 +924,7 @@ const defaultRunDeps: RunHostStartDeps = {
   readEnvOverrides: async () => ({ ...(await listEnvOverrides()) }),
   writeMarker: writeBootstrapMarker,
   writeTerminalMarker: writeBootstrapTerminalMarker,
+  writePreviousExit: writePreviousExitRecord,
   exit: (code) => {
     process.exit(code);
   },
@@ -4301,6 +4311,24 @@ async function persistChildExit(input: {
             },
       ),
       exitCode: 128 + signalNumber(signal),
+      previousExit: buildPreviousExit({
+        attemptId,
+        endedAtMs: input.childEndedAtMs,
+        // A decodable fatal signal is a crash; a shutdown or kill signal is
+        // an end from outside.
+        kind:
+          fatalMeaning === null
+            ? "stopped"
+            : crashKind(
+                input.stderrTee.capture.classifyFatal(
+                  input.stderrSettle.drained === true,
+                ),
+                crashReport,
+              ),
+        exitCode: null,
+        signal,
+        report: crashReport,
+      }),
       // EVERY signal death is abnormal here, and the deliberate-stop question
       // is answered where it is actually known - `decideRelaunch`, which reads
       // the `shuttingDown` latch and the stop-intent file.
@@ -4388,6 +4416,14 @@ async function persistChildExit(input: {
       ),
       exitCode: 0,
       abnormal: false,
+      previousExit: buildPreviousExit({
+        attemptId,
+        endedAtMs: input.childEndedAtMs,
+        kind: "stopped",
+        exitCode: code,
+        signal: null,
+        report: null,
+      }),
     });
   }
   if (code === null || code === 0) {
@@ -4416,6 +4452,14 @@ async function persistChildExit(input: {
       ),
       exitCode: code ?? 0,
       abnormal: false,
+      previousExit: buildPreviousExit({
+        attemptId,
+        endedAtMs: input.childEndedAtMs,
+        kind: "exited",
+        exitCode: code ?? 0,
+        signal: null,
+        report: null,
+      }),
     });
   }
   if (
@@ -4457,6 +4501,14 @@ async function persistChildExit(input: {
       ),
       exitCode: code,
       abnormal: true,
+      previousExit: buildPreviousExit({
+        attemptId,
+        endedAtMs: input.childEndedAtMs,
+        kind: "stopped",
+        exitCode: code,
+        signal: null,
+        report: null,
+      }),
     });
   }
   logger.error(
@@ -4514,6 +4566,23 @@ async function persistChildExit(input: {
     ),
     exitCode: code,
     abnormal: true,
+    previousExit: buildPreviousExit({
+      attemptId,
+      endedAtMs: input.childEndedAtMs,
+      // A Windows session end is the logoff, not a crash.
+      kind:
+        input.platform === "win32" && isWindowsSessionEndExit(code)
+          ? "stopped"
+          : crashKind(
+              input.stderrTee.capture.classifyFatal(
+                input.stderrSettle.drained === true,
+              ),
+              crashReport,
+            ),
+      exitCode: code,
+      signal: null,
+      report: crashReport,
+    }),
   });
   // After the marker, never before it: the marker is readiness authority and
   // a telemetry stall must not delay it. Not awaited either: the relaunch
@@ -4765,6 +4834,8 @@ function persistTerminalMarker(options: {
   readonly fields: BootstrapMarkerFields;
   readonly exitCode: number;
   readonly abnormal: boolean;
+  /** How the child ended, for the next host (`previous-exit.json`). */
+  readonly previousExit: HostPreviousExit;
 }): ChildExitOutcome {
   try {
     options.deps.writeTerminalMarker(
@@ -4782,6 +4853,18 @@ function persistTerminalMarker(options: {
       },
       errorFromUnknown(cause),
     );
+  }
+  // After the marker, never before it: the marker is readiness authority, and
+  // this record only tells the next host what to say about this exit.
+  try {
+    options.deps.writePreviousExit(options.environment, options.previousExit);
+  } catch (cause) {
+    options.logger.warn("Host supervisor could not record the previous exit", {
+      environment: options.environment,
+      phase: options.phase,
+      kind: options.previousExit.kind,
+      cause: errorFromUnknown(cause).name,
+    });
   }
   // Marker persistence is best effort; it must never replace the child's
   // actual exit code or cause a spurious service-manager restart.
