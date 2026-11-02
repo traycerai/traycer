@@ -3550,7 +3550,8 @@ window`, recorded in the type as `coverage.browsersAreMountedOnly` -
       environments.** The capability's scopes are `global`/`project` and carry no
       shared destination, so `useSkillEnvironmentRoute` tells the two kinds of host
       apart by `environment.status`, which a build without environments never
-      answers. That host writes to `~/.agents/skills` as it always did: the
+      answers (`null` until the manifest arrives: no shared-folder action and no
+      refusal yet). That host writes to `~/.agents/skills` as it always did: the
       composer offers "Every provider", and a shared row keeps Edit and Remove. A
       host that answers refuses those writes (`unsupported_scope` for a
       create or import, `unsupported_action` for an edit, update or remove),

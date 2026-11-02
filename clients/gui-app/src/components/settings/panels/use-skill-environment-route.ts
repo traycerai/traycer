@@ -18,9 +18,11 @@ export interface SkillEnvironmentRoute {
   /**
    * The host answers `environment.status`, which a build without environments
    * never does. Such a host only reads the shared folder; one without it still
-   * writes there, and has no environment to offer.
+   * writes there, and has no environment to offer. `null` until its manifest
+   * arrives, when neither is known: offer no shared-folder action and word no
+   * refusal.
    */
-  readonly hostRunsEnvironments: boolean;
+  readonly hostRunsEnvironments: boolean | null;
   /** What this host serves, once known; the composer writes nowhere else. */
   readonly served: ServedSkillEnvironment | null;
   readonly hostClient: HostClient<HostRpcRegistry>;
@@ -39,14 +41,14 @@ export function useSkillEnvironmentRoute(): SkillEnvironmentRoute {
     hostClient,
     "environment.status",
   );
-  const hostRunsEnvironments = status !== null && status !== false;
+  const hostRunsEnvironments = status === null ? null : status !== false;
   const hostId = useRequesterHostId(hostClient);
   const bindingReadable =
     useHostMethodSupport(hostId, "environment.host.read") === true;
   const environment = useEnvironmentHostReadQuery(
     hostClient,
     hostId,
-    hostRunsEnvironments && bindingReadable,
+    hostRunsEnvironments === true && bindingReadable,
   ).data?.environment;
   const served: ServedSkillEnvironment | null =
     environment === undefined

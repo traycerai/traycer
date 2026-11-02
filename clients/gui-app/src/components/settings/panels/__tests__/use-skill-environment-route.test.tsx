@@ -96,6 +96,16 @@ describe("useSkillEnvironmentRoute", () => {
     expect(result.current.served).toBeNull();
   });
 
+  it("reads a host whose manifest has not arrived as neither, and does not ask it what it serves", () => {
+    route.statusVersion = null;
+
+    const { result } = renderHook(() => useSkillEnvironmentRoute());
+
+    expect(result.current.hostRunsEnvironments).toBeNull();
+    expect(route.bindingEnabled).toEqual([false]);
+    expect(result.current.served).toBeNull();
+  });
+
   it("does not ask a host without the binding read what it serves", () => {
     route.bindingSupport = false;
 

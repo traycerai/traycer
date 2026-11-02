@@ -51,6 +51,7 @@ import {
   isSharedFolderSkill,
   isSkillUpdateNoOp,
   providerRootFromSkills,
+  HOST_NOT_KNOWN_REASON,
   SHARED_FOLDER_READ_ONLY_REASON,
   skillActionAdvertised,
   skillAudiences,
@@ -500,7 +501,13 @@ function ProviderSkillsTabBody({
             sourceLabel={skillSourceLabel(openSkill.source, providerLabel)}
             removal={
               openSkillReadOnly
-                ? { kind: "blocked", reason: SHARED_FOLDER_READ_ONLY_REASON }
+                ? {
+                    kind: "blocked",
+                    reason:
+                      environment.hostRunsEnvironments === null
+                        ? HOST_NOT_KNOWN_REASON
+                        : SHARED_FOLDER_READ_ONLY_REASON,
+                  }
                 : skillRemovability({
                     removeScopes: allowed.removeScopes,
                     source: openSkill.source,
@@ -640,7 +647,7 @@ function ProviderSkillsTabBody({
 
       <SkillsListBody
         markTarget={{ entryKind: "skills", providerId, scope: effectiveScope }}
-        sharedFolderReadOnly={environment.hostRunsEnvironments}
+        hostRunsEnvironments={environment.hostRunsEnvironments}
         providerLabel={providerLabel}
         projectNeedsWorkspace={projectNeedsWorkspace}
         workspacesLoading={workspacesLoading}
@@ -915,7 +922,7 @@ function SkillUpdateConfirm({
 
 function SkillsListBody({
   markTarget,
-  sharedFolderReadOnly,
+  hostRunsEnvironments,
   providerLabel,
   projectNeedsWorkspace,
   workspacesLoading,
@@ -934,7 +941,7 @@ function SkillsListBody({
 }: {
   readonly markTarget: PersonalMarkTarget;
   /** The host only reads a shared folder's skills: they offer the promote. */
-  readonly sharedFolderReadOnly: boolean;
+  readonly hostRunsEnvironments: boolean | null;
   readonly providerLabel: string;
   readonly projectNeedsWorkspace: boolean;
   readonly workspacesLoading: boolean;
@@ -1019,7 +1026,7 @@ function SkillsListBody({
           skill={skill}
           providerLabel={providerLabel}
           markTarget={markTarget}
-          sharedFolderReadOnly={sharedFolderReadOnly}
+          hostRunsEnvironments={hostRunsEnvironments}
           onOpen={() => {
             onOpenSkill(skill);
           }}
@@ -1116,12 +1123,12 @@ function useOpenSkillActions({
   readonly canEditHere: boolean;
   readonly canUpdateHere: boolean;
   readonly scope: ProviderNativeScope;
-  readonly hostRunsEnvironments: boolean;
+  readonly hostRunsEnvironments: boolean | null;
 }): {
   readonly personal: boolean;
   readonly editable: boolean;
   readonly updatable: boolean;
-  /** A shared folder's skill, which such a host only reads. */
+  /** A shared folder's skill, which such a host only reads, or may. */
   readonly readOnly: boolean;
 } {
   const personal = usePersonalEntryApplied(
@@ -1135,7 +1142,9 @@ function useOpenSkillActions({
   // An item this host once installed there is the person's to remove still,
   // which is how its row drains.
   const readOnly =
-    hostRunsEnvironments && !personal && isSharedFolderSkill(openSkill);
+    hostRunsEnvironments !== false &&
+    !personal &&
+    isSharedFolderSkill(openSkill);
   return {
     personal,
     editable:
@@ -1161,14 +1170,14 @@ function SkillRow({
   skill,
   providerLabel,
   markTarget,
-  sharedFolderReadOnly,
+  hostRunsEnvironments,
   onOpen,
 }: {
   readonly skill: ProviderSkill;
   readonly providerLabel: string;
   /** Where the row's Personal mark reads from (`PersonalEntryMark`). */
   readonly markTarget: PersonalMarkTarget;
-  readonly sharedFolderReadOnly: boolean;
+  readonly hostRunsEnvironments: boolean | null;
   readonly onOpen: () => void;
 }): ReactNode {
   return (
@@ -1237,7 +1246,7 @@ function SkillRow({
       <SkillRowAction
         skill={skill}
         markTarget={markTarget}
-        sharedFolderReadOnly={sharedFolderReadOnly}
+        hostRunsEnvironments={hostRunsEnvironments}
       />
     </li>
   );
@@ -1251,11 +1260,11 @@ function SkillRow({
 function SkillRowAction({
   skill,
   markTarget,
-  sharedFolderReadOnly,
+  hostRunsEnvironments,
 }: {
   readonly skill: ProviderSkill;
   readonly markTarget: PersonalMarkTarget;
-  readonly sharedFolderReadOnly: boolean;
+  readonly hostRunsEnvironments: boolean | null;
 }): ReactNode {
   const personal = usePersonalEntryApplied(
     "skills",
@@ -1263,10 +1272,16 @@ function SkillRowAction({
     markTarget.scope,
   );
   if (skill.source === "managed") return null;
-  if (personal || !sharedFolderReadOnly || !isSharedFolderSkill(skill)) {
+  if (
+    personal ||
+    hostRunsEnvironments === false ||
+    !isSharedFolderSkill(skill)
+  ) {
     return <PersonalEntryMark target={markTarget} name={skill.name} />;
   }
-  if (markTarget.scope !== "global") return null;
+  if (hostRunsEnvironments === null || markTarget.scope !== "global") {
+    return null;
+  }
   return (
     <AddToPersonalButton
       entryKind="skills"

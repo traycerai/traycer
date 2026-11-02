@@ -644,7 +644,7 @@ describe("composerErrorMessage", () => {
 
 describe("skillAudiences", () => {
   const offered = (args: {
-    readonly hostRunsEnvironments: boolean;
+    readonly hostRunsEnvironments: boolean | null;
     readonly environmentAvailable: boolean;
     readonly canProviderScope: boolean;
     readonly effectiveScope: ProviderNativeScope;
@@ -671,6 +671,23 @@ describe("skillAudiences", () => {
       }),
     ).toEqual(["provider", "environment"]);
   });
+
+  it.each([
+    [true, ["provider"]],
+    [false, []],
+  ])(
+    "offers a host not yet known only the provider's own folder, when it can scope: %s",
+    (canProviderScope, audiences) => {
+      expect(
+        offered({
+          hostRunsEnvironments: null,
+          environmentAvailable: false,
+          canProviderScope,
+          effectiveScope: "global",
+        }),
+      ).toEqual(audiences);
+    },
+  );
 
   it("offers no environment at project scope or before it is known", () => {
     expect(

@@ -14,13 +14,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ProviderSkillsTab } from "@/components/settings/panels/provider-skills-tab";
 
 const shared = vi.hoisted(() => ({
-  hostRunsEnvironments: true,
+  hostRunsEnvironments: true as boolean | null,
   skills: [] as ProviderSkill[],
   scope: "global" as ProviderNativeScope,
   promotions: [] as Array<{ scope: string; name: string }>,
   importDialogs: [] as string[],
   importTargets: [] as unknown[],
-  served: { environmentId: "env_me", name: "Personal", team: false },
+  served: { environmentId: "env_me", name: "Personal", team: false } as {
+    environmentId: string;
+    name: string;
+    team: boolean;
+  } | null,
 }));
 
 vi.mock("../use-skill-environment-route", () => ({
@@ -293,5 +297,39 @@ describe("a shared folder's skill on a host from before environments", () => {
     expect(screen.getByRole("radio", { name: /Every provider/ })).toBeDefined();
     expect(screen.getByRole("radio", { name: /Cursor only/ })).toBeDefined();
     expect(screen.queryByLabelText(/^Personal/)).toBeNull();
+  });
+});
+
+describe("a shared folder's skill on a host not yet known", () => {
+  beforeEach(() => {
+    shared.hostRunsEnvironments = null;
+    shared.served = null;
+  });
+
+  it("offers no promote, and the composer offers a single audience: no Every provider and no environment", () => {
+    render(<ProviderSkillsTab state={state()} />);
+
+    expect(
+      screen.queryByRole("button", { name: "Promote to the environment" }),
+    ).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Add skill" }));
+
+    expect(screen.getByRole("dialog")).toBeDefined();
+    expect(screen.queryAllByRole("radio")).toEqual([]);
+    expect(screen.queryByLabelText(/^Personal/)).toBeNull();
+  });
+
+  it("offers no edit, update or remove, and says the host is still connecting", () => {
+    render(<ProviderSkillsTab state={state()} />);
+
+    const dialog = within(openRow("Open hand-placed (Shared)"));
+
+    expect(dialog.queryByRole("button", { name: "Edit" })).toBeNull();
+    expect(
+      dialog.queryByRole("button", { name: /Update from source/ }),
+    ).toBeNull();
+    expect(dialog.queryByRole("button", { name: "Remove" })).toBeNull();
+    expect(dialog.getByText("This host is still connecting.")).toBeDefined();
+    expect(dialog.queryByText(/Traycer reads this folder/)).toBeNull();
   });
 });
