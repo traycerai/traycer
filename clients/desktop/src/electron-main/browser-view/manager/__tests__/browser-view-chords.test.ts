@@ -347,8 +347,8 @@ describe("hostSendKeyCodeForToken", () => {
 
 /**
  * The guest-focused input policy, at the seam that decides it. A browser-scoped
- * chord must NEVER be replayed into the host renderer (that is what made Cmd+W
- * close the app's task tab), and an app-forwarded one must never be delivered
+ * chord must NEVER be replayed into the host renderer (that is what once made
+ * Cmd+W close the app's task tab), and an app-forwarded one must never be delivered
  * as a tile command.
  */
 describe("guest-focused dispositions", () => {
@@ -456,8 +456,9 @@ describe("guest-focused dispositions", () => {
 
   it("still CLAIMS a held chord, so a repeat never reaches the menu", () => {
     // The seam `preventDefault`s on a match. Letting a repeat fall through
-    // would hand Cmd+W back to the focus-blind application accelerator while
-    // the first press's asynchronous browser-tab close is still pending.
+    // would hand a held chord to a focus-blind application accelerator on the
+    // same key while the first press's asynchronous browser-tab close is
+    // still pending.
     const { chords } = dispatchHarness([
       { token: "mod+w", command: "closeTab" },
     ]);

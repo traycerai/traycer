@@ -33,7 +33,7 @@ import {
  *   what every other browser does with it. Main claims the keystroke and names
  *   the command back to the focused tile, which runs it against its own
  *   session tab (`agent-browser-tile.tsx`). Without this, Cmd+W would reach
- *   the app menu's "Close Tab" and retire the app task tab instead.
+ *   nothing: the guest keeps the key and no tab of any kind closes.
  * - APP-FORWARDED (`command: null`) - the app must win even over the page.
  *   Main replays the keystroke into the host renderer so the renderer's
  *   existing binding runs. Shared rows cover app navigation; native-only rows
