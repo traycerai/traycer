@@ -419,6 +419,44 @@ describe("a landing composer over a draft minted before its host resolved", () =
     expect(draftRow(DRAFT_ID).generation).toBe(minted.generation + 1);
   });
 
+  it.each([
+    {
+      memory: "run settings",
+      arrive: () =>
+        useComposerRunSettingsStore
+          .getState()
+          .setGlobalRunSettings(BLANK_HOST, MANAGED_RUN, 1),
+      settings: MANAGED_RUN,
+      folders: [],
+    },
+    {
+      memory: "folders",
+      arrive: () =>
+        useWorkspaceFoldersStore
+          .getState()
+          .addResolvedFolders(BLANK_HOST, [{ ...FOLDER, hostId: BLANK_HOST }]),
+      settings: null,
+      folders: [FOLDER.path],
+    },
+  ])(
+    "seeds with no host change when the host's $memory arrive after it resolved",
+    ({ arrive, settings, folders }) => {
+      const resolveHost = mountComposer();
+      const minted = draftRow(DRAFT_ID);
+      resolveHost(BLANK_HOST);
+      expect(draftRow(DRAFT_ID)).toBe(minted);
+
+      act(() => {
+        arrive();
+      });
+
+      const seeded = draftRow(DRAFT_ID);
+      expect(seeded.settings).toEqual(settings);
+      expect(seeded.workspace.folders).toEqual(folders);
+      expect(seeded.generation).toBe(minted.generation + 1);
+    },
+  );
+
   it("forks a replica rather than writing another host's row", () => {
     useLandingDraftStore.setState((state) => ({
       drafts: state.drafts.map((draft) =>

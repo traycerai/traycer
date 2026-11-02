@@ -71,6 +71,10 @@ import {
   useComposerRunSettingsStore,
 } from "@/stores/composer/composer-run-settings-store";
 import {
+  selectWorkspaceFoldersBucket,
+  useWorkspaceFoldersStore,
+} from "@/stores/workspace/workspace-folders-store";
+import {
   isOpenLandingDraft,
   landingRowIsForeign,
   useLandingDraftStore,
@@ -369,12 +373,26 @@ export function LandingComposer(props: LandingComposerProps) {
   // settings or folders, so it cannot overwrite a draft or follow a failover,
   // and a seeded draft is not seeded twice. The write counts as an edit above,
   // so a row this host does not own forks.
+  //
+  // The host's memory is in the keys because it can arrive after the host does:
+  // these stores move to the signed-in user's data once auth resolves. A run
+  // that finds the draft already seeded writes nothing, so the extra runs are
+  // free.
   const seedUnseededDraft = useLandingDraftStore(
     (state) => state.seedUnseededDraft,
   );
+  const rememberedFolders = useWorkspaceFoldersStore(
+    (state) => selectWorkspaceFoldersBucket(state, resolvedHostId).folders,
+  );
   useEffect(() => {
     if (draftId !== null) seedUnseededDraft(draftId, resolvedHostId);
-  }, [draftId, resolvedHostId, seedUnseededDraft]);
+  }, [
+    draftId,
+    globalLastRunSettings,
+    rememberedFolders,
+    resolvedHostId,
+    seedUnseededDraft,
+  ]);
   const handleToolbarSettingsChange = useCallback(
     (settings: ChatRunSettings) => {
       setGlobalRunSettings(activeHostId, settings, Date.now());

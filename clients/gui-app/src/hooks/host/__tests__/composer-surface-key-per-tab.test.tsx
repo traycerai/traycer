@@ -21,7 +21,8 @@ const tabIdRef = vi.hoisted(() => ({ value: "tab-1" }));
 /** The real module's subscriber set, so a case can drive a regeneration. */
 const identity = vi.hoisted(() => ({ listeners: new Set<() => void>() }));
 
-vi.mock("@/lib/browser-tab-identity", () => ({
+/** Named so the case that lifts this mock can put it back. */
+const mockedIdentityModule = vi.hoisted(() => () => ({
   browserTabId: () => tabIdRef.value,
   subscribeBrowserTabId: (listener: () => void) => {
     identity.listeners.add(listener);
@@ -30,6 +31,8 @@ vi.mock("@/lib/browser-tab-identity", () => ({
     };
   },
 }));
+
+vi.mock("@/lib/browser-tab-identity", mockedIdentityModule);
 
 /**
  * A duplicated tab claiming this tab's id, as the real claim channel delivers
@@ -149,48 +152,81 @@ describe("the browser composer pin is per tab", () => {
 });
 
 describe("the installed app's composer pin outlives the process", () => {
+  const USER_ID = "user-on-phone";
+  // Hand-transcribed, like `persist/__tests__/keys.test.ts`.
+  const MOBILE_WINDOW_KEY = "traycer-gui-app:mobile-window";
+  const PIN_BUCKET_KEY = `traycer-gui-app:surface-host-selection:${USER_ID}`;
+
   /**
-   * The real identity, because how it survives a cold start is the claim under
-   * test; this file's mock only hands its answer to the hook. The flag is loaded
-   * beside it because the desktop case above resets the module registry, and a
-   * statically imported `setMobileApp` would set a different module's flag.
+   * One launch of the installed app. A fresh module graph, so nothing held in
+   * memory reaches the next launch, and neither this file's identity mock nor
+   * its bridge mock applies. The steps run in production's order: the Capacitor
+   * entry sets the flag, then the sign-in bridge retargets the pin store onto
+   * the account's bucket, which is where a phone's pin is actually stored and
+   * how it comes back after a cold start.
    */
-  async function loadRealIdentityAndFlag(): Promise<{
-    readonly realIdentity: typeof import("@/lib/browser-tab-identity");
-    readonly setMobileApp: (value: boolean) => void;
-  }> {
-    const realIdentity = await vi.importActual<
-      typeof import("@/lib/browser-tab-identity")
-    >("@/lib/browser-tab-identity");
+  async function launchInstalledApp() {
+    vi.resetModules();
+    vi.doUnmock("@/lib/browser-tab-identity");
+    vi.doUnmock("@/providers/windows-bridge-context");
+
     const { setMobileApp } = await import("@/lib/mobile-app");
-    return { realIdentity, setMobileApp };
+    setMobileApp(true);
+
+    const { retargetPersistedStore, surfaceHostSelectionKey } =
+      await import("@/lib/persist");
+    const { composerSurfaceKey, useSurfaceHostSelectionStore: store } =
+      await import("@/stores/host/surface-host-selection-store");
+    retargetPersistedStore({
+      store,
+      name: surfaceHostSelectionKey(USER_ID),
+      legacyName: null,
+    });
+
+    const { useComposerSurfaceHostKey: useKey, useComposerSurfaceHostPin } =
+      await import("@/hooks/host/use-composer-surface-host-pin");
+    return {
+      composerSurfaceKey,
+      store,
+      useComposer: () => ({ key: useKey(), pin: useComposerSurfaceHostPin() }),
+    };
   }
 
-  afterEach(async () => {
-    const { realIdentity, setMobileApp } = await loadRealIdentityAndFlag();
-    setMobileApp(false);
-    realIdentity.resetBrowserTabIdentityForTesting();
-    window.localStorage.removeItem("traycer-gui-app:mobile-window");
+  afterEach(() => {
+    cleanup();
+    vi.doMock("@/lib/browser-tab-identity", mockedIdentityModule);
+    vi.doMock("@/providers/windows-bridge-context", () => ({
+      useWindowsBridge: () => null,
+    }));
+    window.localStorage.removeItem(MOBILE_WINDOW_KEY);
+    window.localStorage.removeItem(PIN_BUCKET_KEY);
     window.sessionStorage.clear();
   });
 
   it("keeps the key and the pin across a force-quit", async () => {
-    const { realIdentity, setMobileApp } = await loadRealIdentityAndFlag();
-    setMobileApp(true);
-    realIdentity.resetBrowserTabIdentityForTesting();
-    const keyBeforeQuit = keyForTab(realIdentity.browserTabId());
-    useSurfaceHostSelectionStore
-      .getState()
-      .setSelection(keyBeforeQuit, "host-pinned-on-phone");
+    const firstLaunch = await launchInstalledApp();
+    const beforeQuit = renderHook(firstLaunch.useComposer);
+    act(() => {
+      beforeQuit.result.current.pin.setSelection("host-pinned-on-phone");
+    });
+    const keyBeforeQuit = beforeQuit.result.current.key;
+    beforeQuit.unmount();
 
-    // A force-quit drops sessionStorage and the module's cached id.
+    // A force-quit: sessionStorage is gone, and so is every module's memory.
     window.sessionStorage.clear();
-    realIdentity.resetBrowserTabIdentityForTesting();
-    const keyAfterRelaunch = keyForTab(realIdentity.browserTabId());
+    const relaunch = await launchInstalledApp();
+    // Otherwise the pin below could simply be the first launch's memory.
+    expect(relaunch.store).not.toBe(firstLaunch.store);
+    const { result } = renderHook(relaunch.useComposer);
 
-    expect(keyAfterRelaunch).toBe(keyBeforeQuit);
-    expect(
-      useSurfaceHostSelectionStore.getState().selections[keyAfterRelaunch],
-    ).toBe("host-pinned-on-phone");
+    expect(result.current.key).toBe(keyBeforeQuit);
+    // Keyed by the id the identity stored, not by some other stable value.
+    expect(result.current.key).toBe(
+      relaunch.composerSurfaceKey(
+        window.localStorage.getItem(MOBILE_WINDOW_KEY),
+      ),
+    );
+    // What the host picker renders.
+    expect(result.current.pin.resolvedHostId).toBe("host-pinned-on-phone");
   });
 });
