@@ -711,6 +711,12 @@ interface GuestAttachMint {
 }
 
 interface Harness {
+  /**
+   * Withholds the renderer's acknowledgement of every hold request from now
+   * on; the returned function delivers the ones withheld and resumes
+   * acknowledging at once.
+   */
+  withholdDrawHoldAcknowledgements(): () => void;
   readonly manager: BrowserViewManager;
   readonly windows: Map<string, FakeWindow>;
   readonly guests: FakeWebContents[];
@@ -823,6 +829,7 @@ function createHarnessWithOptions(
   const registeredPopupWebContents: BrowserViewPopupWebContents[] = [];
   const createdPopupWindows: CreatedPopupWindow[] = [];
   let manager: BrowserViewManager | null = null;
+  let withheldAcknowledgements: Array<() => void> | null = null;
   const windowListeners = new Set<() => void>();
   const hiddenWindowIds = new Set<string>();
   const windowShownListeners = new Set<() => void>();
@@ -991,12 +998,17 @@ function createHarnessWithOptions(
           const hold = asPayload<BrowserViewGuestDrawHoldRequested>(payload);
           // The renderer draws the guest and acknowledges.
           for (const guest of guests) guest.lifecycle.push("drawHoldRequested");
-          queueMicrotask(() => {
+          const acknowledge = (): void => {
             manager?.drawHolds.reportApplied(windowId, {
               ...hold,
               applied: true,
             });
-          });
+          };
+          if (withheldAcknowledgements !== null) {
+            withheldAcknowledgements.push(acknowledge);
+          } else {
+            queueMicrotask(acknowledge);
+          }
           return true;
         }
         case RunnerHostEvent.browserViewGuestDrawHoldReleased:
@@ -1061,6 +1073,14 @@ function createHarnessWithOptions(
       if (shown) hiddenWindowIds.delete(windowId);
       else hiddenWindowIds.add(windowId);
       for (const listener of windowShownListeners) listener();
+    },
+    withholdDrawHoldAcknowledgements: () => {
+      const withheld: Array<() => void> = [];
+      withheldAcknowledgements = withheld;
+      return () => {
+        withheldAcknowledgements = null;
+        for (const acknowledge of withheld) acknowledge();
+      };
     },
     holdNextGuestAttach: () => {
       const latch = Promise.withResolvers<void>();
@@ -6404,6 +6424,10 @@ describe("BrowserViewManager draw holds around pixel reads", () => {
       () => undefined,
     );
 
+    // The first frame has been read, so only the stream's own hold is left.
+    await flushCloseEntry();
+    expect(view.lifecycle).not.toContain("drawHoldReleased");
+
     await harness.manager.releaseTab(capability);
     await flushCloseEntry();
 
@@ -6428,5 +6452,51 @@ describe("BrowserViewManager draw holds around pixel reads", () => {
 
     expect(view.lifecycle).toContain("drawHoldRequested");
     expect(view.lifecycle.at(-1)).toBe("drawHoldReleased");
+  });
+
+  it("never reads for a PiP stopped before the guest was drawn, and sends one release", async () => {
+    const harness = createHarness();
+    const { capability, view } = await attach(harness);
+    const deliver = harness.withholdDrawHoldAcknowledgements();
+
+    await harness.manager.startPipCapture(
+      "window-1",
+      { ...capability, ...PIP_INPUT },
+      () => undefined,
+    );
+    harness.manager.pip.stop();
+    deliver();
+    await flushCloseEntry();
+
+    expect(drawHoldSteps(view)).toEqual([
+      "drawHoldRequested",
+      "drawHoldReleased",
+    ]);
+  });
+
+  it("keeps the guest held until a PiP read in flight completes after a stop", async () => {
+    const harness = createHarness();
+    const { capability, view } = await attach(harness);
+    view.deferCaptures = true;
+
+    await harness.manager.startPipCapture(
+      "window-1",
+      { ...capability, ...PIP_INPUT },
+      () => undefined,
+    );
+    await flushCloseEntry();
+    expect(drawHoldSteps(view)).toEqual(["drawHoldRequested", "capturePage"]);
+
+    harness.manager.pip.stop();
+    await flushCloseEntry();
+    expect(drawHoldSteps(view)).toEqual(["drawHoldRequested", "capturePage"]);
+
+    view.resolveNextCapture();
+    await flushCloseEntry();
+    expect(drawHoldSteps(view)).toEqual([
+      "drawHoldRequested",
+      "capturePage",
+      "drawHoldReleased",
+    ]);
   });
 });

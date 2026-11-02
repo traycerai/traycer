@@ -7,6 +7,8 @@ import type {
   BrowserViewDrawHolds,
 } from "./browser-view-draw-holds";
 
+const PIP_STOPPED = "PiP capture stopped before the frame was read.";
+
 /**
  * At most one tab streams PiP frames at a time; starting a second stops the
  * first. Frames come from `webContents.capturePage()`, so this owns the poller
@@ -44,8 +46,19 @@ export class BrowserViewPipCapture {
     const drawHold = this.drawHolds.hold(entry);
     this.drawHold = drawHold;
     const guest = entry.webContents;
+    const streaming = (): boolean => this.drawHold === drawHold;
     const capture = new BrowserPipCapture({
-      capturePage: () => drawHold.ready.then(() => guest.capturePage()),
+      // Each frame holds the guest drawn until its own read completes, so a
+      // stop mid-read cannot park the guest under a pending capture, and a
+      // frame still waiting for the guest to draw never reads after a stop.
+      capturePage: () => {
+        if (!streaming()) return Promise.reject(new Error(PIP_STOPPED));
+        return this.drawHolds.withHold(entry, () =>
+          streaming()
+            ? guest.capturePage()
+            : Promise.reject(new Error(PIP_STOPPED)),
+        );
+      },
     });
     this.capturingEntry = entry;
     this.capture = capture;
