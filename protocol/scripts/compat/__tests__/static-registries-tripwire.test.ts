@@ -434,13 +434,17 @@ function bindSingleFile(source: ts.SourceFile): ts.TypeChecker {
 
 /**
  * The lines of a test file that hand a validator a whole host registry, a copy
- * of one, or the static registry list. It resolves what a file can do to those
- * in its own text: rename an import, bind a value to a name in any scope and
- * order, destructure it, wrap it in a cast, spread it, `Object.assign` it, or
- * read it off a namespace. A value that reaches a validator through a function
- * parameter or another module is out of its sight. A destructured property is
- * judged by its name, so a local object holding a subset under a registry's name
- * reads as whole: a false alarm, and a rename clears it.
+ * of one, the static registry list, or any entry of that list, since every entry
+ * can be a host registry. It resolves what a file can do to those in its own
+ * text: rename an import, bind a value to a name in any scope and order,
+ * destructure it, wrap it in a cast, spread it, `Object.assign` it, read it off a
+ * namespace, index the list, loop over it, or hand its entries to a callback or
+ * a validator passed by reference. A value that reaches a validator through a
+ * function parameter or another module is out of its sight, and so is a loop
+ * that hands a host registry's lines to a validator one at a time. A
+ * destructured property is judged by its name, so a local object holding a
+ * subset under a registry's name reads as whole: a false alarm, and a rename
+ * clears it.
  */
 function wholeHostRegistryValidationLines(
   fileName: string,
@@ -531,17 +535,120 @@ function wholeHostRegistryValidationLines(
     return false;
   };
 
+  // The static registry list, or a copy of it.
+  const isList = (
+    expression: ts.Expression,
+    seen: ReadonlySet<ts.Symbol>,
+  ): boolean => {
+    if (originName(expression, seen) === "STATIC_REGISTRIES") return true;
+    const node = unwrapped(expression);
+    if (ts.isArrayLiteralExpression(node)) {
+      return node.elements.some(
+        (element) =>
+          ts.isSpreadElement(element) && isList(element.expression, seen),
+      );
+    }
+    if (ts.isIdentifier(node)) {
+      const symbol = checker.getSymbolAtLocation(node);
+      const declaration = symbol?.declarations?.[0];
+      return (
+        symbol !== undefined &&
+        declaration !== undefined &&
+        !seen.has(symbol) &&
+        ts.isVariableDeclaration(declaration) &&
+        declaration.initializer !== undefined &&
+        isList(declaration.initializer, new Set([...seen, symbol]))
+      );
+    }
+    return false;
+  };
+
+  // A call of a method on the list, such as `.map`, `.forEach` or `.find`,
+  // which hands each entry to its callback.
+  const isListMethodCall = (node: ts.Node): node is ts.CallExpression =>
+    ts.isCallExpression(node) &&
+    ts.isPropertyAccessExpression(node.expression) &&
+    isList(node.expression.expression, new Set());
+
+  // One entry of the list, or its registry: every entry can be a host
+  // registry, so validating any one of them is a whole walk. An entry is read
+  // by index, by `find` or `at`, by array destructuring, by `for…of`, or as a
+  // callback's first parameter on a method of the list.
+  const isListEntry = (
+    expression: ts.Expression,
+    seen: ReadonlySet<ts.Symbol>,
+  ): boolean => {
+    const node = unwrapped(expression);
+    if (ts.isElementAccessExpression(node)) return isList(node.expression, seen);
+    if (ts.isPropertyAccessExpression(node)) {
+      return (
+        node.name.text === "registry" && isListEntry(node.expression, seen)
+      );
+    }
+    if (ts.isCallExpression(node)) {
+      return (
+        ts.isPropertyAccessExpression(node.expression) &&
+        ["at", "find", "findLast"].includes(node.expression.name.text) &&
+        isList(node.expression.expression, seen)
+      );
+    }
+    if (!ts.isIdentifier(node)) return false;
+    const symbol = checker.getSymbolAtLocation(node);
+    const declaration = symbol?.declarations?.[0];
+    if (symbol === undefined || declaration === undefined || seen.has(symbol)) {
+      return false;
+    }
+    const next = new Set([...seen, symbol]);
+    if (ts.isParameter(declaration)) {
+      const callback = declaration.parent;
+      return (
+        callback.parameters[0] === declaration &&
+        (ts.isArrowFunction(callback) || ts.isFunctionExpression(callback)) &&
+        isListMethodCall(callback.parent)
+      );
+    }
+    if (
+      ts.isBindingElement(declaration) &&
+      ts.isArrayBindingPattern(declaration.parent)
+    ) {
+      const owner = declaration.parent.parent;
+      return (
+        declaration.dotDotDotToken === undefined &&
+        ts.isVariableDeclaration(owner) &&
+        owner.initializer !== undefined &&
+        isList(owner.initializer, next)
+      );
+    }
+    if (!ts.isVariableDeclaration(declaration)) return false;
+    const statement = declaration.parent.parent;
+    if (ts.isForOfStatement(statement)) {
+      return isList(statement.expression, next);
+    }
+    return (
+      declaration.initializer !== undefined &&
+      isListEntry(declaration.initializer, next)
+    );
+  };
+
   const lines: number[] = [];
   const visit = (node: ts.Node): void => {
     if (ts.isCallExpression(node)) {
       const validator = originName(node.expression, new Set());
       const argument = node.arguments[0];
-      if (
+      const handsOverWhole =
         validator !== null &&
         validators.has(validator) &&
         argument !== undefined &&
-        isWhole(argument, new Set())
-      ) {
+        (isWhole(argument, new Set()) || isListEntry(argument, new Set()));
+      // `STATIC_REGISTRIES.forEach(validateStaticRegistry)`: a validator
+      // passed by reference to a method of the list.
+      const passesValidator =
+        isListMethodCall(node) &&
+        node.arguments.some((callback) => {
+          const name = originName(callback, new Set());
+          return name !== null && validators.has(name);
+        });
+      if (handsOverWhole || passesValidator) {
         lines.push(
           source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1,
         );
@@ -667,6 +774,56 @@ describe("the one whole-registry validation", () => {
       "a rest copy of the registry",
       "const { ...registry } = hostRpcRegistry; validateVersionedRpcRegistry(registry);",
       1,
+    ],
+    [
+      "a loop over the static registry list",
+      "for (const entry of STATIC_REGISTRIES) validateStaticRegistry(entry);",
+      1,
+    ],
+    [
+      "a callback on the list",
+      "STATIC_REGISTRIES.map((entry) => validateStaticRegistry(entry));",
+      1,
+    ],
+    [
+      "a function callback on a renamed list",
+      'import { STATIC_REGISTRIES as list } from "x"; list.forEach(function (entry) { validateStaticRegistry(entry); });',
+      1,
+    ],
+    [
+      "a validator passed by reference to the list",
+      "STATIC_REGISTRIES.forEach(validateStaticRegistry);",
+      1,
+    ],
+    [
+      "an entry read by index",
+      "validateStaticRegistry(STATIC_REGISTRIES[0]);",
+      1,
+    ],
+    [
+      "an entry found by name",
+      'validateStaticRegistry(STATIC_REGISTRIES.find((entry) => entry.name === "hostRpcRegistry")!);',
+      1,
+    ],
+    [
+      "an entry destructured from the list",
+      "const [first] = STATIC_REGISTRIES; validateStaticRegistry(first);",
+      1,
+    ],
+    [
+      "an entry's registry, looping over a copy of the list",
+      "for (const entry of [...STATIC_REGISTRIES]) validateVersionedRpcRegistry(entry.registry);",
+      1,
+    ],
+    [
+      "a callback on the list that validates nothing",
+      "STATIC_REGISTRIES.map((entry) => entry.name);",
+      0,
+    ],
+    [
+      "a loop over the test's own entries",
+      "for (const entry of planted) validateStaticRegistry(entry);",
+      0,
     ],
     [
       "a binding declared after the call that reads it",
