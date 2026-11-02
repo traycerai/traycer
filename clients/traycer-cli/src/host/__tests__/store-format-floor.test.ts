@@ -1834,6 +1834,11 @@ describe("the task store floor", () => {
       targetVersion: "1.4.2",
       publishedStoreFormats: { chatDb: 20 },
       declaredStoreFormats: null,
+      // The default pairs with the 1.4.x and 1.3.x targets below, which it
+      // is above. A case whose target is NEWER than this has to name its own
+      // installed build, or the move is an upgrade: `storeFloorApplicability`
+      // sends every upgrade straight out, and nothing the case puts on disk
+      // is ever read.
       installedVersion: "1.5.0",
       installedStoreFormats: { chatDb: 20 },
       provenance: NO_PROVENANCE,
@@ -1992,7 +1997,10 @@ describe("the task store floor", () => {
 
     await expect(
       assertHostStoreFormatFloor(
-        rollbackInput(logger, { targetVersion: "1.5.3" }),
+        rollbackInput(logger, {
+          targetVersion: "1.5.3",
+          installedVersion: "1.5.4",
+        }),
       ),
     ).resolves.toBeUndefined();
     expect(
@@ -2115,7 +2123,10 @@ describe("the task store floor", () => {
 
     await expect(
       assertHostStoreFormatFloor(
-        rollbackInput(logger, { targetVersion: "1.5.3" }),
+        rollbackInput(logger, {
+          targetVersion: "1.5.3",
+          installedVersion: "1.5.4",
+        }),
       ),
     ).resolves.toBeUndefined();
 
