@@ -1308,9 +1308,18 @@ function RailTab({
         aria-selected={selected}
         aria-label={limited ? `${label}, limit reached` : label}
         onClick={onSelect}
+        // The same active recipe as the model picker's `ProviderRail`. A plain
+        // `bg-accent` fill vanished here: the rail is itself washed
+        // `bg-foreground/3`, and every dark preset's accent is that same small
+        // lift of the card, so the selected tab painted at 1:1 with the rail.
+        // Overview still read as selected only because its mono icon brightens
+        // to `text-foreground`; a brand `HarnessIcon` ignores text colour, so a
+        // provider tab had no visible cue at all.
         className={cn(
-          "relative flex size-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60",
-          selected && "bg-accent text-foreground",
+          "relative flex size-8 shrink-0 items-center justify-center rounded-lg outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring/60",
+          selected
+            ? "bg-primary/10 text-foreground shadow-sm ring-1 ring-primary/25 hover:bg-primary/15"
+            : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
         )}
       >
         {icon}
