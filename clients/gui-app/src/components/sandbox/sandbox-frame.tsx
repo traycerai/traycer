@@ -59,6 +59,7 @@ import {
 import { sandboxTheme, type SandboxTheme } from "@/lib/sandbox/theme-map";
 import { resolveDesktopPlatform } from "@/lib/windows/desktop-capabilities";
 import { cn } from "@/lib/utils";
+import { useGuestFramePressRelay } from "@/hooks/ui/use-guest-frame-press-relay";
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 import { useThemeRevision } from "@/providers/use-theme-revision";
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
@@ -392,6 +393,10 @@ export function SandboxFrame(props: SandboxFrameProps) {
   const themeRevision = useThemeRevision();
   const bindings = useKeybindingStore((s) => s.bindings);
   const frameRef = useRef<HTMLIFrameElement | null>(null);
+  // A press inside the frame reaches nothing in this document, so the usage
+  // and resources popovers (and every other outside-dismissed overlay) stayed
+  // open over an artifact page until the next click elsewhere.
+  useGuestFramePressRelay(frameRef);
   const bridgeRef = useRef<SandboxBridgeHost | null>(null);
   // The link this frame's page is waiting on the reader for, and how to
   // answer it. The bridge allows one at a time.
