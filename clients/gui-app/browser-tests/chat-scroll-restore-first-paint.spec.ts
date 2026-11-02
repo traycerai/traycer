@@ -483,7 +483,7 @@ async function attempt(
     return { hit: false, problems: [], note: noteOf(facts) };
   }
   const gestureAt = facts.gestureAt ?? 0;
-  await nextFrames(page, 60);
+  await nextFrames(page, 30);
   await settle(page, 12);
   const overwrites =
     placement === "after-dispatch"

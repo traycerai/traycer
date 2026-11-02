@@ -217,10 +217,8 @@ async function wheelBy(page: Page, deltaY: number): Promise<void> {
   await wheelsDelivered(page, [{ deltaX: 0, deltaY }], 0);
 }
 
-async function settleFrames(page: Page, ms: number): Promise<void> {
-  await nextFrames(page, 20);
-  await page.waitForTimeout(ms);
-  await nextFrames(page, 20);
+async function settleFrames(page: Page, frames: number): Promise<void> {
+  await nextFrames(page, 40 + frames);
 }
 
 function headerTop(page: Page): Promise<number> {
@@ -256,7 +254,7 @@ for (const line of ["legacy", "windowed"] as const) {
     }) => {
       await open(page, line);
       await wheelBy(page, -1500);
-      await settleFrames(page, 600);
+      await settleFrames(page, 36);
       await install(page);
       const reading = await page.evaluate(() =>
         window.__chatScrollProbe.readingRow(),
@@ -264,7 +262,7 @@ for (const line of ["legacy", "windowed"] as const) {
       const before = await edgeMark(page);
       const anchor = await edgeAnchorText(page);
       await page.setViewportSize({ width: 600, height: 700 });
-      await settleFrames(page, 900);
+      await settleFrames(page, 54);
       const after = await edge(page);
       const rowAfter = await page.evaluate(() =>
         window.__chatScrollProbe.readingRow(),
@@ -317,7 +315,7 @@ for (const line of ["legacy", "windowed"] as const) {
           );
           await nextFrames(page, 20);
         }
-        await settleFrames(page, 600);
+        await settleFrames(page, 36);
         await install(page);
         const rowTop = await page.evaluate(() => {
           const nodeEl = document.querySelector<HTMLElement>(
@@ -336,14 +334,14 @@ for (const line of ["legacy", "windowed"] as const) {
         });
         // A scroll after install, so the list records its edge anchor.
         await wheelBy(page, 2);
-        await settleFrames(page, 300);
+        await settleFrames(page, 18);
         const anchor = await edgeAnchorText(page);
         const before = await headerTop(page);
         await page.locator(CARD).click();
-        await settleFrames(page, 700);
+        await settleFrames(page, 42);
         const expanded = await headerTop(page);
         await page.locator(CARD).click();
-        await settleFrames(page, 700);
+        await settleFrames(page, 42);
         const collapsed = await headerTop(page);
         const adjusts = await edgeAdjusts(page);
         const report = `[${line} B4 ${name}] row top ${rowTop.toFixed(0)} header ${before.toFixed(1)} -> expand ${expanded.toFixed(1)} (Δ ${(expanded - before).toFixed(1)}) -> collapse ${collapsed.toFixed(1)} (Δ ${(collapsed - before).toFixed(1)}); anchor: ${anchor}; adjusts=${String(adjusts.length)}\n${adjusts.join("\n")}`;
@@ -395,17 +393,17 @@ test(`legacy: a block that appears above the edge inside the row leaves the edge
     );
     await nextFrames(page, 20);
   }
-  await settleFrames(page, 600);
+  await settleFrames(page, 36);
   await install(page);
   await wheelBy(page, 2);
-  await settleFrames(page, 300);
+  await settleFrames(page, 18);
   const rowBefore = await cardRowHeight(page);
   const before = await edgeMark(page);
   const anchor = await edgeAnchorText(page);
   await page.evaluate(() =>
     window.__chatScrollProbe.insertAboveInRow("message-49", 2),
   );
-  await settleFrames(page, 900);
+  await settleFrames(page, 54);
   const after = await edge(page);
   const rowAfter = await cardRowHeight(page);
   const adjusts = await edgeAdjusts(page);

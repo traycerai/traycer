@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import {
+  transcriptMounted,
   expectAtRest,
   expectPositionKept,
   intentOf,
@@ -62,7 +63,7 @@ async function load(page: Page, mode: Mode): Promise<() => Promise<string>> {
     });
   }
   await page.goto(fixture("chat-scroll-model"));
-  await nextFrames(page, 30);
+  await transcriptMounted(page);
   const stopTimeline = await startTimeline(page);
   const view = await expectAtRest(page, { kind: "tail" }, "load");
   expect(view.mode).toBe("following-end");
@@ -78,11 +79,11 @@ const stopStream = (page: Page): Promise<void> =>
 async function streamThenCheck(
   page: Page,
   intent: ReaderIntent,
-  ms: number,
+  frames: number,
   label: string,
 ): Promise<ChatScrollView> {
   await startStream(page);
-  await page.waitForTimeout(ms);
+  await nextFrames(page, frames);
   await stopStream(page);
   return expectAtRest(page, intent, label);
 }
@@ -164,10 +165,23 @@ async function tap(page: Page, y: number): Promise<void> {
   }
 }
 
+/** Resolves once a fling has run out: the offset holds still while the tail
+ *  keeps growing, so the content height cannot be what is watched. */
+async function momentumOver(page: Page): Promise<void> {
+  let previous = (await readView(page)).scrollTop;
+  let still = 0;
+  while (still < 12) {
+    await nextFrames(page, 1);
+    const current = (await readView(page)).scrollTop;
+    still = current === previous ? still + 1 : 0;
+    previous = current;
+  }
+}
+
 /** Following, streaming; a slow swipe up detaches; stream stopped; at rest. */
 async function detachWhileStreaming(page: Page): Promise<ChatScrollView> {
   await startStream(page);
-  await page.waitForTimeout(300);
+  await nextFrames(page, 12);
   await slowSwipe(page, 250, 550, 20);
   await stopStream(page);
   const view = await settle(page, 12);
@@ -201,13 +215,13 @@ scenario(
   "P1 slow swipe up while following a stream detaches and holds",
   async (page) => {
     await startStream(page);
-    await page.waitForTimeout(300);
+    await nextFrames(page, 12);
     await slowSwipe(page, 250, 550, 20);
     // The stream keeps running: the reader's row must not move.
     const during = await readView(page);
     const intent = intentOf(during);
     expect(during.mode).toBe("free-scrolling");
-    await page.waitForTimeout(600);
+    await nextFrames(page, 30);
     await stopStream(page);
     await expectAtRest(page, intent, "P1 after stream stop");
     const view = await readView(page);
@@ -219,7 +233,7 @@ scenario(
   "P2 fast swipe (fling) while following holds where momentum stopped",
   async (page) => {
     await startStream(page);
-    await page.waitForTimeout(300);
+    await nextFrames(page, 12);
     const before = await readView(page);
     await fling(page, 20);
     const a = (await readView(page)).scrollTop;
@@ -228,7 +242,7 @@ scenario(
     expect(a !== b, `momentum was running (${String(a)} -> ${String(b)})`).toBe(
       true,
     );
-    await page.waitForTimeout(2500);
+    await momentumOver(page);
     await stopStream(page);
     const view = await settle(page, 12);
     expect(view.scrollTop, "the fling moved the list up").toBeLessThan(
@@ -237,20 +251,20 @@ scenario(
     const intent = intentOf(view);
     expect(intent.kind, "the fling ended away from the bottom").toBe("at");
     await expectAtRest(page, intent, "P2 at rest");
-    await streamThenCheck(page, intent, 600, "P2 stream resumed");
+    await streamThenCheck(page, intent, 25, "P2 stream resumed");
   },
 );
 
 scenario("P3 a tap during fling momentum stops it and holds", async (page) => {
   await startStream(page);
-  await page.waitForTimeout(300);
+  await nextFrames(page, 12);
   await fling(page, 20);
   const a = (await readView(page)).scrollTop;
   await nextFrames(page, 2);
   const b = (await readView(page)).scrollTop;
   await tap(page, 400);
   const atTap = (await readView(page)).scrollTop;
-  await page.waitForTimeout(400);
+  await nextFrames(page, 24);
   const later = (await readView(page)).scrollTop;
   await stopStream(page);
   const view = await settle(page, 12);
@@ -264,7 +278,7 @@ scenario("P3 a tap during fling momentum stops it and holds", async (page) => {
   const intent = intentOf(view);
   expect(intent.kind).toBe("at");
   await expectAtRest(page, intent, "P3 at rest");
-  await streamThenCheck(page, intent, 600, "P3 stream resumed");
+  await streamThenCheck(page, intent, 25, "P3 stream resumed");
 });
 
 scenario("P4 swiping back to the bottom follows again", async (page) => {
@@ -278,25 +292,25 @@ scenario("P4 swiping back to the bottom follows again", async (page) => {
     "P4 back at the bottom",
   );
   expect(view.mode).toBe("following-end");
-  await streamThenCheck(page, { kind: "tail" }, 800, "P4 stream follows");
+  await streamThenCheck(page, { kind: "tail" }, 30, "P4 stream follows");
 });
 
 scenario(
   "P5 a Messages pick while following a stream holds the turn",
   async (page) => {
     await startStream(page);
-    await page.waitForTimeout(300);
+    await nextFrames(page, 12);
     const items = await page.evaluate(() =>
       window.__chatScrollProbe.pickItems(),
     );
     const target = items.at(3);
     if (target === undefined) throw new Error("no pick item");
     await page.evaluate(() => window.__chatScrollProbe.pick(3));
-    await page.waitForTimeout(1200);
+    await nextFrames(page, 60);
     await stopStream(page);
     const intent: ReaderIntent = { kind: "picked", messageId: target };
     await expectAtRest(page, intent, "P5 after pick");
-    await streamThenCheck(page, intent, 600, "P5 stream resumed");
+    await streamThenCheck(page, intent, 25, "P5 stream resumed");
   },
 );
 
@@ -305,14 +319,14 @@ for (const delayMs of [0, 100, 300]) {
     `P6 swipe up ${String(delayMs)}ms after appendTurn while following holds`,
     async (page) => {
       await startStream(page);
-      await page.waitForTimeout(300);
+      await nextFrames(page, 12);
       await page.evaluate(() => window.__chatScrollProbe.appendTurn());
       if (delayMs > 0) await page.waitForTimeout(delayMs);
       await slowSwipe(page, 250, 550, 20);
       const during = await readView(page);
       const intent = intentOf(during);
       expect(during.mode, "the swipe detached").toBe("free-scrolling");
-      await page.waitForTimeout(600);
+      await nextFrames(page, 30);
       await stopStream(page);
       await expectAtRest(page, intent, "P6 after stream stop");
     },
@@ -387,7 +401,7 @@ scenario(
       "P8 after the pill",
     );
     expect(view.mode).toBe("following-end");
-    await streamThenCheck(page, { kind: "tail" }, 800, "P8 stream follows");
+    await streamThenCheck(page, { kind: "tail" }, 30, "P8 stream follows");
   },
 );
 
@@ -395,14 +409,14 @@ scenario(
   "P9 a tap on the transcript while following is not a departure",
   async (page) => {
     await startStream(page);
-    await page.waitForTimeout(300);
+    await nextFrames(page, 12);
     await tap(page, 400);
-    await page.waitForTimeout(500);
+    await nextFrames(page, 30);
     const during = await readView(page);
     expect(during.mode, "still following after a tap").toBe("following-end");
     await stopStream(page);
     await expectAtRest(page, { kind: "tail" }, "P9 after the tap");
-    await streamThenCheck(page, { kind: "tail" }, 600, "P9 stream follows");
+    await streamThenCheck(page, { kind: "tail" }, 25, "P9 stream follows");
   },
 );
 
@@ -413,10 +427,10 @@ for (const remount of REMOUNTS) {
     `P7-control wheel-detached, remount (${remount.label}) keeps the position`,
     async (page) => {
       await startStream(page);
-      await page.waitForTimeout(300);
+      await nextFrames(page, 12);
       await page.mouse.move(X, 400);
       await wheelsDelivered(page, [{ deltaX: 0, deltaY: -300 }], 0);
-      await page.waitForTimeout(200);
+      await nextFrames(page, 12);
       await stopStream(page);
       const before = await settle(page, 12);
       expect(before.mode).toBe("free-scrolling");

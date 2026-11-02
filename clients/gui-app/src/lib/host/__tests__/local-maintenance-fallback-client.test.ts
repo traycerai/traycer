@@ -591,6 +591,7 @@ describe("createLocalMaintenanceFallbackClient", () => {
             crossHostMessaging: null,
             sessions: null,
             updatesExternallyManaged: null,
+            previousExit: null,
           };
         },
       },

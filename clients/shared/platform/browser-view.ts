@@ -51,6 +51,29 @@ export interface BrowserViewGuestReleaseRequested {
   readonly registrationId: string;
 }
 
+/**
+ * Main is about to read this guest's pixels (a screenshot, a PiP frame). An
+ * unshown guest is parked where the compositor does not draw it, so it costs
+ * nothing; a read needs a drawn frame, so main holds it drawn for the read.
+ */
+export interface BrowserViewGuestDrawHoldRequested {
+  readonly holdId: string;
+  readonly registrationId: string;
+}
+
+/** The read is over; the guest may stop drawing if no tile shows it. */
+export interface BrowserViewGuestDrawHoldReleased {
+  readonly holdId: string;
+  readonly registrationId: string;
+}
+
+/** The renderer has drawn the held guest, or does not know it (`applied: false`). */
+export interface BrowserViewGuestDrawHoldApplied {
+  readonly holdId: string;
+  readonly registrationId: string;
+  readonly applied: boolean;
+}
+
 /** Logical guest sizing only; placement remains the renderer's CSS anchor. */
 export interface BrowserViewGuestViewportRequested {
   readonly requestId: string;
@@ -911,5 +934,14 @@ export interface BrowserViewBridge {
   ): { dispose: () => void };
   reportGuestViewportResult(
     input: BrowserViewGuestViewportResult,
+  ): Promise<void>;
+  onGuestDrawHoldRequested(
+    handler: (request: BrowserViewGuestDrawHoldRequested) => void,
+  ): { dispose: () => void };
+  onGuestDrawHoldReleased(
+    handler: (request: BrowserViewGuestDrawHoldReleased) => void,
+  ): { dispose: () => void };
+  reportGuestDrawHoldApplied(
+    input: BrowserViewGuestDrawHoldApplied,
   ): Promise<void>;
 }
