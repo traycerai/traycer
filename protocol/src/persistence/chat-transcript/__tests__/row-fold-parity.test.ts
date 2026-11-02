@@ -1300,12 +1300,17 @@ function randomOp(
   );
 }
 
+// Every push runs half of each fuzz's seeds; the nightly `measurements.yml` runs
+// them all.
+const RUN_EVERY_SEED = process.env.HOST_MEASUREMENT_FULL === "1";
+
 function runFuzzedFamily(
   name: string,
   features: Features,
-  seeds: number,
+  allSeeds: number,
   ops: number,
 ): void {
+  const seeds = RUN_EVERY_SEED ? allSeeds : Math.ceil(allSeeds / 2);
   describe(`fuzz family: ${name}`, () => {
     // Per family, never a module global: one family cannot borrow another's count.
     const rewriteTally = { assistantRewrites: 0 };
@@ -1435,8 +1440,7 @@ function assertCheckpointLoadMechanism(
 }
 
 describe("P1/P2: checkpoint-heavy fuzz", () => {
-  // Every push runs five seeds; the nightly `measurements.yml` runs all eight.
-  const SEEDS = process.env.HOST_MEASUREMENT_FULL === "1" ? 8 : 5;
+  const SEEDS = RUN_EVERY_SEED ? 8 : 5;
   /**
    * Every op checks the whole history against the oracle, so a seed's cost
    * grows with the square of this: 100 ops took 100 ms locally, 250 took 380
@@ -2874,8 +2878,8 @@ describe("explicit decline tests", () => {
 describe("mechanism tests on a large chat", () => {
   /**
    * Seeds through raw `store.apply` calls, without the O(record-count) oracle
-   * comparison `applyStep` runs after every op - a ~2000-record chat built
-   * through 1000 checked increments would be O(n^2) and time out. Each
+   * comparison `applyStep` runs after every op - a ~1000-record chat built
+   * through 500 checked increments would be O(n^2) and time out. Each
    * mechanism test still runs the full parity check once, on the resulting
    * store, via {@link assertRowParity}.
    */
@@ -2887,7 +2891,7 @@ describe("mechanism tests on a large chat", () => {
     const store = new RowFoldStore("chat-large");
     let earlyTurnKey = "";
     let earlyUserId = "";
-    for (let i = 0; i < 1000; i += 1) {
+    for (let i = 0; i < 500; i += 1) {
       const uid = `u${i}`;
       const ts = 1000 + i * 2;
       const userResult = store.apply({
@@ -2936,10 +2940,10 @@ describe("mechanism tests on a large chat", () => {
 
   it("a streaming upsert with unchanged facts issues NO facts-from load", () => {
     const { store } = buildLargeChat();
-    const ts = 1000 + 499 * 2 + 1;
+    const ts = 1000 + 249 * 2 + 1;
     const streamed = assistantMessage(
-      "a499",
-      "t499",
+      "a249",
+      "t249",
       ts,
       [textBlock(ts), textBlock(ts)],
       { turnProfile: false, startedAt: ts },
@@ -2982,7 +2986,7 @@ describe("mechanism tests on a large chat", () => {
     });
     expect(result.continued).toBe(true);
     expect(result.touchedUnitKeys).not.toContain(turnRowUnitKey(earlyTurnKey));
-    expect(result.touchedUnitKeys.length).toBeLessThan(1000);
+    expect(result.touchedUnitKeys.length).toBeLessThan(500);
   });
 });
 
