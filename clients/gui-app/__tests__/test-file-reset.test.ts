@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resetTestFileState } from "./test-file-reset";
+import { finishTestFile, resetTestFileState } from "./test-file-reset";
 
 const KEY = "__testFileResetProbe";
 
@@ -92,6 +92,18 @@ describe("what one test file leaves for the next", () => {
     expect(document.cookie).toBe("");
     expect(window.location.pathname).toBe("/");
     expect(window.location.search).toBe("");
+  });
+
+  it("waits for an import the file left in flight before it ends", async () => {
+    vi.resetModules();
+    const imported = vi.fn<() => void>();
+    void import("@/lib/chat/transient-live-assistant-message-id").then(
+      imported,
+    );
+
+    await finishTestFile();
+
+    expect(imported).toHaveBeenCalledOnce();
   });
 
   it("answers hasFocus() false again after the file focused something", () => {

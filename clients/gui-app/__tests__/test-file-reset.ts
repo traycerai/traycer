@@ -342,4 +342,16 @@ export function resetTestFileState(): void {
   baseline.focusedInThisFile = false;
 }
 
-afterAll(resetTestFileState);
+/**
+ * How a file ends. The wait comes first: an import the file left in flight, such
+ * as a `lazy()` it rendered, would otherwise finish after the next file's graph
+ * was cleared and before that file's `vi.mock` was registered, and the next file
+ * would get the real module however it mocked it.
+ */
+export async function finishTestFile(): Promise<void> {
+  vi.useRealTimers();
+  await vi.dynamicImportSettled();
+  resetTestFileState();
+}
+
+afterAll(finishTestFile);

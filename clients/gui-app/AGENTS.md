@@ -420,8 +420,10 @@ Files share a worker (`isolate: false`), and `__tests__/test-file-reset.ts`
 resets what one leaves for the next: the module graph and mock registry (so a
 store needs no reset of its own for this), timers and frames, listeners on the
 window, document, `<html>` and `<body>`, globals and every DOM prototype, the
-DOM, storage, cookies, selection, URL, and `hasFocus()`. A new leak gets a line
-there and a case in `test-file-reset.test.ts`. What it cannot reset, a test must
+DOM, storage, cookies, selection, URL, and `hasFocus()`. It also waits for an
+import the file left in flight, which would otherwise land in the next file's
+graph ahead of its `vi.mock`. A new leak gets a line there and a case in
+`test-file-reset.test.ts`. What it cannot reset, a test must
 allow for:
 
 - A module Node loads natively (`node_modules`) is evaluated once per worker. A
