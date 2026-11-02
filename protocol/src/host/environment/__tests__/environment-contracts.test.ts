@@ -114,6 +114,7 @@ describe("environment.list protocol contract", () => {
     }
   });
 
+  // Walks the whole host registry: ~0.7s locally, past 5s on a loaded CI runner.
   it("registers off the released floor with unsupported degrade", () => {
     expect(() => validateVersionedRpcRegistry(hostRpcRegistry)).not.toThrow();
     expect(RELEASED_FLOOR_METHOD_NAMES).not.toContain("environment.list");
@@ -125,7 +126,7 @@ describe("environment.list protocol contract", () => {
     expect(entry[1].versions[1].upgradeFromPreviousVersion).toBe(
       environmentListUpgradeV10ToV11,
     );
-  });
+  }, 30_000);
 });
 
 describe("environment.host.read / .bind / .list protocol contracts", () => {
@@ -342,7 +343,6 @@ describe("environment.setMainBot protocol contract", () => {
   });
 
   it("registers off the released floor with unsupported degrade", () => {
-    expect(() => validateVersionedRpcRegistry(hostRpcRegistry)).not.toThrow();
     expect(RELEASED_FLOOR_METHOD_NAMES).not.toContain("environment.setMainBot");
     const entry = hostRpcRegistry["environment.setMainBot"];
     expect(entry.degrade).toEqual({ kind: "unsupported" });
