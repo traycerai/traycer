@@ -1152,11 +1152,13 @@ export async function setAgentRolesEnabled(enabled: boolean): Promise<void> {
 
 /** Enables or disables agent feedback while preserving the rest of the config. */
 export async function setAgentFeedbackEnabled(enabled: boolean): Promise<void> {
-  const current = await readCliConfig();
-  await writeCliConfig({
-    ...current,
-    features: { ...current.features, agentFeedback: enabled },
-  });
+  await updateCliConfig((current) => ({
+    next: {
+      ...current,
+      features: { ...current.features, agentFeedback: enabled },
+    },
+    result: undefined,
+  }));
 }
 
 /** Whether agents may drive the in-app browser (default on when unset). */

@@ -180,7 +180,7 @@ export const GENERAL = defineSettingsSection("general", {
     label: "Agent feedback",
     description:
       "Let agents send Traycer's maintainers problems and suggestions about Traycer. Agents are told to describe the need in general terms, not your work, and reports carry no account or chat ids.",
-    availableWhen: alwaysAvailable,
+    availableWhen: isAgentRolesRowAvailable,
     keywords: ["feedback", "suggestions", "telemetry", "privacy", "sentry"],
   },
   // Gated on the SELECTED HOST (both `chatAutoArchive.*` methods advertised),

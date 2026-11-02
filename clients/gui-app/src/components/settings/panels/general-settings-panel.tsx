@@ -142,27 +142,29 @@ export function GeneralSettingsPanel() {
               }
             />
           ) : null}
-          <SettingsRow
-            row={GENERAL.definitions.agentFeedback}
-            status={
-              featureSettings.isError
-                ? "Couldn't read feature settings. Repair ~/.traycer/cli/config.json, or back it up before resetting it, then reopen Settings."
-                : undefined
-            }
-            control={
-              <Switch
-                checked={featureSettings.data?.agentFeedback === true}
-                disabled={
-                  featureSettings.data === undefined ||
-                  setAgentFeedback.isPending
-                }
-                onCheckedChange={(enabled) => {
-                  setAgentFeedback.mutate(enabled);
-                }}
-                aria-label="Agent feedback"
-              />
-            }
-          />
+          {agentRolesAvailable ? (
+            <SettingsRow
+              row={GENERAL.definitions.agentFeedback}
+              status={
+                featureSettings.isError
+                  ? "Couldn't read feature settings. Repair ~/.traycer/cli/config.json, or back it up before resetting it, then reopen Settings."
+                  : undefined
+              }
+              control={
+                <Switch
+                  checked={featureSettings.data?.agentFeedback === true}
+                  disabled={
+                    featureSettings.data === undefined ||
+                    setAgentFeedback.isPending
+                  }
+                  onCheckedChange={(enabled) => {
+                    setAgentFeedback.mutate(enabled);
+                  }}
+                  aria-label="Agent feedback"
+                />
+              }
+            />
+          ) : null}
           <ChatAutoArchiveSettingsRow />
         </SettingsGroup>
 
