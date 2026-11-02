@@ -151,6 +151,8 @@ import {
   agentSendMessageUpgradeV10ToV11,
   agentSendMessageV10,
   agentSendMessageV11,
+  agentSendMessageUpgradeV11ToV12,
+  agentSendMessageV12,
   agentStopV10,
   agentForkV10,
 } from "@traycer/protocol/host/agent/contracts";
@@ -8251,7 +8253,7 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   },
   "agent.sendMessage": {
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: agentSendMessageV10,
@@ -8262,6 +8264,12 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
         1: {
           contract: agentSendMessageV11,
           upgradeFromPreviousVersion: agentSendMessageUpgradeV10ToV11,
+        },
+        // @1.2 adds `attachments`: images from the sender's own transcript,
+        // named by file name.
+        2: {
+          contract: agentSendMessageV12,
+          upgradeFromPreviousVersion: agentSendMessageUpgradeV11ToV12,
         },
       },
       downgradePathsFromLatest: {},
