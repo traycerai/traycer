@@ -121,10 +121,11 @@ export function sandboxOperationFixture(
   };
 }
 
-/** The host directory's entry for the sandbox behind `hostId`, in `state`. */
+/** The host directory's entry for the sandbox behind `hostId`, in `state`, frozen or not. */
 export function sandboxHostEntryFixture(
   hostId: string,
   state: HostListItem["sandboxState"],
+  frozen: boolean,
 ): HostDirectoryEntry {
   return hostListItemToDirectoryEntry(
     {
@@ -144,7 +145,7 @@ export function sandboxHostEntryFixture(
       },
       updatePolicy: "manual",
       sandboxState: state,
-      sandboxFrozen: false,
+      sandboxFrozen: frozen,
       profile: "agent",
     },
     "wss://relay.example.test",

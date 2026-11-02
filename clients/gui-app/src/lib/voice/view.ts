@@ -59,6 +59,9 @@ export interface VoiceView {
 }
 
 /** The palette's items by the place each takes in the view's order. */
+/** `frozen`: it would try to wake, and be refused. */
+export type HostWake = "none" | "wakes" | "frozen";
+
 export interface VoicePaletteItems {
   /** The active task's agents and artifacts, as the opener lists them. */
   readonly tiles: ReadonlyArray<CommandItem>;
@@ -68,8 +71,8 @@ export interface VoicePaletteItems {
   readonly themes: ReadonlyArray<CommandItem>;
   /** The chord actions and the navigation rows. */
   readonly commands: ReadonlyArray<CommandItem>;
-  /** Opening a tile on this host starts its sandbox's wake. */
-  readonly restsHost: (hostId: string) => boolean;
+  /** What opening a tile on this host does about its sandbox. */
+  readonly hostWake: (hostId: string) => HostWake;
 }
 
 export const NO_PALETTE_ITEMS: VoicePaletteItems = {
@@ -78,7 +81,7 @@ export const NO_PALETTE_ITEMS: VoicePaletteItems = {
   tasks: [],
   themes: [],
   commands: [],
-  restsHost: () => false,
+  hostWake: () => "none",
 };
 
 export interface VoiceViewSources {
@@ -152,12 +155,14 @@ const OPEN_TAB_PREFIX = "Open tab: ";
 /** An opener row for an existing tile; the capture is the tile's content id. */
 export const OPENER_ROW = /^open:(?:chats|tui|artifacts):(.+)$/su;
 
-/** Whether opening this item wakes a sandbox, which a tile already open does too. */
-export function itemWakesSandbox(
+/** What opening this item does about a sandbox, a tile already open included. */
+export function itemHostWake(
   item: CommandItem,
   palette: VoicePaletteItems,
-): boolean {
-  return item.tileHostId !== undefined && palette.restsHost(item.tileHostId);
+): HostWake {
+  return item.tileHostId === undefined
+    ? "none"
+    : palette.hostWake(item.tileHostId);
 }
 
 /**
@@ -253,7 +258,9 @@ function prefixedRows(
 function tileRows(palette: VoicePaletteItems): ReadonlyArray<VoiceViewRow> {
   return runnable(palette.tiles).map((item) => {
     const row = registryRow(item, `${OPEN_TAB_PREFIX}${item.label}`);
-    return itemWakesSandbox(item, palette) ? { ...row, confirm: true } : row;
+    return itemHostWake(item, palette) === "wakes"
+      ? { ...row, confirm: true }
+      : row;
   });
 }
 

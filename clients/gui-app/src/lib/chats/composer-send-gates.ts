@@ -58,6 +58,8 @@ export interface ComposerSendState {
   readonly attachmentPreparationPending: boolean;
   /** A send here wakes the chat's sandbox first, and only {@link submit} can. */
   readonly restingSandbox: boolean;
+  /** That sandbox can't be woken, whoever asks. */
+  readonly sandboxFrozen: boolean;
   /** What the composer's own send hands over, leaving its draft alone. */
   readonly submit: (input: ChatComposerSubmitInput) => boolean;
   /** Read when sending: the toolbar moves without a render of this state. */

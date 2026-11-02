@@ -1,3 +1,5 @@
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import { isRemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
 import { useRouter } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { useCommandPaletteRouter } from "@/components/command-palette/command-palette-context";
@@ -25,9 +27,10 @@ import type {
 } from "@/lib/voice/page-acts";
 import {
   approvalSummary,
-  itemWakesSandbox,
+  itemHostWake,
   composeVoiceView,
   NO_PALETTE_ITEMS,
+  type HostWake,
   type VoicePage,
   type VoicePaletteItems,
   type VoiceView,
@@ -181,6 +184,25 @@ function readAgentSession(
   };
 }
 
+/** A frozen sandbox can't be woken, so there is no question to put about it. */
+function composerAsksToWake(session: VoiceAgentSession): boolean {
+  const composer = composerSendStateFor(
+    session.hostId,
+    session.chatId,
+    session.tileInstanceId,
+  );
+  return composer?.restingSandbox === true && !composer.sandboxFrozen;
+}
+
+function hostWakeOf(entry: HostDirectoryEntry | null): HostWake {
+  if (!hostEntryNeedsWake(entry)) return "none";
+  return entry !== null &&
+    isRemoteHostDirectoryEntry(entry) &&
+    entry.sandbox?.frozen === true
+    ? "frozen"
+    : "wakes";
+}
+
 /** What the chat in the task's active tile is doing. */
 function readAgent(
   tabId: string | null,
@@ -215,12 +237,7 @@ function readAgent(
     // A send that has not started its turn reads as running too, and there is
     // no turn yet for a stop to be asked of.
     turnRunning: turnStatus === "running" && chat.activeTurn !== null,
-    asleep:
-      composerSendStateFor(
-        session.hostId,
-        session.chatId,
-        session.tileInstanceId,
-      )?.restingSandbox === true,
+    asleep: composerAsksToWake(session),
     approvals,
   };
 }
@@ -411,7 +428,7 @@ export function useVoiceView(enabled: boolean): VoiceViewHandle {
       const item = offeredItem(items, action);
       return item === null
         ? null
-        : { item, ctx, wakesSandbox: itemWakesSandbox(item, items) };
+        : { item, ctx, hostWake: itemHostWake(item, items) };
     },
     [router],
   );
@@ -502,7 +519,7 @@ export function VoiceViewPaletteItems(props: {
         themes: THEME_SUBPAGE_ITEMS,
         commands: [...navItems, ...actionItems],
         // Read when asked: a sandbox sleeps without moving anything above.
-        restsHost: (hostId) => hostEntryNeedsWake(directory.findById(hostId)),
+        hostWake: (hostId) => hostWakeOf(directory.findById(hostId)),
       },
       composedFor,
       ctx,

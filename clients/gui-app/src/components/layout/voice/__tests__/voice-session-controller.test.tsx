@@ -62,6 +62,7 @@ import {
 } from "@/lib/registries/chat-session-registry";
 import {
   AGENT_CANT_TAKE_NOTICE,
+  SANDBOX_CANT_WAKE_NOTICE,
   TURN_ENDED_NOTICE,
 } from "@/lib/voice/page-acts";
 import { runVoiceQueueVerb } from "@/lib/voice/queue-verbs";
@@ -4622,7 +4623,7 @@ describe("the page in front", () => {
               target === null ? true : boundSend(input),
             onSideChat: null,
             targetHostId: HOST_ID,
-            restingSandbox: target !== null,
+            restingSandbox: target,
             queueEditTargetId: null,
             getDraftBlobBridgeSupported: () => true,
           });
@@ -4780,7 +4781,7 @@ describe("the page in front", () => {
     });
 
     /** The agent's composer in the active tile, over a resting sandbox. */
-    function mountRestingComposer(): void {
+    function mountRestingComposer(resting: RestingChatSandbox): void {
       const toolbarStore = createComposerToolbarStore({
         purpose: "run",
         reasoningFallback: "model-default",
@@ -4808,7 +4809,7 @@ describe("the page in front", () => {
           const boundSend = useBoundSandboxSend({
             epicId: EPIC_ID,
             chatId: AGENT_ID,
-            target: RESTING,
+            target: resting,
           });
           return useChatComposerSubmit({
             taskId: AGENT_ID,
@@ -4830,7 +4831,7 @@ describe("the page in front", () => {
               boundSend(input),
             onSideChat: null,
             targetHostId: HOST_ID,
-            restingSandbox: true,
+            restingSandbox: resting,
             queueEditTargetId: null,
             getDraftBlobBridgeSupported: () => true,
           });
@@ -4882,7 +4883,7 @@ describe("the page in front", () => {
       await bringLive();
       focusOn(CHANNEL_FOCUS);
       const wire = seedRunningAgent();
-      mountRestingComposer();
+      mountRestingComposer(RESTING);
 
       const question = await tellAndHearQuestion();
 
@@ -4895,7 +4896,7 @@ describe("the page in front", () => {
       await bringLive();
       focusOn(CHANNEL_FOCUS);
       const wire = seedRunningAgent();
-      mountRestingComposer();
+      mountRestingComposer(RESTING);
       await tellAndHearQuestion();
 
       await answer("yes");
@@ -4908,7 +4909,7 @@ describe("the page in front", () => {
       await bringLive();
       focusOn(CHANNEL_FOCUS);
       const wire = seedRunningAgent();
-      mountRestingComposer();
+      mountRestingComposer(RESTING);
       await tellAndHearQuestion();
 
       await answer("no");
@@ -4917,11 +4918,35 @@ describe("the page in front", () => {
       expect(sends(wire)).toEqual([]);
     });
 
+    it("asks nothing, says it can't wake, and holds and sends nothing when the sandbox is frozen", async () => {
+      await bringLive();
+      focusOn(CHANNEL_FOCUS);
+      const wire = seedRunningAgent();
+      mountRestingComposer({
+        ...RESTING,
+        sandbox: { ...RESTING.sandbox, frozen: true },
+      });
+
+      fake.routeAnswer = () => actAnswer(`agent.tell:${AGENT_ID}`);
+      await say(WORDS, "d1");
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(6_000);
+      });
+
+      const spoken = fake.engines[0]?.appendCommentary.mock.calls.map(
+        ([text]) => text,
+      );
+      expect(spoken).toContain(SANDBOX_CANT_WAKE_NOTICE);
+      expect(spoken.some((text) => text.endsWith("Yes?"))).toBe(false);
+      expect(heldSends()).toEqual([]);
+      expect(sends(wire)).toEqual([]);
+    });
+
     it("holds nothing and says the page changed when the page moved between the question and the yes", async () => {
       await bringLive();
       focusOn(CHANNEL_FOCUS);
       const wire = seedRunningAgent();
-      mountRestingComposer();
+      mountRestingComposer(RESTING);
       await tellAndHearQuestion();
       act(() => {
         useTabsStore.setState({
@@ -5059,7 +5084,11 @@ describe("the page in front", () => {
 
     describe("whose sandbox is asleep", () => {
       beforeEach(() => {
-        directoryFacts.entry = sandboxHostEntryFixture(HOST_ID, "suspended");
+        directoryFacts.entry = sandboxHostEntryFixture(
+          HOST_ID,
+          "suspended",
+          false,
+        );
       });
 
       it("asks the wake first, in the exact words, and opens nothing until the yes", async () => {
@@ -5104,6 +5133,26 @@ describe("the page in front", () => {
         expect(wasTileOpenRequested("inst-sleepy-restored")).toBe(true);
         expect(sleepyTiles()).toEqual(["inst-sleepy-restored"]);
       });
+    });
+
+    it("asks nothing, says it can't wake, and leaves the canvas alone when the sandbox is frozen", async () => {
+      directoryFacts.entry = sandboxHostEntryFixture(
+        HOST_ID,
+        "suspended",
+        true,
+      );
+      await seedTask();
+      showSleepyTile("inst-sleepy-frozen");
+      const before = canvasOfTask();
+
+      expect(await openSleepy()).toBeNull();
+
+      expect(fake.engines[0]?.appendCommentary).toHaveBeenCalledWith(
+        SANDBOX_CANT_WAKE_NOTICE,
+        "d1",
+      );
+      expect(wasTileOpenRequested("inst-sleepy-frozen")).toBe(false);
+      expect(canvasOfTask()).toBe(before);
     });
 
     it("opens the tile of an awake sandbox with no question", async () => {

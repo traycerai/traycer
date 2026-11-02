@@ -53,6 +53,7 @@ import {
   extractPlainTextFromComposerJSONContent,
 } from "@/lib/composer/tiptap-json-content";
 import { buildChatRunSettings } from "@/lib/composer/chat-run-settings";
+import type { RestingChatSandbox } from "@/lib/sandboxes/chat-sandbox-state";
 import {
   composerModelUnresolved,
   composerSendRefusal,
@@ -148,7 +149,7 @@ interface UseChatComposerSubmitArgs {
    */
   readonly targetHostId: string | null;
   /** The chat's sandbox rests: a send wakes it, through `onSubmitMessage`. */
-  readonly restingSandbox: boolean;
+  readonly restingSandbox: RestingChatSandbox | null;
   /**
    * The queued prompt this composer is currently editing, or `null` for an
    * ordinary send. Part of the submit INTENT: `onSubmitMessage`'s destination
@@ -445,7 +446,8 @@ export function useChatComposerSubmit(
       workspaceBlocked,
       imagesUnsupported,
       attachmentPreparationPending,
-      restingSandbox,
+      restingSandbox: restingSandbox !== null,
+      sandboxFrozen: restingSandbox?.sandbox.frozen === true,
       submit: (input) => onSubmitMessage?.(input) ?? false,
       modelSlug: () => toolbarStore.getState().selection.modelSlug,
       runSettings: () => {

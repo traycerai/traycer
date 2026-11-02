@@ -496,6 +496,7 @@ describe("the tell row of an agent whose sandbox rests", () => {
         imagesUnsupported: false,
         attachmentPreparationPending: false,
         restingSandbox,
+        sandboxFrozen: false,
         submit: () => false,
         modelSlug: () => "model-a",
         runSettings: () => ({
@@ -1230,24 +1231,24 @@ describe("the row that opens a tile on a host whose sandbox rests", () => {
     taskWithWorkingAgent();
     const mounted = mount("/", { enabled: true, palette: true });
 
-    directoryFacts.entry = sandboxHostEntryFixture(HOST_ID, "awake");
+    directoryFacts.entry = sandboxHostEntryFixture(HOST_ID, "awake", false);
     expect(confirmOf(mounted)).toBe(false);
-    expect(mounted.handle().paletteRow(OPEN_AGENT)?.wakesSandbox).toBe(false);
+    expect(mounted.handle().paletteRow(OPEN_AGENT)?.hostWake).toBe("none");
 
-    directoryFacts.entry = sandboxHostEntryFixture(HOST_ID, "suspended");
+    directoryFacts.entry = sandboxHostEntryFixture(HOST_ID, "suspended", false);
     expect(confirmOf(mounted)).toBe(true);
-    expect(mounted.handle().paletteRow(OPEN_AGENT)?.wakesSandbox).toBe(true);
+    expect(mounted.handle().paletteRow(OPEN_AGENT)?.hostWake).toBe("wakes");
   });
 
   it("reads the directory as the row is asked for, when the sandbox wakes after the palette composed", () => {
     taskWithWorkingAgent();
-    directoryFacts.entry = sandboxHostEntryFixture(HOST_ID, "suspended");
+    directoryFacts.entry = sandboxHostEntryFixture(HOST_ID, "suspended", false);
     const mounted = mount("/", { enabled: true, palette: true });
     expect(confirmOf(mounted)).toBe(true);
 
-    directoryFacts.entry = sandboxHostEntryFixture(HOST_ID, "awake");
+    directoryFacts.entry = sandboxHostEntryFixture(HOST_ID, "awake", false);
 
     expect(confirmOf(mounted)).toBe(false);
-    expect(mounted.handle().paletteRow(OPEN_AGENT)?.wakesSandbox).toBe(false);
+    expect(mounted.handle().paletteRow(OPEN_AGENT)?.hostWake).toBe("none");
   });
 });

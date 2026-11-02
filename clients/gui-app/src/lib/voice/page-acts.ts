@@ -28,6 +28,7 @@ import {
   OPENER_ROW,
   openerWakesSandbox,
   tellWakesSandbox,
+  type HostWake,
   type VoiceViewRow,
 } from "@/lib/voice/view";
 import { worktreeDraftCommitsRebind } from "@/lib/worktree/owner-teardown-snapshot";
@@ -70,8 +71,8 @@ export interface VoiceAgentSession {
 export interface VoicePaletteRow {
   readonly item: CommandItem;
   readonly ctx: CommandContext;
-  /** Running it wakes a sandbox, as of now. */
-  readonly wakesSandbox: boolean;
+  /** What running it does about a sandbox, as of now. */
+  readonly hostWake: HostWake;
 }
 
 /** What an executor reads from the page in front when it runs. */
@@ -92,6 +93,7 @@ export const AGENT_WORKSPACE_CHANGE_NOTICE =
 export const AGENT_NOT_READY_NOTICE = "It isn't ready for a message yet.";
 export const AGENT_ASLEEP_NOTICE =
   "The sandbox went to sleep. Say that again if you still want it sent.";
+export const SANDBOX_CANT_WAKE_NOTICE = "The sandbox can't wake right now.";
 export const OPENER_ASLEEP_NOTICE =
   "The sandbox went to sleep. Say that again if you still want it opened.";
 export const NOT_DELIVERED_NOTICE = "That didn't reach the agent.";
@@ -206,7 +208,10 @@ function tellRefusal(
   if (refusal !== null) return COMPOSER_REFUSAL_NOTICE[refusal];
   // Waking costs, and this request was not read back as one that would. A send
   // to a resting sandbox carries a staged change of folder, and asks nothing.
-  if (composer.restingSandbox) return wakeAskedFor ? null : AGENT_ASLEEP_NOTICE;
+  if (composer.restingSandbox) {
+    if (composer.sandboxFrozen) return SANDBOX_CANT_WAKE_NOTICE;
+    return wakeAskedFor ? null : AGENT_ASLEEP_NOTICE;
+  }
   return commitsStagedRebind(chat, session)
     ? AGENT_WORKSPACE_CHANGE_NOTICE
     : null;
@@ -368,8 +373,9 @@ async function runRegistryRow(
   const { action } = routed;
   const row = reads.paletteRow(action);
   if (row === null) return refused(ROW_GONE_NOTICE);
+  if (row.hostWake === "frozen") return refused(SANDBOX_CANT_WAKE_NOTICE);
   // Waking costs, and this request was not read back as one that would.
-  if (row.wakesSandbox && !openerWakesSandbox(routed)) {
+  if (row.hostWake === "wakes" && !openerWakesSandbox(routed)) {
     return refused(OPENER_ASLEEP_NOTICE);
   }
   const { item, ctx } = row;

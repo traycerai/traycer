@@ -352,7 +352,7 @@ function mountComposerOver(
         },
         onSideChat: null,
         targetHostId: HOST_ID,
-        restingSandbox: target !== null,
+        restingSandbox: target,
         queueEditTargetId: null,
         getDraftBlobBridgeSupported: () => true,
       });

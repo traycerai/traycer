@@ -160,7 +160,7 @@ function mountSubmit(
         onSubmitMessage,
         onSideChat: null,
         targetHostId: null,
-        restingSandbox: false,
+        restingSandbox: null,
         queueEditTargetId: props.queueEditTargetId,
         // The gate is off in this fixture: it predates the gate and asserts the
         // inline behaviour, which is what `false` preserves exactly.
@@ -375,7 +375,7 @@ describe("steering a queue edit that changes settings", () => {
         onSubmitMessage: submit,
         onSideChat: null,
         targetHostId: null,
-        restingSandbox: false,
+        restingSandbox: null,
         queueEditTargetId: input.queueEditTargetId,
         getDraftBlobBridgeSupported: () => false,
         getQueuedSteerRestartConfirmationSupported: () =>

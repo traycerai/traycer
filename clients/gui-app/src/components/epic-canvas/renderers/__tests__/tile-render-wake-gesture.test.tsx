@@ -101,7 +101,7 @@ describe("the tile-open wake's gesture", () => {
 
 describe("the wake of a tile a layout restored", () => {
   beforeEach(() => {
-    hostFacts.entry = sandboxHostEntryFixture("host-sbx", "suspended");
+    hostFacts.entry = sandboxHostEntryFixture("host-sbx", "suspended", false);
     vi.mocked(startSandboxWake).mockClear();
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   });

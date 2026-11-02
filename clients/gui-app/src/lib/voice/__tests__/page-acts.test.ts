@@ -465,6 +465,7 @@ function composerIs(composer: PublishedComposer): void {
     imagesUnsupported: composer.imagesUnsupported,
     attachmentPreparationPending: composer.attachmentPreparationPending,
     restingSandbox: false,
+    sandboxFrozen: false,
     submit: () => false,
     modelSlug: () => composer.modelSlug,
     runSettings: () => composer.settings,
@@ -1219,7 +1220,7 @@ describe("a row of the palette", () => {
     const outcome = await run(
       item.id,
       "",
-      readsOver(null, [{ item, ctx, wakesSandbox: false }]),
+      readsOver(null, [{ item, ctx, hostWake: "none" }]),
     );
 
     expect(outcome).toEqual({ kind: "executed" });
@@ -1242,7 +1243,7 @@ describe("a row of the palette", () => {
     const outcome = await run(
       item.id,
       "",
-      readsOver(null, [{ item, ctx, wakesSandbox: false }]),
+      readsOver(null, [{ item, ctx, hostWake: "none" }]),
     );
 
     expect(outcome).toEqual({ kind: "executed" });
@@ -1272,7 +1273,7 @@ describe("a row of the palette", () => {
     const outcome = await run(
       item.id,
       "",
-      readsOver(null, [{ item, ctx: context({}), wakesSandbox: false }]),
+      readsOver(null, [{ item, ctx: context({}), hostWake: "none" }]),
     );
 
     expect(outcome).toEqual(refusedWith(ACT_FAILED_NOTICE));
@@ -1333,7 +1334,7 @@ describe("a row of the palette", () => {
       const outcome = await run(
         item.id,
         "",
-        readsOver(null, [{ item, ctx, wakesSandbox: false }]),
+        readsOver(null, [{ item, ctx, hostWake: "none" }]),
       );
 
       expect(outcome).toEqual({ kind: "executed" });
@@ -1360,7 +1361,7 @@ describe("a row of the palette", () => {
       const outcome = await run(
         item.id,
         "",
-        readsOver(null, [{ item, ctx, wakesSandbox: false }]),
+        readsOver(null, [{ item, ctx, hostWake: "none" }]),
       );
 
       expect(outcome).toEqual({ kind: "executed" });
@@ -1375,7 +1376,7 @@ describe("a row of the palette", () => {
         ctx: CommandContext,
       ): PageActReads {
         const item = commandItem(`open:chats:${CHAT_ID}`, itemRun, null);
-        return readsOver(null, [{ item, ctx, wakesSandbox: true }]);
+        return readsOver(null, [{ item, ctx, hostWake: "wakes" }]);
       }
 
       /** The opener's row, as the router returns it: read back as a wake or not. */
@@ -1482,7 +1483,7 @@ describe("a row of the palette", () => {
         row: { ...rowFor(item.id), confirm: true },
         text: "",
         turnId: null,
-        reads: readsOver(null, [{ item, ctx, wakesSandbox: false }]),
+        reads: readsOver(null, [{ item, ctx, hostWake: "none" }]),
       });
 
       expect(outcome).toEqual({ kind: "executed" });

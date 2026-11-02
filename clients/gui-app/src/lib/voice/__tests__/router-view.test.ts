@@ -682,7 +682,7 @@ const QUALIFIED_LABEL = /^(.*) \(([^)]*)\)$/;
 
 /** The palette's lists of items, without the live reads it also carries. */
 type PaletteLists = Record<
-  Exclude<keyof VoicePaletteItems, "restsHost">,
+  Exclude<keyof VoicePaletteItems, "hostWake">,
   CommandItem[]
 >;
 
@@ -2017,7 +2017,8 @@ describe("an opener row for a tile on a host whose sandbox rests", () => {
             hostId === undefined ? {} : { tileHostId: hostId },
           ),
         ],
-        restsHost: (candidate) => candidate === RESTING_HOST,
+        hostWake: (candidate) =>
+          candidate === RESTING_HOST ? "wakes" : "none",
       },
     });
   }
