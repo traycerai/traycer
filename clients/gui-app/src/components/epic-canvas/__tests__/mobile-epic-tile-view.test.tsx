@@ -866,6 +866,76 @@ describe("<MobileEpicTileView />", () => {
       expect(within(secondPane()).queryByTestId("tile-spec-4")).not.toBeNull();
       expect(within(primaryPane()).queryByTestId("tile-spec-1")).not.toBeNull();
     });
+
+    it("reads an artifact picked from the column beside the first tile, folding the column", () => {
+      seed(twoPaneCanvas("pane-A"));
+      renderView();
+      expect(screen.queryByTestId("mobile-tile-column")).not.toBeNull();
+      pendingOpen.value = {
+        intent: tileIntent(
+          spec(4),
+          { tabId: VIEW_TAB_ID },
+          "explicit",
+          "direct_ui",
+        ),
+      };
+      fireEvent.click(screen.getByTestId("list-pick"));
+      expect(within(secondPane()).queryByTestId("tile-spec-4")).not.toBeNull();
+      expect(within(primaryPane()).queryByTestId("tile-spec-1")).not.toBeNull();
+      expect(screen.queryByTestId("mobile-tile-column")).toBeNull();
+      expect(slot()).toEqual({ instanceId: "inst-4", transient: false });
+    });
+
+    it("reads an artifact picked from the first tile's menu beside it, as the column does", () => {
+      seed(twoPaneCanvas("pane-A"));
+      showSecond("inst-3", false);
+      renderView();
+      fireEvent.click(screen.getByTestId("menu-trigger-spec-1"));
+      pendingOpen.value = {
+        intent: tileIntent(
+          spec(4),
+          { tabId: VIEW_TAB_ID },
+          "explicit",
+          "direct_ui",
+        ),
+      };
+      fireEvent.click(screen.getByTestId("list-pick"));
+      expect(within(primaryPane()).queryByTestId("tile-spec-1")).not.toBeNull();
+      expect(within(secondPane()).queryByTestId("tile-spec-4")).not.toBeNull();
+    });
+
+    it("closes the first tile's side, and the second takes the screen with the column back", () => {
+      seed(twoPaneCanvas("pane-A"));
+      showSecond("inst-3", true);
+      renderView();
+      fireEvent.click(screen.getByTestId("mobile-primary-tile-close"));
+      expect(screen.queryByTestId("mobile-epic-second-tile")).toBeNull();
+      expect(within(primaryPane()).queryByTestId("tile-spec-3")).not.toBeNull();
+      expect(screen.queryByTestId("tile-spec-1")).toBeNull();
+      expect(screen.queryByTestId("mobile-tile-column")).not.toBeNull();
+      expect(slot()).toBeUndefined();
+      // The first tile stays open in the task, and so does the one that was transient beside it.
+      expect(canvasOf().tilesByInstanceId["inst-1"]).toBeDefined();
+      expect(canvasOf().tilesByInstanceId["inst-3"]).toBeDefined();
+      expect(screen.queryByTestId("mobile-primary-tile-close")).toBeNull();
+    });
+
+    it("shows the first tile alone upright, whatever the width, and both again on the side", () => {
+      shell.set({ width: 1032, portrait: false });
+      seed(twoPaneCanvas("pane-A"));
+      showSecond("inst-3", false);
+      renderView();
+      expect(within(secondPane()).queryByTestId("tile-spec-3")).not.toBeNull();
+
+      shell.tilt(true);
+      expect(screen.queryByTestId("mobile-epic-second-tile")).toBeNull();
+      expect(within(primaryPane()).queryByTestId("tile-spec-1")).not.toBeNull();
+      expect(screen.queryByTestId("mobile-tile-column")).not.toBeNull();
+      expect(slot()).toEqual({ instanceId: "inst-3", transient: false });
+
+      shell.tilt(false);
+      expect(within(secondPane()).queryByTestId("tile-spec-3")).not.toBeNull();
+    });
   });
 
   describe("outside the installed app", () => {

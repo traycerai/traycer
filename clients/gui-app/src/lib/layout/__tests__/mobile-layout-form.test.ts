@@ -20,6 +20,7 @@ function resolve(
   return resolveMobileLayoutForm({
     contentWidth,
     phonePortrait: false,
+    portrait: false,
     stripPreference,
     openTiles,
   });
@@ -83,11 +84,12 @@ describe("resolveMobileLayoutForm", () => {
     ],
   ])(
     "answers the matrix cell at %s",
-    (_, contentWidth, phonePortrait, form) => {
+    (cell, contentWidth, phonePortrait, form) => {
       expect(
         resolveMobileLayoutForm({
           contentWidth,
           phonePortrait,
+          portrait: cell.endsWith("portrait"),
           stripPreference: "expanded",
           openTiles: 1,
         }),
@@ -138,10 +140,23 @@ describe("resolveMobileLayoutForm", () => {
       resolveMobileLayoutForm({
         contentWidth: 466,
         phonePortrait: true,
+        portrait: true,
         stripPreference: "expanded",
         openTiles: 2,
       }),
     ).toEqual(PHONE_PORTRAIT);
+  });
+
+  it("shows one tile upright at a width that fits two on its side, with the column beside it", () => {
+    expect(
+      resolveMobileLayoutForm({
+        contentWidth: 1032,
+        phonePortrait: false,
+        portrait: true,
+        stripPreference: "expanded",
+        openTiles: 2,
+      }),
+    ).toEqual({ level1: "expanded", level2: { column: 256 }, tiles: 1 });
   });
 
   it("keeps one tile while two would not fit, whatever is open", () => {

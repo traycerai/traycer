@@ -22,6 +22,8 @@ export interface ShellFormHarness {
     readonly width: number;
     readonly portrait: boolean;
   }) => void;
+  /** Turns the screen upright or onto its side at the width it has: a tablet, not a phone. */
+  readonly tilt: (portrait: boolean) => void;
   readonly dispose: () => void;
 }
 
@@ -53,6 +55,12 @@ export function installShellForm(width: number): ShellFormHarness {
         ? PORTRAIT_INNER_WIDTH
         : LANDSCAPE_INNER_WIDTH;
       // Both stores re-read on a window resize, which the shell also fires.
+      act(() => {
+        window.dispatchEvent(new Event("resize"));
+      });
+    },
+    tilt: (portrait) => {
+      state.portrait = portrait;
       act(() => {
         window.dispatchEvent(new Event("resize"));
       });

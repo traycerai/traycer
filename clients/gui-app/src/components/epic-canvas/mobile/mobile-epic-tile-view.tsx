@@ -17,6 +17,7 @@ import { MobileTileColumn } from "@/components/epic-canvas/mobile/mobile-tile-co
 import { MobileTileColumnToggle } from "@/components/epic-canvas/mobile/mobile-tile-column-toggle";
 import { MobileTileMenu } from "@/components/epic-canvas/mobile/mobile-tile-menu";
 import {
+  MobilePrimaryTileClose,
   MobileSecondaryTileClose,
   MobileTileOriginCrumb,
 } from "@/components/epic-canvas/mobile/mobile-tile-header-actions";
@@ -191,7 +192,13 @@ export function MobileEpicTileView(props: MobileEpicTileViewProps) {
         leading={
           <FoldedColumnToggle level2={level2} columnOffered={columnOffered} />
         }
-        trailing={<MobileTileOriginCrumb tabId={tabId} />}
+        trailing={
+          <PrimaryTileTrailing
+            epicId={epicId}
+            tabId={tabId}
+            secondary={secondary}
+          />
+        }
       >
         <MobileDrawerTaskPaintReporter ready={tileChromePainted} />
         {/* No bar here. The Epic's stream reports upward and the app shell renders
@@ -272,6 +279,30 @@ function FoldedColumnToggle(props: {
 }): ReactNode {
   if (props.level2 !== "menu") return null;
   return <MobileTileColumnToggle offered={props.columnOffered} />;
+}
+
+/**
+ * What ends the first tile's header: the way back to Tracy, and, while a
+ * second tile shows, the close that leaves the second alone on screen.
+ */
+function PrimaryTileTrailing(props: {
+  readonly epicId: string;
+  readonly tabId: string;
+  readonly secondary: MobileTileSelection | null;
+}): ReactNode {
+  const { epicId, tabId, secondary } = props;
+  return (
+    <>
+      <MobileTileOriginCrumb tabId={tabId} />
+      {secondary === null ? null : (
+        <MobilePrimaryTileClose
+          epicId={epicId}
+          tabId={tabId}
+          secondary={secondary}
+        />
+      )}
+    </>
+  );
 }
 
 /** What an open from inside each slot's tile lands in: the other one. */

@@ -12,8 +12,11 @@ import "@/components/layout/shell/mobile-shell-touch-targets.css";
 
 /**
  * The task's tiles in a popover under a tile's name, opened from a
- * `MobileLevel2MenuTrigger` somewhere in `children`. What is chosen from it lands
- * in that tile's slot. The first slot's open is the switcher's own flag, so a
+ * `MobileLevel2MenuTrigger` somewhere in `children`. What is chosen from the
+ * second tile's lands in the second tile; what is chosen from the first's lands
+ * where the tile's kind says, as a pick from the column does, so a chat takes
+ * the first tile and anything else is read beside it. The first slot's open is
+ * the switcher's own flag, so a
  * comment thread that asks the switcher to open opens this; the second's is its
  * own, so the two do not open together.
  *
@@ -46,7 +49,10 @@ export function MobileTileMenu(props: {
     () => handleOpenChange(false),
     [handleOpenChange],
   );
-  const openTarget = useMemo(() => ({ tabId, slot }), [slot, tabId]);
+  const openTarget = useMemo(
+    () => (slot === "secondary" ? { tabId, slot } : null),
+    [slot, tabId],
+  );
   return (
     <Popover open={menuOpen} onOpenChange={handleOpenChange}>
       {children}

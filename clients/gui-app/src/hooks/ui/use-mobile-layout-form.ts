@@ -50,7 +50,7 @@ export function subscribeToPhonePortrait(onChange: () => void): () => void {
  * portrait dimensions in every orientation. That reads as portrait throughout,
  * which the width half corrects: no phone there is under the limit on its side.
  */
-function readScreenPortrait(): boolean {
+export function readScreenPortrait(): boolean {
   const orientation = readScreenOrientation();
   if (orientation !== null) return orientation.type.startsWith("portrait");
   return window.screen.width < window.screen.height;
@@ -118,10 +118,17 @@ export function useMobileLayoutForm(
     readPhonePortrait,
     readPhonePortraitServerSnapshot,
   );
+  // The same subscription: it already follows the screen's orientation.
+  const portrait = React.useSyncExternalStore(
+    subscribeToPhonePortrait,
+    readScreenPortrait,
+    readPhonePortraitServerSnapshot,
+  );
   const collapsed = useSideStripCollapsed();
   const form = resolveMobileLayoutForm({
     contentWidth,
     phonePortrait,
+    portrait,
     stripPreference: collapsed ? "rail" : "expanded",
     openTiles,
   });
@@ -140,6 +147,7 @@ export function readMobileTwoTilesFit(): boolean {
     resolveMobileLayoutForm({
       contentWidth: readShellContentWidth(),
       phonePortrait: readPhonePortrait(),
+      portrait: readScreenPortrait(),
       stripPreference:
         (strip.dragCollapsed ?? strip.collapsed) ? "rail" : "expanded",
       openTiles: 2,
