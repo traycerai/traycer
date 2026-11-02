@@ -55,6 +55,12 @@ repos:
   # Tests run in their own workflow (.github/workflows/test.yml).
   - repo: local
     hooks:
+      - id: local-definition-ratchet
+        name: No new local sleep, isRecord, errorMessage, source walker or stream-session lifecycle
+        entry: bun scripts/local-definition-ratchet.mjs scripts/local-definition-ratchet.json
+        language: system
+        pass_filenames: false
+        files: (\.[cm]?[jt]s|\.[jt]sx|^scripts/local-definition-ratchet\.json)$
       - id: unreleased-features-off
         name: unreleased-features.ts commits the literal true
         entry: scripts/check_unreleased_features_off.sh
