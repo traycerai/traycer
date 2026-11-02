@@ -176,11 +176,11 @@ jobs:
         # Whole files, cut by measured time (the script says why), not `--shard`.
         run: |
           set -euo pipefail
-          mapfile -t files < <(node scripts/browser-test-shard-plan.mjs "$SHARD")
+          mapfile -t files < <(node scripts/browser-test-shard-plan.ts "$SHARD")
           bun run test:browser "${files[@]}"
       - name: Every test is within the per-test budget
         working-directory: clients/gui-app
-        run: node scripts/browser-test-budget.mjs test-results.json
+        run: node scripts/browser-test-budget.ts test-results.json
       # Whatever the result: the timings refresh reads these, and a red run's
       # times say what a budget failure or a timeout was waiting on.
       - name: Upload the JSON report

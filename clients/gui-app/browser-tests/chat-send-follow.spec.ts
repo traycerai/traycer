@@ -314,7 +314,7 @@ for (const c of CASES) {
       await page.evaluate(() => {
         window.__followDriver?.host.streamRich("earlier", 8, 40);
       });
-      await page.waitForTimeout(600);
+      await nextFrames(page, 30);
     }
     const dockBefore = (await probe(page)).dockHeight;
     await typePrompt(page, c.lines);
@@ -352,10 +352,10 @@ for (const c of CASES) {
     await mark(page, "stream");
     await page.evaluate((reply) => {
       if (reply === "rich")
-        window.__followDriver?.host.streamRich("reply", 5, 40);
+        window.__followDriver?.host.streamRich("reply", 5, 20);
       else window.__followDriver?.host.streamReply(100, 40);
     }, c.reply);
-    await page.waitForTimeout(c.reply === "rich" ? 6000 : 2000);
+    await nextFrames(page, c.reply === "rich" ? 120 : 60);
     await mark(page, "after");
     await page.evaluate(() => {
       window.__followDriver?.host.stopReply();

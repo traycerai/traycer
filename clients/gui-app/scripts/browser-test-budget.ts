@@ -6,30 +6,34 @@
  * `<file> › <describes and title>`, as this prints it. Time a test merely waits
  * is cut, not listed: see "Wait for a condition" in `browser-tests/README.md`.
  *
- *   node scripts/browser-test-budget.mjs test-results.json
+ *   node scripts/browser-test-budget.ts test-results.json
  */
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { reportedTests } from "./browser-test-report.mjs";
+import {
+  reportedTests,
+  type JsonReport,
+  type ReportedTest,
+} from "./browser-test-report.ts";
 
-export const BUDGET_SECONDS = 20;
+const BUDGET_SECONDS = 20;
 
-/**
- * @param {readonly import("./browser-test-report.mjs").ReportedTest[]} tests
- * @param {Readonly<Record<string, string>>} allowlist reason by test key
- * @returns {string[]} one line per problem; none when the shard is within budget
- */
-export function budgetProblems(tests, allowlist) {
-  const keys = new Set(tests.map((test) => `${test.file} › ${test.name}`));
+/** One line per problem; none when the shard is within budget. */
+export function budgetProblems(
+  tests: readonly ReportedTest[],
+  allowlist: Readonly<Record<string, string>>,
+): string[] {
+  const keyOf = (test: ReportedTest): string => `${test.file} › ${test.name}`;
+  const keys = new Set(tests.map(keyOf));
   const files = new Set(tests.map((test) => test.file));
   const overBudget = tests
     .filter((test) => test.seconds > BUDGET_SECONDS)
-    .filter((test) => allowlist[`${test.file} › ${test.name}`] === undefined)
+    .filter((test) => !(keyOf(test) in allowlist))
     .map(
       (test) =>
-        `${test.seconds.toFixed(1)} s, over the ${String(BUDGET_SECONDS)} s budget: ${test.file} › ${test.name}`,
+        `${test.seconds.toFixed(1)} s, over the ${String(BUDGET_SECONDS)} s budget: ${keyOf(test)}`,
     );
   // A shard sees only its own files, so only those can prove an entry stale.
   const stale = Object.keys(allowlist)
@@ -39,17 +43,17 @@ export function budgetProblems(tests, allowlist) {
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  const reportPath = process.argv[2];
+  const reportPath = process.argv.at(2);
   if (reportPath === undefined) {
-    throw new Error("usage: browser-test-budget.mjs <results.json>");
+    throw new Error("usage: browser-test-budget.ts <test-results.json>");
   }
   const allowlistPath = join(
     dirname(fileURLToPath(import.meta.url)),
     "../browser-tests/test-budget-allowlist.json",
   );
   const problems = budgetProblems(
-    reportedTests(JSON.parse(readFileSync(reportPath, "utf8"))),
-    JSON.parse(readFileSync(allowlistPath, "utf8")),
+    reportedTests(JSON.parse(readFileSync(reportPath, "utf8")) as JsonReport),
+    JSON.parse(readFileSync(allowlistPath, "utf8")) as Record<string, string>,
   );
   if (problems.length > 0) {
     process.stderr.write(`${problems.join("\n")}\n`);

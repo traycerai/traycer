@@ -207,7 +207,7 @@ for (const c of CASES) {
       await page.evaluate(() => {
         window.__followDriver?.host.streamRich("earlier", 8, 40);
       });
-      await page.waitForTimeout(600);
+      await nextFrames(page, 30);
     }
     const scroller = page.getByTestId("chat-messages-scroll");
     const box = await scroller.boundingBox();
@@ -247,19 +247,18 @@ for (const c of CASES) {
       await nextFrames(page, 20);
       await mark(page, "stream");
       await page.evaluate(() => {
-        window.__followDriver?.host.streamRich("reply", 2, 40);
+        window.__followDriver?.host.streamRich("reply", 2, 20);
       });
     }
     await nudged;
     await nextFrames(page, 3);
     const afterBurstTop = (await probe(page)).scrollTop;
     await mark(page, "after");
-    await page.waitForTimeout(c.setup === "send" ? 3500 : 2000);
+    await nextFrames(page, c.setup === "send" ? 100 : 60);
     await page.evaluate(() => {
       window.__followDriver?.host.stopReply();
     });
-    await nextFrames(page, 30);
-    await page.waitForTimeout(300);
+    await nextFrames(page, 45);
     const frames: ChatFollowFrame[] = await page.evaluate(() => {
       window.__followStop?.();
       return [...(window.__followFrames ?? [])];

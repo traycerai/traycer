@@ -219,12 +219,11 @@ for (const { variant, runs } of RUNS) {
       await mark(page, "reach");
       await wheelToBottom(page);
       await mark(page, "after");
-      await page.waitForTimeout(4500);
+      await nextFrames(page, 120);
       await page.evaluate(() => {
         window.__followDriver?.host.stopReply();
       });
-      await nextFrames(page, 30);
-      await page.waitForTimeout(400);
+      await nextFrames(page, 45);
       const frames: ChatFollowFrame[] = await page.evaluate(() => {
         window.__followStop?.();
         return [...(window.__followFrames ?? [])];

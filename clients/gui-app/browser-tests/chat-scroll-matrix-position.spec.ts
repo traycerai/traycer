@@ -151,9 +151,9 @@ const startStream = (page: Page, ms: number): Promise<void> =>
 const stopStream = (page: Page): Promise<void> =>
   page.evaluate(() => window.__chatScrollProbe.stopStream());
 
-async function streamFor(page: Page, ms: number): Promise<void> {
+async function streamFor(page: Page, frames: number): Promise<void> {
   await startStream(page, 50);
-  await page.waitForTimeout(ms);
+  await nextFrames(page, frames);
   await stopStream(page);
 }
 
@@ -168,7 +168,7 @@ for (const line of LINES) {
       await withTimeline(page, async () => {
         await expectAtRest(page, { kind: "tail" }, "start");
         await hide(page, kind);
-        await streamFor(page, 1000);
+        await streamFor(page, 40);
         await show(page);
         await expectAtRest(page, { kind: "tail" }, "after show");
       });
@@ -187,10 +187,10 @@ for (const line of LINES) {
           const before = await detach(page);
           await expectAtRest(page, intentOf(before), "detached");
           await hide(page, kind);
-          await page.waitForTimeout(100);
-          if (whileHidden === "stream") await streamFor(page, 1000);
+          await nextFrames(page, 6);
+          if (whileHidden === "stream") await streamFor(page, 40);
           if (whileHidden === "appendTurn") await appendTurn(page);
-          await page.waitForTimeout(200);
+          await nextFrames(page, 12);
           await show(page);
           await expectPositionKept(page, before, "after show");
         });
@@ -208,7 +208,7 @@ for (const line of LINES) {
         const before = await detach(page);
         for (const round of [1, 2]) {
           await hide(page, kind);
-          await page.waitForTimeout(150);
+          await nextFrames(page, 9);
           await show(page);
           await expectPositionKept(page, before, `round ${String(round)}`);
         }
@@ -231,7 +231,7 @@ for (const line of LINES) {
           await wheel(page, [-600, -600, -400]);
           if (delayMs > 0) await page.waitForTimeout(delayMs);
           const live = await hideReadingLive(page, kind);
-          await page.waitForTimeout(300);
+          await nextFrames(page, 18);
           await show(page);
           await expectPositionKept(
             page,
@@ -258,7 +258,7 @@ for (const line of LINES) {
           const before = await detach(page);
           if (withTraffic) {
             await appendTurn(page);
-            await streamFor(page, 600);
+            await streamFor(page, 25);
             await expectPositionKept(page, before, "after traffic");
           }
           await reopen(page, how);
@@ -291,9 +291,9 @@ for (const line of LINES) {
       await withTimeline(page, async () => {
         const before = await detach(page);
         await hide(page, "collapse");
-        await page.waitForTimeout(100);
+        await nextFrames(page, 6);
         await reopen(page, how);
-        await page.waitForTimeout(300);
+        await nextFrames(page, 18);
         await show(page);
         await expectPositionKept(page, before, "after show");
       });
@@ -334,7 +334,7 @@ for (const line of LINES) {
           await reopen(page, how);
           if (streamDelayMs > 0) await page.waitForTimeout(streamDelayMs);
           await startStream(page, 50);
-          await page.waitForTimeout(1000);
+          await nextFrames(page, 40);
           await stopStream(page);
           await expectPositionKept(page, before, "after stream");
         });

@@ -61,13 +61,14 @@ export default defineConfig({
   // One retry on CI absorbs a runner hiccup; the report still marks such a
   // test "flaky", so a real intermittent failure stays visible.
   retries: isCi ? 1 : 0,
-  // The heaviest fixtures boot most of the app from unbundled modules, and a
-  // standard runner has 4 vCPUs: two pages at a time leaves room for Vite.
-  workers: 2,
+  // The heaviest fixtures boot most of the app from unbundled modules on the
+  // dev server, so a local run leaves room for Vite. CI's fixtures are bundled,
+  // and a standard runner has 4 vCPUs.
+  workers: isCi ? 3 : 2,
   timeout: 180_000,
   expect: { timeout: 10_000 },
   // The JSON report is what the per-test budget and the shard timings read
-  // (`scripts/browser-test-budget.mjs`, `scripts/browser-test-timings.mjs`).
+  // (`scripts/browser-test-budget.ts`, `scripts/browser-test-timings.ts`).
   reporter: isCi
     ? [
         ["github"],

@@ -204,7 +204,7 @@ for (const { variant, runs } of RUNS) {
 
       if (variant === "P5c paused-wheel") {
         // Let the reply row appear and some text stream, pause 500ms, then reach.
-        await page.waitForTimeout(700);
+        await nextFrames(page, 40);
         await page.evaluate(() => {
           window.__followDriver?.host.stopReply();
         });
@@ -228,12 +228,11 @@ for (const { variant, runs } of RUNS) {
         else await dragToBottom(page);
         await mark(page, "after");
       }
-      await page.waitForTimeout(4500);
+      await nextFrames(page, 120);
       await page.evaluate(() => {
         window.__followDriver?.host.stopReply();
       });
-      await nextFrames(page, 30);
-      await page.waitForTimeout(400);
+      await nextFrames(page, 45);
       const frames: ChatFollowFrame[] = await page.evaluate(() => {
         window.__followStop?.();
         return [...(window.__followFrames ?? [])];

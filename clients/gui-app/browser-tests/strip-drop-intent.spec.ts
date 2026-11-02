@@ -55,6 +55,8 @@ const gapSchema = z.object({
  * The dragged Delta overlay's centre, and the rows drawn just before and just
  * after the gap its tab left, down the strip.
  */
+const GAP_REST_FRAMES = 10;
+
 async function readGap(page: Page): Promise<z.infer<typeof gapSchema>> {
   return gapSchema.parse(
     await page.evaluate(`(() => {
@@ -73,6 +75,19 @@ async function readGap(page: Page): Promise<z.infer<typeof gapSchema>> {
       };
     })()`),
   );
+}
+
+/** The gap once the rows drawn beside it have stopped moving. */
+async function restedGap(page: Page): Promise<z.infer<typeof gapSchema>> {
+  let gap = await readGap(page);
+  let still = 0;
+  while (still < GAP_REST_FRAMES) {
+    await nextFrames(page, 1);
+    const next = await readGap(page);
+    still = JSON.stringify(next) === JSON.stringify(gap) ? still + 1 : 0;
+    gap = next;
+  }
+  return gap;
 }
 
 /** A real press on `from` and a drag to `to`, which leaves the button down. */
@@ -231,12 +246,11 @@ test.describe("the vertical strip", () => {
     await page.mouse.down();
     for (const y of sweep) {
       await page.mouse.move(delta.x, y, { steps: 2 });
-      await nextFrames(page, 30);
       // A row is passed once the dragged centre reaches its far quarter where
       // it is drawn, and not before: at rest the overlay never reaches past
       // the near three quarters of the rows drawn either side of its gap, in
       // both directions.
-      const { overlay, before, after } = await readGap(page);
+      const { overlay, before, after } = await restedGap(page);
       expect(overlay).toBeCloseTo(y, 0);
       if (before !== null) {
         expect(overlay).toBeGreaterThanOrEqual(

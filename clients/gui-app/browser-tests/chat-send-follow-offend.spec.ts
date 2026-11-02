@@ -356,10 +356,10 @@ for (const [reply, runs] of [
       await page.evaluate((kind) => {
         window.__ofStep = "stream";
         if (kind === "rich")
-          window.__followDriver?.host.streamRich("reply", 5, 40);
+          window.__followDriver?.host.streamRich("reply", 5, 20);
         else window.__followDriver?.host.streamReply(100, 40);
       }, reply);
-      await page.waitForTimeout(reply === "rich" ? 6000 : 2000);
+      await nextFrames(page, reply === "rich" ? 120 : 60);
       await page.evaluate(() => {
         window.__followDriver?.host.stopReply();
         window.__ofStep = "after";

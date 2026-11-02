@@ -630,7 +630,7 @@ test.describe("P6: a wheel while the reopened chat's restore command is held", (
         await nextFrames(page, 3);
         await callProbe(page, "releaseRangesIn", [lead]);
         await wheelTwice(page, direction);
-        await page.waitForTimeout(1500);
+        await nextFrames(page, 60);
         const recorded = await readRecorder(page);
         const first = recorded.wheels.at(0);
         if (first === undefined) throw new Error("no wheel recorded");
@@ -717,7 +717,7 @@ async function streamAndPick(
   const items = await page.evaluate(() => window.__chatScrollProbe.pickItems());
   const index = items.length - 6;
   await page.evaluate(() => window.__chatScrollProbe.startParagraphStream(100));
-  await page.waitForTimeout(400);
+  await nextFrames(page, 20);
   await page.evaluate(() => window.__p6Proof?.watch(2500));
   // The pick runs in the page 30ms from now and the wheel is sent from here
   // at the same time, so it reaches the page while the pick's scroll runs.
@@ -730,7 +730,7 @@ async function streamAndPick(
   }, index);
   await page.waitForTimeout(30);
   if (wheel === "then wheel away") await wheelTwice(page, "away");
-  await page.waitForTimeout(1500);
+  await nextFrames(page, 60);
   await page.evaluate(() => window.__chatScrollProbe.stopStream());
   return { pickedAt: scheduledAt, picked: items[index] };
 }
