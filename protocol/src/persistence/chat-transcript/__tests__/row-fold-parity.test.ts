@@ -2872,7 +2872,7 @@ describe("explicit decline tests", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Mechanism tests, on a ~2000-record chat built through the store.
+// Mechanism tests, on a ~1000-record chat built through the store.
 // ---------------------------------------------------------------------------
 
 describe("mechanism tests on a large chat", () => {

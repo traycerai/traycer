@@ -55,7 +55,8 @@ unless `test-budget-allowlist.json` names it with a reason
 - A whole host registry is validated once, in
   `scripts/compat/__tests__/static-registries.test.ts`. A test validates the lines
   it claims, as `{ [method]: hostRpcRegistry[method] }`; the tripwire beside that
-  file fails on a new whole-registry call.
+  file fails on a new whole-registry call, or one made through a name or copy in
+  the same file.
 
 ## Three version systems — keep them separate
 

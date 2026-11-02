@@ -397,33 +397,97 @@ const HOST_REGISTRY_VALIDATORS = new Set([
   "validateVersionedRpcRegistry",
   "validateVersionedStreamRpcRegistry",
 ]);
+const STATIC_REGISTRY_WALKERS = new Set([
+  "findStaticRegistryFailures",
+  "validateStaticRegistry",
+]);
+/** The one test file allowed to walk the host registries. */
+const WHOLE_REGISTRY_HOME =
+  "scripts/compat/__tests__/static-registries.test.ts";
 
-function isHostRegistryName(node: ts.Expression): boolean {
-  return ts.isIdentifier(node) && HOST_REGISTRY_NAMES.has(node.text);
+function unwrapped(node: ts.Expression): ts.Expression {
+  return ts.isParenthesizedExpression(node) ||
+    ts.isAsExpression(node) ||
+    ts.isSatisfiesExpression(node) ||
+    ts.isNonNullExpression(node)
+    ? unwrapped(node.expression)
+    : node;
 }
 
-/** The lines of `text` that hand a validator a whole host registry, or a copy of one. */
+/**
+ * The lines of a test file that hand a validator a whole host registry, a copy
+ * of one, or the static registry list. It follows what a file can do to those
+ * in its own text: rename an import, bind a value to a new name, wrap it in a
+ * cast, spread it, `Object.assign` it, or read it off a namespace. A value that
+ * reaches a validator through another module's function is out of its sight.
+ */
 function wholeHostRegistryValidationLines(
   fileName: string,
   text: string,
 ): number[] {
-  const source = ts.createSourceFile(fileName, text, ts.ScriptTarget.Latest);
+  const source = ts.createSourceFile(
+    fileName,
+    text,
+    ts.ScriptTarget.Latest,
+    true,
+  );
+  const registries = new Set(HOST_REGISTRY_NAMES);
+  registries.add("STATIC_REGISTRIES");
+  const validators = new Set([
+    ...HOST_REGISTRY_VALIDATORS,
+    ...STATIC_REGISTRY_WALKERS,
+  ]);
+  const isWhole = (expression: ts.Expression): boolean => {
+    const node = unwrapped(expression);
+    if (ts.isIdentifier(node)) return registries.has(node.text);
+    if (ts.isPropertyAccessExpression(node)) {
+      return registries.has(node.name.text);
+    }
+    if (ts.isObjectLiteralExpression(node)) {
+      return node.properties.some(
+        (property) =>
+          ts.isSpreadAssignment(property) && isWhole(property.expression),
+      );
+    }
+    if (ts.isCallExpression(node)) {
+      return (
+        node.expression.getText(source) === "Object.assign" &&
+        node.arguments.some(isWhole)
+      );
+    }
+    return false;
+  };
+  const calleeText = (node: ts.CallExpression): string | null => {
+    const callee = unwrapped(node.expression);
+    if (ts.isIdentifier(callee)) return callee.text;
+    return ts.isPropertyAccessExpression(callee) ? callee.name.text : null;
+  };
   const lines: number[] = [];
   const visit = (node: ts.Node): void => {
+    if (ts.isImportSpecifier(node) && node.propertyName !== undefined) {
+      const imported = node.propertyName.text;
+      if (registries.has(imported)) registries.add(node.name.text);
+      if (validators.has(imported)) validators.add(node.name.text);
+    }
+    if (
+      ts.isVariableDeclaration(node) &&
+      ts.isIdentifier(node.name) &&
+      node.initializer !== undefined
+    ) {
+      if (isWhole(node.initializer)) registries.add(node.name.text);
+      const value = unwrapped(node.initializer);
+      if (ts.isIdentifier(value) && validators.has(value.text)) {
+        validators.add(node.name.text);
+      }
+    }
     if (ts.isCallExpression(node)) {
-      const name = calleeName(node);
+      const name = calleeText(node);
       const argument = node.arguments[0];
       if (
         name !== null &&
-        HOST_REGISTRY_VALIDATORS.has(name) &&
+        validators.has(name) &&
         argument !== undefined &&
-        (isHostRegistryName(argument) ||
-          (ts.isObjectLiteralExpression(argument) &&
-            argument.properties.some(
-              (property) =>
-                ts.isSpreadAssignment(property) &&
-                isHostRegistryName(property.expression),
-            )))
+        isWhole(argument)
       ) {
         lines.push(
           source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1,
@@ -441,7 +505,7 @@ describe("the one whole-registry validation", () => {
   // file budget, so the budget would not see a new one. `static-registries.test.ts`
   // holds the one walk, through `STATIC_REGISTRIES`; a test validates the lines
   // it claims, as `{ [method]: hostRpcRegistry[method] }`.
-  it("no test file validates a whole host registry", () => {
+  it("no test file but its home validates a whole host registry", () => {
     const listing = execFileSync(
       "git",
       [
@@ -456,16 +520,27 @@ describe("the one whole-registry validation", () => {
       { cwd: PROTOCOL_ROOT, encoding: "utf8" },
     );
     const found: string[] = [];
+    let homeWalks = 0;
     for (const relative of listing.split("\0")) {
       const full = path.join(PROTOCOL_ROOT, relative);
       if (relative.length === 0 || !existsSync(full)) continue;
       const text = readFileSync(full, "utf8");
-      if (!text.includes("validateVersioned")) continue;
-      for (const line of wholeHostRegistryValidationLines(relative, text)) {
-        found.push(`${relative}:${String(line)}`);
+      if (
+        !text.includes("validateVersioned") &&
+        !text.includes("StaticRegistr") &&
+        !text.includes("STATIC_REGISTRIES")
+      ) {
+        continue;
       }
+      const lines = wholeHostRegistryValidationLines(relative, text);
+      if (relative === WHOLE_REGISTRY_HOME) {
+        homeWalks = lines.length;
+        continue;
+      }
+      found.push(...lines.map((line) => `${relative}:${String(line)}`));
     }
     expect(found).toEqual([]);
+    expect(homeWalks).toBe(1);
   });
 
   it.each([
@@ -476,8 +551,58 @@ describe("the one whole-registry validation", () => {
       1,
     ],
     [
-      "a copy of the registry",
+      "a spread copy",
       'validateVersionedRpcRegistry({ ...hostRpcRegistry, "a.b": line });',
+      1,
+    ],
+    [
+      "a renamed import",
+      'import { hostRpcRegistry as registry } from "x"; validateVersionedRpcRegistry(registry);',
+      1,
+    ],
+    [
+      "a copy bound to a name",
+      "const registry = { ...hostRpcRegistry }; validateVersionedRpcRegistry(registry);",
+      1,
+    ],
+    [
+      "an alias of an alias",
+      "const a = hostRpcRegistry; const b = a; validateVersionedRpcRegistry(b);",
+      1,
+    ],
+    [
+      "a parenthesised cast",
+      "validateVersionedRpcRegistry((hostRpcRegistry as never));",
+      1,
+    ],
+    [
+      "Object.assign",
+      "validateVersionedRpcRegistry(Object.assign({}, hostRpcRegistry));",
+      1,
+    ],
+    [
+      "a namespace read",
+      "validateVersionedRpcRegistry(host.hostRpcRegistry);",
+      1,
+    ],
+    [
+      "a renamed validator",
+      'import { validateVersionedRpcRegistry as check } from "x"; check(hostRpcRegistry);',
+      1,
+    ],
+    [
+      "a validator bound to a name",
+      "const check = validateVersionedRpcRegistry; check(hostRpcRegistry);",
+      1,
+    ],
+    [
+      "a namespace validator",
+      "framework.validateVersionedRpcRegistry(hostRpcRegistry);",
+      1,
+    ],
+    [
+      "the static registry list",
+      "findStaticRegistryFailures(STATIC_REGISTRIES);",
       1,
     ],
     [
@@ -488,6 +613,11 @@ describe("the one whole-registry validation", () => {
     [
       "a registry of the test's own",
       "validateVersionedRpcRegistry(registry);",
+      0,
+    ],
+    [
+      "a planted entry among the record registries",
+      "findStaticRegistryFailures(plantedAmongRecords(entry));",
       0,
     ],
   ] as const)("counts %s", (_name, text, count) => {
