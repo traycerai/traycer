@@ -59,6 +59,50 @@ async function middleOf(locator: Locator): Promise<number> {
   return box.x + box.width / 2;
 }
 
+/**
+ * Reads the controls, not the box around them: that box may shrink for its
+ * readings, and whatever it cannot shrink spills out past its edge, so its own
+ * right edge stays in the window when the controls in it do not.
+ */
+async function expectHeaderControlsInWindow(
+  page: Page,
+  width: number,
+): Promise<void> {
+  await expect(page.getByTestId("notifications-bell")).toBeVisible();
+  await expect(page.getByTestId("user-menu-trigger")).toBeVisible();
+  const controls = page
+    .getByTestId("app-header")
+    .locator("> :last-child")
+    .locator("button, a");
+  await expect
+    .poll(() =>
+      controls.evaluateAll((nodes) =>
+        Math.max(...nodes.map((node) => node.getBoundingClientRect().right)),
+      ),
+    )
+    .toBeLessThanOrEqual(width);
+  const sideways = await page.evaluate(() => {
+    const root = document.documentElement;
+    return root.scrollWidth - root.clientWidth;
+  });
+  expect(sideways).toBe(0);
+}
+
+/** New tab is the last of the strip's fixed controls: it ends where they end. */
+async function expectFixedTabControlsClearOfZone(page: Page): Promise<void> {
+  const newTab = page.getByTestId("tab-new");
+  const zone = page.getByTestId("app-header-centre-zone");
+  await expect
+    .poll(async () => rightOf(await boxOf(newTab)) - (await boxOf(zone)).x)
+    .toBeLessThanOrEqual(0);
+  const box = await boxOf(newTab);
+  const hit = await newTab.evaluate(
+    (node, [x, y]) => node.contains(document.elementFromPoint(x, y)),
+    [box.x + box.width / 2, box.y + box.height / 2],
+  );
+  expect(hit).toBe(true);
+}
+
 test("Talk is on the middle of the header with the tabs at the top", async ({
   page,
 }) => {
@@ -158,7 +202,7 @@ for (const width of [1400, 1100, 900, 800, 768]) {
     page,
   }) => {
     await page.setViewportSize({ width, height: 800 });
-    await open(page, "placement=top");
+    await open(page, "placement=top&account=1");
     await page.evaluate(() => window.__voiceTopRowProbe?.openTabs(12));
     await page.getByTestId("header-tab-strip-scroll").waitFor();
     await page.evaluate(() => window.__voiceTopRowProbe?.goLive());
@@ -197,7 +241,8 @@ for (const width of [1400, 1100, 900, 800, 768]) {
     const actions = await boxOf(
       page.getByTestId("app-header").locator("> :last-child"),
     );
-    expect(rightOf(actions)).toBeLessThanOrEqual(width);
+    await expectHeaderControlsInWindow(page, width);
+    await expectFixedTabControlsClearOfZone(page);
     expect(actions.x).toBeGreaterThanOrEqual(rightOf(zone));
     await nextFrames(page, 3);
     expect(await page.evaluate(() => window.__voiceTopRowErrors)).toEqual([]);
@@ -206,6 +251,45 @@ for (const width of [1400, 1100, 900, 800, 768]) {
     await expect(page.getByRole("tooltip")).toHaveCount(1);
   });
 }
+
+for (const width of [1400, 1100, 900, 800, 768]) {
+  test(`with 12 real tabs at ${String(width)}px and no session the window does not scroll sideways`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width, height: 800 });
+    await open(page, "placement=top&account=1");
+    await page.evaluate(() => window.__voiceTopRowProbe?.openTabs(12));
+    await page.getByTestId("header-tab-strip-scroll").waitFor();
+    await expectHeaderControlsInWindow(page, width);
+    await expectFixedTabControlsClearOfZone(page);
+    await expect
+      .poll(async () => rightOf(await boxOf(talk(page))))
+      .toBeLessThanOrEqual(width);
+  });
+}
+
+// Windows and Linux keep the desktop header in a zoomed window, below the width
+// where every other platform changes to the phone header, and at this one the
+// row has no room for everything. Talk and the header's own controls stay; the
+// window does not scroll.
+test("in a zoomed Windows window with no room left the window does not scroll sideways", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 560, height: 800 });
+  await open(page, "placement=top&wco=win&account=1");
+  await page.evaluate(() => window.__voiceTopRowProbe?.openTabs(12));
+  // The scroller has given up all its room: present, not visible.
+  await page
+    .getByTestId("header-tab-strip-scroll")
+    .waitFor({ state: "attached" });
+  await expectHeaderControlsInWindow(page, 560);
+  const box = await boxOf(talk(page));
+  const hit = await talk(page).evaluate(
+    (node, [x, y]) => node.contains(document.elementFromPoint(x, y)),
+    [box.x + box.width / 2, box.y + box.height / 2],
+  );
+  expect(hit).toBe(true);
+});
 
 test("with room to spare Waiting keeps its name", async ({ page }) => {
   await open(page, "placement=top");
