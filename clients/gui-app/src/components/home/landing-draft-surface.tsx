@@ -14,7 +14,6 @@ import { useDraftSurfaceId } from "@/providers/draft-surface-hooks";
 import { useLandingDraftShell } from "@/stores/home/landing-draft-store";
 import { LandingTerminalPaneAnchor } from "@/components/home/terminal-panel/landing-terminal-host";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
-import { useMobileStripForm } from "@/components/layout/tabs/mobile-strip-form-context";
 import { useMobileNavStore } from "@/stores/layout/mobile-nav-store";
 import "./home-touch-targets.css";
 import { isMobileApp } from "@/lib/mobile-app";
@@ -60,8 +59,6 @@ export function LandingDraftSurface() {
   // inline copy is pure duplication at this width.
   const isMobile = useIsMobileViewport();
   const setNavOpen = useMobileNavStore((state) => state.setOpen);
-  const stripMounted = useMobileStripForm() !== null;
-  const { openHistory } = useSystemTabModalActions();
   const workspaceSurface = useMemo(
     () => ({ kind: "home" as const, draftId }),
     [draftId],
@@ -173,7 +170,7 @@ export function LandingDraftSurface() {
       <div
         ref={appearanceSurfaceRef}
         className={cn(
-          "landing-appearance-surface relative isolate grid min-h-0 min-w-0 flex-1 grid-cols-[minmax(0,1fr)] overflow-hidden",
+          "landing-appearance-surface relative isolate grid min-h-0 min-w-0 flex-1 grid-cols-[minmax(0,1fr)] overflow-hidden max-md:short-landscape:content-start max-md:short-landscape:overflow-y-auto",
           layout.rows,
         )}
       >
@@ -184,7 +181,7 @@ export function LandingDraftSurface() {
 
         <section
           className={cn(
-            "relative mx-auto flex w-full max-w-3xl items-end justify-center px-6 pb-10 pt-3 max-md:px-4 max-md:pb-6",
+            "relative mx-auto flex w-full max-w-3xl items-end justify-center px-6 pb-10 pt-3 max-md:px-4 max-md:pb-6 max-md:short-landscape:h-0 max-md:short-landscape:overflow-hidden max-md:short-landscape:p-0",
             !showGreeting && "invisible",
             layout.hero,
           )}
@@ -230,11 +227,7 @@ export function LandingDraftSurface() {
               type="button"
               data-testid="home-view-history"
               className="mt-auto shrink-0 self-center pt-4 pb-safe-bottom-gutter text-ui-xs text-muted-foreground transition-colors active:text-foreground"
-              onClick={() => {
-                // The strip has replaced the drawer, so this goes to the list itself.
-                if (stripMounted) openHistory();
-                else setNavOpen(true);
-              }}
+              onClick={() => setNavOpen(true)}
             >
               View history
             </button>
@@ -298,13 +291,13 @@ function startPageLayout(
 } {
   return showGreeting || showRecentHistory
     ? {
-        rows: "grid-rows-[auto_minmax(0,1fr)_minmax(0,1fr)] max-md:grid-rows-[auto_minmax(0,1fr)_minmax(0,1.4fr)]",
+        rows: "grid-rows-[auto_minmax(0,1fr)_minmax(0,1fr)] max-md:grid-rows-[auto_minmax(0,1fr)_minmax(0,1.4fr)] max-md:short-landscape:grid-rows-[auto_0_auto]",
         hero: "",
         composer: "",
         placement: "top",
       }
     : {
-        rows: "grid-rows-[auto_minmax(0,0fr)_minmax(0,1fr)]",
+        rows: "grid-rows-[auto_minmax(0,0fr)_minmax(0,1fr)] max-md:short-landscape:grid-rows-[auto_0_auto]",
         hero: "h-0 overflow-hidden",
         composer: "justify-center",
         placement: "centered",

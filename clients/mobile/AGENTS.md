@@ -36,17 +36,31 @@ move together or the app half-changes shell:
   imports it and pushes every Tailwind breakpoint out of reach, so `md:` and
   `lg:` utilities cannot paint desktop controls over the phone shell at tablet
   widths. The comment there explains why it is a sentinel value and not
-  `--breakpoint-*: initial`. **Raw `@media` rules outside Tailwind do not get
-  this for free** — a hand-written `max-width: 767px` tier is phone styling
-  that silently stops applying on a tablet running the phone shell. Either key
-  it on the resolved layout, or override it in `index.native.css`, which is
-  what the first-task coachmark's type scale does.
+  `--breakpoint-*: initial`. Raw `@media` rules outside Tailwind are reached
+  by `scripts/phone-tier-css.ts`: it repeats a line-anchored
+  `@media (max-width: 767px)` or `@media (pointer: coarse)` block under
+  `.traycer-phone-layout-only`, the class `main.tsx` puts on `<html>`, so
+  those tiers apply at every width. Any other raw query is not reached: key it
+  on the resolved layout, or override it in `index.native.css`.
+
+The phone layout means the same screens at every width: the menu button and
+drawer for level 1, the tab switcher for level 2, one full-width pane. There is
+no rail, no level-2 column and no second tile in the installed app, on a tablet
+or in landscape. Text and page width caps from the desktop layout are lifted in
+`index.native.css`. A touch stylus makes the emulator and pen phones report
+`(pointer: fine)`, so the installed app treats its pointer as coarse by decision
+(`use-coarse-pointer.ts`, the `pointer-*` variants in `index.native.css`).
+
+A window under 560px tall in landscape has room for little else, so the
+`max-md:short-landscape:` variant keeps the chat transcript and the home composer
+visible there: the composer draws its one-row form at rest and the stacked
+surfaces above it give way.
 
 Both platforms rotate freely, tablets as well as phones. iOS lists all four
 orientations in **both** `Info.plist` and `Info-Dev.plist` (Debug builds use the
 latter), and omits `UIRequiresFullScreen`, so an iPad can also give the app a
-Split View or Stage Manager window: layout reads the width it gets, never a
-device. Android sets no `android:screenOrientation`.
+Split View or Stage Manager window, which draws the same phone layout. Android
+sets no `android:screenOrientation`.
 
 ## Host and auth invariants
 
@@ -135,6 +149,13 @@ Gradle files embed install-layout hashes that go stale.
   default (build succeeds, push registration rejects and is swallowed).
 - `POST_NOTIFICATIONS` must stay declared in the app manifest or Android 13+
   denies without ever prompting.
+- Below WebView 140 Capacitor's `SystemBars` pads the WebView's parent view
+  natively, so the system-bar bands show that view, not the page.
+  `src/window-background.ts` paints it through `WindowBackgroundPlugin.java`
+  and sets the bar icon style from the current theme or full-bleed surface.
+- `proguard-rules.pro` strips `Activity.setRequestedOrientation` so no plugin
+  activity can lock the rotation Play checks for. A new orientation lock in
+  native code is removed in release builds the same way.
 
 ## Working rules
 

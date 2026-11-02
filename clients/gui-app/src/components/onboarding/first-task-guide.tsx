@@ -14,6 +14,7 @@ import {
   onboardingCompletedCount,
   onboardingGuideCount,
 } from "@/stores/onboarding/onboarding-store";
+import { readShortLandscape } from "@/hooks/ui/use-short-landscape";
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 import { useSessionImportRunStore } from "@/stores/session-import/session-import-run-store";
 import { useFirstTaskGuideStore } from "@/stores/onboarding/first-task-guide-store";
@@ -40,6 +41,17 @@ export function FirstTaskImportBridge() {
     return useSessionImportRunStore.subscribe(observe);
   }, []);
   return null;
+}
+
+const SHORT_LANDSCAPE_REMINDER_MS = 8000;
+
+/**
+ * A phone on its side has no room to spare for a card that waits: the Start
+ * page's toasts say their line and leave, and come back the next time the page
+ * opens.
+ */
+function startToastDuration(): number {
+  return readShortLandscape() ? SHORT_LANDSCAPE_REMINDER_MS : Infinity;
 }
 
 const LandingGuide = lazy(() =>
@@ -121,7 +133,8 @@ function GettingStartedToast() {
  * as one has been shown and not answered.
  *
  * Once shown, the invitation stands until the person presses it, answers Not
- * now, or ×s it. A status that stops naming a move - a host swap, a version
+ * now, or ×s it, or on a phone on its side until its time runs out, which is
+ * no answer: it asks again the next time the Start page opens. A status that stops naming a move - a host swap, a version
  * without the planes, a move accepted elsewhere - is not an answer from the
  * person: it neither withdraws the invitation nor lets the reminder take its
  * place. Both effects live here, the invitation's first, so the reminder's
@@ -154,21 +167,26 @@ function StartToast(props: {
     markMoveInvitationShown();
     const identityIsCurrent = captureOnboardingReminderIdentity();
     // The invitation's shape is the import announcement's
-    // (`session-import-announcement-controller.tsx`): it does not time out,
-    // and only the person takes it down - which is why there is nothing to
-    // undo here. ×, Not now and the action each dismiss it themselves, and a
-    // sign-out retires it (`retireOnboardingReminder`).
+    // (`session-import-announcement-controller.tsx`): outside a phone on its
+    // side it does not time out, and only the person takes it down - which is
+    // why there is nothing to undo here. ×, Not now and the action each dismiss
+    // it themselves, and a sign-out retires it (`retireOnboardingReminder`).
     toast("This computer's settings aren't in Personal.", {
       id: MOVE_INVITATION_TOAST_ID,
       description: (
         <span className="text-pretty">Move them to use them everywhere</span>
       ),
-      duration: Infinity,
+      duration: startToastDuration(),
       closeButton: true,
       onDismiss: () => {
         if (!identityIsCurrent()) return;
         markMoveInvitationAnswered();
         dismiss();
+      },
+      // Off the screen, so it no longer holds the reminder back, and nothing
+      // the person said is recorded.
+      onAutoClose: () => {
+        if (identityIsCurrent()) markMoveInvitationAnswered();
       },
       action: {
         label: "Show me what moves",
@@ -208,7 +226,7 @@ function StartToast(props: {
       description: (
         <span className="text-pretty">More setup is in Settings.</span>
       ),
-      duration: Infinity,
+      duration: startToastDuration(),
       closeButton: true,
       onDismiss: () => {
         if (mounted && identityIsCurrent()) dismiss();

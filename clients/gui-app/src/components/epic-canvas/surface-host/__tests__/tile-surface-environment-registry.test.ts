@@ -99,7 +99,6 @@ function environment(
       geometryAnchorElement: document.createElement("div"),
       panePortalContainer: null,
       isPaneFocusedNow: () => false,
-      mobileOpenTarget: null,
     },
     ...overrides,
   };
@@ -277,7 +276,6 @@ describe("tile surface environment registry", () => {
           geometryAnchorElement: sourceAnchor,
           panePortalContainer: null,
           isPaneFocusedNow: () => false,
-          mobileOpenTarget: null,
         },
       }),
     );
@@ -613,7 +611,6 @@ describe("tile surface environment registry", () => {
         geometryAnchorElement: document.createElement("div"),
         panePortalContainer: portal,
         isPaneFocusedNow,
-        mobileOpenTarget: null,
       },
     };
 
