@@ -205,7 +205,9 @@ function readAgent(
       waitingOn: waiting ? "approval" : null,
       turnId: chat.activeTurn?.turnId ?? null,
     },
-    turnRunning: turnStatus === "running",
+    // A send that has not started its turn reads as running too, and there is
+    // no turn yet for a stop to be asked of.
+    turnRunning: turnStatus === "running" && chat.activeTurn !== null,
     approvals,
   };
 }

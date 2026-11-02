@@ -374,7 +374,11 @@ function taskWithWorkingAgent(): TaskTab {
   const task = openTaskTab();
   openEpicSession();
   const session = chatSession();
-  session.store.setState({ runStatus: "running", turnInProgress: true });
+  session.store.setState({
+    runStatus: "running",
+    turnInProgress: true,
+    activeTurn: activeTurn("turn-1"),
+  });
   useTabsStore.setState(stripOf([task.ref], task.ref));
   activateTile(task, AGENT);
   return task;
@@ -397,7 +401,7 @@ describe("the view of a task with a working agent", () => {
       title: "Main agent",
       state: "working",
       waitingOn: null,
-      turnId: null,
+      turnId: "turn-1",
     });
     expect(actionsOf(view)).toEqual(
       expect.arrayContaining([
@@ -419,10 +423,6 @@ describe("the view of a task with a working agent", () => {
   it("names the turn on the wire, and none once the chat has none", () => {
     taskWithWorkingAgent();
     const mounted = mount("/", { enabled: true, palette: true });
-
-    act(() => {
-      chatSession().store.setState({ activeTurn: activeTurn("turn-1") });
-    });
     expect(mounted.handle().current().agent?.turnId).toBe("turn-1");
 
     act(() => {
@@ -975,6 +975,28 @@ describe("how the agent's turn is read", () => {
       expect(actionsOf(view).includes("agent.stop:chat-1")).toBe(stoppable);
     },
   );
+
+  it("offers no stop while a send has not started its turn, though the agent reads as working, and offers it once the turn starts", () => {
+    taskWithWorkingAgent();
+    chatSession().store.setState({ activeTurn: null });
+    const mounted = mount("/", { enabled: true, palette: true });
+
+    const pending = mounted.handle().current();
+    expect(pending.agent).toMatchObject({ state: "working", turnId: null });
+    expect(actionsOf(pending)).toContain("agent.tell:chat-1");
+    expect(actionsOf(pending)).not.toContain("agent.stop:chat-1");
+
+    act(() => {
+      chatSession().store.setState({ activeTurn: activeTurn("turn-1") });
+    });
+
+    const started = mounted.handle().current();
+    expect(started.agent).toMatchObject({
+      state: "working",
+      turnId: "turn-1",
+    });
+    expect(actionsOf(started)).toContain("agent.stop:chat-1");
+  });
 
   it("shows the agent waiting on an approval, with nothing to stop, though the host still calls the run running", () => {
     taskWithWorkingAgent();
