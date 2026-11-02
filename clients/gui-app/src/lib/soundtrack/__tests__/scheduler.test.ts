@@ -138,6 +138,48 @@ function isOnGrid(value: number, alignment: number): boolean {
   return Math.abs(ticks - Math.round(ticks)) < 1e-6;
 }
 
+/**
+ * Answers `draws` in order, then `fallback` for ever. The scheduler draws, in
+ * order: the enabled count and the layer shuffle, then per sublayer its
+ * starting offset (second and later only), start pause and sequence length;
+ * after that variants and pauses as plays are decided and reported.
+ */
+function scripted(draws: readonly number[], fallback: number): RandomSource {
+  let next = 0;
+  return () => {
+    const draw = next < draws.length ? draws[next] : fallback;
+    next += 1;
+    return draw;
+  };
+}
+
+function twoSublayerTrack(
+  alignmentSeconds: number,
+  variants: number,
+  properties: LayerProperties,
+  offset: Range,
+): VariableTrack {
+  return buildTrack({
+    lengthSeconds: 100,
+    alignmentSeconds,
+    layers: [layer(variants, 2, offset)],
+    properties: [properties],
+    enabledCount: [1, 1],
+  });
+}
+
+function schedulerWith(
+  track: VariableTrack,
+  random: RandomSource,
+): TrackScheduler {
+  return new TrackScheduler({
+    track,
+    state: track.states[0],
+    random,
+    pauseMultiplier: 1,
+  });
+}
+
 function stateOf(
   name: string,
   properties: LayerProperties,
@@ -365,6 +407,19 @@ describe("TrackScheduler", () => {
       const [play] = makeScheduler(track, 1, 1).advance(20);
       expect(play.startAt).toBeCloseTo(8.4, 9);
     });
+
+    it("decides nothing whose tick is past the time asked about, though it falls due before it", () => {
+      const track = buildTrack({
+        lengthSeconds: 100,
+        alignmentSeconds: 1,
+        layers: [layer(2, 1, null)],
+        properties: [singleSample([0.5, 0.5], [0, 0])],
+        enabledCount: [1, 1],
+      });
+      const scheduler = schedulerWith(track, scripted([], 0));
+      expect(scheduler.advance(0.6)).toEqual([]);
+      expect(scheduler.advance(1)[0].startAt).toBe(1);
+    });
   });
 
   describe("variants", () => {
@@ -395,6 +450,193 @@ describe("TrackScheduler", () => {
           }
         });
       }
+    });
+
+    it("gives a sample a variant other than the one beside it, whichever was decided first", () => {
+      const track = twoSublayerTrack(
+        0.5,
+        2,
+        {
+          startPause: [0, 0.5],
+          sequenceLength: [2, 2],
+          pauseBetweenSamples: [0.4, 0.4],
+          pauseBetweenRepetitions: [5, 5],
+        },
+        [0, 0],
+      );
+      // Sublayer 0 draws a start pause just under 0.5 s; sublayer 1 draws 0.
+      const scheduler = schedulerWith(
+        track,
+        scripted([0, 0, 0.999, 0, 0, 0, 0], 0),
+      );
+
+      const [late, early] = scheduler.advance(0.55);
+      expect([late.sublayerIndex, late.startAt]).toEqual([0, 0.5]);
+      expect([early.sublayerIndex, early.startAt]).toEqual([1, 0]);
+      expect(early.variant).not.toBe(late.variant);
+
+      scheduler.confirm(late, 2, 0);
+      scheduler.confirm(early, 0.1, 0);
+      const [next] = scheduler.advance(0.6);
+      expect([next.sublayerIndex, next.startAt]).toEqual([1, 0.5]);
+      expect(next.variant).not.toBe(late.variant);
+    });
+
+    it("reads a late play at the tick it moved to, not where it was drawn", () => {
+      const track = twoSublayerTrack(
+        1,
+        2,
+        singleSample([0, 0], [0, 0]),
+        [1, 1],
+      );
+      const scheduler = schedulerWith(track, scripted([], 0));
+      const [slow] = scheduler.advance(0);
+      const [fast] = scheduler.advance(1);
+      scheduler.confirm(fast, 2, 0);
+      expect(scheduler.confirm(slow, 10, 1.4)).toBe(2);
+
+      const [following] = scheduler.advance(3);
+      expect(following.startAt).toBe(3);
+      expect(following.variant).not.toBe(slow.variant);
+    });
+
+    it("sends a late play back for a fresh draw if it would land beside the same variant", () => {
+      const track = twoSublayerTrack(
+        1,
+        2,
+        singleSample([0, 0], [0, 0]),
+        [1, 1],
+      );
+      const scheduler = schedulerWith(track, scripted([], 0));
+      const [slow] = scheduler.advance(0);
+      const [first] = scheduler.advance(1);
+      scheduler.confirm(first, 0.1, 0);
+      const [second] = scheduler.advance(2);
+      expect(second.variant).toBe(slow.variant);
+      scheduler.confirm(second, 0.1, 0);
+
+      // Its tick has gone, and the next one is right after the same variant.
+      expect(scheduler.confirm(slow, 50, 2.5)).toBeNull();
+
+      const [third] = scheduler.advance(3);
+      expect(third.sublayerIndex).toBe(1);
+      scheduler.confirm(third, 50, 0);
+      const [redrawn] = scheduler.advance(4);
+      expect([redrawn.sublayerIndex, redrawn.startAt]).toEqual([0, 4]);
+      expect(redrawn.variant).not.toBe(third.variant);
+    });
+
+    it("does not count a skipped draw as heard", () => {
+      const track = twoSublayerTrack(
+        1,
+        2,
+        singleSample([0, 0], [0, 0]),
+        [1, 1],
+      );
+      const scheduler = schedulerWith(track, scripted([], 0));
+      const [heard] = scheduler.advance(0);
+      scheduler.confirm(heard, 1.5, 0);
+      const [missing] = scheduler.advance(1);
+      scheduler.skip(missing);
+
+      const [next] = scheduler.advance(2);
+      expect(next.sublayerIndex).toBe(0);
+      expect(next.variant).not.toBe(heard.variant);
+    });
+
+    it("reads the nearest start after a sample, not the furthest", () => {
+      const track = buildTrack({
+        lengthSeconds: 100,
+        alignmentSeconds: 1,
+        layers: [layer(2, 3, [0, 0])],
+        properties: [singleSample([0, 4], [0, 0])],
+        enabledCount: [1, 1],
+      });
+      // Each sublayer falls a tick before the one decided ahead of it: 4, 3, 2.
+      const scheduler = schedulerWith(
+        track,
+        scripted([0, 0, 0.999, 0, 0, 0.74, 0, 0, 0.49, 0], 0),
+      );
+      const plays = scheduler
+        .advance(4)
+        .toSorted((a, b) => a.startAt - b.startAt);
+      expect(plays.map(({ startAt }) => startAt)).toEqual([2, 3, 4]);
+      expect(plays[0].variant).not.toBe(plays[1].variant);
+      expect(plays[1].variant).not.toBe(plays[2].variant);
+    });
+
+    it("forgets the samples a restart cut, so the same variant can start again", () => {
+      const track = buildTrack({
+        lengthSeconds: 100,
+        alignmentSeconds: 1,
+        layers: [layer(2, 1, null)],
+        properties: [singleSample([0, 0], [0, 0])],
+        enabledCount: [1, 1],
+      });
+      const scheduler = schedulerWith(track, scripted([], 0));
+      const [before] = scheduler.advance(0);
+      scheduler.confirm(before, 50, 0);
+
+      scheduler.restartAt(0);
+      const [after] = scheduler.advance(0);
+      expect(after.variant).toBe(before.variant);
+    });
+
+    it("may draw a skipped variant again, because the sublayer never played it", () => {
+      const track = buildTrack({
+        lengthSeconds: 100,
+        alignmentSeconds: 1,
+        layers: [layer(3, 1, null)],
+        properties: [singleSample([0, 0], [0, 0])],
+        enabledCount: [1, 1],
+      });
+      const scheduler = schedulerWith(track, scripted([], 0));
+      const [missing] = scheduler.advance(0);
+      scheduler.skip(missing);
+
+      const [next] = scheduler.advance(1);
+      expect(next.startAt).toBe(1);
+      expect(next.variant).toBe(missing.variant);
+    });
+
+    it("starts no two sublayers on one variant on one tick, holding one back if it must", () => {
+      const track = buildTrack({
+        lengthSeconds: 100,
+        alignmentSeconds: 1,
+        layers: [layer(2, 3, [0, 0])],
+        properties: [singleSample([0, 0], [0, 0])],
+        enabledCount: [1, 1],
+      });
+      const scheduler = schedulerWith(track, scripted([], 0));
+      const atStart = scheduler.advance(0);
+      expect(atStart.map(({ variant }) => variant).sort()).toEqual([1, 2]);
+      for (const play of atStart) scheduler.confirm(play, 50, 0);
+
+      const [held] = scheduler.advance(1);
+      expect([held.sublayerIndex, held.startAt]).toEqual([2, 1]);
+    });
+
+    it("holds a sample back past ticks where its two neighbours rule out every variant", () => {
+      const track = twoSublayerTrack(
+        1,
+        2,
+        singleSample([0, 0], [0, 0]),
+        [3, 3],
+      );
+      const scheduler = schedulerWith(track, scripted([], 0));
+      const [first, second] = scheduler.advance(3);
+      expect([first.startAt, second.startAt]).toEqual([0, 3]);
+      expect(first.variant).not.toBe(second.variant);
+      scheduler.confirm(first, 0.1, 0);
+      scheduler.confirm(second, 50, 0);
+
+      // Due at 1, where variant 1 would follow itself and variant 2 precede
+      // itself; each ask tries one tick on.
+      expect(scheduler.advance(3)).toEqual([]);
+      expect(scheduler.advance(3)).toEqual([]);
+      const [next] = scheduler.advance(3);
+      expect(next.startAt).toBe(3);
+      expect(next.variant).not.toBe(second.variant);
     });
 
     it("repeats the only variant of a 1-variant layer", () => {
@@ -508,7 +750,7 @@ describe("TrackScheduler", () => {
       enabledCount: [2, 2],
     });
 
-    it("schedules nothing for a disabled layer, and a re-enabled one lands on the next tick after the window", () => {
+    it("schedules nothing for a disabled layer, and one enabled again takes the next tick after now", () => {
       const scheduler = makeScheduler(track, 1, 1);
       scheduler.setLayerEnabled(0, false);
       const seen: ScheduledPlay[] = [];
@@ -522,13 +764,31 @@ describe("TrackScheduler", () => {
       expect(seen.some(({ layerIndex }) => layerIndex === 1)).toBe(true);
       expect(seen.some(({ layerIndex }) => layerIndex === 0)).toBe(false);
 
+      // Looked ahead to 100.4 while off, but it is only 99.8: 100 is still open.
       scheduler.advance(100.4);
       scheduler.setLayerEnabled(0, true);
-      const fromLayer = scheduler
+      const [play] = scheduler
         .advance(105)
         .filter(({ layerIndex }) => layerIndex === 0);
-      expect(fromLayer).toHaveLength(1);
-      expect(fromLayer[0].startAt).toBe(101);
+      expect(scheduler.confirm(play, 1, 99.8)).toBe(100);
+    });
+
+    it("keeps its place when enabled again inside a pause it had already drawn", () => {
+      const pausing = buildTrack({
+        lengthSeconds: 300,
+        alignmentSeconds: 1,
+        layers: [layer(3, 1, null)],
+        properties: [singleSample([0, 0], [50, 50])],
+        enabledCount: [1, 1],
+      });
+      const scheduler = makeScheduler(pausing, 1, 1);
+      const [play] = scheduler.advance(0);
+      scheduler.confirm(play, 1, 0);
+
+      scheduler.setLayerEnabled(0, false);
+      scheduler.setLayerEnabled(0, true);
+      expect(scheduler.advance(50)).toEqual([]);
+      expect(scheduler.advance(51)[0].startAt).toBe(51);
     });
   });
 

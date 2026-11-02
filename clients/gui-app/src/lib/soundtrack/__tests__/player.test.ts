@@ -9,6 +9,7 @@ import { makeAudioBuffer } from "./audio-buffer";
 interface PlayCall {
   readonly kind: "play";
   readonly gain: string;
+  readonly duration: number;
   readonly when: number;
   readonly fadeIn: number;
   readonly at: number;
@@ -97,10 +98,11 @@ class FakeGain implements OutputGain {
     return child;
   }
 
-  play(_buffer: AudioBuffer, when: number, fadeInSeconds: number): OutputVoice {
+  play(buffer: AudioBuffer, when: number, fadeInSeconds: number): OutputVoice {
     this.output.calls.push({
       kind: "play",
       gain: this.name,
+      duration: buffer.duration,
       when,
       fadeIn: fadeInSeconds,
       at: this.output.currentTime(),
@@ -297,10 +299,6 @@ function makeSingleLayerTrack(
   };
 }
 
-async function advance(milliseconds: number): Promise<void> {
-  await vi.advanceTimersByTimeAsync(milliseconds);
-}
-
 function isOnGrid(value: number, alignment: number): boolean {
   const ticks = value / alignment;
   return Math.abs(ticks - Math.round(ticks)) < 1e-6;
@@ -325,7 +323,7 @@ describe("TrackPlayer scheduling", () => {
       5,
     );
     player.start(0, 0.1);
-    await advance(30_000);
+    await vi.advanceTimersByTimeAsync(30_000);
 
     const plays = output.allPlays();
     expect(plays.length).toBeGreaterThan(6);
@@ -352,7 +350,7 @@ describe("TrackPlayer scheduling", () => {
       5,
     );
     player.start(0, 0.1);
-    await advance(30_000);
+    await vi.advanceTimersByTimeAsync(30_000);
 
     const plays = output.allPlays();
     // Layer A's first play is at track time 0, which anchors the grid.
@@ -378,7 +376,7 @@ describe("TrackPlayer scheduling", () => {
         5,
       );
       player.start(0, 0.1);
-      await advance(1000);
+      await vi.advanceTimersByTimeAsync(1000);
       player.stop(requested);
 
       const cuts = output.cuts();
@@ -401,7 +399,7 @@ describe("TrackPlayer scheduling", () => {
     );
     const startedAt = output.currentTime();
     player.start(0, 0.1);
-    await advance(1000);
+    await vi.advanceTimersByTimeAsync(1000);
 
     const [firstA] = output.plays("bus0/0");
     expect(firstA.when - startedAt).toBeLessThan(0.5);
@@ -435,7 +433,7 @@ describe("TrackPlayer scheduling", () => {
     );
     player.start(0, 0.1);
     // The one sample sounds from 5 s to 7.2 s; the next is not due until 11.5.
-    await advance(9000);
+    await vi.advanceTimersByTimeAsync(9000);
     expect(output.allPlays()).toHaveLength(1);
     player.stop(0.1);
     expect(output.cuts()).toEqual([]);
@@ -452,9 +450,9 @@ describe("TrackPlayer scheduling", () => {
       );
       player.setPauseMultiplier(multiplier);
       player.start(0, 0.1);
-      await advance(1000);
+      await vi.advanceTimersByTimeAsync(1000);
       player.setPauseMultiplier(laterMultiplier);
-      await advance(25_000);
+      await vi.advanceTimersByTimeAsync(25_000);
       return output.allPlays().map((call) => call.when);
     }
 
@@ -477,7 +475,7 @@ describe("TrackPlayer resume", () => {
       5,
     );
     player.start(0, 0.1);
-    await advance(3000);
+    await vi.advanceTimersByTimeAsync(3000);
     player.setLayerEnabled(1, false);
     const state = player.currentState();
     const before = player.elapsed();
@@ -485,7 +483,7 @@ describe("TrackPlayer resume", () => {
 
     player.stop(0.1);
     expect(player.elapsed()).toBe(before);
-    await advance(5000);
+    await vi.advanceTimersByTimeAsync(5000);
     expect(player.elapsed()).toBe(before);
 
     const restartedAt = output.currentTime();
@@ -495,7 +493,7 @@ describe("TrackPlayer resume", () => {
     expect(player.currentState()).toBe(state);
     expect(player.enabledLayers()).toEqual([true, false]);
 
-    await advance(2000);
+    await vi.advanceTimersByTimeAsync(2000);
     expect(player.elapsed()).toBeGreaterThan(before + 1.5);
     expect(player.elapsed()).toBeLessThanOrEqual(before + 2);
     // Layer A resumes on the first tick at or after the remembered position,
@@ -515,7 +513,7 @@ describe("TrackPlayer resume", () => {
     );
     const startedAt = output.currentTime();
     player.start(0, 0.1);
-    await advance(8000);
+    await vi.advanceTimersByTimeAsync(8000);
     // The first sample sits at track time 5, which gives the start lead.
     const [first] = output.allPlays();
     const lead = first.when - 5 - startedAt;
@@ -524,7 +522,7 @@ describe("TrackPlayer resume", () => {
 
     const resumedAt = output.currentTime();
     player.start(position, 0.1);
-    await advance(8000);
+    await vi.advanceTimersByTimeAsync(8000);
     const [resumed] = output.allPlays().slice(1);
     const trackTime = resumed.when - (resumedAt - position + lead);
     expect(trackTime).toBeCloseTo(Math.ceil((position + 5) / 0.5) * 0.5, 6);
@@ -537,10 +535,10 @@ describe("TrackPlayer end of track", () => {
     // 8 s samples are still sounding when the 5 s track ends.
     const player = makePlayer(output, new FakeStems(8), makeTrack(5, 2), 3);
     player.start(0, 0.1);
-    await advance(1000);
+    await vi.advanceTimersByTimeAsync(1000);
     player.setLayerEnabled(1, false);
     expect(player.currentState()).not.toBeNull();
-    await advance(4500);
+    await vi.advanceTimersByTimeAsync(4500);
 
     const cuts = output.cuts();
     expect(cuts.map((call) => call.gain).sort()).toEqual(["bus0/0", "bus0/1"]);
@@ -550,12 +548,12 @@ describe("TrackPlayer end of track", () => {
 
     const endedAt = cuts[0].at;
     const playsAtEnd = output.allPlays().length;
-    await advance(2000);
+    await vi.advanceTimersByTimeAsync(2000);
     expect(output.allPlays()).toHaveLength(playsAtEnd);
     expect(player.currentState()).toBeNull();
     expect(player.elapsed()).toBe(0);
 
-    await advance(3000);
+    await vi.advanceTimersByTimeAsync(3000);
     const fresh = output.allPlays().slice(playsAtEnd);
     expect(fresh.length).toBeGreaterThan(0);
     expect(fresh[0].at).toBeGreaterThanOrEqual(endedAt + 3);
@@ -588,10 +586,10 @@ describe("crossfadePlayers", () => {
     const { output, from, to } = twoPlayers();
     from.start(0, 0.1);
     to.start(0, 0.1);
-    await advance(2000);
+    await vi.advanceTimersByTimeAsync(2000);
     to.stop(0.01);
     const remembered = to.elapsed();
-    await advance(1000);
+    await vi.advanceTimersByTimeAsync(1000);
 
     const startedAt = output.currentTime();
     crossfadePlayers(from, to);
@@ -606,9 +604,9 @@ describe("crossfadePlayers", () => {
     expect(to.elapsed()).toBeGreaterThanOrEqual(remembered);
     expect(to.elapsed()).toBeLessThan(remembered + 0.2);
 
-    await advance(1900);
+    await vi.advanceTimersByTimeAsync(1900);
     expect(output.ramps("bus0").at(-1)?.seconds).toBe(2);
-    await advance(400);
+    await vi.advanceTimersByTimeAsync(400);
     const stopRamp = output.ramps("bus0").at(-1);
     expect(stopRamp).toMatchObject({ target: 0, seconds: 0.01 });
     expect(stopRamp?.at).toBeGreaterThanOrEqual(startedAt + 2);
@@ -618,7 +616,7 @@ describe("crossfadePlayers", () => {
 
     const held = from.elapsed();
     const playsOnFrom = output.plays("bus0/0").length;
-    await advance(10_000);
+    await vi.advanceTimersByTimeAsync(10_000);
     expect(from.elapsed()).toBe(held);
     expect(output.plays("bus0/0")).toHaveLength(playsOnFrom);
     expect(to.elapsed()).toBeGreaterThan(remembered + 10);
@@ -628,10 +626,10 @@ describe("crossfadePlayers", () => {
     const { output, from, to } = twoPlayers();
     from.start(0, 0.1);
     to.start(0, 0.1);
-    await advance(3000);
+    await vi.advanceTimersByTimeAsync(3000);
 
     crossfadePlayers(from, to);
-    await advance(1000);
+    await vi.advanceTimersByTimeAsync(1000);
     crossfadePlayers(to, from);
     expect(output.ramps("bus0").at(-1)).toMatchObject({
       target: 1,
@@ -643,7 +641,7 @@ describe("crossfadePlayers", () => {
     });
 
     // Past the first fade's end (2 s after it began) and the second's.
-    await advance(5000);
+    await vi.advanceTimersByTimeAsync(5000);
     expect(
       output
         .ramps("bus0")
@@ -651,7 +649,7 @@ describe("crossfadePlayers", () => {
     ).toBe(true);
     const heldTo = to.elapsed();
     const fromBefore = from.elapsed();
-    await advance(2000);
+    await vi.advanceTimersByTimeAsync(2000);
     expect(from.elapsed()).toBeGreaterThan(fromBefore + 1.5);
     expect(to.elapsed()).toBe(heldTo);
   });
@@ -700,7 +698,7 @@ describe("TrackPlayer layer gains", () => {
     );
     player.setLayerTarget(0, 0.4);
     player.start(0, 0.1);
-    await advance(1000);
+    await vi.advanceTimersByTimeAsync(1000);
     player.stop(0.1);
     player.start(player.elapsed(), 0.1);
     expect(output.ramps("bus0/0").at(-1)?.target).toBe(0.4);
@@ -715,7 +713,7 @@ describe("TrackPlayer stems", () => {
     stems.failLayer("A");
     const player = makePlayer(output, stems, makeTrack(60, 1), 5);
     player.start(0, 0.1);
-    await advance(40_000);
+    await vi.advanceTimersByTimeAsync(40_000);
 
     expect(
       stems.requests.filter((request) => request === "A/1").length,
@@ -732,7 +730,7 @@ describe("TrackPlayer stems", () => {
     stems.holdLayer("A");
     const player = makePlayer(output, stems, makeTrack(60, 2), 5);
     player.start(0, 0.1);
-    await advance(1200);
+    await vi.advanceTimersByTimeAsync(1200);
     // B's first play is at track time 0.5, which anchors the grid.
     const [firstB] = output.plays("bus0/1");
     expect(output.plays("bus0/0")).toHaveLength(0);
@@ -740,7 +738,7 @@ describe("TrackPlayer stems", () => {
     const arrivedAt = output.currentTime() - trackStart;
 
     stems.releaseLayer("A");
-    await advance(1000);
+    await vi.advanceTimersByTimeAsync(1000);
     const [lateA] = output.plays("bus0/0");
     const startAt = lateA.when - trackStart;
     expect(startAt).toBeGreaterThanOrEqual(arrivedAt);
@@ -754,14 +752,14 @@ describe("TrackPlayer stems", () => {
     stems.holdLayer("A");
     const player = makePlayer(output, stems, makeTrack(60, 2), 5);
     player.start(0, 0.1);
-    await advance(500);
+    await vi.advanceTimersByTimeAsync(500);
     player.stop(0.1);
     expect(stems.requests.some((request) => request.startsWith("A/"))).toBe(
       true,
     );
 
     stems.releaseLayer("A");
-    await advance(2000);
+    await vi.advanceTimersByTimeAsync(2000);
     expect(output.plays("bus0/0")).toHaveLength(0);
   });
 });
@@ -781,27 +779,27 @@ describe("TrackPlayer enterState", () => {
   it("is taken by the next play only, when called during the silence", async () => {
     const { player } = playerOnStatesTrack(5);
     player.start(0, 0.1);
-    await advance(6000);
+    await vi.advanceTimersByTimeAsync(6000);
     expect(player.currentState()).toBeNull();
 
     player.enterState("second");
-    await advance(1000);
+    await vi.advanceTimersByTimeAsync(1000);
     expect(player.currentState()).toBeNull();
 
     // The 5 s silence ends at about 10.3 s and that play runs to about 15.5 s.
-    await advance(5000);
+    await vi.advanceTimersByTimeAsync(5000);
     expect(player.currentState()?.name).toBe("second");
 
-    await advance(5000);
+    await vi.advanceTimersByTimeAsync(5000);
     expect(player.currentState()).toBeNull();
-    await advance(5000);
+    await vi.advanceTimersByTimeAsync(5000);
     expect(player.currentState()?.name).toBe("first");
   });
 
   it("lands on a later tick while playing, cutting nothing and ramping the gains at once", async () => {
     const { output, player } = playerOnStatesTrack(60);
     player.start(0, 0.1);
-    await advance(1000);
+    await vi.advanceTimersByTimeAsync(1000);
     // Layer A's first sample is at track time 0, which anchors track time.
     const origin = output.plays("bus0/0")[0].when;
 
@@ -827,12 +825,12 @@ describe("TrackPlayer enterState", () => {
     // The call fell at track time 0.95, so the move lands on the tick at 1.
     const landsAt = origin + 1;
     const untilLanding = Math.round((landsAt - output.currentTime()) * 1000);
-    await advance(untilLanding - 10);
+    await vi.advanceTimersByTimeAsync(untilLanding - 10);
     expect(player.currentState()?.name).toBe("first");
-    await advance(20);
+    await vi.advanceTimersByTimeAsync(20);
     expect(player.currentState()?.name).toBe("second");
 
-    await advance(26_000);
+    await vi.advanceTimersByTimeAsync(26_000);
     expect(output.cuts()).toEqual([]);
     // Layer A's sample sounds to 2.2 s, then the 1 s start pause of "second"
     // falls on 3.5 s, and its 20 s pause gives 3.5 + 2.2 + 20 = 26.
@@ -851,11 +849,11 @@ describe("TrackPlayer enterState", () => {
     async function runWith(restate: boolean) {
       const { output, player } = playerOnStatesTrack(60);
       player.start(0, 0.1);
-      await advance(1000);
+      await vi.advanceTimersByTimeAsync(1000);
       const rampsBefore = output.calls.filter(isRamp).length;
       if (restate) player.enterState("first");
       expect(output.calls.filter(isRamp)).toHaveLength(rampsBefore);
-      await advance(12_000);
+      await vi.advanceTimersByTimeAsync(12_000);
       return output.allPlays().map((call) => call.when);
     }
 
@@ -867,7 +865,7 @@ describe("TrackPlayer enterState", () => {
   it("is taken at the next start when stopped, keeping the position and rolling the layers afresh", async () => {
     const { player } = playerOnStatesTrack(60);
     player.start(0, 0.1);
-    await advance(3000);
+    await vi.advanceTimersByTimeAsync(3000);
     player.setLayerEnabled(0, false);
     player.stop(0.1);
     const position = player.elapsed();
@@ -885,7 +883,7 @@ describe("TrackPlayer enterState", () => {
   it("takes the last choice made while stopped, and keeps the layers it had", async () => {
     const { player } = playerOnStatesTrack(60);
     player.start(0, 0.1);
-    await advance(3000);
+    await vi.advanceTimersByTimeAsync(3000);
     player.setLayerEnabled(0, false);
     player.stop(0.1);
 
@@ -900,7 +898,7 @@ describe("TrackPlayer enterState", () => {
   it("throws on an unknown name, playing or stopped, and changes nothing", async () => {
     const { player } = playerOnStatesTrack(60);
     player.start(0, 0.1);
-    await advance(1000);
+    await vi.advanceTimersByTimeAsync(1000);
     expect(() => {
       player.enterState("nowhere");
     }).toThrow("nowhere");
@@ -914,5 +912,170 @@ describe("TrackPlayer enterState", () => {
     // Nothing was kept for the next start.
     player.start(player.elapsed(), 0.1);
     expect(player.currentState()?.name).toBe("first");
+  });
+});
+
+describe("TrackPlayer scheduling inside one lookahead window", () => {
+  /** One layer of two variants, with no pauses, on the given grid. */
+  function twoVariantTrack(
+    alignmentSeconds: number,
+    sublayers: number,
+    offset: number,
+    enabledLayers: number,
+  ): VariableTrack {
+    const properties: LayerProperties = {
+      startPause: [0, 0],
+      sequenceLength: [1, 1],
+      pauseBetweenSamples: [0, 0],
+      pauseBetweenRepetitions: [0, 0],
+    };
+    return {
+      name: "window",
+      title: "Window",
+      lengthSeconds: 60,
+      alignmentSeconds,
+      layers: [
+        {
+          name: "A",
+          variants: 2,
+          sublayers,
+          sublayerStartingOffset: [offset, offset],
+        },
+      ],
+      states: ["first", "second"].map((name) => ({
+        name,
+        layersProperties: [properties],
+        numberOfEnabledLayers: [enabledLayers, enabledLayers],
+      })),
+    };
+  }
+
+  function playerOn(
+    output: FakeOutput,
+    track: VariableTrack,
+    load: StemSource["load"],
+  ): TrackPlayer {
+    return makePlayerWithRandom(output, { load }, track, () => 0);
+  }
+
+  it("loses no grid tick when samples are shorter than the timer's interval", async () => {
+    const output = new FakeOutput();
+    const player = playerOn(output, twoVariantTrack(0.1, 1, 0, 1), () =>
+      Promise.resolve(makeAudioBuffer(0.05, 50)),
+    );
+    player.start(0, 0.01);
+    await vi.advanceTimersByTimeAsync(1000);
+
+    const plays = output.allPlays();
+    const starts = plays
+      .map((play) => Number((play.when - plays[0].when).toFixed(4)))
+      .filter((trackTime) => trackTime < 1);
+    expect(starts).toEqual([0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]);
+  });
+
+  it("does not repeat a variant when sublayers' first decodes finish out of order", async () => {
+    const output = new FakeOutput();
+    const slow = Promise.withResolvers<AudioBuffer>();
+    let ready = false;
+    // Variant 1 is 10 s long and variant 2 is 2 s, which tells them apart below.
+    const player = playerOn(
+      output,
+      twoVariantTrack(1, 2, 1, 1),
+      (_track, _layer, variant) =>
+        variant === 1 && !ready
+          ? slow.promise
+          : Promise.resolve(makeAudioBuffer(variant === 1 ? 10 : 2, 10)),
+    );
+    player.start(0, 0.01);
+    await vi.advanceTimersByTimeAsync(1400);
+    ready = true;
+    slow.resolve(makeAudioBuffer(10, 10));
+    await vi.advanceTimersByTimeAsync(2000);
+
+    const heard = output
+      .allPlays()
+      .toSorted((a, b) => a.when - b.when)
+      .map((play) => play.duration);
+    expect(heard.length).toBeGreaterThan(2);
+    for (let i = 1; i < heard.length; i += 1) {
+      expect(heard[i]).not.toBe(heard[i - 1]);
+    }
+  });
+
+  it("drops a decode from before a restart, and plays the one after it", async () => {
+    const output = new FakeOutput();
+    const old = Promise.withResolvers<AudioBuffer>();
+    const fresh = Promise.withResolvers<AudioBuffer>();
+    let requests = 0;
+    const player = playerOn(output, twoVariantTrack(1, 1, 0, 1), () => {
+      requests += 1;
+      return requests === 1 ? old.promise : fresh.promise;
+    });
+    player.start(0, 0.01);
+    await vi.advanceTimersByTimeAsync(20);
+    player.stop(0.01);
+    player.start(player.elapsed(), 0.01);
+
+    old.resolve(makeAudioBuffer(2, 10));
+    await vi.advanceTimersByTimeAsync(100);
+    expect(output.allPlays()).toEqual([]);
+    fresh.resolve(makeAudioBuffer(2, 10));
+    await vi.advanceTimersByTimeAsync(100);
+    expect(output.allPlays()).toHaveLength(1);
+  });
+
+  it("schedules nothing from a failed decode that comes back after a stop", async () => {
+    const output = new FakeOutput();
+    const failing = Promise.withResolvers<AudioBuffer>();
+    let requests = 0;
+    // On this fine a grid, a next sample would fall inside the lookahead.
+    const player = playerOn(output, twoVariantTrack(0.1, 1, 0, 1), () => {
+      requests += 1;
+      return failing.promise;
+    });
+    player.start(0, 0.01);
+    await vi.advanceTimersByTimeAsync(20);
+    player.stop(0.01);
+
+    failing.reject(new Error("no such stem"));
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(requests).toBe(1);
+  });
+
+  it("drops a decode from before a state move, and starts the new state on its tick", async () => {
+    const output = new FakeOutput();
+    const old = Promise.withResolvers<AudioBuffer>();
+    let requests = 0;
+    const player = playerOn(output, twoVariantTrack(1, 1, 0, 1), () => {
+      requests += 1;
+      return requests === 1
+        ? old.promise
+        : Promise.resolve(makeAudioBuffer(2, 10));
+    });
+    player.start(0, 0.01);
+    await vi.advanceTimersByTimeAsync(20);
+    player.enterState("second");
+
+    old.resolve(makeAudioBuffer(2, 10));
+    await vi.advanceTimersByTimeAsync(100);
+    expect(output.allPlays()).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1000);
+    const [play] = output.allPlays();
+    expect(play.when).toBe(1.05);
+  });
+
+  it("enables a silent layer on the next tick that has not gone, not one past the lookahead", async () => {
+    const output = new FakeOutput();
+    const player = playerOn(output, twoVariantTrack(1, 1, 0, 0), () =>
+      Promise.resolve(makeAudioBuffer(10, 10)),
+    );
+    player.start(0, 0.01);
+    // Track time is about 0.55, and the lookahead has already reached past 1.
+    await vi.advanceTimersByTimeAsync(600);
+    player.setLayerEnabled(0, true);
+    await vi.advanceTimersByTimeAsync(2000);
+
+    const [play] = output.allPlays();
+    expect(play.when).toBe(1.05);
   });
 });

@@ -26,6 +26,12 @@ export interface TrackSchedulerOptions {
   readonly pauseMultiplier: number;
 }
 
+/** A sample's place in its layer's order of starts. */
+interface LayerStart {
+  readonly startAt: number;
+  readonly variant: number;
+}
+
 interface SublayerCursor {
   readonly layerIndex: number;
   readonly sublayerIndex: number;
@@ -36,6 +42,7 @@ interface SublayerCursor {
   samplesLeftInSequence: number;
   /** Decided and handed out, its duration not back yet. */
   pending: ScheduledPlay | null;
+  /** The variant it last started, so not a draw that was skipped or sent back. */
   lastVariant: number | null;
   /** When its last started sample ends; a state entered meanwhile waits for it. */
   soundingUntil: number;
@@ -84,6 +91,25 @@ function rollEnabledLayers(
   return enabled;
 }
 
+/**
+ * The variants a sample at `startAt` must not be: whatever starts on that very
+ * tick, or else the start just before it, and the start just after it.
+ */
+function neighbourVariants(
+  starts: readonly LayerStart[],
+  startAt: number,
+): ReadonlySet<number> {
+  const ordered = starts.toSorted((a, b) => a.startAt - b.startAt);
+  const sameTick = ordered.filter((start) => start.startAt === startAt);
+  const neighbours = [
+    ...(sameTick.length > 0
+      ? sameTick
+      : ordered.filter((start) => start.startAt < startAt).slice(-1)),
+    ...ordered.filter((start) => start.startAt > startAt).slice(0, 1),
+  ];
+  return new Set(neighbours.map((start) => start.variant));
+}
+
 function assertStateFitsTrack(track: VariableTrack, state: State): void {
   if (state.layersProperties.length !== track.layers.length) {
     throw new Error(
@@ -109,7 +135,12 @@ export class TrackScheduler {
   private enabled: boolean[];
   private pauseMultiplier: number;
   private cursors: SublayerCursor[] = [];
-  private lastVariantByLayer: (number | null)[] = [];
+  /**
+   * Per layer, the starts confirmed so far. Rule 2 is about what is heard, so a
+   * draw counts only while its play is pending, and not once it is skipped or
+   * moved: a sample's neighbours are read here, at the time they matter.
+   */
+  private confirmedByLayer: LayerStart[][] = [];
 
   constructor(options: TrackSchedulerOptions) {
     const { track, state } = options;
@@ -129,7 +160,7 @@ export class TrackScheduler {
    */
   restartAt(trackTime: number): void {
     this.outgoing = null;
-    this.lastVariantByLayer = this.track.layers.map(() => null);
+    this.confirmedByLayer = this.track.layers.map(() => []);
     this.cursors = this.track.layers.flatMap((layer, layerIndex) =>
       Array.from({ length: layer.sublayers }, (_, sublayerIndex) =>
         this.createCursor(layer, layerIndex, sublayerIndex, trackTime),
@@ -181,7 +212,11 @@ export class TrackScheduler {
     return this.enabled;
   }
 
-  /** The caller's override. The scheduler writes the flags only when rolling. */
+  /**
+   * The caller's override. The scheduler writes the flags only when rolling. A
+   * layer that is off decides nothing, and its next sample stays where it was:
+   * if that time goes by meanwhile, `confirm` moves the sample to the next tick.
+   */
   setLayerEnabled(layerIndex: number, enabled: boolean): void {
     this.enabled[layerIndex] = enabled;
   }
@@ -197,22 +232,22 @@ export class TrackScheduler {
     const plays: ScheduledPlay[] = [];
     for (const cursor of this.cursors) {
       if (cursor.pending !== null || cursor.nextAt > untilTrackTime) continue;
-      if (!this.enabled[cursor.layerIndex]) {
-        // Stay just ahead of the window, so that enabling the layer lands on
-        // the coming tick instead of catching up on a tick already gone.
-        cursor.nextAt = tickAfter(untilTrackTime, alignment);
-        continue;
-      }
+      if (!this.enabled[cursor.layerIndex]) continue;
       const startAt = snapUp(cursor.nextAt, alignment);
       if (startAt >= this.track.lengthSeconds) {
         cursor.nextAt = Number.POSITIVE_INFINITY;
         continue;
       }
       if (startAt > untilTrackTime) continue;
+      const variant = this.pickVariant(cursor, startAt);
+      if (variant === null) {
+        cursor.nextAt = tickAfter(startAt, alignment);
+        continue;
+      }
       const play: ScheduledPlay = {
         layerIndex: cursor.layerIndex,
         sublayerIndex: cursor.sublayerIndex,
-        variant: this.pickVariant(cursor),
+        variant,
         startAt,
       };
       cursor.pending = play;
@@ -227,7 +262,9 @@ export class TrackScheduler {
    * `notBeforeTrackTime` passed its tick: the same variant then takes the next
    * tick rather than being dropped, so that a slow first decode does not spend
    * the rest of the pool on samples that all arrive late too. Answers null if
-   * it must not start: past the track's end, or forgotten by `restartAt`.
+   * it must not start: past the track's end, forgotten by `restartAt`, or now
+   * beside the same variant because the order changed while it waited. In that
+   * last case the sublayer draws again on the next tick.
    */
   confirm(
     play: ScheduledPlay,
@@ -244,6 +281,20 @@ export class TrackScheduler {
       cursor.nextAt = Number.POSITIVE_INFINITY;
       return null;
     }
+    if (
+      cursor.layer.variants > 1 &&
+      neighbourVariants(this.startsOfLayer(play.layerIndex), startAt).has(
+        play.variant,
+      )
+    ) {
+      cursor.nextAt = tickAfter(startAt, this.track.alignmentSeconds);
+      return null;
+    }
+    this.confirmedByLayer[play.layerIndex].push({
+      startAt,
+      variant: play.variant,
+    });
+    cursor.lastVariant = play.variant;
     cursor.soundingUntil = startAt + durationSeconds;
     this.placeNext(cursor, startAt, durationSeconds);
     return startAt;
@@ -286,6 +337,18 @@ export class TrackScheduler {
     };
   }
 
+  /** What the layer has confirmed, and what it has decided but not heard yet. */
+  private startsOfLayer(layerIndex: number): readonly LayerStart[] {
+    return [
+      ...this.confirmedByLayer[layerIndex],
+      ...this.cursors.flatMap((cursor) =>
+        cursor.layerIndex === layerIndex && cursor.pending !== null
+          ? [cursor.pending]
+          : [],
+      ),
+    ];
+  }
+
   private claimPending(play: ScheduledPlay): SublayerCursor | null {
     const cursor = this.cursors.find((candidate) => candidate.pending === play);
     if (cursor === undefined) return null;
@@ -294,23 +357,25 @@ export class TrackScheduler {
   }
 
   /**
-   * Never repeats the layer's last sample, across its sublayers, nor where
-   * there are enough variants the sublayer's own: the first is the rule, and
-   * the second keeps a sublayer from repeating itself around its neighbour.
+   * Never a variant beside the same one, in the order the layer's samples are
+   * heard, nor where there are enough variants the sublayer's own last: the
+   * first is the rule, and the second keeps a sublayer from repeating itself
+   * around its neighbour. Answers null if no variant can start on this tick.
    */
-  private pickVariant(cursor: SublayerCursor): number {
-    const lastOfLayer = this.lastVariantByLayer[cursor.layerIndex];
+  private pickVariant(cursor: SublayerCursor, startAt: number): number | null {
+    if (cursor.layer.variants === 1) return 1;
+    const taken = neighbourVariants(
+      this.startsOfLayer(cursor.layerIndex),
+      startAt,
+    );
     const others = Array.from(
       { length: cursor.layer.variants },
       (_, index) => index + 1,
-    ).filter((variant) => variant !== lastOfLayer);
+    ).filter((variant) => !taken.has(variant));
+    if (others.length === 0) return null;
     const fresh = others.filter((variant) => variant !== cursor.lastVariant);
     const pool = fresh.length > 0 ? fresh : others;
-    const variant =
-      pool.length > 0 ? pool[Math.floor(this.random() * pool.length)] : 1;
-    this.lastVariantByLayer[cursor.layerIndex] = variant;
-    cursor.lastVariant = variant;
-    return variant;
+    return pool[Math.floor(this.random() * pool.length)];
   }
 
   private placeNext(

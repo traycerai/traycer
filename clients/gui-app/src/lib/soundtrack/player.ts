@@ -270,7 +270,9 @@ export class TrackPlayer {
 
   /**
    * Each play waits for its own audio, so a slow decode holds back only its
-   * sublayer. A run that ended meanwhile drops what arrives for it.
+   * sublayer. A run that ended meanwhile drops what arrives for it. A report
+   * frees the sublayer, so it looks ahead again at once: on a fine grid its next
+   * sample may fall inside this window, and waiting for the timer would miss it.
    */
   private async place(phase: PlayingPhase, play: ScheduledPlay): Promise<void> {
     const layer = this.track.layers[play.layerIndex];
@@ -282,21 +284,23 @@ export class TrackPlayer {
         buffer.duration,
         this.output.currentTime() - phase.trackStart,
       );
-      if (startAt === null) return;
-      const when = phase.trackStart + startAt;
-      this.voices.push({
-        voice: this.layerGains[play.layerIndex].play(
-          buffer,
-          when,
-          SAMPLE_FADE_SECONDS,
-        ),
-        endsAt: when + buffer.duration,
-      });
+      if (startAt !== null) {
+        const when = phase.trackStart + startAt;
+        this.voices.push({
+          voice: this.layerGains[play.layerIndex].play(
+            buffer,
+            when,
+            SAMPLE_FADE_SECONDS,
+          ),
+          endsAt: when + buffer.duration,
+        });
+      }
     } catch (error) {
       if (this.phase !== phase) return;
       this.reportMissing(layer.name, play.variant, error);
       phase.scheduler.skip(play);
     }
+    this.lookAhead(phase, this.output.currentTime());
   }
 
   // Once per sample: a missing stem comes up again at every turn of its layer,
