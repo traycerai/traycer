@@ -1805,29 +1805,44 @@ describe("the task store floor", () => {
   const TASK_FLOOR_STOPPED_ASIDE =
     "Host task store could not be read; the task-store floor stood aside";
 
+  /** Every exit that returns before the floor reaches the task store. */
+  const FLOOR_EXITS_BEFORE_THE_TASK_STORE = [
+    "Host store-format floor cleared: the target is the installed archive",
+    "Host store-format floor not consulted",
+    "Host store-format floor stood aside",
+  ];
+
   /**
-   * The floor reached the task-store decision instead of returning before it.
+   * The floor reached the task-store DECISION instead of returning before it.
    *
    * Three exits return first, each logging its own line: the target is the
    * installed archive, the move is not a downgrade, and the target is off the
    * ladder. A case that writes a store and then takes one of them passes
    * without the floor ever reading what it wrote - which is how an inherited
-   * installed version silently turned one of these cases into an upgrade.
+   * installed version silently turned one of these cases into an upgrade. A
+   * fourth exit would need its line added here.
+   *
    * Asserted as the absence of all three rather than the presence of a
    * clearance line, because every clearance line past this point belongs to
    * the chat side, and a case about the task store should not redden when the
    * chat shortcut stops applying to it.
+   *
+   * The decision, not the read: `findTaskStoreFloorBlock` returns null without
+   * a line for a target the table does not judge, so a case still has to put
+   * its target inside the era it means to exercise.
    */
-  function expectFloorReachedTaskStore(
+  function expectFloorReachedTaskStoreDecision(
     logger: ILogger & { readonly calls: RecordedCall[] },
   ): void {
-    for (const message of [
-      "Host store-format floor cleared: the target is the installed archive",
-      "Host store-format floor not consulted",
-      "Host store-format floor stood aside",
-    ]) {
-      expect(logger.calls.some((call) => call.message === message)).toBe(false);
-    }
+    // Collected rather than asserted one by one, so a failure names the exit
+    // that fired instead of only the line that caught it.
+    expect(
+      logger.calls
+        .map((call) => call.message)
+        .filter((message) =>
+          FLOOR_EXITS_BEFORE_THE_TASK_STORE.includes(message),
+        ),
+    ).toEqual([]);
   }
 
   async function writeTaskStoreDb(
@@ -1864,7 +1879,7 @@ describe("the task store floor", () => {
       // installed build, or the move is an upgrade: `storeFloorApplicability`
       // sends every upgrade straight out, and nothing the case puts on disk
       // is ever read. A case that writes a store and expects no refusal calls
-      // `expectFloorReachedTaskStore`, which fails on that exit.
+      // `expectFloorReachedTaskStoreDecision`, which fails on that exit.
       installedVersion: "1.5.0",
       installedStoreFormats: { chatDb: 20 },
       provenance: NO_PROVENANCE,
@@ -2032,7 +2047,7 @@ describe("the task store floor", () => {
     expect(
       logger.calls.some((call) => call.message === TASK_FLOOR_STOPPED_ASIDE),
     ).toBe(false);
-    expectFloorReachedTaskStore(logger);
+    expectFloorReachedTaskStoreDecision(logger);
   });
 
   it("consent passes the task-only refusal and logs it at WARN", async () => {
@@ -2166,7 +2181,7 @@ describe("the task store floor", () => {
 
     // Before the refusal below, so it reads a logger holding only the
     // newest-era half's calls and isolates that half.
-    expectFloorReachedTaskStore(logger);
+    expectFloorReachedTaskStoreDecision(logger);
 
     const err = await refusalOf(rollbackInput(logger, {}));
     expect(err.details?.onDiskTaskStore).toBe(6);
