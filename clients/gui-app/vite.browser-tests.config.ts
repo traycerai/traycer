@@ -30,18 +30,12 @@ import { sandboxAssets } from "./vite/sandbox-assets.ts";
  * `build` is the same pages bundled, which CI serves with `vite preview`
  * (`BROWSER_TESTS_BUNDLE` in `playwright.config.ts`). A fixture on the dev
  * server fetches up to 3,500 modules and 150 MB in every test's fresh context;
- * bundled it fetches a few hundred chunks. `NODE_ENV=development` on the build keeps
- * the React and the `import.meta.env` the dev server gives them.
+ * bundled it fetches a few hundred chunks. `NODE_ENV=development` on the build
+ * keeps the React and the `import.meta.env` the dev server gives them.
  */
 const port = process.env.BROWSER_TESTS_PORT ?? "4178";
 const GUI_APP_ROOT = import.meta.dirname;
 const FIXTURE_DIR = "src/__tests__/browser";
-
-function filesUnder(directory: string): string[] {
-  return readdirSync(directory, { recursive: true, encoding: "utf8" }).map(
-    (name) => path.join(directory, name),
-  );
-}
 
 /**
  * Every module a spec imports at runtime, `import("/src/...")` inside a page.
@@ -49,12 +43,13 @@ function filesUnder(directory: string): string[] {
  * shares the page's module instance through the common chunks.
  */
 function modulesSpecsImport(): string[] {
-  const specs = filesUnder(path.join(GUI_APP_ROOT, "browser-tests")).filter(
-    (file) => file.endsWith(".ts"),
+  const root = path.join(GUI_APP_ROOT, "browser-tests");
+  const specs = readdirSync(root, { recursive: true, encoding: "utf8" }).filter(
+    (name) => name.endsWith(".ts"),
   );
   const modules = new Set<string>();
   for (const spec of specs) {
-    const source = readFileSync(spec, "utf8");
+    const source = readFileSync(path.join(root, spec), "utf8");
     for (const match of source.matchAll(/import\(\s*["'`]\/(src\/[^"'`]+)/g)) {
       modules.add(match[1]);
     }
