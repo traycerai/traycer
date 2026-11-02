@@ -60,3 +60,9 @@ later merge never cancels an earlier merge's run.
 - The internal repository's nightly staging train and its promotion to
   production both refuse a pinned commit of this repository whose push checks
   are not all green.
+- Each gui-app shard holds its test files to 10 s
+  (`scripts/ci-gui-test-budget.mjs`, on the shard's JUnit report). A file over
+  it runs once more alone, and only a second reading over 10 s fails, unless
+  `clients/gui-app/test-budget-allowlist.json` names the file with a reason.
+- A time or size measurement too long for that budget is a `*.measure.ts` file
+  and runs nightly in `measurements.yml`, not on the merge run.
