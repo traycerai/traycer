@@ -710,6 +710,11 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
   let confirming: Confirming | null = null;
   /** The session is over; nothing scheduled by this loop acts any more. */
   let disposed = false;
+  /**
+   * Counts the requests that finished routing, fragments aside: an act that
+   * ran keeps Not what I meant only while no later request has been routed.
+   */
+  let routedRequests = 0;
   /** The question the voice just asked about words it handed back, for the next route. */
   let askedQuestion: {
     readonly text: string;
@@ -1122,13 +1127,16 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
     }
     store.getState().consumeReservation(entry.seqs);
     settleDelegation(entry.delegationId);
+    const routedBefore = routedRequests;
     const outcome = await deps.act(decision.row, text, decision.turnId);
     if (store.getState().sessionToken !== entry.sessionToken) return;
     if (outcome.kind === "refused") {
       deps.notify(outcome.say, delegationOf(entry));
       return;
     }
-    store.getState().setExecutedAct(seen);
+    // A request routed while this act ran is the person's latest: what it left
+    // for Not what I meant, nothing or its own act, stays.
+    if (routedRequests === routedBefore) store.getState().setExecutedAct(seen);
   }
 
   /** Files a request the page could not serve, when the router's answer is known. */
@@ -1595,6 +1603,7 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
       // A new request: Not what I meant is offered for the act that ran last
       // only until the person asks for something else.
       if (routed.decision.kind !== "fragment") {
+        routedRequests += 1;
         store.getState().setExecutedAct(null);
       }
       await execute(entry, routed);
