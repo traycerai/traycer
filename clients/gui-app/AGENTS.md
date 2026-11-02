@@ -67,13 +67,21 @@ Generated — don't hand-edit: `src/routeTree.gen.ts`, `dist/`, `.tanstack/`.
 - **`cn(...)`** from `@/lib/utils` for all composed `className`s. No template
   literals / `+` / `.join(" ")`. Static single strings OK.
 - **Fluid layout sizing** — `w-full`, `max-w-*`, viewport caps. No fixed px/rem
-  for layout surfaces (icons / touch targets OK). One recorded exception, a
-  SIMULATED viewport, where the pixel size is the thing being simulated
-  rather than a layout choice:
+  for layout surfaces (icons / touch targets OK). Two recorded exceptions,
+  where the pixel size is the thing being decided rather than a layout
+  choice:
   - The layout inspector is 380px wide (`layout-editor.css`), always under
     `max-width: 100%`. It is an instrument panel like DevTools: a fluid width
     would change the measured width of the specimen stage, which is the thing
     the user is judging.
+  - The phone shell's level-2 column (`MobileLevel2Column`) is 256px or 220px
+    wide, the answer of `lib/layout/mobile-layout-form.ts`. That resolver is
+    a width BUDGET: the pane keeps its 384px minimum and the column takes
+    what is left up to the bots sidebar's measured 256, down to the 220 that
+    still shows a row's name, and draws nowhere the budget does not hold.
+    The strip beside it is budgeted the same way from its own px tokens. A
+    fluid column would make the pane's width a function of the column's
+    content and void the thresholds `mobile-layout-form.test.ts` holds.
 
   A new fixed-px layout width needs the same kind of argument.
   (The previous entry named `panels/layout/status-bar-preview.tsx`, deleted
