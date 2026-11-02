@@ -1,4 +1,3 @@
-import type { SoundtrackOutput } from "./output";
 import type { Layer, VariableTrack } from "./variable-sound";
 
 export interface StemSource {
@@ -8,6 +7,10 @@ export interface StemSource {
     layer: Layer,
     variant: number,
   ): Promise<AudioBuffer>;
+}
+
+export interface StemDecoder {
+  decode(bytes: ArrayBuffer): Promise<AudioBuffer>;
 }
 
 export interface StemManifest {
@@ -55,16 +58,13 @@ function stemUrl(
  */
 export class ManifestStemSource implements StemSource {
   private readonly manifest: StemManifest;
-  private readonly decoder: Pick<SoundtrackOutput, "decode">;
+  private readonly decoder: StemDecoder;
   private readonly inFlight = new Map<string, Promise<AudioBuffer>>();
   /** Least recently used first: a Map iterates in insertion order. */
   private readonly decoded = new Map<string, AudioBuffer>();
   private decodedTotalBytes = 0;
 
-  constructor(
-    manifest: StemManifest,
-    decoder: Pick<SoundtrackOutput, "decode">,
-  ) {
+  constructor(manifest: StemManifest, decoder: StemDecoder) {
     this.manifest = manifest;
     this.decoder = decoder;
   }

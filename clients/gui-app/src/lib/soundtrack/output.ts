@@ -1,3 +1,5 @@
+import type { StemDecoder } from "./stems";
+
 /** A sample scheduled or sounding. */
 export interface OutputVoice {
   /** Fades to silence from now over `fadeSeconds`, then stops. */
@@ -13,13 +15,12 @@ export interface OutputGain {
   play(buffer: AudioBuffer, when: number, fadeInSeconds: number): OutputVoice;
 }
 
-/** All the soundtrack engine asks of Web Audio. */
+/** All a player asks of Web Audio. */
 export interface SoundtrackOutput {
   /** The clock every scheduled time is on, in seconds. */
   currentTime(): number;
   /** A gain that feeds the output. */
   createBus(initial: number): OutputGain;
-  decode(bytes: ArrayBuffer): Promise<AudioBuffer>;
 }
 
 // A voice outlives its fade by this much, so the stop never clips the ramp.
@@ -95,7 +96,7 @@ class WebAudioGain implements OutputGain {
  * `destination` is where the mix goes, so that a caller can put its own volume
  * or filter in front of the speakers.
  */
-export class WebAudioOutput implements SoundtrackOutput {
+export class WebAudioOutput implements SoundtrackOutput, StemDecoder {
   private readonly context: BaseAudioContext;
   private readonly destination: AudioNode;
 
