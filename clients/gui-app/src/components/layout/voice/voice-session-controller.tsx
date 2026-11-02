@@ -35,6 +35,10 @@ import {
 import { useVoiceAvailabilityQuery } from "@/hooks/voice/use-voice-availability-query";
 import { useVoiceDirectory } from "@/hooks/voice/use-voice-directory";
 import {
+  useVoiceView,
+  VoiceViewPaletteItems,
+} from "@/hooks/voice/use-voice-view";
+import {
   useVoiceMicrophoneAccessMutation,
   useVoiceRouteMutation,
   useVoiceSessionEndMutation,
@@ -423,6 +427,7 @@ export function VoiceSessionController(): ReactNode {
     appHostId,
     botsSupported && phase !== "idle",
   );
+  const view = useVoiceView(phase !== "idle");
   const { mutateAsync: routeAsync } = useVoiceRouteMutation();
   const decideRef = useRef<(request: RouteRequest) => Promise<RoutedDecision>>(
     () => Promise.resolve({ kind: "refused", reason: "unavailable" }),
@@ -432,9 +437,11 @@ export function VoiceSessionController(): ReactNode {
     recheckRef.current = directory.current;
     decideRef.current = async (request) => {
       let snapshot = directory.current();
+      const viewSnapshot = view.current();
       const answer = await routeAsync(
         routerRequestBody(
           snapshot,
+          viewSnapshot,
           {
             segments: request.segments,
             askedQuestion: request.askedQuestion,
@@ -459,9 +466,14 @@ export function VoiceSessionController(): ReactNode {
       ) {
         snapshot = await directory.refresh();
       }
-      return resolveRoute(result, snapshot, request.segments.length);
+      return resolveRoute(
+        result,
+        snapshot,
+        viewSnapshot,
+        request.segments.length,
+      );
     };
-  }, [directory, routeAsync]);
+  }, [directory, routeAsync, view]);
 
   const placeOf = useCallback(
     (botId: string, threadId: string | null): string =>
@@ -1329,6 +1341,7 @@ export function VoiceSessionController(): ReactNode {
       ) : null}
       {running ? (
         <>
+          <VoiceViewPaletteItems onItems={view.setPaletteItems} />
           <VoiceQueueSources owner={voiceQueue} />
           <VoiceCards
             owner={voiceQueue}

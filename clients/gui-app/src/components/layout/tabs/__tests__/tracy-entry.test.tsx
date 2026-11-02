@@ -1123,11 +1123,21 @@ describe("the fixed Tracy entry - signals", () => {
   );
 
   describe("the unread count", () => {
+    // The rail tile's chip clips what overhangs it, so the row draws the count.
     const PLACEMENTS = [
-      { placement: "top strip", mountEntry: () => mountTopStrip("/") },
-      { placement: "vertical strip", mountEntry: () => mountSideStrip("/") },
+      {
+        placement: "top strip",
+        countTestId: "tracy-entry-unread-count",
+        mountEntry: () => mountTopStrip("/"),
+      },
+      {
+        placement: "vertical strip",
+        countTestId: "tracy-entry-unread-count",
+        mountEntry: () => mountSideStrip("/"),
+      },
       {
         placement: "collapsed rail",
+        countTestId: "side-tab-rail-count",
         mountEntry: () => {
           useSideTabStripStore.setState({ collapsed: true });
           return mountSideStrip("/");
@@ -1147,15 +1157,25 @@ describe("the fixed Tracy entry - signals", () => {
     }
 
     it.each(PLACEMENTS)(
-      "is drawn on the glyph in the $placement and named by the entry",
-      async ({ mountEntry }) => {
+      "is drawn on the glyph in the $placement, outside the rail tile's chip, and named by the entry",
+      async ({ placement, countTestId, mountEntry }) => {
         tracyIndicators({ unreadDone: true, unreadCount: 3 });
         mountEntry();
 
         const entry = await screen.findByTestId("tab-tracy");
-        expect(
-          within(entry).getByTestId("tracy-entry-unread-count").textContent,
-        ).toBe("3");
+        const count = within(entry).getByTestId(countTestId);
+        expect(count.textContent).toBe("3");
+        const glyph = within(entry).getByTestId("tracy-entry-icon");
+        if (placement === "collapsed rail") {
+          const chip = within(entry).getByTestId("side-tab-monogram-chip");
+          expect(chip.contains(glyph)).toBe(true);
+          expect(chip.contains(count)).toBe(false);
+          expect(
+            within(chip).queryByTestId("tracy-entry-unread-count"),
+          ).toBeNull();
+        } else {
+          expect(count.parentElement?.contains(glyph)).toBe(true);
+        }
         expect(entry.getAttribute("aria-label")).toBe("Tracy, 3 unread");
         expect(entry.hasAttribute("data-unread")).toBe(true);
         // The count stands for the rail's unread badge.
@@ -1176,14 +1196,12 @@ describe("the fixed Tracy entry - signals", () => {
 
     it.each(PLACEMENTS)(
       "is not drawn in the $placement while nothing is unread",
-      async ({ mountEntry }) => {
+      async ({ countTestId, mountEntry }) => {
         tracyIndicators({ unreadCount: 0 });
         mountEntry();
 
         const entry = await screen.findByTestId("tab-tracy");
-        expect(
-          within(entry).queryByTestId("tracy-entry-unread-count"),
-        ).toBeNull();
+        expect(within(entry).queryByTestId(countTestId)).toBeNull();
         expect(entry.getAttribute("aria-label")).toBe("Tracy");
         expect(entry.hasAttribute("data-unread")).toBe(false);
       },
@@ -1191,14 +1209,12 @@ describe("the fixed Tracy entry - signals", () => {
 
     it.each(PLACEMENTS)(
       "is not drawn in the $placement for a host that does not count, which keeps the bold name or the rail's unread badge",
-      async ({ placement, mountEntry }) => {
+      async ({ placement, countTestId, mountEntry }) => {
         tracyIndicators({ unreadDone: true, unreadCount: null });
         mountEntry();
 
         const entry = await screen.findByTestId("tab-tracy");
-        expect(
-          within(entry).queryByTestId("tracy-entry-unread-count"),
-        ).toBeNull();
+        expect(within(entry).queryByTestId(countTestId)).toBeNull();
         expect(entry.getAttribute("aria-label")).toBe("Tracy");
         expect(entry.hasAttribute("data-unread")).toBe(true);
         if (placement === "top strip") {

@@ -8,6 +8,7 @@ import type {
   RouteRefusal,
   RoutedDecision,
 } from "@/lib/voice/router";
+import type { VoiceViewAgent } from "@/lib/voice/view";
 import {
   joinSegments,
   type CardKey,
@@ -308,13 +309,17 @@ type LoopRefusal =
   /** Another post is already waiting for the person's yes or no. */
   | "confirm-busy"
   /** The tab navigation to the destination was refused or undone. */
-  | "move-failed";
+  | "move-failed"
+  /** A request to the page in front that the voice cannot carry out yet. */
+  | "not-here-yet";
 
 const REFUSAL_TEXT: Record<LoopRefusal, string> = {
   unparseable:
     "Nothing was posted: the request was not clear enough to act on. The person can say it again.",
   "unknown-target":
     "Nothing was posted: the bot or thread named was not one the person has. The person can say it again.",
+  "unknown-action":
+    "Nothing was done: that is not something this page offers. The person can say it again.",
   "invalid-span":
     "Nothing was posted: the request was not clear enough to act on. The person can say it again.",
   unavailable:
@@ -326,6 +331,7 @@ const REFUSAL_TEXT: Record<LoopRefusal, string> = {
     "Nothing changed: the move to that bot or thread did not happen. The person can say it again.",
   "confirm-busy":
     "Nothing was posted: an earlier post is still waiting for the person's yes or no. The person can say this one again after answering.",
+  "not-here-yet": "I can't do that here yet.",
 };
 
 const DECLINED_TEXT = "Okay, I did not post it.";
@@ -347,6 +353,20 @@ function confirmQuestion(target: BoundTarget, uncertain: boolean): string {
   return uncertain
     ? `Did you mean ${scoped}? Say yes to post it there, or no.`
     : `Should I post that to ${scoped}? Say yes or no.`;
+}
+
+/** What the agent on the page is doing, as the voice says it. */
+function agentStatusLine(agent: VoiceViewAgent): string {
+  switch (agent.state) {
+    case "working":
+      return `${agent.title} is working.`;
+    case "waiting":
+      return `${agent.title} is waiting on an approval.`;
+    case "background":
+      return `${agent.title} has finished its turn, with work still running in the background.`;
+    case "idle":
+      return `${agent.title} is idle.`;
+  }
 }
 
 /** Where the person is after a navigation, for the voice to keep. */
@@ -885,6 +905,25 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
     askedQuestion = null;
   }
 
+  /** A deferred verb: the words are spent, and a refusal is said. */
+  function runDeferred(
+    entry: RoutingEntry,
+    decision: Extract<RoutedDecision, { readonly kind: "deferred" }>,
+  ): void {
+    store.getState().consumeReservation(entry.seqs);
+    settleDelegation(entry.delegationId);
+    const outcome = executeDeferredVerb({
+      verb: decision.verb,
+      target: decision.target,
+      itemId: decision.itemId,
+      threadNamed: decision.threadNamed,
+      delegationId: delegationOf(entry),
+    });
+    if (outcome.kind === "refused") {
+      deps.notify(outcome.say, delegationOf(entry));
+    }
+  }
+
   /** Carries out one routed decision for the words `entry` reserved. */
   async function execute(
     entry: RoutingEntry,
@@ -913,21 +952,18 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
       case "answer":
         answerRouted(entry, decision);
         return;
-      case "deferred": {
+      case "act":
+      case "missing":
+        refuse(entry, "not-here-yet");
+        return;
+      case "agent-status":
         store.getState().consumeReservation(entry.seqs);
         settleDelegation(entry.delegationId);
-        const outcome = executeDeferredVerb({
-          verb: decision.verb,
-          target: decision.target,
-          itemId: decision.itemId,
-          threadNamed: decision.threadNamed,
-          delegationId: delegationOf(entry),
-        });
-        if (outcome.kind === "refused") {
-          deps.notify(outcome.say, delegationOf(entry));
-        }
+        deps.notify(agentStatusLine(decision.agent), delegationOf(entry));
         return;
-      }
+      case "deferred":
+        runDeferred(entry, decision);
+        return;
       case "navigate":
         await move(entry, decision.target);
         return;

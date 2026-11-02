@@ -398,6 +398,12 @@ export interface VoiceSessionState {
    * compares at acceptance: a changed generation means the person moved.
    */
   readonly selectionGeneration: number;
+  /**
+   * Bumped when the page in front changes: the active tab, the active tile
+   * owner or the Settings section. A page action binds it; the focus has its
+   * own generation above, since looking elsewhere does not re-aim a post.
+   */
+  readonly viewGeneration: number;
   readonly activity: SpeechActivity;
   readonly queue: ReadonlyArray<QueueItem>;
   readonly pendingAction: PendingAction | null;
@@ -482,6 +488,8 @@ export interface VoiceSessionState {
    * focus stays, the generation moves.
    */
   readonly selectionReturned: () => void;
+  /** The page in front changed. */
+  readonly viewChanged: () => void;
   readonly appendInputSegment: (text: string, at: number) => void;
   /** The open utterance: every unreserved segment, as said. */
   readonly openSpan: () => string;
@@ -554,6 +562,7 @@ export const useVoiceSessionStore = create<VoiceSessionState>()((set, get) => ({
   segments: NO_SEGMENTS,
   pendingDelegationId: null,
   selectionGeneration: 0,
+  viewGeneration: 0,
   activity: CLEAR_ACTIVITY,
   queue: NO_QUEUE,
   pendingAction: null,
@@ -627,6 +636,7 @@ export const useVoiceSessionStore = create<VoiceSessionState>()((set, get) => ({
   },
   selectionReturned: () =>
     set({ selectionGeneration: get().selectionGeneration + 1 }),
+  viewChanged: () => set({ viewGeneration: get().viewGeneration + 1 }),
   appendInputSegment: (text, at) => {
     if (text.length === 0) return;
     const seq = nextSegmentSeq;

@@ -27,6 +27,7 @@ import {
 } from "../card-desk";
 import { NOTHING_WAITING_NOTICE } from "../deferred-verbs";
 import { resolveRoute, type RouterResult } from "../router";
+import { EMPTY_VIEW } from "./fixtures/empty-view";
 import type { SpeechItem } from "../scheduler";
 import { createVoiceQueue, type VoiceQueue } from "../voice-queue";
 import {
@@ -117,7 +118,14 @@ function route(
 ): RouterResult {
   return {
     action,
-    target: { environmentId, botId, threadId: null, itemId: null },
+    target: {
+      environmentId,
+      botId,
+      threadId: null,
+      itemId: null,
+      actionId: null,
+      agentId: null,
+    },
     span: { fromSegment: 0, toSegment: segments - 1 },
     uncertain: false,
     question: null,
@@ -185,7 +193,12 @@ function build(wiring: Wiring, directory: VoiceDirectory) {
       const next = answers.shift();
       if (next === undefined) throw new Error("no answer queued");
       // The directory is read when the route is made, as the real one does.
-      return resolveRoute(await next(), directory, request.segments.length);
+      return resolveRoute(
+        await next(),
+        directory,
+        EMPTY_VIEW,
+        request.segments.length,
+      );
     },
     recheck: (tuple) => wiring.recheckHolds && tupleHolds(directory, tuple),
     navigate: (target: BoundTarget) => {
@@ -479,7 +492,14 @@ describe("a routed verb on the queue", () => {
   ): RouterResult {
     return {
       ...route(action, null, null, 2),
-      target: { environmentId: null, botId: null, threadId: null, itemId },
+      target: {
+        environmentId: null,
+        botId: null,
+        threadId: null,
+        itemId,
+        actionId: null,
+        agentId: null,
+      },
     };
   }
 
@@ -597,6 +617,8 @@ describe("a routed verb on the queue", () => {
           botId: null,
           threadId: null,
           itemId: "r-1",
+          actionId: null,
+          agentId: null,
         },
       }),
     );
@@ -661,6 +683,8 @@ describe("a routed verb on the queue", () => {
           botId: CI,
           threadId,
           itemId: null,
+          actionId: null,
+          agentId: null,
         },
       };
     }
@@ -697,6 +721,8 @@ describe("a routed verb on the queue", () => {
             botId: null,
             threadId: null,
             itemId: "r-1",
+            actionId: null,
+            agentId: null,
           },
         }),
       );
