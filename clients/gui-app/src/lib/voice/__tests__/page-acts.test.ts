@@ -462,6 +462,8 @@ function composerIs(composer: PublishedComposer): void {
     workspaceBlocked: composer.workspaceBlocked,
     imagesUnsupported: composer.imagesUnsupported,
     attachmentPreparationPending: composer.attachmentPreparationPending,
+    restingSandbox: false,
+    submit: () => false,
     modelSlug: () => composer.modelSlug,
     runSettings: () => composer.settings,
   });
@@ -842,6 +844,7 @@ describe("a spoken stop that waits for its yes", () => {
       waitingOn: null,
       turnId: ACTIVE_TURN.turnId,
     },
+    agentAsleep: false,
     agentTurnRunning: true,
     approvals: [],
     palette: NO_PALETTE_ITEMS,

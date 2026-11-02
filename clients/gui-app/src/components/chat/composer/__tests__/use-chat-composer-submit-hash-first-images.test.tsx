@@ -200,6 +200,7 @@ function mountSubmit(args: {
       onSubmitMessage: args.onSubmitMessage,
       onSideChat: null,
       targetHostId: null,
+      restingSandbox: false,
       queueEditTargetId: null,
       getDraftBlobBridgeSupported: () => false,
     }),

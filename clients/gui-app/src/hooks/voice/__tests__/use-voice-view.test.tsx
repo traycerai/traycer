@@ -36,6 +36,7 @@ import {
   __getOpenEpicRegistryForTests,
   handleHostIds,
 } from "@/lib/registries/epic-session-registry";
+import { publishComposerSendState } from "@/lib/chats/composer-send-gates";
 import { SETTINGS_SECTIONS } from "@/lib/settings-sections";
 import type { VoicePaletteRow } from "@/lib/voice/page-acts";
 import { NO_PALETTE_ITEMS, type VoiceView } from "@/lib/voice/view";
@@ -464,6 +465,67 @@ describe("the view of a task with a working agent", () => {
     expect(view.page).toMatchObject({ kind: "task", tile: "Plan" });
     expect(view.agent).toBeNull();
     expect(actionsOf(view).some((id) => id.startsWith("agent."))).toBe(false);
+  });
+});
+
+describe("the tell row of an agent whose sandbox rests", () => {
+  const retractions: Array<() => void> = [];
+
+  afterEach(() => {
+    for (const retract of retractions.splice(0)) retract();
+  });
+
+  /** A composer for the agent's chat in the tile `tileInstanceId`, as the composer publishes it. */
+  function publishComposer(tileInstanceId: string, restingSandbox: boolean) {
+    retractions.push(
+      publishComposerSendState(HOST_ID, AGENT.id, tileInstanceId, {
+        sendDisabled: false,
+        workspaceBlocked: false,
+        imagesUnsupported: false,
+        attachmentPreparationPending: false,
+        restingSandbox,
+        submit: () => false,
+        modelSlug: () => "model-a",
+        runSettings: () => ({
+          ultracode: false,
+          harnessId: "claude",
+          model: "model-a",
+          permissionMode: "supervised",
+          reasoningEffort: null,
+          serviceTier: null,
+          agentMode: "regular",
+          profileId: null,
+        }),
+      }),
+    );
+  }
+
+  function tellRow(view: VoiceView) {
+    return view.rows.find((row) => row.action === "agent.tell:chat-1");
+  }
+
+  it("asks for a yes when the composer in the active tile says the sandbox rests", () => {
+    taskWithWorkingAgent();
+    publishComposer(AGENT.instanceId, true);
+    const mounted = mount("/", { enabled: true, palette: true });
+
+    expect(tellRow(mounted.handle().current())?.confirm).toBe(true);
+  });
+
+  it("asks for nothing when the composer in the active tile says it is awake", () => {
+    taskWithWorkingAgent();
+    publishComposer(AGENT.instanceId, false);
+    const mounted = mount("/", { enabled: true, palette: true });
+
+    expect(tellRow(mounted.handle().current())?.confirm).toBe(false);
+  });
+
+  it("asks for nothing on account of a resting composer in another tile showing the same chat", () => {
+    taskWithWorkingAgent();
+    publishComposer("inst-chat-elsewhere", true);
+    const mounted = mount("/", { enabled: true, palette: true });
+
+    expect(tellRow(mounted.handle().current())?.confirm).toBe(false);
   });
 });
 

@@ -221,6 +221,7 @@ function mountSubmit(args: {
       onSubmitMessage: args.onSubmitMessage,
       onSideChat: null,
       targetHostId: null,
+      restingSandbox: false,
       queueEditTargetId: null,
       // The gate is off in these fixtures: they predate it and assert the
       // inline behaviour, which is what `false` preserves exactly.
@@ -860,6 +861,7 @@ describe("useChatComposerSubmit: a refusal at the live re-check is logged", () =
           onSubmitMessage: submit,
           onSideChat: null,
           targetHostId: "host-tab",
+          restingSandbox: false,
           queueEditTargetId: null,
           getDraftBlobBridgeSupported: () => false,
         }),

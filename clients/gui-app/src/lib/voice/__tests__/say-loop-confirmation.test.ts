@@ -648,6 +648,7 @@ const TASK_PAGE: VoiceView = composeVoiceView({
     waitingOn: null,
     turnId: null,
   },
+  agentAsleep: false,
   agentTurnRunning: false,
   approvals: [],
   palette: {
@@ -671,6 +672,7 @@ function runningPage(turnId: string): VoiceView {
       waitingOn: null,
       turnId,
     },
+    agentAsleep: false,
     agentTurnRunning: true,
     approvals: [],
     palette: NO_PALETTE_ITEMS,

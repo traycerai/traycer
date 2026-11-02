@@ -2,6 +2,7 @@ import type {
   ChatActiveTurn,
   ChatRunSettings,
 } from "@traycer/protocol/host/agent/gui/subscribe";
+import type { ChatComposerSubmitInput } from "@/components/chat/composer/chat-composer";
 
 /**
  * Whether a message can be sent to a chat now, as one answer for everyone who
@@ -55,6 +56,10 @@ export interface ComposerSendState {
   readonly workspaceBlocked: boolean;
   readonly imagesUnsupported: boolean;
   readonly attachmentPreparationPending: boolean;
+  /** A send here wakes the chat's sandbox first, and only {@link submit} can. */
+  readonly restingSandbox: boolean;
+  /** What the composer's own send hands over, leaving its draft alone. */
+  readonly submit: (input: ChatComposerSubmitInput) => boolean;
   /** Read when sending: the toolbar moves without a render of this state. */
   readonly modelSlug: () => string;
   readonly runSettings: () => ChatRunSettings;

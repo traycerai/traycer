@@ -1118,7 +1118,7 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
     holdForYes(
       entry,
       { kind: "act", decision, text },
-      readBackQuestion(decision.row, view.page),
+      readBackQuestion(decision.row, view.page, text),
     );
   }
 

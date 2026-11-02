@@ -14,6 +14,7 @@ import {
   composerSendRefusal,
   composerSendStateFor,
   type ComposerSendRefusal,
+  type ComposerSendState,
 } from "@/lib/chats/composer-send-gates";
 import { decideSteerSettings } from "@/lib/chats/decide-steer-settings";
 import { resolveSubmitDeliveryPolicy } from "@/lib/chats/resolve-steer-submit";
@@ -23,7 +24,7 @@ import type { CommandContext, CommandItem } from "@/lib/commands/types";
 import { buildSubmittedChatJSONContent } from "@/lib/composer/tiptap-json-content";
 import { appLogger } from "@/lib/logger";
 import type { VerbOutcome } from "@/lib/voice/deferred-verbs";
-import type { VoiceViewRow } from "@/lib/voice/view";
+import { tellWakesSandbox, type VoiceViewRow } from "@/lib/voice/view";
 import { worktreeDraftCommitsRebind } from "@/lib/worktree/owner-teardown-snapshot";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
@@ -82,6 +83,8 @@ export const AGENT_NO_WORKSPACE_NOTICE = "Its workspace isn't ready.";
 export const AGENT_WORKSPACE_CHANGE_NOTICE =
   "It has a workspace change waiting. Send this one from its message box.";
 export const AGENT_NOT_READY_NOTICE = "It isn't ready for a message yet.";
+export const AGENT_ASLEEP_NOTICE =
+  "The sandbox went to sleep. Say that again if you still want it sent.";
 export const NOT_DELIVERED_NOTICE = "That didn't reach the agent.";
 export const ALREADY_DECIDED_NOTICE = "That was already decided.";
 export const APPROVAL_NOT_WAITING_NOTICE =
@@ -173,9 +176,37 @@ function commitsStagedRebind(
   });
 }
 
+/** Why a tell stops here, in the voice's words, with the composer's answer first. */
+function tellRefusal(
+  chat: ChatSessionState,
+  session: VoiceAgentSession,
+  composer: ComposerSendState,
+  wakeAskedFor: boolean,
+): string | null {
+  const refusal = composerSendRefusal({
+    activeTurnStatus: stopRequested(chat) ? "stopping" : turnStatusOf(chat),
+    hasPendingApprovals: composerHasBlockingApprovals(
+      chat.pendingApprovals,
+      chat.pendingFileEditApprovals.length,
+    ),
+    sendDisabled: composer.sendDisabled,
+    workspaceBlocked: composer.workspaceBlocked,
+    imagesUnsupported: composer.imagesUnsupported,
+    attachmentPreparationPending: composer.attachmentPreparationPending,
+  });
+  if (refusal !== null) return COMPOSER_REFUSAL_NOTICE[refusal];
+  // Waking costs, and this request was not read back as one that would. A send
+  // to a resting sandbox carries a staged change of folder, and asks nothing.
+  if (composer.restingSandbox) return wakeAskedFor ? null : AGENT_ASLEEP_NOTICE;
+  return commitsStagedRebind(chat, session)
+    ? AGENT_WORKSPACE_CHANGE_NOTICE
+    : null;
+}
+
 function tellAgent(
   chatId: string,
   text: string,
+  wakeAskedFor: boolean,
   reads: PageActReads,
 ): VerbOutcome {
   const session = reads.agentSession(chatId);
@@ -188,21 +219,8 @@ function tellAgent(
   );
   if (composer === null) return refused(AGENT_CANT_TAKE_NOTICE);
   const chat = session.handle.store.getState();
-  const refusal = composerSendRefusal({
-    activeTurnStatus: stopRequested(chat) ? "stopping" : turnStatusOf(chat),
-    hasPendingApprovals: composerHasBlockingApprovals(
-      chat.pendingApprovals,
-      chat.pendingFileEditApprovals.length,
-    ),
-    sendDisabled: composer.sendDisabled,
-    workspaceBlocked: composer.workspaceBlocked,
-    imagesUnsupported: composer.imagesUnsupported,
-    attachmentPreparationPending: composer.attachmentPreparationPending,
-  });
-  if (refusal !== null) return refused(COMPOSER_REFUSAL_NOTICE[refusal]);
-  if (commitsStagedRebind(chat, session)) {
-    return refused(AGENT_WORKSPACE_CHANGE_NOTICE);
-  }
+  const refusal = tellRefusal(chat, session, composer, wakeAskedFor);
+  if (refusal !== null) return refused(refusal);
   const sender = userMessageSenderForProfile(useAuthStore.getState().profile);
   if (sender === null || composerModelUnresolved(composer.modelSlug())) {
     return refused(AGENT_NOT_READY_NOTICE);
@@ -212,6 +230,20 @@ function tellAgent(
     plainTextPromptContent(text),
     null,
   );
+  // Only the composer's own send wakes a sandbox and holds the message for it.
+  if (composer.restingSandbox) {
+    return composer.submit({
+      content,
+      contentText: text,
+      attachments: [],
+      settings,
+      deliveryPolicy: deliveryPolicyOf(chat, settings),
+      restore: { content, browserAnnotations: [] },
+      restartConfirmed: false,
+    })
+      ? EXECUTED
+      : refused(NOT_DELIVERED_NOTICE);
+  }
   const marksTitlePending = shouldGenerateChatTitleForSubmittedMessage({
     chat: chat.chat,
     messages: chat.messages,
@@ -363,7 +395,7 @@ function runRow(input: PageActInput): VerbOutcome | Promise<VerbOutcome> {
   const { row, text, turnId, reads } = input;
   const { action } = row;
   const tell = idAfter(action, "agent.tell");
-  if (tell !== null) return tellAgent(tell, text, reads);
+  if (tell !== null) return tellAgent(tell, text, tellWakesSandbox(row), reads);
   const stop = idAfter(action, "agent.stop");
   if (stop !== null) return stopAgent(stop, turnId, reads);
   const approve = idAfter(action, "approval.approve");

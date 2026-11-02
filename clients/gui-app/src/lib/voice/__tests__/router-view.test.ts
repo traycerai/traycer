@@ -374,6 +374,7 @@ function probeViewOf(name: ProbeViewName): VoiceView {
   return composeVoiceView({
     page,
     agent,
+    agentAsleep: false,
     agentTurnRunning: probe.actions.some((row) =>
       row.action.startsWith("agent.stop:"),
     ),
@@ -755,6 +756,7 @@ function round2ViewOf(name: Round2Name): VoiceView {
   return composeVoiceView({
     page,
     agent,
+    agentAsleep: false,
     agentTurnRunning,
     approvals,
     palette,
@@ -1212,6 +1214,7 @@ const TASK_VIEW = composeVoiceView({
     waitingOn: null,
     turnId: null,
   },
+  agentAsleep: false,
   agentTurnRunning: true,
   approvals: [],
   palette: {
@@ -1263,6 +1266,7 @@ describe("resolveRoute against the view", () => {
         waitingOn: null,
         turnId: "turn-7",
       },
+      agentAsleep: false,
       agentTurnRunning: true,
       approvals: [],
       palette: NO_PALETTE_ITEMS,
@@ -1450,6 +1454,7 @@ describe("resolveRoute naming a row by what follows its last colon", () => {
       waitingOn: null,
       turnId: null,
     },
+    agentAsleep: false,
     agentTurnRunning: true,
     approvals: [],
     palette: NO_PALETTE_ITEMS,
@@ -1607,6 +1612,7 @@ describe("the say loop with a page action or a question about the agent", () => 
           waitingOn: null,
           turnId: null,
         },
+        agentAsleep: false,
         agentTurnRunning: false,
         approvals: [],
         palette: NO_PALETTE_ITEMS,
@@ -1643,6 +1649,7 @@ function compose(overrides: Partial<VoiceViewSources>): VoiceView {
   return composeVoiceView({
     page: { kind: "task", title: "Tracy Bots", tile: null },
     agent: null,
+    agentAsleep: false,
     agentTurnRunning: false,
     approvals: [],
     palette: NO_PALETTE_ITEMS,
@@ -1883,7 +1890,7 @@ describe("readBackQuestion", () => {
       approvals: [{ id: "ap_1", summary: "Run bun install" }],
       palette: CLOSING_COMMANDS,
     });
-    return readBackQuestion(rowOf(view, action), view.page);
+    return readBackQuestion(rowOf(view, action), view.page, "");
   }
 
   const TASK: VoicePage = {
@@ -1920,6 +1927,40 @@ describe("readBackQuestion", () => {
     },
   ])("reads $name", ({ action, question }) => {
     expect(questionFor(TASK, action)).toBe(question);
+  });
+
+  it("reads a tell to an agent whose sandbox rests as waking it, with the words to be sent", () => {
+    const view = compose({
+      page: TASK,
+      agent: WORKING_AGENT,
+      agentAsleep: true,
+    });
+
+    expect(
+      readBackQuestion(
+        rowOf(view, "agent.tell:chat_1"),
+        view.page,
+        "use the other branch",
+      ),
+    ).toBe(
+      "The sandbox is asleep. Wake it and send: use the other branch. Yes?",
+    );
+  });
+
+  it("reads a tell to an awake agent, which only an unsure route asks about, by its label and not its words", () => {
+    const view = compose({
+      page: TASK,
+      agent: WORKING_AGENT,
+      agentAsleep: false,
+    });
+
+    expect(
+      readBackQuestion(
+        rowOf(view, "agent.tell:chat_1"),
+        view.page,
+        "use the other branch",
+      ),
+    ).toBe("Tell the agent (Main agent) in Tracy Bots. Yes?");
   });
 
   it("names only the task for a tab close while an overlay holds the keys and no tile is active", () => {

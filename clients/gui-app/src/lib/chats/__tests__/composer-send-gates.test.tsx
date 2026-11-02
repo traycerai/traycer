@@ -6,16 +6,26 @@ import type {
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport/chat-stream-client";
 import type { ReactNode } from "react";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { SandboxCatalogue } from "@traycer/protocol/host/sandbox-control";
+import type {
+  WorktreeBinding,
+  WorktreeIntent,
+} from "@traycer/protocol/host/worktree-schemas";
 import type { ChatComposerSubmitInput } from "@/components/chat/composer/chat-composer";
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
 import { createComposerPickerStore } from "@/components/chat/composer/picker/composer-picker-store";
 import { useChatComposerSubmit } from "@/components/chat/composer/use-chat-composer-submit";
 import { TileMinimapContext } from "@/components/epic-canvas/tile-minimap/tile-minimap-context";
+import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
+import { useBoundSandboxSend } from "@/hooks/sandboxes/use-bound-sandbox-send";
+import type { RestingChatSandbox } from "@/lib/sandboxes/chat-sandbox-state";
 import {
+  AGENT_ASLEEP_NOTICE,
   AGENT_CANT_TAKE_NOTICE,
   AGENT_NO_WORKSPACE_NOTICE,
   AGENT_NOT_READY_NOTICE,
+  NOT_DELIVERED_NOTICE,
   executePageAct,
   type PageActReads,
 } from "@/lib/voice/page-acts";
@@ -28,6 +38,22 @@ import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-
 import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
 import { createComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
+import { useStagedSandboxStore } from "@/stores/composer/staged-sandbox-store";
+import { usePendingSandboxSendStore } from "@/stores/sandboxes/pending-sandbox-send-store";
+import {
+  useWorktreeIntentStagingStore,
+  type WorktreeStagingKey,
+} from "@/stores/worktree/worktree-intent-staging-store";
+
+const catalogue = vi.hoisted(() => ({
+  data: undefined as SandboxCatalogue | undefined,
+}));
+
+// The cloud catalogue is the only thing a resting sandbox's send reads from
+// outside the app: which agents sandboxes run.
+vi.mock("@/hooks/sandboxes/use-sandbox-catalogue-query", () => ({
+  useSandboxCatalogue: () => ({ data: catalogue.data }),
+}));
 
 /**
  * One chat, two senders: the composer's Mod-Enter and the voice's "tell it".
@@ -44,6 +70,68 @@ const CHAT_ID = "chat-voice";
 const USER_ID = "user-me";
 const TITLE = "Main agent";
 const MESSAGE = "use the other branch";
+
+/** A chat bound to one folder, run in place. */
+const BOUND: WorktreeBinding = {
+  entries: [
+    {
+      workspacePath: "/repo",
+      mode: "local",
+      repoIdentifier: null,
+      worktreePath: null,
+      branch: null,
+      isPrimary: true,
+      isImported: false,
+      setupState: "not_required",
+      setupTerminalSessionId: null,
+      setupExitCode: null,
+      setupFailedAt: null,
+      createdAt: 1,
+    },
+  ],
+};
+
+/** A pick of a new worktree for the folder: a send would commit it as a rebind. */
+const NEW_WORKTREE: WorktreeIntent = {
+  entries: [
+    {
+      kind: "worktree",
+      scripts: null,
+      workspacePath: "/repo",
+      repoIdentifier: null,
+      isPrimary: true,
+      branch: {
+        type: "new",
+        name: "feat-voice",
+        source: "main",
+        carryUncommittedChanges: false,
+      },
+    },
+  ],
+};
+
+const STAGING_KEY: WorktreeStagingKey = {
+  surface: "owner",
+  hostId: HOST_ID,
+  epicId: EPIC_ID,
+  ownerKind: "chat",
+  ownerId: CHAT_ID,
+};
+
+/** The sandbox the chat is bound to, resting; the wake is its own `resume`, or `start` when stopped. */
+function resting(state: "suspended" | "stopped"): RestingChatSandbox {
+  return {
+    kind: "resting",
+    sandbox: sandboxSummaryFixture({
+      id: "sbx-r",
+      hostId: HOST_ID,
+      displayName: "e2e-sbx-rest",
+      state,
+    }),
+    configuration: { kind: "team", teamId: "team-a", teamName: "Acme" },
+    wakeChangesPayer: true,
+  };
+}
 
 const SETTINGS: ChatRunSettings = {
   ultracode: false,
@@ -122,7 +210,7 @@ function openIdleSession(): Session {
       activeTurn: null,
       pendingApprovals: [],
       pendingInterviews: [],
-      worktreeBinding: null,
+      worktreeBinding: BOUND,
       missingWorktreePaths: [],
       pendingFileEditApprovals: [],
       accumulatedFileChanges: [],
@@ -202,6 +290,20 @@ function mountComposer(
   modelSlug: string,
   tileInstanceId: string | null,
 ): MountedComposer {
+  return mountComposerOver(null, gates, modelSlug, tileInstanceId);
+}
+
+/**
+ * The same composer over a chat whose sandbox rests when `target` is not
+ * `null`: its owner is then the real bound-sandbox send, which holds the
+ * message for the wake, and `submitted` still records what it was handed.
+ */
+function mountComposerOver(
+  target: RestingChatSandbox | null,
+  gates: Gates,
+  modelSlug: string,
+  tileInstanceId: string | null,
+): MountedComposer {
   const submitted: ChatComposerSubmitInput[] = [];
   const toolbarStore = createComposerToolbarStore({
     purpose: "run",
@@ -222,8 +324,13 @@ function mountComposer(
   });
   const pickerStore = createComposerPickerStore();
   const mounted = renderHook(
-    (current: Gates) =>
-      useChatComposerSubmit({
+    (current: Gates) => {
+      const boundSend = useBoundSandboxSend({
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        target,
+      });
+      return useChatComposerSubmit({
         taskId: CHAT_ID,
         editorRef: { current: EDITOR },
         pickerStore,
@@ -241,13 +348,15 @@ function mountComposer(
         attachmentPreparationPending: current.attachmentPreparationPending,
         onSubmitMessage: (input) => {
           submitted.push(input);
-          return true;
+          return target === null ? true : boundSend(input);
         },
         onSideChat: null,
         targetHostId: HOST_ID,
+        restingSandbox: target !== null,
         queueEditTargetId: null,
         getDraftBlobBridgeSupported: () => true,
-      }),
+      });
+    },
     {
       initialProps: gates,
       wrapper: ({ children }: { readonly children: ReactNode }) =>
@@ -294,12 +403,25 @@ function readsOver(session: Session, tileInstanceId: string): PageActReads {
 
 /** "Tell the agent" of the chat shown in `tileInstanceId`, as the say loop hands it to the page executor. */
 function voiceTells(session: Session, tileInstanceId: string) {
+  return voiceTellsRow(session, tileInstanceId, false);
+}
+
+/** The same tell after the person said yes to waking the sandbox first. */
+function voiceTellsAfterWakeYes(session: Session, tileInstanceId: string) {
+  return voiceTellsRow(session, tileInstanceId, true);
+}
+
+function voiceTellsRow(
+  session: Session,
+  tileInstanceId: string,
+  readBackAsWake: boolean,
+) {
   return executePageAct({
     row: {
       action: `agent.tell:${CHAT_ID}`,
       label: "Tell the agent",
       takesWords: true,
-      confirm: false,
+      confirm: readBackAsWake,
     },
     text: MESSAGE,
     turnId: null,
@@ -309,7 +431,15 @@ function voiceTells(session: Session, tileInstanceId: string) {
 
 const initialAuth = useAuthStore.getInitialState();
 
+function resetSandboxStores(): void {
+  usePendingSandboxSendStore.setState({ sends: {} });
+  useStagedSandboxStore.setState({ bySurface: {} });
+  useWorktreeIntentStagingStore.getState().resetForTests();
+}
+
 beforeEach(() => {
+  catalogue.data = { providers: [], offeredAgents: [SETTINGS.harnessId] };
+  resetSandboxStores();
   useAuthStore.setState({
     status: "signed-in",
     profile: { userId: USER_ID, userName: "Me", email: "me@example.com" },
@@ -319,6 +449,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  resetSandboxStores();
   useAuthStore.setState(initialAuth, true);
 });
 
@@ -535,5 +666,132 @@ describe("a chat shown in two panes", () => {
 
     expect(outcome).toEqual({ kind: "executed" });
     expect(sendFrames(session).at(0)?.settings.model).toBe("front-model");
+  });
+});
+
+describe("a message to a chat whose sandbox rests", () => {
+  function heldSends() {
+    return Object.values(usePendingSandboxSendStore.getState().sends);
+  }
+
+  function stagedWakes() {
+    return Object.values(useStagedSandboxStore.getState().bySurface);
+  }
+
+  it.each([
+    ["suspended", "resume"],
+    ["stopped", "start"],
+  ] as const)(
+    "holds the message in the pending store and stages the %s sandbox's %s, sending no frame, when the tell was read back as a wake",
+    async (state, verb) => {
+      const session = openIdleSession();
+      mountComposerOver(resting(state), OPEN_GATES, SETTINGS.model, FRONT);
+
+      const outcome = await voiceTellsAfterWakeYes(session, FRONT);
+
+      expect(outcome).toEqual({ kind: "executed" });
+      expect(sendFrames(session)).toEqual([]);
+      const [held, ...rest] = heldSends();
+      expect(rest).toEqual([]);
+      expect(held).toMatchObject({
+        epicId: EPIC_ID,
+        request: { kind: "message", chatId: CHAT_ID },
+        text: MESSAGE,
+        delivery: null,
+      });
+      const [stage, ...otherStages] = stagedWakes();
+      expect(otherStages).toEqual([]);
+      expect(stage?.target).toMatchObject({
+        kind: "existing",
+        sandboxId: "sbx-r",
+        verb,
+      });
+    },
+  );
+
+  it("holds what the same composer's Mod-Enter holds: the same settings and delivery policy", async () => {
+    const session = openIdleSession();
+    const composer = mountComposerOver(
+      resting("suspended"),
+      OPEN_GATES,
+      "front-model",
+      FRONT,
+    );
+    await voiceTellsAfterWakeYes(session, FRONT);
+    const byVoice = heldSends().map((send) => ({
+      settings: send.settings,
+      deliveryPolicy:
+        send.request.kind === "message" ? send.request.deliveryPolicy : null,
+    }));
+    resetSandboxStores();
+
+    const handed = await composer.pressModEnter();
+    const byHand = heldSends().map((send) => ({
+      settings: send.settings,
+      deliveryPolicy:
+        send.request.kind === "message" ? send.request.deliveryPolicy : null,
+    }));
+
+    expect(handed).toHaveLength(1);
+    expect(byVoice).toHaveLength(1);
+    expect(byHand).toEqual(byVoice);
+    expect(byVoice[0]?.settings.model).toBe("front-model");
+    expect(byVoice[0]?.deliveryPolicy).toBe(handed[0]?.deliveryPolicy);
+  });
+
+  it("refuses a tell read back as an ordinary send, holding and staging nothing", async () => {
+    const session = openIdleSession();
+    mountComposerOver(resting("suspended"), OPEN_GATES, SETTINGS.model, FRONT);
+
+    const outcome = await voiceTells(session, FRONT);
+
+    expect(outcome).toEqual({ kind: "refused", say: AGENT_ASLEEP_NOTICE });
+    expect(heldSends()).toEqual([]);
+    expect(stagedWakes()).toEqual([]);
+    expect(sendFrames(session)).toEqual([]);
+  });
+
+  it("says it did not reach the agent, staging nothing, when the catalogue cannot be read", async () => {
+    catalogue.data = undefined;
+    const session = openIdleSession();
+    mountComposerOver(resting("suspended"), OPEN_GATES, SETTINGS.model, FRONT);
+
+    const outcome = await voiceTellsAfterWakeYes(session, FRONT);
+
+    expect(outcome).toEqual({ kind: "refused", say: NOT_DELIVERED_NOTICE });
+    expect(heldSends()).toEqual([]);
+    expect(stagedWakes()).toEqual([]);
+  });
+
+  it("carries a staged change of workspace with the held message, and does not refuse for it", async () => {
+    const session = openIdleSession();
+    mountComposerOver(resting("suspended"), OPEN_GATES, SETTINGS.model, FRONT);
+    useWorktreeIntentStagingStore
+      .getState()
+      .setIntent(STAGING_KEY, NEW_WORKTREE);
+
+    const outcome = await voiceTellsAfterWakeYes(session, FRONT);
+
+    expect(outcome).toEqual({ kind: "executed" });
+    const held = heldSends().at(0);
+    expect(
+      held?.request.kind === "message" ? held.request.worktreeIntent : null,
+    ).toEqual(NEW_WORKTREE);
+  });
+
+  it("holds nothing when the composer cannot send, though the tell was read back as a wake", async () => {
+    const session = openIdleSession();
+    mountComposerOver(
+      resting("suspended"),
+      { ...OPEN_GATES, sendDisabled: true },
+      SETTINGS.model,
+      FRONT,
+    );
+
+    const outcome = await voiceTellsAfterWakeYes(session, FRONT);
+
+    expect(outcome).toEqual({ kind: "refused", say: AGENT_CANT_TAKE_NOTICE });
+    expect(heldSends()).toEqual([]);
+    expect(stagedWakes()).toEqual([]);
   });
 });

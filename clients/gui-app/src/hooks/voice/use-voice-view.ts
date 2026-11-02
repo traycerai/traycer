@@ -13,6 +13,7 @@ import { useAgentsOpenerItems } from "@/lib/commands/sources/open/agents-subpage
 import { useArtifactsOpenerItems } from "@/lib/commands/sources/open/artifacts-subpage";
 import { THEME_SUBPAGE_ITEMS } from "@/lib/commands/sources/theme.source";
 import type { CommandContext } from "@/lib/commands/types";
+import { composerSendStateFor } from "@/lib/chats/composer-send-gates";
 import { getChatSessionRegistry } from "@/lib/registries/chat-session-registry";
 import { SETTINGS_SECTIONS } from "@/lib/settings-sections";
 import type {
@@ -137,12 +138,14 @@ function readPage(pathname: string, focused: TabRef | null): VoicePage {
 interface AgentRead {
   readonly agent: VoiceViewAgent | null;
   readonly turnRunning: boolean;
+  readonly asleep: boolean;
   readonly approvals: ReadonlyArray<VoiceViewApproval>;
 }
 
 const NO_AGENT: AgentRead = {
   agent: null,
   turnRunning: false,
+  asleep: false,
   approvals: [],
 };
 
@@ -209,6 +212,12 @@ function readAgent(
     // A send that has not started its turn reads as running too, and there is
     // no turn yet for a stop to be asked of.
     turnRunning: turnStatus === "running" && chat.activeTurn !== null,
+    asleep:
+      composerSendStateFor(
+        session.hostId,
+        session.chatId,
+        session.tileInstanceId,
+      )?.restingSandbox === true,
     approvals,
   };
 }
@@ -232,6 +241,7 @@ function readVoiceView(
     page,
     agent: read.agent,
     agentTurnRunning: read.turnRunning,
+    agentAsleep: read.asleep,
     approvals: read.approvals,
     palette,
     generation: useVoiceSessionStore.getState().viewGeneration,

@@ -9,6 +9,7 @@ import {
 import { act, cleanup, render, renderHook } from "@testing-library/react";
 import type { ReactNode } from "react";
 import type { JsonContent } from "@traycer/protocol/common/registry";
+import type { SandboxCatalogue } from "@traycer/protocol/host/sandbox-control";
 import type {
   ChatActiveTurn,
   ChatRunSettings,
@@ -43,6 +44,9 @@ import { createComposerPickerStore } from "@/components/chat/composer/picker/com
 import { useChatComposerSubmit } from "@/components/chat/composer/use-chat-composer-submit";
 import { CommandPaletteRouterContext } from "@/components/command-palette/command-palette-context";
 import { TileMinimapContext } from "@/components/epic-canvas/tile-minimap/tile-minimap-context";
+import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
+import { useBoundSandboxSend } from "@/hooks/sandboxes/use-bound-sandbox-send";
+import type { RestingChatSandbox } from "@/lib/sandboxes/chat-sandbox-state";
 import type { KeybindingRouter } from "@/lib/keybindings/dispatch";
 import { MockWsStreamClient } from "@/components/epic-canvas/pr/__tests__/pr-stream-test-fixtures";
 import type { VoiceEngineEvents } from "@/lib/voice/engine";
@@ -60,6 +64,8 @@ import { runVoiceQueueVerb } from "@/lib/voice/queue-verbs";
 import { MOVED_ASK_TEXT, PAGE_CHANGED_ASK_TEXT } from "@/lib/voice/say-loop";
 import { voiceMutationKeys } from "@/lib/query-keys";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { useStagedSandboxStore } from "@/stores/composer/staged-sandbox-store";
+import { usePendingSandboxSendStore } from "@/stores/sandboxes/pending-sandbox-send-store";
 import { createChatSessionStore } from "@/stores/chats/chat-session-store";
 import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
 import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
@@ -466,6 +472,16 @@ const fake = vi.hoisted(() => {
     botThreads: new Map<string, ReadonlyArray<unknown>>(),
   };
 });
+
+const catalogue = vi.hoisted(() => ({
+  data: undefined as SandboxCatalogue | undefined,
+}));
+
+// The cloud catalogue (which agents sandboxes run) is the one thing a resting
+// sandbox's send reads from outside the app.
+vi.mock("@/hooks/sandboxes/use-sandbox-catalogue-query", () => ({
+  useSandboxCatalogue: () => ({ data: catalogue.data }),
+}));
 
 vi.mock("@/providers/use-runner-host", () => ({
   // The page's actions are listed for a window with no native shell of its own.
@@ -4519,6 +4535,9 @@ describe("the page in front", () => {
     const OTHER_TILE_ID = "inst-agent-other";
 
     beforeEach(() => {
+      catalogue.data = { providers: [], offeredAgents: ["claude"] };
+      usePendingSandboxSendStore.setState({ sends: {} });
+      useStagedSandboxStore.setState({ bySurface: {} });
       useAuthStore.setState({
         status: "signed-in",
         profile: { userId: USER_ID, userName: "Me", email: "me@example.com" },
@@ -4527,6 +4546,8 @@ describe("the page in front", () => {
     });
 
     afterEach(() => {
+      usePendingSandboxSendStore.setState({ sends: {} });
+      useStagedSandboxStore.setState({ bySurface: {} });
       useAuthStore.setState(initialAuth, true);
     });
 
@@ -4535,6 +4556,7 @@ describe("the page in front", () => {
       tileInstanceId: string,
       sendDisabled: boolean,
       modelSlug: string,
+      target: RestingChatSandbox | null,
     ): void {
       const toolbarStore = createComposerToolbarStore({
         purpose: "run",
@@ -4555,8 +4577,13 @@ describe("the page in front", () => {
       });
       const pickerStore = createComposerPickerStore();
       renderHook(
-        () =>
-          useChatComposerSubmit({
+        () => {
+          const boundSend = useBoundSandboxSend({
+            epicId: EPIC_ID,
+            chatId: AGENT_ID,
+            target,
+          });
+          return useChatComposerSubmit({
             taskId: AGENT_ID,
             editorRef: { current: EDITOR },
             pickerStore,
@@ -4572,12 +4599,15 @@ describe("the page in front", () => {
             workspaceBlocked: false,
             imagesUnsupported: false,
             attachmentPreparationPending: false,
-            onSubmitMessage: (_input: ChatComposerSubmitInput) => true,
+            onSubmitMessage: (input: ChatComposerSubmitInput) =>
+              target === null ? true : boundSend(input),
             onSideChat: null,
             targetHostId: HOST_ID,
+            restingSandbox: target !== null,
             queueEditTargetId: null,
             getDraftBlobBridgeSupported: () => true,
-          }),
+          });
+        },
         {
           wrapper: ({ children }: { readonly children: ReactNode }) => (
             <TileMinimapContext.Provider value={tileInstanceId}>
@@ -4597,6 +4627,14 @@ describe("the page in front", () => {
       });
     }
 
+    /** The read-back the voice appended, if it asked one. */
+    function askedQuestion(): string | null {
+      const asked = fake.engines[0]?.appendCommentary.mock.calls.find(
+        ([text]) => text.endsWith("Yes?"),
+      );
+      return asked === undefined ? null : asked[0];
+    }
+
     function sends(wire: AgentWire) {
       return wire.sent.flatMap((frame) =>
         frame.kind === "send" ? [frame] : [],
@@ -4607,20 +4645,21 @@ describe("the page in front", () => {
       await bringLive();
       focusOn(CHANNEL_FOCUS);
       const wire = seedRunningAgent();
-      mountComposer(AGENT_TILE.instanceId, false, "front-model");
+      mountComposer(AGENT_TILE.instanceId, false, "front-model", null);
 
       await tellTheAgent();
 
       expect(sends(wire).map((frame) => frame.settings.model)).toEqual([
         "front-model",
       ]);
+      expect(askedQuestion()).toBeNull();
     });
 
     it("says it can't and sends nothing when the composer shown in the active tile cannot send", async () => {
       await bringLive();
       focusOn(CHANNEL_FOCUS);
       const wire = seedRunningAgent();
-      mountComposer(AGENT_TILE.instanceId, true, "front-model");
+      mountComposer(AGENT_TILE.instanceId, true, "front-model", null);
 
       await tellTheAgent();
 
@@ -4635,8 +4674,8 @@ describe("the page in front", () => {
       await bringLive();
       focusOn(CHANNEL_FOCUS);
       const wire = seedRunningAgent();
-      mountComposer(AGENT_TILE.instanceId, true, "front-model");
-      mountComposer(OTHER_TILE_ID, false, "other-model");
+      mountComposer(AGENT_TILE.instanceId, true, "front-model", null);
+      mountComposer(OTHER_TILE_ID, false, "other-model", null);
 
       await tellTheAgent();
 
@@ -4651,14 +4690,235 @@ describe("the page in front", () => {
       await bringLive();
       focusOn(CHANNEL_FOCUS);
       const wire = seedRunningAgent();
-      mountComposer(AGENT_TILE.instanceId, false, "front-model");
-      mountComposer(OTHER_TILE_ID, false, "other-model");
+      mountComposer(AGENT_TILE.instanceId, false, "front-model", null);
+      mountComposer(OTHER_TILE_ID, false, "other-model", null);
 
       await tellTheAgent();
 
       expect(sends(wire).map((frame) => frame.settings.model)).toEqual([
         "front-model",
       ]);
+    });
+  });
+
+  describe("a spoken tell of an agent whose sandbox rests", () => {
+    const initialAuth = useAuthStore.getInitialState();
+    const WORDS = "use the other branch";
+    const QUESTION = `The sandbox is asleep. Wake it and send: ${WORDS}. Yes?`;
+    const DRAFT: JsonContent = {
+      type: "doc",
+      content: [
+        { type: "paragraph", content: [{ type: "text", text: "draft" }] },
+      ],
+    };
+    const EDITOR: ComposerPromptEditorHandle = {
+      isReady: () => true,
+      getEditorIncarnation: () => null,
+      hasFocus: () => false,
+      focus: () => undefined,
+      focusAtEnd: () => undefined,
+      getJSON: () => DRAFT,
+      isEmpty: () => false,
+      clear: () => undefined,
+      setContent: () => undefined,
+      syncContent: () => undefined,
+      insertImageAttachments: () => undefined,
+      insertMentionAttachment: () => false,
+      beginPathInsertion: () => null,
+      removeImageAttachmentById: () => undefined,
+      rewriteImageAttachmentHashById: () => false,
+      insertDictatedText: () => undefined,
+      draftGeneration: () => 0,
+      dismissActiveSuggestion: () => false,
+    };
+    const RESTING: RestingChatSandbox = {
+      kind: "resting",
+      sandbox: sandboxSummaryFixture({
+        id: "sbx-r",
+        hostId: HOST_ID,
+        displayName: "e2e-sbx-rest",
+        state: "suspended",
+      }),
+      configuration: { kind: "team", teamId: "team-a", teamName: "Acme" },
+      wakeChangesPayer: true,
+    };
+
+    beforeEach(() => {
+      catalogue.data = { providers: [], offeredAgents: ["claude"] };
+      usePendingSandboxSendStore.setState({ sends: {} });
+      useStagedSandboxStore.setState({ bySurface: {} });
+      useAuthStore.setState({
+        status: "signed-in",
+        profile: { userId: USER_ID, userName: "Me", email: "me@example.com" },
+        contextMetadata: { userId: USER_ID, username: "me" },
+      });
+    });
+
+    afterEach(() => {
+      usePendingSandboxSendStore.setState({ sends: {} });
+      useStagedSandboxStore.setState({ bySurface: {} });
+      useAuthStore.setState(initialAuth, true);
+    });
+
+    /** The agent's composer in the active tile, over a resting sandbox. */
+    function mountRestingComposer(): void {
+      const toolbarStore = createComposerToolbarStore({
+        purpose: "run",
+        reasoningFallback: "model-default",
+        seedKey: "voice-controller-resting",
+        values: {
+          ultracode: false,
+          permission: "supervised",
+          selection: {
+            harnessId: "claude",
+            modelSlug: "model-a",
+            profileId: null,
+          },
+          reasoning: "",
+          serviceTier: "",
+        },
+        onSettingsChange: null,
+        tuiOnly: false,
+        chatLineCarriesAutoMode: null,
+        ultracodeCarried: false,
+        hostId: HOST_ID,
+      });
+      const pickerStore = createComposerPickerStore();
+      renderHook(
+        () => {
+          const boundSend = useBoundSandboxSend({
+            epicId: EPIC_ID,
+            chatId: AGENT_ID,
+            target: RESTING,
+          });
+          return useChatComposerSubmit({
+            taskId: AGENT_ID,
+            editorRef: { current: EDITOR },
+            pickerStore,
+            toolbarStore,
+            activeTurnStatus: null,
+            steerCapable: false,
+            steerEnabled: useSettingsStore.getState().steerOnModEnterEnabled,
+            steerProtocolSupported: true,
+            getActiveTurnForSteer: () => null,
+            hasPendingApprovals: false,
+            sendDisabled: false,
+            sendDisabledHint: null,
+            workspaceBlocked: false,
+            imagesUnsupported: false,
+            attachmentPreparationPending: false,
+            onSubmitMessage: (input: ChatComposerSubmitInput) =>
+              boundSend(input),
+            onSideChat: null,
+            targetHostId: HOST_ID,
+            restingSandbox: true,
+            queueEditTargetId: null,
+            getDraftBlobBridgeSupported: () => true,
+          });
+        },
+        {
+          wrapper: ({ children }: { readonly children: ReactNode }) => (
+            <TileMinimapContext.Provider value={AGENT_TILE.instanceId}>
+              {children}
+            </TileMinimapContext.Provider>
+          ),
+        },
+      );
+    }
+
+    function heldSends() {
+      return Object.values(usePendingSandboxSendStore.getState().sends);
+    }
+
+    function sends(wire: AgentWire) {
+      return wire.sent.flatMap((frame) =>
+        frame.kind === "send" ? [frame] : [],
+      );
+    }
+
+    /** Says the tell, and lets the question be heard. */
+    async function tellAndHearQuestion(): Promise<string> {
+      fake.routeAnswer = () => actAnswer(`agent.tell:${AGENT_ID}`);
+      await say(WORDS, "d1");
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(6_000);
+      });
+      const asked = fake.engines[0]?.appendCommentary.mock.calls.find(
+        ([text]) => text.endsWith("Yes?"),
+      );
+      if (asked === undefined) throw new Error("the tell was never asked");
+      act(() => eventsOf(0).onOutputTranscriptDelta(asked[0]));
+      await settle();
+      return asked[0];
+    }
+
+    async function answer(words: string) {
+      await say(words, "d2");
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(6_000);
+      });
+    }
+
+    it("asks the wake first, in the exact words, and holds nothing until the yes", async () => {
+      await bringLive();
+      focusOn(CHANNEL_FOCUS);
+      const wire = seedRunningAgent();
+      mountRestingComposer();
+
+      const question = await tellAndHearQuestion();
+
+      expect(question).toBe(QUESTION);
+      expect(heldSends()).toEqual([]);
+      expect(sends(wire)).toEqual([]);
+    });
+
+    it("holds the message for the wake on a yes, and sends no frame", async () => {
+      await bringLive();
+      focusOn(CHANNEL_FOCUS);
+      const wire = seedRunningAgent();
+      mountRestingComposer();
+      await tellAndHearQuestion();
+
+      await answer("yes");
+
+      expect(heldSends().map((held) => held.text)).toEqual([WORDS]);
+      expect(sends(wire)).toEqual([]);
+    });
+
+    it("holds nothing on a no", async () => {
+      await bringLive();
+      focusOn(CHANNEL_FOCUS);
+      const wire = seedRunningAgent();
+      mountRestingComposer();
+      await tellAndHearQuestion();
+
+      await answer("no");
+
+      expect(heldSends()).toEqual([]);
+      expect(sends(wire)).toEqual([]);
+    });
+
+    it("holds nothing and says the page changed when the page moved between the question and the yes", async () => {
+      await bringLive();
+      focusOn(CHANNEL_FOCUS);
+      const wire = seedRunningAgent();
+      mountRestingComposer();
+      await tellAndHearQuestion();
+      act(() => {
+        useTabsStore.setState({
+          items: [{ kind: "tab", id: "item-history", ref: HISTORY_TAB_REF }],
+          activeItemId: "item-history",
+        });
+      });
+
+      await answer("yes");
+
+      expect(heldSends()).toEqual([]);
+      expect(sends(wire)).toEqual([]);
+      expect(fake.engines[0]?.appendCommentary).toHaveBeenCalledWith(
+        PAGE_CHANGED_ASK_TEXT,
+        "d1",
+      );
     });
   });
 

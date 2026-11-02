@@ -147,6 +147,8 @@ interface UseChatComposerSubmitArgs {
    * hash-only image node's bytes.
    */
   readonly targetHostId: string | null;
+  /** The chat's sandbox rests: a send wakes it, through `onSubmitMessage`. */
+  readonly restingSandbox: boolean;
   /**
    * The queued prompt this composer is currently editing, or `null` for an
    * ordinary send. Part of the submit INTENT: `onSubmitMessage`'s destination
@@ -240,6 +242,7 @@ export function useChatComposerSubmit(
     onSubmitMessage,
     onSideChat,
     targetHostId,
+    restingSandbox,
     queueEditTargetId,
     getDraftBlobBridgeSupported,
     getQueuedSteerRestartConfirmationSupported,
@@ -442,6 +445,8 @@ export function useChatComposerSubmit(
       workspaceBlocked,
       imagesUnsupported,
       attachmentPreparationPending,
+      restingSandbox,
+      submit: (input) => onSubmitMessage?.(input) ?? false,
       modelSlug: () => toolbarStore.getState().selection.modelSlug,
       runSettings: () => {
         const toolbar = toolbarStore.getState();
@@ -457,6 +462,8 @@ export function useChatComposerSubmit(
   }, [
     attachmentPreparationPending,
     imagesUnsupported,
+    onSubmitMessage,
+    restingSandbox,
     sendDisabled,
     targetHostId,
     taskId,

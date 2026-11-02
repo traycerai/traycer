@@ -83,6 +83,8 @@ export interface VoiceViewSources {
   readonly agent: VoiceViewAgent | null;
   /** The agent's turn is running, so it can be stopped. */
   readonly agentTurnRunning: boolean;
+  /** The agent's sandbox rests, so a message to it wakes that first. */
+  readonly agentAsleep: boolean;
   readonly approvals: ReadonlyArray<VoiceViewApproval>;
   readonly palette: VoicePaletteItems;
   readonly generation: number;
@@ -141,15 +143,26 @@ export function approvalSummary(description: string, toolName: string): string {
   return text.slice(0, MAX_SUMMARY_CHARS);
 }
 
+const TELL_ACTION = "agent.tell:";
+
+/**
+ * Whether this row is a tell that wakes the chat's sandbox first. Waking costs,
+ * which is the only reason a tell is offered as one that asks.
+ */
+export function tellWakesSandbox(row: VoiceViewRow): boolean {
+  return row.confirm && row.action.startsWith(TELL_ACTION);
+}
+
 function agentRows(
   agent: VoiceViewAgent,
   turnRunning: boolean,
+  asleep: boolean,
 ): ReadonlyArray<VoiceViewRow> {
   const tell: VoiceViewRow = {
-    action: `agent.tell:${agent.chatId}`,
+    action: `${TELL_ACTION}${agent.chatId}`,
     label: `Tell the agent (${agent.title})`,
     takesWords: true,
-    confirm: false,
+    confirm: asleep,
   };
   if (!turnRunning) return [tell];
   return [
@@ -236,7 +249,9 @@ function sectionRows(
 function composeRows(sources: VoiceViewSources): ReadonlyArray<VoiceViewRow> {
   const { agent, palette } = sources;
   return [
-    ...(agent === null ? [] : agentRows(agent, sources.agentTurnRunning)),
+    ...(agent === null
+      ? []
+      : agentRows(agent, sources.agentTurnRunning, sources.agentAsleep)),
     ...sources.approvals.flatMap(approvalRows),
     ...prefixedRows(palette.tiles, "Open tab").slice(0, MAX_TILE_ROWS),
     ...(sources.page.kind === "settings" ? sectionRows(palette.sections) : []),
@@ -284,7 +299,14 @@ function readBackTarget(row: VoiceViewRow, page: VoicePage): string {
 }
 
 /** The question before a row that costs or cannot be undone runs. */
-export function readBackQuestion(row: VoiceViewRow, page: VoicePage): string {
+export function readBackQuestion(
+  row: VoiceViewRow,
+  page: VoicePage,
+  text: string,
+): string {
+  if (tellWakesSandbox(row)) {
+    return `The sandbox is asleep. Wake it and send: ${text}. Yes?`;
+  }
   return `${row.label}${readBackTarget(row, page)}. Yes?`;
 }
 
