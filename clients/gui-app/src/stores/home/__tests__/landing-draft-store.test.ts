@@ -11,7 +11,6 @@ import {
   setLandingDraftWorkspacePrimary,
   useLandingDraftStore,
   freshLandingMirrorState,
-  isUnseededLandingDraft,
   type LandingDraftTab,
 } from "@/stores/home/landing-draft-store";
 import * as landingImageGc from "@/lib/composer/landing-image-gc";
@@ -607,13 +606,8 @@ describe("useLandingDraftStore", () => {
       setDraftLocalEditListener(null);
     });
 
-    it("counts as unseeded while it holds nothing", () => {
-      const id = useLandingDraftStore.getState().createDraft(null);
-      expect(isUnseededLandingDraft(row(id))).toBe(true);
-    });
-
     it.each(HOLDS_SOMETHING)(
-      "does not count as unseeded once it holds $label, and is not seeded",
+      "is not seeded once it holds $label",
       ({ patch }) => {
         const id = useLandingDraftStore.getState().createDraft(null);
         useLandingDraftStore.setState((state) => ({
@@ -624,7 +618,6 @@ describe("useLandingDraftStore", () => {
         remember(MANAGED_SETTINGS, [WORKSPACE_B]);
         const before = useLandingDraftStore.getState().drafts;
 
-        expect(isUnseededLandingDraft(row(id))).toBe(false);
         expect(
           useLandingDraftStore.getState().seedUnseededDraft(id, HOST_B),
         ).toBe(false);
@@ -697,7 +690,7 @@ describe("useLandingDraftStore", () => {
       expect(useLandingDraftStore.getState().drafts).toBe(before);
     });
 
-    it("writes and publishes nothing for a host that remembers nothing", () => {
+    it("writes and publishes nothing for a host that remembers nothing, and can still be seeded", () => {
       const id = useLandingDraftStore.getState().createDraft(null);
       const edits: string[] = [];
       setDraftLocalEditListener((draftId) => {
@@ -710,8 +703,12 @@ describe("useLandingDraftStore", () => {
       ).toBe(false);
 
       expect(useLandingDraftStore.getState().drafts).toBe(before);
-      expect(isUnseededLandingDraft(row(id))).toBe(true);
       expect(edits).toEqual([]);
+
+      remember(MANAGED_SETTINGS, []);
+      expect(
+        useLandingDraftStore.getState().seedUnseededDraft(id, HOST_B),
+      ).toBe(true);
     });
 
     it("does nothing with no host resolved, or for a draft that is gone", () => {

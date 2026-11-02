@@ -648,7 +648,7 @@ export function isLandingDraftEmpty(draft: LandingDraftTab): boolean {
  * It was minted before its placement host resolved, so seeding it from that
  * host's memory loses nothing.
  */
-export function isUnseededLandingDraft(draft: LandingDraftTab): boolean {
+function isUnseededLandingDraft(draft: LandingDraftTab): boolean {
   return (
     isLandingDraftEmpty(draft) &&
     draft.settings === null &&

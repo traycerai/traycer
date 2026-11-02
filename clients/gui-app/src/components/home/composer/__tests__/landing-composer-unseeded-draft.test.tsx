@@ -267,7 +267,6 @@ import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-sett
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useStagedSandboxStore } from "@/stores/composer/staged-sandbox-store";
 import {
-  isUnseededLandingDraft,
   useLandingDraftShell,
   useLandingDraftStore,
   type LandingDraftTab,
@@ -371,7 +370,8 @@ describe("a landing composer over a draft minted before its host resolved", () =
   it("gives the draft that host's settings and folders, and shows that profile", async () => {
     const resolveHost = mountComposer();
     const minted = draftRow(DRAFT_ID);
-    expect(isUnseededLandingDraft(minted)).toBe(true);
+    expect(minted.settings).toBeNull();
+    expect(minted.workspace.folders).toEqual([]);
     expect(host.toolbar?.getState().selection.profileId).toBeNull();
 
     resolveHost(REMEMBERING_HOST);
