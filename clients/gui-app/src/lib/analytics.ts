@@ -2722,6 +2722,22 @@ export function sanitizeAnalyticsProperties(
   ) {
     return null;
   }
+  return declaredEventProperties(event, record, expectedKeys);
+}
+
+/**
+ * The event's own declared properties, validated, with every other key
+ * dropped. `before_send` reads through this rather than
+ * {@link sanitizeAnalyticsProperties}: by then the SDK has added its token,
+ * distinct id, app globals and session ids to the same object, so the strict
+ * key count would refuse every strict event. The caller-bug check already ran
+ * in `track`.
+ */
+function declaredEventProperties(
+  event: AnalyticsEvent,
+  record: Record<string, unknown>,
+  expectedKeys: ReadonlyArray<string>,
+): Record<string, AnalyticsPropertyValue> | null {
   if (
     expectedKeys.some(
       (key) =>
@@ -2910,10 +2926,11 @@ export function sanitizePostHogCaptureResult(
   const identity = safeIngestionProperties(rawProperties, false);
   const globals = safeAppGlobals(rawProperties);
   const session = safeSessionProperties(rawProperties);
-  const eventProperties = sanitizeAnalyticsProperties(
-    result.event,
-    rawProperties,
-  );
+  const expectedKeys = eventPropertyKeys(result.event);
+  const eventProperties =
+    expectedKeys === null
+      ? null
+      : declaredEventProperties(result.event, rawProperties, expectedKeys);
   if (identity === null || globals === null || eventProperties === null) {
     return null;
   }

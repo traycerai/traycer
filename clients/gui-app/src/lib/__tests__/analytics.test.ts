@@ -403,6 +403,60 @@ describe("analytics", () => {
     );
   });
 
+  it("delivers a strict event through the real SDK's before_send", async () => {
+    const {
+      AnalyticsEvent,
+      POSTHOG_CONFIG,
+      sanitizeAnalyticsProperties,
+      sanitizePostHogCaptureResult,
+    } = await import("@/lib/analytics");
+    const captured: CaptureResult[] = [];
+    const sdk = new PostHog();
+    sdk.init("phc_test_project_key_strict_event", {
+      ...POSTHOG_CONFIG,
+      before_send: (result) => {
+        const sanitized = sanitizePostHogCaptureResult(result);
+        if (sanitized !== null) captured.push(sanitized);
+        return null;
+      },
+      persistence: "memory",
+      request_batching: false,
+    });
+    sdk.register({
+      app: "gui-app",
+      app_surface: "desktop",
+      app_version: "1.2.3",
+      platform: "macos",
+      release_channel: "production",
+    });
+    // What `track` does: the strict key count on the caller's properties,
+    // then capture. The SDK adds its own keys before before_send sees them.
+    const properties = sanitizeAnalyticsProperties(
+      AnalyticsEvent.HostQuitDecision,
+      {
+        mode: "ask",
+        verdict: "busy",
+        choice: "keep",
+        forced: false,
+        remembered: true,
+      },
+    );
+    expect(properties).not.toBeNull();
+    sdk.capture(AnalyticsEvent.HostQuitDecision, properties);
+
+    const eventName: string = AnalyticsEvent.HostQuitDecision;
+    const delivered = captured.find(({ event }) => event === eventName);
+    expect(delivered?.properties).toMatchObject({
+      token: "phc_test_project_key_strict_event",
+      app: "gui-app",
+      mode: "ask",
+      verdict: "busy",
+      choice: "keep",
+      forced: false,
+      remembered: true,
+    });
+  });
+
   it("rejects content-shaped identities from real SDK CaptureResults", async () => {
     const { POSTHOG_CONFIG, sanitizePostHogCaptureResult } =
       await import("@/lib/analytics");
