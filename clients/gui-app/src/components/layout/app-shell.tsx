@@ -39,6 +39,7 @@ import { TracyEntryController } from "@/components/layout/tabs/tracy-entry-contr
 import { TalkShortcutBridge } from "@/components/layout/voice/talk-control";
 import { VoiceSessionController } from "@/components/layout/voice/voice-session-controller";
 import { VoiceSessionChrome } from "@/components/layout/voice/voice-session-chrome";
+import { VoiceColumnTopRow } from "@/components/layout/voice/voice-top-row";
 import { LandingTerminalHost } from "@/components/home/terminal-panel/landing-terminal-host";
 import { OpenFolderDialog } from "@/components/open-folder-dialog";
 import { RemoteFolderPickerDialog } from "@/components/remote-folder-picker-dialog";
@@ -135,6 +136,7 @@ function AppShellBody(props: AppShellProps) {
               columnRef={setAppColumn}
               {...chrome}
               header={<AppHeader variant="app" />}
+              voiceTopRow={<VoiceColumnTopRow titleBand={chrome.titleBand} />}
               strip={
                 stripEdge === null ? null : (
                   <SideTabStrip
@@ -155,11 +157,8 @@ function AppShellBody(props: AppShellProps) {
                   <SessionConnectivityStrip
                     connectivity={sessionConnectivity}
                   />
-                  {/* Beneath the tab strip and across every tab while a
-                    voice session is live (V6): the destination the next
-                    spoken post goes to, Mute, End, captions. The phone
-                    draws its full-screen view instead, and this bar while
-                    that view is down (V5). */}
+                  {/* The phone's full-screen view, and its bar while that
+                    view is down (V5). Desktop's strip is in the top row. */}
                   <VoiceSessionChrome />
                 </>
               }
@@ -229,7 +228,8 @@ function AppShellBody(props: AppShellProps) {
                   <TracyEntryController />
                   {/* Once per window: the voice session's owner (the
                     microphone, the engine, the scheduler), which the Talk
-                    control and the strip drive through the store. */}
+                    control and the strip drive through the store, from the
+                    top row and the phone's channel header. */}
                   <VoiceSessionController />
                   <TalkShortcutBridge />
                   <MigrationRunController />

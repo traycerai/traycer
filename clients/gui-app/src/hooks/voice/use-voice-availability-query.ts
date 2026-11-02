@@ -10,6 +10,7 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 
 function voiceAvailabilityQueryOptions(
   auth: AuthService | null,
+  hostId: string | null,
   userId: string | null,
   enabled: boolean,
 ) {
@@ -21,7 +22,7 @@ function voiceAvailabilityQueryOptions(
     });
   }
   return queryOptions<boolean>({
-    queryKey: voiceQueryKeys.availability(auth, userId),
+    queryKey: voiceQueryKeys.availability(hostId, userId),
     queryFn: async () => {
       const result = await auth.getVoiceAvailability();
       if (result.kind === "ok") return result.available;
@@ -51,9 +52,10 @@ export function useVoiceAvailabilityQuery(
 ): UseQueryResult<boolean> {
   const binding = useHostBinding();
   const auth = binding === null ? null : binding.auth;
+  const hostId = binding === null ? null : binding.hostId;
   const signedIn = useAuthStore((s) => s.status === "signed-in");
   const userId = useAuthStore((s) => s.contextMetadata?.userId ?? null);
   return useQuery(
-    voiceAvailabilityQueryOptions(auth, userId, signedIn && enabled),
+    voiceAvailabilityQueryOptions(auth, hostId, userId, signedIn && enabled),
   );
 }

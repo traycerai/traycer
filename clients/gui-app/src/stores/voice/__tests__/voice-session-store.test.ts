@@ -26,10 +26,8 @@ const DRIVER: VoiceSessionDriver = {
   setMuted: () => undefined,
 };
 
-const initial = useVoiceSessionStore.getState();
-
 beforeEach(() => {
-  useVoiceSessionStore.setState(initial, true);
+  useVoiceSessionStore.setState(useVoiceSessionStore.getInitialState(), true);
 });
 
 describe("focus and selection generation", () => {
@@ -62,6 +60,45 @@ describe("sessionEnded", () => {
     expect(state.endReason).toBe("ended");
     expect(state.availability).toBe("live");
     expect(state.driver).toBe(DRIVER);
+  });
+});
+
+describe("sessionRefused", () => {
+  it("resets the session like an end but says a refusal, leaving endReason null, until it is cleared", () => {
+    const store = useVoiceSessionStore.getState();
+    store.setAvailability("live");
+    store.setDriver(DRIVER);
+    store.sessionConnecting();
+    store.setFocus(FOCUS);
+
+    store.sessionRefused("credits");
+
+    expect(useVoiceSessionStore.getState()).toMatchObject({
+      phase: "idle",
+      refusal: "credits",
+      endReason: null,
+      focus: null,
+      phoneViewOpen: false,
+      availability: "live",
+      driver: DRIVER,
+    });
+
+    store.clearRefusal();
+    expect(useVoiceSessionStore.getState().refusal).toBeNull();
+  });
+
+  it("is replaced by the next start, and an end replaces a refusal rather than joining it", () => {
+    const store = useVoiceSessionStore.getState();
+    store.sessionRefused("unavailable");
+    store.sessionConnecting();
+    expect(useVoiceSessionStore.getState().refusal).toBeNull();
+
+    store.sessionRefused("microphone");
+    store.sessionEnded("ended");
+    expect(useVoiceSessionStore.getState()).toMatchObject({
+      refusal: null,
+      endReason: "ended",
+    });
   });
 });
 
