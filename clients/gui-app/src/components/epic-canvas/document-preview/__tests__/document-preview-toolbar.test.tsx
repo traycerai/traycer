@@ -35,6 +35,7 @@ function baseZoom(overrides: Partial<ZoomControlsModel>): ZoomControlsModel {
     canZoomOut: true,
     onZoomIn: vi.fn(),
     onZoomOut: vi.fn(),
+    onZoomTo: vi.fn(),
     fitKind: "width",
     fitActive: false,
     onFit: vi.fn(),
@@ -421,6 +422,130 @@ describe("<DocumentPreviewToolbar />", () => {
       // onGoToPage is a mock here - it never feeds a new pageNumber prop
       // back in, so a cleared draft must fall back to the original prop.
       expect(pageField().value).toBe("2");
+    });
+  });
+
+  describe("the zoom level field", () => {
+    function zoomField(): HTMLInputElement {
+      return screen.getByLabelText<HTMLInputElement>("Zoom level");
+    }
+
+    function type(text: string): void {
+      fireEvent.change(zoomField(), { target: { value: text } });
+    }
+
+    it.each(["175", "175%"])(
+      "hands %s to the surface as 175 once, however the reader leaves the field",
+      (text) => {
+        const onZoomTo = vi.fn();
+        renderToolbar({ zoom: baseZoom({ onZoomTo }) });
+
+        type(text);
+        fireEvent.keyDown(zoomField(), { key: "Enter" });
+        // Enter keeps focus in the field, so the blur that follows must not
+        // commit the same draft a second time.
+        fireEvent.blur(zoomField());
+
+        expect(onZoomTo).toHaveBeenCalledExactlyOnceWith(175);
+      },
+    );
+
+    it("commits on blur", () => {
+      const onZoomTo = vi.fn();
+      renderToolbar({ zoom: baseZoom({ onZoomTo }) });
+
+      type("175");
+      fireEvent.blur(zoomField());
+
+      expect(onZoomTo).toHaveBeenCalledExactlyOnceWith(175);
+    });
+
+    it("rounds a fractional level to a whole percent", () => {
+      const onZoomTo = vi.fn();
+      renderToolbar({ zoom: baseZoom({ onZoomTo }) });
+
+      type("149.6");
+      fireEvent.keyDown(zoomField(), { key: "Enter" });
+
+      expect(onZoomTo).toHaveBeenCalledExactlyOnceWith(150);
+    });
+
+    it("shows what the reader is typing, even when the live level moves underneath it", () => {
+      const props = baseProps({});
+      const { rerender } = render(<DocumentPreviewToolbar {...props} />);
+
+      type("17");
+      rerender(
+        <DocumentPreviewToolbar
+          {...props}
+          zoom={baseZoom({ scalePercent: 150 })}
+        />,
+      );
+
+      expect(zoomField().value).toBe("17");
+    });
+
+    it("drops the draft on Escape and commits nothing, not even on the blur after it", () => {
+      const onZoomTo = vi.fn();
+      renderToolbar({ zoom: baseZoom({ onZoomTo, scalePercent: 125 }) });
+
+      type("175");
+      fireEvent.keyDown(zoomField(), { key: "Escape" });
+      fireEvent.blur(zoomField());
+
+      expect(zoomField().value).toBe("125%");
+      expect(onZoomTo).not.toHaveBeenCalled();
+    });
+
+    it.each(["abc", "0", "-5", ""])(
+      "commits nothing for %j and shows the live level again",
+      (text) => {
+        const onZoomTo = vi.fn();
+        renderToolbar({ zoom: baseZoom({ onZoomTo, scalePercent: 125 }) });
+
+        type(text);
+        fireEvent.keyDown(zoomField(), { key: "Enter" });
+
+        expect(onZoomTo).not.toHaveBeenCalled();
+        expect(zoomField().value).toBe("125%");
+      },
+    );
+
+    it("commits nothing when the reader types the level the surface is already at", () => {
+      const onZoomTo = vi.fn();
+      renderToolbar({ zoom: baseZoom({ onZoomTo, scalePercent: 125 }) });
+
+      type("125");
+      fireEvent.keyDown(zoomField(), { key: "Enter" });
+
+      expect(onZoomTo).not.toHaveBeenCalled();
+      expect(zoomField().value).toBe("125%");
+    });
+
+    it("follows the live level once the draft is gone, and says it in a status region", () => {
+      const props = baseProps({});
+      const { rerender } = render(<DocumentPreviewToolbar {...props} />);
+      expect(screen.getByRole("status").textContent).toBe("125%");
+
+      rerender(
+        <DocumentPreviewToolbar
+          {...props}
+          zoom={baseZoom({ scalePercent: 150 })}
+        />,
+      );
+
+      expect(zoomField().value).toBe("150%");
+      expect(screen.getByRole("status").textContent).toBe("150%");
+    });
+
+    it("is disabled and reads a dash until the surface is ready", () => {
+      renderToolbar({
+        zoom: baseZoom({ ready: false, scalePercent: null }),
+      });
+
+      expect(zoomField().disabled).toBe(true);
+      expect(zoomField().value).toBe("–");
+      expect(screen.getByRole("status").textContent).toBe("");
     });
   });
 

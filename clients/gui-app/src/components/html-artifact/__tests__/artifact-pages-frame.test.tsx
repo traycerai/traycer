@@ -30,6 +30,10 @@ vi.mock("@/components/sandbox/sandbox-frame", () => ({
 }));
 
 import { ArtifactPagesFrame } from "@/components/html-artifact/artifact-pages-frame";
+import {
+  disposeBridges,
+  realBridge,
+} from "@/components/canvas-artifact/__tests__/canvas-edit-test-support";
 
 function manifestOf(pages: readonly string[]): ArtifactManifest {
   const files: Record<string, ArtifactManifest["files"][string]> = {};
@@ -111,6 +115,7 @@ const MISSING = "This page is not in the artifact.";
 
 afterEach(() => {
   cleanup();
+  disposeBridges();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   frames.latest = null;
@@ -207,6 +212,26 @@ function frameProps(): SandboxFrameProps {
 }
 
 describe("the floating controls chip", () => {
+  it("asks the page for a typed zoom level, and shows the level the page then reports", () => {
+    renderPages({ pageZoom: true });
+    const bridge = realBridge();
+    const setHtmlView = vi.spyOn(bridge, "setHtmlView");
+    act(() => frameProps().onBridge?.(bridge));
+    act(() => frameProps().onStatus("ready"));
+    setHtmlView.mockClear();
+    const zoomLevel = screen.getByLabelText<HTMLInputElement>("Zoom level");
+
+    fireEvent.change(zoomLevel, { target: { value: "150" } });
+    fireEvent.keyDown(zoomLevel, { key: "Enter" });
+
+    expect(setHtmlView).toHaveBeenCalledTimes(1);
+    expect(setHtmlView).toHaveBeenCalledWith(true, 1.5);
+    // The field follows the page, not the draft: it reads 100% until the page reports 1.5.
+    expect(zoomLevel.value).toBe("100%");
+    act(() => frameProps().onHtmlZoom?.(1.5));
+    expect(zoomLevel.value).toBe("150%");
+  });
+
   it("offers no Back or Home on an artifact with one page", () => {
     renderPages({ pageZoom: true });
 

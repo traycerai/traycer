@@ -1,6 +1,7 @@
 import { useCallback, useRef, useState, type ReactNode } from "react";
 import type { ReactZoomPanPinchRef } from "react-zoom-pan-pinch";
 import { fitInstance } from "@/components/epic-canvas/image-preview/fit-instance";
+import { zoomInstanceTo } from "@/components/epic-canvas/image-preview/zoom-instance-to";
 import { ImagePreview } from "@/components/epic-canvas/image-preview/image-preview";
 import {
   DEFAULT_ANIMATION_MS,
@@ -90,6 +91,11 @@ export function ZoomableImageDialogBody(props: {
             }}
             onZoomOut={() => {
               transformRef.current?.zoomOut(ZOOM_STEP, DEFAULT_ANIMATION_MS);
+            }}
+            onZoomTo={(percent) => {
+              const instance = transformRef.current;
+              if (instance !== null)
+                zoomInstanceTo(instance, percent / 100, DEFAULT_ANIMATION_MS);
             }}
             fitKind="screen"
             fitActive={report?.isFitted ?? false}

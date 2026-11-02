@@ -5,20 +5,21 @@
  *
  *   [ - ] [ 137% ] [ + ]  |  [ fit ] [ 1:1 ]
  *
- * The percentage is a READOUT and nothing else. It follows every zoom the
- * surface makes, pinch and wheel included, and pressing it does nothing.
- * The two anchors after the divider are the actions: fit (to the stage, or
- * to a page's width on a paged document) and actual size, which is one
- * content pixel per CSS pixel. Before this cluster existed the image viewer
- * labelled its actual-size action "100%", which read as a zoom level that
- * never moved - the confusion this file replaces.
+ * The percentage is the zoom level and a field to type one into
+ * ({@link ZoomLevelField}). It follows every zoom the surface makes, pinch
+ * and wheel included. The two anchors after the divider are the actions:
+ * fit (to the stage, or to a page's width on a paged document) and actual
+ * size, which is one content pixel per CSS pixel. Before this cluster
+ * existed the image viewer labelled its actual-size action "100%", which
+ * read as a zoom level that never moved - the confusion this file replaces.
  *
  * Keyboard shortcuts live on the buttons themselves, so they work whenever
  * the cluster has focus: `+`/`-` step, `0` actual size, `F` fit.
  */
-import type { KeyboardEvent, ReactNode } from "react";
+import { useState, type KeyboardEvent, type ReactNode } from "react";
 import { Maximize2, Minus, Plus, Scan } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { cn } from "@/lib/utils";
 import { fitLabel } from "./fit-label";
@@ -33,6 +34,11 @@ export interface ZoomControlsModel {
   readonly canZoomOut: boolean;
   readonly onZoomIn: () => void;
   readonly onZoomOut: () => void;
+  /**
+   * Zoom to a typed level, in percent. The surface holds it to its own
+   * smallest and largest size, as it does a pinch.
+   */
+  readonly onZoomTo: (percent: number) => void;
   /**
    * `"screen"` fits the whole content into the stage (an image, a diagram);
    * `"width"` fits one page's width, which is the useful fit on a paged
@@ -112,16 +118,11 @@ export function ZoomControls(props: ZoomControlsProps): ReactNode {
             <Minus className="size-4" />
           </Button>
         </TooltipWrapper>
-        <span
-          // A status region: it gives the readout a valid accessible name
-          // (a generic span may not carry one) and announces zoom changes
-          // politely, so a keyboard or screen-reader zoom is confirmed.
-          role="status"
-          aria-label="Zoom level"
-          className="min-w-9 whitespace-nowrap text-center text-ui-xs font-medium tabular-nums"
-        >
-          {props.scalePercent === null ? "–" : `${props.scalePercent}%`}
-        </span>
+        <ZoomLevelField
+          ready={props.ready}
+          scalePercent={props.scalePercent}
+          onZoomTo={props.onZoomTo}
+        />
         <TooltipWrapper
           label="Zoom in (+)"
           side="top"
@@ -190,6 +191,57 @@ export function ZoomControls(props: ZoomControlsProps): ReactNode {
           </Button>
         </TooltipWrapper>
       </div>
+    </>
+  );
+}
+
+/**
+ * The zoom level, and where a level is typed. While the reader types, the
+ * field shows their draft; otherwise it follows every zoom the surface makes.
+ * Enter, or leaving the field, hands the number to the surface, which holds
+ * it to its own range. Escape, or anything that is not a number, puts the
+ * level back. "175" and "175%" both read as 175%.
+ */
+export function ZoomLevelField(props: {
+  readonly ready: boolean;
+  /** The live zoom, already rounded; `null` until the surface has measured one. */
+  readonly scalePercent: number | null;
+  readonly onZoomTo: (percent: number) => void;
+}): ReactNode {
+  const [draft, setDraft] = useState<string | null>(null);
+
+  const commit = (): void => {
+    if (draft === null) return;
+    setDraft(null);
+    const percent = Math.round(Number.parseFloat(draft.replace("%", "")));
+    if (!Number.isFinite(percent) || percent <= 0) return;
+    if (percent !== props.scalePercent) props.onZoomTo(percent);
+  };
+
+  const level = props.scalePercent === null ? "–" : `${props.scalePercent}%`;
+  return (
+    <>
+      <Input
+        value={props.ready ? (draft ?? level) : "–"}
+        disabled={!props.ready}
+        onChange={(event) => setDraft(event.target.value)}
+        // Selected on the way in, so typing a level replaces the old one.
+        onFocus={(event) => event.currentTarget.select()}
+        onBlur={commit}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") commit();
+          if (event.key === "Escape") setDraft(null);
+        }}
+        inputMode="numeric"
+        aria-label="Zoom level"
+        className="h-6 w-12 text-center tabular-nums"
+        size="xs"
+      />
+      {/* The field's value is not announced as it changes; this is, so a
+          keyboard or screen-reader zoom is confirmed. */}
+      <span role="status" className="sr-only">
+        {props.ready ? level : ""}
+      </span>
     </>
   );
 }

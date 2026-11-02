@@ -242,7 +242,9 @@ describe("<PdfPreview /> document lifecycle", () => {
     expect(screen.getByLabelText<HTMLInputElement>("Page number").value).toBe(
       "2",
     );
-    expect(screen.getByLabelText("Zoom level").textContent).toBe("110%");
+    expect(screen.getByLabelText<HTMLInputElement>("Zoom level").value).toBe(
+      "110%",
+    );
     expect(screen.getByTestId("pdf-outline-panel")).not.toBeNull();
 
     rerender(
@@ -253,7 +255,9 @@ describe("<PdfPreview /> document lifecycle", () => {
     expect(screen.getByLabelText<HTMLInputElement>("Page number").value).toBe(
       "1",
     );
-    expect(screen.getByLabelText("Zoom level").textContent).toBe("100%");
+    expect(screen.getByLabelText<HTMLInputElement>("Zoom level").value).toBe(
+      "100%",
+    );
     expect(screen.queryByLabelText("Find in document")).toBeNull();
     expect(
       await screen.findByRole("button", { name: "Document outline" }),
@@ -261,6 +265,28 @@ describe("<PdfPreview /> document lifecycle", () => {
     expect(screen.queryByTestId("pdf-outline-panel")).toBeNull();
     expect(firstDestroy).toHaveBeenCalledTimes(1);
     expect(onRenderFailure).not.toHaveBeenCalled();
+  });
+
+  it("holds a typed zoom level to the largest size the viewer allows", async () => {
+    state.getDocument.mockReturnValueOnce(
+      makeTask(
+        Promise.resolve(
+          makeDocument(
+            Promise.resolve(null),
+            vi.fn(() => Promise.resolve()),
+          ),
+        ),
+        vi.fn(() => Promise.resolve()),
+      ),
+    );
+    render(<PdfPreview {...baseProps({})} />);
+    await waitFor(() => expect(screen.getByText("/ 2")).not.toBeNull());
+    const zoomLevel = screen.getByLabelText<HTMLInputElement>("Zoom level");
+
+    fireEvent.change(zoomLevel, { target: { value: "900" } });
+    fireEvent.keyDown(zoomLevel, { key: "Enter" });
+
+    expect(zoomLevel.value).toBe("500%");
   });
 
   it("destroys and ignores a late old document promise after a URL change", async () => {

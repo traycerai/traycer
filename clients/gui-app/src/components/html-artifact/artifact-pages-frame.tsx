@@ -1,6 +1,9 @@
 import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { ArrowLeft, House, Minus, MoreHorizontal, Plus } from "lucide-react";
-import { ActualSizeGlyph } from "@/components/epic-canvas/zoom-controls/zoom-controls";
+import {
+  ActualSizeGlyph,
+  ZoomLevelField,
+} from "@/components/epic-canvas/zoom-controls/zoom-controls";
 import { useCoarsePointer } from "@/hooks/ui/use-coarse-pointer";
 import {
   SandboxFrame,
@@ -540,13 +543,12 @@ function HtmlPageZoomControls(props: {
           <Minus className="size-3.5" />
         </Button>
       </TooltipWrapper>
-      <span
-        role="status"
-        aria-label="Zoom level"
-        className="min-w-9 text-center text-ui-xs tabular-nums"
-      >
-        {ready ? `${Math.round(scale * 100)}%` : "–"}
-      </span>
+      <ZoomLevelField
+        ready={ready}
+        scalePercent={ready ? Math.round(scale * 100) : null}
+        // The page's own viewer script holds it to 25-400%, as it does a pinch.
+        onZoomTo={(percent) => onScale(percent / 100)}
+      />
       <TooltipWrapper
         label="Zoom in"
         side="bottom"

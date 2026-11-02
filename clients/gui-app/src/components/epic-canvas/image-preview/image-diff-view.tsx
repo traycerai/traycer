@@ -26,6 +26,7 @@ import {
 } from "@/hooks/assets/use-file-asset";
 import { ImagePreview, type ImagePreviewStatus } from "./image-preview";
 import { fitInstance } from "./fit-instance";
+import { zoomInstanceTo } from "./zoom-instance-to";
 import {
   clampPositionToVisibleBounds,
   MAX_SCALE,
@@ -443,6 +444,12 @@ export function ImageDiffView(props: ImageDiffViewProps): ReactNode {
   const handleZoomOut = useCallback(() => {
     dualDispatch((instance) => instance.zoomOut(ZOOM_STEP, 0));
   }, [dualDispatch]);
+  const handleZoomTo = useCallback(
+    (percent: number) => {
+      dualDispatch((instance) => zoomInstanceTo(instance, percent / 100, 0));
+    },
+    [dualDispatch],
+  );
 
   // Matches the shared toolbar's own instant dual-dispatch rather than
   // letting one side's internal handler run solo
@@ -521,6 +528,7 @@ export function ImageDiffView(props: ImageDiffViewProps): ReactNode {
               canZoomOut={!zoomOutDisabled}
               onZoomIn={handleZoomIn}
               onZoomOut={handleZoomOut}
+              onZoomTo={handleZoomTo}
               fitKind="screen"
               fitActive={isFitted}
               onFit={handleFit}
