@@ -37,7 +37,10 @@ import {
 import type { HostInstallRecord } from "../../manifest/host-install";
 import type { ILogger } from "../../logger";
 import type { Layer0FrameRead } from "../../host/lifecycle-probe";
-import type { HostPreviousExit } from "@traycer/protocol/config/host-previous-exit";
+import {
+  parseHostPreviousExit,
+  type HostPreviousExit,
+} from "@traycer/protocol/config/host-previous-exit";
 import {
   CRASH_REPORT_SPAWN_SLACK_MS,
   NO_HEAP_SPACE_USED_BYTES,
@@ -9445,13 +9448,23 @@ describe("runHostStart - previous-exit record", () => {
   const heapFatalLine =
     "FATAL ERROR: Ineffective mark-compacts near heap limit Allocation failed - JavaScript heap out of memory\n";
 
+  /** Every record the supervisor wrote must be one the host's parser accepts. */
+  function expectEveryRecordParses(recorded: Recorded): void {
+    for (const record of recorded.previousExits) {
+      expect(parseHostPreviousExit(record)).toEqual(record);
+    }
+  }
+
   async function runExit(options: {
     readonly code: number | null;
     readonly signal: NodeJS.Signals | null;
     readonly stderrText: string | null;
     readonly report: CrashReportMatch | null;
     /** Deps layered over the stubs; given the run's recorder. */
-    readonly overrides: (recorded: Recorded) => Partial<RunHostStartDeps>;
+    readonly overrides: (
+      recorded: Recorded,
+      base: Partial<RunHostStartDeps>,
+    ) => Partial<RunHostStartDeps>;
   }): Promise<Recorded> {
     const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
     const stderr = new PassThrough();
@@ -9467,7 +9480,7 @@ describe("runHostStart - previous-exit record", () => {
           { environment: "production", cwd: null },
           {
             ...deps,
-            ...options.overrides(recorded),
+            ...options.overrides(recorded, deps),
             spawn: (command, args, spawnOptions) => {
               const spawned = originalSpawn(command, args, spawnOptions);
               setImmediate(() => {
@@ -9506,6 +9519,7 @@ describe("runHostStart - previous-exit record", () => {
       report: oomReport,
       overrides: () => ({}),
     });
+    expectEveryRecordParses(recorded);
     const marker = recorded.markers.find((m) => m.phase === "killed");
     expect(recorded.previousExits).toHaveLength(1);
     expect(recorded.previousExits[0]).toMatchObject({
@@ -9530,6 +9544,7 @@ describe("runHostStart - previous-exit record", () => {
       report: oomReport,
       overrides: () => ({}),
     });
+    expectEveryRecordParses(recorded);
     expect(recorded.previousExits).toHaveLength(1);
     expect(recorded.previousExits[0]?.kind).toBe("out-of-memory");
     expect(recorded.previousExits[0]?.exitCode).toBe(134);
@@ -9544,6 +9559,7 @@ describe("runHostStart - previous-exit record", () => {
       report: null,
       overrides: () => ({}),
     });
+    expectEveryRecordParses(recorded);
     expect(recorded.previousExits).toHaveLength(1);
     expect(recorded.previousExits[0]).toMatchObject({
       kind: "out-of-memory",
@@ -9560,6 +9576,7 @@ describe("runHostStart - previous-exit record", () => {
       report: null,
       overrides: () => ({}),
     });
+    expectEveryRecordParses(recorded);
     expect(recorded.previousExits).toHaveLength(1);
     expect(recorded.previousExits[0]?.kind).toBe("crashed");
     expect(recorded.previousExits[0]?.exitCode).toBe(7);
@@ -9573,6 +9590,7 @@ describe("runHostStart - previous-exit record", () => {
       report: null,
       overrides: () => ({ maxRelaunches: 0 }),
     });
+    expectEveryRecordParses(recorded);
     expect(recorded.previousExits).toHaveLength(1);
     expect(recorded.previousExits[0]).toMatchObject({
       kind: "crashed",
@@ -9594,6 +9612,7 @@ describe("runHostStart - previous-exit record", () => {
         hasStopIntent: async () => (run.spawnCalls.length > 0 ? "stop" : null),
       }),
     });
+    expectEveryRecordParses(recorded);
     expect(recorded.previousExits).toHaveLength(1);
     expect(recorded.previousExits[0]).toMatchObject({
       kind: "stopped",
@@ -9615,6 +9634,7 @@ describe("runHostStart - previous-exit record", () => {
         ),
       recorded,
     );
+    expectEveryRecordParses(recorded);
     const firstAttempt = recorded.markers.find((m) => m.phase === "starting");
     expect(recorded.previousExits[0]).toMatchObject({
       kind: "stopped",
@@ -9629,6 +9649,65 @@ describe("runHostStart - previous-exit record", () => {
     expect(recorded.sequence.indexOf("previous-exit")).toBeLessThan(spawns[1]);
   });
 
+  it("writes a parseable record for a forced shutdown (recorded as stopped)", async () => {
+    const recorded = await runExit({
+      code: 0,
+      signal: null,
+      stderrText:
+        "host-shutdown-forced reason=watchdog pending=host close (30000ms)\n",
+      report: null,
+      overrides: () => ({}),
+    });
+    expect(recorded.previousExits).toHaveLength(1);
+    expect(recorded.previousExits[0]).toMatchObject({
+      kind: "stopped",
+      exitCode: 0,
+      signal: null,
+    });
+    expectEveryRecordParses(recorded);
+  });
+
+  it("writes a parseable record for a Windows requested kill (recorded as stopped)", async () => {
+    const recorded = await runExit({
+      code: 0xffffffff,
+      signal: null,
+      stderrText: null,
+      report: null,
+      overrides: (run, base) => ({
+        ...withLifecyclePlatform(base, "win32"),
+        maxRelaunches: 0,
+        hasStopIntent: async () => (run.spawnCalls.length > 0 ? "stop" : null),
+      }),
+    });
+    expect(recorded.previousExits).toHaveLength(1);
+    expect(recorded.previousExits[0]).toMatchObject({
+      kind: "stopped",
+      exitCode: 0xffffffff,
+      signal: null,
+    });
+    expectEveryRecordParses(recorded);
+  });
+
+  it("writes a parseable record for a Windows session end (recorded as stopped)", async () => {
+    const recorded = await runExit({
+      code: 0xc000026b,
+      signal: null,
+      stderrText: null,
+      report: null,
+      overrides: (_run, base) => ({
+        ...withLifecyclePlatform(base, "win32"),
+        maxRelaunches: 0,
+      }),
+    });
+    expect(recorded.previousExits).toHaveLength(1);
+    expect(recorded.previousExits[0]).toMatchObject({
+      kind: "stopped",
+      exitCode: 0xc000026b,
+      signal: null,
+    });
+    expectEveryRecordParses(recorded);
+  });
+
   it("records exited for a clean exit", async () => {
     const recorded = await runExit({
       code: 0,
@@ -9637,6 +9716,7 @@ describe("runHostStart - previous-exit record", () => {
       report: null,
       overrides: () => ({}),
     });
+    expectEveryRecordParses(recorded);
     expect(recorded.previousExits).toHaveLength(1);
     expect(recorded.previousExits[0]?.kind).toBe("exited");
   });
@@ -9655,6 +9735,7 @@ describe("runHostStart - previous-exit record", () => {
         },
       }),
     });
+    expectEveryRecordParses(recorded);
     expect(attempts).toEqual(["write"]);
     expect(recorded.exited).toBe(7);
     expect(recorded.markers.some((m) => m.phase === "crashed")).toBe(true);

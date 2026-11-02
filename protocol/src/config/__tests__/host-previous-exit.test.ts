@@ -27,6 +27,18 @@ describe("parseHostPreviousExit", () => {
     }
   });
 
+  it("accepts an exit code alone and a signal alone", () => {
+    const code = { ...GOOD, kind: "crashed", exitCode: 3, signal: null };
+    const signal = {
+      ...GOOD,
+      kind: "crashed",
+      exitCode: null,
+      signal: "SIGKILL",
+    };
+    expect(parseHostPreviousExit(code)).toEqual(code);
+    expect(parseHostPreviousExit(signal)).toEqual(signal);
+  });
+
   it("accepts a clean exit with no heap numbers and no signal", () => {
     const record = {
       ...GOOD,
@@ -50,6 +62,14 @@ describe("parseHostPreviousExit", () => {
     ["an unparsable endedAt", { ...GOOD, endedAt: "yesterday" }],
     ["a numeric endedAt", { ...GOOD, endedAt: 1_700_000_000_000 }],
     ["an unknown kind", { ...GOOD, kind: "melted" }],
+    [
+      "both an exit code and a signal",
+      { ...GOOD, exitCode: 1, signal: "SIGABRT" },
+    ],
+    [
+      "neither an exit code nor a signal",
+      { ...GOOD, exitCode: null, signal: null },
+    ],
     ["a fractional exitCode", { ...GOOD, exitCode: 1.5 }],
     ["a string exitCode", { ...GOOD, exitCode: "1" }],
     ["an empty signal", { ...GOOD, signal: "" }],

@@ -1,4 +1,11 @@
-import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  type RmOptions,
+} from "node:fs";
 import { dirname } from "node:path";
 import { parseHostPreviousExit } from "@traycer/protocol/config/host-previous-exit";
 import { afterAll, describe, expect, it, vi } from "vitest";
@@ -23,6 +30,35 @@ vi.mock("node:os", async (importOriginal) => {
     );
   }
   return { ...actual, homedir: () => osHome.current };
+});
+
+// The one seam for a failed replacement: the rename that would publish the
+// record can be made to fail, after the temporary file really was written.
+const renameFault = vi.hoisted(() => ({
+  error: null as Error | null,
+  /** A path whose removal fails (the cleanup that follows a failed rename). */
+  unremovablePath: null as string | null,
+  /** Removals attempted on `unremovablePath`. */
+  removalAttempts: 0,
+}));
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return {
+    ...actual,
+    renameSync: (from: string, to: string): void => {
+      if (renameFault.error !== null) throw renameFault.error;
+      actual.renameSync(from, to);
+    },
+    rmSync: (target: string, options: RmOptions | undefined): void => {
+      if (renameFault.unremovablePath === target) {
+        renameFault.removalAttempts += 1;
+        throw Object.assign(new Error("simulated removal failure"), {
+          code: "EPERM",
+        });
+      }
+      actual.rmSync(target, options);
+    },
+  };
 });
 afterAll(() => {
   rmSync(osHome.current, { recursive: true, force: true });
@@ -152,6 +188,84 @@ describe("writePreviousExitRecord", () => {
     expect(
       readdirSync(dirname(path)).filter((n) => n.endsWith(".tmp")),
     ).toEqual([]);
+  });
+
+  it("removes the old record and the temporary file, and rethrows the original error, when the replacement fails", () => {
+    writePreviousExitRecord(ENV, record);
+    const path = previousExitRecordPath(ENV);
+    expect(existsSync(path)).toBe(true);
+
+    const failure = Object.assign(new Error("simulated rename failure"), {
+      code: "EXDEV",
+    });
+    renameFault.error = failure;
+    let thrown: unknown = null;
+    try {
+      writePreviousExitRecord(ENV, { ...record, attemptId: "attempt-11" });
+    } catch (error) {
+      thrown = error;
+    } finally {
+      renameFault.error = null;
+    }
+
+    expect(thrown).toBe(failure);
+    // The stale record would read as how the NEXT host's predecessor ended.
+    expect(existsSync(path)).toBe(false);
+    expect(
+      readdirSync(dirname(path)).filter((n) => n.endsWith(".tmp")),
+    ).toEqual([]);
+  });
+
+  it("throws the original error and keeps the old record when removing it also fails: a stale record can survive a double failure", () => {
+    writePreviousExitRecord(ENV, record);
+    const path = previousExitRecordPath(ENV);
+    const before = readFileSync(path, "utf8");
+
+    const failure = Object.assign(new Error("simulated rename failure"), {
+      code: "EXDEV",
+    });
+    renameFault.error = failure;
+    renameFault.unremovablePath = path;
+    renameFault.removalAttempts = 0;
+    let thrown: unknown = null;
+    try {
+      writePreviousExitRecord(ENV, { ...record, attemptId: "attempt-13" });
+    } catch (error) {
+      thrown = error;
+    } finally {
+      renameFault.error = null;
+      renameFault.unremovablePath = null;
+    }
+
+    // The old record's removal WAS attempted, and failed.
+    expect(renameFault.removalAttempts).toBe(1);
+    // The write's error, not the cleanup's EPERM.
+    expect(thrown).toBe(failure);
+    // Nothing promises the stale record is gone: here it is still on disk,
+    // byte for byte, because it could not be removed.
+    expect(readFileSync(path, "utf8")).toBe(before);
+    // The temporary file, which could be removed, is gone.
+    expect(
+      readdirSync(dirname(path)).filter((n) => n.endsWith(".tmp")),
+    ).toEqual([]);
+  });
+
+  it("writes a fresh record again after a failed replacement", () => {
+    writePreviousExitRecord(ENV, record);
+    renameFault.error = new Error("simulated rename failure");
+    try {
+      expect(() => {
+        writePreviousExitRecord(ENV, record);
+      }).toThrow("simulated rename failure");
+    } finally {
+      renameFault.error = null;
+    }
+    writePreviousExitRecord(ENV, { ...record, attemptId: "attempt-12" });
+    expect(
+      parseHostPreviousExit(
+        JSON.parse(readFileSync(previousExitRecordPath(ENV), "utf8")),
+      )?.attemptId,
+    ).toBe("attempt-12");
   });
 
   it("stays under the redirected home", () => {

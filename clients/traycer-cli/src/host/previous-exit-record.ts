@@ -69,6 +69,19 @@ export function buildPreviousExit(input: PreviousExitInput): HostPreviousExit {
  * one, so a reader sees one exit or the other, never a torn mix. Throws on
  * failure; the caller logs and carries on, since the record is never the
  * marker's authority.
+ *
+ * A failed replacement (the directory, the temporary write or the rename)
+ * also tries to remove the old record: left in place, it describes an older
+ * attempt, and the next host would read that as how its predecessor ended.
+ * What the next host then knows:
+ *
+ *  - the removal succeeded: no record, so the predecessor's exit is unknown
+ *    ("nothing known");
+ *  - the removal ALSO failed: the old record survives, and the next host reads
+ *    an older attempt's exit as its predecessor's. Nothing here can prevent
+ *    that; the caller's WARN is its only trace.
+ *
+ * The original error is the one thrown, whatever the cleanup does.
  */
 export function writePreviousExitRecord(
   environment: Environment,
@@ -87,7 +100,13 @@ export function writePreviousExitRecord(
     });
     renameSync(temporary, path);
   } catch (error) {
-    rmSync(temporary, { force: true });
+    for (const stale of [temporary, path]) {
+      try {
+        rmSync(stale, { force: true });
+      } catch {
+        // The write's own error is the one the caller logs.
+      }
+    }
     throw error;
   }
 }
