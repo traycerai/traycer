@@ -27,6 +27,7 @@ import { createSayLoop } from "../say-loop";
 import {
   composeVoiceView,
   NO_PALETTE_ITEMS,
+  readBackQuestion,
   type VoicePage,
   type VoicePaletteItems,
   type VoiceView,
@@ -339,6 +340,7 @@ function probeViewOf(name: ProbeViewName): VoiceView {
         title: line.title,
         state: line.state,
         waitingOn: line.waitingOn ?? null,
+        turnId: null,
       };
     } else if ("approval" in line) {
       approvals.push({ id: line.approval, summary: line.summary });
@@ -372,11 +374,12 @@ function probeViewOf(name: ProbeViewName): VoiceView {
   return composeVoiceView({
     page,
     agent,
+    agentAsleep: false,
     agentTurnRunning: probe.actions.some((row) =>
       row.action.startsWith("agent.stop:"),
     ),
     approvals,
-    palette: { tiles, sections, tasks, themes, commands },
+    palette: { ...NO_PALETTE_ITEMS, tiles, sections, tasks, themes, commands },
     generation: GENERATION,
   });
 }
@@ -432,6 +435,7 @@ function act(
     row: rowOf(view, paletteIdOf(probeId)),
     span: { from, to },
     generation: GENERATION,
+    turnId: null,
     confirm,
   });
 }
@@ -676,9 +680,15 @@ const round2LineSchema = z.union([
 /** "Diagnostics (Host)": the label of a section and the badge that tells it from its namesake. */
 const QUALIFIED_LABEL = /^(.*) \(([^)]*)\)$/;
 
+/** The palette's lists of items, without the live reads it also carries. */
+type PaletteLists = Record<
+  Exclude<keyof VoicePaletteItems, "hostWake">,
+  CommandItem[]
+>;
+
 /** The palette item whose rendered row is `action` and `label`; the agent's and approvals' rows come from elsewhere. */
 function addPaletteRow(
-  palette: Record<keyof VoicePaletteItems, CommandItem[]>,
+  palette: PaletteLists,
   action: string,
   label: string,
 ): void {
@@ -718,7 +728,7 @@ function round2ViewOf(name: Round2Name): VoiceView {
   let agent: VoiceViewAgent | null = null;
   let agentTurnRunning = false;
   const approvals: VoiceViewApproval[] = [];
-  const palette: Record<keyof VoicePaletteItems, CommandItem[]> = {
+  const palette: PaletteLists = {
     tiles: [],
     sections: [],
     tasks: [],
@@ -733,6 +743,7 @@ function round2ViewOf(name: Round2Name): VoiceView {
         title: line.title,
         state: line.state,
         waitingOn: line.waitingOn ?? null,
+        turnId: null,
       };
     } else if ("approval" in line) {
       approvals.push({ id: line.approval, summary: line.summary });
@@ -751,9 +762,10 @@ function round2ViewOf(name: Round2Name): VoiceView {
   return composeVoiceView({
     page,
     agent,
+    agentAsleep: false,
     agentTurnRunning,
     approvals,
-    palette,
+    palette: { ...NO_PALETTE_ITEMS, ...palette },
     generation: GENERATION,
   });
 }
@@ -1025,6 +1037,7 @@ const SAMPLE_VIEW: VoiceView = {
     title: "Main agent",
     state: "waiting",
     waitingOn: "approval",
+    turnId: null,
   },
   approvals: [{ id: "ap_1", summary: "Run bun install" }],
   rows: [
@@ -1082,6 +1095,7 @@ describe("renderView", () => {
         title: "Main agent",
         state: "working",
         waitingOn: null,
+        turnId: null,
       },
     };
 
@@ -1090,6 +1104,24 @@ describe("renderView", () => {
       title: "Main agent",
       state: "working",
     });
+  });
+
+  it("renders a view the same whatever turn its agent is on, and never shows the model the turn's id", () => {
+    const onTurn: VoiceView = {
+      ...SAMPLE_VIEW,
+      agent: {
+        chatId: "chat_1",
+        title: "Main agent",
+        state: "waiting",
+        waitingOn: "approval",
+        turnId: "turn-7f3a",
+      },
+    };
+
+    const rendered = renderView(onTurn);
+
+    expect(rendered).not.toContain("turn-7f3a");
+    expect(rendered).toBe(renderView(SAMPLE_VIEW));
   });
 
   it("keeps a title, an approval's text and a label that try to close the fence escaped inside their own lines", () => {
@@ -1186,7 +1218,9 @@ const TASK_VIEW = composeVoiceView({
     title: "Main agent",
     state: "working",
     waitingOn: null,
+    turnId: null,
   },
+  agentAsleep: false,
   agentTurnRunning: true,
   approvals: [],
   palette: {
@@ -1228,6 +1262,46 @@ function route(
 const WHOLE = { from: 0, to: 1 };
 
 describe("resolveRoute against the view", () => {
+  it("carries the turn of the view's agent on an act, and none on a page without an agent", () => {
+    const onTurn = composeVoiceView({
+      page: { kind: "task", title: "Tracy Bots", tile: "Main agent" },
+      agent: {
+        chatId: "chat_1",
+        title: "Main agent",
+        state: "working",
+        waitingOn: null,
+        turnId: "turn-7",
+      },
+      agentAsleep: false,
+      agentTurnRunning: true,
+      approvals: [],
+      palette: NO_PALETTE_ITEMS,
+      generation: 5,
+    });
+    const noAgent = compose({
+      palette: {
+        ...NO_PALETTE_ITEMS,
+        commands: [commandItem("tab.next", "Next tab")],
+      },
+    });
+    const resolve = (view: VoiceView, actionId: string): RoutedDecision =>
+      resolveRoute(
+        route("act", { actionId }, WHOLE, false),
+        DIRECTORY,
+        view,
+        2,
+      );
+
+    expect(resolve(onTurn, "agent.stop:chat_1")).toMatchObject({
+      kind: "act",
+      turnId: "turn-7",
+    });
+    expect(resolve(noAgent, "action:tab.next")).toMatchObject({
+      kind: "act",
+      turnId: null,
+    });
+  });
+
   it("refuses an act whose id the view does not offer", () => {
     expect(
       resolveRoute(
@@ -1384,7 +1458,9 @@ describe("resolveRoute naming a row by what follows its last colon", () => {
       title: "Main agent",
       state: "working",
       waitingOn: null,
+      turnId: null,
     },
+    agentAsleep: false,
     agentTurnRunning: true,
     approvals: [],
     palette: NO_PALETTE_ITEMS,
@@ -1428,6 +1504,7 @@ describe("resolveRoute naming a row by what follows its last colon", () => {
       row: rowOf(TASK_VIEW, "action:tab.close"),
       span: WHOLE,
       generation: 5,
+      turnId: null,
       confirm: true,
     });
   });
@@ -1491,6 +1568,8 @@ describe("the say loop with a page action or a question about the agent", () => 
       openThread: () => undefined,
       botTitle: (botId) => botId,
       onAccepted: () => undefined,
+      view: () => view,
+      act: () => Promise.resolve({ kind: "executed" }),
     });
     const store = useVoiceSessionStore.getState();
     store.appendInputSegment("Close this", 0);
@@ -1499,23 +1578,27 @@ describe("the say loop with a page action or a question about the agent", () => 
     return { sends, notices, asks };
   }
 
-  it.each([
-    {
-      name: "an act",
-      answer: route("act", { actionId: "action:tab.close" }, WHOLE, false),
-    },
-    { name: "a missing", answer: route("missing", {}, WHOLE, false) },
-  ])(
-    "says $name cannot be done here yet, spends the words and posts nothing",
-    async ({ answer }) => {
-      const outcome = await heard(answer, TASK_VIEW);
+  it("says a request nothing on the page serves cannot be done here yet, spends the words and posts nothing", async () => {
+    const outcome = await heard(route("missing", {}, WHOLE, false), TASK_VIEW);
 
-      expect(outcome.notices).toEqual(["I can't do that here yet."]);
-      expect(outcome.sends).toEqual([]);
-      expect(outcome.asks).toEqual([]);
-      expect(useVoiceSessionStore.getState().segments).toEqual([]);
-    },
-  );
+    expect(outcome.notices).toEqual(["I can't do that here yet."]);
+    expect(outcome.sends).toEqual([]);
+    expect(outcome.asks).toEqual([]);
+    expect(useVoiceSessionStore.getState().segments).toEqual([]);
+  });
+
+  it("reads an act that cannot be undone back before it runs, and posts nothing", async () => {
+    const outcome = await heard(
+      route("act", { actionId: "action:tab.close" }, WHOLE, false),
+      TASK_VIEW,
+    );
+
+    expect(outcome.asks).toEqual([
+      "Close this tab: Main agent in Tracy Bots. Yes?",
+    ]);
+    expect(outcome.notices).toEqual([]);
+    expect(outcome.sends).toEqual([]);
+  });
 
   it.each([
     { state: "working", line: "Main agent is working." },
@@ -1533,7 +1616,9 @@ describe("the say loop with a page action or a question about the agent", () => 
           title: "Main agent",
           state,
           waitingOn: null,
+          turnId: null,
         },
+        agentAsleep: false,
         agentTurnRunning: false,
         approvals: [],
         palette: NO_PALETTE_ITEMS,
@@ -1570,6 +1655,7 @@ function compose(overrides: Partial<VoiceViewSources>): VoiceView {
   return composeVoiceView({
     page: { kind: "task", title: "Tracy Bots", tile: null },
     agent: null,
+    agentAsleep: false,
     agentTurnRunning: false,
     approvals: [],
     palette: NO_PALETTE_ITEMS,
@@ -1587,10 +1673,12 @@ const WORKING_AGENT: VoiceViewAgent = {
   title: "Main agent",
   state: "working",
   waitingOn: null,
+  turnId: null,
 };
 
 describe("composeVoiceView", () => {
   const ONE_OF_EACH: VoicePaletteItems = {
+    ...NO_PALETTE_ITEMS,
     tiles: [paletteItem("open:chats:t1", "Slack", {})],
     sections: [paletteItem("nav:settings/voice", "Voice", {})],
     tasks: [paletteItem("epic:ep_1", "Mobile landscape", {})],
@@ -1788,5 +1876,209 @@ describe("composeVoiceView", () => {
       "Settings: Diagnostics (App)",
       "Settings: Voice",
     ]);
+  });
+});
+
+describe("readBackQuestion", () => {
+  const CLOSING_COMMANDS: VoicePaletteItems = {
+    ...NO_PALETTE_ITEMS,
+    commands: [
+      commandItem("tab.close", "Close this tab"),
+      commandItem("epic.close", "Close task"),
+    ],
+  };
+
+  /** The question read before the page's row `action` runs, on `page`. */
+  function questionFor(page: VoicePage, action: string): string {
+    const view = compose({
+      page,
+      agent: WORKING_AGENT,
+      agentTurnRunning: true,
+      approvals: [{ id: "ap_1", summary: "Run bun install" }],
+      palette: CLOSING_COMMANDS,
+    });
+    return readBackQuestion(rowOf(view, action), view.page, "");
+  }
+
+  const TASK: VoicePage = {
+    kind: "task",
+    title: "Tracy Bots",
+    tile: "Main agent",
+  };
+
+  it.each([
+    {
+      name: "approving what the agent asks, in the task",
+      action: "approval.approve:ap_1",
+      question: "Approve: Run bun install in Tracy Bots. Yes?",
+    },
+    {
+      name: "declining it",
+      action: "approval.decline:ap_1",
+      question: "Decline: Run bun install in Tracy Bots. Yes?",
+    },
+    {
+      name: "stopping the agent",
+      action: "agent.stop:chat_1",
+      question: "Stop the agent's turn (Main agent) in Tracy Bots. Yes?",
+    },
+    {
+      name: "closing the tab, naming the tile and the task",
+      action: "action:tab.close",
+      question: "Close this tab: Main agent in Tracy Bots. Yes?",
+    },
+    {
+      name: "closing the task, naming the task",
+      action: "action:epic.close",
+      question: "Close task: Tracy Bots. Yes?",
+    },
+  ])("reads $name", ({ action, question }) => {
+    expect(questionFor(TASK, action)).toBe(question);
+  });
+
+  it("reads a tell to an agent whose sandbox rests as waking it, with the words to be sent", () => {
+    const view = compose({
+      page: TASK,
+      agent: WORKING_AGENT,
+      agentAsleep: true,
+    });
+
+    expect(
+      readBackQuestion(
+        rowOf(view, "agent.tell:chat_1"),
+        view.page,
+        "use the other branch",
+      ),
+    ).toBe(
+      "The sandbox is asleep. Wake it and send: use the other branch. Yes?",
+    );
+  });
+
+  it("reads a tell to an awake agent, which only an unsure route asks about, by its label and not its words", () => {
+    const view = compose({
+      page: TASK,
+      agent: WORKING_AGENT,
+      agentAsleep: false,
+    });
+
+    expect(
+      readBackQuestion(
+        rowOf(view, "agent.tell:chat_1"),
+        view.page,
+        "use the other branch",
+      ),
+    ).toBe("Tell the agent (Main agent) in Tracy Bots. Yes?");
+  });
+
+  it("names only the task for a tab close while an overlay holds the keys and no tile is active", () => {
+    expect(questionFor({ ...TASK, tile: null }, "action:tab.close")).toBe(
+      "Close this tab in Tracy Bots. Yes?",
+    );
+  });
+
+  it("names nothing for a task whose title is empty", () => {
+    expect(questionFor({ ...TASK, title: "" }, "action:tab.close")).toBe(
+      "Close this tab. Yes?",
+    );
+  });
+
+  it("reads the close of the task as closing Settings when that is the page in front", () => {
+    expect(
+      questionFor({ kind: "settings", section: null }, "action:epic.close"),
+    ).toBe("Close task: Settings. Yes?");
+  });
+
+  it("reads a close of the task with no name on a page that has none", () => {
+    expect(questionFor({ kind: "notifications" }, "action:epic.close")).toBe(
+      "Close task. Yes?",
+    );
+  });
+
+  it("does not name the page for a tab close away from a task", () => {
+    expect(
+      questionFor({ kind: "settings", section: null }, "action:tab.close"),
+    ).toBe("Close this tab. Yes?");
+  });
+});
+
+describe("an opener row for a tile on a host whose sandbox rests", () => {
+  const RESTING_HOST = "host-resting";
+  const AWAKE_HOST = "host-awake";
+  const UNKNOWN_HOST = "host-unknown";
+
+  /** The view offering one tile opener on `hostId`, with only RESTING_HOST resting. */
+  function viewOpening(id: string, hostId: string | undefined): VoiceView {
+    return compose({
+      palette: {
+        ...NO_PALETTE_ITEMS,
+        tiles: [
+          paletteItem(
+            id,
+            "Slack",
+            hostId === undefined ? {} : { tileHostId: hostId },
+          ),
+        ],
+        hostWake: (candidate) => {
+          if (candidate === RESTING_HOST) return "wakes";
+          return candidate === UNKNOWN_HOST ? "unknown" : "none";
+        },
+      },
+    });
+  }
+
+  it.each(["open:chats:t1", "open:tui:t1", "open:artifacts:t1"])(
+    "asks to be confirmed for %s, and not for the same tile on an awake host",
+    (id) => {
+      expect(rowOf(viewOpening(id, RESTING_HOST), id).confirm).toBe(true);
+      expect(rowOf(viewOpening(id, AWAKE_HOST), id).confirm).toBe(false);
+    },
+  );
+
+  it("reads the wake back with the tile's title, not the words of the request", () => {
+    const view = viewOpening("open:chats:t1", RESTING_HOST);
+
+    expect(
+      readBackQuestion(
+        rowOf(view, "open:chats:t1"),
+        view.page,
+        "open slack please",
+      ),
+    ).toBe("The sandbox is asleep. Wake it and open Slack. Yes?");
+  });
+
+  it("reads an opener on an awake host by its label, as a route that is unsure about it would ask", () => {
+    const view = viewOpening("open:chats:t1", AWAKE_HOST);
+
+    expect(readBackQuestion(rowOf(view, "open:chats:t1"), view.page, "")).toBe(
+      "Open tab: Slack in Tracy Bots. Yes?",
+    );
+  });
+
+  it("never asks for an opener that names no host, whatever the directory says", () => {
+    expect(
+      rowOf(viewOpening("open:chats:t1", undefined), "open:chats:t1").confirm,
+    ).toBe(false);
+  });
+
+  it("asks to be confirmed for a tile on a host the directory does not know, in words that do not claim the sandbox rests", () => {
+    const view = viewOpening("open:chats:t1", UNKNOWN_HOST);
+
+    expect(rowOf(view, "open:chats:t1").confirm).toBe(true);
+    expect(
+      readBackQuestion(rowOf(view, "open:chats:t1"), view.page, "open it"),
+    ).toBe("That may wake its sandbox. Open it anyway? Yes?");
+  });
+
+  it("shows the model the same row for a tile on an unknown host as for an awake one", () => {
+    expect(renderView(viewOpening("open:chats:t1", UNKNOWN_HOST))).toBe(
+      renderView(viewOpening("open:chats:t1", AWAKE_HOST)),
+    );
+  });
+
+  it("shows the model the same row for a resting tile as for an awake one", () => {
+    const resting = viewOpening("open:chats:t1", RESTING_HOST);
+    const awake = viewOpening("open:chats:t1", AWAKE_HOST);
+
+    expect(renderView(resting)).toBe(renderView(awake));
   });
 });

@@ -91,6 +91,8 @@ export interface CommandItem {
    * `CommandItem` literals don't need a no-op `hostBadge: null` added.
    */
   readonly hostBadge?: string;
+  /** The host of the tile this row opens, on an opener row for an existing tile. */
+  readonly tileHostId?: string;
   /**
    * Trailing context text, rendered by sub-pages as a badge.
    *

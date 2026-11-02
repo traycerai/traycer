@@ -6,7 +6,15 @@ import {
   createRoute,
   createRouter,
 } from "@tanstack/react-router";
-import { act, cleanup, render } from "@testing-library/react";
+import { act, cleanup, render, renderHook } from "@testing-library/react";
+import { cloneElement, type ReactNode } from "react";
+import type { JsonContent } from "@traycer/protocol/common/registry";
+import type { SandboxCatalogue } from "@traycer/protocol/host/sandbox-control";
+import type {
+  ChatActiveTurn,
+  ChatRunSettings,
+  ChatSubscribeClientFrame,
+} from "@traycer/protocol/host/agent/gui/subscribe";
 import type { BotQuestionSettlement } from "@traycer/protocol/persistence/epic/messages";
 import type { OpenTextBlock } from "@traycer/protocol/persistence/epic/open-harness-records";
 import {
@@ -26,29 +34,82 @@ import type {
   BotRecord,
 } from "@traycer/protocol/host/bot/schemas";
 import type { BotSubscriptionResult } from "@/hooks/bots/use-bot-subscription";
+import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport/chat-stream-client";
 import type { StreamFrameEnvelope } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type { SystemSuspendCause } from "@traycer-clients/shared/platform/runner-host";
 import type { StreamMethodSupport } from "@traycer-clients/shared/host-transport/ws-stream-client";
+import type { ChatComposerSubmitInput } from "@/components/chat/composer/chat-composer";
+import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
+import { createComposerPickerStore } from "@/components/chat/composer/picker/composer-picker-store";
+import { useChatComposerSubmit } from "@/components/chat/composer/use-chat-composer-submit";
 import { CommandPaletteRouterContext } from "@/components/command-palette/command-palette-context";
+import { TileMinimapContext } from "@/components/epic-canvas/tile-minimap/tile-minimap-context";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import {
+  sandboxHostEntryFixture,
+  sandboxSummaryFixture,
+} from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
+import { useBoundSandboxSend } from "@/hooks/sandboxes/use-bound-sandbox-send";
+import type { RestingChatSandbox } from "@/lib/sandboxes/chat-sandbox-state";
 import type { KeybindingRouter } from "@/lib/keybindings/dispatch";
 import { MockWsStreamClient } from "@/components/epic-canvas/pr/__tests__/pr-stream-test-fixtures";
 import type { VoiceEngineEvents } from "@/lib/voice/engine";
 import type { ReplyRow } from "@/lib/voice/focused-replies";
 import type { HydrationRow } from "@/lib/voice/queue-sources";
+import {
+  __getChatSessionRegistryForTests,
+  disposeAllChatSessions,
+} from "@/lib/registries/chat-session-registry";
+import {
+  AGENT_CANT_TAKE_NOTICE,
+  SANDBOX_CANT_WAKE_NOTICE,
+  TURN_ENDED_NOTICE,
+} from "@/lib/voice/page-acts";
 import { runVoiceQueueVerb } from "@/lib/voice/queue-verbs";
-import { MOVED_ASK_TEXT } from "@/lib/voice/say-loop";
+import { MOVED_ASK_TEXT, PAGE_CHANGED_ASK_TEXT } from "@/lib/voice/say-loop";
 import { voiceMutationKeys } from "@/lib/query-keys";
+import { useAuthStore } from "@/stores/auth/auth-store";
+import { useStagedSandboxStore } from "@/stores/composer/staged-sandbox-store";
+import { usePendingSandboxSendStore } from "@/stores/sandboxes/pending-sandbox-send-store";
+import { createChatSessionStore } from "@/stores/chats/chat-session-store";
+import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
+import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
+import { createComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
+import {
+  __getOpenEpicRegistryForTests,
+  handleHostIds,
+} from "@/lib/registries/epic-session-registry";
+import { startSandboxWake } from "@/lib/sandboxes/sandbox-wake";
+import { wakeElementOf } from "@/components/epic-canvas/renderers/__tests__/wake-element-of";
+import { wasTileOpenRequested } from "@/lib/canvas/tile-open/tile-open-provenance";
+import { openStoreForTest } from "@/stores/epics/open-epic/test-support/open-store-for-test";
+import type { ChatProjection } from "@/stores/epics/open-epic/types";
+import type { EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
+import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { useSettingsStore } from "@/stores/settings/settings-store";
+import type {
+  EpicCanvasTileRef,
+  EpicNodeRef,
+} from "@/stores/epics/canvas/types";
+import { tabItemId } from "@/stores/tabs/layout";
+import {
+  createUnavailableTileFindAdapter,
+  useTileFindStore,
+} from "@/stores/tile-find";
 import { useBotOpenThreadStore } from "@/stores/bots/bot-open-thread-store";
 import { useBotTabLandingStore } from "@/stores/bots/bot-tab-landing-store";
 import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { TRACY_TAB_REF } from "@/stores/tabs/kinds/tracy";
+import type { TabRef } from "@/stores/tabs/types";
 import { useTabsStore } from "@/stores/tabs/store";
 import {
   useVoiceSessionStore,
   type VoiceCardDriver,
   type VoiceFocus,
 } from "@/stores/voice/voice-session-store";
+import { EpicSessionLifecycleBridge } from "@/providers/auth-lifecycle-bridge";
+import { VoiceAvailabilityLifecycleBridge } from "@/providers/voice-availability-lifecycle-bridge";
 import { VoiceSessionController } from "../voice-session-controller";
 
 interface Deferred<T> {
@@ -401,6 +462,8 @@ const fake = vi.hoisted(() => {
      * emptied for every case.
      */
     mintAnswers: [] as Array<{ kind: "credits-exhausted" | "unavailable" }>,
+    /** While set, the mint stays out until this settles; reset for every case. */
+    mintHold: null as Deferred<void> | null,
     /** A router answer for one case, in place of {@link routeToFocus}; reset for every case. */
     routeAnswer: null as ((body: string) => unknown) | null,
     /**
@@ -431,6 +494,25 @@ const fake = vi.hoisted(() => {
     botThreads: new Map<string, ReadonlyArray<unknown>>(),
   };
 });
+
+const catalogue = vi.hoisted(() => ({
+  data: undefined as SandboxCatalogue | undefined,
+}));
+
+/**
+ * What the host directory answers for any host: `null` is a host it knows
+ * nothing of, and `settled` is whether the account's listing has answered.
+ */
+const directoryFacts = vi.hoisted(() => ({
+  entry: null as HostDirectoryEntry | null,
+  settled: false,
+}));
+
+// The cloud catalogue (which agents sandboxes run) is the one thing a resting
+// sandbox's send reads from outside the app.
+vi.mock("@/hooks/sandboxes/use-sandbox-catalogue-query", () => ({
+  useSandboxCatalogue: () => ({ data: catalogue.data }),
+}));
 
 vi.mock("@/providers/use-runner-host", () => ({
   // The page's actions are listed for a window with no native shell of its own.
@@ -465,8 +547,8 @@ vi.mock("@/providers/use-runner-host", () => ({
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useAuthService: () => ({
-    mintVoiceSession: () =>
-      Promise.resolve(
+    mintVoiceSession: () => {
+      const answer = () =>
         fake.mintAnswers.shift() ?? {
           kind: "ok",
           session: {
@@ -474,8 +556,11 @@ vi.mock("@/lib/host", async (importOriginal) => ({
             answerSdp: "a",
             expiresAt: Date.now() + 7_200_000,
           },
-        },
-      ),
+        };
+      return fake.mintHold === null
+        ? Promise.resolve(answer())
+        : fake.mintHold.promise.then(answer);
+    },
     endVoiceSession: fake.endVoiceSession,
     routeVoiceUtterance: (body: string) =>
       Promise.resolve({
@@ -484,6 +569,24 @@ vi.mock("@/lib/host", async (importOriginal) => ({
       }),
   }),
   useHostClient: () => null,
+  useHostBinding: () => ({}),
+  useHostDirectory: () => ({
+    findById: () => directoryFacts.entry,
+    hasSettledFleet: () => directoryFacts.settled,
+  }),
+}));
+// The wake a tile starts on its host: the directory's entry for the tile's host
+// and the wake itself are faked, the tile's mounted wake element is the real one.
+vi.mock("@/hooks/host/use-host-directory-entry", () => ({
+  useHostDirectoryEntry: () => directoryFacts.entry,
+}));
+// The host picker's list needs a directory the tile's wake does not, and the
+// binding the wake is mounted over has none.
+vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
+  useHostDirectoryList: () => ({ data: [] }),
+}));
+vi.mock("@/lib/sandboxes/sandbox-wake", () => ({
+  startSandboxWake: vi.fn<typeof startSandboxWake>(() => Promise.resolve(null)),
 }));
 // The router's directory is the real one, over the bot list above and the
 // person's one environment as `environment.list` answers it.
@@ -759,6 +862,8 @@ vi.mock("@tanstack/react-router", async (importOriginal) => ({
   useNavigate: () => fake.navigate,
 }));
 
+const HISTORY_TAB_REF: TabRef = { kind: "history", id: "history" };
+
 const initialVoice = useVoiceSessionStore.getState();
 const initialRail = useBotOpenThreadStore.getState();
 const initialTabs = useTabsStore.getState();
@@ -914,14 +1019,16 @@ const ACCEPTED = {
 
 let queryClient = new QueryClient();
 
-/** The palette's router seam, which the voice's page actions are listed through; none of them runs here. */
+const navigateToEpicList = vi.fn<() => void>();
+
+/** The palette's router seam, which the voice's page actions are listed through and run by. */
 const KEYBINDING_ROUTER: KeybindingRouter = {
   getPathname: () => "/",
   navigateHome: () => undefined,
   navigateSettings: () => undefined,
   navigateToEpic: () => undefined,
   navigateToEpicTab: () => undefined,
-  navigateToEpicList: () => undefined,
+  navigateToEpicList,
   navigateSettingsSection: () => undefined,
   navigateToTabIntent: () => undefined,
   goBack: () => undefined,
@@ -945,15 +1052,34 @@ function makeRouter() {
   });
 }
 
+function controllerOverRouter(): ReactNode {
+  return (
+    <RouterContextProvider router={makeRouter()}>
+      <CommandPaletteRouterContext.Provider value={KEYBINDING_ROUTER}>
+        <VoiceSessionController />
+      </CommandPaletteRouterContext.Provider>
+    </RouterContextProvider>
+  );
+}
+
 function renderController(): void {
   queryClient = new QueryClient();
   render(
     <QueryClientProvider client={queryClient}>
-      <RouterContextProvider router={makeRouter()}>
-        <CommandPaletteRouterContext.Provider value={KEYBINDING_ROUTER}>
-          <VoiceSessionController />
-        </CommandPaletteRouterContext.Provider>
-      </RouterContextProvider>
+      {controllerOverRouter()}
+    </QueryClientProvider>,
+  );
+}
+
+/** The controller as the app mounts it: under the epic session bridge, beside the voice availability bridge. */
+function renderControllerBesideBridges(): void {
+  queryClient = new QueryClient();
+  render(
+    <QueryClientProvider client={queryClient}>
+      <VoiceAvailabilityLifecycleBridge />
+      <EpicSessionLifecycleBridge>
+        {controllerOverRouter()}
+      </EpicSessionLifecycleBridge>
     </QueryClientProvider>,
   );
 }
@@ -986,9 +1112,14 @@ beforeEach(() => {
   fake.getUserMedia.mockReset();
   fake.getUserMedia.mockImplementation(() => fake.media.promise);
   fake.routeAnswer = null;
+  // A host the directory knows to be awake: an unknown one asks before an open.
+  directoryFacts.entry = sandboxHostEntryFixture("host-a", "awake", false);
+  directoryFacts.settled = false;
   fake.mintAnswers.length = 0;
+  fake.mintHold = null;
   fake.navigateOutcome = () => Promise.resolve();
   fake.navigate.mockClear();
+  navigateToEpicList.mockClear();
   fake.conversationLists.answer("bot-1", true);
   fake.conversationLists.answer("bot-2", true);
   fake.tabActivation = "switches";
@@ -1023,6 +1154,190 @@ afterEach(() => {
   cleanup();
   vi.useRealTimers();
   vi.unstubAllGlobals();
+});
+
+describe("the signed-in account switching", () => {
+  const initialAuth = useAuthStore.getInitialState();
+  const PROFILE_A = {
+    userId: "user-a",
+    userName: "Ada",
+    email: "ada@example.com",
+  };
+  const META_A = { userId: "user-a", username: "ada" };
+  const PROFILE_B = {
+    userId: "user-b",
+    userName: "Bo",
+    email: "bo@example.com",
+  };
+  const META_B = { userId: "user-b", username: "bo" };
+
+  function signInAs(profile: typeof PROFILE_A, meta: typeof META_A): void {
+    act(() => useAuthStore.getState().setSignedIn(profile, meta, []));
+  }
+
+  beforeEach(() => {
+    // The controller beside its bridges, mounted under account A: the global
+    // setup's bare controller makes way for it.
+    cleanup();
+    signInAs(PROFILE_A, META_A);
+    renderControllerBesideBridges();
+  });
+
+  afterEach(() => {
+    cleanup();
+    useAuthStore.setState(initialAuth, true);
+  });
+
+  it("ends a live session with the account as the reason, closing the voice with the microphone already stopped and sending no end route for the account that is gone", async () => {
+    await bringLive();
+    const token = useVoiceSessionStore.getState().sessionToken;
+    const engine = fake.engines[0];
+    const microphoneStoppedAtClose: boolean[] = [];
+    engine.close.mockImplementation(() => {
+      microphoneStoppedAtClose.push(fake.track.stop.mock.calls.length > 0);
+      return Promise.resolve();
+    });
+
+    signInAs(PROFILE_B, META_B);
+    await settle();
+
+    const state = useVoiceSessionStore.getState();
+    expect(state.phase).toBe("idle");
+    expect(state.session).toBeNull();
+    expect(state.sessionToken).not.toBe(token);
+    expect(state.endReason).toBe("account");
+    expect(fake.track.stop).toHaveBeenCalled();
+    expect(microphoneStoppedAtClose).toEqual([true]);
+    expect(fake.endVoiceSession).not.toHaveBeenCalled();
+  });
+
+  it("hears nothing more from the session that was ended, so a late utterance of it posts nowhere and moves nothing", async () => {
+    await bringLive();
+    focusOn(CHANNEL_FOCUS);
+    await say("first words", "d1");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(6_000);
+    });
+    expect(fake.sendMock).toHaveBeenCalledTimes(1);
+    fake.sendMock.mockClear();
+    signInAs(PROFILE_B, META_B);
+    await settle();
+
+    await say("late words", "d2");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(6_000);
+    });
+
+    expect(fake.sendMock).not.toHaveBeenCalled();
+    expect(useVoiceSessionStore.getState().phase).toBe("idle");
+    expect(useVoiceSessionStore.getState().endReason).toBe("account");
+  });
+
+  it("keeps the session when the same account refreshes its profile or goes unverified and back", async () => {
+    await bringLive();
+    const token = useVoiceSessionStore.getState().sessionToken;
+
+    signInAs({ ...PROFILE_A, userName: "Ada L." }, META_A);
+    act(() => useAuthStore.getState().setUnverifiedSession(PROFILE_A, META_A));
+    signInAs(PROFILE_A, META_A);
+    await settle();
+
+    const state = useVoiceSessionStore.getState();
+    expect(state.phase).toBe("live");
+    expect(state.sessionToken).toBe(token);
+    expect(state.endReason).toBeNull();
+    expect(fake.track.stop).not.toHaveBeenCalled();
+    expect(fake.endVoiceSession).not.toHaveBeenCalled();
+  });
+
+  it("keeps the session through a sign-in attempt that fails back to the same account", async () => {
+    await bringLive();
+    const token = useVoiceSessionStore.getState().sessionToken;
+
+    act(() => useAuthStore.getState().setSigningIn("device"));
+    act(() => useAuthStore.getState().setInteractiveAttemptFailed());
+    signInAs(PROFILE_A, META_A);
+    await settle();
+
+    expect(useVoiceSessionStore.getState().phase).toBe("live");
+    expect(useVoiceSessionStore.getState().sessionToken).toBe(token);
+    expect(fake.track.stop).not.toHaveBeenCalled();
+    expect(fake.endVoiceSession).not.toHaveBeenCalled();
+  });
+
+  it("leaves nothing live when the account switches while the first opening's mint is out, and sends no end route for the session that mint then opens", async () => {
+    fake.mintHold = fake.deferred<void>();
+    await startTalk();
+    await grantMicrophone();
+    await openMicrophone();
+    expect(useVoiceSessionStore.getState().phase).toBe("connecting");
+
+    signInAs(PROFILE_B, META_B);
+    await settle();
+
+    const state = useVoiceSessionStore.getState();
+    expect(state.phase).toBe("idle");
+    expect(state.refusal).toBe("unavailable");
+    expect(state.endReason).toBeNull();
+    expect(fake.track.stop).toHaveBeenCalled();
+
+    await act(async () => {
+      fake.mintHold?.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(fake.endVoiceSession).not.toHaveBeenCalled();
+    const after = useVoiceSessionStore.getState();
+    expect(after.phase).toBe("idle");
+    expect(after.refusal).toBe("unavailable");
+  });
+
+  it("sends no end route for a session the person ended, when the account switched while the voice's close was still open", async () => {
+    await bringLive();
+    const engine = fake.engines[0];
+    const closeHeld = fake.deferred<void>();
+    engine.close.mockImplementation(() => closeHeld.promise);
+
+    act(() => useVoiceSessionStore.getState().driver?.end());
+    expect(engine.close).toHaveBeenCalledTimes(1);
+    signInAs(PROFILE_B, META_B);
+    await settle();
+    expect(fake.endVoiceSession).not.toHaveBeenCalled();
+    await act(async () => {
+      closeHeld.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(fake.endVoiceSession).not.toHaveBeenCalled();
+    expect(useVoiceSessionStore.getState().phase).toBe("idle");
+  });
+
+  it("sends the end route for a session the person ends while the same account stays signed in", async () => {
+    await bringLive();
+
+    act(() => useVoiceSessionStore.getState().driver?.end());
+    await settle();
+
+    const state = useVoiceSessionStore.getState();
+    expect(state.phase).toBe("idle");
+    expect(state.endReason).toBeNull();
+    expect(fake.endVoiceSession).toHaveBeenCalledTimes(1);
+    expect(fake.endVoiceSession).toHaveBeenCalledWith("vs1");
+  });
+
+  it("still sends the end route when the window signs out under a live session and the controller then goes away", async () => {
+    await bringLive();
+
+    act(() => useAuthStore.getState().setSignedOut());
+    await settle();
+    expect(useVoiceSessionStore.getState().phase).toBe("live");
+    expect(fake.endVoiceSession).not.toHaveBeenCalled();
+    cleanup();
+    await settle();
+
+    expect(fake.endVoiceSession).toHaveBeenCalledTimes(1);
+    expect(fake.endVoiceSession).toHaveBeenCalledWith("vs1");
+  });
 });
 
 describe("pagehide", () => {
@@ -4222,7 +4537,7 @@ describe("the page in front", () => {
     expect(text.indexOf("</view>")).toBeLessThan(text.indexOf("<utterance>"));
   });
 
-  it("answers a request for one of its actions that the voice cannot do here yet, and posts nothing", async () => {
+  it("runs one of its actions that needs no yes through the page's own path, and says and posts nothing", async () => {
     const bodies: string[] = [];
     await bringLive();
     focusOn(CHANNEL_FOCUS);
@@ -4240,11 +4555,1001 @@ describe("the page in front", () => {
     expect(requestText(bodies[0] ?? "")).toContain(
       '{"action":"action:app.history.open"',
     );
+    expect(navigateToEpicList).toHaveBeenCalledTimes(1);
+    expect(fake.engines[0]?.appendCommentary).not.toHaveBeenCalled();
+    expect(fake.sendMock).not.toHaveBeenCalled();
+    expect(useVoiceSessionStore.getState().segments).toEqual([]);
+  });
+
+  it("drops the action, reading the page when it is about to run, if the page moved while the router was answering", async () => {
+    await bringLive();
+    focusOn(CHANNEL_FOCUS);
+    fake.routeAnswer = () => {
+      // The person changes tab after the router was shown the page.
+      act(() => {
+        useTabsStore.setState({
+          items: [{ kind: "tab", id: "item-history", ref: HISTORY_TAB_REF }],
+          activeItemId: "item-history",
+        });
+      });
+      return actAnswer("action:app.history.open");
+    };
+
+    await say("Open the history.", "d1");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(4_000);
+    });
+
+    expect(navigateToEpicList).not.toHaveBeenCalled();
     expect(fake.engines[0]?.appendCommentary).toHaveBeenCalledWith(
-      expect.stringContaining("I can't do that here yet."),
+      PAGE_CHANGED_ASK_TEXT,
       "d1",
     );
     expect(fake.sendMock).not.toHaveBeenCalled();
-    expect(useVoiceSessionStore.getState().segments).toEqual([]);
+    expect(useVoiceSessionStore.getState().pendingAction).toMatchObject({
+      kind: "interrupted",
+      text: "Open the history.",
+    });
+  });
+
+  const EPIC_ID = "epic-voice";
+  const AGENT_ID = "agent-chat";
+  const HOST_ID = "host-a";
+  const USER_ID = "user-me";
+  const AGENT_TILE: EpicNodeRef = {
+    id: AGENT_ID,
+    instanceId: "inst-agent",
+    type: "chat",
+    name: "Main agent",
+    hostId: HOST_ID,
+  };
+  const SETTINGS: ChatRunSettings = {
+    ultracode: false,
+    harnessId: "claude",
+    model: "model-a",
+    permissionMode: "supervised",
+    reasoningEffort: null,
+    serviceTier: null,
+    agentMode: "regular",
+    profileId: null,
+  };
+
+  function turn(turnId: string): ChatActiveTurn {
+    return {
+      turnId,
+      status: "running",
+      harnessId: "claude",
+      model: "model-a",
+      reasoningEffort: null,
+      serviceTier: null,
+      agentMode: "regular",
+      profileId: null,
+      userMessageId: null,
+      startedAt: 1,
+      updatedAt: 1,
+      sameTurnSteeringSupported: true,
+    };
+  }
+
+  let releaseTile: () => void = () => undefined;
+
+  afterEach(() => {
+    releaseTile();
+    releaseTile = () => undefined;
+    useTileFindStore.getState().resetForTests();
+    useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    disposeAllChatSessions();
+  });
+
+  interface AgentWire {
+    readonly sent: ChatSubscribeClientFrame[];
+    readonly callbacks: ChatStreamCallbacks;
+  }
+
+  /**
+   * A task in front whose active tile is a chat running `turn-1`, in the real
+   * canvas, tile-find and chat session registry; only the stream client, the
+   * wire, is faked.
+   */
+  function seedRunningAgent(): AgentWire {
+    const sent: ChatSubscribeClientFrame[] = [];
+    const wire: { callbacks: ChatStreamCallbacks | null } = {
+      callbacks: null,
+    };
+    __getChatSessionRegistryForTests().acquire(
+      {
+        epicId: EPIC_ID,
+        chatId: AGENT_ID,
+        hostId: HOST_ID,
+        scopeKey: "voice-controller-test",
+      },
+      () =>
+        createChatSessionStore({
+          environment: CHAT_STORE_TEST_ENVIRONMENT,
+          hostId: HOST_ID,
+          epicId: EPIC_ID,
+          chatId: AGENT_ID,
+          userId: USER_ID,
+          onAuthError: null,
+          onProviderAuthError: null,
+          wakeTransport: null,
+          streamFlushCoordinator: IMMEDIATE_STREAM_FLUSH_COORDINATOR,
+          streamClientFactory: (_epicId, _chatId, callbacks) => {
+            wire.callbacks = callbacks;
+            return {
+              sendAction: (frame) => {
+                sent.push(frame);
+              },
+              sameTurnSteeringProtocolSupported: () => true,
+              draftBlobBridgeSupported: () => true,
+              requestTranscriptRange: () => undefined,
+              requestResnapshot: () => undefined,
+              close: () => undefined,
+            };
+          },
+        }),
+    );
+    const { callbacks } = wire;
+    if (callbacks === null) throw new Error("the store never opened");
+    callbacks.onConnectionStatus("open", null, null, null);
+    callbacks.onSnapshot({
+      kind: "snapshot",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: AGENT_ID,
+      snapshot: {
+        chat: {
+          id: AGENT_ID,
+          parentId: null,
+          userId: USER_ID,
+          hostId: HOST_ID,
+          title: AGENT_TILE.name,
+          createdAt: 1,
+          updatedAt: 1,
+          isTitleEditedByUser: false,
+          settings: SETTINGS,
+          activeSessionChain: null,
+          claudePendingWakes: [],
+          messages: [],
+          events: [],
+          archivedAt: null,
+          pinnedUserProviderHandle: null,
+          lastDeliveredRolesDigest: null,
+        },
+        access: { role: "owner", ownerUserId: USER_ID, canAct: true },
+        queue: { status: "idle", items: [] },
+        runStatus: "running",
+        activeTurn: turn("turn-1"),
+        pendingApprovals: [],
+        pendingInterviews: [],
+        worktreeBinding: null,
+        missingWorktreePaths: [],
+        pendingFileEditApprovals: [],
+        accumulatedFileChanges: [],
+        managedCommands: [],
+        heldUpdates: [],
+        portForwards: [],
+      },
+    });
+
+    const canvas = useEpicCanvasStore.getState();
+    const tabId = canvas.openEpicTab(EPIC_ID, "Tracy Bots");
+    canvas.openTileInTab(tabId, AGENT_TILE);
+    const ref: TabRef = { kind: "epic", id: tabId };
+    act(() => {
+      useTabsStore.setState({
+        version: 2,
+        items: [{ kind: "tab", id: tabItemId(ref), ref }],
+        activeItemId: tabItemId(ref),
+        stripOrder: [ref],
+        systemTabs: { history: null, settings: null },
+      });
+      releaseTile = useTileFindStore.getState().registerTarget({
+        tileInstanceId: AGENT_TILE.instanceId,
+        contentId: `${AGENT_TILE.instanceId}-content`,
+        viewTabId: tabId,
+        tileId: `${AGENT_TILE.instanceId}-pane`,
+        epicId: EPIC_ID,
+        tileKind: "chat",
+        isEligible: true,
+        adapter: createUnavailableTileFindAdapter({
+          tileInstanceId: AGENT_TILE.instanceId,
+          tileKind: "chat",
+          message: null,
+        }),
+      });
+    });
+    return { sent, callbacks };
+  }
+
+  describe("a spoken tell of the agent", () => {
+    const initialAuth = useAuthStore.getInitialState();
+    const DRAFT: JsonContent = {
+      type: "doc",
+      content: [
+        { type: "paragraph", content: [{ type: "text", text: "draft" }] },
+      ],
+    };
+    const EDITOR: ComposerPromptEditorHandle = {
+      isReady: () => true,
+      getEditorIncarnation: () => null,
+      hasFocus: () => false,
+      focus: () => undefined,
+      focusAtEnd: () => undefined,
+      getJSON: () => DRAFT,
+      isEmpty: () => false,
+      clear: () => undefined,
+      setContent: () => undefined,
+      syncContent: () => undefined,
+      insertImageAttachments: () => undefined,
+      insertMentionAttachment: () => false,
+      beginPathInsertion: () => null,
+      removeImageAttachmentById: () => undefined,
+      rewriteImageAttachmentHashById: () => false,
+      insertDictatedText: () => undefined,
+      draftGeneration: () => 0,
+      dismissActiveSuggestion: () => false,
+    };
+    /** A split's other pane showing the same chat. */
+    const OTHER_TILE_ID = "inst-agent-other";
+
+    beforeEach(() => {
+      catalogue.data = { providers: [], offeredAgents: ["claude"] };
+      usePendingSandboxSendStore.setState({ sends: {} });
+      useStagedSandboxStore.setState({ bySurface: {} });
+      useAuthStore.setState({
+        status: "signed-in",
+        profile: { userId: USER_ID, userName: "Me", email: "me@example.com" },
+        contextMetadata: { userId: USER_ID, username: "me" },
+      });
+    });
+
+    afterEach(() => {
+      usePendingSandboxSendStore.setState({ sends: {} });
+      useStagedSandboxStore.setState({ bySurface: {} });
+      useAuthStore.setState(initialAuth, true);
+    });
+
+    /** A real composer for the agent's chat in the tile `tileInstanceId`, with its toolbar on `modelSlug`. */
+    function mountComposer(
+      tileInstanceId: string,
+      sendDisabled: boolean,
+      modelSlug: string,
+      target: RestingChatSandbox | null,
+    ): void {
+      const toolbarStore = createComposerToolbarStore({
+        purpose: "run",
+        reasoningFallback: "model-default",
+        seedKey: "voice-controller-tell",
+        values: {
+          ultracode: false,
+          permission: "supervised",
+          selection: { harnessId: "claude", modelSlug, profileId: null },
+          reasoning: "",
+          serviceTier: "",
+        },
+        onSettingsChange: null,
+        tuiOnly: false,
+        chatLineCarriesAutoMode: null,
+        ultracodeCarried: false,
+        hostId: HOST_ID,
+      });
+      const pickerStore = createComposerPickerStore();
+      renderHook(
+        () => {
+          const boundSend = useBoundSandboxSend({
+            epicId: EPIC_ID,
+            chatId: AGENT_ID,
+            target,
+          });
+          return useChatComposerSubmit({
+            taskId: AGENT_ID,
+            editorRef: { current: EDITOR },
+            pickerStore,
+            toolbarStore,
+            activeTurnStatus: null,
+            steerCapable: false,
+            steerEnabled: useSettingsStore.getState().steerOnModEnterEnabled,
+            steerProtocolSupported: true,
+            getActiveTurnForSteer: () => null,
+            hasPendingApprovals: false,
+            sendDisabled,
+            sendDisabledHint: null,
+            workspaceBlocked: false,
+            imagesUnsupported: false,
+            attachmentPreparationPending: false,
+            onSubmitMessage: (input: ChatComposerSubmitInput) =>
+              target === null ? true : boundSend(input),
+            onSideChat: null,
+            targetHostId: HOST_ID,
+            restingSandbox: target,
+            queueEditTargetId: null,
+            getDraftBlobBridgeSupported: () => true,
+          });
+        },
+        {
+          wrapper: ({ children }: { readonly children: ReactNode }) => (
+            <TileMinimapContext.Provider value={tileInstanceId}>
+              {children}
+            </TileMinimapContext.Provider>
+          ),
+        },
+      );
+    }
+
+    /** Says "tell the agent ..." and lets the voice act on it. */
+    async function tellTheAgent() {
+      fake.routeAnswer = () => actAnswer(`agent.tell:${AGENT_ID}`);
+      await say("use the other branch", "d1");
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(6_000);
+      });
+    }
+
+    /** The read-back the voice appended, if it asked one. */
+    function askedQuestion(): string | null {
+      const asked = fake.engines[0]?.appendCommentary.mock.calls.find(
+        ([text]) => text.endsWith("Yes?"),
+      );
+      return asked === undefined ? null : asked[0];
+    }
+
+    function sends(wire: AgentWire) {
+      return wire.sent.flatMap((frame) =>
+        frame.kind === "send" ? [frame] : [],
+      );
+    }
+
+    it("sends through the composer shown in the active tile when it can send", async () => {
+      await bringLive();
+      focusOn(CHANNEL_FOCUS);
+      const wire = seedRunningAgent();
+      mountComposer(AGENT_TILE.instanceId, false, "front-model", null);
+
+      await tellTheAgent();
+
+      expect(sends(wire).map((frame) => frame.settings.model)).toEqual([
+        "front-model",
+      ]);
+      expect(askedQuestion()).toBeNull();
+    });
+
+    it("says it can't and sends nothing when the composer shown in the active tile cannot send", async () => {
+      await bringLive();
+      focusOn(CHANNEL_FOCUS);
+      const wire = seedRunningAgent();
+      mountComposer(AGENT_TILE.instanceId, true, "front-model", null);
+
+      await tellTheAgent();
+
+      expect(sends(wire)).toEqual([]);
+      expect(fake.engines[0]?.appendCommentary).toHaveBeenCalledWith(
+        AGENT_CANT_TAKE_NOTICE,
+        "d1",
+      );
+    });
+
+    it("takes the gates of the active tile's composer, not those of another pane showing the same chat", async () => {
+      await bringLive();
+      focusOn(CHANNEL_FOCUS);
+      const wire = seedRunningAgent();
+      mountComposer(AGENT_TILE.instanceId, true, "front-model", null);
+      mountComposer(OTHER_TILE_ID, false, "other-model", null);
+
+      await tellTheAgent();
+
+      expect(sends(wire)).toEqual([]);
+      expect(fake.engines[0]?.appendCommentary).toHaveBeenCalledWith(
+        AGENT_CANT_TAKE_NOTICE,
+        "d1",
+      );
+    });
+
+    it("takes the settings of the active tile's composer, not those of another pane showing the same chat", async () => {
+      await bringLive();
+      focusOn(CHANNEL_FOCUS);
+      const wire = seedRunningAgent();
+      mountComposer(AGENT_TILE.instanceId, false, "front-model", null);
+      mountComposer(OTHER_TILE_ID, false, "other-model", null);
+
+      await tellTheAgent();
+
+      expect(sends(wire).map((frame) => frame.settings.model)).toEqual([
+        "front-model",
+      ]);
+    });
+  });
+
+  describe("a spoken tell of an agent whose sandbox rests", () => {
+    const initialAuth = useAuthStore.getInitialState();
+    const WORDS = "use the other branch";
+    const QUESTION = `The sandbox is asleep. Wake it and send: ${WORDS}. Yes?`;
+    const DRAFT: JsonContent = {
+      type: "doc",
+      content: [
+        { type: "paragraph", content: [{ type: "text", text: "draft" }] },
+      ],
+    };
+    const EDITOR: ComposerPromptEditorHandle = {
+      isReady: () => true,
+      getEditorIncarnation: () => null,
+      hasFocus: () => false,
+      focus: () => undefined,
+      focusAtEnd: () => undefined,
+      getJSON: () => DRAFT,
+      isEmpty: () => false,
+      clear: () => undefined,
+      setContent: () => undefined,
+      syncContent: () => undefined,
+      insertImageAttachments: () => undefined,
+      insertMentionAttachment: () => false,
+      beginPathInsertion: () => null,
+      removeImageAttachmentById: () => undefined,
+      rewriteImageAttachmentHashById: () => false,
+      insertDictatedText: () => undefined,
+      draftGeneration: () => 0,
+      dismissActiveSuggestion: () => false,
+    };
+    const RESTING: RestingChatSandbox = {
+      kind: "resting",
+      sandbox: sandboxSummaryFixture({
+        id: "sbx-r",
+        hostId: HOST_ID,
+        displayName: "e2e-sbx-rest",
+        state: "suspended",
+      }),
+      configuration: { kind: "team", teamId: "team-a", teamName: "Acme" },
+      wakeChangesPayer: true,
+    };
+
+    beforeEach(() => {
+      catalogue.data = { providers: [], offeredAgents: ["claude"] };
+      usePendingSandboxSendStore.setState({ sends: {} });
+      useStagedSandboxStore.setState({ bySurface: {} });
+      useAuthStore.setState({
+        status: "signed-in",
+        profile: { userId: USER_ID, userName: "Me", email: "me@example.com" },
+        contextMetadata: { userId: USER_ID, username: "me" },
+      });
+    });
+
+    afterEach(() => {
+      usePendingSandboxSendStore.setState({ sends: {} });
+      useStagedSandboxStore.setState({ bySurface: {} });
+      useAuthStore.setState(initialAuth, true);
+    });
+
+    /** The agent's composer in the active tile, over a resting sandbox. */
+    function mountRestingComposer(resting: RestingChatSandbox): void {
+      const toolbarStore = createComposerToolbarStore({
+        purpose: "run",
+        reasoningFallback: "model-default",
+        seedKey: "voice-controller-resting",
+        values: {
+          ultracode: false,
+          permission: "supervised",
+          selection: {
+            harnessId: "claude",
+            modelSlug: "model-a",
+            profileId: null,
+          },
+          reasoning: "",
+          serviceTier: "",
+        },
+        onSettingsChange: null,
+        tuiOnly: false,
+        chatLineCarriesAutoMode: null,
+        ultracodeCarried: false,
+        hostId: HOST_ID,
+      });
+      const pickerStore = createComposerPickerStore();
+      renderHook(
+        () => {
+          const boundSend = useBoundSandboxSend({
+            epicId: EPIC_ID,
+            chatId: AGENT_ID,
+            target: resting,
+          });
+          return useChatComposerSubmit({
+            taskId: AGENT_ID,
+            editorRef: { current: EDITOR },
+            pickerStore,
+            toolbarStore,
+            activeTurnStatus: null,
+            steerCapable: false,
+            steerEnabled: useSettingsStore.getState().steerOnModEnterEnabled,
+            steerProtocolSupported: true,
+            getActiveTurnForSteer: () => null,
+            hasPendingApprovals: false,
+            sendDisabled: false,
+            sendDisabledHint: null,
+            workspaceBlocked: false,
+            imagesUnsupported: false,
+            attachmentPreparationPending: false,
+            onSubmitMessage: (input: ChatComposerSubmitInput) =>
+              boundSend(input),
+            onSideChat: null,
+            targetHostId: HOST_ID,
+            restingSandbox: resting,
+            queueEditTargetId: null,
+            getDraftBlobBridgeSupported: () => true,
+          });
+        },
+        {
+          wrapper: ({ children }: { readonly children: ReactNode }) => (
+            <TileMinimapContext.Provider value={AGENT_TILE.instanceId}>
+              {children}
+            </TileMinimapContext.Provider>
+          ),
+        },
+      );
+    }
+
+    function heldSends() {
+      return Object.values(usePendingSandboxSendStore.getState().sends);
+    }
+
+    function sends(wire: AgentWire) {
+      return wire.sent.flatMap((frame) =>
+        frame.kind === "send" ? [frame] : [],
+      );
+    }
+
+    /** Says the tell, and lets the question be heard. */
+    async function tellAndHearQuestion(): Promise<string> {
+      fake.routeAnswer = () => actAnswer(`agent.tell:${AGENT_ID}`);
+      await say(WORDS, "d1");
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(6_000);
+      });
+      const asked = fake.engines[0]?.appendCommentary.mock.calls.find(
+        ([text]) => text.endsWith("Yes?"),
+      );
+      if (asked === undefined) throw new Error("the tell was never asked");
+      act(() => eventsOf(0).onOutputTranscriptDelta(asked[0]));
+      await settle();
+      return asked[0];
+    }
+
+    async function answer(words: string) {
+      await say(words, "d2");
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(6_000);
+      });
+    }
+
+    it("asks the wake first, in the exact words, and holds nothing until the yes", async () => {
+      await bringLive();
+      focusOn(CHANNEL_FOCUS);
+      const wire = seedRunningAgent();
+      mountRestingComposer(RESTING);
+
+      const question = await tellAndHearQuestion();
+
+      expect(question).toBe(QUESTION);
+      expect(heldSends()).toEqual([]);
+      expect(sends(wire)).toEqual([]);
+    });
+
+    it("holds the message for the wake on a yes, and sends no frame", async () => {
+      await bringLive();
+      focusOn(CHANNEL_FOCUS);
+      const wire = seedRunningAgent();
+      mountRestingComposer(RESTING);
+      await tellAndHearQuestion();
+
+      await answer("yes");
+
+      expect(heldSends().map((held) => held.text)).toEqual([WORDS]);
+      expect(sends(wire)).toEqual([]);
+    });
+
+    it("holds nothing on a no", async () => {
+      await bringLive();
+      focusOn(CHANNEL_FOCUS);
+      const wire = seedRunningAgent();
+      mountRestingComposer(RESTING);
+      await tellAndHearQuestion();
+
+      await answer("no");
+
+      expect(heldSends()).toEqual([]);
+      expect(sends(wire)).toEqual([]);
+    });
+
+    it("asks nothing, says it can't wake, and holds and sends nothing when the sandbox is frozen", async () => {
+      await bringLive();
+      focusOn(CHANNEL_FOCUS);
+      const wire = seedRunningAgent();
+      mountRestingComposer({
+        ...RESTING,
+        sandbox: { ...RESTING.sandbox, frozen: true },
+      });
+
+      fake.routeAnswer = () => actAnswer(`agent.tell:${AGENT_ID}`);
+      await say(WORDS, "d1");
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(6_000);
+      });
+
+      const spoken = fake.engines[0]?.appendCommentary.mock.calls.map(
+        ([text]) => text,
+      );
+      expect(spoken).toContain(SANDBOX_CANT_WAKE_NOTICE);
+      expect(spoken.some((text) => text.endsWith("Yes?"))).toBe(false);
+      expect(heldSends()).toEqual([]);
+      expect(sends(wire)).toEqual([]);
+    });
+
+    it("holds nothing and says the page changed when the page moved between the question and the yes", async () => {
+      await bringLive();
+      focusOn(CHANNEL_FOCUS);
+      const wire = seedRunningAgent();
+      mountRestingComposer(RESTING);
+      await tellAndHearQuestion();
+      act(() => {
+        useTabsStore.setState({
+          items: [{ kind: "tab", id: "item-history", ref: HISTORY_TAB_REF }],
+          activeItemId: "item-history",
+        });
+      });
+
+      await answer("yes");
+
+      expect(heldSends()).toEqual([]);
+      expect(sends(wire)).toEqual([]);
+      expect(fake.engines[0]?.appendCommentary).toHaveBeenCalledWith(
+        PAGE_CHANGED_ASK_TEXT,
+        "d1",
+      );
+    });
+  });
+
+  describe("a spoken opener of a chat on a sandbox that rests", () => {
+    const SLEEPY_ID = "chat-sleepy";
+    const SLEEPY_TITLE = "Sleepy agent";
+    const QUESTION = `The sandbox is asleep. Wake it and open ${SLEEPY_TITLE}. Yes?`;
+    const MAY_WAKE_QUESTION = "That may wake its sandbox. Open it anyway? Yes?";
+
+    const NO_STREAM: EpicStreamClientFactory = () => ({
+      applyUpdate: () => undefined,
+      awareness: () => undefined,
+      applyArtifactRoomUpdate: () => undefined,
+      artifactRoomAwareness: () => undefined,
+      retryMigration: () => undefined,
+      close: () => undefined,
+    });
+
+    function projectionOf(id: string, title: string): ChatProjection {
+      return {
+        id,
+        title,
+        parentId: null,
+        createdAt: 1,
+        updatedAt: 1,
+        userId: USER_ID,
+        ownedByViewer: true,
+        hostId: HOST_ID,
+        isTitleEditedByUser: false,
+        docResident: false,
+        settings: null,
+        archivedAt: null,
+      };
+    }
+
+    /** The task's session, holding the agent in front and the sleepy chat, which the task does not show. */
+    function openTaskSession(): void {
+      const handle = openStoreForTest({
+        epicId: EPIC_ID,
+        userId: null,
+        factories: { streamClientFactory: NO_STREAM, laneSelection: null },
+        writeCommand: null,
+      });
+      handleHostIds.set(handle, HOST_ID);
+      handle.store.setState({
+        chats: {
+          allIds: [AGENT_ID, SLEEPY_ID],
+          byId: {
+            [AGENT_ID]: projectionOf(AGENT_ID, AGENT_TILE.name),
+            [SLEEPY_ID]: projectionOf(SLEEPY_ID, SLEEPY_TITLE),
+          },
+        },
+      });
+      __getOpenEpicRegistryForTests().acquireMounted(EPIC_ID, () => handle);
+    }
+
+    afterEach(() => {
+      __getOpenEpicRegistryForTests().disposeAll();
+    });
+
+    function canvasOfTask() {
+      const [canvas] = Object.values(
+        useEpicCanvasStore.getState().canvasByTabId,
+      );
+      if (canvas === undefined) throw new Error("the task has no canvas");
+      return canvas;
+    }
+
+    function sleepyTiles(): ReadonlyArray<string> {
+      return Object.values(canvasOfTask().tilesByInstanceId).flatMap((ref) =>
+        ref?.id === SLEEPY_ID ? [ref.instanceId] : [],
+      );
+    }
+
+    /** The sleepy chat's tile, opened in the task before anything is said. */
+    function showSleepyTile(instanceId: string): void {
+      const tabId = Object.keys(useEpicCanvasStore.getState().canvasByTabId).at(
+        0,
+      );
+      if (tabId === undefined) throw new Error("the task has no canvas");
+      useEpicCanvasStore.getState().openTileInTab(tabId, {
+        id: SLEEPY_ID,
+        instanceId,
+        type: "chat",
+        name: SLEEPY_TITLE,
+        hostId: HOST_ID,
+      });
+    }
+
+    async function seedTask(): Promise<void> {
+      await bringLive();
+      focusOn(CHANNEL_FOCUS);
+      seedRunningAgent();
+      openTaskSession();
+      await settle();
+    }
+
+    /** Says the opener, and lets the question be heard if one was asked. */
+    async function openSleepy(): Promise<string | null> {
+      fake.routeAnswer = () => actAnswer(`open:chats:${SLEEPY_ID}`);
+      await say("open the sleepy agent", "d1");
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(6_000);
+      });
+      const asked = fake.engines[0]?.appendCommentary.mock.calls.find(
+        ([text]) => text.endsWith("Yes?"),
+      );
+      if (asked === undefined) return null;
+      act(() => eventsOf(0).onOutputTranscriptDelta(asked[0]));
+      await settle();
+      return asked[0];
+    }
+
+    async function answer(words: string) {
+      await say(words, "d2");
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(6_000);
+      });
+    }
+
+    function sleepyNode(): EpicCanvasTileRef {
+      const node = Object.values(canvasOfTask().tilesByInstanceId).find(
+        (ref) => ref?.id === SLEEPY_ID,
+      );
+      if (node === undefined) throw new Error("the sleepy tile is not open");
+      return node;
+    }
+
+    /**
+     * The wake the sleepy tile mounts, as the canvas renders it for `node`;
+     * returns how to render it again after the directory moved.
+     */
+    function mountWake(node: EpicCanvasTileRef): () => void {
+      const wake = wakeElementOf(node);
+      const client = new QueryClient();
+      const mounted = render(
+        <QueryClientProvider client={client}>{wake}</QueryClientProvider>,
+      );
+      return () => {
+        mounted.rerender(
+          <QueryClientProvider client={client}>
+            {cloneElement(wake)}
+          </QueryClientProvider>,
+        );
+      };
+    }
+
+    describe("whose host the directory does not know yet", () => {
+      beforeEach(() => {
+        directoryFacts.entry = null;
+        vi.mocked(startSandboxWake).mockClear();
+      });
+
+      it("asks before it opens, opens nothing and marks nothing until the yes, and the wake the open then starts waits for the directory's answer", async () => {
+        await seedTask();
+        showSleepyTile("inst-sleepy-unknown-yes");
+        const restored = sleepyNode();
+        const rerenderWake = mountWake(restored);
+
+        expect(await openSleepy()).toBe(MAY_WAKE_QUESTION);
+        expect(wasTileOpenRequested(restored.instanceId)).toBe(false);
+
+        await answer("yes");
+
+        expect(sleepyTiles()).toEqual([restored.instanceId]);
+        expect(wasTileOpenRequested(restored.instanceId)).toBe(true);
+        expect(startSandboxWake).not.toHaveBeenCalled();
+
+        directoryFacts.entry = sandboxHostEntryFixture(
+          HOST_ID,
+          "suspended",
+          false,
+        );
+        rerenderWake();
+
+        expect(startSandboxWake).toHaveBeenCalledTimes(1);
+        expect(vi.mocked(startSandboxWake).mock.calls.at(0)?.[2]).toBe(HOST_ID);
+      });
+
+      it("leaves the tile unopened on a no, and the directory's answer afterwards wakes nothing", async () => {
+        await seedTask();
+        showSleepyTile("inst-sleepy-unknown-no");
+        const restored = sleepyNode();
+        const rerenderWake = mountWake(restored);
+        expect(await openSleepy()).toBe(MAY_WAKE_QUESTION);
+
+        await answer("no");
+        directoryFacts.entry = sandboxHostEntryFixture(
+          HOST_ID,
+          "suspended",
+          false,
+        );
+        rerenderWake();
+
+        expect(wasTileOpenRequested(restored.instanceId)).toBe(false);
+        expect(startSandboxWake).not.toHaveBeenCalled();
+      });
+    });
+
+    it("opens a tile whose host the answered listing does not have at once, with no question", async () => {
+      directoryFacts.entry = null;
+      directoryFacts.settled = true;
+      await seedTask();
+
+      const question = await openSleepy();
+
+      expect(question).toBeNull();
+      expect(sleepyTiles()).toHaveLength(1);
+    });
+
+    describe("whose sandbox is asleep", () => {
+      beforeEach(() => {
+        directoryFacts.entry = sandboxHostEntryFixture(
+          HOST_ID,
+          "suspended",
+          false,
+        );
+      });
+
+      it("asks the wake first, in the exact words, and opens nothing until the yes", async () => {
+        await seedTask();
+
+        const question = await openSleepy();
+
+        expect(question).toBe(QUESTION);
+        expect(sleepyTiles()).toEqual([]);
+      });
+
+      it("opens the tile on a yes", async () => {
+        await seedTask();
+        await openSleepy();
+
+        await answer("yes");
+
+        expect(sleepyTiles()).toHaveLength(1);
+      });
+
+      it("leaves the canvas alone on a no", async () => {
+        await seedTask();
+        expect(await openSleepy()).toBe(QUESTION);
+
+        await answer("no");
+
+        expect(sleepyTiles()).toEqual([]);
+      });
+
+      it("opens a tile the task does not show once, and the tile it mounts is the one that is asked for and woken", async () => {
+        vi.mocked(startSandboxWake).mockClear();
+        await seedTask();
+        expect(await openSleepy()).toBe(QUESTION);
+        expect(sleepyTiles()).toEqual([]);
+
+        await answer("yes");
+
+        const opened = sleepyNode();
+        expect(sleepyTiles()).toEqual([opened.instanceId]);
+        expect(wasTileOpenRequested(opened.instanceId)).toBe(true);
+        mountWake(opened);
+        expect(startSandboxWake).toHaveBeenCalledTimes(1);
+        expect(vi.mocked(startSandboxWake).mock.calls.at(0)?.[2]).toBe(HOST_ID);
+      });
+
+      it("asks for a tile the task already shows but a restore put back, and a yes asks for that tile without a second view of it", async () => {
+        await seedTask();
+        showSleepyTile("inst-sleepy-restored");
+        expect(wasTileOpenRequested("inst-sleepy-restored")).toBe(false);
+
+        const question = await openSleepy();
+
+        expect(question).toBe(QUESTION);
+        expect(wasTileOpenRequested("inst-sleepy-restored")).toBe(false);
+
+        await answer("yes");
+
+        expect(wasTileOpenRequested("inst-sleepy-restored")).toBe(true);
+        expect(sleepyTiles()).toEqual(["inst-sleepy-restored"]);
+      });
+    });
+
+    it("asks nothing, says it can't wake, and leaves the canvas alone when the sandbox is frozen", async () => {
+      directoryFacts.entry = sandboxHostEntryFixture(
+        HOST_ID,
+        "suspended",
+        true,
+      );
+      await seedTask();
+      showSleepyTile("inst-sleepy-frozen");
+      const before = canvasOfTask();
+
+      expect(await openSleepy()).toBeNull();
+
+      expect(fake.engines[0]?.appendCommentary).toHaveBeenCalledWith(
+        SANDBOX_CANT_WAKE_NOTICE,
+        "d1",
+      );
+      expect(wasTileOpenRequested("inst-sleepy-frozen")).toBe(false);
+      expect(canvasOfTask()).toBe(before);
+    });
+
+    it("opens the tile of an awake sandbox with no question", async () => {
+      await seedTask();
+
+      const question = await openSleepy();
+
+      expect(question).toBeNull();
+      expect(sleepyTiles()).toHaveLength(1);
+    });
+  });
+
+  describe("a spoken stop that waits for its yes", () => {
+    it("does not stop the next turn when the one it asked about ended while the question waited, and says so", async () => {
+      await bringLive();
+      focusOn(CHANNEL_FOCUS);
+      const wire = seedRunningAgent();
+      fake.routeAnswer = () => actAnswer(`agent.stop:${AGENT_ID}`);
+      const spoken = fake.engines[0]?.appendCommentary;
+
+      await say("Stop the agent.", "d1");
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(6_000);
+      });
+      const question = spoken.mock.calls.find(([text]) =>
+        text.endsWith("Yes?"),
+      );
+      if (question === undefined) throw new Error("the stop was never asked");
+      act(() => eventsOf(0).onOutputTranscriptDelta(question[0]));
+      await settle();
+
+      act(() => {
+        for (const next of [null, turn("turn-2")]) {
+          wire.callbacks.onTurnStateChanged({
+            kind: "turnStateChanged",
+            hasBinaryPayload: false,
+            epicId: EPIC_ID,
+            chatId: AGENT_ID,
+            runStatus: next === null ? "idle" : "running",
+            activeTurn: next,
+            turnInProgress: next !== null,
+          });
+        }
+      });
+      await say("yes", "d2");
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(6_000);
+      });
+
+      expect(wire.sent.filter((frame) => frame.kind === "stop")).toEqual([]);
+      expect(spoken).toHaveBeenCalledWith(TURN_ENDED_NOTICE, "d1");
+    });
   });
 });

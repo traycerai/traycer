@@ -529,6 +529,8 @@ import {
 } from "@/components/epic-canvas/renderers/chat-tile";
 import * as chatPrewarmHandoff from "@/components/epic-canvas/chat-prewarm-handoff";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
+import { TileMinimapContext } from "@/components/epic-canvas/tile-minimap/tile-minimap-context";
+import { executePageAct } from "@/lib/voice/page-acts";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import {
@@ -1584,6 +1586,19 @@ function chatTileSessionViewTestTree(
 }
 
 function renderRestingCopy(handle: ChatSessionStoreHandle) {
+  return render(restingCopyTree(handle));
+}
+
+/** The resting copy in a canvas tile of its own, as the voice reads it. */
+function renderRestingCopyInTile(handle: ChatSessionStoreHandle) {
+  return render(
+    <TileMinimapContext.Provider value={CHAT_ARTIFACT.instanceId}>
+      {restingCopyTree(handle)}
+    </TileMinimapContext.Provider>,
+  );
+}
+
+function restingCopyTree(handle: ChatSessionStoreHandle) {
   act(() => {
     handle.store.setState({
       access: { role: "owner", ownerUserId: "owner-1", canAct: false },
@@ -1601,7 +1616,7 @@ function renderRestingCopy(handle: ChatSessionStoreHandle) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
   });
-  return render(chatTileSessionViewTestTree(queryClient, handle, false));
+  return chatTileSessionViewTestTree(queryClient, handle, false);
 }
 
 /**
@@ -2410,6 +2425,64 @@ describe("<ChatTile />", () => {
       kind: "message",
       chatId: CHAT_ARTIFACT.id,
       hostId: RESTING_COPY_SANDBOX.sandbox.hostId,
+    });
+    usePendingSandboxSendStore.setState({ sends: {} });
+    useStagedSandboxStore.getState().clearAll();
+  });
+
+  it("lets the voice wake a resting copy through the composer in its tile: the message is held in the pending store", async () => {
+    const liveTile = renderChatTile();
+    await waitForChatTileLoaded();
+    const handle = __getChatSessionRegistryForTests().peek(
+      EPIC_ID,
+      CHAT_ARTIFACT.id,
+      HOST_ID,
+    );
+    if (handle === null) {
+      throw new Error("expected the live chat session handle");
+    }
+    liveTile.unmount();
+    sandboxCatalogueTestState.catalogue = {
+      providers: [],
+      offeredAgents: ["codex"],
+    };
+    renderRestingCopyInTile(handle);
+    await waitFor(() => {
+      const button = screen.getByRole("button", { name: "Send" });
+      if (!(button instanceof HTMLButtonElement)) {
+        throw new Error("expected send button");
+      }
+      expect(button.disabled).toBe(false);
+    });
+
+    const outcome = await executePageAct({
+      row: {
+        action: `agent.tell:${CHAT_ARTIFACT.id}`,
+        label: "Tell the agent",
+        takesWords: true,
+        confirm: true,
+      },
+      text: "use the other branch",
+      turnId: null,
+      reads: {
+        agentSession: () => ({
+          handle,
+          chatId: CHAT_ARTIFACT.id,
+          epicId: EPIC_ID,
+          hostId: HOST_ID,
+          tileInstanceId: CHAT_ARTIFACT.instanceId,
+          title: CHAT_ARTIFACT.name,
+        }),
+        paletteRow: () => null,
+      },
+    });
+
+    expect(outcome).toEqual({ kind: "executed" });
+    const sends = Object.values(usePendingSandboxSendStore.getState().sends);
+    expect(sends).toHaveLength(1);
+    expect(sends[0]).toMatchObject({
+      text: "use the other branch",
+      request: { kind: "message", chatId: CHAT_ARTIFACT.id },
     });
     usePendingSandboxSendStore.setState({ sends: {} });
     useStagedSandboxStore.getState().clearAll();

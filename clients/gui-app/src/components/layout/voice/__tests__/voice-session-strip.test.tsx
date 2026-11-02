@@ -379,4 +379,18 @@ describe("VoiceSessionStrip", () => {
       "Voice ended: the sound could not be played.",
     );
   });
+
+  it("says the account changed when the end was a switch of accounts, offers Dismiss, and does not offer Get credits", async () => {
+    useVoiceSessionStore.setState({ phase: "idle", endReason: "account" });
+    render(<VoiceSessionStrip />, { wrapper: WithTestQueryClient });
+
+    expect(screen.getByTestId("voice-strip-state").textContent).toBe(
+      "Voice ended when you switched accounts.",
+    );
+    expect(screen.queryByTestId("voice-strip-get-credits")).toBeNull();
+
+    await userEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+
+    expect(useVoiceSessionStore.getState().endReason).toBeNull();
+  });
 });

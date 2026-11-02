@@ -8,14 +8,20 @@ import {
   type RouterHistory,
 } from "@tanstack/react-router";
 import { act, cleanup, render } from "@testing-library/react";
-import { useEffect, type ReactNode } from "react";
+import { useCallback, useEffect, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
+import type { RemoteHostFetchOutcome } from "@traycer-clients/shared/host-client/remote-fetcher";
+import { HostDirectoryService } from "@/lib/host/host-directory-service";
 import {
   backgroundItemSchema,
   chatApprovalStateSchema,
   type BackgroundItem,
+  type ChatActiveTurn,
   type ChatApprovalState,
 } from "@traycer/protocol/host/agent/gui/subscribe";
+import { sandboxHostEntryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 import { CommandPaletteRouterContext } from "@/components/command-palette/command-palette-context";
 import { useRegisterTileFindAdapter } from "@/components/epic-canvas/tile-find/tile-find-adapter-context";
 import { TileFindScope } from "@/components/epic-canvas/tile-find/tile-find-scope";
@@ -24,6 +30,7 @@ import {
   VoiceViewPaletteItems,
   type VoiceViewHandle,
 } from "@/hooks/voice/use-voice-view";
+import type { CommandContext, CommandItem } from "@/lib/commands/types";
 import type { KeybindingRouter } from "@/lib/keybindings/dispatch";
 import { setMobileApp } from "@/lib/mobile-app";
 import {
@@ -34,8 +41,14 @@ import {
   __getOpenEpicRegistryForTests,
   handleHostIds,
 } from "@/lib/registries/epic-session-registry";
+import { publishComposerSendState } from "@/lib/chats/composer-send-gates";
 import { SETTINGS_SECTIONS } from "@/lib/settings-sections";
-import type { VoiceView } from "@/lib/voice/view";
+import type { VoicePaletteRow } from "@/lib/voice/page-acts";
+import {
+  NO_PALETTE_ITEMS,
+  readBackQuestion,
+  type VoiceView,
+} from "@/lib/voice/view";
 import { createChatSessionStore } from "@/stores/chats/chat-session-store";
 import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
 import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
@@ -66,6 +79,25 @@ import { useVoiceSessionStore } from "@/stores/voice/voice-session-store";
 
 vi.mock("@/hooks/home/use-history-query", () => ({
   useHistoryQuery: () => ({ data: undefined }),
+}));
+
+/**
+ * What the host directory answers for any host, read again on every ask: the
+ * entry and whether the account's listing has answered, or a real service when
+ * a case drives one.
+ */
+const directoryFacts = vi.hoisted(() => ({
+  entry: null as HostDirectoryEntry | null,
+  settled: false,
+  service: null as HostDirectoryService | null,
+}));
+vi.mock("@/lib/host", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/host")>()),
+  useHostDirectory: () =>
+    directoryFacts.service ?? {
+      findById: () => directoryFacts.entry,
+      hasSettledFleet: () => directoryFacts.settled,
+    },
 }));
 
 const EPIC_ID = "epic-1";
@@ -128,6 +160,23 @@ function approval(overrides: Partial<ChatApprovalState>): ChatApprovalState {
     reviewing: null,
     ...overrides,
   });
+}
+
+function activeTurn(turnId: string): ChatActiveTurn {
+  return {
+    turnId,
+    status: "running",
+    harnessId: "claude",
+    model: "model-a",
+    reasoningEffort: null,
+    serviceTier: null,
+    agentMode: "regular",
+    profileId: null,
+    userMessageId: null,
+    startedAt: 1,
+    updatedAt: 1,
+    sameTurnSteeringSupported: true,
+  };
 }
 
 function chatProjection(node: EpicNodeRef): ChatProjection {
@@ -256,8 +305,15 @@ function actionsOf(view: VoiceView): ReadonlyArray<string> {
   return view.rows.map((row) => row.action);
 }
 
+/** What the palette's publisher last handed the handle: the key and context its rows were composed for. */
+interface Published {
+  readonly composedFor: string | null;
+  readonly ctx: CommandContext | null;
+}
+
 interface Mounted {
   readonly handle: () => VoiceViewHandle;
+  readonly published: () => Published;
   readonly router: { readonly history: RouterHistory };
   readonly update: (props: ProbeProps) => void;
 }
@@ -286,14 +342,20 @@ function mount(initialPath: string, props: ProbeProps): Mounted {
     defaultOptions: { queries: { retry: false } },
   });
   let captured: VoiceViewHandle | null = null;
+  let published: Published = { composedFor: null, ctx: null };
   function Probe(probe: ProbeProps): ReactNode {
     const handle = useVoiceView(probe.enabled);
     useEffect(() => {
       captured = handle;
     }, [handle]);
-    return probe.palette ? (
-      <VoiceViewPaletteItems onItems={handle.setPaletteItems} />
-    ) : null;
+    const onItems = useCallback<VoiceViewHandle["setPaletteItems"]>(
+      (items, composedFor, ctx) => {
+        published = { composedFor, ctx };
+        handle.setPaletteItems(items, composedFor, ctx);
+      },
+      [handle],
+    );
+    return probe.palette ? <VoiceViewPaletteItems onItems={onItems} /> : null;
   }
   function Tree(tree: ProbeProps): ReactNode {
     return (
@@ -312,6 +374,7 @@ function mount(initialPath: string, props: ProbeProps): Mounted {
       if (captured === null) throw new Error("the hook never mounted");
       return captured;
     },
+    published: () => published,
     router,
     update: (next) => {
       rendered.rerender(<Tree {...next} />);
@@ -320,6 +383,10 @@ function mount(initialPath: string, props: ProbeProps): Mounted {
 }
 
 beforeEach(() => {
+  // A host the directory knows to be awake: an unknown one asks before an open.
+  directoryFacts.entry = sandboxHostEntryFixture(HOST_ID, "awake", false);
+  directoryFacts.settled = false;
+  directoryFacts.service = null;
   window.localStorage.clear();
   useTabsStore.setState(stripOf([], null));
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
@@ -340,7 +407,11 @@ function taskWithWorkingAgent(): TaskTab {
   const task = openTaskTab();
   openEpicSession();
   const session = chatSession();
-  session.store.setState({ runStatus: "running", turnInProgress: true });
+  session.store.setState({
+    runStatus: "running",
+    turnInProgress: true,
+    activeTurn: activeTurn("turn-1"),
+  });
   useTabsStore.setState(stripOf([task.ref], task.ref));
   activateTile(task, AGENT);
   return task;
@@ -363,6 +434,7 @@ describe("the view of a task with a working agent", () => {
       title: "Main agent",
       state: "working",
       waitingOn: null,
+      turnId: "turn-1",
     });
     expect(actionsOf(view)).toEqual(
       expect.arrayContaining([
@@ -379,6 +451,17 @@ describe("the view of a task with a working agent", () => {
         confirm: false,
       },
     );
+  });
+
+  it("names the turn on the wire, and none once the chat has none", () => {
+    taskWithWorkingAgent();
+    const mounted = mount("/", { enabled: true, palette: true });
+    expect(mounted.handle().current().agent?.turnId).toBe("turn-1");
+
+    act(() => {
+      chatSession().store.setState({ activeTurn: null });
+    });
+    expect(mounted.handle().current().agent?.turnId).toBeNull();
   });
 
   it("is bound to the generation the store holds", () => {
@@ -414,6 +497,68 @@ describe("the view of a task with a working agent", () => {
     expect(view.page).toMatchObject({ kind: "task", tile: "Plan" });
     expect(view.agent).toBeNull();
     expect(actionsOf(view).some((id) => id.startsWith("agent."))).toBe(false);
+  });
+});
+
+describe("the tell row of an agent whose sandbox rests", () => {
+  const retractions: Array<() => void> = [];
+
+  afterEach(() => {
+    for (const retract of retractions.splice(0)) retract();
+  });
+
+  /** A composer for the agent's chat in the tile `tileInstanceId`, as the composer publishes it. */
+  function publishComposer(tileInstanceId: string, restingSandbox: boolean) {
+    retractions.push(
+      publishComposerSendState(HOST_ID, AGENT.id, tileInstanceId, {
+        sendDisabled: false,
+        workspaceBlocked: false,
+        imagesUnsupported: false,
+        attachmentPreparationPending: false,
+        restingSandbox,
+        sandboxFrozen: false,
+        submit: () => false,
+        modelSlug: () => "model-a",
+        runSettings: () => ({
+          ultracode: false,
+          harnessId: "claude",
+          model: "model-a",
+          permissionMode: "supervised",
+          reasoningEffort: null,
+          serviceTier: null,
+          agentMode: "regular",
+          profileId: null,
+        }),
+      }),
+    );
+  }
+
+  function tellRow(view: VoiceView) {
+    return view.rows.find((row) => row.action === "agent.tell:chat-1");
+  }
+
+  it("asks for a yes when the composer in the active tile says the sandbox rests", () => {
+    taskWithWorkingAgent();
+    publishComposer(AGENT.instanceId, true);
+    const mounted = mount("/", { enabled: true, palette: true });
+
+    expect(tellRow(mounted.handle().current())?.confirm).toBe(true);
+  });
+
+  it("asks for nothing when the composer in the active tile says it is awake", () => {
+    taskWithWorkingAgent();
+    publishComposer(AGENT.instanceId, false);
+    const mounted = mount("/", { enabled: true, palette: true });
+
+    expect(tellRow(mounted.handle().current())?.confirm).toBe(false);
+  });
+
+  it("asks for nothing on account of a resting composer in another tile showing the same chat", () => {
+    taskWithWorkingAgent();
+    publishComposer("inst-chat-elsewhere", true);
+    const mounted = mount("/", { enabled: true, palette: true });
+
+    expect(tellRow(mounted.handle().current())?.confirm).toBe(false);
   });
 });
 
@@ -926,6 +1071,28 @@ describe("how the agent's turn is read", () => {
     },
   );
 
+  it("offers no stop while a send has not started its turn, though the agent reads as working, and offers it once the turn starts", () => {
+    taskWithWorkingAgent();
+    chatSession().store.setState({ activeTurn: null });
+    const mounted = mount("/", { enabled: true, palette: true });
+
+    const pending = mounted.handle().current();
+    expect(pending.agent).toMatchObject({ state: "working", turnId: null });
+    expect(actionsOf(pending)).toContain("agent.tell:chat-1");
+    expect(actionsOf(pending)).not.toContain("agent.stop:chat-1");
+
+    act(() => {
+      chatSession().store.setState({ activeTurn: activeTurn("turn-1") });
+    });
+
+    const started = mounted.handle().current();
+    expect(started.agent).toMatchObject({
+      state: "working",
+      turnId: "turn-1",
+    });
+    expect(actionsOf(started)).toContain("agent.stop:chat-1");
+  });
+
   it("shows the agent waiting on an approval, with nothing to stop, though the host still calls the run running", () => {
     taskWithWorkingAgent();
     chatSession().store.setState({
@@ -942,5 +1109,232 @@ describe("how the agent's turn is read", () => {
       waitingOn: "approval",
     });
     expect(actionsOf(view)).not.toContain("agent.stop:chat-1");
+  });
+});
+
+function plainItem(id: string, extra: Partial<CommandItem>): CommandItem {
+  return {
+    id,
+    label: id,
+    description: null,
+    keywords: [],
+    group: "actions",
+    scope: "actions",
+    shortcut: null,
+    actionId: null,
+    run: () => undefined,
+    subpage: null,
+    ...extra,
+  };
+}
+
+describe("the palette row behind an action", () => {
+  it("is the item the palette offered, with the context it was composed for", () => {
+    const task = taskWithWorkingAgent();
+    const mounted = mount("/", { enabled: true, palette: true });
+
+    const row = mounted.handle().paletteRow("open:chats:chat-1");
+
+    expect(row?.item.id).toBe("open:chats:chat-1");
+    expect(row?.ctx).toEqual({
+      pathname: "/",
+      router: KEYBINDING_ROUTER,
+      activeTabId: task.tabId,
+      activeEpicId: EPIC_ID,
+      focusedComposerKind: null,
+      targetGroupId:
+        useEpicCanvasStore.getState().canvasByTabId[task.tabId]?.activePaneId ??
+        null,
+    });
+  });
+
+  it("is gone for a page that has since changed, and back for the page that replaced it", () => {
+    const task = taskWithWorkingAgent();
+    const mounted = mount("/", { enabled: true, palette: true });
+    const seen: Array<VoicePaletteRow | null> = [];
+
+    act(() => {
+      useTabsStore.setState(stripOf([task.ref, HISTORY_TAB], HISTORY_TAB));
+      // Before React has re-rendered the palette for History.
+      seen.push(mounted.handle().paletteRow("open:chats:chat-1"));
+    });
+
+    expect(seen).toEqual([null]);
+    expect(mounted.handle().paletteRow("open:chats:chat-1")).toBeNull();
+    expect(
+      mounted.handle().paletteRow("action:app.history.open")?.ctx.activeTabId,
+    ).toBeNull();
+  });
+
+  it("is none while the palette has published nothing", () => {
+    taskWithWorkingAgent();
+    const mounted = mount("/", { enabled: true, palette: false });
+
+    expect(mounted.handle().paletteRow("open:chats:chat-1")).toBeNull();
+  });
+
+  it("is none for an item that only opens a picker or cannot be used, though the palette lists it", () => {
+    taskWithWorkingAgent();
+    const mounted = mount("/", { enabled: true, palette: true });
+    const { composedFor, ctx } = mounted.published();
+    const usable = plainItem("action:usable", {});
+    mounted.handle().setPaletteItems(
+      {
+        ...NO_PALETTE_ITEMS,
+        commands: [
+          usable,
+          plainItem("action:picker", {
+            subpage: { id: "picker", title: "Pick", useItems: () => [] },
+          }),
+          plainItem("action:off", { disabled: true }),
+        ],
+      },
+      composedFor,
+      ctx,
+    );
+
+    expect(mounted.handle().paletteRow("action:usable")?.item).toBe(usable);
+    expect(mounted.handle().paletteRow("action:picker")).toBeNull();
+    expect(mounted.handle().paletteRow("action:off")).toBeNull();
+  });
+});
+
+describe("the chat session behind an action", () => {
+  it("is the chat in the active tile, by its id or for whichever is shown", () => {
+    taskWithWorkingAgent();
+    const mounted = mount("/", { enabled: true, palette: false });
+    const store = chatSession().store;
+
+    const byId = mounted.handle().agentSession("chat-1");
+    const shown = mounted.handle().agentSession(null);
+
+    expect(byId).toMatchObject({
+      chatId: "chat-1",
+      epicId: EPIC_ID,
+      hostId: HOST_ID,
+      tileInstanceId: AGENT.instanceId,
+      title: "Main agent",
+    });
+    expect(byId?.handle.store).toBe(store);
+    expect(shown?.chatId).toBe("chat-1");
+  });
+
+  it("is none for another chat's id", () => {
+    taskWithWorkingAgent();
+    const mounted = mount("/", { enabled: true, palette: false });
+
+    expect(mounted.handle().agentSession("chat-elsewhere")).toBeNull();
+  });
+
+  it("is none once the active tile is not a chat", () => {
+    const task = taskWithWorkingAgent();
+    useTileFindStore.getState().resetForTests();
+    activateTile(task, SPEC);
+    const mounted = mount("/", { enabled: true, palette: false });
+
+    expect(mounted.handle().agentSession(null)).toBeNull();
+    expect(mounted.handle().agentSession("chat-1")).toBeNull();
+  });
+});
+
+describe("the row that opens a tile on a host whose sandbox rests", () => {
+  const OPEN_AGENT = "open:chats:chat-1";
+
+  function confirmOf(mounted: Mounted): boolean | undefined {
+    return mounted
+      .handle()
+      .current()
+      .rows.find((row) => row.action === OPEN_AGENT)?.confirm;
+  }
+
+  it("asks to be confirmed and reports that running it wakes the sandbox, where an awake host asks nothing", () => {
+    taskWithWorkingAgent();
+    const mounted = mount("/", { enabled: true, palette: true });
+
+    directoryFacts.entry = sandboxHostEntryFixture(HOST_ID, "awake", false);
+    expect(confirmOf(mounted)).toBe(false);
+    expect(mounted.handle().paletteRow(OPEN_AGENT)?.hostWake).toBe("none");
+
+    directoryFacts.entry = sandboxHostEntryFixture(HOST_ID, "suspended", false);
+    expect(confirmOf(mounted)).toBe(true);
+    expect(mounted.handle().paletteRow(OPEN_AGENT)?.hostWake).toBe("wakes");
+  });
+
+  it("reads the directory as the row is asked for, when the sandbox wakes after the palette composed", () => {
+    taskWithWorkingAgent();
+    directoryFacts.entry = sandboxHostEntryFixture(HOST_ID, "suspended", false);
+    const mounted = mount("/", { enabled: true, palette: true });
+    expect(confirmOf(mounted)).toBe(true);
+
+    directoryFacts.entry = sandboxHostEntryFixture(HOST_ID, "awake", false);
+
+    expect(confirmOf(mounted)).toBe(false);
+    expect(mounted.handle().paletteRow(OPEN_AGENT)?.hostWake).toBe("none");
+  });
+
+  describe("that the account's listing has not answered for", () => {
+    const services: HostDirectoryService[] = [];
+
+    afterEach(() => {
+      for (const service of services.splice(0)) service.dispose();
+    });
+
+    /** A real directory over a registry that answers `outcomes` in turn; its first fetch happens on start. */
+    async function startedDirectory(
+      outcomes: ReadonlyArray<RemoteHostFetchOutcome>,
+    ): Promise<HostDirectoryService> {
+      const queue = [...outcomes];
+      const service = new HostDirectoryService({
+        onRegistryPollTick: null,
+        authContextId: null,
+        credentialGeneration: null,
+        runnerHost: new MockRunnerHost({
+          signInUrl: "https://auth.traycer.invalid/sign-in",
+          authnBaseUrl: "http://localhost:5005",
+          localHost: null,
+          hosts: [],
+          workspaceFolderPickerPaths: undefined,
+          hasLocalHost: undefined,
+          traycerCli: undefined,
+        }),
+        localHostIdSeeder: null,
+        remoteFetcher: () => {
+          const next = queue.shift();
+          if (next === undefined) throw new Error("the registry ran out");
+          return Promise.resolve(next);
+        },
+      });
+      services.push(service);
+      await service.start();
+      return service;
+    }
+
+    function openRow(mounted: Mounted) {
+      const view = mounted.handle().current();
+      const row = view.rows.find(
+        (candidate) => candidate.action === OPEN_AGENT,
+      );
+      if (row === undefined) throw new Error("the view has no opener row");
+      return { row, question: readBackQuestion(row, view.page, "") };
+    }
+
+    it("asks before opening after a first fetch that failed, and stops asking once a listing without the host answers, with nothing composed again", async () => {
+      directoryFacts.service = await startedDirectory([
+        { kind: "failed" },
+        { kind: "hosts", entries: [] },
+      ]);
+      taskWithWorkingAgent();
+      const mounted = mount("/", { enabled: true, palette: true });
+
+      expect(openRow(mounted)).toMatchObject({
+        row: { confirm: true },
+        question: "That may wake its sandbox. Open it anyway? Yes?",
+      });
+
+      await directoryFacts.service.refresh();
+
+      expect(openRow(mounted).row.confirm).toBe(false);
+      expect(mounted.handle().paletteRow(OPEN_AGENT)?.hostWake).toBe("none");
+    });
   });
 });

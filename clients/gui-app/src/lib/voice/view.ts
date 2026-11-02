@@ -30,6 +30,8 @@ export interface VoiceViewAgent {
   /** `background`: its turn is over, and work it started is still running. */
   readonly state: "working" | "waiting" | "background" | "idle";
   readonly waitingOn: "approval" | null;
+  /** The turn on the wire now; `null` while none is, or a send has not started one yet. */
+  readonly turnId: string | null;
 }
 
 export interface VoiceViewApproval {
@@ -45,6 +47,8 @@ export interface VoiceViewRow {
   readonly takesWords: boolean;
   /** Read back before it runs. */
   readonly confirm: boolean;
+  /** On an opener that wakes or may wake a sandbox: the question it asks. */
+  readonly wakeQuestion?: string;
 }
 
 export interface VoiceView {
@@ -57,6 +61,12 @@ export interface VoiceView {
 }
 
 /** The palette's items by the place each takes in the view's order. */
+/**
+ * `frozen`: it would try to wake, and be refused. `unknown`: the account's hosts
+ * haven't answered yet, and if this one turns out to rest, the open wakes it then.
+ */
+export type HostWake = "none" | "wakes" | "frozen" | "unknown";
+
 export interface VoicePaletteItems {
   /** The active task's agents and artifacts, as the opener lists them. */
   readonly tiles: ReadonlyArray<CommandItem>;
@@ -66,6 +76,8 @@ export interface VoicePaletteItems {
   readonly themes: ReadonlyArray<CommandItem>;
   /** The chord actions and the navigation rows. */
   readonly commands: ReadonlyArray<CommandItem>;
+  /** What opening a tile on this host does about its sandbox. */
+  readonly hostWake: (hostId: string) => HostWake;
 }
 
 export const NO_PALETTE_ITEMS: VoicePaletteItems = {
@@ -74,6 +86,7 @@ export const NO_PALETTE_ITEMS: VoicePaletteItems = {
   tasks: [],
   themes: [],
   commands: [],
+  hostWake: () => "none",
 };
 
 export interface VoiceViewSources {
@@ -81,6 +94,8 @@ export interface VoiceViewSources {
   readonly agent: VoiceViewAgent | null;
   /** The agent's turn is running, so it can be stopped. */
   readonly agentTurnRunning: boolean;
+  /** The agent's sandbox rests, so a message to it wakes that first. */
+  readonly agentAsleep: boolean;
   readonly approvals: ReadonlyArray<VoiceViewApproval>;
   readonly palette: VoicePaletteItems;
   readonly generation: number;
@@ -139,15 +154,39 @@ export function approvalSummary(description: string, toolName: string): string {
   return text.slice(0, MAX_SUMMARY_CHARS);
 }
 
+const TELL_ACTION = "agent.tell:";
+
+/** An opener row for an existing tile; the capture is the tile's content id. */
+export const OPENER_ROW = /^open:(?:chats|tui|artifacts):(.+)$/su;
+
+/** What opening this item does about a sandbox, a tile already open included. */
+export function itemHostWake(
+  item: CommandItem,
+  palette: VoicePaletteItems,
+): HostWake {
+  return item.tileHostId === undefined
+    ? "none"
+    : palette.hostWake(item.tileHostId);
+}
+
+/**
+ * Whether this row is a tell that wakes the chat's sandbox first. Waking costs,
+ * which is the only reason a tell is offered as one that asks.
+ */
+export function tellWakesSandbox(row: VoiceViewRow): boolean {
+  return row.confirm && row.action.startsWith(TELL_ACTION);
+}
+
 function agentRows(
   agent: VoiceViewAgent,
   turnRunning: boolean,
+  asleep: boolean,
 ): ReadonlyArray<VoiceViewRow> {
   const tell: VoiceViewRow = {
-    action: `agent.tell:${agent.chatId}`,
+    action: `${TELL_ACTION}${agent.chatId}`,
     label: `Tell the agent (${agent.title})`,
     takesWords: true,
-    confirm: false,
+    confirm: asleep,
   };
   if (!turnRunning) return [tell];
   return [
@@ -212,6 +251,28 @@ function prefixedRows(
   );
 }
 
+function openerWakeQuestion(wake: HostWake, title: string): string | null {
+  if (wake === "wakes") {
+    return `The sandbox is asleep. Wake it and open ${title}. Yes?`;
+  }
+  return wake === "unknown"
+    ? "That may wake its sandbox. Open it anyway? Yes?"
+    : null;
+}
+
+function tileRows(palette: VoicePaletteItems): ReadonlyArray<VoiceViewRow> {
+  return runnable(palette.tiles).map((item) => {
+    const row = registryRow(item, `Open tab: ${item.label}`);
+    const wakeQuestion = openerWakeQuestion(
+      itemHostWake(item, palette),
+      item.label,
+    );
+    return wakeQuestion === null
+      ? row
+      : { ...row, confirm: true, wakeQuestion };
+  });
+}
+
 /** Settings has two sections of one name, told apart by the badge naming their group. */
 function sectionRows(
   items: ReadonlyArray<CommandItem>,
@@ -234,9 +295,11 @@ function sectionRows(
 function composeRows(sources: VoiceViewSources): ReadonlyArray<VoiceViewRow> {
   const { agent, palette } = sources;
   return [
-    ...(agent === null ? [] : agentRows(agent, sources.agentTurnRunning)),
+    ...(agent === null
+      ? []
+      : agentRows(agent, sources.agentTurnRunning, sources.agentAsleep)),
     ...sources.approvals.flatMap(approvalRows),
-    ...prefixedRows(palette.tiles, "Open tab").slice(0, MAX_TILE_ROWS),
+    ...tileRows(palette).slice(0, MAX_TILE_ROWS),
     ...(sources.page.kind === "settings" ? sectionRows(palette.sections) : []),
     ...prefixedRows(palette.tasks, "Open task").slice(0, MAX_TASK_ROWS),
     ...prefixedRows(palette.themes, "Theme"),
@@ -247,6 +310,51 @@ function composeRows(sources: VoiceViewSources): ReadonlyArray<VoiceViewRow> {
       )
       .map((item) => registryRow(item, item.label)),
   ].slice(0, MAX_VIEW_ROWS);
+}
+
+/** The page as the voice names it when it reads a closing row back. */
+function pageName(page: VoicePage): string | null {
+  switch (page.kind) {
+    case "task":
+      return page.title.length > 0 ? page.title : null;
+    case "tracy":
+      return "Tracy";
+    case "history":
+      return "History";
+    case "settings":
+      return "Settings";
+    // The view calls a draft's landing composer Home too, and Notifications is
+    // a popover over a page: neither names what the row would close.
+    case "home":
+    case "notifications":
+      return null;
+  }
+}
+
+/** What a read-back adds to the row's label: what the row acts on, where. */
+function readBackTarget(row: VoiceViewRow, page: VoicePage): string {
+  const name = pageName(page);
+  if (row.action === "action:epic.close") {
+    return name === null ? "" : `: ${name}`;
+  }
+  if (page.kind !== "task" || name === null) return "";
+  if (row.action === "action:tab.close" && page.tile !== null) {
+    return `: ${page.tile} in ${name}`;
+  }
+  return ` in ${name}`;
+}
+
+/** The question before a row that costs or cannot be undone runs. */
+export function readBackQuestion(
+  row: VoiceViewRow,
+  page: VoicePage,
+  text: string,
+): string {
+  if (tellWakesSandbox(row)) {
+    return `The sandbox is asleep. Wake it and send: ${text}. Yes?`;
+  }
+  if (row.wakeQuestion !== undefined) return row.wakeQuestion;
+  return `${row.label}${readBackTarget(row, page)}. Yes?`;
 }
 
 export function composeVoiceView(sources: VoiceViewSources): VoiceView {

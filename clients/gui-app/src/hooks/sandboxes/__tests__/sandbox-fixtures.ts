@@ -1,3 +1,6 @@
+import type { HostListItem } from "@traycer/protocol/host/host-status";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import { hostListItemToDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
 import type {
   SandboxOperation,
   SandboxSummary,
@@ -116,4 +119,35 @@ export function sandboxOperationFixture(
     gesture: null,
     ...overrides,
   };
+}
+
+/** The host directory's entry for the sandbox behind `hostId`, in `state`, frozen or not. */
+export function sandboxHostEntryFixture(
+  hostId: string,
+  state: HostListItem["sandboxState"],
+  frozen: boolean,
+): HostDirectoryEntry {
+  return hostListItemToDirectoryEntry(
+    {
+      hostId,
+      displayName: "build-box",
+      platform: "linux",
+      kind: "sandbox",
+      publicKey: "pk",
+      createdAt: "2026-10-01T00:00:00.000Z",
+      status: {
+        connectivity: "connectable",
+        viewerReachability: "unknown",
+        clientCloud: "ok",
+        updateState: "current",
+        appVersion: "1.5.0",
+        lastSeenAt: null,
+      },
+      updatePolicy: "manual",
+      sandboxState: state,
+      sandboxFrozen: frozen,
+      profile: "agent",
+    },
+    "wss://relay.example.test",
+  );
 }

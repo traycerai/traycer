@@ -909,6 +909,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
       onSubmitMessage: submitWithGuide,
       onSideChat,
       targetHostId: tabHostId,
+      restingSandbox,
       // The queued prompt this composer is pointed at, which is also what the
       // tile's `onSubmitMessage` chooses its destination from - so it is part
       // of the submit intent a preparation has to re-check before delivering.

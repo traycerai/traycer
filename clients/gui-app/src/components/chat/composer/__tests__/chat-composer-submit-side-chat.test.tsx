@@ -88,6 +88,7 @@ function mountSubmit(args: {
       onSubmitMessage: args.onSubmitMessage,
       onSideChat: args.onSideChat,
       targetHostId: null,
+      restingSandbox: null,
       queueEditTargetId: null,
       // The gate is off in these fixtures: they predate it and assert the
       // inline behaviour, which is what `false` preserves exactly.
