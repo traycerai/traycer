@@ -1117,6 +1117,7 @@ describe("the chat session behind an action", () => {
       chatId: "chat-1",
       epicId: EPIC_ID,
       hostId: HOST_ID,
+      tileInstanceId: AGENT.instanceId,
       title: "Main agent",
     });
     expect(byId?.handle.store).toBe(store);

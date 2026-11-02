@@ -6,7 +6,9 @@ import {
   createRoute,
   createRouter,
 } from "@tanstack/react-router";
-import { act, cleanup, render } from "@testing-library/react";
+import { act, cleanup, render, renderHook } from "@testing-library/react";
+import type { ReactNode } from "react";
+import type { JsonContent } from "@traycer/protocol/common/registry";
 import type {
   ChatActiveTurn,
   ChatRunSettings,
@@ -35,7 +37,12 @@ import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport
 import type { StreamFrameEnvelope } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type { SystemSuspendCause } from "@traycer-clients/shared/platform/runner-host";
 import type { StreamMethodSupport } from "@traycer-clients/shared/host-transport/ws-stream-client";
+import type { ChatComposerSubmitInput } from "@/components/chat/composer/chat-composer";
+import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
+import { createComposerPickerStore } from "@/components/chat/composer/picker/composer-picker-store";
+import { useChatComposerSubmit } from "@/components/chat/composer/use-chat-composer-submit";
 import { CommandPaletteRouterContext } from "@/components/command-palette/command-palette-context";
+import { TileMinimapContext } from "@/components/epic-canvas/tile-minimap/tile-minimap-context";
 import type { KeybindingRouter } from "@/lib/keybindings/dispatch";
 import { MockWsStreamClient } from "@/components/epic-canvas/pr/__tests__/pr-stream-test-fixtures";
 import type { VoiceEngineEvents } from "@/lib/voice/engine";
@@ -45,14 +52,20 @@ import {
   __getChatSessionRegistryForTests,
   disposeAllChatSessions,
 } from "@/lib/registries/chat-session-registry";
-import { TURN_ENDED_NOTICE } from "@/lib/voice/page-acts";
+import {
+  AGENT_CANT_TAKE_NOTICE,
+  TURN_ENDED_NOTICE,
+} from "@/lib/voice/page-acts";
 import { runVoiceQueueVerb } from "@/lib/voice/queue-verbs";
 import { MOVED_ASK_TEXT, PAGE_CHANGED_ASK_TEXT } from "@/lib/voice/say-loop";
 import { voiceMutationKeys } from "@/lib/query-keys";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import { createChatSessionStore } from "@/stores/chats/chat-session-store";
 import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
 import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
+import { createComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { useSettingsStore } from "@/stores/settings/settings-store";
 import type { EpicNodeRef } from "@/stores/epics/canvas/types";
 import { tabItemId } from "@/stores/tabs/layout";
 import {
@@ -4304,175 +4317,352 @@ describe("the page in front", () => {
     });
   });
 
-  describe("a spoken stop that waits for its yes", () => {
-    const EPIC_ID = "epic-voice";
-    const AGENT_ID = "agent-chat";
-    const HOST_ID = "host-a";
-    const USER_ID = "user-me";
-    const AGENT_TILE: EpicNodeRef = {
-      id: AGENT_ID,
-      instanceId: "inst-agent",
-      type: "chat",
-      name: "Main agent",
-      hostId: HOST_ID,
-    };
-    const SETTINGS: ChatRunSettings = {
-      ultracode: false,
+  const EPIC_ID = "epic-voice";
+  const AGENT_ID = "agent-chat";
+  const HOST_ID = "host-a";
+  const USER_ID = "user-me";
+  const AGENT_TILE: EpicNodeRef = {
+    id: AGENT_ID,
+    instanceId: "inst-agent",
+    type: "chat",
+    name: "Main agent",
+    hostId: HOST_ID,
+  };
+  const SETTINGS: ChatRunSettings = {
+    ultracode: false,
+    harnessId: "claude",
+    model: "model-a",
+    permissionMode: "supervised",
+    reasoningEffort: null,
+    serviceTier: null,
+    agentMode: "regular",
+    profileId: null,
+  };
+
+  function turn(turnId: string): ChatActiveTurn {
+    return {
+      turnId,
+      status: "running",
       harnessId: "claude",
       model: "model-a",
-      permissionMode: "supervised",
       reasoningEffort: null,
       serviceTier: null,
       agentMode: "regular",
       profileId: null,
+      userMessageId: null,
+      startedAt: 1,
+      updatedAt: 1,
+      sameTurnSteeringSupported: true,
     };
+  }
 
-    function turn(turnId: string): ChatActiveTurn {
-      return {
-        turnId,
-        status: "running",
-        harnessId: "claude",
-        model: "model-a",
-        reasoningEffort: null,
-        serviceTier: null,
-        agentMode: "regular",
-        profileId: null,
-        userMessageId: null,
-        startedAt: 1,
-        updatedAt: 1,
-        sameTurnSteeringSupported: true,
-      };
-    }
+  let releaseTile: () => void = () => undefined;
 
-    let releaseTile: () => void = () => undefined;
+  afterEach(() => {
+    releaseTile();
+    releaseTile = () => undefined;
+    useTileFindStore.getState().resetForTests();
+    useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    disposeAllChatSessions();
+  });
 
-    afterEach(() => {
-      releaseTile();
-      releaseTile = () => undefined;
-      useTileFindStore.getState().resetForTests();
-      useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
-      disposeAllChatSessions();
-    });
+  interface AgentWire {
+    readonly sent: ChatSubscribeClientFrame[];
+    readonly callbacks: ChatStreamCallbacks;
+  }
 
-    /**
-     * A task in front whose active tile is a chat running `turn-1`, in the real
-     * canvas, tile-find and chat session registry; only the stream client, the
-     * wire, is faked.
-     */
-    function seedRunningAgent(): {
-      readonly sent: ChatSubscribeClientFrame[];
-      readonly callbacks: ChatStreamCallbacks;
-    } {
-      const sent: ChatSubscribeClientFrame[] = [];
-      const wire: { callbacks: ChatStreamCallbacks | null } = {
-        callbacks: null,
-      };
-      __getChatSessionRegistryForTests().acquire(
-        {
-          epicId: EPIC_ID,
-          chatId: AGENT_ID,
-          hostId: HOST_ID,
-          scopeKey: "voice-controller-test",
-        },
-        () =>
-          createChatSessionStore({
-            environment: CHAT_STORE_TEST_ENVIRONMENT,
-            hostId: HOST_ID,
-            epicId: EPIC_ID,
-            chatId: AGENT_ID,
-            userId: USER_ID,
-            onAuthError: null,
-            onProviderAuthError: null,
-            wakeTransport: null,
-            streamFlushCoordinator: IMMEDIATE_STREAM_FLUSH_COORDINATOR,
-            streamClientFactory: (_epicId, _chatId, callbacks) => {
-              wire.callbacks = callbacks;
-              return {
-                sendAction: (frame) => {
-                  sent.push(frame);
-                },
-                sameTurnSteeringProtocolSupported: () => true,
-                draftBlobBridgeSupported: () => true,
-                requestTranscriptRange: () => undefined,
-                requestResnapshot: () => undefined,
-                close: () => undefined,
-              };
-            },
-          }),
-      );
-      const { callbacks } = wire;
-      if (callbacks === null) throw new Error("the store never opened");
-      callbacks.onConnectionStatus("open", null, null, null);
-      callbacks.onSnapshot({
-        kind: "snapshot",
-        hasBinaryPayload: false,
+  /**
+   * A task in front whose active tile is a chat running `turn-1`, in the real
+   * canvas, tile-find and chat session registry; only the stream client, the
+   * wire, is faked.
+   */
+  function seedRunningAgent(): AgentWire {
+    const sent: ChatSubscribeClientFrame[] = [];
+    const wire: { callbacks: ChatStreamCallbacks | null } = {
+      callbacks: null,
+    };
+    __getChatSessionRegistryForTests().acquire(
+      {
         epicId: EPIC_ID,
         chatId: AGENT_ID,
-        snapshot: {
-          chat: {
-            id: AGENT_ID,
-            parentId: null,
-            userId: USER_ID,
-            hostId: HOST_ID,
-            title: AGENT_TILE.name,
-            createdAt: 1,
-            updatedAt: 1,
-            isTitleEditedByUser: false,
-            settings: SETTINGS,
-            activeSessionChain: null,
-            claudePendingWakes: [],
-            messages: [],
-            events: [],
-            archivedAt: null,
-            pinnedUserProviderHandle: null,
-            lastDeliveredRolesDigest: null,
-          },
-          access: { role: "owner", ownerUserId: USER_ID, canAct: true },
-          queue: { status: "idle", items: [] },
-          runStatus: "running",
-          activeTurn: turn("turn-1"),
-          pendingApprovals: [],
-          pendingInterviews: [],
-          worktreeBinding: null,
-          missingWorktreePaths: [],
-          pendingFileEditApprovals: [],
-          accumulatedFileChanges: [],
-          managedCommands: [],
-          heldUpdates: [],
-          portForwards: [],
-        },
-      });
-
-      const canvas = useEpicCanvasStore.getState();
-      const tabId = canvas.openEpicTab(EPIC_ID, "Tracy Bots");
-      canvas.openTileInTab(tabId, AGENT_TILE);
-      const ref: TabRef = { kind: "epic", id: tabId };
-      act(() => {
-        useTabsStore.setState({
-          version: 2,
-          items: [{ kind: "tab", id: tabItemId(ref), ref }],
-          activeItemId: tabItemId(ref),
-          stripOrder: [ref],
-          systemTabs: { history: null, settings: null },
-        });
-        releaseTile = useTileFindStore.getState().registerTarget({
-          tileInstanceId: AGENT_TILE.instanceId,
-          contentId: `${AGENT_TILE.instanceId}-content`,
-          viewTabId: tabId,
-          tileId: `${AGENT_TILE.instanceId}-pane`,
+        hostId: HOST_ID,
+        scopeKey: "voice-controller-test",
+      },
+      () =>
+        createChatSessionStore({
+          environment: CHAT_STORE_TEST_ENVIRONMENT,
+          hostId: HOST_ID,
           epicId: EPIC_ID,
-          tileKind: "chat",
-          isEligible: true,
-          adapter: createUnavailableTileFindAdapter({
-            tileInstanceId: AGENT_TILE.instanceId,
-            tileKind: "chat",
-            message: null,
-          }),
-        });
+          chatId: AGENT_ID,
+          userId: USER_ID,
+          onAuthError: null,
+          onProviderAuthError: null,
+          wakeTransport: null,
+          streamFlushCoordinator: IMMEDIATE_STREAM_FLUSH_COORDINATOR,
+          streamClientFactory: (_epicId, _chatId, callbacks) => {
+            wire.callbacks = callbacks;
+            return {
+              sendAction: (frame) => {
+                sent.push(frame);
+              },
+              sameTurnSteeringProtocolSupported: () => true,
+              draftBlobBridgeSupported: () => true,
+              requestTranscriptRange: () => undefined,
+              requestResnapshot: () => undefined,
+              close: () => undefined,
+            };
+          },
+        }),
+    );
+    const { callbacks } = wire;
+    if (callbacks === null) throw new Error("the store never opened");
+    callbacks.onConnectionStatus("open", null, null, null);
+    callbacks.onSnapshot({
+      kind: "snapshot",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: AGENT_ID,
+      snapshot: {
+        chat: {
+          id: AGENT_ID,
+          parentId: null,
+          userId: USER_ID,
+          hostId: HOST_ID,
+          title: AGENT_TILE.name,
+          createdAt: 1,
+          updatedAt: 1,
+          isTitleEditedByUser: false,
+          settings: SETTINGS,
+          activeSessionChain: null,
+          claudePendingWakes: [],
+          messages: [],
+          events: [],
+          archivedAt: null,
+          pinnedUserProviderHandle: null,
+          lastDeliveredRolesDigest: null,
+        },
+        access: { role: "owner", ownerUserId: USER_ID, canAct: true },
+        queue: { status: "idle", items: [] },
+        runStatus: "running",
+        activeTurn: turn("turn-1"),
+        pendingApprovals: [],
+        pendingInterviews: [],
+        worktreeBinding: null,
+        missingWorktreePaths: [],
+        pendingFileEditApprovals: [],
+        accumulatedFileChanges: [],
+        managedCommands: [],
+        heldUpdates: [],
+        portForwards: [],
+      },
+    });
+
+    const canvas = useEpicCanvasStore.getState();
+    const tabId = canvas.openEpicTab(EPIC_ID, "Tracy Bots");
+    canvas.openTileInTab(tabId, AGENT_TILE);
+    const ref: TabRef = { kind: "epic", id: tabId };
+    act(() => {
+      useTabsStore.setState({
+        version: 2,
+        items: [{ kind: "tab", id: tabItemId(ref), ref }],
+        activeItemId: tabItemId(ref),
+        stripOrder: [ref],
+        systemTabs: { history: null, settings: null },
       });
-      return { sent, callbacks };
+      releaseTile = useTileFindStore.getState().registerTarget({
+        tileInstanceId: AGENT_TILE.instanceId,
+        contentId: `${AGENT_TILE.instanceId}-content`,
+        viewTabId: tabId,
+        tileId: `${AGENT_TILE.instanceId}-pane`,
+        epicId: EPIC_ID,
+        tileKind: "chat",
+        isEligible: true,
+        adapter: createUnavailableTileFindAdapter({
+          tileInstanceId: AGENT_TILE.instanceId,
+          tileKind: "chat",
+          message: null,
+        }),
+      });
+    });
+    return { sent, callbacks };
+  }
+
+  describe("a spoken tell of the agent", () => {
+    const initialAuth = useAuthStore.getInitialState();
+    const DRAFT: JsonContent = {
+      type: "doc",
+      content: [
+        { type: "paragraph", content: [{ type: "text", text: "draft" }] },
+      ],
+    };
+    const EDITOR: ComposerPromptEditorHandle = {
+      isReady: () => true,
+      getEditorIncarnation: () => null,
+      hasFocus: () => false,
+      focus: () => undefined,
+      focusAtEnd: () => undefined,
+      getJSON: () => DRAFT,
+      isEmpty: () => false,
+      clear: () => undefined,
+      setContent: () => undefined,
+      syncContent: () => undefined,
+      insertImageAttachments: () => undefined,
+      insertMentionAttachment: () => false,
+      beginPathInsertion: () => null,
+      removeImageAttachmentById: () => undefined,
+      rewriteImageAttachmentHashById: () => false,
+      insertDictatedText: () => undefined,
+      draftGeneration: () => 0,
+      dismissActiveSuggestion: () => false,
+    };
+    /** A split's other pane showing the same chat. */
+    const OTHER_TILE_ID = "inst-agent-other";
+
+    beforeEach(() => {
+      useAuthStore.setState({
+        status: "signed-in",
+        profile: { userId: USER_ID, userName: "Me", email: "me@example.com" },
+        contextMetadata: { userId: USER_ID, username: "me" },
+      });
+    });
+
+    afterEach(() => {
+      useAuthStore.setState(initialAuth, true);
+    });
+
+    /** A real composer for the agent's chat in the tile `tileInstanceId`, with its toolbar on `modelSlug`. */
+    function mountComposer(
+      tileInstanceId: string,
+      sendDisabled: boolean,
+      modelSlug: string,
+    ): void {
+      const toolbarStore = createComposerToolbarStore({
+        purpose: "run",
+        reasoningFallback: "model-default",
+        seedKey: "voice-controller-tell",
+        values: {
+          ultracode: false,
+          permission: "supervised",
+          selection: { harnessId: "claude", modelSlug, profileId: null },
+          reasoning: "",
+          serviceTier: "",
+        },
+        onSettingsChange: null,
+        tuiOnly: false,
+        chatLineCarriesAutoMode: null,
+        ultracodeCarried: false,
+        hostId: HOST_ID,
+      });
+      const pickerStore = createComposerPickerStore();
+      renderHook(
+        () =>
+          useChatComposerSubmit({
+            taskId: AGENT_ID,
+            editorRef: { current: EDITOR },
+            pickerStore,
+            toolbarStore,
+            activeTurnStatus: null,
+            steerCapable: false,
+            steerEnabled: useSettingsStore.getState().steerOnModEnterEnabled,
+            steerProtocolSupported: true,
+            getActiveTurnForSteer: () => null,
+            hasPendingApprovals: false,
+            sendDisabled,
+            sendDisabledHint: null,
+            workspaceBlocked: false,
+            imagesUnsupported: false,
+            attachmentPreparationPending: false,
+            onSubmitMessage: (_input: ChatComposerSubmitInput) => true,
+            onSideChat: null,
+            targetHostId: HOST_ID,
+            queueEditTargetId: null,
+            getDraftBlobBridgeSupported: () => true,
+          }),
+        {
+          wrapper: ({ children }: { readonly children: ReactNode }) => (
+            <TileMinimapContext.Provider value={tileInstanceId}>
+              {children}
+            </TileMinimapContext.Provider>
+          ),
+        },
+      );
     }
 
+    /** Says "tell the agent ..." and lets the voice act on it. */
+    async function tellTheAgent() {
+      fake.routeAnswer = () => actAnswer(`agent.tell:${AGENT_ID}`);
+      await say("use the other branch", "d1");
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(6_000);
+      });
+    }
+
+    function sends(wire: AgentWire) {
+      return wire.sent.flatMap((frame) =>
+        frame.kind === "send" ? [frame] : [],
+      );
+    }
+
+    it("sends through the composer shown in the active tile when it can send", async () => {
+      await bringLive();
+      focusOn(CHANNEL_FOCUS);
+      const wire = seedRunningAgent();
+      mountComposer(AGENT_TILE.instanceId, false, "front-model");
+
+      await tellTheAgent();
+
+      expect(sends(wire).map((frame) => frame.settings.model)).toEqual([
+        "front-model",
+      ]);
+    });
+
+    it("says it can't and sends nothing when the composer shown in the active tile cannot send", async () => {
+      await bringLive();
+      focusOn(CHANNEL_FOCUS);
+      const wire = seedRunningAgent();
+      mountComposer(AGENT_TILE.instanceId, true, "front-model");
+
+      await tellTheAgent();
+
+      expect(sends(wire)).toEqual([]);
+      expect(fake.engines[0]?.appendCommentary).toHaveBeenCalledWith(
+        AGENT_CANT_TAKE_NOTICE,
+        "d1",
+      );
+    });
+
+    it("takes the gates of the active tile's composer, not those of another pane showing the same chat", async () => {
+      await bringLive();
+      focusOn(CHANNEL_FOCUS);
+      const wire = seedRunningAgent();
+      mountComposer(AGENT_TILE.instanceId, true, "front-model");
+      mountComposer(OTHER_TILE_ID, false, "other-model");
+
+      await tellTheAgent();
+
+      expect(sends(wire)).toEqual([]);
+      expect(fake.engines[0]?.appendCommentary).toHaveBeenCalledWith(
+        AGENT_CANT_TAKE_NOTICE,
+        "d1",
+      );
+    });
+
+    it("takes the settings of the active tile's composer, not those of another pane showing the same chat", async () => {
+      await bringLive();
+      focusOn(CHANNEL_FOCUS);
+      const wire = seedRunningAgent();
+      mountComposer(AGENT_TILE.instanceId, false, "front-model");
+      mountComposer(OTHER_TILE_ID, false, "other-model");
+
+      await tellTheAgent();
+
+      expect(sends(wire).map((frame) => frame.settings.model)).toEqual([
+        "front-model",
+      ]);
+    });
+  });
+
+  describe("a spoken stop that waits for its yes", () => {
     it("does not stop the next turn when the one it asked about ended while the question waited, and says so", async () => {
       await bringLive();
       focusOn(CHANNEL_FOCUS);

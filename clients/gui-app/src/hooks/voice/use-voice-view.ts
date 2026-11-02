@@ -170,6 +170,7 @@ function readAgentSession(
     chatId: ref.id,
     epicId: owner.epicId,
     hostId: ref.hostId,
+    tileInstanceId: owner.tileInstanceId,
     title: ref.name,
   };
 }

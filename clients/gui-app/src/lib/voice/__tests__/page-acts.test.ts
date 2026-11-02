@@ -87,6 +87,8 @@ const EPIC_ID = "epic-voice";
 const CHAT_ID = "chat-voice";
 const USER_ID = "user-me";
 const TITLE = "Main agent";
+/** The tile the chat is shown in: the composer publishes under it and the voice reads it. */
+const TILE_ID = "tile-voice";
 
 const SETTINGS: ChatRunSettings = {
   ultracode: false,
@@ -223,6 +225,8 @@ interface Session {
   readonly handle: ChatSessionStoreHandle;
   readonly sent: ChatSubscribeClientFrame[];
   readonly callbacks: ChatStreamCallbacks;
+  /** The host's snapshot of the chat, with `turn` as the turn it is running (or none). */
+  readonly snapshot: (turn: ChatActiveTurn | null) => void;
 }
 
 /**
@@ -259,46 +263,48 @@ function openSession(shape: SnapshotShape): Session {
   const { callbacks } = wire;
   if (callbacks === null) throw new Error("the store never opened its stream");
   callbacks.onConnectionStatus("open", null, null, null);
-  callbacks.onSnapshot({
-    kind: "snapshot",
-    hasBinaryPayload: false,
-    epicId: EPIC_ID,
-    chatId: CHAT_ID,
-    snapshot: {
-      chat: {
-        id: CHAT_ID,
-        parentId: null,
-        userId: USER_ID,
-        hostId: HOST_ID,
-        title: TITLE,
-        createdAt: 1,
-        updatedAt: 1,
-        isTitleEditedByUser: false,
-        settings: shape.settings,
-        activeSessionChain: null,
-        claudePendingWakes: [],
-        messages: [],
-        events: [],
-        archivedAt: null,
-        pinnedUserProviderHandle: null,
-        lastDeliveredRolesDigest: null,
+  const snapshot = (turn: ChatActiveTurn | null): void =>
+    callbacks.onSnapshot({
+      kind: "snapshot",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      snapshot: {
+        chat: {
+          id: CHAT_ID,
+          parentId: null,
+          userId: USER_ID,
+          hostId: HOST_ID,
+          title: TITLE,
+          createdAt: 1,
+          updatedAt: 1,
+          isTitleEditedByUser: false,
+          settings: shape.settings,
+          activeSessionChain: null,
+          claudePendingWakes: [],
+          messages: [],
+          events: [],
+          archivedAt: null,
+          pinnedUserProviderHandle: null,
+          lastDeliveredRolesDigest: null,
+        },
+        access: { role: "owner", ownerUserId: USER_ID, canAct: shape.canAct },
+        queue: { status: "idle", items: [] },
+        runStatus: turn === null ? "idle" : "running",
+        activeTurn: turn,
+        pendingApprovals: [...shape.approvals],
+        pendingInterviews: [],
+        worktreeBinding: shape.binding,
+        missingWorktreePaths: [...shape.missingWorktreePaths],
+        pendingFileEditApprovals: [...shape.fileEditApprovals],
+        accumulatedFileChanges: [],
+        managedCommands: [],
+        heldUpdates: [],
+        portForwards: [],
       },
-      access: { role: "owner", ownerUserId: USER_ID, canAct: shape.canAct },
-      queue: { status: "idle", items: [] },
-      runStatus: shape.running ? "running" : "idle",
-      activeTurn: shape.running ? ACTIVE_TURN : null,
-      pendingApprovals: [...shape.approvals],
-      pendingInterviews: [],
-      worktreeBinding: shape.binding,
-      missingWorktreePaths: [...shape.missingWorktreePaths],
-      pendingFileEditApprovals: [...shape.fileEditApprovals],
-      accumulatedFileChanges: [],
-      managedCommands: [],
-      heldUpdates: [],
-      portForwards: [],
-    },
-  });
-  return { handle, sent, callbacks };
+    });
+  snapshot(shape.running ? ACTIVE_TURN : null);
+  return { handle, sent, callbacks, snapshot };
 }
 
 /** The host reports the chat's turn: `turn` is running, or none is. */
@@ -397,6 +403,7 @@ function readsOver(
             chatId: CHAT_ID,
             epicId: EPIC_ID,
             hostId: HOST_ID,
+            tileInstanceId: TILE_ID,
             title: TITLE,
           },
     paletteRow: (action) => rows.find((row) => row.item.id === action) ?? null,
@@ -430,6 +437,8 @@ function tell(session: Session, text: string) {
 interface PublishedComposer {
   readonly sendDisabled: boolean | undefined;
   readonly workspaceBlocked: boolean;
+  readonly imagesUnsupported: boolean;
+  readonly attachmentPreparationPending: boolean;
   readonly modelSlug: string;
   readonly settings: ChatRunSettings;
 }
@@ -437,6 +446,8 @@ interface PublishedComposer {
 const OPEN_COMPOSER: PublishedComposer = {
   sendDisabled: false,
   workspaceBlocked: false,
+  imagesUnsupported: false,
+  attachmentPreparationPending: false,
   modelSlug: SETTINGS.model,
   settings: SETTINGS,
 };
@@ -446,9 +457,11 @@ let retractComposer: () => void = () => undefined;
 /** The chat's composer as `composer` says, in place of the one before; every test starts with {@link OPEN_COMPOSER}. */
 function composerIs(composer: PublishedComposer): void {
   retractComposer();
-  retractComposer = publishComposerSendState(HOST_ID, CHAT_ID, {
+  retractComposer = publishComposerSendState(HOST_ID, CHAT_ID, TILE_ID, {
     sendDisabled: composer.sendDisabled,
     workspaceBlocked: composer.workspaceBlocked,
+    imagesUnsupported: composer.imagesUnsupported,
+    attachmentPreparationPending: composer.attachmentPreparationPending,
     modelSlug: () => composer.modelSlug,
     runSettings: () => composer.settings,
   });
@@ -971,6 +984,121 @@ describe("a spoken stop that waits for its yes", () => {
 
     expect(stopFrames(session)).toMatchObject([{ turnId: "turn-1" }]);
     expect(h.notices).toEqual([]);
+  });
+
+  describe("across a reconnect", () => {
+    /** The stream drops and returns, and the host's snapshot names `turn`. */
+    function reconnectOnto(session: Session, turn: ChatActiveTurn | null) {
+      session.callbacks.onConnectionStatus("reconnecting", null, null, null);
+      session.callbacks.onConnectionStatus("open", null, null, null);
+      session.snapshot(turn);
+    }
+
+    it("stops the same execution that came back under a new id", async () => {
+      const session = openSession({ ...READY_TO_SEND, running: true });
+      const h = buildLoop(session);
+      await askToStop(h);
+      reconnectOnto(session, {
+        ...ACTIVE_TURN,
+        turnId: "provider-id",
+        updatedAt: 2,
+      });
+
+      await sayYes(h);
+
+      expect(stopFrames(session)).toMatchObject([{ turnId: "provider-id" }]);
+      expect(h.notices).toEqual([]);
+    });
+
+    it.each([
+      { name: "started at another time", other: { startedAt: 2 } },
+      { name: "answers another message", other: { userMessageId: "m-2" } },
+    ])(
+      "does not stop a turn that $name, though it came back under a new id",
+      async ({ other }) => {
+        const session = openSession({ ...READY_TO_SEND, running: true });
+        const h = buildLoop(session);
+        await askToStop(h);
+        reconnectOnto(session, {
+          ...ACTIVE_TURN,
+          turnId: "provider-id",
+          ...other,
+        });
+
+        await sayYes(h);
+
+        expect(stopFrames(session)).toEqual([]);
+        expect(h.notices).toEqual([
+          { text: TURN_ENDED_NOTICE, delegationId: "d-1" },
+        ]);
+      },
+    );
+
+    it("keeps a rename the live frames made when the snapshot still names that turn", async () => {
+      const session = openSession({ ...READY_TO_SEND, running: true });
+      const h = buildLoop(session);
+      await askToStop(h);
+      moveToTurn(session, TURN_B);
+      reconnectOnto(session, TURN_B);
+
+      await sayYes(h);
+
+      expect(stopFrames(session)).toMatchObject([{ turnId: "turn-2" }]);
+      expect(h.notices).toEqual([]);
+    });
+
+    it("forgets a rename once a snapshot says no turn was running, so a later turn of that id is not the one asked about", async () => {
+      const session = openSession({ ...READY_TO_SEND, running: true });
+      const h = buildLoop(session);
+      await askToStop(h);
+      moveToTurn(session, TURN_B);
+      reconnectOnto(session, null);
+      moveToTurn(session, TURN_B);
+
+      await sayYes(h);
+
+      expect(stopFrames(session)).toEqual([]);
+      expect(h.notices).toEqual([
+        { text: TURN_ENDED_NOTICE, delegationId: "d-1" },
+      ]);
+    });
+
+    it("forgets a rename once a snapshot names another execution, so a later turn of the renamed id is not the one asked about", async () => {
+      const session = openSession({ ...READY_TO_SEND, running: true });
+      const h = buildLoop(session);
+      await askToStop(h);
+      moveToTurn(session, TURN_B);
+      reconnectOnto(session, {
+        ...ACTIVE_TURN,
+        turnId: "turn-3",
+        startedAt: 2,
+      });
+      moveToTurn(session, TURN_B);
+
+      await sayYes(h);
+
+      expect(stopFrames(session)).toEqual([]);
+      expect(h.notices).toEqual([
+        { text: TURN_ENDED_NOTICE, delegationId: "d-1" },
+      ]);
+    });
+
+    it("forgets a rename once the connection closes, so a later turn of that id is not the one asked about", async () => {
+      const session = openSession({ ...READY_TO_SEND, running: true });
+      const h = buildLoop(session);
+      await askToStop(h);
+      moveToTurn(session, TURN_B);
+      session.callbacks.onConnectionStatus("closed", null, null, null);
+      session.callbacks.onConnectionStatus("open", null, null, null);
+      moveToTurn(session, TURN_B);
+
+      await sayYes(h);
+
+      expect(stopFrames(session)).toEqual([]);
+      expect(h.notices).toEqual([
+        { text: TURN_ENDED_NOTICE, delegationId: "d-1" },
+      ]);
+    });
   });
 
   it("does not stop the next turn when the one it asked about ended while the question waited", async () => {

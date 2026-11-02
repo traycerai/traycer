@@ -5,11 +5,13 @@ import type {
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport/chat-stream-client";
+import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ChatComposerSubmitInput } from "@/components/chat/composer/chat-composer";
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
 import { createComposerPickerStore } from "@/components/chat/composer/picker/composer-picker-store";
 import { useChatComposerSubmit } from "@/components/chat/composer/use-chat-composer-submit";
+import { TileMinimapContext } from "@/components/epic-canvas/tile-minimap/tile-minimap-context";
 import {
   AGENT_CANT_TAKE_NOTICE,
   AGENT_NO_WORKSPACE_NOTICE,
@@ -169,9 +171,20 @@ const EDITOR: ComposerPromptEditorHandle = {
 interface Gates {
   readonly sendDisabled: boolean | undefined;
   readonly workspaceBlocked: boolean;
+  readonly imagesUnsupported: boolean;
+  readonly attachmentPreparationPending: boolean;
 }
 
-const OPEN_GATES: Gates = { sendDisabled: false, workspaceBlocked: false };
+const OPEN_GATES: Gates = {
+  sendDisabled: false,
+  workspaceBlocked: false,
+  imagesUnsupported: false,
+  attachmentPreparationPending: false,
+};
+
+/** The two panes a split shows the one chat in. */
+const FRONT = "tile-front";
+const OTHER = "tile-other";
 
 interface MountedComposer {
   /** Mod-Enter in the composer; what it handed its owner to send. */
@@ -180,8 +193,15 @@ interface MountedComposer {
   readonly unmount: () => void;
 }
 
-/** The chat's composer, mounted with `gates` and a toolbar that has chosen `modelSlug`. */
-function mountComposer(gates: Gates, modelSlug: string): MountedComposer {
+/**
+ * The chat's composer in the tile `tileInstanceId`, mounted with `gates` and a
+ * toolbar that has chosen `modelSlug`; with `null`, in no tile at all.
+ */
+function mountComposer(
+  gates: Gates,
+  modelSlug: string,
+  tileInstanceId: string | null,
+): MountedComposer {
   const submitted: ChatComposerSubmitInput[] = [];
   const toolbarStore = createComposerToolbarStore({
     purpose: "run",
@@ -217,8 +237,8 @@ function mountComposer(gates: Gates, modelSlug: string): MountedComposer {
         sendDisabled: current.sendDisabled,
         sendDisabledHint: null,
         workspaceBlocked: current.workspaceBlocked,
-        imagesUnsupported: false,
-        attachmentPreparationPending: false,
+        imagesUnsupported: current.imagesUnsupported,
+        attachmentPreparationPending: current.attachmentPreparationPending,
         onSubmitMessage: (input) => {
           submitted.push(input);
           return true;
@@ -228,7 +248,17 @@ function mountComposer(gates: Gates, modelSlug: string): MountedComposer {
         queueEditTargetId: null,
         getDraftBlobBridgeSupported: () => true,
       }),
-    { initialProps: gates },
+    {
+      initialProps: gates,
+      wrapper: ({ children }: { readonly children: ReactNode }) =>
+        tileInstanceId === null ? (
+          children
+        ) : (
+          <TileMinimapContext.Provider value={tileInstanceId}>
+            {children}
+          </TileMinimapContext.Provider>
+        ),
+    },
   );
   return {
     pressModEnter: async () => {
@@ -244,7 +274,8 @@ function mountComposer(gates: Gates, modelSlug: string): MountedComposer {
   };
 }
 
-function readsOver(session: Session): PageActReads {
+/** The page's reads with the chat shown in the tile `tileInstanceId`. */
+function readsOver(session: Session, tileInstanceId: string): PageActReads {
   return {
     agentSession: (chatId) =>
       chatId !== null && chatId !== CHAT_ID
@@ -254,14 +285,15 @@ function readsOver(session: Session): PageActReads {
             chatId: CHAT_ID,
             epicId: EPIC_ID,
             hostId: HOST_ID,
+            tileInstanceId,
             title: TITLE,
           },
     paletteRow: () => null,
   };
 }
 
-/** "Tell the agent", as the say loop hands it to the page executor. */
-function voiceTells(session: Session) {
+/** "Tell the agent" of the chat shown in `tileInstanceId`, as the say loop hands it to the page executor. */
+function voiceTells(session: Session, tileInstanceId: string) {
   return executePageAct({
     row: {
       action: `agent.tell:${CHAT_ID}`,
@@ -271,7 +303,7 @@ function voiceTells(session: Session) {
     },
     text: MESSAGE,
     turnId: null,
-    reads: readsOver(session),
+    reads: readsOver(session, tileInstanceId),
   });
 }
 
@@ -310,14 +342,26 @@ describe("a message to the chat, from the composer and by voice", () => {
       modelSlug: "",
       say: AGENT_NOT_READY_NOTICE,
     },
+    {
+      name: "the draft holds an image this model cannot take",
+      gates: { ...OPEN_GATES, imagesUnsupported: true },
+      modelSlug: SETTINGS.model,
+      say: AGENT_CANT_TAKE_NOTICE,
+    },
+    {
+      name: "an attachment is still being prepared",
+      gates: { ...OPEN_GATES, attachmentPreparationPending: true },
+      modelSlug: SETTINGS.model,
+      say: AGENT_CANT_TAKE_NOTICE,
+    },
   ])(
     "sends nothing from either when $name",
     async ({ gates, modelSlug, say }) => {
       const session = openIdleSession();
-      const composer = mountComposer(gates, modelSlug);
+      const composer = mountComposer(gates, modelSlug, FRONT);
 
       const submitted = await composer.pressModEnter();
-      const outcome = await voiceTells(session);
+      const outcome = await voiceTells(session, FRONT);
 
       expect(submitted).toEqual([]);
       expect(outcome).toEqual({ kind: "refused", say });
@@ -325,17 +369,16 @@ describe("a message to the chat, from the composer and by voice", () => {
     },
   );
 
-  it("sends from both when the composer is open, with the settings the composer would send", async () => {
+  it("sends from both when the composer is open", async () => {
     const session = openIdleSession();
-    const composer = mountComposer(OPEN_GATES, SETTINGS.model);
+    const composer = mountComposer(OPEN_GATES, SETTINGS.model, FRONT);
 
     const submitted = await composer.pressModEnter();
-    const outcome = await voiceTells(session);
+    const outcome = await voiceTells(session, FRONT);
 
     expect(submitted).toHaveLength(1);
     expect(outcome).toEqual({ kind: "executed" });
     expect(sendFrames(session)).toHaveLength(1);
-    expect(sendFrames(session).at(0)?.settings).toEqual(submitted[0]?.settings);
     expect(sendFrames(session).at(0)?.deliveryPolicy).toBe(
       submitted[0]?.deliveryPolicy,
     );
@@ -343,11 +386,11 @@ describe("a message to the chat, from the composer and by voice", () => {
 
   it("stops sending by voice when the composer unmounts", async () => {
     const session = openIdleSession();
-    const composer = mountComposer(OPEN_GATES, SETTINGS.model);
-    expect(await voiceTells(session)).toEqual({ kind: "executed" });
+    const composer = mountComposer(OPEN_GATES, SETTINGS.model, FRONT);
+    expect(await voiceTells(session, FRONT)).toEqual({ kind: "executed" });
 
     composer.unmount();
-    const outcome = await voiceTells(session);
+    const outcome = await voiceTells(session, FRONT);
 
     expect(outcome).toEqual({ kind: "refused", say: AGENT_CANT_TAKE_NOTICE });
     expect(sendFrames(session)).toHaveLength(1);
@@ -355,13 +398,13 @@ describe("a message to the chat, from the composer and by voice", () => {
 
   it("follows the composer when it stops being able to send, and when it can again", async () => {
     const session = openIdleSession();
-    const composer = mountComposer(OPEN_GATES, SETTINGS.model);
+    const composer = mountComposer(OPEN_GATES, SETTINGS.model, FRONT);
 
     composer.rerender({ ...OPEN_GATES, sendDisabled: true });
-    const whileDisabled = await voiceTells(session);
+    const whileDisabled = await voiceTells(session, FRONT);
     const submittedWhileDisabled = await composer.pressModEnter();
     composer.rerender(OPEN_GATES);
-    const afterwards = await voiceTells(session);
+    const afterwards = await voiceTells(session, FRONT);
 
     expect(whileDisabled).toEqual({
       kind: "refused",
@@ -370,5 +413,127 @@ describe("a message to the chat, from the composer and by voice", () => {
     expect(submittedWhileDisabled).toEqual([]);
     expect(afterwards).toEqual({ kind: "executed" });
     expect(sendFrames(session)).toHaveLength(1);
+  });
+
+  it("publishes nothing from a composer that is in no tile, so the voice refuses", async () => {
+    const session = openIdleSession();
+    mountComposer(OPEN_GATES, SETTINGS.model, null);
+
+    const outcome = await voiceTells(session, FRONT);
+
+    expect(outcome).toEqual({ kind: "refused", say: AGENT_CANT_TAKE_NOTICE });
+    expect(sendFrames(session)).toEqual([]);
+  });
+});
+
+describe("a chat shown in two panes", () => {
+  /** The two composers, mounted in the order named; the voice is routed to the front pane. */
+  const ORDERS = [
+    { name: "the front pane mounted first", frontFirst: true },
+    { name: "the front pane mounted last", frontFirst: false },
+  ];
+
+  interface Panes {
+    readonly front: MountedComposer;
+    readonly other: MountedComposer;
+  }
+
+  function mountPanes(
+    front: { readonly gates: Gates; readonly modelSlug: string },
+    other: { readonly gates: Gates; readonly modelSlug: string },
+    frontFirst: boolean,
+  ): Panes {
+    const mountFront = () => mountComposer(front.gates, front.modelSlug, FRONT);
+    const mountOther = () => mountComposer(other.gates, other.modelSlug, OTHER);
+    if (frontFirst) {
+      const mountedFront = mountFront();
+      return { front: mountedFront, other: mountOther() };
+    }
+    const mountedOther = mountOther();
+    return { front: mountFront(), other: mountedOther };
+  }
+
+  it.each(ORDERS)(
+    "refuses by voice when the front pane cannot send and the other can, $name",
+    async ({ frontFirst }) => {
+      const session = openIdleSession();
+      const panes = mountPanes(
+        {
+          gates: { ...OPEN_GATES, sendDisabled: true },
+          modelSlug: "front-model",
+        },
+        { gates: OPEN_GATES, modelSlug: "other-model" },
+        frontFirst,
+      );
+
+      const submitted = await panes.front.pressModEnter();
+      const outcome = await voiceTells(session, FRONT);
+
+      expect(submitted).toEqual([]);
+      expect(outcome).toEqual({ kind: "refused", say: AGENT_CANT_TAKE_NOTICE });
+      expect(sendFrames(session)).toEqual([]);
+    },
+  );
+
+  it.each(ORDERS)(
+    "sends with the front pane's settings, the ones its own Mod-Enter sends, $name",
+    async ({ frontFirst }) => {
+      const session = openIdleSession();
+      const panes = mountPanes(
+        { gates: OPEN_GATES, modelSlug: "front-model" },
+        { gates: OPEN_GATES, modelSlug: "other-model" },
+        frontFirst,
+      );
+
+      const submitted = await panes.front.pressModEnter();
+      const outcome = await voiceTells(session, FRONT);
+
+      expect(outcome).toEqual({ kind: "executed" });
+      expect(sendFrames(session).at(0)?.settings.model).toBe("front-model");
+      expect(sendFrames(session).at(0)?.settings).toEqual(
+        submitted[0]?.settings,
+      );
+    },
+  );
+
+  it("is not moved by the other pane's gate changing and republishing", async () => {
+    const session = openIdleSession();
+    const panes = mountPanes(
+      { gates: OPEN_GATES, modelSlug: "front-model" },
+      { gates: OPEN_GATES, modelSlug: "other-model" },
+      true,
+    );
+
+    panes.other.rerender({ ...OPEN_GATES, sendDisabled: true });
+    panes.other.rerender(OPEN_GATES);
+    const outcome = await voiceTells(session, FRONT);
+
+    expect(outcome).toEqual({ kind: "executed" });
+    expect(sendFrames(session).at(0)?.settings.model).toBe("front-model");
+  });
+
+  it("refuses by voice when the front pane has no composer, though the other pane does", async () => {
+    const session = openIdleSession();
+    mountComposer(OPEN_GATES, "other-model", OTHER);
+
+    const outcome = await voiceTells(session, FRONT);
+
+    expect(outcome).toEqual({ kind: "refused", say: AGENT_CANT_TAKE_NOTICE });
+    expect(sendFrames(session)).toEqual([]);
+  });
+
+  it("keeps sending to the front pane when the other pane unmounts", async () => {
+    const session = openIdleSession();
+    const panes = mountPanes(
+      { gates: OPEN_GATES, modelSlug: "front-model" },
+      { gates: OPEN_GATES, modelSlug: "other-model" },
+      false,
+    );
+
+    panes.other.unmount();
+    const outcome = await voiceTells(session, FRONT);
+
+    expect(outcome).toEqual({ kind: "executed" });
+    expect(sendFrames(session).at(0)?.settings.model).toBe("front-model");
   });
 });

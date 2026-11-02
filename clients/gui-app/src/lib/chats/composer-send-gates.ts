@@ -53,38 +53,48 @@ export function composerModelUnresolved(modelSlug: string): boolean {
 export interface ComposerSendState {
   readonly sendDisabled: boolean | undefined;
   readonly workspaceBlocked: boolean;
+  readonly imagesUnsupported: boolean;
+  readonly attachmentPreparationPending: boolean;
   /** Read when sending: the toolbar moves without a render of this state. */
   readonly modelSlug: () => string;
   readonly runSettings: () => ChatRunSettings;
 }
 
-const composersByChat = new Map<string, ReadonlyArray<ComposerSendState>>();
+const composersBySurface = new Map<string, ComposerSendState>();
 
-function chatKey(hostId: string, chatId: string): string {
-  return JSON.stringify([hostId, chatId]);
+function surfaceKey(
+  hostId: string,
+  chatId: string,
+  tileInstanceId: string,
+): string {
+  return JSON.stringify([hostId, chatId, tileInstanceId]);
 }
 
-/** Publishes a composer's state for its chat until the returned call removes it. */
+/** Publishes a composer's state for its tile until the returned call removes it. */
 export function publishComposerSendState(
   hostId: string,
   chatId: string,
+  tileInstanceId: string,
   state: ComposerSendState,
 ): () => void {
-  const key = chatKey(hostId, chatId);
-  composersByChat.set(key, [...(composersByChat.get(key) ?? []), state]);
+  const key = surfaceKey(hostId, chatId, tileInstanceId);
+  composersBySurface.set(key, state);
   return () => {
-    const rest = (composersByChat.get(key) ?? []).filter(
-      (candidate) => candidate !== state,
-    );
-    if (rest.length === 0) composersByChat.delete(key);
-    else composersByChat.set(key, rest);
+    composersBySurface.delete(key);
   };
 }
 
-/** The chat's composer; the newest when a split shows it twice. `null` with none mounted. */
+/**
+ * The composer of this tile, or `null` with none mounted there. Never another
+ * tile's: a split can show one chat twice, each pane with its own settings and
+ * its own answer.
+ */
 export function composerSendStateFor(
   hostId: string,
   chatId: string,
+  tileInstanceId: string,
 ): ComposerSendState | null {
-  return composersByChat.get(chatKey(hostId, chatId))?.at(-1) ?? null;
+  return (
+    composersBySurface.get(surfaceKey(hostId, chatId, tileInstanceId)) ?? null
+  );
 }

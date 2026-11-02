@@ -56,6 +56,7 @@ export interface VoiceAgentSession {
   readonly chatId: string;
   readonly epicId: string;
   readonly hostId: string;
+  readonly tileInstanceId: string;
   readonly title: string;
 }
 
@@ -180,7 +181,11 @@ function tellAgent(
   const session = reads.agentSession(chatId);
   if (session === null) return refused(AGENT_GONE_NOTICE);
   // No composer on the tile means no way to send from it by hand either.
-  const composer = composerSendStateFor(session.hostId, chatId);
+  const composer = composerSendStateFor(
+    session.hostId,
+    chatId,
+    session.tileInstanceId,
+  );
   if (composer === null) return refused(AGENT_CANT_TAKE_NOTICE);
   const chat = session.handle.store.getState();
   const refusal = composerSendRefusal({
@@ -191,8 +196,8 @@ function tellAgent(
     ),
     sendDisabled: composer.sendDisabled,
     workspaceBlocked: composer.workspaceBlocked,
-    imagesUnsupported: false,
-    attachmentPreparationPending: false,
+    imagesUnsupported: composer.imagesUnsupported,
+    attachmentPreparationPending: composer.attachmentPreparationPending,
   });
   if (refusal !== null) return refused(COMPOSER_REFUSAL_NOTICE[refusal]);
   if (commitsStagedRebind(chat, session)) {

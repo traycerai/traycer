@@ -18,6 +18,7 @@ import { toast } from "sonner";
 
 import { appLogger } from "@/lib/logger";
 import { QueuedMessageStagesContext } from "@/components/chat/queued-message-stages";
+import { TileMinimapContext } from "@/components/epic-canvas/tile-minimap/tile-minimap-context";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import {
   appendImageAttachmentAtoms,
@@ -433,11 +434,14 @@ export function useChatComposerSubmit(
 
   // The voice sends to a chat with no composer of its own, and takes the same
   // answer this one gives. Layout-timed for the reason `submitBlockedRef` is.
+  const tileInstanceId = use(TileMinimapContext);
   useLayoutEffect(() => {
-    if (targetHostId === null) return undefined;
-    return publishComposerSendState(targetHostId, taskId, {
+    if (targetHostId === null || tileInstanceId === null) return undefined;
+    return publishComposerSendState(targetHostId, taskId, tileInstanceId, {
       sendDisabled,
       workspaceBlocked,
+      imagesUnsupported,
+      attachmentPreparationPending,
       modelSlug: () => toolbarStore.getState().selection.modelSlug,
       runSettings: () => {
         const toolbar = toolbarStore.getState();
@@ -450,7 +454,16 @@ export function useChatComposerSubmit(
         });
       },
     });
-  }, [sendDisabled, targetHostId, taskId, toolbarStore, workspaceBlocked]);
+  }, [
+    attachmentPreparationPending,
+    imagesUnsupported,
+    sendDisabled,
+    targetHostId,
+    taskId,
+    tileInstanceId,
+    toolbarStore,
+    workspaceBlocked,
+  ]);
 
   // The LIVE blocking predicate, for the deferred confirmation's continuation.
   // `submitBlocked` is rebuilt per render from props; a continuation holds the

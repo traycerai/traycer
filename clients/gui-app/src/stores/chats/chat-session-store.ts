@@ -5044,6 +5044,10 @@ export function createChatSessionStoreWithNotificationDependencies(
           lastSendSnapshotRevision: (state.sendHostFrameRevision ?? 0) + 1,
           runStatus: frame.snapshot.runStatus,
           activeTurn: frame.snapshot.activeTurn,
+          renamedTurnIds: snapshotRenamedTurnIds(
+            state,
+            frame.snapshot.activeTurn,
+          ),
           turnInProgress: frame.snapshot.turnInProgress,
           turnLifecycleRevision: nextTurnLifecycleRevision(state, {
             activeTurn: frame.snapshot.activeTurn,
@@ -10280,6 +10284,8 @@ export function createChatSessionStoreWithNotificationDependencies(
             connectionStatus: status,
             runStatus: status === "closed" ? "idle" : state.runStatus,
             activeTurn: status === "closed" ? null : state.activeTurn,
+            renamedTurnIds:
+              status === "closed" ? NO_RENAMED_TURN_IDS : state.renamedTurnIds,
             turnLifecycleRevision: nextTurnLifecycleRevision(state, {
               activeTurn: status === "closed" ? null : state.activeTurn,
               turnInProgress: state.turnInProgress,
@@ -16000,6 +16006,29 @@ function nextRenamedTurnIds(
   const next = new Map(renamed);
   next.delete(nextTurnId);
   return next.set(previousTurnId, nextTurnId);
+}
+
+/**
+ * A snapshot reports only where a turn ended up, and a frame that would have
+ * named a rename may have been missed offline. The same start and the same user
+ * message mean the same execution under a new id; anything else is another turn.
+ */
+function snapshotRenamedTurnIds(
+  state: Pick<ChatSessionState, "activeTurn" | "renamedTurnIds">,
+  nextTurn: ChatActiveTurn | null,
+): ReadonlyMap<string, string> {
+  const previousTurn = state.activeTurn;
+  if (previousTurn === null || nextTurn === null) return NO_RENAMED_TURN_IDS;
+  if (
+    previousTurn.startedAt !== nextTurn.startedAt ||
+    previousTurn.userMessageId !== nextTurn.userMessageId
+  ) {
+    return NO_RENAMED_TURN_IDS;
+  }
+  return nextRenamedTurnIds(state.renamedTurnIds, {
+    previousTurnId: previousTurn.turnId,
+    nextTurnId: nextTurn.turnId,
+  });
 }
 
 /** The id `turnId` goes by now, following the renames of the turn still running. */
