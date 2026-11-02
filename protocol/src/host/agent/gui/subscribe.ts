@@ -37,6 +37,7 @@ import {
   chatSchema as chatSchemaLive,
   chatSchemaV18,
   messageSchemaV18,
+  messageSchemaPreSlack,
   chatSchemaPreInReplyTo,
   chatSchemaV14,
   chatSchemaV15,
@@ -44,6 +45,7 @@ import {
   interviewDeliveryProjectionSchema,
   userMessagePayloadSchemaPreCanvas,
   userMessagePayloadSchema,
+  userMessagePayloadSchemaPreSlack,
   userMessagePayloadSchemaPreAnnotation,
   userMessageSchema,
   userMessageSchemaPreConversation,
@@ -124,7 +126,9 @@ import {
   openUserMessageSchemaPreCanvas,
   openUserMessageSchema,
   openUserMessageSchemaPreConversation,
+  openUserMessageSchemaPreSlack,
   openUserMessageSenderSchema,
+  openMessageSchemaPreSlack,
 } from "@traycer/protocol/host/agent/gui/open-harness-wire";
 import {
   worktreeBindingSchema,
@@ -160,6 +164,7 @@ import {
   chatTranscriptWindowSchema,
   chatTranscriptWindowSchemaPreMessageDelivery,
   openChatRangeResponseSchema,
+  openChatRangeResponseSchemaPreSlack,
   openChatRangeResponseSchemaPreNotApplied,
   openChatRangeResponseSchemaPreCanvas,
   openChatRangeResponseSchemaPreDelivery,
@@ -170,6 +175,7 @@ import {
   openChatTranscriptWindowSchemaPreConversation,
   openChatTranscriptWindowSchemaPreMcpApp,
   openChatTranscriptWindowSchema,
+  openChatTranscriptWindowSchemaPreSlack,
   openChatTranscriptWindowSchemaPreNotApplied,
   openChatTranscriptWindowSchemaPreCanvas,
   openChatTranscriptWindowSchemaPreDelivery,
@@ -201,11 +207,13 @@ const jsonContentSchema = getRecordSchema(
 const chatSchema = lazySchema(() =>
   chatSchemaLive.extend({
     settings: chatRunSettingsSchemaPreUltracode.nullable().default(null),
+    messages: z.array(messageSchemaPreSlack),
   }),
 );
 const openChatSchema = lazySchema(() =>
   openChatSchemaLive.extend({
     settings: chatRunSettingsSchemaPreUltracode.nullable().default(null),
+    messages: z.array(openMessageSchemaPreSlack),
   }),
 );
 const chatRecordSchema = lazySchema(() =>
@@ -1247,7 +1255,7 @@ export type OpenChatQueueState = z.infer<typeof openChatQueueStateSchema>;
 // Live 1.32 queue: the prompt payload carries canvas annotations.
 export const chatQueuedPromptItemSchemaPreUltracode = lazySchema(() =>
   chatQueuedPromptItemSchemaPreCanvas.extend({
-    message: userMessagePayloadSchema,
+    message: userMessagePayloadSchemaPreSlack,
   }),
 );
 
@@ -3827,7 +3835,7 @@ const chatSubscribeCommonServerFrameSchemas =
 // them: the queue frozen at its six pre-memory-curation arms.
 const chatSubscribeCommonServerFrameSchemasOpenHarness =
   buildChatSubscribeCommonServerFrameSchemas({
-    message: openUserMessageSchema,
+    message: openUserMessageSchemaPreSlack,
     queue: openChatQueueStateSchemaPreMemoryCuration,
     event: openChatEventSchema,
     action: chatActionSchema,
@@ -3847,7 +3855,7 @@ const chatSubscribeCommonServerFrameSchemasOpenHarness =
 // pre-memory-curation arms.
 const chatSubscribeCommonServerFrameSchemasOpenHarnessV134 =
   buildChatSubscribeCommonServerFrameSchemas({
-    message: openUserMessageSchema,
+    message: openUserMessageSchemaPreSlack,
     queue: openChatQueueStateSchemaPreMemoryCuration,
     event: openChatEventSchema,
     action: chatActionSchema,
@@ -3867,7 +3875,7 @@ const chatSubscribeCommonServerFrameSchemasOpenHarnessV134 =
 // arms, which may carry a memory-curation item.
 const chatSubscribeCommonServerFrameSchemasOpenHarnessV135 =
   buildChatSubscribeCommonServerFrameSchemas({
-    message: openUserMessageSchema,
+    message: openUserMessageSchemaPreSlack,
     queue: openChatQueueStateSchemaPreNotificationDigest,
     event: openChatEventSchema,
     action: chatActionSchema,
@@ -3887,7 +3895,7 @@ const chatSubscribeCommonServerFrameSchemasOpenHarnessV135 =
 // the steer restart reasons `1.40` adds to `actionAck`.
 const chatSubscribeCommonServerFrameSchemasOpenHarnessV139 =
   buildChatSubscribeCommonServerFrameSchemas({
-    message: openUserMessageSchema,
+    message: openUserMessageSchemaPreSlack,
     queue: openChatQueueStateSchemaPreUltracode,
     event: openChatEventSchema,
     action: chatActionSchema,
@@ -3906,7 +3914,7 @@ const chatSubscribeCommonServerFrameSchemasOpenHarnessV139 =
 // restart reasons on a rejected `actionAck`.
 const chatSubscribeCommonServerFrameSchemasOpenHarnessV140 =
   buildChatSubscribeCommonServerFrameSchemas({
-    message: openUserMessageSchema,
+    message: openUserMessageSchemaPreSlack,
     queue: openChatQueueStateSchemaPreUltracode,
     event: openChatEventSchema,
     action: chatActionSchema,
@@ -6523,7 +6531,7 @@ const openChatWindowedSnapshotSchemaPreNotApplied = lazySchema(() =>
 const openChatWindowedSnapshotSchemaPreLineHeld = lazySchema(() =>
   chatWindowedSnapshotSchemaPreUltracode.extend({
     queue: openChatQueueStateSchemaPreNotificationDigest,
-    tail: openChatTranscriptWindowSchema,
+    tail: openChatTranscriptWindowSchemaPreSlack,
   }),
 );
 
@@ -6768,7 +6776,7 @@ const chatSubscribeRangeServerFrameSchemaOpenHarnessV137 = lazySchema(() =>
     kind: z.literal("range"),
     ...textFrameFields,
     ...chatReferenceFields,
-    range: openChatRangeResponseSchema,
+    range: openChatRangeResponseSchemaPreSlack,
   }),
 );
 
@@ -8678,14 +8686,22 @@ export const chatSubscribeV140 = defineStreamRpcContract({
 
 // 1.41 carries the per-chat request. Earlier lines keep settings, queues,
 // fallback views and message tails exactly as their contracts defined them.
+// 1.43 adds the `slack` user payload to the live prompt item; the open queue
+// of 1.42 and below is frozen without it.
 export const chatQueuedPromptItemSchema = lazySchema(() =>
   chatQueuedPromptItemSchemaPreUltracode.extend({
+    settings: chatRunSettingsSchema,
+    message: userMessagePayloadSchema,
+  }),
+);
+const openChatQueuedPromptItemSchemaPreSlack = lazySchema(() =>
+  openChatQueuedPromptItemSchemaPreUltracode.extend({
     settings: chatRunSettingsSchema,
   }),
 );
 export const openChatQueuedPromptItemSchema = lazySchema(() =>
-  openChatQueuedPromptItemSchemaPreUltracode.extend({
-    settings: chatRunSettingsSchema,
+  openChatQueuedPromptItemSchemaPreSlack.extend({
+    message: userMessagePayloadSchema,
   }),
 );
 export const chatQueuedItemSchema = lazySchema(() =>
@@ -8698,6 +8714,18 @@ export const chatQueuedItemSchema = lazySchema(() =>
     chatQueuedMemoryCurationItemSchema,
     chatQueuedNotificationDigestItemSchema,
     chatQueuedPromptItemSchema,
+  ]),
+);
+const openChatQueuedItemSchemaPreSlack = lazySchema(() =>
+  z.union([
+    chatQueuedManagedCommandItemSchema,
+    chatQueuedPortForwardItemSchema,
+    chatQueuedConversationMessageItemSchema,
+    chatQueuedTaskCheckinItemSchema,
+    chatQueuedTaskOverdueItemSchema,
+    chatQueuedMemoryCurationItemSchema,
+    chatQueuedNotificationDigestItemSchema,
+    openChatQueuedPromptItemSchemaPreSlack,
   ]),
 );
 export const openChatQueuedItemSchema = lazySchema(() =>
@@ -8715,6 +8743,12 @@ export const openChatQueuedItemSchema = lazySchema(() =>
 export const chatQueueStateSchema = lazySchema(() =>
   chatQueueStateSchemaPreUltracode.extend({
     items: z.array(chatQueuedItemSchema),
+  }),
+);
+/** The open queue `chat.subscribe` lines through `1.42` ship: prompt items without the `slack` payload. */
+const openChatQueueStateSchemaPreSlack = lazySchema(() =>
+  openChatQueueStateSchemaPreUltracode.extend({
+    items: z.array(openChatQueuedItemSchemaPreSlack),
   }),
 );
 export const openChatQueueStateSchema = lazySchema(() =>
@@ -8783,17 +8817,24 @@ export const chatWindowedSnapshotSchema = lazySchema(() =>
 const openChatWindowedSnapshotSchemaV141 = lazySchema(() =>
   openChatWindowedSnapshotSchemaPreUltracode.extend({
     chat: chatRecordSchemaLive,
-    queue: openChatQueueStateSchema,
+    queue: openChatQueueStateSchemaPreSlack,
     ...ultracodeFallbackFields,
   }),
 );
-export const openChatWindowedSnapshotSchema = lazySchema(() =>
+/** The open windowed snapshot `chat.subscribe@1.42` ships: no `slack` row or queued payload. */
+const openChatWindowedSnapshotSchemaPreSlack = lazySchema(() =>
   openChatWindowedSnapshotSchemaV141.extend(deliveryWorktreeIntentFields),
+);
+export const openChatWindowedSnapshotSchema = lazySchema(() =>
+  openChatWindowedSnapshotSchemaPreSlack.extend({
+    queue: openChatQueueStateSchema,
+    tail: openChatTranscriptWindowSchema,
+  }),
 );
 const chatSubscribeCommonServerFrameSchemasOpenHarnessV141 =
   buildChatSubscribeCommonServerFrameSchemas({
-    message: openUserMessageSchema,
-    queue: openChatQueueStateSchema,
+    message: openUserMessageSchemaPreSlack,
+    queue: openChatQueueStateSchemaPreSlack,
     event: openChatEventSchema,
     action: chatActionSchema,
     approval: chatApprovalStateSchema,
@@ -8838,10 +8879,11 @@ const messageDeliveryChangedServerFrameSchemaV142 = lazySchema(() =>
     delivery: chatMessageDeliverySchemaV142.nullable(),
   }),
 );
-export const openChatSubscribeWindowedServerFrameSchema = lazySchema(() =>
+/** The open server frame `chat.subscribe@1.42` ships: no `slack` row or queued payload. */
+const openChatSubscribeWindowedServerFrameSchemaPreSlack = lazySchema(() =>
   z.discriminatedUnion("kind", [
     chatSubscribeWindowedSnapshotServerFrameSchemaOpenHarnessV139.extend({
-      snapshot: openChatWindowedSnapshotSchema,
+      snapshot: openChatWindowedSnapshotSchemaPreSlack,
     }),
     chatSubscribeSkeletonChunkServerFrameSchemaV119,
     chatSubscribeAccumulatedChangesServerFrameSchema,
@@ -8854,6 +8896,52 @@ export const openChatSubscribeWindowedServerFrameSchema = lazySchema(() =>
     chatSubscribeThinkingTokensServerFrameSchema,
     messageDeliveryChangedServerFrameSchemaV142,
     ...chatSubscribeCommonServerFrameSchemasOpenHarnessV141,
+    blockDeltaServerFrameSchema(openRuntimeEventSchema),
+  ]),
+);
+const chatSubscribeCommonServerFrameSchemasOpenHarnessV143 =
+  buildChatSubscribeCommonServerFrameSchemas({
+    message: openUserMessageSchema,
+    queue: openChatQueueStateSchema,
+    event: openChatEventSchema,
+    action: chatActionSchema,
+    approval: chatApprovalStateSchema,
+    fileEditApproval: chatFileEditApprovalStateSchema,
+    interviewAnswered: interviewAnsweredServerFrameSchema,
+    interviewErrored: interviewErroredServerFrameSchema,
+    extraQueueChangedFields: {
+      sendWouldQueue: lazySchema(() => z.boolean().optional()),
+    },
+    extraActionAckFields: {
+      ...fallbackGraceHoldLeaseFields,
+      ...draftImageAckCauseFields,
+      ...steerRestartAckFields,
+    },
+  });
+const chatSubscribeRangeServerFrameSchemaOpenHarnessV143 = lazySchema(() =>
+  z.object({
+    kind: z.literal("range"),
+    ...textFrameFields,
+    ...chatReferenceFields,
+    range: openChatRangeResponseSchema,
+  }),
+);
+export const openChatSubscribeWindowedServerFrameSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    chatSubscribeWindowedSnapshotServerFrameSchemaOpenHarnessV139.extend({
+      snapshot: openChatWindowedSnapshotSchema,
+    }),
+    chatSubscribeSkeletonChunkServerFrameSchemaV119,
+    chatSubscribeAccumulatedChangesServerFrameSchema,
+    chatSubscribeIndexChangedServerFrameSchema,
+    chatSubscribeRangeServerFrameSchemaOpenHarnessV143,
+    chatSubscribeTurnStateChangedServerFrameSchemaV141,
+    chatSubscribeManagedCommandsChangedServerFrameSchema,
+    chatSubscribePortForwardsChangedServerFrameSchema,
+    chatSubscribeHeldUpdatesChangedServerFrameSchema,
+    chatSubscribeThinkingTokensServerFrameSchema,
+    messageDeliveryChangedServerFrameSchemaV142,
+    ...chatSubscribeCommonServerFrameSchemasOpenHarnessV143,
     blockDeltaServerFrameSchema(openRuntimeEventSchema),
   ]),
 );
@@ -8951,8 +9039,29 @@ export const chatSubscribeV142 = defineStreamRpcContract({
   method: "chat.subscribe",
   schemaVersion: { major: 1, minor: 42 } as const,
   openRequestSchema: chatSubscribeV141.openRequestSchema,
-  serverFrameSchema: openChatSubscribeWindowedServerFrameSchema,
+  serverFrameSchema: openChatSubscribeWindowedServerFrameSchemaPreSlack,
   clientFrameSchema: chatSubscribeV141.clientFrameSchema,
+});
+
+/**
+ * 1.43: a Slack message delivered to a bot's session is a user row of its
+ * own kind (`slackUserMessageSchema`): its text and images, its Slack author
+ * and the files it did not carry. One union arm and no key, frame or enum
+ * value elsewhere: the user row (`messageAccepted`, the tail, a range) and the
+ * queued prompt item carry it.
+ *
+ * PROJECTION, like `1.32`'s canvas annotations: `1.42` and every older line
+ * bind payload unions without the arm, and the host renders a Slack message
+ * for a peer below `1.43` as the plain user message it degrades to
+ * (`chat-frame-compat.ts`). The open request and the client frames are
+ * `1.42`'s, unchanged.
+ */
+export const chatSubscribeV143 = defineStreamRpcContract({
+  method: "chat.subscribe",
+  schemaVersion: { major: 1, minor: 43 } as const,
+  openRequestSchema: chatSubscribeV142.openRequestSchema,
+  serverFrameSchema: openChatSubscribeWindowedServerFrameSchema,
+  clientFrameSchema: chatSubscribeV142.clientFrameSchema,
 });
 
 const chatSubscribeCommonServerFrameSchemasV141 =

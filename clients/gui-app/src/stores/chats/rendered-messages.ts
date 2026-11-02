@@ -4119,6 +4119,9 @@ function renderUserMessage(
     ...(message.conversationRequest === undefined
       ? {}
       : { conversationRequest: message.conversationRequest }),
+    ...(message.message.kind === "slack"
+      ? { slackMessage: message.message }
+      : {}),
   };
 }
 

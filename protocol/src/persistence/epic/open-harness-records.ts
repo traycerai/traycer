@@ -59,6 +59,8 @@ import {
   userMessageSchema,
   userMessageSchemaPreCanvas,
   userMessageSchemaPreConversation,
+  userMessageSchemaPreSlack,
+  userMessageSenderTypeFor,
 } from "@traycer/protocol/persistence/epic/messages";
 import {
   agentSenderSchema,
@@ -278,6 +280,22 @@ export const openUserMessageSchemaPreCanvas = lazySchema(() =>
       });
     }),
 );
+/** The open user row `chat.subscribe` lines through `1.42` ship: no `slack` payload. */
+export const openUserMessageSchemaPreSlack = lazySchema(() =>
+  z
+    .object({
+      ...userMessageSchemaPreSlack.shape,
+      sender: openUserMessageSenderSchema,
+    })
+    .superRefine((message, ctx) => {
+      if (message.sender.type === message.message.kind) return;
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["message", "kind"],
+        message: "User message sender.type must match message.kind.",
+      });
+    }),
+);
 export const openUserMessageSchema = lazySchema(() =>
   z
     .object({
@@ -285,7 +303,10 @@ export const openUserMessageSchema = lazySchema(() =>
       sender: openUserMessageSenderSchema,
     })
     .superRefine((message, ctx) => {
-      if (message.sender.type === message.message.kind) return;
+      if (
+        message.sender.type === userMessageSenderTypeFor(message.message.kind)
+      )
+        return;
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["message", "kind"],
@@ -342,7 +363,7 @@ export const openAssistantMessageSchemaPreDelivery = lazySchema(() =>
 /** Canvas-aware rows before the not-applied outcome flag. */
 export const openMessageSchemaPreNotApplied = lazySchema(() =>
   z.discriminatedUnion("role", [
-    openUserMessageSchema,
+    openUserMessageSchemaPreSlack,
     openAssistantMessageSchemaPreNotApplied,
   ]),
 );
@@ -350,6 +371,13 @@ export const openMessageSchemaPreNotApplied = lazySchema(() =>
 export const openMessageSchema = lazySchema(() =>
   z.discriminatedUnion("role", [
     openUserMessageSchema,
+    openAssistantMessageSchema,
+  ]),
+);
+/** The open message union `chat.subscribe@1.36` through `@1.42` ship: the user row without `slack`. */
+export const openMessageSchemaPreSlack = lazySchema(() =>
+  z.discriminatedUnion("role", [
+    openUserMessageSchemaPreSlack,
     openAssistantMessageSchema,
   ]),
 );

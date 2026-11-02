@@ -6,6 +6,7 @@ import { chatEventSchema } from "@traycer/protocol/persistence/epic/chat-events"
 import {
   openChatEventSchema,
   openMessageSchema,
+  openMessageSchemaPreSlack,
   openMessageSchemaPreNotApplied,
   openMessageSchemaPreCanvas,
   openMessageSchemaPreHtml,
@@ -841,6 +842,13 @@ export type OpenChatTranscriptWindow = z.infer<
   typeof openChatTranscriptWindowSchema
 >;
 
+/** The open tail `chat.subscribe@1.36` through `@1.42` ship: user rows without `slack`. */
+export const openChatTranscriptWindowSchemaPreSlack = lazySchema(() =>
+  openChatTranscriptWindowSchema.extend({
+    messages: z.array(openMessageSchemaPreSlack),
+  }),
+);
+
 /**
  * Wire-freeze copy of the tail bound to `chat.subscribe@1.9`.
  *
@@ -1240,6 +1248,13 @@ export const openChatRangeResponseSchema = lazySchema(() =>
   }),
 );
 export type OpenChatRangeResponse = z.infer<typeof openChatRangeResponseSchema>;
+
+/** The open range `chat.subscribe@1.36` through `@1.42` ship: user rows without `slack`. */
+export const openChatRangeResponseSchemaPreSlack = lazySchema(() =>
+  openChatRangeResponseSchema.extend({
+    messages: z.array(openMessageSchemaPreSlack),
+  }),
+);
 
 /**
  * Wire-freeze copy of the range response bound to `chat.subscribe@1.18`-

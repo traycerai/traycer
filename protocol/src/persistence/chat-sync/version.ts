@@ -169,7 +169,12 @@ import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 // older reader draws the send without the post's state. The receipt's `slack`
 // (a send posted in Slack, S4b) rides the same minor, defaulted `null`.
 // 1.12 adds the per-chat Ultracode request to core.settings.
-export const CHAT_SYNC_SCHEMA_VERSION = { major: 1, minor: 12 } as const;
+// 1.13 adds the `slack` user message (a Slack message delivered to a bot's
+// session). A new arm of the user payload union, which the message-role
+// passthrough does not cover: publishers MUST stamp a conditional 1.13
+// minReaderVersion when any message, or any queued item, is a Slack message
+// (`chatSyncReaderFloorForTranscriptMessages` / `...Events` in `head.ts`).
+export const CHAT_SYNC_SCHEMA_VERSION = { major: 1, minor: 13 } as const;
 
 export type ChatSyncSchemaVersion = typeof CHAT_SYNC_SCHEMA_VERSION;
 

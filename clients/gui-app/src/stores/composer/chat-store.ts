@@ -25,6 +25,7 @@ import type {
   TodoItem,
   AgentUserMessage,
   BrowserAnnotationRecord,
+  SlackUserMessage,
 } from "@traycer/protocol/persistence/epic/schemas";
 import type {
   AgentMessageDelivery,
@@ -785,6 +786,12 @@ export interface ChatMessage {
    * reads it.
    */
   conversationRequest?: ConversationRequest;
+  /**
+   * The Slack message this user row is, in a bot session that runs a Slack
+   * thread or DM: who wrote it in Slack, and the files it did not carry.
+   * Absent on every other row.
+   */
+  slackMessage?: SlackUserMessage;
   /**
    * The announcement this assistant row is, on a bot channel (Tracy Bots):
    * its kind and the one thing it points at. Absent on every other row.
