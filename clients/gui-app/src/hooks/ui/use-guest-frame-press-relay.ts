@@ -19,6 +19,12 @@ import { useEffect, type RefObject } from "react";
  * click anywhere. Both events bubble like the real ones would, so document
  * listeners of every kind see one ordinary outside press.
  *
+ * When the whole application loses focus while the frame holds it, the
+ * active element is the frame too, but the document no longer has focus:
+ * such a blur is not a press and relays nothing. (Chrome delivers that blur
+ * to the frame's own window; the check is for an engine that delivers it
+ * here.)
+ *
  * Not relayed: a press while the frame already holds focus - the window does
  * not blur again - and anything the frame does with the press itself.
  */
@@ -29,6 +35,7 @@ export function useGuestFramePressRelay(
     const onWindowBlur = (): void => {
       const frame = frameRef.current;
       if (frame === null || document.activeElement !== frame) return;
+      if (!document.hasFocus()) return;
       relayGuestFramePress(frame);
     };
     window.addEventListener("blur", onWindowBlur);
@@ -37,7 +44,7 @@ export function useGuestFramePressRelay(
 }
 
 /** The pointerdown + click pair an outside press produces, on `frame`. */
-export function relayGuestFramePress(frame: Element): void {
+function relayGuestFramePress(frame: Element): void {
   frame.dispatchEvent(
     new PointerEvent("pointerdown", {
       bubbles: true,
