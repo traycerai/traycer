@@ -68,6 +68,7 @@ import {
   peekSavedChatTabState,
   restoreChatTabState,
   restoreChatTabStateForMount,
+  savedAnchorTurnWasSplit,
   saveChatTabState,
   savedChatTabAnchorRowKey,
   type ChatTabScrollMode,
@@ -2240,9 +2241,31 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   // Raw saved state, peeked WITHOUT `restoreChatTabState`'s messages-dependent
   // clamp. Hydration retry needs the original anchor id to replay a measured
   // location once the transcript has hydrated enough to contain it.
-  const [rawSavedTabState] = useState<SavedChatTabScrollState | null>(
-    () => pendingHydrationRestore(identity) ?? peekSavedChatTabState(identity),
-  );
+  //
+  // Unless a steer split the turn the anchor sits in since the save: its rows
+  // were renamed, not delayed, so the mount-time restore above has already
+  // answered against the slices (the part cutting at the saved segment, or
+  // the latest) and nothing under the old id will ever hydrate. The restored
+  // state is the saved state from here on, or the catch-up below would hold
+  // the list at offset 0 waiting for a row that cannot arrive.
+  const [mountSavedTabState] = useState<{
+    readonly raw: SavedChatTabScrollState | null;
+    readonly anchorTurnWasSplit: boolean;
+  }>(() => {
+    const raw =
+      pendingHydrationRestore(identity) ?? peekSavedChatTabState(identity);
+    const anchorTurnWasSplit =
+      raw !== null &&
+      savedAnchorTurnWasSplit(
+        raw,
+        listRows.map((row) => row.key),
+      );
+    return {
+      raw: anchorTurnWasSplit ? restoredTabState : raw,
+      anchorTurnWasSplit,
+    };
+  });
+  const rawSavedTabState = mountSavedTabState.raw;
   const pendingHydrationRestoreAnchorId =
     resolvePendingHydrationRestoreAnchorId(restoredTabState, rawSavedTabState);
   // A cold turn part must retain its exact coordinate until that part lands.
@@ -2265,6 +2288,14 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       rememberPendingHydrationRestore(identity, rawSavedTabState);
     }
   }, [identity, pendingHydrationRestoreAnchorId, rawSavedTabState]);
+  // A pending coordinate the split retired must not outlive this mount in the
+  // registry: a same-instance remount prefers that entry over the position
+  // this mount goes on to save, and would replay the pre-steer anchor over it.
+  useLayoutEffect(() => {
+    if (mountSavedTabState.anchorTurnWasSplit) {
+      forgetPendingHydrationRestore(identity);
+    }
+  }, [identity, mountSavedTabState.anchorTurnWasSplit]);
   const pendingMeasuredFreeRestoreRef =
     useRef<PendingMeasuredFreeRestore | null>(
       resolvePendingMeasuredFreeRestore(restoredTabState),

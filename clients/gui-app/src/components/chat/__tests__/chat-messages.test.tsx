@@ -7324,6 +7324,96 @@ describe("ChatMessages scroll policy", () => {
       second.unmount();
     });
 
+    it("reopens inside a turn a steer split since the save, at the slice part cutting at the saved segment", async () => {
+      // A message queued during a running turn is delivered as a same-turn
+      // steer, which renames every row of that turn (`assistant:<key>` ->
+      // `assistant:<key>:part:<n>`). A position saved inside the turn before
+      // the steer names a row no list draws again. The mount used to read that
+      // as "not hydrated yet": no initial anchor, no follow, offset 0 - the
+      // top of the chat - waiting for a row that could not arrive.
+      const turnIndex = 11;
+      const turnRowId = "assistant:turn-steered";
+      const laterTextId = "text-later";
+      const savedOffset = 24;
+      const messages = makeCompletedTranscript(40);
+      const preSplitTurn: ChatMessageModel = {
+        ...messages[turnIndex],
+        id: turnRowId,
+        role: "assistant",
+        segments: [
+          assistantTextSegment("text-first", "First block of the turn."),
+          assistantTextSegment(laterTextId, "Later block the reader was on."),
+        ],
+      };
+      const afterSteer: ChatMessageModel[] = [
+        ...messages.slice(0, turnIndex),
+        { ...preSplitTurn, id: `${turnRowId}:part:0` },
+        {
+          ...makeMessageAt(0, "user", 5_000),
+          id: "steer:queue-item-1",
+          content: "queued while the turn ran",
+        },
+        {
+          ...makeMessageAt(0, "assistant", 5_001),
+          id: `${turnRowId}:part:1`,
+          completedAt: 5_100,
+          segments: [
+            assistantTextSegment("text-after-steer", "Picked the steer up."),
+          ],
+        },
+        ...messages.slice(turnIndex + 1),
+      ];
+      const instanceId = `steer-split-reopen-${Math.random().toString(36).slice(2)}`;
+      const identity = makeTestIdentity(instanceId, "epic-1", "task-1");
+      // Saved while reading the later part of the unsplit turn: the expanded
+      // list drew that part right after the turn's own row.
+      saveChatTabState({
+        identity,
+        mode: "free-scrolling",
+        anchorMessageId: `${turnRowId}#${laterTextId}`,
+        anchorRowKey: turnRowId,
+        anchorIndex: turnIndex + 1,
+        offset: savedOffset,
+      });
+      // The first slice keeps the turn's segments, so its later part sits at
+      // the same expanded index the saved one did.
+      const resolvedPartKey = `${turnRowId}:part:0#${laterTextId}`;
+      const expectedScrollTop =
+        (turnIndex + 1) * TICKET_13_ROW_HEIGHT_PX +
+        LEGEND_LIST_HEADER_PX -
+        savedOffset;
+      const expandedRowCount = afterSteer.length + 1;
+      setLegendListScrollContainerScrollHeightOverride(
+        LEGEND_LIST_HEADER_PX + expandedRowCount * TICKET_13_ROW_HEIGHT_PX + 40,
+      );
+      tileLiveness.live = true;
+      const view = renderChatMessages({
+        messages: afterSteer,
+        instanceId,
+        epicId: "epic-1",
+        taskId: "task-1",
+      });
+      await settleLegendList();
+      await settleLegendList();
+
+      expect(
+        getScrollNode().querySelector(`[data-row-key="${resolvedPartKey}"]`),
+      ).not.toBeNull();
+      expect(getScrollNode().scrollTop).toBe(expectedScrollTop);
+      expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+
+      // The split retired the pre-steer coordinate rather than leaving it
+      // armed as a hydration wait: the close saves the slice the reader was
+      // restored to, not the row that no longer exists.
+      view.unmount();
+      expect(peekSavedChatTabState(identity)).toMatchObject({
+        mode: "free-scrolling",
+        anchorMessageId: resolvedPartKey,
+        anchorRowKey: `${turnRowId}:part:0`,
+        offset: savedOffset,
+      });
+    });
+
     it("failed hydration landing retains the coordinate for a later messages-change retry", async () => {
       // The late-hydration catch-up must not
       // clear the pending id / session fallback before a validated landing.

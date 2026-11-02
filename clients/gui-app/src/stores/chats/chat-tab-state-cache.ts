@@ -117,6 +117,14 @@ export function restoreChatTabState(
       offset: 0,
     };
   }
+  if (owner !== null && turnWasSplit(owner, rowKeys)) {
+    return restoreAcrossSteerSplit(
+      saved.anchorMessageId,
+      saved,
+      owner,
+      rowKeys,
+    );
+  }
   // A new saved index describes an expanded list. It cannot locate a missing
   // row in a cold or differently expanded list; retain only semantic identity.
   if (
@@ -142,6 +150,93 @@ export function restoreChatTabState(
     anchorIndex: clampedIndex,
     offset: 0,
   };
+}
+
+/**
+ * The slice rows of a turn whose unsplit row id was `owner`: a same-turn steer
+ * splits an assistant turn and renames every row it draws, `assistant:<key>`
+ * becoming `assistant:<key>:part:<n>` (`assistantSliceRowId` in the protocol's
+ * row projection, sticky for the whole turn).
+ */
+function sliceRowKeyPrefix(owner: string): string {
+  return `${owner}:part:`;
+}
+
+function turnWasSplit(owner: string, rowKeys: ReadonlyArray<string>): boolean {
+  const prefix = sliceRowKeyPrefix(owner);
+  return rowKeys.some((key) => key.startsWith(prefix));
+}
+
+/**
+ * Whether a steer split the turn `saved` is anchored in since the position was
+ * saved. The row the anchor names is then gone for good, not cold: nothing is
+ * left for a hydration restore to wait for, and `restoreChatTabState` has
+ * already answered against the renamed slices.
+ */
+export function savedAnchorTurnWasSplit(
+  saved: SavedChatTabScrollState,
+  rowKeys: ReadonlyArray<string>,
+): boolean {
+  const anchor = saved.anchorMessageId;
+  if (anchor === null || rowKeys.includes(anchor)) return false;
+  const owner = savedChatTabAnchorRowKey(saved, rowKeys);
+  if (owner === null || rowKeys.includes(owner)) return false;
+  return turnWasSplit(owner, rowKeys);
+}
+
+/**
+ * A reading position saved inside a turn before a steer split it names a row
+ * no list will draw again. The coordinate survives where its pieces do: the
+ * turn's own key is now its first slice, which starts where the turn started;
+ * a part key hangs off the id of the text segment it cuts at
+ * (`assistantTurnPartKey`), which the split keeps, so the slice part cutting
+ * at that segment is the same pixel position. A segment no slice cuts at -
+ * the first text after an earlier steer starts its slice instead of cutting
+ * it - leaves no row to name, and the reader follows the latest rather than
+ * being placed by a guess.
+ */
+function restoreAcrossSteerSplit(
+  anchor: string,
+  saved: SavedChatTabScrollState,
+  owner: string,
+  rowKeys: ReadonlyArray<string>,
+): SavedChatTabScrollState {
+  const prefix = sliceRowKeyPrefix(owner);
+  let resolved: string | null = null;
+  if (anchor === owner) {
+    resolved = `${prefix}0`;
+  } else if (anchor.startsWith(`${owner}#`)) {
+    resolved = slicePartCuttingAt(
+      prefix,
+      anchor.slice(owner.length + 1),
+      rowKeys,
+    );
+  }
+  const index = resolved === null ? -1 : rowKeys.indexOf(resolved);
+  if (resolved === null || index === -1) return DEFAULT_CHAT_TAB_SCROLL_STATE;
+  const cut = resolved.indexOf("#", prefix.length);
+  return {
+    mode: saved.mode,
+    anchorMessageId: resolved,
+    ...(cut === -1 ? {} : { anchorRowKey: resolved.slice(0, cut) }),
+    anchorIndex: index,
+    offset: saved.offset,
+  };
+}
+
+/** `<prefix><n>#<segmentId>` among `rowKeys`, for any slice number `n`. */
+function slicePartCuttingAt(
+  prefix: string,
+  segmentId: string,
+  rowKeys: ReadonlyArray<string>,
+): string | null {
+  const suffix = `#${segmentId}`;
+  for (const key of rowKeys) {
+    if (!key.startsWith(prefix) || !key.endsWith(suffix)) continue;
+    const slice = key.slice(prefix.length, key.length - suffix.length);
+    if (/^\d+$/.test(slice)) return key;
+  }
+  return null;
 }
 
 /**

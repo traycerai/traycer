@@ -200,6 +200,83 @@ describe("chat-tab-persistence-key", () => {
 });
 
 describe("ticket 15 dual-key scroll cache", () => {
+  describe("a steer splitting the anchored turn", () => {
+    // A same-turn steer renames every row of the turn it lands in
+    // (`assistant:<key>` -> `assistant:<key>:part:<n>`), so a position saved
+    // inside that turn names a row no list draws again - gone, not cold.
+    const turn = "assistant:turn-7";
+    const splitRowKeys = [
+      "row-before",
+      `${turn}:part:0`,
+      `${turn}:part:0#text-later`,
+      "steer:queue-item-1",
+      `${turn}:part:1`,
+      "row-after",
+    ];
+    const followingLatest = {
+      mode: "following-end",
+      anchorMessageId: null,
+      anchorIndex: null,
+      offset: 0,
+    };
+
+    it("lands a part anchor on the slice part cutting at its segment, offset kept", () => {
+      const id = chatIdIdentity("split-part-anchor");
+      saveChatTabState({
+        identity: id,
+        mode: "free-scrolling",
+        anchorMessageId: `${turn}#text-later`,
+        anchorRowKey: turn,
+        anchorIndex: 2,
+        offset: 31,
+      });
+      const expected = {
+        mode: "free-scrolling",
+        anchorMessageId: `${turn}:part:0#text-later`,
+        anchorRowKey: `${turn}:part:0`,
+        anchorIndex: 2,
+        offset: 31,
+      };
+      expect(restoreChatTabState(id, splitRowKeys)).toEqual(expected);
+      expect(restoreChatTabStateForMount(id, splitRowKeys)).toEqual(expected);
+    });
+
+    it("lands the turn's own anchor on its first slice, offset kept", () => {
+      const id = chatIdIdentity("split-turn-anchor");
+      saveChatTabState({
+        identity: id,
+        mode: "free-scrolling",
+        anchorMessageId: turn,
+        anchorIndex: 1,
+        offset: 12,
+      });
+      expect(restoreChatTabState(id, splitRowKeys)).toEqual({
+        mode: "free-scrolling",
+        anchorMessageId: `${turn}:part:0`,
+        anchorIndex: 1,
+        offset: 12,
+      });
+    });
+
+    it("follows the latest when no slice cuts at the saved segment", () => {
+      // The text that was streaming at the save moved behind the steer and
+      // now starts a slice instead of cutting one: no row names it.
+      const id = chatIdIdentity("split-lost-segment");
+      saveChatTabState({
+        identity: id,
+        mode: "free-scrolling",
+        anchorMessageId: `${turn}#text-streaming`,
+        anchorRowKey: turn,
+        anchorIndex: 3,
+        offset: 40,
+      });
+      expect(restoreChatTabState(id, splitRowKeys)).toEqual(followingLatest);
+      expect(restoreChatTabStateForMount(id, splitRowKeys)).toEqual(
+        followingLatest,
+      );
+    });
+  });
+
   describe("mounting a free scroll that resolves to no anchor", () => {
     const followingLatest = {
       mode: "following-end",
