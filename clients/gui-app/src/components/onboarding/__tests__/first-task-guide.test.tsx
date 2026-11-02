@@ -22,6 +22,7 @@ import {
   buildEnvironmentClient,
   environmentStatusFixture,
 } from "@/lib/environment/__tests__/environment-test-support";
+import { setPhoneLayoutOnly } from "@/lib/mobile-app";
 import {
   moveInvitationIsOutstanding,
   retireOnboardingReminder,
@@ -420,8 +421,27 @@ describe("FirstTaskLandingGuide getting-started toast", () => {
         pendingUploads: [],
       });
 
+    beforeEach(() => {
+      setPhoneLayoutOnly(true);
+    });
+
     afterEach(() => {
+      setPhoneLayoutOnly(false);
       vi.unstubAllGlobals();
+    });
+
+    it("keeps the move invitation waiting in a short window on the desktop layout", async () => {
+      setPhoneLayoutOnly(false);
+      stubShortLandscape(true);
+      computerWithStatus(moveStatus());
+      renderGuide();
+
+      await waitFor(() =>
+        expect(toastState).toHaveBeenCalledWith(
+          "This computer's settings aren't in Personal.",
+          expect.objectContaining({ duration: Infinity }),
+        ),
+      );
     });
 
     it.each([

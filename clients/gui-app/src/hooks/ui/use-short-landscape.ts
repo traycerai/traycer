@@ -1,5 +1,8 @@
 import * as React from "react";
-import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
+import {
+  isMobileViewport,
+  useIsMobileViewport,
+} from "@/hooks/ui/use-mobile-viewport";
 
 /** The same query as the `short-landscape` Tailwind variant in `index.css`. */
 const SHORT_LANDSCAPE_QUERY =
@@ -17,8 +20,13 @@ function subscribeToShortLandscape(onChange: () => void): () => void {
   };
 }
 
-export function readShortLandscape(): boolean {
+function readShortLandscapeQuery(): boolean {
   return window.matchMedia(SHORT_LANDSCAPE_QUERY).matches;
+}
+
+/** `useShortLandscape` for a decision made once, outside render. */
+export function readShortLandscape(): boolean {
+  return isMobileViewport() && readShortLandscapeQuery();
 }
 
 function readFalse(): boolean {
@@ -30,7 +38,7 @@ export function useShortLandscape(): boolean {
   const phoneShell = useIsMobileViewport();
   const short = React.useSyncExternalStore(
     subscribeToShortLandscape,
-    readShortLandscape,
+    readShortLandscapeQuery,
     readFalse,
   );
   return phoneShell && short;
