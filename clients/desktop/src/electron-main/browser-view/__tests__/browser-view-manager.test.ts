@@ -17,6 +17,7 @@ import { MAX_BROWSER_VIEW_POPUPS } from "../manager/browser-view-popups";
 import type {
   BrowserViewCapturedImage,
   BrowserViewDebugger,
+  BrowserViewElectronTabCdpDispatch,
   BrowserViewEnsureTab,
   BrowserViewGuestAttachRequest,
   BrowserViewGuestAttachResult,
@@ -29,6 +30,7 @@ import type {
   BrowserViewCertificateErrorChange,
   BrowserViewDownloadChange,
   BrowserViewFindChange,
+  BrowserViewGuestDrawHoldRequested,
   BrowserViewNativeTabCapability,
   BrowserViewOpenTileRequest,
   BrowserViewNativeTabStatusChange,
@@ -380,6 +382,7 @@ class FakeWebContents extends EventEmitter implements BrowserViewWebContents {
   zoomFactor = 1;
   title = "";
   emptyCapture = false;
+  failCaptures = false;
   deferCaptures = false;
   private readonly captureResolvers: Array<
     (image: BrowserViewCapturedImage) => void
@@ -430,6 +433,7 @@ class FakeWebContents extends EventEmitter implements BrowserViewWebContents {
 
   capturePage(): Promise<BrowserViewCapturedImage> {
     this.lifecycle.push("capturePage");
+    if (this.failCaptures) return Promise.reject(new Error("capture failed"));
     if (this.deferCaptures) {
       return new Promise((resolve) => {
         this.captureResolvers.push(resolve);
@@ -818,6 +822,7 @@ function createHarnessWithOptions(
   const releasedIsolatedSessions: BrowserSessionProfileRequest[] = [];
   const registeredPopupWebContents: BrowserViewPopupWebContents[] = [];
   const createdPopupWindows: CreatedPopupWindow[] = [];
+  let manager: BrowserViewManager | null = null;
   const windowListeners = new Set<() => void>();
   const hiddenWindowIds = new Set<string>();
   const windowShownListeners = new Set<() => void>();
@@ -982,6 +987,21 @@ function createHarnessWithOptions(
         case RunnerHostEvent.browserViewAnnotationAttached:
           record(annotationAttached, payload);
           return true;
+        case RunnerHostEvent.browserViewGuestDrawHoldRequested: {
+          const hold = asPayload<BrowserViewGuestDrawHoldRequested>(payload);
+          // The renderer draws the guest and acknowledges.
+          for (const guest of guests) guest.lifecycle.push("drawHoldRequested");
+          queueMicrotask(() => {
+            manager?.drawHolds.reportApplied(windowId, {
+              ...hold,
+              applied: true,
+            });
+          });
+          return true;
+        }
+        case RunnerHostEvent.browserViewGuestDrawHoldReleased:
+          for (const guest of guests) guest.lifecycle.push("drawHoldReleased");
+          return true;
         default:
           throw new Error(`unexpected browser-view channel: ${channel}`);
       }
@@ -1004,7 +1024,7 @@ function createHarnessWithOptions(
     },
     hostPlatform: harnessOptions?.hostPlatform ?? "darwin",
   };
-  const manager = new BrowserViewManager(options);
+  manager = new BrowserViewManager(options);
   createdManagers.push(manager);
   return {
     manager,
@@ -1149,6 +1169,17 @@ async function attachNativeTab(
   view.emit("did-navigate", {}, requestedUrl, 200, "OK");
   await Promise.resolve();
   return { bindingId, capability, view };
+}
+
+/** The guest's reads and the draw-hold traffic around them, in order. */
+function drawHoldSteps(view: FakeWebContents): string[] {
+  return view.lifecycle.filter(
+    (step) =>
+      step === "drawHoldRequested" ||
+      step === "drawHoldReleased" ||
+      step === "capturePage" ||
+      step === "Page.captureScreenshot",
+  );
 }
 
 describe("BrowserViewManager primary profile observation", () => {
@@ -3807,6 +3838,26 @@ describe("BrowserViewManager annotation session", () => {
     expect(attached).toMatchObject(BASE_TILE_KEY);
   });
 
+  it("holds the guest drawn around the annotation capture", async () => {
+    const harness = createHarness();
+    const { view } = await attachAnnotationTab(harness);
+    await harness.manager.annotations.start("window-1", BASE_KEY);
+
+    emitAnnotationBinding(
+      view,
+      { type: "attachRequested", payload: VALID_ATTACH_PAYLOAD },
+      77,
+    );
+    await flush();
+
+    expect(harness.annotationAttached).toHaveLength(1);
+    expect(drawHoldSteps(view)).toEqual([
+      "drawHoldRequested",
+      "capturePage",
+      "drawHoldReleased",
+    ]);
+  });
+
   it("emits no annotationAttached on empty capture and leaves the session cancellable", async () => {
     const harness = createHarness();
     const { view } = await attachAnnotationTab(harness);
@@ -6215,5 +6266,167 @@ describe("BrowserViewManager stop", () => {
       throw new Error("navigate emitted nothing");
     }
     expect(afterStopAttempt).toBeGreaterThan(stoppedAttempt);
+  });
+});
+
+describe("BrowserViewManager draw holds around pixel reads", () => {
+  const PIP_INPUT = { maxWidth: 640, maxHeight: 360, quality: 75 } as const;
+
+  function screenshotDispatch(
+    capability: BrowserViewNativeTabCapability,
+    command: BrowserViewElectronTabCdpDispatch["command"],
+  ): BrowserViewElectronTabCdpDispatch {
+    return { ...capability, target: { kind: "root" }, command };
+  }
+
+  async function attach(harness: Harness): Promise<{
+    capability: BrowserViewNativeTabCapability;
+    view: FakeWebContents;
+  }> {
+    const { capability, view } = await attachNativeTab(
+      harness,
+      "window-1",
+      BASE_KEY,
+      "https://example.com/",
+    );
+    return { capability, view };
+  }
+
+  it("holds the guest drawn around capturePage", async () => {
+    const harness = createHarness();
+    const { view } = await attach(harness);
+
+    await harness.manager.capturePage("window-1", BASE_KEY);
+
+    expect(drawHoldSteps(view)).toEqual([
+      "drawHoldRequested",
+      "capturePage",
+      "drawHoldReleased",
+    ]);
+  });
+
+  it("releases the hold when capturePage fails", async () => {
+    const harness = createHarness();
+    const { view } = await attach(harness);
+    view.failCaptures = true;
+
+    await expect(
+      harness.manager.capturePage("window-1", BASE_KEY),
+    ).rejects.toThrow("capture failed");
+
+    expect(drawHoldSteps(view)).toEqual([
+      "drawHoldRequested",
+      "capturePage",
+      "drawHoldReleased",
+    ]);
+  });
+
+  it("holds the guest drawn around a CDP screenshot", async () => {
+    const harness = createHarness();
+    const { capability, view } = await attach(harness);
+
+    await harness.manager.dispatchElectronTabCdp(
+      screenshotDispatch(capability, {
+        kind: "cdpCaptureScreenshot",
+        format: "png",
+        quality: null,
+      }),
+    );
+
+    expect(drawHoldSteps(view)).toEqual([
+      "drawHoldRequested",
+      "Page.captureScreenshot",
+      "drawHoldReleased",
+    ]);
+  });
+
+  it("releases the hold when a CDP screenshot fails", async () => {
+    const harness = createHarness();
+    const { capability, view } = await attach(harness);
+    const sendCommand = view.debugger.sendCommand.bind(view.debugger);
+    vi.spyOn(view.debugger, "sendCommand").mockImplementation(
+      (method, params, sessionId) =>
+        method === "Page.captureScreenshot"
+          ? Promise.reject(new Error("screenshot failed"))
+          : sendCommand(method, params, sessionId),
+    );
+
+    // The dispatcher folds a failed command into its result; the hold ends
+    // either way.
+    await harness.manager.dispatchElectronTabCdp(
+      screenshotDispatch(capability, {
+        kind: "cdpCaptureScreenshot",
+        format: "png",
+        quality: null,
+      }),
+    );
+
+    expect(view.lifecycle).toContain("drawHoldRequested");
+    expect(view.lifecycle.at(-1)).toBe("drawHoldReleased");
+  });
+
+  it("takes no hold for other CDP commands", async () => {
+    const harness = createHarness();
+    const { capability, view } = await attach(harness);
+
+    await harness.manager.dispatchElectronTabCdp(
+      screenshotDispatch(capability, { kind: "cdpGetFrameTree" }),
+    );
+
+    expect(view.lifecycle).not.toContain("drawHoldRequested");
+    expect(view.lifecycle).not.toContain("drawHoldReleased");
+  });
+
+  it("holds the guest drawn for as long as PiP streams", async () => {
+    const harness = createHarness();
+    const { capability, view } = await attach(harness);
+
+    await harness.manager.startPipCapture(
+      "window-1",
+      { ...capability, ...PIP_INPUT },
+      () => undefined,
+    );
+    await flushCloseEntry();
+    expect(view.lifecycle).toContain("drawHoldRequested");
+    expect(view.lifecycle).toContain("capturePage");
+    expect(view.lifecycle).not.toContain("drawHoldReleased");
+
+    harness.manager.pip.stop();
+    expect(view.lifecycle.at(-1)).toBe("drawHoldReleased");
+  });
+
+  it("releases the PiP hold when the tab is released", async () => {
+    const harness = createHarness();
+    const { capability, view } = await attach(harness);
+    await harness.manager.startPipCapture(
+      "window-1",
+      { ...capability, ...PIP_INPUT },
+      () => undefined,
+    );
+
+    await harness.manager.releaseTab(capability);
+    await flushCloseEntry();
+
+    expect(
+      view.lifecycle.filter((step) => step === "drawHoldReleased"),
+    ).toHaveLength(1);
+  });
+
+  it("releases the PiP hold when starting fails", async () => {
+    const harness = createHarness();
+    const { capability, view } = await attach(harness);
+
+    await expect(
+      harness.manager.startPipCapture(
+        "window-1",
+        { ...capability, ...PIP_INPUT },
+        () => {
+          throw new Error("frame sink failed");
+        },
+      ),
+    ).rejects.toThrow("frame sink failed");
+
+    expect(view.lifecycle).toContain("drawHoldRequested");
+    expect(view.lifecycle.at(-1)).toBe("drawHoldReleased");
   });
 });

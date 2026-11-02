@@ -2,16 +2,24 @@ import type { PipCaptureStartInput } from "@traycer-clients/shared/platform/brow
 import type { PipCaptureIpcPayload } from "../../../ipc-contracts/pip-capture-types";
 import { BrowserPipCapture } from "../debug/browser-pip-capture";
 import type { BrowserViewEntry } from "./browser-view-entry";
+import type {
+  BrowserViewDrawHold,
+  BrowserViewDrawHolds,
+} from "./browser-view-draw-holds";
 
 /**
  * At most one tab streams PiP frames at a time; starting a second stops the
  * first. Frames come from `webContents.capturePage()`, so this owns the poller
  * itself and never reaches the tab's CDP session - PiP needs no debugger and
- * takes no lease.
+ * takes no lease. It holds the guest drawn for as long as it streams: PiP is
+ * how a person watches a tab no tile shows, and a parked guest draws nothing.
  */
 export class BrowserViewPipCapture {
   private capturingEntry: BrowserViewEntry | null = null;
   private capture: BrowserPipCapture | null = null;
+  private drawHold: BrowserViewDrawHold | null = null;
+
+  constructor(private readonly drawHolds: BrowserViewDrawHolds) {}
 
   isCapturing(entry: BrowserViewEntry): boolean {
     return this.capturingEntry === entry;
@@ -23,6 +31,7 @@ export class BrowserViewPipCapture {
     this.capturingEntry = null;
     this.capture?.stall();
     this.capture = null;
+    this.releaseDrawHold(this.drawHold);
   }
 
   start(
@@ -32,7 +41,12 @@ export class BrowserViewPipCapture {
   ): boolean {
     this.stop();
     entry.webContents.setBackgroundThrottling(false);
-    const capture = new BrowserPipCapture(entry.webContents);
+    const drawHold = this.drawHolds.hold(entry);
+    this.drawHold = drawHold;
+    const guest = entry.webContents;
+    const capture = new BrowserPipCapture({
+      capturePage: () => drawHold.ready.then(() => guest.capturePage()),
+    });
     this.capturingEntry = entry;
     this.capture = capture;
     try {
@@ -48,12 +62,14 @@ export class BrowserViewPipCapture {
         this.capture = null;
       }
       capture.stop();
+      this.releaseDrawHold(drawHold);
       this.restoreEntry(entry);
       throw err;
     }
     if (!capture.isCapturing() && this.capturingEntry === entry) {
       this.capturingEntry = null;
       this.capture = null;
+      this.releaseDrawHold(drawHold);
       this.restoreEntry(entry);
     }
     return capture.isCapturing();
@@ -64,11 +80,17 @@ export class BrowserViewPipCapture {
     this.capturingEntry = null;
     this.capture?.stop();
     this.capture = null;
+    this.releaseDrawHold(this.drawHold);
     if (entry !== null) this.restoreEntry(entry);
   }
 
   private restoreEntry(entry: BrowserViewEntry): void {
     if (entry.webContents.isDestroyed()) return;
     entry.webContents.setBackgroundThrottling(true);
+  }
+
+  private releaseDrawHold(drawHold: BrowserViewDrawHold | null): void {
+    drawHold?.release();
+    if (this.drawHold === drawHold) this.drawHold = null;
   }
 }
