@@ -13,6 +13,7 @@ import {
   type VoiceDirectory,
 } from "../directory";
 import { resolveRoute, type RouterResult } from "../router";
+import { EMPTY_VIEW } from "./fixtures/empty-view";
 import {
   CONFIRM_ANSWER_WINDOW_MS,
   confirmationAnswer,
@@ -99,7 +100,14 @@ function route(
 ): RouterResult {
   return {
     action,
-    target: { environmentId, botId, threadId: null, itemId: null },
+    target: {
+      environmentId,
+      botId,
+      threadId: null,
+      itemId: null,
+      actionId: null,
+      agentId: null,
+    },
     span: { fromSegment: 0, toSegment: segments - 1 },
     uncertain: false,
     question: null,
@@ -168,7 +176,12 @@ function build() {
     decide: async (request) => {
       const next = answers.shift();
       if (next === undefined) throw new Error("no answer queued");
-      return resolveRoute(await next(), DIRECTORY, request.segments.length);
+      return resolveRoute(
+        await next(),
+        DIRECTORY,
+        EMPTY_VIEW,
+        request.segments.length,
+      );
     },
     recheck: (tuple) => wiring.recheck && tupleHolds(DIRECTORY, tuple),
     navigate: (_target: BoundTarget) => {

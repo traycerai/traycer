@@ -27,8 +27,8 @@ const THEME_OPTIONS: ReadonlyArray<ThemeOption> = [
   { mode: "system", label: "System", keywords: ["theme", "auto", "system"] },
 ];
 
-const THEME_SUBPAGE_ITEMS: ReadonlyArray<CommandItem> = THEME_OPTIONS.map(
-  (option) => ({
+export const THEME_SUBPAGE_ITEMS: ReadonlyArray<CommandItem> =
+  THEME_OPTIONS.map((option) => ({
     id: `theme:${option.mode}`,
     label: option.label,
     description: null,
@@ -41,8 +41,7 @@ const THEME_SUBPAGE_ITEMS: ReadonlyArray<CommandItem> = THEME_OPTIONS.map(
     run: () => {
       useSettingsStore.getState().setTheme(option.mode);
     },
-  }),
-);
+  }));
 
 const THEME_SUBPAGE: CommandSubpage = {
   id: "theme:pick",

@@ -73,7 +73,7 @@ const OPEN_EPICS_ITEM: CommandItem = {
   subpage: null,
 };
 
-const SETTINGS_SUBPAGE: CommandSubpage = {
+export const SETTINGS_SUBPAGE: CommandSubpage = {
   id: "nav:settings",
   title: "Open settings",
   useItems: (ctx: CommandContext) =>
