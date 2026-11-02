@@ -789,6 +789,9 @@ function buildFakeBridge(
       onGuestReleaseRequested: (_handler) => ({ dispose: () => undefined }),
       onGuestViewportRequested: (_handler) => ({ dispose: () => undefined }),
       reportGuestViewportResult: async () => undefined,
+      onGuestDrawHoldRequested: (_handler) => ({ dispose: () => undefined }),
+      onGuestDrawHoldReleased: (_handler) => ({ dispose: () => undefined }),
+      reportGuestDrawHoldApplied: async () => undefined,
       reportAnnotationAttachResult: async () => undefined,
     },
     sandboxArtifacts: {

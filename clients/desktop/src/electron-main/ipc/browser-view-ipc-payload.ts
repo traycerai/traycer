@@ -18,6 +18,7 @@ import type {
   BrowserViewDetachSurface,
   BrowserViewDownloadCancel,
   BrowserViewElectronTabControl,
+  BrowserViewGuestDrawHoldApplied,
   BrowserViewGuestViewportResult,
   BrowserViewFindRequest,
   BrowserViewFindStop,
@@ -92,6 +93,13 @@ const guestViewportResultSchema: z.ZodType<BrowserViewGuestViewportResult> = z
     requestId: nonEmptyStringSchema,
     registrationId: nonEmptyStringSchema,
     revision: z.number().int().nonnegative(),
+    applied: z.boolean(),
+  })
+  .strict();
+const guestDrawHoldAppliedSchema: z.ZodType<BrowserViewGuestDrawHoldApplied> = z
+  .object({
+    holdId: nonEmptyStringSchema,
+    registrationId: nonEmptyStringSchema,
     applied: z.boolean(),
   })
   .strict();
@@ -248,6 +256,7 @@ export const browserViewIpcPayload = {
   detachSurface: detachSurfaceSchema,
   downloadCancel: downloadCancelSchema,
   electronTabControl: electronTabControlSchema,
+  guestDrawHoldApplied: guestDrawHoldAppliedSchema,
   guestViewportResult: guestViewportResultSchema,
   findRequest: findRequestSchema,
   findStop: findStopSchema,
