@@ -112,8 +112,8 @@ export function MobileNavDrawer(): ReactNode {
   useEffect(() => {
     if (open) taskPaintGate?.markDrawerRequested();
   }, [open, taskPaintGate]);
-  // A rotation into the strip's form unmounts the drawer while it may be open,
-  // and the store's open flag also hides the footer.
+  // A window resize out of the phone layout unmounts the drawer while it may be
+  // open, and the store's open flag also hides the footer.
   useEffect(() => {
     return () => {
       setOpen(false);
@@ -225,7 +225,7 @@ export function MobileNavDrawer(): ReactNode {
       )}
       {/* "New task" sits outside the scroll container so it stays pinned
             while the recent-task list below it scrolls. */}
-      <nav className="flex min-h-0 flex-1 flex-col p-2">
+      <nav className="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain p-2">
         <MobileNavNotificationsRow onOpen={close} />
         <Button
           type="button"
@@ -727,7 +727,7 @@ function DrawerTaskList(props: DrawerTaskListProps): ReactNode {
   }
 
   return (
-    <div className="relative mt-1 min-h-0 flex-1 overflow-hidden">
+    <div className="relative mt-1 min-h-48 flex-1 overflow-hidden">
       <PullIndicator
         pullPx={pull.pullPx}
         isArmed={pull.isArmed}

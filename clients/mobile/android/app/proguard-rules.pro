@@ -1,21 +1,19 @@
-# Add project specific ProGuard rules here.
-# You can control the set of applied configuration files using the
-# proguardFiles setting in build.gradle.
-#
-# For more details, see
-#   http://developer.android.com/guide/developing/tools/proguard.html
+# Capacitor 8.4.2 reads these annotation types through reflection. Keeping
+# annotated plugins alone lets R8 full mode fold their cached annotation to
+# null, crashing permission checks after sign-in (ionic-team/capacitor#8589).
+-keep @interface com.getcapacitor.annotation.** { *; }
+-keep @interface com.getcapacitor.PluginMethod { *; }
+-keep @interface com.getcapacitor.NativePlugin { *; }
 
-# If your project uses WebView with JS, uncomment the following
-# and specify the fully qualified class name to the JavaScript interface
-# class:
-#-keepclassmembers class fqcn.of.javascript.interface.for.webview {
-#   public *;
-#}
+# Activity and permission callbacks can live on non-public plugin base classes.
+-keepclassmembers class * extends com.getcapacitor.Plugin {
+    @com.getcapacitor.annotation.ActivityCallback <methods>;
+    @com.getcapacitor.annotation.PermissionCallback <methods>;
+}
 
-# Uncomment this to preserve the line number information for
-# debugging stack traces.
-#-keepattributes SourceFile,LineNumberTable
-
-# If you keep the line number information, uncomment this to
-# hide the original source file name.
-#-renamesourcefileattribute SourceFile
+# The barcode scanner only sets an orientation when asked for portrait or
+# landscape, and this app always asks for adaptive. Nothing else here sets one,
+# so the calls go, and with them Play's warning about orientation restrictions.
+-assumenosideeffects class android.app.Activity {
+    public void setRequestedOrientation(int);
+}

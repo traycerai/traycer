@@ -15,7 +15,6 @@ import type { BarRegionId } from "@/lib/layout/layout-arrangement";
 import { resolveReadingDensity } from "@/lib/layout/reading-density";
 import { SignInButton } from "@/components/layout/header/sign-in-button";
 import { useColumnOverlayPlacement } from "@/components/layout/column-edge-context";
-import { useMobileStripForm } from "@/components/layout/tabs/mobile-strip-form-context";
 import {
   Popover,
   PopoverContent,
@@ -45,16 +44,13 @@ import {
  * update is pending, the header-hosted readings (left cluster, then right),
  * and the account row that opens the user menu. Notifications and All tasks moved to
  * the top block. Only one of the desktop header and the strip is ever mounted,
- * so each region's canvas node and each action registration stays single. The
- * phone shell mounts its own header beside the strip and that header keeps the
- * readings, so the strip draws none there. Collapsed, one centred column with
- * the avatar tile last; all of it no-drag.
+ * so each region's canvas node and each action registration stays single.
+ * Collapsed, one centred column with the avatar tile last; all of it no-drag.
  */
 export function SideStripFoot(props: {
   readonly variant: SideTabRowVariant;
 }): ReactNode {
   const collapsed = props.variant === "collapsed";
-  const mobileForm = useMobileStripForm();
   return (
     <div
       data-testid="side-strip-foot"
@@ -69,7 +65,7 @@ export function SideStripFoot(props: {
       )}
     >
       <AppUpdateHeaderButton layout={collapsed ? "icon" : "row"} />
-      {mobileForm === null ? <SideStripReadings collapsed={collapsed} /> : null}
+      <SideStripReadings collapsed={collapsed} />
       <SideStripAccount variant={props.variant} />
     </div>
   );

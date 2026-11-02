@@ -39,6 +39,7 @@ import { Button } from "@/components/ui/button";
 import type { ChatProviderFallbackState } from "@/components/chat/fallback/fallback-state";
 import { ChatLowerDock } from "@/components/chat/chat-lower-dock";
 import { ChatDockCompactStripProvider } from "@/components/chat/chat-dock-compact-strip";
+import { useShortLandscape } from "@/hooks/ui/use-short-landscape";
 import {
   type ChatLowerSurfaceTopSpacing,
   type ChatPinnedStackTopSpacing,
@@ -544,8 +545,9 @@ export function ChatLowerInteractionSurfaces(
   // only its one row stays over the transcript, so the dock gives its height up
   // and nothing around the row spaces itself against it.
   const [lowerSurfaces, setLowerSurfaces] = useState<HTMLElement | null>(null);
-  const focusLayout = useKeyboardFocusLayoutWithin(lowerSurfaces);
-  const dockShown = dockDrawn(props.subagentView, focusLayout);
+  const keyboardFocusLayout = useKeyboardFocusLayoutWithin(lowerSurfaces);
+  const focusLayout = useComposerRestsOnOneRow(keyboardFocusLayout);
+  const dockShown = dockDrawn(props.subagentView, keyboardFocusLayout);
   const chrome = useChatDockChrome({
     snapshotLoaded: props.runtime.snapshotLoaded,
     chatId: props.chatId,
@@ -659,7 +661,7 @@ export function ChatLowerInteractionSurfaces(
   );
 
   return (
-    <ChatComposerBannerPortalProvider>
+    <ChatComposerBannerPortalProvider hidden={keyboardFocusLayout}>
       <div ref={setLowerSurfaces} className="contents">
         <ChatDockCompactStripProvider value={chrome.strip}>
           <RuntimeGatedApprovalSurface
@@ -671,7 +673,11 @@ export function ChatLowerInteractionSurfaces(
             panel is open, where it is scrolled, the Background rows' own
             memory of their parents. */}
           <div
-            className={cn(dockShown ? "contents" : "hidden")}
+            className={cn(
+              dockShown
+                ? "contents max-md:short-landscape:block max-md:short-landscape:max-h-20 max-md:short-landscape:shrink-0 max-md:short-landscape:overflow-y-auto"
+                : "hidden",
+            )}
             inert={!dockShown}
           >
             <ChatLowerDock
@@ -774,6 +780,16 @@ function dockDrawn(
   focusLayout: boolean,
 ): boolean {
   return subagentView === null && !focusLayout;
+}
+
+/**
+ * A phone on its side rests on the composer's one row too, or the composer
+ * alone fills the screen and no transcript shows. A pull opens the full
+ * composer, and the dock stays, held to a scrolling strip.
+ */
+function useComposerRestsOnOneRow(keyboardFocusLayout: boolean): boolean {
+  const shortLandscape = useShortLandscape();
+  return keyboardFocusLayout || shortLandscape;
 }
 
 function approvalSurfaceVisible(

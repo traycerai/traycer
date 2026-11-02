@@ -1,7 +1,7 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "@capacitor/app";
-import { Capacitor } from "@capacitor/core";
+import { Capacitor, SystemBars, SystemBarsStyle } from "@capacitor/core";
 import { Keyboard } from "@capacitor/keyboard";
 import { PushNotifications } from "@capacitor/push-notifications";
 import { init as initSentry } from "@sentry/browser";
@@ -51,6 +51,11 @@ import { MobileLinkLoginDeepLinks } from "../link-login-deep-links";
 import { MobileStatusBarTap } from "../status-bar-tap";
 import { MobileSystemBack } from "../system-back";
 import { MobileVoiceAudio, VoiceAudio } from "../voice-audio";
+import {
+  WindowBackground,
+  cssColorToHex,
+  startWindowBackgroundSync,
+} from "../window-background";
 import {
   MobilePushRegistration,
   pushRegistrationTarget,
@@ -191,6 +196,9 @@ function bootstrap(): void {
   // mounting the phone shell while `md:` utilities still turn on would paint
   // desktop controls over it.
   setPhoneLayoutOnly(Capacitor.isNativePlatform());
+  if (Capacitor.isNativePlatform()) {
+    document.documentElement.classList.add("traycer-phone-layout-only");
+  }
   // PRODUCT flag, not layout: unlocks mobile-app-only UX policy such as the
   // single-composer draft model and the link-code sign-in entry. See gui-app's
   // `src/lib/mobile-app.ts` for how this differs from the viewport signal.
@@ -231,6 +239,21 @@ function bootstrap(): void {
     startNativeKeyboardBridge({
       plugin: Keyboard,
       drivesInset: nativePlatform === "ios",
+    });
+  }
+  if (nativePlatform === "android") {
+    startWindowBackgroundSync({
+      document,
+      setBackground: (color) => {
+        void WindowBackground.set({ color });
+      },
+      setBarStyle: (style) => {
+        void SystemBars.setStyle({
+          style:
+            style === "DARK" ? SystemBarsStyle.Dark : SystemBarsStyle.Light,
+        });
+      },
+      toHex: (cssColor) => cssColorToHex(cssColor, document),
     });
   }
   // APNs addressing follows code signing, not the backend set: staging and

@@ -124,6 +124,70 @@ describe("useShortKeyboardViewport", () => {
     expect(isShort()).toBe(false);
   });
 
+  it("holds the upright-phone limit on the viewport width, at 466 and not at 467", () => {
+    setScreenOrientation("portrait-primary");
+    window.innerWidth = 466;
+    raiseNativeKeyboard({ height: 800, top: 0, inset: 500 });
+    render(<ShortProbe />);
+    expect(isShort()).toBe(false);
+
+    act(() => {
+      window.innerWidth = 467;
+      window.dispatchEvent(new Event("resize"));
+    });
+    expect(isShort()).toBe(true);
+  });
+
+  it("re-answers when only the screen turns, at the same width", () => {
+    const listeners = new Set<() => void>();
+    let type: OrientationType = "portrait-primary";
+    Object.defineProperty(window.screen, "orientation", {
+      configurable: true,
+      value: {
+        get type() {
+          return type;
+        },
+        addEventListener: (_: string, listener: () => void) => {
+          listeners.add(listener);
+        },
+        removeEventListener: (_: string, listener: () => void) => {
+          listeners.delete(listener);
+        },
+      },
+    });
+    window.innerWidth = 450;
+    raiseNativeKeyboard({ height: 800, top: 0, inset: 500 });
+    render(<ShortProbe />);
+    expect(isShort()).toBe(false);
+
+    act(() => {
+      type = "landscape-primary";
+      for (const listener of listeners) listener();
+    });
+    expect(isShort()).toBe(true);
+  });
+
+  it("falls back to the screen's dimensions without screen.orientation", () => {
+    Reflect.deleteProperty(window.screen, "orientation");
+    Object.defineProperty(window.screen, "width", {
+      configurable: true,
+      value: 450,
+    });
+    Object.defineProperty(window.screen, "height", {
+      configurable: true,
+      value: 800,
+    });
+    window.innerWidth = 450;
+    raiseNativeKeyboard({ height: 800, top: 0, inset: 500 });
+    try {
+      render(<ShortProbe />);
+      expect(isShort()).toBe(false);
+    } finally {
+      Reflect.deleteProperty(window.screen, "width");
+      Reflect.deleteProperty(window.screen, "height");
+    }
+  });
+
   it("is not short outside the phone shell", () => {
     setPhoneLayoutOnly(false);
     window.innerWidth = 1280;
