@@ -32,8 +32,17 @@ function rampParam(
   target: number,
   seconds: number,
 ): void {
-  param.cancelScheduledValues(now);
-  param.setValueAtTime(param.value, now);
+  const value = param.value;
+  // Cancelling a ramp under way can let one sample through at whatever came
+  // before that ramp: a click. Holding leaves no gap, but adds no event when no
+  // ramp is under way, so the value is still set for the new ramp to start from.
+  // Firefox has no such method, so it takes the way with the risk.
+  if (typeof param.cancelAndHoldAtTime === "function") {
+    param.cancelAndHoldAtTime(now);
+  } else {
+    param.cancelScheduledValues(now);
+  }
+  param.setValueAtTime(value, now);
   param.linearRampToValueAtTime(target, now + seconds);
 }
 
@@ -65,22 +74,28 @@ class WebAudioGain implements OutputGain {
     const source = context.createBufferSource();
     source.buffer = buffer;
     const fade = context.createGain();
+    // Silent from creation: a gain node reads 1 until its first event.
+    fade.gain.value = 0;
     fade.gain.setValueAtTime(0, when);
     fade.gain.linearRampToValueAtTime(1, when + fadeInSeconds);
     source.connect(fade);
     fade.connect(this.node);
-    source.addEventListener(
-      "ended",
-      () => {
-        source.disconnect();
-        fade.disconnect();
-      },
-      { once: true },
-    );
+    const disconnect = (): void => {
+      source.disconnect();
+      fade.disconnect();
+    };
+    source.addEventListener("ended", disconnect, { once: true });
     source.start(when);
     return {
       cut: (fadeSeconds) => {
         const now = context.currentTime;
+        // Not started yet: a ramp would replace its fade-in, and the source
+        // would then start at whatever the ramp had reached, as a click.
+        if (now <= when) {
+          source.stop(now);
+          disconnect();
+          return;
+        }
         rampParam(fade.gain, now, 0, fadeSeconds);
         source.stop(now + fadeSeconds + STOP_AFTER_FADE_SECONDS);
       },
