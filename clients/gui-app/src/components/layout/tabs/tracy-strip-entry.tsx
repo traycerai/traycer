@@ -28,9 +28,9 @@ export const TRACY_ENTRY_LABEL = "Tracy";
 
 /**
  * The entry's glyph, in every strip placement, wearing the bot's unread count
- * on its top-right corner and the muted mark on its bottom-right while the
- * person set the channel to Nothing; the bare glyph at zero, and where the
- * host does not count.
+ * on its top-right corner (the rail tile passes none: its row draws the count)
+ * and the muted mark on its bottom-right while the person set the channel to
+ * Nothing; the bare glyph at zero, and where the host does not count.
  */
 export function TracyEntryIcon(props: {
   readonly className: string | undefined;
