@@ -148,7 +148,7 @@ Actions:
 - answer: the person answers the <card>: set choice to the number of the choice they picked, matching by sound and meaning ("the second one", "hold it", a mis-heard label). For a card that takes the person's own words and words that are none of the choices, set choice to null and the span to their answer. Only while a <card> is shown, and never for a request to a bot.
 - control: the voice session itself; set control to end, mute, resume or captions.
 - act: perform one of the page actions listed in <view>: target.actionId is that action's id, copied exactly. When the action takes the person's words (its line says "takesWords": true, such as telling the agent on screen something), the span is the words to pass on, without the lead-in ("tell it to", "say"). "It", "the agent", "this one" on a page that shows an agent mean that agent. Approving or declining what the shown agent asks is an act with that approval's action id. Never choose an action id that is not listed.
-- missing: the person asks the page in front to do something, but no listed action does it (and no bot is meant). Nothing is done; the words are kept so the application can record what was asked for. Set question to null.
+- missing: the person asks the page in front to do something, but no listed action does it (and no bot is meant). Nothing is done; the words are kept so the application can record what was asked for. Set question to null. A request to change something on the page that no listed action changes is missing, even when a listed action would open the related page: opening the page is not what was asked.
 - ask: you cannot tell which destination is meant (two bots or threads match, or none does; two page actions match equally): set question to one short question naming the candidates by title. Nothing is posted.
 - fragment: the words are small talk, thanks, or an unfinished request that is still being said ("tell the release bot to hold the build until"). Nothing is posted; the words are kept for the next request.
 
@@ -586,15 +586,29 @@ function resolveDeferred(
   };
 }
 
+/**
+ * The row an id names: exactly, or by what follows the id's last colon when
+ * the answer dropped the prefix and only one row ends that way.
+ */
+function rowNamedBy(
+  actionId: string | null,
+  view: VoiceView,
+): VoiceViewRow | undefined {
+  const exact = view.rows.find((row) => row.action === actionId);
+  if (exact !== undefined) return exact;
+  const byTail = view.rows.filter(
+    (row) => row.action.slice(row.action.lastIndexOf(":") + 1) === actionId,
+  );
+  return byTail.length === 1 ? byTail[0] : undefined;
+}
+
 /** A row of the view the route was made from, or refused: nothing runs that was not offered. */
 function resolveAct(
   result: RouterResult,
   view: VoiceView,
   span: SpanPick | null,
 ): RoutedDecision {
-  const row = view.rows.find(
-    (candidate) => candidate.action === result.target.actionId,
-  );
+  const row = rowNamedBy(result.target.actionId, view);
   if (row === undefined || span === null) {
     return { kind: "refused", reason: "unknown-action" };
   }

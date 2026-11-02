@@ -20,6 +20,7 @@ import {
   renderView,
   resolveRoute,
   routerRequestBody,
+  type RoutedDecision,
   type RouterResult,
 } from "../router";
 import { createSayLoop } from "../say-loop";
@@ -35,6 +36,10 @@ import {
 } from "../view";
 import { EMPTY_VIEW } from "./fixtures/empty-view";
 import { PROBE_ANSWERS, PROBE_VIEWS } from "./fixtures/router-probe-answers";
+import {
+  ROUND2_ANSWERS,
+  ROUND2_VIEWS,
+} from "./fixtures/router-probe-round2-answers";
 
 /**
  * The router on the page in front (Tracy Bots voice, VT9a). MODEL ANSWERS ARE
@@ -450,116 +455,121 @@ function decision(expected: object): Expectation {
 }
 
 /** The decision each (view, heard words) must come to, on both repetitions. */
-const EXPECTED: ReadonlyMap<string, Expectation> = new Map([
+const EXPECTED: ReadonlyMap<string, Expectation> = new Map<string, Expectation>(
   [
-    "taskWorking|tell it to skip the windows build",
-    act("agent.tell:agent_main", 1, 1, false),
-  ],
-  [
-    "taskWorking|tell at to skip the window's bill",
-    act("agent.tell:agent_main", 0, 1, false),
-  ],
-  ["taskWorking|open the slack tap", act("tile.open:tile_slack", 0, 1, false)],
-  [
-    "taskWorking|what's it doing",
-    decision({
-      kind: "agent-status",
-      agent: {
-        chatId: "agent_main",
-        title: "Main agent",
-        state: "working",
-        waitingOn: null,
-      },
-    }),
-  ],
-  ["taskWorking|stop it", act("agent.stop:agent_main", 0, 0, true)],
-  [
-    "taskWorking|ask tracy whether the train is green",
-    post(TRACY_CHANNEL, true, null, 1),
-  ],
-  [
-    "taskWorking|ask the sidebar whether the train is green",
-    post(CI_TRAIN_THREAD, false, "uncertain", 1),
-  ],
-  ["taskWorking|close this tab", act("tab.close", 0, 0, true)],
-  [
-    "taskWorking|switch to landscape",
-    act("tile.open:tile_landscape", 0, 0, false),
-  ],
-  [
-    "taskWorking|rename this tab to voice work",
-    decision({ kind: "missing", span: { from: 0, to: 1 } }),
-  ],
-  ["taskApproval|approve", act("approval.approve:appr_1", 0, 0, true)],
-  // A one-word mis-hearing of "approve" with no other cue is small talk.
-  ["taskApproval|a proof", decision({ kind: "fragment" })],
-  [
-    "taskApproval|no don't do that decline",
-    act("approval.decline:appr_1", 0, 1, true),
-  ],
-  [
-    "taskApproval|yes go ahead and install it",
-    act("approval.approve:appr_1", 0, 1, true),
-  ],
-  [
-    "taskApproval|tell it to use the frozen lock file instead",
-    act("agent.tell:agent_main", 0, 1, false),
-  ],
-  [
-    "settingsKeybindings|go to the appearance section",
-    act("settings.section:appearance", 0, 1, false),
-  ],
-  ["settingsKeybindings|switch to dark mode", act("theme:dark", 0, 0, false)],
-  [
-    "settingsKeybindings|change the talk shortcut to control option t",
-    decision({ kind: "missing", span: { from: 0, to: 1 } }),
-  ],
-  [
-    "settingsKeybindings|open the voice settings",
-    act("settings.section:voice", 0, 0, false),
-  ],
-  // "Tracy Bots" the task sounds like "Tracy" the bot, and the router chose
-  // the bot, unsure: the voice asks and nothing moves.
-  [
-    "home|open the tracey boss task",
-    decision({ kind: "ask", question: "Did you mean Tracy?" }),
-  ],
-  [
-    "home|open the land escape task",
-    act("epic.open:ep_landscape", 0, 0, false),
-  ],
-  // Once right under `act`, once under `open`: both come to the same.
-  ["home|open the toast one", act("epic.open:ep_toast", 0, 0, false)],
-  ["home|tell it to run the tests", post(TRACY_CHANNEL, true, null, 0)],
-  ["tracy|tell it to run the tests", post(TRACY_CHANNEL, true, null, 0)],
-  [
-    "tracy|go to the worktrees thread",
-    decision({
-      kind: "navigate",
-      target: {
-        tuple: {
-          environmentId: PERSONAL,
-          botId: "bot_tracy",
-          threadId: "th_worktrees",
-          hostId: HOST_MAIN,
+    [
+      "taskWorking|tell it to skip the windows build",
+      act("agent.tell:agent_main", 1, 1, false),
+    ],
+    [
+      "taskWorking|tell at to skip the window's bill",
+      act("agent.tell:agent_main", 0, 1, false),
+    ],
+    [
+      "taskWorking|open the slack tap",
+      act("tile.open:tile_slack", 0, 1, false),
+    ],
+    [
+      "taskWorking|what's it doing",
+      decision({
+        kind: "agent-status",
+        agent: {
+          chatId: "agent_main",
+          title: "Main agent",
+          state: "working",
+          waitingOn: null,
         },
-      },
-    }),
+      }),
+    ],
+    ["taskWorking|stop it", act("agent.stop:agent_main", 0, 0, true)],
+    [
+      "taskWorking|ask tracy whether the train is green",
+      post(TRACY_CHANNEL, true, null, 1),
+    ],
+    [
+      "taskWorking|ask the sidebar whether the train is green",
+      post(CI_TRAIN_THREAD, false, "uncertain", 1),
+    ],
+    ["taskWorking|close this tab", act("tab.close", 0, 0, true)],
+    [
+      "taskWorking|switch to landscape",
+      act("tile.open:tile_landscape", 0, 0, false),
+    ],
+    [
+      "taskWorking|rename this tab to voice work",
+      decision({ kind: "missing", span: { from: 0, to: 1 } }),
+    ],
+    ["taskApproval|approve", act("approval.approve:appr_1", 0, 0, true)],
+    // A one-word mis-hearing of "approve" with no other cue is small talk.
+    ["taskApproval|a proof", decision({ kind: "fragment" })],
+    [
+      "taskApproval|no don't do that decline",
+      act("approval.decline:appr_1", 0, 1, true),
+    ],
+    [
+      "taskApproval|yes go ahead and install it",
+      act("approval.approve:appr_1", 0, 1, true),
+    ],
+    [
+      "taskApproval|tell it to use the frozen lock file instead",
+      act("agent.tell:agent_main", 0, 1, false),
+    ],
+    [
+      "settingsKeybindings|go to the appearance section",
+      act("settings.section:appearance", 0, 1, false),
+    ],
+    ["settingsKeybindings|switch to dark mode", act("theme:dark", 0, 0, false)],
+    [
+      "settingsKeybindings|change the talk shortcut to control option t",
+      decision({ kind: "missing", span: { from: 0, to: 1 } }),
+    ],
+    [
+      "settingsKeybindings|open the voice settings",
+      act("settings.section:voice", 0, 0, false),
+    ],
+    // "Tracy Bots" the task sounds like "Tracy" the bot, and the router chose
+    // the bot, unsure: the voice asks and nothing moves.
+    [
+      "home|open the tracey boss task",
+      decision({ kind: "ask", question: "Did you mean Tracy?" }),
+    ],
+    [
+      "home|open the land escape task",
+      act("epic.open:ep_landscape", 0, 0, false),
+    ],
+    // Once right under `act`, once under `open`: both come to the same.
+    ["home|open the toast one", act("epic.open:ep_toast", 0, 0, false)],
+    ["home|tell it to run the tests", post(TRACY_CHANNEL, true, null, 0)],
+    ["tracy|tell it to run the tests", post(TRACY_CHANNEL, true, null, 0)],
+    [
+      "tracy|go to the worktrees thread",
+      decision({
+        kind: "navigate",
+        target: {
+          tuple: {
+            environmentId: PERSONAL,
+            botId: "bot_tracy",
+            threadId: "th_worktrees",
+            hostId: HOST_MAIN,
+          },
+        },
+      }),
+    ],
+    ["tracy|mute", decision({ kind: "control", verb: "mute" })],
+    [
+      "tracy|read me the sidebar's answer",
+      decision({
+        kind: "deferred",
+        verb: "read",
+        itemId: "q_1",
+        threadNamed: true,
+        target: { tuple: { botId: "bot_ci", threadId: "th_train" } },
+        span: { from: 0, to: 0 },
+      }),
+    ],
+    ["tracy|open settings", act("app.settings.open", 0, 0, false)],
   ],
-  ["tracy|mute", decision({ kind: "control", verb: "mute" })],
-  [
-    "tracy|read me the sidebar's answer",
-    decision({
-      kind: "deferred",
-      verb: "read",
-      itemId: "q_1",
-      threadNamed: true,
-      target: { tuple: { botId: "bot_ci", threadId: "th_train" } },
-      span: { from: 0, to: 0 },
-    }),
-  ],
-  ["tracy|open settings", act("app.settings.open", 0, 0, false)],
-]);
+);
 
 describe("the probe's recorded answers on the page in front", () => {
   it("are shown views whose rows are the probe's, under the palette's ids", () => {
@@ -643,6 +653,368 @@ describe("the probe's recorded answers on the page in front", () => {
     expect(
       actionId === null || (shown ?? "").includes(JSON.stringify(actionId)),
     ).toBe(true);
+  });
+});
+
+const round2NameSchema = z.enum(["task", "settings", "home"]);
+type Round2Name = z.infer<typeof round2NameSchema>;
+
+const round2LineSchema = z.union([
+  z.object({ view: z.literal("task"), title: z.string(), tile: z.string() }),
+  z.object({ view: z.literal("settings"), section: z.string() }),
+  z.object({ view: z.literal("home") }),
+  z.object({
+    agent: z.string(),
+    title: z.string(),
+    state: z.enum(["working", "waiting"]),
+    waitingOn: z.literal("approval").optional(),
+  }),
+  z.object({ approval: z.string(), summary: z.string() }),
+  z.object({ action: z.string(), label: z.string() }),
+]);
+
+/** "Diagnostics (Host)": the label of a section and the badge that tells it from its namesake. */
+const QUALIFIED_LABEL = /^(.*) \(([^)]*)\)$/;
+
+/** The palette item whose rendered row is `action` and `label`; the agent's and approvals' rows come from elsewhere. */
+function addPaletteRow(
+  palette: Record<keyof VoicePaletteItems, CommandItem[]>,
+  action: string,
+  label: string,
+): void {
+  if (action.startsWith("open:chats:")) {
+    palette.tiles.push(
+      paletteItem(action, afterPrefix(label, "Open tab: "), {}),
+    );
+  } else if (action.startsWith("nav:settings/")) {
+    const section = afterPrefix(label, "Settings: ");
+    const qualified = QUALIFIED_LABEL.exec(section);
+    palette.sections.push(
+      paletteItem(
+        action,
+        qualified?.[1] ?? section,
+        qualified?.[2] === undefined ? {} : { statusBadge: qualified[2] },
+      ),
+    );
+  } else if (action.startsWith("epic:")) {
+    palette.tasks.push(
+      paletteItem(action, afterPrefix(label, "Open task: "), {}),
+    );
+  } else if (action.startsWith("theme:")) {
+    palette.themes.push(paletteItem(action, afterPrefix(label, "Theme: "), {}));
+  } else if (action.startsWith("action:")) {
+    palette.commands.push(commandItem(afterPrefix(action, "action:"), label));
+  } else if (!action.startsWith("agent.") && !action.startsWith("approval.")) {
+    palette.commands.push(paletteItem(action, label, {}));
+  }
+}
+
+/**
+ * The view the second round showed, composed by the real composer from the
+ * palette items, page, agent and approvals its rendered text implies.
+ */
+function round2ViewOf(name: Round2Name): VoiceView {
+  let page: VoicePage = { kind: "home" };
+  let agent: VoiceViewAgent | null = null;
+  let agentTurnRunning = false;
+  const approvals: VoiceViewApproval[] = [];
+  const palette: Record<keyof VoicePaletteItems, CommandItem[]> = {
+    tiles: [],
+    sections: [],
+    tasks: [],
+    themes: [],
+    commands: [],
+  };
+  for (const raw of ROUND2_VIEWS[name].split("\n").slice(1, -1)) {
+    const line = round2LineSchema.parse(JSON.parse(raw));
+    if ("agent" in line) {
+      agent = {
+        chatId: line.agent,
+        title: line.title,
+        state: line.state,
+        waitingOn: line.waitingOn ?? null,
+      };
+    } else if ("approval" in line) {
+      approvals.push({ id: line.approval, summary: line.summary });
+    } else if ("view" in line) {
+      if (line.view === "task") {
+        page = { kind: "task", title: line.title, tile: line.tile };
+      } else if (line.view === "settings") {
+        page = { kind: "settings", section: line.section };
+      }
+    } else if (line.action.startsWith("agent.stop:")) {
+      agentTurnRunning = true;
+    } else {
+      addPaletteRow(palette, line.action, line.label);
+    }
+  }
+  return composeVoiceView({
+    page,
+    agent,
+    agentTurnRunning,
+    approvals,
+    palette,
+    generation: GENERATION,
+  });
+}
+
+const ROUND2_VIEW_BY_NAME: Readonly<Record<Round2Name, VoiceView>> = {
+  task: round2ViewOf("task"),
+  settings: round2ViewOf("settings"),
+  home: round2ViewOf("home"),
+};
+
+const WAITING_AGENT = {
+  kind: "agent-status",
+  agent: {
+    chatId: "chat-1",
+    title: "Main agent",
+    state: "waiting",
+    waitingOn: "approval",
+  },
+};
+
+function both(expected: Expectation): readonly [Expectation, Expectation] {
+  return [expected, expected];
+}
+
+const KEYBINDINGS = act("nav:settings/keybindings", 0, 1, false);
+
+/**
+ * The decision each (view, heard words) must come to, for repetition 0 and 1.
+ * Where the two repetitions differ, so do the entries.
+ */
+const ROUND2_EXPECTED: ReadonlyMap<
+  string,
+  readonly [Expectation, Expectation]
+> = new Map<string, readonly [Expectation, Expectation]>([
+  [
+    "task|tell it to skip the windows build",
+    both(act("agent.tell:chat-1", 1, 1, false)),
+  ],
+  [
+    "task|tell at to skip the window's bill",
+    // Repetition 0 was unsure, and the words go to an agent: read back first.
+    [
+      act("agent.tell:chat-1", 0, 1, true),
+      act("agent.tell:chat-1", 0, 1, false),
+    ],
+  ],
+  ["task|open the slack tap", both(act("open:chats:chat_slack", 0, 1, false))],
+  ["task|what's it doing", both(decision(WAITING_AGENT))],
+  ["task|stop it", both(act("agent.stop:chat-1", 0, 0, true))],
+  [
+    "task|ask tracy whether the train is green",
+    both(post(TRACY_CHANNEL, true, null, 1)),
+  ],
+  [
+    "task|ask the sidebar whether the train is green",
+    [
+      post(CI_TRAIN_THREAD, false, "uncertain", 1),
+      post({ botId: "bot_ci", threadId: null }, false, "uncertain", 1),
+    ],
+  ],
+  ["task|close this tab", both(act("action:tab.close", 0, 0, true))],
+  [
+    "task|switch to landscape",
+    // Repetition 1 said `open` with the row's id and no directory id: still the action.
+    both(act("open:chats:chat_landscape", 0, 0, false)),
+  ],
+  [
+    "task|rename this tab to voice work",
+    both(decision({ kind: "missing", span: { from: 0, to: 1 } })),
+  ],
+  ["task|approve", both(act("approval.approve:ap_1", 0, 0, true))],
+  ["task|a proof", both(decision({ kind: "fragment" }))],
+  [
+    "task|no don't do that decline",
+    both(act("approval.decline:ap_1", 0, 1, true)),
+  ],
+  [
+    "task|yes go ahead and install it",
+    both(act("approval.approve:ap_1", 0, 1, true)),
+  ],
+  [
+    "task|tell it to use the frozen lock file instead",
+    both(act("agent.tell:chat-1", 0, 1, false)),
+  ],
+  [
+    "task|open the toast one",
+    // Repetition 1 said `open` with the row's id and no directory id.
+    both(act("epic:ep_toast", 0, 0, false)),
+  ],
+  [
+    "task|open the mobile landscape task",
+    both(act("epic:ep_landscape", 0, 0, false)),
+  ],
+  ["task|go home", both(act("action:app.home.open", 0, 0, false))],
+  [
+    "task|open a new terminal",
+    both(act("action:app.terminal.new", 0, 0, false)),
+  ],
+  ["task|is it done", both(decision(WAITING_AGENT))],
+  [
+    "settings|go to the key bindings section",
+    both(act("nav:settings/keybindings", 0, 1, false)),
+  ],
+  ["settings|switch to dark mode", both(act("theme:dark", 0, 0, false))],
+  // These are the model's recorded answers from before the `missing`
+  // sentence: a `navigate` to the Keybindings page for a request to change a
+  // shortcut. They record what the resolver does with them today (the page
+  // opens), not what we want from the model, which is `missing`.
+  ["settings|change the talk shortcut to control option t", both(KEYBINDINGS)],
+  [
+    "settings|open the voice settings",
+    [
+      decision({
+        kind: "ask",
+        question:
+          "Which settings do you mean: Sounds, Alerts, Notifications, or another voice-related setting?",
+      }),
+      decision({
+        kind: "ask",
+        question:
+          "Which settings do you mean: Sounds, Alerts, or another voice-related setting?",
+      }),
+    ],
+  ],
+  ["settings|show me my usage", both(act("nav:settings/usage", 0, 0, false))],
+  ["settings|go back", both(act("action:nav.back", 0, 0, false))],
+  [
+    "settings|open the em cee pee servers page",
+    // Repetition 0 said `navigate` with the row's id and no directory id.
+    both(act("nav:settings/mcp-servers", 0, 1, false)),
+  ],
+  [
+    "home|open the tracey boss task",
+    [
+      decision({
+        kind: "ask",
+        question:
+          "Did you mean open the Tracy Bots task or open a chat with Tracy?",
+      }),
+      act("epic:epic-1", 0, 1, false),
+    ],
+  ],
+  [
+    "home|open the land escape task",
+    // Repetition 0 dropped the prefix ("ep_landscape"): the one row that ends so.
+    both(act("epic:ep_landscape", 0, 0, false)),
+  ],
+  ["home|new task", both(act("action:epic.new", 0, 0, false))],
+  ["home|tell it to run the tests", both(post(TRACY_CHANNEL, true, null, 0))],
+  [
+    "home|search my chats for safari",
+    both(act("action:app.chat-search.open", 0, 0, false)),
+  ],
+  ["home|mute", both(decision({ kind: "control", verb: "mute" }))],
+  [
+    "home|go to the worktrees thread",
+    both(
+      decision({
+        kind: "navigate",
+        target: {
+          tuple: {
+            environmentId: PERSONAL,
+            botId: "bot_tracy",
+            threadId: "th_worktrees",
+            hostId: HOST_MAIN,
+          },
+        },
+      }),
+    ),
+  ],
+]);
+
+function round2Decisions(): ReadonlyArray<{
+  readonly view: VoiceView;
+  readonly decision: RoutedDecision;
+}> {
+  return ROUND2_ANSWERS.map((answer) => {
+    const view = ROUND2_VIEW_BY_NAME[round2NameSchema.parse(answer.view)];
+    return {
+      view,
+      decision: resolveRoute(
+        parseRouterResponse(responsesBody(answer.route)),
+        DIRECTORY,
+        view,
+        answer.segments.length,
+      ),
+    };
+  });
+}
+
+describe("the second round of recorded answers", () => {
+  it.each(round2NameSchema.options)(
+    "renders the %s view exactly as the model was shown it",
+    (name) => {
+      expect(renderView(ROUND2_VIEW_BY_NAME[name])).toBe(ROUND2_VIEWS[name]);
+    },
+  );
+
+  it("tells the two Diagnostics sections of Settings apart by their group", () => {
+    const labels = ROUND2_VIEW_BY_NAME.settings.rows.map((row) => row.label);
+
+    expect(labels).toContain("Settings: Diagnostics (Application)");
+    expect(labels).toContain("Settings: Diagnostics (Host)");
+  });
+
+  it("are 68 answers to 34 heard requests, each with a planned decision for both repetitions", () => {
+    const heard = new Set(
+      ROUND2_ANSWERS.map(
+        (answer) => `${answer.view}|${answer.segments.join("")}`,
+      ),
+    );
+
+    expect(ROUND2_ANSWERS).toHaveLength(68);
+    expect([...heard].sort()).toEqual([...ROUND2_EXPECTED.keys()].sort());
+  });
+
+  it.each(
+    ROUND2_ANSWERS.map((answer) => ({
+      name: `[${answer.view}] "${answer.segments.join("")}" (rep ${answer.rep})`,
+      answer,
+    })),
+  )("resolves $name to the planned decision", ({ answer }) => {
+    const viewName = round2NameSchema.parse(answer.view);
+    const view = ROUND2_VIEW_BY_NAME[viewName];
+    const planned = ROUND2_EXPECTED.get(
+      `${viewName}|${answer.segments.join("")}`,
+    );
+    const expected = planned?.[answer.rep === 0 ? 0 : 1];
+    if (expected === undefined) throw new Error("no planned decision");
+    const shown = bodySchema
+      .parse(
+        JSON.parse(
+          routerRequestBody(
+            DIRECTORY,
+            view,
+            { segments: answer.segments, askedQuestion: null, card: null },
+            NOW,
+          ),
+        ),
+      )
+      .input.at(0)
+      ?.content.at(1)?.text;
+
+    const resolved = resolveRoute(
+      parseRouterResponse(responsesBody(answer.route)),
+      DIRECTORY,
+      view,
+      answer.segments.length,
+    );
+
+    expect(resolved).toMatchObject(expected(view));
+    expect(shown).toContain(ROUND2_VIEWS[viewName]);
+  });
+
+  it("only ever acts on a row of the view it was shown", () => {
+    const acts = round2Decisions().flatMap(({ view, decision: resolved }) =>
+      resolved.kind === "act" ? [{ view, row: resolved.row }] : [],
+    );
+
+    expect(acts.length).toBeGreaterThan(0);
+    expect(acts.every(({ view, row }) => view.rows.includes(row))).toBe(true);
   });
 });
 
@@ -790,6 +1162,12 @@ describe("routerRequestBody on a page", () => {
     );
     expect(properties.action.enum).toEqual(
       expect.arrayContaining(["act", "missing"]),
+    );
+  });
+
+  it("tells a change no listed action makes from opening the related page", () => {
+    expect(body.instructions).toContain(
+      "A request to change something on the page that no listed action changes is missing, even when a listed action would open the related page: opening the page is not what was asked.",
     );
   });
 
@@ -996,6 +1374,70 @@ describe("resolveRoute against the view", () => {
       ).toMatchObject({ kind: "act", confirm, generation: 5 });
     },
   );
+});
+
+describe("resolveRoute naming a row by what follows its last colon", () => {
+  const agentView = composeVoiceView({
+    page: { kind: "task", title: "Tracy Bots", tile: "Main agent" },
+    agent: {
+      chatId: "chat-1",
+      title: "Main agent",
+      state: "working",
+      waitingOn: null,
+    },
+    agentTurnRunning: true,
+    approvals: [],
+    palette: NO_PALETTE_ITEMS,
+    generation: 5,
+  });
+  const resolveAct = (actionId: string, view: VoiceView): unknown =>
+    resolveRoute(route("act", { actionId }, WHOLE, false), DIRECTORY, view, 2);
+
+  it("refuses a tail that two rows end with", () => {
+    expect(resolveAct("chat-1", agentView)).toEqual({
+      kind: "refused",
+      reason: "unknown-action",
+    });
+  });
+
+  it("refuses a tail that no row ends with", () => {
+    expect(resolveAct("nothing", TASK_VIEW)).toEqual({
+      kind: "refused",
+      reason: "unknown-action",
+    });
+  });
+
+  it("takes the row whose id is the whole of what was named over one that only ends that way", () => {
+    const view = compose({
+      palette: {
+        ...NO_PALETTE_ITEMS,
+        tiles: [paletteItem("alpha", "Alpha", {})],
+        commands: [paletteItem("action:alpha", "Alpha too", {})],
+      },
+    });
+
+    expect(resolveAct("alpha", view)).toMatchObject({
+      kind: "act",
+      row: { action: "alpha", label: "Open tab: Alpha" },
+    });
+  });
+
+  it("takes a bare action id for the one row that ends with it, and carries that row whole", () => {
+    expect(resolveAct("tab.close", TASK_VIEW)).toEqual({
+      kind: "act",
+      row: rowOf(TASK_VIEW, "action:tab.close"),
+      span: WHOLE,
+      generation: 5,
+      confirm: true,
+    });
+  });
+
+  it("refuses an id with a prefix that is not the row's", () => {
+    expect(resolveAct("epic:tab.close", TASK_VIEW)).toEqual({
+      kind: "refused",
+      reason: "unknown-action",
+    });
+  });
 });
 
 describe("the say loop with a page action or a question about the agent", () => {
