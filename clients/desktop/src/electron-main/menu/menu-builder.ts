@@ -104,7 +104,10 @@ function buildFileMenu(
       },
       {
         label: "Close Tab",
-        accelerator: "CmdOrCtrl+W",
+        // The renderer's `epic.close` chord. ⌘W is `tab.close` there (the
+        // tile), so a menu equivalent on ⌘W would close the task tab from any
+        // focus sink the renderer does not cancel the key in.
+        accelerator: "CmdOrCtrl+Shift+W",
         registerAccelerator: registerTerminalConflictingAccelerator(
           state.platform,
         ),
