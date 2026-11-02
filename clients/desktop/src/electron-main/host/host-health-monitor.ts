@@ -311,6 +311,9 @@ export function startHostHealthMonitor(
   // than dropped: the episode's end says how many there were and how long it
   // lasted (`noteBusyEpisodeEnded`).
   let busyHolds = 0;
+  // The pid the episode's once-per-stall line named: the end line names the
+  // same host, whatever host ended it.
+  let busyPid: number | null = null;
   // Same once-per-stall rate limit as `busyLogged`, for the long-stall WARN.
   let longStallLogged = false;
   // Whether `onHostUnresponsive` was last told a state rather than `null`, so
@@ -319,20 +322,27 @@ export function startHostHealthMonitor(
   // The host the force-restart offer out now was made for, or `null` when no
   // offer is out.
   let offeredHost: OfferedHost | null = null;
-  // A busy episode that ends with the host answering again leaves one line,
-  // so a report can tell a 30 s hold from a 30 min one: the once-per-stall
-  // INFO above says only that it began. Called before the episode's state
-  // is reset; a host that died instead ends its episode with its own lines.
-  const noteBusyEpisodeEnded = (pid: number, now: number): void => {
+  // Every busy episode leaves one line when it ends, so a report can tell a
+  // 30 s hold from a 30 min one: the once-per-stall INFO says only that it
+  // began. It names the host the episode was about and how it ended - the
+  // host answered, another host replaced it, or it died - and carries the
+  // holds the once-per-stall line stood for. Called before the episode's
+  // state is reset.
+  const noteBusyEpisodeEnded = (
+    outcome: "answered" | "replaced" | "died",
+    now: number,
+  ): void => {
     if (busyLogged) {
-      log.info("[host-health] busy host answered again", {
-        pid,
+      log.info("[host-health] busy episode ended", {
+        pid: busyPid,
+        outcome,
         busyHolds,
         unreachableForMs:
           unreachableSince === null ? null : now - unreachableSince,
       });
     }
     busyHolds = 0;
+    busyPid = null;
   };
   const clearUnresponsive = (): void => {
     offeredHost = null;
@@ -508,8 +518,8 @@ export function startHostHealthMonitor(
       nextLivenessCheckAt = 0;
       // The process is gone - or its pid was recycled onto something else -
       // so fall through to the existing dead-host handling.
+      noteBusyEpisodeEnded("died", Date.now());
       busyLogged = false;
-      busyHolds = 0;
       longStallLogged = false;
       clearUnresponsive();
       return false;
@@ -553,6 +563,7 @@ export function startHostHealthMonitor(
     busyHolds += 1;
     if (!busyLogged) {
       busyLogged = true;
+      busyPid = snapshot.pid;
       log.info(
         "[host-health] endpoint unresponsive but the host process exists - busy, holding the snapshot",
         { pid: snapshot.pid },
@@ -636,9 +647,11 @@ export function startHostHealthMonitor(
       if (!sameEndpoint || outageHost?.startIdentity !== startIdentity) {
         outageHost = { endpointKey, startIdentity };
         consecutiveFailures = 0;
+        // Another host (or this one on a new endpoint) is published: an
+        // episode about the old one ended here, not when the new one answers.
+        noteBusyEpisodeEnded("replaced", Date.now());
         unreachableSince = null;
         busyLogged = false;
-        busyHolds = 0;
         longStallLogged = false;
         nextLivenessCheckAt = 0;
         clearUnresponsive();
@@ -654,7 +667,7 @@ export function startHostHealthMonitor(
         ))
       ) {
         consecutiveFailures = 0;
-        noteBusyEpisodeEnded(snapshot.pid, Date.now());
+        noteBusyEpisodeEnded("answered", Date.now());
         busyLogged = false;
         longStallLogged = false;
         clearUnresponsive();
@@ -720,7 +733,10 @@ export function startHostHealthMonitor(
           "[host-health] stale snapshot converged onto a reachable host - no respawn needed",
           { pid: surfaced.pid },
         );
-        noteBusyEpisodeEnded(surfaced.pid, Date.now());
+        noteBusyEpisodeEnded(
+          surfaced.pid === busyPid ? "answered" : "replaced",
+          Date.now(),
+        );
         unreachableSince = null;
         // Convergence ends the current stall just as a direct reachable probe
         // does, so the once-per-stall log latches and the liveness-read

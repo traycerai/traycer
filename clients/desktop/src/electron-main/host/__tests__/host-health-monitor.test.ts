@@ -165,6 +165,16 @@ function deferred<T>(): {
   return { promise, resolve };
 }
 
+/** The detail objects of every `busy episode ended` line logged so far. */
+function busyEpisodeEnds(): unknown[] {
+  return vi
+    .mocked(log.info)
+    .mock.calls.filter(
+      ([message]) => message === "[host-health] busy episode ended",
+    )
+    .map(([, detail]) => detail);
+}
+
 describe("startHostHealthMonitor", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -1787,24 +1797,21 @@ describe("startHostHealthMonitor", () => {
       probe.mockImplementation(async () => true);
       await ticks(3);
 
-      const answered = vi
-        .mocked(log.info)
-        .mock.calls.filter(
-          ([message]) => message === "[host-health] busy host answered again",
-        );
-      expect(answered).toHaveLength(1);
-      expect(answered[0]?.[1]).toEqual({
-        pid: SNAPSHOT.pid,
-        busyHolds: 5,
-        unreachableForMs: 10 * INTERVAL_MS,
-      });
+      expect(busyEpisodeEnds()).toEqual([
+        {
+          pid: SNAPSHOT.pid,
+          outcome: "answered",
+          busyHolds: 5,
+          unreachableForMs: 10 * INTERVAL_MS,
+        },
+      ]);
     } finally {
       killSpy.mockRestore();
       monitor.dispose();
     }
   });
 
-  it("does not log the answered-again line for a host that died instead", async () => {
+  it("logs the episode as died when the host held busy dies", async () => {
     vi.mocked(log.info).mockClear();
     const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
     publishThroughPidJson(() => SNAPSHOT, PUBLISHED_IDENTITY);
@@ -1833,10 +1840,107 @@ describe("startHostHealthMonitor", () => {
       liveness = "dead";
       await ticks(10);
 
-      const messages = vi
-        .mocked(log.info)
-        .mock.calls.map(([message]) => message);
-      expect(messages).not.toContain("[host-health] busy host answered again");
+      expect(busyEpisodeEnds()).toEqual([
+        {
+          pid: SNAPSHOT.pid,
+          outcome: "died",
+          busyHolds: expect.any(Number),
+          unreachableForMs: expect.any(Number),
+        },
+      ]);
+    } finally {
+      killSpy.mockRestore();
+      monitor.dispose();
+    }
+  });
+
+  it("ends a busy episode as replaced, naming the old host, when another host is published", async () => {
+    vi.mocked(log.info).mockClear();
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+    const hostA: DesktopPublishedHostSnapshot = { ...SNAPSHOT, pid: 33301 };
+    const hostB: DesktopPublishedHostSnapshot = {
+      ...SNAPSHOT,
+      pid: 33302,
+      websocketUrl: "ws://127.0.0.1:55556/rpc",
+    };
+    let current = hostA;
+    publishThroughPidJson(() => current, PUBLISHED_IDENTITY);
+    const readLiveness = vi.fn(ALIVE);
+    const monitor = startHostHealthMonitor({
+      host: fakeHost({
+        getSnapshot: () => current,
+        reloadSnapshotFromDisk: vi.fn(async () => null),
+      }),
+      intervalMs: INTERVAL_MS,
+      probe: vi.fn(async () => false),
+      readMetadata: vi.fn(async () => current),
+      respawn: vi.fn(async () => {}),
+      automaticRecoverySuspended: () => false,
+      governor: createHostRecoveryGovernor({ readLiveness, now: undefined }),
+      readLiveness,
+      readLiveSupervisorPid: () => Promise.resolve(null),
+      onHostUnresponsive: () => undefined,
+    });
+    try {
+      await ticks(10);
+      current = hostB;
+      await ticks(3);
+
+      expect(busyEpisodeEnds()).toEqual([
+        {
+          pid: hostA.pid,
+          outcome: "replaced",
+          busyHolds: 5,
+          unreachableForMs: 10 * INTERVAL_MS,
+        },
+      ]);
+    } finally {
+      killSpy.mockRestore();
+      monitor.dispose();
+    }
+  });
+
+  it("ends a busy episode as replaced, not answered, when the reload converges onto a different pid", async () => {
+    vi.mocked(log.info).mockClear();
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+    const hostA: DesktopPublishedHostSnapshot = { ...SNAPSHOT, pid: 33311 };
+    const hostB: DesktopPublishedHostSnapshot = {
+      ...SNAPSHOT,
+      pid: 33312,
+      websocketUrl: "ws://127.0.0.1:55557/rpc",
+    };
+    // The host's snapshot stays on A while disk comes to name B.
+    let onDisk = hostA;
+    publishThroughPidJson(() => onDisk, PUBLISHED_IDENTITY);
+    const readLiveness = vi.fn(ALIVE);
+    const monitor = startHostHealthMonitor({
+      host: fakeHost({
+        getSnapshot: () => hostA,
+        reloadSnapshotFromDisk: vi.fn(async () => onDisk),
+      }),
+      intervalMs: INTERVAL_MS,
+      probe: vi.fn(async () => false),
+      readMetadata: vi.fn(async () => onDisk),
+      respawn: vi.fn(async () => {}),
+      automaticRecoverySuspended: () => false,
+      governor: createHostRecoveryGovernor({ readLiveness, now: undefined }),
+      readLiveness,
+      readLiveSupervisorPid: () => Promise.resolve(null),
+      onHostUnresponsive: () => undefined,
+    });
+    try {
+      await ticks(10);
+      onDisk = hostB;
+      await ticks(3);
+
+      expect(busyEpisodeEnds()).toEqual([
+        {
+          pid: hostA.pid,
+          outcome: "replaced",
+          busyHolds: 5,
+          unreachableForMs: expect.any(Number),
+        },
+      ]);
     } finally {
       killSpy.mockRestore();
       monitor.dispose();
