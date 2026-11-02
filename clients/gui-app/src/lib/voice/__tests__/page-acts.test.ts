@@ -36,6 +36,7 @@ import {
   ALREADY_DECIDED_NOTICE,
   DECISION_IN_FLIGHT_NOTICE,
   NOT_DELIVERED_NOTICE,
+  NOTHING_TO_STOP_NOTICE,
   ROW_GONE_NOTICE,
   TURN_ENDED_NOTICE,
   executePageAct,
@@ -747,13 +748,13 @@ describe("stopping the agent", () => {
     expect(stopFrames(session)).toHaveLength(1);
   });
 
-  it("stops the running turn when none was on the wire at the route", async () => {
+  it("says nothing was running to stop, and does not stop the turn running now, when none was on the wire at the route", async () => {
     const session = openSession({ ...READY_TO_SEND, running: true });
 
     const outcome = await stop(session, null);
 
-    expect(outcome).toEqual({ kind: "executed" });
-    expect(stopFrames(session)).toHaveLength(1);
+    expect(outcome).toEqual(refusedWith(NOTHING_TO_STOP_NOTICE));
+    expect(stopFrames(session)).toEqual([]);
   });
 
   it("says the turn already ended, and does not stop", async () => {

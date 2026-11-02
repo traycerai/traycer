@@ -89,6 +89,7 @@ export const ALREADY_DECIDED_NOTICE = "That was already decided.";
 export const DECISION_IN_FLIGHT_NOTICE =
   "Another decision is still going through. Say it again in a moment.";
 export const TURN_ENDED_NOTICE = "The agent's turn already ended.";
+export const NOTHING_TO_STOP_NOTICE = "Nothing was running to stop.";
 export const ROW_GONE_NOTICE = "That isn't available here any more.";
 export const ACT_FAILED_NOTICE = "That didn't work.";
 
@@ -268,14 +269,15 @@ function tellAgent(
 /**
  * A stop acts on the turn it was asked of. The read-back can outlast that turn,
  * and a yes must not stop the next one, which nobody asked to stop. With no turn
- * on the wire when it was routed (a send had not started one yet) there is
- * nothing to compare, and a running turn is the one that send started.
+ * on the wire when it was routed there is no such turn, and whatever runs by the
+ * time of the yes is not what was asked about.
  */
 function stopAgent(
   chatId: string,
   routedTurnId: string | null,
   reads: PageActReads,
 ): VerbOutcome {
+  if (routedTurnId === null) return refused(NOTHING_TO_STOP_NOTICE);
   const session = reads.agentSession(chatId);
   if (session === null) return refused(AGENT_GONE_NOTICE);
   const chat = session.handle.store.getState();
@@ -283,10 +285,7 @@ function stopAgent(
   if (stopRequested(chat) || status === "stopping") {
     return refused(AGENT_STOPPING_NOTICE);
   }
-  if (
-    status !== "running" ||
-    (routedTurnId !== null && chat.activeTurn?.turnId !== routedTurnId)
-  ) {
+  if (status !== "running" || chat.activeTurn?.turnId !== routedTurnId) {
     return refused(TURN_ENDED_NOTICE);
   }
   return chatActionsFor(session.handle).stopTurn() === null
