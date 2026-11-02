@@ -159,7 +159,7 @@ describe("useSkillEnvironmentRoute", () => {
   });
 
   it.each([
-    [{ outcome: "not_served", reason: null }, /isn't running the environment/],
+    [{ outcome: "not_served", reason: null }, /isn't running Acme/],
     [{ outcome: "refused", reason: "read_only" }, /review-pr/],
     [{ outcome: "refused", reason: "too_large" }, /Couldn't add/],
     [{ outcome: "forbidden", reason: null }, /Only Acme's editors/],

@@ -190,13 +190,24 @@ describe("a shared folder's skill on a host that runs environments", () => {
     expect(
       screen.getByRole("button", { name: "Open hand-placed (Shared)" }),
     ).toBeDefined();
-    fireEvent.click(
-      screen.getByRole("button", { name: "Promote to the environment" }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Add to Personal" }));
 
     expect(shared.promotions).toEqual([
       { scope: "global", name: "hand-placed" },
     ]);
+  });
+
+  it("names the team a team-bound host serves on the promote", () => {
+    shared.served = { environmentId: "env_acme", name: "Acme", team: true };
+
+    render(<ProviderSkillsTab state={state()} />);
+
+    expect(screen.getByRole("button", { name: "Add to Acme" })).toBeDefined();
+    expect(
+      screen.queryByRole("button", { name: "Add to Personal" }),
+    ).toBeNull();
+    const dialog = within(openRow("Open hand-placed (Shared)"));
+    expect(dialog.getByText(/or add it to Acme\./)).toBeDefined();
   });
 
   it("offers no promote at project scope, which the host refuses", () => {
@@ -205,7 +216,7 @@ describe("a shared folder's skill on a host that runs environments", () => {
     render(<ProviderSkillsTab state={state()} />);
 
     expect(
-      screen.queryByRole("button", { name: "Promote to the environment" }),
+      screen.queryByRole("button", { name: "Add to Personal" }),
     ).toBeNull();
   });
 
@@ -228,7 +239,7 @@ describe("a shared folder's skill on a host that runs environments", () => {
     render(<ProviderSkillsTab state={state()} />);
 
     expect(
-      screen.queryByRole("button", { name: "Promote to the environment" }),
+      screen.queryByRole("button", { name: "Add to Personal" }),
     ).toBeNull();
     const dialog = within(openRow("Open own (Cursor only)"));
     expect(dialog.getByRole("button", { name: "Edit" })).toBeDefined();
@@ -286,7 +297,7 @@ describe("a shared folder's skill on a host from before environments", () => {
     render(<ProviderSkillsTab state={state()} />);
 
     expect(
-      screen.queryByRole("button", { name: "Promote to the environment" }),
+      screen.queryByRole("button", { name: "Add to Personal" }),
     ).toBeNull();
     const dialog = within(openRow("Open hand-placed (Shared)"));
     expect(dialog.getByRole("button", { name: "Edit" })).toBeDefined();
@@ -310,7 +321,7 @@ describe("a shared folder's skill on a host not yet known", () => {
     render(<ProviderSkillsTab state={state()} />);
 
     expect(
-      screen.queryByRole("button", { name: "Promote to the environment" }),
+      screen.queryByRole("button", { name: "Add to Personal" }),
     ).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Add skill" }));
 

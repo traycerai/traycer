@@ -3557,7 +3557,7 @@ window`, recorded in the type as `coverage.browsersAreMountedOnly` -
       create or import, `unsupported_action` for an edit, update or remove),
       so the composer offers "<provider> only" and the served environment, and a
       row directly in a `.agents/skills` folder (`isSharedFolderSkill`) keeps its
-      Shared badge with "Promote to the environment" (global scope, the one
+      Shared badge with "Add to <name>" (global scope, the one
       `promoteToPersonal` takes) in place of Edit and Remove. A folder under the
       served root the room has not captured also lists as `shared` and is not
       that row: it stays editable. The environment option is the

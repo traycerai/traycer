@@ -10,9 +10,7 @@ import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { skillArchiveBase64 } from "./provider-skill-archive";
 import type { ServedSkillEnvironment } from "./provider-skill-composer-model";
 
-const WRITE_FAILED = "Couldn't add this skill to the environment.";
-const NOT_SERVED =
-  "This host isn't running the environment yet, so it can't add the skill. Open the environment's Skills page and pick a host that runs it.";
+const WRITE_FAILED = "Couldn't add this skill.";
 
 export interface SkillEnvironmentRoute {
   /**
@@ -78,7 +76,9 @@ export function useSkillEnvironmentRoute(): SkillEnvironmentRoute {
           archive: await skillArchiveBase64(skill.markdown),
         });
         if (result.outcome === "saved") return null;
-        if (result.outcome === "not_served") return NOT_SERVED;
+        if (result.outcome === "not_served") {
+          return `This host isn't running ${served.name} yet, so it can't add the skill. Open ${served.name}'s Skills page and pick a host that runs it.`;
+        }
         if (result.outcome === "forbidden") {
           return `Only ${served.name}'s editors can add skills to it.`;
         }

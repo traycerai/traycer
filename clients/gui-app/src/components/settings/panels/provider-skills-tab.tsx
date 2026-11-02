@@ -52,7 +52,7 @@ import {
   isSkillUpdateNoOp,
   providerRootFromSkills,
   HOST_NOT_KNOWN_REASON,
-  SHARED_FOLDER_READ_ONLY_REASON,
+  sharedFolderReadOnlyReason,
   skillActionAdvertised,
   skillAudiences,
   skillAuthoring,
@@ -506,7 +506,9 @@ function ProviderSkillsTabBody({
                     reason:
                       environment.hostRunsEnvironments === null
                         ? HOST_NOT_KNOWN_REASON
-                        : SHARED_FOLDER_READ_ONLY_REASON,
+                        : sharedFolderReadOnlyReason(
+                            environment.served?.name ?? null,
+                          ),
                   }
                 : skillRemovability({
                     removeScopes: allowed.removeScopes,
@@ -648,6 +650,7 @@ function ProviderSkillsTabBody({
       <SkillsListBody
         markTarget={{ entryKind: "skills", providerId, scope: effectiveScope }}
         hostRunsEnvironments={environment.hostRunsEnvironments}
+        environmentName={environment.served?.name ?? null}
         providerLabel={providerLabel}
         projectNeedsWorkspace={projectNeedsWorkspace}
         workspacesLoading={workspacesLoading}
@@ -923,6 +926,7 @@ function SkillUpdateConfirm({
 function SkillsListBody({
   markTarget,
   hostRunsEnvironments,
+  environmentName,
   providerLabel,
   projectNeedsWorkspace,
   workspacesLoading,
@@ -942,6 +946,7 @@ function SkillsListBody({
   readonly markTarget: PersonalMarkTarget;
   /** The host only reads a shared folder's skills: they offer the promote. */
   readonly hostRunsEnvironments: boolean | null;
+  readonly environmentName: string | null;
   readonly providerLabel: string;
   readonly projectNeedsWorkspace: boolean;
   readonly workspacesLoading: boolean;
@@ -1027,6 +1032,7 @@ function SkillsListBody({
           providerLabel={providerLabel}
           markTarget={markTarget}
           hostRunsEnvironments={hostRunsEnvironments}
+          environmentName={environmentName}
           onOpen={() => {
             onOpenSkill(skill);
           }}
@@ -1171,6 +1177,7 @@ function SkillRow({
   providerLabel,
   markTarget,
   hostRunsEnvironments,
+  environmentName,
   onOpen,
 }: {
   readonly skill: ProviderSkill;
@@ -1178,6 +1185,7 @@ function SkillRow({
   /** Where the row's Personal mark reads from (`PersonalEntryMark`). */
   readonly markTarget: PersonalMarkTarget;
   readonly hostRunsEnvironments: boolean | null;
+  readonly environmentName: string | null;
   readonly onOpen: () => void;
 }): ReactNode {
   return (
@@ -1247,6 +1255,7 @@ function SkillRow({
         skill={skill}
         markTarget={markTarget}
         hostRunsEnvironments={hostRunsEnvironments}
+        environmentName={environmentName}
       />
     </li>
   );
@@ -1261,10 +1270,12 @@ function SkillRowAction({
   skill,
   markTarget,
   hostRunsEnvironments,
+  environmentName,
 }: {
   readonly skill: ProviderSkill;
   readonly markTarget: PersonalMarkTarget;
   readonly hostRunsEnvironments: boolean | null;
+  readonly environmentName: string | null;
 }): ReactNode {
   const personal = usePersonalEntryApplied(
     "skills",
@@ -1279,15 +1290,13 @@ function SkillRowAction({
   ) {
     return <PersonalEntryMark target={markTarget} name={skill.name} />;
   }
-  if (hostRunsEnvironments === null || markTarget.scope !== "global") {
-    return null;
-  }
+  if (environmentName === null || markTarget.scope !== "global") return null;
   return (
     <AddToPersonalButton
       entryKind="skills"
       providerId={markTarget.providerId}
       name={skill.name}
-      label="Promote to the environment"
+      label={`Add to ${environmentName}`}
     />
   );
 }

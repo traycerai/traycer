@@ -195,11 +195,18 @@ export function isSharedFolderSkill(skill: ProviderSkill): boolean {
   );
 }
 
-/** Why a shared folder's skill offers no edit, update or remove. */
 export const HOST_NOT_KNOWN_REASON = "This host is still connecting.";
 
-export const SHARED_FOLDER_READ_ONLY_REASON =
-  "Traycer reads this folder and doesn't change it. Manage this skill with whatever put it there, or promote it to the environment.";
+/** Why a shared folder's skill offers no edit, update or remove. */
+export function sharedFolderReadOnlyReason(
+  environmentName: string | null,
+): string {
+  const manage =
+    "Traycer reads this folder and doesn't change it. Manage this skill with whatever put it there";
+  return environmentName === null
+    ? `${manage}.`
+    : `${manage}, or add it to ${environmentName}.`;
+}
 
 /**
  * Where a create/import will land, for the audience the user picked.
@@ -219,8 +226,8 @@ export function skillDestination(args: {
   if (args.audience === "shared") {
     return { display: `~/${SHARED_SKILLS_RELATIVE}`, exact: true };
   }
-  if (args.audience === "environment") {
-    return { display: args.environmentName ?? "the environment", exact: false };
+  if (args.audience === "environment" && args.environmentName !== null) {
+    return { display: args.environmentName, exact: false };
   }
   if (args.providerRoot === null) {
     return {

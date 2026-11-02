@@ -760,7 +760,7 @@ function audienceCopy(
   audience: SkillAudience,
   providerLabel: string,
   environment: ServedSkillEnvironment | null,
-): { readonly title: string; readonly detail: string } {
+): { readonly title: string; readonly detail: string } | null {
   switch (audience) {
     case "shared":
       return {
@@ -774,12 +774,11 @@ function audienceCopy(
         detail: `Stored in ${providerLabel}'s own skills folder.`,
       };
     case "environment":
+      if (environment === null) return null;
       return {
-        title: environment?.name ?? "This environment",
-        detail: `Stored in ${environment?.name ?? "the environment"} and reaches every provider on ${
-          environment?.team === true
-            ? "every member's hosts"
-            : "every host of yours"
+        title: environment.name,
+        detail: `Stored in ${environment.name} and reaches every provider on ${
+          environment.team ? "every member's hosts" : "every host of yours"
         }.`,
       };
   }
@@ -807,6 +806,7 @@ function SkillScopeFieldset({
       </legend>
       {audiences.map((choice) => {
         const copy = audienceCopy(choice, providerLabel, environment);
+        if (copy === null) return null;
         return (
           <label
             key={choice}
