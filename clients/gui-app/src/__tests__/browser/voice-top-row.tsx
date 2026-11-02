@@ -28,6 +28,7 @@ import {
 import type { TabStripPlacement } from "@/lib/layout/layout-arrangement";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { WindowsBridgeContext } from "@/providers/windows-bridge-context";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { tabItemId, type StripItem } from "@/stores/tabs/layout";
 import { useTabsStore } from "@/stores/tabs/store";
@@ -39,9 +40,10 @@ import "@/index.css";
 /**
  * The real column frame, header and voice row, because where Talk lands is a
  * layout claim jsdom cannot decide. `?placement=top|left|right` picks the
- * placement and `?wco=mac` stands in for the frameless macOS preload, as
+ * placement and `?wco=mac|win` stands in for the frameless desktop preload, as
  * `sheet-shell-guest-clip.tsx` does: the real `appColumnChrome()` then decides
- * the title band. The header is signed out, so its tab strip is empty;
+ * the title band. `?account=1` signs in, which draws the bell and the user menu.
+ * Until `__voiceTopRowProbe.openTabs` the tab strip is empty;
  * `__voiceTopRowProbe.fillTabs` stands in for tabs of a given natural width.
  */
 declare global {
@@ -61,12 +63,14 @@ const PLACEMENT: TabStripPlacement =
   placementParam === "left" || placementParam === "right"
     ? placementParam
     : "top";
-const MAC = search.get("wco") === "mac";
+const WCO = search.get("wco");
+const FRAMELESS = WCO === "mac" || WCO === "win";
+const PLATFORM = WCO === "win" ? "win32" : "darwin";
 
 const CHROME_INPUT: AppColumnChromeInput = {
   placement: PLACEMENT,
-  platform: MAC ? "darwin" : null,
-  frameless: MAC,
+  platform: FRAMELESS ? PLATFORM : null,
+  frameless: FRAMELESS,
 };
 const CHROME = appColumnChrome(CHROME_INPUT);
 
@@ -80,10 +84,29 @@ const runnerHost = new MockRunnerHost({
   traycerCli: undefined,
 });
 
-if (MAC) {
-  Reflect.set(runnerHost, "menu", { platform: "darwin" });
+if (FRAMELESS) {
+  Reflect.set(runnerHost, "menu", {
+    platform: PLATFORM,
+    getSnapshot: () => Promise.resolve({ revision: 1, menus: [] }),
+    executeItem: () => Promise.resolve(),
+    onChange: () => ({ dispose: () => undefined }),
+    openTopLevel: () => Promise.resolve(),
+  });
   Reflect.set(window, "runnerHost", runnerHost);
   document.documentElement.classList.add("wco");
+}
+
+if (search.get("account") === "1") {
+  useAuthStore.getState().setSignedIn(
+    {
+      userId: "fixture-user",
+      userName: "Ada Lovelace",
+      email: "ada@example.com",
+      avatarUrl: null,
+    },
+    { userId: "fixture-user", username: "ada" },
+    [],
+  );
 }
 
 const WINDOWS_BRIDGE = { bridge: null, hasHydrated: true } as const;
