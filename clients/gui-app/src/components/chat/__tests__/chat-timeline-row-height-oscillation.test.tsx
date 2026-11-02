@@ -29,6 +29,7 @@ import { makeMessages } from "./chat-message-fixtures";
 import {
   installLegendListTestClock,
   installLegendListViewportMetrics,
+  listItemShellFor,
   restoreLegendListTestClock,
   settleLegendList,
 } from "./legend-list-test-environment";
@@ -38,24 +39,8 @@ const SHORT_HEIGHT = OSCILLATING_HEIGHTS[0];
 const TALL_HEIGHT = OSCILLATING_HEIGHTS[1];
 const OSCILLATION_WARNING = "[transcript] a row's height never settled";
 
-function isRowShell(candidate: Element): boolean {
-  return (
-    candidate.hasAttribute("data-message-id") ||
-    candidate.hasAttribute("data-index")
-  );
-}
-
-/** The row a LegendList container draws, matched the way the shared viewport
- *  shim matches it: the container itself, or its first child, is the row
- *  shell. The scroll and content containers never qualify. */
-function rowShellOf(element: HTMLElement): Element | null {
-  if (isRowShell(element)) return element;
-  const child = element.firstElementChild;
-  return child !== null && isRowShell(child) ? child : null;
-}
-
 function rowMessageIdOf(element: HTMLElement): string | null {
-  const shell = rowShellOf(element);
+  const shell = listItemShellFor(element);
   if (shell === null) return null;
   return (
     shell.getAttribute("data-message-id") ??
@@ -297,7 +282,7 @@ function BareList({
 /** Sizes every row from the text it shows. */
 function measureBareRowsByText(): void {
   reshapeMeasurements((element, rect) => {
-    const shell = rowShellOf(element);
+    const shell = listItemShellFor(element);
     return shell === null
       ? rect
       : withSize(rect, rect.width, heightForText(shell.textContent));
@@ -337,7 +322,7 @@ describe("LegendList pinned row measurement", () => {
       if (element.classList.contains(NARROW_LIST_CLASS)) {
         return withSize(rect, 0, rect.height);
       }
-      const shell = rowShellOf(element);
+      const shell = listItemShellFor(element);
       if (shell === null) return rect;
       const text = shell.textContent;
       return withSize(

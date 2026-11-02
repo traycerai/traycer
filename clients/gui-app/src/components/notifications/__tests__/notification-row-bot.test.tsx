@@ -129,6 +129,7 @@ function renderRow(row: MergedNotificationRow): HTMLElement {
 beforeEach(() => {
   mocks.row = null;
   mocks.listEnabled = [];
+  mocks.environments = [];
   mocks.bots = {
     bots: [
       {

@@ -13,9 +13,7 @@ export interface StandaloneBotsDirectory {
  * environments they belong to hold their main bot in the list or show it as
  * still to be set up.
  */
-export function seesMoreThanOneMainBot(
-  directory: StandaloneBotsDirectory,
-): boolean {
+function seesMoreThanOneMainBot(directory: StandaloneBotsDirectory): boolean {
   let mainBots = 0;
   for (const group of directory.model.groups) {
     if (
