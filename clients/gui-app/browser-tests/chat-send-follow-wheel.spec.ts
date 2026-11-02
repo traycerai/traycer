@@ -187,12 +187,6 @@ for (const c of CASES) {
   const name = `${c.kind} / ${c.pattern} wheel ${String(c.delayMs)}ms after ${c.anchor === "enter" ? "Enter" : "turn start"}: the reader stays on the follow line`;
   test(name, async ({ page }) => {
     await openScenario(page, c.kind);
-    if (c.kind === "running") {
-      await page.evaluate(() => {
-        window.__followDriver?.host.streamRich("earlier", 8, 40);
-      });
-      await streamRuns(page, 15);
-    }
     const scroller = page.getByTestId("chat-messages-scroll");
     const box = await scroller.boundingBox();
     if (box === null) throw new Error("no scroller box");
@@ -200,6 +194,12 @@ for (const c of CASES) {
     await page.getByRole("textbox").click();
     await page.keyboard.type(PROMPT);
     await page.mouse.move(box.x + box.width / 2, box.y + 150);
+    if (c.kind === "running") {
+      await page.evaluate(() => {
+        window.__followDriver?.host.streamRich("earlier", 8, 40);
+      });
+      await streamRuns(page, 15);
+    }
     await startWatching(page);
     await mark(page, "enter");
     await page.keyboard.press("Enter");

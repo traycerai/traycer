@@ -62,9 +62,11 @@ export default defineConfig({
   // test "flaky", so a real intermittent failure stays visible.
   retries: isCi ? 1 : 0,
   // The heaviest fixtures boot most of the app from unbundled modules on the
-  // dev server, so a local run leaves room for Vite. CI's fixtures are bundled,
-  // and a standard runner has 4 vCPUs.
-  workers: 2,
+  // dev server, so a local run leaves room for Vite. CI's fixtures are bundled.
+  // Measured on one commit of the 4 vCPU runner, slowest shard / test time /
+  // retries: two workers 4.8 min / 3,555 s / 0, three 3.7 / 4,070 / 0, four
+  // 4.2 / 5,593 / 1, with a test failing outright.
+  workers: isCi ? 3 : 2,
   timeout: 180_000,
   expect: { timeout: 10_000 },
   // The JSON report is what the per-test budget and the shard timings read

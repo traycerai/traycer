@@ -27,10 +27,6 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
-    inputs:
-      workers:
-        type: string
-        default: ""
 
 permissions:
   contents: read
@@ -181,12 +177,11 @@ jobs:
           SHARD: ${{ matrix.shard }}/${{ strategy.job-total }}
           # Serve the fixture pages bundled: `vite.browser-tests.config.ts`.
           BROWSER_TESTS_BUNDLE: "1"
-          WORKERS: ${{ inputs.workers }}
         # Whole files, cut by measured time (the script says why), not `--shard`.
         run: |
           set -euo pipefail
           mapfile -t files < <(node scripts/browser-test-shard-plan.ts "$SHARD")
-          bun run test:browser ${WORKERS:+--workers=$WORKERS} "${files[@]}"
+          bun run test:browser "${files[@]}"
       - name: Every test is within the per-test budget
         working-directory: clients/gui-app
         run: node scripts/browser-test-budget.ts test-results.json

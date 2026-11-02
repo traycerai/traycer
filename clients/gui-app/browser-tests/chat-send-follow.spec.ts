@@ -311,16 +311,16 @@ for (const c of CASES) {
     page,
   }) => {
     await openScenario(page, c.kind);
+    const dockBefore = (await probe(page)).dockHeight;
+    await typePrompt(page, c.lines);
+    await nextFrames(page, 5);
+    const dockTyped = (await probe(page)).dockHeight;
     if (c.earlierStreaming) {
       await page.evaluate(() => {
         window.__followDriver?.host.streamRich("earlier", 8, 40);
       });
       await streamRuns(page, 15);
     }
-    const dockBefore = (await probe(page)).dockHeight;
-    await typePrompt(page, c.lines);
-    await nextFrames(page, 5);
-    const dockTyped = (await probe(page)).dockHeight;
     await startWatching(page);
     await mark(page, "enter");
     await page.keyboard.press("Enter");
