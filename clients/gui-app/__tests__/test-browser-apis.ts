@@ -249,15 +249,18 @@ configure({ defaultIgnore: "script, style, title" });
 // by passing an options object whose getter flips a flag. jsdom's native focus
 // never reads its options, so the first editor focus in a worker would settle
 // the probe on "unsupported" for every file after it. A real browser reads them.
-const jsdomFocus: unknown = Reflect.get(HTMLElement.prototype, "focus");
-HTMLElement.prototype.focus = function (
-  this: HTMLElement,
-  options: FocusOptions | undefined,
-) {
-  void options?.preventScroll;
-  if (typeof jsdomFocus !== "function") throw new Error("jsdom has no focus");
-  Reflect.apply(jsdomFocus, this, [options]);
-};
+// A file under `@vitest-environment node` has no DOM to patch.
+if (typeof HTMLElement !== "undefined") {
+  const jsdomFocus: unknown = Reflect.get(HTMLElement.prototype, "focus");
+  HTMLElement.prototype.focus = function (
+    this: HTMLElement,
+    options: FocusOptions | undefined,
+  ) {
+    void options?.preventScroll;
+    if (typeof jsdomFocus !== "function") throw new Error("jsdom has no focus");
+    Reflect.apply(jsdomFocus, this, [options]);
+  };
+}
 
 class MockResizeObserver implements ResizeObserver {
   observe(): void {}
