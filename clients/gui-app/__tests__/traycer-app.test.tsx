@@ -135,6 +135,7 @@ function hostStatusResponse() {
     crossHostMessaging: null,
     sessions: null,
     updatesExternallyManaged: null,
+    previousExit: null,
   };
 }
 

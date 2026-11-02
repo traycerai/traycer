@@ -305,6 +305,7 @@ function createHostQueriesFixture(): {
             crossHostMessaging: null,
             sessions: null,
             updatesExternallyManaged: null,
+            previousExit: null,
           };
         },
       },
