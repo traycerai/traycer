@@ -68,6 +68,8 @@ import {
   peekSavedChatTabState,
   restoreChatTabState,
   restoreChatTabStateForMount,
+  restoreSplitTurnAnchorForMount,
+  savedAnchorTurnWasSplit,
   saveChatTabState,
   savedChatTabAnchorRowKey,
   type ChatTabScrollMode,
@@ -2212,12 +2214,39 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   // The identity is stable for the mount, so re-reading per
   // render would only repeat an O(n) row scan whose result the
   // initializers below already captured.
-  const [restoredTabState] = useState<SavedChatTabScrollState>(() =>
-    restoreChatTabStateForMount(
-      identity,
-      listRows.map((row) => row.key),
-    ),
-  );
+  //
+  // `raw` is the saved state WITHOUT `restoreChatTabState`'s messages-dependent
+  // clamp: hydration retry needs the original anchor id to replay a measured
+  // location once the transcript has hydrated enough to contain it.
+  //
+  // A steer that split the turn the anchor sits in renames its rows rather
+  // than delaying them (`savedAnchorTurnWasSplit`). The restore then answers
+  // against the slices: the part cutting at the saved segment where a drawn
+  // slice names it, the first slice while a slice is still cold, the latest
+  // once every slice is drawn and none does. In the settled cases the restored
+  // state becomes the saved state for this mount, so the catch-up below is not
+  // left holding the list at offset 0 for a row that cannot arrive.
+  const [mountRestore] = useState<{
+    readonly restored: SavedChatTabScrollState;
+    readonly raw: SavedChatTabScrollState | null;
+    readonly splitSettled: boolean;
+  }>(() => {
+    const rowKeys = listRows.map((row) => row.key);
+    const raw =
+      pendingHydrationRestore(identity) ?? peekSavedChatTabState(identity);
+    const restored = restoreChatTabStateForMount(identity, rowKeys);
+    if (raw === null || !savedAnchorTurnWasSplit(raw, rowKeys)) {
+      return { restored, raw, splitSettled: false };
+    }
+    const split = restoreSplitTurnAnchorForMount(raw, restored, listRows);
+    return {
+      restored: split.state,
+      raw: split.settled ? split.state : raw,
+      splitSettled: split.settled,
+    };
+  });
+  const restoredTabState = mountRestore.restored;
+  const rawSavedTabState = mountRestore.raw;
   // A restored row becomes LegendList's own `initialScrollIndex`
   // measurement bootstrap - the same self-correcting path
   // `initialScrollAtEnd` uses, carrying the saved pixel offset. `null` for a
@@ -2237,12 +2266,6 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       if (index === -1) return null;
       return { index, viewOffset: restoredTabState.offset, viewPosition: 0 };
     });
-  // Raw saved state, peeked WITHOUT `restoreChatTabState`'s messages-dependent
-  // clamp. Hydration retry needs the original anchor id to replay a measured
-  // location once the transcript has hydrated enough to contain it.
-  const [rawSavedTabState] = useState<SavedChatTabScrollState | null>(
-    () => pendingHydrationRestore(identity) ?? peekSavedChatTabState(identity),
-  );
   const pendingHydrationRestoreAnchorId =
     resolvePendingHydrationRestoreAnchorId(restoredTabState, rawSavedTabState);
   // A cold turn part must retain its exact coordinate until that part lands.
@@ -2265,6 +2288,14 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       rememberPendingHydrationRestore(identity, rawSavedTabState);
     }
   }, [identity, pendingHydrationRestoreAnchorId, rawSavedTabState]);
+  // A pending coordinate the split retired must not outlive this mount in the
+  // registry: a same-instance remount prefers that entry over the position
+  // this mount goes on to save, and would replay the pre-steer anchor over it.
+  useLayoutEffect(() => {
+    if (mountRestore.splitSettled) {
+      forgetPendingHydrationRestore(identity);
+    }
+  }, [identity, mountRestore.splitSettled]);
   const pendingMeasuredFreeRestoreRef =
     useRef<PendingMeasuredFreeRestore | null>(
       resolvePendingMeasuredFreeRestore(restoredTabState),
@@ -4563,16 +4594,65 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   // clear (`cancelTimelineLiveFollowForUserNavigation`'s
   // `publishesReaderPosition` branch, `navigateToMessage`,
   // `releaseForExplicitNavigation`), independent of this effect.
+  //
+  // The split's gone outcome retires the pending coordinate and publishes
+  // following-end through `scrollToEnd`, which sets state: a microtask, as an
+  // effect body may not set state itself. An effect event rather than a
+  // dependency: the effect re-runs on `listRows`, and must not also re-run
+  // because the callback's identity moved.
+  const followLatestAfterSplit = useEffectEvent((): void => {
+    queueMicrotask(() => {
+      scrollToEnd(false);
+    });
+  });
   useEffect(() => {
     const anchorId = pendingHydrationRestoreAnchorIdRef.current;
     if (anchorId === null) return;
     const index = rowIndexByKeyRef.current.get(anchorId);
     if (index === undefined) {
       if (rawSavedTabState === null) return;
-      const owner = savedChatTabAnchorRowKey(
-        rawSavedTabState,
-        listRows.map((row) => row.key),
-      );
+      const rowKeys = listRows.map((row) => row.key);
+      if (savedAnchorTurnWasSplit(rawSavedTabState, rowKeys)) {
+        // A steer renamed the turn's rows, so the saved id itself never
+        // arrives. Replay the part a drawn slice now names; once every slice
+        // is drawn and none does, the segment is gone and the reader follows
+        // the latest. While a slice is still cold, ask for the slices.
+        const split = restoreSplitTurnAnchorForMount(
+          rawSavedTabState,
+          restoreChatTabState(identity, rowKeys),
+          listRows,
+        );
+        if (!split.settled) {
+          const ordinals = split.coldSlices.flatMap((row) =>
+            row.ordinal === null ? [] : [row.ordinal],
+          );
+          if (ordinals.length > 0) {
+            onVisibleOrdinalRangeChange({
+              fromOrdinal: Math.min(...ordinals),
+              toOrdinal: Math.max(...ordinals) + 1,
+            });
+          }
+          return;
+        }
+        if (split.state.anchorMessageId === null) {
+          followLatestAfterSplit();
+          return;
+        }
+        restorePersistedTimelineLocation(
+          split.state.anchorMessageId,
+          split.state.offset,
+          {
+            isAborted: () => false,
+            onValidated: () => {
+              pendingHydrationRestoreAnchorIdRef.current = null;
+              forgetPendingHydrationRestore(identity);
+            },
+            onExhausted: () => undefined,
+          },
+        );
+        return;
+      }
+      const owner = savedChatTabAnchorRowKey(rawSavedTabState, rowKeys);
       const ownerIndex =
         owner === null ? undefined : rowIndexByKeyRef.current.get(owner);
       if (ownerIndex === undefined) return;
