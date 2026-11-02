@@ -57,6 +57,13 @@ later merge never cancels an earlier merge's run.
   compares against the last push its own workflow passed on (`scripts/ci-last-green-sha.sh`), not the
   push before. So the next merge's range still holds a break, and `main`
   stays red until a run covering everything since the last green push passes.
+- `pre-commit.yml`'s `lint` and `compile` jobs restore a cache only a passing
+  push saves, so every run starts from the last green `main` entry. It holds
+  `NX_CACHE_DIRECTORY`, the Nx database and gui-app's ESLint cache. A cached
+  result replays as a pass, so a target's `inputs` must name everything its
+  answer depends on: `lint` is type-aware and lists `^production`. A rule that
+  reads another file goes in the cache key, because ESLint hashes only the file
+  it lints. `build` keeps no cache.
 - The internal repository's nightly staging train and its promotion to
   production both refuse a pinned commit of this repository whose push checks
   are not all green.

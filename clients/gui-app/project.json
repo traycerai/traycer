@@ -25,7 +25,12 @@
         "{projectRoot}/eslint.config.*",
         "{projectRoot}/.oxlintrc*",
         "{projectRoot}/oxlint.config.*",
+        "{projectRoot}/package.json",
+        "{projectRoot}/tsconfig*.json",
+        "{projectRoot}/**/*.css",
+        "{workspaceRoot}/package.json",
         "{workspaceRoot}/eslint/*.mjs",
+        "^production",
         "sharedGlobals"
       ]
     },

@@ -62,9 +62,14 @@ is_ci() {
 # The compile targets themselves are incremental and single-threaded in every
 # lane, so a warm local re-check costs seconds and ~2 GB.
 
-run_static_checks() {
-  local args=("$@")
-  bun x nx affected --target=lint "${args[@]}" --parallel="${nx_parallel}"
+# The linters run with --fix, which would quietly repair a violation and pass.
+# A dirty tree after them is the failure.
+run_lint_checks() {
+  bun x nx affected --target=lint "$@" --parallel="${nx_parallel}"
+  git diff --exit-code
+}
+
+run_format_checks() {
   if is_ci; then
     bun run format:check
   else
@@ -72,9 +77,8 @@ run_static_checks() {
   fi
 }
 
-run_local_static_checks() {
+run_local_lint_checks() {
   bun scripts/lint-changed-files.mjs "$1"
-  bun run format
 }
 
 run_compile_checks() {
@@ -99,15 +103,12 @@ run_local_protocol_build() {
 run_full_checks() {
   echo "Running full workspace checks..."
   case "${workspace_check_lane}" in
-    static)
-      bun run lint
-      if is_ci; then bun run format:check; else bun run format; fi
-      ;;
+    lint) bun run lint ;;
     compile) bun run compile ;;
     build) bun run build ;;
     all)
       bun run lint
-      if is_ci; then bun run format:check; else bun run format; fi
+      run_format_checks
       bun run compile
       if is_ci; then bun run build; fi
       ;;
@@ -118,11 +119,12 @@ run_full_checks() {
 run_affected() {
   local args=("$@")
   case "${workspace_check_lane}" in
-    static) run_static_checks "${args[@]}" ;;
+    lint) run_lint_checks "${args[@]}" ;;
     compile) run_compile_checks "${args[@]}" ;;
     build) run_build_checks "${args[@]}" ;;
     all)
-      run_static_checks "${args[@]}"
+      run_lint_checks "${args[@]}"
+      run_format_checks
       bun x nx affected --targets=compile,build "${args[@]}" \
         --parallel="${nx_compile_parallel}"
       ;;
@@ -134,11 +136,12 @@ run_local_affected() {
   local base="$1"
   shift
   case "${workspace_check_lane}" in
-    static) run_local_static_checks "${base}" ;;
+    lint) run_local_lint_checks "${base}" ;;
     compile) run_compile_checks --base="${base}" "$@" ;;
     build) run_build_checks --base="${base}" "$@" ;;
     all)
-      run_local_static_checks "${base}"
+      run_local_lint_checks "${base}"
+      run_format_checks
       run_compile_checks --base="${base}" "$@"
       run_local_protocol_build "${base}"
       ;;

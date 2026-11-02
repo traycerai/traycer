@@ -1,8 +1,8 @@
 name: pre-commit
 
-# The static-analysis gate: hygiene hooks + project checks (build / compile /
-# lint / format) via .pre-commit-config.yaml's workspace-checks hook. Tests run
-# separately (test.yml) so they start in parallel. No secrets.
+# The static-analysis gate: the hygiene hooks of .pre-commit-config.yaml, then
+# lint, format, compile and build as their own jobs. Tests run separately
+# (test.yml) so they start in parallel. No secrets.
 
 on:
   pull_request:
@@ -23,6 +23,65 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # The hygiene hooks read the whole tree on every run, so they need no history,
+  # no dependencies and no Nx. `workspace-checks` is skipped here because its
+  # checks are their own jobs below.
+  static:
+    name: static
+    # A team PR into `main`, `integration/*` or `land/*` skips this job: the
+    # merge to `main` runs it once. A fork PR, a bot PR and a PR into any
+    # other branch run it in full.
+    if: >-
+      github.event_name != 'pull_request'
+      || (github.base_ref != 'main' && !startsWith(github.base_ref, 'integration/') && !startsWith(github.base_ref, 'land/'))
+      || github.event.pull_request.head.repo.full_name != github.repository
+      || github.event.pull_request.user.type == 'Bot'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: github.event_name == 'pull_request'
+        with:
+          package-manager-cache: false
+          node-version: "24.20.0"
+      - name: Require temporary crash telemetry cleanup before main promotion
+        if: github.event_name == 'pull_request'
+        env:
+          PR_HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+        run: node scripts/release-train-promotion-guard.cjs
+      - uses: pre-commit/action@2c7b3805fd2a0fd8c1884dcaebf91fc102a13ecd # v3.0.1
+        env:
+          SKIP: workspace-checks
+
+  # `oxfmt --check .` reads the whole tree on every run: no history and no Nx.
+  format:
+    name: format
+    # A team PR into `main`, `integration/*` or `land/*` skips this job: the
+    # merge to `main` runs it once. A fork PR, a bot PR and a PR into any
+    # other branch run it in full.
+    if: >-
+      github.event_name != 'pull_request'
+      || (github.base_ref != 'main' && !startsWith(github.base_ref, 'integration/') && !startsWith(github.base_ref, 'land/'))
+      || github.event.pull_request.head.repo.full_name != github.repository
+      || github.event.pull_request.user.type == 'Bot'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: "1.3.14"
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          package-manager-cache: false
+          node-version: "24.20.0"
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Check formatting
+        run: bun run format:check
+
   workspace-checks:
     name: ${{ matrix.lane }}
     # A team PR into `main`, `integration/*` or `land/*` skips this job: the
@@ -37,24 +96,31 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        lane: [static, compile, build]
+        lane: [lint, compile, build]
     # `actions: read` lets the push step below list this workflow's earlier runs.
     permissions:
       contents: read
       actions: read
     env:
-      # Drive `nx affected` in the workspace-checks hook off the PR base. On a
+      # Drive `nx affected` in the workspace-checks script off the PR base. On a
       # push to `main` the base is set by the "Find the last green push" step
-      # below, not here: without a base the hook falls back to `origin/main`,
+      # below, not here: without a base the script falls back to `origin/main`,
       # which IS the pushed commit, so nothing would be affected and the merge
-      # run would check nothing. A manual run has no base (the hook needs both),
-      # so it takes the fallback: the branch against `origin/main`.
+      # run would check nothing. A manual run has no base (the script needs
+      # both), so it takes the fallback: the branch against `origin/main`.
       NX_BASE: ${{ github.event.pull_request.base.sha }}
       NX_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+      # Without this Nx keeps its cache and the database that indexes it in
+      # `~/.nx/<workspace id>`, so the `.nx/cache` this job restores and saves
+      # stays empty. Setting it keeps both inside the checkout. Nx ignores cache
+      # files its database does not list, and the database file is named for the
+      # machine id, which every runner of one image shares: a new image costs one
+      # cold run.
+      NX_CACHE_DIRECTORY: .nx/cache
       # gui-app's type-aware lint has outgrown Node's ~4GB default heap (OOM
       # SIGABRT on two consecutive CI heads, then locally). The headroom lives
       # in that package's own `lint` script - the one place every invocation
-      # (this hook, the local hook, a bare `bun run lint`) inherits it - so no
+      # (this job, the local hook, a bare `bun run lint`) inherits it - so no
       # per-runner env is set here.
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -83,10 +149,6 @@ jobs:
             base="$(git rev-list --max-parents=0 HEAD | tail -n 1)"
           fi
           echo "NX_BASE=${base}" >> "$GITHUB_ENV"
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
-        if: matrix.lane == 'static'
-        with:
-          python-version: "3.12"
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: "1.3.14"
@@ -94,44 +156,47 @@ jobs:
         with:
           package-manager-cache: false
           node-version: "24.20.0"
-      - name: Require temporary crash telemetry cleanup before main promotion
-        if: matrix.lane == 'static' && github.event_name == 'pull_request'
-        env:
-          PR_HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
-        run: node scripts/release-train-promotion-guard.cjs
-      - name: Cache Nx
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      # Keyed on what the cached results depend on outside the files they name:
+      # dependency versions for both lanes, and for lint the rule code and the
+      # stylesheets ESLint reads, which its own cache does not hash. `build` keeps
+      # no cache: its outputs are 60 MB a merge and a changed source misses anyway.
+      - name: Restore the Nx cache
+        id: nx-cache
+        if: matrix.lane != 'build'
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
-          path: .nx/cache
-          key: ${{ runner.os }}-nx-${{ matrix.lane }}-${{ hashFiles('bun.lock') }}-${{ github.sha }}
+          path: |
+            .nx/cache
+            .nx/workspace-data/*.db
+            clients/gui-app/.eslintcache
+          key: ${{ runner.os }}-nx-${{ matrix.lane }}-${{ hashFiles('bun.lock', 'eslint/**', 'clients/gui-app/eslint.config.mjs', 'clients/gui-app/src/**/*.css') }}-${{ github.sha }}
           restore-keys: |
-            ${{ runner.os }}-nx-${{ hashFiles('bun.lock') }}-
-            ${{ runner.os }}-nx-
-      - name: Cache GUI ESLint fallback
-        if: matrix.lane == 'static'
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: clients/gui-app/.eslintcache
-          key: ${{ runner.os }}-eslint-${{ github.sha }}
-          restore-keys: |
-            ${{ runner.os }}-eslint-
+            ${{ runner.os }}-nx-${{ matrix.lane }}-${{ hashFiles('bun.lock', 'eslint/**', 'clients/gui-app/eslint.config.mjs', 'clients/gui-app/src/**/*.css') }}-
       - name: Install dependencies
         run: bun install --frozen-lockfile
-      - uses: pre-commit/action@2c7b3805fd2a0fd8c1884dcaebf91fc102a13ecd # v3.0.1
-        if: matrix.lane == 'static'
-        env:
-          WORKSPACE_CHECK_LANE: static
-
       - name: Run ${{ matrix.lane }} checks
-        if: matrix.lane != 'static'
         env:
           CI: "true"
           WORKSPACE_CHECK_LANE: ${{ matrix.lane }}
         run: scripts/pre_commit_workspace_checks.sh
+      # Only a push saves, so a pull request's run starts from the last `main`
+      # entry and adds nothing to the repository's cache quota. Only a job that
+      # passed saves: when `--fix` repairs a violation Nx records the lint task as
+      # passed and the job fails on the dirty tree, and that record, restored by
+      # the re-run of the failed job, would turn the commit green.
+      - name: Save the Nx cache
+        if: matrix.lane != 'build' && github.event_name == 'push'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            .nx/cache
+            .nx/workspace-data/*.db
+            clients/gui-app/.eslintcache
+          key: ${{ steps.nx-cache.outputs.cache-primary-key }}
 
   pre-commit:
     name: pre-commit
-    needs: workspace-checks
+    needs: [static, format, workspace-checks]
     # A team PR into `main`, `integration/*` or `land/*` skips this job: the
     # merge to `main` runs it once. A fork PR, a bot PR and a PR into any
     # other branch run it in full.
@@ -144,7 +209,10 @@ jobs:
       )
     runs-on: ubuntu-24.04
     steps:
-      - name: Require every workspace lane
+      - name: Require every job
         env:
-          RESULT: ${{ needs.workspace-checks.result }}
-        run: test "$RESULT" = success
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          for result in $RESULTS; do
+            test "$result" = success
+          done

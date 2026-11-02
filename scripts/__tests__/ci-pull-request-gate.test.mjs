@@ -482,6 +482,24 @@ describe("a job that narrows a push run compares against the last green push", (
     );
   });
 
+  // Nx writes to `~/.nx` unless told otherwise, and a cache saved from a job that
+  // failed on the dirty tree `--fix` leaves would pass that job on its re-run.
+  it("pre-commit.yml: only a passing push saves the directory Nx writes to", () => {
+    const { workflow } = workflows.find(
+      ({ file }) => file === "pre-commit.yml",
+    );
+    const job = workflow.jobs["workspace-checks"];
+    const restore = job.steps.find((step) => step.id === "nx-cache");
+    const save = job.steps.find((step) =>
+      String(step.uses ?? "").startsWith("actions/cache/save@"),
+    );
+    expect(save.if).toBe(
+      "matrix.lane != 'build' && github.event_name == 'push'",
+    );
+    expect(save.with.path).toBe(restore.with.path);
+    expect(save.with.path.split("\n")).toContain(job.env.NX_CACHE_DIRECTORY);
+  });
+
   it("browser-regressions.yml: the filter reads the answer from the step's output", () => {
     const { workflow } = workflows.find(
       ({ file }) => file === "browser-regressions.yml",
