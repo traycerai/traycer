@@ -204,6 +204,8 @@ function plantedRecordEntry(): StaticRegistry {
   };
 }
 
+// Every test here walks whole registries, 0.5-1.7s locally and past the 5s
+// default on a loaded CI runner, so each names a 30s timeout.
 describe("STATIC_REGISTRIES CI check", () => {
   it("names exactly the six static registries and they all pass full validation", () => {
     expect(STATIC_REGISTRIES.map((entry) => entry.name)).toEqual([
@@ -218,7 +220,7 @@ describe("STATIC_REGISTRIES CI check", () => {
       "record",
     ]);
     expect(findStaticRegistryFailures(STATIC_REGISTRIES)).toEqual([]);
-  });
+  }, 30_000);
 
   it("validateStaticRegistry succeeds on the live host unary entry (positive control)", () => {
     const hostUnary = STATIC_REGISTRIES.find(
@@ -228,7 +230,7 @@ describe("STATIC_REGISTRIES CI check", () => {
     expect(() =>
       validateStaticRegistry(required(hostUnary, "hostRpcRegistry missing")),
     ).not.toThrow();
-  });
+  }, 30_000);
 });
 
 describe("planted non-additive change, one per kind", () => {
@@ -247,7 +249,7 @@ describe("planted non-additive change, one per kind", () => {
     expect(failures[0]?.name).toBe("hostRpcRegistry");
     expect(failures[0]?.sourceFile).toBe("src/host/registry.ts");
     expect(failures[0]?.message).toMatch(/wslHealth/);
-  });
+  }, 30_000);
 
   it("stream: swapping epic.subscribe 1.0/1.1 sub-schemas fails full validation and not construction", () => {
     const planted = plantedStreamRegistry();
@@ -263,7 +265,7 @@ describe("planted non-additive change, one per kind", () => {
     expect(failures[0]?.name).toBe("hostStreamRpcRegistry");
     expect(failures[0]?.sourceFile).toBe("src/host/registry.ts");
     expect(failures[0]?.message).toMatch(/dirtySnapshot\.kind/);
-  });
+  }, 30_000);
 
   it("record: a synthetic room-metadata 1.1 that drops a 1.0 field fails full validation and not construction", () => {
     const planted = plantedRecordRegistry();
@@ -282,7 +284,7 @@ describe("planted non-additive change, one per kind", () => {
     expect(failures[0]?.name).toBe("persistenceRecordRegistry");
     expect(failures[0]?.sourceFile).toBe("src/persistence/registry.ts");
     expect(failures[0]?.message).toMatch(/drops field/);
-  });
+  }, 30_000);
 });
 
 describe("floor-aware degrade check via validateStaticRegistry", () => {
@@ -306,5 +308,5 @@ describe("floor-aware degrade check via validateStaticRegistry", () => {
     expect(() => validateStaticRegistry(entry)).toThrow(
       /Non-floor method 'config\.shell\.listDetected' must declare a degrade strategy/,
     );
-  });
+  }, 30_000);
 });
