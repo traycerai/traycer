@@ -115,22 +115,21 @@ function bootstrapMain(config: BootstrapConfig): void {
   };
 
   // An artifact page in a tile opens below the app's floating controls. The
-  // space is padding on the page's own root, so it scrolls away with the page,
-  // and it is inline so a page's own reset of `html` cannot take it back.
-  // A page the app has no controls over keeps its root untouched.
-  // Only padding this applied is ever taken off: a page's own inline padding
-  // on its root survives a theme change that carries no inset.
-  let insetApplied = false;
+  // space is padding on the page's root, so it scrolls away with the page,
+  // from a rule of this script's own, `!important` so a page's own reset of
+  // `html` cannot take it back. Never the root's inline style: written while
+  // the page is still parsing, that claims the root's `style` attribute, and
+  // the parser then drops the one on the page's own `<html>` tag. A page the
+  // app has no controls over gets no rule.
+  const insetRule = document.createElement("style");
   const applyPageInset = (inset: string): void => {
     if (config.artifactPage === null) return;
-    const root = document.documentElement;
-    if (inset !== "") {
-      root.style.paddingTop = inset;
-      insetApplied = true;
-    } else if (insetApplied) {
-      root.style.removeProperty("padding-top");
-      insetApplied = false;
+    if (!/^\d+(?:\.\d+)?px$/.test(inset)) {
+      insetRule.textContent = "";
+      return;
     }
+    insetRule.textContent = `:root{padding-top:${inset} !important}`;
+    if (!insetRule.isConnected) document.head.append(insetRule);
   };
   applyPageInset(config.pageInset);
 

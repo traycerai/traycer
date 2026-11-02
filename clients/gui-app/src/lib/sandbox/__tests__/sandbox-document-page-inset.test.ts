@@ -84,11 +84,18 @@ function pageRoot(window: DOMWindow): HTMLElement {
   return window.document.documentElement;
 }
 
+/** The root's top padding in px as the page lays it out, whatever set it. */
+function rootPadding(window: DOMWindow): number {
+  return (
+    Number.parseFloat(window.getComputedStyle(pageRoot(window)).paddingTop) || 0
+  );
+}
+
 describe("an artifact page's room for the app's floating controls", () => {
   it("opens with the room as padding on the page's root", () => {
     const window = startPage({ artifactPage: "found", inset: "44px" });
 
-    expect(pageRoot(window).style.paddingTop).toBe("44px");
+    expect(rootPadding(window)).toBe(44);
     expect(window.document.body.style.paddingTop).toBe("");
   });
 
@@ -97,21 +104,21 @@ describe("an artifact page's room for the app's floating controls", () => {
 
     themeChanged(window, "62px");
 
-    expect(pageRoot(window).style.paddingTop).toBe("62px");
+    expect(rootPadding(window)).toBe(62);
   });
 
   it("is added when the controls appear after the page, and cleared with its variable once they go", () => {
     const window = startPage({ artifactPage: "found", inset: null });
-    expect(pageRoot(window).style.paddingTop).toBe("");
+    expect(rootPadding(window)).toBe(0);
 
     themeChanged(window, "62px");
-    expect(pageRoot(window).style.paddingTop).toBe("62px");
+    expect(rootPadding(window)).toBe(62);
     expect(
       pageRoot(window).style.getPropertyValue(PAGE_INSET_TOP_VARIABLE),
     ).toBe("62px");
 
     themeChanged(window, null);
-    expect(pageRoot(window).style.paddingTop).toBe("");
+    expect(rootPadding(window)).toBe(0);
     expect(
       pageRoot(window).style.getPropertyValue(PAGE_INSET_TOP_VARIABLE),
     ).toBe("");
@@ -124,7 +131,7 @@ describe("an artifact page's room for the app's floating controls", () => {
 
     hostContextChanged(window, { displayMode: "fullscreen" });
 
-    expect(pageRoot(window).style.paddingTop).toBe("44px");
+    expect(rootPadding(window)).toBe(44);
   });
 
   it("leaves the page's own padding on its root through a theme change with no room in it", () => {
@@ -133,15 +140,45 @@ describe("an artifact page's room for the app's floating controls", () => {
 
     themeChanged(window, null);
 
-    expect(pageRoot(window).style.paddingTop).toBe("12px");
+    expect(rootPadding(window)).toBe(12);
+  });
+
+  // The bootstrap runs before the page's own markup, so the room must not
+  // come from the root's inline style: claiming that attribute mid-parse
+  // makes the parser drop the one on the page's own <html> tag.
+  it("keeps the page's own style on its root when it opens with the room", () => {
+    const composed = buildDocument({
+      html: '<html style="--page-accent: red"><body><h1>Title</h1></body></html>',
+      csp: null,
+      nonce: "n-1",
+      theme: {
+        appliesToRoot: true,
+        colorScheme: "dark",
+        background: null,
+        variables: Object.entries(variablesWith("44px")),
+      },
+      shortcuts: [],
+      artifactPage: "found",
+    });
+    const { window } = new JSDOM(composed, {
+      runScripts: "dangerously",
+      url: "traycer-artifact://artifact-a1--m1/site/index.html",
+      virtualConsole: new VirtualConsole(),
+    });
+    windows.push(window);
+
+    expect(pageRoot(window).getAttribute("style")).toContain(
+      "--page-accent: red",
+    );
+    expect(rootPadding(window)).toBe(44);
   });
 
   it("never pads a document that is not an artifact page, at boot or later", () => {
     const window = startPage({ artifactPage: null, inset: "44px" });
-    expect(pageRoot(window).style.paddingTop).toBe("");
+    expect(rootPadding(window)).toBe(0);
 
     themeChanged(window, "62px");
 
-    expect(pageRoot(window).style.paddingTop).toBe("");
+    expect(rootPadding(window)).toBe(0);
   });
 });
