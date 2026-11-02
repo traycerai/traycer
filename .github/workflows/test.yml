@@ -245,22 +245,24 @@ jobs:
       # Naming reporters replaces vitest's defaults, so all of them are listed.
       - name: Test
         shell: bash
+        env:
+          TEST_EVIDENCE_ARGS: ${{ matrix.project == 'traycer-clients-gui-app' && format('--logHeapUsage --reporter=default --reporter=github-actions --reporter=junit --outputFile.junit={0}/test-junit.xml', github.workspace) || '' }}
+        run: bunx nx run-many --target=test --projects="${{ matrix.project }}" --outputStyle=stream ${{ matrix.test_args }} $TEST_EVIDENCE_ARGS 2>&1 | tee test-output.log
+      # A killed fork leaves the file it was running unfinished, and gui-app's
+      # `dangerouslyIgnoreUnhandledErrors` still lets vitest exit 0, so the shard
+      # would report green with those tests unrun. None of 740 green jobs on
+      # `main` from 28 Oct to 2 Nov 2026 had a dead fork, so this has held by
+      # luck, not by a check.
+      - name: Fail a green run whose test fork died
         run: |
-          evidence=()
-          if [ "${{ matrix.project }}" = "traycer-clients-gui-app" ]; then
-            evidence=(
-              --logHeapUsage
-              --reporter=default
-              --reporter=github-actions
-              --reporter=junit
-              "--outputFile.junit=$GITHUB_WORKSPACE/test-junit.xml"
-            )
+          if grep -q "Worker exited unexpectedly" test-output.log; then
+            echo "::error::A test fork died, so its test file did not finish. Nx exited 0 because vitest ignores unhandled errors here."
+            exit 1
           fi
-          bunx nx run-many --target=test --projects="${{ matrix.project }}" --outputStyle=stream ${{ matrix.test_args }} "${evidence[@]}" 2>&1 | tee test-output.log
       # `always()`, so a red shard can be compared with a green one. vitest
-      # writes the file when the run ends: a fork's death still leaves one, a
-      # killed vitest parent leaves none. A replay from the Nx cache leaves none
-      # either, so a missing file is not an upload failure. Kept for the
+      # writes the file when the run ends: a fork's death still leaves a report,
+      # a killed vitest parent leaves an empty file. A replay from the Nx cache
+      # leaves none, so a missing file is not an upload failure. Kept for the
       # repository's retention, the same seven days as the job log.
       - name: Upload the JUnit report
         if: always() && matrix.project == 'traycer-clients-gui-app'
