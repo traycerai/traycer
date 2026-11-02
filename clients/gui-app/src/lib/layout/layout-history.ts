@@ -227,6 +227,11 @@ function rebaseArrangement(
       previous.sidebarSide,
       next.sidebarSide,
     ),
+    sidebarStartCollapsed: pick(
+      entry.sidebarStartCollapsed,
+      previous.sidebarStartCollapsed,
+      next.sidebarStartCollapsed,
+    ),
     sideStripView: pick(
       entry.sideStripView,
       previous.sideStripView,

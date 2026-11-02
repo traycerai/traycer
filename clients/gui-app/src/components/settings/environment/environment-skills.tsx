@@ -1222,8 +1222,25 @@ const OPENCODE_FAMILY: readonly ProviderId[] = [
   "huggingface",
 ];
 
+/**
+ * Cursor and Grok each read the other's skills directory, so the host
+ * switches the two together, and the tab names both.
+ */
+const CURSOR_AND_GROK: readonly ProviderId[] = ["cursor", "grok"];
+
 function skillSwitchGroup(providerId: ProviderId): readonly ProviderId[] {
-  return OPENCODE_FAMILY.includes(providerId) ? OPENCODE_FAMILY : [providerId];
+  return (
+    [OPENCODE_FAMILY, CURSOR_AND_GROK].find((group) =>
+      group.includes(providerId),
+    ) ?? [providerId]
+  );
+}
+
+/** Whom a provider tab's switches reach, as its heading and switches say. */
+function skillSwitchLabel(providerId: ProviderId): string {
+  return CURSOR_AND_GROK.includes(providerId)
+    ? CURSOR_AND_GROK.map((id) => providerDisplayName(id)).join(" and ")
+    : providerDisplayName(providerId);
 }
 
 /**
@@ -1280,7 +1297,7 @@ function ProviderSkillsList(props: {
     setProviders.data === undefined
       ? null
       : typedWriteIssue(setProviders.data, "Couldn't save these settings.");
-  const label = providerDisplayName(props.providerId);
+  const label = skillSwitchLabel(props.providerId);
   const heading = skillsCardHeading(name, label);
   return (
     <div className="flex flex-col gap-4">
