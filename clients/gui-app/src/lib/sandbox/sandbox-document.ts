@@ -117,18 +117,24 @@ function bootstrapMain(config: BootstrapConfig): void {
   // An artifact page in a tile opens below the app's floating controls. The
   // space is padding on the page's root, so it scrolls away with the page,
   // from a rule of this script's own, `!important` so a page's own reset of
-  // `html` cannot take it back. Never the root's inline style: written while
-  // the page is still parsing, that claims the root's `style` attribute, and
-  // the parser then drops the one on the page's own `<html>` tag. A page the
-  // app has no controls over gets no rule.
+  // `html` cannot take it back.
+  // - Never the root's inline style: written while the page is still parsing,
+  //   that claims the root's `style` attribute, and the parser then drops the
+  //   one on the page's own `<html>` tag.
+  // - `border-box`, so the space comes out of a root sized to the window
+  //   (`html, body { height: 100% }`) instead of pushing that page's bottom
+  //   edge out of a window it may not let scroll.
+  // - The rule restates the variable, so a page reading it (the viewer's
+  //   scrollbar) sees 0px once the app drops it, not the first document's.
+  // A page the app has no controls over gets no rule.
   const insetRule = document.createElement("style");
   const applyPageInset = (inset: string): void => {
     if (config.artifactPage === null) return;
     if (!/^\d+(?:\.\d+)?px$/.test(inset)) {
-      insetRule.textContent = "";
+      insetRule.textContent = ":root{--traycer-page-inset-top:0px !important}";
       return;
     }
-    insetRule.textContent = `:root{padding-top:${inset} !important}`;
+    insetRule.textContent = `:root{--traycer-page-inset-top:${inset} !important;padding-top:${inset} !important;box-sizing:border-box !important}`;
     if (!insetRule.isConnected) document.head.append(insetRule);
   };
   applyPageInset(config.pageInset);

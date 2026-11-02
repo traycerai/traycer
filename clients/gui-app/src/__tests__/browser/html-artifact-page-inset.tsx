@@ -39,10 +39,20 @@ const PAGE_SHA = "a".repeat(64);
 const TILE_HEIGHT_PX = 480;
 const PARAGRAPH_COUNT = 40;
 
-const PAGE_HTML = `<!doctype html><html><head><meta charset="utf-8"><style>html,body{margin:0}html{padding:0}body{padding:16px;font:16px/1.4 sans-serif}h1{margin:0 0 16px;font-size:28px}p{margin:0 0 12px}</style></head><body><h1>A long page title that runs the full width of the page, so it reaches all the way under the controls floating over the top right corner</h1>${Array.from(
+const DOCUMENT_PAGE_HTML = `<!doctype html><html><head><meta charset="utf-8"><style>html,body{margin:0}html{padding:0}body{padding:16px;font:16px/1.4 sans-serif}h1{margin:0 0 16px;font-size:28px}p{margin:0 0 12px}</style></head><body><h1>A long page title that runs the full width of the page, so it reaches all the way under the controls floating over the top right corner</h1>${Array.from(
   { length: PARAGRAPH_COUNT },
   (_, index) => `<p>Paragraph ${String(index + 1)} of the page.</p>`,
 ).join("")}</body></html>`;
+// A page laid out to exactly fill the window, the way a dashboard is: its
+// root and body are one viewport tall and do not scroll, and its footer sits
+// on the bottom edge. The room for the controls must not push that edge out
+// of reach.
+const FULL_HEIGHT_PAGE_HTML = `<!doctype html><html><head><meta charset="utf-8"><style>html,body{height:100%;margin:0;overflow:hidden}body{display:flex;flex-direction:column;font:16px/1.4 sans-serif}header{padding:16px}h1{margin:0;font-size:28px}main{flex:1;min-height:0;overflow:auto;padding:0 16px}footer{padding:16px}</style></head><body><header><h1>A long dashboard title that runs the full width of the page, so it reaches all the way under the controls</h1></header><main><p>Rows of the dashboard.</p></main><footer id="footer">Status at the bottom edge</footer></body></html>`;
+
+const PAGE_HTML =
+  new URLSearchParams(window.location.search).get("layout") === "full-height"
+    ? FULL_HEIGHT_PAGE_HTML
+    : DOCUMENT_PAGE_HTML;
 const pageBytes = new TextEncoder().encode(PAGE_HTML);
 
 const manifest: ArtifactManifest = {
