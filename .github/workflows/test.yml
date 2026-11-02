@@ -416,11 +416,9 @@ jobs:
     outputs:
       run: ${{ steps.filter.outputs.run }}
     steps:
-      # History for the range below, and no blobs: it reads file names only.
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 0
-          filter: blob:none
           persist-credentials: false
       # A push run is compared with the last push this workflow PASSED on, not
       # with the push before it. A team PR is not tested before it merges, so a
