@@ -4,6 +4,12 @@ import {
   executeDeferredVerb,
   type VerbOutcome,
 } from "@/lib/voice/deferred-verbs";
+import {
+  reportVoiceMiss,
+  type RouteSeen,
+  type VoiceMissCause,
+  type VoiceMissKind,
+} from "@/lib/voice/miss-report";
 import { noteVoiceQueueSwitch } from "@/lib/voice/queue-verbs";
 import type { BoundTarget } from "@/lib/voice/directory";
 import type {
@@ -112,7 +118,7 @@ export interface SayLoopDeps {
    * The router: one action for the reserved words, checked against the
    * directory. Rejects only on a transport failure, which is refused.
    */
-  readonly decide: (request: RouteRequest) => Promise<RoutedDecision>;
+  readonly decide: (request: RouteRequest) => Promise<Routed>;
   /** Whether a bound tuple still holds against the directory as it is now. */
   readonly recheck: (tuple: VoiceTargetTuple) => boolean;
   /**
@@ -165,6 +171,15 @@ export interface SayLoopDeps {
     text: string,
     turnId: string | null,
   ) => Promise<VerbOutcome>;
+}
+
+/**
+ * The router's decision, with what it was shown and answered; `seen` is `null`
+ * when the router gave no answer the voice could read.
+ */
+export interface Routed {
+  readonly decision: RoutedDecision;
+  readonly seen: RouteSeen | null;
 }
 
 /** What the router is given: the reserved words, segment by segment, as said. */
@@ -313,6 +328,7 @@ type ConfirmSubject =
       readonly kind: "act";
       readonly decision: ActDecision;
       readonly text: string;
+      readonly seen: RouteSeen | null;
     };
 
 /** A routed decision held for the person's yes. */
@@ -394,6 +410,36 @@ const UNANSWERED_TEXT: Record<ConfirmSubject["kind"], string> = {
   post: "Nothing was posted: no yes came for it. The person can say it again.",
   act: "Nothing was done: no yes came for it. The person can say it again.",
 };
+
+/** How a miss is filed: its kind, and what it is about. */
+interface Miss {
+  readonly kind: VoiceMissKind;
+  readonly cause: VoiceMissCause;
+}
+
+/**
+ * How a route the page cannot serve is filed: nothing listed does what was
+ * asked, or the router chose an action the page does not offer. Every other
+ * decision, a post, an answer or a tell among them, is filed as nothing.
+ */
+function missOf(decision: RoutedDecision): Miss | null {
+  if (decision.kind === "missing") return { kind: "missing", cause: "missing" };
+  return decision.kind === "refused" && decision.reason === "unknown-action"
+    ? { kind: "refused", cause: "unknown-action" }
+    : null;
+}
+
+/** An act the router chose that could not run on the page it was chosen for. */
+const STALE_ACT: Miss = { kind: "refused", cause: "chosen-act" };
+
+/**
+ * When a request was said, by the seq of its last word. Not its first: words
+ * handed back from an earlier request open the next one, which is still said
+ * after any request routed in between.
+ */
+function lastSaid(entry: Pick<RoutingEntry, "seqs">): number {
+  return Math.max(...entry.seqs);
+}
 
 /** What the voice says of the decision already waiting, by what it is. */
 function busyRefusal(held: Confirming): LoopRefusal {
@@ -673,6 +719,14 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
   let confirming: Confirming | null = null;
   /** The session is over; nothing scheduled by this loop acts any more. */
   let disposed = false;
+  /**
+   * The last word of the latest-spoken request that finished routing,
+   * fragments aside, by its segment's seq; `-1` before any. Requests are
+   * ordered by when they were said, not by when their routes came back: an
+   * act that ran keeps Not what I meant only while nothing said after it has
+   * been routed, and a request said before it finishing late takes nothing.
+   */
+  let latestRoutedSeq = -1;
   /** The question the voice just asked about words it handed back, for the next route. */
   let askedQuestion: {
     readonly text: string;
@@ -1076,23 +1130,40 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
     entry: RoutingEntry,
     decision: ActDecision,
     text: string,
+    seen: RouteSeen | null,
   ): Promise<void> {
     if (deps.view().generation !== decision.generation) {
+      reportMiss(STALE_ACT, seen);
       dropForMovedPage(entry);
       return;
     }
     store.getState().consumeReservation(entry.seqs);
     settleDelegation(entry.delegationId);
     const outcome = await deps.act(decision.row, text, decision.turnId);
-    if (outcome.kind !== "refused") return;
     if (store.getState().sessionToken !== entry.sessionToken) return;
-    deps.notify(outcome.say, delegationOf(entry));
+    if (outcome.kind === "refused") {
+      deps.notify(outcome.say, delegationOf(entry));
+      return;
+    }
+    // A request said after this one and routed while it ran is the person's
+    // latest: what it left for Not what I meant, nothing or its own act, stays.
+    if (latestRoutedSeq === lastSaid(entry)) {
+      store.getState().setExecutedAct(seen);
+    }
+  }
+
+  /** Files a request the page could not serve, when the router's answer is known. */
+  function reportMiss(miss: Miss | null, seen: RouteSeen | null): void {
+    if (miss !== null && seen !== null) {
+      reportVoiceMiss(miss.kind, miss.cause, seen, null);
+    }
   }
 
   /** An act the router chose: at once, or read back first when it asks for that. */
   async function routeAct(
     entry: RoutingEntry,
     decision: ActDecision,
+    seen: RouteSeen | null,
   ): Promise<void> {
     const text = joinSegments(
       entry.segments.slice(decision.span.from, decision.span.to + 1),
@@ -1102,12 +1173,13 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
       return;
     }
     if (!decision.confirm) {
-      await runAct(entry, decision, text);
+      await runAct(entry, decision, text, seen);
       return;
     }
     // Not a question about a page the person has already left.
     const view = deps.view();
     if (view.generation !== decision.generation) {
+      reportMiss(STALE_ACT, seen);
       dropForMovedPage(entry);
       return;
     }
@@ -1117,7 +1189,7 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
     }
     holdForYes(
       entry,
-      { kind: "act", decision, text },
+      { kind: "act", decision, text, seen },
       readBackQuestion(decision.row, view.page, text),
     );
   }
@@ -1178,10 +1250,9 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
   }
 
   /** Carries out one routed decision for the words `entry` reserved. */
-  async function execute(
-    entry: RoutingEntry,
-    decision: RoutedDecision,
-  ): Promise<void> {
+  async function execute(entry: RoutingEntry, routed: Routed): Promise<void> {
+    const { decision, seen } = routed;
+    reportMiss(missOf(decision), seen);
     switch (decision.kind) {
       case "refused":
         refuse(entry, decision.reason);
@@ -1206,7 +1277,7 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
         answerRouted(entry, decision);
         return;
       case "act":
-        await routeAct(entry, decision);
+        await routeAct(entry, decision, seen);
         return;
       case "missing":
         refuse(entry, "not-here-yet");
@@ -1410,7 +1481,7 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
       if (subject.kind === "post") {
         await postRouted(held.entry, subject.target, subject.text);
       } else {
-        await runAct(held.entry, subject.decision, subject.text);
+        await runAct(held.entry, subject.decision, subject.text, subject.seen);
       }
       return "handled";
     }
@@ -1524,22 +1595,34 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
           : null;
       askedQuestion = null;
       routing.set(actionId, entry);
-      let decision: RoutedDecision;
+      let routed: Routed;
       try {
-        decision = await deps.decide({
+        routed = await deps.decide({
           segments: entry.segments.map((segment) => segment.text),
           askedQuestion: asked,
           card: routerCard,
         });
       } catch {
-        decision = { kind: "refused", reason: "unavailable" };
+        routed = {
+          decision: { kind: "refused", reason: "unavailable" },
+          seen: null,
+        };
       }
       // A move took the words while the route was out: the completion is
       // stale, and navigates and posts nothing. An ended session forgot them.
       if (!routing.delete(actionId)) return;
       if (store.getState().sessionToken !== entry.sessionToken) return;
-      afterCardRoute(entry, decision);
-      await execute(entry, decision);
+      afterCardRoute(entry, routed.decision);
+      // A new request: Not what I meant is offered for the act that ran last
+      // only until the person asks for something else.
+      if (
+        routed.decision.kind !== "fragment" &&
+        lastSaid(entry) > latestRoutedSeq
+      ) {
+        latestRoutedSeq = lastSaid(entry);
+        store.getState().setExecutedAct(null);
+      }
+      await execute(entry, routed);
     },
 
     async onFocusResolved() {

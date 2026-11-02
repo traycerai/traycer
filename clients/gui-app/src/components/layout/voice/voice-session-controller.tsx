@@ -77,13 +77,13 @@ import {
   type ReplyWatchMemory,
 } from "@/lib/voice/focused-replies";
 import { createBrowserGptLiveEngine } from "@/lib/voice/gpt-live-engine";
+import { offeredIdsOf } from "@/lib/voice/miss-report";
 import { executePageAct } from "@/lib/voice/page-acts";
 import {
   parseRouterResponse,
   resolveRoute,
   routerRequestBody,
   type ControlVerb,
-  type RoutedDecision,
 } from "@/lib/voice/router";
 import {
   createSayLoop,
@@ -91,6 +91,7 @@ import {
   type ReplyPlace,
   type ReplyPlacement,
   type RouteRequest,
+  type Routed,
   type SayLoop,
 } from "@/lib/voice/say-loop";
 import {
@@ -448,8 +449,11 @@ export function VoiceSessionController(): ReactNode {
   );
   const view = useVoiceView(phase !== "idle");
   const { mutateAsync: routeAsync } = useVoiceRouteMutation();
-  const decideRef = useRef<(request: RouteRequest) => Promise<RoutedDecision>>(
-    () => Promise.resolve({ kind: "refused", reason: "unavailable" }),
+  const decideRef = useRef<(request: RouteRequest) => Promise<Routed>>(() =>
+    Promise.resolve({
+      decision: { kind: "refused", reason: "unavailable" },
+      seen: null,
+    }),
   );
   const recheckRef = useRef(directory.current);
   const viewRef = useRef(view);
@@ -457,7 +461,8 @@ export function VoiceSessionController(): ReactNode {
     recheckRef.current = directory.current;
     viewRef.current = view;
     decideRef.current = async (request) => {
-      let snapshot = directory.current();
+      const shown = directory.current();
+      let snapshot = shown;
       const viewSnapshot = view.current();
       const answer = await routeAsync(
         routerRequestBody(
@@ -473,7 +478,10 @@ export function VoiceSessionController(): ReactNode {
       );
       if (answer.kind !== "ok") {
         appLogger.warn("[voice] route did not answer", { kind: answer.kind });
-        return { kind: "refused", reason: "unavailable" };
+        return {
+          decision: { kind: "refused", reason: "unavailable" },
+          seen: null,
+        };
       }
       const result = parseRouterResponse(answer.body);
       const namedThread = result?.target.threadId ?? null;
@@ -487,12 +495,28 @@ export function VoiceSessionController(): ReactNode {
       ) {
         snapshot = await directory.refresh();
       }
-      return resolveRoute(
+      const decision = resolveRoute(
         result,
         snapshot,
         viewSnapshot,
         request.segments.length,
       );
+      return {
+        decision,
+        seen:
+          result === null
+            ? null
+            : {
+                route: result,
+                viewKind: viewSnapshot.page.kind,
+                rowIds: viewSnapshot.rows.map((row) => row.action),
+                offered: offeredIdsOf([shown, snapshot], viewSnapshot),
+                pageTakesWords: viewSnapshot.rows.some((row) => row.takesWords),
+                actTakesWords:
+                  decision.kind === "act" && decision.row.takesWords,
+                segments: request.segments,
+              },
+      };
     };
   }, [directory, routeAsync, view]);
 

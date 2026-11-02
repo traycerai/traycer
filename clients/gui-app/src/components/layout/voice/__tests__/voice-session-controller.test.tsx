@@ -54,6 +54,7 @@ import type { RestingChatSandbox } from "@/lib/sandboxes/chat-sandbox-state";
 import type { KeybindingRouter } from "@/lib/keybindings/dispatch";
 import { MockWsStreamClient } from "@/components/epic-canvas/pr/__tests__/pr-stream-test-fixtures";
 import type { VoiceEngineEvents } from "@/lib/voice/engine";
+import { filedMisses } from "@/lib/voice/__tests__/fixtures/filed-misses";
 import type { ReplyRow } from "@/lib/voice/focused-replies";
 import type { HydrationRow } from "@/lib/voice/queue-sources";
 import {
@@ -66,6 +67,7 @@ import {
   TURN_ENDED_NOTICE,
 } from "@/lib/voice/page-acts";
 import { runVoiceQueueVerb } from "@/lib/voice/queue-verbs";
+import type { RouterResult } from "@/lib/voice/router";
 import { MOVED_ASK_TEXT, PAGE_CHANGED_ASK_TEXT } from "@/lib/voice/say-loop";
 import { voiceMutationKeys } from "@/lib/query-keys";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -543,6 +545,12 @@ vi.mock("@/providers/use-runner-host", () => ({
     },
   }),
 }));
+
+const sentry = vi.hoisted(() => ({
+  captureMessage: vi.fn(),
+  isInitialized: vi.fn(() => true),
+}));
+vi.mock("@sentry/browser", () => sentry);
 
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
@@ -1112,6 +1120,9 @@ beforeEach(() => {
   fake.getUserMedia.mockReset();
   fake.getUserMedia.mockImplementation(() => fake.media.promise);
   fake.routeAnswer = null;
+  sentry.captureMessage.mockReset();
+  sentry.isInitialized.mockReset();
+  sentry.isInitialized.mockReturnValue(true);
   // A host the directory knows to be awake: an unknown one asks before an open.
   directoryFacts.entry = sandboxHostEntryFixture("host-a", "awake", false);
   directoryFacts.settled = false;
@@ -4520,6 +4531,56 @@ describe("the page in front", () => {
     return parsed.input.at(0)?.content.at(1)?.text ?? "";
   }
 
+  /** The page as the router was shown it: its kind first, then one line per action. */
+  function shownLines(body: string) {
+    return (requestText(body).split("<view>\n")[1] ?? "")
+      .split("\n</view>")[0]
+      .split("\n")
+      .map((line) =>
+        z
+          .object({
+            view: z.string().optional(),
+            action: z.string().optional(),
+            takesWords: z.boolean().optional(),
+          })
+          .parse(JSON.parse(line)),
+      );
+  }
+
+  /** The router's answer that nothing on the page does what was said, and no one is named. */
+  const MISSING_ROUTE: RouterResult = {
+    action: "missing",
+    target: {
+      environmentId: null,
+      botId: null,
+      threadId: null,
+      itemId: null,
+      actionId: null,
+      agentId: null,
+    },
+    span: { fromSegment: 0, toSegment: 0 },
+    uncertain: false,
+    question: null,
+    control: null,
+    choice: null,
+  };
+
+  /** The missing answer, naming what `target` names. */
+  function missingAnswer(target: Partial<RouterResult["target"]>): unknown {
+    const route = {
+      ...MISSING_ROUTE,
+      target: { ...MISSING_ROUTE.target, ...target },
+    };
+    return {
+      output: [
+        {
+          type: "message",
+          content: [{ type: "output_text", text: JSON.stringify(route) }],
+        },
+      ],
+    };
+  }
+
   it("is shown to the router after the focus and ahead of the words", async () => {
     const bodies: string[] = [];
     await bringLive();
@@ -4559,6 +4620,81 @@ describe("the page in front", () => {
     expect(fake.engines[0]?.appendCommentary).not.toHaveBeenCalled();
     expect(fake.sendMock).not.toHaveBeenCalled();
     expect(useVoiceSessionStore.getState().segments).toEqual([]);
+  });
+
+  it("files a request the router found nothing on the page for, with the page it was shown and its answer", async () => {
+    const bodies: string[] = [];
+    await bringLive();
+    focusOn(CHANNEL_FOCUS);
+    fake.routeAnswer = (body) => {
+      bodies.push(body);
+      return missingAnswer({});
+    };
+
+    await say("Rename the sandbox.", "d1");
+
+    const shown = shownLines(bodies[0] ?? "");
+    const shownKind = shown.at(0)?.view;
+    const shownRows = shown.flatMap((line) =>
+      line.action === undefined ? [] : [line.action],
+    );
+    expect(shownRows.length).toBeGreaterThan(0);
+    // No action on this page passes the person's words on, so the words are kept.
+    expect(shown.some((line) => line.takesWords === true)).toBe(false);
+    const filed = filedMisses(sentry.captureMessage.mock.calls);
+    expect(filed).toHaveLength(1);
+    expect(filed[0]?.options.tags).toMatchObject({
+      viewKind: shownKind,
+      missKind: "missing",
+      routerAction: "missing",
+      spanDropped: "none",
+    });
+    expect(filed[0]?.options.extra).toEqual({
+      rows: shownRows,
+      route: {
+        action: "missing",
+        target: MISSING_ROUTE.target,
+        uncertain: false,
+        choice: null,
+        control: null,
+      },
+      span: "Rename the sandbox.",
+      spanWords: 3,
+    });
+  });
+
+  it.each([
+    {
+      name: "a bot of the directory and an action of the page, as themselves",
+      target: { botId: "bot-2", actionId: "action:app.history.open" },
+      shipped: { botId: "bot-2", actionId: "action:app.history.open" },
+    },
+    {
+      name: "a bot and an action the router made up, as unlisted",
+      target: { botId: "bot-made-up", actionId: "make the sandbox purple" },
+      shipped: { botId: "unlisted", actionId: "unlisted" },
+    },
+  ])("ships $name", async ({ target, shipped }) => {
+    await bringLive();
+    focusOn(CHANNEL_FOCUS);
+    fake.routeAnswer = () => missingAnswer(target);
+
+    await say("Rename the sandbox.", "d1");
+
+    const filed = filedMisses(sentry.captureMessage.mock.calls);
+    expect(filed).toHaveLength(1);
+    expect(filed[0]?.options.tags.spanDropped).toBe("target");
+    expect(
+      z
+        .object({ target: z.record(z.string(), z.string().nullable()) })
+        .parse(filed[0]?.options.extra.route).target,
+    ).toEqual({
+      environmentId: null,
+      threadId: null,
+      itemId: null,
+      agentId: null,
+      ...shipped,
+    });
   });
 
   it("drops the action, reading the page when it is about to run, if the page moved while the router was answering", async () => {
@@ -4899,6 +5035,54 @@ describe("the page in front", () => {
         frame.kind === "send" ? [frame] : [],
       );
     }
+
+    it("files a request nothing served with no words when the agent's page offers a tell, as it may have been a message", async () => {
+      const bodies: string[] = [];
+      await bringLive();
+      focusOn(CHANNEL_FOCUS);
+      seedRunningAgent();
+      fake.routeAnswer = (body) => {
+        bodies.push(body);
+        return missingAnswer({});
+      };
+
+      await say("use the other branch", "d1");
+
+      // The router was shown a tell that passes the person's words on.
+      expect(
+        shownLines(bodies[0] ?? "").some(
+          (line) =>
+            line.action === `agent.tell:${AGENT_ID}` &&
+            line.takesWords === true,
+        ),
+      ).toBe(true);
+      const filed = filedMisses(sentry.captureMessage.mock.calls);
+      expect(filed).toHaveLength(1);
+      expect(filed[0]?.options.tags).toMatchObject({
+        missKind: "missing",
+        spanDropped: "agent-page",
+      });
+      expect(filed[0]?.options.extra).toMatchObject({
+        span: null,
+        spanWords: 4,
+      });
+    });
+
+    it("keeps a tell that ran as an act that passes words on, on a page that offers one", async () => {
+      await bringLive();
+      focusOn(CHANNEL_FOCUS);
+      const wire = seedRunningAgent();
+      mountComposer(AGENT_TILE.instanceId, false, "front-model", null);
+
+      await tellTheAgent();
+
+      expect(sends(wire)).toHaveLength(1);
+      expect(useVoiceSessionStore.getState().executedAct).toMatchObject({
+        actTakesWords: true,
+        pageTakesWords: true,
+      });
+      expect(sentry.captureMessage).not.toHaveBeenCalled();
+    });
 
     it("sends through the composer shown in the active tile when it can send", async () => {
       await bringLive();

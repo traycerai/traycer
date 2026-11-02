@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type { VoiceEngine } from "@/lib/voice/engine";
+import type { RouteSeen } from "@/lib/voice/miss-report";
 import type { QueueVerb, QueueVerbOutcome } from "@/lib/voice/queue-verbs";
 import type { SpeechActivity } from "@/lib/voice/scheduler";
 
@@ -421,6 +422,12 @@ export interface VoiceSessionState {
   readonly pendingAction: PendingAction | null;
   /** The one card the voice is reading back and acting on; `null` for none. */
   readonly activeCard: ActiveCard | null;
+  /**
+   * The route of the last page action the voice carried out, while the strip
+   * offers Not what I meant for it: until the person's next request, their
+   * press, or the session's end.
+   */
+  readonly executedAct: RouteSeen | null;
   readonly captions: boolean;
   readonly captionLines: ReadonlyArray<CaptionLine>;
   /**
@@ -525,6 +532,7 @@ export interface VoiceSessionState {
   readonly setQueue: (queue: ReadonlyArray<QueueItem>) => void;
   readonly setPendingAction: (action: PendingAction | null) => void;
   readonly setActiveCard: (card: ActiveCard | null) => void;
+  readonly setExecutedAct: (seen: RouteSeen | null) => void;
   readonly setCaptions: (on: boolean) => void;
   readonly pushCaptionLine: (line: CaptionDelta) => void;
   readonly acquireDictationHold: (owner: string) => void;
@@ -580,6 +588,7 @@ function idleSession(state: VoiceSessionState): Partial<VoiceSessionState> {
     queue: NO_QUEUE,
     pendingAction: null,
     activeCard: null,
+    executedAct: null,
     captionLines: NO_CAPTIONS,
     muted: false,
     pushToTalk: false,
@@ -607,6 +616,7 @@ export const useVoiceSessionStore = create<VoiceSessionState>()((set, get) => ({
   queue: NO_QUEUE,
   pendingAction: null,
   activeCard: null,
+  executedAct: null,
   captions: false,
   captionLines: NO_CAPTIONS,
   pausedForDictation: false,
@@ -735,6 +745,10 @@ export const useVoiceSessionStore = create<VoiceSessionState>()((set, get) => ({
   setQueue: (queue) => set({ queue }),
   setPendingAction: (pendingAction) => set({ pendingAction }),
   setActiveCard: (activeCard) => set({ activeCard }),
+  setExecutedAct: (executedAct) => {
+    if (get().executedAct === executedAct) return;
+    set({ executedAct });
+  },
   setCaptions: (captions) =>
     set({
       captions,

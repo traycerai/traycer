@@ -10,6 +10,12 @@ import {
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { WithTestQueryClient } from "@/__tests__/with-test-query-client";
+import type { RouteSeen } from "@/lib/voice/miss-report";
+import {
+  filedMisses,
+  NO_OFFERED_IDS,
+  scrubbedMisses,
+} from "@/lib/voice/__tests__/fixtures/filed-misses";
 import { botTabIntent } from "@/lib/tab-navigation/intents";
 import { useBotOpenThreadStore } from "@/stores/bots/bot-open-thread-store";
 import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
@@ -19,6 +25,10 @@ import {
   type VoiceSessionDriver,
 } from "@/stores/voice/voice-session-store";
 import { VoiceSessionStrip } from "../voice-session-strip";
+
+const captureMessage = vi.hoisted(() => vi.fn());
+const isInitialized = vi.hoisted(() => vi.fn(() => true));
+vi.mock("@sentry/browser", () => ({ captureMessage, isInitialized }));
 
 const BOT_ID = "bot-1";
 const FOCUS: VoiceFocus = {
@@ -96,6 +106,9 @@ function makeDriver(): FakeDriver {
 beforeEach(() => {
   useVoiceSessionStore.setState(initial, true);
   navigation.activateTabIntent.mockReset();
+  captureMessage.mockReset();
+  isInitialized.mockReset();
+  isInitialized.mockReturnValue(true);
   links.openLink.mockReset();
   links.openLink.mockResolvedValue(undefined);
   useTracySurfaceStore.setState(useTracySurfaceStore.getInitialState(), true);
@@ -113,6 +126,48 @@ function goLive(driver: FakeDriver) {
   render(<VoiceSessionStrip />);
   return driver;
 }
+
+const EXECUTED_ACT: RouteSeen = {
+  route: {
+    action: "act",
+    target: {
+      environmentId: null,
+      botId: null,
+      threadId: null,
+      itemId: null,
+      actionId: "action:tab.next",
+      agentId: null,
+    },
+    span: { fromSegment: 0, toSegment: 0 },
+    uncertain: false,
+    question: null,
+    control: null,
+    choice: null,
+  },
+  viewKind: "task",
+  rowIds: ["action:tab.next", "action:tab.close"],
+  offered: NO_OFFERED_IDS,
+  pageTakesWords: false,
+  actTakesWords: false,
+  segments: ["next tab"],
+};
+
+/** An agent tell that ran, over words that name a person and carry a secret. */
+const EXECUTED_TELL: RouteSeen = {
+  ...EXECUTED_ACT,
+  route: {
+    ...EXECUTED_ACT.route,
+    target: { ...EXECUTED_ACT.route.target, actionId: "agent.tell:chat_1" },
+    span: { fromSegment: 0, toSegment: 1 },
+  },
+  rowIds: ["agent.tell:chat_1"],
+  pageTakesWords: true,
+  actTakesWords: true,
+  segments: [
+    "Please remind Ada at ada.lovelace@example.com ",
+    "that my password is tangerine-oyster-42",
+  ],
+};
 
 describe("VoiceSessionStrip", () => {
   it("renders nothing when idle with no end reason", () => {
@@ -392,5 +447,82 @@ describe("VoiceSessionStrip", () => {
     await userEvent.click(screen.getByRole("button", { name: "Dismiss" }));
 
     expect(useVoiceSessionStore.getState().endReason).toBeNull();
+  });
+  describe("Not what I meant", () => {
+    it("is not offered while no page action has run", () => {
+      goLive(makeDriver());
+
+      expect(
+        screen.queryByRole("button", { name: "Not what I meant" }),
+      ).toBeNull();
+    });
+
+    it("files the act that ran as not meant, and goes", async () => {
+      goLive(makeDriver());
+      act(() => {
+        useVoiceSessionStore.getState().setExecutedAct(EXECUTED_ACT);
+      });
+
+      await userEvent.click(
+        screen.getByRole("button", { name: "Not what I meant" }),
+      );
+
+      const filed = filedMisses(captureMessage.mock.calls);
+      expect(filed).toHaveLength(1);
+      expect(filed[0]?.message).toMatch(
+        /^voice\.route\.miss task not-meant #\d+$/,
+      );
+      expect(filed[0]?.options.tags).toMatchObject({
+        viewKind: "task",
+        missKind: "not-meant",
+        routerAction: "act",
+      });
+      expect(filed[0]?.options.tags.spanDropped).toBe("act");
+      expect(filed[0]?.options.extra).toEqual({
+        rows: EXECUTED_ACT.rowIds,
+        route: {
+          action: "act",
+          target: EXECUTED_ACT.route.target,
+          uncertain: false,
+          choice: null,
+          control: null,
+        },
+        span: null,
+        spanWords: 2,
+      });
+      expect(useVoiceSessionStore.getState().executedAct).toBeNull();
+      expect(
+        screen.queryByRole("button", { name: "Not what I meant" }),
+      ).toBeNull();
+    });
+
+    it("files a tell that ran with none of the words said, only how many", async () => {
+      goLive(makeDriver());
+      act(() => {
+        useVoiceSessionStore.getState().setExecutedAct(EXECUTED_TELL);
+      });
+
+      await userEvent.click(
+        screen.getByRole("button", { name: "Not what I meant" }),
+      );
+
+      const filed = filedMisses(captureMessage.mock.calls);
+      expect(filed).toHaveLength(1);
+      expect(filed[0]?.options.tags.spanDropped).toBe("tell");
+      expect(filed[0]?.options.extra).toMatchObject({
+        span: null,
+        spanWords: 10,
+      });
+      const events = scrubbedMisses(captureMessage.mock.calls).join("\n");
+      for (const word of [
+        "Please",
+        "remind",
+        "ada.lovelace@example.com",
+        "password",
+        "tangerine-oyster-42",
+      ]) {
+        expect(events).not.toContain(word);
+      }
+    });
   });
 });

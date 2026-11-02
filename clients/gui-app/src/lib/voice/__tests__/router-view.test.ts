@@ -4,7 +4,7 @@ import type {
 } from "@traycer/protocol/host/bot/conversation-schemas";
 import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
 import type { EnvironmentDescriptorV11 } from "@traycer/protocol/host/environment/contracts";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import type { CommandItem, CommandSubpage } from "@/lib/commands/types";
 import { ACTION_IDS, type ActionId } from "@/lib/keybindings/actions";
@@ -23,7 +23,13 @@ import {
   type RoutedDecision,
   type RouterResult,
 } from "../router";
-import { createSayLoop } from "../say-loop";
+import type { VerbOutcome } from "../deferred-verbs";
+import { offeredIdsOf, reportVoiceMiss, type RouteSeen } from "../miss-report";
+import {
+  createSayLoop,
+  PAGE_CHANGED_ASK_TEXT,
+  type AskOutcome,
+} from "../say-loop";
 import {
   composeVoiceView,
   NO_PALETTE_ITEMS,
@@ -36,6 +42,7 @@ import {
   type VoiceViewSources,
 } from "../view";
 import { EMPTY_VIEW } from "./fixtures/empty-view";
+import { filedMisses, onlyMiss, scrubbedMisses } from "./fixtures/filed-misses";
 import { PROBE_ANSWERS, PROBE_VIEWS } from "./fixtures/router-probe-answers";
 import {
   ROUND2_ANSWERS,
@@ -49,6 +56,11 @@ import {
  * directory the real composers built; the rest of the suite pins how the view
  * is rendered and composed, the request's shape and the new resolutions.
  */
+
+const captureMessage = vi.hoisted(() => vi.fn());
+const isInitialized = vi.hoisted(() => vi.fn(() => true));
+
+vi.mock("@sentry/browser", () => ({ captureMessage, isInitialized }));
 
 const NOW = 1_800_000_000_000;
 const VIEWER = "user-me";
@@ -1550,15 +1562,19 @@ describe("the say loop with a page action or a question about the agent", () => 
         asks.push(text);
         return () => undefined;
       },
-      decide: (request) =>
-        Promise.resolve(
-          resolveRoute(
-            parseRouterResponse(responsesBody(answer)),
-            DIRECTORY,
-            view,
-            request.segments.length,
-          ),
-        ),
+      decide: (request) => {
+        const parsed = parseRouterResponse(responsesBody(answer));
+        const decision = resolveRoute(
+          parsed,
+          DIRECTORY,
+          view,
+          request.segments.length,
+        );
+        return Promise.resolve({
+          decision,
+          seen: seenOf(parsed, decision, view, request.segments),
+        });
+      },
       recheck: () => true,
       navigate: () => Promise.resolve(true),
       think: () => undefined,
@@ -1650,6 +1666,581 @@ describe("the say loop with a page action or a question about the agent", () => 
     expect(useVoiceSessionStore.getState().segments).toEqual([]);
   });
 });
+
+describe("the say loop's report of a request the page could not serve", () => {
+  const initial = useVoiceSessionStore.getState();
+  /** The generation the route was made from; the page may have moved on by the time it runs. */
+  const ROUTED_GENERATION = 1;
+  /** What the person says in every case that does not care what it is. */
+  const SAID = ["Close this", " tab please"];
+  /** A message to someone, with an address and a password in it: nothing of it may be filed. */
+  const SECRET_SAID = [
+    "Please remind Ada at ada.lovelace@example.com ",
+    "that my password is tangerine-oyster-42",
+  ];
+  const SECRET_WORDS = 10;
+  /** Labels no id, no utterance and no tag could contain. */
+  const LABELS = ["Marble orchard", "Violet harbor", "Quartz lantern"];
+
+  /** A task page, with an agent whose tell passes the person's words on, or without one. */
+  function pageWithLabels(
+    generation: number,
+    pageKind: "agent" | "plain",
+  ): VoiceView {
+    return compose({
+      agent:
+        pageKind === "plain"
+          ? null
+          : {
+              chatId: "chat_1",
+              title: "Cobalt fennel",
+              state: "working",
+              waitingOn: null,
+              turnId: null,
+            },
+      palette: {
+        ...NO_PALETTE_ITEMS,
+        tiles: [paletteItem("open:chats:t1", LABELS[0], {})],
+        commands: [
+          commandItem("tab.next", LABELS[1]),
+          commandItem("tab.close", LABELS[2]),
+        ],
+      },
+      generation,
+    });
+  }
+
+  interface Spoken {
+    /** The rows the loop ran, by action. */
+    readonly acts: string[];
+    readonly asks: AskOutcome[];
+    /** What the voice asked, in order. */
+    readonly askTexts: string[];
+    readonly notices: string[];
+    readonly sends: string[];
+    /** Where the page is now, which the loop compares with the route's. */
+    readonly page: { generation: number };
+    /** Says "Close this tab please" and has the model answer `answer`. */
+    hear(answer: RouterResult): Promise<void>;
+    /** Says `segments`, one after another, and has the model answer `answer`. */
+    hearSaying(
+      answer: RouterResult,
+      segments: ReadonlyArray<string>,
+    ): Promise<void>;
+    /** Says yes to the question that waits, once it has been heard. */
+    sayYes(): Promise<void>;
+  }
+
+  function listen(outcome: VerbOutcome, pageKind: "agent" | "plain"): Spoken {
+    const acts: string[] = [];
+    const asks: AskOutcome[] = [];
+    const askTexts: string[] = [];
+    const notices: string[] = [];
+    const sends: string[] = [];
+    const answers: RouterResult[] = [];
+    const page = { generation: ROUTED_GENERATION };
+    let heardRequests = 0;
+    const loop = createSayLoop({
+      store: useVoiceSessionStore,
+      send: (_focus, text) => {
+        sends.push(text);
+        return Promise.resolve(SEND_RESPONSE);
+      },
+      notify: (text) => {
+        notices.push(text);
+      },
+      ask: (text, _delegationId, askOutcome) => {
+        askTexts.push(text);
+        asks.push(askOutcome);
+        return () => undefined;
+      },
+      decide: (request) => {
+        const answer = answers.shift();
+        if (answer === undefined) throw new Error("no answer queued");
+        const parsed = parseRouterResponse(responsesBody(answer));
+        const routedView = pageWithLabels(ROUTED_GENERATION, pageKind);
+        const decision = resolveRoute(
+          parsed,
+          DIRECTORY,
+          routedView,
+          request.segments.length,
+        );
+        return Promise.resolve({
+          decision,
+          seen: seenOf(parsed, decision, routedView, request.segments),
+        });
+      },
+      recheck: () => true,
+      navigate: () => Promise.resolve(true),
+      think: () => undefined,
+      control: () => undefined,
+      canSend: () => true,
+      schedule: () => () => undefined,
+      openThread: () => undefined,
+      botTitle: (botId) => botId,
+      onAccepted: () => undefined,
+      view: () => pageWithLabels(page.generation, pageKind),
+      act: (row) => {
+        acts.push(row.action);
+        return Promise.resolve(outcome);
+      },
+    });
+    const store = useVoiceSessionStore;
+    const hearSaying = async (
+      answer: RouterResult,
+      segments: ReadonlyArray<string>,
+    ): Promise<void> => {
+      answers.push(answer);
+      heardRequests += 1;
+      const at = heardRequests * 10_000;
+      segments.forEach((text, index) => {
+        store.getState().appendInputSegment(text, at + index * 400);
+      });
+      await loop.onDelegationCreated(`d-${heardRequests}`);
+    };
+    return {
+      acts,
+      asks,
+      askTexts,
+      notices,
+      sends,
+      page,
+      hear: (answer) => hearSaying(answer, SAID),
+      hearSaying,
+      sayYes: async () => {
+        heardRequests += 1;
+        store
+          .getState()
+          .appendInputSegment("yes", heardRequests * 10_000 + 400);
+        await loop.onDelegationCreated(`d-${heardRequests}`);
+      },
+    };
+  }
+
+  const MISS_ROWS = actionsOf(pageWithLabels(ROUTED_GENERATION, "agent"));
+  const PLAIN_ROWS = actionsOf(pageWithLabels(ROUTED_GENERATION, "plain"));
+  const TELL = route("act", { actionId: "agent.tell:chat_1" }, WHOLE, false);
+  const NEXT_TAB = route("act", { actionId: "action:tab.next" }, WHOLE, false);
+  const CLOSE_TAB = route(
+    "act",
+    { actionId: "action:tab.close" },
+    WHOLE,
+    false,
+  );
+  const EXECUTED: VerbOutcome = { kind: "executed" };
+
+  beforeEach(() => {
+    useVoiceSessionStore.setState(initial, true);
+    useVoiceSessionStore.getState().setFocus(FOCUS_CHANNEL);
+    captureMessage.mockReset();
+    isInitialized.mockReset();
+    isInitialized.mockReturnValue(true);
+  });
+
+  describe("files what the page could not serve", () => {
+    it("files one event for a missing route on a page with no action that passes words on, with the page's action ids and the words the route points at", async () => {
+      const answer = route("missing", {}, { from: 1, to: 1 }, false);
+      const spoken = listen(EXECUTED, "plain");
+
+      await spoken.hear(answer);
+
+      expect(captureMessage).toHaveBeenCalledTimes(1);
+      expect(captureMessage.mock.calls[0]?.[0]).toMatch(
+        /^voice\.route\.miss task missing #\d+$/,
+      );
+      expect(captureMessage.mock.calls[0]?.[1]).toEqual({
+        level: "info",
+        tags: {
+          viewKind: "task",
+          missKind: "missing",
+          routerAction: "missing",
+          uncertain: "false",
+          spanDropped: "none",
+        },
+        fingerprint: ["voice.route.miss", "task", "missing"],
+        extra: {
+          rows: PLAIN_ROWS,
+          route: {
+            action: "missing",
+            target: answer.target,
+            uncertain: false,
+            choice: null,
+            control: null,
+          },
+          span: "tab please",
+          spanWords: 2,
+        },
+      });
+      expect(spoken.notices).toEqual(["I can't do that here yet."]);
+    });
+
+    it("files an act naming an action the page does not offer as refused", async () => {
+      const answer = route(
+        "act",
+        { actionId: "action:tab.reopen" },
+        WHOLE,
+        true,
+      );
+      const spoken = listen(EXECUTED, "agent");
+
+      await spoken.hear(answer);
+
+      expect(captureMessage).toHaveBeenCalledTimes(1);
+      expect(captureMessage.mock.calls[0]?.[0]).toMatch(
+        /^voice\.route\.miss task refused #\d+$/,
+      );
+      expect(captureMessage.mock.calls[0]?.[1]).toEqual({
+        level: "info",
+        tags: {
+          viewKind: "task",
+          missKind: "refused",
+          routerAction: "act",
+          uncertain: "true",
+          spanDropped: "agent-page",
+        },
+        fingerprint: ["voice.route.miss", "task", "refused"],
+        extra: {
+          rows: MISS_ROWS,
+          route: {
+            action: "act",
+            // The router named an action the page does not offer: its own writing.
+            target: { ...answer.target, actionId: "unlisted" },
+            uncertain: true,
+            choice: null,
+            control: null,
+          },
+          span: null,
+          spanWords: 4,
+        },
+      });
+      expect(spoken.acts).toEqual([]);
+    });
+
+    it("files an act as refused when the page moved after the route was made, and runs nothing", async () => {
+      const spoken = listen(EXECUTED, "agent");
+      spoken.page.generation = ROUTED_GENERATION + 1;
+
+      await spoken.hear(NEXT_TAB);
+
+      const filed = filedMisses(captureMessage.mock.calls);
+      expect(filed).toHaveLength(1);
+      expect(filed[0]?.options.tags).toMatchObject({
+        missKind: "refused",
+        routerAction: "act",
+        spanDropped: "act",
+      });
+      expect(filed[0]?.options.extra).toMatchObject({
+        span: null,
+        spanWords: 4,
+      });
+      expect(spoken.acts).toEqual([]);
+    });
+
+    it("files an act that needs a yes as refused when the page moved before the question, and asks no read-back", async () => {
+      const spoken = listen(EXECUTED, "agent");
+      spoken.page.generation = ROUTED_GENERATION + 1;
+
+      await spoken.hear(CLOSE_TAB);
+
+      const filed = filedMisses(captureMessage.mock.calls);
+      expect(filed).toHaveLength(1);
+      expect(filed[0]?.options.tags).toMatchObject({
+        missKind: "refused",
+        routerAction: "act",
+        spanDropped: "act",
+      });
+      expect(filed[0]?.options.extra).toMatchObject({
+        span: null,
+        spanWords: 4,
+      });
+      // The only thing said is that the page changed, not the question for a yes.
+      expect(spoken.askTexts).toEqual([PAGE_CHANGED_ASK_TEXT]);
+      expect(spoken.acts).toEqual([]);
+    });
+
+    it("files an act as refused when the page moved while its yes was awaited, and runs nothing", async () => {
+      const spoken = listen(EXECUTED, "agent");
+      await spoken.hear(CLOSE_TAB);
+      expect(spoken.asks).toHaveLength(1);
+      spoken.asks[0]?.onDelivered();
+      expect(captureMessage).not.toHaveBeenCalled();
+      spoken.page.generation = ROUTED_GENERATION + 1;
+
+      await spoken.sayYes();
+
+      const filed = filedMisses(captureMessage.mock.calls);
+      expect(filed).toHaveLength(1);
+      expect(filed[0]?.options.tags).toMatchObject({
+        missKind: "refused",
+        routerAction: "act",
+        spanDropped: "act",
+      });
+      expect(filed[0]?.options.extra).toMatchObject({
+        span: null,
+        spanWords: 4,
+      });
+      expect(spoken.acts).toEqual([]);
+    });
+
+    it("names no row label anywhere in the event", async () => {
+      await listen(EXECUTED, "agent").hear(route("missing", {}, WHOLE, false));
+
+      const filed = JSON.stringify(captureMessage.mock.calls);
+      expect(filed).toContain("action:tab.close");
+      for (const label of pageWithLabels(ROUTED_GENERATION, "agent").rows.map(
+        (row) => row.label,
+      )) {
+        expect(filed).not.toContain(label);
+      }
+    });
+
+    it("files nothing where reporting is off, and says the same line", async () => {
+      isInitialized.mockReturnValue(false);
+      const spoken = listen(EXECUTED, "agent");
+
+      await spoken.hear(route("missing", {}, WHOLE, false));
+
+      expect(captureMessage).not.toHaveBeenCalled();
+      expect(spoken.notices).toEqual(["I can't do that here yet."]);
+    });
+  });
+
+  describe("files nothing for a request the page served", () => {
+    it.each([
+      {
+        name: "a post",
+        answer: route("post", { botId: "bot_tracy" }, WHOLE, false),
+        ran: (spoken: Spoken) => spoken.sends,
+      },
+      {
+        name: "an answer with no card to take it",
+        answer: route("answer", {}, WHOLE, false),
+        ran: (spoken: Spoken) => spoken.notices,
+      },
+      {
+        name: "a tell to the agent",
+        answer: TELL,
+        ran: (spoken: Spoken) => spoken.acts,
+      },
+    ])("$name", async ({ answer, ran }) => {
+      const spoken = listen(EXECUTED, "agent");
+
+      await spoken.hear(answer);
+
+      expect(ran(spoken)).toHaveLength(1);
+      expect(captureMessage).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("keeps what the person said out of what is filed", () => {
+    const WORDS_SAID = [
+      "Please",
+      "remind",
+      "ada.lovelace@example.com",
+      "that",
+      "password",
+      "tangerine-oyster-42",
+    ];
+
+    /** Every word of the message that shows anywhere in the events as they leave the app. */
+    function leaked(): ReadonlyArray<string> {
+      const events = scrubbedMisses(captureMessage.mock.calls).join("\n");
+      return WORDS_SAID.filter((word) => events.includes(word));
+    }
+
+    function onlyFiled() {
+      return onlyMiss(captureMessage.mock.calls);
+    }
+
+    it("files a stale tell with no words, only how many there were", async () => {
+      const spoken = listen(EXECUTED, "agent");
+      spoken.page.generation = ROUTED_GENERATION + 1;
+
+      await spoken.hearSaying(TELL, SECRET_SAID);
+
+      const filed = onlyFiled();
+      expect(filed.options.tags).toMatchObject({
+        missKind: "refused",
+        spanDropped: "tell",
+      });
+      expect(filed.options.extra).toMatchObject({
+        span: null,
+        spanWords: SECRET_WORDS,
+      });
+      expect(spoken.acts).toEqual([]);
+      expect(leaked()).toEqual([]);
+    });
+
+    it("files Not what I meant after a tell that ran with no words, only how many there were", async () => {
+      const spoken = listen(EXECUTED, "agent");
+      await spoken.hearSaying(TELL, SECRET_SAID);
+      const { executedAct } = useVoiceSessionStore.getState();
+      expect(spoken.acts).toEqual(["agent.tell:chat_1"]);
+      expect(captureMessage).not.toHaveBeenCalled();
+      if (executedAct === null)
+        throw new Error("the tell left nothing to report");
+
+      reportVoiceMiss("not-meant", "chosen-act", executedAct, null);
+
+      const filed = onlyFiled();
+      expect(filed.options.tags).toMatchObject({
+        missKind: "not-meant",
+        spanDropped: "tell",
+      });
+      expect(filed.options.extra).toMatchObject({
+        span: null,
+        spanWords: SECRET_WORDS,
+      });
+      expect(leaked()).toEqual([]);
+    });
+
+    it("files a request that named a bot with no words, and with nothing of the router's question", async () => {
+      const question = "Did you mean to tell Ada ada.lovelace@example.com?";
+      const spoken = listen(EXECUTED, "plain");
+
+      await spoken.hearSaying(
+        { ...route("missing", { botId: "bot_tracy" }, WHOLE, false), question },
+        SECRET_SAID,
+      );
+
+      const filed = onlyFiled();
+      expect(filed.options.tags.spanDropped).toBe("target");
+      expect(filed.options.extra).toMatchObject({
+        span: null,
+        spanWords: SECRET_WORDS,
+      });
+      const events = scrubbedMisses(captureMessage.mock.calls).join("\n");
+      expect(events).not.toContain("Did you mean");
+      expect(events).not.toContain("lovelace");
+      expect(leaked()).toEqual([]);
+    });
+
+    it("files a request nothing served on a page with an agent to tell with no words, as it may have been a message", async () => {
+      const spoken = listen(EXECUTED, "agent");
+
+      await spoken.hearSaying(route("missing", {}, WHOLE, false), SECRET_SAID);
+
+      const filed = onlyFiled();
+      expect(filed.options.tags.spanDropped).toBe("agent-page");
+      expect(filed.options.extra).toMatchObject({
+        span: null,
+        spanWords: SECRET_WORDS,
+      });
+      expect(leaked()).toEqual([]);
+    });
+
+    it("files a request the router was unsure of with no words", async () => {
+      const spoken = listen(EXECUTED, "plain");
+
+      await spoken.hearSaying(route("missing", {}, WHOLE, true), SECRET_SAID);
+
+      const filed = onlyFiled();
+      expect(filed.options.tags).toMatchObject({
+        uncertain: "true",
+        spanDropped: "uncertain",
+      });
+      expect(filed.options.extra).toMatchObject({
+        span: null,
+        spanWords: SECRET_WORDS,
+      });
+      expect(leaked()).toEqual([]);
+    });
+
+    it("sends none of the router's question, which can quote a label on the page, and only the ids of its answer", async () => {
+      const spoken = listen(EXECUTED, "plain");
+
+      await spoken.hear({
+        ...route("missing", {}, WHOLE, false),
+        question: `Did you mean ${LABELS[2]}?`,
+      });
+
+      const filed = onlyFiled();
+      expect(Object.keys(filed.options.extra).sort()).toEqual(
+        ["route", "rows", "span", "spanWords"].sort(),
+      );
+      expect(
+        Object.keys(
+          z.record(z.string(), z.unknown()).parse(filed.options.extra.route),
+        ).sort(),
+      ).toEqual(["action", "choice", "control", "target", "uncertain"]);
+      const events = scrubbedMisses(captureMessage.mock.calls).join("\n");
+      expect(events).not.toContain(LABELS[2]);
+      expect(events).not.toContain("Did you mean");
+    });
+  });
+
+  describe("keeps the act that ran for Not what I meant", () => {
+    it("keeps what the router was shown and answered once an act has run", async () => {
+      const spoken = listen(EXECUTED, "agent");
+
+      await spoken.hear(NEXT_TAB);
+
+      expect(spoken.acts).toEqual(["action:tab.next"]);
+      expect(useVoiceSessionStore.getState().executedAct).toEqual({
+        route: NEXT_TAB,
+        viewKind: "task",
+        rowIds: MISS_ROWS,
+        offered: offeredIdsOf(
+          [DIRECTORY],
+          pageWithLabels(ROUTED_GENERATION, "agent"),
+        ),
+        pageTakesWords: true,
+        actTakesWords: false,
+        segments: ["Close this", " tab please"],
+      });
+    });
+
+    it("keeps nothing for an act the page refused", async () => {
+      const spoken = listen(
+        { kind: "refused", say: "That is not open." },
+        "agent",
+      );
+
+      await spoken.hear(NEXT_TAB);
+
+      expect(spoken.notices).toEqual(["That is not open."]);
+      expect(useVoiceSessionStore.getState().executedAct).toBeNull();
+    });
+
+    it("lets a fragment leave it, and drops it at the next request", async () => {
+      const spoken = listen(EXECUTED, "agent");
+      await spoken.hear(NEXT_TAB);
+
+      await spoken.hear(route("fragment", {}, WHOLE, false));
+      expect(useVoiceSessionStore.getState().executedAct).not.toBeNull();
+
+      await spoken.hear(route("post", { botId: "bot_tracy" }, WHOLE, false));
+      expect(useVoiceSessionStore.getState().executedAct).toBeNull();
+    });
+
+    it("drops it when the session ends", async () => {
+      await listen(EXECUTED, "agent").hear(NEXT_TAB);
+
+      useVoiceSessionStore.getState().sessionEnded(null);
+
+      expect(useVoiceSessionStore.getState().executedAct).toBeNull();
+    });
+  });
+});
+
+/** What the router was shown and answered, as the controller hands it to the loop. */
+function seenOf(
+  parsed: RouterResult | null,
+  decision: RoutedDecision,
+  view: VoiceView,
+  segments: ReadonlyArray<string>,
+): RouteSeen | null {
+  if (parsed === null) return null;
+  return {
+    route: parsed,
+    viewKind: view.page.kind,
+    rowIds: view.rows.map((row) => row.action),
+    offered: offeredIdsOf([DIRECTORY], view),
+    pageTakesWords: view.rows.some((row) => row.takesWords),
+    actTakesWords: decision.kind === "act" && decision.row.takesWords,
+    segments,
+  };
+}
 
 function compose(overrides: Partial<VoiceViewSources>): VoiceView {
   return composeVoiceView({
