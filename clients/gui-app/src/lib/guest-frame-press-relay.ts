@@ -68,9 +68,14 @@ export function isRelayedGuestFramePress(event: Event): boolean {
   return relayed.has(event);
 }
 
-/** The pointerdown + click pair an outside press produces, on `frame`. */
+/**
+ * The whole gesture an outside press produces, on `frame`: pointerdown,
+ * pointerup, click. The pointerup settles whatever the pointerdown armed
+ * (the primary focus coordinator parks focus requests between the two), and
+ * the click is what the dismissable layer waits for.
+ */
 function relayGuestFramePress(frame: Element): void {
-  const pointerdown = new PointerEvent("pointerdown", {
+  const pointer = {
     bubbles: true,
     cancelable: true,
     composed: true,
@@ -78,16 +83,20 @@ function relayGuestFramePress(frame: Element): void {
     pointerId: 1,
     isPrimary: true,
     button: 0,
+  };
+  const pointerdown = new PointerEvent("pointerdown", {
+    ...pointer,
     buttons: 1,
   });
+  const pointerup = new PointerEvent("pointerup", { ...pointer, buttons: 0 });
   const click = new MouseEvent("click", {
     bubbles: true,
     cancelable: true,
     composed: true,
     button: 0,
   });
-  relayed.add(pointerdown);
-  relayed.add(click);
-  frame.dispatchEvent(pointerdown);
-  frame.dispatchEvent(click);
+  for (const event of [pointerdown, pointerup, click]) {
+    relayed.add(event);
+    frame.dispatchEvent(event);
+  }
 }

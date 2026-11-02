@@ -1203,13 +1203,13 @@ describe("the press relay on a guest", () => {
     const record = (event: Event): void => {
       if (event.target === target) seen.push(event.type);
     };
-    document.addEventListener("pointerdown", record);
-    document.addEventListener("click", record);
+    for (const type of ["pointerdown", "pointerup", "click"])
+      document.addEventListener(type, record);
     return {
       seen,
       stop: () => {
-        document.removeEventListener("pointerdown", record);
-        document.removeEventListener("click", record);
+        for (const type of ["pointerdown", "pointerup", "click"])
+          document.removeEventListener(type, record);
       },
     };
   }
@@ -1227,7 +1227,7 @@ describe("the press relay on a guest", () => {
     window.dispatchEvent(new Event("blur"));
   }
 
-  it("a press into the guest reaches the document as one pointerdown and click on its webview", () => {
+  it("a press into the guest reaches the document as one whole gesture on its webview", () => {
     const bridge = new FakeBrowserViewBridge({});
     startHost(bridge, NOOP_ACTIVATE);
     bridge.emitGuestMountRequested(mountRequest(REGISTRATION_A, PARTITION_A));
@@ -1236,7 +1236,9 @@ describe("the press relay on a guest", () => {
 
     blurIntoGuest(webview);
 
-    expect(presses.seen).toEqual(["pointerdown", "click"]);
+    // The pointerup settles what the pointerdown armed (the primary focus
+    // coordinator parks focus requests between the two).
+    expect(presses.seen).toEqual(["pointerdown", "pointerup", "click"]);
     presses.stop();
   });
 
