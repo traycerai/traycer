@@ -831,6 +831,40 @@ describe("DesktopSupportService host log attachment: earlier evidence", () => {
     expect(lines.filter((line) => line === lateStall)).toHaveLength(1);
   });
 
+  it("does not admit on the rebuild a record the first section dropped for size, and stays within the byte cap", async () => {
+    const nowMs = Date.now();
+    /** A WARN record of `lines` 1,000-byte lines: the header, then continuation lines. */
+    function warnRecord(label: string, at: number, lines: number): string[] {
+      const head = `${localHeader(at, "WARN")}${label} `;
+      return [
+        head + "w".repeat(1_000 - Buffer.byteLength(head, "utf8")),
+        ...Array.from({ length: lines - 1 }, () => "c".repeat(1_000)),
+      ];
+    }
+    const big = warnRecord("stall big", nowMs - 120_000, 100);
+    const mid = warnRecord("stall mid", nowMs - 110_000, 40);
+    const routine = Array.from({ length: 200 }, () =>
+      routineLineOfBytes(2_000, nowMs),
+    );
+    const fileLines = [...big, ...mid, ...routine];
+    expect(fileLines.length).toBeLessThan(500);
+
+    const { lines, text } = await hostLogAttachment(fileLines);
+
+    // The two records do not both fit the section's share, so only the
+    // newer, mid-sized one is a candidate; the re-sized tail then holds it.
+    const sectionStart = lines.findIndex((line) =>
+      line.startsWith("--- earlier host.log records"),
+    );
+    const tailEnd = sectionStart === -1 ? lines.length : sectionStart;
+    expect(lines[tailEnd - 1]).toBe(fileLines[fileLines.length - 1]);
+    expect(lines.filter((line) => line === mid[0])).toHaveLength(1);
+    expect(lines.indexOf(mid[0] ?? "")).toBeLessThan(tailEnd);
+    expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(
+      REPORT_LOG_TAIL_MAX_BYTES,
+    );
+  });
+
   it("scrubs a secret inside an earlier WARN record", async () => {
     const nowMs = Date.now();
     const fileLines = [

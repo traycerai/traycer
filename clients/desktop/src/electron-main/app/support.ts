@@ -1070,12 +1070,14 @@ async function captureHostLogTail(
     Math.max(0, maxBytes - Buffer.byteLength(section, "utf8") - 1),
   );
   const tailStart = retainedTailStart(allLines, tail.content);
-  // Never larger than `section`, so the total still fits.
+  // Bounded by the bytes `section` measured, not by the reservation: the
+  // tail was sized against `section`, and a rebuild from the reservation can
+  // admit a record the first section dropped for size and overrun the cap.
   const kept =
     tailStart < reservedStart
       ? earlierHostLogSection(
           earlierHostLogRecords(allLines.slice(0, tailStart), nowMs),
-          reservation,
+          Buffer.byteLength(section, "utf8"),
           scrubSupportText,
         )
       : section;
