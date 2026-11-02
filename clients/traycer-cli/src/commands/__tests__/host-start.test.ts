@@ -9446,7 +9446,8 @@ describe("runHostStart - previous-exit record", () => {
     readonly signal: NodeJS.Signals | null;
     readonly stderrText: string | null;
     readonly report: CrashReportMatch | null;
-    readonly overrides: Partial<RunHostStartDeps>;
+    /** Deps layered over the stubs; given the run's recorder. */
+    readonly overrides: (recorded: Recorded) => Partial<RunHostStartDeps>;
   }): Promise<Recorded> {
     const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
     const stderr = new PassThrough();
@@ -9462,7 +9463,7 @@ describe("runHostStart - previous-exit record", () => {
           { environment: "production", cwd: null },
           {
             ...deps,
-            ...options.overrides,
+            ...options.overrides(recorded),
             spawn: (command, args, spawnOptions) => {
               const spawned = originalSpawn(command, args, spawnOptions);
               setImmediate(() => {
@@ -9494,7 +9495,7 @@ describe("runHostStart - previous-exit record", () => {
       signal: "SIGABRT",
       stderrText: heapFatalLine,
       report: oomReport,
-      overrides: {},
+      overrides: () => ({}),
     });
     const marker = recorded.markers.find((m) => m.phase === "killed");
     expect(recorded.previousExits).toHaveLength(1);
@@ -9518,7 +9519,7 @@ describe("runHostStart - previous-exit record", () => {
       signal: null,
       stderrText: null,
       report: oomReport,
-      overrides: {},
+      overrides: () => ({}),
     });
     expect(recorded.previousExits).toHaveLength(1);
     expect(recorded.previousExits[0]?.kind).toBe("out-of-memory");
@@ -9532,7 +9533,7 @@ describe("runHostStart - previous-exit record", () => {
       signal: null,
       stderrText: heapFatalLine,
       report: null,
-      overrides: {},
+      overrides: () => ({}),
     });
     expect(recorded.previousExits).toHaveLength(1);
     expect(recorded.previousExits[0]).toMatchObject({
@@ -9548,11 +9549,47 @@ describe("runHostStart - previous-exit record", () => {
       signal: null,
       stderrText: null,
       report: null,
-      overrides: {},
+      overrides: () => ({}),
     });
     expect(recorded.previousExits).toHaveLength(1);
     expect(recorded.previousExits[0]?.kind).toBe("crashed");
     expect(recorded.previousExits[0]?.exitCode).toBe(7);
+  });
+
+  it("records crashed for an unsolicited SIGKILL, which no stop asked for", async () => {
+    const recorded = await runExit({
+      code: null,
+      signal: "SIGKILL",
+      stderrText: null,
+      report: null,
+      overrides: () => ({ maxRelaunches: 0 }),
+    });
+    expect(recorded.previousExits).toHaveLength(1);
+    expect(recorded.previousExits[0]).toMatchObject({
+      kind: "crashed",
+      signal: "SIGKILL",
+      exitCode: null,
+    });
+  });
+
+  it("records stopped for a SIGKILL while a stop was requested", async () => {
+    // The stop lands while the child runs; true from the start would end the
+    // run at the spawn-boundary guard before any child existed.
+    const recorded = await runExit({
+      code: null,
+      signal: "SIGKILL",
+      stderrText: null,
+      report: null,
+      overrides: (run) => ({
+        maxRelaunches: 0,
+        hasStopIntent: async () => (run.spawnCalls.length > 0 ? "stop" : null),
+      }),
+    });
+    expect(recorded.previousExits).toHaveLength(1);
+    expect(recorded.previousExits[0]).toMatchObject({
+      kind: "stopped",
+      signal: "SIGKILL",
+    });
   });
 
   it("records exited for a clean exit", async () => {
@@ -9561,7 +9598,7 @@ describe("runHostStart - previous-exit record", () => {
       signal: null,
       stderrText: null,
       report: null,
-      overrides: {},
+      overrides: () => ({}),
     });
     expect(recorded.previousExits).toHaveLength(1);
     expect(recorded.previousExits[0]?.kind).toBe("exited");
@@ -9574,12 +9611,12 @@ describe("runHostStart - previous-exit record", () => {
       signal: null,
       stderrText: null,
       report: null,
-      overrides: {
+      overrides: () => ({
         writePreviousExit: () => {
           attempts.push("write");
           throw new Error("disk full");
         },
-      },
+      }),
     });
     expect(attempts).toEqual(["write"]);
     expect(recorded.exited).toBe(7);

@@ -9,9 +9,10 @@
  *
  * - `out-of-memory` - the V8 heap reached its limit and the process aborted:
  *   the diagnostic report's trigger, or the fatal line on stderr, says so.
- * - `crashed` - any other abnormal end: a nonzero exit or a fatal signal.
- * - `stopped` - ended from outside on purpose: a forced shutdown, a requested
- *   kill, a forwarded shutdown signal.
+ * - `crashed` - any other abnormal end: a nonzero exit, a fatal signal, or
+ *   any signal no stop was asked for (an unsolicited SIGKILL or SIGTERM).
+ * - `stopped` - ended on purpose: a signal or kill while a stop was asked
+ *   for, a forced shutdown, a Windows session ending.
  * - `exited` - a clean exit.
  */
 export const HOST_PREVIOUS_EXIT_KINDS = [

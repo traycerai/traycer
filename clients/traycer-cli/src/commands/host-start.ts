@@ -4314,11 +4314,15 @@ async function persistChildExit(input: {
       previousExit: buildPreviousExit({
         attemptId,
         endedAtMs: input.childEndedAtMs,
-        // A decodable fatal signal is a crash; a shutdown or kill signal is
-        // an end from outside.
+        // A decodable fatal signal is a crash. Any other signal is a stop
+        // only when one was asked for (the latch or a stop intent): the
+        // signal name says nothing about intent, so an unsolicited SIGKILL
+        // (a kernel OOM kill) or SIGTERM is a crash, never "stopped".
         kind:
           fatalMeaning === null
-            ? "stopped"
+            ? input.stopRequested
+              ? "stopped"
+              : "crashed"
             : crashKind(
                 input.stderrTee.capture.classifyFatal(
                   input.stderrSettle.drained === true,
