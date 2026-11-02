@@ -71,7 +71,7 @@ import {
   within,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HostAvailableManifest } from "@traycer/protocol/host/maintenance/index";
 import type { HostListItem } from "@traycer/protocol/host/host-status";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
@@ -92,6 +92,7 @@ import type {
 import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
+import { resetHostServiceWriteLatchesForTest } from "@/components/settings/panels/host-service-write-latch-store";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { HostSettingsPanel } from "@/components/settings/panels/host-settings-panel";
 import {
@@ -100,8 +101,13 @@ import {
   type OverviewHostFixture,
 } from "@/components/settings/panels/__tests__/host-overview-test-support";
 
+beforeEach(() => {
+  resetHostServiceWriteLatchesForTest();
+});
+
 afterEach(() => {
   cleanup();
+  resetHostServiceWriteLatchesForTest();
   resetNegotiatedManifests();
   scopeOverrides.current = {};
   hostBindingMock.current = null;
@@ -423,7 +429,7 @@ describe("<HostSettingsPanel /> Overview ▸ Updates tab", () => {
             outcome: "ok" as const,
             effectiveIncludePreReleases: false,
             includePreReleasesSource: "stable-default" as const,
-            manifest: multiVersionManifest(["1.7.0", "1.6.0", "1.5.0"]),
+            manifest: multiVersionManifest(["1.7.0", "1.6.0", "1.6.1"]),
           }),
         "host.update.install": async (req) => {
           await gate;
@@ -458,7 +464,8 @@ describe("<HostSettingsPanel /> Overview ▸ Updates tab", () => {
     const picker = await screen.findByTestId("host-version-rows");
     const rows = within(picker).getAllByRole("listitem");
     const targetRow = rows.find((row) => row.textContent.includes("v1.6.0"));
-    const otherRow = rows.find((row) => row.textContent.includes("v1.5.0"));
+    // Keep the peer installable by the running host's format-5 reader.
+    const otherRow = rows.find((row) => row.textContent.includes("v1.6.1"));
     if (targetRow === undefined || otherRow === undefined) {
       throw new Error("expected both version rows to render");
     }
@@ -472,7 +479,7 @@ describe("<HostSettingsPanel /> Overview ▸ Updates tab", () => {
     await waitFor(() => {
       expect(
         within(otherRow)
-          .getByRole("button", { name: "Install 1.5.0" })
+          .getByRole("button", { name: "Install 1.6.1" })
           .hasAttribute("disabled"),
       ).toBe(true);
     });
@@ -501,7 +508,7 @@ describe("<HostSettingsPanel /> Overview ▸ Updates tab", () => {
     await waitFor(() => {
       expect(
         within(otherRow)
-          .getByRole("button", { name: "Install 1.5.0" })
+          .getByRole("button", { name: "Install 1.6.1" })
           .hasAttribute("disabled"),
       ).toBe(false);
     });
