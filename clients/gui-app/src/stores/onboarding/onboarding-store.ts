@@ -51,11 +51,6 @@ interface OnboardingState {
   readonly dismissSetupReminder: () => void;
   readonly setupProgress: Record<SetupGuideId, number>;
   readonly completeSetup: (id: SetupGuideId) => void;
-  /**
-   * The product reporting something a guide may be waiting for. Whichever
-   * guide the table says cares is completed; a call site names the event,
-   * never a guide.
-   */
   readonly completedAt: number | null;
   readonly step: number;
   /** Next step, or complete the tour if already on the last one. */
