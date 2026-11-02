@@ -84,7 +84,6 @@ import { useComposerSurfaceHostKey } from "@/hooks/host/use-composer-surface-hos
 import { useSandboxCatalogue } from "@/hooks/sandboxes/use-sandbox-catalogue-query";
 import { defaultStageShape } from "@/lib/sandboxes/sandbox-stage-model";
 import { useStagedSandbox } from "@/stores/composer/staged-sandbox-store";
-import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 
 /** A single signed-in owner for host reachability and lifecycle state. */
 export function HostReadinessControllerProvider(props: {
@@ -635,12 +634,10 @@ export function DefaultHostReadyGate(props: {
  * because a sandbox can be their first host: the landing composer has one
  * staged, or the catalogue offers a shape to stage. The composer's picker and
  * its staged send create it, and the handoff pins the composer to it. Every
- * other readiness is the gate's as before. A build without sandboxes
- * (`unreleased-features.ts`) has no such first host and reads no catalogue.
+ * other readiness is the gate's as before.
  */
 function useHostlessSandboxBootstrap(readiness: SurfaceReadiness): boolean {
-  const noHost =
-    UNRELEASED_FEATURES_ENABLED && readiness.kind === "mobile-no-host";
+  const noHost = readiness.kind === "mobile-no-host";
   const staged = useStagedSandbox(useComposerSurfaceHostKey()) !== null;
   const catalogue = useSandboxCatalogue(noHost).data ?? null;
   if (!noHost) return false;

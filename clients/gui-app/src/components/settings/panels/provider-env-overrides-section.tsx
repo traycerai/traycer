@@ -36,7 +36,6 @@ import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-
 import { useHostsRunningPersonal } from "@/components/settings/environment/use-hosts-running-configuration";
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 import { useConfigurationKey } from "@/components/settings/environment/use-configuration-key";
-import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 
 type ProviderId = ProviderCliState["providerId"];
 
@@ -236,9 +235,7 @@ export function ProviderEnvOverridesSection({
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
           <div className="text-ui-sm font-medium text-foreground">
-            {UNRELEASED_FEATURES_ENABLED
-              ? "Variables"
-              : "Environment variables"}
+            Variables
           </div>
           <ProviderEnvSubtitleLine
             providerName={providerName}
@@ -284,25 +281,13 @@ export function ProviderEnvOverridesSection({
   );
 }
 
-/**
- * What the provider's variables apply to. A build without environments
- * (`unreleased-features.ts`) keeps the wording from before them.
- */
+/** What the provider's variables apply to. */
 function ProviderEnvSubtitleLine(props: {
   readonly providerName: string;
   readonly nativeConfigOnly: boolean;
   readonly local: boolean;
 }): ReactNode {
   const { providerName } = props;
-  if (!UNRELEASED_FEATURES_ENABLED) {
-    return (
-      <p className="text-ui-xs text-muted-foreground">
-        {props.nativeConfigOnly
-          ? "Applied to native configuration operations, such as MCP setup, but not chat turns. Use Unset to drop a variable inherited from your shell."
-          : `Applied when Traycer spawns the ${providerName} harness. Use Unset to drop a variable inherited from your shell.`}
-      </p>
-    );
-  }
   const configuration = props.local
     ? { kind: "local" as const }
     : { kind: "personal" as const };

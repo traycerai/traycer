@@ -184,10 +184,7 @@ describe("settings search assembly", () => {
         ),
     );
     // The glob found the modules at all — an empty match would pass the
-    // membership checks below vacuously. A section may export two variants
-    // of its collection (Getting started: the first steps, or the 1.5.1
-    // guides in a build without environments), of which the assembly lists
-    // exactly one.
+    // membership checks below vacuously.
     const bySection = new Map<string, string[]>();
     for (const { label, value } of exported) {
       bySection.set(value.section, [

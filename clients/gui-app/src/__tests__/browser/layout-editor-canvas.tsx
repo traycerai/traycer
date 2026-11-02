@@ -143,7 +143,6 @@ import { setSystemTabModalApi } from "@/stores/tabs/system-tab-modal-bridge";
 import type { SystemTabModalApi } from "@/stores/tabs/use-system-tab-modal";
 import { SettingsDensityContext } from "@/providers/settings-density-context";
 import { AppStatusBar } from "@/components/layout/status-bar/app-status-bar";
-import { focusGuideTarget } from "@/components/onboarding/guide-target";
 import { NavigatorResourceHotspotChip } from "@/components/resources/resource-usage-chip";
 import { useNavigatorResourceMetrics } from "@/hooks/resources/use-navigator-resource-metrics";
 import "@/lib/theme-applier";
@@ -356,8 +355,6 @@ interface LayoutCanvasProbe {
   readonly openSettingsApi: () => void;
   /** The region's area, opened with no row selected, so its row can be hovered. */
   readonly openAreaOf: (regionId: RegionId) => void;
-  /** A setup guide step's focus return onto the element at `selector` (H2). */
-  readonly focusGuideTarget: (selector: string) => boolean;
   /** Hidden AND Chip, the shape whose only picture used to be the row it never takes. */
   readonly hideChangedFilesAsChip: () => void;
   /**
@@ -1062,10 +1059,6 @@ function buildProbe(): LayoutCanvasProbe {
       useLayoutEditorStore
         .getState()
         .openArea(LAYOUT_REGIONS[regionId].surface, null);
-    },
-    focusGuideTarget: (selector) => {
-      const target = document.querySelector<HTMLElement>(selector);
-      return target !== null && focusGuideTarget(target);
     },
     hideChangedFilesAsChip: () => {
       useLayoutStore

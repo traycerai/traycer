@@ -31,19 +31,9 @@ import {
   type BrowserSaveLoginsController,
 } from "@/lib/browser-view/use-browser-save-logins";
 import { useBrowserSavedLoginSitesQuery } from "@/hooks/browser/use-browser-saved-login-sites-query";
-import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
-import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
-import { useHostQuery } from "@/hooks/host/use-host-query";
-import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mutation";
 import { useReactiveLocalHostId } from "@/hooks/host/use-reactive-local-host-id";
-import { trackSettingChanged } from "@/lib/analytics";
-import { configMutationKeys } from "@/lib/query-keys";
-import {
-  useHostBinding,
-  useHostClient,
-  type HostRpcRegistry,
-} from "@/lib/host";
+import { useHostBinding } from "@/lib/host";
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 import { appLogger } from "@/lib/logger";
 import type { BrowserViewBridge } from "@traycer-clients/shared/platform/browser-view";
@@ -52,10 +42,8 @@ import type {
   BrowserSavedLoginSitesResponse,
 } from "@traycer/protocol/host/browser/contracts";
 import { useBrowserFocusStore } from "@/stores/settings/browser-focus-store";
-import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { hostNameFromLabel } from "@/hooks/agent/use-host-reachability";
-import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 
 /**
  * The Browser page's host-dependent half: the Agents group and Website
@@ -66,8 +54,7 @@ import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
  * origins need a terminal to have printed one. So the card always has a row.
  * Whether agents may use the browser at all is Permissions > Browser, not a
  * row here: it follows the configuration, and this page is the window's own
- * browsing. A build without environments (`unreleased-features.ts`) draws it
- * here instead, as before them.
+ * browsing.
  */
 export function BrowserSettingsSection(props: {
   /** The always-present row of the Agents group, drawn by the panel. */
@@ -87,7 +74,6 @@ export function BrowserSettingsSection(props: {
         dataTestId="settings-browser-agents"
         fill={false}
       >
-        {UNRELEASED_FEATURES_ENABLED ? null : <AgentBrowserAccessSlot />}
         {props.agentOpenedTabsRow}
         {browserDevOrigins.length > 0 ? (
           <SettingsRow
@@ -103,88 +89,6 @@ export function BrowserSettingsSection(props: {
       </SettingsGroup>
       <BrowserSavedLoginsGroup />
     </>
-  );
-}
-
-const AGENT_BROWSER_ACCESS_GET = "config.browser.get";
-const AGENT_BROWSER_ACCESS_SET = "config.browser.set";
-
-/**
- * The row's gate. The ACTIVE host, like the sibling Website sessions group:
- * Browser carries no host scope of its own, so this page's host IS the
- * app-wide one. `null` (no handshake yet) hides the row exactly as `false`
- * does - the row reappears on its own once the host advertises the method, no
- * reload.
- *
- * BOTH methods, because they negotiate independently: the row is an
- * interactive switch, so a host that could answer `get` but not `set` would
- * render a control whose every flip fails. Two statements, not one `&&`:
- * short-circuiting a hook call is a rules-of-hooks violation.
- */
-function AgentBrowserAccessSlot(): ReactNode {
-  const hostId = useAddressableHostId();
-  const getSupported = useHostMethodSupport(hostId, AGENT_BROWSER_ACCESS_GET);
-  const setSupported = useHostMethodSupport(hostId, AGENT_BROWSER_ACCESS_SET);
-  if (getSupported !== true || setSupported !== true) return null;
-  return <AgentBrowserAccessRow hostId={hostId} />;
-}
-
-/**
- * The host-wide "let agents use the in-app browser" switch (plan B08).
- *
- * Off means agent registrations on this host are minted with no browser MCP
- * server and no steering that names it; the user's own browser tiles, saved
- * logins and dev-origin detection are untouched. The value is machine-user
- * global, so the row names the host it is about - Settings > Browser has no
- * host picker, and this is the one place on the page where "which machine"
- * is not obvious from the copy.
- *
- * Rendered ONLY under a positive `useHostMethodSupport` for both the getter and
- * the setter, which is what makes `useHostClient()` safe here: a host that
- * advertised the methods has a binding.
- */
-function AgentBrowserAccessRow(props: {
-  readonly hostId: string | null;
-}): ReactNode {
-  const client = useHostClient();
-  const hostName = hostNameOf(
-    useHostDirectoryEntry(props.hostId),
-    props.hostId,
-  );
-  const query = useHostQuery<HostRpcRegistry, "config.browser.get">({
-    cacheKeyIdentity: undefined,
-    client,
-    method: AGENT_BROWSER_ACCESS_GET,
-    params: {},
-    options: { enabled: true },
-  });
-  const setAccess = useHostScopedMutationForClient(client, {
-    method: AGENT_BROWSER_ACCESS_SET,
-    mutationKey: configMutationKeys.browserSet(),
-    errorMessage: "Couldn't update agent browser access",
-    invalidateMethods: [AGENT_BROWSER_ACCESS_GET],
-  });
-
-  return (
-    <SettingsRow
-      row={BROWSER.definitions.agentBrowserAccess}
-      status={
-        query.isError
-          ? "Couldn't read this host's browser setting. Repair ~/.traycer/cli/config.json on that machine, or back it up before resetting it, then reopen Settings."
-          : `On ${hostName ?? "this host"}. ${BROWSER.definitions.agentBrowserAccess.description} Running agents pick this up on their next turn.`
-      }
-      control={
-        <Switch
-          checked={query.data?.agentAccess === true}
-          disabled={query.isPending || query.isError || setAccess.isPending}
-          aria-label="Let agents use the in-app browser"
-          onCheckedChange={(next) => {
-            trackSettingChanged("browser", "agentBrowserAccess");
-            setAccess.mutate({ agentAccess: next });
-          }}
-        />
-      }
-    />
   );
 }
 
@@ -373,14 +277,7 @@ function SavedLoginsToggleRow(props: {
             aria-label="Save website sessions on this computer"
             onCheckedChange={(next) => {
               if (next) {
-                // The guide moves on only once the machine reports saving ON:
-                // a refused or downgraded write leaves the import step locked.
-                void props.saveLogins.setEnabled(true).then((settled) => {
-                  if (settled === true)
-                    useOnboardingStore
-                      .getState()
-                      .notifySetupEvent("browser-save-enabled");
-                });
+                void props.saveLogins.setEnabled(true);
                 return;
               }
               setConfirming(true);

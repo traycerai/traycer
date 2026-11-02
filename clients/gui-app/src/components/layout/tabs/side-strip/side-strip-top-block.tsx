@@ -17,7 +17,6 @@ import { cn } from "@/lib/utils";
 import { useBindingForAction } from "@/stores/settings/keybinding-store";
 import { TalkControl } from "@/components/layout/voice/talk-control";
 import { useVoiceSessionStore } from "@/stores/voice/voice-session-store";
-import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 import { SideHomeRow } from "./side-home-row";
 import { SideTracyRow } from "./side-tracy-row";
 import type { TracyStripEntry } from "../tab-strip-controller";
@@ -196,9 +195,7 @@ function sideFixedRows(
       {props.tracy === null ? null : (
         <SideTracyRow variant={props.variant} entry={props.tracy} />
       )}
-      {/* The slot exists only with the features, so the build without them
-          keeps the column's gaps as they were. */}
-      {UNRELEASED_FEATURES_ENABLED ? talk : null}
+      {talk}
     </>
   );
 }

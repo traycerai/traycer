@@ -68,7 +68,6 @@ import {
 import { LocalRowNote } from "@/components/settings/environment/local-row-note";
 import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
 import { providerRailStateWord } from "./provider-rail-state-word";
-import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 import type { HostRpcRegistry } from "@/lib/host";
 import { HostRuntimeContext } from "@/lib/host/runtime";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
@@ -232,21 +231,10 @@ const VIEW_COPY: Readonly<
 };
 
 /**
- * The page's blurb in a build without environments (`unreleased-features.ts`),
- * where every host is read as its own Local row under the Host picker: what
- * the page said before environments.
- */
-const PROVIDERS_DESCRIPTION_WITHOUT_ENVIRONMENTS =
-  "Choose the CLI binary Traycer runs for each coding agent. Pick the bundled binary, one found on your PATH, or a custom install. Disable a provider to hide it when creating an agent.";
-
-/**
  * Providers on a Local row: the old page whole, about that one computer, so
- * its subtitle names it when environments are enabled.
+ * its subtitle names it.
  */
 function localProvidersDescription(hostName: string): string {
-  if (!UNRELEASED_FEATURES_ENABLED) {
-    return PROVIDERS_DESCRIPTION_WITHOUT_ENVIRONMENTS;
-  }
   return `Sign-ins, keys and tools for each coding agent on ${hostName}.`;
 }
 

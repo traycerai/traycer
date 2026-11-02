@@ -34,9 +34,7 @@ test.describe.configure({ mode: "default" });
 //  - Choose... seeds its picks with what Automatic draws:
 //    `provider-limits-choose.test.tsx`; a hidden monitor's Metrics staying
 //    editable (L-174): `surface-section-rows.test.tsx` and
-//    `use-navigator-resource-metrics.test.ts`;
-//  - the guide target's choice among hidden, inert and selected controls:
-//    `guide-target.test.ts`, `guide-target-coachmark-dismiss.test.tsx`.
+//    `use-navigator-resource-metrics.test.ts`.
 //
 // One page load per configuration: the width, the area and the layout each
 // test needs are set live (`setWindow`, the area's tab, `probe.reset()`), so a
@@ -224,56 +222,6 @@ test.describe("the page alone at a desktop width and a phone width", () => {
       expect(fit.select, `${label}: the select is drawn`).toBe(!desktop);
     });
   }
-});
-
-// ── A setup guide's focus return ────────────────────────────────────────────
-
-// A setup guide hands focus back to its step's target on Escape and on its
-// dismiss button, through `focusGuideTarget`. The Layout page's target holds
-// both the phone select and the desktop rail, so the control it lands on must be
-// the one this width draws - and on a desktop the PICKED area's tab. Which
-// control the guide prefers among hidden, inert and selected ones is jsdom's
-// (`guide-target.test.ts`); that the width really hides one of them is not.
-test.describe("a setup guide's focus return lands on the control this width draws", () => {
-  test("on a desktop, the picked area's tab", async ({ settingsPage }) => {
-    const { page, setWindow } = settingsPage;
-    await prepareSettings(settingsPage, "Composer");
-    await setWindow(DESKTOP.width, DESKTOP.height, 1);
-    // Clicked twice: the second click moves no focus, which leaves Radix's tab
-    // list treating its next focus as a click's and keeping it itself.
-    await areaTab(page, "Chat").click();
-    await areaTab(page, "Chat").click();
-    await page.evaluate(() => {
-      if (document.activeElement instanceof HTMLElement) {
-        document.activeElement.blur();
-      }
-    });
-
-    const moved = await probe(page, "focusGuideTarget('[data-layout-areas]')");
-
-    expect(moved, "the guide reports it moved focus").toBe(true);
-    await expect(areaTab(page, "Chat")).toBeFocused();
-    await expect(areaTab(page, "Chat")).toHaveAttribute(
-      "aria-selected",
-      "true",
-    );
-  });
-
-  test("on a phone, the Layout area select", async ({ settingsPage }) => {
-    const { page, setWindow } = settingsPage;
-    await prepareSettings(settingsPage, "Chat");
-    await setWindow(PHONE.width, PHONE.height, 1);
-    await page.evaluate(() => {
-      if (document.activeElement instanceof HTMLElement) {
-        document.activeElement.blur();
-      }
-    });
-
-    const moved = await probe(page, "focusGuideTarget('[data-layout-areas]')");
-
-    expect(moved, "the guide reports it moved focus").toBe(true);
-    await expect(areaSelect(page)).toBeFocused();
-  });
 });
 
 // ── A short desktop pane ────────────────────────────────────────────────────

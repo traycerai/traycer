@@ -9,7 +9,6 @@ import {
   ONBOARDING_PERSIST_VERSION,
   useOnboardingStore,
 } from "@/stores/onboarding/onboarding-store";
-import { setupGuideLength } from "@/stores/onboarding/setup-guides";
 
 const PERSIST_KEY = persistKey(STORE_KEYS.onboarding);
 /** The desktop, where every guide is on offer. */
@@ -24,7 +23,6 @@ function resetStore(): void {
   useOnboardingStore.setState({
     setupProgress: { agents: -1, appearance: -1, cookies: -1 },
     setupReminderDismissed: false,
-    activeSetup: null,
     completedAt: null,
     step: 0,
   });
@@ -42,7 +40,6 @@ describe("useOnboardingStore", () => {
       appearance: -1,
       cookies: -1,
     });
-    expect(useOnboardingStore.getState().activeSetup).toBeNull();
     expect(useOnboardingStore.getState().setupReminderDismissed).toBe(false);
   });
 
@@ -94,172 +91,6 @@ describe("useOnboardingStore", () => {
     expect(
       onboardingCompletedCount(useOnboardingStore.getState(), DESKTOP),
     ).toBe(onboardingGuideCount(DESKTOP));
-  });
-
-  it("preserves completion count when a completed setup guide is replayed", () => {
-    useOnboardingStore.getState().completeSetup("appearance");
-    const completedCount = onboardingCompletedCount(
-      useOnboardingStore.getState(),
-      DESKTOP,
-    );
-
-    useOnboardingStore.getState().startSetup("appearance");
-
-    expect(useOnboardingStore.getState().activeSetup).toEqual({
-      id: "appearance",
-      step: 0,
-    });
-    expect(
-      onboardingCompletedCount(useOnboardingStore.getState(), DESKTOP),
-    ).toBe(completedCount);
-  });
-
-  it("starts appearance and resumes it at its saved step", () => {
-    const store = useOnboardingStore.getState();
-    store.startSetup("appearance");
-    store.advanceSetup();
-
-    expect(useOnboardingStore.getState().setupProgress.appearance).toBe(1);
-
-    // The settings surface closing leaves `activeSetup` alone, so reopening it
-    // and starting the card again lands on the step it left off at.
-    useOnboardingStore.setState({ activeSetup: null });
-    useOnboardingStore.getState().startSetup("appearance");
-
-    expect(useOnboardingStore.getState().activeSetup).toEqual({
-      id: "appearance",
-      step: 1,
-    });
-  });
-
-  it("retreats an active setup step without changing saved progress or completion", () => {
-    const completedAt = 1_600_000_000_000;
-    const fullLength = setupGuideLength("appearance");
-    useOnboardingStore.setState({
-      completedAt,
-      setupProgress: { agents: 0, appearance: 2, cookies: 0 },
-      activeSetup: { id: "appearance", step: 2 },
-    });
-    useOnboardingStore.getState().retreatSetup(fullLength);
-
-    expect(useOnboardingStore.getState().activeSetup).toEqual({
-      id: "appearance",
-      step: 1,
-    });
-    expect(useOnboardingStore.getState().setupProgress).toEqual({
-      agents: 0,
-      appearance: 2,
-      cookies: 0,
-    });
-    expect(useOnboardingStore.getState().completedAt).toBe(completedAt);
-
-    useOnboardingStore.getState().retreatSetup(fullLength);
-    useOnboardingStore.getState().retreatSetup(fullLength);
-    expect(useOnboardingStore.getState().activeSetup).toEqual({
-      id: "appearance",
-      step: 0,
-    });
-  });
-
-  it("retreats to the predecessor of the step actually shown, not one below a resumed step a smaller count no longer holds", () => {
-    // A guide resumed at its raw last step (the layout-editor door), read
-    // back on a shell whose `stepCount` leaves that door out (L-50): Back
-    // must land on the step just before the one this shell can show, not
-    // one below the stale raw step - which the clamp already draws too, so
-    // decrementing IT unclamped would repeat the same displayed step.
-    const fullLength = setupGuideLength("appearance");
-    useOnboardingStore.setState({
-      activeSetup: { id: "appearance", step: fullLength - 1 },
-    });
-    useOnboardingStore.getState().retreatSetup(fullLength - 1);
-
-    expect(useOnboardingStore.getState().activeSetup).toEqual({
-      id: "appearance",
-      step: fullLength - 3,
-    });
-  });
-
-  it("completes appearance after its last step and replays from the start without losing completion", () => {
-    useOnboardingStore.getState().startSetup("appearance");
-    for (let index = 0; index < setupGuideLength("appearance"); index += 1)
-      useOnboardingStore.getState().advanceSetup();
-
-    expect(useOnboardingStore.getState().activeSetup).toBeNull();
-    expect(useOnboardingStore.getState().setupProgress.appearance).toBe(
-      setupGuideLength("appearance"),
-    );
-
-    useOnboardingStore.getState().startSetup("appearance");
-
-    expect(useOnboardingStore.getState().activeSetup).toEqual({
-      id: "appearance",
-      step: 0,
-    });
-    expect(useOnboardingStore.getState().setupProgress.appearance).toBe(
-      setupGuideLength("appearance"),
-    );
-  });
-
-  it("walks the cookie guide's steps but never completes it without the import result", () => {
-    useOnboardingStore.getState().startSetup("cookies");
-    useOnboardingStore.getState().advanceSetup();
-
-    expect(useOnboardingStore.getState().activeSetup).toEqual({
-      id: "cookies",
-      step: 1,
-    });
-    expect(useOnboardingStore.getState().setupProgress.cookies).toBe(1);
-
-    useOnboardingStore.getState().advanceSetup();
-
-    expect(useOnboardingStore.getState().activeSetup).toEqual({
-      id: "cookies",
-      step: 1,
-    });
-    expect(useOnboardingStore.getState().setupProgress.cookies).toBe(1);
-
-    useOnboardingStore.getState().completeSetup("cookies");
-
-    expect(useOnboardingStore.getState().activeSetup).toBeNull();
-    expect(useOnboardingStore.getState().setupProgress.cookies).toBe(
-      setupGuideLength("cookies"),
-    );
-  });
-
-  it("routes product events to whichever guide step declares them", () => {
-    // The product reports what happened; the step table decides what that
-    // means. Enabling the switch IS the first step, so it auto-advances, and
-    // only the real import can end the guide.
-    useOnboardingStore.getState().startSetup("cookies");
-    useOnboardingStore.getState().notifySetupEvent("browser-save-enabled");
-
-    expect(useOnboardingStore.getState().activeSetup).toEqual({
-      id: "cookies",
-      step: 1,
-    });
-
-    // The same event on a step that does not declare it moves nothing.
-    useOnboardingStore.getState().notifySetupEvent("browser-save-enabled");
-    expect(useOnboardingStore.getState().activeSetup).toEqual({
-      id: "cookies",
-      step: 1,
-    });
-
-    useOnboardingStore.getState().notifySetupEvent("browser-logins-imported");
-
-    expect(useOnboardingStore.getState().activeSetup).toBeNull();
-    expect(useOnboardingStore.getState().setupProgress.cookies).toBe(
-      setupGuideLength("cookies"),
-    );
-  });
-
-  it("completes a guide from its event with no guide running", () => {
-    useOnboardingStore.getState().notifySetupEvent("browser-logins-imported");
-
-    expect(useOnboardingStore.getState().setupProgress.cookies).toBe(
-      setupGuideLength("cookies"),
-    );
-    expect(useOnboardingStore.getState().activeSetup).toBeNull();
   });
 
   it("complete marks the tour done with a timestamp", () => {
@@ -388,12 +219,11 @@ describe("useOnboardingStore", () => {
     expect(typeof parsed.state?.completedAt).toBe("number");
   });
 
-  it("persists setup progress but not the active guide or step", async () => {
+  it("persists setup progress but not the step", async () => {
     useOnboardingStore.getState().complete();
     useOnboardingStore.setState({
       step: 2,
       setupProgress: { agents: 1, appearance: 2, cookies: 0 },
-      activeSetup: { id: "appearance", step: 2 },
     });
 
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
@@ -414,7 +244,6 @@ describe("useOnboardingStore", () => {
       appearance: 2,
       cookies: 0,
     });
-    expect(parsed.state?.activeSetup).toBeUndefined();
   });
 
   it("rehydrates completion but ignores stale persisted step", async () => {
@@ -426,7 +255,6 @@ describe("useOnboardingStore", () => {
           completedAt: timestamp,
           step: 2,
           setupProgress: { agents: 0, appearance: 2, cookies: 1 },
-          activeSetup: { id: "appearance", step: 2 },
         },
         version: ONBOARDING_PERSIST_VERSION,
       }),
@@ -441,7 +269,6 @@ describe("useOnboardingStore", () => {
       appearance: 2,
       cookies: 1,
     });
-    expect(useOnboardingStore.getState().activeSetup).toBeNull();
   });
 
   it("restores legacy state with default setup progress", async () => {
@@ -460,7 +287,6 @@ describe("useOnboardingStore", () => {
       appearance: -1,
       cookies: -1,
     });
-    expect(useOnboardingStore.getState().activeSetup).toBeNull();
   });
 
   it("recovers safely from malformed persisted setup progress", async () => {
@@ -470,7 +296,6 @@ describe("useOnboardingStore", () => {
         state: {
           completedAt: null,
           setupProgress: { agents: 10, appearance: "later", cookies: 0 },
-          activeSetup: { id: "cookies", step: 0 },
         },
         version: ONBOARDING_PERSIST_VERSION,
       }),
@@ -483,7 +308,6 @@ describe("useOnboardingStore", () => {
       appearance: -1,
       cookies: 0,
     });
-    expect(useOnboardingStore.getState().activeSetup).toBeNull();
   });
 
   // v1 predates the checklist, so everyone already using the app landed on

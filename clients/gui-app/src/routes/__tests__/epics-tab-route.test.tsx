@@ -267,15 +267,6 @@ describe("/epics/$epicId/$tabId route", () => {
     expect(screen.queryByTestId("epic-route-session-body")).toBeNull();
     expect(router.state.location.pathname).toBe(`/epics/${EPIC_ID}/${TAB_ID}`);
   });
-
-  it("renders replay onboarding outside the app shell without clearing completion", async () => {
-    const router = renderAt("/onboarding?replay=true");
-
-    await screen.findByTestId("onboarding-page-stub");
-    expect(screen.queryByTestId("app-shell")).toBeNull();
-    expect(router.state.location.pathname).toBe("/onboarding");
-    expect(useOnboardingStore.getState().completedAt).toBe(1_700_000_000_000);
-  });
 });
 
 /**

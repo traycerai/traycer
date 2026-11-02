@@ -36,9 +36,6 @@ import { providersMutationKeys } from "@/lib/query-keys";
 import { ProviderOnHostOnlyLine } from "./provider-on-host-only-line";
 import { EmbeddedProviderRateLimitForProvider } from "./provider-rate-limit-section";
 import { ProfileEditDialog } from "./provider-profile-edit-dialog";
-import { ProfileSyncEntryButton } from "./profile-sync/profile-sync-entry-button";
-import { profileSyncWireProvider } from "@/lib/profile-sync/profile-sync-presentation";
-import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 import {
   isProviderAmbientAuthenticated,
   isProviderAmbientSignedOut,
@@ -264,12 +261,6 @@ function ProfileScopedSectionMessages(props: {
  * holds to each computer running it. The page header's Refresh re-probes every
  * profile's sign-in, and usage re-reads on open and after each turn, so the
  * card carries no refresh of its own.
- *
- * A build without environments (`unreleased-features.ts`) has no Personal to
- * carry profiles, so the card reads as it did before them: the terminal
- * login is a profile row like the others, `Add profile` beside `Sync
- * profiles…`, which copies profiles to the person's other computers host to
- * host, and a provider with no profile keeps that entry.
  */
 export function ProviderProfileScopedSection(
   props: ProviderProfileScopedSectionProps,
@@ -302,11 +293,7 @@ export function ProviderProfileScopedSection(
     startInReauth ? "sign-in" : "manage",
   );
 
-  if (profiles.length === 0) {
-    return UNRELEASED_FEATURES_ENABLED ? null : (
-      <EmptyProviderProfiles state={state} hostId={hostId} />
-    );
-  }
+  if (profiles.length === 0) return null;
 
   const selectedProfile =
     profiles.find(
@@ -323,13 +310,10 @@ export function ProviderProfileScopedSection(
     : null;
   const duplicateLabel = duplicateProfileLabel(selectedProfile, profiles);
   const ownLogin = ownLoginLabel(providerLabel, hostName);
-  // The dropdown names the terminal login the way its row does; without
-  // environments the row is a profile row and keeps its own label and badge.
-  const labelledProfiles = UNRELEASED_FEATURES_ENABLED
-    ? profiles.map((profile) =>
-        profile.kind === "ambient" ? { ...profile, label: ownLogin } : profile,
-      )
-    : profiles;
+  // The dropdown names the terminal login the way its row does.
+  const labelledProfiles = profiles.map((profile) =>
+    profile.kind === "ambient" ? { ...profile, label: ownLogin } : profile,
+  );
 
   const openProfileEditor = (): void => {
     setEditIntent("manage");
@@ -349,12 +333,6 @@ export function ProviderProfileScopedSection(
         <div className="flex items-center justify-between gap-2">
           <div className="text-ui-sm font-medium text-foreground">Profiles</div>
           <div className="flex flex-wrap items-center gap-1">
-            {UNRELEASED_FEATURES_ENABLED ? null : (
-              <ProfileSyncEntryButton
-                hostId={hostId}
-                providerId={state.providerId}
-              />
-            )}
             <TooltipWrapper
               label={addProfileDisabledReason}
               side="top"
@@ -373,9 +351,7 @@ export function ProviderProfileScopedSection(
                   onClick={onAddProfile}
                 >
                   <Plus className="size-3.5" />
-                  {UNRELEASED_FEATURES_ENABLED
-                    ? "Add a profile"
-                    : "Add profile"}
+                  Add a profile
                 </Button>
               </span>
             </TooltipWrapper>
@@ -411,15 +387,13 @@ export function ProviderProfileScopedSection(
               : null
           }
           admissionByProfileId={null}
-          showTerminalBadge={!UNRELEASED_FEATURES_ENABLED}
+          showTerminalBadge={false}
         />
-        {UNRELEASED_FEATURES_ENABLED ? (
-          <ProviderOnHostOnlyLine
-            hostId={hostId}
-            providerId={state.providerId}
-            profileId={selectedProfile.profileId}
-          />
-        ) : null}
+        <ProviderOnHostOnlyLine
+          hostId={hostId}
+          providerId={state.providerId}
+          profileId={selectedProfile.profileId}
+        />
         <SelectedProfileRow
           state={state}
           hostName={hostName}
@@ -506,7 +480,7 @@ function SelectedProfileRow(props: {
   readonly onManage: () => void;
 }): ReactNode {
   const { profile, managementHeldReason } = props;
-  if (profile.kind === "ambient" && UNRELEASED_FEATURES_ENABLED) {
+  if (profile.kind === "ambient") {
     return (
       <OwnLoginSummary
         state={props.state}
@@ -527,13 +501,11 @@ function SelectedProfileRow(props: {
       // instead, keeping every chip whole.
       className="flex min-w-0 flex-wrap items-center justify-end gap-2"
     >
-      {UNRELEASED_FEATURES_ENABLED ? (
-        <AppliedProviderItemDetails
-          kind="managed_profile"
-          itemKey={`${providerIdToGuiHarnessId(props.state.providerId)}:${profile.profileId}`}
-          title={profile.label}
-        />
-      ) : null}
+      <AppliedProviderItemDetails
+        kind="managed_profile"
+        itemKey={`${providerIdToGuiHarnessId(props.state.providerId)}:${profile.profileId}`}
+        title={profile.label}
+      />
       <ProfileSummary key={profile.profileId} profile={profile} />
       {profile.auth.status === "unauthenticated" ? (
         <TooltipWrapper
@@ -583,40 +555,6 @@ function SelectedProfileRow(props: {
         </span>
       </TooltipWrapper>
     </div>
-  );
-}
-
-/**
- * A provider with no profile on this computer, in a build without
- * environments: the card keeps the `Sync profiles…` entry, so profiles on the
- * person's other computers are still reachable from here.
- */
-function EmptyProviderProfiles(props: {
-  readonly state: ProviderCliState;
-  readonly hostId: string | null;
-}): ReactNode {
-  if (
-    props.hostId === null ||
-    profileSyncWireProvider(props.state.providerId) === null
-  )
-    return null;
-  return (
-    <section className="flex flex-col gap-3 rounded-lg border border-border/60 p-3">
-      <div className="flex items-center justify-between gap-2">
-        <div className="text-ui-sm font-medium text-foreground">Profiles</div>
-        {/* No gate needed: the caller above only reaches this component when
-            UNRELEASED_FEATURES_ENABLED is already false, so a second check
-            of that same build constant here could never take its other
-            branch. */}
-        <ProfileSyncEntryButton
-          hostId={props.hostId}
-          providerId={props.state.providerId}
-        />
-      </div>
-      <p className="text-ui-xs text-muted-foreground">
-        No profiles on this device.
-      </p>
-    </section>
   );
 }
 

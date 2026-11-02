@@ -162,8 +162,6 @@ describe("`traycer host capabilities` as a subprocess", () => {
       "capabilities",
       "--json",
     ]);
-    // The subprocess runs the committed `unreleased-features.ts`, which the
-    // commit hook pins at `true`: the build with sandboxes.
     expect(JSON.parse(result.stdout)).toEqual({
       v: 1,
       capabilities: [

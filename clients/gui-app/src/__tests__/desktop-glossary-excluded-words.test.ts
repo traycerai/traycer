@@ -85,48 +85,6 @@ const ALLOWED: readonly Allowed[] = [
     closedBy:
       "the environments redesign names the Settings sidebar group Environment",
   },
-  // The build without environments (`unreleased-features.ts`) restores the
-  // words the glossary pass replaced, because that build is the release
-  // before the pass. Each string below is the pre-glossary one, reachable
-  // only through that build's arm of its gate; the shipped arm beside it
-  // carries the glossary's own word.
-  {
-    file: "gui-app/src/components/settings/panels/permissions/rules-tab.tsx",
-    text: "Environment",
-    closedBy: "the build without environments names the Rules section as 1.5.1",
-  },
-  {
-    file: "gui-app/src/components/settings/panels/providers-settings.definitions.ts",
-    text: "Environment variables",
-    closedBy:
-      "the build without environments searches the Providers group as 1.5.1",
-  },
-  {
-    file: "gui-app/src/components/settings/panels/providers-settings.definitions.ts",
-    text: "Per-provider environment overrides.",
-    closedBy:
-      "the build without environments searches the Providers group as 1.5.1",
-  },
-  {
-    file: "gui-app/src/components/settings/panels/provider-env-overrides-section.tsx",
-    text: "Environment variables",
-    closedBy: "the build without environments titles the section as 1.5.1",
-  },
-  {
-    file: "gui-app/src/components/settings/panels/provider-api-key-section.tsx",
-    text: "Using   from your shell environment. Save a key here to override it.",
-    closedBy: "the build without environments says shell environment as 1.5.1",
-  },
-  {
-    file: "gui-app/src/components/settings/panels/shell-settings-panel.tsx",
-    text: "Host environment",
-    closedBy: "the build without environments labels the save status as 1.5.1",
-  },
-  {
-    file: "gui-app/src/components/settings/panels/shell-settings.definitions.ts",
-    text: "Host environment · After restart",
-    closedBy: "the build without environments labels the group as 1.5.1",
-  },
 ];
 
 interface Hit {
