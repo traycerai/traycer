@@ -2,19 +2,33 @@
 
 Landed-input controls were measured against source main 120982023.
 The original 25 names and bounds retain their freshly observed classes.
+The MomentumPair controls were measured with the pair on main 49ec74dbf.
 Bounds count states including Init; witness lengths are evidence.
 """
 
 # Only the queued-command pair uses T2; the focused pair keeps ordinary Next.
-MODULES = {'ChatScroll_PKConsumer_after': ('ChatScrollPKConsumer', 'ReplaySpec'),
+MODULES = {'ChatScroll_MomentumPair_after': ('ChatScrollMomentumPair', 'ReplaySpec'),
+ 'ChatScroll_MomentumPair_before': ('ChatScrollMomentumPair', 'ReplaySpec'),
+ 'ChatScroll_MomentumPair_first_after': ('ChatScrollMomentumPair', 'ReplaySpec'),
+ 'ChatScroll_MomentumPair_first_before': ('ChatScrollMomentumPair', 'ReplaySpec'),
+ 'ChatScroll_PKConsumer_after': ('ChatScrollPKConsumer', 'ReplaySpec'),
  'ChatScroll_PKConsumer_before': ('ChatScrollPKConsumer', 'ReplaySpec'),
  'ChatScroll_drag_idle_fixed_pressqueue_after': ('ChatScrollT2Bounded', 'T2Spec'),
  'ChatScroll_drag_idle_fixed_pressqueue_before': ('ChatScrollT2Bounded', 'T2Spec')}
 
 # Engine deadlock checks distinguish a stalled required history from a source-Q terminal.
-CHECK_DEADLOCK = {'ChatScroll_PKConsumer_after': True, 'ChatScroll_PKConsumer_before': True}
+CHECK_DEADLOCK = {'ChatScroll_MomentumPair_after': True,
+ 'ChatScroll_MomentumPair_before': True,
+ 'ChatScroll_MomentumPair_first_after': True,
+ 'ChatScroll_MomentumPair_first_before': True,
+ 'ChatScroll_PKConsumer_after': True,
+ 'ChatScroll_PKConsumer_before': True}
 
-DEPTH = {'ChatScroll_PKConsumer_after': 42,
+DEPTH = {'ChatScroll_MomentumPair_after': 16,
+ 'ChatScroll_MomentumPair_before': 16,
+ 'ChatScroll_MomentumPair_first_after': 15,
+ 'ChatScroll_MomentumPair_first_before': 15,
+ 'ChatScroll_PKConsumer_after': 42,
  'ChatScroll_PKConsumer_before': 42,
  'ChatScroll_armless_viewport_fixed': 18,
  'ChatScroll_drag_idle_fixed': 18,
@@ -52,7 +66,18 @@ DEPTH = {'ChatScroll_PKConsumer_after': 42,
  'ChatScroll_turn_wheel_fixed_withturnclear': 18,
  'ChatScroll_unscrolled_wheel_fixed': 18}
 
-VIOLATIONS = {'ChatScroll_PKConsumer_after': {'I_PKConsumerEndpointNotReached': 'Required coverage only: the '
+MOMENTUM_ENDPOINT = ('Required coverage only: the reader history reaches source quiescence; '
+                     'absence fails the control.')
+MOMENTUM_YANK = ('Without momdir, the silent pan onto the end an away lift recorded reads as '
+                 'its fling arriving: the report follows and writes past where the reader stopped.')
+
+VIOLATIONS = {'ChatScroll_MomentumPair_after': {'I_MomentumPairEndpointNotReached': MOMENTUM_ENDPOINT},
+ 'ChatScroll_MomentumPair_before': {'I_IntentHeld': MOMENTUM_YANK,
+                                    'I_MomentumPairEndpointNotReached': MOMENTUM_ENDPOINT},
+ 'ChatScroll_MomentumPair_first_after': {'I_MomentumPairEndpointNotReached': MOMENTUM_ENDPOINT},
+ 'ChatScroll_MomentumPair_first_before': {'I_IntentHeld': MOMENTUM_YANK,
+                                          'I_MomentumPairEndpointNotReached': MOMENTUM_ENDPOINT},
+ 'ChatScroll_PKConsumer_after': {'I_PKConsumerEndpointNotReached': 'Required coverage only: the '
                                                                    'complete reader history '
                                                                    'reaches source quiescence (10 '
                                                                    'states); absence fails the '

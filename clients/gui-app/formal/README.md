@@ -10,7 +10,7 @@ within small budgets and checks what a reader would notice.
 
 `SHIPPED` models pinned OSS main `120982023`, including K (#3110),
 PressKey (#3135), Rule A (#3138), and the away-input follow guard (#3128).
-The generator contains the original 189 exploration configs and twelve paired
+The generator contains the original 189 exploration configs and sixteen paired
 landed-input controls. CI selects measured configurations explicitly in
 `expected.py`; it does not claim a full matrix verdict. Passing cases and
 known failing controls remain distinct.
@@ -24,6 +24,8 @@ known failing controls remain distinct.
 | `keyanswer` (#3110)     | A toward-end key that moves no pixels after input preflight calls follow-end in the same handler, since no scroll report will arrive to answer it.                                                                                                                                                                                                                 |
 | `presskey` (#3135)      | A held scrollbar press keeps its arm through an incoming intent that cannot move the view; an intent that can move replaces it normally. Touch retains its own arm.                                                                                                                                                                                                |
 | `pressqueue` (#3138)    | A correction under a physical press makes its immediate write and keeps retrying, while superseding the queued copy that could land after the reader's next drag.                                                                                                                                                                                                  |
+| `momdir`                | A lift whose finger last moved away records no momentum. The contact's last delivered away touchmove sets a floor; each observation lowers it and every announced write or absorbed viewport clamp carries it. A view risen off it is a reversal no touchmove delivered, which keeps the record.                                                                   |
+| `momaway`               | Momentum only travels toward the end: an observation that reads the reader's credited travel away from it, off the strict bottom, retires the record before arrival is read.                                                                                                                                                                                       |
 
 The old physical contact/tap oracle, existing symptom invariants and ordinary
 frames remain unchanged. `KeyStep` adds a directional one-unit input and its
@@ -47,6 +49,25 @@ report is pending, retaining the restriction on a range decrease that erases
 the drag. This exception is confined to the named T2 pair; ordinary configs
 retain `DragFrame`. The selected bound is 20 states on both sides. Unbounded
 `check.sh`/`run-all.sh` reject this scoped exception.
+
+The four `MomentumPair_*` controls use `ChatScrollMomentumPair` and `ReplaySpec`:
+a delivered contact lifts moving away, the tail grows, then a contact on that
+fling delivers no touch event and pans onto the end the lift recorded. They
+run with `SilentMomentumFrame` lifted, because that frame excludes the report
+that consumes the record, and hold every other frame. Without `momdir` and
+`momaway`, the report follows and writes past where the reader stopped:
+`I_IntentHeld` at 15 states. With them the reader keeps their row and offset
+through source quiescence. Each lane runs twice, the `first` pair with
+`TouchMoveFirstOnly`, where only a contact's first movement delivers a
+touchmove, the platform's guarantee. `I_MomentumPairEndpointNotReached` is an
+inverse coverage observer as in the `PKConsumer` pair, and engine deadlock
+checks catch a disabled mandatory step.
+
+`SilentMomentumFrame` stays on every other config. What it still excludes is a
+toward fling caught by a silent contact on the end the lift recorded, with or
+without a toward pan onto it: no touch, pointer or `scrollend` event tells that
+from the fling reaching the end itself, so the record is consumed and the view
+moves past the contact's stop, on `main` as here.
 
 The two `PKConsumer_*` controls use `ChatScrollPKConsumer` and `ReplaySpec`
 with the ordinary frame. They run a fixed reader history through a held press,
