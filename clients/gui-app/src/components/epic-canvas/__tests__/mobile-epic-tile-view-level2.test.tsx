@@ -21,6 +21,7 @@ import {
   installShellForm,
   SHELL_WIDTH_COLUMN_256,
   SHELL_WIDTH_MENU,
+  SHELL_WIDTH_TWO_TILES,
   type ShellFormHarness,
 } from "../../../../__tests__/mobile-level2-form-harness";
 
@@ -415,6 +416,21 @@ describe("<MobileEpicTileView /> level 2 forms", () => {
       renderView();
       await openMenu();
       showTile("inst-file");
+      expect(screen.queryByTestId("mobile-tile-menu")).toBeNull();
+    });
+
+    it("closes when a tile from an embedded panel is shown beside the first, where two fit", async () => {
+      shell.set({ width: SHELL_WIDTH_TWO_TILES, portrait: false });
+      useMobileTileColumnStore.setState({ collapsed: true });
+      renderView();
+      await openMenu();
+      act(() => {
+        useEpicCanvasStore.getState().setMobileSecondaryTile(TAB_ID, {
+          instanceId: "inst-file",
+          transient: false,
+        });
+      });
+      expect(screen.getByTestId("mobile-epic-second-tile")).not.toBeNull();
       expect(screen.queryByTestId("mobile-tile-menu")).toBeNull();
     });
 

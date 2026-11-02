@@ -61,11 +61,29 @@ interface TileSwitcherListProps {
 }
 
 /**
- * "The list has not seen a shown tile yet." Distinct from `null`, which means it
- * HAS looked and the pane is empty.
+ * "The list has not seen a shown tile yet." Distinct from `null` ids, which
+ * mean it HAS looked and the slot is empty.
  */
 const UNOBSERVED = Symbol("unobserved-shown-tile");
-type ShownInstanceObservation = string | null | typeof UNOBSERVED;
+interface ShownInstanceIds {
+  readonly primaryId: string | null;
+  readonly secondaryId: string | null;
+}
+type ShownObservation = ShownInstanceIds | typeof UNOBSERVED;
+
+/** The tile a change in either watched slot brought on screen, else `null`. */
+function newlyShownTile(
+  previous: ShownInstanceIds,
+  current: ShownInstanceIds & {
+    readonly primaryTile: EpicCanvasTileRef | null;
+    readonly secondaryTile: EpicCanvasTileRef | null;
+  },
+): EpicCanvasTileRef | null {
+  if (current.secondaryId !== previous.secondaryId)
+    return current.secondaryTile;
+  if (current.primaryId !== previous.primaryId) return current.primaryTile;
+  return null;
+}
 
 /** Tile kinds only the embedded File-tree / Git-diff / Pull-requests bodies open. */
 function isEmbedOriginatedTileRef(ref: EpicCanvasTileRef): boolean {
@@ -123,25 +141,35 @@ export function TileSwitcherList(props: TileSwitcherListProps) {
   // shown tile, but must NOT close the surface under the user mid-browse - those
   // row opens close via their own `onClose`.
   //
-  // The tile this list chooses for: the second slot's menu watches the second.
+  // The tiles this list chooses for: a slot's own menu watches that slot, and
+  // a list that places by kind (the column, the sheet, the first tile's menu:
+  // no target) watches both, since its embed open lands beside the chat.
   const reading = useMobileTileReading(tabId);
-  const listsForSecondary =
-    use(MobileTileOpenTargetContext)?.slot === "secondary";
-  const shownTile =
-    (listsForSecondary ? reading.secondary : reading.primary)?.ref ?? null;
-  const shownInstanceId = shownTile?.instanceId ?? null;
-  const shownInstanceIdRef = useRef<ShownInstanceObservation>(UNOBSERVED);
+  const target = use(MobileTileOpenTargetContext)?.slot ?? null;
+  const primaryTile =
+    target === "secondary" ? null : (reading.primary?.ref ?? null);
+  const secondaryTile =
+    target === "primary" ? null : (reading.secondary?.ref ?? null);
+  const primaryId = primaryTile?.instanceId ?? null;
+  const secondaryId = secondaryTile?.instanceId ?? null;
+  const observedRef = useRef<ShownObservation>(UNOBSERVED);
   useEffect(() => {
-    const previous = shownInstanceIdRef.current;
-    shownInstanceIdRef.current = shownInstanceId;
+    const previous = observedRef.current;
+    observedRef.current = { primaryId, secondaryId };
     // Only the FIRST observation after mounting is skipped - it establishes the
     // baseline rather than reporting a change. `null` cannot stand for that: it
     // is also a legitimate observation (an empty pane, which is exactly the
     // state the switcher exists to rescue the user from), and conflating the two
     // left the sheet covering the very first tile opened from an empty pane.
-    if (previous === UNOBSERVED || shownInstanceId === previous) return;
-    if (shownTile !== null && isEmbedOriginatedTileRef(shownTile)) onClose();
-  }, [shownInstanceId, shownTile, onClose]);
+    if (previous === UNOBSERVED) return;
+    const shown = newlyShownTile(previous, {
+      primaryId,
+      secondaryId,
+      primaryTile,
+      secondaryTile,
+    });
+    if (shown !== null && isEmbedOriginatedTileRef(shown)) onClose();
+  }, [primaryId, secondaryId, primaryTile, secondaryTile, onClose]);
 
   return (
     <Tabs
