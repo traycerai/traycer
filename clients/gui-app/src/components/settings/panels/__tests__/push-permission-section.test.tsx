@@ -212,7 +212,7 @@ describe("<PushPermissionSection />", () => {
   it("renders nothing where the shell has no OS push permission", () => {
     renderSection(null);
 
-    expect(screen.queryByText("Push notifications on this phone")).toBeNull();
+    expect(screen.queryByText("Push notifications")).toBeNull();
     expect(screen.queryByTestId("push-permission-state")).toBeNull();
   });
 
@@ -221,11 +221,9 @@ describe("<PushPermissionSection />", () => {
     renderSection(permission.host);
 
     expect(await screen.findByText("On")).toBeTruthy();
-    expect(screen.getByText("Push notifications on this phone")).toBeTruthy();
+    expect(screen.getByText("Push notifications")).toBeTruthy();
     expect(
-      screen.getByText(
-        "Delivered to this phone for the events turned on under Notification events.",
-      ),
+      screen.getByText("Sent for the kinds turned on below."),
     ).toBeTruthy();
     expect(screen.getByTestId("push-permission-state").dataset.state).toBe(
       "granted",
@@ -257,9 +255,7 @@ describe("<PushPermissionSection />", () => {
     const action = await screen.findByRole("button", { name: "Enable" });
     expect(action.dataset.testid).toBe("push-permission-action");
     expect(
-      screen.getByText(
-        "Get buzzed on this phone for the events turned on under Notification events.",
-      ),
+      screen.getByText("Allow Traycer to send push notifications."),
     ).toBeTruthy();
     expect(screen.getByTestId("push-permission-state").dataset.state).toBe(
       "prompt",
@@ -282,7 +278,7 @@ describe("<PushPermissionSection />", () => {
     });
     expect(
       screen.getByText(
-        "Couldn't read this phone's notification setting. permission read failed",
+        "Couldn't read the notification permission. permission read failed",
       ),
     ).toBeTruthy();
     expect(screen.queryByTestId("push-permission-action")).toBeNull();
