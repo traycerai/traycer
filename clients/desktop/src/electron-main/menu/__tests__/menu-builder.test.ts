@@ -256,7 +256,7 @@ describe("buildApplicationMenu", () => {
     const fileMenu = menuByLabel(items, "File").submenu ?? [];
     const item = menuByLabel(fileMenu, "Close Tab");
     expect(item.enabled).toBe(true);
-    expect(item.accelerator).toBe("CmdOrCtrl+W");
+    expect(item.accelerator).toBe("CmdOrCtrl+Shift+W");
     item.click?.(null, null);
     expect(commands).toEqual(["epic.closeTab"]);
   });
@@ -397,7 +397,7 @@ describe("buildApplicationMenu", () => {
     expect(windowMenu.some((item) => item.role === "minimize")).toBe(false);
     expect(windowMenu.some((item) => item.role === "zoom")).toBe(false);
     expect(windowMenu.some((item) => item.role === "front")).toBe(false);
-    expect(closeTab.accelerator).toBe("CmdOrCtrl+W");
+    expect(closeTab.accelerator).toBe("CmdOrCtrl+Shift+W");
     expect(minimize.accelerator).toBe("CmdOrCtrl+M");
     expect(closeWindow.accelerator).toBeUndefined();
     expect(minimize.enabled).toBe(true);
@@ -507,7 +507,7 @@ describe("buildApplicationMenu", () => {
       const windowMenu = menuByLabel(items, "Window").submenu ?? [];
 
       expect(menuByLabel(fileMenu, "Close Tab").accelerator).toBe(
-        "CmdOrCtrl+W",
+        "CmdOrCtrl+Shift+W",
       );
       expect(fileMenu.some((item) => item.role === "quit")).toBe(true);
       expect(fileMenu.some((item) => item.role === "close")).toBe(false);
@@ -544,7 +544,7 @@ describe("buildApplicationMenu", () => {
       const findPrevious = menuByLabel(editMenu, "Find Previous");
       const minimize = menuByLabel(windowMenu, "Minimize");
 
-      expect(closeTab.accelerator).toBe("CmdOrCtrl+W");
+      expect(closeTab.accelerator).toBe("CmdOrCtrl+Shift+W");
       expect(settings.accelerator).toBe("CmdOrCtrl+,");
       expect(find.accelerator).toBe("CommandOrControl+F");
       expect(findNext.accelerator).toBe("CommandOrControl+G");

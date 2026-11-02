@@ -280,9 +280,10 @@ export class BrowserViewChords {
 
   /**
    * Matching deliberately ignores `isAutoRepeat`: a repeat of a reserved chord
-   * still has to be CLAIMED, or it reaches the focus-blind menu accelerator
-   * this policy exists to displace (holding Cmd+W would close the app tab
-   * while the browser tab's asynchronous close is still pending). Whether a
+   * still has to be CLAIMED, or it reaches a focus-blind menu accelerator
+   * on the same key, which this policy exists to displace (a held chord
+   * would run that while the browser tab's asynchronous close is still
+   * pending). Whether a
    * repeat also DISPATCHES is the seam's call - see
    * `handleBeforeInputEvent`, which suppresses it because every reserved
    * chord is one-shot.
