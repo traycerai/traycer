@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { streamRuns } from "./support/chat-send-follow.ts";
 import { fixture, nextFrames } from "./support/fixtures.ts";
 
 // The owner's "stuck after send", against the fixture in
@@ -186,12 +187,6 @@ for (const c of CASES) {
   const name = `${c.kind} / ${c.pattern} wheel ${String(c.delayMs)}ms after ${c.anchor === "enter" ? "Enter" : "turn start"}: the reader stays on the follow line`;
   test(name, async ({ page }) => {
     await openScenario(page, c.kind);
-    if (c.kind === "running") {
-      await page.evaluate(() => {
-        window.__followDriver?.host.streamRich("earlier", 8, 40);
-      });
-      await page.waitForTimeout(600);
-    }
     const scroller = page.getByTestId("chat-messages-scroll");
     const box = await scroller.boundingBox();
     if (box === null) throw new Error("no scroller box");
@@ -199,6 +194,12 @@ for (const c of CASES) {
     await page.getByRole("textbox").click();
     await page.keyboard.type(PROMPT);
     await page.mouse.move(box.x + box.width / 2, box.y + 150);
+    if (c.kind === "running") {
+      await page.evaluate(() => {
+        window.__followDriver?.host.streamRich("earlier", 8, 40);
+      });
+      await streamRuns(page, 15);
+    }
     await startWatching(page);
     await mark(page, "enter");
     await page.keyboard.press("Enter");
@@ -241,16 +242,15 @@ for (const c of CASES) {
     await nextFrames(page, 20);
     await mark(page, "stream");
     await page.evaluate(() => {
-      window.__followDriver?.host.streamRich("reply", 3, 40);
+      window.__followDriver?.host.streamRich("reply", 2, 20);
     });
-    await page.waitForTimeout(5500);
+    await streamRuns(page, 60);
     await Promise.all(nudges);
     await mark(page, "after");
     await page.evaluate(() => {
       window.__followDriver?.host.stopReply();
     });
-    await nextFrames(page, 30);
-    await page.waitForTimeout(500);
+    await nextFrames(page, 45);
     const frames: ChatFollowFrame[] = await page.evaluate(() => {
       window.__followStop?.();
       return [...(window.__followFrames ?? [])];

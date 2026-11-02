@@ -700,6 +700,7 @@ beforeEach(() => {
         crossHostMessaging: null,
         sessions: null,
         updatesExternallyManaged: null,
+        previousExit: null,
       }),
       "environment.host.list": ({ environmentId }) => ({
         hosts: appHost.hostsByEnvironmentId.get(environmentId) ?? [],

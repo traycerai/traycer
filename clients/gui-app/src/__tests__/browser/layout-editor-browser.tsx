@@ -429,6 +429,7 @@ const dockMetricMessengerFactory: MessengerFactory<HostRpcRegistry> = ({
         crossHostMessaging: null,
         sessions: null,
         updatesExternallyManaged: null,
+        previousExit: null,
       }),
       "host.notifications.indicatorState": () => ({
         epics: {},

@@ -260,11 +260,32 @@ export function accumulatedSummarySetComplete(input: {
 }
 
 /**
- * Merge the host's rows with what the ACTIVE turn is writing right now.
+ * What the ACTIVE turn is writing right now: one row per file, in the order
+ * the turn first touched it.
  *
  * The host recomputes its accumulated set at turn boundaries, so mid-turn it is
  * one turn behind: a file the running turn has just created is not in it at
- * all. Walking the rendered messages supplies those missing rows.
+ * all. Walking the rendered messages supplies those rows. A net no-op edit
+ * (equal content-addressed endpoints) has none.
+ */
+export function activeTurnChangeRows(
+  messages: ReadonlyArray<ChatMessage>,
+  activeTurnId: string | null,
+): ReadonlyArray<AccumulatedChangeRow> {
+  const rows: AccumulatedChangeRow[] = [];
+  for (const merged of collectActiveTurnFileChanges(
+    messages,
+    activeTurnId,
+  ).values()) {
+    const row = activeTurnRow(merged);
+    if (row !== null) rows.push(row);
+  }
+  return rows;
+}
+
+/**
+ * The panel's rows: the host's, then the active turn's for every file the host
+ * has no row for.
  *
  * ## The HOST list is the order, not the rendered rows
  *
@@ -280,7 +301,7 @@ export function accumulatedSummarySetComplete(input: {
  * evicted. Taking the host's order fixes that at the root and needs no
  * line-conditional, because the host's answer is the same definition on both.
  *
- * What the rendered rows still supply is the TAIL of the list: a path the host
+ * What the active turn still supplies is the TAIL of the list: a path the host
  * has no row for is one no completed turn has touched, so the active turn is
  * its first toucher and it belongs after everything the host knows.
  *
@@ -294,20 +315,112 @@ export function accumulatedSummarySetComplete(input: {
  * stale number for a file the host knows beats showing a per-edit number that
  * means something different from every other row in the list.
  */
-export function accumulatedChangeRows(
-  messages: ReadonlyArray<ChatMessage>,
+export function mergeAccumulatedChangeRows(
   fromHost: ReadonlyArray<AccumulatedChangeRow>,
-  activeTurnId: string | null,
+  activeRows: ReadonlyArray<AccumulatedChangeRow>,
 ): ReadonlyArray<AccumulatedChangeRow> {
-  const active = collectActiveTurnFileChanges(messages, activeTurnId);
   const hostPaths = new Set(fromHost.map((row) => row.filePath));
   const out: AccumulatedChangeRow[] = [...fromHost];
-  for (const [filePath, merged] of active) {
-    if (hostPaths.has(filePath)) continue;
-    const activeRow = activeTurnRow(merged);
-    if (activeRow !== null) out.push(activeRow);
+  for (const row of activeRows) {
+    if (!hostPaths.has(row.filePath)) out.push(row);
   }
   return out;
+}
+
+/**
+ * Whether two row lists render the same panel: the same rows in the same
+ * order, every field equal.
+ *
+ * This is what lets the active turn's rows keep their identity across a flush
+ * that touched no file. A streamed reasoning or text delta re-derives the
+ * rendered messages, and with them these rows, about thirty times a second;
+ * without the comparison every one of them hands the panel a new list and
+ * every row of it re-renders.
+ */
+export function accumulatedChangeRowListsEqual(
+  left: ReadonlyArray<AccumulatedChangeRow>,
+  right: ReadonlyArray<AccumulatedChangeRow>,
+): boolean {
+  return (
+    left.length === right.length &&
+    // `noUncheckedIndexedAccess` is off, and the lengths already match, so
+    // this index is a value rather than a value-or-undefined.
+    left.every((row, index) => accumulatedChangeRowsEqual(row, right[index]))
+  );
+}
+
+function accumulatedChangeRowsEqual(
+  left: AccumulatedChangeRow,
+  right: AccumulatedChangeRow,
+): boolean {
+  if (left === right) return true;
+  const {
+    filePath,
+    operation,
+    diffSource,
+    reason,
+    undoable,
+    artifact,
+    counts,
+    hasContents,
+    digest,
+    liveDiff,
+    ...unlisted
+  } = left;
+  // A field added to the row and not compared below is never trusted equal:
+  // this assignment stops compiling, and a row carrying one at runtime reads
+  // as changed.
+  const uncompared: Readonly<Record<PropertyKey, never>> = unlisted;
+  return (
+    Object.keys(uncompared).length === 0 &&
+    filePath === right.filePath &&
+    operation === right.operation &&
+    diffSource === right.diffSource &&
+    reason === right.reason &&
+    undoable === right.undoable &&
+    artifactTagsEqual(artifact, right.artifact) &&
+    diffLineCountsEqual(counts, right.counts) &&
+    hasContents === right.hasContents &&
+    digest === right.digest &&
+    liveDiffsEqual(liveDiff, right.liveDiff)
+  );
+}
+
+function artifactTagsEqual(
+  left: CheckpointArtifactTag | null,
+  right: CheckpointArtifactTag | null,
+): boolean {
+  if (left === null || right === null) return left === right;
+  return (
+    left.artifactId === right.artifactId &&
+    left.kind === right.kind &&
+    left.title === right.title
+  );
+}
+
+function diffLineCountsEqual(
+  left: DiffLineCounts | null,
+  right: DiffLineCounts | null,
+): boolean {
+  if (left === null || right === null) return left === right;
+  return (
+    left.additions === right.additions && left.deletions === right.deletions
+  );
+}
+
+function liveDiffsEqual(
+  left: AccumulatedChangeRow["liveDiff"],
+  right: AccumulatedChangeRow["liveDiff"],
+): boolean {
+  if (left === null || right === null) return left === right;
+  return (
+    left.beforeHash === right.beforeHash &&
+    left.afterHash === right.afterHash &&
+    left.sourceBlockIds.length === right.sourceBlockIds.length &&
+    left.sourceBlockIds.every(
+      (blockId, index) => blockId === right.sourceBlockIds[index],
+    )
+  );
 }
 
 /**

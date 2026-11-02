@@ -165,6 +165,7 @@ const compatibleHostStatus: HostStatusResponse = {
   crossHostMessaging: null,
   sessions: null,
   updatesExternallyManaged: null,
+  previousExit: null,
 };
 
 let restoreFetch: () => void = () => undefined;
