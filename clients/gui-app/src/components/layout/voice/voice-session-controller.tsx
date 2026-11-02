@@ -178,6 +178,19 @@ interface Attempt {
   /** What the mint refused with, so a pre-start failure keeps its reason. */
   failure: "credits" | "unavailable" | null;
   cancelled: boolean;
+  /** The account signed in when the attempt began. */
+  readonly account: string | null;
+}
+
+/**
+ * Whether the end route can answer for this attempt: it goes out under whoever
+ * is signed in now, and the server knows a session only to the account that
+ * minted it. After a switch the vendor's close is what ends the session, and the
+ * server's sideband settles its row.
+ */
+function endRouteAnswers(attempt: Attempt): boolean {
+  const current = useAuthStore.getState().contextMetadata?.userId ?? null;
+  return current === null || current === attempt.account;
 }
 
 /**
@@ -802,7 +815,8 @@ export function VoiceSessionController(): ReactNode {
   /**
    * The vendor side of an attempt that is no longer the controller's: the
    * peer's close (confirmed or timed out) and then the server's end route,
-   * for every attempt that was minted, started or not.
+   * for every attempt that was minted, started or not, unless another account
+   * has taken over the window since.
    */
   const settleAttempt = useCallback(
     async (attempt: Attempt): Promise<void> => {
@@ -813,7 +827,7 @@ export function VoiceSessionController(): ReactNode {
           error: describeLogError(error),
         });
       }
-      if (attempt.sessionId === null) return;
+      if (attempt.sessionId === null || !endRouteAnswers(attempt)) return;
       // Best effort: the session is over for the person either way, and the
       // server finalizes an unended row from its sideband. A refusal is
       // the result's kind; a shell whose bridge throws (the desktop's main
@@ -908,6 +922,7 @@ export function VoiceSessionController(): ReactNode {
         startedAt: 0,
         failure: null,
         cancelled: false,
+        account: useAuthStore.getState().contextMetadata?.userId ?? null,
       };
       attemptRef.current = attempt;
       const owns = (): boolean =>
@@ -932,13 +947,15 @@ export function VoiceSessionController(): ReactNode {
                 attempt.sessionId = result.session.voiceSessionId;
                 attempt.expiresAt = result.session.expiresAt;
                 if (!owns()) {
-                  void endAsync(result.session.voiceSessionId).catch(
-                    (error: unknown) => {
-                      appLogger.warn("[voice] end route failed", {
-                        error: describeLogError(error),
-                      });
-                    },
-                  );
+                  if (endRouteAnswers(attempt)) {
+                    void endAsync(result.session.voiceSessionId).catch(
+                      (error: unknown) => {
+                        appLogger.warn("[voice] end route failed", {
+                          error: describeLogError(error),
+                        });
+                      },
+                    );
+                  }
                   throw closedBeforeStart();
                 }
                 return result.session.answerSdp;

@@ -1188,13 +1188,14 @@ describe("the signed-in account switching", () => {
     useAuthStore.setState(initialAuth, true);
   });
 
-  it("ends a live session with the account as the reason, stopping the microphone before the end route is called", async () => {
+  it("ends a live session with the account as the reason, closing the voice with the microphone already stopped and sending no end route for the account that is gone", async () => {
     await bringLive();
     const token = useVoiceSessionStore.getState().sessionToken;
-    const microphoneStoppedAtEnd: boolean[] = [];
-    fake.endVoiceSession.mockImplementation(() => {
-      microphoneStoppedAtEnd.push(fake.track.stop.mock.calls.length > 0);
-      return Promise.resolve({ kind: "ok", closedAt: 1 });
+    const engine = fake.engines[0];
+    const microphoneStoppedAtClose: boolean[] = [];
+    engine.close.mockImplementation(() => {
+      microphoneStoppedAtClose.push(fake.track.stop.mock.calls.length > 0);
+      return Promise.resolve();
     });
 
     signInAs(PROFILE_B, META_B);
@@ -1206,9 +1207,8 @@ describe("the signed-in account switching", () => {
     expect(state.sessionToken).not.toBe(token);
     expect(state.endReason).toBe("account");
     expect(fake.track.stop).toHaveBeenCalled();
-    expect(fake.endVoiceSession).toHaveBeenCalledTimes(1);
-    expect(fake.endVoiceSession).toHaveBeenCalledWith("vs1");
-    expect(microphoneStoppedAtEnd).toEqual([true]);
+    expect(microphoneStoppedAtClose).toEqual([true]);
+    expect(fake.endVoiceSession).not.toHaveBeenCalled();
   });
 
   it("hears nothing more from the session that was ended, so a late utterance of it posts nowhere and moves nothing", async () => {
@@ -1265,13 +1265,12 @@ describe("the signed-in account switching", () => {
     expect(fake.endVoiceSession).not.toHaveBeenCalled();
   });
 
-  it("leaves nothing live when the account switches while the first opening's mint is out, and ends the session that mint then opens", async () => {
+  it("leaves nothing live when the account switches while the first opening's mint is out, and sends no end route for the session that mint then opens", async () => {
     fake.mintHold = fake.deferred<void>();
     await startTalk();
     await grantMicrophone();
     await openMicrophone();
     expect(useVoiceSessionStore.getState().phase).toBe("connecting");
-    expect(fake.endVoiceSession).not.toHaveBeenCalled();
 
     signInAs(PROFILE_B, META_B);
     await settle();
@@ -1287,9 +1286,57 @@ describe("the signed-in account switching", () => {
       await vi.advanceTimersByTimeAsync(0);
     });
 
+    expect(fake.endVoiceSession).not.toHaveBeenCalled();
+    const after = useVoiceSessionStore.getState();
+    expect(after.phase).toBe("idle");
+    expect(after.refusal).toBe("unavailable");
+  });
+
+  it("sends no end route for a session the person ended, when the account switched while the voice's close was still open", async () => {
+    await bringLive();
+    const engine = fake.engines[0];
+    const closeHeld = fake.deferred<void>();
+    engine.close.mockImplementation(() => closeHeld.promise);
+
+    act(() => useVoiceSessionStore.getState().driver?.end());
+    expect(engine.close).toHaveBeenCalledTimes(1);
+    signInAs(PROFILE_B, META_B);
+    await settle();
+    expect(fake.endVoiceSession).not.toHaveBeenCalled();
+    await act(async () => {
+      closeHeld.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(fake.endVoiceSession).not.toHaveBeenCalled();
+    expect(useVoiceSessionStore.getState().phase).toBe("idle");
+  });
+
+  it("sends the end route for a session the person ends while the same account stays signed in", async () => {
+    await bringLive();
+
+    act(() => useVoiceSessionStore.getState().driver?.end());
+    await settle();
+
+    const state = useVoiceSessionStore.getState();
+    expect(state.phase).toBe("idle");
+    expect(state.endReason).toBeNull();
     expect(fake.endVoiceSession).toHaveBeenCalledTimes(1);
     expect(fake.endVoiceSession).toHaveBeenCalledWith("vs1");
-    expect(useVoiceSessionStore.getState().phase).toBe("idle");
+  });
+
+  it("still sends the end route when the window signs out under a live session and the controller then goes away", async () => {
+    await bringLive();
+
+    act(() => useAuthStore.getState().setSignedOut());
+    await settle();
+    expect(useVoiceSessionStore.getState().phase).toBe("live");
+    expect(fake.endVoiceSession).not.toHaveBeenCalled();
+    cleanup();
+    await settle();
+
+    expect(fake.endVoiceSession).toHaveBeenCalledTimes(1);
+    expect(fake.endVoiceSession).toHaveBeenCalledWith("vs1");
   });
 });
 
