@@ -138,6 +138,7 @@ export function buildConfigHostFixture(options: {
         crossHostMessaging: null,
         sessions: null,
         updatesExternallyManaged: null,
+        previousExit: null,
       };
     },
     "config.shell.get": async () => {
