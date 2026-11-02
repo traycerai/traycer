@@ -14,7 +14,7 @@ import {
   type VerifyStepUpResponse,
 } from "@traycer/protocol/auth/devices-sessions";
 import type { z } from "zod";
-import { composeRequestAbort } from "./request-abort";
+import { composeRequestAbort, untilAborted } from "./request-abort";
 
 const DEVICES_SESSIONS_FETCH_TIMEOUT_MS = 10_000;
 const STEP_UP_REQUIRED_REASON = "step_up_required";
@@ -119,12 +119,15 @@ async function fetchAuthn(
     DEVICES_SESSIONS_FETCH_TIMEOUT_MS,
   );
   try {
-    const response = await fetch(authnApiUrl(authnBaseUrl, path), {
-      ...init,
-      headers: jsonHeaders(bearerToken),
-      signal: abort.signal,
-    });
-    const text = await response.text();
+    const response = await untilAborted(
+      fetch(authnApiUrl(authnBaseUrl, path), {
+        ...init,
+        headers: jsonHeaders(bearerToken),
+        signal: abort.signal,
+      }),
+      abort.signal,
+    );
+    const text = await untilAborted(response.text(), abort.signal);
     return new Response(NULL_BODY_STATUSES.has(response.status) ? null : text, {
       status: response.status,
       statusText: response.statusText,

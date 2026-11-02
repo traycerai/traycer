@@ -1167,3 +1167,69 @@ describe("caller signal composition without AbortSignal.any", () => {
     expect((await pending).kind).toBe("network-error");
   });
 });
+
+describe("refreshOnceAbortable on a fetch that ignores its signal", () => {
+  const ARGS = {
+    authnBaseUrl: AUTHN_BASE_URL,
+    token: "stale-bearer",
+    refreshToken: "stale-refresh",
+    clientKind: null,
+    signal: null,
+  } as const;
+  // AUTH_FETCH_TIMEOUT_MS
+  const REFRESH_TIMEOUT_MS = 10_000;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("settles at the deadline as a network error when the request never completes", async () => {
+    // Like CapacitorHttp's patched fetch: the signal is dropped, so only the
+    // deadline can settle the request.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(() => new Promise<Response>(() => undefined)),
+    );
+    let settled = false;
+
+    const pending = refreshOnceAbortable(ARGS);
+    void pending.then(() => {
+      settled = true;
+    });
+
+    await vi.advanceTimersByTimeAsync(REFRESH_TIMEOUT_MS - 1);
+    expect(settled).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(settled).toBe(true);
+    expect(await pending).toEqual({ kind: "network-error" });
+  });
+
+  it("settles at the deadline as a network error when a 200 body never arrives", async () => {
+    const response = new Response(null, { status: 200 });
+    const json = vi
+      .spyOn(response, "json")
+      .mockImplementation(() => new Promise<unknown>(() => undefined));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async () => response),
+    );
+    let settled = false;
+
+    const pending = refreshOnceAbortable(ARGS);
+    void pending.then(() => {
+      settled = true;
+    });
+
+    await vi.advanceTimersByTimeAsync(REFRESH_TIMEOUT_MS - 1);
+    expect(json).toHaveBeenCalledTimes(1);
+    expect(settled).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(settled).toBe(true);
+    expect(await pending).toEqual({ kind: "network-error" });
+  });
+});

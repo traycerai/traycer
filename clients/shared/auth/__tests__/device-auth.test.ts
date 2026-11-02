@@ -6,10 +6,11 @@
  * into a single `network-error` / `rejected`. This suite pins that mapping
  * status-by-status, the `/device/authorize` parsing, and the backoff helper.
  */
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   applySlowDown,
   createPollSchedule,
+  DEFAULT_DEVICE_REQUEST_TIMEOUT_MS,
   describeDeviceRequestFailure,
   isDeviceExpired,
   MAX_POLL_INTERVAL_SECONDS,
@@ -642,6 +643,62 @@ describe("cancellation and timeout", () => {
       describeDeviceRequestFailure({ kind: "transport", code: "tls" }),
     ).toBe("transport code=tls");
   });
+});
+
+describe("a device request on a fetch that ignores its signal", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it.each([
+    {
+      name: "startDeviceAuthorization",
+      call: () =>
+        startDeviceAuthorization(
+          AUTHN_BASE_URL,
+          { clientId: "cli", hostLabel: "host" },
+          { signal: undefined, timeoutMs: DEFAULT_DEVICE_REQUEST_TIMEOUT_MS },
+        ),
+    },
+    {
+      name: "pollDeviceToken",
+      call: () =>
+        pollDeviceToken(AUTHN_BASE_URL, "dev-code", "cli", {
+          signal: undefined,
+          timeoutMs: DEFAULT_DEVICE_REQUEST_TIMEOUT_MS,
+        }),
+    },
+  ])(
+    "$name: settles at the deadline as a timeout network error when the request never completes",
+    async ({ call }) => {
+      // Like CapacitorHttp's patched fetch: the signal is dropped, so only the
+      // deadline can settle the request.
+      vi.stubGlobal(
+        "fetch",
+        vi.fn<typeof fetch>(() => new Promise<Response>(() => undefined)),
+      );
+      let settled = false;
+
+      const pending = call();
+      void pending.then(() => {
+        settled = true;
+      });
+
+      await vi.advanceTimersByTimeAsync(DEFAULT_DEVICE_REQUEST_TIMEOUT_MS - 1);
+      expect(settled).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(settled).toBe(true);
+      expect(await pending).toEqual({
+        kind: "network-error",
+        cause: { kind: "timeout" },
+      });
+    },
+  );
 });
 
 describe("backoff helper", () => {
