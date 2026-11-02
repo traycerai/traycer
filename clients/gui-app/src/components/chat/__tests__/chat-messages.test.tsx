@@ -7622,6 +7622,132 @@ describe("ChatMessages scroll policy", () => {
       view.unmount();
     });
 
+    it("follows the latest once a split turn's cold slices hydrate without the saved segment", async () => {
+      // The cold-to-gone transition: the mount waits on the slices, and when
+      // every one is drawn and none names the segment, the pending coordinate
+      // is retired and the reader follows the latest.
+      const rowCount = 60;
+      const firstSliceOrdinal = 20;
+      const turnRowId = "assistant:turn-cold-then-gone";
+      const firstSliceRowId = `${turnRowId}:part:0`;
+      const steerRowId = "steer:queue-item-1";
+      const secondSliceRowId = `${turnRowId}:part:1`;
+      const turnRowIds: Record<number, string> = {
+        [firstSliceOrdinal]: firstSliceRowId,
+        [firstSliceOrdinal + 1]: steerRowId,
+        [firstSliceOrdinal + 2]: secondSliceRowId,
+      };
+      const skeleton = Array.from({ length: rowCount }, (_unused, ordinal) => {
+        const role: "user" | "assistant" =
+          ordinal === firstSliceOrdinal + 1 ? "user" : "assistant";
+        return {
+          rowId: turnRowIds[ordinal] ?? `row-${ordinal}`,
+          createdAt: ordinal,
+          role,
+          byteLength: 80,
+          bodyDigest: `digest-${ordinal}`,
+        };
+      });
+      const coldWindow: TranscriptWindow = {
+        ...emptyTranscriptWindow(),
+        epoch: 1,
+        rowCount,
+        skeleton,
+        skeletonRevision: 2,
+        skeletonComplete: true,
+        skeletonStreamCoveredThrough: rowCount,
+        indexRevision: 2,
+        indexRevisionRebuilding: false,
+      };
+      const hydratedWindow: TranscriptWindow = {
+        ...coldWindow,
+        spans: [
+          {
+            fromOrdinal: firstSliceOrdinal,
+            rowIds: [firstSliceRowId, steerRowId, secondSliceRowId],
+            rowContext: {},
+            messageIds: [],
+            eventIds: [],
+            contextBytes: 0,
+          },
+        ],
+      };
+      // The text the reader was on moved behind the steer and now starts the
+      // second slice: no drawn part names it.
+      const hydratedTurn: ChatMessageModel[] = [
+        {
+          ...makeMessageAt(0, "assistant", 1_000),
+          id: firstSliceRowId,
+          completedAt: 1_100,
+          segments: [assistantTextSegment("text-first", "Before the steer.")],
+        },
+        {
+          ...makeMessageAt(0, "user", 1_150),
+          id: steerRowId,
+          content: "queued while the turn ran",
+        },
+        {
+          ...makeMessageAt(0, "assistant", 1_160),
+          id: secondSliceRowId,
+          completedAt: 1_200,
+          segments: [
+            assistantTextSegment("text-later", "Resumed behind the steer."),
+          ],
+        },
+      ];
+      const instanceId = `steer-split-cold-gone-${Math.random().toString(36).slice(2)}`;
+      const identity = makeTestIdentity(instanceId, "epic-1", "task-1");
+      saveChatTabState({
+        identity,
+        mode: "free-scrolling",
+        anchorMessageId: `${turnRowId}#text-later`,
+        anchorRowKey: turnRowId,
+        anchorIndex: firstSliceOrdinal + 1,
+        offset: 24,
+      });
+      const ranges: Array<OrdinalRange | null> = [];
+      setLegendListScrollContainerScrollHeightOverride(
+        LEGEND_LIST_HEADER_PX + rowCount * TICKET_13_ROW_HEIGHT_PX + 40,
+      );
+      tileLiveness.live = true;
+      const view = renderChatMessages({
+        messages: [],
+        instanceId,
+        epicId: "epic-1",
+        taskId: "task-1",
+        transcriptWindow: coldWindow,
+        onVisibleOrdinalRangeChange: (range) => ranges.push(range),
+      });
+      await waitFor(() => {
+        expect(ranges).toContainEqual({
+          fromOrdinal: firstSliceOrdinal,
+          toOrdinal: firstSliceOrdinal + 3,
+        });
+      });
+      await settleLegendList();
+      expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+
+      view.rerenderWith({
+        messages: hydratedTurn,
+        transcriptWindow: hydratedWindow,
+      });
+      await waitFor(() => {
+        expect(getScrollNode().dataset.scrollMode).toBe("following-end");
+      });
+      await waitForNavigationSettle();
+      await waitFor(() => {
+        expect(getScrollNode().scrollTop).toBe(
+          maxScrollTopFor(getScrollNode()),
+        );
+      });
+
+      view.unmount();
+      expect(peekSavedChatTabState(identity)).toMatchObject({
+        mode: "following-end",
+        anchorMessageId: null,
+      });
+    });
+
     it("failed hydration landing retains the coordinate for a later messages-change retry", async () => {
       // The late-hydration catch-up must not
       // clear the pending id / session fallback before a validated landing.

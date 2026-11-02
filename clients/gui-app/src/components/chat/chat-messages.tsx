@@ -4594,6 +4594,17 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   // clear (`cancelTimelineLiveFollowForUserNavigation`'s
   // `publishesReaderPosition` branch, `navigateToMessage`,
   // `releaseForExplicitNavigation`), independent of this effect.
+  //
+  // The split's gone outcome retires the pending coordinate and publishes
+  // following-end through `scrollToEnd`, which sets state: a microtask, as an
+  // effect body may not set state itself. An effect event rather than a
+  // dependency: the effect re-runs on `listRows`, and must not also re-run
+  // because the callback's identity moved.
+  const followLatestAfterSplit = useEffectEvent((): void => {
+    queueMicrotask(() => {
+      scrollToEnd(false);
+    });
+  });
   useEffect(() => {
     const anchorId = pendingHydrationRestoreAnchorIdRef.current;
     if (anchorId === null) return;
@@ -4624,11 +4635,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
           return;
         }
         if (split.state.anchorMessageId === null) {
-          // Retires the pending coordinate and publishes following-end; a
-          // microtask because it sets state, which an effect body may not.
-          queueMicrotask(() => {
-            scrollToEnd(false);
-          });
+          followLatestAfterSplit();
           return;
         }
         restorePersistedTimelineLocation(
@@ -4680,7 +4687,6 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     onVisibleOrdinalRangeChange,
     rawSavedTabState,
     restorePersistedTimelineLocation,
-    scrollToEnd,
   ]);
 
   const onMinimapItemSelect = useCallback(
