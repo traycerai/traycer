@@ -1805,6 +1805,31 @@ describe("the task store floor", () => {
   const TASK_FLOOR_STOPPED_ASIDE =
     "Host task store could not be read; the task-store floor stood aside";
 
+  /**
+   * The floor reached the task-store decision instead of returning before it.
+   *
+   * Three exits return first, each logging its own line: the target is the
+   * installed archive, the move is not a downgrade, and the target is off the
+   * ladder. A case that writes a store and then takes one of them passes
+   * without the floor ever reading what it wrote - which is how an inherited
+   * installed version silently turned one of these cases into an upgrade.
+   * Asserted as the absence of all three rather than the presence of a
+   * clearance line, because every clearance line past this point belongs to
+   * the chat side, and a case about the task store should not redden when the
+   * chat shortcut stops applying to it.
+   */
+  function expectFloorReachedTaskStore(
+    logger: ILogger & { readonly calls: RecordedCall[] },
+  ): void {
+    for (const message of [
+      "Host store-format floor cleared: the target is the installed archive",
+      "Host store-format floor not consulted",
+      "Host store-format floor stood aside",
+    ]) {
+      expect(logger.calls.some((call) => call.message === message)).toBe(false);
+    }
+  }
+
   async function writeTaskStoreDb(
     userVersion: number,
     wal: boolean,
@@ -1838,9 +1863,8 @@ describe("the task store floor", () => {
       // is above. A case whose target is NEWER than this has to name its own
       // installed build, or the move is an upgrade: `storeFloorApplicability`
       // sends every upgrade straight out, and nothing the case puts on disk
-      // is ever read. The newest-era cases assert the absence of the "not
-      // consulted" line an upgrade would log, so this cannot go wrong
-      // silently again.
+      // is ever read. A case that writes a store and expects no refusal calls
+      // `expectFloorReachedTaskStore`, which fails on that exit.
       installedVersion: "1.5.0",
       installedStoreFormats: { chatDb: 20 },
       provenance: NO_PROVENANCE,
@@ -2008,14 +2032,7 @@ describe("the task store floor", () => {
     expect(
       logger.calls.some((call) => call.message === TASK_FLOOR_STOPPED_ASIDE),
     ).toBe(false);
-    // The specific line, not merely a resolved promise: an upgrade would log
-    // "not consulted" instead, and this case would pass without the floor
-    // ever looking at the store it set up.
-    expect(
-      logger.calls.some(
-        (call) => call.message === "Host store-format floor not consulted",
-      ),
-    ).toBe(false);
+    expectFloorReachedTaskStore(logger);
   });
 
   it("consent passes the task-only refusal and logs it at WARN", async () => {
@@ -2129,10 +2146,12 @@ describe("the task store floor", () => {
 
   // Not the cap: a newest-era target never reaches `taskStoreFloorBlock`, so
   // nothing here can tell `min(onDisk, NEWEST)` from `onDisk`. The protocol's
-  // own suite owns that. What this covers is the pair the CLI decides - a
-  // newest-era target opens no store however high the stamp, and a target the
-  // table proves too old refuses naming the stamp UNCAPPED.
-  it("opens no task store over a stamp above the table, and names that stamp uncapped when it refuses", async () => {
+  // own suite owns that. The newest-era pass below is setup: it establishes
+  // that a stamp above the table refuses nothing, and over a READABLE file an
+  // open leaves no trace at all, so "opens no store" is the corrupt-file
+  // case's claim and not this one's. What this case carries is the refusal -
+  // the stamp it names is the one on disk, UNCAPPED.
+  it("names a stamp above the table uncapped when it refuses a target the table proves too old", async () => {
     await writeTaskStoreDb(6, false);
     const logger = fakeLogger();
 
@@ -2145,14 +2164,9 @@ describe("the task store floor", () => {
       ),
     ).resolves.toBeUndefined();
 
-    // The specific line, not merely a resolved promise: an upgrade would log
-    // "not consulted" instead, and this case would pass without the floor
-    // ever looking at the store it set up.
-    expect(
-      logger.calls.some(
-        (call) => call.message === "Host store-format floor not consulted",
-      ),
-    ).toBe(false);
+    // Before the refusal below, so it reads a logger holding only the
+    // newest-era half's calls and isolates that half.
+    expectFloorReachedTaskStore(logger);
 
     const err = await refusalOf(rollbackInput(logger, {}));
     expect(err.details?.onDiskTaskStore).toBe(6);
