@@ -573,6 +573,7 @@ describe("useHostQuery auth readiness", () => {
             crossHostMessaging: null,
             sessions: null,
             updatesExternallyManaged: null,
+            previousExit: null,
           };
         },
       },
@@ -1207,6 +1208,7 @@ function createHostQueryFixture(): {
           crossHostMessaging: null,
           sessions: null,
           updatesExternallyManaged: null,
+          previousExit: null,
         };
       },
     },
@@ -1274,6 +1276,7 @@ function createEndpointGatedHostQueryFixture(): {
             crossHostMessaging: null,
             sessions: null,
             updatesExternallyManaged: null,
+            previousExit: null,
           };
         },
       },
@@ -1442,6 +1445,7 @@ const STATUS_RESPONSE = {
   crossHostMessaging: null,
   sessions: null,
   updatesExternallyManaged: null,
+  previousExit: null,
 } as const;
 
 /**

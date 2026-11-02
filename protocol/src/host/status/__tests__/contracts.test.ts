@@ -12,6 +12,7 @@ import {
   hostStatusUpgradeV17ToV18,
   hostStatusUpgradeV18ToV19,
   hostStatusUpgradeV19ToV110,
+  hostStatusUpgradeV110ToV111,
   hostStatusV10,
   hostStatusV11,
   hostStatusV12,
@@ -23,6 +24,7 @@ import {
   hostStatusV18,
   hostStatusV19,
   hostStatusV110,
+  hostStatusV111,
 } from "../contracts";
 
 const V10_RESPONSE = {
@@ -389,10 +391,10 @@ describe("host.status registry membership", () => {
     expect(hostStatusV18.requestSchema).toBe(hostStatusV17.requestSchema);
   });
 
-  it("installs @1.0 through @1.10 on the unary registry at major 1", () => {
+  it("installs @1.0 through @1.11 on the unary registry at major 1", () => {
     const entry = hostRpcRegistry["host.status"];
     expect(entry).toBeDefined();
-    expect(entry[1].latestMinor).toBe(10);
+    expect(entry[1].latestMinor).toBe(11);
     expect(entry[1].versions[0].contract).toBe(hostStatusV10);
     expect(entry[1].versions[1].contract).toBe(hostStatusV11);
     expect(entry[1].versions[2].contract).toBe(hostStatusV12);
@@ -430,6 +432,10 @@ describe("host.status registry membership", () => {
     expect(entry[1].versions[10].contract).toBe(hostStatusV110);
     expect(entry[1].versions[10].upgradeFromPreviousVersion).toBe(
       hostStatusUpgradeV19ToV110,
+    );
+    expect(entry[1].versions[11].contract).toBe(hostStatusV111);
+    expect(entry[1].versions[11].upgradeFromPreviousVersion).toBe(
+      hostStatusUpgradeV110ToV111,
     );
   });
 });
@@ -616,5 +622,65 @@ describe("hostStatusUpgradeV19ToV110", () => {
       updatesExternallyManaged: true,
     });
     expect("updatesExternallyManaged" in parsed).toBe(false);
+  });
+});
+
+const V110_RESPONSE = {
+  ...V19_RESPONSE,
+  updatesExternallyManaged: null,
+};
+
+const PREVIOUS_EXIT = {
+  kind: "out-of-memory",
+  endedAt: 1_700_000_000_000,
+  heapLimitBytes: 4_831_838_208,
+  heapUsedBytes: null,
+} as const;
+
+describe("hostStatusUpgradeV110ToV111", () => {
+  it("upgrades a v1.10 response with previousExit: null, NOT a fabricated clean exit", () => {
+    const parsed = hostStatusV110.responseSchema.parse(V110_RESPONSE);
+    const upgraded = hostStatusUpgradeV110ToV111.upgradeResponse(parsed);
+    expect(upgraded.previousExit).toBeNull();
+    expect(() => hostStatusV111.responseSchema.parse(upgraded)).not.toThrow();
+  });
+
+  it("leaves the request identity-mapped", () => {
+    expect(hostStatusUpgradeV110ToV111.upgradeRequest({})).toEqual({});
+  });
+
+  it("requires the key at 1.11 and round-trips a reported exit", () => {
+    expect(hostStatusV111.responseSchema.safeParse(V110_RESPONSE).success).toBe(
+      false,
+    );
+    const parsed = hostStatusV111.responseSchema.parse({
+      ...V110_RESPONSE,
+      previousExit: PREVIOUS_EXIT,
+    });
+    expect(parsed.previousExit).toEqual(PREVIOUS_EXIT);
+  });
+
+  it("refuses an unknown kind and a negative or fractional number", () => {
+    for (const bad of [
+      { ...PREVIOUS_EXIT, kind: "melted" },
+      { ...PREVIOUS_EXIT, endedAt: -1 },
+      { ...PREVIOUS_EXIT, endedAt: 1.5 },
+      { ...PREVIOUS_EXIT, heapLimitBytes: -1 },
+    ]) {
+      expect(
+        hostStatusV111.responseSchema.safeParse({
+          ...V110_RESPONSE,
+          previousExit: bad,
+        }).success,
+      ).toBe(false);
+    }
+  });
+
+  it("strips previousExit when a v1.10 caller re-parses the reply", () => {
+    const parsed = hostStatusV110.responseSchema.parse({
+      ...V110_RESPONSE,
+      previousExit: PREVIOUS_EXIT,
+    });
+    expect("previousExit" in parsed).toBe(false);
   });
 });

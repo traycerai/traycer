@@ -204,6 +204,7 @@ export function buildOverviewHostFixture(options: {
         crossHostMessaging: null,
         sessions: null,
         updatesExternallyManaged: options.updatesExternallyManaged ?? null,
+        previousExit: null,
       };
     },
     "host.identity.get": () => ({ ...identity }),

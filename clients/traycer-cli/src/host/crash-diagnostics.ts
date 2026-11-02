@@ -725,6 +725,11 @@ export interface CrashReportMatch {
   readonly summary: string | null;
   /** The report's memory numbers; every field `null` when unreadable. */
   readonly memory: CrashReportMemory;
+  /**
+   * Whether the report says the V8 heap reached its limit: Node's trigger for
+   * that abort is `OOMError`. `false` when the report is unreadable.
+   */
+  readonly heapOutOfMemory: boolean;
 }
 
 /**
@@ -763,7 +768,12 @@ export async function findCrashReportSince(
     return null;
   }
   const read = await summarizeReport(join(dir, newest.name));
-  return { filename: newest.name, summary: read.summary, memory: read.memory };
+  return {
+    filename: newest.name,
+    summary: read.summary,
+    memory: read.memory,
+    heapOutOfMemory: read.heapOutOfMemory,
+  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -801,7 +811,11 @@ function asResidentBytes(value: unknown): number | null {
 interface ReportReading {
   readonly summary: string | null;
   readonly memory: CrashReportMemory;
+  readonly heapOutOfMemory: boolean;
 }
+
+/** Node's `header.trigger` for a V8 heap-limit abort. */
+const HEAP_OUT_OF_MEMORY_TRIGGER = "OOMError";
 
 async function summarizeReport(path: string): Promise<ReportReading> {
   try {
@@ -843,8 +857,9 @@ async function summarizeReport(path: string): Promise<ReportReading> {
       if (used !== null) parts.push(`${label}=${used}`);
     }
     if (message !== null) parts.push(`js=${message}`);
+    const heapOutOfMemory = trigger === HEAP_OUT_OF_MEMORY_TRIGGER;
     if (parts.length === 0) {
-      return { summary: null, memory };
+      return { summary: null, memory, heapOutOfMemory };
     }
     // ENFORCED, not just documented: these values come verbatim out of the
     // report JSON, and a `javascriptStack.message` carrying a line
@@ -857,8 +872,9 @@ async function summarizeReport(path: string): Promise<ReportReading> {
         REPORT_SUMMARY_MAX_CHARS,
       ),
       memory,
+      heapOutOfMemory,
     };
   } catch {
-    return { summary: null, memory: NO_REPORT_MEMORY };
+    return { summary: null, memory: NO_REPORT_MEMORY, heapOutOfMemory: false };
   }
 }

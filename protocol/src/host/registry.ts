@@ -468,12 +468,14 @@ import {
   hostStatusUpgradeV17ToV18,
   hostStatusUpgradeV18ToV19,
   hostStatusUpgradeV19ToV110,
+  hostStatusUpgradeV110ToV111,
   hostStatusV15,
   hostStatusV16,
   hostStatusV17,
   hostStatusV18,
   hostStatusV19,
   hostStatusV110,
+  hostStatusV111,
 } from "@traycer/protocol/host/status/contracts";
 import {
   hostRestartUpgradeV10ToV11,
@@ -13847,7 +13849,7 @@ const HOST_RPC_ID_CARRYING_REGISTRY_DEFINITION = {
   },
   "host.status": {
     1: {
-      latestMinor: 10,
+      latestMinor: 11,
       versions: {
         0: {
           contract: hostStatusV10,
@@ -13899,6 +13901,13 @@ const HOST_RPC_ID_CARRYING_REGISTRY_DEFINITION = {
         10: {
           contract: hostStatusV110,
           upgradeFromPreviousVersion: hostStatusUpgradeV19ToV110,
+        },
+        // @1.11 adds `previousExit`: how the host that ran before this one
+        // ended, from the supervisor's record (an out-of-memory abort above
+        // all, traycerai/traycer#2366).
+        11: {
+          contract: hostStatusV111,
+          upgradeFromPreviousVersion: hostStatusUpgradeV110ToV111,
         },
       },
       downgradePathsFromLatest: {},

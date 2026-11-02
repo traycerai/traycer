@@ -223,6 +223,7 @@ const messengerFactory: MessengerFactory<HostRpcRegistry> = ({ registry }) =>
         crossHostMessaging: null,
         sessions: null,
         updatesExternallyManaged: null,
+        previousExit: null,
       }),
       "agent.gui.listHarnesses": () => ({ harnesses: HARNESS_OPTIONS }),
       "agent.gui.listModels": ({ harnessId }) => ({

@@ -20,6 +20,9 @@ import type {
 // the Node readers), and `host/maintenance/schemas.ts` already puts these
 // records on the wire the same way.
 import { hostInstallSourceKindSchema } from "@traycer/protocol/config/installation-records";
+// A VALUE import of the pure half of the previous-exit record, for the same
+// reason: `host-previous-exit-kinds` imports nothing from Node.
+import { HOST_PREVIOUS_EXIT_KINDS } from "@traycer/protocol/config/host-previous-exit-kinds";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 export const hostStatusV10 = defineRpcContract({
@@ -967,4 +970,51 @@ export const hostStatusUpgradeV19ToV110 = defineUpgradePath<
     ...response,
     updatesExternallyManaged: null,
   }),
+});
+
+/**
+ * How the host process that ran before this one ended, as the supervisor
+ * recorded it (`@traycer/protocol/config/host-previous-exit`), read once at
+ * boot. `kind` is that record's closed set; `endedAt` is epoch ms; the heap
+ * numbers are the diagnostic report's, `null` when there was none.
+ */
+export const hostStatusPreviousExitSchema = lazySchema(() =>
+  z.object({
+    kind: z.enum(HOST_PREVIOUS_EXIT_KINDS),
+    endedAt: z.number().int().nonnegative(),
+    heapLimitBytes: z.number().int().nonnegative().nullable(),
+    heapUsedBytes: z.number().int().nonnegative().nullable(),
+  }),
+);
+export type HostStatusPreviousExit = z.infer<
+  typeof hostStatusPreviousExitSchema
+>;
+
+/**
+ * v1.11 adds `previousExit`. `null` means nothing is known: a peer below this
+ * minor, a supervisor that wrote no record, or a record this host could not
+ * read. Every other field is v1.10's, unchanged.
+ */
+export const hostStatusV111 = defineRpcContract({
+  method: "host.status",
+  schemaVersion: { major: 1, minor: 11 } as const,
+  requestSchema: hostStatusV110.requestSchema,
+  responseSchema: lazySchema(() =>
+    hostStatusV110.responseSchema.extend({
+      previousExit: hostStatusPreviousExitSchema.nullable(),
+    }),
+  ),
+});
+
+// A pre-1.11 peer never said how its predecessor ended: `null`, never a clean
+// exit - "the last host exited cleanly" about a host that was never asked is
+// the fabrication every upgrade above refuses.
+export const hostStatusUpgradeV110ToV111 = defineUpgradePath<
+  typeof hostStatusV110,
+  typeof hostStatusV111
+>({
+  from: hostStatusV110.schemaVersion,
+  to: hostStatusV111.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({ ...response, previousExit: null }),
 });

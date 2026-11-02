@@ -857,6 +857,22 @@ describe("findCrashReportSince", () => {
     });
   });
 
+  it.each([
+    ["OOMError", true],
+    ["FatalError", false],
+  ])("reads heapOutOfMemory from the trigger %s", async (trigger, expected) => {
+    const sinceMs = Date.now() - 1_000;
+    const path = join(dir, "trigger.json");
+    await writeFile(
+      path,
+      JSON.stringify({ header: { event: "Allocation failed", trigger } }),
+      "utf8",
+    );
+    await utimes(path, new Date(sinceMs + 100), new Date(sinceMs + 100));
+    const match = await findCrashReportSince(dir, sinceMs, EMPTY_EXCLUDE);
+    expect(match?.heapOutOfMemory).toBe(expected);
+  });
+
   it("returns filename with null summary when JSON is unreadable", async () => {
     const sinceMs = Date.now() - 1_000;
     const path = join(dir, "broken.json");
@@ -867,6 +883,7 @@ describe("findCrashReportSince", () => {
     expect(match).toEqual({
       filename: "broken.json",
       summary: null,
+      heapOutOfMemory: false,
       memory: NO_REPORT_MEMORY,
     });
   });
