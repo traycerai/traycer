@@ -200,6 +200,81 @@ describe("chat-tab-persistence-key", () => {
 });
 
 describe("ticket 15 dual-key scroll cache", () => {
+  describe("a steer splitting the anchored turn", () => {
+    // A same-turn steer renames every row of the turn it lands in
+    // (`assistant:<key>` -> `assistant:<key>:part:<n>`), so a position saved
+    // inside that turn names a row no list draws again - gone, not cold.
+    const turn = "assistant:turn-7";
+    const splitRowKeys = [
+      "row-before",
+      `${turn}:part:0`,
+      `${turn}:part:0#text-later`,
+      "steer:queue-item-1",
+      `${turn}:part:1`,
+      "row-after",
+    ];
+    it("lands a part anchor on the slice part cutting at its segment, offset kept", () => {
+      const id = chatIdIdentity("split-part-anchor");
+      saveChatTabState({
+        identity: id,
+        mode: "free-scrolling",
+        anchorMessageId: `${turn}#text-later`,
+        anchorRowKey: turn,
+        anchorIndex: 2,
+        offset: 31,
+      });
+      const expected = {
+        mode: "free-scrolling",
+        anchorMessageId: `${turn}:part:0#text-later`,
+        anchorRowKey: `${turn}:part:0`,
+        anchorIndex: 2,
+        offset: 31,
+      };
+      expect(restoreChatTabState(id, splitRowKeys)).toEqual(expected);
+      expect(restoreChatTabStateForMount(id, splitRowKeys)).toEqual(expected);
+    });
+
+    it("lands the turn's own anchor on its first slice, offset kept", () => {
+      const id = chatIdIdentity("split-turn-anchor");
+      saveChatTabState({
+        identity: id,
+        mode: "free-scrolling",
+        anchorMessageId: turn,
+        anchorIndex: 1,
+        offset: 12,
+      });
+      expect(restoreChatTabState(id, splitRowKeys)).toEqual({
+        mode: "free-scrolling",
+        anchorMessageId: `${turn}:part:0`,
+        anchorIndex: 1,
+        offset: 12,
+      });
+    });
+
+    it("leaves a part no slice names yet in the pending shape", () => {
+      // Part keys exist only on drawn rows: the part is behind a cold slice
+      // or gone, which keys alone cannot tell apart. The mount decides from
+      // the rows (chat-messages.test.tsx covers both outcomes).
+      const id = chatIdIdentity("split-unnamed-segment");
+      saveChatTabState({
+        identity: id,
+        mode: "free-scrolling",
+        anchorMessageId: `${turn}#text-streaming`,
+        anchorRowKey: turn,
+        anchorIndex: 3,
+        offset: 40,
+      });
+      const pending = {
+        mode: "free-scrolling",
+        anchorMessageId: null,
+        anchorIndex: null,
+        offset: 0,
+      };
+      expect(restoreChatTabState(id, splitRowKeys)).toEqual(pending);
+      expect(restoreChatTabStateForMount(id, splitRowKeys)).toEqual(pending);
+    });
+  });
+
   describe("mounting a free scroll that resolves to no anchor", () => {
     const followingLatest = {
       mode: "following-end",
