@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import {
+  transcriptMounted,
   expectAtRest,
   expectPositionKept,
   intentOf,
@@ -62,7 +63,7 @@ async function load(page: Page, mode: Mode): Promise<() => Promise<string>> {
     });
   }
   await page.goto(fixture("chat-scroll-model"));
-  await nextFrames(page, 30);
+  await transcriptMounted(page);
   const stopTimeline = await startTimeline(page);
   const view = await expectAtRest(page, { kind: "tail" }, "load");
   expect(view.mode).toBe("following-end");

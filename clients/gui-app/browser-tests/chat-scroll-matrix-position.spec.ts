@@ -1,5 +1,6 @@
 import { test, type Page } from "@playwright/test";
 import {
+  transcriptMounted,
   expectAtRest,
   expectPositionKept,
   intentOf,
@@ -28,7 +29,7 @@ async function open(page: Page, line: Line): Promise<void> {
   await page.goto(
     `${fixture("chat-scroll-model")}${line === "windowed" ? "?line=windowed" : ""}`,
   );
-  await nextFrames(page, 30);
+  await transcriptMounted(page);
 }
 
 /** Runs a scenario with a frame timeline, and appends its tail to a failure. */

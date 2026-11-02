@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import {
+  transcriptMounted,
   expectAtRest,
   intentOf,
   readView,
@@ -52,7 +53,7 @@ async function load(page: Page, suppression: Suppression): Promise<void> {
     });
   }
   await page.goto(fixture("chat-scroll-model"));
-  await nextFrames(page, 30);
+  await transcriptMounted(page);
 }
 
 /** Free position well away from the tail, at rest. */

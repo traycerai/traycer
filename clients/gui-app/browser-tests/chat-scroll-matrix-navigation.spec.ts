@@ -1,6 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import { fixture, nextFrames, wheelsDelivered } from "./support/fixtures";
 import {
+  transcriptMounted,
   expectAtRest,
   intentOf,
   readView,
@@ -89,7 +90,7 @@ for (const intervalMs of [40, 16, 100]) {
     page,
   }) => {
     await page.goto(fixture("chat-scroll-model"));
-    await nextFrames(page, 30);
+    await transcriptMounted(page);
     await expect
       .poll(() => page.evaluate(() => window.__chatScrollProbe.mode()))
       .toBe("following-end");
@@ -197,7 +198,7 @@ for (const mode of STREAM_MODES) {
       page,
     }) => {
       await page.goto(fixture("chat-scroll-model"));
-      await nextFrames(page, 30);
+      await transcriptMounted(page);
       await expect
         .poll(() => page.evaluate(() => window.__chatScrollProbe.mode()))
         .toBe("following-end");
@@ -277,7 +278,7 @@ const STREAM_MS = 40;
 
 async function load(page: Page): Promise<void> {
   await page.goto(fixture("chat-scroll-model"));
-  await nextFrames(page, 30);
+  await transcriptMounted(page);
   await expect
     .poll(() => page.evaluate(() => window.__chatScrollProbe.mode()))
     .toBe("following-end");

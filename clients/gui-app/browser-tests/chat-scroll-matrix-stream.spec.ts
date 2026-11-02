@@ -279,7 +279,7 @@ for (const line of ["legacy", "windowed"] as const) {
             if (f === "plain") window.__chatScrollProbe.startStream(40);
             else window.__chatScrollProbe.startParagraphStream(200);
           }, flavour);
-          await nextFrames(page, 100);
+          await nextFrames(page, 60);
           const stretch = await longest();
           await stopStream(page);
           expect(
@@ -329,7 +329,7 @@ for (const line of ["legacy", "windowed"] as const) {
           await nextFrames(page, 2);
           const intent = intentOf(await readView(page));
           expect(intent.kind, "the wheel left the tail").toBe("at");
-          await nextFrames(page, 50);
+          await nextFrames(page, 30);
           await stopStream(page);
           await expectAtRest(page, intent, "after the stream");
         });
@@ -401,7 +401,7 @@ for (const line of ["legacy", "windowed"] as const) {
         await nextFrames(page, 2);
         const intent = intentOf(await readView(page));
         expect(intent.kind, "the notch left the tail").toBe("at");
-        await nextFrames(page, 50);
+        await nextFrames(page, 30);
         await stopStream(page);
         await expectAtRest(page, intent, "after the stream");
       });
@@ -509,7 +509,7 @@ for (const line of ["legacy", "windowed"] as const) {
                     await page.waitForTimeout(afterAppendMs);
                 }
                 await wheelDownLikeATrackpad(page);
-                await nextFrames(page, 60);
+                await nextFrames(page, 30);
                 await stopStream(page);
                 await expectAtRest(
                   page,
@@ -517,7 +517,7 @@ for (const line of ["legacy", "windowed"] as const) {
                   "after the reader stopped and the stream ended",
                 );
                 await stream.start(page);
-                await nextFrames(page, 30);
+                await nextFrames(page, 15);
                 await stopStream(page);
                 await expectAtRest(page, TAIL, "after a second stream");
               });

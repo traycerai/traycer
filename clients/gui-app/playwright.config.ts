@@ -87,7 +87,10 @@ export default defineConfig({
     // event (the old CDP drivers saw this on CI runners) fails here and is
     // retried, rather than spending the whole test timeout.
     navigationTimeout: 60_000,
-    trace: "retain-on-failure",
+    // A trace records every action of every test, about a tenth of the run's
+    // time. CI retries once, so a red test's retry carries one; the workflow
+    // uploads the report only for a red shard, so a flake's was never read.
+    trace: isCi ? "on-first-retry" : "retain-on-failure",
   },
   webServer: {
     command: serverCommand(),

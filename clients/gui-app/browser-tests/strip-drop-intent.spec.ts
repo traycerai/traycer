@@ -55,7 +55,7 @@ const gapSchema = z.object({
  * The dragged Delta overlay's centre, and the rows drawn just before and just
  * after the gap its tab left, down the strip.
  */
-const GAP_REST_FRAMES = 10;
+const GAP_REST_FRAMES = 8;
 
 async function readGap(page: Page): Promise<z.infer<typeof gapSchema>> {
   return gapSchema.parse(
