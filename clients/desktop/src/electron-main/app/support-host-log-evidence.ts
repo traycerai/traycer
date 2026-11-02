@@ -69,8 +69,7 @@ export function earlierHostLogRecords(
   nowMs: number,
 ): readonly HostLogRecord[] {
   const kept: HostLogRecord[] = [];
-  let current: { atMs: number; lines: string[]; keep: boolean } | null =
-    null;
+  let current: { atMs: number; lines: string[]; keep: boolean } | null = null;
   const close = (): void => {
     if (current?.keep === true) {
       kept.push({ atMs: current.atMs, lines: current.lines });

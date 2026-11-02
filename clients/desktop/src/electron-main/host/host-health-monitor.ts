@@ -328,7 +328,8 @@ export function startHostHealthMonitor(
       log.info("[host-health] busy host answered again", {
         pid,
         busyHolds,
-        unreachableForMs: unreachableSince === null ? null : now - unreachableSince,
+        unreachableForMs:
+          unreachableSince === null ? null : now - unreachableSince,
       });
     }
     busyHolds = 0;
