@@ -26,6 +26,7 @@ import {
   type ControlVerb,
   type RouterResult,
 } from "../router";
+import { EMPTY_VIEW } from "./fixtures/empty-view";
 import {
   MOVED_ASK_TEXT,
   createSayLoop,
@@ -235,7 +236,14 @@ function ids(
   botId: string | null,
   threadId: string | null,
 ): NamedIds {
-  return { environmentId, botId, threadId, itemId: null };
+  return {
+    environmentId,
+    botId,
+    threadId,
+    itemId: null,
+    actionId: null,
+    agentId: null,
+  };
 }
 
 const NOWHERE = ids(null, null, null);
@@ -339,7 +347,7 @@ function harness(directory: VoiceDirectory): Harness {
     },
     decide: async (request) => {
       requests.push(request);
-      bodies.push(routerRequestBody(directory, request, NOW));
+      bodies.push(routerRequestBody(directory, EMPTY_VIEW, request, NOW));
       const answer = answers.shift();
       if (answer === undefined) {
         throw new Error("no model answer was recorded for this route");
@@ -347,6 +355,7 @@ function harness(directory: VoiceDirectory): Harness {
       return resolveRoute(
         parseRouterResponse(await answer),
         directory,
+        EMPTY_VIEW,
         request.segments.length,
       );
     },
@@ -661,6 +670,7 @@ describe("a routed read of a queue item", () => {
     const decision = resolveRoute(
       withItem(ids(null, TRACY, "thr-safari-scroll"), "i-tracy-thread"),
       QUEUE_DIRECTORY,
+      EMPTY_VIEW,
       words(HEARD).length,
     );
 
@@ -692,6 +702,7 @@ describe("a routed read of a queue item", () => {
         target: { ...ids(null, null, null), itemId: "i-tracy-channel" },
       },
       directory,
+      EMPTY_VIEW,
       3,
     );
 
@@ -707,6 +718,7 @@ describe("a routed read of a queue item", () => {
     const decision = resolveRoute(
       routerResult("read", ids(null, TRACY, null), 0, 3),
       QUEUE_DIRECTORY,
+      EMPTY_VIEW,
       4,
     );
 
@@ -1061,6 +1073,7 @@ describe("the request body", () => {
   it("names the model once, asks for no reasoning, stores nothing and demands the strict schema", () => {
     const raw = routerRequestBody(
       DIRECTORY,
+      EMPTY_VIEW,
       { segments: ["Tell Tracy hello"], askedQuestion: null, card: null },
       NOW,
     );
@@ -1088,6 +1101,7 @@ describe("the request body", () => {
     );
     const raw = routerRequestBody(
       hostile,
+      EMPTY_VIEW,
       { segments: ["Tell Tracy hello"], askedQuestion: null, card: null },
       NOW,
     );
@@ -1121,6 +1135,7 @@ describe("the card the voice read", () => {
     const inputText = (card: RouterCard | null): string => {
       const raw = routerRequestBody(
         DIRECTORY,
+        EMPTY_VIEW,
         { segments: ["the second one"], askedQuestion: null, card },
         NOW,
       );
@@ -1157,17 +1172,28 @@ describe("the card the voice read", () => {
       resolveRoute(
         { ...routerResult("answer", NOWHERE, 1, 2), choice: 1 },
         DIRECTORY,
+        EMPTY_VIEW,
         4,
       ),
     ).toEqual({ kind: "answer", choice: 1, span: { from: 1, to: 2 } });
     expect(
-      resolveRoute(routerResult("answer", NOWHERE, 0, 3), DIRECTORY, 4),
+      resolveRoute(
+        routerResult("answer", NOWHERE, 0, 3),
+        DIRECTORY,
+        EMPTY_VIEW,
+        4,
+      ),
     ).toEqual({ kind: "answer", choice: null, span: { from: 0, to: 3 } });
   });
 
   it("refuses an answer whose span lies outside the words", () => {
     expect(
-      resolveRoute(routerResult("answer", NOWHERE, 0, 9), DIRECTORY, 4),
+      resolveRoute(
+        routerResult("answer", NOWHERE, 0, 9),
+        DIRECTORY,
+        EMPTY_VIEW,
+        4,
+      ),
     ).toEqual({ kind: "refused", reason: "invalid-span" });
   });
 });
