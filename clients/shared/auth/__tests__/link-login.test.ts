@@ -378,11 +378,6 @@ describe("match code on the wire", () => {
   });
 });
 
-/**
- * The approve prompt reads "Approve sign-in from ___?", so the label owns its
- * own article. Every surface that renders the prompt calls this, which is the
- * point of it living here.
- */
 describe("a link-login request on a fetch that ignores its signal", () => {
   // LINK_LOGIN_FETCH_TIMEOUT_MS
   const LINK_LOGIN_TIMEOUT_MS = 10_000;
@@ -424,6 +419,11 @@ describe("a link-login request on a fetch that ignores its signal", () => {
   });
 });
 
+/**
+ * The approve prompt reads "Approve sign-in from ___?", so the label owns its
+ * own article. Every surface that renders the prompt calls this, which is the
+ * point of it living here.
+ */
 describe("claimant device label", () => {
   it("gives a bare family its article", () => {
     // What iOS reports about itself, and the case that would otherwise fall
