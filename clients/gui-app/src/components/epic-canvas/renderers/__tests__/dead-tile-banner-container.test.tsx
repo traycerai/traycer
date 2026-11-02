@@ -135,9 +135,10 @@ vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => "host-test",
 }));
 
-vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
-  useHostDirectoryList: () => ({ data: [], fetchStatus: "success" }),
-}));
+vi.mock("@/hooks/host/use-host-directory-list-query", () => {
+  const useHostDirectoryList = () => ({ data: [], fetchStatus: "success" });
+  return { useHostDirectoryList, useHostDirectoryListQuery: useHostDirectoryList };
+});
 
 vi.mock("@/hooks/host/use-effective-host-id", () => ({
   useEffectiveHostId: () => "host-test",

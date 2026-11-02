@@ -4,7 +4,7 @@ import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/hos
 import { useHostBinding } from "@/lib/host";
 import {
   registerHostPickerDirectory,
-  useHostPickerList,
+  useHostPickerListQuery,
 } from "@/hooks/host/use-host-picker-list";
 import { uiQueryKeys } from "@/lib/query-keys";
 
@@ -16,6 +16,26 @@ import { uiQueryKeys } from "@/lib/query-keys";
 export function useHostDirectoryList(): UseQueryResult<
   readonly HostDirectoryEntry[]
 > {
+  return useHostDirectoryListQuery(true);
+}
+
+/**
+ * `useHostDirectoryList` with the observer's subscription under the caller's
+ * control.
+ *
+ * `subscribed: false` reads the cached list and joins nothing: no observer on
+ * the query, no mount-time refetch (the query is deliberately stale on mount,
+ * see `useHostPickerList`), and no `onChange` -> invalidate listener of its
+ * own. It is for a consumer whose LIVE reading arrives from a provider higher
+ * up (`useHostDirectoryReading`): a sidebar row mounting in a long list must
+ * not add its own observer, refetch and invalidate listener per row when the
+ * panel above it already holds all three. A subscribed caller keeps the
+ * 2026-07-14 pairing intact, so the provider is exactly as live as every
+ * direct consumer.
+ */
+export function useHostDirectoryListQuery(
+  subscribed: boolean,
+): UseQueryResult<readonly HostDirectoryEntry[]> {
   const binding = useHostBinding();
   const queryClient = useQueryClient();
   const directory = binding === null ? null : binding.directory;
@@ -23,7 +43,7 @@ export function useHostDirectoryList(): UseQueryResult<
     directory === null ? null : registerHostPickerDirectory(directory);
 
   useEffect(() => {
-    if (directory === null || directoryId === null) return;
+    if (!subscribed || directory === null || directoryId === null) return;
     // The host publishing during boot (the 2026-07-14 incident) arrives as an
     // onChange well after this subscription is installed, so invalidating here
     // refetches and surfaces it. Paired with `staleTime: 0` in
@@ -40,7 +60,7 @@ export function useHostDirectoryList(): UseQueryResult<
     return () => {
       subscription.dispose();
     };
-  }, [directory, directoryId, queryClient]);
+  }, [subscribed, directory, directoryId, queryClient]);
 
-  return useHostPickerList(directoryId);
+  return useHostPickerListQuery(directoryId, subscribed);
 }

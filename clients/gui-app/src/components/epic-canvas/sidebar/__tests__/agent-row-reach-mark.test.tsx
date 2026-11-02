@@ -26,7 +26,11 @@ import {
   within,
 } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  QueryClient,
+  QueryClientProvider,
+  type UseQueryResult,
+} from "@tanstack/react-query";
 import type { ReactElement, ReactNode } from "react";
 import * as Y from "yjs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -70,6 +74,7 @@ import {
   openStoreForTest,
   type OpenedStoreForTest,
 } from "@/stores/epics/open-epic/test-support/open-store-for-test";
+import type { TreeRowExpansion } from "@/components/epic-canvas/sidebar/epic-sidebar-tree-shared";
 
 /** What the test says about each host the rows live on. */
 const hostState = vi.hoisted(() => {
@@ -95,15 +100,21 @@ vi.mock(
       await importOriginal<
         typeof import("@/hooks/host/use-host-directory-list-query")
       >();
+    const withDirectory = (
+      real: UseQueryResult<readonly HostDirectoryEntry[]>,
+    ) => {
+      const entries = hostState.directory.current;
+      return entries === null
+        ? real
+        : { ...real, data: entries, fetchStatus: "idle" as const };
+    };
     return {
       ...actual,
-      useHostDirectoryList: () => {
-        const real = actual.useHostDirectoryList();
-        const entries = hostState.directory.current;
-        return entries === null
-          ? real
-          : { ...real, data: entries, fetchStatus: "idle" as const };
-      },
+      useHostDirectoryList: () => withDirectory(actual.useHostDirectoryList()),
+      // The panel reads the directory once for its rows through this one;
+      // the rows' reachability follows it.
+      useHostDirectoryListQuery: (subscribed: boolean) =>
+        withDirectory(actual.useHostDirectoryListQuery(subscribed)),
     };
   },
 );
@@ -202,6 +213,18 @@ const USER_ID = "user-1";
 
 const VIEWER: TaskHostPrincipal = { kind: "user", id: USER_ID };
 const TEAM: TaskHostPrincipal = { kind: "team", id: "team-acme" };
+
+function staticExpansion(
+  expandedIds: ReadonlySet<string>,
+  toggleExpanded: (id: string) => void,
+): TreeRowExpansion {
+  return {
+    subscribe: () => () => undefined,
+    isExpanded: (id) => expandedIds.has(id),
+    toggleExpanded,
+    ensureExpanded: () => undefined,
+  };
+}
 
 function hostRow(
   hostId: string,
@@ -482,10 +505,7 @@ function renderCloudRow(
     <EpicSidebarCloudChatRow
       chat={{ ...CLOUD_CHAT, ownerHostId }}
       childEntries={[]}
-      expansion={{
-        expandedIds: new Set<string>(),
-        toggleExpanded: () => undefined,
-      }}
+      expansion={staticExpansion(new Set<string>(), () => undefined)}
       tabId={TAB_ID}
       depth={0}
       selectionMode={false}

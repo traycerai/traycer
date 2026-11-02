@@ -226,9 +226,13 @@ vi.mock("@/hooks/agent/use-host-reachability", () => ({
   }) => (r.status === "checking" ? null : r.hostLabel),
 }));
 
-vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
-  useHostDirectoryList: () => ({ data: undefined, fetchStatus: "idle" }),
-}));
+vi.mock("@/hooks/host/use-host-directory-list-query", () => {
+  const useHostDirectoryList = () => ({ data: undefined, fetchStatus: "idle" });
+  return {
+    useHostDirectoryList,
+    useHostDirectoryListQuery: useHostDirectoryList,
+  };
+});
 
 vi.mock("@/hooks/agent/use-terminal-tile-bootstrap", () => ({
   TerminalXtermHost: () => null,

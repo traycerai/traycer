@@ -181,8 +181,8 @@ vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => "host-test",
 }));
 
-vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
-  useHostDirectoryList: () => ({
+vi.mock("@/hooks/host/use-host-directory-list-query", () => {
+  const useHostDirectoryList = () => ({
     data: [
       {
         hostId: "host-test",
@@ -192,8 +192,12 @@ vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
         websocketUrl: "ws://127.0.0.1:0",
       },
     ],
-  }),
-}));
+  });
+  return {
+    useHostDirectoryList,
+    useHostDirectoryListQuery: useHostDirectoryList,
+  };
+});
 
 vi.mock("react-virtuoso", async () => {
   const React = await import("react");

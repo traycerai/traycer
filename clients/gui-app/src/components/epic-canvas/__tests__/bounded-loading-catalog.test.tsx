@@ -154,9 +154,13 @@ const directoryState: {
   fetchStatus: string;
 } = { data: [], fetchStatus: "success" };
 
-vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
-  useHostDirectoryList: () => directoryState,
-}));
+vi.mock("@/hooks/host/use-host-directory-list-query", () => {
+  const useHostDirectoryList = () => directoryState;
+  return {
+    useHostDirectoryList,
+    useHostDirectoryListQuery: useHostDirectoryList,
+  };
+});
 
 const EPIC_ID = "epic-bounded-loading-catalog";
 const CHAT_ARTIFACT = {

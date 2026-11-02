@@ -19,9 +19,13 @@ const list = vi.hoisted<{ value: ListState }>(() => ({
   value: { data: [], fetchStatus: "idle" },
 }));
 
-vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
-  useHostDirectoryList: () => list.value,
-}));
+vi.mock("@/hooks/host/use-host-directory-list-query", () => {
+  const useHostDirectoryList = () => list.value;
+  return {
+    useHostDirectoryList,
+    useHostDirectoryListQuery: useHostDirectoryList,
+  };
+});
 
 function entry(overrides: Partial<HostDirectoryEntry>): HostDirectoryEntry {
   return {
