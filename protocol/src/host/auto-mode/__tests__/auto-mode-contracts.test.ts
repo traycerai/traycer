@@ -70,6 +70,7 @@ function providerStateFixture(): Record<string, unknown> {
 }
 
 describe("auto-mode protocol change", () => {
+  // Walks both whole host registries: ~1.6s locally, past 5s on a loaded CI runner.
   it("constructs both host registries (the annotations parse)", () => {
     expect(() => validateVersionedRpcRegistry(hostRpcRegistry)).not.toThrow();
     expect(() =>
@@ -77,7 +78,7 @@ describe("auto-mode protocol change", () => {
     ).not.toThrow();
     expect(Object.keys(hostRpcRegistry).length).toBeGreaterThan(0);
     expect(Object.keys(hostStreamRpcRegistry).length).toBeGreaterThan(0);
-  });
+  }, 30_000);
 
   it("declares `auto` between auto_accept_edits and full_access", () => {
     // Order is load-bearing, not cosmetic: `ALL_PERMISSION_MODES` is documented
