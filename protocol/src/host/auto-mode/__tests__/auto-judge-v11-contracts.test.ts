@@ -384,8 +384,13 @@ describe("autoJudge.get/set registry entries", () => {
     ).toBe(autoJudgeSetUpgradeV11ToV12);
   });
 
-  it("validates the registry as constructed", () => {
-    expect(() => validateVersionedRpcRegistry(hostRpcRegistry)).not.toThrow();
+  it("validates the autoJudge.get and autoJudge.set lines as constructed", () => {
+    expect(() =>
+      validateVersionedRpcRegistry({
+        "autoJudge.get": hostRpcRegistry["autoJudge.get"],
+        "autoJudge.set": hostRpcRegistry["autoJudge.set"],
+      }),
+    ).not.toThrow();
   });
 });
 

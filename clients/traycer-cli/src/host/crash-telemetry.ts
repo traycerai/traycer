@@ -11,8 +11,11 @@ import type { Environment } from "../runner/environment";
 import { destroySentryTransportRequests } from "../sentry-transport";
 import { hostCrashThrottlePath } from "../store/paths";
 import {
+  HEAP_SPACE_NAMES,
   isWindowsExternalTerminationExit,
   type CrashReportMemory,
+  type HeapSpaceName,
+  type HeapSpaceUsedBytes,
   type StderrFatalKind,
 } from "./crash-diagnostics";
 import { readHostPidMetadata } from "./pid-metadata";
@@ -35,9 +38,13 @@ import { readHostPidMetadata } from "./pid-metadata";
 //     question this exists to answer.
 //   - The decoded exit status, the signal, the host version, the OS release
 //     and how long the child ran. All of it is already in host.log.
+//   - From the diagnostic report, only its numbers: the heap limit, the heap
+//     in use, the resident set, and the heap in use per V8 space under a
+//     closed set of space names. Byte counts, nothing a report can put text
+//     into.
 //   - NOT the stderr tail (it can carry prompt text and paths), NOT the
-//     bundle path (it contains the user's home directory), NOT the
-//     diagnostic-report contents - only whether one exists.
+//     bundle path (it contains the user's home directory), NOT the rest of
+//     the diagnostic report (its stack, environment and paths).
 //
 // Every step is best-effort and bounded by the caller: the terminal marker is
 // readiness authority and is written first; nothing here may delay or
@@ -264,8 +271,28 @@ export function buildHostCrashEvent(
       ...(telemetry.reportMemory.rssBytes === null
         ? {}
         : { rssBytes: telemetry.reportMemory.rssBytes }),
+      // The heap in use by space, under a closed set of keys: which space
+      // filled is the answer to what grew, and it is otherwise only on the
+      // machine that crashed.
+      ...heapSpaceExtras(telemetry.reportMemory.heapSpaceUsedBytes),
     },
   };
+}
+
+/** Extra key for one space's used bytes, e.g. `heapSpaceUsedBytes.old_space`. */
+export function heapSpaceExtraKey(space: HeapSpaceName): string {
+  return `heapSpaceUsedBytes.${space}`;
+}
+
+function heapSpaceExtras(
+  used: HeapSpaceUsedBytes,
+): Readonly<Record<string, number>> {
+  const out: Record<string, number> = {};
+  for (const space of HEAP_SPACE_NAMES) {
+    const bytes = used[space];
+    if (bytes !== null) out[heapSpaceExtraKey(space)] = bytes;
+  }
+  return out;
 }
 
 /**
