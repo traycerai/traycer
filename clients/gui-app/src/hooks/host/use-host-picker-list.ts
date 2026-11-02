@@ -46,9 +46,25 @@ export function registerHostPickerDirectory(
 export function useHostPickerList(
   directoryId: string | null,
 ): UseQueryResult<readonly HostDirectoryEntry[]> {
-  return useQuery<readonly HostDirectoryEntry[]>(
-    hostPickerListQueryOptions(directoryId),
-  );
+  return useHostPickerListQuery(directoryId, true);
+}
+
+/**
+ * `useHostPickerList` with the observer's subscription under the caller's
+ * control. `subscribed: false` reads the cached list without joining the
+ * query: no refetch on mount, no notification on change. For a consumer whose
+ * live reading arrives from a provider higher up (`useHostDirectoryReading`),
+ * so that a row mounting in a long list does not add an observer - and a
+ * refetch, the query is deliberately stale on mount - per row.
+ */
+export function useHostPickerListQuery(
+  directoryId: string | null,
+  subscribed: boolean,
+): UseQueryResult<readonly HostDirectoryEntry[]> {
+  return useQuery<readonly HostDirectoryEntry[]>({
+    ...hostPickerListQueryOptions(directoryId),
+    subscribed,
+  });
 }
 
 function hostPickerListQueryOptions(directoryId: string | null) {

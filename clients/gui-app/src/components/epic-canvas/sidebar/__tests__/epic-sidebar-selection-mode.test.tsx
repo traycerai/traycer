@@ -805,6 +805,27 @@ vi.mock("@/hooks/host/use-host-client-for", () => ({
   useHostClientFor: () => testState.rowHostClient,
 }));
 
+vi.mock("@/hooks/host/use-host-directory-list-query", () => {
+  const useHostDirectoryList = () => ({
+    data: undefined,
+    fetchStatus: "idle",
+  });
+  return {
+    useHostDirectoryList,
+    useHostDirectoryListQuery: useHostDirectoryList,
+  };
+});
+
+vi.mock(
+  "@/hooks/runner/use-runner-feature-settings-query",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/hooks/runner/use-runner-feature-settings-query")
+    >()),
+    useAgentRolesEnabled: () => false,
+  }),
+);
+
 vi.mock("@/hooks/host/use-host-directory-entry", () => ({
   useHostDirectoryEntry: () => testState.rowHostEntry,
 }));

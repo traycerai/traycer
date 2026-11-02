@@ -15,6 +15,7 @@ import {
 } from "@/lib/chats/unified-chat-list";
 import type { HostReachabilityStatus } from "@/hooks/agent/use-host-reachability";
 import type { TileOpenIntent } from "@/lib/canvas/tile-open/intent";
+import type { TreeRowExpansion } from "@/components/epic-canvas/sidebar/epic-sidebar-tree-shared";
 
 /** Nested shared subagents: the tree affordances of a cloud row. */
 
@@ -90,6 +91,18 @@ const CHILD_ENTRIES: readonly UnifiedCloudChatEntry[] = [
 ];
 const PARENT_KEY = cloudChatRowKey(PARENT.identity);
 
+function staticExpansion(
+  expandedIds: ReadonlySet<string>,
+  toggleExpanded: (id: string) => void,
+): TreeRowExpansion {
+  return {
+    subscribe: () => () => undefined,
+    isExpanded: (id) => expandedIds.has(id),
+    toggleExpanded,
+    ensureExpanded: () => undefined,
+  };
+}
+
 function renderParent(input: {
   readonly childEntries: readonly UnifiedCloudChatEntry[];
   readonly expandedIds: ReadonlySet<string>;
@@ -101,10 +114,7 @@ function renderParent(input: {
         <EpicSidebarCloudChatRow
           chat={PARENT}
           childEntries={input.childEntries}
-          expansion={{
-            expandedIds: input.expandedIds,
-            toggleExpanded: input.toggleExpanded,
-          }}
+          expansion={staticExpansion(input.expandedIds, input.toggleExpanded)}
           tabId="tab-1"
           depth={0}
           selectionMode={false}

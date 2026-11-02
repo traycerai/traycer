@@ -82,8 +82,8 @@ vi.mock("@/hooks/host/use-host-credential-refusal", () => ({
 vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => "local",
 }));
-vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
-  useHostDirectoryList: () => ({
+vi.mock("@/hooks/host/use-host-directory-list-query", () => {
+  const useHostDirectoryList = () => ({
     data: [
       {
         hostId: "local",
@@ -93,8 +93,12 @@ vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
         websocketUrl: "ws://127.0.0.1:0",
       },
     ],
-  }),
-}));
+  });
+  return {
+    useHostDirectoryList,
+    useHostDirectoryListQuery: useHostDirectoryList,
+  };
+});
 vi.mock("@/lib/host/runtime", () => ({
   useHostBinding: () => hostBindingMock.current,
   useHostClient: () => hostBindingMock.current?.hostClient,

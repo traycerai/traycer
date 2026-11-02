@@ -235,14 +235,16 @@ vi.mock("@/hooks/host/use-host-directory-list-query", async (importActual) => {
     await importActual<
       typeof import("@/hooks/host/use-host-directory-list-query")
     >();
+  const useHostDirectoryList = () => {
+    const real = actual.useHostDirectoryList();
+    const entries = directoryListTestState.entries;
+    if (entries === null) return real;
+    return { ...real, data: entries, fetchStatus: "idle" as const };
+  };
   return {
     ...actual,
-    useHostDirectoryList: () => {
-      const real = actual.useHostDirectoryList();
-      const entries = directoryListTestState.entries;
-      if (entries === null) return real;
-      return { ...real, data: entries, fetchStatus: "idle" as const };
-    },
+    useHostDirectoryList,
+    useHostDirectoryListQuery: useHostDirectoryList,
   };
 });
 
