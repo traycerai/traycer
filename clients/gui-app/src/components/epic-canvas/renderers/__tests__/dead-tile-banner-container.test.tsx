@@ -154,12 +154,16 @@ const directoryList = vi.hoisted((): { rows: HostDirectoryEntry[] } => ({
   rows: [],
 }));
 
-vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
-  useHostDirectoryList: () => ({
+vi.mock("@/hooks/host/use-host-directory-list-query", () => {
+  const useHostDirectoryList = () => ({
     data: directoryList.rows,
     fetchStatus: "success",
-  }),
-}));
+  });
+  return {
+    useHostDirectoryList,
+    useHostDirectoryListQuery: useHostDirectoryList,
+  };
+});
 
 vi.mock("@/hooks/host/use-effective-host-id", () => ({
   useEffectiveHostId: () => "host-test",

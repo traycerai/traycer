@@ -56,6 +56,7 @@ import { publishedChatTileId } from "@/stores/epics/canvas/tile-schema/published
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import type { TaskHostsView } from "@/hooks/epic/use-task-hosts-view";
 import { TaskHostsViewContext } from "@/hooks/sandboxes/use-chat-sandbox-row-line";
+import type { TreeRowExpansion } from "@/components/epic-canvas/sidebar/epic-sidebar-tree-shared";
 
 /**
  * The row's HOST SCOPE, pinned.
@@ -185,12 +186,24 @@ afterEach(() => {
   });
 });
 
+function staticExpansion(
+  expandedIds: ReadonlySet<string>,
+  toggleExpanded: (id: string) => void,
+): TreeRowExpansion {
+  return {
+    subscribe: () => () => undefined,
+    isExpanded: (id) => expandedIds.has(id),
+    toggleExpanded,
+    ensureExpanded: () => undefined,
+  };
+}
+
 /** A leaf row: no subagents beneath it, so no expansion state to consult. */
 const NO_CHILDREN: readonly UnifiedCloudChatEntry[] = [];
-const LEAF_EXPANSION: CloudChatRowExpansion = {
-  expandedIds: new Set<string>(),
-  toggleExpanded: () => undefined,
-};
+const LEAF_EXPANSION: CloudChatRowExpansion = staticExpansion(
+  new Set<string>(),
+  () => undefined,
+);
 
 const CHAT: CloudChatSummary = {
   identity: {

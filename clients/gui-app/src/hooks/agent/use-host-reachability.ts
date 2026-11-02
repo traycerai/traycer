@@ -13,7 +13,7 @@ import {
   POOL_HOST_LABEL,
   type HostKind,
 } from "@traycer-clients/shared/host-client/host-directory";
-import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
+import { useHostDirectoryReading } from "@/hooks/host/use-host-directory-reading";
 import { useLoadDeadline } from "@/hooks/host/use-load-deadline";
 import { useHostLease } from "@/hooks/host/use-host-lease";
 import { isUnknownHost } from "@/lib/host/constants";
@@ -151,7 +151,10 @@ export interface HostReachability {
  */
 export function useHostReachability(hostId: string): HostReachability {
   const lease = useHostLease(hostId);
-  const list = useHostDirectoryList();
+  // A panel-provided reading where one exists (the sidebar tree), else this
+  // consumer's own subscription; see `HostDirectoryReadingContext`.
+  const { entries: directory, loading: directoryLoading } =
+    useHostDirectoryReading();
   const hasReadySession = useRemoteSessionPollReadiness(hostId);
   const poolRestartExpected = usePoolRestartExpected(hostId);
   const directoryVerdict = useMemo<HostReachability>(() => {
@@ -167,12 +170,12 @@ export function useHostReachability(hostId: string): HostReachability {
         hostKind: "pool",
       };
     }
-    if (list.data === undefined) {
+    if (directory === undefined) {
       // The directory query is disabled when no host binding exists
       // (e.g., test harnesses that do not mount the renderer's host
       // provider). With no source of truth we cannot gate the tile;
       // fall through to "reachable" so the live render path proceeds.
-      if (list.fetchStatus === "idle") {
+      if (!directoryLoading) {
         return {
           status: "reachable",
           hostLabel: UNNAMED_HOST_LABEL,
@@ -208,7 +211,7 @@ export function useHostReachability(hostId: string): HostReachability {
     // is "host-starting", never a per-tab death: the 2026-07-14 incident
     // rendered every chat as "Bound host is offline" + Clone CTA (and
     // terminals as "permanently closed") from exactly this window.
-    if (list.data.length === 0) {
+    if (directory.length === 0) {
       return {
         status: "host-starting",
         hostLabel: UNNAMED_HOST_LABEL,
@@ -217,7 +220,7 @@ export function useHostReachability(hostId: string): HostReachability {
         hostKind: "unknown",
       };
     }
-    const entry = list.data.find((e) => e.hostId === hostId);
+    const entry = directory.find((e) => e.hostId === hostId);
     if (entry === undefined) {
       // A bound host the directory does not list at all: a machine that left
       // the account, or a past identity's. `unknown` rather than `remote` -
@@ -332,8 +335,8 @@ export function useHostReachability(hostId: string): HostReachability {
     };
   }, [
     hostId,
-    list.data,
-    list.fetchStatus,
+    directory,
+    directoryLoading,
     hasReadySession,
     poolRestartExpected,
   ]);

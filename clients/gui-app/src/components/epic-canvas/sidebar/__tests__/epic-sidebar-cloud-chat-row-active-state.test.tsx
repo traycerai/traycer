@@ -12,6 +12,7 @@ import type { UnifiedCloudChatEntry } from "@/lib/chats/unified-chat-list";
 import type { HostReachabilityStatus } from "@/hooks/agent/use-host-reachability";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { makePublishedChatTileRef } from "@/stores/epics/canvas/tile-schema/published-chat-tile";
+import type { TreeRowExpansion } from "@/components/epic-canvas/sidebar/epic-sidebar-tree-shared";
 
 /**
  * The row's active-state wiring, verified against the REAL canvas store.
@@ -46,12 +47,24 @@ vi.mock("@/hooks/epic/use-epic-nested-focus-navigation", () => ({
       prepare(),
 }));
 
+function staticExpansion(
+  expandedIds: ReadonlySet<string>,
+  toggleExpanded: (id: string) => void,
+): TreeRowExpansion {
+  return {
+    subscribe: () => () => undefined,
+    isExpanded: (id) => expandedIds.has(id),
+    toggleExpanded,
+    ensureExpanded: () => undefined,
+  };
+}
+
 /** A leaf row: no subagents beneath it, so no expansion state to consult. */
 const NO_CHILDREN: readonly UnifiedCloudChatEntry[] = [];
-const LEAF_EXPANSION: CloudChatRowExpansion = {
-  expandedIds: new Set<string>(),
-  toggleExpanded: () => undefined,
-};
+const LEAF_EXPANSION: CloudChatRowExpansion = staticExpansion(
+  new Set<string>(),
+  () => undefined,
+);
 
 const CHAT: CloudChatSummary = {
   identity: {
