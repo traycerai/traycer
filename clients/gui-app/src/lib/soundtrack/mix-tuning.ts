@@ -8,8 +8,6 @@ export const MIX_TUNING = {
   replanIntervalMs: 5000,
   /** How long a `done` row counts for after it arrives. */
   doneWindowMs: 90_000,
-  /** The most agents that count as working. */
-  workingCap: 3,
   /**
    * `base + Σ weight · min(count, cap)`, clamped to 1. A cap keeps a feed left
    * unread from pinning the mix at full for as long as nobody reads it.

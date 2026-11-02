@@ -15,7 +15,7 @@ export type SoundtrackView = "home" | "task" | "bot" | "settings";
  */
 export interface MixSignals {
   readonly view: SoundtrackView;
-  /** Agents with a turn in flight, up to `MIX_TUNING.workingCap`. */
+  /** Agents with a turn in flight, up to the cap on their intensity term. */
   readonly working: number;
   /** Unread rows in the `blocking` attention tier. */
   readonly blocking: number;
@@ -25,7 +25,7 @@ export interface MixSignals {
   readonly done: number;
 }
 
-export type MixFeedSignals = Pick<MixSignals, "blocking" | "failure" | "done">;
+type MixFeedSignals = Pick<MixSignals, "blocking" | "failure" | "done">;
 
 type FeedRow = Pick<
   MergedNotificationRow,

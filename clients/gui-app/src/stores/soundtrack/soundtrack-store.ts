@@ -23,7 +23,7 @@ import { openWebAudioPorts } from "@/lib/soundtrack/web-audio-ports";
  * Client state only, in memory, per window: what the soundtrack is doing, never
  * what it was fed. Signals pass through to the session and are not kept here.
  */
-export interface SoundtrackState {
+interface SoundtrackState {
   readonly enabled: boolean;
   readonly directorId: MixDirectorId;
   /** The view whose track is in front; null while off, or it has no track. */
@@ -44,7 +44,7 @@ export interface SoundtrackState {
   readonly setSignals: (signals: MixSignals) => void;
 }
 
-export interface SoundtrackStoreDependencies {
+interface SoundtrackStoreDependencies {
   readonly manifest: SoundtrackManifest;
   readonly openPorts: (stems: StemManifest) => SoundtrackPorts;
   readonly random: RandomSource;

@@ -43,7 +43,10 @@ export function useMixSignalsFeed(
     state.open ? state.botId : null,
   );
   const botTurns = botTurnsInFlight(useBotActivity(botId));
-  const working = Math.min(agentTurns + botTurns, MIX_TUNING.workingCap);
+  const working = Math.min(
+    agentTurns + botTurns,
+    MIX_TUNING.intensity.working.cap,
+  );
 
   useEffect(() => {
     let timer: number | null = null;

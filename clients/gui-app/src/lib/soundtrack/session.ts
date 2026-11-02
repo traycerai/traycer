@@ -23,7 +23,7 @@ export interface SoundtrackPorts {
 }
 
 /** Where a view's track had got to, so that it comes back there. */
-export interface ResumePosition {
+interface ResumePosition {
   readonly trackName: string;
   readonly elapsedSeconds: number;
 }
@@ -33,12 +33,12 @@ export type ResumePositions = Readonly<
 >;
 
 /** What is sounding now; null while the view in front has no track. */
-export interface SoundingMix {
+interface SoundingMix {
   readonly view: SoundtrackView;
   readonly plan: MixPlan;
 }
 
-export interface SoundtrackSessionOptions {
+interface SoundtrackSessionOptions {
   readonly manifest: SoundtrackManifest;
   readonly ports: SoundtrackPorts;
   readonly random: RandomSource;

@@ -3,6 +3,10 @@ import { WebAudioDimFilter, WebAudioOutput } from "./output";
 import type { SoundtrackPorts } from "./session";
 import { ManifestStemSource, type StemManifest } from "./stems";
 
+// Closing cuts what is still on its way to the speakers, which over Bluetooth
+// is a few hundred milliseconds of a fade that has finished on the clock.
+const CLOSE_AFTER_FADE_SECONDS = 0.5;
+
 /**
  * Opens the audio device: speakers ← low-pass ← the mix. Only ever call this
  * from a gesture of the person's, because the `AudioContext` constructor can
@@ -28,13 +32,16 @@ export function openWebAudioPorts(stems: StemManifest): SoundtrackPorts {
       dim.setDimmed(dimmed);
     },
     close: (afterSeconds) => {
-      window.setTimeout(() => {
-        void context.close().catch((error: unknown) => {
-          appLogger.warn("[soundtrack] could not close the audio context", {
-            error: describeLogError(error),
+      window.setTimeout(
+        () => {
+          void context.close().catch((error: unknown) => {
+            appLogger.warn("[soundtrack] could not close the audio context", {
+              error: describeLogError(error),
+            });
           });
-        });
-      }, afterSeconds * 1000);
+        },
+        (afterSeconds + CLOSE_AFTER_FADE_SECONDS) * 1000,
+      );
     },
   };
 }
