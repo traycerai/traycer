@@ -235,27 +235,82 @@ jobs:
       # workflow, `browser-regressions.yml`, which runs them in parallel jobs.
       # Serially at the end of gui-app shard 1 they took this required check
       # from about 7 minutes to about 35.
+      #
+      # `shell: bash` is what adds `-o pipefail` (the implicit shell has only
+      # `-e`), so `tee` cannot turn a red run green. The log it keeps is what
+      # the diagnostics step below reads for its verdict.
+      #
+      # The gui-app shards also log per-file heap, so a growing file is named,
+      # and write JUnit, which reaches a file without going through this pipe.
+      # Naming reporters replaces vitest's defaults, so all of them are listed.
       - name: Test
-        run: bunx nx run-many --target=test --projects="${{ matrix.project }}" --outputStyle=stream ${{ matrix.test_args }}
-      # Diagnostics for the gui-app shard flake: shards die with every visible
-      # test passing, a log truncated mid-write, and exit 1 with no vitest
-      # failure summary — the signature of the runner killing the process, not
-      # of a failing assertion. Nothing in this job recorded WHY, so every
-      # occurrence has been triaged by guesswork and cleared by a rerun.
+        shell: bash
+        run: |
+          evidence=()
+          if [ "${{ matrix.project }}" = "traycer-clients-gui-app" ]; then
+            evidence=(
+              --logHeapUsage
+              --reporter=default
+              --reporter=github-actions
+              --reporter=junit
+              "--outputFile.junit=$GITHUB_WORKSPACE/test-junit.xml"
+            )
+          fi
+          bunx nx run-many --target=test --projects="${{ matrix.project }}" --outputStyle=stream ${{ matrix.test_args }} "${evidence[@]}" 2>&1 | tee test-output.log
+      # `always()`, so a red shard can be compared with a green one. vitest
+      # writes the file when the run ends: a fork's death still leaves one, a
+      # killed vitest parent leaves none. A replay from the Nx cache leaves none
+      # either, so a missing file is not an upload failure. Kept for the
+      # repository's retention, the same seven days as the job log.
+      - name: Upload the JUnit report
+        if: always() && matrix.project == 'traycer-clients-gui-app'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: junit-${{ matrix.cache_key }}
+          path: test-junit.xml
+          if-no-files-found: ignore
+      # Says first whether a process died, because this step runs on every red
+      # job and most are plain assertion failures: of 220 failed jobs on `main`
+      # from 27 Oct to 2 Nov 2026, all 220 printed a vitest summary and one
+      # named a dead worker. Nx exits 1 for any failed task, so its exit code
+      # cannot tell them apart; the log can. vitest names a dead fork's signal
+      # and the file it was running, `clients/gui-app/scripts/run-tests.ts`
+      # names a killed vitest, and bun names a killed script.
       #
       # `dmesg` names an OOM kill and its victim; the memory/disk lines bound
       # the alternative (a full tmpfs, an exhausted runner). `|| true`
       # throughout: this step must never convert a diagnostic gap into a
-      # second failure, and `dmesg` is not always readable on hosted runners.
+      # second failure.
       - name: Capture runner diagnostics on test failure
         if: failure()
         run: |
+          echo "::group::Why this job failed"
+          if [ ! -f test-output.log ]; then
+            echo "The Test step never ran: a step before it failed."
+          else
+            sed -E 's/\x1b\[[0-9;]*m//g' test-output.log >/tmp/test-output.txt || true
+            deaths=$(grep -E "Worker exited unexpectedly|vitest was killed by|was terminated by signal" /tmp/test-output.txt | tail -20 || true)
+            if [ -n "$deaths" ]; then
+              echo "A PROCESS DIED:"
+              echo "$deaths"
+            elif grep -qE "Test Files +[0-9]+ failed" /tmp/test-output.txt; then
+              echo "NO PROCESS DIED: vitest finished and reported failing tests, named in the log above."
+              echo "The kernel, memory and disk sections below are not about this failure."
+            elif grep -q "Test Files " /tmp/test-output.txt; then
+              echo "NO PROCESS DIED: vitest finished with no failed file. Read its Errors line in the log above."
+            else
+              echo "vitest printed no summary and nothing named a signal: it did not start, or its output was lost."
+            fi
+          fi
+          echo "::endgroup::"
           echo "::group::Kernel OOM / kill records"
           # Capture dmesg FIRST, then grep, and report which case we are in.
           # Piping dmesg straight into grep makes "dmesg is not readable"
           # indistinguishable from "no OOM records" - both render as an empty
           # section, which is the one ambiguity this step exists to remove.
-          if dmesg -T >/tmp/dmesg.txt 2>/dev/null || dmesg >/tmp/dmesg.txt 2>/dev/null; then
+          # The kernel log needs root here, and the hosted runner's sudo asks
+          # for no password.
+          if sudo -n dmesg -T >/tmp/dmesg.txt 2>/dev/null; then
             # Test grep with -q SEPARATELY from printing. `grep ... | tail`
             # reports tail's status, which is 0 even when grep matched
             # nothing - so the pipeline form would claim OOM records exist
@@ -268,9 +323,7 @@ jobs:
               echo "dmesg READ OK, and it contains NO OOM/kill records."
             fi
           else
-            echo "dmesg NOT READABLE on this runner (permission denied)."
-            echo "An OOM kill can NOT be ruled out from this section alone;"
-            echo "use the runner's exit code instead - 137 means SIGKILL."
+            echo "dmesg NOT READABLE on this runner."
           fi
           echo "::endgroup::"
           echo "::group::Memory"
