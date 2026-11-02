@@ -33,6 +33,8 @@ import {
   worktreesOnlyConfigSchema,
   type AgentWorktreeCreatePolicy,
   type WorktreesConfig,
+  agentFeedbackOnlyConfigSchema,
+  type AgentFeedbackConfig,
   visualizationOnlyConfigSchema,
   type VisualizationConfig,
   SIMULATOR_CONFIG_DEFAULT,
@@ -1129,14 +1131,10 @@ export function readFeatureSettingsSync(): FeatureSettings {
     const raw = readFileSync(cliConfigPath(), "utf8");
     const result = parseCliConfig(JSON.parse(raw));
     if (result.success) return result.data.features;
-  } catch (error) {
-    // No config file is the unset case, so agent feedback keeps its default.
-    if (error instanceof Error && "code" in error && error.code === "ENOENT") {
-      return { agentRoles: false, artifactVersioning: false, agentFeedback: true };
-    }
+  } catch {
     // Feature gates must remain safe even when config cannot be read.
   }
-  return { agentRoles: false, artifactVersioning: false, agentFeedback: false };
+  return { agentRoles: false, artifactVersioning: false };
 }
 
 /** Enables or disables agent roles while preserving the rest of the config. */
@@ -1150,15 +1148,40 @@ export async function setAgentRolesEnabled(enabled: boolean): Promise<void> {
   }));
 }
 
+/** The `agentFeedback` block. Throws on a malformed block, like `readBrowserConfig`. */
+export async function readAgentFeedbackConfig(): Promise<AgentFeedbackConfig> {
+  return agentFeedbackOnlyConfigSchema.parse(await readCliConfig())
+    .agentFeedback;
+}
+
+/**
+ * Best-effort synchronous read for the gates on `traycer_send_feedback`. No
+ * config file is the unset case, so it reads on. A file that cannot be read or
+ * parsed fails CLOSED, unlike `readBrowserConfigSync`: this switch stops data
+ * leaving the machine, and that file may hold the user's `false`.
+ */
+export function readAgentFeedbackConfigSync(): AgentFeedbackConfig {
+  try {
+    const raw = readFileSync(cliConfigPath(), "utf8");
+    const result = agentFeedbackOnlyConfigSchema.safeParse(JSON.parse(raw));
+    if (result.success) return result.data.agentFeedback;
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+      return { enabled: true };
+    }
+  }
+  return { enabled: false };
+}
+
 /** Enables or disables agent feedback while preserving the rest of the config. */
 export async function setAgentFeedbackEnabled(enabled: boolean): Promise<void> {
-  await updateCliConfig((current) => ({
-    next: {
-      ...current,
-      features: { ...current.features, agentFeedback: enabled },
-    },
-    result: undefined,
-  }));
+  await updateCliConfig((current) => {
+    const { agentFeedback } = agentFeedbackOnlyConfigSchema.parse(current);
+    return {
+      next: { ...current, agentFeedback: { ...agentFeedback, enabled } },
+      result: undefined,
+    };
+  });
 }
 
 /** Whether agents may drive the in-app browser (default on when unset). */

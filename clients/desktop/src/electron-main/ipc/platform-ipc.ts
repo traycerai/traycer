@@ -96,6 +96,7 @@ import {
   setDesktopLogLevel,
 } from "../app/desktop-log-level";
 import {
+  readAgentFeedbackConfig,
   readFeatureSettings,
   readLogLevels,
   setAgentFeedbackEnabled,
@@ -542,7 +543,7 @@ export function registerPlatformIpc(
 
   bridge.handleInvoke(
     RunnerHostInvoke.featureSettingsGet,
-    (): Promise<FeatureSettingsSnapshot> => readFeatureSettings(),
+    (): Promise<FeatureSettingsSnapshot> => readFeatureSettingsSnapshot(),
   );
 
   bridge.handleInvoke(
@@ -552,7 +553,7 @@ export function registerPlatformIpc(
         throw new Error("featureSettings:agentRoles:set requires a boolean");
       }
       await setAgentRolesEnabled(enabled);
-      return readFeatureSettings();
+      return readFeatureSettingsSnapshot();
     },
   );
 
@@ -563,13 +564,21 @@ export function registerPlatformIpc(
         throw new Error("featureSettings:agentFeedback:set requires a boolean");
       }
       await setAgentFeedbackEnabled(enabled);
-      return readFeatureSettings();
+      return readFeatureSettingsSnapshot();
     },
   );
 
   bridge.handleInvoke(RunnerHostInvoke.fontsList, () => {
     return listInstalledFonts();
   });
+}
+
+async function readFeatureSettingsSnapshot(): Promise<FeatureSettingsSnapshot> {
+  const [features, agentFeedback] = await Promise.all([
+    readFeatureSettings(),
+    readAgentFeedbackConfig(),
+  ]);
+  return { agentRoles: features.agentRoles, agentFeedback: agentFeedback.enabled };
 }
 
 function redactNullableText(value: string | null): string | null {

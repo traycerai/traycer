@@ -68,13 +68,15 @@ import {
   setAgentBrowserAccess,
   setAgentPages,
   setAgentFeedbackEnabled,
+  readAgentFeedbackConfig,
+  readAgentFeedbackConfigSync,
   setAgentRolesEnabled,
   setAgentWorktreeCreatePolicy,
   setLogLevels,
   setShell,
   writeCliConfig,
 } from "../store";
-import { CLI_CONFIG_VERSION } from "../schema";
+import { CLI_CONFIG_VERSION, featureSettingsSchema } from "../schema";
 
 beforeEach(async () => {
   h.home = await mkdtemp(join(tmpdir(), "traycer-cli-config-"));
@@ -97,12 +99,10 @@ describe("cli config store", () => {
     expect(await readFeatureSettings()).toEqual({
       agentRoles: false,
       artifactVersioning: false,
-      agentFeedback: true,
     });
     expect(readFeatureSettingsSync()).toEqual({
       agentRoles: false,
       artifactVersioning: false,
-      agentFeedback: true,
     });
   });
 
@@ -119,7 +119,6 @@ describe("cli config store", () => {
       features: {
         agentRoles: false,
         artifactVersioning: false,
-        agentFeedback: true,
       },
       browser: { agentAccess: true },
       worktrees: { agentCreate: "allow" as const },
@@ -195,7 +194,6 @@ describe("cli config store", () => {
     expect(readFeatureSettingsSync()).toEqual({
       agentRoles: false,
       artifactVersioning: false,
-      agentFeedback: false,
     });
 
     await writeRaw(
@@ -209,7 +207,6 @@ describe("cli config store", () => {
     expect(readFeatureSettingsSync()).toEqual({
       agentRoles: false,
       artifactVersioning: false,
-      agentFeedback: false,
     });
 
     await writeRaw(
@@ -223,7 +220,6 @@ describe("cli config store", () => {
     expect(readFeatureSettingsSync()).toEqual({
       agentRoles: false,
       artifactVersioning: false,
-      agentFeedback: false,
     });
   });
 
@@ -241,7 +237,6 @@ describe("cli config store", () => {
         expect(readFeatureSettingsSync()).toEqual({
           agentRoles: false,
           artifactVersioning: false,
-          agentFeedback: false,
         });
       } finally {
         await chmod(cliConfigPath(), 0o600);
@@ -258,7 +253,6 @@ describe("cli config store", () => {
     expect(await readFeatureSettings()).toEqual({
       agentRoles: true,
       artifactVersioning: false,
-      agentFeedback: true,
     });
     expect(await readCliConfig()).toMatchObject({
       shell: {
@@ -274,7 +268,6 @@ describe("cli config store", () => {
     expect(await readFeatureSettings()).toEqual({
       agentRoles: false,
       artifactVersioning: false,
-      agentFeedback: true,
     });
     expect(await readCliConfig()).toMatchObject({
       shell: {
@@ -286,12 +279,13 @@ describe("cli config store", () => {
       features: {
         agentRoles: false,
         artifactVersioning: false,
-        agentFeedback: true,
       },
     });
   });
 
-  it("defaults agent feedback on when the config does not set it", async () => {
+  it("reads agent feedback on with no file and when the block is absent", async () => {
+    expect(readAgentFeedbackConfigSync()).toEqual({ enabled: true });
+    expect(await readAgentFeedbackConfig()).toEqual({ enabled: true });
     await writeRaw(
       JSON.stringify({
         version: 1,
@@ -300,33 +294,84 @@ describe("cli config store", () => {
         features: { agentRoles: true },
       }),
     );
-    expect(readFeatureSettingsSync()).toEqual({
-      agentRoles: true,
-      artifactVersioning: false,
-      agentFeedback: true,
-    });
+    expect(readAgentFeedbackConfigSync()).toEqual({ enabled: true });
+    expect(await readAgentFeedbackConfig()).toEqual({ enabled: true });
   });
 
-  it("sets agent feedback and preserves other settings", async () => {
+  it("reads agent feedback off when the block says false", async () => {
+    await writeRaw(
+      JSON.stringify({ version: 1, agentFeedback: { enabled: false } }),
+    );
+    expect(readAgentFeedbackConfigSync()).toEqual({ enabled: false });
+    expect(await readAgentFeedbackConfig()).toEqual({ enabled: false });
+  });
+
+  it("fails closed for malformed, wrong-typed, and future-version agent feedback reads", async () => {
+    await writeRaw("{ not json");
+    expect(readAgentFeedbackConfigSync()).toEqual({ enabled: false });
+
+    await writeRaw(
+      JSON.stringify({ version: 1, agentFeedback: { enabled: "no" } }),
+    );
+    expect(readAgentFeedbackConfigSync()).toEqual({ enabled: false });
+
+    await writeRaw(JSON.stringify({ version: 1, agentFeedback: true }));
+    expect(readAgentFeedbackConfigSync()).toEqual({ enabled: false });
+  });
+
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "fails closed when agent feedback config is unreadable",
+    async () => {
+      await writeRaw(
+        JSON.stringify({ version: 1, agentFeedback: { enabled: true } }),
+      );
+      await chmod(cliConfigPath(), 0o000);
+      try {
+        expect(readAgentFeedbackConfigSync()).toEqual({ enabled: false });
+      } finally {
+        await chmod(cliConfigPath(), 0o600);
+      }
+    },
+  );
+
+  it("sets agent feedback at top level and preserves other settings", async () => {
     await setShell("/bin/fish", ["-l"]);
     await setAgentRolesEnabled(true);
 
     await setAgentFeedbackEnabled(false);
-    expect(readFeatureSettingsSync().agentFeedback).toBe(false);
+    expect(readAgentFeedbackConfigSync()).toEqual({ enabled: false });
     expect(await readFeatureSettings()).toEqual({
       agentRoles: true,
       artifactVersioning: false,
-      agentFeedback: false,
     });
+    const raw = JSON.parse(await readFile(cliConfigPath(), "utf8"));
+    expect(raw.agentFeedback).toEqual({ enabled: false });
+    expect(raw.features).not.toHaveProperty("agentFeedback");
     expect(await readCliConfig()).toMatchObject({
       shell: { path: "/bin/fish", args: ["-l"] },
     });
 
     await setAgentFeedbackEnabled(true);
-    expect(await readFeatureSettings()).toMatchObject({
-      agentRoles: true,
-      agentFeedback: true,
-    });
+    expect(readAgentFeedbackConfigSync()).toEqual({ enabled: true });
+    expect(await readFeatureSettings()).toMatchObject({ agentRoles: true });
+  });
+
+  it("keeps an agent feedback opt-out through unrelated updates and a features-only parse", async () => {
+    await writeRaw(
+      JSON.stringify({ version: 1, agentFeedback: { enabled: false } }),
+    );
+    await setAgentRolesEnabled(true);
+    expect(readAgentFeedbackConfigSync()).toEqual({ enabled: false });
+
+    // A binary that does not know the key parses and rewrites via the features schema.
+    const stripped = featureSettingsSchema.parse(
+      JSON.parse(await readFile(cliConfigPath(), "utf8")).features,
+    );
+    expect(stripped).toEqual({ agentRoles: true, artifactVersioning: false });
+    const raw = JSON.parse(await readFile(cliConfigPath(), "utf8"));
+    await writeRaw(JSON.stringify({ ...raw, features: stripped }));
+    expect(readAgentFeedbackConfigSync()).toEqual({ enabled: false });
+    expect(await readAgentFeedbackConfig()).toEqual({ enabled: false });
   });
 
   it("reads agent browser access as on from a pre-feature file", async () => {
@@ -535,7 +580,6 @@ describe("cli config store", () => {
       features: {
         agentRoles: false,
         artifactVersioning: false,
-        agentFeedback: true,
       },
       browser: { agentAccess: true },
       worktrees: { agentCreate: "allow" },

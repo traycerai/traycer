@@ -183,6 +183,26 @@ export type SessionNamesConfig = z.infer<
 >["sessionNames"];
 
 /**
+ * The `agentFeedback` block in `~/.traycer/cli/config.json`: whether agents may
+ * send Traycer's maintainers feedback (`traycer_send_feedback`). It defaults on.
+ *
+ * Its own top-level block, not a key of `features`, because the value that must
+ * survive is the user's `false`: an older binary strips an unknown key inside
+ * `features` on its next write, and the missing key would then read as on. The
+ * top level of `cliConfigSchema` is passthrough, so this block survives.
+ */
+export const agentFeedbackOnlyConfigSchema = lazySchema(() =>
+  z.object({
+    agentFeedback: z
+      .object({ enabled: z.boolean().default(true) })
+      .default({ enabled: true }),
+  }),
+);
+export type AgentFeedbackConfig = z.infer<
+  typeof agentFeedbackOnlyConfigSchema
+>["agentFeedback"];
+
+/**
  * The `simulator` block in `~/.traycer/cli/config.json`: the one switch for
  * mobile simulators (iOS Simulator / Android Emulator support). `enabled`
  * installs the `simulator-tools` pack, runs the hub, shows the tile AND lets
@@ -372,13 +392,8 @@ export const featureSettingsSchema = lazySchema(() =>
     .object({
       agentRoles: z.boolean().default(false),
       artifactVersioning: z.boolean().default(false),
-      agentFeedback: z.boolean().default(true),
     })
-    .default({
-      agentRoles: false,
-      artifactVersioning: false,
-      agentFeedback: true,
-    }),
+    .default({ agentRoles: false, artifactVersioning: false }),
 );
 export type FeatureSettings = z.infer<typeof featureSettingsSchema>;
 
@@ -520,7 +535,7 @@ export const EMPTY_CLI_CONFIG: CliConfig = {
   shell: { path: null, args: null, entries: [] },
   envOverrides: {},
   logs: { cliLogLevel: DEFAULT_LOG_LEVEL, hostLogLevel: DEFAULT_LOG_LEVEL },
-  features: { agentRoles: false, artifactVersioning: false, agentFeedback: true },
+  features: { agentRoles: false, artifactVersioning: false },
   browser: { agentAccess: true },
   worktrees: { agentCreate: "allow" },
   catalog: { probeTimeoutSeconds: CATALOG_PROBE_TIMEOUT_DEFAULT_SECONDS },

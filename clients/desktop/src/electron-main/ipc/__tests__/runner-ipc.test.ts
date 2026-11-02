@@ -243,8 +243,11 @@ const appEventState = vi.hoisted(() => ({
 const readFeatureSettingsMock = vi.hoisted(() =>
   vi.fn(async () => ({
     agentRoles: featureSettings.agentRoles,
-    agentFeedback: featureSettings.agentFeedback,
+    artifactVersioning: false,
   })),
+);
+const readAgentFeedbackConfigMock = vi.hoisted(() =>
+  vi.fn(async () => ({ enabled: featureSettings.agentFeedback })),
 );
 const setAgentRolesEnabledMock = vi.hoisted(() =>
   vi.fn(async (enabled: boolean) => {
@@ -259,6 +262,7 @@ const setAgentFeedbackEnabledMock = vi.hoisted(() =>
 vi.mock("@traycer/protocol/config/store", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@traycer/protocol/config/store")>()),
   readFeatureSettings: readFeatureSettingsMock,
+  readAgentFeedbackConfig: readAgentFeedbackConfigMock,
   setAgentRolesEnabled: setAgentRolesEnabledMock,
   setAgentFeedbackEnabled: setAgentFeedbackEnabledMock,
 }));
