@@ -101,6 +101,15 @@ brew install --cask traycerai/traycer/traycer-desktop
 
 On Linux (x86_64), the same cask installs the AppImage.
 
+## Install With Scoop on Windows
+
+If you use [Scoop](https://scoop.sh), add Traycer’s bucket and install Desktop:
+
+```powershell
+scoop bucket add traycer https://github.com/traycerai/scoop-traycer
+scoop install traycer/traycer-desktop
+```
+
 ## CLI
 
 The desktop app bundles the command-line tools it needs, so most people don't need to install the CLI separately.
@@ -118,6 +127,12 @@ brew install traycerai/traycer/traycer
 ```
 
 Both install the `traycer` command. Check it with `traycer --version`. See the [CLI reference](/cli/commands).
+
+### Choose a Data Folder on Windows
+
+Traycer uses `%USERPROFILE%\.traycer` by default. To use another fixed local NTFS drive on a new installation, install the CLI and run `traycer data init --to "D:\TraycerData"` before starting Traycer or installing the Host.
+
+For an existing installation, quit Desktop and use `traycer data migrate` rather than dragging the folder. See [data folder commands](/cli/commands#data-folder) for the preview, session-impact review, and cleanup steps. The app itself and its caches do not move.
 
 ## After Install
 
@@ -185,6 +200,6 @@ Some host updates need a newer CLI first. The host's Overview then shows **Needs
   </Step>
 </Steps>
 
-Your local data stays in `~/.traycer` (`%USERPROFILE%\.traycer` on Windows). Delete that folder only if you also want to remove local chats, settings and credentials from this computer.
+Your local data stays in the selected data folder, by default `~/.traycer` (`%USERPROFILE%\.traycer` on Windows). `traycer data status` shows the location. Uninstalling also keeps `~/.traycer-bootstrap`, which records that location. Delete the data folder only if you also want to remove local chats, settings and credentials from this computer.
 
 **A host on another machine:** **Remove from account** on that host's Overview only takes it off your account; nothing on that machine is uninstalled. To uninstall there, run `traycer host uninstall --all` on that machine, which stops the host, removes its service registration and removes the install.

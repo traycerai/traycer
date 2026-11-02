@@ -98,6 +98,19 @@ When a rate limit or another provider problem blocks a chat's turn, Traycer can 
 
 A switch starts a new agent session from the chat's history and retries the blocked message there. Messages waiting to run move with it.
 
+### Keep One Chat on Its Account
+
+Right-click a chat’s tab and open **On a usage limit or error**:
+
+| Choice | What happens |
+| --- | --- |
+| **Follow the device routing** | Uses the host’s [Model routing settings](/settings/model-routing). This is the default. |
+| **Wait it out here** | Keeps this chat on its current provider, account and model. When a usage limit gives a reset time within the host’s longest wait, the chat waits and retries there instead of switching. |
+
+**Wait it out here** works even when **Route automatically** is off. It still uses the host’s cancellation countdown and longest-wait limit. If waiting cannot help, Traycer notifies you instead of switching.
+
+The menu requires a current Host. It is disabled for a chat you do not own or that has not saved its run settings yet.
+
 ### The Routing Card
 
 While routing is working on a chat, one card sits above the composer. It has the same parts in every state:

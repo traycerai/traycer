@@ -3,15 +3,21 @@ title: "Version history and recovery"
 description: "See how an artifact changed, restore an earlier version, and bring back deleted artifacts."
 ---
 
-Traycer saves versions of each artifact as it is edited, whether by you, a collaborator, an agent, or a change to the file on disk. Version history is your safety net against a bad edit: you can compare any version with the one before it and restore it, and you can bring back artifacts that were deleted.
+For Markdown documents (specs, tickets, stories, and reviews), Traycer saves versions as the document is edited, whether by you, a collaborator, an agent, or a change to the file on disk. Version history is your safety net against a bad edit: you can compare any version with the one before it and restore it, and you can bring back artifacts that were deleted.
 
 Each host saves versions of the artifacts it has open, following its own [settings](#settings).
 
+## HTML Versions
+
+[HTML artifacts](/panels/artifacts/html) have a version picker in their page toolbar. Choose **Latest** or a saved version to preview it, and **Download ZIP** to save that selected version with its supporting files. **Older versions** loads earlier entries. Selecting an entry does not restore it over the live page, and comments are available on the latest page only.
+
+The comparison and restore steps below describe Markdown documents.
+
 ## Open Version History
 
-Open an artifact and click **Version history**, the clock button in the top-right corner of its tile. The **Version history** panel opens beside the body.
+Open an artifact and click **Version history**, the clock button in the top-right corner of its panel. The **Version history** panel opens beside the body.
 
-- Drag the panel's left edge to resize it, or click **Maximize panel** to cover the tile.
+- Drag the panel's left edge to resize it, or click **Maximize panel** to cover the panel.
 - Click **Close history** to close it.
 
 Versions are listed newest first and grouped by day. Each one is labeled with where it came from:
@@ -49,7 +55,7 @@ Anyone with access can view version history. Restoring needs the **Editor** or *
 
 ## Restore a Deleted Artifact
 
-Deleting an artifact moves it out of the tree, but its saved versions stay in version history.
+Deleting a Markdown document moves it out of the tree, but its saved versions stay in version history.
 
 1. In the [Artifacts](/panels/artifacts) panel, open the **⋯** menu and choose **Deleted artifacts**. You can also find **Deleted artifacts** in the command palette.
 2. Pick an artifact from the list. Each entry shows when it was deleted and how many versions it has, and the preview shows its **Latest saved version**.

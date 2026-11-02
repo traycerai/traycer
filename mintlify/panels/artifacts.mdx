@@ -1,13 +1,13 @@
 ---
 title: "Artifacts"
-description: "Browse, organize, and track the specs, tickets, stories, and reviews in a Task."
+description: "Browse documents, interactive HTML pages, visual canvas boards, and shared files in a Task."
 ---
 
 import { FeatureVideo } from "/snippets/feature-video.jsx";
 
-Artifacts are durable documents inside a Task. They keep plans, work items, and review findings where you and your agents can both find them, instead of leaving them buried in a chat transcript.
+Artifacts are durable documents, interactive pages, visual boards, and files inside a Task. They keep plans, work items, and review findings where you and your agents can both find them, instead of leaving them buried in a chat transcript.
 
-The **Artifacts** panel shows the Task's artifact tree. Open an artifact to read or edit it in a tile. See [Editing artifacts](/panels/artifacts/editing).
+The **Artifacts** panel shows the Task's artifact tree. Open an artifact to read, preview, or edit it in a panel. See [Editing artifacts](/panels/artifacts/editing).
 
 ## Artifact Types
 
@@ -17,12 +17,15 @@ The **Artifacts** panel shows the Task's artifact tree. Open an artifact to read
 | **Ticket** | A unit of implementation work: what needs to change and how to verify it.                | Yes    |
 | **Story**  | A group of related artifacts, such as the tickets and specs that serve one user journey. | Yes    |
 | **Review** | Review findings, critique, decisions, and follow-ups.                                    | No     |
+| **HTML** | Interactive reports, charts, explainers, and pages. See [HTML artifacts](/panels/artifacts/html). | No |
+| **Canvas** | Screens, mockups, and flows on a visual board. See [Canvases](/panels/artifacts/canvases). | No |
+| **File** | PDFs, Word documents, images, text, and other deliverables. See [File artifacts](/panels/artifacts/file-artifacts). | No |
 
 Specs and reviews are shared context. Tickets and stories track work, so they carry a status.
 
 ## Hierarchy
 
-Artifacts nest under other artifacts, and any type can hold any other type. A common shape:
+Artifacts can nest under other artifacts. Folder-based artifacts can have children; a standalone file has no **Add child artifact** control. A common shape:
 
 ```text
 Task
@@ -57,14 +60,14 @@ The panel header has three controls:
 
 | Control                       | What it does                                                                                   |
 | ----------------------------- | ---------------------------------------------------------------------------------------------- |
-| **Add artifact** (+)          | Creates a top-level artifact: **New ticket**, **New spec**, **New story**, or **New review**.  |
+| **Add artifact** (+)          | Creates a top-level artifact: **New ticket**, **New spec**, **New story**, **New review**, or **New canvas**. HTML and file artifacts are created from files, usually by an agent.  |
 | **More artifact actions** (⋯) | Opens **Search artifacts**, **Deleted artifacts**, **Collapse all**, and **Select artifacts**. |
 | **Filter artifacts**          | Sets the ordering and filters, described below.                                                |
 
 Each row also has its own controls when you hover it:
 
-- **Add child artifact** (+) creates a new artifact nested under that row, with the same four types.
-- The row's **⋯** menu, also available by right-clicking the row, has **Export as Markdown**, **Export as PDF**, **Rename**, **Copy ID**, and **Delete**.
+- **Add child artifact** (+) creates a new artifact nested under that row, with the same choices.
+- The row's **⋯** menu, also available by right-clicking the row, has **Rename**, **Copy ID**, and **Delete**. Markdown documents also have **Export as Markdown** and **Export as PDF**; HTML and file artifacts have download controls in their open panels.
 
 ### Filter and Order
 
@@ -74,12 +77,12 @@ Each row also has its own controls when you hover it:
 | -------------- | --------------------------------------------------------------------------------- |
 | **Ordering**   | **Last updated**, **Date created**, or **Name**; **Descending** or **Ascending**. |
 | **Status**     | **Todo**, **In Progress**, **Done**.                                              |
-| **Type**       | **Spec**, **Ticket**, **Story**, **Review**.                                      |
+| **Type**       | **Spec**, **Ticket**, **Story**, **Review**, **HTML**, **Canvas**, **File**.                                      |
 | **Read state** | **All**, **Unread**, **Read**.                                                    |
 
 The menu also has **Mark all as read** and, once you have changed anything, **Reset view**.
 
-Specs and reviews have no status, so any **Status** filter hides them.
+Only tickets and stories have a status, so any **Status** filter hides other types.
 
 ### Read and Unread
 
@@ -97,6 +100,10 @@ Search matches artifact titles, folder paths, and body text. It reads the Task's
 
 Choose **Select artifacts** from the ⋯ menu, or ⌘-click / Ctrl-click rows. The header then shows how many are selected, with **Select all**, **Cancel selection**, an export button, and a delete button. See [Export](/panels/artifacts/export).
 
+## Reference an Artifact in Chat
+
+Type **@** in an agent message and choose **Artifacts**, then select the artifact by title. The same list includes Markdown documents, HTML artifacts, canvases, and file artifacts. Use the reference to ask for a change or direct the agent to a particular deliverable. Nothing is sent until you send the message.
+
 ## Working With Artifacts
 
 | Action            | How                                                                                                  |
@@ -105,19 +112,26 @@ Choose **Select artifacts** from the ⋯ menu, or ⌘-click / Ctrl-click rows. T
 | **Rename**        | **Rename** in the row menu. The title shows in the panel, the tab, and references to the artifact.   |
 | **Move**          | Drag the row onto its new parent.                                                                    |
 | **Change status** | Use the status pill at the top of an open ticket or story.                                           |
-| **Comment**       | Select text in the artifact and add a thread. See [Comments](/panels/comments).                      |
-| **Export**        | **Export as Markdown** or **Export as PDF** in the row menu. See [Export](/panels/artifacts/export). |
+| **Comment**       | Select document text, or comment on an HTML element or canvas. See [Comments](/panels/comments).                      |
+| **Export**        | Markdown/PDF for documents; download controls for HTML and files. See [Export](/panels/artifacts/export). |
 | **Delete**        | **Delete** in the row menu. This also deletes the artifacts nested under it.                         |
 
 Creating, editing, moving, and deleting artifacts needs the **Editor** or **Owner** role. See [Roles](/panels/sharing#roles).
 
 ### Deleting and Restoring
 
-Deleting an artifact removes it, and every artifact nested under it, from the tree. You can bring deleted artifacts back from **Deleted artifacts** in the panel's ⋯ menu. See [Version history and recovery](/panels/artifacts/version-history).
+Deleting an artifact removes it, and every artifact nested under it, from the tree. You can bring deleted Markdown documents back from **Deleted artifacts** in the panel's ⋯ menu. See [Version history and recovery](/panels/artifacts/version-history).
 
 ## Artifacts on Disk
 
-The live document you edit in the app is the primary copy of each artifact. The host that has the Task open also keeps a Markdown copy of every artifact on disk and syncs it both ways: edits in the app are written to the file, and edits to the file flow back into the app.
+The on-disk format depends on the artifact:
+
+- **Specs, tickets, stories, and reviews:** an `index.md` document, synced with the editor.
+- **HTML:** a folder with `index.html` and its supporting files.
+- **Canvas:** a folder with `canvas.json`, board HTML files, and supporting files.
+- **File:** a standalone deliverable, such as a PDF or image.
+
+These artifacts sync with the Task, so collaborators can open the published deliverables without sharing your repository folder. The workspace itself is separate; see [File Tree](/panels/file-tree).
 
 A host keeps its copy current only while the Task is open there or one of its agents is working in it. Elsewhere the copy is the one that host last had, and it can be out of date or missing artifacts until the Task opens there again.
 
@@ -133,11 +147,13 @@ The copy exists only for people with the **Editor** or **Owner** role. Viewers h
       └─ index.md
 ```
 
+For Markdown documents:
+
 - Each artifact is a folder, named after the artifact's title when it was created, that holds an `index.md`.
 - Nested artifacts are nested folders.
 - A new folder with an `index.md` becomes a new artifact in the Task. This is how agents create artifacts.
 
-Only `index.md` and the `.comments/` files sync between hosts and to collaborators. An artifact's `images/` folder holds copies of the images in that artifact, which each host writes for itself. The host keeps that folder matching the artifact, so a file you add there is removed, and one you change or delete is put back. Any other file you put in an artifact folder stays on the machine where it was written.
+For Markdown documents, `index.md` and the `.comments/` files sync between hosts and to collaborators. An artifact's `images/` folder holds copies of the images in that artifact, which each host writes for itself. The host keeps that folder matching the artifact, so a file you add there is removed, and one you change or delete is put back. Other deliverable files beside `index.md` can become separate file artifacts. HTML and canvas folders also sync their supporting files; they are not limited to Markdown.
 
 Each `index.md` starts with frontmatter:
 
@@ -159,11 +175,20 @@ comments: 2 open, 1 resolved
 
 Comment threads are copied into a hidden `.comments/` folder beside the artifact, one file per thread. Agents read those files, and resolve a thread by changing its `status:` line. See [Comments and Agents](/panels/comments#comments-and-agents).
 
-Because the files are plain Markdown, you and your agents can search and edit them with ordinary tools.
+Agents can work with these files using ordinary file tools. For HTML and canvas artifacts, sync messages and comment counts are reported in `status.txt` beside the artifacts folder.
 
 ## More on Artifacts
 
 <CardGroup cols={2}>
+  <Card title="HTML artifacts" icon="code" href="/panels/artifacts/html">
+    Interactive pages, inline previews, and ZIP downloads.
+  </Card>
+  <Card title="Canvases" icon="object-group" href="/panels/artifacts/canvases">
+    Review and edit visual boards, screens, and flows.
+  </Card>
+  <Card title="File artifacts" icon="file" href="/panels/artifacts/file-artifacts">
+    Preview and download shared deliverables.
+  </Card>
   <Card title="Editing" icon="pen" href="/panels/artifacts/editing">
     The editor toolbar, links, images, and sending passages to a chat.
   </Card>
@@ -171,7 +196,7 @@ Because the files are plain Markdown, you and your agents can search and edit th
     Compare and restore earlier versions, and bring back deleted artifacts.
   </Card>
   <Card title="Export" icon="file-export" href="/panels/artifacts/export">
-    Save artifacts as Markdown or PDF, one at a time or as a ZIP.
+    Save documents as Markdown or PDF, or download HTML and files.
   </Card>
   <Card title="Diagrams" icon="diagram-project" href="/panels/artifacts/diagrams">
     Mermaid diagrams that render inline.
