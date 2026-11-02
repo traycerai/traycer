@@ -388,6 +388,24 @@ function paneIds(root: TileLayoutNode | null): ReadonlyArray<string> {
   return collectPanes(root).map((pane) => pane.id);
 }
 
+function canvasOf(): EpicCanvasState {
+  const canvas = useEpicCanvasStore.getState().canvasByTabId[VIEW_TAB_ID];
+  if (canvas === undefined) throw new Error("canvas not seeded");
+  return canvas;
+}
+
+function slot() {
+  return useEpicCanvasStore.getState().mobileSecondaryTileByTabId[VIEW_TAB_ID];
+}
+
+function showSecond(instanceId: string, transient: boolean): void {
+  act(() => {
+    useEpicCanvasStore
+      .getState()
+      .setMobileSecondaryTile(VIEW_TAB_ID, { instanceId, transient });
+  });
+}
+
 describe("selectMobileTile", () => {
   it("returns null for an empty (rootless) canvas", () => {
     expect(
@@ -629,26 +647,6 @@ describe("<MobileEpicTileView />", () => {
       restoreKeyboardEnvironment();
       pendingOpen.value = { intent: null };
     });
-
-    function canvasOf() {
-      const canvas = useEpicCanvasStore.getState().canvasByTabId[VIEW_TAB_ID];
-      if (canvas === undefined) throw new Error("canvas not seeded");
-      return canvas;
-    }
-
-    function slot() {
-      return useEpicCanvasStore.getState().mobileSecondaryTileByTabId[
-        VIEW_TAB_ID
-      ];
-    }
-
-    function showSecond(instanceId: string, transient: boolean): void {
-      act(() => {
-        useEpicCanvasStore
-          .getState()
-          .setMobileSecondaryTile(VIEW_TAB_ID, { instanceId, transient });
-      });
-    }
 
     function open(fromTestId: string, node: EpicCanvasTileRef): void {
       pendingOpen.value = {
@@ -1001,26 +999,6 @@ describe("<MobileEpicTileView /> with two tiles and chats painted by the stable 
       intent: tileIntent(node, { tabId: VIEW_TAB_ID }, gesture, "direct_ui"),
     };
     fireEvent.click(screen.getByTestId(testId));
-  }
-
-  function showSecond(instanceId: string, transient: boolean): void {
-    act(() => {
-      useEpicCanvasStore
-        .getState()
-        .setMobileSecondaryTile(VIEW_TAB_ID, { instanceId, transient });
-    });
-  }
-
-  function slot() {
-    return useEpicCanvasStore.getState().mobileSecondaryTileByTabId[
-      VIEW_TAB_ID
-    ];
-  }
-
-  function canvasOf(): EpicCanvasState {
-    const canvas = useEpicCanvasStore.getState().canvasByTabId[VIEW_TAB_ID];
-    if (canvas === undefined) throw new Error("canvas not seeded");
-    return canvas;
   }
 
   function activeOf(chatId: string): string | null {

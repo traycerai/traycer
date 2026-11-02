@@ -128,7 +128,7 @@ function isListItemShell(element: HTMLElement): boolean {
  * wrapper falls through to the viewport height below and the list's content
  * size (and with it `isAtEnd`) diverges from the DOM it is measuring.
  */
-function listItemShellFor(element: HTMLElement): HTMLElement | null {
+export function listItemShellFor(element: HTMLElement): HTMLElement | null {
   if (isListItemShell(element)) return element;
   const child = element.firstElementChild;
   return child instanceof HTMLElement && isListItemShell(child) ? child : null;
