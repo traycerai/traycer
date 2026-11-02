@@ -26,7 +26,6 @@ import { appLogger } from "@/lib/logger";
 import type { VerbOutcome } from "@/lib/voice/deferred-verbs";
 import {
   OPENER_ROW,
-  openerWakesSandbox,
   tellWakesSandbox,
   type HostWake,
   type VoiceViewRow,
@@ -96,6 +95,8 @@ export const AGENT_ASLEEP_NOTICE =
 export const SANDBOX_CANT_WAKE_NOTICE = "The sandbox can't wake right now.";
 export const OPENER_ASLEEP_NOTICE =
   "The sandbox went to sleep. Say that again if you still want it opened.";
+export const OPENER_MAY_WAKE_NOTICE =
+  "That may wake its sandbox. Say that again if you still want it opened.";
 export const NOT_DELIVERED_NOTICE = "That didn't reach the agent.";
 export const ALREADY_DECIDED_NOTICE = "That was already decided.";
 export const APPROVAL_NOT_WAITING_NOTICE =
@@ -375,8 +376,9 @@ async function runRegistryRow(
   if (row === null) return refused(ROW_GONE_NOTICE);
   if (row.hostWake === "frozen") return refused(SANDBOX_CANT_WAKE_NOTICE);
   // Waking costs, and this request was not read back as one that would.
-  if (row.hostWake === "wakes" && !openerWakesSandbox(routed)) {
-    return refused(OPENER_ASLEEP_NOTICE);
+  if (routed.wakeQuestion === undefined) {
+    if (row.hostWake === "wakes") return refused(OPENER_ASLEEP_NOTICE);
+    if (row.hostWake === "unknown") return refused(OPENER_MAY_WAKE_NOTICE);
   }
   const { item, ctx } = row;
   const open = openTileOf(action, ctx);

@@ -126,8 +126,8 @@ export function openTileWithNavigation(
   // that does mount reads `false` - an explicit Open of a sleeping agent that
   // leaves it asleep.
   //
-  // Marked IN ADDITION to the line above rather than instead of it: for every
-  // other plan kind the intent's instance is the one that mounts. `noop` (a
+  // Marked IN ADDITION to the line above rather than instead of it: for most
+  // other plan kinds the intent's instance is the one that mounts. `noop` (a
   // BACKGROUND open of an already-open tile) deliberately gets neither - it
   // changes nothing on the canvas by contract, and waking an agent is a
   // change.
@@ -140,7 +140,7 @@ export function openTileWithNavigation(
   ) {
     markTileOpenRequested(plan.existingInstanceId);
   }
-  return executeTileOpen({
+  const target = executeTileOpen({
     plan,
     node: intent.node,
     source: intent.source,
@@ -149,6 +149,12 @@ export function openTileWithNavigation(
     epicId: store.tabsById[tabId]?.epicId ?? null,
     pipOrigin: options.pipOrigin,
   });
+  // And again on the id it landed under: into a pane, the canvas mints one of
+  // its own, because a row's ref outlives one open.
+  if (target?.tileInstanceId !== undefined) {
+    markTileOpenRequested(target.tileInstanceId);
+  }
+  return target;
 }
 
 function resolveHeaderTabId(

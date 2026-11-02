@@ -7,7 +7,7 @@ import {
   createRouter,
 } from "@tanstack/react-router";
 import { act, cleanup, render, renderHook } from "@testing-library/react";
-import type { ReactNode } from "react";
+import { cloneElement, type ReactNode } from "react";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { SandboxCatalogue } from "@traycer/protocol/host/sandbox-control";
 import type {
@@ -79,13 +79,18 @@ import {
   __getOpenEpicRegistryForTests,
   handleHostIds,
 } from "@/lib/registries/epic-session-registry";
+import { startSandboxWake } from "@/lib/sandboxes/sandbox-wake";
+import { wakeElementOf } from "@/components/epic-canvas/renderers/__tests__/wake-element-of";
 import { wasTileOpenRequested } from "@/lib/canvas/tile-open/tile-open-provenance";
 import { openStoreForTest } from "@/stores/epics/open-epic/test-support/open-store-for-test";
 import type { ChatProjection } from "@/stores/epics/open-epic/types";
 import type { EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
-import type { EpicNodeRef } from "@/stores/epics/canvas/types";
+import type {
+  EpicCanvasTileRef,
+  EpicNodeRef,
+} from "@/stores/epics/canvas/types";
 import { tabItemId } from "@/stores/tabs/layout";
 import {
   createUnavailableTileFindAdapter,
@@ -553,7 +558,21 @@ vi.mock("@/lib/host", async (importOriginal) => ({
       }),
   }),
   useHostClient: () => null,
+  useHostBinding: () => ({}),
   useHostDirectory: () => ({ findById: () => directoryFacts.entry }),
+}));
+// The wake a tile starts on its host: the directory's entry for the tile's host
+// and the wake itself are faked, the tile's mounted wake element is the real one.
+vi.mock("@/hooks/host/use-host-directory-entry", () => ({
+  useHostDirectoryEntry: () => directoryFacts.entry,
+}));
+// The host picker's list needs a directory the tile's wake does not, and the
+// binding the wake is mounted over has none.
+vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
+  useHostDirectoryList: () => ({ data: [] }),
+}));
+vi.mock("@/lib/sandboxes/sandbox-wake", () => ({
+  startSandboxWake: vi.fn<typeof startSandboxWake>(() => Promise.resolve(null)),
 }));
 // The router's directory is the real one, over the bot list above and the
 // person's one environment as `environment.list` answers it.
@@ -1060,7 +1079,8 @@ beforeEach(() => {
   fake.getUserMedia.mockReset();
   fake.getUserMedia.mockImplementation(() => fake.media.promise);
   fake.routeAnswer = null;
-  directoryFacts.entry = null;
+  // A host the directory knows to be awake: an unknown one asks before an open.
+  directoryFacts.entry = sandboxHostEntryFixture("host-a", "awake", false);
   fake.mintAnswers.length = 0;
   fake.navigateOutcome = () => Promise.resolve();
   fake.navigate.mockClear();
@@ -4970,6 +4990,7 @@ describe("the page in front", () => {
     const SLEEPY_ID = "chat-sleepy";
     const SLEEPY_TITLE = "Sleepy agent";
     const QUESTION = `The sandbox is asleep. Wake it and open ${SLEEPY_TITLE}. Yes?`;
+    const MAY_WAKE_QUESTION = "That may wake its sandbox. Open it anyway? Yes?";
 
     const NO_STREAM: EpicStreamClientFactory = () => ({
       applyUpdate: () => undefined,
@@ -5082,6 +5103,85 @@ describe("the page in front", () => {
       });
     }
 
+    function sleepyNode(): EpicCanvasTileRef {
+      const node = Object.values(canvasOfTask().tilesByInstanceId).find(
+        (ref) => ref?.id === SLEEPY_ID,
+      );
+      if (node === undefined) throw new Error("the sleepy tile is not open");
+      return node;
+    }
+
+    /**
+     * The wake the sleepy tile mounts, as the canvas renders it for `node`;
+     * returns how to render it again after the directory moved.
+     */
+    function mountWake(node: EpicCanvasTileRef): () => void {
+      const wake = wakeElementOf(node);
+      const client = new QueryClient();
+      const mounted = render(
+        <QueryClientProvider client={client}>{wake}</QueryClientProvider>,
+      );
+      return () => {
+        mounted.rerender(
+          <QueryClientProvider client={client}>
+            {cloneElement(wake)}
+          </QueryClientProvider>,
+        );
+      };
+    }
+
+    describe("whose host the directory does not know yet", () => {
+      beforeEach(() => {
+        directoryFacts.entry = null;
+        vi.mocked(startSandboxWake).mockClear();
+      });
+
+      it("asks before it opens, opens nothing and marks nothing until the yes, and the wake the open then starts waits for the directory's answer", async () => {
+        await seedTask();
+        showSleepyTile("inst-sleepy-unknown-yes");
+        const restored = sleepyNode();
+        const rerenderWake = mountWake(restored);
+
+        expect(await openSleepy()).toBe(MAY_WAKE_QUESTION);
+        expect(wasTileOpenRequested(restored.instanceId)).toBe(false);
+
+        await answer("yes");
+
+        expect(sleepyTiles()).toEqual([restored.instanceId]);
+        expect(wasTileOpenRequested(restored.instanceId)).toBe(true);
+        expect(startSandboxWake).not.toHaveBeenCalled();
+
+        directoryFacts.entry = sandboxHostEntryFixture(
+          HOST_ID,
+          "suspended",
+          false,
+        );
+        rerenderWake();
+
+        expect(startSandboxWake).toHaveBeenCalledTimes(1);
+        expect(vi.mocked(startSandboxWake).mock.calls.at(0)?.[2]).toBe(HOST_ID);
+      });
+
+      it("leaves the tile unopened on a no, and the directory's answer afterwards wakes nothing", async () => {
+        await seedTask();
+        showSleepyTile("inst-sleepy-unknown-no");
+        const restored = sleepyNode();
+        const rerenderWake = mountWake(restored);
+        expect(await openSleepy()).toBe(MAY_WAKE_QUESTION);
+
+        await answer("no");
+        directoryFacts.entry = sandboxHostEntryFixture(
+          HOST_ID,
+          "suspended",
+          false,
+        );
+        rerenderWake();
+
+        expect(wasTileOpenRequested(restored.instanceId)).toBe(false);
+        expect(startSandboxWake).not.toHaveBeenCalled();
+      });
+    });
+
     describe("whose sandbox is asleep", () => {
       beforeEach(() => {
         directoryFacts.entry = sandboxHostEntryFixture(
@@ -5116,6 +5216,22 @@ describe("the page in front", () => {
         await answer("no");
 
         expect(sleepyTiles()).toEqual([]);
+      });
+
+      it("opens a tile the task does not show once, and the tile it mounts is the one that is asked for and woken", async () => {
+        vi.mocked(startSandboxWake).mockClear();
+        await seedTask();
+        expect(await openSleepy()).toBe(QUESTION);
+        expect(sleepyTiles()).toEqual([]);
+
+        await answer("yes");
+
+        const opened = sleepyNode();
+        expect(sleepyTiles()).toEqual([opened.instanceId]);
+        expect(wasTileOpenRequested(opened.instanceId)).toBe(true);
+        mountWake(opened);
+        expect(startSandboxWake).toHaveBeenCalledTimes(1);
+        expect(vi.mocked(startSandboxWake).mock.calls.at(0)?.[2]).toBe(HOST_ID);
       });
 
       it("asks for a tile the task already shows but a restore put back, and a yes asks for that tile without a second view of it", async () => {

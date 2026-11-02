@@ -47,6 +47,8 @@ export interface VoiceViewRow {
   readonly takesWords: boolean;
   /** Read back before it runs. */
   readonly confirm: boolean;
+  /** On an opener that wakes or may wake a sandbox: the question it asks. */
+  readonly wakeQuestion?: string;
 }
 
 export interface VoiceView {
@@ -59,8 +61,11 @@ export interface VoiceView {
 }
 
 /** The palette's items by the place each takes in the view's order. */
-/** `frozen`: it would try to wake, and be refused. */
-export type HostWake = "none" | "wakes" | "frozen";
+/**
+ * `frozen`: it would try to wake, and be refused. `unknown`: the host isn't in
+ * the directory yet, and if it turns out to rest, the open wakes it then.
+ */
+export type HostWake = "none" | "wakes" | "frozen" | "unknown";
 
 export interface VoicePaletteItems {
   /** The active task's agents and artifacts, as the opener lists them. */
@@ -150,7 +155,6 @@ export function approvalSummary(description: string, toolName: string): string {
 }
 
 const TELL_ACTION = "agent.tell:";
-const OPEN_TAB_PREFIX = "Open tab: ";
 
 /** An opener row for an existing tile; the capture is the tile's content id. */
 export const OPENER_ROW = /^open:(?:chats|tui|artifacts):(.+)$/su;
@@ -163,14 +167,6 @@ export function itemHostWake(
   return item.tileHostId === undefined
     ? "none"
     : palette.hostWake(item.tileHostId);
-}
-
-/**
- * Whether this row opens a tile and wakes its sandbox first. Waking costs, which
- * is the only reason an opener is offered as one that asks.
- */
-export function openerWakesSandbox(row: VoiceViewRow): boolean {
-  return row.confirm && OPENER_ROW.test(row.action);
 }
 
 /**
@@ -255,12 +251,25 @@ function prefixedRows(
   );
 }
 
+function openerWakeQuestion(wake: HostWake, title: string): string | null {
+  if (wake === "wakes") {
+    return `The sandbox is asleep. Wake it and open ${title}. Yes?`;
+  }
+  return wake === "unknown"
+    ? "That may wake its sandbox. Open it anyway? Yes?"
+    : null;
+}
+
 function tileRows(palette: VoicePaletteItems): ReadonlyArray<VoiceViewRow> {
   return runnable(palette.tiles).map((item) => {
-    const row = registryRow(item, `${OPEN_TAB_PREFIX}${item.label}`);
-    return itemHostWake(item, palette) === "wakes"
-      ? { ...row, confirm: true }
-      : row;
+    const row = registryRow(item, `Open tab: ${item.label}`);
+    const wakeQuestion = openerWakeQuestion(
+      itemHostWake(item, palette),
+      item.label,
+    );
+    return wakeQuestion === null
+      ? row
+      : { ...row, confirm: true, wakeQuestion };
   });
 }
 
@@ -344,10 +353,7 @@ export function readBackQuestion(
   if (tellWakesSandbox(row)) {
     return `The sandbox is asleep. Wake it and send: ${text}. Yes?`;
   }
-  if (openerWakesSandbox(row)) {
-    const title = row.label.slice(OPEN_TAB_PREFIX.length);
-    return `The sandbox is asleep. Wake it and open ${title}. Yes?`;
-  }
+  if (row.wakeQuestion !== undefined) return row.wakeQuestion;
   return `${row.label}${readBackTarget(row, page)}. Yes?`;
 }
 

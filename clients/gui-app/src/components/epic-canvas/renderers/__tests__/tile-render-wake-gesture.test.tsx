@@ -1,15 +1,9 @@
-import {
-  Children,
-  isValidElement,
-  type ReactElement,
-  type ReactNode,
-} from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SandboxVerbGesture } from "@traycer/protocol/host/sandbox-control";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
-import { renderTile } from "@/components/epic-canvas/renderers/tile-render";
+import { wakeElementOf } from "./wake-element-of";
 import { sandboxHostEntryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 import { openTileIntoTargetGroup } from "@/lib/commands/actions/open-into-target";
 import { startSandboxWake } from "@/lib/sandboxes/sandbox-wake";
@@ -40,35 +34,11 @@ const BASE_NODE = {
   hostId: "host-sbx",
 };
 
-interface WakeProps {
-  readonly gesture: SandboxVerbGesture | null;
-  readonly hostId: string;
-}
-
-/** The element a tile mounts to wake its host when the tile is opened. */
-function wakeElementOf(node: EpicCanvasTileRef): ReactElement<WakeProps> {
-  const tree: ReactNode = renderTile({
-    node,
-    viewTabId: "tab-1",
-    tileId: "tile-1",
-    epicId: "epic-1",
-    isActive: true,
-  });
-  if (!isValidElement<{ children: ReactNode }>(tree)) {
-    throw new Error("renderTile did not return an element");
-  }
-  for (const child of Children.toArray(tree.props.children)) {
-    if (isValidElement<WakeProps>(child) && "gesture" in child.props) {
-      expect(child.props.hostId).toBe("host-sbx");
-      return child;
-    }
-  }
-  throw new Error("no wake element under the tile's host provider");
-}
-
 /** The gesture the tile's open wake is mounted with. */
 function wakeGestureOf(node: EpicCanvasTileRef): SandboxVerbGesture | null {
-  return wakeElementOf(node).props.gesture;
+  const wake = wakeElementOf(node);
+  expect(wake.props.hostId).toBe("host-sbx");
+  return wake.props.gesture;
 }
 
 describe("the tile-open wake's gesture", () => {

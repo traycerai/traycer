@@ -2004,6 +2004,7 @@ describe("readBackQuestion", () => {
 describe("an opener row for a tile on a host whose sandbox rests", () => {
   const RESTING_HOST = "host-resting";
   const AWAKE_HOST = "host-awake";
+  const UNKNOWN_HOST = "host-unknown";
 
   /** The view offering one tile opener on `hostId`, with only RESTING_HOST resting. */
   function viewOpening(id: string, hostId: string | undefined): VoiceView {
@@ -2017,8 +2018,10 @@ describe("an opener row for a tile on a host whose sandbox rests", () => {
             hostId === undefined ? {} : { tileHostId: hostId },
           ),
         ],
-        hostWake: (candidate) =>
-          candidate === RESTING_HOST ? "wakes" : "none",
+        hostWake: (candidate) => {
+          if (candidate === RESTING_HOST) return "wakes";
+          return candidate === UNKNOWN_HOST ? "unknown" : "none";
+        },
       },
     });
   }
@@ -2055,6 +2058,21 @@ describe("an opener row for a tile on a host whose sandbox rests", () => {
     expect(
       rowOf(viewOpening("open:chats:t1", undefined), "open:chats:t1").confirm,
     ).toBe(false);
+  });
+
+  it("asks to be confirmed for a tile on a host the directory does not know, in words that do not claim the sandbox rests", () => {
+    const view = viewOpening("open:chats:t1", UNKNOWN_HOST);
+
+    expect(rowOf(view, "open:chats:t1").confirm).toBe(true);
+    expect(
+      readBackQuestion(rowOf(view, "open:chats:t1"), view.page, "open it"),
+    ).toBe("That may wake its sandbox. Open it anyway? Yes?");
+  });
+
+  it("shows the model the same row for a tile on an unknown host as for an awake one", () => {
+    expect(renderView(viewOpening("open:chats:t1", UNKNOWN_HOST))).toBe(
+      renderView(viewOpening("open:chats:t1", AWAKE_HOST)),
+    );
   });
 
   it("shows the model the same row for a resting tile as for an awake one", () => {

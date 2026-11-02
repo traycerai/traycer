@@ -36,6 +36,7 @@ import {
   NOT_DELIVERED_NOTICE,
   NOTHING_TO_STOP_NOTICE,
   OPENER_ASLEEP_NOTICE,
+  OPENER_MAY_WAKE_NOTICE,
   ROW_GONE_NOTICE,
   TURN_ENDED_NOTICE,
   executePageAct,
@@ -52,6 +53,7 @@ import {
   composeVoiceView,
   NO_PALETTE_ITEMS,
   type VoiceView,
+  type HostWake,
   type VoiceViewRow,
 } from "@/lib/voice/view";
 import { wasTileOpenRequested } from "@/lib/canvas/tile-open/tile-open-provenance";
@@ -1369,23 +1371,35 @@ describe("a row of the palette", () => {
       expect(itemRun.mock.calls.at(0)?.[0]).toBe(ctx);
     });
 
+    /** The opener of the chat, as the palette offers it for a host in `hostWake`. */
+    function openerOn(
+      hostWake: HostWake,
+      itemRun: CommandItem["run"],
+      ctx: CommandContext,
+    ): PageActReads {
+      const item = commandItem(`open:chats:${CHAT_ID}`, itemRun, null);
+      return readsOver(null, [{ item, ctx, hostWake }]);
+    }
+
+    /** The opener's row, as the router returns it: read back with a wake question or not. */
+    function openerRow(readBack: boolean): VoiceViewRow {
+      const row = rowFor(`open:chats:${CHAT_ID}`);
+      return readBack
+        ? { ...row, confirm: true, wakeQuestion: "Wake it and open it. Yes?" }
+        : row;
+    }
+
+    function openNow(row: VoiceViewRow, reads: PageActReads) {
+      return executePageAct({ row, text: "", turnId: null, reads });
+    }
+
     describe("on a host whose sandbox rests", () => {
       /** The opener of the chat, as the palette offers it for a host that rests. */
       function restingOpener(
         itemRun: CommandItem["run"],
         ctx: CommandContext,
       ): PageActReads {
-        const item = commandItem(`open:chats:${CHAT_ID}`, itemRun, null);
-        return readsOver(null, [{ item, ctx, hostWake: "wakes" }]);
-      }
-
-      /** The opener's row, as the router returns it: read back as a wake or not. */
-      function openerRow(readBack: boolean): VoiceViewRow {
-        return { ...rowFor(`open:chats:${CHAT_ID}`), confirm: readBack };
-      }
-
-      function openNow(row: VoiceViewRow, reads: PageActReads) {
-        return executePageAct({ row, text: "", turnId: null, reads });
+        return openerOn("wakes", itemRun, ctx);
       }
 
       it("opens the tile the task already has, and marks it asked for, once the wake was read back", async () => {
@@ -1469,6 +1483,46 @@ describe("a row of the palette", () => {
       });
     });
 
+    describe("on a host the directory does not know yet", () => {
+      function canvasAndContext() {
+        const { tabId, paneId } = taskCanvas(false);
+        const ctx = context({
+          activeTabId: tabId,
+          activeEpicId: EPIC_ID,
+          targetGroupId: paneId,
+        });
+        return { tabId, ctx };
+      }
+
+      it("says it may wake the sandbox and opens nothing when the request was not read back", async () => {
+        const { tabId, ctx } = canvasAndContext();
+        const itemRun = vi.fn<CommandItem["run"]>();
+        const before = canvasOf(tabId);
+
+        const outcome = await openNow(
+          openerRow(false),
+          openerOn("unknown", itemRun, ctx),
+        );
+
+        expect(outcome).toEqual(refusedWith(OPENER_MAY_WAKE_NOTICE));
+        expect(itemRun).not.toHaveBeenCalled();
+        expect(canvasOf(tabId)).toBe(before);
+      });
+
+      it("runs the opener once the question was asked", async () => {
+        const { ctx } = canvasAndContext();
+        const itemRun = vi.fn<CommandItem["run"]>();
+
+        const outcome = await openNow(
+          openerRow(true),
+          openerOn("unknown", itemRun, ctx),
+        );
+
+        expect(outcome).toEqual({ kind: "executed" });
+        expect(itemRun).toHaveBeenCalledTimes(1);
+      });
+    });
+
     it("opens a read back opener whose host woke before the yes, as any opener", async () => {
       const { tabId, paneId } = taskCanvas(false);
       const itemRun = vi.fn<CommandItem["run"]>();
@@ -1480,7 +1534,7 @@ describe("a row of the palette", () => {
       });
 
       const outcome = await executePageAct({
-        row: { ...rowFor(item.id), confirm: true },
+        row: openerRow(true),
         text: "",
         turnId: null,
         reads: readsOver(null, [{ item, ctx, hostWake: "none" }]),

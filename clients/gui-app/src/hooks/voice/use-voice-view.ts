@@ -195,10 +195,9 @@ function composerAsksToWake(session: VoiceAgentSession): boolean {
 }
 
 function hostWakeOf(entry: HostDirectoryEntry | null): HostWake {
+  if (entry === null) return "unknown";
   if (!hostEntryNeedsWake(entry)) return "none";
-  return entry !== null &&
-    isRemoteHostDirectoryEntry(entry) &&
-    entry.sandbox?.frozen === true
+  return isRemoteHostDirectoryEntry(entry) && entry.sandbox?.frozen === true
     ? "frozen"
     : "wakes";
 }

@@ -366,7 +366,8 @@ function mount(initialPath: string, props: ProbeProps): Mounted {
 }
 
 beforeEach(() => {
-  directoryFacts.entry = null;
+  // A host the directory knows to be awake: an unknown one asks before an open.
+  directoryFacts.entry = sandboxHostEntryFixture(HOST_ID, "awake", false);
   window.localStorage.clear();
   useTabsStore.setState(stripOf([], null));
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
