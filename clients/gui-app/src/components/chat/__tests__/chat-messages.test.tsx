@@ -7394,13 +7394,13 @@ describe("ChatMessages scroll policy", () => {
         taskId: "task-1",
       });
       await settleLegendList();
-      await settleLegendList();
-
-      expect(
-        getScrollNode().querySelector(`[data-row-key="${resolvedPartKey}"]`),
-      ).not.toBeNull();
-      expect(getScrollNode().scrollTop).toBe(expectedScrollTop);
-      expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+      await waitFor(() => {
+        expect(
+          getScrollNode().querySelector(`[data-row-key="${resolvedPartKey}"]`),
+        ).not.toBeNull();
+        expect(getScrollNode().scrollTop).toBe(expectedScrollTop);
+        expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+      });
 
       // The split retired the pre-steer coordinate rather than leaving it
       // armed as a hydration wait: the close saves the slice the reader was
@@ -7468,10 +7468,12 @@ describe("ChatMessages scroll policy", () => {
         taskId: "task-1",
       });
       await settleLegendList();
-      await settleLegendList();
-
-      expect(getScrollNode().dataset.scrollMode).toBe("following-end");
-      expect(getScrollNode().scrollTop).toBe(maxScrollTopFor(getScrollNode()));
+      await waitFor(() => {
+        expect(getScrollNode().dataset.scrollMode).toBe("following-end");
+        expect(getScrollNode().scrollTop).toBe(
+          maxScrollTopFor(getScrollNode()),
+        );
+      });
 
       view.unmount();
       expect(peekSavedChatTabState(identity)).toMatchObject({
@@ -7735,9 +7737,18 @@ describe("ChatMessages scroll policy", () => {
         expect(getScrollNode().dataset.scrollMode).toBe("following-end");
       });
       await waitForNavigationSettle();
+      // The cold rows keep the list's estimated heights, so the DOM
+      // `scrollHeight` the harness overrides does not describe the end the
+      // list itself knows. Its end is the last row in view.
       await waitFor(() => {
-        expect(getScrollNode().scrollTop).toBe(
-          maxScrollTopFor(getScrollNode()),
+        const list = legendListRefHolder.current;
+        if (list === null) throw new Error("LegendList ref is not mounted");
+        const lastRowTop = list.getState().positionAtIndex(rowCount - 1);
+        if (typeof lastRowTop !== "number") {
+          throw new Error("last row not measured");
+        }
+        expect(getScrollNode().scrollTop + VIEWPORT_HEIGHT_PX).toBeGreaterThan(
+          lastRowTop + LEGEND_LIST_HEADER_PX,
         );
       });
 
