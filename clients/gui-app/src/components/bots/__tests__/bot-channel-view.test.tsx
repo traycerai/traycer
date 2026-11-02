@@ -416,6 +416,12 @@ import {
   type BotChannelLanding,
 } from "@/components/bots/bot-channel-view";
 import { BotSendFailedNotice } from "@/components/bots/bot-channel-notices";
+import { PaneSurfaceActivityContext } from "@/components/epic-tabs/pane-visibility-context";
+import { usePublishPresentedBotConversation } from "@/hooks/notifications/use-publish-presented-bot-conversation";
+import {
+  readFocusedHostNotificationPresence,
+  readHostNotificationPresenceFrame,
+} from "@/lib/notifications/notification-presence";
 import type { BotOpenThread } from "@/stores/bots/bot-open-thread-store";
 import { threadOpenOf } from "@/lib/bots/bot-trunk-model";
 import { useBotPaneWidthsStore } from "@/stores/bots/bot-pane-widths-store";
@@ -488,6 +494,16 @@ const QUESTION_1: BotOpenThread = {
   anchorKind: null,
   sent: null,
 };
+
+const PRESENCE_FRAME_INPUT = { windowId: "window-1", now: () => 1 };
+
+function PresentedConversation(props: {
+  readonly botId: string;
+  readonly conversationId: string;
+}): ReactNode {
+  usePublishPresentedBotConversation(props.botId, null, props.conversationId);
+  return null;
+}
 
 /** Where the next mount lands the channel; `null` for where it opens. */
 let mountLanding: BotChannelLanding | null = null;
@@ -1428,55 +1444,82 @@ describe("<BotChannelView tiles={null} /> channel", () => {
   });
 });
 
-describe("<BotChannelView tiles={null} /> channel read mark", () => {
-  it("marks the channel read when it is shown unread, and leaves a read one alone", () => {
-    mocks.state.chats = { "conversation-channel": indicator(true, false) };
-    mount({ openThreadPostId: null });
-    expect(mocks.markRead).toHaveBeenCalledTimes(1);
-    expect(mocks.markRead).toHaveBeenCalledWith({
-      epicId: BOT_ID,
-      chatId: "conversation-channel",
-    });
-    cleanup();
-    mocks.markRead.mockClear();
+describe("<BotChannelView tiles={null} /> focused notification presence", () => {
+  const CHANNEL_ENTITY = { epicId: BOT_ID, chatId: "conversation-channel" };
 
-    mocks.state.chats = { "conversation-channel": indicator(false, false) };
+  it("publishes the channel while it is shown, and withdraws it on unmount", () => {
     mount({ openThreadPostId: null });
+    expect(readFocusedHostNotificationPresence()).toEqual({
+      originHostId: null,
+      entity: CHANNEL_ENTITY,
+    });
+
+    cleanup();
+    expect(readFocusedHostNotificationPresence()).toBeNull();
+  });
+
+  it("issues no host mark of its own for an unread channel as its indicators refresh", () => {
+    mocks.state.chats = { "conversation-channel": indicator(true, false) };
+    const { rerender } = mount({ openThreadPostId: null });
+    mocks.state.chats = { "conversation-channel": indicator(true, true) };
+    rerender();
+
     expect(mocks.markRead).not.toHaveBeenCalled();
   });
 
-  it("marks the channel read for a failure as well as a done mark", () => {
-    mocks.state.chats = { "conversation-channel": indicator(false, true) };
-    mount({ openThreadPostId: null });
-    expect(mocks.markRead).toHaveBeenCalledTimes(1);
-  });
-
-  it("leaves the channel unread while its tab is not on screen, and reads it when the person comes back", () => {
-    mocks.state.chats = { "conversation-channel": indicator(true, false) };
+  it("withdraws the channel while its tab is not on screen, and publishes it when the person comes back", () => {
     mocks.state.paneVisible = false;
     const { rerender } = mount({ openThreadPostId: null });
-    expect(mocks.markRead).not.toHaveBeenCalled();
+    expect(readFocusedHostNotificationPresence()).toBeNull();
 
     mocks.state.paneVisible = true;
     rerender();
-    expect(mocks.markRead).toHaveBeenCalledTimes(1);
-    expect(mocks.markRead).toHaveBeenCalledWith({
-      epicId: BOT_ID,
-      chatId: "conversation-channel",
-    });
+    expect(readFocusedHostNotificationPresence()?.entity).toEqual(
+      CHANNEL_ENTITY,
+    );
   });
 
-  it("leaves the channel unread while the window is in the background, and reads it when the window returns", () => {
-    mocks.state.chats = { "conversation-channel": indicator(true, false) };
+  it("withdraws the channel while the window is in the background, and publishes it when the window returns", () => {
     const hasFocus = vi.spyOn(document, "hasFocus").mockReturnValue(false);
     mount({ openThreadPostId: null });
-    expect(mocks.markRead).not.toHaveBeenCalled();
+    expect(readHostNotificationPresenceFrame(PRESENCE_FRAME_INPUT).entity).toBe(
+      null,
+    );
 
     hasFocus.mockReturnValue(true);
     act(() => {
       window.dispatchEvent(new Event("focus"));
     });
-    expect(mocks.markRead).toHaveBeenCalledTimes(1);
+    expect(readFocusedHostNotificationPresence()?.entity).toEqual(
+      CHANNEL_ENTITY,
+    );
+  });
+
+  it("publishes the channel it switches to", () => {
+    const { rerender } = mount({ openThreadPostId: null });
+
+    mocks.state.appConversationChatId = "conversation-later";
+    rerender();
+
+    expect(readFocusedHostNotificationPresence()?.entity).toEqual({
+      epicId: BOT_ID,
+      chatId: "conversation-later",
+    });
+  });
+
+  it("leaves presence to the focused partner while its pane is the unfocused side of a split", () => {
+    render(
+      <PaneSurfaceActivityContext.Provider
+        value={{ visible: true, focused: false }}
+      >
+        <PresentedConversation
+          botId={BOT_ID}
+          conversationId="conversation-channel"
+        />
+      </PaneSurfaceActivityContext.Provider>,
+    );
+
+    expect(readFocusedHostNotificationPresence()).toBeNull();
   });
 });
 
@@ -1656,7 +1699,7 @@ describe("<BotChannelView tiles={null} /> read cursor", () => {
   });
 });
 
-describe("<BotChannelView tiles={null} /> channel read mark beside an open thread", () => {
+describe("<BotChannelView tiles={null} /> presence beside an open thread", () => {
   /** The `ResizeObserver`s the view made, to report a size for the channel's section. */
   const observers: FakeResizeObserver[] = [];
 
@@ -1710,31 +1753,17 @@ describe("<BotChannelView tiles={null} /> channel read mark beside an open threa
     vi.unstubAllGlobals();
   });
 
-  it("leaves the channel unread while it is hidden beside the thread, and reads it when the pane is wide enough to show it", () => {
+  it("publishes the thread however wide the channel beside it is", () => {
     vi.stubGlobal("ResizeObserver", FakeResizeObserver);
     mount({ openThreadPostId: "post-a" });
-    expect(screen.getByTestId("bot-thread-panel")).toBeTruthy();
-    // Not measured yet: the channel is taken as hidden.
-    expect(mocks.markRead).not.toHaveBeenCalled();
+    const threadEntity = { epicId: BOT_ID, chatId: "thread-a" };
+    expect(readFocusedHostNotificationPresence()?.entity).toEqual(threadEntity);
 
-    // A narrow pane hides the channel section, so it has no width.
     reportChannelWidth(0);
-    expect(mocks.markRead).not.toHaveBeenCalled();
+    expect(readFocusedHostNotificationPresence()?.entity).toEqual(threadEntity);
 
-    // A wide pane shows the channel beside the thread.
     reportChannelWidth(480);
-    expect(mocks.markRead).toHaveBeenCalledTimes(1);
-    expect(mocks.markRead).toHaveBeenCalledWith({
-      epicId: BOT_ID,
-      chatId: "conversation-channel",
-    });
-  });
-
-  it("leaves the channel unread beside an open thread where nothing can measure it", () => {
-    vi.stubGlobal("ResizeObserver", undefined);
-    mount({ openThreadPostId: "post-a" });
-    expect(screen.getByTestId("bot-thread-panel")).toBeTruthy();
-    expect(mocks.markRead).not.toHaveBeenCalled();
+    expect(readFocusedHostNotificationPresence()?.entity).toEqual(threadEntity);
   });
 });
 
@@ -2041,48 +2070,31 @@ describe("<BotChannelView tiles={null} /> open thread", () => {
     expect(onOpenThread).toHaveBeenCalledWith(null);
   });
 
-  it("marks an unread thread read when it is opened, and leaves a read one alone", () => {
-    mocks.state.chats = { "thread-a": indicator(true, false) };
-    mount({ openThreadPostId: "post-a" });
-    expect(mocks.markRead).toHaveBeenCalledTimes(1);
-    expect(mocks.markRead).toHaveBeenCalledWith({
+  it("publishes the thread when it opens, and the channel again when it closes", () => {
+    const { reopen } = mount({ openThreadPostId: "post-a" });
+    expect(readFocusedHostNotificationPresence()?.entity).toEqual({
       epicId: BOT_ID,
       chatId: "thread-a",
     });
-    cleanup();
-    mocks.markRead.mockClear();
 
-    mocks.state.chats = { "thread-b": indicator(false, false) };
-    mount({ openThreadPostId: "post-b" });
-    expect(mocks.markRead).not.toHaveBeenCalled();
+    reopen(null);
+    expect(readFocusedHostNotificationPresence()?.entity).toEqual({
+      epicId: BOT_ID,
+      chatId: "conversation-channel",
+    });
   });
 
-  it("leaves a verdict unread while the tab is not on screen, and reads it when the person comes back", () => {
-    mocks.state.chats = { "thread-a": indicator(true, false) };
+  it("withdraws the thread while the tab is not on screen, and publishes it when the person comes back", () => {
     mocks.state.paneVisible = false;
     const { rerender } = mount({ openThreadPostId: "post-a" });
-    expect(mocks.markRead).not.toHaveBeenCalled();
+    expect(readFocusedHostNotificationPresence()).toBeNull();
 
     mocks.state.paneVisible = true;
     rerender();
-    expect(mocks.markRead).toHaveBeenCalledTimes(1);
-    expect(mocks.markRead).toHaveBeenCalledWith({
+    expect(readFocusedHostNotificationPresence()?.entity).toEqual({
       epicId: BOT_ID,
       chatId: "thread-a",
     });
-  });
-
-  it("leaves a verdict unread while the window is in the background, and reads it when the window returns", () => {
-    mocks.state.chats = { "thread-a": indicator(true, false) };
-    const hasFocus = vi.spyOn(document, "hasFocus").mockReturnValue(false);
-    mount({ openThreadPostId: "post-a" });
-    expect(mocks.markRead).not.toHaveBeenCalled();
-
-    hasFocus.mockReturnValue(true);
-    act(() => {
-      window.dispatchEvent(new Event("focus"));
-    });
-    expect(mocks.markRead).toHaveBeenCalledTimes(1);
   });
 });
 

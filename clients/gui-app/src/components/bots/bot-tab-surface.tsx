@@ -36,6 +36,7 @@ import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
+import { useClaimBotSurfaceFocus } from "@/hooks/notifications/use-publish-presented-bot-conversation";
 import { BotsUnavailableNotice } from "@/components/bots/bots-unavailable-notice";
 import {
   useBotSubscriptionForHost,
@@ -162,6 +163,7 @@ export function BotTabSurface(props: {
   readonly hostId: string;
 }): ReactNode {
   const { botId, hostId } = props;
+  useClaimBotSurfaceFocus();
   // A RESTORED surface (the store persists) meets whatever its host
   // advertises now. `bot.open` is the newest method of the `bot.*` block, so
   // its presence stands for every write the surface offers; without it the
