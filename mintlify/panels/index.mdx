@@ -16,19 +16,21 @@ You can use panels one at a time, stack them together, or rearrange them around 
 | [Agents](/panels/agents) | Every agent in the Task, on the Chat or Terminal interface. |
 | [Terminals](/panels/terminals) | Plain shell sessions. |
 | [Browsers](/panels/browsers) | Browser tabs open in the Task. |
-| [Artifacts](/panels/artifacts) | Specs, tickets, stories, and reviews. |
+| [Mobile simulators](/panels/simulators) | iOS simulators and Android emulators you and your agents can use. |
+| [Artifacts](/panels/artifacts) | Documents, HTML pages, visual canvases and files. |
 | [Git Diff](/panels/git-diff) | Changed files for a selected worktree. |
 | [Pull Requests](/panels/pull-requests) | Pull requests found in the Task's chats. |
 | [File Tree](/panels/file-tree) | Project files and folders. |
 | [Sharing](/panels/sharing) | People and teams with access to the Task. |
 | [Comments](/panels/comments) | Comment threads for the active artifact. |
 
-Two panels appear only when they have something to show:
+Three panels appear only when they have something to show:
 
+- **Mobile simulators** appears when this computer can run a simulator or the Task already has one on another machine.
 - **Pull Requests** appears once a pull request is found in the Task's chats.
 - **Comments** appears when you start or open a comment on the active artifact, and stays while a commentable artifact is open.
 
-The other panels are always in the rail unless you hide them. You can force either conditional panel to show from the [rail's right-click menu](#the-rail).
+The other panels are always in the rail unless you hide them. You can force any conditional panel to show from the [rail's right-click menu](#the-rail).
 
 ## The Rail
 
@@ -44,7 +46,7 @@ Right-click the rail, on an icon or on empty space, to choose which panels it sh
 | Item | What it does |
 |---|---|
 | **Hide '&lt;Panel&gt;'** | Hide the panel you right-clicked. |
-| A checkbox for each panel | Check to show a panel, uncheck to hide it. Checking **Pull Requests** or **Comments** keeps it in the rail even when it has nothing to show; the menu then notes "No PRs yet" or "Needs an open artifact". |
+| A checkbox for each panel | Check to show a panel, uncheck to hide it. Checking **Mobile simulators**, **Pull Requests** or **Comments** keeps it in the rail even when it has nothing to show; the menu explains what is missing. |
 | **Reset panel visibility** | Return every panel to its default. Shown once you have changed something. |
 
 The last visible panel can't be hidden. Your choices apply to every Task.
@@ -60,6 +62,7 @@ Each panel has a header. In a combined group, click a header to collapse or expa
 | Agents | **Add agent**, a filter menu, and **More agent actions**: **Search agents**, **Agent office**, **Collapse all**, and **Select agents**. |
 | Terminals | **New terminal**. |
 | Browsers | **Add browser** and **Search browsers**. |
+| Mobile simulators | **Add simulator**. |
 | Artifacts | **Add artifact**, a filter menu, and **More artifact actions**, which include **Search artifacts**, **Collapse all**, and **Select artifacts**. |
 | Git Diff | **More Git Diff actions**. |
 | Comments | **Close comments**. |
@@ -102,6 +105,7 @@ Right-click a tab in the canvas for:
 | **Copy File Path** | Copy the file's full path. File tabs only. |
 | **Reveal in Sidebar** | Show the tab's item in its sidebar panel. |
 | **Usage** | Show the chat's usage. Chat tabs only, when the host supports it. |
+| **On a usage limit or error** | Follow device routing or keep this chat on its current account. See [Per-chat routing](/agents-and-models/usage-limits-and-routing#keep-one-chat-on-its-account). |
 
 ### Pane Opener
 
@@ -114,6 +118,7 @@ Type in the "Open into pane…" box, or pick a category:
 | **Agents** | An agent from this Task. |
 | **Terminals** | A terminal from this Task. |
 | **Browser** | A browser tab. |
+| **Mobile simulators** | An available simulator or emulator. |
 | **Artifacts** | An artifact. |
 | **Files** | A file from a workspace folder. |
 | **Diff** | A changed-file diff. |
@@ -171,6 +176,7 @@ Right-click a Task's header tab for more actions:
 | **Pin Task in History** | Pin the Task in History, or unpin it. |
 | **Duplicate Tab** | Open a copy of the tab with its tiling layout. |
 | **Open in New Window** | Open the tab in a new window. Available on every header tab except Home. |
+| **Close Tab** | Close this Task tab. |
 | **Close Other Tabs** | Close every other header tab. |
 | **Reopen Closed Tab** | Restore the last tab you closed. |
 
