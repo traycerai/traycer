@@ -7739,17 +7739,11 @@ describe("ChatMessages scroll policy", () => {
       await waitForNavigationSettle();
       // The cold rows keep the list's estimated heights, so the DOM
       // `scrollHeight` the harness overrides does not describe the end the
-      // list itself knows. Its end is the last row in view.
+      // list itself knows; the list's own end state does.
       await waitFor(() => {
         const list = legendListRefHolder.current;
         if (list === null) throw new Error("LegendList ref is not mounted");
-        const lastRowTop = list.getState().positionAtIndex(rowCount - 1);
-        if (typeof lastRowTop !== "number") {
-          throw new Error("last row not measured");
-        }
-        expect(getScrollNode().scrollTop + VIEWPORT_HEIGHT_PX).toBeGreaterThan(
-          lastRowTop + LEGEND_LIST_HEADER_PX,
-        );
+        expect(list.getState().isAtEnd).toBe(true);
       });
 
       view.unmount();
