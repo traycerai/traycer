@@ -396,6 +396,11 @@ const fake = vi.hoisted(() => {
      * the focus, which is what the say loop's post path they pin needs.
      */
     routeToFocus: (body: string): unknown => routePost(null, null, body, false),
+    /**
+     * The mint's next answers in place of an opened session, one per mint;
+     * emptied for every case.
+     */
+    mintAnswers: [] as Array<{ kind: "credits-exhausted" | "unavailable" }>,
     /** A router answer for one case, in place of {@link routeToFocus}; reset for every case. */
     routeAnswer: null as ((body: string) => unknown) | null,
     /**
@@ -461,14 +466,16 @@ vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useAuthService: () => ({
     mintVoiceSession: () =>
-      Promise.resolve({
-        kind: "ok",
-        session: {
-          voiceSessionId: "vs1",
-          answerSdp: "a",
-          expiresAt: Date.now() + 7_200_000,
+      Promise.resolve(
+        fake.mintAnswers.shift() ?? {
+          kind: "ok",
+          session: {
+            voiceSessionId: "vs1",
+            answerSdp: "a",
+            expiresAt: Date.now() + 7_200_000,
+          },
         },
-      }),
+      ),
     endVoiceSession: fake.endVoiceSession,
     routeVoiceUtterance: (body: string) =>
       Promise.resolve({
@@ -979,6 +986,7 @@ beforeEach(() => {
   fake.getUserMedia.mockReset();
   fake.getUserMedia.mockImplementation(() => fake.media.promise);
   fake.routeAnswer = null;
+  fake.mintAnswers.length = 0;
   fake.navigateOutcome = () => Promise.resolve();
   fake.navigate.mockClear();
   fake.conversationLists.answer("bot-1", true);
@@ -1046,6 +1054,70 @@ describe("pagehide", () => {
     expect(fake.track.stop).toHaveBeenCalled();
     expect(fake.endVoiceSession).toHaveBeenCalledWith("vs1");
     expect(fake.setVoiceSessionLive.mock.lastCall).toEqual([false]);
+  });
+});
+
+describe("a start stopped before its first engine goes live", () => {
+  function refusePlayback(): void {
+    vi.stubGlobal(
+      "Audio",
+      class {
+        autoplay = false;
+        srcObject: unknown = null;
+        play = () => Promise.reject(new Error("blocked"));
+        pause = () => undefined;
+      },
+    );
+  }
+
+  it("is a refusal when the sound cannot play, and the attempt is settled", async () => {
+    refusePlayback();
+    await startTalk();
+    await grantMicrophone();
+    await openMicrophone();
+    await settle();
+
+    await act(async () => {
+      fake.engines[0]?.onRemoteAudio?.(fake.remoteStream);
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    const state = useVoiceSessionStore.getState();
+    expect(state.phase).toBe("idle");
+    expect(state.refusal).toBe("playback");
+    expect(state.endReason).toBeNull();
+    expect(fake.track.stop).toHaveBeenCalled();
+    expect(fake.endVoiceSession).toHaveBeenCalledWith("vs1");
+  });
+
+  it("is a refusal when the track ends under it", async () => {
+    await startTalk();
+    await grantMicrophone();
+    await openMicrophone();
+    await settle();
+
+    act(() => {
+      fake.track.dispatchEvent(new Event("ended"));
+    });
+
+    const state = useVoiceSessionStore.getState();
+    expect(state.phase).toBe("idle");
+    expect(state.refusal).toBe("unavailable");
+    expect(state.endReason).toBeNull();
+  });
+
+  it("still ends a session that went live when its sound stops playing", async () => {
+    await bringLive();
+    refusePlayback();
+
+    await act(async () => {
+      fake.engines[0]?.onRemoteAudio?.(fake.remoteStream);
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    const state = useVoiceSessionStore.getState();
+    expect(state.endReason).toBe("playback");
+    expect(state.refusal).toBeNull();
   });
 });
 
@@ -1122,7 +1194,7 @@ describe("the app leaving or the OS taking the sound", () => {
 });
 
 describe("the microphone refused or failing at the start", () => {
-  it("ends as microphone-denied without opening the microphone when the OS says denied", async () => {
+  it("is refused as microphone-denied without opening the microphone when the OS says denied", async () => {
     await startTalk();
     await act(async () => {
       fake.micAccess.resolve("denied");
@@ -1131,11 +1203,12 @@ describe("the microphone refused or failing at the start", () => {
 
     const state = useVoiceSessionStore.getState();
     expect(state.phase).toBe("idle");
-    expect(state.endReason).toBe("microphone-denied");
+    expect(state.refusal).toBe("microphone-denied");
+    expect(state.endReason).toBeNull();
     expect(fake.getUserMedia).not.toHaveBeenCalled();
   });
 
-  it("ends as microphone-denied when the web view refuses the capture", async () => {
+  it("is refused as microphone-denied when the web view refuses the capture", async () => {
     fake.getUserMedia.mockImplementation(() =>
       Promise.reject(new DOMException("refused", "NotAllowedError")),
     );
@@ -1144,10 +1217,11 @@ describe("the microphone refused or failing at the start", () => {
 
     const state = useVoiceSessionStore.getState();
     expect(state.phase).toBe("idle");
-    expect(state.endReason).toBe("microphone-denied");
+    expect(state.refusal).toBe("microphone-denied");
+    expect(state.endReason).toBeNull();
   });
 
-  it("ends as microphone when the capture fails for any other reason", async () => {
+  it("is refused as microphone when the capture fails for any other reason", async () => {
     fake.getUserMedia.mockImplementation(() =>
       Promise.reject(new DOMException("in use", "NotReadableError")),
     );
@@ -1156,7 +1230,62 @@ describe("the microphone refused or failing at the start", () => {
 
     const state = useVoiceSessionStore.getState();
     expect(state.phase).toBe("idle");
-    expect(state.endReason).toBe("microphone");
+    expect(state.refusal).toBe("microphone");
+    expect(state.endReason).toBeNull();
+  });
+});
+
+describe("a mint that does not open a session", () => {
+  it("is a refusal, not an ending, when the first mint answers 402, and nothing is left open", async () => {
+    fake.mintAnswers.push({ kind: "credits-exhausted" });
+    await startTalk();
+    await grantMicrophone();
+    await openMicrophone();
+
+    const state = useVoiceSessionStore.getState();
+    expect(state.phase).toBe("idle");
+    expect(state.refusal).toBe("credits");
+    expect(state.endReason).toBeNull();
+    expect(fake.track.stop).toHaveBeenCalled();
+    expect(fake.endVoiceSession).not.toHaveBeenCalled();
+  });
+
+  it("is a refusal that nothing started when the first mint is unavailable", async () => {
+    fake.mintAnswers.push({ kind: "unavailable" });
+    await startTalk();
+    await grantMicrophone();
+    await openMicrophone();
+
+    const state = useVoiceSessionStore.getState();
+    expect(state.phase).toBe("idle");
+    expect(state.refusal).toBe("unavailable");
+    expect(state.endReason).toBeNull();
+  });
+
+  it("ends the live session with credits when its replacement's mint answers 402", async () => {
+    await bringLive();
+    fake.mintAnswers.push({ kind: "credits-exhausted" });
+
+    act(() => eventsOf(0).onClosed("vendor"));
+    await settle();
+
+    const state = useVoiceSessionStore.getState();
+    expect(state.phase).toBe("idle");
+    expect(state.endReason).toBe("credits");
+    expect(state.refusal).toBeNull();
+  });
+
+  it("ends the live session with connection when its replacement's mint is unavailable", async () => {
+    await bringLive();
+    fake.mintAnswers.push({ kind: "unavailable" });
+
+    act(() => eventsOf(0).onClosed("vendor"));
+    await settle();
+
+    const state = useVoiceSessionStore.getState();
+    expect(state.phase).toBe("idle");
+    expect(state.endReason).toBe("connection");
+    expect(state.refusal).toBeNull();
   });
 });
 

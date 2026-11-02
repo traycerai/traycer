@@ -28,6 +28,8 @@ import {
   type VoiceSessionDriver,
 } from "@/stores/voice/voice-session-store";
 import { VoiceSessionChrome } from "../voice-session-chrome";
+import { useVoiceTopRowDrawn } from "../use-voice-top-row-drawn";
+import { VoiceTopRowControl } from "../voice-top-row";
 
 const BOT_ID = "bot-1";
 const FOCUS: VoiceFocus = {
@@ -60,6 +62,7 @@ vi.mock("@/hooks/host/use-host-supports-method", () => ({
 vi.mock("@/lib/host", () => ({ useHostClient: () => null }));
 const runnerHost = vi.hoisted(() => ({ openMicrophoneSettings: vi.fn() }));
 vi.mock("@/providers/use-runner-host", () => ({
+  useRunnerHostOrNull: () => null,
   useRunnerHost: () => runnerHost,
 }));
 vi.mock("@/hooks/bots/use-bot-list-query", () => ({
@@ -91,9 +94,24 @@ function makeDriver(): FakeDriver {
   };
 }
 
-/** The ended line reaches TanStack Query, so the chrome mounts under a client. */
+/**
+ * The session's chrome as the app mounts it: the phone's view and bar from
+ * `VoiceSessionChrome`, and on desktop the top row's control, which the frame
+ * draws only where the row is.
+ */
+function Chrome() {
+  const topRowDrawn = useVoiceTopRowDrawn();
+  return (
+    <>
+      <VoiceSessionChrome />
+      {topRowDrawn ? <VoiceTopRowControl /> : null}
+    </>
+  );
+}
+
+/** The outcome line reaches TanStack Query, so the chrome mounts under a client. */
 function renderChrome() {
-  return render(<VoiceSessionChrome />, { wrapper: WithTestQueryClient });
+  return render(<Chrome />, { wrapper: WithTestQueryClient });
 }
 
 /** A session that has gone live on the channel, not yet drawn. */
@@ -269,7 +287,7 @@ describe("the phone voice view", () => {
 
   it("sends a refused microphone to the OS settings page", async () => {
     act(() =>
-      useVoiceSessionStore.getState().sessionEnded("microphone-denied"),
+      useVoiceSessionStore.getState().sessionRefused("microphone-denied"),
     );
     renderChrome();
 
@@ -329,7 +347,7 @@ describe("the phone voice view", () => {
     expect(screen.queryByTestId("voice-strip-mute")).toBeNull();
 
     setPhoneLayoutOnly(false);
-    rerender(<VoiceSessionChrome />);
+    rerender(<Chrome />);
 
     expect(useVoiceSessionStore.getState()).toMatchObject({
       pushToTalk: false,
@@ -347,7 +365,7 @@ describe("the phone voice view", () => {
     const { rerender } = renderChrome();
 
     setPhoneLayoutOnly(false);
-    rerender(<VoiceSessionChrome />);
+    rerender(<Chrome />);
 
     expect(useVoiceSessionStore.getState().muted).toBe(false);
     expect(screen.getByTestId("voice-strip-mute").textContent).toContain(
@@ -363,7 +381,7 @@ describe("the phone voice view", () => {
       new Error("no settings app"),
     );
     act(() =>
-      useVoiceSessionStore.getState().sessionEnded("microphone-denied"),
+      useVoiceSessionStore.getState().sessionRefused("microphone-denied"),
     );
     renderChrome();
 
@@ -392,7 +410,7 @@ describe("the phone voice view", () => {
       }),
     );
     act(() =>
-      useVoiceSessionStore.getState().sessionEnded("microphone-denied"),
+      useVoiceSessionStore.getState().sessionRefused("microphone-denied"),
     );
     renderChrome();
 
@@ -420,6 +438,15 @@ describe("the phone voice view", () => {
 
     expect(screen.getByTestId("voice-strip-mute")).toBeTruthy();
     expect(screen.queryByTestId("voice-phone-view")).toBeNull();
+    expect(screen.queryByTestId("voice-phone-bar")).toBeNull();
+  });
+
+  it("draws nothing of its own on the desktop layout, whose strip is in the top row", () => {
+    setPhoneLayoutOnly(false);
+    markLive(makeDriver());
+    render(<VoiceSessionChrome />, { wrapper: WithTestQueryClient });
+
+    expect(screen.queryByTestId("voice-session-strip")).toBeNull();
     expect(screen.queryByTestId("voice-phone-bar")).toBeNull();
   });
 });

@@ -1394,7 +1394,7 @@ describe("the fixed Tracy entry - vertical strip", () => {
     });
   });
 
-  it("draws Talk under the entry when voice is available, and as the glyph alone in the collapsed rail", async () => {
+  it("draws no Talk under the entry or in the collapsed rail when voice is available", async () => {
     const initialVoice = useVoiceSessionStore.getInitialState();
     useVoiceSessionStore.setState({
       availability: "live",
@@ -1408,24 +1408,18 @@ describe("the fixed Tracy entry - vertical strip", () => {
       openEpicTabs(["Alpha"]);
       mountSideStrip("/epics/e-alpha/e-alpha");
 
-      const entry = await screen.findByRole("tab", { name: "Tracy" });
-      const talk = screen.getByRole("button", { name: "Talk" });
-      expect(screen.getByTestId("side-strip-top-block").contains(talk)).toBe(
-        true,
-      );
-      expect(
-        entry.compareDocumentPosition(talk) & Node.DOCUMENT_POSITION_FOLLOWING,
-      ).toBeTruthy();
-      expect(talk.textContent).toBe("Talk");
+      await screen.findByRole("tab", { name: "Tracy" });
+      expect(screen.queryByRole("button", { name: "Talk" })).toBeNull();
 
       act(() => {
         useSideTabStripStore.setState({ collapsed: true });
       });
-      const tile = await screen.findByRole("button", { name: "Talk" });
-      expect(tile.textContent).toBe("");
-      expect(screen.getByTestId("side-strip-top-block").contains(tile)).toBe(
-        true,
+      await waitFor(() =>
+        expect(
+          screen.getByTestId("side-tab-strip").getAttribute("data-collapsed"),
+        ).toBe("true"),
       );
+      expect(screen.queryByRole("button", { name: "Talk" })).toBeNull();
     } finally {
       useVoiceSessionStore.setState(initialVoice, true);
     }
@@ -1452,48 +1446,46 @@ describe("Talk without the fixed Tracy entry", () => {
     useVoiceSessionStore.setState(initialVoice, true);
   });
 
-  it("is drawn on the header strip", async () => {
+  it("draws no Talk on the header strip", async () => {
     openEpicTabs(["Alpha"]);
     mountTopStrip("/epics/e-alpha/e-alpha");
 
-    const talk = await screen.findByRole("button", { name: "Talk" });
-    expect(talk.textContent).toBe("Talk");
+    await screen.findByRole("tab", { name: "Alpha" });
+    expect(screen.queryByRole("button", { name: "Talk" })).toBeNull();
     expect(screen.queryByRole("tab", { name: "Tracy" })).toBeNull();
   });
 
-  it("is drawn on the empty landing route, where the strip draws no tabs, idle and through a live session", async () => {
+  it("draws no Talk on the empty landing route, where the strip draws no tabs, idle or through a live session", async () => {
     // Show Tracy off, Home off, no tabs, route "/": the strip's empty landing.
     setHomeTabEnabled(false);
-    mountTopStrip("/");
+    const mounted = mountTopStrip("/");
 
-    const talk = await screen.findByRole("button", { name: "Talk" });
-    expect(talk.getAttribute("data-state")).toBe("idle");
+    await waitFor(() => expect(mounted.pathname()).toBe("/"));
     expect(screen.queryByTestId("tab-strip")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Talk" })).toBeNull();
 
     act(() => {
       useVoiceSessionStore.setState({ phase: "live" });
     });
-    const live = screen.getAllByRole("button", { name: "Talk" });
-    expect(live).toHaveLength(1);
-    expect(live[0]?.getAttribute("data-state")).toBe("live");
-    expect(live[0]?.getAttribute("aria-pressed")).toBe("true");
+    expect(screen.queryByRole("button", { name: "Talk" })).toBeNull();
   });
 
-  it("is drawn in the vertical strip's top block, expanded and collapsed", async () => {
+  it("draws no Talk in the vertical strip's top block, expanded or collapsed", async () => {
     openEpicTabs(["Alpha"]);
     mountSideStrip("/epics/e-alpha/e-alpha");
 
-    const talk = await screen.findByRole("button", { name: "Talk" });
-    expect(screen.getByTestId("side-strip-top-block").contains(talk)).toBe(
-      true,
-    );
+    const strip = await screen.findByTestId("side-tab-strip");
+    expect(strip.getAttribute("data-collapsed")).toBe("false");
+    expect(screen.queryByRole("button", { name: "Talk" })).toBeNull();
     expect(screen.queryByRole("tab", { name: "Tracy" })).toBeNull();
 
     act(() => {
       useSideTabStripStore.setState({ collapsed: true });
     });
-    const tile = await screen.findByRole("button", { name: "Talk" });
-    expect(tile.textContent).toBe("");
+    await waitFor(() =>
+      expect(strip.getAttribute("data-collapsed")).toBe("true"),
+    );
+    expect(screen.queryByRole("button", { name: "Talk" })).toBeNull();
   });
 });
 
@@ -1538,6 +1530,7 @@ function PhoneShellHarness(): ReactNode {
       {...chrome}
       columnRef={() => undefined}
       header={<MobileAppHeader />}
+      voiceTopRow={null}
       strip={
         placement === "left" ? (
           <SideTabStrip edge="left" ownsTitleBar={false} />
