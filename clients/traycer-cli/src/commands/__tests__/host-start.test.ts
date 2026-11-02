@@ -9601,6 +9601,34 @@ describe("runHostStart - previous-exit record", () => {
     });
   });
 
+  it("records a requested restart as stopped for the first attempt, before the second spawns", async () => {
+    const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const scripted = withScriptedAttempts(deps, [
+      { code: RESTART_EXIT_CODE, signal: null },
+      { code: 0, signal: null },
+    ]);
+    await runUntilExit(
+      () =>
+        runHostStart(
+          { environment: "production", cwd: null },
+          { ...scripted.deps, maxRelaunches: 5 },
+        ),
+      recorded,
+    );
+    const firstAttempt = recorded.markers.find((m) => m.phase === "starting");
+    expect(recorded.previousExits[0]).toMatchObject({
+      kind: "stopped",
+      exitCode: RESTART_EXIT_CODE,
+      signal: null,
+      attemptId: firstAttempt?.fields.attemptId,
+    });
+    const spawns = recorded.sequence
+      .map((label, index) => (label === "spawn" ? index : -1))
+      .filter((index) => index >= 0);
+    expect(spawns).toHaveLength(2);
+    expect(recorded.sequence.indexOf("previous-exit")).toBeLessThan(spawns[1]);
+  });
+
   it("records exited for a clean exit", async () => {
     const recorded = await runExit({
       code: 0,

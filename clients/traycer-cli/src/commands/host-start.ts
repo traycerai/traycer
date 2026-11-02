@@ -3025,6 +3025,23 @@ export async function runHostStart(
         stderrEnded,
       });
       disposeAttemptStderr(child.stderr);
+      // No crash marker, but still an exit the next host must not mistake for
+      // an older one: without this, the replacement reads whatever attempt
+      // last wrote the record (an out-of-memory crash days ago, say) as how
+      // its predecessor ended.
+      recordPreviousExit({
+        deps,
+        logger,
+        environment: opts.environment,
+        previousExit: buildPreviousExit({
+          attemptId,
+          endedAtMs: childEndedAtMs,
+          kind: "stopped",
+          exitCode: ending.code,
+          signal: null,
+          report: null,
+        }),
+      });
       // The relaunch below is the same either way; this only says it followed
       // a teardown that did not finish.
       const forcedShutdown = stderrTee.capture.forcedShutdownLine();
@@ -4829,6 +4846,29 @@ function isReadable(value: unknown): value is Readable {
  * the SUPERVISOR - which now outlives individual attempts. Collapsing the two
  * is what made a crash necessarily fatal to the supervisor.
  */
+/**
+ * Replace `previous-exit.json` with how this attempt ended. Every child exit
+ * the supervisor observes writes one, including a requested restart that
+ * writes no terminal marker, so the next host never reads an older attempt's
+ * exit as its predecessor's. Best effort: a failure is logged, never thrown.
+ */
+function recordPreviousExit(options: {
+  readonly deps: RunHostStartDeps;
+  readonly logger: ILogger;
+  readonly environment: Environment;
+  readonly previousExit: HostPreviousExit;
+}): void {
+  try {
+    options.deps.writePreviousExit(options.environment, options.previousExit);
+  } catch (cause) {
+    options.logger.warn("Host supervisor could not record the previous exit", {
+      environment: options.environment,
+      kind: options.previousExit.kind,
+      cause: errorFromUnknown(cause).name,
+    });
+  }
+}
+
 function persistTerminalMarker(options: {
   readonly deps: RunHostStartDeps;
   readonly logger: ILogger;
@@ -4859,16 +4899,7 @@ function persistTerminalMarker(options: {
   }
   // After the marker, never before it: the marker is readiness authority, and
   // this record only tells the next host what to say about this exit.
-  try {
-    options.deps.writePreviousExit(options.environment, options.previousExit);
-  } catch (cause) {
-    options.logger.warn("Host supervisor could not record the previous exit", {
-      environment: options.environment,
-      phase: options.phase,
-      kind: options.previousExit.kind,
-      cause: errorFromUnknown(cause).name,
-    });
-  }
+  recordPreviousExit(options);
   // Marker persistence is best effort; it must never replace the child's
   // actual exit code or cause a spurious service-manager restart.
   return { exitCode: options.exitCode, abnormal: options.abnormal };

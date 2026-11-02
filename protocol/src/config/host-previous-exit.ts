@@ -9,8 +9,10 @@ import {
  * ended.
  *
  * Written by the supervisor (`traycer host start`) each time its child ends,
- * right after the terminal marker it appends to `host.log`, and replaced
- * whole on every exit, so it always describes the host that ran before the
+ * right after the terminal marker it appends to `host.log` when the exit has
+ * one (a requested restart has none, and still writes a `stopped` record),
+ * and replaced whole on every exit, so it always describes the host that ran
+ * before the
  * current one. Read by the host at boot: a host that starts after an
  * out-of-memory abort says so, once, to the person and on `host.status`.
  *

@@ -12,7 +12,7 @@
  * - `crashed` - any other abnormal end: a nonzero exit, a fatal signal, or
  *   any signal no stop was asked for (an unsolicited SIGKILL or SIGTERM).
  * - `stopped` - ended on purpose: a signal or kill while a stop was asked
- *   for, a forced shutdown, a Windows session ending.
+ *   for, a forced shutdown, a Windows session ending, a requested restart.
  * - `exited` - a clean exit.
  */
 export const HOST_PREVIOUS_EXIT_KINDS = [
