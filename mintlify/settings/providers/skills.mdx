@@ -5,7 +5,7 @@ description: "Import or write skills, choose which providers can use them, and i
 
 import { FeatureVideo } from "/snippets/feature-video.jsx";
 
-<FeatureVideo src="https://assets.traycer.ai/docs/videos/skills-setup.mp4" label="Create a shared skill with Markdown instructions" />
+<FeatureVideo src="https://assets.traycer.ai/docs/videos/skills-setup.mp4" label="Create a skill with Markdown instructions" />
 
 A skill is a folder with a `SKILL.md` inside it: a name, a description of when to use it, and Markdown instructions. The agent loads a skill on its own when the work matches, or you can invoke it by name in chat.
 
@@ -37,8 +37,8 @@ In the **Add skill** dialog, choose "or write one from scratch".
 2. Enter a **Description**. The agent reads it to decide when to use the skill.
 3. Write the Markdown **Instructions**.
 4. Choose who can use it under **Available to**:
-   - **Every provider** stores the skill once in the shared skills folder, where any agent that reads it picks it up.
    - The provider's own option, for example **Claude Code only**, stores it in that provider's own skills folder.
+   - **Personal**, or your team's name on a host that runs your team's settings, stores it there. Personal reaches every provider on every host of yours; a team's reaches every provider on every member's hosts. It appears when you manage **Global** skills.
 5. Click **Create skill**.
 
 The dialog shows where the skill will be saved. To switch back to importing, choose "or import an existing one".
@@ -49,13 +49,14 @@ Badges show where each skill comes from. Use the filter menu to show or hide eac
 
 | Badge             | Meaning                                                                              |
 | ----------------- | ------------------------------------------------------------------------------------ |
-| **Shared**        | Stored in the shared skills folder, available to every provider.                     |
+| **Shared**        | In a shared skills folder (`~/.agents/skills` or a workspace's `.agents/skills`). Traycer reads it. |
 | **Provider-only** | Stored in this provider's own skills folder.                                         |
 | **Plugin**        | Comes from an installed plugin. Remove the plugin to remove the skill.               |
 | **Built-in**      | Ships with the provider and can't be removed from here.                              |
-| **Conflict**      | A folder already sits where this provider would link the skill. Traycer leaves it alone. |
 
 Open a skill to see its **Name**, **When to use**, **Source**, and **Instructions**. From there you can **Edit** it and **Save changes**, **Remove** it, or, for an imported skill, **Update from source**. If you edited an imported skill, updating asks before it overwrites your edits.
+
+A **Shared** skill can't be edited or removed here: manage it with whatever put it there. Choose **Add to Personal** to put a copy there, which reaches every provider on every host of yours. On a host that runs your team's settings, the button names your team, and the copy reaches every member's hosts.
 
 ## Use A Skill In Chat
 
