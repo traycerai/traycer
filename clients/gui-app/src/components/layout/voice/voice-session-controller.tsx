@@ -493,13 +493,14 @@ export function VoiceSessionController(): ReactNode {
       ) {
         snapshot = await directory.refresh();
       }
+      const decision = resolveRoute(
+        result,
+        snapshot,
+        viewSnapshot,
+        request.segments.length,
+      );
       return {
-        decision: resolveRoute(
-          result,
-          snapshot,
-          viewSnapshot,
-          request.segments.length,
-        ),
+        decision,
         seen:
           result === null
             ? null
@@ -507,6 +508,9 @@ export function VoiceSessionController(): ReactNode {
                 route: result,
                 viewKind: viewSnapshot.page.kind,
                 rowIds: viewSnapshot.rows.map((row) => row.action),
+                pageTakesWords: viewSnapshot.rows.some((row) => row.takesWords),
+                actTakesWords:
+                  decision.kind === "act" && decision.row.takesWords,
                 segments: request.segments,
               },
       };

@@ -1,3 +1,4 @@
+import { scrubSentryEventInPlace } from "@traycer-clients/shared/platform/sentry-scrub";
 import { z } from "zod";
 
 const filedMissSchema = z.object({
@@ -20,4 +21,33 @@ export function filedMisses(
   return calls.map(([message, options]) =>
     filedMissSchema.parse({ message, options }),
   );
+}
+
+/** The one event filed through a mocked `captureMessage`; a test fails if there was not exactly one. */
+export function onlyMiss(
+  calls: ReadonlyArray<ReadonlyArray<unknown>>,
+): FiledMiss {
+  const filed = filedMisses(calls);
+  if (filed.length !== 1) {
+    throw new Error(`expected one event to be filed, got ${filed.length}`);
+  }
+  return filed[0];
+}
+
+/**
+ * The events as they leave the app: each one through the real Sentry scrubber,
+ * serialized, so a test can look for anything that should not be in it.
+ */
+export function scrubbedMisses(
+  calls: ReadonlyArray<ReadonlyArray<unknown>>,
+): ReadonlyArray<string> {
+  return filedMisses(calls).map((miss) => {
+    const event = structuredClone({
+      message: miss.message,
+      tags: miss.options.tags,
+      extra: miss.options.extra,
+    });
+    scrubSentryEventInPlace(event);
+    return JSON.stringify(event);
+  });
 }

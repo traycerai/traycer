@@ -177,7 +177,7 @@ function NotWhatIMeant(): ReactNode {
       size="xs"
       data-testid="voice-strip-not-meant"
       onClick={() => {
-        reportVoiceMiss("not-meant", executedAct, null);
+        reportVoiceMiss("not-meant", "chosen-act", executedAct, null);
         setExecutedAct(null);
       }}
     >

@@ -7,6 +7,7 @@ import {
 import {
   reportVoiceMiss,
   type RouteSeen,
+  type VoiceMissCause,
   type VoiceMissKind,
 } from "@/lib/voice/miss-report";
 import { noteVoiceQueueSwitch } from "@/lib/voice/queue-verbs";
@@ -410,17 +411,26 @@ const UNANSWERED_TEXT: Record<ConfirmSubject["kind"], string> = {
   act: "Nothing was done: no yes came for it. The person can say it again.",
 };
 
+/** How a miss is filed: its kind, and what it is about. */
+interface Miss {
+  readonly kind: VoiceMissKind;
+  readonly cause: VoiceMissCause;
+}
+
 /**
  * How a route the page cannot serve is filed: nothing listed does what was
  * asked, or the router chose an action the page does not offer. Every other
  * decision, a post, an answer or a tell among them, is filed as nothing.
  */
-function missKindOf(decision: RoutedDecision): VoiceMissKind | null {
-  if (decision.kind === "missing") return "missing";
+function missOf(decision: RoutedDecision): Miss | null {
+  if (decision.kind === "missing") return { kind: "missing", cause: "missing" };
   return decision.kind === "refused" && decision.reason === "unknown-action"
-    ? "refused"
+    ? { kind: "refused", cause: "unknown-action" }
     : null;
 }
+
+/** An act the router chose that could not run on the page it was chosen for. */
+const STALE_ACT: Miss = { kind: "refused", cause: "chosen-act" };
 
 /** What the voice says of the decision already waiting, by what it is. */
 function busyRefusal(held: Confirming): LoopRefusal {
@@ -1106,7 +1116,7 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
     seen: RouteSeen | null,
   ): Promise<void> {
     if (deps.view().generation !== decision.generation) {
-      reportMiss("refused", seen);
+      reportMiss(STALE_ACT, seen);
       dropForMovedPage(entry);
       return;
     }
@@ -1122,12 +1132,9 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
   }
 
   /** Files a request the page could not serve, when the router's answer is known. */
-  function reportMiss(
-    missKind: VoiceMissKind | null,
-    seen: RouteSeen | null,
-  ): void {
-    if (missKind !== null && seen !== null) {
-      reportVoiceMiss(missKind, seen, null);
+  function reportMiss(miss: Miss | null, seen: RouteSeen | null): void {
+    if (miss !== null && seen !== null) {
+      reportVoiceMiss(miss.kind, miss.cause, seen, null);
     }
   }
 
@@ -1151,7 +1158,7 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
     // Not a question about a page the person has already left.
     const view = deps.view();
     if (view.generation !== decision.generation) {
-      reportMiss("refused", seen);
+      reportMiss(STALE_ACT, seen);
       dropForMovedPage(entry);
       return;
     }
@@ -1224,7 +1231,7 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
   /** Carries out one routed decision for the words `entry` reserved. */
   async function execute(entry: RoutingEntry, routed: Routed): Promise<void> {
     const { decision, seen } = routed;
-    reportMiss(missKindOf(decision), seen);
+    reportMiss(missOf(decision), seen);
     switch (decision.kind) {
       case "refused":
         refuse(entry, decision.reason);

@@ -4530,6 +4530,53 @@ describe("the page in front", () => {
     return parsed.input.at(0)?.content.at(1)?.text ?? "";
   }
 
+  /** The page as the router was shown it: its kind first, then one line per action. */
+  function shownLines(body: string) {
+    return (requestText(body).split("<view>\n")[1] ?? "")
+      .split("\n</view>")[0]
+      .split("\n")
+      .map((line) =>
+        z
+          .object({
+            view: z.string().optional(),
+            action: z.string().optional(),
+            takesWords: z.boolean().optional(),
+          })
+          .parse(JSON.parse(line)),
+      );
+  }
+
+  /** The router's answer that nothing on the page does what was said, and no one is named. */
+  const MISSING_ROUTE = {
+    action: "missing",
+    target: {
+      environmentId: null,
+      botId: null,
+      threadId: null,
+      itemId: null,
+      actionId: null,
+      agentId: null,
+    },
+    span: { fromSegment: 0, toSegment: 0 },
+    uncertain: false,
+    question: null,
+    control: null,
+    choice: null,
+  };
+
+  function missingAnswer(): unknown {
+    return {
+      output: [
+        {
+          type: "message",
+          content: [
+            { type: "output_text", text: JSON.stringify(MISSING_ROUTE) },
+          ],
+        },
+      ],
+    };
+  }
+
   it("is shown to the router after the focus and ahead of the words", async () => {
     const bodies: string[] = [];
     await bringLive();
@@ -4575,64 +4622,40 @@ describe("the page in front", () => {
     const bodies: string[] = [];
     await bringLive();
     focusOn(CHANNEL_FOCUS);
-    const answered = {
-      action: "missing",
-      target: {
-        environmentId: null,
-        botId: null,
-        threadId: null,
-        itemId: null,
-        actionId: null,
-        agentId: null,
-      },
-      span: { fromSegment: 0, toSegment: 0 },
-      uncertain: false,
-      question: null,
-      control: null,
-      choice: null,
-    };
     fake.routeAnswer = (body) => {
       bodies.push(body);
-      return {
-        output: [
-          {
-            type: "message",
-            content: [{ type: "output_text", text: JSON.stringify(answered) }],
-          },
-        ],
-      };
+      return missingAnswer();
     };
 
     await say("Rename the sandbox.", "d1");
 
-    // The page as the router was shown it: its kind, then one line per action.
-    const shownLines = (requestText(bodies[0] ?? "").split("<view>\n")[1] ?? "")
-      .split("\n</view>")[0]
-      .split("\n")
-      .map((line) =>
-        z
-          .object({
-            view: z.string().optional(),
-            action: z.string().optional(),
-          })
-          .parse(JSON.parse(line)),
-      );
-    const shownKind = shownLines.at(0)?.view;
-    const shownRows = shownLines.flatMap((line) =>
+    const shown = shownLines(bodies[0] ?? "");
+    const shownKind = shown.at(0)?.view;
+    const shownRows = shown.flatMap((line) =>
       line.action === undefined ? [] : [line.action],
     );
     expect(shownRows.length).toBeGreaterThan(0);
+    // No action on this page passes the person's words on, so the words are kept.
+    expect(shown.some((line) => line.takesWords === true)).toBe(false);
     const filed = filedMisses(sentry.captureMessage.mock.calls);
     expect(filed).toHaveLength(1);
     expect(filed[0]?.options.tags).toMatchObject({
       viewKind: shownKind,
       missKind: "missing",
       routerAction: "missing",
+      spanDropped: "none",
     });
     expect(filed[0]?.options.extra).toEqual({
       rows: shownRows,
-      route: answered,
+      route: {
+        action: "missing",
+        target: MISSING_ROUTE.target,
+        uncertain: false,
+        choice: null,
+        control: null,
+      },
       span: "Rename the sandbox.",
+      spanWords: 3,
     });
   });
 
@@ -4974,6 +4997,54 @@ describe("the page in front", () => {
         frame.kind === "send" ? [frame] : [],
       );
     }
+
+    it("files a request nothing served with no words when the agent's page offers a tell, as it may have been a message", async () => {
+      const bodies: string[] = [];
+      await bringLive();
+      focusOn(CHANNEL_FOCUS);
+      seedRunningAgent();
+      fake.routeAnswer = (body) => {
+        bodies.push(body);
+        return missingAnswer();
+      };
+
+      await say("use the other branch", "d1");
+
+      // The router was shown a tell that passes the person's words on.
+      expect(
+        shownLines(bodies[0] ?? "").some(
+          (line) =>
+            line.action === `agent.tell:${AGENT_ID}` &&
+            line.takesWords === true,
+        ),
+      ).toBe(true);
+      const filed = filedMisses(sentry.captureMessage.mock.calls);
+      expect(filed).toHaveLength(1);
+      expect(filed[0]?.options.tags).toMatchObject({
+        missKind: "missing",
+        spanDropped: "agent-page",
+      });
+      expect(filed[0]?.options.extra).toMatchObject({
+        span: null,
+        spanWords: 4,
+      });
+    });
+
+    it("keeps a tell that ran as an act that passes words on, on a page that offers one", async () => {
+      await bringLive();
+      focusOn(CHANNEL_FOCUS);
+      const wire = seedRunningAgent();
+      mountComposer(AGENT_TILE.instanceId, false, "front-model", null);
+
+      await tellTheAgent();
+
+      expect(sends(wire)).toHaveLength(1);
+      expect(useVoiceSessionStore.getState().executedAct).toMatchObject({
+        actTakesWords: true,
+        pageTakesWords: true,
+      });
+      expect(sentry.captureMessage).not.toHaveBeenCalled();
+    });
 
     it("sends through the composer shown in the active tile when it can send", async () => {
       await bringLive();

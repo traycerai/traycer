@@ -11,7 +11,10 @@ import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { WithTestQueryClient } from "@/__tests__/with-test-query-client";
 import type { RouteSeen } from "@/lib/voice/miss-report";
-import { filedMisses } from "@/lib/voice/__tests__/fixtures/filed-misses";
+import {
+  filedMisses,
+  scrubbedMisses,
+} from "@/lib/voice/__tests__/fixtures/filed-misses";
 import { botTabIntent } from "@/lib/tab-navigation/intents";
 import { useBotOpenThreadStore } from "@/stores/bots/bot-open-thread-store";
 import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
@@ -142,7 +145,26 @@ const EXECUTED_ACT: RouteSeen = {
   },
   viewKind: "task",
   rowIds: ["action:tab.next", "action:tab.close"],
+  pageTakesWords: false,
+  actTakesWords: false,
   segments: ["next tab"],
+};
+
+/** An agent tell that ran, over words that name a person and carry a secret. */
+const EXECUTED_TELL: RouteSeen = {
+  ...EXECUTED_ACT,
+  route: {
+    ...EXECUTED_ACT.route,
+    target: { ...EXECUTED_ACT.route.target, actionId: "agent.tell:chat_1" },
+    span: { fromSegment: 0, toSegment: 1 },
+  },
+  rowIds: ["agent.tell:chat_1"],
+  pageTakesWords: true,
+  actTakesWords: true,
+  segments: [
+    "Please remind Ada at ada.lovelace@example.com ",
+    "that my password is tangerine-oyster-42",
+  ],
 };
 
 describe("VoiceSessionStrip", () => {
@@ -451,15 +473,52 @@ describe("VoiceSessionStrip", () => {
         missKind: "not-meant",
         routerAction: "act",
       });
+      expect(filed[0]?.options.tags.spanDropped).toBe("act");
       expect(filed[0]?.options.extra).toEqual({
         rows: EXECUTED_ACT.rowIds,
-        route: EXECUTED_ACT.route,
-        span: "next tab",
+        route: {
+          action: "act",
+          target: EXECUTED_ACT.route.target,
+          uncertain: false,
+          choice: null,
+          control: null,
+        },
+        span: null,
+        spanWords: 2,
       });
       expect(useVoiceSessionStore.getState().executedAct).toBeNull();
       expect(
         screen.queryByRole("button", { name: "Not what I meant" }),
       ).toBeNull();
+    });
+
+    it("files a tell that ran with none of the words said, only how many", async () => {
+      goLive(makeDriver());
+      act(() => {
+        useVoiceSessionStore.getState().setExecutedAct(EXECUTED_TELL);
+      });
+
+      await userEvent.click(
+        screen.getByRole("button", { name: "Not what I meant" }),
+      );
+
+      const filed = filedMisses(captureMessage.mock.calls);
+      expect(filed).toHaveLength(1);
+      expect(filed[0]?.options.tags.spanDropped).toBe("tell");
+      expect(filed[0]?.options.extra).toMatchObject({
+        span: null,
+        spanWords: 10,
+      });
+      const events = scrubbedMisses(captureMessage.mock.calls).join("\n");
+      for (const word of [
+        "Please",
+        "remind",
+        "ada.lovelace@example.com",
+        "password",
+        "tangerine-oyster-42",
+      ]) {
+        expect(events).not.toContain(word);
+      }
     });
   });
 });
