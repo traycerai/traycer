@@ -7393,6 +7393,18 @@ describe("ChatMessages scroll policy", () => {
         epicId: "epic-1",
         taskId: "task-1",
       });
+      // The split retired the pre-steer coordinate rather than leaving it
+      // armed as a hydration wait, and the mount's commit already saved the
+      // slice: a close before the restore validates, while the persistence
+      // gate still keeps the entry, finds the slice there, not the row that
+      // no longer exists.
+      const resolvedSavedState = {
+        mode: "free-scrolling",
+        anchorMessageId: resolvedPartKey,
+        anchorRowKey: `${turnRowId}:part:0`,
+        offset: savedOffset,
+      };
+      expect(peekSavedChatTabState(identity)).toMatchObject(resolvedSavedState);
       await settleLegendList();
       await waitFor(() => {
         expect(
@@ -7402,16 +7414,10 @@ describe("ChatMessages scroll policy", () => {
         expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
       });
 
-      // The split retired the pre-steer coordinate rather than leaving it
-      // armed as a hydration wait: the close saves the slice the reader was
-      // restored to, not the row that no longer exists.
+      // The close saves the slice the reader was restored to, whether or not
+      // the restore has validated by then.
       view.unmount();
-      expect(peekSavedChatTabState(identity)).toMatchObject({
-        mode: "free-scrolling",
-        anchorMessageId: resolvedPartKey,
-        anchorRowKey: `${turnRowId}:part:0`,
-        offset: savedOffset,
-      });
+      expect(peekSavedChatTabState(identity)).toMatchObject(resolvedSavedState);
     });
 
     it("follows the latest when every slice of the split turn is drawn and none names the saved segment", async () => {
