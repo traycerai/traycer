@@ -11,7 +11,7 @@ export function AlertsSettingsPanel() {
   return (
     <SettingsPanelShell
       title="Alerts"
-      description="How this app alerts you across hosts."
+      description="How this app alerts you."
       bodyClassName="overflow-visible rounded-none border-none bg-transparent"
     >
       {/* The OS row exists on the desktop and the push row in the phone
@@ -37,7 +37,7 @@ export function AlertsSettingsPanel() {
                 navigateToSettingsSection("notifications");
               }}
             >
-              Open Host Notifications
+              Open Notifications
             </Button>
           }
         />

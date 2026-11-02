@@ -40,9 +40,7 @@ describe("<AppNotificationsSettingsPanel />", () => {
 
     expect(screen.getByRole("heading", { name: "Sounds" })).toBeTruthy();
     expect(
-      screen.getByText(
-        "Which chime plays for each kind of alert, across hosts.",
-      ),
+      screen.getByText("Which chime plays for each kind of alert."),
     ).toBeTruthy();
     expect(
       within(screen.getByTestId("notification-chime-section")).queryByRole(
@@ -135,7 +133,7 @@ describe("<AppNotificationsSettingsPanel />", () => {
 
     expect(screen.getAllByRole("combobox")).toHaveLength(4);
     expect(screen.queryByText("OS notifications")).toBeNull();
-    expect(screen.queryByText("Push notifications on this phone")).toBeNull();
+    expect(screen.queryByText("Push notifications")).toBeNull();
     expect(screen.queryByText("Notification events")).toBeNull();
     expect(screen.queryAllByRole("switch")).toEqual([]);
   });
