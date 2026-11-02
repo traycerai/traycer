@@ -138,9 +138,13 @@ vi.mock("@/components/settings/host-scope/use-host-options", async () => {
     },
   };
 });
-vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
-  useHostDirectoryList: () => ({ data: dialogMocks.directoryHosts }),
-}));
+vi.mock("@/hooks/host/use-host-directory-list-query", () => {
+  const useHostDirectoryList = () => ({ data: dialogMocks.directoryHosts });
+  return {
+    useHostDirectoryList,
+    useHostDirectoryListQuery: useHostDirectoryList,
+  };
+});
 
 // The binding here is a bare fake with no directory for the real hook to read.
 vi.mock("@/hooks/host/use-host-credential-refusal", () => ({

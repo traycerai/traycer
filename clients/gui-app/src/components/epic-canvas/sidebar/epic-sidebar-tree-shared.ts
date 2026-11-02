@@ -3,7 +3,7 @@
  * Extracted from the original monolithic epic-sidebar.tsx to eliminate duplication.
  */
 
-import type { CSSProperties } from "react";
+import { useSyncExternalStore, type CSSProperties } from "react";
 import type { TargetAndTransition, Transition } from "motion/react";
 import type { EpicNodeKind } from "@/lib/artifacts/node-display";
 import { useReducedMotion } from "@/lib/animation/status-animation-clock";
@@ -13,6 +13,69 @@ import { SIDEBAR_NODE_REVEAL_VISIBILITY_MS } from "@/stores/epics/sidebar-node-r
 
 export const INDENT_PX = 16;
 export const BASE_PAD_LEFT = 8;
+
+/**
+ * The expansion state a tree row reads and drives: whether ITS branch is open,
+ * and the two actions. One instance per panel, with a stable identity for the
+ * panel's life.
+ *
+ * Rows used to receive the whole effective expanded `Set` as a prop. Every
+ * toggle rebuilt that set, so the callbacks closed over it and the controller
+ * object holding them were re-minted too, and the `memo` on every row in the
+ * tree compared unequal: one chevron click re-rendered all of them, and
+ * Motion re-measured every `m.li` for the layout animation. The rows that
+ * actually change on a toggle are the toggled one and the children it shows
+ * or hides. So the set lives behind a subscription instead, and a row reads
+ * one boolean, its own id's membership, through `useTreeRowExpanded`: only a
+ * row whose boolean flips re-renders.
+ */
+export interface TreeRowExpansion {
+  readonly subscribe: (listener: () => void) => () => void;
+  readonly isExpanded: (id: string) => boolean;
+  readonly toggleExpanded: (id: string) => void;
+  readonly ensureExpanded: (id: string) => void;
+}
+
+/** The panel-held store behind `TreeRowExpansion`. */
+export interface ExpandedIdsStore {
+  readonly subscribe: (listener: () => void) => () => void;
+  readonly get: () => ReadonlySet<string>;
+  /** Publishes a new effective set; a same-identity set notifies no one. */
+  readonly set: (next: ReadonlySet<string>) => void;
+}
+
+export function createExpandedIdsStore(
+  initial: ReadonlySet<string>,
+): ExpandedIdsStore {
+  let current = initial;
+  const listeners = new Set<() => void>();
+  return {
+    subscribe: (listener) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+    get: () => current,
+    set: (next) => {
+      if (next === current) return;
+      current = next;
+      for (const listener of listeners) listener();
+    },
+  };
+}
+
+/** Whether `id`'s branch is open: re-renders this row only when that flips. */
+export function useTreeRowExpanded(
+  expansion: TreeRowExpansion,
+  id: string,
+): boolean {
+  return useSyncExternalStore(
+    expansion.subscribe,
+    () => expansion.isExpanded(id),
+    () => expansion.isExpanded(id),
+  );
+}
 
 /**
  * The motion props of one chat-tree row, local or cloud: a position-only

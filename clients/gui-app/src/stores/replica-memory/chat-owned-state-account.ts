@@ -144,6 +144,7 @@ export const CHAT_STATE_FIELD_ACCOUNTING = {
   unacknowledgedDeliveryRestore: true,
   runStatus: "small scalar included in the fixed store charge",
   activeTurn: true,
+  renamedTurnIds: true,
   turnLifecycleRevision: "counter included in the fixed store charge",
   steerProtocolSupported: "boolean included in the fixed store charge",
   draftBlobBridgeSupported: "boolean included in the fixed store charge",

@@ -1,6 +1,7 @@
 import * as React from "react";
 import { Dialog as DialogPrimitive } from "radix-ui";
 
+import { declineListSearchAutoFocus } from "@/hooks/ui/decline-list-search-autofocus";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { XIcon } from "lucide-react";
@@ -121,6 +122,7 @@ function DialogContent({
           layout === "banded" && "gap-0 p-0",
           className,
         )}
+        onOpenAutoFocus={declineListSearchAutoFocus}
         onCloseAutoFocus={handleCloseAutoFocus}
         {...props}
       >

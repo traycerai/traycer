@@ -4,7 +4,7 @@ import type {
 } from "@traycer/protocol/host/bot/conversation-schemas";
 import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
 import type { EnvironmentDescriptorV11 } from "@traycer/protocol/host/environment/contracts";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import type { CommandItem, CommandSubpage } from "@/lib/commands/types";
 import { ACTION_IDS, type ActionId } from "@/lib/keybindings/actions";
@@ -23,10 +23,17 @@ import {
   type RoutedDecision,
   type RouterResult,
 } from "../router";
-import { createSayLoop } from "../say-loop";
+import type { VerbOutcome } from "../deferred-verbs";
+import { offeredIdsOf, reportVoiceMiss, type RouteSeen } from "../miss-report";
+import {
+  createSayLoop,
+  PAGE_CHANGED_ASK_TEXT,
+  type AskOutcome,
+} from "../say-loop";
 import {
   composeVoiceView,
   NO_PALETTE_ITEMS,
+  readBackQuestion,
   type VoicePage,
   type VoicePaletteItems,
   type VoiceView,
@@ -35,6 +42,7 @@ import {
   type VoiceViewSources,
 } from "../view";
 import { EMPTY_VIEW } from "./fixtures/empty-view";
+import { filedMisses, onlyMiss, scrubbedMisses } from "./fixtures/filed-misses";
 import { PROBE_ANSWERS, PROBE_VIEWS } from "./fixtures/router-probe-answers";
 import {
   ROUND2_ANSWERS,
@@ -48,6 +56,11 @@ import {
  * directory the real composers built; the rest of the suite pins how the view
  * is rendered and composed, the request's shape and the new resolutions.
  */
+
+const captureMessage = vi.hoisted(() => vi.fn());
+const isInitialized = vi.hoisted(() => vi.fn(() => true));
+
+vi.mock("@sentry/browser", () => ({ captureMessage, isInitialized }));
 
 const NOW = 1_800_000_000_000;
 const VIEWER = "user-me";
@@ -339,6 +352,7 @@ function probeViewOf(name: ProbeViewName): VoiceView {
         title: line.title,
         state: line.state,
         waitingOn: line.waitingOn ?? null,
+        turnId: null,
       };
     } else if ("approval" in line) {
       approvals.push({ id: line.approval, summary: line.summary });
@@ -372,11 +386,12 @@ function probeViewOf(name: ProbeViewName): VoiceView {
   return composeVoiceView({
     page,
     agent,
+    agentAsleep: false,
     agentTurnRunning: probe.actions.some((row) =>
       row.action.startsWith("agent.stop:"),
     ),
     approvals,
-    palette: { tiles, sections, tasks, themes, commands },
+    palette: { ...NO_PALETTE_ITEMS, tiles, sections, tasks, themes, commands },
     generation: GENERATION,
   });
 }
@@ -432,6 +447,7 @@ function act(
     row: rowOf(view, paletteIdOf(probeId)),
     span: { from, to },
     generation: GENERATION,
+    turnId: null,
     confirm,
   });
 }
@@ -676,9 +692,15 @@ const round2LineSchema = z.union([
 /** "Diagnostics (Host)": the label of a section and the badge that tells it from its namesake. */
 const QUALIFIED_LABEL = /^(.*) \(([^)]*)\)$/;
 
+/** The palette's lists of items, without the live reads it also carries. */
+type PaletteLists = Record<
+  Exclude<keyof VoicePaletteItems, "hostWake">,
+  CommandItem[]
+>;
+
 /** The palette item whose rendered row is `action` and `label`; the agent's and approvals' rows come from elsewhere. */
 function addPaletteRow(
-  palette: Record<keyof VoicePaletteItems, CommandItem[]>,
+  palette: PaletteLists,
   action: string,
   label: string,
 ): void {
@@ -718,7 +740,7 @@ function round2ViewOf(name: Round2Name): VoiceView {
   let agent: VoiceViewAgent | null = null;
   let agentTurnRunning = false;
   const approvals: VoiceViewApproval[] = [];
-  const palette: Record<keyof VoicePaletteItems, CommandItem[]> = {
+  const palette: PaletteLists = {
     tiles: [],
     sections: [],
     tasks: [],
@@ -733,6 +755,7 @@ function round2ViewOf(name: Round2Name): VoiceView {
         title: line.title,
         state: line.state,
         waitingOn: line.waitingOn ?? null,
+        turnId: null,
       };
     } else if ("approval" in line) {
       approvals.push({ id: line.approval, summary: line.summary });
@@ -751,9 +774,10 @@ function round2ViewOf(name: Round2Name): VoiceView {
   return composeVoiceView({
     page,
     agent,
+    agentAsleep: false,
     agentTurnRunning,
     approvals,
-    palette,
+    palette: { ...NO_PALETTE_ITEMS, ...palette },
     generation: GENERATION,
   });
 }
@@ -1025,6 +1049,7 @@ const SAMPLE_VIEW: VoiceView = {
     title: "Main agent",
     state: "waiting",
     waitingOn: "approval",
+    turnId: null,
   },
   approvals: [{ id: "ap_1", summary: "Run bun install" }],
   rows: [
@@ -1082,6 +1107,7 @@ describe("renderView", () => {
         title: "Main agent",
         state: "working",
         waitingOn: null,
+        turnId: null,
       },
     };
 
@@ -1090,6 +1116,24 @@ describe("renderView", () => {
       title: "Main agent",
       state: "working",
     });
+  });
+
+  it("renders a view the same whatever turn its agent is on, and never shows the model the turn's id", () => {
+    const onTurn: VoiceView = {
+      ...SAMPLE_VIEW,
+      agent: {
+        chatId: "chat_1",
+        title: "Main agent",
+        state: "waiting",
+        waitingOn: "approval",
+        turnId: "turn-7f3a",
+      },
+    };
+
+    const rendered = renderView(onTurn);
+
+    expect(rendered).not.toContain("turn-7f3a");
+    expect(rendered).toBe(renderView(SAMPLE_VIEW));
   });
 
   it("keeps a title, an approval's text and a label that try to close the fence escaped inside their own lines", () => {
@@ -1186,7 +1230,9 @@ const TASK_VIEW = composeVoiceView({
     title: "Main agent",
     state: "working",
     waitingOn: null,
+    turnId: null,
   },
+  agentAsleep: false,
   agentTurnRunning: true,
   approvals: [],
   palette: {
@@ -1228,6 +1274,46 @@ function route(
 const WHOLE = { from: 0, to: 1 };
 
 describe("resolveRoute against the view", () => {
+  it("carries the turn of the view's agent on an act, and none on a page without an agent", () => {
+    const onTurn = composeVoiceView({
+      page: { kind: "task", title: "Tracy Bots", tile: "Main agent" },
+      agent: {
+        chatId: "chat_1",
+        title: "Main agent",
+        state: "working",
+        waitingOn: null,
+        turnId: "turn-7",
+      },
+      agentAsleep: false,
+      agentTurnRunning: true,
+      approvals: [],
+      palette: NO_PALETTE_ITEMS,
+      generation: 5,
+    });
+    const noAgent = compose({
+      palette: {
+        ...NO_PALETTE_ITEMS,
+        commands: [commandItem("tab.next", "Next tab")],
+      },
+    });
+    const resolve = (view: VoiceView, actionId: string): RoutedDecision =>
+      resolveRoute(
+        route("act", { actionId }, WHOLE, false),
+        DIRECTORY,
+        view,
+        2,
+      );
+
+    expect(resolve(onTurn, "agent.stop:chat_1")).toMatchObject({
+      kind: "act",
+      turnId: "turn-7",
+    });
+    expect(resolve(noAgent, "action:tab.next")).toMatchObject({
+      kind: "act",
+      turnId: null,
+    });
+  });
+
   it("refuses an act whose id the view does not offer", () => {
     expect(
       resolveRoute(
@@ -1384,7 +1470,9 @@ describe("resolveRoute naming a row by what follows its last colon", () => {
       title: "Main agent",
       state: "working",
       waitingOn: null,
+      turnId: null,
     },
+    agentAsleep: false,
     agentTurnRunning: true,
     approvals: [],
     palette: NO_PALETTE_ITEMS,
@@ -1428,6 +1516,7 @@ describe("resolveRoute naming a row by what follows its last colon", () => {
       row: rowOf(TASK_VIEW, "action:tab.close"),
       span: WHOLE,
       generation: 5,
+      turnId: null,
       confirm: true,
     });
   });
@@ -1473,15 +1562,19 @@ describe("the say loop with a page action or a question about the agent", () => 
         asks.push(text);
         return () => undefined;
       },
-      decide: (request) =>
-        Promise.resolve(
-          resolveRoute(
-            parseRouterResponse(responsesBody(answer)),
-            DIRECTORY,
-            view,
-            request.segments.length,
-          ),
-        ),
+      decide: (request) => {
+        const parsed = parseRouterResponse(responsesBody(answer));
+        const decision = resolveRoute(
+          parsed,
+          DIRECTORY,
+          view,
+          request.segments.length,
+        );
+        return Promise.resolve({
+          decision,
+          seen: seenOf(parsed, decision, view, request.segments),
+        });
+      },
       recheck: () => true,
       navigate: () => Promise.resolve(true),
       think: () => undefined,
@@ -1491,6 +1584,8 @@ describe("the say loop with a page action or a question about the agent", () => 
       openThread: () => undefined,
       botTitle: (botId) => botId,
       onAccepted: () => undefined,
+      view: () => view,
+      act: () => Promise.resolve({ kind: "executed" }),
     });
     const store = useVoiceSessionStore.getState();
     store.appendInputSegment("Close this", 0);
@@ -1499,23 +1594,27 @@ describe("the say loop with a page action or a question about the agent", () => 
     return { sends, notices, asks };
   }
 
-  it.each([
-    {
-      name: "an act",
-      answer: route("act", { actionId: "action:tab.close" }, WHOLE, false),
-    },
-    { name: "a missing", answer: route("missing", {}, WHOLE, false) },
-  ])(
-    "says $name cannot be done here yet, spends the words and posts nothing",
-    async ({ answer }) => {
-      const outcome = await heard(answer, TASK_VIEW);
+  it("says a request nothing on the page serves cannot be done here yet, spends the words and posts nothing", async () => {
+    const outcome = await heard(route("missing", {}, WHOLE, false), TASK_VIEW);
 
-      expect(outcome.notices).toEqual(["I can't do that here yet."]);
-      expect(outcome.sends).toEqual([]);
-      expect(outcome.asks).toEqual([]);
-      expect(useVoiceSessionStore.getState().segments).toEqual([]);
-    },
-  );
+    expect(outcome.notices).toEqual(["I can't do that here yet."]);
+    expect(outcome.sends).toEqual([]);
+    expect(outcome.asks).toEqual([]);
+    expect(useVoiceSessionStore.getState().segments).toEqual([]);
+  });
+
+  it("reads an act that cannot be undone back before it runs, and posts nothing", async () => {
+    const outcome = await heard(
+      route("act", { actionId: "action:tab.close" }, WHOLE, false),
+      TASK_VIEW,
+    );
+
+    expect(outcome.asks).toEqual([
+      "Close this tab: Main agent in Tracy Bots. Yes?",
+    ]);
+    expect(outcome.notices).toEqual([]);
+    expect(outcome.sends).toEqual([]);
+  });
 
   it.each([
     { state: "working", line: "Main agent is working." },
@@ -1533,7 +1632,9 @@ describe("the say loop with a page action or a question about the agent", () => 
           title: "Main agent",
           state,
           waitingOn: null,
+          turnId: null,
         },
+        agentAsleep: false,
         agentTurnRunning: false,
         approvals: [],
         palette: NO_PALETTE_ITEMS,
@@ -1566,10 +1667,586 @@ describe("the say loop with a page action or a question about the agent", () => 
   });
 });
 
+describe("the say loop's report of a request the page could not serve", () => {
+  const initial = useVoiceSessionStore.getState();
+  /** The generation the route was made from; the page may have moved on by the time it runs. */
+  const ROUTED_GENERATION = 1;
+  /** What the person says in every case that does not care what it is. */
+  const SAID = ["Close this", " tab please"];
+  /** A message to someone, with an address and a password in it: nothing of it may be filed. */
+  const SECRET_SAID = [
+    "Please remind Ada at ada.lovelace@example.com ",
+    "that my password is tangerine-oyster-42",
+  ];
+  const SECRET_WORDS = 10;
+  /** Labels no id, no utterance and no tag could contain. */
+  const LABELS = ["Marble orchard", "Violet harbor", "Quartz lantern"];
+
+  /** A task page, with an agent whose tell passes the person's words on, or without one. */
+  function pageWithLabels(
+    generation: number,
+    pageKind: "agent" | "plain",
+  ): VoiceView {
+    return compose({
+      agent:
+        pageKind === "plain"
+          ? null
+          : {
+              chatId: "chat_1",
+              title: "Cobalt fennel",
+              state: "working",
+              waitingOn: null,
+              turnId: null,
+            },
+      palette: {
+        ...NO_PALETTE_ITEMS,
+        tiles: [paletteItem("open:chats:t1", LABELS[0], {})],
+        commands: [
+          commandItem("tab.next", LABELS[1]),
+          commandItem("tab.close", LABELS[2]),
+        ],
+      },
+      generation,
+    });
+  }
+
+  interface Spoken {
+    /** The rows the loop ran, by action. */
+    readonly acts: string[];
+    readonly asks: AskOutcome[];
+    /** What the voice asked, in order. */
+    readonly askTexts: string[];
+    readonly notices: string[];
+    readonly sends: string[];
+    /** Where the page is now, which the loop compares with the route's. */
+    readonly page: { generation: number };
+    /** Says "Close this tab please" and has the model answer `answer`. */
+    hear(answer: RouterResult): Promise<void>;
+    /** Says `segments`, one after another, and has the model answer `answer`. */
+    hearSaying(
+      answer: RouterResult,
+      segments: ReadonlyArray<string>,
+    ): Promise<void>;
+    /** Says yes to the question that waits, once it has been heard. */
+    sayYes(): Promise<void>;
+  }
+
+  function listen(outcome: VerbOutcome, pageKind: "agent" | "plain"): Spoken {
+    const acts: string[] = [];
+    const asks: AskOutcome[] = [];
+    const askTexts: string[] = [];
+    const notices: string[] = [];
+    const sends: string[] = [];
+    const answers: RouterResult[] = [];
+    const page = { generation: ROUTED_GENERATION };
+    let heardRequests = 0;
+    const loop = createSayLoop({
+      store: useVoiceSessionStore,
+      send: (_focus, text) => {
+        sends.push(text);
+        return Promise.resolve(SEND_RESPONSE);
+      },
+      notify: (text) => {
+        notices.push(text);
+      },
+      ask: (text, _delegationId, askOutcome) => {
+        askTexts.push(text);
+        asks.push(askOutcome);
+        return () => undefined;
+      },
+      decide: (request) => {
+        const answer = answers.shift();
+        if (answer === undefined) throw new Error("no answer queued");
+        const parsed = parseRouterResponse(responsesBody(answer));
+        const routedView = pageWithLabels(ROUTED_GENERATION, pageKind);
+        const decision = resolveRoute(
+          parsed,
+          DIRECTORY,
+          routedView,
+          request.segments.length,
+        );
+        return Promise.resolve({
+          decision,
+          seen: seenOf(parsed, decision, routedView, request.segments),
+        });
+      },
+      recheck: () => true,
+      navigate: () => Promise.resolve(true),
+      think: () => undefined,
+      control: () => undefined,
+      canSend: () => true,
+      schedule: () => () => undefined,
+      openThread: () => undefined,
+      botTitle: (botId) => botId,
+      onAccepted: () => undefined,
+      view: () => pageWithLabels(page.generation, pageKind),
+      act: (row) => {
+        acts.push(row.action);
+        return Promise.resolve(outcome);
+      },
+    });
+    const store = useVoiceSessionStore;
+    const hearSaying = async (
+      answer: RouterResult,
+      segments: ReadonlyArray<string>,
+    ): Promise<void> => {
+      answers.push(answer);
+      heardRequests += 1;
+      const at = heardRequests * 10_000;
+      segments.forEach((text, index) => {
+        store.getState().appendInputSegment(text, at + index * 400);
+      });
+      await loop.onDelegationCreated(`d-${heardRequests}`);
+    };
+    return {
+      acts,
+      asks,
+      askTexts,
+      notices,
+      sends,
+      page,
+      hear: (answer) => hearSaying(answer, SAID),
+      hearSaying,
+      sayYes: async () => {
+        heardRequests += 1;
+        store
+          .getState()
+          .appendInputSegment("yes", heardRequests * 10_000 + 400);
+        await loop.onDelegationCreated(`d-${heardRequests}`);
+      },
+    };
+  }
+
+  const MISS_ROWS = actionsOf(pageWithLabels(ROUTED_GENERATION, "agent"));
+  const PLAIN_ROWS = actionsOf(pageWithLabels(ROUTED_GENERATION, "plain"));
+  const TELL = route("act", { actionId: "agent.tell:chat_1" }, WHOLE, false);
+  const NEXT_TAB = route("act", { actionId: "action:tab.next" }, WHOLE, false);
+  const CLOSE_TAB = route(
+    "act",
+    { actionId: "action:tab.close" },
+    WHOLE,
+    false,
+  );
+  const EXECUTED: VerbOutcome = { kind: "executed" };
+
+  beforeEach(() => {
+    useVoiceSessionStore.setState(initial, true);
+    useVoiceSessionStore.getState().setFocus(FOCUS_CHANNEL);
+    captureMessage.mockReset();
+    isInitialized.mockReset();
+    isInitialized.mockReturnValue(true);
+  });
+
+  describe("files what the page could not serve", () => {
+    it("files one event for a missing route on a page with no action that passes words on, with the page's action ids and the words the route points at", async () => {
+      const answer = route("missing", {}, { from: 1, to: 1 }, false);
+      const spoken = listen(EXECUTED, "plain");
+
+      await spoken.hear(answer);
+
+      expect(captureMessage).toHaveBeenCalledTimes(1);
+      expect(captureMessage.mock.calls[0]?.[0]).toMatch(
+        /^voice\.route\.miss task missing #\d+$/,
+      );
+      expect(captureMessage.mock.calls[0]?.[1]).toEqual({
+        level: "info",
+        tags: {
+          viewKind: "task",
+          missKind: "missing",
+          routerAction: "missing",
+          uncertain: "false",
+          spanDropped: "none",
+        },
+        fingerprint: ["voice.route.miss", "task", "missing"],
+        extra: {
+          rows: PLAIN_ROWS,
+          route: {
+            action: "missing",
+            target: answer.target,
+            uncertain: false,
+            choice: null,
+            control: null,
+          },
+          span: "tab please",
+          spanWords: 2,
+        },
+      });
+      expect(spoken.notices).toEqual(["I can't do that here yet."]);
+    });
+
+    it("files an act naming an action the page does not offer as refused", async () => {
+      const answer = route(
+        "act",
+        { actionId: "action:tab.reopen" },
+        WHOLE,
+        true,
+      );
+      const spoken = listen(EXECUTED, "agent");
+
+      await spoken.hear(answer);
+
+      expect(captureMessage).toHaveBeenCalledTimes(1);
+      expect(captureMessage.mock.calls[0]?.[0]).toMatch(
+        /^voice\.route\.miss task refused #\d+$/,
+      );
+      expect(captureMessage.mock.calls[0]?.[1]).toEqual({
+        level: "info",
+        tags: {
+          viewKind: "task",
+          missKind: "refused",
+          routerAction: "act",
+          uncertain: "true",
+          spanDropped: "agent-page",
+        },
+        fingerprint: ["voice.route.miss", "task", "refused"],
+        extra: {
+          rows: MISS_ROWS,
+          route: {
+            action: "act",
+            // The router named an action the page does not offer: its own writing.
+            target: { ...answer.target, actionId: "unlisted" },
+            uncertain: true,
+            choice: null,
+            control: null,
+          },
+          span: null,
+          spanWords: 4,
+        },
+      });
+      expect(spoken.acts).toEqual([]);
+    });
+
+    it("files an act as refused when the page moved after the route was made, and runs nothing", async () => {
+      const spoken = listen(EXECUTED, "agent");
+      spoken.page.generation = ROUTED_GENERATION + 1;
+
+      await spoken.hear(NEXT_TAB);
+
+      const filed = filedMisses(captureMessage.mock.calls);
+      expect(filed).toHaveLength(1);
+      expect(filed[0]?.options.tags).toMatchObject({
+        missKind: "refused",
+        routerAction: "act",
+        spanDropped: "act",
+      });
+      expect(filed[0]?.options.extra).toMatchObject({
+        span: null,
+        spanWords: 4,
+      });
+      expect(spoken.acts).toEqual([]);
+    });
+
+    it("files an act that needs a yes as refused when the page moved before the question, and asks no read-back", async () => {
+      const spoken = listen(EXECUTED, "agent");
+      spoken.page.generation = ROUTED_GENERATION + 1;
+
+      await spoken.hear(CLOSE_TAB);
+
+      const filed = filedMisses(captureMessage.mock.calls);
+      expect(filed).toHaveLength(1);
+      expect(filed[0]?.options.tags).toMatchObject({
+        missKind: "refused",
+        routerAction: "act",
+        spanDropped: "act",
+      });
+      expect(filed[0]?.options.extra).toMatchObject({
+        span: null,
+        spanWords: 4,
+      });
+      // The only thing said is that the page changed, not the question for a yes.
+      expect(spoken.askTexts).toEqual([PAGE_CHANGED_ASK_TEXT]);
+      expect(spoken.acts).toEqual([]);
+    });
+
+    it("files an act as refused when the page moved while its yes was awaited, and runs nothing", async () => {
+      const spoken = listen(EXECUTED, "agent");
+      await spoken.hear(CLOSE_TAB);
+      expect(spoken.asks).toHaveLength(1);
+      spoken.asks[0]?.onDelivered();
+      expect(captureMessage).not.toHaveBeenCalled();
+      spoken.page.generation = ROUTED_GENERATION + 1;
+
+      await spoken.sayYes();
+
+      const filed = filedMisses(captureMessage.mock.calls);
+      expect(filed).toHaveLength(1);
+      expect(filed[0]?.options.tags).toMatchObject({
+        missKind: "refused",
+        routerAction: "act",
+        spanDropped: "act",
+      });
+      expect(filed[0]?.options.extra).toMatchObject({
+        span: null,
+        spanWords: 4,
+      });
+      expect(spoken.acts).toEqual([]);
+    });
+
+    it("names no row label anywhere in the event", async () => {
+      await listen(EXECUTED, "agent").hear(route("missing", {}, WHOLE, false));
+
+      const filed = JSON.stringify(captureMessage.mock.calls);
+      expect(filed).toContain("action:tab.close");
+      for (const label of pageWithLabels(ROUTED_GENERATION, "agent").rows.map(
+        (row) => row.label,
+      )) {
+        expect(filed).not.toContain(label);
+      }
+    });
+
+    it("files nothing where reporting is off, and says the same line", async () => {
+      isInitialized.mockReturnValue(false);
+      const spoken = listen(EXECUTED, "agent");
+
+      await spoken.hear(route("missing", {}, WHOLE, false));
+
+      expect(captureMessage).not.toHaveBeenCalled();
+      expect(spoken.notices).toEqual(["I can't do that here yet."]);
+    });
+  });
+
+  describe("files nothing for a request the page served", () => {
+    it.each([
+      {
+        name: "a post",
+        answer: route("post", { botId: "bot_tracy" }, WHOLE, false),
+        ran: (spoken: Spoken) => spoken.sends,
+      },
+      {
+        name: "an answer with no card to take it",
+        answer: route("answer", {}, WHOLE, false),
+        ran: (spoken: Spoken) => spoken.notices,
+      },
+      {
+        name: "a tell to the agent",
+        answer: TELL,
+        ran: (spoken: Spoken) => spoken.acts,
+      },
+    ])("$name", async ({ answer, ran }) => {
+      const spoken = listen(EXECUTED, "agent");
+
+      await spoken.hear(answer);
+
+      expect(ran(spoken)).toHaveLength(1);
+      expect(captureMessage).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("keeps what the person said out of what is filed", () => {
+    const WORDS_SAID = [
+      "Please",
+      "remind",
+      "ada.lovelace@example.com",
+      "that",
+      "password",
+      "tangerine-oyster-42",
+    ];
+
+    /** Every word of the message that shows anywhere in the events as they leave the app. */
+    function leaked(): ReadonlyArray<string> {
+      const events = scrubbedMisses(captureMessage.mock.calls).join("\n");
+      return WORDS_SAID.filter((word) => events.includes(word));
+    }
+
+    function onlyFiled() {
+      return onlyMiss(captureMessage.mock.calls);
+    }
+
+    it("files a stale tell with no words, only how many there were", async () => {
+      const spoken = listen(EXECUTED, "agent");
+      spoken.page.generation = ROUTED_GENERATION + 1;
+
+      await spoken.hearSaying(TELL, SECRET_SAID);
+
+      const filed = onlyFiled();
+      expect(filed.options.tags).toMatchObject({
+        missKind: "refused",
+        spanDropped: "tell",
+      });
+      expect(filed.options.extra).toMatchObject({
+        span: null,
+        spanWords: SECRET_WORDS,
+      });
+      expect(spoken.acts).toEqual([]);
+      expect(leaked()).toEqual([]);
+    });
+
+    it("files Not what I meant after a tell that ran with no words, only how many there were", async () => {
+      const spoken = listen(EXECUTED, "agent");
+      await spoken.hearSaying(TELL, SECRET_SAID);
+      const { executedAct } = useVoiceSessionStore.getState();
+      expect(spoken.acts).toEqual(["agent.tell:chat_1"]);
+      expect(captureMessage).not.toHaveBeenCalled();
+      if (executedAct === null)
+        throw new Error("the tell left nothing to report");
+
+      reportVoiceMiss("not-meant", "chosen-act", executedAct, null);
+
+      const filed = onlyFiled();
+      expect(filed.options.tags).toMatchObject({
+        missKind: "not-meant",
+        spanDropped: "tell",
+      });
+      expect(filed.options.extra).toMatchObject({
+        span: null,
+        spanWords: SECRET_WORDS,
+      });
+      expect(leaked()).toEqual([]);
+    });
+
+    it("files a request that named a bot with no words, and with nothing of the router's question", async () => {
+      const question = "Did you mean to tell Ada ada.lovelace@example.com?";
+      const spoken = listen(EXECUTED, "plain");
+
+      await spoken.hearSaying(
+        { ...route("missing", { botId: "bot_tracy" }, WHOLE, false), question },
+        SECRET_SAID,
+      );
+
+      const filed = onlyFiled();
+      expect(filed.options.tags.spanDropped).toBe("target");
+      expect(filed.options.extra).toMatchObject({
+        span: null,
+        spanWords: SECRET_WORDS,
+      });
+      const events = scrubbedMisses(captureMessage.mock.calls).join("\n");
+      expect(events).not.toContain("Did you mean");
+      expect(events).not.toContain("lovelace");
+      expect(leaked()).toEqual([]);
+    });
+
+    it("files a request nothing served on a page with an agent to tell with no words, as it may have been a message", async () => {
+      const spoken = listen(EXECUTED, "agent");
+
+      await spoken.hearSaying(route("missing", {}, WHOLE, false), SECRET_SAID);
+
+      const filed = onlyFiled();
+      expect(filed.options.tags.spanDropped).toBe("agent-page");
+      expect(filed.options.extra).toMatchObject({
+        span: null,
+        spanWords: SECRET_WORDS,
+      });
+      expect(leaked()).toEqual([]);
+    });
+
+    it("files a request the router was unsure of with no words", async () => {
+      const spoken = listen(EXECUTED, "plain");
+
+      await spoken.hearSaying(route("missing", {}, WHOLE, true), SECRET_SAID);
+
+      const filed = onlyFiled();
+      expect(filed.options.tags).toMatchObject({
+        uncertain: "true",
+        spanDropped: "uncertain",
+      });
+      expect(filed.options.extra).toMatchObject({
+        span: null,
+        spanWords: SECRET_WORDS,
+      });
+      expect(leaked()).toEqual([]);
+    });
+
+    it("sends none of the router's question, which can quote a label on the page, and only the ids of its answer", async () => {
+      const spoken = listen(EXECUTED, "plain");
+
+      await spoken.hear({
+        ...route("missing", {}, WHOLE, false),
+        question: `Did you mean ${LABELS[2]}?`,
+      });
+
+      const filed = onlyFiled();
+      expect(Object.keys(filed.options.extra).sort()).toEqual(
+        ["route", "rows", "span", "spanWords"].sort(),
+      );
+      expect(
+        Object.keys(
+          z.record(z.string(), z.unknown()).parse(filed.options.extra.route),
+        ).sort(),
+      ).toEqual(["action", "choice", "control", "target", "uncertain"]);
+      const events = scrubbedMisses(captureMessage.mock.calls).join("\n");
+      expect(events).not.toContain(LABELS[2]);
+      expect(events).not.toContain("Did you mean");
+    });
+  });
+
+  describe("keeps the act that ran for Not what I meant", () => {
+    it("keeps what the router was shown and answered once an act has run", async () => {
+      const spoken = listen(EXECUTED, "agent");
+
+      await spoken.hear(NEXT_TAB);
+
+      expect(spoken.acts).toEqual(["action:tab.next"]);
+      expect(useVoiceSessionStore.getState().executedAct).toEqual({
+        route: NEXT_TAB,
+        viewKind: "task",
+        rowIds: MISS_ROWS,
+        offered: offeredIdsOf(
+          [DIRECTORY],
+          pageWithLabels(ROUTED_GENERATION, "agent"),
+        ),
+        pageTakesWords: true,
+        actTakesWords: false,
+        segments: ["Close this", " tab please"],
+      });
+    });
+
+    it("keeps nothing for an act the page refused", async () => {
+      const spoken = listen(
+        { kind: "refused", say: "That is not open." },
+        "agent",
+      );
+
+      await spoken.hear(NEXT_TAB);
+
+      expect(spoken.notices).toEqual(["That is not open."]);
+      expect(useVoiceSessionStore.getState().executedAct).toBeNull();
+    });
+
+    it("lets a fragment leave it, and drops it at the next request", async () => {
+      const spoken = listen(EXECUTED, "agent");
+      await spoken.hear(NEXT_TAB);
+
+      await spoken.hear(route("fragment", {}, WHOLE, false));
+      expect(useVoiceSessionStore.getState().executedAct).not.toBeNull();
+
+      await spoken.hear(route("post", { botId: "bot_tracy" }, WHOLE, false));
+      expect(useVoiceSessionStore.getState().executedAct).toBeNull();
+    });
+
+    it("drops it when the session ends", async () => {
+      await listen(EXECUTED, "agent").hear(NEXT_TAB);
+
+      useVoiceSessionStore.getState().sessionEnded(null);
+
+      expect(useVoiceSessionStore.getState().executedAct).toBeNull();
+    });
+  });
+});
+
+/** What the router was shown and answered, as the controller hands it to the loop. */
+function seenOf(
+  parsed: RouterResult | null,
+  decision: RoutedDecision,
+  view: VoiceView,
+  segments: ReadonlyArray<string>,
+): RouteSeen | null {
+  if (parsed === null) return null;
+  return {
+    route: parsed,
+    viewKind: view.page.kind,
+    rowIds: view.rows.map((row) => row.action),
+    offered: offeredIdsOf([DIRECTORY], view),
+    pageTakesWords: view.rows.some((row) => row.takesWords),
+    actTakesWords: decision.kind === "act" && decision.row.takesWords,
+    segments,
+  };
+}
+
 function compose(overrides: Partial<VoiceViewSources>): VoiceView {
   return composeVoiceView({
     page: { kind: "task", title: "Tracy Bots", tile: null },
     agent: null,
+    agentAsleep: false,
     agentTurnRunning: false,
     approvals: [],
     palette: NO_PALETTE_ITEMS,
@@ -1587,10 +2264,12 @@ const WORKING_AGENT: VoiceViewAgent = {
   title: "Main agent",
   state: "working",
   waitingOn: null,
+  turnId: null,
 };
 
 describe("composeVoiceView", () => {
   const ONE_OF_EACH: VoicePaletteItems = {
+    ...NO_PALETTE_ITEMS,
     tiles: [paletteItem("open:chats:t1", "Slack", {})],
     sections: [paletteItem("nav:settings/voice", "Voice", {})],
     tasks: [paletteItem("epic:ep_1", "Mobile landscape", {})],
@@ -1788,5 +2467,209 @@ describe("composeVoiceView", () => {
       "Settings: Diagnostics (App)",
       "Settings: Voice",
     ]);
+  });
+});
+
+describe("readBackQuestion", () => {
+  const CLOSING_COMMANDS: VoicePaletteItems = {
+    ...NO_PALETTE_ITEMS,
+    commands: [
+      commandItem("tab.close", "Close this tab"),
+      commandItem("epic.close", "Close task"),
+    ],
+  };
+
+  /** The question read before the page's row `action` runs, on `page`. */
+  function questionFor(page: VoicePage, action: string): string {
+    const view = compose({
+      page,
+      agent: WORKING_AGENT,
+      agentTurnRunning: true,
+      approvals: [{ id: "ap_1", summary: "Run bun install" }],
+      palette: CLOSING_COMMANDS,
+    });
+    return readBackQuestion(rowOf(view, action), view.page, "");
+  }
+
+  const TASK: VoicePage = {
+    kind: "task",
+    title: "Tracy Bots",
+    tile: "Main agent",
+  };
+
+  it.each([
+    {
+      name: "approving what the agent asks, in the task",
+      action: "approval.approve:ap_1",
+      question: "Approve: Run bun install in Tracy Bots. Yes?",
+    },
+    {
+      name: "declining it",
+      action: "approval.decline:ap_1",
+      question: "Decline: Run bun install in Tracy Bots. Yes?",
+    },
+    {
+      name: "stopping the agent",
+      action: "agent.stop:chat_1",
+      question: "Stop the agent's turn (Main agent) in Tracy Bots. Yes?",
+    },
+    {
+      name: "closing the tab, naming the tile and the task",
+      action: "action:tab.close",
+      question: "Close this tab: Main agent in Tracy Bots. Yes?",
+    },
+    {
+      name: "closing the task, naming the task",
+      action: "action:epic.close",
+      question: "Close task: Tracy Bots. Yes?",
+    },
+  ])("reads $name", ({ action, question }) => {
+    expect(questionFor(TASK, action)).toBe(question);
+  });
+
+  it("reads a tell to an agent whose sandbox rests as waking it, with the words to be sent", () => {
+    const view = compose({
+      page: TASK,
+      agent: WORKING_AGENT,
+      agentAsleep: true,
+    });
+
+    expect(
+      readBackQuestion(
+        rowOf(view, "agent.tell:chat_1"),
+        view.page,
+        "use the other branch",
+      ),
+    ).toBe(
+      "The sandbox is asleep. Wake it and send: use the other branch. Yes?",
+    );
+  });
+
+  it("reads a tell to an awake agent, which only an unsure route asks about, by its label and not its words", () => {
+    const view = compose({
+      page: TASK,
+      agent: WORKING_AGENT,
+      agentAsleep: false,
+    });
+
+    expect(
+      readBackQuestion(
+        rowOf(view, "agent.tell:chat_1"),
+        view.page,
+        "use the other branch",
+      ),
+    ).toBe("Tell the agent (Main agent) in Tracy Bots. Yes?");
+  });
+
+  it("names only the task for a tab close while an overlay holds the keys and no tile is active", () => {
+    expect(questionFor({ ...TASK, tile: null }, "action:tab.close")).toBe(
+      "Close this tab in Tracy Bots. Yes?",
+    );
+  });
+
+  it("names nothing for a task whose title is empty", () => {
+    expect(questionFor({ ...TASK, title: "" }, "action:tab.close")).toBe(
+      "Close this tab. Yes?",
+    );
+  });
+
+  it("reads the close of the task as closing Settings when that is the page in front", () => {
+    expect(
+      questionFor({ kind: "settings", section: null }, "action:epic.close"),
+    ).toBe("Close task: Settings. Yes?");
+  });
+
+  it("reads a close of the task with no name on a page that has none", () => {
+    expect(questionFor({ kind: "notifications" }, "action:epic.close")).toBe(
+      "Close task. Yes?",
+    );
+  });
+
+  it("does not name the page for a tab close away from a task", () => {
+    expect(
+      questionFor({ kind: "settings", section: null }, "action:tab.close"),
+    ).toBe("Close this tab. Yes?");
+  });
+});
+
+describe("an opener row for a tile on a host whose sandbox rests", () => {
+  const RESTING_HOST = "host-resting";
+  const AWAKE_HOST = "host-awake";
+  const UNKNOWN_HOST = "host-unknown";
+
+  /** The view offering one tile opener on `hostId`, with only RESTING_HOST resting. */
+  function viewOpening(id: string, hostId: string | undefined): VoiceView {
+    return compose({
+      palette: {
+        ...NO_PALETTE_ITEMS,
+        tiles: [
+          paletteItem(
+            id,
+            "Slack",
+            hostId === undefined ? {} : { tileHostId: hostId },
+          ),
+        ],
+        hostWake: (candidate) => {
+          if (candidate === RESTING_HOST) return "wakes";
+          return candidate === UNKNOWN_HOST ? "unknown" : "none";
+        },
+      },
+    });
+  }
+
+  it.each(["open:chats:t1", "open:tui:t1", "open:artifacts:t1"])(
+    "asks to be confirmed for %s, and not for the same tile on an awake host",
+    (id) => {
+      expect(rowOf(viewOpening(id, RESTING_HOST), id).confirm).toBe(true);
+      expect(rowOf(viewOpening(id, AWAKE_HOST), id).confirm).toBe(false);
+    },
+  );
+
+  it("reads the wake back with the tile's title, not the words of the request", () => {
+    const view = viewOpening("open:chats:t1", RESTING_HOST);
+
+    expect(
+      readBackQuestion(
+        rowOf(view, "open:chats:t1"),
+        view.page,
+        "open slack please",
+      ),
+    ).toBe("The sandbox is asleep. Wake it and open Slack. Yes?");
+  });
+
+  it("reads an opener on an awake host by its label, as a route that is unsure about it would ask", () => {
+    const view = viewOpening("open:chats:t1", AWAKE_HOST);
+
+    expect(readBackQuestion(rowOf(view, "open:chats:t1"), view.page, "")).toBe(
+      "Open tab: Slack in Tracy Bots. Yes?",
+    );
+  });
+
+  it("never asks for an opener that names no host, whatever the directory says", () => {
+    expect(
+      rowOf(viewOpening("open:chats:t1", undefined), "open:chats:t1").confirm,
+    ).toBe(false);
+  });
+
+  it("asks to be confirmed for a tile on a host the directory does not know, in words that do not claim the sandbox rests", () => {
+    const view = viewOpening("open:chats:t1", UNKNOWN_HOST);
+
+    expect(rowOf(view, "open:chats:t1").confirm).toBe(true);
+    expect(
+      readBackQuestion(rowOf(view, "open:chats:t1"), view.page, "open it"),
+    ).toBe("That may wake its sandbox. Open it anyway? Yes?");
+  });
+
+  it("shows the model the same row for a tile on an unknown host as for an awake one", () => {
+    expect(renderView(viewOpening("open:chats:t1", UNKNOWN_HOST))).toBe(
+      renderView(viewOpening("open:chats:t1", AWAKE_HOST)),
+    );
+  });
+
+  it("shows the model the same row for a resting tile as for an awake one", () => {
+    const resting = viewOpening("open:chats:t1", RESTING_HOST);
+    const awake = viewOpening("open:chats:t1", AWAKE_HOST);
+
+    expect(renderView(resting)).toBe(renderView(awake));
   });
 });

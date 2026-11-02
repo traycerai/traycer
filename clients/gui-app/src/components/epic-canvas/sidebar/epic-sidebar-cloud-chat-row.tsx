@@ -43,7 +43,9 @@ import {
   BASE_PAD_LEFT,
   INDENT_PX,
   useNodeIconDisplay,
+  useTreeRowExpanded,
   useTreeRowMotion,
+  type TreeRowExpansion,
 } from "@/components/epic-canvas/sidebar/epic-sidebar-tree-shared";
 
 /**
@@ -70,15 +72,12 @@ import {
 const ChatIcon = EPIC_NODE_ICONS.chat;
 
 /**
- * The slice of the sidebar's expansion controller a cloud branch needs. Keyed
- * by the row's `cloudChatRowKey`, in the same per-panel store as local rows, so
- * a collapsed shared orchestrator stays collapsed across re-renders and
- * reorders exactly as a local one does.
+ * The sidebar's expansion controller, shared with the local rows. A cloud
+ * branch is keyed by the row's `cloudChatRowKey`, in the same per-panel store
+ * as local rows, so a collapsed shared orchestrator stays collapsed across
+ * re-renders and reorders exactly as a local one does.
  */
-export interface CloudChatRowExpansion {
-  readonly expandedIds: ReadonlySet<string>;
-  readonly toggleExpanded: (id: string) => void;
-}
+export type CloudChatRowExpansion = TreeRowExpansion;
 
 export interface EpicSidebarCloudChatRowProps {
   readonly chat: CloudChatSummary;
@@ -385,7 +384,7 @@ function useCloudRowBranch(
 } {
   const rowKey = cloudChatRowKey(chat.identity);
   const hasChildren = childEntries.length > 0;
-  const expanded = hasChildren && expansion.expandedIds.has(rowKey);
+  const expanded = useTreeRowExpanded(expansion, rowKey) && hasChildren;
   const { toggleExpanded } = expansion;
   const handleToggle = useCallback(
     (event: MouseEvent<HTMLSpanElement>) => {

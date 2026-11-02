@@ -20,6 +20,17 @@ const hostMock = vi.hoisted(
     binding: null,
   }),
 );
+// A host that runs environments, the one the Personal mark is drawn on.
+vi.mock("@/components/settings/panels/use-skill-environment-route", () => ({
+  useSkillEnvironmentRoute: () => ({
+    hostRunsEnvironments: true,
+    served: { environmentId: "env_me", name: "Personal", team: false },
+    hostClient: null,
+    writing: false,
+    write: () => Promise.resolve(null),
+  }),
+}));
+
 vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
   return {
@@ -237,8 +248,8 @@ function skill(name: string): ProviderSkill {
   return {
     name,
     description: `${name} skill`,
-    path: `/Users/dev/.agents/skills/${name}`,
-    source: "shared",
+    path: `/Users/dev/.codex/skills/${name}`,
+    source: "provider",
   };
 }
 

@@ -1805,6 +1805,46 @@ describe("the task store floor", () => {
   const TASK_FLOOR_STOPPED_ASIDE =
     "Host task store could not be read; the task-store floor stood aside";
 
+  /** Every exit that returns before the floor reaches the task store. */
+  const FLOOR_EXITS_BEFORE_THE_TASK_STORE = [
+    "Host store-format floor cleared: the target is the installed archive",
+    "Host store-format floor not consulted",
+    "Host store-format floor stood aside",
+  ];
+
+  /**
+   * The floor reached the task-store DECISION instead of returning before it.
+   *
+   * Three exits return first, each logging its own line: the target is the
+   * installed archive, the move is not a downgrade, and the target is off the
+   * ladder. A case that writes a store and then takes one of them passes
+   * without the floor ever reading what it wrote - which is how an inherited
+   * installed version silently turned one of these cases into an upgrade. A
+   * fourth exit would need its line added here.
+   *
+   * Asserted as the absence of all three rather than the presence of a
+   * clearance line, because every clearance line past this point belongs to
+   * the chat side, and a case about the task store should not redden when the
+   * chat shortcut stops applying to it.
+   *
+   * The decision, not the read: `findTaskStoreFloorBlock` returns null without
+   * a line for a target the table does not judge, so a case still has to put
+   * its target inside the era it means to exercise.
+   */
+  function expectFloorReachedTaskStoreDecision(
+    logger: ILogger & { readonly calls: RecordedCall[] },
+  ): void {
+    // Collected rather than asserted one by one, so a failure names the exit
+    // that fired instead of only the line that caught it.
+    expect(
+      logger.calls
+        .map((call) => call.message)
+        .filter((message) =>
+          FLOOR_EXITS_BEFORE_THE_TASK_STORE.includes(message),
+        ),
+    ).toEqual([]);
+  }
+
   async function writeTaskStoreDb(
     userVersion: number,
     wal: boolean,
@@ -1834,6 +1874,12 @@ describe("the task store floor", () => {
       targetVersion: "1.4.2",
       publishedStoreFormats: { chatDb: 20 },
       declaredStoreFormats: null,
+      // The default pairs with the 1.4.x and 1.3.x targets below, which it
+      // is above. A case whose target is NEWER than this has to name its own
+      // installed build, or the move is an upgrade: `storeFloorApplicability`
+      // sends every upgrade straight out, and nothing the case puts on disk
+      // is ever read. A case that writes a store and expects no refusal calls
+      // `expectFloorReachedTaskStoreDecision`, which fails on that exit.
       installedVersion: "1.5.0",
       installedStoreFormats: { chatDb: 20 },
       provenance: NO_PROVENANCE,
@@ -1984,7 +2030,7 @@ describe("the task store floor", () => {
     ).resolves.toBeUndefined();
   });
 
-  it("does not refuse a rollback inside 1.5.0 and opens no task store", async () => {
+  it("does not refuse a rollback inside the newest era and opens no task store", async () => {
     const dbPath = taskStoreDbPathFor(hostHome);
     await mkdir(dirname(dbPath), { recursive: true });
     await writeFile(dbPath, "not a sqlite file", "utf8");
@@ -1992,12 +2038,16 @@ describe("the task store floor", () => {
 
     await expect(
       assertHostStoreFormatFloor(
-        rollbackInput(logger, { targetVersion: "1.5.0-rc.1" }),
+        rollbackInput(logger, {
+          targetVersion: "1.5.3",
+          installedVersion: "1.5.4",
+        }),
       ),
     ).resolves.toBeUndefined();
     expect(
       logger.calls.some((call) => call.message === TASK_FLOOR_STOPPED_ASIDE),
     ).toBe(false);
+    expectFloorReachedTaskStoreDecision(logger);
   });
 
   it("consent passes the task-only refusal and logs it at WARN", async () => {
@@ -2109,18 +2159,51 @@ describe("the task store floor", () => {
     ).toBe(false);
   });
 
-  it("caps an on-disk 5: 1.5.0-rc.1 passes, 1.4.2 still refuses naming 5", async () => {
-    await writeTaskStoreDb(5, false);
+  // Not the cap: a newest-era target never reaches `taskStoreFloorBlock`, so
+  // nothing here can tell `min(onDisk, NEWEST)` from `onDisk`. The protocol's
+  // own suite owns that. The newest-era pass below is setup: it establishes
+  // that a stamp above the table refuses nothing, and over a READABLE file an
+  // open leaves no trace at all, so "opens no store" is the corrupt-file
+  // case's claim and not this one's. What this case carries is the refusal -
+  // the stamp it names is the one on disk, UNCAPPED.
+  it("names a stamp above the table uncapped when it refuses a target the table proves too old", async () => {
+    await writeTaskStoreDb(6, false);
     const logger = fakeLogger();
 
     await expect(
       assertHostStoreFormatFloor(
-        rollbackInput(logger, { targetVersion: "1.5.0-rc.1" }),
+        rollbackInput(logger, {
+          targetVersion: "1.5.3",
+          installedVersion: "1.5.4",
+        }),
       ),
     ).resolves.toBeUndefined();
 
+    // Before the refusal below, so it reads a logger holding only the
+    // newest-era half's calls and isolates that half.
+    expectFloorReachedTaskStoreDecision(logger);
+
     const err = await refusalOf(rollbackInput(logger, {}));
-    expect(err.details?.onDiskTaskStore).toBe(5);
+    expect(err.details?.onDiskTaskStore).toBe(6);
     expect(err.details?.targetTaskStore).toBe(2);
+  });
+
+  /**
+   * The format-5 era, through the CLI: a 1.5.0 host reads 4, so a
+   * format-5 task store blocks it. It is the one behaviour the new era row
+   * adds here - before it, 4 was the newest format the table knew and such
+   * a target opened no task store at all.
+   */
+  it("refuses a format-4 era target over a format-5 task store", async () => {
+    await writeTaskStoreDb(5, false);
+    const logger = fakeLogger();
+
+    const err = await refusalOf(
+      rollbackInput(logger, { targetVersion: "1.5.0-rc.1" }),
+    );
+
+    expect(err.details?.verdict).toBe("task-store-blocked");
+    expect(err.details?.targetTaskStore).toBe(4);
+    expect(err.details?.onDiskTaskStore).toBe(5);
   });
 });

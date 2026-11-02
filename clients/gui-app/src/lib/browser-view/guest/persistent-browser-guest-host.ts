@@ -7,6 +7,10 @@ import type {
 import type { BrowserViewportState } from "@traycer/protocol/host/browser/viewport";
 import { runPresentationLossBlur } from "@/components/epic-tabs/pane-visibility-context";
 import {
+  attachGuestFramePressRelay,
+  isRelayedGuestFramePress,
+} from "@/lib/guest-frame-press-relay";
+import {
   HOSTED_TILE_INSTANCE_ID_ATTRIBUTE,
   HOSTED_TILE_PANE_ID_ATTRIBUTE,
   HOSTED_TILE_VIEW_TAB_ID_ATTRIBUTE,
@@ -111,6 +115,7 @@ interface GuestRecord {
   } | null;
   retainedSize: { readonly width: number; readonly height: number } | null;
   readonly sizeObserver: ResizeObserver;
+  readonly detachPressRelay: () => void;
 }
 
 interface RunningHost {
@@ -308,6 +313,10 @@ function handleMount(request: BrowserViewGuestMountRequested): void {
         height: webview.offsetHeight,
       };
     }),
+    // A press inside the guest reaches nothing in this document, so the
+    // status-bar popovers (and every other outside-dismissed overlay) stayed
+    // open over a browser tile until the next click elsewhere.
+    detachPressRelay: attachGuestFramePressRelay(() => webview),
   };
   guest.sizeObserver.observe(webview);
   guests.set(request.registrationId, guest);
@@ -387,6 +396,7 @@ function removeGuest(registrationId: string): void {
   if (guest === undefined) return;
   guests.delete(registrationId);
   guest.sizeObserver.disconnect();
+  guest.detachPressRelay();
   finishViewportLayout(guest, false);
   notifyViewportListeners();
   relinquishGuestFocus(guest);
@@ -394,6 +404,8 @@ function removeGuest(registrationId: string): void {
 }
 
 function handleGuestPointerDown(guest: GuestRecord, event: Event): void {
+  // The relayed press follows the guest's focus, which already activated.
+  if (isRelayedGuestFramePress(event)) return;
   const placement = placements.get(guest.registrationId)?.placement;
   if (placement === undefined || !placement.presented) return;
   onActivate?.pointerDown(placement.viewTabId, placement.paneId, {

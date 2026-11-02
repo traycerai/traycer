@@ -487,16 +487,38 @@ function mergeLeftPanelPersistedState(
   return { ...merged, activePanelIdByTabId };
 }
 
-function getPersistedMainCollapsedByTabId(
+/**
+ * What a tab with no collapse record of its own reads: the layout's
+ * "Collapsed in new tasks" preference (`arrangement.sidebarStartCollapsed`).
+ * A tab the user has collapsed or expanded keeps its own entry, whichever way
+ * it went - which is why `mainCollapsedByTabId` persists `false` as well as
+ * `true`: an expanded tab is a decision only while the fallback can say
+ * otherwise.
+ */
+function defaultMainCollapsed(): boolean {
+  return useLayoutStore.getState().arrangement.sidebarStartCollapsed;
+}
+
+function mainCollapsedOf(
   mainCollapsedByTabId: Readonly<Record<string, boolean>>,
+  tabId: string,
+): boolean {
+  return mainCollapsedByTabId[tabId] ?? defaultMainCollapsed();
+}
+
+/** The target holding exactly the source's record: its value, or no entry. */
+function copiedMainCollapsed(
+  mainCollapsedByTabId: Readonly<Record<string, boolean>>,
+  sourceTabId: string,
+  targetTabId: string,
 ): Readonly<Record<string, boolean>> {
-  return Object.entries(mainCollapsedByTabId).reduce<Record<string, boolean>>(
-    (nextCollapsedByTabId, [tabId, collapsed]) => {
-      if (collapsed) nextCollapsedByTabId[tabId] = true;
-      return nextCollapsedByTabId;
-    },
-    {},
-  );
+  const next = { ...mainCollapsedByTabId };
+  if (Object.hasOwn(mainCollapsedByTabId, sourceTabId)) {
+    next[targetTabId] = mainCollapsedByTabId[sourceTabId];
+  } else {
+    delete next[targetTabId];
+  }
+  return next;
 }
 
 // Persist only active filters so localStorage doesn't accumulate empty entries.
@@ -620,7 +642,10 @@ export const useLeftPanelStore = create<LeftPanelStore>()(
           }
           const currentPanelId =
             state.activePanelIdByTabId[tabId] ?? DEFAULT_LEFT_PANEL_ID;
-          const currentCollapsed = state.mainCollapsedByTabId[tabId] ?? false;
+          const currentCollapsed = mainCollapsedOf(
+            state.mainCollapsedByTabId,
+            tabId,
+          );
           // Focusing a panel un-collapses its SECTION too, which is what
           // makes clicking either icon of a stacked pair open the stack with
           // that panel showing (L-167) - and the way back out of a section
@@ -651,10 +676,21 @@ export const useLeftPanelStore = create<LeftPanelStore>()(
             state.activePanelIdByTabId[sourceTabId] ?? DEFAULT_LEFT_PANEL_ID;
           const targetActivePanelId =
             state.activePanelIdByTabId[targetTabId] ?? DEFAULT_LEFT_PANEL_ID;
-          const sourceMainCollapsed =
-            state.mainCollapsedByTabId[sourceTabId] ?? false;
-          const targetMainCollapsed =
-            state.mainCollapsedByTabId[targetTabId] ?? false;
+          // The RECORD is copied, not the resolved boolean: a source whose
+          // explicit choice happens to equal today's "Collapsed in new tasks"
+          // fallback must still hand the duplicate that choice, or flipping
+          // the preference later would move the duplicate and not the
+          // original. A source with no record leaves the target with none,
+          // so both keep following the fallback.
+          const sourceHasMainCollapsed = Object.hasOwn(
+            state.mainCollapsedByTabId,
+            sourceTabId,
+          );
+          const targetHasMainCollapsed = Object.hasOwn(
+            state.mainCollapsedByTabId,
+            targetTabId,
+          );
+          const sourceMainCollapsed = state.mainCollapsedByTabId[sourceTabId];
           const sourceCommentsPanelRevealed =
             state.commentsPanelRevealedByTabId[sourceTabId] ?? false;
           const targetCommentsPanelRevealed =
@@ -662,7 +698,9 @@ export const useLeftPanelStore = create<LeftPanelStore>()(
           const activePanelChanged =
             sourceActivePanelId !== targetActivePanelId;
           const mainCollapseChanged =
-            sourceMainCollapsed !== targetMainCollapsed;
+            sourceHasMainCollapsed !== targetHasMainCollapsed ||
+            (sourceHasMainCollapsed &&
+              sourceMainCollapsed !== state.mainCollapsedByTabId[targetTabId]);
           const commentsRevealChanged =
             sourceCommentsPanelRevealed !== targetCommentsPanelRevealed;
           if (
@@ -680,10 +718,11 @@ export const useLeftPanelStore = create<LeftPanelStore>()(
                 }
               : state.activePanelIdByTabId,
             mainCollapsedByTabId: mainCollapseChanged
-              ? {
-                  ...state.mainCollapsedByTabId,
-                  [targetTabId]: sourceMainCollapsed,
-                }
+              ? copiedMainCollapsed(
+                  state.mainCollapsedByTabId,
+                  sourceTabId,
+                  targetTabId,
+                )
               : state.mainCollapsedByTabId,
             commentsPanelRevealedByTabId: commentsRevealChanged
               ? {
@@ -695,11 +734,12 @@ export const useLeftPanelStore = create<LeftPanelStore>()(
         });
       },
 
-      isMainCollapsed: (tabId) => get().mainCollapsedByTabId[tabId] ?? false,
+      isMainCollapsed: (tabId) =>
+        mainCollapsedOf(get().mainCollapsedByTabId, tabId),
 
       setMainCollapsed: (tabId, collapsed) => {
         set((state) => {
-          const current = state.mainCollapsedByTabId[tabId] ?? false;
+          const current = mainCollapsedOf(state.mainCollapsedByTabId, tabId);
           if (current === collapsed) return state;
           return {
             mainCollapsedByTabId: {
@@ -714,7 +754,7 @@ export const useLeftPanelStore = create<LeftPanelStore>()(
         set((state) => ({
           mainCollapsedByTabId: {
             ...state.mainCollapsedByTabId,
-            [tabId]: !(state.mainCollapsedByTabId[tabId] ?? false),
+            [tabId]: !mainCollapsedOf(state.mainCollapsedByTabId, tabId),
           },
         }));
       },
@@ -1103,9 +1143,8 @@ export const useLeftPanelStore = create<LeftPanelStore>()(
         activePanelIdByTabId: getPersistedActivePanelIds(
           state.activePanelIdByTabId,
         ),
-        mainCollapsedByTabId: getPersistedMainCollapsedByTabId(
-          state.mainCollapsedByTabId,
-        ),
+        // Both values, not only `true`: see `defaultMainCollapsed`.
+        mainCollapsedByTabId: state.mainCollapsedByTabId,
         sidebarWidthPx: state.sidebarWidthPx,
         // Only the collapsed ones, so an expanded section is the absence of a
         // record rather than a `false` in every user's blob.
@@ -1225,7 +1264,15 @@ export function expandJoinedPanelSections(
 }
 
 export function useMainPanelCollapsed(tabId: string): boolean {
-  return useLeftPanelStore((s) => s.mainCollapsedByTabId[tabId] ?? false);
+  const own = useLeftPanelStore((s) =>
+    Object.hasOwn(s.mainCollapsedByTabId, tabId)
+      ? s.mainCollapsedByTabId[tabId]
+      : null,
+  );
+  const startCollapsed = useLayoutStore(
+    (s) => s.arrangement.sidebarStartCollapsed,
+  );
+  return own ?? startCollapsed;
 }
 
 export function useSidebarWidthPx(): number {

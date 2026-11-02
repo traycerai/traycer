@@ -61,10 +61,11 @@ export function surfaceJoinPane(
       return draftJoinPane(landing.get(tab.id) ?? null, edge);
     case "settings":
       return edge === "left" ? "panel" : "surface";
-    // The Tracy surface paints its own surface edge to edge, like a draft: a header
-    // band on top and the conversation below it, no canvas showing through.
+    // The Tracy surface's header band runs along its top in `--background`.
+    // Down its sides it shows its sheet's canvas: the channel column paints
+    // no ground of its own, and the content pane beside it is canvas.
     case "tracy":
-      return "surface";
+      return edge === "top" ? "surface" : "canvas";
     case "home":
     case "history":
     case "sample-workspace":

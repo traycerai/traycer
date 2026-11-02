@@ -352,12 +352,15 @@ function harness(directory: VoiceDirectory): Harness {
       if (answer === undefined) {
         throw new Error("no model answer was recorded for this route");
       }
-      return resolveRoute(
-        parseRouterResponse(await answer),
-        directory,
-        EMPTY_VIEW,
-        request.segments.length,
-      );
+      return {
+        decision: resolveRoute(
+          parseRouterResponse(await answer),
+          directory,
+          EMPTY_VIEW,
+          request.segments.length,
+        ),
+        seen: null,
+      };
     },
     recheck: (tuple) => tupleHolds(directory, tuple),
     navigate: (target) => {
@@ -377,6 +380,8 @@ function harness(directory: VoiceDirectory): Harness {
     botTitle: (botId) =>
       directory.bots.find((bot) => bot.botId === botId)?.title ?? botId,
     onAccepted: () => undefined,
+    view: () => EMPTY_VIEW,
+    act: () => Promise.resolve({ kind: "executed" }),
   });
   return {
     loop,

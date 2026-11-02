@@ -191,7 +191,7 @@ export function ArtifactPagesFrame(props: {
   return (
     <div className={cn("relative flex w-full flex-col", fills && "h-full")}>
       {zooms || navigated || props.toolbarControls ? (
-        <div className="pointer-events-none absolute top-2 right-2 z-30 flex max-w-[calc(100%-1rem)] items-start">
+        <div className="pointer-events-none absolute top-2 right-2 z-30 flex max-w-[calc(100%-1rem)] items-start max-md:static max-md:max-w-full max-md:shrink-0 max-md:justify-end max-md:p-1">
           <div
             role="toolbar"
             aria-label="HTML artifact controls"

@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { useQueryClient } from "@tanstack/react-query";
 import type { SandboxVerbGesture } from "@traycer/protocol/host/sandbox-control";
 import { isRemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
@@ -6,6 +7,13 @@ import { isSandboxAsleep } from "@traycer-clients/shared/host-client/sandbox-con
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { useHostBinding } from "@/lib/host";
 import { startSandboxWake } from "@/lib/sandboxes/sandbox-wake";
+
+/** Whether opening a tile on this host starts its sandbox's wake. */
+export function hostEntryNeedsWake(entry: HostDirectoryEntry | null): boolean {
+  const facts =
+    entry !== null && isRemoteHostDirectoryEntry(entry) ? entry.sandbox : null;
+  return facts !== null && (facts.frozen || isSandboxAsleep(facts.state));
+}
 
 /**
  * Wakes a tile's sandbox host. Mounted only for a tile that was OPENED in this
@@ -27,10 +35,7 @@ export function useSandboxWakeForOpenedTile(
   gesture: SandboxVerbGesture | null,
 ): void {
   const entry = useHostDirectoryEntry(hostId);
-  const facts =
-    entry !== null && isRemoteHostDirectoryEntry(entry) ? entry.sandbox : null;
-  const needsWake =
-    facts !== null && (facts.frozen || isSandboxAsleep(facts.state));
+  const needsWake = hostEntryNeedsWake(entry);
 
   const binding = useHostBinding();
   const queryClient = useQueryClient();

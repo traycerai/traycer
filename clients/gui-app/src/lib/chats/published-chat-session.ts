@@ -343,6 +343,7 @@ export function publishedChatSessionState(
     portForwards: [],
     runStatus: "idle",
     activeTurn: null,
+    renamedTurnIds: new Map(),
     turnLifecycleRevision: 0,
     steerProtocolSupported: false,
     queuedSteerRestartConfirmationSupported: () => false,

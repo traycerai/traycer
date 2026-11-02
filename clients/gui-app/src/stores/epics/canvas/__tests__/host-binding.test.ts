@@ -34,14 +34,18 @@ const directoryEntries = vi.hoisted(() => ({
   current: [] as ReadonlyArray<HostDirectoryEntry>,
 }));
 
-vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
-  useHostDirectoryList: () => ({
+vi.mock("@/hooks/host/use-host-directory-list-query", () => {
+  const useHostDirectoryList = () => ({
     data: directoryEntries.current,
     fetchStatus: "success",
     isFetching: false,
     isLoading: false,
-  }),
-}));
+  });
+  return {
+    useHostDirectoryList,
+    useHostDirectoryListQuery: useHostDirectoryList,
+  };
+});
 
 const SOURCE_HOST = "host-A";
 const REPLACEMENT_HOST = "host-B";

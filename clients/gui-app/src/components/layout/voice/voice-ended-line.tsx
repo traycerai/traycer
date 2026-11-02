@@ -163,6 +163,8 @@ function endedLine(reason: VoiceEndReason): string {
       return "Voice ended: a call or another app took the microphone.";
     case "playback":
       return "Voice ended: the sound could not be played.";
+    case "account":
+      return "Voice ended when you switched accounts.";
     case "ended":
       return "Voice ended.";
   }

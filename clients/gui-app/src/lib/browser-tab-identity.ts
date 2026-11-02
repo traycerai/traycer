@@ -1,4 +1,9 @@
-import { persistKey, PERSIST_PREFIX } from "@/lib/persist/keys";
+import { isMobileApp } from "@/lib/mobile-app";
+import {
+  mobileWindowIdKey,
+  persistKey,
+  PERSIST_PREFIX,
+} from "@/lib/persist/keys";
 
 /**
  * THIS BROWSER TAB's stable identity.
@@ -22,6 +27,14 @@ import { persistKey, PERSIST_PREFIX } from "@/lib/persist/keys";
  * had this property since it was written. A consumer keying durable state by
  * this id inherits it rather than introducing it. The bound is one row per
  * browser-tab lifetime.
+ *
+ * THE INSTALLED MOBILE APP IS NOT A BROWSER TAB, and gets one id per install
+ * from localStorage instead. Its WebView loses `sessionStorage` when the process
+ * is killed, so the path above would mint an id per launch and rotate everything
+ * keyed by it. It has one WebView and cannot duplicate it, so the claim protocol
+ * has nothing to disambiguate there, and nothing ever regenerates this id. Ids
+ * minted per launch before this existed are abandoned, not migrated: their pin
+ * entries and recovery databases stay where they are, and nothing sweeps them.
  *
  * `"default"` is the last resort - no `window`, or storage denied - and it
  * deliberately collapses every such tab onto one identity: a caller that cannot
@@ -138,6 +151,24 @@ function claimBrowserTabId(id: string): string | null {
   return id;
 }
 
+/** The installed app's per-install id. See the module comment for why. */
+function readOrMintMobileWindowId(): string {
+  try {
+    const key = mobileWindowIdKey();
+    const existing = window.localStorage.getItem(key);
+    if (existing !== null && existing.length > 0) {
+      currentBrowserTabId = existing;
+      return existing;
+    }
+    const minted = generateBrowserTabId();
+    window.localStorage.setItem(key, minted);
+    currentBrowserTabId = minted;
+    return minted;
+  } catch {
+    return "default";
+  }
+}
+
 // Every browser tab without a desktop `windowId` used to fall back to the same
 // "default" partition, so two tabs editing the same file shared one IndexedDB
 // database and one identity key - either tab's save (or delete-on-clean)
@@ -151,6 +182,11 @@ function claimBrowserTabId(id: string): string | null {
 export function browserTabId(): string {
   if (typeof window === "undefined") return "default";
   if (currentBrowserTabId !== null) return currentBrowserTabId;
+  // Read here rather than at module load: the Capacitor entry sets the flag
+  // after the static import graph has evaluated, and this is first called no
+  // earlier than a render or an action. `lib/host/client-identity.ts` relies on
+  // the same ordering.
+  if (isMobileApp()) return readOrMintMobileWindowId();
   try {
     const existing = window.sessionStorage.getItem(BROWSER_TAB_PARTITION_KEY);
     const resolved =
