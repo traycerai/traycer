@@ -14,6 +14,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ProviderSkillComposerDialog } from "@/components/settings/panels/provider-skill-composer-dialog";
 import type {
+  ServedSkillEnvironment,
   SkillAudience,
   SkillAuthoring,
 } from "@/components/settings/panels/provider-skill-composer-model";
@@ -77,12 +78,19 @@ function inspectData(
   };
 }
 
+const PERSONAL: ServedSkillEnvironment = {
+  environmentId: "env_me",
+  name: "Personal",
+  team: false,
+};
+
 function renderDialog(
   overrides: Partial<{
     authoring: SkillAuthoring;
     listScope: ProviderNativeScope;
     providerRoot: string | null;
     audiences: readonly SkillAudience[];
+    environment: ServedSkillEnvironment;
     pending: boolean;
   }>,
 ) {
@@ -110,6 +118,7 @@ function renderDialog(
         overrides.providerRoot === undefined ? null : overrides.providerRoot
       }
       audiences={overrides.audiences ?? ["shared", "provider"]}
+      environment={overrides.environment ?? PERSONAL}
       onEnvironmentWrite={onEnvironmentWrite}
       onEnvironmentImport={onEnvironmentImport}
       pending={overrides.pending ?? false}
@@ -589,14 +598,14 @@ describe("<ProviderSkillComposerDialog />", () => {
       "environment",
     ];
 
-    it("offers the provider's own folder, selected, and This environment, and no Every provider", () => {
+    it("offers the provider's own folder, selected, and the served environment by name, and no Every provider", () => {
       renderDialog({ authoring: BOTH, audiences: ENVIRONMENT_HOST });
 
       const own = screen.getByLabelText<HTMLInputElement>(/Codex only/);
       expect(own.checked).toBe(true);
-      expect(
-        screen.getByLabelText<HTMLInputElement>(/This environment/).checked,
-      ).toBe(false);
+      expect(screen.getByLabelText<HTMLInputElement>(/^Personal/).checked).toBe(
+        false,
+      );
       expect(screen.queryByLabelText(/Every provider/)).toBeNull();
     });
 
@@ -610,8 +619,7 @@ describe("<ProviderSkillComposerDialog />", () => {
       await user.click(
         screen.getByRole("button", { name: "or write one from scratch" }),
       );
-      await user.click(screen.getByLabelText(/This environment/));
-      expect(screen.getByText("the environment")).toBeDefined();
+      await user.click(screen.getByLabelText(/^Personal/));
       fireEvent.change(screen.getByLabelText("Name"), {
         target: { value: "review-pr" },
       });
@@ -641,7 +649,7 @@ describe("<ProviderSkillComposerDialog />", () => {
       await user.click(
         screen.getByRole("button", { name: "or write one from scratch" }),
       );
-      await user.click(screen.getByLabelText(/This environment/));
+      await user.click(screen.getByLabelText(/^Personal/));
       fireEvent.change(screen.getByLabelText("Name"), {
         target: { value: "review-pr" },
       });
@@ -663,12 +671,26 @@ describe("<ProviderSkillComposerDialog />", () => {
         audiences: ENVIRONMENT_HOST,
       });
 
-      await user.click(screen.getByLabelText(/This environment/));
+      await user.click(screen.getByLabelText(/^Personal/));
       fillSource(" owner/repo ");
       await user.click(screen.getByRole("button", { name: "Add skill" }));
 
       expect(onEnvironmentImport).toHaveBeenCalledWith("owner/repo");
       expect(onMutate).not.toHaveBeenCalled();
+    });
+
+    it("names a team the host serves and says whose hosts its skills reach", () => {
+      renderDialog({
+        authoring: BOTH,
+        audiences: ENVIRONMENT_HOST,
+        environment: { environmentId: "env_acme", name: "Acme", team: true },
+      });
+
+      const choice = screen.getByLabelText<HTMLInputElement>(/^Acme/);
+      expect(choice.closest("label")?.textContent).toContain(
+        "every member's hosts",
+      );
+      expect(screen.queryByLabelText(/^Personal/)).toBeNull();
     });
 
     it("sends a provider-only write as provider-scoped", async () => {

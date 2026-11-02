@@ -19,12 +19,14 @@ const shared = vi.hoisted(() => ({
   scope: "global" as ProviderNativeScope,
   promotions: [] as Array<{ scope: string; name: string }>,
   importDialogs: [] as string[],
+  importTargets: [] as unknown[],
+  served: { environmentId: "env_me", name: "Personal", team: false },
 }));
 
 vi.mock("../use-skill-environment-route", () => ({
   useSkillEnvironmentRoute: () => ({
     hostRunsEnvironments: shared.hostRunsEnvironments,
-    available: true,
+    served: shared.served,
     hostClient: null,
     writing: false,
     write: () => Promise.resolve(null),
@@ -89,8 +91,13 @@ vi.mock("@/hooks/providers/use-providers-promote-to-personal-mutation", () => ({
 vi.mock(
   "@/components/settings/environment/configuration-source-boundary",
   () => ({
-    ConfigurationSourceBoundary: (props: { children: React.ReactNode }) =>
-      props.children,
+    ConfigurationSourceBoundary: (props: {
+      target: unknown;
+      children: React.ReactNode;
+    }) => {
+      shared.importTargets.push(props.target);
+      return props.children;
+    },
   }),
 );
 vi.mock(
@@ -157,6 +164,8 @@ function state(): ProviderCliState {
 
 beforeEach(() => {
   shared.hostRunsEnvironments = true;
+  shared.importTargets = [];
+  shared.served = { environmentId: "env_me", name: "Personal", team: false };
   shared.skills = [HAND_PLACED, OWN];
   shared.scope = "global";
   shared.promotions = [];
@@ -226,7 +235,7 @@ describe("a shared folder's skill on a host that runs environments", () => {
     render(<ProviderSkillsTab state={state()} />);
 
     fireEvent.click(screen.getByRole("button", { name: "Add skill" }));
-    fireEvent.click(screen.getByLabelText(/This environment/));
+    fireEvent.click(screen.getByLabelText(/^Personal/));
     fireEvent.change(screen.getByLabelText("Skill source"), {
       target: { value: "owner/repo" },
     });
@@ -238,7 +247,29 @@ describe("a shared folder's skill on a host that runs environments", () => {
 
     expect(screen.getByTestId("environment-import")).toBeDefined();
     expect(shared.importDialogs).toContain("owner/repo");
-    expect(screen.queryByLabelText(/This environment/)).toBeNull();
+    expect(shared.importTargets).toContainEqual({ kind: "personal" });
+    expect(screen.queryByLabelText(/^Personal/)).toBeNull();
+  });
+
+  it("imports into the team a team-bound host serves", () => {
+    shared.served = { environmentId: "env_acme", name: "Acme", team: true };
+    render(<ProviderSkillsTab state={state()} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Add skill" }));
+    fireEvent.click(screen.getByLabelText(/^Acme/));
+    fireEvent.change(screen.getByLabelText("Skill source"), {
+      target: { value: "owner/repo" },
+    });
+    fireEvent.click(
+      within(screen.getByRole("dialog")).getByRole("button", {
+        name: "Add skill",
+      }),
+    );
+
+    expect(shared.importTargets).toContainEqual({
+      kind: "team",
+      environmentId: "env_acme",
+    });
   });
 });
 
@@ -261,6 +292,6 @@ describe("a shared folder's skill on a host from before environments", () => {
 
     expect(screen.getByRole("radio", { name: /Every provider/ })).toBeDefined();
     expect(screen.getByRole("radio", { name: /Cursor only/ })).toBeDefined();
-    expect(screen.queryByLabelText(/This environment/)).toBeNull();
+    expect(screen.queryByLabelText(/^Personal/)).toBeNull();
   });
 });

@@ -732,6 +732,7 @@ describe("skillDestination", () => {
         audience: "shared",
         providerLabel: "Codex",
         providerRoot: "/Users/dev/.codex/skills",
+        environmentName: null,
       }),
     ).toEqual({ display: "~/.agents/skills", exact: true });
   });
@@ -742,18 +743,20 @@ describe("skillDestination", () => {
         audience: "provider",
         providerLabel: "Codex",
         providerRoot: "/Users/dev/.codex/skills",
+        environmentName: null,
       }),
     ).toEqual({ display: "/Users/dev/.codex/skills", exact: true });
   });
 
-  it("names the environment rather than a path for an environment write", () => {
+  it("names the served environment rather than a path for an environment write", () => {
     expect(
       skillDestination({
         audience: "environment",
         providerLabel: "Codex",
         providerRoot: "/Users/dev/.codex/skills",
+        environmentName: "Acme",
       }),
-    ).toEqual({ display: "the environment", exact: false });
+    ).toEqual({ display: "Acme", exact: false });
   });
 
   it("falls back to honest prose when the provider root is not yet known", () => {
@@ -762,6 +765,7 @@ describe("skillDestination", () => {
         audience: "provider",
         providerLabel: "Codex",
         providerRoot: null,
+        environmentName: null,
       }),
     ).toEqual({
       display: "Codex's own skills folder",
@@ -776,6 +780,7 @@ describe("skillFilePath", () => {
       audience: "shared",
       providerLabel: "Codex",
       providerRoot: null,
+      environmentName: null,
     });
     expect(skillFilePath({ destination, name: "review-pr" })).toBe(
       "~/.agents/skills/review-pr/SKILL.md",
@@ -787,6 +792,7 @@ describe("skillFilePath", () => {
       audience: "shared",
       providerLabel: "Codex",
       providerRoot: null,
+      environmentName: null,
     });
     expect(skillFilePath({ destination, name: "   " })).toBe(
       "~/.agents/skills",
@@ -798,6 +804,7 @@ describe("skillFilePath", () => {
       audience: "provider",
       providerLabel: "Codex",
       providerRoot: null,
+      environmentName: null,
     });
     expect(skillFilePath({ destination, name: "review-pr" })).toBe(
       "Codex's own skills folder",

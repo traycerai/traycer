@@ -31,6 +31,7 @@ import {
   skillNameError,
   skillSubmitBlocker,
   SKILL_DESCRIPTION_SOFT_LIMIT,
+  type ServedSkillEnvironment,
   type SkillAudience,
   type SkillAuthoring,
   type SkillComposerStep,
@@ -55,6 +56,8 @@ export function ProviderSkillComposerDialog(props: {
   readonly providerRoot: string | null;
   /** What "Available to" offers, the default first. */
   readonly audiences: readonly SkillAudience[];
+  /** What the "environment" audience writes to; `null` where none is offered. */
+  readonly environment: ServedSkillEnvironment | null;
   readonly pending: boolean;
   readonly onMutate: (
     mutation: ProvidersSkillsMutateAction,
@@ -163,6 +166,7 @@ export function ProviderSkillComposerDialog(props: {
             <SkillScopeFieldset
               providerLabel={props.providerLabel}
               audiences={props.audiences}
+              environment={props.environment}
               audience={draft.effectiveAudience}
               disabled={props.pending}
               onChange={draft.setAudience}
@@ -223,6 +227,7 @@ function useComposerDraft(props: {
   readonly providerLabel: string;
   readonly providerRoot: string | null;
   readonly audiences: readonly SkillAudience[];
+  readonly environment: ServedSkillEnvironment | null;
   readonly pending: boolean;
   readonly onMutate: (
     mutation: ProvidersSkillsMutateAction,
@@ -269,6 +274,7 @@ function useComposerDraft(props: {
     audience: effectiveAudience,
     providerLabel: props.providerLabel,
     providerRoot: props.providerRoot,
+    environmentName: props.environment?.name ?? null,
   });
   const showScope = step !== "picker" && props.audiences.length > 1;
 
@@ -753,6 +759,7 @@ function DestinationLine({
 function audienceCopy(
   audience: SkillAudience,
   providerLabel: string,
+  environment: ServedSkillEnvironment | null,
 ): { readonly title: string; readonly detail: string } {
   switch (audience) {
     case "shared":
@@ -768,9 +775,12 @@ function audienceCopy(
       };
     case "environment":
       return {
-        title: "This environment",
-        detail:
-          "Stored in the environment and reaches every provider on every host of yours.",
+        title: environment?.name ?? "This environment",
+        detail: `Stored in ${environment?.name ?? "the environment"} and reaches every provider on ${
+          environment?.team === true
+            ? "every member's hosts"
+            : "every host of yours"
+        }.`,
       };
   }
 }
@@ -778,12 +788,14 @@ function audienceCopy(
 function SkillScopeFieldset({
   providerLabel,
   audiences,
+  environment,
   audience,
   disabled,
   onChange,
 }: {
   readonly providerLabel: string;
   readonly audiences: readonly SkillAudience[];
+  readonly environment: ServedSkillEnvironment | null;
   readonly audience: SkillAudience;
   readonly disabled: boolean;
   readonly onChange: (audience: SkillAudience) => void;
@@ -794,7 +806,7 @@ function SkillScopeFieldset({
         Available to
       </legend>
       {audiences.map((choice) => {
-        const copy = audienceCopy(choice, providerLabel);
+        const copy = audienceCopy(choice, providerLabel, environment);
         return (
           <label
             key={choice}

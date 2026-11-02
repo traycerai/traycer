@@ -245,7 +245,7 @@ function ProviderSkillsTabBody({
   const environment = useSkillEnvironmentRoute();
   const audiences = skillAudiences({
     hostRunsEnvironments: environment.hostRunsEnvironments,
-    environmentAvailable: environment.available,
+    environmentAvailable: environment.served !== null,
     canProviderScope: skillProviderScopeVisible({
       effectiveScope,
       createScopes: caps.actionScopes.create,
@@ -457,6 +457,7 @@ function ProviderSkillsTabBody({
             listScope={effectiveScope}
             providerRoot={providerRoot}
             audiences={audiences}
+            environment={environment.served}
             pending={composerPending || environment.writing}
             onMutate={onComposerMutate}
             onEnvironmentWrite={environment.write}
@@ -470,9 +471,16 @@ function ProviderSkillsTabBody({
           />
         ) : null}
 
-        {environmentImport === null ? null : (
+        {environmentImport === null || environment.served === null ? null : (
           <ConfigurationSourceBoundary
-            target={{ kind: "personal" }}
+            target={
+              environment.served.team
+                ? {
+                    kind: "team",
+                    environmentId: environment.served.environmentId,
+                  }
+                : { kind: "personal" }
+            }
             section={null}
           >
             <EnvironmentSkillImportDialog

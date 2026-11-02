@@ -24,7 +24,7 @@ const hostMock = vi.hoisted(
 vi.mock("@/components/settings/panels/use-skill-environment-route", () => ({
   useSkillEnvironmentRoute: () => ({
     hostRunsEnvironments: true,
-    available: true,
+    served: { environmentId: "env_me", name: "Personal", team: false },
     hostClient: null,
     writing: false,
     write: () => Promise.resolve(null),

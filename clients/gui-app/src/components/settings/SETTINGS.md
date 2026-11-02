@@ -3554,13 +3554,15 @@ window`, recorded in the type as `coverage.browsersAreMountedOnly` -
       composer offers "Every provider", and a shared row keeps Edit and Remove. A
       host that answers refuses those writes (`unsupported_scope` for a
       create or import, `unsupported_action` for an edit, update or remove),
-      so the composer offers "<provider> only" and "This environment", and a
+      so the composer offers "<provider> only" and the served environment, and a
       row directly in a `.agents/skills` folder (`isSharedFolderSkill`) keeps its
       Shared badge with "Promote to the environment" (global scope, the one
       `promoteToPersonal` takes) in place of Edit and Remove. A folder under the
       served root the room has not captured also lists as `shared` and is not
-      that row: it stays editable. "This environment" is the person's own
-      environment: a written skill goes up as the archive
+      that row: it stays editable. The environment option is the
+      environment this host serves, named by its name ("Personal", or the
+      team's), since its views are what reach this host's harnesses: a written
+      skill goes up as the archive
       `environment.configuration.skills.upload` takes (`provider-skill-archive.ts`),
       an import hands its source to `EnvironmentSkillImportDialog`.
   - **Model Providers is the visual layer of `opencode auth login`**

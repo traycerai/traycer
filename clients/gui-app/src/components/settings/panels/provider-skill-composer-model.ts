@@ -147,6 +147,17 @@ export interface SkillDestination {
 export type SkillAudience = "shared" | "provider" | "environment";
 
 /**
+ * The environment this host serves: the one whose views reach this host's
+ * harnesses, so the one a skill written here has to land in. `name` is
+ * "Personal" or the team's.
+ */
+export interface ServedSkillEnvironment {
+  readonly environmentId: string;
+  readonly name: string;
+  readonly team: boolean;
+}
+
+/**
  * The audiences the composer offers, the default first.
  *
  * A host that runs environments takes no write to the shared folder; one that
@@ -198,12 +209,13 @@ export function skillDestination(args: {
   readonly audience: SkillAudience;
   readonly providerLabel: string;
   readonly providerRoot: string | null;
+  readonly environmentName: string | null;
 }): SkillDestination {
   if (args.audience === "shared") {
     return { display: `~/${SHARED_SKILLS_RELATIVE}`, exact: true };
   }
   if (args.audience === "environment") {
-    return { display: "the environment", exact: false };
+    return { display: args.environmentName ?? "the environment", exact: false };
   }
   if (args.providerRoot === null) {
     return {

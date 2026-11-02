@@ -32,7 +32,7 @@ type SkillsListMutateResult = {
 vi.mock("../use-skill-environment-route", () => ({
   useSkillEnvironmentRoute: () => ({
     hostRunsEnvironments: false,
-    available: false,
+    served: null,
     hostClient: null,
     writing: false,
     write: () => Promise.resolve(null),
