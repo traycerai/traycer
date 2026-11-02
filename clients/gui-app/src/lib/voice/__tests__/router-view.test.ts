@@ -1197,11 +1197,8 @@ describe("composeVoiceView", () => {
         commands: [
           "tab.close",
           "epic.close",
-          "tab.close-others",
-          "tab.close-right",
-          "tab.close-all",
           "tab.next",
-          "app.home.open",
+          "app.settings.open",
         ].map((id) => commandItem(id, id)),
       },
     });
@@ -1216,12 +1213,26 @@ describe("composeVoiceView", () => {
       "open:chats:t1": false,
       "action:tab.close": true,
       "action:epic.close": true,
-      "action:tab.close-others": true,
-      "action:tab.close-right": true,
-      "action:tab.close-all": true,
       "action:tab.next": false,
-      "action:app.home.open": false,
+      "action:app.settings.open": false,
     });
+  });
+
+  it("offers only the chord actions that mean something said aloud, and every row that names no chord", () => {
+    const view = compose({
+      palette: {
+        ...NO_PALETTE_ITEMS,
+        commands: [
+          commandItem("group.focus.up", "Focus the pane above"),
+          commandItem("tab.close-all", "Close all tabs"),
+          commandItem("voice.talk.toggle", "Talk"),
+          commandItem("app.settings.open", "Open Settings"),
+          paletteItem("nav:epics", "Open Tasks", {}),
+        ],
+      },
+    });
+
+    expect(actionsOf(view)).toEqual(["action:app.settings.open", "nav:epics"]);
   });
 
   it("passes the person's words on only to the tell row", () => {
@@ -1265,19 +1276,23 @@ describe("composeVoiceView", () => {
         approvals: [APPROVAL],
         palette: {
           ...NO_PALETTE_ITEMS,
-          commands: items("action:cmd-", 120),
+          commands: items("cmd-", 200),
         },
       });
 
-      expect(view.rows).toHaveLength(90);
-      expect(actionsOf(view).slice(0, 4)).toEqual([
+      const synthetic = [
         "agent.tell:chat_1",
         "agent.stop:chat_1",
         "approval.approve:ap_1",
         "approval.decline:ap_1",
-      ]);
-      // Four synthetic rows leave room for 86 of the commands.
-      expect(actionsOf(view).at(-1)).toBe("action:cmd-85");
+      ];
+      const commands = view.rows.slice(synthetic.length);
+      expect(actionsOf(view).slice(0, synthetic.length)).toEqual(synthetic);
+      // Fewer than all of them fit, and the ones that do are the first ones.
+      expect(commands.length).toBeLessThan(200);
+      expect(commands.map((row) => row.action)).toEqual(
+        Array.from({ length: commands.length }, (_, index) => `cmd-${index}`),
+      );
     });
   });
 

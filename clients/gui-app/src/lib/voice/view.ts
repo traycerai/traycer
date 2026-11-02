@@ -87,13 +87,13 @@ export interface VoiceViewSources {
 
 /**
  * The probe's views of 19 to 22 rows cost about 250 input tokens over the
- * prompt without them, about 12 a row, so 90 rows cost about 1,100 on a
- * prompt of about 1,650. A task page comes to about 83 at the caps below
- * (6 agent and approval rows, 12 tiles, 12 tasks, 4 theme and navigation rows,
- * 49 chord actions); the cap only cuts a page with many more approvals, from
- * the end of the order.
+ * prompt without them, about 12 a row, so 70 rows cost about 850 on a prompt
+ * of about 1,650. A task page comes to about 52 at the caps below (4 agent and
+ * approval rows, 12 tiles, 12 tasks, 4 theme and navigation rows, 20 chord
+ * actions) and Settings to about 62; the cap only cuts a page with many
+ * approvals, from the end of the order.
  */
-const MAX_VIEW_ROWS = 90;
+const MAX_VIEW_ROWS = 70;
 /** A task can hold more agents and artifacts than the budget above has room for. */
 const MAX_TILE_ROWS = 12;
 /** History's recents page is longer than the budget above has room for. */
@@ -102,13 +102,34 @@ const MAX_TASK_ROWS = 12;
 /** An approval's text reaches the model twice per approval, and agents write long ones. */
 const MAX_SUMMARY_CHARS = 120;
 
+/** The chord actions that mean something said aloud; the rest are keyboard gestures. */
+const SPOKEN_CHORD_ACTIONS: ReadonlySet<ActionId> = new Set<ActionId>([
+  "epic.new",
+  "epic.close",
+  "tab.new",
+  "tab.close",
+  "tab.next",
+  "tab.prev",
+  "nav.back",
+  "nav.forward",
+  "app.sidebar.toggle",
+  "app.status-bar.toggle",
+  "app.home.open",
+  "app.settings.open",
+  "app.notifications.open",
+  "app.history.open",
+  "app.chat-search.open",
+  "app.resources.open",
+  "app.rate-limits.open",
+  "app.terminal.toggle",
+  "app.terminal.new",
+  "app.browser.new",
+]);
+
 /** Registry actions that cannot be undone by another word. */
 const CONFIRMED_ACTIONS: ReadonlySet<ActionId> = new Set<ActionId>([
   "tab.close",
   "epic.close",
-  "tab.close-others",
-  "tab.close-right",
-  "tab.close-all",
 ]);
 
 /** An approval's text as the view carries it. */
@@ -218,7 +239,12 @@ function composeRows(sources: VoiceViewSources): ReadonlyArray<VoiceViewRow> {
     ...(sources.page.kind === "settings" ? sectionRows(palette.sections) : []),
     ...prefixedRows(palette.tasks, "Open task").slice(0, MAX_TASK_ROWS),
     ...prefixedRows(palette.themes, "Theme"),
-    ...runnable(palette.commands).map((item) => registryRow(item, item.label)),
+    ...runnable(palette.commands)
+      .filter(
+        (item) =>
+          item.actionId === null || SPOKEN_CHORD_ACTIONS.has(item.actionId),
+      )
+      .map((item) => registryRow(item, item.label)),
   ].slice(0, MAX_VIEW_ROWS);
 }
 

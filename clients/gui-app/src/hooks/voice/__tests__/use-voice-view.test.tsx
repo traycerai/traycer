@@ -555,6 +555,17 @@ describe("the desktop-only rows", () => {
   });
 });
 
+describe("the chord actions the voice offers", () => {
+  it("leaves out a keyboard gesture the actions source lists, and keeps one that means something said aloud", () => {
+    const mounted = mount("/", { enabled: true, palette: true });
+
+    const actions = actionsOf(mounted.handle().current());
+
+    expect(actions).toContain("action:app.history.open");
+    expect(actions).not.toContain("action:group.focus.up");
+  });
+});
+
 describe("the palette rows", () => {
   it("are gone once the palette items unmount, leaving the agent's rows", () => {
     taskWithWorkingAgent();
