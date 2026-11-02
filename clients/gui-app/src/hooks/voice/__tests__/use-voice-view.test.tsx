@@ -10,6 +10,7 @@ import {
 import { act, cleanup, render } from "@testing-library/react";
 import { useCallback, useEffect, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import {
   backgroundItemSchema,
   chatApprovalStateSchema,
@@ -17,6 +18,7 @@ import {
   type ChatActiveTurn,
   type ChatApprovalState,
 } from "@traycer/protocol/host/agent/gui/subscribe";
+import { sandboxHostEntryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 import { CommandPaletteRouterContext } from "@/components/command-palette/command-palette-context";
 import { useRegisterTileFindAdapter } from "@/components/epic-canvas/tile-find/tile-find-adapter-context";
 import { TileFindScope } from "@/components/epic-canvas/tile-find/tile-find-scope";
@@ -70,6 +72,15 @@ import { useVoiceSessionStore } from "@/stores/voice/voice-session-store";
 
 vi.mock("@/hooks/home/use-history-query", () => ({
   useHistoryQuery: () => ({ data: undefined }),
+}));
+
+/** What the host directory answers for any host, read again on every ask. */
+const directoryFacts = vi.hoisted(() => ({
+  entry: null as HostDirectoryEntry | null,
+}));
+vi.mock("@/lib/host", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/host")>()),
+  useHostDirectory: () => ({ findById: () => directoryFacts.entry }),
 }));
 
 const EPIC_ID = "epic-1";
@@ -355,6 +366,7 @@ function mount(initialPath: string, props: ProbeProps): Mounted {
 }
 
 beforeEach(() => {
+  directoryFacts.entry = null;
   window.localStorage.clear();
   useTabsStore.setState(stripOf([], null));
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
@@ -1201,5 +1213,41 @@ describe("the chat session behind an action", () => {
 
     expect(mounted.handle().agentSession(null)).toBeNull();
     expect(mounted.handle().agentSession("chat-1")).toBeNull();
+  });
+});
+
+describe("the row that opens a tile on a host whose sandbox rests", () => {
+  const OPEN_AGENT = "open:chats:chat-1";
+
+  function confirmOf(mounted: Mounted): boolean | undefined {
+    return mounted
+      .handle()
+      .current()
+      .rows.find((row) => row.action === OPEN_AGENT)?.confirm;
+  }
+
+  it("asks to be confirmed and reports that running it wakes the sandbox, where an awake host asks nothing", () => {
+    taskWithWorkingAgent();
+    const mounted = mount("/", { enabled: true, palette: true });
+
+    directoryFacts.entry = sandboxHostEntryFixture(HOST_ID, "awake");
+    expect(confirmOf(mounted)).toBe(false);
+    expect(mounted.handle().paletteRow(OPEN_AGENT)?.wakesSandbox).toBe(false);
+
+    directoryFacts.entry = sandboxHostEntryFixture(HOST_ID, "suspended");
+    expect(confirmOf(mounted)).toBe(true);
+    expect(mounted.handle().paletteRow(OPEN_AGENT)?.wakesSandbox).toBe(true);
+  });
+
+  it("reads the directory as the row is asked for, when the sandbox wakes after the palette composed", () => {
+    taskWithWorkingAgent();
+    directoryFacts.entry = sandboxHostEntryFixture(HOST_ID, "suspended");
+    const mounted = mount("/", { enabled: true, palette: true });
+    expect(confirmOf(mounted)).toBe(true);
+
+    directoryFacts.entry = sandboxHostEntryFixture(HOST_ID, "awake");
+
+    expect(confirmOf(mounted)).toBe(false);
+    expect(mounted.handle().paletteRow(OPEN_AGENT)?.wakesSandbox).toBe(false);
   });
 });

@@ -44,7 +44,11 @@ import { createComposerPickerStore } from "@/components/chat/composer/picker/com
 import { useChatComposerSubmit } from "@/components/chat/composer/use-chat-composer-submit";
 import { CommandPaletteRouterContext } from "@/components/command-palette/command-palette-context";
 import { TileMinimapContext } from "@/components/epic-canvas/tile-minimap/tile-minimap-context";
-import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import {
+  sandboxHostEntryFixture,
+  sandboxSummaryFixture,
+} from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 import { useBoundSandboxSend } from "@/hooks/sandboxes/use-bound-sandbox-send";
 import type { RestingChatSandbox } from "@/lib/sandboxes/chat-sandbox-state";
 import type { KeybindingRouter } from "@/lib/keybindings/dispatch";
@@ -70,6 +74,14 @@ import { createChatSessionStore } from "@/stores/chats/chat-session-store";
 import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
 import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
 import { createComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
+import {
+  __getOpenEpicRegistryForTests,
+  handleHostIds,
+} from "@/lib/registries/epic-session-registry";
+import { wasTileOpenRequested } from "@/lib/canvas/tile-open/tile-open-provenance";
+import { openStoreForTest } from "@/stores/epics/open-epic/test-support/open-store-for-test";
+import type { ChatProjection } from "@/stores/epics/open-epic/types";
+import type { EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import type { EpicNodeRef } from "@/stores/epics/canvas/types";
@@ -477,6 +489,11 @@ const catalogue = vi.hoisted(() => ({
   data: undefined as SandboxCatalogue | undefined,
 }));
 
+/** What the host directory answers for any host; `null` is a host it knows nothing of. */
+const directoryFacts = vi.hoisted(() => ({
+  entry: null as HostDirectoryEntry | null,
+}));
+
 // The cloud catalogue (which agents sandboxes run) is the one thing a resting
 // sandbox's send reads from outside the app.
 vi.mock("@/hooks/sandboxes/use-sandbox-catalogue-query", () => ({
@@ -535,6 +552,7 @@ vi.mock("@/lib/host", async (importOriginal) => ({
       }),
   }),
   useHostClient: () => null,
+  useHostDirectory: () => ({ findById: () => directoryFacts.entry }),
 }));
 // The router's directory is the real one, over the bot list above and the
 // person's one environment as `environment.list` answers it.
@@ -1041,6 +1059,7 @@ beforeEach(() => {
   fake.getUserMedia.mockReset();
   fake.getUserMedia.mockImplementation(() => fake.media.promise);
   fake.routeAnswer = null;
+  directoryFacts.entry = null;
   fake.mintAnswers.length = 0;
   fake.navigateOutcome = () => Promise.resolve();
   fake.navigate.mockClear();
@@ -4919,6 +4938,181 @@ describe("the page in front", () => {
         PAGE_CHANGED_ASK_TEXT,
         "d1",
       );
+    });
+  });
+
+  describe("a spoken opener of a chat on a sandbox that rests", () => {
+    const SLEEPY_ID = "chat-sleepy";
+    const SLEEPY_TITLE = "Sleepy agent";
+    const QUESTION = `The sandbox is asleep. Wake it and open ${SLEEPY_TITLE}. Yes?`;
+
+    const NO_STREAM: EpicStreamClientFactory = () => ({
+      applyUpdate: () => undefined,
+      awareness: () => undefined,
+      applyArtifactRoomUpdate: () => undefined,
+      artifactRoomAwareness: () => undefined,
+      retryMigration: () => undefined,
+      close: () => undefined,
+    });
+
+    function projectionOf(id: string, title: string): ChatProjection {
+      return {
+        id,
+        title,
+        parentId: null,
+        createdAt: 1,
+        updatedAt: 1,
+        userId: USER_ID,
+        ownedByViewer: true,
+        hostId: HOST_ID,
+        isTitleEditedByUser: false,
+        docResident: false,
+        settings: null,
+        archivedAt: null,
+      };
+    }
+
+    /** The task's session, holding the agent in front and the sleepy chat, which the task does not show. */
+    function openTaskSession(): void {
+      const handle = openStoreForTest({
+        epicId: EPIC_ID,
+        userId: null,
+        factories: { streamClientFactory: NO_STREAM, laneSelection: null },
+        writeCommand: null,
+      });
+      handleHostIds.set(handle, HOST_ID);
+      handle.store.setState({
+        chats: {
+          allIds: [AGENT_ID, SLEEPY_ID],
+          byId: {
+            [AGENT_ID]: projectionOf(AGENT_ID, AGENT_TILE.name),
+            [SLEEPY_ID]: projectionOf(SLEEPY_ID, SLEEPY_TITLE),
+          },
+        },
+      });
+      __getOpenEpicRegistryForTests().acquireMounted(EPIC_ID, () => handle);
+    }
+
+    afterEach(() => {
+      __getOpenEpicRegistryForTests().disposeAll();
+    });
+
+    function canvasOfTask() {
+      const [canvas] = Object.values(
+        useEpicCanvasStore.getState().canvasByTabId,
+      );
+      if (canvas === undefined) throw new Error("the task has no canvas");
+      return canvas;
+    }
+
+    function sleepyTiles(): ReadonlyArray<string> {
+      return Object.values(canvasOfTask().tilesByInstanceId).flatMap((ref) =>
+        ref?.id === SLEEPY_ID ? [ref.instanceId] : [],
+      );
+    }
+
+    /** The sleepy chat's tile, opened in the task before anything is said. */
+    function showSleepyTile(instanceId: string): void {
+      const tabId = Object.keys(useEpicCanvasStore.getState().canvasByTabId).at(
+        0,
+      );
+      if (tabId === undefined) throw new Error("the task has no canvas");
+      useEpicCanvasStore.getState().openTileInTab(tabId, {
+        id: SLEEPY_ID,
+        instanceId,
+        type: "chat",
+        name: SLEEPY_TITLE,
+        hostId: HOST_ID,
+      });
+    }
+
+    async function seedTask(): Promise<void> {
+      await bringLive();
+      focusOn(CHANNEL_FOCUS);
+      seedRunningAgent();
+      openTaskSession();
+      await settle();
+    }
+
+    /** Says the opener, and lets the question be heard if one was asked. */
+    async function openSleepy(): Promise<string | null> {
+      fake.routeAnswer = () => actAnswer(`open:chats:${SLEEPY_ID}`);
+      await say("open the sleepy agent", "d1");
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(6_000);
+      });
+      const asked = fake.engines[0]?.appendCommentary.mock.calls.find(
+        ([text]) => text.endsWith("Yes?"),
+      );
+      if (asked === undefined) return null;
+      act(() => eventsOf(0).onOutputTranscriptDelta(asked[0]));
+      await settle();
+      return asked[0];
+    }
+
+    async function answer(words: string) {
+      await say(words, "d2");
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(6_000);
+      });
+    }
+
+    describe("whose sandbox is asleep", () => {
+      beforeEach(() => {
+        directoryFacts.entry = sandboxHostEntryFixture(HOST_ID, "suspended");
+      });
+
+      it("asks the wake first, in the exact words, and opens nothing until the yes", async () => {
+        await seedTask();
+
+        const question = await openSleepy();
+
+        expect(question).toBe(QUESTION);
+        expect(sleepyTiles()).toEqual([]);
+      });
+
+      it("opens the tile on a yes", async () => {
+        await seedTask();
+        await openSleepy();
+
+        await answer("yes");
+
+        expect(sleepyTiles()).toHaveLength(1);
+      });
+
+      it("leaves the canvas alone on a no", async () => {
+        await seedTask();
+        expect(await openSleepy()).toBe(QUESTION);
+
+        await answer("no");
+
+        expect(sleepyTiles()).toEqual([]);
+      });
+
+      it("asks for a tile the task already shows but a restore put back, and a yes asks for that tile without a second view of it", async () => {
+        await seedTask();
+        showSleepyTile("inst-sleepy-restored");
+        expect(wasTileOpenRequested("inst-sleepy-restored")).toBe(false);
+
+        const question = await openSleepy();
+
+        expect(question).toBe(QUESTION);
+        expect(wasTileOpenRequested("inst-sleepy-restored")).toBe(false);
+
+        await answer("yes");
+
+        expect(wasTileOpenRequested("inst-sleepy-restored")).toBe(true);
+        expect(sleepyTiles()).toEqual(["inst-sleepy-restored"]);
+      });
+    });
+
+    it("opens the tile of an awake sandbox with no question", async () => {
+      await seedTask();
+
+      const question = await openSleepy();
+
+      expect(question).toBeNull();
+      expect(sleepyTiles()).toHaveLength(1);
     });
   });
 

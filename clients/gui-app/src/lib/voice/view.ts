@@ -68,6 +68,8 @@ export interface VoicePaletteItems {
   readonly themes: ReadonlyArray<CommandItem>;
   /** The chord actions and the navigation rows. */
   readonly commands: ReadonlyArray<CommandItem>;
+  /** Opening a tile on this host starts its sandbox's wake. */
+  readonly restsHost: (hostId: string) => boolean;
 }
 
 export const NO_PALETTE_ITEMS: VoicePaletteItems = {
@@ -76,6 +78,7 @@ export const NO_PALETTE_ITEMS: VoicePaletteItems = {
   tasks: [],
   themes: [],
   commands: [],
+  restsHost: () => false,
 };
 
 export interface VoiceViewSources {
@@ -144,6 +147,26 @@ export function approvalSummary(description: string, toolName: string): string {
 }
 
 const TELL_ACTION = "agent.tell:";
+const OPEN_TAB_PREFIX = "Open tab: ";
+
+/** An opener row for an existing tile; the capture is the tile's content id. */
+export const OPENER_ROW = /^open:(?:chats|tui|artifacts):(.+)$/su;
+
+/** Whether opening this item wakes a sandbox, which a tile already open does too. */
+export function itemWakesSandbox(
+  item: CommandItem,
+  palette: VoicePaletteItems,
+): boolean {
+  return item.tileHostId !== undefined && palette.restsHost(item.tileHostId);
+}
+
+/**
+ * Whether this row opens a tile and wakes its sandbox first. Waking costs, which
+ * is the only reason an opener is offered as one that asks.
+ */
+export function openerWakesSandbox(row: VoiceViewRow): boolean {
+  return row.confirm && OPENER_ROW.test(row.action);
+}
 
 /**
  * Whether this row is a tell that wakes the chat's sandbox first. Waking costs,
@@ -227,6 +250,13 @@ function prefixedRows(
   );
 }
 
+function tileRows(palette: VoicePaletteItems): ReadonlyArray<VoiceViewRow> {
+  return runnable(palette.tiles).map((item) => {
+    const row = registryRow(item, `${OPEN_TAB_PREFIX}${item.label}`);
+    return itemWakesSandbox(item, palette) ? { ...row, confirm: true } : row;
+  });
+}
+
 /** Settings has two sections of one name, told apart by the badge naming their group. */
 function sectionRows(
   items: ReadonlyArray<CommandItem>,
@@ -253,7 +283,7 @@ function composeRows(sources: VoiceViewSources): ReadonlyArray<VoiceViewRow> {
       ? []
       : agentRows(agent, sources.agentTurnRunning, sources.agentAsleep)),
     ...sources.approvals.flatMap(approvalRows),
-    ...prefixedRows(palette.tiles, "Open tab").slice(0, MAX_TILE_ROWS),
+    ...tileRows(palette).slice(0, MAX_TILE_ROWS),
     ...(sources.page.kind === "settings" ? sectionRows(palette.sections) : []),
     ...prefixedRows(palette.tasks, "Open task").slice(0, MAX_TASK_ROWS),
     ...prefixedRows(palette.themes, "Theme"),
@@ -306,6 +336,10 @@ export function readBackQuestion(
 ): string {
   if (tellWakesSandbox(row)) {
     return `The sandbox is asleep. Wake it and send: ${text}. Yes?`;
+  }
+  if (openerWakesSandbox(row)) {
+    const title = row.label.slice(OPEN_TAB_PREFIX.length);
+    return `The sandbox is asleep. Wake it and open ${title}. Yes?`;
   }
   return `${row.label}${readBackTarget(row, page)}. Yes?`;
 }

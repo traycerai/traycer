@@ -13,7 +13,9 @@ import { useAgentsOpenerItems } from "@/lib/commands/sources/open/agents-subpage
 import { useArtifactsOpenerItems } from "@/lib/commands/sources/open/artifacts-subpage";
 import { THEME_SUBPAGE_ITEMS } from "@/lib/commands/sources/theme.source";
 import type { CommandContext } from "@/lib/commands/types";
+import { hostEntryNeedsWake } from "@/hooks/sandboxes/use-sandbox-wake-on-tile-open";
 import { composerSendStateFor } from "@/lib/chats/composer-send-gates";
+import { useHostDirectory } from "@/lib/host";
 import { getChatSessionRegistry } from "@/lib/registries/chat-session-registry";
 import { SETTINGS_SECTIONS } from "@/lib/settings-sections";
 import type {
@@ -23,6 +25,7 @@ import type {
 } from "@/lib/voice/page-acts";
 import {
   approvalSummary,
+  itemWakesSandbox,
   composeVoiceView,
   NO_PALETTE_ITEMS,
   type VoicePage,
@@ -406,7 +409,9 @@ export function useVoiceView(enabled: boolean): VoiceViewHandle {
         return null;
       }
       const item = offeredItem(items, action);
-      return item === null ? null : { item, ctx };
+      return item === null
+        ? null
+        : { item, ctx, wakesSandbox: itemWakesSandbox(item, items) };
     },
     [router],
   );
@@ -482,6 +487,7 @@ export function VoiceViewPaletteItems(props: {
   const taskItems = epicsSource.useItems(ctx);
   const agentItems = useAgentsOpenerItems(ctx);
   const artifactItems = useArtifactsOpenerItems(ctx);
+  const directory = useHostDirectory();
 
   useEffect(() => {
     onItems(
@@ -495,6 +501,8 @@ export function VoiceViewPaletteItems(props: {
         tasks: taskItems,
         themes: THEME_SUBPAGE_ITEMS,
         commands: [...navItems, ...actionItems],
+        // Read when asked: a sandbox sleeps without moving anything above.
+        restsHost: (hostId) => hostEntryNeedsWake(directory.findById(hostId)),
       },
       composedFor,
       ctx,
@@ -505,6 +513,7 @@ export function VoiceViewPaletteItems(props: {
     artifactItems,
     composedFor,
     ctx,
+    directory,
     navItems,
     onItems,
     sectionItems,

@@ -35,6 +35,7 @@ import {
   DECISION_IN_FLIGHT_NOTICE,
   NOT_DELIVERED_NOTICE,
   NOTHING_TO_STOP_NOTICE,
+  OPENER_ASLEEP_NOTICE,
   ROW_GONE_NOTICE,
   TURN_ENDED_NOTICE,
   executePageAct,
@@ -53,6 +54,7 @@ import {
   type VoiceView,
   type VoiceViewRow,
 } from "@/lib/voice/view";
+import { wasTileOpenRequested } from "@/lib/canvas/tile-open/tile-open-provenance";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   createChatSessionStore,
@@ -1214,7 +1216,11 @@ describe("a row of the palette", () => {
     const ctx = context({ pathname: "/composed-for" });
     const item = commandItem("nav:somewhere", itemRun, null);
 
-    const outcome = await run(item.id, "", readsOver(null, [{ item, ctx }]));
+    const outcome = await run(
+      item.id,
+      "",
+      readsOver(null, [{ item, ctx, wakesSandbox: false }]),
+    );
 
     expect(outcome).toEqual({ kind: "executed" });
     expect(itemRun).toHaveBeenCalledTimes(1);
@@ -1233,7 +1239,11 @@ describe("a row of the palette", () => {
       "app.history.open",
     );
 
-    const outcome = await run(item.id, "", readsOver(null, [{ item, ctx }]));
+    const outcome = await run(
+      item.id,
+      "",
+      readsOver(null, [{ item, ctx, wakesSandbox: false }]),
+    );
 
     expect(outcome).toEqual({ kind: "executed" });
     expect(navigateToEpicList).toHaveBeenCalledTimes(1);
@@ -1262,7 +1272,7 @@ describe("a row of the palette", () => {
     const outcome = await run(
       item.id,
       "",
-      readsOver(null, [{ item, ctx: context({}) }]),
+      readsOver(null, [{ item, ctx: context({}), wakesSandbox: false }]),
     );
 
     expect(outcome).toEqual(refusedWith(ACT_FAILED_NOTICE));
@@ -1286,9 +1296,13 @@ describe("a row of the palette", () => {
 
     /** A task whose canvas holds a spec, the chat when asked, and the spec on top. */
     function taskCanvas(withChat: boolean) {
+      return canvasHolding(withChat ? CHAT_TILE : null);
+    }
+
+    function canvasHolding(chat: EpicNodeRef | null) {
       const canvas = useEpicCanvasStore.getState();
       const tabId = canvas.openEpicTab(EPIC_ID, "Task");
-      if (withChat) canvas.openTileInTab(tabId, CHAT_TILE);
+      if (chat !== null) canvas.openTileInTab(tabId, chat);
       canvas.openTileInTab(tabId, SPEC_TILE);
       const state = useEpicCanvasStore.getState().canvasByTabId[tabId];
       if (state === undefined || state.activePaneId === null) {
@@ -1316,7 +1330,11 @@ describe("a row of the palette", () => {
         SPEC_TILE.instanceId,
       );
 
-      const outcome = await run(item.id, "", readsOver(null, [{ item, ctx }]));
+      const outcome = await run(
+        item.id,
+        "",
+        readsOver(null, [{ item, ctx, wakesSandbox: false }]),
+      );
 
       expect(outcome).toEqual({ kind: "executed" });
       expect(Object.keys(canvasOf(tabId).tilesByInstanceId).sort()).toEqual([
@@ -1339,11 +1357,136 @@ describe("a row of the palette", () => {
         targetGroupId: paneId,
       });
 
-      const outcome = await run(item.id, "", readsOver(null, [{ item, ctx }]));
+      const outcome = await run(
+        item.id,
+        "",
+        readsOver(null, [{ item, ctx, wakesSandbox: false }]),
+      );
 
       expect(outcome).toEqual({ kind: "executed" });
       expect(itemRun).toHaveBeenCalledTimes(1);
       expect(itemRun.mock.calls.at(0)?.[0]).toBe(ctx);
+    });
+
+    describe("on a host whose sandbox rests", () => {
+      /** The opener of the chat, as the palette offers it for a host that rests. */
+      function restingOpener(
+        itemRun: CommandItem["run"],
+        ctx: CommandContext,
+      ): PageActReads {
+        const item = commandItem(`open:chats:${CHAT_ID}`, itemRun, null);
+        return readsOver(null, [{ item, ctx, wakesSandbox: true }]);
+      }
+
+      /** The opener's row, as the router returns it: read back as a wake or not. */
+      function openerRow(readBack: boolean): VoiceViewRow {
+        return { ...rowFor(`open:chats:${CHAT_ID}`), confirm: readBack };
+      }
+
+      function openNow(row: VoiceViewRow, reads: PageActReads) {
+        return executePageAct({ row, text: "", turnId: null, reads });
+      }
+
+      it("opens the tile the task already has, and marks it asked for, once the wake was read back", async () => {
+        const asked = { ...CHAT_TILE, instanceId: "inst-chat-read-back" };
+        const { tabId, paneId } = canvasHolding(asked);
+        const itemRun = vi.fn<CommandItem["run"]>();
+        const ctx = context({
+          activeTabId: tabId,
+          activeEpicId: EPIC_ID,
+          targetGroupId: paneId,
+        });
+        expect(wasTileOpenRequested(asked.instanceId)).toBe(false);
+
+        const outcome = await openNow(
+          openerRow(true),
+          restingOpener(itemRun, ctx),
+        );
+
+        expect(outcome).toEqual({ kind: "executed" });
+        expect(findPaneById(canvasOf(tabId).root, paneId)?.activeTabId).toBe(
+          asked.instanceId,
+        );
+        expect(Object.keys(canvasOf(tabId).tilesByInstanceId)).toHaveLength(2);
+        expect(wasTileOpenRequested(asked.instanceId)).toBe(true);
+      });
+
+      it("refuses a request that was not read back, and leaves a tile the task has open and unasked for", async () => {
+        const unasked = { ...CHAT_TILE, instanceId: "inst-chat-not-read-back" };
+        const { tabId, paneId } = canvasHolding(unasked);
+        const ctx = context({
+          activeTabId: tabId,
+          activeEpicId: EPIC_ID,
+          targetGroupId: paneId,
+        });
+        const before = canvasOf(tabId);
+
+        const outcome = await openNow(
+          openerRow(false),
+          restingOpener(vi.fn<CommandItem["run"]>(), ctx),
+        );
+
+        expect(outcome).toEqual(refusedWith(OPENER_ASLEEP_NOTICE));
+        expect(canvasOf(tabId)).toBe(before);
+        expect(wasTileOpenRequested(unasked.instanceId)).toBe(false);
+      });
+
+      it("refuses a request that was not read back before the opener runs", async () => {
+        const { tabId, paneId } = taskCanvas(false);
+        const itemRun = vi.fn<CommandItem["run"]>();
+        const ctx = context({
+          activeTabId: tabId,
+          activeEpicId: EPIC_ID,
+          targetGroupId: paneId,
+        });
+
+        const outcome = await openNow(
+          openerRow(false),
+          restingOpener(itemRun, ctx),
+        );
+
+        expect(outcome).toEqual(refusedWith(OPENER_ASLEEP_NOTICE));
+        expect(itemRun).not.toHaveBeenCalled();
+      });
+
+      it("runs the opener of a tile the task has not got once the wake was read back", async () => {
+        const { tabId, paneId } = taskCanvas(false);
+        const itemRun = vi.fn<CommandItem["run"]>();
+        const ctx = context({
+          activeTabId: tabId,
+          activeEpicId: EPIC_ID,
+          targetGroupId: paneId,
+        });
+
+        const outcome = await openNow(
+          openerRow(true),
+          restingOpener(itemRun, ctx),
+        );
+
+        expect(outcome).toEqual({ kind: "executed" });
+        expect(itemRun).toHaveBeenCalledTimes(1);
+      });
+    });
+
+    it("opens a read back opener whose host woke before the yes, as any opener", async () => {
+      const { tabId, paneId } = taskCanvas(false);
+      const itemRun = vi.fn<CommandItem["run"]>();
+      const item = commandItem(`open:chats:${CHAT_ID}`, itemRun, null);
+      const ctx = context({
+        activeTabId: tabId,
+        activeEpicId: EPIC_ID,
+        targetGroupId: paneId,
+      });
+
+      const outcome = await executePageAct({
+        row: { ...rowFor(item.id), confirm: true },
+        text: "",
+        turnId: null,
+        reads: readsOver(null, [{ item, ctx, wakesSandbox: false }]),
+      });
+
+      expect(outcome).toEqual({ kind: "executed" });
+      expect(itemRun).toHaveBeenCalledTimes(1);
     });
   });
 });

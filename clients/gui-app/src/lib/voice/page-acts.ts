@@ -24,7 +24,12 @@ import type { CommandContext, CommandItem } from "@/lib/commands/types";
 import { buildSubmittedChatJSONContent } from "@/lib/composer/tiptap-json-content";
 import { appLogger } from "@/lib/logger";
 import type { VerbOutcome } from "@/lib/voice/deferred-verbs";
-import { tellWakesSandbox, type VoiceViewRow } from "@/lib/voice/view";
+import {
+  OPENER_ROW,
+  openerWakesSandbox,
+  tellWakesSandbox,
+  type VoiceViewRow,
+} from "@/lib/voice/view";
 import { worktreeDraftCommitsRebind } from "@/lib/worktree/owner-teardown-snapshot";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
@@ -65,6 +70,8 @@ export interface VoiceAgentSession {
 export interface VoicePaletteRow {
   readonly item: CommandItem;
   readonly ctx: CommandContext;
+  /** Running it wakes a sandbox, as of now. */
+  readonly wakesSandbox: boolean;
 }
 
 /** What an executor reads from the page in front when it runs. */
@@ -85,6 +92,8 @@ export const AGENT_WORKSPACE_CHANGE_NOTICE =
 export const AGENT_NOT_READY_NOTICE = "It isn't ready for a message yet.";
 export const AGENT_ASLEEP_NOTICE =
   "The sandbox went to sleep. Say that again if you still want it sent.";
+export const OPENER_ASLEEP_NOTICE =
+  "The sandbox went to sleep. Say that again if you still want it opened.";
 export const NOT_DELIVERED_NOTICE = "That didn't reach the agent.";
 export const ALREADY_DECIDED_NOTICE = "That was already decided.";
 export const APPROVAL_NOT_WAITING_NOTICE =
@@ -332,8 +341,6 @@ function decideApproval(
     : EXECUTED;
 }
 
-const OPENER_ROW = /^open:(?:chats|tui|artifacts):(.+)$/su;
-
 /**
  * The tile an opener row names, when the task already has it open. The opener
  * mints a second view of its tile, which is what a person picking it from the
@@ -355,11 +362,16 @@ function openTileOf(
 }
 
 async function runRegistryRow(
-  action: string,
+  routed: VoiceViewRow,
   reads: PageActReads,
 ): Promise<VerbOutcome> {
+  const { action } = routed;
   const row = reads.paletteRow(action);
   if (row === null) return refused(ROW_GONE_NOTICE);
+  // Waking costs, and this request was not read back as one that would.
+  if (row.wakesSandbox && !openerWakesSandbox(routed)) {
+    return refused(OPENER_ASLEEP_NOTICE);
+  }
   const { item, ctx } = row;
   const open = openTileOf(action, ctx);
   if (open !== null) {
@@ -402,7 +414,7 @@ function runRow(input: PageActInput): VerbOutcome | Promise<VerbOutcome> {
   if (approve !== null) return decideApproval(approve, true, reads);
   const decline = idAfter(action, "approval.decline");
   if (decline !== null) return decideApproval(decline, false, reads);
-  return runRegistryRow(action, reads);
+  return runRegistryRow(row, reads);
 }
 
 /**

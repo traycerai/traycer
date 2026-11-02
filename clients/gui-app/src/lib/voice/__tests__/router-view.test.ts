@@ -379,7 +379,7 @@ function probeViewOf(name: ProbeViewName): VoiceView {
       row.action.startsWith("agent.stop:"),
     ),
     approvals,
-    palette: { tiles, sections, tasks, themes, commands },
+    palette: { ...NO_PALETTE_ITEMS, tiles, sections, tasks, themes, commands },
     generation: GENERATION,
   });
 }
@@ -680,9 +680,15 @@ const round2LineSchema = z.union([
 /** "Diagnostics (Host)": the label of a section and the badge that tells it from its namesake. */
 const QUALIFIED_LABEL = /^(.*) \(([^)]*)\)$/;
 
+/** The palette's lists of items, without the live reads it also carries. */
+type PaletteLists = Record<
+  Exclude<keyof VoicePaletteItems, "restsHost">,
+  CommandItem[]
+>;
+
 /** The palette item whose rendered row is `action` and `label`; the agent's and approvals' rows come from elsewhere. */
 function addPaletteRow(
-  palette: Record<keyof VoicePaletteItems, CommandItem[]>,
+  palette: PaletteLists,
   action: string,
   label: string,
 ): void {
@@ -722,7 +728,7 @@ function round2ViewOf(name: Round2Name): VoiceView {
   let agent: VoiceViewAgent | null = null;
   let agentTurnRunning = false;
   const approvals: VoiceViewApproval[] = [];
-  const palette: Record<keyof VoicePaletteItems, CommandItem[]> = {
+  const palette: PaletteLists = {
     tiles: [],
     sections: [],
     tasks: [],
@@ -759,7 +765,7 @@ function round2ViewOf(name: Round2Name): VoiceView {
     agentAsleep: false,
     agentTurnRunning,
     approvals,
-    palette,
+    palette: { ...NO_PALETTE_ITEMS, ...palette },
     generation: GENERATION,
   });
 }
@@ -1672,6 +1678,7 @@ const WORKING_AGENT: VoiceViewAgent = {
 
 describe("composeVoiceView", () => {
   const ONE_OF_EACH: VoicePaletteItems = {
+    ...NO_PALETTE_ITEMS,
     tiles: [paletteItem("open:chats:t1", "Slack", {})],
     sections: [paletteItem("nav:settings/voice", "Voice", {})],
     tasks: [paletteItem("epic:ep_1", "Mobile landscape", {})],
@@ -1991,5 +1998,68 @@ describe("readBackQuestion", () => {
     expect(
       questionFor({ kind: "settings", section: null }, "action:tab.close"),
     ).toBe("Close this tab. Yes?");
+  });
+});
+
+describe("an opener row for a tile on a host whose sandbox rests", () => {
+  const RESTING_HOST = "host-resting";
+  const AWAKE_HOST = "host-awake";
+
+  /** The view offering one tile opener on `hostId`, with only RESTING_HOST resting. */
+  function viewOpening(id: string, hostId: string | undefined): VoiceView {
+    return compose({
+      palette: {
+        ...NO_PALETTE_ITEMS,
+        tiles: [
+          paletteItem(
+            id,
+            "Slack",
+            hostId === undefined ? {} : { tileHostId: hostId },
+          ),
+        ],
+        restsHost: (candidate) => candidate === RESTING_HOST,
+      },
+    });
+  }
+
+  it.each(["open:chats:t1", "open:tui:t1", "open:artifacts:t1"])(
+    "asks to be confirmed for %s, and not for the same tile on an awake host",
+    (id) => {
+      expect(rowOf(viewOpening(id, RESTING_HOST), id).confirm).toBe(true);
+      expect(rowOf(viewOpening(id, AWAKE_HOST), id).confirm).toBe(false);
+    },
+  );
+
+  it("reads the wake back with the tile's title, not the words of the request", () => {
+    const view = viewOpening("open:chats:t1", RESTING_HOST);
+
+    expect(
+      readBackQuestion(
+        rowOf(view, "open:chats:t1"),
+        view.page,
+        "open slack please",
+      ),
+    ).toBe("The sandbox is asleep. Wake it and open Slack. Yes?");
+  });
+
+  it("reads an opener on an awake host by its label, as a route that is unsure about it would ask", () => {
+    const view = viewOpening("open:chats:t1", AWAKE_HOST);
+
+    expect(readBackQuestion(rowOf(view, "open:chats:t1"), view.page, "")).toBe(
+      "Open tab: Slack in Tracy Bots. Yes?",
+    );
+  });
+
+  it("never asks for an opener that names no host, whatever the directory says", () => {
+    expect(
+      rowOf(viewOpening("open:chats:t1", undefined), "open:chats:t1").confirm,
+    ).toBe(false);
+  });
+
+  it("shows the model the same row for a resting tile as for an awake one", () => {
+    const resting = viewOpening("open:chats:t1", RESTING_HOST);
+    const awake = viewOpening("open:chats:t1", AWAKE_HOST);
+
+    expect(renderView(resting)).toBe(renderView(awake));
   });
 });
