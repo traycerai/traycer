@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { streamRuns } from "./support/chat-send-follow.ts";
 import { fixture, nextFrames, wheelsDelivered } from "./support/fixtures.ts";
 
 // A wheel UP right after a send: the reader must stay where the wheel left
@@ -207,7 +208,7 @@ for (const c of CASES) {
       await page.evaluate(() => {
         window.__followDriver?.host.streamRich("earlier", 8, 40);
       });
-      await nextFrames(page, 30);
+      await streamRuns(page, 15);
     }
     const scroller = page.getByTestId("chat-messages-scroll");
     const box = await scroller.boundingBox();
@@ -254,7 +255,7 @@ for (const c of CASES) {
     await nextFrames(page, 3);
     const afterBurstTop = (await probe(page)).scrollTop;
     await mark(page, "after");
-    await nextFrames(page, c.setup === "send" ? 100 : 60);
+    await streamRuns(page, 30);
     await page.evaluate(() => {
       window.__followDriver?.host.stopReply();
     });

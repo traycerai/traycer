@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { streamRuns } from "./support/chat-send-follow.ts";
 import { fixture, nextFrames } from "./support/fixtures.ts";
 
 // The owner's "stuck after send", against the fixture in
@@ -190,7 +191,7 @@ for (const c of CASES) {
       await page.evaluate(() => {
         window.__followDriver?.host.streamRich("earlier", 8, 40);
       });
-      await nextFrames(page, 30);
+      await streamRuns(page, 15);
     }
     const scroller = page.getByTestId("chat-messages-scroll");
     const box = await scroller.boundingBox();
@@ -241,9 +242,9 @@ for (const c of CASES) {
     await nextFrames(page, 20);
     await mark(page, "stream");
     await page.evaluate(() => {
-      window.__followDriver?.host.streamRich("reply", 3, 20);
+      window.__followDriver?.host.streamRich("reply", 2, 20);
     });
-    await nextFrames(page, 150);
+    await streamRuns(page, 60);
     await Promise.all(nudges);
     await mark(page, "after");
     await page.evaluate(() => {

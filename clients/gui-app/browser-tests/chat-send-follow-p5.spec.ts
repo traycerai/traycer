@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { streamRuns } from "./support/chat-send-follow.ts";
 import { fixture, nextFrames, wheelsDelivered } from "./support/fixtures.ts";
 
 // A free reader reaches the strict bottom while the structural commit of a
@@ -204,7 +205,7 @@ for (const { variant, runs } of RUNS) {
 
       if (variant === "P5c paused-wheel") {
         // Let the reply row appear and some text stream, pause 500ms, then reach.
-        await nextFrames(page, 40);
+        await streamRuns(page, 10);
         await page.evaluate(() => {
           window.__followDriver?.host.stopReply();
         });
@@ -228,7 +229,7 @@ for (const { variant, runs } of RUNS) {
         else await dragToBottom(page);
         await mark(page, "after");
       }
-      await nextFrames(page, 120);
+      await streamRuns(page, 30);
       await page.evaluate(() => {
         window.__followDriver?.host.stopReply();
       });

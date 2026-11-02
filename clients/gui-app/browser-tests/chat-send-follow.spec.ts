@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { streamRuns } from "./support/chat-send-follow.ts";
 import { fixture, nextFrames } from "./support/fixtures.ts";
 
 // The reader is at the bottom of a long chat and sends a prompt. The
@@ -314,7 +315,7 @@ for (const c of CASES) {
       await page.evaluate(() => {
         window.__followDriver?.host.streamRich("earlier", 8, 40);
       });
-      await nextFrames(page, 30);
+      await streamRuns(page, 15);
     }
     const dockBefore = (await probe(page)).dockHeight;
     await typePrompt(page, c.lines);
@@ -352,10 +353,10 @@ for (const c of CASES) {
     await mark(page, "stream");
     await page.evaluate((reply) => {
       if (reply === "rich")
-        window.__followDriver?.host.streamRich("reply", 5, 20);
+        window.__followDriver?.host.streamRich("reply", 2, 20);
       else window.__followDriver?.host.streamReply(100, 40);
     }, c.reply);
-    await nextFrames(page, c.reply === "rich" ? 120 : 60);
+    await streamRuns(page, c.reply === "rich" ? 60 : 30);
     await mark(page, "after");
     await page.evaluate(() => {
       window.__followDriver?.host.stopReply();

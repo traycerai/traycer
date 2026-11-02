@@ -17,6 +17,10 @@ name: Browser regressions
 # always reports, so a PR that skips the suite is not held waiting for it,
 # and it fails when any job that ran failed. The shard jobs themselves are
 # not required, so the shard count can change freely. No secrets.
+#
+# Each shard takes a share of whole spec files cut by measured time and serves
+# the fixture pages bundled; a test over the per-test budget fails its shard.
+# `clients/gui-app/browser-tests/README.md`, "Time".
 
 on:
   pull_request:

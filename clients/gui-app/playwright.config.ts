@@ -64,7 +64,7 @@ export default defineConfig({
   // The heaviest fixtures boot most of the app from unbundled modules on the
   // dev server, so a local run leaves room for Vite. CI's fixtures are bundled,
   // and a standard runner has 4 vCPUs.
-  workers: isCi ? 3 : 2,
+  workers: 2,
   timeout: 180_000,
   expect: { timeout: 10_000 },
   // The JSON report is what the per-test budget and the shard timings read

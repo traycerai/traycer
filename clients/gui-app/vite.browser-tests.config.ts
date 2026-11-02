@@ -30,7 +30,7 @@ import { sandboxAssets } from "./vite/sandbox-assets.ts";
  * `build` is the same pages bundled, which CI serves with `vite preview`
  * (`BROWSER_TESTS_BUNDLE` in `playwright.config.ts`). A fixture on the dev
  * server fetches up to 3,500 modules and 150 MB in every test's fresh context;
- * bundled it fetches a few chunks. `NODE_ENV=development` on the build keeps
+ * bundled it fetches a few hundred chunks. `NODE_ENV=development` on the build keeps
  * the React and the `import.meta.env` the dev server gives them.
  */
 const port = process.env.BROWSER_TESTS_PORT ?? "4178";
