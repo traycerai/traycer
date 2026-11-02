@@ -1058,6 +1058,58 @@ describe("A provider's Skills tab on Personal or a team", () => {
     },
   );
 
+  it.each([
+    {
+      providerId: "cursor" as const,
+      before: ["codex"],
+      after: ["codex", "cursor", "grok"],
+    },
+    {
+      providerId: "grok" as const,
+      before: ["codex", "cursor", "grok"],
+      after: ["codex"],
+    },
+  ])(
+    "names Cursor and Grok on $providerId's tab and moves the two together",
+    async ({ providerId, before, after }) => {
+      negotiateMethods(SWITCHES);
+      const harness = mountTeamPage(
+        poolSource("editor"),
+        handlers({
+          list: listed([{ ...REVIEW, offFor: before }], "pol-1"),
+          hostSkills: [],
+        }),
+      );
+      render(<EnvironmentProviderSkillsTab providerId={providerId} />, {
+        wrapper: harness.Wrapper,
+      });
+
+      expect(
+        await screen.findByRole("heading", {
+          name: "Acme's skills · for Cursor and Grok",
+        }),
+      ).toBeTruthy();
+      await userEvent.click(
+        await screen.findByRole("switch", {
+          name: "review for Cursor and Grok",
+        }),
+      );
+
+      await waitFor(() => {
+        expect(
+          harness.paramsOf("environment.configuration.skills.setProviders"),
+        ).toEqual([
+          {
+            environmentId: "env-a",
+            name: "review",
+            offFor: after,
+            revision: "rev-1",
+          },
+        ]);
+      });
+    },
+  );
+
   it("says once above the list that built-ins come with Traycer, and marks each built-in row", async () => {
     negotiateMethods(SWITCHES);
     const harness = mountTeamPage(
