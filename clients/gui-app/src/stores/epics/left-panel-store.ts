@@ -506,6 +506,21 @@ function mainCollapsedOf(
   return mainCollapsedByTabId[tabId] ?? defaultMainCollapsed();
 }
 
+/** The target holding exactly the source's record: its value, or no entry. */
+function copiedMainCollapsed(
+  mainCollapsedByTabId: Readonly<Record<string, boolean>>,
+  sourceTabId: string,
+  targetTabId: string,
+): Readonly<Record<string, boolean>> {
+  const next = { ...mainCollapsedByTabId };
+  if (Object.hasOwn(mainCollapsedByTabId, sourceTabId)) {
+    next[targetTabId] = mainCollapsedByTabId[sourceTabId];
+  } else {
+    delete next[targetTabId];
+  }
+  return next;
+}
+
 // Persist only active filters so localStorage doesn't accumulate empty entries.
 function filterActiveByEpic<T>(
   byEpicId: Readonly<Record<string, T>>,
@@ -661,14 +676,21 @@ export const useLeftPanelStore = create<LeftPanelStore>()(
             state.activePanelIdByTabId[sourceTabId] ?? DEFAULT_LEFT_PANEL_ID;
           const targetActivePanelId =
             state.activePanelIdByTabId[targetTabId] ?? DEFAULT_LEFT_PANEL_ID;
-          const sourceMainCollapsed = mainCollapsedOf(
+          // The RECORD is copied, not the resolved boolean: a source whose
+          // explicit choice happens to equal today's "Collapsed in new tasks"
+          // fallback must still hand the duplicate that choice, or flipping
+          // the preference later would move the duplicate and not the
+          // original. A source with no record leaves the target with none,
+          // so both keep following the fallback.
+          const sourceHasMainCollapsed = Object.hasOwn(
             state.mainCollapsedByTabId,
             sourceTabId,
           );
-          const targetMainCollapsed = mainCollapsedOf(
+          const targetHasMainCollapsed = Object.hasOwn(
             state.mainCollapsedByTabId,
             targetTabId,
           );
+          const sourceMainCollapsed = state.mainCollapsedByTabId[sourceTabId];
           const sourceCommentsPanelRevealed =
             state.commentsPanelRevealedByTabId[sourceTabId] ?? false;
           const targetCommentsPanelRevealed =
@@ -676,7 +698,9 @@ export const useLeftPanelStore = create<LeftPanelStore>()(
           const activePanelChanged =
             sourceActivePanelId !== targetActivePanelId;
           const mainCollapseChanged =
-            sourceMainCollapsed !== targetMainCollapsed;
+            sourceHasMainCollapsed !== targetHasMainCollapsed ||
+            (sourceHasMainCollapsed &&
+              sourceMainCollapsed !== state.mainCollapsedByTabId[targetTabId]);
           const commentsRevealChanged =
             sourceCommentsPanelRevealed !== targetCommentsPanelRevealed;
           if (
@@ -694,10 +718,11 @@ export const useLeftPanelStore = create<LeftPanelStore>()(
                 }
               : state.activePanelIdByTabId,
             mainCollapsedByTabId: mainCollapseChanged
-              ? {
-                  ...state.mainCollapsedByTabId,
-                  [targetTabId]: sourceMainCollapsed,
-                }
+              ? copiedMainCollapsed(
+                  state.mainCollapsedByTabId,
+                  sourceTabId,
+                  targetTabId,
+                )
               : state.mainCollapsedByTabId,
             commentsPanelRevealedByTabId: commentsRevealChanged
               ? {

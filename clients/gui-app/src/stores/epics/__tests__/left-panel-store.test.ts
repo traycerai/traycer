@@ -306,6 +306,30 @@ describe("useLeftPanelStore", () => {
     });
   });
 
+  it("copies the collapse RECORD to a derived tab, even when it equals the Collapsed in new tasks fallback", () => {
+    act(() => {
+      writeArrangementField("sidebarStartCollapsed", true);
+    });
+    useLeftPanelStore.getState().setMainCollapsed("tab-a", false);
+    useLeftPanelStore.getState().setMainCollapsed("tab-a", true);
+
+    useLeftPanelStore.getState().copyTabState("tab-a", "tab-b");
+    // And a source with no record hands the duplicate none, so a stale
+    // record on the target does not outlive the copy.
+    useLeftPanelStore.getState().setMainCollapsed("tab-d", false);
+    useLeftPanelStore.getState().copyTabState("tab-c", "tab-d");
+
+    act(() => {
+      writeArrangementField("sidebarStartCollapsed", false);
+    });
+    expect(useLeftPanelStore.getState().isMainCollapsed("tab-a")).toBe(true);
+    expect(useLeftPanelStore.getState().isMainCollapsed("tab-b")).toBe(true);
+    expect(useLeftPanelStore.getState().isMainCollapsed("tab-d")).toBe(false);
+    expect(
+      Object.hasOwn(useLeftPanelStore.getState().mainCollapsedByTabId, "tab-d"),
+    ).toBe(false);
+  });
+
   it("opens a tab with no collapse record of its own as the layout's Collapsed in new tasks says", () => {
     const { result } = renderHook(() => useMainPanelCollapsed("tab-a"));
     expect(useLeftPanelStore.getState().isMainCollapsed("tab-a")).toBe(false);
