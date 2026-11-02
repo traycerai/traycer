@@ -9,7 +9,7 @@ import { FeatureVideo } from "/snippets/feature-video.jsx";
 
 Choosing a host in the picker only changes what Settings shows. When it isn't your active host, the sidebar says "Viewing — the active host is &lt;name&gt;." To make it the active host, click **Activate** in the header. See [Hosts](/concepts/hosts#the-active-host).
 
-The page has a header, a notices strip and four tabs: **Installation**, **Updates**, **Data** and **Ports**. It opens on **Installation**.
+The page has a header, a notices strip and five tabs: **Installation**, **Updates**, **Data**, **Ports** and **Mobile simulators**. It opens on **Installation**.
 
 ## Header
 
@@ -22,7 +22,7 @@ The header stays at the top on every tab.
 | **Activate** / **Active** | **Activate** makes this host the active host. Its tooltip reads "Switching changes where new work starts." Once it is the active host, the button becomes an **Active** tag. |
 | Health | A status word, such as **Online**, **Offline** or **Restarting…**, with a detail such as when the host was last seen. See [Host Status](/reference/troubleshooting#host-status). |
 | Platform and version | The host's operating system, architecture and version. |
-| Work chip | What is running on the host, such as "2 agents · 1 terminal working", or **Idle**. Check it before you restart. |
+| Running work | What is running on the host, such as "2 agents · 1 terminal working", or **Idle**. Check it before you restart. |
 
 The **⋯** menu holds **Restart**, **Run doctor**, **Reset name to default** (only when the host has a custom name) and **Copy host ID**.
 
@@ -121,6 +121,10 @@ If you restart or update a host that is busy, a **Host is busy** dialog names th
 
 The Data tab covers what this host keeps on its disk. It needs a connection to the host.
 
+### Data Folder
+
+On Windows, you can choose a data folder on a fixed local NTFS drive or move an existing one with the [data-folder CLI commands](/cli/commands#data-folder). Quit Traycer and stop its Host before moving data; the commands explain any session impact and ask you to confirm it. This is separate from the **Data migration** row below, which moves Tasks to the cloud.
+
 ### Import & Migration
 
 | Row | What it does |
@@ -149,6 +153,12 @@ Version history keeps restorable versions of artifact edits made on this host. S
 The Ports tab lists the port forwards on this host. **Forwards on this host** lists forwards this host's agents created, with **Stop** or **Clear**. **Ports other machines hold here** lists ports that other machines' forwards use on this host, with **Cut**. **Refresh** reads the lists again.
 
 When anything is forwarded or held, the **Ports** tab shows a count. See [Port forwarding](/concepts/hosts/port-forwarding).
+
+## Mobile Simulators
+
+Turn on **Use mobile simulators** to run this host’s simulators in Traycer and let agents use them. **Platforms** shows missing prerequisites; **Check again** rechecks after you install them. **Running now** provides **Power off** and **Keep running**. Set **Power off when idle** for unused devices Traycer started.
+
+See [Mobile simulators](/panels/simulators) for setup and controls.
 
 ## Doctor
 
