@@ -157,8 +157,10 @@ jobs:
           package-manager-cache: false
           node-version: "24.20.0"
       # Keyed on what the cached results depend on outside the files they name:
-      # dependency versions for both lanes, and for lint the rule code and the
-      # stylesheets ESLint reads, which its own cache does not hash. `build` keeps
+      # dependency versions for both lanes, and for lint the rule code, the
+      # runner, and the files gui-app's design-system rules read
+      # (`components.json` and the stylesheets), which ESLint's cache does not
+      # hash. `build` keeps
       # no cache: its outputs are 60 MB a merge and a changed source misses anyway.
       - name: Restore the Nx cache
         id: nx-cache
@@ -169,9 +171,9 @@ jobs:
             .nx/cache
             .nx/workspace-data/*.db
             clients/gui-app/.eslintcache
-          key: ${{ runner.os }}-nx-${{ matrix.lane }}-${{ hashFiles('bun.lock', 'eslint/**', 'clients/gui-app/eslint.config.mjs', 'clients/gui-app/src/**/*.css') }}-${{ github.sha }}
+          key: ${{ runner.os }}-nx-${{ matrix.lane }}-${{ hashFiles('bun.lock', 'eslint/**', 'clients/gui-app/eslint.config.mjs', 'clients/gui-app/components.json', 'clients/gui-app/scripts/lint-files.mjs', 'clients/gui-app/src/**/*.css') }}-${{ github.sha }}
           restore-keys: |
-            ${{ runner.os }}-nx-${{ matrix.lane }}-${{ hashFiles('bun.lock', 'eslint/**', 'clients/gui-app/eslint.config.mjs', 'clients/gui-app/src/**/*.css') }}-
+            ${{ runner.os }}-nx-${{ matrix.lane }}-${{ hashFiles('bun.lock', 'eslint/**', 'clients/gui-app/eslint.config.mjs', 'clients/gui-app/components.json', 'clients/gui-app/scripts/lint-files.mjs', 'clients/gui-app/src/**/*.css') }}-
       - name: Install dependencies
         run: bun install --frozen-lockfile
       - name: Run ${{ matrix.lane }} checks

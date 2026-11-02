@@ -22,8 +22,12 @@
       "inputs": [
         "{projectRoot}/**/*.ts",
         "{projectRoot}/**/*.tsx",
+        "{projectRoot}/**/*.mts",
+        "{projectRoot}/**/*.cts",
         "{projectRoot}/**/*.js",
         "{projectRoot}/**/*.jsx",
+        "{projectRoot}/**/*.mjs",
+        "{projectRoot}/**/*.cjs",
         "{projectRoot}/.eslintrc*",
         "{projectRoot}/eslint.config.*",
         "{projectRoot}/.oxlintrc*",
