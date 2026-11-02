@@ -163,13 +163,6 @@ jobs:
         with:
           package-manager-cache: false
           node-version: "24.20.0"
-      - name: Cache bun global install cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: ~/.bun/install/cache
-          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
-          restore-keys: |
-            bun-${{ runner.os }}-
       - run: bun install --frozen-lockfile
       - name: Browser regressions
         working-directory: clients/gui-app
