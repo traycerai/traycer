@@ -239,13 +239,34 @@ jobs:
       # `dangerouslyIgnoreUnhandledErrors` still lets vitest exit 0, so the shard
       # would report green with those tests unrun. None of 740 green jobs on
       # `main` from 28 Oct to 2 Nov 2026 had a dead fork, so this has held by
-      # luck, not by a check.
+      # luck, not by a check. The verdict is read from vitest's own record of
+      # its unhandled errors in the JUnit report, not from the log, where a
+      # test may print anything. A green run with no readable report proves
+      # nothing, so it fails too.
       - name: Fail a green run whose test fork died
+        if: matrix.project == 'traycer-clients-gui-app'
+        shell: python3 {0}
         run: |
-          if grep -q "Worker exited unexpectedly" test-output.log; then
-            echo "::error::A test fork died, so its test file did not finish. Nx exited 0 because vitest ignores unhandled errors here."
-            exit 1
-          fi
+          import sys
+          import xml.etree.ElementTree as ET
+
+          try:
+              report = ET.parse("test-junit.xml").getroot()
+          except (OSError, ET.ParseError) as error:
+              print(f"::error::No readable JUnit report ({error}), so this green run proves nothing.")
+              sys.exit(1)
+          deaths = [
+              (error.text or "").strip()
+              for suite in report.iter("testsuite")
+              if suite.get("name") == "vitest unhandled errors"
+              for error in suite.iter("error")
+              if "Worker exited unexpectedly" in (error.text or "")
+          ]
+          for death in deaths:
+              print(death)
+          if deaths:
+              print("::error::A test fork died, so its test file did not finish. vitest exited 0 because gui-app ignores unhandled errors.")
+              sys.exit(1)
       # `always()`, so a red shard can be compared with a green one. vitest
       # writes the file when the run ends: a fork's death still leaves a report,
       # a killed vitest parent leaves an empty file. A replay from the Nx cache
