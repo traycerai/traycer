@@ -108,6 +108,8 @@ import {
   type VoiceCardDriver,
   type VoiceFocus,
 } from "@/stores/voice/voice-session-store";
+import { EpicSessionLifecycleBridge } from "@/providers/auth-lifecycle-bridge";
+import { VoiceAvailabilityLifecycleBridge } from "@/providers/voice-availability-lifecycle-bridge";
 import { VoiceSessionController } from "../voice-session-controller";
 
 interface Deferred<T> {
@@ -460,6 +462,8 @@ const fake = vi.hoisted(() => {
      * emptied for every case.
      */
     mintAnswers: [] as Array<{ kind: "credits-exhausted" | "unavailable" }>,
+    /** While set, the mint stays out until this settles; reset for every case. */
+    mintHold: null as Deferred<void> | null,
     /** A router answer for one case, in place of {@link routeToFocus}; reset for every case. */
     routeAnswer: null as ((body: string) => unknown) | null,
     /**
@@ -543,8 +547,8 @@ vi.mock("@/providers/use-runner-host", () => ({
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useAuthService: () => ({
-    mintVoiceSession: () =>
-      Promise.resolve(
+    mintVoiceSession: () => {
+      const answer = () =>
         fake.mintAnswers.shift() ?? {
           kind: "ok",
           session: {
@@ -552,8 +556,11 @@ vi.mock("@/lib/host", async (importOriginal) => ({
             answerSdp: "a",
             expiresAt: Date.now() + 7_200_000,
           },
-        },
-      ),
+        };
+      return fake.mintHold === null
+        ? Promise.resolve(answer())
+        : fake.mintHold.promise.then(answer);
+    },
     endVoiceSession: fake.endVoiceSession,
     routeVoiceUtterance: (body: string) =>
       Promise.resolve({
@@ -1045,15 +1052,34 @@ function makeRouter() {
   });
 }
 
+function controllerOverRouter(): ReactNode {
+  return (
+    <RouterContextProvider router={makeRouter()}>
+      <CommandPaletteRouterContext.Provider value={KEYBINDING_ROUTER}>
+        <VoiceSessionController />
+      </CommandPaletteRouterContext.Provider>
+    </RouterContextProvider>
+  );
+}
+
 function renderController(): void {
   queryClient = new QueryClient();
   render(
     <QueryClientProvider client={queryClient}>
-      <RouterContextProvider router={makeRouter()}>
-        <CommandPaletteRouterContext.Provider value={KEYBINDING_ROUTER}>
-          <VoiceSessionController />
-        </CommandPaletteRouterContext.Provider>
-      </RouterContextProvider>
+      {controllerOverRouter()}
+    </QueryClientProvider>,
+  );
+}
+
+/** The controller as the app mounts it: under the epic session bridge, beside the voice availability bridge. */
+function renderControllerBesideBridges(): void {
+  queryClient = new QueryClient();
+  render(
+    <QueryClientProvider client={queryClient}>
+      <VoiceAvailabilityLifecycleBridge />
+      <EpicSessionLifecycleBridge>
+        {controllerOverRouter()}
+      </EpicSessionLifecycleBridge>
     </QueryClientProvider>,
   );
 }
@@ -1090,6 +1116,7 @@ beforeEach(() => {
   directoryFacts.entry = sandboxHostEntryFixture("host-a", "awake", false);
   directoryFacts.settled = false;
   fake.mintAnswers.length = 0;
+  fake.mintHold = null;
   fake.navigateOutcome = () => Promise.resolve();
   fake.navigate.mockClear();
   navigateToEpicList.mockClear();
@@ -1127,6 +1154,143 @@ afterEach(() => {
   cleanup();
   vi.useRealTimers();
   vi.unstubAllGlobals();
+});
+
+describe("the signed-in account switching", () => {
+  const initialAuth = useAuthStore.getInitialState();
+  const PROFILE_A = {
+    userId: "user-a",
+    userName: "Ada",
+    email: "ada@example.com",
+  };
+  const META_A = { userId: "user-a", username: "ada" };
+  const PROFILE_B = {
+    userId: "user-b",
+    userName: "Bo",
+    email: "bo@example.com",
+  };
+  const META_B = { userId: "user-b", username: "bo" };
+
+  function signInAs(profile: typeof PROFILE_A, meta: typeof META_A): void {
+    act(() => useAuthStore.getState().setSignedIn(profile, meta, []));
+  }
+
+  beforeEach(() => {
+    // The controller beside its bridges, mounted under account A: the global
+    // setup's bare controller makes way for it.
+    cleanup();
+    signInAs(PROFILE_A, META_A);
+    renderControllerBesideBridges();
+  });
+
+  afterEach(() => {
+    cleanup();
+    useAuthStore.setState(initialAuth, true);
+  });
+
+  it("ends a live session with the account as the reason, stopping the microphone before the end route is called", async () => {
+    await bringLive();
+    const token = useVoiceSessionStore.getState().sessionToken;
+    const microphoneStoppedAtEnd: boolean[] = [];
+    fake.endVoiceSession.mockImplementation(() => {
+      microphoneStoppedAtEnd.push(fake.track.stop.mock.calls.length > 0);
+      return Promise.resolve({ kind: "ok", closedAt: 1 });
+    });
+
+    signInAs(PROFILE_B, META_B);
+    await settle();
+
+    const state = useVoiceSessionStore.getState();
+    expect(state.phase).toBe("idle");
+    expect(state.session).toBeNull();
+    expect(state.sessionToken).not.toBe(token);
+    expect(state.endReason).toBe("account");
+    expect(fake.track.stop).toHaveBeenCalled();
+    expect(fake.endVoiceSession).toHaveBeenCalledTimes(1);
+    expect(fake.endVoiceSession).toHaveBeenCalledWith("vs1");
+    expect(microphoneStoppedAtEnd).toEqual([true]);
+  });
+
+  it("hears nothing more from the session that was ended, so a late utterance of it posts nowhere and moves nothing", async () => {
+    await bringLive();
+    focusOn(CHANNEL_FOCUS);
+    await say("first words", "d1");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(6_000);
+    });
+    expect(fake.sendMock).toHaveBeenCalledTimes(1);
+    fake.sendMock.mockClear();
+    signInAs(PROFILE_B, META_B);
+    await settle();
+
+    await say("late words", "d2");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(6_000);
+    });
+
+    expect(fake.sendMock).not.toHaveBeenCalled();
+    expect(useVoiceSessionStore.getState().phase).toBe("idle");
+    expect(useVoiceSessionStore.getState().endReason).toBe("account");
+  });
+
+  it("keeps the session when the same account refreshes its profile or goes unverified and back", async () => {
+    await bringLive();
+    const token = useVoiceSessionStore.getState().sessionToken;
+
+    signInAs({ ...PROFILE_A, userName: "Ada L." }, META_A);
+    act(() => useAuthStore.getState().setUnverifiedSession(PROFILE_A, META_A));
+    signInAs(PROFILE_A, META_A);
+    await settle();
+
+    const state = useVoiceSessionStore.getState();
+    expect(state.phase).toBe("live");
+    expect(state.sessionToken).toBe(token);
+    expect(state.endReason).toBeNull();
+    expect(fake.track.stop).not.toHaveBeenCalled();
+    expect(fake.endVoiceSession).not.toHaveBeenCalled();
+  });
+
+  it("keeps the session through a sign-in attempt that fails back to the same account", async () => {
+    await bringLive();
+    const token = useVoiceSessionStore.getState().sessionToken;
+
+    act(() => useAuthStore.getState().setSigningIn("device"));
+    act(() => useAuthStore.getState().setInteractiveAttemptFailed());
+    signInAs(PROFILE_A, META_A);
+    await settle();
+
+    expect(useVoiceSessionStore.getState().phase).toBe("live");
+    expect(useVoiceSessionStore.getState().sessionToken).toBe(token);
+    expect(fake.track.stop).not.toHaveBeenCalled();
+    expect(fake.endVoiceSession).not.toHaveBeenCalled();
+  });
+
+  it("leaves nothing live when the account switches while the first opening's mint is out, and ends the session that mint then opens", async () => {
+    fake.mintHold = fake.deferred<void>();
+    await startTalk();
+    await grantMicrophone();
+    await openMicrophone();
+    expect(useVoiceSessionStore.getState().phase).toBe("connecting");
+    expect(fake.endVoiceSession).not.toHaveBeenCalled();
+
+    signInAs(PROFILE_B, META_B);
+    await settle();
+
+    const state = useVoiceSessionStore.getState();
+    expect(state.phase).toBe("idle");
+    expect(state.refusal).toBe("unavailable");
+    expect(state.endReason).toBeNull();
+    expect(fake.track.stop).toHaveBeenCalled();
+
+    await act(async () => {
+      fake.mintHold?.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(fake.endVoiceSession).toHaveBeenCalledTimes(1);
+    expect(fake.endVoiceSession).toHaveBeenCalledWith("vs1");
+    expect(useVoiceSessionStore.getState().phase).toBe("idle");
+  });
 });
 
 describe("pagehide", () => {

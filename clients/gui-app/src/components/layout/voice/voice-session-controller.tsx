@@ -22,6 +22,10 @@ import { useBotConversationSendMutation } from "@/hooks/bots/use-bot-mutations";
 import { useBotThreadListQuery } from "@/hooks/bots/use-bot-thread-list-query";
 import { usePersonalEnvironment } from "@/hooks/environment/use-addressed-environment";
 import { dictationCaptureConstraints } from "@/hooks/composer/dictation-capture-constraints";
+import {
+  useAuthIdentityTransition,
+  type AuthIdentityTransition,
+} from "@/hooks/auth/use-auth-identity-transition";
 import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
@@ -1350,6 +1354,21 @@ export function VoiceSessionController(): ReactNode {
       window.removeEventListener("pagehide", onPageHide);
     };
   }, [end, runnerHost]);
+
+  // A session is minted and billed under one account. A sign-out takes the
+  // shell, and this controller with it; a switch leaves both standing, so the
+  // switch ends the session here, before it can hear or act for the next account.
+  const authStatus = useAuthStore((state) => state.status);
+  const authUserId = useAuthStore(
+    (state) => state.contextMetadata?.userId ?? null,
+  );
+  const onIdentityTransition = useCallback(
+    (transition: AuthIdentityTransition) => {
+      if (transition.kind === "userSwitched") end("account");
+    },
+    [end],
+  );
+  useAuthIdentityTransition(authStatus, authUserId, onIdentityTransition);
 
   // Unmount ends everything; the microphone never outlives the controller.
   // Through a ref, so a new `end` identity never ends a live session by

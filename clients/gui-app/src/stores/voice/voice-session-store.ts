@@ -330,7 +330,9 @@ export type VoiceEndReason =
   /** A call or another app took the sound while the session was live. */
   | "interrupted"
   /** The voice's sound could not be played, so nothing could be heard. */
-  | "playback";
+  | "playback"
+  /** Another account took over the window; the session was the outgoing one's. */
+  | "account";
 
 /** Why a session never began; nothing ended, so this is not a `VoiceEndReason`. */
 export type VoiceRefusal =
