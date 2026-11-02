@@ -258,18 +258,22 @@ vi.mock(
       await importOriginal<
         typeof import("@/hooks/host/use-host-directory-list-query")
       >();
+    const useHostDirectoryList = () => {
+      const real = actual.useHostDirectoryList();
+      return realDirectory.entries === null
+        ? real
+        : {
+            ...real,
+            data: realDirectory.entries,
+            fetchStatus: "idle" as const,
+          };
+    };
     return {
       ...actual,
-      useHostDirectoryList: () => {
-        const real = actual.useHostDirectoryList();
-        return realDirectory.entries === null
-          ? real
-          : {
-              ...real,
-              data: realDirectory.entries,
-              fetchStatus: "idle" as const,
-            };
-      },
+      useHostDirectoryList,
+      // The reachability hook reads the directory through
+      // `useHostDirectoryReading`, whose own subscription is this query.
+      useHostDirectoryListQuery: useHostDirectoryList,
     };
   },
 );
