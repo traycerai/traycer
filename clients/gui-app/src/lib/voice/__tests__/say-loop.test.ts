@@ -1035,9 +1035,12 @@ describe("the act Not what I meant is offered for", () => {
     seen: seenFor("fragment"),
   };
 
-  /** The loop with the router's answers queued and each act held until the test settles it. */
-  function actHarness(...answers: Routed[]) {
-    const queued = [...answers];
+  /**
+   * The loop with each route and each act held until the test settles it:
+   * `answer` settles the route of the n-th request, `acts` the acts that ran.
+   */
+  function actHarness() {
+    const routes: Array<(routed: Routed) => void> = [];
     const acts: Array<(outcome: VerbOutcome) => void> = [];
     const loop = createSayLoop({
       store: useVoiceSessionStore,
@@ -1052,11 +1055,10 @@ describe("the act Not what I meant is offered for", () => {
         new Promise<VerbOutcome>((resolve) => {
           acts.push(resolve);
         }),
-      decide: () => {
-        const next = queued.shift();
-        if (next === undefined) return Promise.reject(new Error("no answer"));
-        return Promise.resolve(next);
-      },
+      decide: () =>
+        new Promise<Routed>((resolve) => {
+          routes.push(resolve);
+        }),
       recheck: () => true,
       navigate: () => Promise.resolve(true),
       think: () => undefined,
@@ -1064,7 +1066,15 @@ describe("the act Not what I meant is offered for", () => {
       canSend: () => true,
       schedule: () => () => undefined,
     });
-    return { loop, acts };
+    return {
+      loop,
+      acts,
+      /** Settles the route of the request asked `index`-th, once it is out. */
+      answer: async (index: number, routed: Routed): Promise<void> => {
+        await vi.waitFor(() => expect(routes.length).toBeGreaterThan(index));
+        routes[index]?.(routed);
+      },
+    };
   }
 
   function say(text: string, at: number): void {
@@ -1074,13 +1084,16 @@ describe("the act Not what I meant is offered for", () => {
   const executedAct = () => useVoiceSessionStore.getState().executedAct;
 
   it("is dropped when a later request is routed while it ran, and the act finishing does not bring it back", async () => {
-    const h = actHarness(actRouted("older"), MISSING);
+    const h = actHarness();
 
     const older = h.loop.onDelegationCreated("d-older");
+    await h.answer(0, actRouted("older"));
     await vi.waitFor(() => expect(h.acts).toHaveLength(1));
 
     say(" something no page action serves", 10);
-    await h.loop.onDelegationCreated("d-newer");
+    const newer = h.loop.onDelegationCreated("d-newer");
+    await h.answer(1, MISSING);
+    await newer;
     expect(executedAct()).toBeNull();
 
     h.acts[0]?.({ kind: "executed" });
@@ -1090,13 +1103,15 @@ describe("the act Not what I meant is offered for", () => {
   });
 
   it("is the newer act's when that one ran first: the older act finishing does not overwrite it", async () => {
-    const h = actHarness(actRouted("older"), actRouted("newer"));
+    const h = actHarness();
 
     const older = h.loop.onDelegationCreated("d-older");
+    await h.answer(0, actRouted("older"));
     await vi.waitFor(() => expect(h.acts).toHaveLength(1));
 
     say(" now the next one", 10);
     const newer = h.loop.onDelegationCreated("d-newer");
+    await h.answer(1, actRouted("newer"));
     await vi.waitFor(() => expect(h.acts).toHaveLength(2));
     h.acts[1]?.({ kind: "executed" });
     await newer;
@@ -1109,17 +1124,81 @@ describe("the act Not what I meant is offered for", () => {
   });
 
   it("is kept for an act that ran while only a fragment was routed, since a fragment is not a new request", async () => {
-    const h = actHarness(actRouted("older"), FRAGMENT);
+    const h = actHarness();
 
     const older = h.loop.onDelegationCreated("d-older");
+    await h.answer(0, actRouted("older"));
     await vi.waitFor(() => expect(h.acts).toHaveLength(1));
 
     say(" um", 10);
-    await h.loop.onDelegationCreated("d-fragment");
+    const fragment = h.loop.onDelegationCreated("d-fragment");
+    await h.answer(1, FRAGMENT);
+    await fragment;
 
     h.acts[0]?.({ kind: "executed" });
     await older;
 
     expect(executedAct()).toEqual(seenFor("older"));
+  });
+
+  describe("with two requests out at once", () => {
+    it("stays the act of the request said later, when the one said first is routed after it and serves nothing", async () => {
+      const h = actHarness();
+
+      const first = h.loop.onDelegationCreated("d-first");
+      say(" the second request", 10);
+      const second = h.loop.onDelegationCreated("d-second");
+
+      await h.answer(1, actRouted("second"));
+      await vi.waitFor(() => expect(h.acts).toHaveLength(1));
+      h.acts[0]?.({ kind: "executed" });
+      await second;
+      expect(executedAct()).toEqual(seenFor("second"));
+
+      await h.answer(0, MISSING);
+      await first;
+
+      expect(executedAct()).toEqual(seenFor("second"));
+    });
+
+    it("is the act of the request said later, when the one said first was routed before it", async () => {
+      const h = actHarness();
+
+      const first = h.loop.onDelegationCreated("d-first");
+      say(" the second request", 10);
+      const second = h.loop.onDelegationCreated("d-second");
+
+      await h.answer(0, MISSING);
+      await first;
+      await h.answer(1, actRouted("second"));
+      await vi.waitFor(() => expect(h.acts).toHaveLength(1));
+      h.acts[0]?.({ kind: "executed" });
+      await second;
+
+      expect(executedAct()).toEqual(seenFor("second"));
+    });
+
+    it("counts a request that took back words handed back by a fragment as said after the one routed between", async () => {
+      const h = actHarness();
+
+      const first = h.loop.onDelegationCreated("d-first");
+      say(" the second request", 10);
+      const second = h.loop.onDelegationCreated("d-second");
+
+      await h.answer(0, FRAGMENT);
+      await first;
+      await h.answer(1, MISSING);
+      await second;
+      expect(executedAct()).toBeNull();
+
+      say(" and the third", 20);
+      const third = h.loop.onDelegationCreated("d-third");
+      await h.answer(2, actRouted("third"));
+      await vi.waitFor(() => expect(h.acts).toHaveLength(1));
+      h.acts[0]?.({ kind: "executed" });
+      await third;
+
+      expect(executedAct()).toEqual(seenFor("third"));
+    });
   });
 });

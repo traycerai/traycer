@@ -432,6 +432,15 @@ function missOf(decision: RoutedDecision): Miss | null {
 /** An act the router chose that could not run on the page it was chosen for. */
 const STALE_ACT: Miss = { kind: "refused", cause: "chosen-act" };
 
+/**
+ * When a request was said, by the seq of its last word. Not its first: words
+ * handed back from an earlier request open the next one, which is still said
+ * after any request routed in between.
+ */
+function lastSaid(entry: Pick<RoutingEntry, "seqs">): number {
+  return Math.max(...entry.seqs);
+}
+
 /** What the voice says of the decision already waiting, by what it is. */
 function busyRefusal(held: Confirming): LoopRefusal {
   return held.subject.kind === "post" ? "confirm-busy" : "act-confirm-busy";
@@ -711,10 +720,13 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
   /** The session is over; nothing scheduled by this loop acts any more. */
   let disposed = false;
   /**
-   * Counts the requests that finished routing, fragments aside: an act that
-   * ran keeps Not what I meant only while no later request has been routed.
+   * The last word of the latest-spoken request that finished routing,
+   * fragments aside, by its segment's seq; `-1` before any. Requests are
+   * ordered by when they were said, not by when their routes came back: an
+   * act that ran keeps Not what I meant only while nothing said after it has
+   * been routed, and a request said before it finishing late takes nothing.
    */
-  let routedRequests = 0;
+  let latestRoutedSeq = -1;
   /** The question the voice just asked about words it handed back, for the next route. */
   let askedQuestion: {
     readonly text: string;
@@ -1127,16 +1139,17 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
     }
     store.getState().consumeReservation(entry.seqs);
     settleDelegation(entry.delegationId);
-    const routedBefore = routedRequests;
     const outcome = await deps.act(decision.row, text, decision.turnId);
     if (store.getState().sessionToken !== entry.sessionToken) return;
     if (outcome.kind === "refused") {
       deps.notify(outcome.say, delegationOf(entry));
       return;
     }
-    // A request routed while this act ran is the person's latest: what it left
-    // for Not what I meant, nothing or its own act, stays.
-    if (routedRequests === routedBefore) store.getState().setExecutedAct(seen);
+    // A request said after this one and routed while it ran is the person's
+    // latest: what it left for Not what I meant, nothing or its own act, stays.
+    if (latestRoutedSeq === lastSaid(entry)) {
+      store.getState().setExecutedAct(seen);
+    }
   }
 
   /** Files a request the page could not serve, when the router's answer is known. */
@@ -1602,8 +1615,11 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
       afterCardRoute(entry, routed.decision);
       // A new request: Not what I meant is offered for the act that ran last
       // only until the person asks for something else.
-      if (routed.decision.kind !== "fragment") {
-        routedRequests += 1;
+      if (
+        routed.decision.kind !== "fragment" &&
+        lastSaid(entry) > latestRoutedSeq
+      ) {
+        latestRoutedSeq = lastSaid(entry);
         store.getState().setExecutedAct(null);
       }
       await execute(entry, routed);
