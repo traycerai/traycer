@@ -118,7 +118,9 @@ test("the page title opens below the controls chip", async ({ page }) => {
     .toBeGreaterThanOrEqual(chipBottom);
 });
 
-test("the room for the controls is inline padding on the page root", async ({
+// The fixture's page resets `html { padding: 0 }`, and the room must hold
+// through it.
+test("the room for the controls is padding on the page root that outlasts the page's own reset", async ({
   page,
 }) => {
   await open(page);
@@ -126,12 +128,14 @@ test("the room for the controls is inline padding on the page root", async ({
   const chipBottomInFrame = (await chipBottomInPage(page)) - frameBox.y;
 
   await expect
-    .poll(async () => {
-      const inline = await pageFrame(page)
+    .poll(() =>
+      pageFrame(page)
         .locator("html")
-        .evaluate((root) => root.style.paddingTop);
-      return inline.endsWith("px") ? Number.parseFloat(inline) : 0;
-    })
+        .evaluate(
+          (root) =>
+            Number.parseFloat(window.getComputedStyle(root).paddingTop) || 0,
+        ),
+    )
     .toBeGreaterThanOrEqual(chipBottomInFrame);
 });
 
