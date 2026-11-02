@@ -4,9 +4,7 @@ import {
   getRecordSchema,
   loadRecord,
   validateVersionedRecordRegistry,
-  validateVersionedRpcRegistry,
 } from "@traycer/protocol/framework/index";
-import { hostRpcRegistry } from "@traycer/protocol/host/index";
 import { commonRecordRegistry } from "@traycer/protocol/common/registry";
 import {
   chatHeadRecordV1120,
@@ -26,26 +24,22 @@ import {
 import { CHAT_SYNC_SCHEMA_VERSION } from "@traycer/protocol/persistence/chat-sync/version";
 
 /**
- * Smoke test that every seeded protocol registry survives the structural
+ * Smoke test that the seeded record registries survive the structural
  * + JSON-Schema compatibility validators. Construction (`define*`) is
  * structural-only, so a broken seed no longer blows up on import; these
- * assertions call the full validators explicitly. CI also holds every
- * static registry to the same pass via
- * `protocol/scripts/compat/static-registries.ts`.
+ * assertions call the full validators explicitly. The host RPC registries are
+ * validated once, with every other static registry, in
+ * `protocol/scripts/compat/__tests__/static-registries.test.ts`.
  *
  * The CloudData RPC registry has moved out of `protocol/` and now lives
  * beside the `CloudDataClient` HTTP client in the cloud data client
  * (internal, not in this repo). The cloud catalog
  * (`epic-light`), repo association, and workspace-association cached
- * records moved with it; this file keeps only the host + narrowed
- * persistence (`2.0.0` / V200 epic record) registries honest.
+ * records moved with it; this file keeps only the narrowed persistence
+ * (`2.0.0` / V200 epic record) registries honest.
  */
 
 describe("seeded protocol registries", () => {
-  it("host registry validates", () => {
-    expect(() => validateVersionedRpcRegistry(hostRpcRegistry)).not.toThrow();
-  });
-
   it("persistence record registry validates", () => {
     expect(() =>
       validateVersionedRecordRegistry(persistenceRecordRegistry),

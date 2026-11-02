@@ -39,6 +39,8 @@ import type { ILogger } from "../../logger";
 import type { Layer0FrameRead } from "../../host/lifecycle-probe";
 import {
   CRASH_REPORT_SPAWN_SLACK_MS,
+  NO_HEAP_SPACE_USED_BYTES,
+  NO_REPORT_MEMORY,
   STDERR_HEAD_MAX_BYTES,
   STDERR_TAIL_MAX_BYTES,
   StderrCaptureBuffer,
@@ -1425,6 +1427,7 @@ describe("runHostStart - signal/exit propagation", () => {
         heapLimitBytes: 4831838208,
         heapUsedBytes: 4100000000,
         rssBytes: 4750000000,
+        heapSpaceUsedBytes: NO_HEAP_SPACE_USED_BYTES,
       },
     };
 
@@ -1502,6 +1505,7 @@ describe("runHostStart - signal/exit propagation", () => {
       heapLimitBytes: 4831838208,
       heapUsedBytes: 4100000000,
       rssBytes: 4750000000,
+      heapSpaceUsedBytes: NO_HEAP_SPACE_USED_BYTES,
     });
     expect(report.hostVersion).toBe(sampleRecord(exec).version);
     expect(report.attemptId).toBe(crashed?.fields.attemptId);
@@ -1537,7 +1541,7 @@ describe("runHostStart - signal/exit propagation", () => {
       recorded.findCrashReportResult = {
         filename: "report.abrt.json",
         summary: "event=FatalError",
-        memory: { heapLimitBytes: null, heapUsedBytes: null, rssBytes: null },
+        memory: NO_REPORT_MEMORY,
       };
       const originalSpawn = deps.spawn;
       if (originalSpawn === undefined) {
