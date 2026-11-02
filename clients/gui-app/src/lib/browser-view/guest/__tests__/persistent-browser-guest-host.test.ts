@@ -1193,3 +1193,66 @@ describe("persistent browser guest host", () => {
     });
   });
 });
+
+describe("the press relay on a guest", () => {
+  function recordPressesOn(target: Element): {
+    readonly seen: string[];
+    readonly stop: () => void;
+  } {
+    const seen: string[] = [];
+    const record = (event: Event): void => {
+      if (event.target === target) seen.push(event.type);
+    };
+    document.addEventListener("pointerdown", record);
+    document.addEventListener("click", record);
+    return {
+      seen,
+      stop: () => {
+        document.removeEventListener("pointerdown", record);
+        document.removeEventListener("click", record);
+      },
+    };
+  }
+
+  /**
+   * Focus moved into the guest, as the staging Electron renderer reports it:
+   * the webview element receives `focus`, and the window blurs with the
+   * webview active and the document without focus (the guest is its own web
+   * contents).
+   */
+  function blurIntoGuest(webview: HTMLElement): void {
+    webview.setAttribute("tabindex", "-1");
+    webview.focus();
+    vi.spyOn(document, "hasFocus").mockReturnValue(false);
+    window.dispatchEvent(new Event("blur"));
+  }
+
+  it("a press into the guest reaches the document as one pointerdown and click on its webview", () => {
+    const bridge = new FakeBrowserViewBridge({});
+    startHost(bridge, NOOP_ACTIVATE);
+    bridge.emitGuestMountRequested(mountRequest(REGISTRATION_A, PARTITION_A));
+    const { webview } = guestNodes(REGISTRATION_A);
+    const presses = recordPressesOn(webview);
+
+    blurIntoGuest(webview);
+
+    expect(presses.seen).toEqual(["pointerdown", "click"]);
+    presses.stop();
+  });
+
+  it("a released guest relays nothing", () => {
+    const bridge = new FakeBrowserViewBridge({});
+    startHost(bridge, NOOP_ACTIVATE);
+    bridge.emitGuestMountRequested(mountRequest(REGISTRATION_A, PARTITION_A));
+    const { webview } = guestNodes(REGISTRATION_A);
+    const presses = recordPressesOn(webview);
+    bridge.emitGuestReleaseRequested({ registrationId: REGISTRATION_A });
+
+    document.body.appendChild(webview);
+    blurIntoGuest(webview);
+
+    expect(presses.seen).toEqual([]);
+    presses.stop();
+    webview.remove();
+  });
+});
