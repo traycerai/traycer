@@ -448,6 +448,7 @@ function activationDebtStatusHandler(): MockHandlerMap<HostRpcRegistry> {
       crossHostMessaging: null,
       sessions: null,
       updatesExternallyManaged: null,
+      previousExit: null,
     }),
   };
 }
@@ -914,6 +915,7 @@ function statusWithBusy(
     crossHostMessaging: null,
     sessions: null,
     updatesExternallyManaged: null,
+    previousExit: null,
   };
 }
 
@@ -1562,6 +1564,7 @@ function activationAttemptStatusHandler(): MockHandlerMap<HostRpcRegistry> {
       crossHostMessaging: null,
       sessions: null,
       updatesExternallyManaged: null,
+      previousExit: null,
     }),
     "host.update.check": () => ({
       outcome: "ok" as const,
