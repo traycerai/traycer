@@ -12,8 +12,7 @@ import { VALIDATE_TUI_FORK_PROFILE_METHOD } from "@/hooks/agent/use-tui-fork-pro
 
 /**
  * Read-only cross-profile fork-admission preflight - the optional
- * (non-floor) `agent.tui.validateForkProfile` RPC (tech plan governing
- * mechanism 2). Callers MUST gate on
+ * (non-floor) `agent.tui.validateForkProfile` RPC. Callers MUST gate on
  * `useHostSupportsMethod(hostId, "agent.tui.validateForkProfile")` before
  * invoking this - an old host that lacks the method rejects the call with
  * `E_HOST_UNSUPPORTED` rather than silently degrading. Its negotiated

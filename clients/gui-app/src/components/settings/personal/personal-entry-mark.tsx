@@ -15,6 +15,13 @@ import { useHostNegotiatedMethodVersion } from "@/hooks/host/use-host-negotiated
 import { useProvidersPromoteToPersonal } from "@/hooks/providers/use-providers-promote-to-personal-mutation";
 import { useHostClient } from "@/lib/host";
 
+/** Which list a mark is drawn in: the entry kind, provider and scope. */
+export interface PersonalMarkTarget {
+  readonly entryKind: "mcp" | "skills";
+  readonly providerId: ProviderId;
+  readonly scope: ProviderNativeScope;
+}
+
 /**
  * Whether an MCP server or skill on this host is one of the person's
  * settings, and if not, the one way to make it one.
@@ -28,13 +35,6 @@ import { useHostClient } from "@/lib/host";
  *
  * Nothing on a host that is not set up for the person's settings.
  */
-/** Which list a mark is drawn in: the entry kind, provider and scope. */
-export interface PersonalMarkTarget {
-  readonly entryKind: "mcp" | "skills";
-  readonly providerId: ProviderId;
-  readonly scope: ProviderNativeScope;
-}
-
 export function PersonalEntryMark(props: {
   readonly target: PersonalMarkTarget;
   readonly name: string;
@@ -64,6 +64,7 @@ export function PersonalEntryMark(props: {
         entryKind={props.target.entryKind}
         providerId={props.target.providerId}
         name={props.name}
+        label="Add to Personal"
       />
     </span>
   );
@@ -74,10 +75,11 @@ export function PersonalEntryMark(props: {
  * (`PROMOTE_TO_PERSONAL_REQUIRED_HOST_VERSION`, nativeMutate 1.3). A host on
  * 1.2 or older refuses it.
  */
-function AddToPersonalButton(props: {
+export function AddToPersonalButton(props: {
   readonly entryKind: "mcp" | "skills";
   readonly providerId: ProviderId;
   readonly name: string;
+  readonly label: string;
 }): ReactNode {
   const version = useHostNegotiatedMethodVersion(
     useHostClient(),
@@ -130,7 +132,7 @@ function AddToPersonalButton(props: {
           );
         }}
       >
-        Add to Personal
+        {props.label}
         {promote.isPending ? (
           <AgentSpinningDots
             className={undefined}

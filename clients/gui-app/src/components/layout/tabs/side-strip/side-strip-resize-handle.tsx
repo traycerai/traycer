@@ -36,7 +36,7 @@ interface StripDragState {
 }
 
 /**
- * The strip's width handle on its content-facing edge (S-20), on the shared
+ * The strip's width handle on its content-facing edge, on the shared
  * `usePointerDragCommit` machine: `style.width` is written per frame with no
  * React render, and the store once on release. The drag and the arrow nudge
  * are negated for a right-edge strip, so moving toward the content always
@@ -109,7 +109,7 @@ export function SideStripResizeHandle(props: {
       if (drag === null) return;
       stopWidthEasing();
       // The width as rendered after the last frame, so a floor or cap the
-      // strip's own classes apply (S-43, the 40vw cap) is what gets stored.
+      // strip's own classes apply (including the 40vw cap) is what gets stored.
       const renderedWidth = drag.strip.getBoundingClientRect().width;
       commitReleasedWidth(drag.latestWidth, renderedWidth);
       settleStripWidth(drag.strip);

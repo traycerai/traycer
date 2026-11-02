@@ -61,7 +61,7 @@ export function HostOptionRow(props: {
   readonly updateView: FleetUpdateView | null;
   /**
    * The name's element, for a surface that tells when its width has cut the
-   * name (the account menu's tooltip, G4), or `null`.
+   * name (the account menu's tooltip), or `null`.
    */
   readonly nameRef: Ref<HTMLSpanElement>;
   /**

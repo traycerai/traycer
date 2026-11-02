@@ -347,3 +347,43 @@ describe("ConfirmDestructiveDialog - focus when the opener is disabled at close"
     });
   });
 });
+
+/**
+ * The cascade paragraph's one sentence frame. `cascadeNestedUnder` is optional
+ * because a caller deleting a single target has nothing to say about it, and
+ * that default is what the mobile switcher relies on - so it needs a witness
+ * here rather than only at the sidebar sites, which all pass it explicitly.
+ */
+describe("ConfirmDestructiveDialog - the cascade sentence", () => {
+  function renderWithCascade(
+    cascadeNestedUnder: "it" | "them" | undefined,
+  ): string {
+    render(
+      <ConfirmDestructiveDialog
+        open
+        onOpenChange={() => {}}
+        title="Delete these?"
+        description="This cannot be undone."
+        cascadeSummary="2 tickets"
+        cascadeNestedUnder={cascadeNestedUnder}
+        actionLabel="Delete"
+        isPending={false}
+        blockedReason={null}
+        onConfirm={() => {}}
+      />,
+    );
+    return screen.getByTestId("confirm-cascade-meta").textContent;
+  }
+
+  it("addresses one target as it when the caller says nothing", () => {
+    expect(renderWithCascade(undefined)).toBe(
+      "This will also delete 2 tickets nested under it.",
+    );
+  });
+
+  it("addresses a selection as them", () => {
+    expect(renderWithCascade("them")).toBe(
+      "This will also delete 2 tickets nested under them.",
+    );
+  });
+});

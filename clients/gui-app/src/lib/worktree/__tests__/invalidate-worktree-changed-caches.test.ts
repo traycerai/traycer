@@ -378,7 +378,7 @@ describe("invalidateWorktreeChangedCaches + an ACTIVE multi-path enrichment obse
   });
 });
 
-// R2: a frame names a path in the HOST's spelling (the lexical
+// A frame names a path in the HOST's spelling (the lexical
 // `path.resolve` of the row's path), while a per-path key may name a
 // binding-sourced spelling the host normalized away (a trailing slash an
 // explicit `worktree.import` kept). `worktreePathMatcher` is what lets such a

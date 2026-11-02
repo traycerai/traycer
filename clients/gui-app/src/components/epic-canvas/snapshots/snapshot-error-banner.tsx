@@ -27,7 +27,7 @@ interface SnapshotErrorBannerProps {
 export function SnapshotErrorBanner(props: SnapshotErrorBannerProps) {
   const requestFreshSnapshot = useEpicRequestFreshSnapshot();
   const clock = useServerClockSkew();
-  // Direction-aware copy (R4-D2) only for a genuine INCOMPATIBLE close — every
+  // Direction-aware copy only for a genuine INCOMPATIBLE close — every
   // other fatal code keeps its plain message.
   const skew =
     props.error.code === "INCOMPATIBLE"

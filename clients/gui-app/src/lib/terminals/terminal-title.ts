@@ -2,7 +2,6 @@ import type {
   CanonicalTerminalSessionInfo,
   CanonicalTerminalSessionInfoWithCurrentCwd,
 } from "@traycer/protocol/host/terminal/unary-schemas";
-import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 
 export const DEFAULT_TERMINAL_TITLE = "New Terminal";
 
@@ -52,12 +51,8 @@ export function terminalSessionTitle(input: {
   if (title.length > 0) return title;
   const activeProcessName = input.activeProcessName?.trim() ?? "";
   const cwdName = terminalDirectoryName(input.currentCwd);
-  // Without sandboxes a task-home terminal is titled by its directory, as
-  // every other terminal is: the host's name named an empty sandbox's shell.
   const taskHomeName =
-    UNRELEASED_FEATURES_ENABLED &&
-    input.taskHome !== null &&
-    cwdName === input.taskHome.epicId
+    input.taskHome !== null && cwdName === input.taskHome.epicId
       ? input.taskHome.hostName
       : null;
   const directoryName = taskHomeName ?? cwdName;

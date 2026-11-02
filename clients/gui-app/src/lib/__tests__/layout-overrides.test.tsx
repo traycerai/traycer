@@ -175,7 +175,7 @@ describe("layout override seam", () => {
   it("merges the arrangement field by field", () => {
     // One field per read, because that is the only way the seam is read now:
     // a whole-arrangement hook made every consumer of one edge rerender on any
-    // other field's write (G1-12, G1-21). Nesting still merges, and a field
+    // other field's write. Nesting still merges, and a field
     // nobody overrode still comes through by identity from the store.
     const nested = (children: ReactNode): ReactNode => (
       <LayoutOverrideProvider value={{ arrangement: { minimapSide: "left" } }}>

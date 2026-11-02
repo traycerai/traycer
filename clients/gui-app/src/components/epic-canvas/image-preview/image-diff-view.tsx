@@ -141,7 +141,7 @@ function aspectRatioOf(meta: FileAssetMeta | null): number | null {
 
 /**
  * The COMPACT root's own width:height ratio for a CSS `aspect-ratio` style
- * (Codex re-review, #3773298843) - `null` when neither side has a usable
+ * `null` when neither side has a usable
  * ratio (both dimensionless, or still loading), the caller's cue to fall
  * back to a fixed-vh height instead.
  *
@@ -168,8 +168,8 @@ interface CompactRootSizing {
 }
 
 /**
- * The compact root's own height (Codex re-review, #3773015605's follow-up
- * #3773298843): a definite `h-full` needs a definite ancestor height, which
+ * The compact root's own height:
+ * a definite `h-full` needs a definite ancestor height, which
  * a bundle row never provides on its own - but a FIXED px/rem value is a
  * `gui-app/AGENTS.md` fluid-layout violation regardless of what fills it
  * (an upscaled icon in a mostly-empty box on a small image, or an
@@ -181,7 +181,7 @@ interface CompactRootSizing {
  * (never px/rem) height only when NEITHER side has decoded dimensions yet
  * to derive a ratio from.
  *
- * `min-h-24` (sol re-review, #3773298843's follow-up): a panoramic/sprite-
+ * `min-h-24`: a panoramic/sprite-
  * strip ratio (e.g. 4000x100) can derive a root height BELOW each compact
  * `ImagePreview`'s own non-shrinking `h-6` caption, collapsing the
  * `min-h-0 flex-1` image stage to zero beneath it - a valid image renders
@@ -213,16 +213,15 @@ export interface ImageDiffViewProps {
   readonly previousPath: string | null;
   /**
    * `gitImageDiffRevisionKey(file, headSha)` - the SAME value the caller
-   * already uses as this component's own `key=` (remount-on-revision-change,
-   * PR review P1). Threaded into each side's git request too, as
+   * already uses as this component's own `key=` (remount-on-revision-change).
+   * Threaded into each side's git request too, as
    * `coalesceRevision`, because the `key=` remount alone doesn't close the
    * gap when a SEPARATE, still-mounted consumer of the identical (path,
    * stage) at the OLD revision keeps that revision's shared pre-header
    * subscription alive (e.g. the same file open in two panes, one remounts
    * before the other's git-status catches up) - without this, the
    * remounted side's fresh `useFileAsset` call would still coalesce onto
-   * that surviving old-revision subscription and replay its stale header
-   * (sol re-review).
+   * that surviving old-revision subscription and replay its stale header.
    */
   readonly revisionKey: string;
   /** Stage to request the OLD (pre-change) side at; `null` = no old side (Added empty state). */
@@ -231,7 +230,7 @@ export interface ImageDiffViewProps {
   readonly newStage: "staged" | "unstaged" | null;
   readonly fileName: string;
   readonly conflicted: boolean;
-  /** Drops the shared toolbar and all gestures for bundle use - static fit only (image-preview decision log, decision #18; ticket 07). */
+  /** Drops the shared toolbar and all gestures for bundle use - static fit only. */
   readonly compact: boolean;
   /** `null` when there is no single unambiguous file on disk to open for a per-side failure (e.g. a bundle row). */
   readonly onOpenExternally: (() => void) | null;
@@ -239,10 +238,10 @@ export interface ImageDiffViewProps {
 }
 
 /**
- * Two `ImagePreview` instances side by side (image-preview decision log,
- * decision #9), always two columns - a missing side renders an Added/Deleted
+ * Two `ImagePreview` instances side by side, always two
+ * columns - a missing side renders an Added/Deleted
  * empty state rather than collapsing to one column. Zoom + pan are LINKED
- * (decision #17, rebuilt on `react-zoom-pan-pinch` - ticket 07):
+ * (rebuilt on `react-zoom-pan-pinch`):
  * - The shared toolbar's fit/actual/zoom buttons drive BOTH sides
  *   independently and instantly (`animationTime: 0`, so `onTransform` fires
  *   once synchronously per side, never mid-animation) - each side computes
@@ -253,14 +252,14 @@ export interface ImageDiffViewProps {
  *   `setTransform` - exact for same-dimension sides. `setTransform` calls
  *   the library's `setState` directly and bypasses `limitToBounds` entirely,
  *   so for mismatched dimensions the mirrored position is clamped against
- *   the peer's OWN live bounds first - sane containment only (ticket 07: "do
+ *   the peer's OWN live bounds first - sane containment only ("do
  *   not over-engineer sub-pixel alignment for mismatched dimensions"), never
  *   a reimplementation of the library's padding-aware bounds engine.
  * - A PROGRAMMATIC transform (this side's own resize-refit, or a
  *   double-click) is never mirrored at all: each side recomputes its own
  *   fit/actual-size independently instead.
  * Compact (bundle) variant: static fit only, no toolbar, no gestures -
- * matches decision #18's affordance-free intent.
+ * matches the affordance-free intent.
  */
 export function ImageDiffView(props: ImageDiffViewProps): ReactNode {
   const oldTransformRef = useRef<ReactZoomPanPinchRef | null>(null);
@@ -291,8 +290,8 @@ export function ImageDiffView(props: ImageDiffViewProps): ReactNode {
   const [oldBounds, setOldBounds] = useState<SideBounds>(DEFAULT_SIDE_BOUNDS);
   const [newBounds, setNewBounds] = useState<SideBounds>(DEFAULT_SIDE_BOUNDS);
 
-  // A rename's two sides can straddle the extension allowlist (pre-landing
-  // review, P0: `old.png -> new.txt` / `old.txt -> new.png`) - each side is
+  // A rename's two sides can straddle the extension allowlist
+  // (`old.png -> new.txt` / `old.txt -> new.png`) - each side is
   // gated against its OWN effective path, never `props.filePath` alone. The
   // old side reads from `previousPath` when the file was renamed (mirrors
   // the host's `previousPath ?? filePath` resolution); the new side is
@@ -445,8 +444,8 @@ export function ImageDiffView(props: ImageDiffViewProps): ReactNode {
     dualDispatch((instance) => instance.zoomOut(ZOOM_STEP, 0));
   }, [dualDispatch]);
 
-  // Matches the shared toolbar's own instant dual-dispatch (image-preview
-  // decision log) rather than letting one side's internal handler run solo
+  // Matches the shared toolbar's own instant dual-dispatch rather than
+  // letting one side's internal handler run solo
   // - that would mirror a raw fit/actual transform computed for THIS side's
   // size onto the differently-sized peer instead of the peer computing its
   // own.
@@ -598,7 +597,7 @@ function dispatchToSide(
  * gestures) - position bounds are then computed at that CLAMPED scale, not
  * the raw mirrored one, so they describe the transform actually being
  * applied. Sane containment only, not a reimplementation of the library's
- * padding-aware bounds engine (ticket 07: "do not over-engineer sub-pixel
+ * padding-aware bounds engine ("do not over-engineer sub-pixel
  * alignment for mismatched dimensions"). Increments the PEER's own pending
  * count, never a shared synchronous bracket - the peer's `onTransform`
  * consuming it is what suppresses the echo, correct however long delivery
@@ -644,7 +643,7 @@ function mirrorTransform(
 function ImageDiffSide(props: {
   /** Whether this side has a fetchable identity at all (its `stage` is non-null) - `false` renders the Added/Deleted empty state, never a fetch. */
   readonly sideExists: boolean;
-  /** Whether THIS side's own effective path (pre-landing review, P0: a rename can straddle the allowlist) is an image extension - `false` renders the non-image placeholder, never a fetch. */
+  /** Whether THIS side's own effective path (a rename can straddle the allowlist) is an image extension - `false` renders the non-image placeholder, never a fetch. */
   readonly isImageSide: boolean;
   readonly effectivePath: string;
   readonly asset: UseFileAssetResult;
@@ -658,8 +657,8 @@ function ImageDiffSide(props: {
 }): ReactNode {
   const asset = props.asset;
   // Magic-valid, header-parseable bytes can still fail to DECODE in the
-  // browser (pre-landing review, P1) - `<img onError>` has no other signal
-  // path. `reportDecodeFailure` (re-review P1 follow-up) discards the exact
+  // browser `<img onError>` has no other signal
+  // path. `reportDecodeFailure` discards the exact
   // cache entry AND transitions the hook's own state to `fallback`, so this
   // side renders straight from `asset.status` like every other failure -
   // no local decode-failed flag to track or reset.
@@ -708,7 +707,7 @@ function ImageDiffSide(props: {
       fileName={props.effectivePath}
       compact
       gesturesEnabled={!props.compact}
-      // One motion language within the diff view (ticket 07, better-ui
+      // One motion language within the diff view (better-ui
       // audit): double-click is intercepted entirely by
       // `doubleClickOverride` - it drives the shared toolbar's own
       // dual-dispatch instead of this instance's internal

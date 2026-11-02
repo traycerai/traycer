@@ -742,6 +742,7 @@ describe("installHostDowngrade", () => {
     expect(mocks.gateStoreFormatFloorMock).toHaveBeenCalledTimes(1);
     expect(mocks.gateStoreFormatFloorMock.mock.calls[0]?.[0]).toMatchObject({
       targetVersion: "1.2.0",
+      installedProvenance: { recordVersion: expect.any(String) },
       site: "host update",
     });
     // Nothing downstream of the refused gate ran - not even a network

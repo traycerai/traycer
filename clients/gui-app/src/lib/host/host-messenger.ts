@@ -108,7 +108,7 @@ export interface BuildRawHostMessengerForTargetParams<
   readonly auth: StreamAuthRevalidator | null;
   readonly authnBaseUrl: string;
   readonly requestId: RequestIdProvider;
-  /** The signed-in user this messenger is built for (Architecture §4 / S1 cache key). */
+  /** The signed-in user this messenger is built for (S1 cache key). */
   readonly userId: string;
 }
 
@@ -594,8 +594,8 @@ class RuntimeHostMessenger<
       // The single host slot: a different host's binding gives way.
       this.releaseHostBindings(target.hostId);
     }
-    // The remote session cache is keyed `(hostId, userId)` (Architecture §4 /
-    // S1); the authority's bearer is the authoritative identity for the
+    // The remote session cache is keyed `(hostId, userId)` (S1);
+    // the authority's bearer is the authoritative identity for the
     // request being dispatched, so take the user from it rather than a
     // separately-read signed-in user that could disagree mid-transition.
     const userId = authority.bearer.identity.userId;

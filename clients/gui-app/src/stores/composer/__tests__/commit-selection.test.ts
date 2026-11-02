@@ -25,6 +25,7 @@ describe("commitProfileSelection", () => {
 
   it("changes only the profile when provider memory contains different model settings", () => {
     useComposerHarnessMemoryStore.getState().record(HOST_A, {
+      ultracode: false,
       harnessId: "claude",
       model: "opus-4",
       permissionMode: "supervised",
@@ -45,6 +46,7 @@ describe("commitProfileSelection", () => {
       reasoningFallback: "model-default",
       seedKey: "seed-1",
       values: {
+        ultracode: false,
         permission: "supervised",
         selection: {
           harnessId: "claude",
@@ -63,6 +65,7 @@ describe("commitProfileSelection", () => {
         }),
       tuiOnly: false,
       chatLineCarriesAutoMode: null,
+      ultracodeCarried: false,
       hostId: HOST_A,
     });
 
@@ -94,6 +97,7 @@ describe("commitSelection - provider switch", () => {
 
   it("restores the provider's last model independently of its selected profile", () => {
     useComposerHarnessMemoryStore.getState().record(HOST_A, {
+      ultracode: false,
       harnessId: "claude",
       model: "opus-4",
       permissionMode: "supervised",
@@ -103,6 +107,7 @@ describe("commitSelection - provider switch", () => {
       profileId: "profile-b",
     });
     useComposerHarnessMemoryStore.getState().record(HOST_A, {
+      ultracode: false,
       harnessId: "claude",
       model: "sonnet-4.5",
       permissionMode: "supervised",
@@ -118,6 +123,7 @@ describe("commitSelection - provider switch", () => {
       reasoningFallback: "model-default",
       seedKey: "seed-1",
       values: {
+        ultracode: false,
         permission: "supervised",
         selection: {
           harnessId: "codex",
@@ -134,6 +140,7 @@ describe("commitSelection - provider switch", () => {
         }),
       tuiOnly: false,
       chatLineCarriesAutoMode: null,
+      ultracodeCarried: false,
       hostId: HOST_A,
     });
 
@@ -160,6 +167,7 @@ describe("commitSelection - host scoping", () => {
 
   it("reads and writes harness memory keyed by the toolbar store's catalog.hostId, not another host's", () => {
     useComposerHarnessMemoryStore.getState().record(HOST_A, {
+      ultracode: false,
       harnessId: "claude",
       model: "opus-4",
       permissionMode: "supervised",
@@ -174,6 +182,7 @@ describe("commitSelection - host scoping", () => {
       reasoningFallback: "model-default",
       seedKey: "seed-host-b",
       values: {
+        ultracode: false,
         permission: "supervised",
         selection: {
           harnessId: "codex",
@@ -186,6 +195,7 @@ describe("commitSelection - host scoping", () => {
       onSettingsChange: null,
       tuiOnly: false,
       chatLineCarriesAutoMode: null,
+      ultracodeCarried: false,
       hostId: HOST_B,
     });
 
@@ -202,6 +212,7 @@ describe("commitSelection - host scoping", () => {
       reasoningFallback: "model-default",
       seedKey: "seed-host-a",
       values: {
+        ultracode: false,
         permission: "supervised",
         selection: {
           harnessId: "codex",
@@ -214,6 +225,7 @@ describe("commitSelection - host scoping", () => {
       onSettingsChange: null,
       tuiOnly: false,
       chatLineCarriesAutoMode: null,
+      ultracodeCarried: false,
       hostId: HOST_A,
     });
 
@@ -237,6 +249,7 @@ describe("commitSelection - host scoping", () => {
       reasoningFallback: "model-default",
       seedKey: "seed-null-host",
       values: {
+        ultracode: false,
         permission: "supervised",
         selection: {
           harnessId: "claude",
@@ -249,6 +262,7 @@ describe("commitSelection - host scoping", () => {
       onSettingsChange: null,
       tuiOnly: false,
       chatLineCarriesAutoMode: null,
+      ultracodeCarried: false,
       hostId: null,
     });
 

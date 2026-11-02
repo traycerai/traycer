@@ -1,7 +1,7 @@
 /**
  * A terminally-refused body lane, and the exact stimuli that may reattach it.
  *
- * ## The defect this pins (epic-sync-overhaul, finding 11's sibling)
+ * ## The defect this pins
  *
  * A terminal `unavailable` means "no further frames on THIS subscription". The
  * adapter records it and stops (`artifact-lane-adapter.ts`: "the consumer
@@ -226,9 +226,9 @@ function createRefusalRig(): RefusalRig {
     },
     async reconnect(): Promise<void> {
       const status = liveStatus();
-      status.onConnectionStatus("reconnecting", null);
+      status.onConnectionStatus("reconnecting", null, null, null);
       await settle();
-      status.onConnectionStatus("open", null);
+      status.onConnectionStatus("open", null, null, null);
       await settle();
     },
     async pushUnchangedWorld(): Promise<void> {

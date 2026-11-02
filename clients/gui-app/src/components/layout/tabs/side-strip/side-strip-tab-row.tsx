@@ -233,7 +233,7 @@ function fullCardOf(input: {
 }): ReactNode {
   const { tab, title } = input;
   if (tab.kind === "sample-workspace") {
-    // A mode, not a task: no agents, so no "Idle" (audit F2).
+    // A mode, not a task: no agents, so no "Idle".
     return (
       <div
         data-testid="side-tab-hover-card-body"

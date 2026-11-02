@@ -18,7 +18,7 @@ import { HostUpdateRequiredAction } from "@/components/settings/host-scope/host-
  * unconditional; it cannot be. Updating the host cannot fix an app that is
  * itself the outdated leg, and there is no update this app can perform against
  * a machine on someone else's desk. A button offered in either case could only
- * ever fail — the F8 "Retry now" class this epic deleted — so both are
+ * ever fail — the "Retry now" class this epic deleted — so both are
  * withheld, and the row still carries the word `update required` either way.
  *
  * The gates are not restated here: they are the same `hostUpdateActionApplies`

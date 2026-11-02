@@ -1307,12 +1307,13 @@ describe("served document: a folder of pages", () => {
   function pagesHarness() {
     const onNavigate = vi.fn<(path: string) => void>();
     const onPageMissing = vi.fn<() => void>();
+    const onPageUnreachable = vi.fn<() => void>();
     const harness = createServedHarness({
       nonce: NONCE,
       appRequests: null,
-      pages: { treePath: "site", onNavigate, onPageMissing },
+      pages: { treePath: "site", onNavigate, onPageMissing, onPageUnreachable },
     });
-    return { harness, onNavigate, onPageMissing };
+    return { harness, onNavigate, onPageMissing, onPageUnreachable };
   }
 
   /** A served page's ready names the page it is, as the bootstrap sends it. */
@@ -1381,5 +1382,63 @@ describe("served document: a folder of pages", () => {
     );
     expect(onNavigate).toHaveBeenCalledWith("gone.html");
     expect(onPageMissing).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * The unreadable stand-in is served at the page's OWN address, so its ready
+   * reports that page as the one showing, exactly as a successful load would.
+   * The report has to reach `onPageUnreachable` and not `onPageMissing`,
+   * because the app answers the two with different sentences: this page exists
+   * and is worth asking for again.
+   */
+  it("relays the unreadable page's report as unreachable, not as missing", () => {
+    const { harness, onNavigate, onPageMissing, onPageUnreachable } =
+      pagesHarness();
+    harness.host.receive(pageReady("site/report.html"));
+    harness.host.receive(
+      notification("traycer/notifications/page-unreachable", { nonce: NONCE }),
+    );
+    expect(onNavigate).toHaveBeenCalledWith("report.html");
+    expect(onPageUnreachable).toHaveBeenCalledTimes(1);
+    expect(onPageMissing).not.toHaveBeenCalled();
+  });
+
+  it("ignores an unreachable report that does not carry the armed nonce", () => {
+    const { harness, onPageUnreachable } = pagesHarness();
+    harness.host.receive(pageReady("site/report.html"));
+    harness.host.receive(
+      notification("traycer/notifications/page-unreachable", {
+        nonce: "another-document",
+      }),
+    );
+    expect(onPageUnreachable).not.toHaveBeenCalled();
+  });
+
+  /**
+   * Every artifact surface but the pages frame renders with no page navigation
+   * - a canvas board, an MCP App row, a wireframe - and a stand-in there has
+   * nobody to tell. It must not be left standing as a healthy load: it proves
+   * its nonce and reports ready like any document, so the load watchdog that
+   * used to catch an unreadable page has already been cleared by the time the
+   * report arrives. A document that draws nothing is a crash, and every one of
+   * those surfaces answers a crash with an affordance.
+   */
+  it.each([
+    "traycer/notifications/page-unreachable",
+    "traycer/notifications/page-missing",
+  ])("crashes on a %s report that no page navigation can hear", (method) => {
+    const harness = createServedHarness({
+      nonce: NONCE,
+      appRequests: null,
+      pages: null,
+    });
+    harness.host.receive(documentReady(NONCE, 120));
+    harness.host.frameLoaded();
+    expect(harness.host.status).toBe("ready");
+
+    harness.host.receive(notification(method, { nonce: NONCE }));
+
+    expect(harness.host.status).toBe("crashed");
+    expect(harness.statuses).toContain("crashed");
   });
 });

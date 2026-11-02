@@ -10,7 +10,6 @@ import {
   type PoolHostDirectoryEntry,
 } from "./host-directory";
 import { isRemoteHostDirectoryEntry } from "./remote-fetcher";
-import { UNRELEASED_FEATURES_ENABLED } from "../unreleased-features";
 
 /**
  * Which peer serves each RPC method: the routing rule as code.
@@ -156,10 +155,7 @@ export function decideHostRpcDispatch(
       return { kind: "dispatch", entry: plan.pool ?? target };
     case "selected-host":
       // The selected-host rule exists so that a sandbox or the pool never
-      // serves an input device; a build without them (`unreleased-features.ts`)
-      // sends the request to its target, as the release before them did.
-      if (!UNRELEASED_FEATURES_ENABLED)
-        return { kind: "dispatch", entry: target };
+      // serves an input device.
       if (selectedHost === null || !servesInputDevices(selectedHost)) {
         return {
           kind: "refuse",
@@ -348,6 +344,10 @@ export const HOST_UNARY_RPC_ROUTES = {
   "bot.task.setPaused": "target-host",
   "bot.task.stop": "target-host",
   "bot.thread.list": "target-host",
+  "bot.threadFollow.read": "target-host",
+  "bot.threadFollow.set": "target-host",
+  "bot.readCursor.read": "target-host",
+  "bot.readCursor.advance": "target-host",
   "bot.turn.locate": "target-host",
   "bot.updateDirective": "target-host",
   "bot.updateReplyMode": "target-host",

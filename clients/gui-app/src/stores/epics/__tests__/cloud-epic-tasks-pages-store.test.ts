@@ -174,7 +174,7 @@ describe("useCloudEpicTasksPagesStore", () => {
     // that has never appended a page or been reset before: it must register
     // the identity before capturing the generation it hands to the request,
     // or a reset landing during this exact window has nothing to advance.
-    // This is the precise gap the review reproduced as
+    // This is the precise gap reproduced as
     // `{"captured":0,"afterReset":0,"accepted":1}`.
     registerCloudEpicTasksPageIdentity(identity);
     const capturedGeneration = cloudEpicTasksPageGeneration(identity);

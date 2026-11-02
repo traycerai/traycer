@@ -3,7 +3,7 @@
  * (`root-dnd-provider.tsx`). Before the fix, the four end-of-drag cleanup
  * lines - `dragEnded()` included - sat AFTER the `commitSidebarReparentDrop`
  * call with no try/catch: a throw out of the commit (the doc-only
- * terminal-agent -> record-backed-chat pairing this ticket fixes, or any
+ * terminal-agent -> record-backed-chat pairing this change fixes, or any
  * future one) skipped every one of them and wedged the store mid-drag with
  * stale refs until the tree remounted.
  *

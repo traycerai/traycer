@@ -97,17 +97,6 @@ export function hostListReadiness(
   };
 }
 
-/**
- * Whether a FAILED sandbox list (`GET /api/sandboxes`) is hiding rows from the
- * pickers, which is a failed host list by another name.
- *
- * A picker fails closed on a sandbox whose control-plane row is unread
- * (`hostOptionPickerGroup`), so a first read that rejects leaves every sandbox
- * out while the directory and registry both look loaded. Counted as a failure
- * only while it hides something: before the first answer it is still loading,
- * a later failure keeps the last good rows, and an answer without a host's
- * row is the list saying it is not a sandbox to offer.
- */
 /** The sandbox list's outcome, plus whether its first read is in flight. */
 export interface SandboxListOutcome extends HostListOutcome {
   /** The first read is in flight: no answer yet, and one is coming. */
@@ -136,6 +125,17 @@ export function sandboxSummariesPending(
   );
 }
 
+/**
+ * Whether a FAILED sandbox list (`GET /api/sandboxes`) is hiding rows from the
+ * pickers, which is a failed host list by another name.
+ *
+ * A picker fails closed on a sandbox whose control-plane row is unread
+ * (`hostOptionPickerGroup`), so a first read that rejects leaves every sandbox
+ * out while the directory and registry both look loaded. Counted as a failure
+ * only while it hides something: before the first answer it is still loading,
+ * a later failure keeps the last good rows, and an answer without a host's
+ * row is the list saying it is not a sandbox to offer.
+ */
 export function sandboxSummariesUnread(
   hosts: readonly HostScopeOption[],
   sandboxList: HostListOutcome,

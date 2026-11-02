@@ -206,6 +206,7 @@ function catalogScope(tuiOnly: boolean): ComposerToolbarCatalogScope {
     hostId: TEST_HOST_ID,
     tuiOnly,
     chatLineCarriesAutoMode: null,
+    ultracodeCarried: false,
     stagedSurfaceKey: null,
     sendsToRestingSandbox: false,
   };
@@ -221,6 +222,7 @@ function seedDefault(
 
 function runSettings(harnessId: ProviderId, model: string): ChatRunSettings {
   return {
+    ultracode: false,
     harnessId,
     model,
     permissionMode: "supervised",
@@ -659,7 +661,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     expect(result.current.getState().values.permission).toBe("supervised");
   });
 
-  // FIX 2 (P1): the HOST's own negotiated line, which no catalog ROW can
+  // FIX 2: the HOST's own negotiated line, which no catalog ROW can
   // answer - a pre-`auto` host serves unconstrained rows like any other, so
   // without this a sticky `auto` survived the clamp on a machine whose
   // `chat.subscribe` line cannot carry the enum.
@@ -1119,7 +1121,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
       "delisted-old",
     );
 
-    // A commit that still carries the dead remembered slug (as Ticket 4's entry
+    // A commit that still carries the dead remembered slug (as the entry
     // points will, reading it from memory) is held: the substitute must not
     // reach the chat as its model.
     act(() => {
@@ -1158,7 +1160,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
   it("emits immediately for a non-empty unvalidated slug but reports it not catalog-confirmed until validated", async () => {
     // Under the "gate only the write" decision the surface emit is NOT held: a
     // held non-empty remembered slug still propagates to live-settings the moment
-    // it is edited. The `selectionCatalogConfirmed` flag - which Ticket 4's record
+    // it is edited. The `selectionCatalogConfirmed` flag - which the record
     // wrapper gates the MEMORY write on - is what stays false until the catalog
     // validates the slug, so an unvalidated slug reaches live-settings but is
     // never recorded.
@@ -1199,7 +1201,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     expect(onSettingsChange).toHaveBeenCalledWith(
       expect.objectContaining({ model: "remembered", reasoningEffort: "high" }),
     );
-    // ...but it is NOT catalog-confirmed yet, so the Ticket 4 write skips it.
+    // ...but it is NOT catalog-confirmed yet, so the record write skips it.
     expect(result.current.getState().pendingSettingsEmit).toBe(false);
 
     // The catalog loads WITH the remembered slug -> confirmed flips true (no
@@ -1438,6 +1440,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     expect(result.current.getState().selection.harnessId).toBe("codex");
 
     seeds.current = {
+      ultracode: false,
       harnessId: "claude",
       model: "haiku",
       permissionMode: "full_access",
@@ -1462,7 +1465,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     // Models a fork dialog's seed transitioning from a stale non-null
     // profileId (persisted seed) to null - exactly what
     // `resolveSeededProfileId` now produces once `providers.list` settles
-    // empty (round 1's fix). The production fix uses `useLayoutEffect`
+    // empty. The production fix uses `useLayoutEffect`
     // (not a passive `useEffect`) for the re-seed, since only a layout
     // effect is guaranteed by React to complete before the next paint - the
     // real-world window a submit-on-click could otherwise land in. NOTE:
@@ -1476,6 +1479,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     // effect/paint ordering guarantee, not on this test.
     const seeds: { current: ChatRunSettings } = {
       current: {
+        ultracode: false,
         harnessId: "claude",
         model: "opus",
         permissionMode: "supervised",
@@ -1713,6 +1717,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
         hostId: "host-b",
         tuiOnly: false,
         chatLineCarriesAutoMode: null,
+        ultracodeCarried: false,
         stagedSurfaceKey: null,
         sendsToRestingSandbox: false,
       }),
@@ -1736,6 +1741,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
         hostId: null,
         tuiOnly: false,
         chatLineCarriesAutoMode: null,
+        ultracodeCarried: false,
         stagedSurfaceKey: null,
         sendsToRestingSandbox: false,
       }),
@@ -1767,6 +1773,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
           hostId: props.hostId,
           tuiOnly: false,
           chatLineCarriesAutoMode: null,
+          ultracodeCarried: false,
           stagedSurfaceKey: null,
           sendsToRestingSandbox: false,
         }),
@@ -1796,6 +1803,7 @@ describe("useComposerToolbarStore on a sandbox host", () => {
       hostId,
       tuiOnly: false,
       chatLineCarriesAutoMode: null,
+      ultracodeCarried: false,
       stagedSurfaceKey: null,
       sendsToRestingSandbox: false,
     };

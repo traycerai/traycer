@@ -768,7 +768,7 @@ describe("useEpicCreateForClient seed hold", () => {
         userId: "user-1",
       });
 
-      // No toast at the moment of the error - the whole point of ticket 6.
+      // No toast at the moment of the error - the whole point.
       expect(toast).not.toHaveBeenCalled();
       expect(toast.error).not.toHaveBeenCalled();
       expect(pollMocks.pollEpicExistence).toHaveBeenCalledWith(

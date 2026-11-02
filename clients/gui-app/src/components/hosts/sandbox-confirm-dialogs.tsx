@@ -82,7 +82,7 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 
 /**
  * The confirmations Settings › Sandboxes asks before an action that
- * interrupts or ends work (Flow 6): Suspend, Stop, Destroy (typed name) and
+ * interrupts or ends work: Suspend, Stop, Destroy (typed name) and
  * Keep, each with the host's running-sessions count and its own outcome
  * sentences; and the two small editors over the patch, Rename and Idle
  * settings. Each dialog is self-contained: it reads what it says and runs its

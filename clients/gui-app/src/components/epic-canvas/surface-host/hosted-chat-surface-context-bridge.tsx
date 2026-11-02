@@ -23,6 +23,7 @@ import { TabBodySelectedContext } from "@/components/epic-canvas/canvas/tab-body
 import type { ReadyTileSurfaceEnvironment } from "@/components/epic-canvas/surface-host/tile-surface-environment-registry";
 import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
 import { PaneActivationFocusIntentContext } from "@/components/epic-canvas/pane-activation";
+import { MobileTileOpenTargetContext } from "@/lib/canvas/tile-open/mobile-tile-open-target-context";
 
 export function HostedChatSurfaceContextBridge(props: {
   readonly environment: ReadyTileSurfaceEnvironment;
@@ -69,7 +70,11 @@ export function HostedChatSurfaceContextBridge(props: {
                         <TabBodySelectedContext.Provider
                           value={environment.canvasActivity.tabSelected}
                         >
-                          <HostedChatSurfaceBody environment={environment} />
+                          <MobileTileOpenTargetContext
+                            value={environment.services.mobileOpenTarget}
+                          >
+                            <HostedChatSurfaceBody environment={environment} />
+                          </MobileTileOpenTargetContext>
                         </TabBodySelectedContext.Provider>
                       </PanePortalContainerContext.Provider>
                     </PaneFocusProbeContext.Provider>
@@ -92,7 +97,7 @@ export function HostedChatSurfaceContextBridge(props: {
  * `tile-surface-membership.ts`'s transaction-aware retention doc comment).
  * During that gap, `environment.placement.viewTabId` still names the SOURCE
  * tab, so looking the node up there returns `undefined` and unmounts the real
- * `renderTile()` subtree (finding 1). Scanning every open canvas by
+ * `renderTile()` subtree. Scanning every open canvas by
  * `instanceId` instead - not just the environment's last-published tab -
  * finds the tile immediately once the canvas write lands, regardless of
  * which tab currently owns it. Placement/providers deliberately stay on the

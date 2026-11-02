@@ -1,5 +1,8 @@
 import { useState, type ReactNode } from "react";
-import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
+import type {
+  ProviderCliState,
+  ProviderId,
+} from "@traycer/protocol/host/provider-schemas";
 import type { EnvironmentOs } from "@traycer/protocol/host/environment-schemas";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import {
@@ -45,7 +48,11 @@ import { EnvironmentProviderSkillsTab } from "./environment-skills";
 import { teamProviderStateWord } from "./team-provider-state-word";
 import { ConfigurationReadFailed } from "./team-read-failed";
 import { usePickedTeamLabel } from "./team-pick-label";
-import { providerEnvSubtitle } from "@/components/settings/panels/provider-env-subtitle";
+import {
+  providerEnvSubtitle,
+  providerEnvSubtitleUnknownScope,
+  providerNativeConfigOnlyEnvSubtitle,
+} from "@/components/settings/panels/provider-env-subtitle";
 import {
   useConfigurationIsPersonal,
   useConfigurationSource,
@@ -103,6 +110,10 @@ export function TeamProviders(): ReactNode {
       ...(packId === null ? [] : [packId]),
     ]),
   ];
+  const envSubtitleScope = providerEnvSubtitleScope(
+    catalog.data?.providers,
+    providerId,
+  );
   return (
     <SettingsPanelShell
       title="Providers"
@@ -216,7 +227,7 @@ export function TeamProviders(): ReactNode {
                   className="text-ui-xs text-muted-foreground"
                   data-testid="team-provider-env-subtitle"
                 >
-                  {providerEnvSubtitle(
+                  {providerEnvSubtitleFor(envSubtitleScope)(
                     providerDisplayName(providerId),
                     personal
                       ? { kind: "personal" }
@@ -266,6 +277,40 @@ export function TeamProviders(): ReactNode {
       )}
     </SettingsPanelShell>
   );
+}
+
+type EnvSubtitleScope = "config-only" | "normal" | "unknown";
+
+/**
+ * Whether the selected provider's Env override reaches its conversations,
+ * per its row in the team's own `providers.list` catalog read - "unknown"
+ * without a row to read (the catalog hasn't resolved, or there is no
+ * reachable viewing host to read it from at all), never a guess either way.
+ */
+function providerEnvSubtitleScope(
+  providers: readonly ProviderCliState[] | undefined,
+  providerId: ProviderId,
+): EnvSubtitleScope {
+  const row = providers?.find((provider) => provider.providerId === providerId);
+  if (row === undefined) return "unknown";
+  return row.nativeCapabilities.envOverrideScope === "native-config-only"
+    ? "config-only"
+    : "normal";
+}
+
+/** `providerEnvSubtitle`, or one of its siblings for a confirmed
+ *  native-config-only provider or an unconfirmed scope. */
+function providerEnvSubtitleFor(
+  scope: EnvSubtitleScope,
+): typeof providerEnvSubtitle {
+  switch (scope) {
+    case "config-only":
+      return providerNativeConfigOnlyEnvSubtitle;
+    case "unknown":
+      return providerEnvSubtitleUnknownScope;
+    case "normal":
+      return providerEnvSubtitle;
+  }
 }
 
 function providerState(

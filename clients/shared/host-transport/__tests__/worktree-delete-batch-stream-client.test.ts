@@ -18,6 +18,8 @@ import type {
 } from "../ws-stream-factory";
 import { WorktreeDeleteBatchStreamClient } from "../worktree-delete-batch-stream-client";
 import { WsStreamClient } from "../ws-stream-client";
+import { FakeStreamClient } from "../__testing__/fake-stream-client";
+import type { StreamContinuity } from "../i-stream-session";
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
 import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
 
@@ -274,7 +276,12 @@ describe("WorktreeDeleteBatchStreamClient replay safety", () => {
     sockets[1].fireText(reason);
 
     expect(onUnsupported).not.toHaveBeenCalled();
-    expect(onConnectionStatus).toHaveBeenLastCalledWith("closed", reason);
+    expect(onConnectionStatus).toHaveBeenLastCalledWith(
+      "closed",
+      reason,
+      null,
+      null,
+    );
     batch.close();
   });
 
@@ -369,7 +376,12 @@ describe("WorktreeDeleteBatchStreamClient replay safety", () => {
     sockets[0].fireText(reason);
 
     expect(onUnsupported).not.toHaveBeenCalled();
-    expect(onConnectionStatus).toHaveBeenLastCalledWith("closed", reason);
+    expect(onConnectionStatus).toHaveBeenLastCalledWith(
+      "closed",
+      reason,
+      null,
+      null,
+    );
     batch.close();
   });
 
@@ -748,6 +760,71 @@ describe("WorktreeDeleteBatchStreamClient error tail", () => {
         { holders: undefined, code: undefined, errorTail: undefined },
       ],
     ]);
+    batch.close();
+  });
+});
+
+describe("WorktreeDeleteBatchStreamClient held continuity", () => {
+  function startReached(): {
+    readonly fake: FakeStreamClient;
+    readonly batch: WorktreeDeleteBatchStreamClient;
+    readonly statuses: Array<{
+      readonly status: string;
+      readonly continuity: StreamContinuity;
+    }>;
+  } {
+    const fake = new FakeStreamClient(true);
+    const statuses: Array<{
+      readonly status: string;
+      readonly continuity: StreamContinuity;
+    }> = [];
+    const batch = new WorktreeDeleteBatchStreamClient({
+      wsStreamClient: fake,
+      commandId: COMMAND_ID,
+      source: "settings",
+      targets: [{ worktreePath: "/wt/a", scripts: null, stopOwners: false }],
+      callbacks: {
+        ...NOOP_CALLBACKS,
+        onConnectionStatus: (status, _reason, _retryCause, continuity) => {
+          statuses.push({ status, continuity });
+        },
+      },
+    });
+    return { fake, batch, statuses };
+  }
+
+  it("keeps the start session while the host holds it, and reports the held and continued transitions", () => {
+    const { fake, batch, statuses } = startReached();
+    const session = fake.sessions[0];
+
+    session.emitContinuityStatus("reconnecting", "held");
+    session.emitContinuityStatus("open", "continued");
+
+    expect(fake.subscribes).toHaveLength(1);
+    expect(session.closed).toBe(false);
+    expect(statuses.slice(-2)).toEqual([
+      { status: "reconnecting", continuity: "held" },
+      { status: "open", continuity: "continued" },
+    ]);
+    batch.close();
+  });
+
+  it("swaps to observe on a plain reconnect after reaching the host", () => {
+    const { fake, batch, statuses } = startReached();
+    const session = fake.sessions[0];
+
+    session.emitContinuityStatus("reconnecting", null);
+
+    expect(session.closed).toBe(true);
+    expect(fake.subscribes).toHaveLength(2);
+    expect(fake.subscribes[1]?.params).toEqual({
+      mode: "observe",
+      commandId: COMMAND_ID,
+    });
+    expect(statuses.at(-1)).toEqual({
+      status: "reconnecting",
+      continuity: null,
+    });
     batch.close();
   });
 });

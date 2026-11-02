@@ -19,7 +19,7 @@ export interface PruneSchedulerOptions {
    * `true` while a router load/navigation is in progress. The scheduler skips
    * pruning then (store mutations and the explicit replacement navigation often
    * land in the same user action, e.g. close-tab → navigate-next) and re-tries
-   * on the next frame once the load settles (tech plan §3.3).
+   * on the next frame once the load settles.
    */
   readonly isLoadInFlight: () => boolean;
   /** Schedules one sanitation pass even when no source store changes. */
@@ -32,7 +32,7 @@ export interface PruneSchedulerOptions {
  * hydrated and the router has mounted, wiring `getController`,
  * `subscribeStores`, and `isLoadInFlight` to the live app.
  *
- * Behavior (tech plan §3.3):
+ * Behavior:
  * - **Coalesce**: a burst of store mutations schedules at most one pending
  *   prune (one animation frame, microtask fallback when rAF is unavailable).
  * - **Single-flight**: never re-enters a prune that is already running.

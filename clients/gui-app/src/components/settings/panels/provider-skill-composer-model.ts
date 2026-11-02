@@ -141,6 +141,74 @@ export interface SkillDestination {
 }
 
 /**
+ * Who a new skill reaches: the shared folder (a host that still writes it),
+ * this provider's own folder, or the environment.
+ */
+export type SkillAudience = "shared" | "provider" | "environment";
+
+/**
+ * The environment this host serves: the one whose views reach this host's
+ * harnesses, so the one a skill written here has to land in. `name` is
+ * "Personal" or the team's.
+ */
+export interface ServedSkillEnvironment {
+  readonly environmentId: string;
+  readonly name: string;
+  readonly team: boolean;
+}
+
+/**
+ * The audiences the composer offers, the default first.
+ *
+ * A host that runs environments takes no write to the shared folder; one that
+ * does not (an older build) has no environment to offer, and keeps the choice
+ * it always had. A host not yet known to be either offers only the provider's
+ * own folder, which both take. The environment holds skills for every workspace, so a project
+ * listing does not offer it.
+ */
+export function skillAudiences(args: {
+  readonly hostRunsEnvironments: boolean | null;
+  readonly environmentAvailable: boolean;
+  readonly canProviderScope: boolean;
+  readonly effectiveScope: ProviderNativeScope;
+}): readonly SkillAudience[] {
+  const provider: readonly SkillAudience[] = args.canProviderScope
+    ? ["provider"]
+    : [];
+  if (args.hostRunsEnvironments === false) return ["shared", ...provider];
+  return args.hostRunsEnvironments === true &&
+    args.environmentAvailable &&
+    args.effectiveScope === "global"
+    ? [...provider, "environment"]
+    : provider;
+}
+
+/**
+ * A skill directly in `~/.agents/skills` or `<workspace>/.agents/skills`. A
+ * folder under the served root the room has not captured also lists as shared,
+ * and is not one: it is Traycer's to edit.
+ */
+export function isSharedFolderSkill(skill: ProviderSkill): boolean {
+  return (
+    skill.source === "shared" &&
+    /[\\/]\.agents[\\/]skills[\\/][^\\/]+$/.test(skill.path)
+  );
+}
+
+export const HOST_NOT_KNOWN_REASON = "This host is still connecting.";
+
+/** Why a shared folder's skill offers no edit, update or remove. */
+export function sharedFolderReadOnlyReason(
+  environmentName: string | null,
+): string {
+  const manage =
+    "Traycer reads this folder and doesn't change it. Manage this skill with whatever put it there";
+  return environmentName === null
+    ? `${manage}.`
+    : `${manage}, or add it to ${environmentName}.`;
+}
+
+/**
  * Where a create/import will land, for the audience the user picked.
  *
  * The shared root is fixed by the Agent Skills standard, so it is derived
@@ -150,12 +218,16 @@ export interface SkillDestination {
  * that root, and falls back to prose when the list has none yet.
  */
 export function skillDestination(args: {
-  readonly providerScoped: boolean;
+  readonly audience: SkillAudience;
   readonly providerLabel: string;
   readonly providerRoot: string | null;
+  readonly environmentName: string | null;
 }): SkillDestination {
-  if (!args.providerScoped) {
+  if (args.audience === "shared") {
     return { display: `~/${SHARED_SKILLS_RELATIVE}`, exact: true };
+  }
+  if (args.audience === "environment" && args.environmentName !== null) {
+    return { display: args.environmentName, exact: false };
   }
   if (args.providerRoot === null) {
     return {

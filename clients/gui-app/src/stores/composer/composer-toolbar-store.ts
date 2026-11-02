@@ -10,6 +10,7 @@ import { getNegotiatedHostMethodVersion } from "@traycer-clients/shared/host-tra
 import {
   findDefaultModel,
   findSelectedModel,
+  modelDisplayLabel,
   autoModeOfferableHere,
   normalizePermissionMode,
   normalizeReasoningForModel,
@@ -58,6 +59,7 @@ export interface ComposerToolbarValues {
   readonly selection: HarnessModelSelection;
   readonly reasoning: ReasoningLevel;
   readonly serviceTier: ServiceTier;
+  readonly ultracode: boolean;
 }
 
 export interface ComposerToolbarCatalog {
@@ -83,6 +85,8 @@ export interface ComposerToolbarCatalog {
    * `autoModeOfferableHere`.
    */
   readonly chatLineCarriesAutoMode: boolean | null;
+  /** The owning surface's negotiated stream or create line carries the request. */
+  readonly ultracodeCarried: boolean;
   /** `undefined` while the harness list is loading / the surface is inactive. */
   readonly harnesses: ReadonlyArray<HarnessOption> | undefined;
   /**
@@ -119,7 +123,8 @@ export interface ComposerToolbarCatalog {
    * the model the person chose with one they did not; the surface holds the
    * send until the install is done (the pack gate) and refuses a harness that
    * cannot run there (`useSandboxAgentGate`). Only the terminal surface's
-   * capability rule still applies.
+   * capability rule still applies. A stage arriving keeps the pick shown at
+   * that moment, a reroute or a healed model included (`shownPickValues`).
    */
   readonly keepsUnavailablePick: boolean;
 }
@@ -136,6 +141,8 @@ interface ComposerToolbarDerived {
   readonly permission: PermissionMode;
   readonly reasoning: ReasoningLevel;
   readonly serviceTier: ServiceTier;
+  /** Saved chat intent, independent of model eligibility. */
+  readonly ultracode: boolean;
   /** Permission modes the selected harness honors; `null` while the catalog
    *  is loading or the harness is unknown (picker keeps every option enabled). */
   readonly supportedPermissionModes: ReadonlyArray<PermissionMode> | null;
@@ -186,6 +193,25 @@ export interface ComposerToolbarState extends ComposerToolbarDerived {
    * resting one is never described as an offline host.
    */
   readonly sandboxRunTarget: "staged" | "resting" | null;
+  /**
+   * Where a stage's kept pick (`shownPickValues`) is written: the surface's
+   * own draft, so a reload that shows the draft shows that pick. `null` on a
+   * surface with no draft. Never the per-host settings `onSettingsChange`
+   * writes.
+   */
+  readonly onShownPickKept: ((settings: ChatRunSettings) => void) | null;
+  /**
+   * Whether the last catalog push derived under a stage's model hold. A stage
+   * can come or go with no change to the catalog, on a sandbox host.
+   */
+  readonly modelHeld: boolean;
+  /** The stage in place is a pick, not a draft's returned sandbox restored. */
+  readonly stageKeepsShownPick: boolean;
+  /**
+   * A kept pick still owed to `onShownPickKept`, waiting for its model to
+   * resolve so `model: ""` never reaches a draft.
+   */
+  readonly keptPickUnwritten: boolean;
 }
 
 /**
@@ -210,6 +236,7 @@ export interface ComposerToolbarActions {
   readonly applyComposerSelection: (input: ApplyComposerSelectionInput) => void;
   readonly setReasoning: (next: ReasoningLevel) => void;
   readonly setServiceTier: (next: ServiceTier) => void;
+  readonly setUltracode: (next: boolean) => void;
   /**
    * Replace the raw values when the seed identity changes (draft swap,
    * settings restored from persistence). No-op when `seedKey` matches the
@@ -263,6 +290,7 @@ export interface CreateComposerToolbarStoreInput {
   readonly tuiOnly: boolean;
   /** Seeds `catalog.chatLineCarriesAutoMode`; kept in sync via `setCatalog`. */
   readonly chatLineCarriesAutoMode: boolean | null;
+  readonly ultracodeCarried: boolean;
   /** Seeds `catalog.hostId`; kept in sync at runtime via `setCatalog`. */
   readonly hostId: string | null;
   /**
@@ -299,10 +327,16 @@ export function createComposerToolbarStore(
   const policy: ToolbarSurfacePolicy = {
     purpose,
     reasoningFallback: input.reasoningFallback,
+    staged: false,
   };
+  const policyFor = (state: ComposerToolbarState): ToolbarSurfacePolicy => ({
+    ...policy,
+    staged: state.sandboxRunTarget === "staged",
+  });
   const initialCatalog: ComposerToolbarCatalog = {
     hostId: input.hostId,
     chatLineCarriesAutoMode: input.chatLineCarriesAutoMode,
+    ultracodeCarried: input.ultracodeCarried,
     harnesses: undefined,
     modelsHarnessId: input.values.selection.harnessId,
     models: EMPTY_MODELS,
@@ -315,7 +349,12 @@ export function createComposerToolbarStore(
     const update = (patch: Partial<ComposerToolbarValues>): void => {
       const state = get();
       const values = { ...state.values, ...patch };
-      const derived = deriveToolbarState(values, state.catalog, state, policy);
+      const derived = deriveToolbarState(
+        values,
+        state.catalog,
+        state,
+        policyFor(state),
+      );
       const settings = settingsFromDerived(derived);
       // Never persist a surface-rerouted harness. When the derived harness
       // differs from the user's raw choice it was clamped by the surface
@@ -357,6 +396,10 @@ export function createComposerToolbarStore(
       onSettingsChange: input.onSettingsChange,
       pendingSettingsEmit: false,
       sandboxRunTarget: null,
+      onShownPickKept: null,
+      modelHeld: false,
+      stageKeepsShownPick: false,
+      keptPickUnwritten: false,
 
       setPermission: (next) => {
         update({ permission: next });
@@ -368,7 +411,10 @@ export function createComposerToolbarStore(
       // the track); `setSelection` is the low-level setter for tests / internal
       // same-harness model edits only.
       setSelection: (next) => {
-        update({ selection: next });
+        update({
+          selection: next,
+          ultracode: next.harnessId === "claude" && get().values.ultracode,
+        });
       },
       // The combined commit path used by every memory-aware entry point. A
       // single `update()` with all three values patched emits at most once - a
@@ -410,6 +456,7 @@ export function createComposerToolbarStore(
           selection,
           reasoning: purpose === "setting" ? settingReasoning : reasoning,
           serviceTier,
+          ultracode: selection.harnessId === "claude" && previous.ultracode,
         });
       },
       setReasoning: (next) => {
@@ -417,6 +464,11 @@ export function createComposerToolbarStore(
       },
       setServiceTier: (next) => {
         update({ serviceTier: next });
+      },
+      setUltracode: (next) => {
+        update({
+          ultracode: get().values.selection.harnessId === "claude" && next,
+        });
       },
 
       applySeed: (seedKey, values) => {
@@ -426,7 +478,7 @@ export function createComposerToolbarStore(
           values,
           state.catalog,
           state,
-          policy,
+          policyFor(state),
         );
         set({
           seedKey,
@@ -434,32 +486,56 @@ export function createComposerToolbarStore(
           ...derived,
           // A new seed supersedes any edit queued under the previous one.
           pendingSettingsEmit: false,
+          keptPickUnwritten: false,
         });
       },
 
       setCatalog: (catalog) => {
         const state = get();
-        if (sameCatalog(state.catalog, catalog)) return;
-        const derived = deriveToolbarState(
+        const { staged } = policyFor(state);
+        if (settledOn(state, catalog, staged)) return;
+        const keptDerived = deriveToolbarState(
           state.values,
           catalog,
           state,
-          policy,
+          policyFor(state),
         );
-        // The emit decision lives in one named, testable place. A catalog push
-        // never touches `values`: the raw sticky selection is the user's.
-        const emit = decideCatalogTransition(state, derived);
+        // A catalog push touches `values` only to keep the pick on screen
+        // when a stage starts keeping picks (`shownPickValues`).
+        const kept = shownPickValues(state, catalog, keptDerived);
+        const values = kept ?? state.values;
+        const derived =
+          kept === null
+            ? keptDerived
+            : deriveToolbarState(kept, catalog, state, policyFor(state));
+        // The emit decision lives in one named, testable place. A kept pick
+        // takes any deferred edit with it to the draft: its emit would carry
+        // the kept pick to the host's settings too.
+        const emit = kept === null && decideCatalogTransition(state, derived);
+        // Owed only while a stage keeps it: once one leaves, this host presents
+        // the pick again and nothing here is the person's to write.
+        const keptPickOwed =
+          kept !== null ||
+          (state.keptPickUnwritten && catalog.keepsUnavailablePick);
+        const keptSettings = keptPickOwed
+          ? keptPickSettings(values, derived)
+          : null;
         set({
           catalog,
+          values,
+          modelHeld: staged,
           ...derived,
           // Only an emit clears the deferred flag; a silent push leaves it as-is.
-          pendingSettingsEmit: emit ? false : state.pendingSettingsEmit,
+          pendingSettingsEmit:
+            emit || kept !== null ? false : state.pendingSettingsEmit,
+          keptPickUnwritten: keptPickOwed && keptSettings === null,
         });
         if (emit) {
           const settings = settingsFromDerived(derived);
           state.onSettingsChange?.(settings);
           state.onUserSettingsChange?.(settings);
         }
+        if (keptSettings !== null) state.onShownPickKept?.(keptSettings);
       },
 
       setOnSettingsChange: (onSettingsChange) => {
@@ -468,6 +544,13 @@ export function createComposerToolbarStore(
       },
     };
   });
+}
+
+/** The model's name as the toolbar's chip shows it. */
+export function chipModelName(state: ComposerToolbarState): string {
+  return state.selectedModel === null
+    ? state.selection.modelSlug
+    : modelDisplayLabel(state.selectedModel);
 }
 
 export function settingsFromDerived(
@@ -481,6 +564,7 @@ export function settingsFromDerived(
     // site shared with the picker display); the codex-adapter still re-filters
     // on the wire as defense-in-depth.
     serviceTier: derived.serviceTier,
+    ultracode: derived.ultracode,
   });
 }
 
@@ -488,6 +572,12 @@ export function settingsFromDerived(
 interface ToolbarSurfacePolicy {
   readonly purpose: ComposerToolbarPurpose;
   readonly reasoningFallback: ReasoningFallback;
+  /**
+   * A sandbox is staged, so the pick's model is held as it is, name included,
+   * whatever this catalog lists. No catalog moves the chip off it; a model the
+   * sandbox does not run is refused at Send.
+   */
+  readonly staged: boolean;
 }
 
 function deriveToolbarState(
@@ -496,7 +586,7 @@ function deriveToolbarState(
   previous: ComposerToolbarDerived | null,
   policy: ToolbarSurfacePolicy,
 ): ComposerToolbarDerived {
-  const { purpose, reasoningFallback } = policy;
+  const { purpose, reasoningFallback, staged } = policy;
   const availabilitySelection = presentedHarnessSelection(
     values.selection,
     catalog,
@@ -517,7 +607,7 @@ function deriveToolbarState(
     availabilitySelection,
     models,
     catalogLoadedForHarness,
-    purpose,
+    policy,
   );
   const selection: HarnessModelSelection =
     resolvedSlug === availabilitySelection.modelSlug
@@ -534,7 +624,7 @@ function deriveToolbarState(
       models,
       catalogLoadedForHarness,
     );
-  const selectedModel = findSelectedModel(models, selection);
+  const selectedModel = presentedModel(models, selection, previous, staged);
   // Harness-level capabilities (currently just supportedPermissionModes) come
   // from `listGuiHarnesses`. `null` covers both "catalog still loading" and
   // "selected harness id isn't in it"; `normalizePermissionMode`
@@ -577,6 +667,7 @@ function deriveToolbarState(
   const derived: ComposerToolbarDerived = {
     selection,
     selectedModel,
+    ultracode: selection.harnessId === "claude" && values.ultracode,
     permission: normalizePermissionMode(
       values.permission,
       supportedPermissionModes,
@@ -654,6 +745,83 @@ function classifyResolvedSlug(
 }
 
 /**
+ * The values that keep the pick on screen when a sandbox is staged on this
+ * composer's host, or `null` to keep `values` as they are. That host shows a
+ * reroute or a healed model when it cannot run the raw pick, and the stage
+ * would put a pick the person never saw on the toolbar. The pick shown is the
+ * person's, so it becomes the raw one: a stage that does not offer it refuses
+ * it at Send.
+ *
+ * Only a stage the person picked: a restored stage returns its draft's own
+ * pick, a resting chat keeps its own, and a sandbox host's reroute is an
+ * install still running, which keeping exists to ride out. Written to this
+ * store and the surface's draft (`onShownPickKept`), never emitted: the
+ * surface's emit also writes per-host last-used settings and harness memory,
+ * which are not this composer's to move.
+ */
+function shownPickValues(
+  state: ComposerToolbarState,
+  catalog: ComposerToolbarCatalog,
+  kept: ComposerToolbarDerived,
+): ComposerToolbarValues | null {
+  const shown = state.selection;
+  if (
+    !state.stageKeepsShownPick ||
+    state.modelHeld ||
+    catalog.hostId !== state.catalog.hostId ||
+    sameShownPick(shown, state.values.selection) ||
+    sameShownPick(shown, kept.selection)
+  )
+    return null;
+  return {
+    ...state.values,
+    selection: shown,
+    reasoning: state.reasoning,
+    serviceTier: state.serviceTier,
+  };
+}
+
+/**
+ * The settings a kept pick writes to the draft: the pick itself, never a
+ * catalog's heal of it, with a model it had none for once that resolves. `null`
+ * until there is a model to write, or while another harness is presented.
+ */
+function keptPickSettings(
+  values: ComposerToolbarValues,
+  derived: ComposerToolbarDerived,
+): ChatRunSettings | null {
+  if (derived.selection.harnessId !== values.selection.harnessId) return null;
+  const selection =
+    values.selection.modelSlug.length > 0
+      ? values.selection
+      : derived.selection;
+  return selection.modelSlug.length > 0
+    ? settingsFromDerived({ ...derived, selection })
+    : null;
+}
+
+/** The model listed for `selection`, or the one a stage holds it on. */
+function presentedModel(
+  models: ReadonlyArray<ModelOption>,
+  selection: HarnessModelSelection,
+  previous: ComposerToolbarDerived | null,
+  staged: boolean,
+): ModelOption | null {
+  const listed = findSelectedModel(models, selection);
+  if (listed !== null || !staged || previous === null) return listed;
+  return sameShownPick(previous.selection, selection)
+    ? previous.selectedModel
+    : null;
+}
+
+function sameShownPick(
+  a: HarnessModelSelection,
+  b: HarnessModelSelection,
+): boolean {
+  return a.harnessId === b.harnessId && a.modelSlug === b.modelSlug;
+}
+
+/**
  * Decide, on a fresh catalog push, whether the resolved settings should EMIT to
  * the surface. Only a DEFERRED user edit ever emits from here: a catalog load
  * on its own never changes the chat's settings.
@@ -685,6 +853,15 @@ function decideCatalogTransition(
   );
 }
 
+/** Nothing a push derives from has moved since the last one. */
+function settledOn(
+  state: ComposerToolbarState,
+  catalog: ComposerToolbarCatalog,
+  staged: boolean,
+): boolean {
+  return state.modelHeld === staged && sameCatalog(state.catalog, catalog);
+}
+
 function sameCatalog(
   a: ComposerToolbarCatalog,
   b: ComposerToolbarCatalog,
@@ -693,6 +870,7 @@ function sameCatalog(
     // A host switch with an otherwise-identical (cached) catalog must still
     // land: `hostId` keys the memory reads/writes downstream of this store.
     a.hostId === b.hostId &&
+    a.ultracodeCarried === b.ultracodeCarried &&
     a.harnesses === b.harnesses &&
     a.modelsHarnessId === b.modelsHarnessId &&
     a.models === b.models &&
@@ -723,7 +901,7 @@ function sameCatalog(
 // runs, and is exactly what the user asked for - and so would suppress every
 // downstream memory write for it. Coverage and write-permission are different
 // questions; `resolveModelSlug` answers the second.
-function modelCoveredByCatalog(
+export function modelCoveredByCatalog(
   models: ReadonlyArray<ModelOption>,
   harnessId: ProviderId,
   modelSlug: string,
@@ -789,9 +967,12 @@ function presentedModelSlug(
   selection: HarnessModelSelection,
   models: ReadonlyArray<ModelOption>,
   catalogLoadedForHarness: boolean,
-  purpose: ComposerToolbarPurpose,
+  policy: ToolbarSurfacePolicy,
 ): string {
-  if (purpose === "setting" && selection.modelSlug.length > 0) {
+  if (
+    (policy.purpose === "setting" || policy.staged) &&
+    selection.modelSlug.length > 0
+  ) {
     return selection.modelSlug;
   }
   return resolveModelSlug(

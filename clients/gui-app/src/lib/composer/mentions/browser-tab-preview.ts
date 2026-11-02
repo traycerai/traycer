@@ -1,5 +1,5 @@
 /**
- * Cross-host browser-tab picks (spec decision #10).
+ * Cross-host browser-tab picks.
  *
  * A tab living on another host can never be driven from this chat - browser
  * sessions are host-local for life - so picking one attaches CONTEXT instead

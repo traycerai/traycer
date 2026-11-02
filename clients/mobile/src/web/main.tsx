@@ -50,6 +50,7 @@ import { MobileLinkCodeScanner } from "../link-code-scanner";
 import { MobileLinkLoginDeepLinks } from "../link-login-deep-links";
 import { MobileStatusBarTap } from "../status-bar-tap";
 import { MobileSystemBack } from "../system-back";
+import { MobileVoiceAudio, VoiceAudio } from "../voice-audio";
 import {
   MobilePushRegistration,
   pushRegistrationTarget,
@@ -109,6 +110,20 @@ function buildOpenPushSettings(): (() => Promise<void>) | null {
     };
   }
   return null;
+}
+
+/**
+ * This app's own page in the OS Settings app, where its Microphone switch
+ * lives on both platforms: the one place a remembered refusal is repaired.
+ */
+async function openAppSettings(): Promise<void> {
+  if (Capacitor.getPlatform() === "android") {
+    await NativeSettings.openAndroid({
+      option: AndroidSettings.ApplicationDetails,
+    });
+    return;
+  }
+  await NativeSettings.openIOS({ option: IOSSettings.App });
 }
 
 const config = __TRAYCER_MOBILE_CONFIG__;
@@ -334,6 +349,11 @@ async function mount(input: {
     // to in a tab.
     fileSave: Capacitor.isNativePlatform()
       ? new MobileFileSave(directDownloads)
+      : null,
+    // Native-only: the browser entry has no OS permission to read and no
+    // settings page to open, and `getUserMedia` raises the browser's prompt.
+    voiceAudio: Capacitor.isNativePlatform()
+      ? new MobileVoiceAudio(VoiceAudio, openAppSettings)
       : null,
     // The one place this difference is allowed to be named. WKWebView honours
     // an image clipboard write; Android's WebView RESOLVES it having written

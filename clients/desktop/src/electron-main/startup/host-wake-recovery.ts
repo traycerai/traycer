@@ -12,6 +12,7 @@ export interface HostWakeRecoveryTarget {
 export interface PowerMonitorWakeHandlers {
   readonly onSuspend: () => void;
   readonly onResume: () => void;
+  readonly onLockScreen: () => void;
   readonly onUnlockScreen: () => void;
 }
 
@@ -25,20 +26,27 @@ export type PowerMonitorWakeInstaller = (
  * fan-out), and on screen-unlock it fires `onWake` again (the user-visible
  * moment when lock-on-sleep was in play). Folding the renderer notification in
  * here avoids a second `installPowerMonitorListeners` call that would
- * double-register every power event.
+ * double-register every power event. `onLeave` is the opposite edge, fired on
+ * suspend and on screen lock: the person is leaving the machine, so a live
+ * voice session's microphone must close.
  */
 export function installHostWakeRecovery(
   host: HostWakeRecoveryTarget,
   install: PowerMonitorWakeInstaller,
   onWake: () => void,
+  onLeave: () => void,
 ): void {
   install({
-    onSuspend: () => log.info("[desktop] pausing on system suspend"),
+    onSuspend: () => {
+      log.info("[desktop] pausing on system suspend");
+      onLeave();
+    },
     onResume: () => {
       log.info("[desktop] resuming after system wake");
       onWake();
       void refreshHostAfterWake(host);
     },
+    onLockScreen: () => onLeave(),
     onUnlockScreen: () => onWake(),
   });
 }

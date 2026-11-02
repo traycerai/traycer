@@ -991,7 +991,7 @@ describe("buildSetupCardRows against the host's whole-log partition", () => {
   });
 
   it("still anchors a cold-opening tail that precedes closedAt", () => {
-    // The other direction on the same field - round six's finding must stay
+    // The other direction on the same field - this must stay
     // fixed. This event falls INSIDE the closed window's span.
     const rows = buildSetupCardRows(
       [setupEvent("setup.running", { workspacePath: "/repo" }, 2_000)],

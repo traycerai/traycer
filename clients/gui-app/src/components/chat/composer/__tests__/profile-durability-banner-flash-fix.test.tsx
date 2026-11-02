@@ -222,6 +222,7 @@ function claudeState(profiles: ProviderProfile[]): ProviderCliState {
 }
 
 const STALE_FALLBACK_SETTINGS: ChatRunSettings = {
+  ultracode: false,
   harnessId: "claude",
   model: "sonnet-4.5",
   permissionMode: "supervised",
@@ -262,6 +263,7 @@ function ChatComposerLikeHarness(props: {
     hostId: "tab-host",
     tuiOnly: false,
     chatLineCarriesAutoMode: null,
+    ultracodeCarried: false,
     stagedSurfaceKey: null,
     sendsToRestingSandbox: false,
   });

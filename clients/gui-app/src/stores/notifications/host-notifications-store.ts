@@ -500,8 +500,8 @@ export interface HostNotificationsCloudLane {
 
 export function openHostNotificationsStream(
   /**
-   * THE reconnect policy for this stream's host (redesign P4.1 /
-   * connection-registry §6), acquired from the connection registry by the one
+   * THE reconnect policy for this stream's host (redesign P4.1),
+   * acquired from the connection registry by the one
    * place that opens these streams. This store no longer constructs its own
    * scheduler: the constants, the terminal-close classification and the
    * backoff shape live once, in the engine, and each stream still gets its
@@ -713,17 +713,26 @@ export function openHostNotificationsStream(
           return;
       }
     });
-    session.onStatusChange((status, reason) => {
+    session.onStatusChange((status, reason, _retryCause, continuity) => {
       if (currentSession !== session) return;
-      useHostNotificationsStore.getState().setConnectionStatus(status);
+      if (continuity === "held") {
+        useHostNotificationsStore.setState({ connectionStatus: status });
+      } else {
+        useHostNotificationsStore.getState().setConnectionStatus(status);
+      }
       if (status === "open") {
         streamOpen = true;
-        lastSentPresenceKey = null;
-        options.onStreamOpened();
+        if (continuity !== "continued") {
+          lastSentPresenceKey = null;
+          options.onStreamOpened();
+        }
         // `forceNotify`: `onStreamOpened` just reset the consumer's active
         // entity, so the focused entity must be re-consumed even though its
         // content key is unchanged.
-        emitPresence({ forceSend: true, forceNotify: true });
+        emitPresence({
+          forceSend: true,
+          forceNotify: continuity !== "continued",
+        });
         emitCloudLanePresence(true);
       } else {
         streamOpen = false;

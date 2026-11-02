@@ -9,7 +9,7 @@ export function creditUsageSeverity(
   return usedPercent > 85 ? "limited" : "healthy";
 }
 
-/** Tailwind fill color for a severity tier, matching the Core Flows wireframe's bar colors. */
+/** Tailwind fill color for a severity tier's bar. */
 export function rateLimitWindowSeverityBarClassName(
   severity: RateLimitWindowSeverity,
 ): string {

@@ -10,7 +10,6 @@ import {
 } from "@/hooks/bots/use-bot-task-action-mutations";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
-import { isRunningAutomation } from "@/lib/bots/bot-activity-model";
 import { formatAbsoluteDateTime } from "@/lib/relative-time";
 
 /**
@@ -30,7 +29,7 @@ export function BotTaskControls(props: {
 }): ReactNode {
   const { botId, hostId, task, boundHere, nameOf } = props;
   const { pause, runRequest } = task;
-  const running = isRunningAutomation(task);
+  const running = task.state === "tracking" && task.cadence.kind === "every";
   return (
     <>
       {pause === null ? null : (

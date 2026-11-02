@@ -311,7 +311,7 @@ describe("<TuiAgentTile /> fork split button", () => {
     expect(group.children).toHaveLength(2);
     expect(group.children[0].contains(fork)).toBe(true);
     expect(group.children[1]).toBe(more);
-    // `muted-outline`, not `outline`: ticket 04 split the border and the label
+    // `muted-outline`, not `outline`: a split separated the border and the label
     // colour into independent axes, and this group is the outline BOX with a
     // muted label. The joined-group contract above is what this test is for.
     expect(fork.getAttribute("data-variant")).toBe("muted-outline");

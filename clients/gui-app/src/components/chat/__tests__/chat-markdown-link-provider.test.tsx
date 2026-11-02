@@ -393,7 +393,7 @@ describe("ChatMarkdownLinkProvider", () => {
     );
 
     // Same epic: opens via the projection waiter, passing the PREVIEW opener
-    // (D3) and the active host as the fallback. No cross-epic navigation.
+    // and the active host as the fallback. No cross-epic navigation.
     await waitFor(() => {
       expect(
         mocks.openProjectedSidebarNodeInTabWhenAvailable,

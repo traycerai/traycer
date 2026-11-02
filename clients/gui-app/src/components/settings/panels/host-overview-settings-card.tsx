@@ -14,7 +14,7 @@ import { useMoveSheetStore } from "@/stores/settings/move-sheet-store";
 /**
  * The Overview's settings card: whether this computer's settings are its
  * own, moving, or moved, and the lines other tickets draw from their own
- * files: P5's dated lines (`OverviewCardDatedLines`) and P3's `Details`
+ * files: the dated lines (`OverviewCardDatedLines`) and the `Details` line
  * (`OverviewCardDetailsLine`). Drawn above the Overview's tabs, so it reads
  * on whichever tab is showing (`HostOverviewSettingsCardSlot`).
  */

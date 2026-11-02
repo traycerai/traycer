@@ -5,12 +5,15 @@ import {
 } from "@/components/chat/segments/agent-failure-presentation";
 
 describe("presentationForUntypedCode", () => {
-  it("presents CLAUDE_RUNTIME_DISPOSED as an interruption headlined Session ended", () => {
-    expect(presentationForUntypedCode("CLAUDE_RUNTIME_DISPOSED")).toEqual({
-      presentation: "interrupted",
-      headline: "Session ended",
-    });
-  });
+  it.each(["CLAUDE_RUNTIME_DISPOSED", "HOST_SHUTDOWN"])(
+    "presents %s as an interruption headlined Session ended",
+    (code) => {
+      expect(presentationForUntypedCode(code)).toEqual({
+        presentation: "interrupted",
+        headline: "Session ended",
+      });
+    },
+  );
 
   it("presents the team-host codes as interruptions with their own headlines", () => {
     expect(presentationForUntypedCode("TEAM_MEMBER_REMOVED")).toEqual({

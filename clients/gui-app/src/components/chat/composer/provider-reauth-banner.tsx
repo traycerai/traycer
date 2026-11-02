@@ -74,7 +74,6 @@ import { CredentialRefusalNote } from "@/components/providers/credential-refusal
 import { useHostCredentialRefusal } from "@/hooks/host/use-host-credential-refusal";
 
 import { useEnvironmentStatusRead } from "@/hooks/environment/use-environment-reads";
-import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 import {
   deviceKeyCustodyLine,
   hostRunsPersonal,
@@ -148,7 +147,7 @@ interface ProviderReauthBannerProps {
 // A profile-specific block (missing/removed, or that profile's own auth is
 // signed out) has no provider-wide OAuth/token form to fall into - the
 // managed profile's config dir is what would need reconnecting, and that
-// flow already lives in Settings -> Providers (ticket 04/06), not duplicated
+// flow already lives in Settings -> Providers, not duplicated
 // here. This banner only offers the confirm-first ambient fallback plus a
 // link to the existing per-profile reconnect UI.
 function ProfileUnavailableBanner({
@@ -444,11 +443,10 @@ export function ProviderReauthBanner({
   // offered, because each one would send a credential to it.
   const credentialRefusal = useHostCredentialRefusal(tabHostId);
   // The configuration the tab's host runs, which the sentence names and which
-  // decides where a pasted key is stored. A build without environments
-  // (`unreleased-features.ts`) reads none: the key stays on the device.
+  // decides where a pasted key is stored.
   const principal =
-    useEnvironmentStatusRead(tabClient, tabHostId, UNRELEASED_FEATURES_ENABLED)
-      .data?.principal ?? null;
+    useEnvironmentStatusRead(tabClient, tabHostId, true).data?.principal ??
+    null;
 
   const tabEntry = useMemo(
     () =>
@@ -1057,9 +1055,6 @@ function PastedKeyCustody(props: {
   readonly keyCustody: KeyCustody;
 }): ReactNode {
   const { providerId, keyCustody } = props;
-  // No custody line in a build without environments (`unreleased-features.ts`):
-  // the banner had none before them.
-  if (!UNRELEASED_FEATURES_ENABLED) return null;
   if (providerKeyIsPersonalSecret(providerId, keyCustody.principal)) {
     return (
       <>

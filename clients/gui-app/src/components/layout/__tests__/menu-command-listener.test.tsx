@@ -434,8 +434,8 @@ describe("<MenuCommandListener />", () => {
     );
     expect(runnerHost.windows.requestNew).toHaveBeenCalledWith(null);
     // The "no menu command opens a host picker" half of this pin used to be an
-    // assertion on the shell-owned picker port. P1.2 deleted the port's last
-    // caller and P3.4 deleted the port itself, so the property is now
+    // assertion on the shell-owned picker port. Its last caller was deleted
+    // before the port itself, so the property is now
     // structural - there is no picker for a command to open, and a revival
     // would have to re-add the capability to `IRunnerHost` first.
   });
@@ -1108,7 +1108,7 @@ describe("<MenuCommandListener />", () => {
     const navigation = latestNavigation();
     expect(navigation.to).toBe("/epics/$epicId/$tabId");
     expect(navigation.params).toEqual({ epicId: "e-a", tabId });
-    // T10: closing the draft now routes through
+    // Closing the draft now routes through
     // `tabCommandCoordinator.closeRefAfterConfirmed`, which synchronously
     // promotes the epic tab to `activeItemId` as part of the close itself
     // (survivor-at-group-position). By the time the navigation controller

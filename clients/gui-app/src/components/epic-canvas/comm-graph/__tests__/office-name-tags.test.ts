@@ -182,7 +182,7 @@ describe("layoutNameTags on a cluster", () => {
  * THE OTHER HALF OF THE SAME COMPLAINT, and the half this module could not see
  * until the space was shared.
  *
- * The screenshot that opened round 2 has `#1158 — DEL…` - an agent's tag -
+ * The screenshot has `#1158 — DEL…` - an agent's tag -
  * printed a dozen pixels off `TRAYCER ISS…`, a board sign. Both were "correct"
  * by their own channel's rules, because neither channel had ever been told the
  * other one existed. A tag now places into a space the signage has already

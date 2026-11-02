@@ -34,8 +34,7 @@ const HOST_STORABLE_IMAGE_MIME_TYPES: ReadonlySet<string> = new Set([
  * The default every reader applies to a node with no `mimeType` attr, matching
  * `collectImageAtoms`. It has to be shared: if the collectors defaulted one way
  * and the rewrite the other, a node with no declared type would be withheld by
- * one and ignored by the other - withheld forever, which is the F2 shape again
- * through a different door.
+ * one and ignored by the other - withheld forever.
  */
 export const DEFAULT_IMAGE_MIME_TYPE = "image/png";
 

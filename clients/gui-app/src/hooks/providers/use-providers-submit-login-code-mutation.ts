@@ -18,7 +18,7 @@ type SubmitLoginCodeMutationResult = UseMutationResult<
 
 /**
  * Relays a pasted authorization code to an in-flight `providers.startLogin`
- * child's stdin (code-paste decision log's "Mechanism" row). No cache
+ * child's stdin. No cache
  * invalidation - the exchange outcome surfaces later via
  * `providers.awaitLogin`'s `codeRejected` flag, not this response.
  *

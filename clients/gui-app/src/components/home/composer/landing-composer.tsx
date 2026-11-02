@@ -1,3 +1,4 @@
+import { useUltracodeCarrierSupported } from "@/components/home/data/model-ultracode";
 import { captureComposerSubmitGeneration } from "@/lib/composer/composer-submit-generation";
 import { signedInUserId } from "@/lib/sandboxes/sandbox-account-fence";
 import {
@@ -54,9 +55,13 @@ import { isAttachmentIngestPending } from "@/hooks/composer/use-composer-paste";
 import { useLandingComposerMentionRoots } from "@/hooks/composer/use-workspace-mention-roots";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useComposerToolbarStore } from "@/components/home/hooks/use-composer-toolbar-store";
-import { catalogSettledFor } from "@/stores/composer/composer-toolbar-store";
+import {
+  catalogSettledFor,
+  chipModelName,
+} from "@/stores/composer/composer-toolbar-store";
 import { useProviderPackGateForClient } from "@/hooks/providers/use-provider-pack-gate";
 import { ComposerStagedSurfaceKeyProvider } from "@/components/composer/composer-staged-sandbox-context";
+import { useStageFallbackHostLine } from "@/hooks/sandboxes/use-stage-fallback-host-line";
 import { useSandboxAgentGate } from "@/hooks/sandboxes/use-sandbox-agent-gate";
 import { useStagedSendSignInCheck } from "@/hooks/sandboxes/use-staged-send-sign-in-check";
 import { stagedSandboxCheckingNotice } from "@/lib/sandboxes/sandbox-agent-refusal";
@@ -65,6 +70,10 @@ import {
   selectGlobalLastRunSettings,
   useComposerRunSettingsStore,
 } from "@/stores/composer/composer-run-settings-store";
+import {
+  selectWorkspaceFoldersBucket,
+  useWorkspaceFoldersStore,
+} from "@/stores/workspace/workspace-folders-store";
 import {
   isOpenLandingDraft,
   landingRowIsForeign,
@@ -87,7 +96,10 @@ import {
   useLandingComposerActions,
   type TerminalAgentLaunch,
 } from "@/components/home/hooks/use-landing-composer-actions";
-import { landingComposerSettingsSeedForDraft } from "@/components/home/composer/landing-composer-settings-seed";
+import {
+  landingComposerSettingsSeedForDraft,
+  landingMintedDraftSettings,
+} from "@/components/home/composer/landing-composer-settings-seed";
 import { contentIsSubmittable } from "@/lib/composer/composer-content";
 import {
   nextComposerMode,
@@ -196,7 +208,7 @@ export function LandingComposer(props: LandingComposerProps) {
   const editorRef = useRef<ComposerPromptEditorHandle | null>(null);
   const createdUnboundDraftIdRef = useRef<string | null>(null);
   const [pickerStore] = useState(() => createComposerPickerStore());
-  // The composer's PLACEMENT (redesign P1.2, selection model §54): its own
+  // The composer's PLACEMENT: its own
   // window-keyed surface pin, or the effective host while it follows. Not the
   // app-wide selection - the picker no longer moves that - so every RPC this
   // surface makes, and every create it performs, resolves through here.
@@ -354,6 +366,33 @@ export function LandingComposer(props: LandingComposerProps) {
       landingEditMark.closed !== seen.closed;
     if (substantive) authority.noteEdit();
   }, [authority, landingEditMark]);
+  // A draft minted before its host resolved holds nothing, and would hold
+  // nothing for life: the draft outranks the host's memory from mint on. This
+  // is the effect keyed by `resolvedHostId` that the host picker warns against,
+  // and it is safe here because the store refuses any draft with content,
+  // settings or folders, so it cannot overwrite a draft or follow a failover,
+  // and a seeded draft is not seeded twice. The write counts as an edit above,
+  // so a row this host does not own forks.
+  //
+  // The host's memory is in the keys because it can arrive after the host does:
+  // these stores move to the signed-in user's data once auth resolves. A run
+  // that finds the draft already seeded writes nothing, so the extra runs are
+  // free.
+  const seedUnseededDraft = useLandingDraftStore(
+    (state) => state.seedUnseededDraft,
+  );
+  const rememberedFolders = useWorkspaceFoldersStore(
+    (state) => selectWorkspaceFoldersBucket(state, resolvedHostId).folders,
+  );
+  useEffect(() => {
+    if (draftId !== null) seedUnseededDraft(draftId, resolvedHostId);
+  }, [
+    draftId,
+    globalLastRunSettings,
+    rememberedFolders,
+    resolvedHostId,
+    seedUnseededDraft,
+  ]);
   const handleToolbarSettingsChange = useCallback(
     (settings: ChatRunSettings) => {
       setGlobalRunSettings(activeHostId, settings, Date.now());
@@ -389,7 +428,11 @@ export function LandingComposer(props: LandingComposerProps) {
   // profile must be corrected to ambient here rather than silently submitted as the
   // new chat's initial settings. The catalog reads through the same
   // `hostClient` - the composer's pinned/followed host, NOT the app-wide
-  // default (P1.2 retired the picker's rebind of that default).
+  // default (the picker's rebind of that default was retired).
+  const ultracodeCarried = useUltracodeCarrierSupported(
+    activeHostId,
+    "epic.create",
+  );
   const toolbarStore = useComposerToolbarStore(
     "landing",
     fallbackSeedSource(settingsSeed, hostClient),
@@ -400,10 +443,26 @@ export function LandingComposer(props: LandingComposerProps) {
       tuiOnly: composerMode === "terminal",
       // The landing composer has no chat yet - see `ComposerBody`.
       chatLineCarriesAutoMode: null,
+      ultracodeCarried,
       stagedSurfaceKey: composerSurfaceKey,
       sendsToRestingSandbox: false,
     },
   );
+  // A stage's kept pick goes to this draft only, never to the host's
+  // last-run settings that seed every other draft. A layout effect: the
+  // toolbar's catalog push that keeps the pick is a passive effect of the same
+  // commit, and must find this installed.
+  useLayoutEffect(() => {
+    toolbarStore.setState({
+      onShownPickKept:
+        draftId === null
+          ? null
+          : (settings) => {
+              setDraftSettings(draftId, settings);
+              authority.noteEdit();
+            },
+    });
+  }, [authority, draftId, setDraftSettings, toolbarStore]);
   const harnessId = useStore(toolbarStore, (s) => s.selection.harnessId);
   const profileId = useStore(toolbarStore, (s) => s.selection.profileId);
   const selectedModel = useStore(toolbarStore, (s) => s.selectedModel);
@@ -461,7 +520,7 @@ export function LandingComposer(props: LandingComposerProps) {
   // Keeps the banner's `providers.list` read converging with a turn's
   // passive rate-limit capture from ANY running epic on this host -
   // mirrors `useRefreshProvidersListOnTurn` in `chat-composer.tsx`, scoped to
-  // the composer's resolved host. (It used the app-wide default before P1.2;
+  // the composer's resolved host. (It used the app-wide default before the redesign;
   // a pinned composer would then invalidate a cache entry keyed to a host it
   // never reads, and never the one whose banner it feeds.)
   useRefreshProvidersListOnTurn(harnessId, resolvedHostId);
@@ -555,9 +614,18 @@ export function LandingComposer(props: LandingComposerProps) {
     (s) => s.values.selection.harnessId,
   );
   const openStagedTerminal = useOpenLandingStagedTerminal(composerSurfaceKey);
+  const pickedModelSlug = useStore(
+    toolbarStore,
+    (s) => s.values.selection.modelSlug,
+  );
+  const chipModel = useStore(toolbarStore, chipModelName);
+  const chooseAnotherHostLabel = useStageFallbackHostLine(resolvedHostId);
   const stagedSignInCheck = useStagedSendSignInCheck({
     harnessId: pickedHarnessId,
+    modelSlug: pickedModelSlug,
+    modelName: chipModel,
     active: chatComposerActive && workspaceGate.stagedAhead,
+    chooseAnotherHostLabel,
     onOpenTerminalInstead: openStagedTerminal,
     onChooseAnotherHost: () => {
       useStagedSandboxStore.getState().clear(composerSurfaceKey);
@@ -590,7 +658,7 @@ export function LandingComposer(props: LandingComposerProps) {
     hasSubmittableContent,
   });
 
-  // A terminal agent's Start on a staged sandbox (sandboxes plan D1). Phase 2
+  // A terminal agent's Start on a staged sandbox (the sandboxes plan). Phase 2
   // resets the draft's workspace to the new host's, which starts empty, then
   // launches it there. The latest resubmit, which is declared below and
   // reads this hook.
@@ -678,9 +746,10 @@ export function LandingComposer(props: LandingComposerProps) {
     ownerId: stagedOwnerId,
     // Each draft is its own: a line action here never sends another's.
     claimsSend: false,
+    chooseAnotherHostLabel,
   });
 
-  // Submit-time refusal copy (selection model §54). The G4 re-point used to
+  // Submit-time refusal copy. The G4 re-point used to
   // share this slot; it narrates as a toast now, and only when it actually
   // reset staged intent — see the effect below.
   const {
@@ -699,7 +768,7 @@ export function LandingComposer(props: LandingComposerProps) {
   // `honoredSelection` is null, and that composer genuinely re-pointed - the
   // stale `isPinned` gate would suppress both the notice and the staged-intent
   // reset for a move that just happened. A composer resting on its pin is not
-  // moved by the derivation and must not narrate one (D6).
+  // moved by the derivation and must not narrate one.
   //
   // Deliberately scoped to the staged INTENT, not to the draft's chosen
   // folders: an automatic failover is not a user gesture, and discarding a
@@ -758,12 +827,15 @@ export function LandingComposer(props: LandingComposerProps) {
     // to a fresh id when the caller has not pre-minted one.
     const createdDraftId = useLandingDraftStore.getState().createDraftWithId(
       props.pendingCreateId ?? uuidv4(),
-      useComposerRunSettingsStore
-        .getState()
-        // The composer's own resolved placement host - not the app
-        // binding: the seed should describe the machine this draft
-        // will create on.
-        .getGlobalRunSettings(activeHostId),
+      landingMintedDraftSettings(
+        toolbarStore.getState(),
+        useComposerRunSettingsStore
+          .getState()
+          // The composer's own resolved placement host - not the app
+          // binding: the seed should describe the machine this draft
+          // will create on.
+          .getGlobalRunSettings(activeHostId),
+      ),
     );
     // Keep the workspace aligned with the caller's captured placement, which
     // supplied the settings above, before accepting a submit.
@@ -785,7 +857,7 @@ export function LandingComposer(props: LandingComposerProps) {
         { surface: "landing", hostId: activeHostId, draftId: createdDraftId },
       );
     return createdDraftId;
-  }, [activeHostId, draftId, props.pendingCreateId]);
+  }, [activeHostId, draftId, props.pendingCreateId, toolbarStore]);
 
   // The start page whose terminal panel a picker-started setup terminal opens
   // in, keyed exactly as the panel keys its layouts. It BINDS the page rather
@@ -937,7 +1009,7 @@ export function LandingComposer(props: LandingComposerProps) {
   /** Whether the submit went ahead. */
   const handleSubmit = useCallback((): boolean | Promise<boolean> => {
     if (!canSubmit) return false;
-    // A staged sandbox takes the send (sandboxes redesign Flow 1): the task
+    // A staged sandbox takes the send: the task
     // opens at once and the message waits in it, behind the setup line,
     // until the agent the person picked is ready on the sandbox. It runs
     // on that agent and model, never one this host would swap in.
@@ -971,6 +1043,7 @@ export function LandingComposer(props: LandingComposerProps) {
         reasoning: toolbar.reasoning,
         serviceTier: toolbar.serviceTier,
         permission: toolbar.permission,
+        ultracode: toolbar.ultracode,
       },
       owner,
       teamSandboxHarnessBlocked: teamSandboxHarnessBlockedFor(
@@ -1194,7 +1267,7 @@ export function LandingComposer(props: LandingComposerProps) {
             hostId={resolvedHostId}
             pickerStore={pickerStore}
             editorRef={editorRef}
-            // The rail is no longer chat-mode-only (D11), so the Cmd+S owner is
+            // The rail is no longer chat-mode-only, so the Cmd+S owner is
             // the surface being edited, whichever composer mode it is in.
             active={activityEnabled}
           />
@@ -1214,7 +1287,7 @@ export function LandingComposer(props: LandingComposerProps) {
         ingestPastedComposerImages={ingestPastedComposerImages}
         onEditorReady={reingestPendingImages}
         // No tab yet, but a placement all the same: the composer creates on its
-        // window-keyed surface pin's resolved host (P1.2). `null` reaches here
+        // window-keyed surface pin's resolved host. `null` reaches here
         // only in the ∅ case - nothing usable to create on - which submit
         // re-validation refuses before any create runs.
         hostId={resolvedHostId}

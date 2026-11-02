@@ -401,6 +401,7 @@ function renderPicker(): ComposerToolbarStore {
     reasoningFallback: "model-default",
     seedKey: "sandbox-traycer-test",
     values: {
+      ultracode: false,
       permission: "supervised",
       selection: {
         harnessId: "codex",
@@ -413,12 +414,14 @@ function renderPicker(): ComposerToolbarStore {
     onSettingsChange: null,
     tuiOnly: false,
     chatLineCarriesAutoMode: null,
+    ultracodeCarried: false,
     hostId: HOST_ID,
   });
   render(
     <SurfaceActivityProvider active>
       <TooltipProvider delayDuration={0}>
         <HarnessModelPicker
+          withUltracode={false}
           labelDisplay="responsive"
           store={store}
           maxModeContext={{ kind: "none" }}
@@ -537,6 +540,7 @@ const STAGED_TARGET: StagedSandboxTarget = {
 
 /** The person's Traycer pick, as the composer is seeded with it. */
 const TRAYCER_PICK = {
+  ultracode: false,
   harnessId: "traycer",
   model: "traycer:claude-sonnet-5-5",
   permissionMode: "supervised",
@@ -564,12 +568,14 @@ function SandboxComposerPicker(props: {
       hostId: props.hostId,
       tuiOnly: false,
       chatLineCarriesAutoMode: null,
+      ultracodeCarried: false,
       stagedSurfaceKey: props.target === "staged" ? STAGED_SURFACE : null,
       sendsToRestingSandbox: props.target === "resting",
     },
   );
   return (
     <HarnessModelPicker
+      withUltracode={false}
       labelDisplay="responsive"
       store={store}
       maxModeContext={{ kind: "none" }}

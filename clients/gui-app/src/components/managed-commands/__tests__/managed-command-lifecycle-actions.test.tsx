@@ -4,7 +4,7 @@ import type { ManagedCommand } from "@traycer/protocol/host/managed-command/unar
 import { TooltipProvider } from "@/components/ui/tooltip";
 
 /**
- * The human capability set (`UI.md` §2): watch plus lifecycle, plus the one
+ * The human capability set: watch plus lifecycle, plus the one
  * setting a person edits - relaunch after a host restart. Start only where
  * there is nothing running, stop where there is, and delete behind a
  * confirmation that names what dies with it.

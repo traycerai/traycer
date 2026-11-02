@@ -1,5 +1,5 @@
 import type { UseMutationResult, UseQueryResult } from "@tanstack/react-query";
-import { useMemo, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import type {
   HostNotificationChannelId,
   HostNotificationSeverity,
@@ -33,12 +33,9 @@ import {
   HostScopeGate,
 } from "@/components/settings/host-scope/host-scope-gate";
 import {
-  WINDOW_HOST_SELECTION,
-  useHostScopeFor,
+  useAccountHostScope,
   type HostScope,
 } from "@/components/settings/host-scope/use-host-scope";
-import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
-import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 import type { HostRpcRegistry } from "@/lib/host";
 import type { SettingsRowDefinition } from "@/lib/settings-search/settings-definitions";
 import { cn } from "@/lib/utils";
@@ -77,25 +74,6 @@ const LEAVE_SECRET_UNCHANGED: HostNotificationsSecretWrite = {
 };
 
 /**
- * With environments this is an Account page and follows the window's own
- * host; a build without them keeps it under the Host picker
- * (`settings-sections.ts`), so it reads the picked host as it did at 1.5.1.
- * One `useHostScopeFor` either way: a second scope would open a second host
- * client.
- */
-function useNotificationsHostScope(): HostScope {
-  const scopedHostId = useSettingsHostScopeStore((s) => s.scopedHostId);
-  const setScopedHostId = useSettingsHostScopeStore((s) => s.setScopedHostId);
-  const pickedSelection = useMemo(
-    () => ({ scopedHostId, setScopedHostId }),
-    [scopedHostId, setScopedHostId],
-  );
-  return useHostScopeFor(
-    UNRELEASED_FEATURES_ENABLED ? WINDOW_HOST_SELECTION : pickedSelection,
-  );
-}
-
-/**
  * The route / modal entry point.
  *
  * Notification policy and hooks are stored BY THE HOST, so this panel was
@@ -108,7 +86,7 @@ function useNotificationsHostScope(): HostScope {
  * it is not the one this window's bell reads from.
  */
 export function NotificationsSettingsPanel() {
-  const scope = useNotificationsHostScope();
+  const scope = useAccountHostScope();
   return (
     <NotificationsSettingsPanelContent
       scope={scope}

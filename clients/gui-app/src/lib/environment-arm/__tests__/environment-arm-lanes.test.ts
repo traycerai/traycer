@@ -33,14 +33,14 @@ class ArmSession extends FakeStreamSession {
   }
 
   closeWith(reason: StreamCloseReason): void {
-    this.closeHandler?.("closed", reason, null);
+    this.closeHandler?.("closed", reason, null, null);
   }
 
   /** Closes as a real logical stream does: the caller's close is reported at once. */
   override close(): void {
     if (this.closed) return;
     super.close();
-    this.closeHandler?.("closed", { kind: "caller" }, null);
+    this.closeHandler?.("closed", { kind: "caller" }, null, null);
   }
 }
 
@@ -153,6 +153,32 @@ describe("createEnvironmentArmLanes", () => {
 
     session.emitStatus("reconnecting");
     session.emitStatus("open");
+    session.emit(frameEnvelope(0, "b"), null);
+
+    expect(lanes.read("k", [])).toEqual(["a", "b"]);
+  });
+
+  it("keeps discarding an older generation after a held drop and a continued open", () => {
+    lanes.acquire(spec("k"));
+    const session = sessions[0];
+    session.emit(frameEnvelope(2, "a"), null);
+
+    session.emitContinuityStatus("reconnecting", "held");
+    session.emitContinuityStatus("open", "continued");
+    session.emit(frameEnvelope(0, "stale"), null);
+    session.emit(frameEnvelope(2, "b"), null);
+
+    expect(lanes.read("k", [])).toEqual(["a", "b"]);
+  });
+
+  it("applies generation 0 again once the hold ends and the stream reopens", () => {
+    lanes.acquire(spec("k"));
+    const session = sessions[0];
+    session.emit(frameEnvelope(2, "a"), null);
+
+    session.emitContinuityStatus("reconnecting", "held");
+    session.emitContinuityStatus("reconnecting", null);
+    session.emitContinuityStatus("open", null);
     session.emit(frameEnvelope(0, "b"), null);
 
     expect(lanes.read("k", [])).toEqual(["a", "b"]);

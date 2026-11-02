@@ -53,6 +53,7 @@ function catalog(models: ReadonlyArray<ModelOption>): ComposerToolbarCatalog {
     modelsLoaded: true,
     tuiOnly: false,
     chatLineCarriesAutoMode: null,
+    ultracodeCarried: false,
     keepsUnavailablePick: false,
   };
 }
@@ -66,6 +67,7 @@ function createStore(
     reasoningFallback: "model-default",
     seedKey: `model-slug-${modelSlug}`,
     values: {
+      ultracode: false,
       permission: "supervised",
       selection: { harnessId: "claude", modelSlug, profileId: null },
       reasoning: "",
@@ -77,6 +79,7 @@ function createStore(
         : (settings) => onSettingsChange(settings.model),
     tuiOnly: false,
     chatLineCarriesAutoMode: null,
+    ultracodeCarried: false,
     hostId: null,
   });
 }

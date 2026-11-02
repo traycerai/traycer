@@ -59,6 +59,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import type { TreeRowExpansion } from "@/components/epic-canvas/sidebar/epic-sidebar-tree-shared";
 
 const overlayMounted = vi.hoisted(() => ({
   contextMenu: 0,
@@ -306,14 +307,26 @@ const ART_A = "ticket-a";
 const ART_B = "spec-b";
 const TITLE_ART_A = "Alpha ticket";
 const TOOLTIP_DELAY_MS = 150;
-/** Same summary the cloud-row suite already mounts. */
+function staticExpansion(
+  expandedIds: ReadonlySet<string>,
+  toggleExpanded: (id: string) => void,
+): TreeRowExpansion {
+  return {
+    subscribe: () => () => undefined,
+    isExpanded: (id) => expandedIds.has(id),
+    toggleExpanded,
+    ensureExpanded: () => undefined,
+  };
+}
+
 /** A leaf row: no subagents beneath it, so no expansion state to consult. */
 const NO_CHILDREN: readonly UnifiedCloudChatEntry[] = [];
-const LEAF_EXPANSION: CloudChatRowExpansion = {
-  expandedIds: new Set<string>(),
-  toggleExpanded: () => undefined,
-};
+const LEAF_EXPANSION: CloudChatRowExpansion = staticExpansion(
+  new Set<string>(),
+  () => undefined,
+);
 
+/** Same summary the cloud-row suite already mounts. */
 const CLOUD_CHAT: CloudChatSummary = {
   identity: {
     taskId: "d60781ca-e0d3-4318-bf2a-e03d8ce4e3a7",

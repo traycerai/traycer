@@ -7,10 +7,9 @@ import { useWindowsBridge } from "@/providers/windows-bridge-context";
 import { composerSurfaceKey } from "@/stores/host/surface-host-selection-store";
 
 /**
- * G1 owns `stores/composer/staged-sandbox-store.ts`. Until that module
- * lands, nothing is staged in this window and the credits step stays
- * hidden. The glob is empty on this branch and picks the store up the
- * moment G1 merges.
+ * Until the staged-sandbox store is available, nothing is staged in this window
+ * and the credits step stays hidden. The glob picks up the store when it is
+ * available.
  */
 interface StagedSandboxStoreApi {
   readonly getState: () => {

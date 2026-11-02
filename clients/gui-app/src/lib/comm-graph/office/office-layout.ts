@@ -192,7 +192,7 @@ const AREA_SIGN_COL_OFFSET = 4;
 /**
  * THE ARCHIVE'S PLATE, in tiles: the one civic sign whose room cannot size it.
  *
- * The archive is a door in the outer wall, one tile wide (C5 - the count is the
+ * The archive is a door in the outer wall, one tile wide (the count is the
  * whole room), and a one-tile plate can say nothing. Four is what its counter
  * needs at close-up (`Archive · 262` measures 96 px against 102), hung one tile
  * left of the door so the plate is centred over it - to within the half tile an
@@ -3024,7 +3024,7 @@ function buildCivicRecord(request: CivicRoomRequest): CivicBuild {
       // record is made. The shell is why the bounds are 10x9 and 17x7 here
       // rather than the size of the furniture inside them.
       enclosure: "walled",
-      // Nothing drives to the lounge (C6), so it names no kerb. The infirmary
+      // Nothing drives to the lounge, so it names no kerb. The infirmary
       // stops a vehicle at the road tile its door opens ONTO - the row below
       // its own bottom wall, because `anchorInfirmaryToRoad` put the room at
       // the foot of its column for exactly this reason. One tile from the
@@ -3158,7 +3158,7 @@ function fitFloor(request: FloorFitRequest): PlacedFloor {
   );
   const civic: ReadonlyArray<OfficeCivicRoom> = [
     ...civicBuilds.map((entry) => entry.room),
-    // THE HELP DESK IS THE RECEPTION (C7). It takes a record of its own so that
+    // THE HELP DESK IS THE RECEPTION. It takes a record of its own so that
     // its name, its sign and its kerb come from the same place as the other
     // three rooms' do; the counter, the queue tiles and the queue's facing are
     // untouched, and it carries no seats because standing at a counter is not
@@ -3195,7 +3195,7 @@ function fitFloor(request: FloorFitRequest): PlacedFloor {
       floorIndex,
       hostId: build.hostId,
       hostScope: "host",
-      // OPEN: these bounds are the RECEPTION COUNTER (C7), a piece of furniture
+      // OPEN: these bounds are the RECEPTION COUNTER, a piece of furniture
       // standing in the lobby. Its tiles are blocked because a counter is
       // solid, and a painter that read that as a wall would box in the one
       // room in the layer whose whole point is that you can walk up to it.
@@ -3228,9 +3228,9 @@ function fitFloor(request: FloorFitRequest): PlacedFloor {
       hostId: build.hostId,
       hostScope: "host",
       // OPEN: one tile, and that tile is a DOOR in the building's own outer
-      // wall (C5). The wall is the building's, not this room's.
+      // wall. The wall is the building's, not this room's.
       enclosure: "open",
-      // Nothing drives to the archive: nobody is collected from it (C6).
+      // Nothing drives to the archive: nobody is collected from it.
       kerbTile: null,
     },
   ];

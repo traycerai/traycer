@@ -179,7 +179,7 @@ const buttonVariants = cva(
         "icon-touch": "size-10 rounded-sm",
         // A round control floating over content rather than sitting in a bar:
         // the always-visible actions button a page row wears on a coarse
-        // pointer (D40, the MobileChat artboard's 30px circle).
+        // pointer, a 30px circle.
         "icon-round": "size-7.5 rounded-full",
         // The vertical strip's nav controls (Notifications, All tasks, Home), as a
         // Button: `nav-tile` is the collapsed rail's 32px tile, `nav-row` the

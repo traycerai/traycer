@@ -134,7 +134,7 @@ export function HeaderTabVisual(props: HeaderTabVisualProps) {
                 content={
                   props.tab.kind === "sample-workspace" ? (
                     // A mode, not a task: no agents, so no "Idle" (matches the
-                    // side strip's own sample-workspace body, F2).
+                    // side strip's own sample-workspace body).
                     <div
                       data-testid="side-tab-hover-card-body"
                       className="flex flex-col gap-2"
@@ -204,7 +204,7 @@ function SessionTabMark(props: {
       // runtime value here, so it travels as a custom property and every fill
       // is a rule rather than a string built in JS.
       data-layout-session-tab={props.isActive ? "filled" : "rest"}
-      // Where every tab's colour mark sits (F4), at the cap's own weight.
+      // Where every tab's colour mark sits, at the cap's own weight.
       className="pointer-events-none absolute bottom-1 left-1/2 w-6 -translate-x-1/2 rounded-full"
       style={{ "--layout-session-tab-color": props.color } as CSSProperties}
     />

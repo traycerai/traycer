@@ -41,9 +41,9 @@ import {
   draftsUpsertResponseSchemaV10,
 } from "@traycer/protocol/host/drafts/schemas";
 import {
-  getChatRunSettingsBatchResponseSchema,
+  getChatRunSettingsBatchResponseSchemaV21,
   getChatRunSettingsBatchResponseSchemaV10,
-  getChatRunSettingsResponseSchema,
+  getChatRunSettingsResponseSchemaV41,
   getChatRunSettingsResponseSchemaV30,
 } from "@traycer/protocol/host/epic/chat-records";
 import {
@@ -299,7 +299,7 @@ describe("every new head is the registry's canonical line", () => {
 
   it("stream heads are the new minors, with the released minors still installed", () => {
     const chat = hostStreamRpcRegistry["chat.subscribe"][1];
-    expect(chat.latestMinor).toBe(40);
+    expect(chat.latestMinor).toBe(41);
     expect(chat.versions[22].contract).toBe(chatSubscribeV122);
     expect(chat.versions[23].contract).toBe(chatSubscribeV123);
     expect(chat.versions[21].contract).toBe(chatSubscribeV121);
@@ -551,7 +551,7 @@ describe("row-dropping bridges that keep non-row fields", () => {
   });
 
   it("epic.getChatRunSettingsBatch omits unrepresentable entries, keeps the others, and never refuses", () => {
-    const response = getChatRunSettingsBatchResponseSchema.parse({
+    const response = getChatRunSettingsBatchResponseSchemaV21.parse({
       entries: [
         { chatId: "c1", settings: chatRunSettings("claude") },
         { chatId: "c2", settings: chatRunSettings(NEW_ID) },
@@ -579,7 +579,7 @@ describe("row-dropping bridges that keep non-row fields", () => {
       hostRpcRegistry["epic.getChatRunSettingsBatch"],
       2,
       1,
-      getChatRunSettingsBatchResponseSchema.parse({
+      getChatRunSettingsBatchResponseSchemaV21.parse({
         entries: [{ chatId: "c2", settings: chatRunSettings(NEW_ID) }],
       }),
     );
@@ -678,7 +678,7 @@ describe("parse-or-refuse bridges", () => {
           hostRpcRegistry["epic.getChatRunSettings"],
           4,
           3,
-          getChatRunSettingsResponseSchema.parse({
+          getChatRunSettingsResponseSchemaV41.parse({
             settings: chatRunSettings(representable ? "claude" : NEW_ID),
           }),
         ),
@@ -911,14 +911,14 @@ describe("every new frozen response schema rejects commandcode while its live co
       label: "epic.getChatRunSettings 3.0",
       oldId: "claude",
       frozen: getChatRunSettingsResponseSchemaV30,
-      live: getChatRunSettingsResponseSchema,
+      live: getChatRunSettingsResponseSchemaV41,
       withId: (id) => ({ settings: chatRunSettings(id) }),
     },
     {
       label: "epic.getChatRunSettingsBatch 1.0",
       oldId: "claude",
       frozen: getChatRunSettingsBatchResponseSchemaV10,
-      live: getChatRunSettingsBatchResponseSchema,
+      live: getChatRunSettingsBatchResponseSchemaV21,
       withId: (id) => ({
         entries: [{ chatId: "c1", settings: chatRunSettings(id) }],
       }),

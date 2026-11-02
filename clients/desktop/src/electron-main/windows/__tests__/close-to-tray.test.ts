@@ -91,6 +91,8 @@ interface Rig {
     quitting: boolean;
     tray: boolean;
     mode: HostLifecycleMode;
+    /** Windows whose renderer reports a live voice session. */
+    readonly voiceLive: Set<string>;
   };
   readonly release: () => void;
 }
@@ -98,7 +100,12 @@ interface Rig {
 function rigFor(platform: NodeJS.Platform, hold: boolean): Rig {
   const windows = fakeWindows();
   const counts = { quit: 0, notice: 0, modeReads: 0 };
-  const flags: Rig["flags"] = { quitting: false, tray: true, mode: "linked" };
+  const flags: Rig["flags"] = {
+    quitting: false,
+    tray: true,
+    mode: "linked",
+    voiceLive: new Set<string>(),
+  };
   let openGate: () => void = () => undefined;
   const gate = hold
     ? new Promise<void>((resolve) => {
@@ -121,6 +128,7 @@ function rigFor(platform: NodeJS.Platform, hold: boolean): Rig {
     showNoticeOnce: () => {
       counts.notice += 1;
     },
+    voiceLive: (windowId) => flags.voiceLive.has(windowId),
   });
   return { closer, windows, counts, flags, release: openGate };
 }
@@ -264,6 +272,7 @@ describe("CloseToTray.interceptClose", () => {
       windows,
       requestQuit: () => undefined,
       showNoticeOnce: () => undefined,
+      voiceLive: () => false,
     });
     closer.interceptClose("w1", closeEvent());
     await flush();
@@ -298,6 +307,7 @@ describe("CloseToTray.interceptClose - hasTray", () => {
         showNoticeOnce: () => {
           noticeCount += 1;
         },
+        voiceLive: () => false,
       });
       closer.interceptClose("w1", closeEvent());
       await flush();
@@ -322,6 +332,7 @@ describe("CloseToTray.interceptClose - hasTray", () => {
         showNoticeOnce: () => {
           noticeCount += 1;
         },
+        voiceLive: () => false,
       });
       closer.interceptClose("w1", closeEvent());
       await flush();
@@ -344,6 +355,7 @@ describe("CloseToTray.interceptClose - hasTray", () => {
         quitCount += 1;
       },
       showNoticeOnce: () => undefined,
+      voiceLive: () => false,
     });
     closer.interceptClose("w1", closeEvent());
     await flush();
@@ -366,6 +378,7 @@ describe("CloseToTray.interceptClose - hasTray", () => {
         windows,
         requestQuit: () => undefined,
         showNoticeOnce: () => undefined,
+        voiceLive: () => false,
       });
       closer.interceptClose("w1", closeEvent());
       await flush();
@@ -394,6 +407,7 @@ describe("CloseToTray.interceptClose - hasTray", () => {
       showNoticeOnce: () => {
         noticeCount += 1;
       },
+      voiceLive: () => false,
     });
     closer.interceptClose("w1", closeEvent());
     await flush();
@@ -657,6 +671,7 @@ describe("window-creation count (real WindowRegistry)", () => {
         txs.onBeforeQuit();
       },
       showNoticeOnce: () => undefined,
+      voiceLive: () => false,
     });
     window.onClose((event) => {
       closer.interceptClose(windowId, event);
@@ -694,6 +709,7 @@ describe("window-creation count (real WindowRegistry)", () => {
       windows: registryCloseToTrayWindows(registry, new HiddenToTrayWindows()),
       requestQuit: () => undefined,
       showNoticeOnce: () => undefined,
+      voiceLive: () => false,
     });
     window.onClose((event) => {
       closer.interceptClose(windowId, event);
@@ -720,6 +736,7 @@ describe("window-creation count (real WindowRegistry)", () => {
       windows: registryCloseToTrayWindows(registry, new HiddenToTrayWindows()),
       requestQuit: () => undefined,
       showNoticeOnce: () => undefined,
+      voiceLive: () => false,
     });
     window.onClose((event) => {
       closer.interceptClose(windowId, event);
@@ -763,6 +780,7 @@ describe("registryCloseToTrayWindows (real WindowRegistry)", () => {
       windows: registryCloseToTrayWindows(registry, hidden),
       requestQuit: () => undefined,
       showNoticeOnce: () => undefined,
+      voiceLive: () => false,
     });
   }
 
@@ -1002,6 +1020,7 @@ describe("a loading (show:false) window is not hidden", () => {
         requestQuitCalls += 1;
       },
       showNoticeOnce: () => undefined,
+      voiceLive: () => false,
     });
     const event = closeEvent();
     const intercepted = closer.interceptClose(aId, event);
@@ -1024,6 +1043,7 @@ describe("a loading (show:false) window is not hidden", () => {
       ),
       requestQuit: () => undefined,
       showNoticeOnce: () => undefined,
+      voiceLive: () => false,
     });
     const event = closeEvent();
     const intercepted = closer.interceptClose(aId, event);
@@ -1055,10 +1075,44 @@ describe("a loading (show:false) window is not hidden", () => {
         requestQuitCalls += 1;
       },
       showNoticeOnce: () => undefined,
+      voiceLive: () => false,
     });
     const event = closeEvent();
     closer.interceptClose(aId, event);
     await flush();
     expect(requestQuitCalls).toBe(1);
+  });
+});
+
+// ---- a window whose renderer holds a live voice session ------------------------
+
+describe("CloseToTray.interceptClose with a live voice session", () => {
+  it.each(["darwin", "win32", "linux"] as const)(
+    "hides the window instead of closing it on %s, even with other windows open, without reading the mode",
+    (platform) => {
+      const rig = rigFor(platform, false);
+      rig.flags.voiceLive.add("w1");
+      rig.windows.open = 1;
+      const event = closeEvent();
+
+      expect(rig.closer.interceptClose("w1", event)).toBe(true);
+
+      expect(event.prevented).toBe(1);
+      expect(rig.windows.calls).toEqual(["hide:w1"]);
+      expect(rig.counts.modeReads).toBe(0);
+      expect(rig.counts.quit).toBe(0);
+    },
+  );
+
+  it("lets a quit close the window, voice or not", () => {
+    const rig = rigFor("linux", false);
+    rig.flags.voiceLive.add("w1");
+    rig.flags.quitting = true;
+    const event = closeEvent();
+
+    expect(rig.closer.interceptClose("w1", event)).toBe(false);
+
+    expect(event.prevented).toBe(0);
+    expect(rig.windows.calls).toEqual([]);
   });
 });

@@ -242,9 +242,9 @@ function ColumnRail(props: {
 }
 
 /**
- * The panel sheet's header (D12): the task's rail tile chip and its title, so
+ * The panel sheet's header: the task's rail tile chip and its title, so
  * the panel says which task it belongs to. The chip is the strip's own, in
- * the tab colour or else the epic's auto tint (D11).
+ * the tab colour or else the epic's auto tint.
  */
 export function PanelTaskHeader(props: {
   readonly epicId: string;

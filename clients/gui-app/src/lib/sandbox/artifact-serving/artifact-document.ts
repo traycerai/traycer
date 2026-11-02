@@ -58,6 +58,18 @@ export function buildMissingPageDocument(
   return composeArtifactDocument("", options, "missing");
 }
 
+/**
+ * Stands in for a page the artifact HAS and the host would not hand over, so
+ * the app can say that and offer the read again. Without it the shell answers
+ * the frame with its error status, whose body is the wire reason - the reader
+ * is shown the bare word "failed", which names nothing they can act on.
+ */
+export function buildUnreachablePageDocument(
+  options: ArtifactDocumentOptions,
+): string {
+  return composeArtifactDocument("", options, "unreachable");
+}
+
 function composeArtifactDocument(
   html: string,
   options: ArtifactDocumentOptions,

@@ -633,7 +633,7 @@ describe("worktree-intent-staging-store", () => {
 
   // Pairs with `clearForAllHosts`'s reach: a caller that clears every bucket
   // must ask about every bucket, or it silently drops an intent staged while
-  // the surface was pinned to another host (Codex review finding).
+  // the surface was pinned to another host.
   describe("anyHostHasStagedWorktreeIntent", () => {
     const draftA: WorktreeStagingKey = {
       surface: "landing",

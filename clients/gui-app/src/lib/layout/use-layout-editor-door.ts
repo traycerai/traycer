@@ -3,7 +3,7 @@ import { isLayoutEditorAvailable } from "@/lib/settings/settings-availability";
 import { useLayoutEditorStore } from "@/stores/layout/layout-editor-store";
 
 /**
- * What a door that names the editor offers right now (T6), asked once by every
+ * What a door that names the editor offers right now, asked once by every
  * such door - the palette's row, the chrome's menu item and the Settings
  * button - so no two can disagree:
  *

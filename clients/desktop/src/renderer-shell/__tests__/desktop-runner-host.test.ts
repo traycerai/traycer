@@ -94,6 +94,7 @@ interface FakeBridgeHandle {
   emit(snapshot: LocalHostSnapshot | null): void;
   emitSystemResumed(): void;
   systemResumedBridgeSubscriptionCount(): number;
+  emitSystemSuspended(): void;
 }
 
 function buildFakeBridge(
@@ -106,6 +107,7 @@ function buildFakeBridge(
     (push: RegisteredHostsChange) => void
   >();
   const systemResumedHandlers = new Set<() => void>();
+  const systemSuspendedHandlers = new Set<() => void>();
 
   const tokenSlot = { value: null as string | null };
   const respawnCounter = { count: 0 };
@@ -147,6 +149,24 @@ function buildFakeBridge(
       kind: "network-error" as const,
       detail: "test",
     }),
+    getVoiceAvailability: async () => ({
+      kind: "network-error" as const,
+      detail: "test",
+    }),
+    mintVoiceSession: async () => ({
+      kind: "network-error" as const,
+      detail: "test",
+    }),
+    endVoiceSession: async () => ({
+      kind: "network-error" as const,
+      detail: "test",
+    }),
+    routeVoiceUtterance: async () => ({
+      kind: "network-error" as const,
+      detail: "test",
+    }),
+    setVoiceSessionLive: async () => undefined,
+    setVoiceSessionIndicator: async () => undefined,
     createSandbox: async () => ({
       kind: "network-error" as const,
       detail: "test",
@@ -172,6 +192,26 @@ function buildFakeBridge(
       detail: "test",
     }),
     openSandboxAutomation: async () => ({
+      kind: "network-error" as const,
+      detail: "test",
+    }),
+    readSlackApp: async () => ({
+      kind: "network-error" as const,
+      detail: "test",
+    }),
+    getSlackAppManifest: async () => ({
+      kind: "network-error" as const,
+      detail: "test",
+    }),
+    registerSlackApp: async () => ({
+      kind: "network-error" as const,
+      detail: "test",
+    }),
+    mintSlackAppInstallUrl: async () => ({
+      kind: "network-error" as const,
+      detail: "test",
+    }),
+    disconnectSlackApp: async () => ({
       kind: "network-error" as const,
       detail: "test",
     }),
@@ -293,6 +333,15 @@ function buildFakeBridge(
         },
       };
     },
+    onSystemSuspended: (handler: () => void) => {
+      systemSuspendedHandlers.add(handler);
+      return {
+        dispose: () => {
+          systemSuspendedHandlers.delete(handler);
+        },
+      };
+    },
+    onVoiceTrayAction: () => ({ dispose: () => undefined }),
     requestHostRespawn: async () => {
       respawnCounter.count += 1;
       return { kind: "restarted" as const };
@@ -879,6 +928,11 @@ function buildFakeBridge(
     },
     systemResumedBridgeSubscriptionCount(): number {
       return systemResumedHandlers.size;
+    },
+    emitSystemSuspended(): void {
+      for (const handler of systemSuspendedHandlers) {
+        handler();
+      }
     },
   };
 }
@@ -1631,6 +1685,25 @@ describe("DesktopRunnerHost.onSystemResumed", () => {
     for (const handler of calls.slice(1)) {
       expect(handler).toHaveBeenCalledTimes(2);
     }
+  });
+});
+
+describe("DesktopRunnerHost.onSystemSuspended", () => {
+  it("reports the bridge's sleep and screen-lock signal as locked", () => {
+    const fake = buildFakeBridge(null);
+    const host = new DesktopRunnerHost({
+      bridge: fake.bridge,
+      signInUrl: "https://auth.example.invalid/sign-in",
+    });
+    const handler = vi.fn();
+    const subscription = host.onSystemSuspended(handler);
+
+    fake.emitSystemSuspended();
+    expect(handler.mock.calls).toEqual([["locked"]]);
+
+    subscription.dispose();
+    fake.emitSystemSuspended();
+    expect(handler).toHaveBeenCalledTimes(1);
   });
 });
 

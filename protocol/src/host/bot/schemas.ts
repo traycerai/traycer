@@ -278,10 +278,13 @@ export type BotUpdateResponse = z.infer<typeof botUpdateResponseSchema>;
 
 /**
  * What the caller's bell raises for one of a bot's conversations (Tracy Bots
- * T63): `all` of the bot's activity there, `mentions` (the answers to their
- * own posts and threads they took part in, which is what a conversation
- * with no level set reads as), or `off`. A thread follows its channel's
- * level. Stored per person in the cloud, so it is the same on every device.
+ * T63, decisions 137 and 138): `all` of the channel's posts, announcements
+ * and replies, `mentions` (answers to their requests, threads they follow,
+ * mentions of them), or `off`, which mutes the channel but still counts a
+ * mention of them or a question put to them. A conversation with no level
+ * set reads `all` for a personal environment's bot and `mentions` for a
+ * team's. A thread follows its channel's level. Stored per person in the
+ * cloud, so it is the same on every device.
  */
 export const botNotificationLevelSchema = lazySchema(() =>
   z.enum(["all", "mentions", "off"]),
@@ -295,7 +298,7 @@ export type BotNotificationLevelReadRequest = z.infer<
   typeof botNotificationLevelReadRequestSchema
 >;
 
-/** The caller's levels by conversation id; a conversation absent reads `mentions`. */
+/** The caller's levels by conversation id; a conversation absent reads its bot's default. */
 export const botNotificationLevelReadResponseSchema = lazySchema(() =>
   z.object({
     levels: z.record(z.string().min(1), botNotificationLevelSchema),
@@ -321,6 +324,128 @@ export const botNotificationLevelSetResponseSchema = lazySchema(() =>
 );
 export type BotNotificationLevelSetResponse = z.infer<
   typeof botNotificationLevelSetResponseSchema
+>;
+
+// ---- bot.threadFollow.read / bot.threadFollow.set ---------------------- //
+
+/**
+ * Whether the person follows one of a bot's threads (decision 137): a
+ * followed thread's replies reach their bell at the Mentions level. Posting
+ * its anchor, replying in it or being mentioned in it follows it; an
+ * explicit Unfollow is never overwritten by one of those. Stored per person
+ * in the cloud, so it is the same on every device.
+ */
+export const botThreadFollowStateSchema = lazySchema(() =>
+  z.enum(["following", "unfollowed"]),
+);
+export type BotThreadFollowState = z.infer<typeof botThreadFollowStateSchema>;
+
+/** Why the follow is what it is: the person took part, was mentioned, or chose. */
+export const botThreadFollowReasonSchema = lazySchema(() =>
+  z.enum(["participated", "mentioned", "manual"]),
+);
+export type BotThreadFollowReason = z.infer<typeof botThreadFollowReasonSchema>;
+
+export const botThreadFollowSchema = lazySchema(() =>
+  z.object({
+    state: botThreadFollowStateSchema,
+    reason: botThreadFollowReasonSchema,
+  }),
+);
+export type BotThreadFollow = z.infer<typeof botThreadFollowSchema>;
+
+export const botThreadFollowReadRequestSchema = lazySchema(() =>
+  z.object({ botId: botIdSchema }),
+);
+export type BotThreadFollowReadRequest = z.infer<
+  typeof botThreadFollowReadRequestSchema
+>;
+
+/** The caller's follow rows by thread id; a thread absent is not followed. */
+export const botThreadFollowReadResponseSchema = lazySchema(() =>
+  z.object({
+    follows: z.record(z.string().min(1), botThreadFollowSchema),
+  }),
+);
+export type BotThreadFollowReadResponse = z.infer<
+  typeof botThreadFollowReadResponseSchema
+>;
+
+export const botThreadFollowSetRequestSchema = lazySchema(() =>
+  z.object({
+    botId: botIdSchema,
+    threadId: z.string().min(1),
+    state: botThreadFollowStateSchema,
+  }),
+);
+export type BotThreadFollowSetRequest = z.infer<
+  typeof botThreadFollowSetRequestSchema
+>;
+
+/** The row as written: an explicit set is always `manual`. */
+export const botThreadFollowSetResponseSchema = lazySchema(() =>
+  z.object({ follow: botThreadFollowSchema }),
+);
+export type BotThreadFollowSetResponse = z.infer<
+  typeof botThreadFollowSetResponseSchema
+>;
+
+// ---- bot.readCursor.read / bot.readCursor.advance ---------------------- //
+
+/**
+ * A position in one of a bot's conversations (decision 139): the row, and
+ * its `seq`, the row's timestamp in epoch milliseconds. Positions compare
+ * by `seq`; it is per row, not dense.
+ */
+export const botReadPositionSchema = lazySchema(() =>
+  z.object({
+    messageId: z.string().min(1),
+    seq: z.number().int().nonnegative(),
+  }),
+);
+export type BotReadPosition = z.infer<typeof botReadPositionSchema>;
+
+export const botReadCursorReadRequestSchema = lazySchema(() =>
+  z.object({ botId: botIdSchema }),
+);
+export type BotReadCursorReadRequest = z.infer<
+  typeof botReadCursorReadRequestSchema
+>;
+
+/**
+ * `cursors`: how far the caller has read each conversation (the channel or
+ * a thread), kept per person in the cloud; a conversation absent was never
+ * read. `latest`: each conversation's newest row as the answering host
+ * knows it; a conversation absent has no row the host knows of.
+ */
+export const botReadCursorReadResponseSchema = lazySchema(() =>
+  z.object({
+    cursors: z.record(z.string().min(1), botReadPositionSchema),
+    latest: z.record(z.string().min(1), botReadPositionSchema),
+  }),
+);
+export type BotReadCursorReadResponse = z.infer<
+  typeof botReadCursorReadResponseSchema
+>;
+
+export const botReadCursorAdvanceRequestSchema = lazySchema(() =>
+  z.object({
+    botId: botIdSchema,
+    conversationId: z.string().min(1),
+    messageId: z.string().min(1),
+    seq: z.number().int().nonnegative(),
+  }),
+);
+export type BotReadCursorAdvanceRequest = z.infer<
+  typeof botReadCursorAdvanceRequestSchema
+>;
+
+/** The cursor as stored; an advance behind it leaves it where it was. */
+export const botReadCursorAdvanceResponseSchema = lazySchema(() =>
+  z.object({ cursor: botReadPositionSchema }),
+);
+export type BotReadCursorAdvanceResponse = z.infer<
+  typeof botReadCursorAdvanceResponseSchema
 >;
 
 // ---- bot.delete -------------------------------------------------------- //

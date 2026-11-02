@@ -220,7 +220,7 @@ describe("the local-bootstrap body's one alignment", () => {
 });
 
 /**
- * F5: ONE HEADING PER EVENT - now enforced by there being only one heading to
+ * ONE HEADING PER EVENT - now enforced by there being only one heading to
  * begin with.
  *
  * HISTORY, because this pin inverted and the reason matters. The stage line

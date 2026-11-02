@@ -5,7 +5,7 @@ import {
   screen,
 } from "@testing-library/react";
 import type { ReactNode } from "react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { deriveToolInputDetail } from "@traycer/protocol/host/agent/gui/tool-input-detail";
 import { deriveToolInputSummary } from "@traycer/protocol/host/agent/gui/tool-input-summary";
 import type { ToolCallArtifactStamp } from "@traycer/protocol/persistence/epic/content-blocks";
@@ -22,6 +22,10 @@ import {
   useSetChatFindForcedOpen,
 } from "@/stores/chats/chat-find-force-store-context";
 import { useToolOpenStore } from "@/stores/chats/tool-open-store";
+import type { TabNavigationIntent } from "@/lib/tab-navigation/intents";
+import { useBotTabLandingStore } from "@/stores/bots/bot-tab-landing-store";
+import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
 
 const PREFIX_RECEIVER_ID = "9600b202-1111-4111-8111-111111111111";
@@ -55,7 +59,19 @@ function inputProps(toolName: string, input: unknown) {
 const navigationMocks = vi.hoisted(() => ({
   navigate: vi.fn(),
   activateTabIntent:
-    vi.fn<(navigate: unknown, intent: unknown, extra: unknown) => void>(),
+    vi.fn<
+      (
+        navigate: unknown,
+        intent: TabNavigationIntent,
+        extra: unknown,
+      ) => boolean
+    >(),
+  navigateToTabIntent:
+    vi.fn<(navigate: unknown, intent: unknown, options: unknown) => void>(),
+}));
+
+vi.mock("@/hooks/host/use-connectable-host-ids", () => ({
+  useConnectableHostIds: () => ({ hostIds: [], resolved: false }),
 }));
 
 vi.mock("@tanstack/react-router", async (importOriginal) => {
@@ -66,7 +82,11 @@ vi.mock("@tanstack/react-router", async (importOriginal) => {
 
 vi.mock("@/lib/tab-navigation", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/tab-navigation")>();
-  return { ...actual, activateTabIntent: navigationMocks.activateTabIntent };
+  return {
+    ...actual,
+    activateTabIntent: navigationMocks.activateTabIntent,
+    navigateToTabIntent: navigationMocks.navigateToTabIntent,
+  };
 });
 
 function expectCrossTaskActivation(node: {
@@ -136,7 +156,7 @@ vi.mock("@/lib/epic-selectors", () => ({
     }
     return null;
   },
-  useOpenEpicId: () => "epic-1",
+  useMaybeOpenEpicId: () => "epic-1",
 }));
 
 // Cross-task peers come from the shared `useA2AMessagePeer` hook. An id with
@@ -153,6 +173,7 @@ const peerMocks = vi.hoisted(() => ({
       hostId: string;
       title: string | null;
       surface: "gui" | "tui";
+      bot: { botId: string; title: string } | null;
     } | null
   >,
 }));
@@ -748,8 +769,29 @@ describe("<ToolSegment /> A2A send-message rendering", () => {
     const CROSS_ID = "cross-receiver-1";
     const CANONICAL_ID = "cccc1234-1111-4111-8111-111111111111";
 
+    beforeEach(() => {
+      // The controller acknowledges a Tracy intent and commits its channel.
+      navigationMocks.activateTabIntent.mockImplementation((_nav, intent) => {
+        if (intent.kind === "tracy") {
+          useTracySurfaceStore.getState().selectChannel(intent.botId);
+        }
+        return true;
+      });
+      useSelectionAuthorityStore.setState({
+        effectiveHostId: "active-host-1",
+      });
+    });
+
     afterEach(() => {
-      navigationMocks.activateTabIntent.mockClear();
+      navigationMocks.activateTabIntent.mockReset();
+      navigationMocks.navigateToTabIntent.mockClear();
+      useTracySurfaceStore.setState({
+        open: false,
+        hostId: null,
+        botId: null,
+        visitedBotIds: [],
+      });
+      useBotTabLandingStore.setState({ byBotId: {} });
       peerMocks.byId = {};
       peerMocks.origins = [];
     });
@@ -795,6 +837,7 @@ describe("<ToolSegment /> A2A send-message rendering", () => {
         hostId: "host-2",
         title: "Cross Task Agent",
         surface: "gui",
+        bot: null,
       };
       renderSend(CROSS_ID, {
         receiverAgentId: CROSS_ID,
@@ -827,6 +870,7 @@ describe("<ToolSegment /> A2A send-message rendering", () => {
         hostId: "host-2",
         title: "Cross Terminal",
         surface: "tui",
+        bot: null,
       };
       renderSend(CROSS_ID, {
         receiverAgentId: CROSS_ID,
@@ -843,6 +887,44 @@ describe("<ToolSegment /> A2A send-message rendering", () => {
       expect(useChatTranscriptJumpStore.getState().requestsByChatId).toEqual(
         {},
       );
+    });
+
+    it("opens a bot receiver's channel on the window host, landing on the session, and parks no transcript jump", () => {
+      peerMocks.byId[CROSS_ID] = {
+        epicId: "bot-1",
+        agentId: CROSS_ID,
+        hostId: "host-2",
+        title: "Release bot",
+        surface: "gui",
+        bot: { botId: "bot-1", title: "Release bot" },
+      };
+      renderSend(CROSS_ID, {
+        receiverAgentId: CROSS_ID,
+        messageId: "cross-message-1",
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: "Release bot" }));
+
+      expect(useTracySurfaceStore.getState()).toMatchObject({
+        open: true,
+        hostId: "active-host-1",
+        botId: "bot-1",
+      });
+      expect(navigationMocks.activateTabIntent).toHaveBeenCalledTimes(1);
+      expect(navigationMocks.activateTabIntent).toHaveBeenCalledWith(
+        navigationMocks.navigate,
+        { kind: "tracy", botId: "bot-1" },
+        expect.anything(),
+      );
+      expect(navigationMocks.navigateToTabIntent).not.toHaveBeenCalled();
+      expect(useBotTabLandingStore.getState().byBotId["bot-1"]).toEqual({
+        kind: "sender",
+        chatId: CROSS_ID,
+      });
+      expect(useChatTranscriptJumpStore.getState().requestsByChatId).toEqual(
+        {},
+      );
+      expect(tileNavigationMocks.openTile).not.toHaveBeenCalled();
     });
 
     it("renders the abbreviated id as plain text when the peer cannot be resolved", () => {
@@ -873,6 +955,7 @@ describe("<ToolSegment /> A2A send-message rendering", () => {
         hostId: "host-2",
         title: "Canonical Peer",
         surface: "gui",
+        bot: null,
       };
       renderSend(abbreviated, {
         receiverAgentId: CANONICAL_ID,
@@ -1556,6 +1639,84 @@ describe("<ToolSegment /> streaming heartbeat", () => {
     expect(screen.queryByText("0s")).toBeNull();
     expect(screen.queryByText(/^\d+s$/)).toBeNull();
   });
+
+  it.each([
+    ["the host's receipt", 20_000, "0s"],
+    ["an earlier native start", 14_000, "6s"],
+    ["a native start ahead of the clock", 25_000, "0s"],
+  ] as const)(
+    "counts the live elapsed time from %s",
+    (_name, startedAt, expected) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(20_000);
+      render(
+        <ToolSegment
+          headerFindUnitId={null}
+          id="elapsed-anchor-tool"
+          toolName="mcp__fetch"
+          {...inputProps("mcp__fetch", { url: "https://example.com" })}
+          error={null}
+          agentMessageSend={null}
+          managedCommand={null}
+          agentMessageReceipt={null}
+          agentMessageDelivery={null}
+          botSendReceipt={null}
+          isStreaming
+          endState={null}
+          stopped={false}
+          progress={null}
+          backgroundOutput={null}
+          backgroundTask={false}
+          startedAt={startedAt}
+          durationMs={null}
+          variant="row"
+        />,
+      );
+
+      expect(screen.getByText(expected)).toBeTruthy();
+    },
+  );
+
+  it.each([
+    ["receipt", 1_700_000_100_000],
+    ["native start", 1_700_000_040_000],
+  ] as const)(
+    "stamps a sent A2A message with the tool's %s time",
+    (_name, startedAt) => {
+      render(
+        <ToolSegment
+          headerFindUnitId={null}
+          id={`a2a-send-stamp-${startedAt}`}
+          toolName="traycer_a2a/traycer_send_message"
+          {...inputProps("traycer_a2a/traycer_send_message", {})}
+          error={null}
+          agentMessageSend={{
+            receiverAgentId: "agent-receiver-1",
+            message: "Please inspect the failing test.",
+            responseId: "response-1",
+            expectReply: false,
+          }}
+          managedCommand={null}
+          agentMessageReceipt={null}
+          agentMessageDelivery={null}
+          botSendReceipt={null}
+          isStreaming={false}
+          endState={null}
+          stopped={false}
+          progress={null}
+          backgroundOutput={null}
+          backgroundTask={false}
+          startedAt={startedAt}
+          durationMs={null}
+          variant="card"
+        />,
+      );
+
+      expect(
+        screen.getByTestId("chat-message-timestamp").getAttribute("datetime"),
+      ).toBe(new Date(startedAt).toISOString());
+    },
+  );
 
   it("shows a 'stopped' badge for an interrupted call and 'superseded' for a steered one", () => {
     const { rerender } = render(

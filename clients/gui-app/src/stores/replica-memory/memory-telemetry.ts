@@ -14,7 +14,7 @@ import { getRetentionProfile } from "@/stores/replica-memory/retention-profile";
  * per-plane budget pressure.
  *
  * This is an INPUT the sync pill (or a memory-pressure affordance) may read.
- * It does not say how to render — T2 left pill presentation UI-owned.
+ * It does not say how to render — pill presentation is UI-owned.
  */
 export interface ReplicaMemoryTelemetry {
   readonly accountant: AccountantSnapshot;

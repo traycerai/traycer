@@ -794,7 +794,7 @@ describe("Overview doctor — Show logs stays on an honest source", () => {
   });
 
   it("withholds Show logs on a remote host that advertises doctor but not diagnostics.logs.tail", async () => {
-    // Discriminator: round 4 routed on `!rpcLogsSupported` alone, so a remote
+    // Discriminator: routing on `!rpcLogsSupported` alone let a remote
     // host's Show logs button read THIS computer's log via the bridge and
     // rendered it under the remote name. The button must be absent, not
     // present-and-wrong. Red against 390d05c2^.

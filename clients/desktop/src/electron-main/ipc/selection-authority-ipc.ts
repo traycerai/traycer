@@ -192,12 +192,9 @@ export function registerSelectionAuthorityIpc(bridge: RunnerIpcBridge): void {
     onRows: (read) => {
       void fleet.acceptPushedRows(read);
     },
-    // Coverage gates the cadence only in the build that ships without team
-    // hosts (`registered-hosts-broadcast.ts`): with team rows in the registry
-    // the bearer read owns a scope no push carries, so the cadence runs
-    // whatever the push is doing and this is a diagnostic of its health.
+    // A diagnostic of the push's health: the bearer read owns a scope no push
+    // carries, so the cadence runs whatever the push is doing.
     onPushActiveChanged: (active) => {
-      fleet.setPushActive(active);
       authorityLog.debug("[local-inventory] push coverage changed", {
         active,
       });

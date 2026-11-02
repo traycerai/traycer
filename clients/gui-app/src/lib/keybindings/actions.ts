@@ -1,5 +1,6 @@
 import { canonicalChord, type ChordString } from "@/lib/keybindings/chord";
 import { isMac } from "@/lib/keybindings/platform";
+import { isMobileApp } from "@/lib/mobile-app";
 
 /**
  * Stable identifiers for every keyboard-bindable action in the app. Adding
@@ -71,6 +72,7 @@ export const ACTION_IDS = [
   "app.zoom.out",
   "app.zoom.reset",
   "composer.dictation.toggle",
+  "voice.talk.toggle",
   "composer.suggestion.accept",
   "composer.drafts",
   "composer.model-picker.toggle",
@@ -635,8 +637,9 @@ export const ACTION_META: Readonly<Record<ActionId, ActionMeta>> = {
     // (`app.browser.new`): the strip sits beside every terminal.
     terminalPolicy: "app",
     secondaryTerminalPolicy: undefined,
-    // The installed mobile app never draws the vertical strip.
-    desktopOnly: true,
+    // The installed mobile app draws the strip where its width allows; the
+    // strip registers the handler only where the expanded form fits.
+    desktopOnly: false,
   },
   "nav.back": {
     id: "nav.back",
@@ -912,6 +915,23 @@ export const ACTION_META: Readonly<Record<ActionId, ActionMeta>> = {
     secondaryTerminalPolicy: undefined,
     desktopOnly: false,
   },
+  "voice.talk.toggle": {
+    id: "voice.talk.toggle",
+    label: "Talk",
+    description:
+      "Start or stop talking with your bots. Costs credits while on.",
+    category: "app",
+    kind: "chord",
+    // Its own chord, apart from dictation's ⌃⇧M. Per-platform like the model
+    // picker's: ⌃⌥T keeps Control distinct from ⌘ on macOS, and Alt+Shift+T
+    // avoids the Windows/Linux Ctrl+Alt=AltGr conflict.
+    defaultChord: { mac: "ctrl+alt+t", other: "alt+shift+t" },
+    secondaryChord: undefined,
+    terminalPolicy: "app",
+    secondaryTerminalPolicy: undefined,
+    // The phone's Talk is its own surface (the mobile voice ticket).
+    desktopOnly: true,
+  },
   "composer.suggestion.accept": {
     id: "composer.suggestion.accept",
     label: "Accept suggested reply",
@@ -999,6 +1019,26 @@ export const ACTION_META: Readonly<Record<ActionId, ActionMeta>> = {
     desktopOnly: false,
   },
 };
+/**
+ * Whether `id` can run in this app: it is not a desktop-only action in the
+ * installed mobile app, where its handler is never registered. One that cannot
+ * is bound to nothing, whatever a profile stored for it: it matches no key,
+ * reserves no chord, is forwarded from no browser tile, conflicts with no
+ * rebind and has no Settings row. The stored chord itself is kept, so an app
+ * that can run the action again finds it where the person left it.
+ */
+export function isActionAvailable(id: ActionId): boolean {
+  return !(ACTION_META[id].desktopOnly && isMobileApp());
+}
+
+/** The chord `id` is bound to in this app: the stored one, or none. */
+export function effectiveBinding(
+  bindings: Readonly<Record<ActionId, ChordString | null>>,
+  id: ActionId,
+): ChordString | null {
+  return isActionAvailable(id) ? (bindings[id] ?? null) : null;
+}
+
 export function getDefaultBindings(): Readonly<
   Record<ActionId, ChordString | null>
 > {

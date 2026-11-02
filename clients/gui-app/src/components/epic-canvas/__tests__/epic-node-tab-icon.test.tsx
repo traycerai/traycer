@@ -5,11 +5,16 @@ import {
   resetAgentActivity,
 } from "@/__tests__/agent-activity-harness";
 import { EpicNodeTabIcon } from "@/components/epic-canvas/epic-node-tab-icon";
+import { ComposerMentionDecorator } from "@/components/chat/composer/nodes/composer-mention-decorator";
+import { DEFAULT_EPIC_NODE_ICON_COLORS } from "@/lib/artifacts/node-display";
+import { iconForSuggestion } from "@/lib/composer/mentions/mention-entry-display";
+import type { EntityMentionAttachment } from "@/lib/composer/types";
 import { NotificationIndicatorsProvider } from "@/components/notifications/notification-indicators-provider";
 import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
 import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
 import { openStoreForTest } from "@/stores/epics/open-epic/test-support/open-store-for-test";
 import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
+import type { ArtifactProjection } from "@/stores/epics/open-epic/types";
 import {
   __resetAppLocalNotificationsStoreForTests,
   emitTerminalCrashedNotification,
@@ -238,6 +243,198 @@ describe("<EpicNodeTabIcon /> terminal-agent activity", () => {
     });
 
     expect(screen.getByRole("status", { name: SPINNER_LABEL })).toBeTruthy();
+  });
+});
+
+function fileNode(id: string, name: string): EpicArtifactRef {
+  return {
+    id,
+    instanceId: `${id}-instance`,
+    type: "file",
+    name,
+    hostId: "host-1",
+  };
+}
+
+function fileArtifact(
+  id: string,
+  folderName: string,
+  mediaType: string,
+): ArtifactProjection {
+  return {
+    layout: "file",
+    object: {
+      sha256: "a".repeat(64),
+      byteLength: 1024,
+      mediaType,
+      status: "published",
+    },
+    id,
+    kind: "file",
+    title: folderName,
+    folderName,
+    parentId: null,
+    artifactRoomId: null,
+    createdAt: 0,
+    updatedAt: 0,
+    status: null,
+    createdManually: false,
+  };
+}
+
+function renderFileTabIcon(node: EpicArtifactRef): HTMLElement {
+  const { container } = render(
+    <EpicNodeTabIcon
+      node={node}
+      epicId="epic-1"
+      variant="static"
+      className="size-3.5 shrink-0"
+      defaultIcon={undefined}
+    />,
+  );
+  return container;
+}
+
+describe("<EpicNodeTabIcon /> file artifacts", () => {
+  afterEach(() => {
+    cleanup();
+    __getOpenEpicRegistryForTests().disposeAll();
+  });
+
+  it("draws the glyph of the viewer the file opens in", () => {
+    const handle = registerEpicSession("epic-1");
+    handle.store.setState({
+      artifacts: {
+        allIds: ["video-1", "audio-1"],
+        byId: {
+          "video-1": fileArtifact("video-1", "walkthrough.mp4", "video/mp4"),
+          // Audio is recognised by media type alone, so the name has no
+          // extension the viewer would know.
+          "audio-1": fileArtifact("audio-1", "voice-note", "audio/mp4"),
+        },
+      },
+    });
+
+    const video = renderFileTabIcon(fileNode("video-1", "walkthrough.mp4"));
+    const audio = renderFileTabIcon(fileNode("audio-1", "voice-note"));
+
+    expect(video.querySelector("svg")?.getAttribute("class")).toContain(
+      "lucide-file-play",
+    );
+    expect(audio.querySelector("svg")?.getAttribute("class")).toContain(
+      "lucide-file-headphone",
+    );
+  });
+
+  // Drag previews render outside an open-epic session: no file to read, so
+  // the tab keeps the plain file glyph instead of throwing.
+  it("keeps the plain file glyph with no registered Epic session", () => {
+    const icon = renderFileTabIcon(fileNode("video-1", "walkthrough.mp4"));
+
+    const glyphClass = icon.querySelector("svg")?.getAttribute("class");
+    expect(glyphClass).toContain("lucide-file");
+    expect(glyphClass).not.toContain("lucide-file-play");
+  });
+});
+
+function artifactMention(
+  contextType: "html" | "file-artifact",
+  artifactId: string,
+  label: string,
+): EntityMentionAttachment {
+  return {
+    kind: "mention",
+    contextType,
+    path: label,
+    pathKind: null,
+    relPath: null,
+    absolutePath: null,
+    workspacePath: null,
+    label,
+    description: "Media epic",
+    epicId: "epic-1",
+    artifactId,
+    artifactType: contextType === "html" ? "html" : "file",
+    chatId: null,
+    terminalAgentId: null,
+    terminalId: null,
+    status: null,
+  };
+}
+
+function glyphOf(container: HTMLElement): SVGElement {
+  const svg = container.querySelector("svg");
+  if (svg === null) throw new Error("no glyph rendered");
+  return svg;
+}
+
+// The surfaces that name an artifact outside the sidebar draw it the way the
+// sidebar row does: the kind's glyph in its Settings tint, and a file's viewer.
+describe("artifact glyphs on mention surfaces", () => {
+  afterEach(() => {
+    cleanup();
+    __getOpenEpicRegistryForTests().disposeAll();
+  });
+
+  it("tints an HTML row in the mention list with the HTML colour", () => {
+    const { container } = render(
+      iconForSuggestion({
+        kind: "epic-artifact",
+        id: "html:epic-1:html-1",
+        token: "html:epic-1/html-1",
+        epicId: "epic-1",
+        epicTitle: "Media epic",
+        artifactId: "html-1",
+        artifactType: "html",
+        label: "Sidebar artifact icons",
+        description: "Media epic",
+        status: null,
+        updatedAt: 0,
+      }),
+    );
+
+    const glyph = glyphOf(container);
+    expect(glyph.getAttribute("class")).toContain("lucide-file-code");
+    expect(glyph.style.getPropertyValue("--swatch")).toBe(
+      DEFAULT_EPIC_NODE_ICON_COLORS.html,
+    );
+  });
+
+  // Regression: an HTML chip fell through to the git-branch glyph.
+  it("draws an HTML chip in the composer with the HTML glyph", () => {
+    const { container } = render(
+      <ComposerMentionDecorator
+        density="regular"
+        mention={artifactMention("html", "html-1", "Sidebar artifact icons")}
+      />,
+    );
+
+    const glyphClass = glyphOf(container).getAttribute("class");
+    expect(glyphClass).toContain("lucide-file-code");
+    expect(glyphClass).not.toContain("lucide-git-branch");
+  });
+
+  it("draws a file chip in the composer with the glyph of its viewer", () => {
+    const handle = registerEpicSession("epic-1");
+    handle.store.setState({
+      artifacts: {
+        allIds: ["video-1"],
+        byId: {
+          "video-1": fileArtifact("video-1", "walkthrough.mp4", "video/mp4"),
+        },
+      },
+    });
+
+    const { container } = render(
+      <ComposerMentionDecorator
+        density="regular"
+        mention={artifactMention("file-artifact", "video-1", "walkthrough.mp4")}
+      />,
+    );
+
+    expect(glyphOf(container).getAttribute("class")).toContain(
+      "lucide-file-play",
+    );
   });
 });
 

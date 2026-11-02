@@ -37,7 +37,7 @@ const sandboxDefaultsValueSchema = z.strictObject({
 
 /** A configuration's defaults as last read, with the revision a save quotes. */
 export interface ConfigurationSandboxDefaults {
-  /** `null`: none set, so a create takes the spec's. */
+  /** `null`: none set, so a create takes the built-in defaults. */
   readonly defaults: SandboxConfigurationDefaults | null;
   /** `null` when there is no item yet: a save creates it. */
   readonly revision: number | null;
@@ -172,7 +172,7 @@ export function useSandboxDefaultsEnvironments(
 /**
  * One configuration's defaults, by `personal` or team id: its environment
  * (`null` when it has none) and the read of its item (`null` with no
- * environment, so a create takes the spec's).
+ * environment, so a create takes the built-in defaults).
  */
 export function useConfigurationSandboxDefaults(configurationKey: string): {
   readonly environment: SandboxDefaultsEnvironment | null;
@@ -194,7 +194,7 @@ export function useConfigurationSandboxDefaults(configurationKey: string): {
 
 /**
  * Every configuration's defaults as a lookup by `personal` or team id: `null`
- * while unread, unset or unreadable, so a create takes the spec's. `enabled`
+ * while unread, unset or unreadable, so a create takes the built-in defaults. `enabled`
  * false reads nothing (a picker that stages nothing).
  */
 export function useSandboxDefaultsLookup(

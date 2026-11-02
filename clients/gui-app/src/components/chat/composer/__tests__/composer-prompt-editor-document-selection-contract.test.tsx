@@ -1,5 +1,5 @@
 /**
- * Ticket 2 - editor-boundary contract.
+ * Editor-boundary contract.
  *
  * `ComposerPromptEditor` splits Tiptap's document-change `update` event from
  * selection-only `selectionUpdate`. Selection must never call `getJSON()`

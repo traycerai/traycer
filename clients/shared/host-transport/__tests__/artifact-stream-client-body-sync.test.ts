@@ -54,7 +54,7 @@ class StubSession implements IStreamSession {
     status: Parameters<StatusChangeHandler>[0],
     reason: Parameters<StatusChangeHandler>[1],
   ): void {
-    this.statusChangeHandler(status, reason, null);
+    this.statusChangeHandler(status, reason, null, null);
   }
 }
 

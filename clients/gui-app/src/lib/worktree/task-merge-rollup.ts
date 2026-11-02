@@ -5,7 +5,7 @@ import type {
 } from "@traycer/protocol/host/index";
 
 /**
- * True-AND Task merge rollup (merge-provenance plan § Task rollup).
+ * True-AND Task merge rollup.
  *
  * A Task (epic) owns a set of branches: the superproject binding branch of every
  * worktree entry it owns, PLUS each of those entries' owned-submodule branches

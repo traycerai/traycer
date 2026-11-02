@@ -253,6 +253,7 @@ describe("buildCliUpgradeCommand's staging path never collides with the live bin
     const result = await buildCliUpgradeCommand({
       dryRun: false,
       targetVersion: null,
+      allowDowngrade: false,
     })(fakeCtx());
 
     expect(result.data).toMatchObject({
@@ -304,6 +305,7 @@ describe("buildCliUpgradeCommand's staging path never collides with the live bin
     await buildCliUpgradeCommand({
       dryRun: false,
       targetVersion: null,
+      allowDowngrade: false,
     })(fakeCtx());
 
     expect(mocks.downloadCalls).toHaveLength(1);
@@ -354,6 +356,7 @@ describe("buildCliUpgradeCommand's staging path never collides with the live bin
     await buildCliUpgradeCommand({
       dryRun: false,
       targetVersion: null,
+      allowDowngrade: false,
     })(fakeCtx());
 
     expect(mocks.downloadCalls).toHaveLength(1);

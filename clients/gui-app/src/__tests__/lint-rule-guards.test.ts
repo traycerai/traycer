@@ -310,12 +310,12 @@ describe("tabNavigationStoreActionRestrictions", () => {
       code: 'const { ["tabActivate"]: activate } = registry;',
     },
     {
-      // Cold review #10: no-substitution template literal is NOT a Literal node.
+      // A no-substitution template literal is NOT a Literal node.
       name: "template-computed member access of tabActivate",
       code: "const activate = registry[`tabActivate`];",
     },
     {
-      // Cold review #10: assignment destructuring is an AssignmentExpression,
+      // Assignment destructuring is an AssignmentExpression,
       // not a VariableDeclarator, so it bypassed the declaration selectors.
       name: "assignment-destructured shorthand of tabActivate",
       code: "let activate; ({ tabActivate: activate } = registry);",
@@ -492,7 +492,7 @@ describe("selectionAuthorityRestrictions", () => {
 });
 
 /**
- * Cold review #10: production flat-config overrides that rewrite
+ * Production flat-config overrides that rewrite
  * `no-restricted-syntax` must keep raw `tabActivate` restricted except for
  * the sole allowed activation module (`src/lib/tab-navigation.ts`).
  */
@@ -554,7 +554,7 @@ describe("eslint config retains raw tabActivate restriction", () => {
   });
 
   it("keeps the raw tabActivate restriction in test files", async () => {
-    // Cold review #10: the test override previously dropped the whole
+    // The test override previously dropped the whole
     // restriction, so a raw tabActivate import lint clean in a test. Tests may
     // seed setActiveTab/setActiveDraft, but must still route activation through
     // activateTabIntent - so the tabActivate restriction stays.
@@ -567,7 +567,7 @@ describe("eslint config retains raw tabActivate restriction", () => {
 });
 
 /**
- * F10: the config-mention tests above only prove the config MENTIONS
+ * The config-mention tests above only prove the config MENTIONS
  * tabActivate for a given file path. These probe the bypass forms THROUGH
  * THE REAL flat config end-to-end via `ESLint#lintText`, which actually
  * parses and runs every configured rule (not just `no-restricted-syntax`)
@@ -930,7 +930,7 @@ describe("eslint config gates the read-path import restriction to its allowlist"
  * of the read-path allowlist as "app chrome" - the two-role model the redesign
  * replaced with three (D15). Those surfaces read the Epic SESSION's host, and
  * exempting the directories let ~40 app-wide reads accumulate there and
- * surface as one review finding per push, three rounds running. These anchors
+ * surface as one finding per push. These anchors
  * pin that the subtree now carries `readPath`, that the reasoned exceptions
  * are lifted per FILE and only `readPath` is lifted (the file still carries
  * `kernel`, proving the lift is selective), and that the real config flags the
@@ -953,7 +953,7 @@ describe("eslint config fences the Epic canvas subtree and hooks/epic behind rea
   const SIBLING_OF_EXEMPT_HOOK =
     "src/hooks/epic/use-epic-tui-agent-mutations.ts";
   // The selector surface over the Epic session's handle: allowlisted as
-  // "canvas-serving, not tab-pinned" (the two-role premise) until round 6,
+  // "canvas-serving, not tab-pinned" (the two-role premise),
   // where its one app-wide read stamped every projected record with the
   // wrong host during a re-point. The census had excluded `src/lib/`.
   const EPIC_SELECTORS_FILE = "src/lib/epic-selectors.ts";
@@ -1001,7 +1001,7 @@ describe("eslint config fences the Epic canvas subtree and hooks/epic behind rea
     },
   );
 
-  // The hook-INDIRECTION half (round 6): `readPath` only ever sees a file's
+  // The hook-INDIRECTION half: `readPath` only ever sees a file's
   // own imports, so a wrapper hook that resolved `useHostClient()` on behalf
   // of an Epic surface laundered the read past the fence. Those directories
   // now take the caller's client and carry `readPath` themselves.

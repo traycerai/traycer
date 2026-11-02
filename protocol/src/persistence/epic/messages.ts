@@ -423,14 +423,6 @@ export function conversationRequestMessageId(requestId: string): string {
 }
 
 /**
- * Whether `messageId` names a member's request row. A request resolved by
- * one (`resolvedByMessageId`) was superseded by that message, not answered.
- */
-export function isConversationRequestMessageId(messageId: string): boolean {
-  return messageId.startsWith(CONVERSATION_REQUEST_MESSAGE_ID_PREFIX);
-}
-
-/**
  * Who settled one of a bot's questions: a member, by their answer or Skip
  * from the card, or the bot, with the default it named.
  */

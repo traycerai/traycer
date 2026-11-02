@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { cleanup, render } from "@testing-library/react";
 import { sideTabTitleIconOf, tabAutoTint } from "../tab-identity";
 
-/** The hues D11 leaves out: amber, red and the info blue that marks unread. */
+/** The hues left out: amber, red and the info blue that marks unread. */
 const FORBIDDEN_HUE_RANGES: ReadonlyArray<readonly [number, number]> = [
   [0, 60], // red/amber
   [210, 260], // the info blue range

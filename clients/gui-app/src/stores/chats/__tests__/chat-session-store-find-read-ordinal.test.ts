@@ -15,7 +15,7 @@ import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-
 import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
 
 /**
- * F14-8: `findReadOrdinal` is REQUIRED hydration, never a viewport move.
+ * `findReadOrdinal` is REQUIRED hydration, never a viewport move.
  *
  * Chat find reads an index hit's row to confirm it, and nothing scrolls to that
  * row - so unless the store names it to the planner, nothing will ever fetch it.

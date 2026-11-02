@@ -10,7 +10,7 @@ import {
 import { fixture, nextFrames, wheelsDelivered } from "./support/fixtures";
 
 /**
- * R3: a free reader's touch lands while a remount's saved-position restore is
+ * A free reader's touch lands while a remount's saved-position restore is
  * still in flight. Each cell reopens the tile with a saved FREE position
  * (`remountLater`, production's unmount-then-mount path), puts a finger down
  * `when` after the new scroll node exists, and drags. "plain" is Chrome's touch

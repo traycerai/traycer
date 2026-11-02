@@ -17,6 +17,7 @@ import { useBotListChangedSubscriptionForApp } from "@/hooks/bots/use-bot-list-c
 import { useHostEnvironmentBindings } from "@/hooks/bots/use-host-environment-bindings-query";
 import { useEnvironmentHostLists } from "@/hooks/bots/use-environment-host-lists-query";
 import { useTeamSetups } from "@/hooks/bots/use-team-setups";
+import { useArrangedBotsModel } from "@/hooks/bots/use-arranged-bots-model";
 import {
   buildHomeBotsModel,
   EMPTY_HOME_BOTS_MODEL,
@@ -130,16 +131,19 @@ export function HomeBotsSection(): ReactNode {
     return byEnvironmentId;
   }, [environmentHosts.hostsByEnvironmentId]);
   const botList = bots.data?.bots ?? EMPTY_BOTS;
-  const model = useMemo(
-    () =>
-      environments.data === undefined && bots.data === undefined
-        ? EMPTY_HOME_BOTS_MODEL
-        : buildHomeBotsModel({
-            environments: environmentList,
-            bots: botList,
-            mainBotIds: bots.data?.mainBotIds ?? null,
-          }),
-    [bots.data, environmentList, environments.data, botList],
+  // In the order the person gave the channel column, so the two agree.
+  const model = useArrangedBotsModel(
+    useMemo(
+      () =>
+        environments.data === undefined && bots.data === undefined
+          ? EMPTY_HOME_BOTS_MODEL
+          : buildHomeBotsModel({
+              environments: environmentList,
+              bots: botList,
+              mainBotIds: bots.data?.mainBotIds ?? null,
+            }),
+      [bots.data, environmentList, environments.data, botList],
+    ),
   );
   const teamSetups = useTeamSetups({
     client,

@@ -12,6 +12,7 @@ import {
   type UseVoiceDictation,
 } from "@/hooks/composer/use-voice-dictation";
 import { useSettingsStore } from "@/stores/settings/settings-store";
+import { useVoiceSessionStore } from "@/stores/voice/voice-session-store";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import {
   localEntry,
@@ -185,6 +186,8 @@ const incarnationBox: { current: ComposerEditorIncarnation | null } = {
   current: null,
 };
 
+const initialVoice = useVoiceSessionStore.getState();
+
 let getUserMediaImpl: () => Promise<FakeMediaStream> = () =>
   Promise.resolve(fakeMediaStream());
 let getUserMediaCalls = 0;
@@ -253,6 +256,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  useVoiceSessionStore.setState(initialVoice, true);
   useSettingsStore.setState({ voiceInputEnabled: true });
   globalWithAudio.AudioContext = originalAudioContext;
   if (originalMediaDevices !== undefined) {
@@ -277,6 +281,94 @@ function renderDictation() {
 }
 
 describe("useVoiceDictation lifecycle", () => {
+  it("pauses a voice session's capture while it holds the microphone, and releases it when the recording ends", async () => {
+    const paused = (): boolean =>
+      useVoiceSessionStore.getState().pausedForDictation;
+    expect(paused()).toBe(false);
+    const { result, unmount } = renderDictation();
+
+    act(() => {
+      result.current.start();
+    });
+    // The prompt is up: the microphone is being taken.
+    expect(result.current.state).toBe("requesting");
+    expect(paused()).toBe(true);
+    await flushAsync();
+    act(() => {
+      lastSpeechClient().callbacks.onReady();
+    });
+    expect(result.current.state).toBe("recording");
+    expect(paused()).toBe(true);
+
+    act(() => {
+      result.current.stop();
+    });
+    expect(result.current.state).toBe("transcribing");
+    expect(paused()).toBe(false);
+
+    // A recording cut short by unmount releases the pause too.
+    act(() => {
+      result.current.start();
+    });
+    expect(paused()).toBe(true);
+    unmount();
+    expect(paused()).toBe(false);
+  });
+
+  it("pauses a live voice session before the microphone opens, and leaves it paused for the person's Resume when the recording ends", async () => {
+    useVoiceSessionStore.setState({ phase: "live" });
+    let pausedAtCapture: boolean | null = null;
+    getUserMediaImpl = () => {
+      pausedAtCapture = useVoiceSessionStore.getState().pausedForDictation;
+      return Promise.resolve(fakeMediaStream());
+    };
+    const { result } = renderDictation();
+    act(() => {
+      result.current.start();
+    });
+    await flushAsync();
+    expect(getUserMediaCalls).toBe(1);
+    expect(pausedAtCapture).toBe(true);
+    act(() => {
+      lastSpeechClient().callbacks.onReady();
+    });
+
+    act(() => {
+      result.current.stop();
+    });
+    expect(result.current.state).toBe("transcribing");
+    expect(useVoiceSessionStore.getState().dictationHolds.size).toBe(0);
+    expect(useVoiceSessionStore.getState().pausedForDictation).toBe(true);
+  });
+
+  it("keeps another instance's pause: an idle hook mounting, or unmounting, releases no hold but its own", async () => {
+    const paused = (): boolean =>
+      useVoiceSessionStore.getState().pausedForDictation;
+    const recording = renderDictation();
+    act(() => {
+      recording.result.current.start();
+    });
+    await flushAsync();
+    act(() => {
+      lastSpeechClient().callbacks.onReady();
+    });
+    expect(recording.result.current.state).toBe("recording");
+    expect(paused()).toBe(true);
+
+    // Another composer mounts its own dictation, idle.
+    const idle = renderDictation();
+    expect(idle.result.current.state).toBe("idle");
+    expect(paused()).toBe(true);
+    idle.unmount();
+    expect(paused()).toBe(true);
+    expect(recording.result.current.state).toBe("recording");
+
+    act(() => {
+      recording.result.current.stop();
+    });
+    expect(paused()).toBe(false);
+  });
+
   it("does not open the microphone just because the hook is mounted", () => {
     renderDictation();
     expect(getUserMediaCalls).toBe(0);

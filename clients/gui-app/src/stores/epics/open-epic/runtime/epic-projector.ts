@@ -533,7 +533,7 @@ function pathOfEvent(event: Y.YEvent<Y.AbstractType<unknown>>): string[] {
  * arms disagree. A doc-arm test reaches tree churn only through a STRUCTURAL
  * key; the lane arm reaches it with a bare timestamp. Coverage written against
  * one door proves nothing about the other, which has already cost this epic two
- * rounds of a perf gate (finding 12): the fixes were right and the harness was
+ * rounds of a perf gate: the fixes were right and the harness was
  * entering through the door the field does not use.
  */
 const ARTIFACT_TREE_KEYS: ReadonlySet<string> = new Set([

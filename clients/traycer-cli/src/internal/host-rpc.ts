@@ -819,6 +819,14 @@ function mapHostRpcError(err: HostRpcError): CliError {
       exitCode: 1,
     });
   }
+  if (err.code === "E_CLOUD_UNREACHABLE") {
+    return cliError({
+      code: CLI_ERROR_CODES.CLOUD_UNREACHABLE,
+      message: `traycer: ${err.message}`,
+      details: null,
+      exitCode: 1,
+    });
+  }
   if (err.code === "E_AGENT_NOT_LOCAL") {
     return cliError({
       code: CLI_ERROR_CODES.AGENT_NOT_LOCAL,

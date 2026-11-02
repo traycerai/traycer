@@ -1,11 +1,14 @@
 import {
   EPIC_READ_ARTIFACT_OBJECT_RANGE_MAX_BYTES,
   EPIC_READ_ARTIFACT_OBJECT_TEXT_MAX_BYTES,
+  type EpicReadArtifactObjectResponse,
 } from "@traycer/protocol/host/epic/artifact-objects";
+import { ARTIFACT_OBJECT_SPAN_BYTES } from "@traycer-clients/shared/platform/sandbox-artifacts";
 import { isArtifactPath } from "./artifact-address";
 import {
   buildArtifactDocument,
   buildMissingPageDocument,
+  buildUnreachablePageDocument,
   type ArtifactDocumentOptions,
 } from "./artifact-document";
 import {
@@ -83,7 +86,14 @@ type ReadResult = CachedBytes | Unavailable;
 const CACHE_MAX_BYTES = 64 * 1024 * 1024;
 // Empty and tiny objects still retain map entries, keys and byte-array objects.
 const CACHE_MAX_ENTRIES = 1024;
-const BLOCK_BYTES = EPIC_READ_ARTIFACT_OBJECT_RANGE_MAX_BYTES;
+/** One host read; a reply to the shell is assembled from as many as it spans. */
+const BLOCK_BYTES = ARTIFACT_OBJECT_SPAN_BYTES;
+/**
+ * The most one reply carries. The phone shells still ask for spans this
+ * large and reject a shorter one, so the cap stays at the host's range
+ * ceiling even though each underlying read is a smaller block.
+ */
+const REPLY_MAX_BYTES = EPIC_READ_ARTIFACT_OBJECT_RANGE_MAX_BYTES;
 /** Captured versions must not fill missing paths from the live artifacts tree. */
 export const NO_OUTSIDE_REFERENCE: ArtifactOutsideReferenceResolver = () =>
   null;
@@ -91,6 +101,32 @@ export const NO_OUTSIDE_REFERENCE: ArtifactOutsideReferenceResolver = () =>
 function unavailable(reason: string, status: 404 | 503): Unavailable {
   return { kind: "unavailable", reason, status };
 }
+
+type HostObjectRefusal = Extract<
+  EpicReadArtifactObjectResponse,
+  { kind: "unavailable" }
+>["reason"];
+
+/**
+ * The reasons the HOST gives for not handing over an object's bytes, as
+ * against the ones this server synthesizes about an answer it did get
+ * (`invalid-span`, `invalid-size`, `document-too-large`). Only the host's own
+ * refusals mean "the content could not be fetched", so only they earn the
+ * stand-in page that says so and offers the read again: a malformed span is a
+ * host that answered wrongly, and asking it again gets the same wrong answer.
+ *
+ * Keyed on the wire union, so a reason ADDED to the protocol fails to compile
+ * here rather than silently falling through to a raw status whose body the
+ * frame would render as the whole page. The port's own `unavailable` is a bare
+ * `string` and stays one - a test feeds it an arbitrary reason to pin the
+ * pass-through - so this cannot be exhaustive over what a port might say, only
+ * over what the protocol defines.
+ */
+const HOST_OBJECT_REFUSAL: Record<HostObjectRefusal, true> = {
+  missing: true,
+  "not-downloaded": true,
+  failed: true,
+};
 
 function isDocument(path: string, entry: ArtifactManifestEntry): boolean {
   return (
@@ -152,6 +188,7 @@ export class ArtifactServer {
   private readonly lifetime = new AbortController();
   private readonly readSignal = this.lifetime.signal;
   private missingPageBytes: Uint8Array | null = null;
+  private unreachablePageBytes: Uint8Array | null = null;
 
   constructor(private readonly options: ArtifactServerOptions) {
     if (options.treePath !== "" && !isArtifactPath(options.treePath)) {
@@ -167,6 +204,7 @@ export class ArtifactServer {
     this.pending.clear();
     this.cacheBytes = 0;
     this.missingPageBytes = null;
+    this.unreachablePageBytes = null;
   }
 
   async serve(request: ArtifactServeRequest): Promise<ArtifactServeResult> {
@@ -188,13 +226,23 @@ export class ArtifactServer {
     if (!Number.isSafeInteger(entry.byteLength) || entry.byteLength < 0) {
       return unavailable("invalid-size", 503);
     }
-    const length = Math.min(request.length, BLOCK_BYTES);
+    const length = Math.min(request.length, REPLY_MAX_BYTES);
     if (resolved.compose) {
       const document = await waitForRead(
         this.documentBytes(path, entry),
         signal,
       );
-      if (document.kind === "unavailable") return document;
+      if (document.kind === "unavailable") {
+        // A page the folder HAS, whose bytes the host would not give up.
+        // Answering the frame with the status would put the wire reason on
+        // screen as the whole page — the reader is shown the bare word
+        // "failed" — so they get the stand-in that says the content could not
+        // be fetched and offers the read again.
+        if (!Object.hasOwn(HOST_OBJECT_REFUSAL, document.reason)) {
+          return document;
+        }
+        return this.unreachablePage(offset, request.length);
+      }
       if (document.sourceSize !== entry.byteLength) {
         return unavailable("invalid-span", 503);
       }
@@ -233,12 +281,31 @@ export class ArtifactServer {
         artifactRootPath: `/${this.treePrefix}`,
       }),
     );
-    const bytes = this.missingPageBytes;
+    return this.standInPage(this.missingPageBytes, offset, length);
+  }
+
+  private unreachablePage(offset: number, length: number): ArtifactServeResult {
+    // Composed once, like the missing page, and for the same reason: it says
+    // the same thing however the read failed and whichever page asked.
+    this.unreachablePageBytes ??= new TextEncoder().encode(
+      buildUnreachablePageDocument({
+        ...this.options.document,
+        artifactRootPath: `/${this.treePrefix}`,
+      }),
+    );
+    return this.standInPage(this.unreachablePageBytes, offset, length);
+  }
+
+  private standInPage(
+    bytes: Uint8Array,
+    offset: number,
+    length: number,
+  ): ArtifactServeResult {
     // The native v1 response has no 416 variant; a range past EOF maps to 404.
     if (offset > bytes.length) return unavailable("invalid-range", 404);
     return {
       kind: "bytes",
-      bytes: bytes.slice(offset, offset + Math.min(length, BLOCK_BYTES)),
+      bytes: bytes.slice(offset, offset + Math.min(length, REPLY_MAX_BYTES)),
       offset,
       totalBytes: bytes.length,
       mediaType: "text/html; charset=utf-8",

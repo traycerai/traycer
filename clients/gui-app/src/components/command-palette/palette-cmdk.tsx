@@ -20,7 +20,7 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { StatusGlyph } from "@/components/notifications/status-glyph";
 import { TreeChevron, TreeChevronSpacer } from "@/components/ui/tree-chevron";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
-import { EPIC_NODE_ICONS } from "@/lib/artifacts/node-display";
+import { EpicArtifactIcon } from "@/components/epic-canvas/epic-node-tab-icon";
 import {
   STATUS_DOT_CLASSES,
   STATUS_LABELS,
@@ -304,7 +304,6 @@ function ArtifactTreeItemLabel(props: {
 }) {
   const row = props.item.artifactTreeRow;
   if (row === undefined) return <SubpageItemLabel label={props.item.label} />;
-  const Icon = EPIC_NODE_ICONS[row.kind];
   const showStatus = computeArtifactNodeStatusDot(row.kind, row.status);
   const statusLabel =
     row.status === null ? null : (STATUS_LABELS[row.status] ?? "Unknown");
@@ -316,7 +315,12 @@ function ArtifactTreeItemLabel(props: {
         ) : (
           <TreeChevronSpacer />
         )}
-        <Icon aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
+        <EpicArtifactIcon
+          epicId={row.epicId}
+          artifactId={row.nodeId}
+          kind={row.kind}
+          className="size-3.5 shrink-0"
+        />
         <SubpageItemLabel label={props.item.label} />
         {showStatus && row.status !== null ? (
           <TooltipWrapper

@@ -1,5 +1,5 @@
 /**
- * R3-02. `inert` left the sample scene (L-131), so every control on the
+ * `inert` left the sample scene (L-131), so every control on the
  * editor's canvas is hit-testable again - and Radix Tooltip opens from
  * `onPointerMove` on its trigger and closes on the trigger's `onPointerDown`,
  * which is the one gesture the edit firewall swallows. A label that opens over

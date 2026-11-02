@@ -4,7 +4,7 @@ import type {
 } from "@traycer/protocol/host/managed-command/unary-schemas";
 
 /**
- * Copy for the Shells surface (root `CONTEXT.md`). There is ONE entity here -
+ * Copy for the Shells surface. There is ONE entity here -
  * a shell - but what the UI CALLS one follows its monitor state: a shell that
  * is watching is a "Monitor", a shell that is not is a "Shell". Product
  * decision, 2026-08-09; it supersedes the earlier rule that the noun stays

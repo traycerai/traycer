@@ -10,7 +10,7 @@ import { cn } from "@/lib/utils";
  * space: this adds the rail's own `gap-1` again between the icons on either
  * side of it, so two icons a divider separates sit three gaps apart instead of
  * one. A user who never opens the editor and has added none sees the rail they
- * always had, since the rail then holds no dividers to draw (R3-04).
+ * always had, since the rail then holds no dividers to draw.
  *
  * In a session it becomes the thing the user grabs: a short lit rule, and the
  * member attributes a canvas drop places by. `editing` is passed in rather

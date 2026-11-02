@@ -319,6 +319,23 @@ describe("Settings ▸ General ▸ When you quit Traycer - reachable signed out"
     ).toHaveLength(0);
   });
 
+  it("signed out with no host runtime, the root route mounts without an error reaching a boundary", async () => {
+    const logged = vi.spyOn(console, "error");
+    const runnerHost = makeRunnerHost({
+      menu: createMenu(),
+      hostLifecycle: null,
+    });
+    mountApp({ pathname: "/when-you-quit", runnerHost });
+
+    await screen.findByTestId("auth-landing-page-stub");
+    expect(
+      logged.mock.calls.filter((call) =>
+        String(call[0]).includes("Host runtime hooks"),
+      ),
+    ).toEqual([]);
+    logged.mockRestore();
+  });
+
   it("signed out, an unavailable card (no hostLifecycle bridge) ends on / with sign-in", async () => {
     // With no lifecycle bridge the card is unavailable, so the route sends
     // the user to `/` with the sign-in page.

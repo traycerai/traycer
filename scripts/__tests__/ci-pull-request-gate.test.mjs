@@ -45,6 +45,7 @@ const isScan = (file, jobId) => file === SCAN.file && jobId === SCAN.jobId;
 // The workflows AGENTS.md says can be run on a branch.
 const DISPATCHABLE = [
   "browser-regressions.yml",
+  "formal-regressions.yml",
   "pre-commit.yml",
   "protocol-compat.yml",
   "real-supervisor.yml",
@@ -265,11 +266,12 @@ describe("the gate expression", () => {
 });
 
 describe("every job of a workflow that runs on a pull request", () => {
-  it("covers the nine workflows the design names", () => {
+  it("covers the ten workflows the design names", () => {
     expect(pullRequestWorkflows.map(({ file }) => file).sort()).toEqual([
       "browser-regressions.yml",
       "codeql.yml",
       "dco.yml",
+      "formal-regressions.yml",
       "gradle-wrapper.yml",
       "pre-commit.yml",
       "protocol-compat.yml",
@@ -385,11 +387,12 @@ describe("a job that narrows a push run compares against the last green push", (
     }
   }
 
-  it("finds the two jobs that narrow today", () => {
+  it("finds the three jobs that narrow today", () => {
     expect(
       narrowing.map(({ file, jobId }) => `${file}/${jobId}`).sort(),
     ).toEqual([
       "browser-regressions.yml/changes",
+      "formal-regressions.yml/changes",
       "pre-commit.yml/workspace-checks",
     ]);
   });

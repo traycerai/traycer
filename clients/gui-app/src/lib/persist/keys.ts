@@ -94,6 +94,11 @@ export const githubMentionFiltersKey = (identity: string | null): string =>
 export const lastLocalHostIdKey = (): string =>
   persistKey("last-local-host-id");
 
+// The installed mobile app's window identity (browser-tab-identity.ts).
+// Identity-free like the key above: it names the device, not who is signed in,
+// the way a desktop window's bridge id does.
+export const mobileWindowIdKey = (): string => persistKey("mobile-window");
+
 export const appLocalNotificationsKey = (userId: string | null): string =>
   scopedPersistKey("app-local-notifications", scopeBucket(userId));
 
@@ -274,7 +279,7 @@ export const PERSIST_STORES = [
   { camelName: "onboarding", leaf: "onboarding", kind: "static" },
   { camelName: "commandPalette", leaf: "command-palette", kind: "static" },
   { camelName: "composerDraft", leaf: "composer-drafts", kind: "static" },
-  // The new-agent modal's per-epic draft patch. Persisted (D21) so a modal
+  // The new-agent modal's per-epic draft patch. Persisted so a modal
   // draft survives a reload and lists before host sync, exactly as a chat
   // draft does — same tier and same reasoning as `composerDraft`.
   {
@@ -482,9 +487,10 @@ export const PERSIST_STORES = [
     leaf: "team-continue-caution-seen",
     kind: "static",
   },
-  // The bot tabs open in this window, each with the host it is bound to for
-  // life (`bot-tabs-store.ts`). A bot id is a cloud entity, so no host scoping
-  // on the key; the host rides on each record instead.
+  // The Tracy surface: whether it is open, the host it is bound to and its
+  // selected channel (`tracy-surface-store.ts`; version 1 held one record per
+  // bot tab). A bot id is a cloud entity, so no host scoping on the key; the
+  // host rides in the value instead.
   {
     camelName: "botTabs",
     leaf: "bot-tabs",
@@ -497,12 +503,22 @@ export const PERSIST_STORES = [
     leaf: "bot-pane-widths",
     kind: "static",
   },
+  // The channel column's arrangement, one per device: the sections' order,
+  // each section's channels' order, the collapsed sections
+  // (`bot-column-layout-store.ts`).
+  {
+    camelName: "botColumnLayout",
+    leaf: "bot-column-layout",
+    kind: "static",
+  },
 
   // ── Non-zustand keys ─────────────────────────────────────────────────────
   // `last-route:<windowId>` — per-window router history (persistent-history.ts).
   { camelName: "lastRoute", leaf: "last-route", kind: "static" },
   // This machine's own local host id (host-directory-service.ts).
   { camelName: "lastLocalHostId", leaf: "last-local-host-id", kind: "static" },
+  // The installed mobile app's per-install window id (browser-tab-identity.ts).
+  { camelName: "mobileWindow", leaf: "mobile-window", kind: "static" },
   // `consumed-initial-route:<windowId>:<route>` — sessionStorage guard.
   {
     camelName: "consumedInitialRoute",

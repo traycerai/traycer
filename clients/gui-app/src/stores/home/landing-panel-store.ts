@@ -562,15 +562,6 @@ export interface LandingPanelStoreState {
    */
   readonly openPlaceholder: (instanceId: string, index: number) => void;
   /**
-   * Replaces the placeholder with the tab that was picked, at the placeholder's
-   * own strip position, and activates it.
-   *
-   * Appends when no placeholder is open. That is not a fallback for a caller
-   * mistake: picking Terminal can route through the directory picker, so the
-   * placeholder may legitimately be dismissed while the create is in flight,
-   * and the terminal that lands still has to become a tab.
-   */
-  /**
    * Lands an answered tab on the placeholder row it was asked for.
    *
    * `forPlaceholderInstanceId` names the row the caller was answering, and
@@ -1202,7 +1193,7 @@ export const useLandingPanelStore = create<LandingPanelStoreState>()(
       ...basePersistOptions(landingTerminalsKey(null)),
       storage: createJSONStorage(() => window.localStorage),
       // `placeholder` is deliberately absent: an unpicked new-tab row is not
-      // state worth restoring, and the core flows say so outright.
+      // state worth restoring.
       partialize: (state): PersistedLandingPanelState => ({
         tabs: state.tabs,
         activeInstanceId: state.activeInstanceId,

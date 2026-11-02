@@ -5,7 +5,7 @@ import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
 /**
  * Whether the composer has said what the Terminal account is, on this
  * desktop. The sentence goes with the first time the composer names it, and
- * once is enough (core flows, flow 0).
+ * once is enough.
  */
 interface TerminalAccountMentionStore {
   readonly explained: boolean;

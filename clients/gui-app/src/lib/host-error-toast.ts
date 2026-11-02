@@ -1,9 +1,9 @@
 import {
   HostRequestAbortedError,
+  HostRpcError,
   HostTransportFailureError,
   isTransientHostRpcFailure,
   RetryableTransportError,
-  type HostRpcError,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import { toast } from "sonner";
 import { staleWriteOfHostError } from "@/lib/environment/stale-write";
@@ -18,13 +18,6 @@ import {
   type EpicSharePromotionPendingReason,
 } from "@traycer/protocol/host/epic/share-refusal";
 
-/**
- * Maps a HostRpcError to the appropriate toast copy mandated by the
- * Core Flows spec. Permission errors get distinct copy from network/RPC
- * errors so the user knows whether to retry or ask for access.
- *
- * Call this in every mutation hook's `onError` callback.
- */
 /**
  * One stable id for every PRE-SEND transport notice, across every call site.
  *
@@ -296,6 +289,13 @@ export function toastHostRefusalWithGuidance(
   );
 }
 
+/**
+ * Maps a HostRpcError to its toast copy.
+ * Permission errors get distinct copy from network/RPC
+ * errors so the user knows whether to retry or ask for access.
+ *
+ * Call this in every mutation hook's `onError` callback.
+ */
 export function toastFromHostError(
   error: HostRpcError,
   fallback: string,
@@ -321,6 +321,112 @@ export function toastFromHostError(
   const dedupeKey = hostErrorDedupeKey(error);
   reportableErrorToast(
     message,
+    dedupeKey === null ? undefined : { id: `host-error:${dedupeKey}` },
+    createReportIssueContext({
+      title: "Host operation failed",
+      message: null,
+      code: error.code,
+      source: "Host",
+    }),
+  );
+}
+
+/**
+ * The share gate refused because the task is on its way to the cloud, and
+ * waiting is the advice.
+ */
+function isTaskStillSettingUp(refusal: EpicShareRefusal): boolean {
+  return (
+    refusal.kind === "promotion-pending" &&
+    (refusal.reason === "busy" || refusal.reason === "recent-attempt")
+  );
+}
+
+/**
+ * {@link toastFromHostError} for a press of Fork that has to attach the task
+ * to a team first. The attachment answers with the share gate's refusals, whose
+ * copy is written for an invite; here a task still on its way to the cloud is a
+ * task still being set up. Any other share refusal gets `fallback`.
+ */
+export function toastFromHostErrorOnFork(
+  error: HostRpcError,
+  fallback: string,
+): void {
+  const shareRefusal = epicShareRefusalFromErrorCode(error.code);
+  if (shareRefusal === null) {
+    toastFromHostError(error, fallback);
+    return;
+  }
+  reportableErrorToast(
+    isTaskStillSettingUp(shareRefusal)
+      ? "This task is still being set up. Fork again in a moment."
+      : fallback,
+    undefined,
+    createReportIssueContext({
+      title: "Host operation failed",
+      message: null,
+      code: error.code,
+      source: "Host",
+    }),
+  );
+}
+
+/** What a Send refused at its attachment has to say about the refusal. */
+export type SendRefusal =
+  /** Nothing: an abort, or a session the app is already recovering. */
+  | { readonly kind: "silent" }
+  /** Still on its way to the cloud, so the advice is to send again. */
+  | { readonly kind: "setting-up" }
+  /** A specific notice that gives the person something to do. */
+  | { readonly kind: "actionable"; readonly message: string }
+  /** Nothing to act on: the surface says what became of the message. */
+  | { readonly kind: "failed" };
+
+/**
+ * Sorts a Send's attachment failure for the surface that says what became of
+ * the message. A specific notice stays when it gives the person something to
+ * do. One with nothing to act on gives way: a transport notice, a stale-setting
+ * notice, a transient session check, a generic permission sentence and the
+ * share gate's invite copy.
+ */
+export function classifySendRefusal(error: unknown): SendRefusal {
+  if (!(error instanceof HostRpcError) || isSilentHostError(error)) {
+    return { kind: "silent" };
+  }
+  const shareRefusal = epicShareRefusalFromErrorCode(error.code);
+  if (shareRefusal !== null) {
+    return isTaskStillSettingUp(shareRefusal)
+      ? { kind: "setting-up" }
+      : { kind: "failed" };
+  }
+  if (
+    isTransportClassFailure(error) ||
+    staleWriteOfHostError(error) !== null ||
+    error.code === "FORBIDDEN" ||
+    (error.code === "UNAUTHORIZED" && error.fatalDetails?.retryable === true)
+  ) {
+    return { kind: "failed" };
+  }
+  const message = hostErrorToastMessage(error, "");
+  return message.length === 0
+    ? { kind: "failed" }
+    : { kind: "actionable", message };
+}
+
+/**
+ * The toast for a refused Send, carrying `line`. A transport failure stays a
+ * plain notice, as `transportNoticeToast` says why; anything else is reportable.
+ */
+export function toastSendRefusal(error: unknown, line: string): void {
+  if (!(error instanceof HostRpcError)) return;
+  if (isTransportClassFailure(error)) {
+    toast(line);
+    return;
+  }
+  emitHostFatalErrorNotification(error, line);
+  const dedupeKey = hostErrorDedupeKey(error);
+  reportableErrorToast(
+    line,
     dedupeKey === null ? undefined : { id: `host-error:${dedupeKey}` },
     createReportIssueContext({
       title: "Host operation failed",

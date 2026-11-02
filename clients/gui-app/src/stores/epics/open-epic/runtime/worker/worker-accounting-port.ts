@@ -3,7 +3,7 @@
  * worker.
  *
  * The counterpart of `process-backed-accounting-port.ts`, which is the same
- * interface backed by T5's books directly. That module reaches a module-scoped
+ * interface backed by the books directly. That module reaches a module-scoped
  * `let processRuntime`, and a worker importing it would get a second COPY of
  * the accountant rather than a second reference to one - so the worker gets
  * this instead, and the books stay on main where there is exactly one set.

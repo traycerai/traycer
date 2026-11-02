@@ -13,7 +13,7 @@ const CLOUD_PUBLICATION: DraftPublication = {
  * Project a published draft head (byte-pipe) onto the host-wire
  * `DraftDocument` the local stores already apply. Origin is always
  * replica: this host did not author the row. Foreign workspace
- * snapshots are dropped (decision #11).
+ * snapshots are dropped.
  */
 export function draftDocumentFromCloudHead(
   summary: CloudChatSummary,

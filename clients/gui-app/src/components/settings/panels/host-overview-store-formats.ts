@@ -384,9 +384,10 @@ function storeFloorReach(input: HostStoreFormatOffer): {
 
 /**
  * The version the floor compares the target against: the INSTALL RECORD's,
- * which is the operand the CLI passes (`readInstalledFloorOperands` reads
- * `install.json`'s version, and `applicabilityOperands` hands it straight to
- * `storeFloorApplicability` for a registry artifact).
+ * which is the operand the CLI passes for a registry artifact
+ * (`readInstalledFloorOperands`, then `applicabilityOperands`). The CLI reads
+ * the record's runtime version where it has one; `host.status` does not report
+ * that, so a `--from` install's label stands in for it here.
  *
  * Not the running process's, and activation debt is where the two part: the
  * bytes on disk are ahead of the host still serving, so with 1.4.0 installed
@@ -407,7 +408,9 @@ function installedVersionOperand(input: HostStoreFormatOffer): string | null {
 /**
  * The installed side as the CLI will place it: the RECORD's version and the
  * declaration the installed tree carries, through the same resolver the CLI
- * uses (`readInstalledFloorOperands` → `resolveHostStoreFormats`).
+ * uses (`readInstalledFloorOperands` → `resolveHostStoreFormats`). A local
+ * install with no declaration is the exception: the CLI resolves its runtime
+ * version, which `host.status` does not report.
  *
  * Deliberately the record rather than this build's own `chatDb.current`, for
  * both provenances. The two disagree in exactly the states where the record is

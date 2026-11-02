@@ -265,7 +265,7 @@ function newSession(): OpenedStoreForTest {
   // transition, including into "open" - so opening AFTER the snapshot would
   // wipe the freshness the snapshot just set, and every enqueued write command
   // would stall in "queued" behind `EpicWriteCommandTransportUnavailableError`.
-  captured.value.onConnectionStatus("open", null, false);
+  captured.value.onConnectionStatus("open", null, false, null);
   captured.value.onSnapshot(makeMeta(), Y.encodeStateAsUpdate(new Y.Doc()));
   return handle;
 }

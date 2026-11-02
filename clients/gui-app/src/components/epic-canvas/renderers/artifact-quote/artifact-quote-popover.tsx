@@ -193,6 +193,7 @@ function ArtifactQuoteTargets(props: {
       onSelectNewChat={props.onSelectNewChat}
       open
       onOpenChange={props.onOpenChange}
+      onClosed={null}
       trigger={
         <button
           type="button"

@@ -34,7 +34,7 @@ describe("paletteFilter", () => {
 });
 
 // The two layout doors are `PRIMARY_ITEM_IDS`: typing "layout" means them,
-// not a task or epic whose title happens to say the word too (C15).
+// not a task or epic whose title happens to say the word too.
 describe('paletteFilter - the layout doors outrank tasks for "layout"', () => {
   const layoutValue = "customize:layout Customize layout";
   const layoutSettingsValue = "customize:layout-settings Layout settings";

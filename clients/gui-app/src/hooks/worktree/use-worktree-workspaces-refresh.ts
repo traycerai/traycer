@@ -285,12 +285,12 @@ export function useWorktreeWorkspacesRefresh(args: {
         // refetches.
         //
         // AWAITED, but `refetchType: "active"` only - and the two halves of
-        // that are what D3 got half right. Its concern was real: awaiting
+        // that are what the earlier design got half right. Its concern was real: awaiting
         // INACTIVE entries (the list usually lives in an unmounted nested
         // form) held "Checking…" open across serial relay round-trips nobody
         // was looking at. But the fix it reached for was dropping the await
         // entirely, and an active-only invalidation never fetches an inactive
-        // entry in the first place - so the cost D3 avoided was already gone
+        // entry in the first place - so the cost it avoided was already gone
         // and not awaiting bought nothing for it.
         //
         // What it cost instead was the VISIBLE list. Refresh reported done

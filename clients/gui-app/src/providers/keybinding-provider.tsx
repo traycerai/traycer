@@ -501,7 +501,7 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
     // back/forward stays intact everywhere else.
     // NOTE: Windows may instead surface these as a main-process `app-command`
     // (`browser-backward`/`browser-forward`); that path is a verify-and-extend
-    // follow-up tracked in the tech plan (§4.4).
+    // follow-up.
     const handleMouseNav = (event: MouseEvent) => {
       if (!historyNavChromeAvailable(router.history)) return;
       if (event.button === 3) {

@@ -283,7 +283,7 @@ export function FallbackTierGroupsEditor(
   const ambiguousNames = ambiguousGroupNames(groups);
   /**
    * What the live region says about a picker refusal - Enter on an option the
-   * one-model-one-tier rule refuses (spec §Accessibility). The same region as
+   * one-model-one-tier rule refuses. The same region as
    * the preview's status, so the page keeps one place that speaks; a counter
    * rides along so pressing Enter twice on the same refusal is said twice.
    */
@@ -756,7 +756,7 @@ function TestPanelSlot(props: {
  * marks the user, so an empty list means "you emptied this", not "nothing has
  * been set up". Restoring is therefore an explicit action with its own verb
  * rather than something the next read does silently - which is exactly what the
- * seed marker exists to guarantee (D116/D127).
+ * seed marker exists to guarantee.
  *
  * It calls the RESTORE op rather than saving a client-built list: only the host
  * can build the seed a first read would have produced, and a list assembled here

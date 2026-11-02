@@ -62,9 +62,10 @@ function secretRows(list: SecretsList | undefined): {
 }
 
 /**
- * Why the list is not shown: an old host by name, Personal's in one line, a
- * team's in the host's words. A read with no answer in time (`error` null)
- * names the configuration.
+ * Why the list is not shown: an old host by name, else the configuration's own
+ * line. A remote error body is never rendered to the person — it says the
+ * server's words ("the destination api.example.com does not resolve"), not
+ * what this page could not do.
  */
 function readFailureText(
   error: Error | null,
@@ -75,9 +76,7 @@ function readFailureText(
     return SECRETS_NEED_UPDATED_HOST;
   }
   if (personal) return PERSONAL_SECRETS_READ_FAILED;
-  return error === null
-    ? `Couldn't read ${configurationName}'s secrets.`
-    : error.message;
+  return `Couldn't read ${configurationName}'s secrets.`;
 }
 
 /**
@@ -125,7 +124,9 @@ export function SecretsPage(props: {
   // with an empty claim while their completion is still unknown.
   const { secrets, removing } = secretRows(list.data);
   const pick = useEnvironmentPick();
-  const personal = pick.kind === "personal";
+  // A Local pick reads this computer's own settings through the window's
+  // host: the same Personal page, and no team, so its lines never name one.
+  const personal = pick.kind === "personal" || source.kind === "host";
   return (
     <section className="flex flex-col gap-3" data-testid="secrets-page">
       {source.kind === "host" ? (
@@ -145,9 +146,10 @@ export function SecretsPage(props: {
           </Button>
         </div>
       ) : null}
-      {secrets !== null &&
+      {canEdit &&
+      secrets !== null &&
       secrets.length === 0 &&
-      (!canEdit || removing.length === 0) ? (
+      removing.length === 0 ? (
         <p
           className="max-w-[72ch] text-ui-sm text-muted-foreground"
           data-testid="secrets-empty"
@@ -155,8 +157,23 @@ export function SecretsPage(props: {
           {props.emptyText}
         </p>
       ) : null}
+      {/* A reader who cannot edit still sees every name and state, the
+          removals that have not finished included, or that there are none. */}
       {secrets !== null && !canEdit ? (
-        <TeamSecretNames secrets={secrets} />
+        <TeamSecretNames
+          secrets={[
+            ...secrets.map((secret) => ({
+              id: secret.secretId,
+              name: secret.name,
+              revoked: secret.revoked,
+            })),
+            ...removing.map((entry) => ({
+              id: entry.id,
+              name: entry.name,
+              revoked: true,
+            })),
+          ]}
+        />
       ) : null}
       {canEdit && secrets !== null && secrets.length + removing.length > 0 ? (
         <ul className="flex flex-col" data-testid="secrets-list">

@@ -1,5 +1,5 @@
 /**
- * T5 follow-ups (three P1/P2 findings in `use-chat-composer-submit.ts`, all
+ * Follow-ups (three P1/P2 findings in `use-chat-composer-submit.ts`, all
  * introduced by the PREVIOUS round's own fixes):
  *
  * R3 - the `/btw` re-inline used to run as a DETACHED submit phase, after the
@@ -243,6 +243,7 @@ function makeToolbarStore(seedKey: string) {
     reasoningFallback: "model-default",
     seedKey,
     values: {
+      ultracode: false,
       permission: "supervised",
       selection: { harnessId: "codex", modelSlug: "gpt-5", profileId: null },
       reasoning: "medium",
@@ -251,6 +252,7 @@ function makeToolbarStore(seedKey: string) {
     onSettingsChange: null,
     tuiOnly: false,
     chatLineCarriesAutoMode: null,
+    ultracodeCarried: false,
     hostId: null,
   });
 }
@@ -291,6 +293,7 @@ function mountSubmit(args: MountArgs) {
       onSubmitMessage: args.onSubmitMessage,
       onSideChat: args.onSideChat ?? null,
       targetHostId: args.targetHostId ?? null,
+      restingSandbox: null,
       queueEditTargetId: args.queueEditTargetId ?? null,
       getDraftBlobBridgeSupported:
         args.getDraftBlobBridgeSupported ?? (() => false),
@@ -553,6 +556,7 @@ function mountSteerConflictLiveBlock(args: {
         onSubmitMessage: args.onSubmitMessage,
         onSideChat: null,
         targetHostId: GATE_HOST,
+        restingSandbox: null,
         queueEditTargetId: null,
         getDraftBlobBridgeSupported: args.bridgeSupported ?? (() => false),
       }),
@@ -765,6 +769,7 @@ function Harness(props: {
     onSubmitMessage: props.onSubmitMessage,
     onSideChat: null,
     targetHostId: props.targetHostId,
+    restingSandbox: null,
     queueEditTargetId: null,
     // The production shape (`chat-tile.tsx`): a STABLE getter bound directly
     // to the store, never to a value captured from this render.

@@ -3,7 +3,7 @@
  * scroller, its m.div frames and the rows' drag handles are what the drag
  * model reads, so this pins the attributes and refs where they actually live.
  * A row reorders along y, the drag overlay is the side row, and a sideways
- * pull into the content tears the tab off (S-11). Rects are stubbed: jsdom
+ * pull into the content tears the tab off. Rects are stubbed: jsdom
  * measures zeros.
  */
 import type { ReactNode } from "react";

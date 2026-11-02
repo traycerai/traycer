@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { DraftDocument, DraftWrite } from "@traycer/protocol/host";
+import type { DraftComposerPortable } from "@traycer/protocol/persistence/draft/schemas";
+import { chatRunSettingsSchemaPreUltracode } from "@traycer/protocol/persistence/epic/foundation";
+import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 
 import { listDraftInventory } from "@/lib/drafts/draft-inventory";
 import {
@@ -55,6 +58,51 @@ function hostDocument(draftId: string, content: JsonContent): DraftDocument {
   };
 }
 
+const LIVE_CLAUDE_SETTINGS: ChatRunSettings = {
+  harnessId: "claude",
+  model: "claude-opus-4-7",
+  permissionMode: "supervised",
+  reasoningEffort: "high",
+  serviceTier: null,
+  agentMode: "regular",
+  profileId: null,
+  ultracode: true,
+};
+
+const FROZEN_CLAUDE_SETTINGS = chatRunSettingsSchemaPreUltracode.parse({
+  harnessId: "claude",
+  model: "claude-opus-4-7",
+  permissionMode: "supervised",
+  reasoningEffort: "high",
+  serviceTier: null,
+  agentMode: "regular",
+  profileId: null,
+});
+
+const FROZEN_CODEX_SETTINGS = chatRunSettingsSchemaPreUltracode.parse({
+  harnessId: "codex",
+  model: "gpt-5.5",
+  permissionMode: "supervised",
+  reasoningEffort: "high",
+  serviceTier: null,
+  agentMode: "regular",
+  profileId: null,
+});
+
+function frozenHostDocument(
+  draftId: string,
+  revision: number,
+  runSettings: DraftComposerPortable["runSettings"],
+): DraftDocument {
+  const document = hostDocument(draftId, typed("from the host"));
+  if (document.kind !== "new-chat") throw new Error("expected a new-chat row");
+  return {
+    ...document,
+    revision,
+    portable: { ...document.portable, runSettings },
+  };
+}
+
 interface HostLog {
   rows: DraftDocument[];
 }
@@ -91,6 +139,10 @@ function mountSession(log: HostLog) {
 
 function patchForEpic() {
   return useNewConversationModalStore.getState().draftPatchesByEpicId[EPIC_ID];
+}
+
+function patchSettings(): ChatRunSettings | null {
+  return patchForEpic()?.settings ?? null;
 }
 
 function currentDraftId(): string {
@@ -146,6 +198,71 @@ describe("new-chat owner host capture", () => {
     // A dirtying write here would re-dirty the row the collector is marking
     // clean, and the flush would never settle.
     expect(patch?.generation).toBe(patch?.syncedGeneration);
+  });
+});
+
+describe("new-chat frozen settings echoes", () => {
+  it("keeps Claude intent only on the acknowledged draft line", async () => {
+    const log: HostLog = { rows: [] };
+    const session = mountSession(log);
+    bindNewChatDraftHost(EPIC_ID, HOST_ID);
+
+    useNewConversationModalStore
+      .getState()
+      .setSettings(EPIC_ID, LIVE_CLAUDE_SETTINGS);
+    const draftId = currentDraftId();
+    await session.flush([draftId]);
+
+    expect(patchForEpic()?.generation).toBe(patchForEpic()?.syncedGeneration);
+    expect(
+      applyNewChatHostDocument(
+        frozenHostDocument(draftId, 8, FROZEN_CLAUDE_SETTINGS),
+      ),
+    ).toBe(true);
+    expect(patchSettings()).toMatchObject({
+      harnessId: "claude",
+      ultracode: true,
+    });
+
+    expect(
+      applyNewChatHostDocument(
+        frozenHostDocument(draftId, 9, FROZEN_CODEX_SETTINGS),
+      ),
+    ).toBe(true);
+    expect(patchSettings()).toMatchObject({
+      harnessId: "codex",
+      ultracode: false,
+    });
+
+    expect(
+      applyNewChatHostDocument(
+        frozenHostDocument(draftId, 10, FROZEN_CLAUDE_SETTINGS),
+      ),
+    ).toBe(true);
+    expect(patchSettings()).toMatchObject({
+      harnessId: "claude",
+      ultracode: false,
+    });
+
+    expect(
+      applyNewChatHostDocument(frozenHostDocument(draftId, 11, null)),
+    ).toBe(true);
+    expect(patchSettings()).toBeNull();
+
+    useNewConversationModalStore
+      .getState()
+      .setSettings(EPIC_ID, LIVE_CLAUDE_SETTINGS);
+    await session.flush([draftId]);
+    expect(patchSettings()).toMatchObject({ ultracode: true });
+
+    const nextDraftId = "new-chat-after-frozen-echo";
+    expect(
+      applyNewChatHostDocument(
+        frozenHostDocument(nextDraftId, 1, FROZEN_CLAUDE_SETTINGS),
+      ),
+    ).toBe(true);
+    expect(patchForEpic()?.draftId).toBe(nextDraftId);
+    expect(patchSettings()).toMatchObject({ ultracode: false });
   });
 });
 

@@ -20,7 +20,10 @@ import {
   resolveTabTitle,
 } from "@/lib/browser-view/browser-tab-display";
 import { basenameOfPath } from "@/lib/path";
-import { EPIC_NODE_ICONS } from "@/lib/artifacts/node-display";
+import {
+  EpicArtifactIcon,
+  StaticEpicNodeIcon,
+} from "@/components/epic-canvas/epic-node-tab-icon";
 import { cn } from "@/lib/utils";
 import {
   composerInlineChipClassNames,
@@ -69,9 +72,8 @@ function DecoratorIcon({
     mention.contextType === "terminal-agent" ||
     mention.contextType === "terminal"
   ) {
-    const Icon = EPIC_NODE_ICONS[mention.contextType];
     return (
-      <Icon className={cn(className, "text-muted-foreground")} aria-hidden />
+      <StaticEpicNodeIcon type={mention.contextType} className={className} />
     );
   }
   if (mention.contextType === "github_pull_request") {
@@ -90,15 +92,14 @@ function DecoratorIcon({
       />
     );
   }
-  if (
-    mention.contextType === "spec" ||
-    mention.contextType === "ticket" ||
-    mention.contextType === "story" ||
-    mention.contextType === "review"
-  ) {
-    const Icon = EPIC_NODE_ICONS[mention.contextType];
+  if ("artifactType" in mention && mention.artifactType !== null) {
     return (
-      <Icon className={cn(className, "text-muted-foreground")} aria-hidden />
+      <EpicArtifactIcon
+        epicId={mention.epicId}
+        artifactId={mention.artifactId}
+        kind={mention.artifactType}
+        className={className}
+      />
     );
   }
   return (

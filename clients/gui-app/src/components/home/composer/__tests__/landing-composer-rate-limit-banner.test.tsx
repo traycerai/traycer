@@ -62,6 +62,12 @@ const testState = vi.hoisted<{
   },
 }));
 
+vi.mock("@/components/settings/host-scope/use-host-options", async () => {
+  const { hostOptionsFixture } =
+    await import("@/components/settings/host-scope/host-scope-fixture");
+  const options = hostOptionsFixture({ hosts: [] });
+  return { useHostOptions: () => options };
+});
 vi.mock("@/hooks/providers/use-provider-pack-gate", () => ({
   // Host-backed readiness hook, stubbed to its fail-open answer - the same
   // treatment this suite already gives every other host-dependent hook. It
@@ -142,6 +148,7 @@ vi.mock("@/stores/home/landing-draft-store", () => {
     drafts: [],
     setDraftComposerMode: vi.fn(),
     setDraftSettings: vi.fn(),
+    seedUnseededDraft: vi.fn(() => false),
   };
   // A store API, not just a selector hook: the landing composer also reads
   // it through `useStoreWithEqualityFn` (its returned sandbox).
@@ -181,6 +188,7 @@ vi.mock("@/hooks/sandboxes/use-staged-send-sign-in-check", () => ({
 
 vi.mock("@/components/home/hooks/use-composer-toolbar-store", () => {
   const toolbarStore = createStore(() => ({
+    ultracode: false,
     selection: {
       harnessId: "claude",
       modelSlug: "claude-sonnet",
@@ -271,7 +279,7 @@ vi.mock("@/hooks/epic/use-epic-create-mutation", () => ({
 vi.mock("@/hooks/agent/use-create-tui-agent", () => ({
   useCreateTuiAgentForClient: () => ({ isPending: false }),
 }));
-// P1.2: the composer resolves its placement (pin ?? effective) through this
+// The composer resolves its placement (pin ?? effective) through this
 // one hook. These suites are about paste/gating/banner behaviour, not
 // selection derivation, so it is stubbed at that single boundary - the same
 // treatment the other host-backed hooks above get.
@@ -316,7 +324,7 @@ vi.mock("@/lib/host", () => ({
     findById: () => null,
     onChange: () => ({ dispose: () => undefined }),
   }),
-  // The SPINE, a separate export since redesign P2.1.
+  // The SPINE, a separate export.
   useHostRuntimeClient: () => null,
 }));
 
@@ -418,7 +426,7 @@ describe("LandingComposer rate-limit banner wiring", () => {
     if (bannerProps === null) throw new Error("expected banner props");
     // Task-wide checkbox is never wired: affectedChatCount is fixed at 0.
     expect(bannerProps.affectedChatCount).toBe(0);
-    // Landing has no tab, but it does have a PLACEMENT (redesign P1.2): the
+    // Landing has no tab, but it does have a PLACEMENT: the
     // usage sidecar / R-key refresh must resolve to the composer's own
     // resolved host - the machine the turn will run on - not to whichever
     // host the window happens to be bound to.

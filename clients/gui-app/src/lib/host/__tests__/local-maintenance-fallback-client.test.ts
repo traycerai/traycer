@@ -1032,7 +1032,7 @@ describe("createLocalMaintenanceFallbackClient", () => {
   });
 
   it("an already-aborted signal on the direct-serve path never starts the CLI", async () => {
-    // Discriminator: round 8's serveRespectingSignal must reject with the
+    // Discriminator: serveRespectingSignal must reject with the
     // transport cancellation shape before calling management. Red against
     // 45e3cb7a^ which ignored the signal on the served branch.
     handshakeAbsent(LOCAL_HOST_ID);

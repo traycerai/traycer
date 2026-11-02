@@ -257,7 +257,7 @@ export function RootView(props: RootViewProps) {
     if (showRecents && recents !== null) buckets.push(recents);
     const ordered = [...buckets, ...trimmed];
     if (showRecents) return ordered;
-    // Best match first, ACROSS groups (C15: "layout" means the layout doors,
+    // Best match first, ACROSS groups ("layout" means the layout doors,
     // not a task titled with it). cmdk 1.1.1 means to reorder groups by score
     // but looks each one up by its generated id against a `data-value` that
     // holds the heading, so it never finds one and the default order stands.

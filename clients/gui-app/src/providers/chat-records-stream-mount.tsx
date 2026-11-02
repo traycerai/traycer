@@ -24,6 +24,13 @@ import { isChatVisibleToUser } from "@/stores/epics/open-epic/projection-helpers
 import type { RecordListRevision } from "@traycer/protocol/host/epic/record-list-revision";
 
 /**
+ * A session that stayed open at least this long before closing counts as
+ * healthy, resetting the reopen lane's backoff even if it carried no deltas.
+ * Mirrors the reconnect engine's rebuild-pacer healthy-lifetime constant.
+ */
+const HEALTHY_SESSION_RESET_MS = 30_000;
+
+/**
  * The record-change PUSH stream, mounted once per app.
  *
  * ## Host-scoped, not per-tab
@@ -91,13 +98,6 @@ import type { RecordListRevision } from "@traycer/protocol/host/epic/record-list
  * A skipped delta costs latency only - the session's own 20s list read against
  * its own host is the backup for every dropped frame, as above.
  */
-/**
- * A session that stayed open at least this long before closing counts as
- * healthy, resetting the reopen lane's backoff even if it carried no deltas.
- * Mirrors the reconnect engine's rebuild-pacer healthy-lifetime constant.
- */
-const HEALTHY_SESSION_RESET_MS = 30_000;
-
 export function ChatRecordsStreamMount(): ReactNode {
   const wsStreamClient = useWsStreamClient();
   const support = useStreamMethodSupport("host.chatRecords.subscribe");

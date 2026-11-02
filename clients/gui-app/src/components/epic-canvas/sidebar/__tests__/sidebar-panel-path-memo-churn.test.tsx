@@ -2,7 +2,7 @@
  * A memoized sidebar row must not re-render through its PARENT when a different
  * row's record changes.
  *
- * ## Why this exists beside the subscription pin (epic-sync-overhaul finding 12)
+ * ## Why this exists beside the subscription pin
  *
  * `sidebar-row-tree-subscription-churn.test.tsx` pins the row's own store
  * subscription and it is green - but the field still rendered all forty rows

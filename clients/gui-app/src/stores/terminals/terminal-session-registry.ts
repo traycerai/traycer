@@ -162,18 +162,18 @@ export class TerminalSessionRegistry {
         // Attachment intent follows lease state, not session kind: a
         // lease-free running terminal-agent (indefinite keep-warm) or
         // lingering plain terminal must not claim attention.
-        // A lease change reopens the stream as `cache`, which is how a host
-        // of any version hears it. A THROW here is the disappearing-transport
-        // case and the registry fails toward disposal, because the captured
+        // The store restates intent in place when supported and otherwise
+        // replaces the stream, deferring either operation while held.
+        // A THROW here is the disappearing-transport case and the registry
+        // fails toward disposal, because the captured
         // factory throws when the directory or user is gone and a warm entry
         // whose stream is already closed would only ever be revived dead.
         onParked: ({ handle }) => {
           handle.store.getState().setViewer("cache");
         },
         // Lease-free keep-warm / linger was tagged `cache`. The tile taking
-        // the lease states what it is: one on screen is `presentation`, which
-        // reopens the stream; one mounted off screen stays `cache`, which
-        // leaves the parked stream exactly as it is.
+        // the lease states what it is: one on screen is `presentation`; one
+        // mounted off screen stays `cache` and retains the parked intent.
         onRevived: ({ handle }) => {
           handle.store.getState().setViewer(this.acquiringViewer);
         },

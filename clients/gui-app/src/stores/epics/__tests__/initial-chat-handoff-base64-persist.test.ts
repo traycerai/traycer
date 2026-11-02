@@ -12,6 +12,7 @@ import {
 const STORAGE_KEY = persistKey(STORE_KEYS.initialChatHandoff);
 
 const SETTINGS: ChatRunSettings = {
+  ultracode: false,
   harnessId: "codex",
   model: "gpt-5-codex",
   permissionMode: "supervised",

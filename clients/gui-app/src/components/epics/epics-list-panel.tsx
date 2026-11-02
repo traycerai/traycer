@@ -1164,15 +1164,6 @@ function useChatHostFilterGate(
 }
 
 /**
- * The narrower question the message-hit section asks: is History showing a
- * SUBSET of the account's tasks right now?
- *
- * Deliberately not {@link hasActiveHistoryFilters}. The query is not a
- * narrowing the hits ignore - it is the thing they are searching for - and a
- * sort reorders the task list without removing anything from it, so neither
- * belongs in a label that says the hits below were not filtered the same way.
- */
-/**
  * Select all needs something to select, and every retained page reachable when
  * some are not loaded yet, and no page read in flight.
  */
@@ -1238,6 +1229,15 @@ function historyMatchingSetKey(search: HistorySearchState): string {
   });
 }
 
+/**
+ * The narrower question the message-hit section asks: is History showing a
+ * SUBSET of the account's tasks right now?
+ *
+ * Deliberately not {@link hasActiveHistoryFilters}. The query is not a
+ * narrowing the hits ignore - it is the thing they are searching for - and a
+ * sort reorders the task list without removing anything from it, so neither
+ * belongs in a label that says the hits below were not filtered the same way.
+ */
 function hasActiveHistoryTaskFilters(search: HistorySearchState): boolean {
   return (
     (search.labelNames?.length ?? 0) > 0 ||

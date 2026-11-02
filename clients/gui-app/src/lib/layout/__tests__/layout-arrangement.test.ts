@@ -173,7 +173,7 @@ describe("the panels a rail draws", () => {
 });
 
 describe("a panel moved within the rail", () => {
-  // One mover for both drags (R5R-06): these are the arrangement's own
+  // One mover for both drags: these are the arrangement's own
   // helpers, and `moveRailPanelBeside` is `moveCanvasOrderMember` with the
   // panel-id bijection applied, which is the same call the editor's canvas
   // drop makes.
@@ -676,7 +676,7 @@ describe("normalizeArrangement", () => {
     // Every write path ends here, so a no-op write - a drag that lands where
     // it started, a bulk clear that changed nothing - must not mint a new
     // object: a fresh `arrangement` invalidates every selector subscribed to
-    // any field of it, which is the whole chrome (G1-21).
+    // any field of it, which is the whole chrome.
     const arrangement = normalizeArrangement(DEFAULT_ARRANGEMENT);
 
     expect(arrangement).toBe(DEFAULT_ARRANGEMENT);
@@ -768,7 +768,7 @@ describe("resolvePersistedArrangement", () => {
     expect(arrangement.usageHost).toBe("header");
     expect(arrangement.usageSide).toBe("right");
     expect(arrangement.minimapSide).toBe("left");
-    // The feature is unreleased, so there is no migration (P5): a value this
+    // The feature is unreleased, so there is no migration: a value this
     // build cannot read is the DEFAULT for that field alone, and the three
     // fields beside it keep what they were given.
     expect(arrangement.resourceHost).toBe(DEFAULT_ARRANGEMENT.resourceHost);
@@ -844,7 +844,7 @@ describe("resolvePersistedArrangement", () => {
   /**
    * The direction L-142 opened: a dock order written before Todo was a member
    * has three entries and this build has four. No migration exists and none
-   * is wanted (P5) - `mergeOrder` against `DEFAULT_DOCK_ORDER` is the whole of
+   * is wanted - `mergeOrder` against `DEFAULT_DOCK_ORDER` is the whole of
    * it.
    *
    * Todo leads, because that is where `ChatLowerDock` already draws it and a
@@ -908,7 +908,7 @@ describe("resolvePersistedArrangement", () => {
   });
 
   it("keeps a drawable limit selection and drops an Automatic one entirely", () => {
-    // The `automatic` booleans are what a record written before R1-15 carries.
+    // The `automatic` booleans are what a record written before that field was dropped carries.
     // They are ignored rather than rejected: the only thing that field ever
     // said was whether the list was empty, and the list says it. An entry
     // that resolves to Automatic is then normalized away, since Automatic IS
@@ -2001,7 +2001,7 @@ describe("railStackMembers / railStackOf (L-181)", () => {
 });
 
 /**
- * S-01, S-02, S-05, S-06: the tab strip's placement and the sidebar's side
+ * The tab strip's placement and the sidebar's side
  * are arrangement fields beside the bar placements, top and left by default.
  */
 describe("the tab strip's placement and the sidebar's side (S-01, S-02, S-05, S-06)", () => {
@@ -2104,8 +2104,8 @@ describe("the vertical strip's view (D8, D9)", () => {
 
 /**
  * The persisted enum fields (L-133): the tab strip's placement, the sidebar's
- * side, the reading width (audit R1: how wide the transcript, the composer and
- * an artifact's body run), the vertical strip's view (D8) and Tab overflow.
+ * side, the reading width (how wide the transcript, the composer and
+ * an artifact's body run), the vertical strip's view and Tab overflow.
  * Each keeps a value this build knows verbatim and reads anything else as its
  * shipped default, field by field.
  *

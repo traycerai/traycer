@@ -11,6 +11,11 @@ import { cn } from "@/lib/utils";
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import {
+  useMoveSheetStore,
+  type MoveSheetTarget,
+} from "@/stores/settings/move-sheet-store";
+import { useThisComputer } from "@/components/settings/move/this-computer";
+import {
   type GettingStartedCardId,
   type GettingStartedEntry,
 } from "@/components/onboarding/getting-started-checklist";
@@ -30,6 +35,13 @@ export function GettingStartedCards(props: {
   const navigate = useNavigate();
   const openLink = useOpenLink();
   const setPick = useSettingsEnvironmentPickStore((state) => state.setPick);
+  const openMoveSheet = useMoveSheetStore((state) => state.openSheet);
+  // The computer the move card offers to move, and the one its sheet is for.
+  const computer = useThisComputer();
+  const moveTarget =
+    computer.hostId === null
+      ? null
+      : { hostId: computer.hostId, hostName: computer.hostName };
   const signInUrl = useRunnerHostOrNull()?.signInUrl;
   const downloadUrl = `${resolvePlatformBaseUrl(signInUrl === undefined || signInUrl.length === 0 ? "https://traycer.ai/sign-in" : signInUrl)}/download`;
   return (
@@ -49,6 +61,8 @@ export function GettingStartedCards(props: {
               navigate,
               openLink,
               setPick,
+              openMoveSheet,
+              moveTarget,
               downloadUrl,
               event,
             });
@@ -65,6 +79,9 @@ function openGettingStartedCard(
     readonly navigate: UseNavigateResult<string>;
     readonly openLink: OpenLink;
     readonly setPick: (pick: EnvironmentPick | null) => void;
+    readonly openMoveSheet: (target: MoveSheetTarget) => void;
+    /** `null` on a shell with no computer of its own to move. */
+    readonly moveTarget: MoveSheetTarget | null;
     readonly downloadUrl: string;
     readonly event: {
       readonly altKey: boolean;
@@ -88,6 +105,11 @@ function openGettingStartedCard(
     case "secret":
       ctx.setPick(null);
       navigateToSettingsSection("secrets");
+      return;
+    case "move":
+      // The sheet is mounted app-wide (`EnvironmentSheetsHost`), so the card
+      // works the same from Settings and from Home.
+      if (ctx.moveTarget !== null) ctx.openMoveSheet(ctx.moveTarget);
       return;
     case "install":
       void (async () => {

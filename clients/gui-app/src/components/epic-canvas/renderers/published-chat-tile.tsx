@@ -64,6 +64,7 @@ import {
 import { useHostRefusesEpicStore } from "@/hooks/chats/use-host-refuses-epic-store";
 import { usePublishedChatLiveConversion } from "@/hooks/chats/use-published-chat-live-conversion";
 import { useChatOwnerCopyFacts } from "@/hooks/environment/use-team-environment-ownership";
+import { useCollaboratorDisplayName } from "@/hooks/epics/use-collaborator-display-name";
 
 /**
  * A chat whose owning host is out of reach, rendered through the ORDINARY chat
@@ -110,7 +111,7 @@ import { useChatOwnerCopyFacts } from "@/hooks/environment/use-team-environment-
  * row metadata that the notice names. A recovery read addresses that owner
  * without changing the host serving the copy.
  *
- * ## The doc-replica fallback (unreachable-owner view, ticket 34A)
+ * ## The doc-replica fallback (unreachable-owner view)
  *
  * A chat this host neither owns nor has ever published still syncs into the
  * epic Y.Doc through ordinary collaboration, so when the cloud read settles
@@ -224,6 +225,7 @@ interface PublishedCopyOwnerFacts {
   readonly ownerIsThisHost: boolean;
   readonly ownedByViewer: boolean;
   readonly environmentOwned: boolean;
+  readonly ownerName: string | null;
   readonly ownerLabel: string;
 }
 
@@ -257,6 +259,7 @@ function usePublishedChatOwner(
     node.ownerHostId,
     node.chatId,
   );
+  const ownerName = useCollaboratorDisplayName(epicId, node.ownerUserId);
   const role = useEpicPermissionRole();
   const editable = role === null || isEditableRole(role);
   const sandbox = resolveChatSandbox(sandboxState, {
@@ -275,6 +278,7 @@ function usePublishedChatOwner(
     sandbox,
     lockFacts: {
       ...ownership,
+      ownerName,
       ownerIsReachable: reachability.status === "reachable",
       ownerRefusesStore,
       ownerIsThisHost: ownerHostIsServingHost(node.ownerHostId, node.hostId),
@@ -491,7 +495,7 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
     node.chatId,
   ]);
 
-  // Audit S3, at the surface the catalog names: this tile's reads go through
+  // At the surface the catalog names: this tile's reads go through
   // the TAB's client, and when that client is null every `useHostQuery` under
   // it disables itself, leaving `isPending` true, `data` undefined and `error`
   // null - forever. `useCloudChatTranscript` faithfully reports that as

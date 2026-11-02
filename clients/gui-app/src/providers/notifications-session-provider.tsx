@@ -18,6 +18,7 @@ import {
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import { useHostStreamClientBindingFor } from "@/hooks/host/use-host-stream-client-for";
+import { StandaloneBotsBridge } from "@/components/layout/bridges/standalone-bots-bridge";
 import { useHostClientFor } from "@/hooks/host/use-host-client-for";
 import { useRequestContextUserId } from "@/hooks/host/use-request-context-user-id";
 import { remoteAwareOwnerIdentityKey } from "@/lib/host/transport-key";
@@ -321,6 +322,9 @@ export function NotificationsSessionProvider(
       <NotificationFeedModeSettlingContext.Provider
         value={notificationFeedModeSettling}
       >
+        {/* Beside the feeds it names arrivals for, so no arrival waits on a
+            directory nothing is reading. */}
+        <StandaloneBotsBridge />
         <NotificationsSessionBody
           navigate={props.navigate}
           servingHostEntry={servingHostEntry}
@@ -881,8 +885,7 @@ function NotificationsSessionBody(
 
   /**
    * THE wake edge for a pinned activity lane whose capability went away and
-   * came back - the same-client, same-principal recovery the R2 dispatch class
-   * left open on this one surface.
+   * came back, including recovery on the same client and principal.
    *
    * A local-only lane is pinned at `agent.activity.subscribe@1.2`. The
    * capability that admits it is read at RENDER, from this connection's
@@ -1102,8 +1105,9 @@ function NotificationsSessionBody(
   //
   // Local mode learns "the user is looking at X" from host presence frames,
   // and neither local stream is opened in cloud mode. But those frames are
-  // built from state this renderer already owns: the canvas store plus
-  // document focus. `readFocusedHostNotificationPresence` is literally
+  // built from state this renderer already owns: the presented bot
+  // conversation, the canvas store and document focus.
+  // `readFocusedHostNotificationPresence` is literally
   // the function the outgoing frame is composed from, and
   // `subscribeHostNotificationPresence` already watches exactly the inputs
   // that can change it. Reading it directly is the same signal one hop
@@ -1192,7 +1196,7 @@ function NotificationsSessionBody(
       if (servingHostId === null) return;
       const streamHostId = servingHostId;
       // ONE reconnect policy for this host, handed to every stream opened
-      // below (redesign P4.1 / connection-registry §6). This is the single
+      // below (redesign P4.1). This is the single
       // wiring point for all of them, which is exactly why the acquisition
       // belongs here: each store constructing its own scheduler was the
       // scattered ownership the consolidation removes. Each store still opens

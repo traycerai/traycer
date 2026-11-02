@@ -4,7 +4,7 @@
  * `inert` is not usable here. It removes the subtree from hit testing, so a
  * region inside an inert `<main>` would never fire the hover and the click the
  * canvas resolves from - and pointing at the real thing is the whole model
- * (P3, L-01). What the column gets instead is a capture-phase listener per
+ * (L-01). What the column gets instead is a capture-phase listener per
  * gesture that could change something, plus a focus bounce so neither the
  * app's controls nor the canvas regions are tab stops (L-31).
  *
@@ -18,7 +18,7 @@
 /**
  * Every gesture swallowed at the column unconditionally. `dragenter`,
  * `dragover`, `dragleave`, `drop` and `paste` are on the list because the
- * composer carries real handlers for all five (C-16), so a file dragged from
+ * composer carries real handlers for all five, so a file dragged from
  * Finder onto the dimmed composer would otherwise attach itself mid-session.
  */
 export const FIREWALLED_EVENT_TYPES = [
@@ -77,7 +77,7 @@ function contextMenuIsTheAppsOwn(target: EventTarget | null): boolean {
 }
 
 /**
- * A press on the Customizing tab itself (audit F1). It is the session's own
+ * A press on the Customizing tab itself. It is the session's own
  * tab, not the app acting: activating it is a no-op, and its close is a way
  * out of the editor.
  */

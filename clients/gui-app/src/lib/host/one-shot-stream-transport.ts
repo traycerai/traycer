@@ -37,7 +37,7 @@ import {
  */
 export function openOneShotStreamTransport(params: {
   readonly target: HostDirectoryEntry;
-  /** The signed-in user this transport is built for (Architecture §4 / S1 cache key). */
+  /** The signed-in user this transport is built for (S1 cache key). */
   readonly userId: string;
   readonly endpoint: HostEndpointProvider;
   readonly bearer: BearerSourceProvider;

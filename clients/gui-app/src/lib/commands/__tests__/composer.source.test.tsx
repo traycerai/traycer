@@ -538,7 +538,7 @@ describe("composerSource", () => {
     expect(ids).not.toContain("composer:select-pc");
     expect(ids).toContain("composer:new-chat:replace");
     expect(ids).toContain("composer:new-terminal-agent");
-    // C8: the split rows are gone - one "New agent" row honours the
+    // The split rows are gone - one "New agent" row honours the
     // configured conversation placement instead of naming an edge.
     expect(ids).not.toContain("composer:new-chat:split:right");
     expect(ids).not.toContain("composer:new-chat:split:bottom");
@@ -565,7 +565,7 @@ describe("composerSource", () => {
     expect(useNewConversationModalOpenStore.getState().request).toEqual({
       epicId: "epic-1",
       tabId: "epic-1",
-      // `null` - the conversation tile-placement setting decides (C3, C8).
+      // `null` - the conversation tile-placement setting decides.
       placement: null,
       parentId: null,
       hostId: null,

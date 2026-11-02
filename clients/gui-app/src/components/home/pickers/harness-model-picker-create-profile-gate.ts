@@ -23,7 +23,7 @@ export const EMPTY_PROVIDER_STATE_BY_HARNESS_ID: ReadonlyMap<
 > = new Map();
 
 /**
- * S8: host-scoped, capability-gated "Create new profile" support for the
+ * Host-scoped, capability-gated "Create new profile" support for the
  * picker. OAuth sign-in needs a local host that advertises login args for
  * the browsed provider - this mirrors Settings' `providerCanStartProfileOauth`
  * gate (`providers-settings-panel.tsx`), scoped to whichever host the

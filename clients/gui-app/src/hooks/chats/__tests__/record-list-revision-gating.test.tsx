@@ -10,7 +10,7 @@
  * records every dispatch's params in its `calls` array, which is how the
  * wire payload is asserted rather than inferred from store state.
  *
- * R1-R5 drive dispatches through explicit invalidation
+ * These cases drive dispatches through explicit invalidation
  * (`invalidateEpicChatRecords` / `invalidateEpicTuiAgentRecords`) rather than
  * the 20s poll interval, so no fake timers are needed. Each case asserts the
  * chat method's dispatches (the primary claim) and mirrors the same claim on
@@ -1050,9 +1050,9 @@ describe("R9 - the terminal twin: a racing tuiUpsert also declines the stamp", (
 });
 
 /**
- * R10 - `useRecordListStreamStamp` keeps a held stamp current from the PUSH
+ * `useRecordListStreamStamp` keeps a held stamp current from the PUSH
  * channel (`publishRecordListDeltaStamp`), so an ordinary change stops costing
- * a snapshot. Reuses R1-R7's harness verbatim: the same fixture, the same real
+ * a snapshot. Reuses the existing harness verbatim: the same fixture, the same real
  * hooks, the same `chatCalls`/`tuiCalls` dispatch log - the only new
  * ingredient is publishing directly onto the per-epic channel the mount would
  * otherwise announce on, since this file has no `ChatRecordsStreamMount`
@@ -1382,14 +1382,14 @@ describe("R10 - the push stream's stamp", () => {
 /**
  * R11 - a REMOTE CREATE between polls, end to end.
  *
- * The case R8-R10 leave open, and the one that needs no race at all: no
+ * The case the earlier suites leave open needs no race at all: no
  * in-flight poll, no lost frame, no unusual timing. Another window or an A2A
  * agent creates a chat; its `@1.4` `upsert` arrives stamped with the exact
  * successor of the revision this client holds.
  *
  * Every mechanism then behaves correctly and the result is still wrong. The
  * delta is applied whole (no fence skipped anything, so `snapshotIncompleteSeq`
- * does not move), the revision IS contiguous (so R10 advances the stamp), and
+ * does not move), the revision IS contiguous (so the push channel advances the stamp), and
  * every later poll answers `unchanged`. The chat's home is never stated, and
  * `routeChatWrite` reads `docResident: null` as "unavailable" - rename,
  * archive, reparent and delete closed on it for the life of the session,

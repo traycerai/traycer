@@ -16,7 +16,7 @@ import type { RpcSchedulingPolicy } from "@traycer-clients/shared/host-client/rp
 import { buildRuntimeChangeScopeHandler } from "../runtime-change-scope";
 
 /**
- * WHICH CHANGE EVENTS RESET THE RUNTIME MESSENGER (redesign P4.2).
+ * WHICH CHANGE EVENTS RESET THE RUNTIME MESSENGER.
  *
  * This filter had no coverage for its entire life, and that is why it needs
  * some now. `HostRuntimeProvider` used to run this reset on EVERY `HostClient`

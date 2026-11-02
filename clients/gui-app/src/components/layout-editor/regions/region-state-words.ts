@@ -59,7 +59,7 @@ export function thinkingStateWord(values: SizedValues): string {
   return values.size === "full" ? "Open" : "Closed";
 }
 
-/** The Access pill's size; it has no Hidden (G6). */
+/** The Access pill's size; it has no Hidden. */
 export function accessStateWord(values: AccessValues): string {
   return values.size === "chip" ? "Icon only" : "Icon and label";
 }

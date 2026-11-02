@@ -1,6 +1,5 @@
 /**
- * The park-then-show cache-reuse defect (cold Codex review of renderer
- * parking, P2).
+ * The park-then-show cache-reuse defect.
  *
  * `EpicRecordSyncEffects` (`components/epic-canvas/epic-route-session-body.tsx`)
  * gates `useEpicSyncChatRecords` and `useEpicSyncTuiAgentRecords` on
@@ -432,7 +431,7 @@ describe("record reads are scoped to the session generation", () => {
       ).toBe(true);
     });
 
-    // Pin 4 (the reviewer's arm, re-checked directly against store contents
+    // Pin 4 (re-checked directly against store contents
     // after settling, not only inferred from the request counter above): the
     // record deleted at the host while parked never resurrects in B.
     expect(

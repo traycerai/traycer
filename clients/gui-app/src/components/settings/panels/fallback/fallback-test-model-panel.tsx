@@ -215,7 +215,7 @@ const TERMINAL_ACCOUNT_VALUE = "__terminal-account__";
 const NO_ACCOUNTS: readonly TestAccountOption[] = [];
 
 /**
- * A dry run of routing for one hypothetical blocked chat (spec §Wireframe 4).
+ * A dry run of routing for one hypothetical blocked chat.
  *
  * The pickers build the run tuple the walk needs - provider, model, account,
  * permission mode, failure kind; agent mode and fast mode are carried from
@@ -282,7 +282,7 @@ export function FallbackTestModelPanel(
   const committedGroups = committedTiers.tierGroups;
   const blocked = blockedModelView(tuple);
   // The header routes on the live draft, so a rename reads through at once;
-  // the walk is asked about the tiers as last committed (review C1).
+  // the walk is asked about the tiers as last committed (C1).
   const routing = routeTuple(
     tuple,
     groups,
@@ -330,7 +330,7 @@ export function FallbackTestModelPanel(
     labelFor,
   });
   // The host arms nothing with the master switch off; the dry run is still
-  // shown, under a lead that says so (review P1).
+  // shown, under a lead that says so.
   const masterOff = !policy.enabled;
 
   return (
@@ -365,7 +365,7 @@ export function FallbackTestModelPanel(
       />
       {/* The verdict as ONE sentence, and the only live region here: the
           visible verdict below is a tree of rows and pills, and announcing it
-          would read a run of fragments on every change (review A1). Mounted
+          would read a run of fragments on every change (A1). Mounted
           with the panel and never swapped out - only its text changes, which
           is what a polite region needs to announce a new answer. */}
       <p
@@ -680,7 +680,7 @@ function useTestAccount(
   );
   // A seed the picker does not offer is not a default: with nothing
   // remembered the seed is `null`, the Terminal account, and a provider whose
-  // Terminal account is disabled lists no such option (review D1). The first
+  // Terminal account is disabled lists no such option (D1). The first
   // listed account is then the default, as it is what the picker shows first.
   const first = accounts.at(0);
   if (
@@ -1132,8 +1132,7 @@ function RoutedVerdict(props: {
 /**
  * The routed tier's rows - or, when the host walked a DIFFERENT tier than the
  * one named above (its own catalog read gave the model another name), one
- * line saying so in place of rows that would otherwise all read empty
- * (review C2).
+ * line saying so in place of rows that would otherwise all read empty.
  */
 function RoutedAnswerView(props: {
   readonly answer: TestRowsAnswer;
@@ -1190,7 +1189,7 @@ function ThenLine(props: { readonly verdict: RoutedTestVerdict }): ReactNode {
         <>
           <StepChain steps={verdict.then} /> (your fallback steps
           {/* "Another error" is answered only when every failure it stands
-              for agrees, so it says so (review P2). */}
+              for agrees, so it says so. */}
           {verdict.failure === "other"
             ? ", the same for every other error"
             : ""}
@@ -1380,7 +1379,7 @@ function TestRowAnswerView(props: {
  * One match in try order: the model, then its pill. A wrapping row rather than
  * a two-column grid, because the host's longest skip label is wider than a
  * phone-width row: the pill drops under the model and wraps inside itself
- * (`Badge wrap`) instead of pushing the settings pane sideways (review L1).
+ * (`Badge wrap`) instead of pushing the settings pane sideways (L1).
  */
 function TestMatchLineView(props: {
   readonly line: TestMatchLine;

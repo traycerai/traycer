@@ -32,8 +32,8 @@ import { createInProcessEpicRuntimeWorker } from "@/stores/epics/open-epic/test-
 import type { RuntimeWorkerLike } from "@/stores/epics/open-epic/runtime/worker/spawn-epic-runtime-worker";
 
 /**
- * Ticket 12 successor to `epic-shell-cost-badge.test.tsx` (ticket-7
- * fixup-01's regression coverage): the AMBIENT badge is gone by design, so
+ * Successor to `epic-shell-cost-badge.test.tsx` (whose regression
+ * coverage this replaces): the AMBIENT badge is gone by design, so
  * its "renders a stuck-pending query self-heals via poll" scenario no
  * longer has a subject. What survives is the mount-composition discipline
  * that test existed to prove - a real `<EpicShell>` / `<EpicSessionProvider>`
@@ -174,7 +174,7 @@ vi.mock("@/lib/host", async (importOriginal) => {
   return {
     ...actual,
     useHostClient: () => liveHostClient,
-    // The SPINE, a separate export since redesign P2.1.
+    // The SPINE, a separate export.
     useHostRuntimeClient: () => liveHostClient,
     useHostBinding: () => ({ hostClient: liveHostClient }),
     useAuthService: () => authService,
@@ -367,7 +367,9 @@ describe("<EpicShell /> usage entry point - real host RPC round trip", () => {
 
     renderShell(queryClient);
 
-    controlled.streams()[0].callbacks.onConnectionStatus("open", null, true);
+    controlled
+      .streams()[0]
+      .callbacks.onConnectionStatus("open", null, true, null);
     controlled
       .streams()[0]
       .callbacks.onSnapshot(
@@ -414,7 +416,9 @@ describe("<EpicShell /> usage entry point - real host RPC round trip", () => {
 
     const view = renderShell(queryClient);
 
-    controlled.streams()[0].callbacks.onConnectionStatus("open", null, true);
+    controlled
+      .streams()[0]
+      .callbacks.onConnectionStatus("open", null, true, null);
     controlled
       .streams()[0]
       .callbacks.onSnapshot(
@@ -459,7 +463,9 @@ describe("<EpicShell /> usage entry point - real host RPC round trip", () => {
 
     renderShell(queryClient);
 
-    controlled.streams()[0].callbacks.onConnectionStatus("open", null, true);
+    controlled
+      .streams()[0]
+      .callbacks.onConnectionStatus("open", null, true, null);
     controlled
       .streams()[0]
       .callbacks.onSnapshot(
@@ -488,7 +494,9 @@ describe("<EpicShell /> usage entry point - real host RPC round trip", () => {
 
     renderShell(queryClient);
 
-    controlled.streams()[0].callbacks.onConnectionStatus("open", null, true);
+    controlled
+      .streams()[0]
+      .callbacks.onConnectionStatus("open", null, true, null);
     controlled
       .streams()[0]
       .callbacks.onSnapshot(

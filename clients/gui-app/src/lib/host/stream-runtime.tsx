@@ -133,7 +133,7 @@ export function HostStreamProvider(props: HostStreamProviderProps): ReactNode {
   // discard the closure on every render.
   //
   // The rebuild policy now lives in the connection registry's reconnect engine
-  // (redesign P4.1 / connection-registry §6) instead of a module this provider
+  // (redesign P4.1) instead of a module this provider
   // owned. The PACER is still per-owner - the streak measures "rebuilding THIS
   // client keeps failing", and this provider keeps ONE client that retargets
   // across hosts rather than one client per host, so a per-host pacer would
@@ -150,7 +150,7 @@ export function HostStreamProvider(props: HostStreamProviderProps): ReactNode {
   // `useMemo` invocation (StrictMode dev double-invoke, or a discarded
   // concurrent render in prod) used to be harmless (each built its own
   // independent, unstarted client that GC reclaimed); under the shared
-  // `(hostId, userId)` session cache (Architecture §4 / S1) a discarded
+  // `(hostId, userId)` session cache (S1) a discarded
   // acquire instead holds a live, never-released reference on the ONE shared
   // session, so the session's refCount would never return to zero. This
   // effect's cleanup is guaranteed to run for exactly the committed acquire,

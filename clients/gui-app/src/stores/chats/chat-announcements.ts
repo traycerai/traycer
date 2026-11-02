@@ -26,7 +26,7 @@ import {
 /**
  * Polite announcements for transcript completions and fallback lifecycle.
  *
- * `useChatAnnouncements` derives turn/background completion (decision #24).
+ * `useChatAnnouncements` derives turn/background completion.
  * The fallback observer derives host plan transitions and confirmed outcomes.
  * The renderer queues both into one persistent region; only the completion
  * signal also drives the "New reply" latch.

@@ -220,7 +220,7 @@ describe("comm-graph tile schema", () => {
   });
 
   it("clears a degraded officeView's dormant Auto outcome too, not just the choice (Finding 20)", () => {
-    // Codex: an explicit office view this build cannot honour degrades to
+    // An explicit office view this build cannot honour degrades to
     // null - "inherit the Settings default". The Auto outcome recorded under
     // that now-unknown pick is dormant, but if the inherited default is Auto
     // at the same generation the renderer trusts it and skips measurement,
@@ -340,11 +340,11 @@ describe("comm-graph tile schema", () => {
     // that is not the same thing as a value this build cannot read, and its
     // owner's framing must survive.
     //
-    // D68: this IS the migration case. The record predates `officeCamera`
+    // This IS the migration case. The record predates `officeCamera`
     // entirely, it is in `office` mode, and its camera is not the neutral
     // default - so those numbers are the office's, and the owner's framing
     // still survives, just under the field that now owns it. `x`/`y`/`zoom`
-    // are the GRAPH's since D68, and the graph never framed anything here.
+    // are the GRAPH's now, and the graph never framed anything here.
     const parsed = parseTileRef({
       id: commGraphTileId(EPIC_ID),
       instanceId: "inst-1",
@@ -368,7 +368,7 @@ describe("comm-graph tile schema", () => {
     // A persisted `null` and an absent field are the SAME thing - never
     // chosen - and neither is a degrade; only an unreadable non-null value is.
     //
-    // D68: the migration case again, this time with the two fields spelled
+    // The migration case again, this time with the two fields spelled
     // out as `null` rather than left absent - `officeCamera` is still absent,
     // so the same numbers still migrate to it, untouched by the explicit
     // nulls beside them.
@@ -399,7 +399,7 @@ describe("comm-graph tile schema", () => {
   });
 
   it("stamps a MIGRATED camera's framed view as Floor, so a Settings default that has since moved on can neutralise it", () => {
-    // Codex: a pre-split record's shared x/y/zoom were always the OFFICE's
+    // A pre-split record's shared x/y/zoom were always the OFFICE's
     // and only ever addressed the Floor (the only office that existed then).
     // Leaving `officeCameraView` null on migration read as "nobody framed
     // this" and let the numbers ride through unchallenged under whatever
@@ -581,7 +581,7 @@ describe("comm-graph tile schema", () => {
   });
 
   it("isDefaultCommGraphView ignores officeCamera too - it is the graph's/canvas's own question", () => {
-    // D68's own field is left out for the same reason as officeView/
+    // The office's camera field is left out for the same reason as officeView/
     // officeAutoView above: this asks whether the GRAPH's camera (x/y/zoom)
     // is unframed, and folding officeCamera in would make an office pick
     // that never touched x/y/zoom read as "the graph was framed".
@@ -621,10 +621,10 @@ describe("comm-graph tile schema", () => {
 
     it("migrates a pre-D68 office-mode record's camera into officeCamera, stamped Floor regardless of a stray officeCameraView", () => {
       // Absent `officeCamera`, `office` mode, a non-neutral camera - those
-      // numbers were the office's under the old one-camera model, and D68
-      // hands them to the field that now owns them.
+      // numbers were the office's under the old one-camera model, and the
+      // split hands them to the field that now owns them.
       //
-      // Codex (Finding 2): `officeCameraView: "building"` here is a shape no
+      // `officeCameraView: "building"` here is a shape no
       // real persisted record can carry - every writer sets `officeCamera`
       // and `officeCameraView` together in the same write (see the two
       // `updateCommGraphTileOfficeCamera*` call sites), and `officeCameraView`
@@ -758,16 +758,16 @@ describe("comm-graph tile schema", () => {
       // The case above seeds GRAPH-NEUTRAL coordinates (`x: 0, y: 0, zoom:
       // 1`) alongside its stale id, so it cannot see this defect at all:
       // zeroing a camera that already reads as zero is invisible. This one
-      // seeds the Graph's own NON-NEUTRAL framing instead - the reviewer's
-      // own reproduction - so the zeroing actually shows up as a lost pan
+      // seeds the Graph's own NON-NEUTRAL framing instead
+      // - so the zeroing actually shows up as a lost pan
       // rather than a no-op.
       //
       // `stale` here degrades from an unknown `officeView` ("atrium" ships
       // in no build), which is unrelated to the mode this record is in: a
       // GRAPH-mode tile has never had an office view of its own, so a
       // degraded `officeView` says nothing about whether this tile's
-      // camera is trustworthy. Before D68 the shared x/y/zoom were the
-      // OFFICE's, so wiping them on any staleness was correct; after D68
+      // camera is trustworthy. Before the split the shared x/y/zoom were the
+      // OFFICE's, so wiping them on any staleness was correct; after it
       // they are the Graph's alone, and a stale office field has no claim
       // on them.
       const parsed = parseTileRef({
@@ -1036,7 +1036,7 @@ describe("updateCommGraphTileView", () => {
   });
 
   it("stores a write that changes only officeCameraView", () => {
-    // R2: this comparison used to cover six fields, dropping a write that
+    // This comparison used to cover six fields, dropping a write that
     // changed only the seventh - a whole-view write differing solely in the
     // camera's framing record would compare equal and vanish.
     const state = stateWith();
@@ -1072,7 +1072,7 @@ describe("updateCommGraphTileView", () => {
   }
 
   it("stores a write that changes only officeAutoGeneration (a stamp-only refresh)", () => {
-    // Finding 5: a re-measurement that lands on the same view and camera but
+    // A re-measurement that lands on the same view and camera but
     // under a newer default generation is a STAMP-ONLY write - every other
     // field is unchanged, so an eight-field comparison sees nothing different
     // and drops it, leaving the stored generation stale and the tile
@@ -1158,7 +1158,7 @@ describe("updateCommGraphTileCamera", () => {
       // The generation field, another one this action does not know about -
       // null since the fixture never measured Auto.
       officeAutoGeneration: null,
-      // D68: nor the office's own camera, a field this action does not even
+      // Nor the office's own camera, a field this action does not even
       // know about - null here since the fixture never framed the office.
       officeCamera: null,
     });
@@ -1180,7 +1180,7 @@ describe("updateCommGraphTileCamera", () => {
   });
 
   it("leaves an existing officeCamera and its officeCameraView exactly as they were", () => {
-    // The graph's camera path (per D68) cannot reach the office's fields at
+    // The graph's camera path cannot reach the office's fields at
     // all - proven here with a REAL office camera in place, not merely
     // `null`, so a write that accidentally touched it would show up.
     const state = stateWithChoice();
@@ -1243,7 +1243,7 @@ describe("updateCommGraphTileOfficeCamera", () => {
   }
 
   it("moves the camera and writes the framed view, leaving mode, officeView and officeAutoView untouched", () => {
-    // D68: a REAL semantic change, not just a fixture edit. The office's
+    // A REAL semantic change, not just a fixture edit. The office's
     // write no longer moves x/y/zoom at all - those are the graph's now -
     // it writes `officeCamera` instead, and x/y/zoom stay exactly as they
     // were (the fixture's defaults, since nothing set them).
@@ -1271,7 +1271,7 @@ describe("updateCommGraphTileOfficeCamera", () => {
   });
 
   it("returns the same state object when neither the camera nor the framed view has changed", () => {
-    // D68: the no-op path compares `officeCamera` now, not x/y/zoom - the
+    // The no-op path compares `officeCamera` now, not x/y/zoom - the
     // shared fixture starts that field `null`, so a state actually AT the
     // camera being written has to seed it first, rather than reading back
     // whatever x/y/zoom already held (those say nothing about the office

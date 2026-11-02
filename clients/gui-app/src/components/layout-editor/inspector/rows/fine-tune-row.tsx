@@ -259,7 +259,7 @@ function FieldChecksList(props: {
   // The list cannot be emptied. An empty pinned breakdown is not a state the
   // card has - it would draw an empty box - so the resolver drops it, and
   // before this guard the user emptied the list, watched the card go blank for
-  // the session and found every row back on the next launch (G1-07).
+  // the session and found every row back on the next launch.
   const last = selected.length <= 1;
   const ordered = [
     ...order.filter((value) =>

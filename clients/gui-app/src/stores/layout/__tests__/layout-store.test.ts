@@ -136,6 +136,7 @@ describe("useLayoutStore", () => {
         effectiveLayoutValues("default", getLayoutSnapshot().overrides).model,
       ).toEqual({
         style: "bars",
+        ultracodeStyle: "text",
         reasoningControl: "slider",
         toolbarStyle: "flat",
       });
@@ -379,7 +380,7 @@ describe("useLayoutStore", () => {
      * three-entry dock and no value bag for it, and this build has to reach
      * four members with Todo leading the frame - where `ChatLowerDock`
      * already draws it - on its preset's own defaults. No migration, no
-     * version bump, nothing to revert (P5).
+     * version bump, nothing to revert.
      *
      * The Hidden-with-a-size half is the part a `shown`-only read would lose:
      * a member switched off keeps the size it would come back at, so turning

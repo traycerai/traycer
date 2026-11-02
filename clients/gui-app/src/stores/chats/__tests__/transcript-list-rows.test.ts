@@ -457,7 +457,7 @@ describe("transcriptListRows", () => {
   });
 
   it("leaves a partially-hydrated turn's unserved rows as placeholders", () => {
-    // Codex P1 (#1459): hydrating ONE row of a steer-split assistant turn
+    // Hydrating ONE row of a steer-split assistant turn
     // pulls the turn's shared records, and rendering those projects EVERY row
     // of the turn. Only `r-2` was served, so `r-3` must stay a placeholder at
     // its own ordinal - appending it as an unplaced row draws it twice, once

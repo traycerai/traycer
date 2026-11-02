@@ -190,6 +190,7 @@ export function ModalFixture() {
               onHoverRow={() => undefined}
               onActiveRow={() => undefined}
               onSelectRow={(row) => setSelected(row.value)}
+              ultracodeFooter={null}
               reasoningFooter={{
                 value: reasoning,
                 options: EFFORTS,

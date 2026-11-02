@@ -9,6 +9,11 @@ import {
   probeHostActivityBusy,
   type HostActivityProbe,
 } from "@traycer-clients/shared/host-client/host-activity-probe";
+import { verifyProcessIdentityAsync } from "@traycer-clients/shared/host-lock/process-identity";
+import {
+  isProcessStartIdentity,
+  type ProcessStartIdentity,
+} from "@traycer/protocol/host/lifecycle";
 import type { Layer0UnavailableCause } from "@traycer/protocol/host/lifecycle/layer0-frame";
 import type { HostFsLayout } from "./host-paths";
 import { readPidMetadataState } from "./host-lifecycle";
@@ -372,18 +377,27 @@ export function attestedInstallGenerationFromDisk(
 export { compareHostVersions, isStrictlyNewerHostVersion };
 
 /**
- * The running host's full identity triple straight off `pid.json`,
- * including `startedAt` - `HostLifecycle`'s `DesktopLocalHostSnapshot` (the
- * renderer-facing projection) deliberately drops that field, but
- * `host stamp-runtime`'s CAS needs it verbatim as `--observed-started-at`
- * (paired with the observed pid/runtime-version) to attest the fresh
- * process it is backfilling against. Read directly here rather than
- * widening the renderer-facing snapshot type for one internal caller.
+ * The running host's identity straight off `pid.json`, including `startedAt`
+ * and the publisher's creation stamp - `HostLifecycle`'s
+ * `DesktopLocalHostSnapshot` (the renderer-facing projection) deliberately
+ * drops both, but `host stamp-runtime`'s CAS needs `startedAt` verbatim as
+ * `--observed-started-at` (paired with the observed pid/runtime-version) to
+ * attest the fresh process it is backfilling against. Read directly here
+ * rather than widening the renderer-facing snapshot type for main's own
+ * callers.
  */
 export interface RunningHostIdentity {
   readonly pid: number;
   readonly version: string;
   readonly startedAt: string;
+  /**
+   * The kernel's creation stamp for the process that published this record,
+   * or `null` when there is none to compare against. Carried for
+   * {@link probeHostBusyVerdict}'s liveness gate, which needs it to tell a
+   * live host from one whose pid the OS has since handed to an unrelated
+   * process.
+   */
+  readonly processStartIdentity: ProcessStartIdentity | null;
 }
 
 export async function readRunningHostIdentity(
@@ -402,6 +416,15 @@ export async function readRunningHostIdentity(
     pid: parsed.pid,
     version: parsed.version,
     startedAt: parsed.startedAt,
+    // A record written before the field existed carries nothing here, and
+    // anything present but unrecognized reads the same way: "no identity to
+    // compare", never a mismatch. The CLI's own reader
+    // (`traycer-cli/src/host/pid-metadata.ts`) makes the identical reading,
+    // and the gate below depends on it - a record read as mismatched would be
+    // positive evidence a live host is gone.
+    processStartIdentity: isProcessStartIdentity(parsed.processStartIdentity)
+      ? parsed.processStartIdentity
+      : null,
   };
 }
 
@@ -409,23 +432,76 @@ export type HostBusyVerdict = "no-host" | "idle" | "busy";
 
 /**
  * Desktop-side mirror of the CLI's `assertHostNotBusy` restart-verdict probe
- * (`host/busy-check.ts`) - deliberately duplicated rather than imported:
- * this ticket must not modify `clients/traycer-cli/`, and the probe itself
- * (`probeHostActivityBusy`) already lives in `clients/shared` so both sides
- * share the actual HTTP check; only the "is there a live host to protect at
- * all" liveness gate is repeated here. Used by the desktop-held lock
- * sections (packaged-macOS activation/removal) immediately before a
- * disruptive SMAppService cycle, mirroring the CLI's in-lock busy probe on
- * CLI-owned platforms.
+ * (`host/busy-check.ts`) - deliberately duplicated rather than imported: the
+ * CLI's gate throws `E_HOST_BUSY` with CLI-worded messages, where the desktop
+ * needs the verdict itself to route its own outcomes. The HTTP check
+ * (`probeHostActivityBusy`) lives in `clients/shared`, so both sides ask the
+ * host the same question; only the "is there a live host to protect at all"
+ * liveness gate is repeated here. Used by the desktop-held lock sections
+ * (packaged-macOS activation/removal) immediately before a disruptive
+ * SMAppService cycle, mirroring the CLI's in-lock busy probe on CLI-owned
+ * platforms.
+ *
+ * The record's mere PRESENCE is not a live host, which is why the publisher's
+ * liveness is settled before the endpoint is dialed: a `pid.json` a
+ * force-killed host left behind names a dead pid, the dead endpoint refuses
+ * the connection, and `probeHostActivityBusy` folds a refused connection into
+ * `busy` by design - it documents that its callers must already know the host
+ * is live. Every answer was therefore "busy", so the packaged-macOS
+ * activation cycle returned at this gate before it ever registered the
+ * SMAppService agent and the host could not be started again.
+ *
+ * `busy` and `idle` are otherwise unchanged. Only a publisher PROVABLY gone
+ * answers `no-host`; a live pid, a probe that could not answer, and a record
+ * with no identity stamp all still dial the endpoint and keep the fail-safe.
+ * The RECORD read keeps the polarity it always had - a `pid.json` that is
+ * absent, torn or malformed reads as `no-host`, where the CLI's gate holds
+ * that case apart as `unverifiable` and refuses. That asymmetry is older than
+ * this gate and untouched here.
+ *
+ * Not `readPublishedHostPresence` (`./host-endpoint-reachability`), which
+ * answers a question of the same shape and is the one desktop reachability
+ * authority: it needs an endpoint-reachability probe this gate is not given,
+ * and its `absent` rests on `getPublishedProcessIdentityVerdict`, which never
+ * compares the stamp under an indeterminate liveness read. The verdict here
+ * has to be the CLI's, because the two gates guard the same teardown on
+ * different platforms and a host neither of them would restart must not
+ * depend on which one asked.
  */
 export async function probeHostBusyVerdict(
   layout: HostFsLayout,
 ): Promise<HostBusyVerdict> {
   const identity = await readRunningHostIdentity(layout);
   if (identity === null) return "no-host";
+  if (await publishedHostProcessIsGone(identity)) return "no-host";
   const websocketUrl = await readWebsocketUrl(layout);
   if (websocketUrl === null) return "no-host";
   return (await probeHostActivityBusy(websocketUrl)) ? "busy" : "idle";
+}
+
+/**
+ * Has the process that published this record positively exited, or does its
+ * pid now belong to an unrelated process? Those two readings only - a live
+ * pid, a probe that established nothing, and a record carrying no stamp to
+ * compare are all "not proven gone", never "proven alive", so an
+ * indeterminate reading leaves the host in play.
+ *
+ * The ASYNCHRONOUS verdict, like every identity read Electron main makes: the
+ * synchronous form shells out to `ps` and would block main's event loop for
+ * as long as the spawn takes.
+ */
+async function publishedHostProcessIsGone(
+  identity: RunningHostIdentity,
+): Promise<boolean> {
+  const verdict = await verifyProcessIdentityAsync({
+    pid: identity.pid,
+    // Not read by any verdict in that module - the creation stamp is the
+    // operand - and the CLI's own `publishedHostProcessGoneAsync` passes it
+    // the same way.
+    startedAtMs: null,
+    startIdentity: identity.processStartIdentity,
+  });
+  return verdict === "dead" || verdict === "alive-different";
 }
 
 /**

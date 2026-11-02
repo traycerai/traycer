@@ -24,7 +24,7 @@ import {
 import type { StreamMethodSupportSource } from "@/lib/host/stream-runtime-context";
 
 /**
- * The output window (`UI.md` §4): one interleaved timeline with timestamps,
+ * The output window: one interleaved timeline with timestamps,
  * opened at the tail, following live output until the human scrolls away, and
  * replaced by a single terminal notice once the command it watches is gone.
  */
@@ -432,7 +432,7 @@ describe("managed-command output window", () => {
     // tinted and a lifecycle record can be set apart without re-parsing text.
     expect(rowChannels()).toEqual(["lifecycle", "stdout", "stderr"]);
     expect(screen.getByText("warning: slow build")).not.toBeNull();
-    // Timestamps are on by default (§4) and carry seconds - a 3am restart is
+    // Timestamps are on by default and carry seconds - a 3am restart is
     // matched against other logs by time of day, not by minute. Asserted by
     // shape rather than by a literal, which would move with the runner's
     // locale and time zone.
@@ -774,10 +774,15 @@ describe("managed-command output window", () => {
     // No snapshot ever arrives: the host refused the open. Without this the
     // window sits blank forever, titled "Output", with nothing to read.
     act(() => {
-      stub.emit().onConnectionStatus("closed", {
-        kind: "fatalError",
-        details: COMMAND_GONE,
-      });
+      stub.emit().onConnectionStatus(
+        "closed",
+        {
+          kind: "fatalError",
+          details: COMMAND_GONE,
+        },
+        null,
+        null,
+      );
     });
 
     const panel = screen.getByTestId("managed-command-output-availability");
@@ -795,7 +800,7 @@ describe("managed-command output window", () => {
     openAtTail(stub.emit, [line("stdout", "watching src/")]);
 
     act(() => {
-      stub.emit().onConnectionStatus("reconnecting", null);
+      stub.emit().onConnectionStatus("reconnecting", null, null, null);
     });
 
     const banner = screen.getByTestId("managed-command-output-availability");
@@ -873,10 +878,15 @@ describe("managed-command output window", () => {
     openAtTail(stub.emit, [line("stdout", "watching src/")]);
 
     act(() => {
-      stub.emit().onConnectionStatus("closed", {
-        kind: "fatalError",
-        details: VIEWER_UNAUTHORIZED,
-      });
+      stub.emit().onConnectionStatus(
+        "closed",
+        {
+          kind: "fatalError",
+          details: VIEWER_UNAUTHORIZED,
+        },
+        null,
+        null,
+      );
     });
 
     expect(
@@ -896,10 +906,15 @@ describe("managed-command output window", () => {
     openAtTail(stub.emit, [line("stdout", "before the failure")]);
 
     act(() => {
-      stub.emit().onConnectionStatus("closed", {
-        kind: "fatalError",
-        details: STREAM_FAILED,
-      });
+      stub.emit().onConnectionStatus(
+        "closed",
+        {
+          kind: "fatalError",
+          details: STREAM_FAILED,
+        },
+        null,
+        null,
+      );
     });
 
     const banner = screen.getByTestId("managed-command-output-availability");
@@ -955,7 +970,7 @@ describe("managed-command output window", () => {
     // The socket declaring itself open is not the snapshot landing - the host
     // only serves the tail after its first log read.
     act(() => {
-      stub.emit().onConnectionStatus("open", null);
+      stub.emit().onConnectionStatus("open", null, null, null);
     });
     expect(screen.getByText("Connecting…")).not.toBeNull();
     expect(screen.queryByRole("log")).toBeNull();
@@ -1010,10 +1025,15 @@ describe("managed-command output window", () => {
     ).not.toBeNull();
 
     act(() => {
-      stub.emit().onConnectionStatus("closed", {
-        kind: "fatalError",
-        details: STREAM_FAILED,
-      });
+      stub.emit().onConnectionStatus(
+        "closed",
+        {
+          kind: "fatalError",
+          details: STREAM_FAILED,
+        },
+        null,
+        null,
+      );
     });
 
     expect(
@@ -1029,7 +1049,7 @@ describe("managed-command output window", () => {
     expect(sentFrames).toHaveLength(1);
   });
 
-  // S5's property - `checking` and `host-starting` render a WORDED,
+  // The property - `checking` and `host-starting` render a WORDED,
   // phase-named, bounded wait rather than a bare endless spinner - is owned
   // by the availability notice since the #1149 merge, and is pinned above by
   // "names the host-directory wait by phase" / "names the host-process wait

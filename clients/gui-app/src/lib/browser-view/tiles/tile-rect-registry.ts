@@ -52,7 +52,7 @@ export function listTileRects(): readonly TileRect[] {
 }
 
 /**
- * Whether a real browser tile is taking up pixels right now (C-18, 4.2, 5.2).
+ * Whether a real browser tile is taking up pixels right now (4.2, 5.2).
  *
  * A `<webview>` guest is a `position: fixed` child of `document.body` placed
  * by the compositor, so nothing the page does to itself reaches it: the layout

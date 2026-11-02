@@ -1,3 +1,4 @@
+import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
 import type { WorktreeBusyHolder } from "@traycer/protocol/framework/worktree-busy-holders";
 import {
   worktreeDeleteBatchTargetSchemaV11,
@@ -14,7 +15,9 @@ import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type {
   IStreamSession,
   StreamCloseReason,
+  StatusChangeHandler,
   StreamConnectionStatus,
+  StreamContinuity,
   StreamFrameEnvelope,
 } from "./i-stream-session";
 import { isIncompatibleCloseForMethod } from "./i-stream-session";
@@ -87,10 +90,7 @@ export interface WorktreeDeleteBatchStreamCallbacks {
    * transition. An unsupported-method close is reported through
    * `onUnsupported` instead and never reaches this handler.
    */
-  readonly onConnectionStatus: (
-    status: StreamConnectionStatus,
-    reason: StreamCloseReason | null,
-  ) => void;
+  readonly onConnectionStatus: StatusChangeHandler;
 }
 
 export interface WorktreeDeleteBatchStreamClientOptions {
@@ -213,8 +213,8 @@ export class WorktreeDeleteBatchStreamClient {
     session.onServerFrame((envelope, binaryPayload) => {
       this.handleServerFrame(envelope, binaryPayload);
     });
-    session.onStatusChange((status, reason) => {
-      this.handleStatusChange(status, reason);
+    session.onStatusChange((status, reason, retryCause, continuity) => {
+      this.handleStatusChange(status, reason, retryCause, continuity);
     });
     return session;
   }
@@ -241,6 +241,8 @@ export class WorktreeDeleteBatchStreamClient {
   private handleStatusChange(
     status: StreamConnectionStatus,
     reason: StreamCloseReason | null,
+    retryCause: FatalErrorDetails | null,
+    continuity: StreamContinuity,
   ): void {
     if (this.closed) {
       return;
@@ -251,7 +253,7 @@ export class WorktreeDeleteBatchStreamClient {
     }
     if (status === "open") {
       this.reachedHost = true;
-      this.callbacks.onConnectionStatus(status, reason);
+      this.callbacks.onConnectionStatus(status, reason, retryCause, continuity);
       return;
     }
     // Local transports cache unsupported-method evidence on the client. Remote
@@ -283,16 +285,17 @@ export class WorktreeDeleteBatchStreamClient {
     }
     if (
       status === "reconnecting" &&
+      continuity !== "held" &&
       this.mode === "start" &&
       this.reachedHost
     ) {
       this.swapToObserve();
       // Still a reconnect from the consumer's point of view: the run stays
       // live and waits for the observe session to land.
-      this.callbacks.onConnectionStatus(status, reason);
+      this.callbacks.onConnectionStatus(status, reason, retryCause, continuity);
       return;
     }
-    this.callbacks.onConnectionStatus(status, reason);
+    this.callbacks.onConnectionStatus(status, reason, retryCause, continuity);
   }
 
   private handleServerFrame(

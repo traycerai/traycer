@@ -8,6 +8,7 @@ import {
   fallbackRungLabel,
 } from "@traycer/protocol/host/notifications/presentation";
 import { HOST_NOTIFICATION_STOPPED_REASONS } from "@traycer/protocol/host/notifications/payloads";
+import { hostNotificationEntrySchemaV21 } from "@traycer/protocol/host/notifications/contracts";
 import { FALLBACK_RUNG_KINDS } from "@traycer/protocol/host/fallback-policy";
 
 const BASE = {
@@ -534,6 +535,29 @@ describe("formatHostNotificationPresentation", () => {
     expect(formatHostNotificationPresentation(entry)).toEqual({
       title: "Private task title",
       body: "Private chat title • Failed",
+    });
+  });
+
+  it("shows a bot row's own title and message", () => {
+    const entry = hostNotificationEntrySchemaV21.parse({
+      ...BASE,
+      kind: "host.operation.finished",
+      severity: "done",
+      outcome: "completed",
+      payload: {
+        kind: "bot_thread_verdict",
+        operation: "bot.thread.verdict",
+        title: "Tracy answered",
+        message: "Your question about the release",
+        botId: "bot-1",
+        threadId: "thread-1",
+        replyMessageId: "reply-1",
+      },
+    });
+
+    expect(formatHostNotificationPresentation(entry)).toEqual({
+      title: "Tracy answered",
+      body: "Your question about the release",
     });
   });
 

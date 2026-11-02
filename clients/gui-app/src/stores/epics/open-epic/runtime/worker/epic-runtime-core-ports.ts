@@ -164,6 +164,8 @@ export interface EpicRuntimeCorePortSource {
   applyTuiAgentRecordDelta(delta: TuiAgentRecordDelta): void;
   markChatRecordListAuthoritative(): void;
   markChatRecordListNotAuthoritative(): void;
+  markTuiAgentRecordListAuthoritative(): void;
+  markTuiAgentRecordListNotAuthoritative(): void;
   beginPendingChatCreation(pending: PendingChatCreation): void;
   clearPendingChatCreation(chatId: string): void;
   expirePendingChatCreationForCloudRow(row: PendingChatCreationCloudRow): void;
@@ -767,7 +769,9 @@ type RecordPlaneCommand = Extract<
       | "apply-tui-agent-record-touches"
       | "apply-tui-agent-record-delta"
       | "mark-chat-records-authoritative"
-      | "mark-chat-records-not-authoritative";
+      | "mark-chat-records-not-authoritative"
+      | "mark-tui-agent-records-authoritative"
+      | "mark-tui-agent-records-not-authoritative";
   }
 >;
 
@@ -812,6 +816,8 @@ function isRecordPlaneCommand(
     case "apply-tui-agent-record-delta":
     case "mark-chat-records-authoritative":
     case "mark-chat-records-not-authoritative":
+    case "mark-tui-agent-records-authoritative":
+    case "mark-tui-agent-records-not-authoritative":
       return true;
     default:
       return false;
@@ -868,6 +874,12 @@ function applyRecordPlaneCommand(
       return;
     case "mark-chat-records-not-authoritative":
       source.markChatRecordListNotAuthoritative();
+      return;
+    case "mark-tui-agent-records-authoritative":
+      source.markTuiAgentRecordListAuthoritative();
+      return;
+    case "mark-tui-agent-records-not-authoritative":
+      source.markTuiAgentRecordListNotAuthoritative();
       return;
   }
 }

@@ -96,8 +96,8 @@ const PLAN_LABELS: Partial<Record<SubscriptionStatus, string>> = {
 };
 
 /**
- * The Traycer plan/tier label for the selected account (Core Flows parity
- * with Codex/Claude: "shown where the provider reports one") - the header
+ * The Traycer plan/tier label for the selected account (as for
+ * Codex/Claude, shown where the provider reports one) - the header
  * popover's "Traycer" tab shows this as a chip next to the name, same as
  * `resolveProviderPlanLabel` does for the host-RPC providers.
  */

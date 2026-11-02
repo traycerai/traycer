@@ -95,6 +95,11 @@ export function markReturnedSandboxRestored(
   restoredBySurface.set(surfaceKey, returned);
 }
 
+/** Whether the stage on `surfaceKey` was restored, not picked. */
+export function returnedSandboxRestoredOn(surfaceKey: string): boolean {
+  return restoredBySurface.has(surfaceKey);
+}
+
 /**
  * Takes the surface's mark if it is `returned`'s, and says whether it was. A
  * different one is a newer restore's, and stays for it to release.

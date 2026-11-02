@@ -1,5 +1,6 @@
 import { use, useCallback, type MouseEvent, type ReactNode } from "react";
 import { Lock } from "lucide-react";
+import { m } from "motion/react";
 import { v4 as uuidv4 } from "uuid";
 import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
 import { cn } from "@/lib/utils";
@@ -11,6 +12,9 @@ import { useOwnerHostNotReachable } from "@/hooks/epic/use-task-host-reach";
 import { useChatSandboxRowLine } from "@/hooks/sandboxes/use-chat-sandbox-row-line";
 import { useEpicChatRecordHead } from "@/hooks/chats/use-epic-chat-record-head";
 import { useOwnerSandboxOpensLive } from "@/hooks/chats/use-owner-sandbox-opens-live";
+import { useChatOwnerCopyFacts } from "@/hooks/environment/use-team-environment-ownership";
+import { useCollaboratorDisplayName } from "@/hooks/epics/use-collaborator-display-name";
+import { collaboratorComputer } from "@/lib/chats/collaborator-reference";
 import { EpicSessionContext } from "@/lib/registries/epic-session-registry";
 import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
 import {
@@ -39,6 +43,9 @@ import {
   BASE_PAD_LEFT,
   INDENT_PX,
   useNodeIconDisplay,
+  useTreeRowExpanded,
+  useTreeRowMotion,
+  type TreeRowExpansion,
 } from "@/components/epic-canvas/sidebar/epic-sidebar-tree-shared";
 
 /**
@@ -65,15 +72,12 @@ import {
 const ChatIcon = EPIC_NODE_ICONS.chat;
 
 /**
- * The slice of the sidebar's expansion controller a cloud branch needs. Keyed
- * by the row's `cloudChatRowKey`, in the same per-panel store as local rows, so
- * a collapsed shared orchestrator stays collapsed across re-renders and
- * reorders exactly as a local one does.
+ * The sidebar's expansion controller, shared with the local rows. A cloud
+ * branch is keyed by the row's `cloudChatRowKey`, in the same per-panel store
+ * as local rows, so a collapsed shared orchestrator stays collapsed across
+ * re-renders and reorders exactly as a local one does.
  */
-export interface CloudChatRowExpansion {
-  readonly expandedIds: ReadonlySet<string>;
-  readonly toggleExpanded: (id: string) => void;
-}
+export type CloudChatRowExpansion = TreeRowExpansion;
 
 export interface EpicSidebarCloudChatRowProps {
   readonly chat: CloudChatSummary;
@@ -122,9 +126,9 @@ export function EpicSidebarCloudChatRow(
   // through `useMaybeOpenEpicHandle`, which several sidebar suites mock with a
   // narrower surface. No session (`""`) fails the hook's own guard and reads
   // `null`, which is exactly the pre-head behavior.
-  const epicSession = use(EpicSessionContext);
+  const epicId = use(EpicSessionContext)?.epicId ?? "";
   const recordHead = useEpicChatRecordHead(
-    epicSession?.epicId ?? "",
+    epicId,
     chat.identity.ownerUserId,
     chat.identity.chatId,
   );
@@ -150,6 +154,12 @@ export function EpicSidebarCloudChatRow(
   const ownerNotReachable = useOwnerHostNotReachable(chat.ownerHostId);
   // A sandbox owner's own line replaces the offline wording on the lock.
   const sandboxLine = useChatSandboxRowLine(chat.ownerHostId, !ownerReachable);
+  const lockCopy = useCloudRowLockCopy(
+    chat,
+    epicId,
+    ownerReachability.hostLabel,
+    sandboxLine,
+  );
   // Openable-live = the owner answers. Host ids are unique (2026-08-07
   // ruling), so a reachable owner IS the machine that holds this chat, and
   // the click opens the ordinary live surface bound to it - the tile
@@ -167,6 +177,11 @@ export function EpicSidebarCloudChatRow(
   // closes. On the TAP path only, exactly as the local row does it: the
   // promote-on-double-click path does not call it there either.
   const surface = useChatTreeSurface();
+  // The row moves exactly as a local row does when the rows around it come
+  // and go. A plain `<li>` here snapped to its new place while its local
+  // neighbours slid, so a collapse above it drew the sliding rows straight
+  // through this one.
+  const motion = useTreeRowMotion();
 
   // Whether this tab is showing THIS row's chat - in either of the two forms a
   // click below can open it. A live open is an ordinary record-backed chat
@@ -248,10 +263,11 @@ export function EpicSidebarCloudChatRow(
     [openRef, openTile, props.tabId],
   );
 
-  const ownerLabel = ownerReachability.hostLabel;
-  const lockCopy = lockedRowCopy(ownerLabel, sandboxLine);
   return (
-    <li
+    <m.li
+      layout={motion.layout}
+      exit={motion.exit}
+      transition={motion.transition}
       role="treeitem"
       aria-selected={isActive}
       // Absent on a leaf: an absent `aria-expanded` is what tells a screen
@@ -268,7 +284,7 @@ export function EpicSidebarCloudChatRow(
         aria-label={cloudRowAriaLabel(
           title,
           ownerReachable,
-          lockCopy.ariaLabel,
+          lockCopy,
           ownerNotReachable,
         )}
         data-testid={`epic-sidebar-cloud-item-${chat.identity.chatId}`}
@@ -346,7 +362,7 @@ export function EpicSidebarCloudChatRow(
         depth={props.depth}
         selectionMode={props.selectionMode}
       />
-    </li>
+    </m.li>
   );
 }
 
@@ -368,7 +384,7 @@ function useCloudRowBranch(
 } {
   const rowKey = cloudChatRowKey(chat.identity);
   const hasChildren = childEntries.length > 0;
-  const expanded = hasChildren && expansion.expandedIds.has(rowKey);
+  const expanded = useTreeRowExpanded(expansion, rowKey) && hasChildren;
   const { toggleExpanded } = expansion;
   const handleToggle = useCallback(
     (event: MouseEvent<HTMLSpanElement>) => {
@@ -435,39 +451,90 @@ function CloudRowIdleTime(props: { readonly publishedAt: number }): ReactNode {
 }
 
 /**
- * What a locked row says about its owner.
- *
- * A row is locked exactly when its owning host is unreachable, so there is one
- * thing to say and one wording for it. The longer explanation lives on the
- * surface the row opens; a tooltip states the fact.
+ * The row's accessible name: its title, then each state its glyphs show. A
+ * lock that already says the owner is out of reach (`coversReach`) is not
+ * followed by the reach line too.
  */
-/** The row's accessible name: its title, then each state its glyphs show. */
 function cloudRowAriaLabel(
   title: string,
   ownerReachable: boolean,
-  lockAriaLabel: string,
+  lockCopy: LockedRowCopy,
   ownerNotReachable: boolean,
 ): string {
-  const lock = ownerReachable ? "" : ` — ${lockAriaLabel}`;
-  const reach = ownerNotReachable ? ` — ${TASK_HOST_UNREACHABLE_LINE}` : "";
+  const lock = ownerReachable ? "" : ` — ${lockCopy.ariaLabel}`;
+  const lockSaysReach = !ownerReachable && lockCopy.coversReach;
+  const reach =
+    ownerNotReachable && !lockSaysReach
+      ? ` — ${TASK_HOST_UNREACHABLE_LINE}`
+      : "";
   return `${title}${lock}${reach}`;
 }
 
+interface LockedRowCopy {
+  readonly tooltip: string;
+  readonly ariaLabel: string;
+  /** Whether `ariaLabel` already says the owner is out of reach. */
+  readonly coversReach: boolean;
+}
+
+/**
+ * {@link lockedRowCopy} for one row. A collaborator's chat names its owner on
+ * the lock instead of a host: the same owner facts and the same name the tile
+ * this row opens reads.
+ */
+function useCloudRowLockCopy(
+  chat: CloudChatSummary,
+  epicId: string,
+  ownerLabel: string,
+  sandboxLine: string | null,
+): LockedRowCopy {
+  const ownership = useChatOwnerCopyFacts(
+    chat.identity.ownerUserId,
+    chat.ownerHostId,
+    chat.identity.chatId,
+  );
+  const collaboratorName = useCollaboratorDisplayName(
+    epicId,
+    chat.identity.ownerUserId,
+  );
+  const collaborator =
+    ownership.ownedByViewer || ownership.environmentOwned
+      ? null
+      : { name: collaboratorName };
+  return lockedRowCopy(ownerLabel, sandboxLine, collaborator);
+}
+
+/**
+ * What a locked row says about its owner.
+ *
+ * The longer explanation lives on the surface the row opens; a tooltip states
+ * the fact. A collaborator's chat names the collaborator, never their host:
+ * their machine is never in this account's directory, so "offline" would be
+ * read off a machine this device cannot observe, even while it runs.
+ */
 function lockedRowCopy(
   ownerLabel: string,
   sandboxLine: string | null,
-): {
-  readonly tooltip: string;
-  readonly ariaLabel: string;
-} {
+  collaborator: { readonly name: string | null } | null,
+): LockedRowCopy {
   if (sandboxLine !== null) {
     return {
       tooltip: `${sandboxLine} Opens read-only from the last published copy.`,
       ariaLabel: sandboxLine,
+      coversReach: false,
+    };
+  }
+  if (collaborator !== null) {
+    const computer = collaboratorComputer(collaborator.name);
+    return {
+      tooltip: `On ${computer}, not reachable from here. Opens read-only from the last published copy.`,
+      ariaLabel: `on ${computer}, not reachable from here`,
+      coversReach: true,
     };
   }
   return {
     tooltip: `Lives on ${ownerLabel}, which is offline. Opens read-only from the last published copy.`,
     ariaLabel: `On ${ownerLabel}, offline`,
+    coversReach: false,
   };
 }

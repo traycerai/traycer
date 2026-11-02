@@ -9,7 +9,7 @@ import {
 import { FLEET_ACTIVE_POLL_MS } from "@/lib/host/fleet-update/fleet-poll-policy";
 import type { FleetUpdateView } from "@/lib/host/fleet-update/fleet-update-view";
 
-// Codex round 3, P2. The acceleration is a property of the HOST's operation,
+// The acceleration is a property of the HOST's operation,
 // but the hook runs once per observing surface and has more than one caller by
 // design (the landing banner and the selected-host Overview). A timer per hook
 // INSTANCE therefore meant two independently-phased intervals invalidating the

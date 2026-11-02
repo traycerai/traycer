@@ -1664,8 +1664,8 @@ export function parkedActivationMatchesInstall(
  * and what stands in for a liveness probe here, is the lock it is already
  * holding: a live executor segment holds this same attempt lock for its whole
  * span - `withCliAttemptExecutorCompletion` wraps `execute` in
- * `traycer-cli`'s `host/update-executor.ts` - and the supervisor contends with
- * `waitMs: 0`, so a live holder returns `busy` from
+ * `traycer-cli`'s `host/update-executor.ts` - and the supervisor contends for
+ * it, so a holder that outlasts the bounded wait returns `busy` from
  * `withUpdateContenderInternal` before any disposition is consulted.
  *
  * That is why this function must NOT probe the holder itself. By the time it

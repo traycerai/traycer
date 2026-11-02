@@ -1,5 +1,5 @@
 /**
- * {@link EpicRuntimeAccountingPort} over T5's process-wide books.
+ * {@link EpicRuntimeAccountingPort} over the process-wide books.
  *
  * **This module is the one that reaches the singleton, and that is the point.**
  * It lives on MAIN and is constructed by whoever composes a runtime, so the

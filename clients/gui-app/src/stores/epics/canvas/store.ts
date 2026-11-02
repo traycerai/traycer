@@ -69,6 +69,7 @@ import {
 import { evictTileFindUi } from "@/stores/tile-find/tile-find-store";
 import { promoteChatTabPersistenceToDurable } from "@/stores/chats/chat-tab-persistence-eviction";
 import type { ChatTabPersistenceIdentity } from "@/stores/chats/chat-tab-persistence-key";
+import { selectMobileTile } from "@/components/epic-canvas/mobile/mobile-tile-selection";
 import {
   closeAllTabs,
   closeOtherTabs as closeOtherTileTabs,
@@ -81,6 +82,8 @@ import {
   openBlankTabInPane as openBlankTabInPaneCanvas,
   ensureEmptyCanvasPane,
   openTile,
+  evictTileWithoutClosing,
+  promotePreviewTile,
   openTileInBackgroundTab as openTileInBackgroundTabCanvas,
   openTileInPane as openTileInPaneCanvas,
   findPaneTabForRef,
@@ -128,6 +131,7 @@ import {
   makeOpenableNodeRef,
   type EdgeDropPosition,
   type EpicCanvasTileRef,
+  type MobileSecondaryTile,
   type EpicCanvasState,
   type CommGraphTileCamera,
   type CommGraphTileViewState,
@@ -347,6 +351,15 @@ export interface EpicCanvasStore {
     Record<string, ReadonlyArray<EpicNodeRecord> | undefined>
   >;
   readonly selfDeletedArtifactIds: ReadonlySet<string>;
+  /**
+   * The tile the phone shell shows beside its current one, per tab. The first
+   * slot is the canvas's own activation (`selectMobileTile`); this is the second,
+   * kept off `canvasByTabId` so a phone's pair never reaches the persisted
+   * desktop layout. Session-only (not in `partialize`).
+   */
+  readonly mobileSecondaryTileByTabId: Readonly<
+    Record<string, MobileSecondaryTile | undefined>
+  >;
   readonly pendingCreateArtifactIds: ReadonlySet<string>;
   /**
    * Terminal pending-create identities, keyed by canonical
@@ -365,7 +378,7 @@ export interface EpicCanvasStore {
   readonly pendingChatTitles: Readonly<Record<string, PendingTitleEntry>>;
   /**
    * Per-epic PiP position/size. Survives relaunch; dismissals and phase
-   * do not. See core-flows retention table.
+   * do not.
    */
   readonly pipGeometryByEpicId: Readonly<
     Record<string, EpicPipGeometry | undefined>
@@ -512,6 +525,15 @@ export interface EpicCanvasStore {
    * stealing focus). Idempotent.
    */
   openTileInBackgroundTab: (tabId: string, node: EpicCanvasTileRef) => void;
+  /**
+   * Fill the phone shell's second slot, or empty it with `null`. A `transient`
+   * tile it held leaves the canvas, unless it is what the slot still names or
+   * the current tile by now.
+   */
+  setMobileSecondaryTile: (
+    tabId: string,
+    next: MobileSecondaryTile | null,
+  ) => void;
   prepareOpenTileInBackgroundTabFocusTargetFromSource: (
     tabId: string,
     node: EpicCanvasTileRef,
@@ -1504,6 +1526,7 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
         mostRecentTabIdByEpicId: {},
         artifactTreeByEpicId: EMPTY_TREES,
         selfDeletedArtifactIds: new Set<string>(),
+        mobileSecondaryTileByTabId: {},
         pendingCreateArtifactIds: new Set<string>(),
         pendingCreateTerminalIdentities: new Set<string>(),
         preAckRootCreatesByEpic: {},
@@ -1860,7 +1883,7 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
               ? (sourceCanvas.tilesByInstanceId[args.sourceTileTabId] ?? null)
               : null;
           if (pane === null || node === null) return null;
-          // Ticket 20: the torn-off tile always remounts - it moves from the
+          // The torn-off tile always remounts - it moves from the
           // source header tab's canvas root into a brand-new header tab's
           // canvas root, a completely different React parent chain (MOVE
           // semantics, same instanceId - see the corrected comment at
@@ -2140,6 +2163,35 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
           );
         },
 
+        setMobileSecondaryTile: (tabId, next) => {
+          set((state) => {
+            const held = state.mobileSecondaryTileByTabId[tabId];
+            const { [tabId]: _replaced, ...others } =
+              state.mobileSecondaryTileByTabId;
+            const slots = next === null ? others : { ...others, [tabId]: next };
+            const canvas = state.canvasByTabId[tabId];
+            const evicted =
+              canvas !== undefined &&
+              held?.transient === true &&
+              held.instanceId !== next?.instanceId &&
+              held.instanceId !== selectMobileTile(canvas)?.ref.instanceId
+                ? held.instanceId
+                : null;
+            return {
+              ...updateTabCanvas(state, tabId, (current) => {
+                const without =
+                  evicted === null
+                    ? current
+                    : evictTileWithoutClosing(current, evicted);
+                return next === null
+                  ? without
+                  : promotePreviewTile(without, next.instanceId);
+              }),
+              mobileSecondaryTileByTabId: slots,
+            };
+          });
+        },
+
         prepareOpenTileInBackgroundTabFocusTargetFromSource: (
           tabId,
           node,
@@ -2397,7 +2449,7 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
         },
 
         insertNodeOnTabStrip: (tabId, targetPaneId, targetIndex, node) => {
-          // Ticket 20: mirrors `dropOnTabStrip`'s own node-kind resolution -
+          // Mirrors `dropOnTabStrip`'s own node-kind resolution -
           // dropping a node already open in a DIFFERENT pane routes through
           // `moveTabAcrossPanes` there, remounting that pane's painted tile
           // exactly like an explicit cross-pane drag (and, if it empties its
@@ -2433,7 +2485,7 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
         moveTabOnTabStrip: (tabId, args) => {
           const before = canvasForExistingTab(get(), tabId);
           const node = before?.tilesByInstanceId[args.tabId];
-          // Ticket 20: a cross-pane move remounts the dragged tab's painted
+          // A cross-pane move remounts the dragged tab's painted
           // chat (the keyed layer moves from the source `TabGroupView` to the
           // target one - `moveTabAcrossPanes`). When the dragged tab was its
           // source pane's only tab, that pane also closes and can dissolve its
@@ -2499,7 +2551,7 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
 
         splitPaneWithNode: (tabId, targetPaneId, position, node) => {
           const before = canvasForExistingTab(get(), tabId);
-          // Ticket 20 (review round 1, finding 1): when the target pane's
+          // When the target pane's
           // parent group runs perpendicular to `position` (or the target is
           // the bare root pane), inserting beside it WRAPS the target instead
           // of a flat insertion (`insertPaneAtEdge`) - the target's own
@@ -2576,7 +2628,7 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
         splitPaneWithTab: (tabId, args) => {
           const before = canvasForExistingTab(get(), tabId);
           const node = before?.tilesByInstanceId[args.tabId];
-          // Ticket 20: the dragged tab always lands in a brand-new pane
+          // The dragged tab always lands in a brand-new pane
           // (`createPaneWithTab` inside `splitPaneAtEdge`) - it remounts
           // unconditionally, unlike a same-pane/same-axis flat split of a
           // DIFFERENT tab. The target pane can also wrap (see
@@ -2641,7 +2693,7 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
 
         splitPaneEmptyInTab: (tabId, targetPaneId, direction) => {
           let newPaneId: string | null = null;
-          // Ticket 20: an empty placeholder pane can still WRAP the target
+          // An empty placeholder pane can still WRAP the target
           // (same `insertPaneAtEdge` mechanism as `splitPaneWithNode`), even
           // though this action opens no content of its own.
           const before = canvasForExistingTab(get(), tabId);
@@ -2691,7 +2743,7 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
 
         closeCanvasTab: (tabId, paneId, tileTabId) => {
           const beforeCanvas = get().canvasByTabId[tabId];
-          // Ticket 20: closing a pane's LAST tab removes the pane itself
+          // Closing a pane's LAST tab removes the pane itself
           // (`closeTab` falls through to `closePane`), which can dissolve its
           // parent group and remount a sibling's painted chat. Predict this
           // BEFORE `set()`, from the state as it stands right now.
@@ -2936,7 +2988,7 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
 
         closeAllCanvasTabs: (tabId, paneId) => {
           const beforeCanvas = get().canvasByTabId[tabId];
-          // Ticket 20: `closeAllTabs` always falls through to `closePane` for
+          // `closeAllTabs` always falls through to `closePane` for
           // a non-empty pane - same dissolve risk as `closeCanvasTab`.
           if (beforeCanvas !== undefined) {
             const pane = findPaneById(beforeCanvas.root, paneId);
@@ -2971,7 +3023,7 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
 
         closeCanvasPane: (tabId, paneId) => {
           const beforeCanvas = get().canvasByTabId[tabId];
-          // Ticket 20: same dissolve risk as `closeCanvasTab`/`closeAllCanvasTabs`
+          // Same dissolve risk as `closeCanvasTab`/`closeAllCanvasTabs`
           // - `closePane` always removes the whole pane.
           if (beforeCanvas !== undefined) {
             flushChatTabViewportHandoff(
@@ -3643,7 +3695,7 @@ useEpicCanvasStore.subscribe((state) => {
 });
 
 /**
- * Ticket 15 review round 3: resolves the `(epicId, chatId)` identity a
+ * Resolves the `(epicId, chatId)` identity a
  * removed tile HAD, using the canvas/tab snapshots as they stood just
  * BEFORE this update - `tilesByInstanceId` lives on `canvasByTabId`, but
  * `epicId` lives on the PARALLEL `tabsById` map (`tabsById[tabId].epicId`),
@@ -3686,7 +3738,7 @@ let previousCanvasByTabId: Readonly<
 let previousTabsById: Readonly<Record<string, EpicViewTab | undefined>> | null =
   null;
 useEpicCanvasStore.subscribe((state) => {
-  // Ticket 15 review round 3: `tabsById` (epicId) and `canvasByTabId` (the
+  // `tabsById` (epicId) and `canvasByTabId` (the
   // tile tree) can update in SEPARATE `set()` calls (e.g. `openEpicTab`
   // creates the tab record before any tile is opened into it) - tracking
   // this UNCONDITIONALLY, not gated behind the `canvasByTabId` equality
@@ -3705,7 +3757,7 @@ useEpicCanvasStore.subscribe((state) => {
   );
   previousTileInstanceIds = current;
   if (removed.length > 0) {
-    // Ticket 15 review round 3 (the ONE close-commit choke point): promote
+    // The ONE close-commit choke point: promote
     // each removed chat tile's live tab-side state to durable BEFORE any
     // of the eviction calls below run - this is the only place that can
     // commit for an INACTIVE (never-mounted) view's close, since it reads
@@ -3721,7 +3773,7 @@ useEpicCanvasStore.subscribe((state) => {
         if (identity !== null) promoteChatTabPersistenceToDurable(identity);
       }
     }
-    // Ticket 5: chat-tile-only per-tab persistence, evicted the same way -
+    // Chat-tile-only per-tab persistence, evicted the same way -
     // proactively on a permanent close, not just LRU/registry-capped. The
     // reading-position cache and the collapse-state registries key by the
     // exact same tile instanceId, so one `removed` list covers all of them;
@@ -3730,7 +3782,7 @@ useEpicCanvasStore.subscribe((state) => {
     evictPendingHydrationRestores(removed);
     evictActivityGroupOpenStores(removed);
     evictA2AOpenStores(removed);
-    // F4 (ticket 5 review): tile-find serves every tile kind, not just chat -
+    // Tile-find serves every tile kind, not just chat -
     // a tile whose adapter unregistered while still live (switched-away, not
     // closed) is skipped by scheduleUiReclaim's own liveness check and never
     // revisited if it is later closed without remounting. This sweep is that
@@ -3739,7 +3791,7 @@ useEpicCanvasStore.subscribe((state) => {
     removed.forEach((instanceId) => {
       useToolOpenStore.getState().reset(instanceId);
       useSubagentOpenStore.getState().reset(instanceId);
-      // Ticket 15 review round 3: bounds the initialized-scope markers -
+      // Bounds the initialized-scope markers -
       // this tileInstanceId can never be seen again (a reopen always mints
       // a fresh one), so nothing else will ever need this entry.
       toolOpenInitializedScopes.delete(instanceId);

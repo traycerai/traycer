@@ -761,6 +761,53 @@ describe("merged notifications feed", () => {
     });
   });
 
+  it("projects a role change as collaboration on both lanes, not as their task", () => {
+    // The row the member is told their own role moved by, which mirrors the
+    // task-sharing role change — a `global`, Collaboration row. Both lanes say
+    // task, so each has to read the kind for the filter to keep the row under
+    // Collaboration; the cloud lane is asserted beside the host one because it
+    // is the lane that carries the row between hosts. Its title comes with it:
+    // a cloud row prefers the epic and chat titles its producer snapshotted
+    // over the composed copy, and this is the first kind the center carries
+    // that belongs to no epic, so those titles have to be absent for the
+    // member to read what happened.
+    const entry = {
+      id: "role-1",
+      updatedAt: 10,
+      readAt: null,
+      kind: "team.role.changed",
+      sourceRef: null,
+      severity: "info",
+      outcome: "completed",
+      epicId: null,
+      chatId: null,
+      payload: {
+        kind: "team_role_changed",
+        environmentId: "env-1",
+        teamName: "Acme",
+        from: "editor",
+        to: "admin",
+      },
+    } as const satisfies HostNotificationFeedEntry;
+
+    expect(rowFromHostEntry(entry)).toMatchObject({
+      category: "collaboration",
+      severity: "info",
+    });
+    expect(
+      rowFromCloudFeedRow({
+        entryId: entry.id,
+        originHostId: "host-a",
+        coalesceKey: entry.id,
+        entry,
+        presentation: { epicTitle: null, chatTitle: null },
+      }),
+    ).toMatchObject({
+      category: "collaboration",
+      title: "Your role changed",
+    });
+  });
+
   it("routes a parked managed-command delivery back to the chat holding it", () => {
     expect(
       rowFromHostEntry({
@@ -917,6 +964,225 @@ describe("merged notifications feed", () => {
         section: "recent",
       });
     });
+  });
+
+  describe("a bot's conversation row", () => {
+    function conversationEntry(
+      readAt: number | null,
+      operation: string,
+      mention: boolean,
+    ): HostNotificationFeedEntry {
+      return {
+        id: `${operation}:row-1`,
+        updatedAt: 10,
+        readAt,
+        kind: "host.operation.finished",
+        sourceRef: "row-1",
+        severity: "done",
+        outcome: "completed",
+        epicId: "bot-1",
+        chatId: "thread-1",
+        payload: {
+          kind: "bot_conversation",
+          operation,
+          title: "Tracy",
+          message: "Something in the thread",
+          botId: "bot-1",
+          threadId: "thread-1",
+          messageId: "row-1",
+          mention,
+        },
+      };
+    }
+
+    const planes = [
+      {
+        plane: "host feed",
+        rowOf: (entry: HostNotificationFeedEntry) => rowFromHostEntry(entry),
+      },
+      {
+        plane: "cloud feed",
+        rowOf: (entry: HostNotificationFeedEntry) =>
+          rowFromCloudFeedRow({
+            entryId: entry.id,
+            originHostId: "host-a",
+            coalesceKey: entry.id,
+            entry,
+            presentation: { epicTitle: null, chatTitle: null },
+          }),
+      },
+    ];
+
+    it.each(planes)(
+      "files an unread reply in a followed thread under Attention's answer class, and Recent once read, from the $plane",
+      ({ rowOf }) => {
+        const unread = rowOf(conversationEntry(null, "bot.reply", false));
+        const read = rowOf(conversationEntry(5, "bot.reply", false));
+
+        expect(classifyNotificationLifecycle(unread)).toEqual({
+          section: "attention",
+          tier: "answer",
+        });
+        expect(classifyNotificationLifecycle(read)).toEqual({
+          section: "recent",
+        });
+      },
+    );
+
+    it.each(planes)(
+      "files an unread row that mentions the person under Attention's answer class, from the $plane",
+      ({ rowOf }) => {
+        expect(
+          classifyNotificationLifecycle(
+            rowOf(conversationEntry(null, "bot.post", true)),
+          ),
+        ).toEqual({ section: "attention", tier: "answer" });
+      },
+    );
+
+    it.each(planes)(
+      "leaves a post that mentions no one under Recent, from the $plane",
+      ({ rowOf }) => {
+        expect(
+          classifyNotificationLifecycle(
+            rowOf(conversationEntry(null, "bot.post", false)),
+          ),
+        ).toEqual({ section: "recent" });
+      },
+    );
+  });
+
+  describe("a bot's row opens the bot's tab", () => {
+    function botEntry(
+      payload: HostNotificationFeedEntry["payload"],
+    ): HostNotificationFeedEntry {
+      return {
+        id: "bot-row-1",
+        updatedAt: 10,
+        readAt: null,
+        kind: "host.operation.finished",
+        sourceRef: "row-1",
+        severity: "done",
+        outcome: "completed",
+        epicId: "bot-1",
+        chatId: null,
+        payload,
+      };
+    }
+
+    const verdict = {
+      kind: "bot_thread_verdict",
+      operation: "bot.thread.verdict",
+      title: "Tracy answered",
+      message: "Your question about the release",
+      botId: "bot-1",
+      threadId: "thread-1",
+      replyMessageId: "reply-1",
+    };
+    const conversation = {
+      kind: "bot_conversation",
+      event: "bot.reply",
+      operation: "bot.reply",
+      title: "Tracy",
+      message: "Something in the thread",
+      botId: "bot-1",
+      conversationId: "conversation-1",
+      threadId: "thread-1",
+      messageId: "message-1",
+      authorUserId: null,
+      mention: false,
+    };
+
+    const planes = [
+      {
+        plane: "host feed",
+        rowOf: (entry: HostNotificationFeedEntry) => rowFromHostEntry(entry),
+      },
+      {
+        plane: "cloud feed",
+        rowOf: (entry: HostNotificationFeedEntry) =>
+          rowFromCloudFeedRow({
+            entryId: entry.id,
+            originHostId: "host-a",
+            coalesceKey: entry.id,
+            entry,
+            presentation: { epicTitle: null, chatTitle: null },
+          }),
+      },
+    ];
+
+    it.each(planes)(
+      "opens the thread on the answer a verdict row names, with the row's own copy, from the $plane",
+      ({ rowOf }) => {
+        const row = rowOf(botEntry(verdict));
+
+        expect(row.payload).toEqual({
+          kind: "chat",
+          epicId: "bot-1",
+          chatId: "thread-1",
+          bot: { botId: "bot-1", threadId: "thread-1", messageId: "reply-1" },
+        });
+        expect(row).toMatchObject({
+          title: "Tracy answered",
+          body: "Your question about the release",
+        });
+      },
+    );
+
+    it.each(planes)(
+      "opens the thread on the row a conversation reply names, from the $plane",
+      ({ rowOf }) => {
+        const row = rowOf(botEntry(conversation));
+
+        expect(row.payload).toEqual({
+          kind: "chat",
+          epicId: "bot-1",
+          chatId: "thread-1",
+          bot: { botId: "bot-1", threadId: "thread-1", messageId: "message-1" },
+        });
+        expect(row).toMatchObject({
+          title: "Tracy",
+          body: "Something in the thread",
+        });
+      },
+    );
+
+    it.each(planes)(
+      "opens the channel on a post that is in no thread, from the $plane",
+      ({ rowOf }) => {
+        const row = rowOf(
+          botEntry({
+            ...conversation,
+            event: "bot.post",
+            operation: "bot.post",
+            threadId: null,
+          }),
+        );
+
+        expect(row.payload).toEqual({
+          kind: "chat",
+          epicId: "bot-1",
+          chatId: "conversation-1",
+          bot: { botId: "bot-1", threadId: null, messageId: "message-1" },
+        });
+      },
+    );
+
+    it.each(planes)(
+      "routes no other finished operation, from the $plane",
+      ({ rowOf }) => {
+        const row = rowOf(
+          botEntry({
+            kind: "test_box",
+            operation: "testbox.provision",
+            title: "Test box ready",
+            message: "Provisioned 1 test box.",
+          }),
+        );
+
+        expect(row.payload).toBeNull();
+      },
+    );
   });
 
   describe("secrets rows", () => {

@@ -209,6 +209,7 @@ function surfacesProps(
       steerCapable: false,
       steerProtocolSupported: true,
       autoPermissionModeProtocolSupported: null,
+      ultracodeProtocolSupported: false,
       getDraftBlobBridgeSupported: () => false,
       // Composer-only under the new contract; Stop no longer reads this.
       getActiveTurnForSteer: () => null,
@@ -349,6 +350,7 @@ const RESTAMP_REASON =
   "Queue paused: this message's settings are not supported on the provider the chat switched to, so it was left on the previous one. Resume it to run it anyway.";
 
 const SETTINGS: ChatRunSettings = {
+  ultracode: false,
   harnessId: "codex",
   model: "codex-test",
   permissionMode: "supervised",

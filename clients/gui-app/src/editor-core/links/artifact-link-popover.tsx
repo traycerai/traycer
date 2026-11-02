@@ -57,7 +57,7 @@ export type OpenableArtifactLink = Extract<
   { readonly kind: "external" | "file" }
 >;
 
-/** A keyboard or card activation, which carries no mouse button (R7). */
+/** A keyboard or card activation, which carries no mouse button. */
 const PLAIN_ACTIVATION: LinkClickEvent = {
   altKey: false,
   ctrlKey: false,
@@ -73,7 +73,7 @@ export interface ArtifactLinkPopoverProps {
   /**
    * The activating event travels with the link: `ctrl`/`meta` forces the OS
    * browser and `alt` inverts the configured mode, and both are decided by
-   * the link seam, not here (A3, R7).
+   * the link seam, not here (A3).
    */
   readonly openLink: (
     link: OpenableArtifactLink,

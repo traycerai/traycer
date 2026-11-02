@@ -1008,7 +1008,7 @@ describe("createEpicStatusLaneAdapter - generation guard", () => {
 
     stale.onSnapshot(snapshotFrame({}), true);
     stale.onTransition(cloudSyncStatusFrame("epoch-1", "connected"), true);
-    stale.onConnectionStatus("closed", { kind: "caller" });
+    stale.onConnectionStatus("closed", { kind: "caller" }, null, null);
 
     expect(log).toEqual([]);
   });

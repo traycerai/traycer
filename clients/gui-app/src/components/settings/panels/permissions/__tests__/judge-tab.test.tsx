@@ -2673,7 +2673,7 @@ describe("JudgeTab", () => {
       });
     });
 
-    // R4: a same-provider rail re-click keeps the model while its catalog is
+    // A same-provider rail re-click keeps the model while its catalog is
     // still loading (`providerSwitchModel`'s hold). With no model row to
     // clamp against, the store emits the stored effort unclamped, and the
     // write guard (`seedRunsEffort`) compares against that same value rather

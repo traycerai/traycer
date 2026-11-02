@@ -62,8 +62,8 @@ vi.mock("@/hooks/host/use-addressable-host-id", () => ({
 }));
 
 // The Epic session resolves its host through the selection authority's derived
-// pointer (selection model §1), not the active-host projection above - seed the
-// decider at its own name (the P1.2 convention in epic-shell-usage-entry-point).
+// pointer, not the active-host projection above - seed the
+// decider at its own name (the convention in epic-shell-usage-entry-point).
 vi.mock("@/hooks/host/use-effective-host-id", () => ({
   useEffectiveHostId: () => "host-a",
 }));
@@ -1241,8 +1241,7 @@ describe("comm-graph agent detail", () => {
    *
    * "Plain" means PROSE, not source. The timeline still renders no markdown -
    * no element comes out of it - but the text it shows is the projection.
-   */
-  /**
+   *
    * The lexer keeps character references encoded, so before this the snippet
    * read `R&amp;D` while expanding the same row in the detail panel read `R&D`.
    */

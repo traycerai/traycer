@@ -1067,7 +1067,7 @@ describe("BrowserPeekTile", () => {
 });
 
 /**
- * Ticket 18's viewer-side half of the RTT probe: the tile answers every
+ * The viewer-side half of the RTT probe: the tile answers every
  * `rttProbe` the host sends with exactly one `rttProbeAck` carrying the same
  * `probeId`, and doing so must not disturb any other frame handling on the
  * same subscription.

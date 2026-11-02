@@ -1,6 +1,6 @@
 import { createElement, useContext, type ReactNode } from "react";
 import { QueryClientProvider, type QueryClient } from "@tanstack/react-query";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import {
@@ -28,6 +28,7 @@ import { useCloudNotificationsStore } from "@/stores/notifications/cloud-notific
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { createAppQueryClient } from "@/lib/query-client";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 
 /**
  * The multi-host indicator fan-out, driven through real `HostClient`s over
@@ -272,6 +273,7 @@ afterEach(() => {
     useCloudNotificationsStore.getInitialState(),
     true,
   );
+  useSelectionAuthorityStore.setState({ leases: [] });
 });
 
 describe("ChatIndicatorHostScopes", () => {
@@ -423,6 +425,69 @@ describe("ChatIndicatorHostScopes", () => {
     await waitFor(() => {
       expect(harness.hosts.get(HOST_A)?.asked).toEqual([]);
       expect(harness.hosts.get(HOST_B)?.asked).toEqual([]);
+    });
+  });
+
+  it("keeps asking a host whose lease is restarting-expected", async () => {
+    // The hold the authority keeps its effective host through is a hold here
+    // too: only `dead` silences a layer, never "not usable right now".
+    useSelectionAuthorityStore.setState({
+      leases: [{ hostId: HOST_B, status: "restarting-expected", dead: null }],
+    });
+    const harness = createHarness([
+      [HOST_B, { "chat-b": lit({ pendingApproval: true }) }],
+    ]);
+
+    renderStrip(harness, [{ hostId: HOST_B, chatId: "chat-b" }]);
+
+    await waitFor(() => {
+      expect(harness.hosts.get(HOST_B)?.asked).toEqual([["chat-b"]]);
+      expect(screen.getByTestId(`probe-${HOST_B}-chat-b`).textContent).toBe(
+        "approval",
+      );
+    });
+  });
+
+  it("does not ask a dead host, and asks it again once its lease recovers", async () => {
+    useSelectionAuthorityStore.setState({
+      leases: [
+        { hostId: HOST_A, status: "ready", dead: null },
+        { hostId: HOST_B, status: "dead", dead: { reason: "offline" } },
+      ],
+    });
+    const harness = createHarness([
+      [HOST_A, { "chat-a": lit({ pendingApproval: true }) }],
+      [HOST_B, { "chat-b": lit({ pendingApproval: true }) }],
+    ]);
+
+    renderStrip(harness, [
+      { hostId: HOST_A, chatId: "chat-a" },
+      { hostId: HOST_B, chatId: "chat-b" },
+    ]);
+
+    // The live host's answer landing is the sync point: by then the dead
+    // host's layer has had every chance to issue its read and issued none.
+    await waitFor(() => {
+      expect(harness.hosts.get(HOST_A)?.asked).toEqual([["chat-a"]]);
+    });
+    expect(harness.hosts.get(HOST_B)?.asked).toEqual([]);
+    expect(screen.getByTestId(`probe-${HOST_B}-chat-b`).textContent).toBe("");
+
+    act(() => {
+      useSelectionAuthorityStore.setState({
+        leases: [
+          { hostId: HOST_A, status: "ready", dead: null },
+          { hostId: HOST_B, status: "ready", dead: null },
+        ],
+      });
+    });
+
+    // Recovery re-enables the read with no user gesture, and the dot lights.
+    await waitFor(() => {
+      expect(harness.hosts.get(HOST_B)?.asked).toEqual([["chat-b"]]);
+      expect(screen.getByTestId(`probe-${HOST_B}-chat-b`).textContent).toBe(
+        "approval",
+      );
     });
   });
 });

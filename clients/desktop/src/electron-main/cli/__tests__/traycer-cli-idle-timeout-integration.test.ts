@@ -36,7 +36,11 @@ vi.mock("../cli-discovery", async (importOriginal) => {
   };
 });
 
-import { streamTraycerCliJson } from "../traycer-cli";
+import {
+  runBundledTraycerCliJson,
+  spawnDetachedBundledTraycerCliJson,
+  streamTraycerCliJson,
+} from "../traycer-cli";
 
 // Stands in for `traycer host download --json`: emits NDJSON progress on a
 // tick, then a terminal ok. `node` runs it directly (the shebang keeps it
@@ -135,6 +139,51 @@ describe("streamTraycerCliJson idle budget against a real subprocess", () => {
     expect(progress).toHaveLength(15);
     expect(elapsed).toBeGreaterThan(2_500);
   }, 30_000);
+
+  describe("tells the CLI the app is behind it, so a lock it takes can say so", () => {
+    beforeAll(() => {
+      const script = `#!/usr/bin/env node
+process.stdout.write(JSON.stringify({
+  type: "result",
+  status: "ok",
+  data: { initiator: process.env.TRAYCER_HOST_UPDATE_INITIATOR },
+}) + "\\n");
+`;
+      const path = join(scriptDir, "fake-cli.mjs");
+      writeFileSync(path, script, "utf8");
+      chmodSync(path, 0o755);
+    });
+
+    it("on a streamed command", async () => {
+      const result = await streamTraycerCliJson<{ initiator: string }>({
+        args: ["host", "download", "--automatic"],
+        onEvent: () => undefined,
+        env: null,
+        idleTimeoutMs: 5_000,
+        signal: null,
+      });
+      expect(result.data.initiator).toBe("desktop");
+    }, 30_000);
+
+    it("on a command it waits for", async () => {
+      const result = await runBundledTraycerCliJson<{ initiator: string }>([
+        "host",
+        "restart",
+      ]);
+      expect(result.initiator).toBe("desktop");
+    }, 30_000);
+
+    it("on a detached command", async () => {
+      const run = await spawnDetachedBundledTraycerCliJson<{
+        initiator: string;
+      }>({
+        args: ["host", "stop"],
+        outputDir: join(scriptDir, "detached"),
+        outputStem: "stop",
+      });
+      expect((await run.completion).initiator).toBe("desktop");
+    }, 30_000);
+  });
 
   it("kills a child that stops reporting, once the budget elapses", async () => {
     writeFakeCli({

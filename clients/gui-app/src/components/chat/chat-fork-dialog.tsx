@@ -1,3 +1,4 @@
+import { useUltracodeCarrierSupported } from "@/components/home/data/model-ultracode";
 import { signedInUserId } from "@/lib/sandboxes/sandbox-account-fence";
 import {
   useCallback,
@@ -38,6 +39,7 @@ import { useFocusedPaneModalOpen } from "@/components/epic-tabs/pane-visibility-
 import { useComposerToolbarStore } from "@/components/home/hooks/use-composer-toolbar-store";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
+import { useStageFallbackHostLine } from "@/hooks/sandboxes/use-stage-fallback-host-line";
 import { useTeamSandboxHarnessBlocked } from "@/hooks/sandboxes/use-team-sandbox-harness-blocked";
 import { TEAM_SANDBOX_HARNESS_UNAVAILABLE } from "@/lib/sandboxes/team-sandbox-harness";
 import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
@@ -69,7 +71,10 @@ import {
 import { clearChatForkWorkspace } from "@/lib/worktree/chat-fork-workspace-staging";
 import { useSeededWorkspaceSnapshotStore } from "@/stores/worktree/seeded-workspace-snapshot-store";
 import { useWorktreeIntentMemoryStore } from "@/stores/worktree/worktree-intent-memory-store";
-import type { ComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
+import {
+  chipModelName,
+  type ComposerToolbarStore,
+} from "@/stores/composer/composer-toolbar-store";
 import type { ChatForkMode } from "@/components/chat/chat-message";
 import {
   chatForkHostRefusals,
@@ -194,7 +199,7 @@ export interface ChatForkDialogTarget {
    */
   readonly onlyHostIds: ReadonlySet<string> | null;
   /**
-   * A New sandbox the chat host chip picked (sandboxes redesign D9): the
+   * A New sandbox the chat host chip picked (the sandboxes redesign): the
    * dialog opens with it staged, its consequences under the host list, and
    * Fork creates it, waits for the agent there and forks onto it. `null`
    * stages nothing; `initialHostId` and `onlyHostIds` are `null` with it.
@@ -247,6 +252,7 @@ function ChatForkModelPicker(props: {
   );
   return (
     <HarnessModelPicker
+      withUltracode
       openForHarnessRef={props.openForHarnessRef}
       labelDisplay="responsive"
       store={props.store}
@@ -563,6 +569,10 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
   // against the SELECTED host's live `providers.list` and corrects a dead
   // profile to ambient, and reads the harness/model catalog through the same
   // client, so the fork offers the target host's harnesses and models.
+  const ultracodeCarried = useUltracodeCarrierSupported(
+    selectedHostId,
+    "epic.createChat",
+  );
   const toolbarStore = useComposerToolbarStore(
     null,
     fallbackSeedSource(target?.settingsSeed ?? null, selectedHostClient),
@@ -578,6 +588,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
       // A fork CREATES a chat; nothing has negotiated a `chat.subscribe` line
       // for it yet, so the harness-catalog line decides `auto` alone.
       chatLineCarriesAutoMode: null,
+      ultracodeCarried,
       stagedSurfaceKey: forkSurfaceKey,
       sendsToRestingSandbox: false,
     },
@@ -631,9 +642,18 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
     (s) => s.values.selection.harnessId,
   );
   const forkModelPickerRef = useRef<OpenForHarness | null>(null);
+  const pickedModelSlug = useStore(
+    toolbarStore,
+    (s) => s.values.selection.modelSlug,
+  );
+  const chipModel = useStore(toolbarStore, chipModelName);
+  const chooseAnotherHostLabel = useStageFallbackHostLine(selectedHostId);
   const stagedSignInCheck = useStagedSendSignInCheck({
     harnessId: pickedHarnessId,
+    modelSlug: pickedModelSlug,
+    modelName: chipModel,
     active: activeWorkspaceTarget !== null && forkStage !== null,
+    chooseAnotherHostLabel,
     onChooseModel: (offeredAgents) =>
       forkModelPickerRef.current?.("traycer", offeredAgents),
     onChooseAnotherHost: () =>
@@ -706,7 +726,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
     appWideHostTeamId === null ? appWideClient : null;
   const attachClient =
     tabHostTeamId === null ? tabHostClient : personalAppWideClient;
-  const attachEnvironment = useEpicAttachEnvironment(attachClient);
+  const attachEnvironment = useEpicAttachEnvironment(attachClient, "fork");
   const sourceOwnerUserId = useCloneSourceOwnerUserId({
     client: appWideClient,
     epicId,
@@ -1038,6 +1058,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
       permission: toolbar.permission,
       reasoning: toolbar.reasoning,
       serviceTier: toolbar.serviceTier,
+      ultracode: toolbar.ultracode,
     });
     const submittedBy = useAuthStore.getState().profile?.userId ?? null;
     const createForkChat = (): void => {
@@ -1183,7 +1204,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
   //
   // `ChatForkDialogBody` stays mounted for the life of the chat tile and the
   // mutation key is constant, so `error` and `variables` outlive every
-  // transition this ticket made variable: retargeting to another host, and
+  // transition that is now variable: retargeting to another host, and
   // reopening the dialog on a different assistant message. Scoping by host
   // alone fixed the first and left the second — turn M1's refusal rendering as
   // "M2 is still syncing" before M2 had been attempted at all. So the notice

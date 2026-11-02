@@ -370,7 +370,7 @@ describe.each(OFFICE_VIEW_IDS)("%s view", (viewId) => {
             ? bounds.chairs
             : 0,
         );
-        // C5 and C7: a door with a counter and a counter with a queue. Neither
+        // A door with a counter and a counter with a queue. Neither
         // is a room anybody sits down in.
         expect(seatsOf("archive")).toBe(0);
         expect(seatsOf("help-desk")).toBe(0);
@@ -506,7 +506,7 @@ describe.each(OFFICE_VIEW_IDS)("%s view", (viewId) => {
             }).text;
           expect(readingAt(plate.widthTiles)).toBe(readingAt(GENEROUS_TILES));
         } else if (room.kind === "archive") {
-          // WIDER THAN THE ROOM, on purpose: C5's archive is a DOOR, one tile,
+          // WIDER THAN THE ROOM, on purpose: the archive is a DOOR, one tile,
           // and a one-tile plate holds no word. The constant is shared so that
           // every FRONTAGE view's records door is labelled the same width; the
           // fixed-width view plates its door like its other three, wider.
@@ -727,7 +727,7 @@ describe.each(OFFICE_VIEW_IDS)("%s view", (viewId) => {
             // placed a thousandth of a pixel apart is on the plan's open list.
             // What is not sample-bound is the RATIO - 0.01 px is 8.8e10 times
             // the largest residual measured, and 120x smaller than 1.2 px, the
-            // smallest REAL overprint this suite has caught (finding 5's board
+            // smallest REAL overprint this suite has caught (the pod plate's board
             // at close-up; the rest ran 2.8 to 8.4 px).
             //
             // Exact tangency is NOT a defect and must not be "fixed" by nudging
@@ -762,7 +762,7 @@ describe.each(OFFICE_VIEW_IDS)("%s view", (viewId) => {
     /**
      * A KERB IS A PROMISE, and this is the whole of it.
      *
-     * C6 says which rooms make it - a vehicle drives to a ward and to a counter,
+     * A vehicle drives to a ward and to a counter,
      * and to neither a bench nor a records door - and ruling 6 says what it
      * means: a road tile one step from that room's own door.
      */
@@ -771,7 +771,7 @@ describe.each(OFFICE_VIEW_IDS)("%s view", (viewId) => {
       roadTiles: ReadonlySet<string>,
     ): void => {
       const kerb = room.kerbTile;
-      // Only the two rooms something drives to name one (C6).
+      // Only the two rooms something drives to name one.
       if (room.kind === "waiting-room" || room.kind === "archive") {
         expect(kerb).toBeNull();
         return;
@@ -1042,7 +1042,7 @@ describe.each(OFFICE_VIEW_IDS)("%s view", (viewId) => {
       const garden = layout.floors.flatMap((floor) =>
         floor.errandSpots.filter((spot) => spot.kind === "garden"),
       );
-      // D25: views without gardens intentionally skip this shared-plan case;
+      // Views without gardens intentionally skip this shared-plan case;
       // Floor remains the reference view and must keep both outcomes.
       if (garden.length === 0 && viewId !== "floor") {
         context.skip(`${viewId} intentionally has no garden spots`);
@@ -1194,7 +1194,7 @@ describe.each(OFFICE_VIEW_IDS)("%s view", (viewId) => {
         return;
       }
 
-      // Every storey of a host shares the host's plaza door (D13), so the
+      // Every storey of a host shares the host's plaza door, so the
       // first floor of the host is the right door on every view.
       const doorFor = (hostId: string): OfficeTilePos => {
         const floor = layout.floors.find(
@@ -1587,7 +1587,7 @@ describe.each(OFFICE_VIEW_IDS)("%s view", (viewId) => {
    * pokes almost entirely outside the bounds as long as its top-left corner
    * still touches them. Decorate the REAL painter to append one of its own
    * real sprite parts at `(bounds.right - 1, bounds.bottom - 1)` - the exact
-   * reproduction the reviewer used - and prove two things about it: it is
+   * reproduction - and prove two things about it: it is
    * genuinely present in the real frame (so the probe above is reading real
    * painter output, not a dropped part), and the containment predicate the
    * case above uses rejects it.
@@ -1739,7 +1739,7 @@ describe("floor civic sign width", () => {
  * `null` a wildcard, or the floor preference a free-for-all - passes every case
  * about the hall and fails this one. The falsifier is a ward that is FULL on one
  * host while another host's ward has beds going spare: the overflowing agent
- * keeps its desk (C2 - capacity is the cap) and does not cross the building line
+ * keeps its desk (capacity is the cap) and does not cross the building line
  * to lie down.
  */
 describe.each(["floor", "towers", "building"] as const)(
@@ -1819,7 +1819,7 @@ describe.each(["floor", "towers", "building"] as const)(
       expect(theirs.seatIds.length).toBeGreaterThan(0);
       expect(tally.occupiedByRoom.get(theirs.civicRoomId) ?? 0).toBe(0);
 
-      // And the overflow kept its desk rather than being dropped somewhere: C2,
+      // And the overflow kept its desk rather than being dropped somewhere:
       // capacity is the cap, and an agent that finds the ward full stays put
       // with its glyph up.
       const inWard = patients.filter(

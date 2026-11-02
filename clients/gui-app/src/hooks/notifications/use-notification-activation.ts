@@ -4,7 +4,10 @@ import { useHostBinding } from "@/lib/host";
 import { resolveAppWideHostClient } from "@/lib/host/binding-host-client";
 import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
 import { readEffectiveHostIdSnapshot } from "@/stores/host/selection-authority-store";
+import { toast } from "sonner";
+import { NO_DEVICE_AVAILABLE } from "@/lib/composer/landing-placement";
 import {
+  isBotChatWithoutDevice,
   routeNotificationForHost,
   type NotificationNavigate,
   type NotificationPayload,
@@ -74,7 +77,7 @@ function hostFeedStayedOnOrigin(input: {
  * leaves it unread via server truth (no optimistic read-state here for a
  * failed write to reconcile).
  *
- * Activation does NOT move the app-wide selection (redesign P1.2, D7): the
+ * Activation does NOT move the app-wide selection (redesign P1.2): the
  * routed surface resolves against the effective host or its own tab binding,
  * and a notification click is not the user answering "which host do you work
  * on" - that gesture exists only in Settings ▸ Activate. The origin-host
@@ -114,7 +117,7 @@ export function useNotificationActivationWithNavigate(
   const effectiveHostId = useEffectiveHostId();
   // APP-WIDE BY INTENT, and it must stay that way if this ever mounts under a
   // host-scoped subtree. `beforeRouteHostId`/`afterRouteHostId` below record
-  // which host the WINDOW was addressing across an activation (D7: it must not
+  // which host the WINDOW was addressing across an activation (it must not
   // move) - that is a property of the window, not of whatever surface happens
   // to be on screen, and a scoped panel's host would report a move that never
   // happened. Reading it off the spine stopped meaning anything when P4.2
@@ -140,10 +143,18 @@ export function useNotificationActivationWithNavigate(
       // would already be stale before routing even starts).
       const beforeRouteHostId =
         client === null ? null : readEffectiveHostIdSnapshot();
+      // A bot's chat opens only as the bot's tab, which needs a device. With
+      // none, routing would open nothing: say so, and leave the row unread so
+      // it can be opened once a device is up.
+      if (isBotChatWithoutDevice(input.payload, beforeRouteHostId)) {
+        toast.error(NO_DEVICE_AVAILABLE);
+        input.onResult?.("failure");
+        return;
+      }
       // ORIGIN-REQUIRED routes may not fall back to the hostless intent.
       //
       // `ensureOriginHostSelected` used to carry two rules at once: it SELECTED
-      // the origin host (which D7 forbids - a notification click is not the
+      // the origin host (which is forbidden - a notification click is not the
       // app-wide selection's writer, and P1.2 removed it), and it REFUSED an
       // activation it could not route to that host. Deleting the function took
       // the refusal with the switch. An approval or interview raised on host B
@@ -191,7 +202,7 @@ export function useNotificationActivationWithNavigate(
           // READ LIVE, and that is the whole point of this line.
           //
           // The guard asks "did the app-wide pointer move while we were
-          // routing" (D7: a notification activation must not switch the
+          // routing" (a notification activation must not switch the
           // window's host). It used to ask the client twice, which worked
           // only because `bind()` mutated one shared object between the two
           // reads. `client` above is an id-pinned requester and CANNOT

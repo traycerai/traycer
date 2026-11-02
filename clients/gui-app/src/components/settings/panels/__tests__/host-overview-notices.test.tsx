@@ -1,4 +1,4 @@
-// T2: the notices strip (`host-overview-notices.tsx`) that replaced the
+// The notices strip (`host-overview-notices.tsx`) that replaced the
 // Status tab and the header's live update pill/phone strip. Three layers,
 // tested at the layer that actually decides the thing:
 //  - pure model (`host-overview-status-model.ts`): `inFlightUpdateKind`,

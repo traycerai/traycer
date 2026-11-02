@@ -364,7 +364,7 @@ export function LayoutRegionContextMenuWithItems(props: {
 
 /**
  * One menu for a whole strip of regions, naming whichever one the pointer was
- * over (G3-10).
+ * over.
  *
  * A root per ITEM is what this replaces: the composer's two clusters draw
  * seven controls between them and every open chat tile draws both, so a

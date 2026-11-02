@@ -232,7 +232,7 @@ describe("noSwitchDestinationText", () => {
 const HOST_LABEL = "Surya's MacBook";
 
 /**
- * The spec's Flow 4 table, written out literally: what each kind says and which
+ * The refusal table, written out literally: what each kind says and which
  * buttons it leaves when the host reports `retryable: false`. Deliberately not
  * derived from the copy module, so a change to the module is a change here.
  */

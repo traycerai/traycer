@@ -16,7 +16,12 @@ import {
 } from "@/components/epic-tabs/pane-visibility-context";
 import type { EpicNodeRef } from "@/stores/epics/canvas/types";
 import { useOpenEpicId } from "@/lib/epic-selectors";
-import { useEpicTerminalAgent } from "@/lib/epic-selectors";
+import {
+  useEpicTerminalAgent,
+  useEpicTuiAgentRecordListAuthoritative,
+  useEpicTuiAgentRecordListFailed,
+} from "@/lib/epic-selectors";
+import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
 import {
   TerminalXtermHost,
   useTerminalTileBootstrap,
@@ -86,6 +91,7 @@ import { useTuiSetupTerminalListRefreshDriver } from "@/hooks/agent/use-tui-setu
 import { useTuiSetupTerminalTabRegisterDriver } from "@/hooks/agent/use-tui-setup-terminal-tab-register-driver";
 import { SetupCardSegment } from "@/components/chat/segments/setup-card-segment";
 import { buildTuiAgentSetupCardModel } from "@/stores/chats/tui-agent-setup-card-model";
+import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useAgentStopControls } from "@/hooks/agent/use-agent-stop-controls";
 import { AgentStopList } from "@/components/chat/chat-agent-stop-list";
 import type { TuiAgentProjection } from "@/stores/epics/open-epic/types";
@@ -240,7 +246,7 @@ export function TuiAgentTile(props: TuiAgentTileProps) {
   }, [sessionId]);
   useEffect(() => {
     if (reachability.status !== "unreachable") return;
-    // The same basis gate as `terminal-tile`: since F4 this verdict also arrives from a
+    // The same basis gate as `terminal-tile`: this verdict also arrives from a
     // starting host that overran its budget, which is the UI's patience
     // expiring rather than proof the agent's session ended. The tile stops
     // waiting; the persisted notification still needs directory evidence.
@@ -306,11 +312,11 @@ export function TuiAgentTile(props: TuiAgentTileProps) {
     );
   }
   // "host-starting": the local host has not published yet (boot/ensure/wake),
-  // or the host's lease vouches for an announced restart (D4) - show
+  // or the host's lease vouches for an announced restart - show
   // the loading shell, never the permanently-closed banner. The shell and its
   // worktree notice stay; only the wordless skeleton inside it is retired for
-  // a bounded state that names the host it is waiting on (audit S5, and
-  // invariant 6 for the end of the wait).
+  // a bounded state that names the host it is waiting on (invariant 6
+  // for the end of the wait).
   if (hostLoad.kind !== "ready") {
     return (
       <TerminalAgentTileShell tileId={props.tileId}>
@@ -378,6 +384,70 @@ function sleepsUntilRequested(input: {
   return input.agent !== null && input.agent.sessionState === "sleeping";
 }
 
+/**
+ * No record for this agent yet. Same stable skeleton the reachability-check,
+ * pre-launch, and xterm suspense states use, so the create→ready transition
+ * reads as one continuous loading state instead of a sequence of placeholder
+ * strings. The worktree-setup notice still rides on top (it keys off the
+ * tab/node id, not the pending agent projection), so a just-created worktree
+ * agent shows its notice before the record lands.
+ *
+ * Unless nothing is going to end the wait. A failed list cannot call this agent
+ * deleted, so the tile stays open. A list that answered without an agent bound
+ * to ANOTHER host cannot either, because that record is host-authoritative, so
+ * the route sweep never closes that tile: a late replica and a create that
+ * failed over there look the same to the session's list. A skeleton in either
+ * case would wait forever with nothing to say why. A same-host agent missing from an
+ * answered list is not here: the sweep closes it, or the tile shows it deleted.
+ * Nor is an agent still being created, whose record does not exist yet: the
+ * wait there is the setup the notice is showing.
+ */
+function TuiAgentAwaitingRecord(props: {
+  readonly node: EpicNodeRef;
+  readonly tileId: string;
+  readonly viewTabId: string;
+  readonly hostId: string;
+  readonly hostLabel: string;
+  readonly onClose: () => void;
+}) {
+  const recordListFailed = useEpicTuiAgentRecordListFailed();
+  const recordListAnswered = useEpicTuiAgentRecordListAuthoritative();
+  const sessionHostId = useEpicSessionHostId();
+  const isPendingCreate = useEpicCanvasStore((state) =>
+    state.pendingCreateArtifactIds.has(props.node.id),
+  );
+  const isOnAnotherHost =
+    sessionHostId !== null && sessionHostId !== props.hostId;
+  const recordUnavailable =
+    !isPendingCreate &&
+    (recordListFailed || (recordListAnswered && isOnAnotherHost));
+  return (
+    <TerminalAgentTileShell tileId={props.tileId}>
+      <TerminalAgentWorktreeNotice
+        owningTileInstanceId={props.node.instanceId}
+        hostId={props.hostId}
+        agentId={props.node.id}
+        viewTabId={props.viewTabId}
+        layout="bar"
+      />
+      <div className="flex min-h-0 flex-1 items-center justify-center">
+        {recordUnavailable ? (
+          <TerminalDeadTileBanner
+            reason="record-unavailable"
+            destroyedLine={null}
+            hostLabel={props.hostLabel}
+            ownerKind="agent"
+            onClose={props.onClose}
+            testId={`terminal-agent-tile-record-unavailable-${props.tileId}`}
+          />
+        ) : (
+          <TerminalLoadingSkeleton />
+        )}
+      </div>
+    </TerminalAgentTileShell>
+  );
+}
+
 function TuiAgentTileLive(
   props: TuiAgentTileProps & {
     readonly recovery: TerminalSessionRecovery;
@@ -426,7 +496,7 @@ function TuiAgentTileLive(
   // orchestrator setup before the visible PTY is created. Codex and OpenCode
   // have always required this for app-server URL freshness; routing Claude
   // through the same RPC closes the bug where a Claude reopen / rebind kept
-  // using the stored invocation + persisted `workspaceFolders[0]` (Flow 6 / Flow 11).
+  // using the stored invocation + persisted `workspaceFolders[0]`.
   const prepareLaunchMutateAsync = prepareLaunch.mutateAsync;
   const preparePayload =
     useCallback(async (): Promise<TerminalCreatePayload | null> => {
@@ -569,7 +639,7 @@ function TuiAgentTileLive(
     enabled: agent !== null && prepareLaunch.isIdle,
     // `adoptOnly` rather than `enabled: false` for the sleeping arm, for the
     // reason the replica arm uses it: the create must not fire, but an ATTACH
-    // must still happen. That is what keeps ticket 2's known window harmless -
+    // must still happen. That is what keeps the known window harmless -
     // an agent archived while its PTY was alive reads `sleeping` until that
     // PTY exits, and a tile that refused to attach would show an asleep
     // notice over a session that is running right now.
@@ -662,7 +732,7 @@ function TuiAgentTileLive(
     // resuming the conversation. The reaped tile falls to the unavailable
     // banner instead, and the agent is restarted where it lives.
     //
-    // DEFENSIVE, and stated as such after a review asked why no test can make
+    // DEFENSIVE, and stated as such because no test can make
     // it fail: `adoptOnly` above already shuts the create effect permanently,
     // and `bootstrap.retry` only clears the dispatch latch and refetches the
     // session list - it never creates on its own. So removing this line does
@@ -869,30 +939,20 @@ function TuiAgentTileLive(
   }
 
   if (agent === null) {
-    // Same stable skeleton the reachability-check, pre-launch, and xterm
-    // suspense states use, so the create→ready transition reads as one
-    // continuous loading state instead of a sequence of placeholder strings.
-    // The worktree-setup notice still rides on top (it keys off the tab/node
-    // id, not the pending agent projection), so a just-created worktree agent
-    // shows its notice before the record lands.
     return (
-      <TerminalAgentTileShell tileId={props.tileId}>
-        <TerminalAgentWorktreeNotice
-          owningTileInstanceId={props.node.instanceId}
-          hostId={hostId}
-          agentId={props.node.id}
-          viewTabId={props.viewTabId}
-          layout="bar"
-        />
-        <div className="flex min-h-0 flex-1 items-center justify-center">
-          <TerminalLoadingSkeleton />
-        </div>
-      </TerminalAgentTileShell>
+      <TuiAgentAwaitingRecord
+        node={props.node}
+        tileId={props.tileId}
+        viewTabId={props.viewTabId}
+        hostId={hostId}
+        hostLabel={hostLabel}
+        onClose={closeTile}
+      />
     );
   }
 
   // Pre-launch / live shell: the worktree chip sits at the top of the tile so
-  // the user can confirm the binding before the harness starts (Flow 1 step 6).
+  // the user can confirm the binding before the harness starts.
   // The host is fixed for a terminal agent because a PTY can't migrate, but
   // folder binding changes are supported by committing the new binding and
   // restarting the PTY from the updated prepare-launch payload. The body
@@ -1183,19 +1243,6 @@ interface TerminalAgentPreLaunchToolbarProps {
   readonly onWorkspaceBindingCommitted: () => void;
 }
 
-/**
- * Always-on toolbar above the terminal-agent body. The host + workspace
- * chips sit beside the harness controls so the user can see where the agent
- * runs without leaving the tile. The host select is locked because a PTY
- * can't migrate; the workspace picker remains editable and restarts the PTY
- * after a committed folder-binding change.
- *
- * The binding is read via `worktree.getBinding` (a unary RPC) so the chip can
- * render `repo · branch` accurately even though terminal-agents do not
- * subscribe to `chat.subscribe`. While the query is loading we pass
- * `binding={null}` so the chip degrades to "not selected"; once it resolves
- * the chip reflects Local / worktree branch deterministically.
- */
 /** Tooltip/aria reason for the disabled "Continue under another profile…"
  *  dropdown item: the old-host capability gate takes precedence over the
  *  same session/binding readiness gate plain Fork uses, since it names a
@@ -1213,6 +1260,19 @@ function continueUnderProfileDisabledReasonFor(
   return undefined;
 }
 
+/**
+ * Always-on toolbar above the terminal-agent body. The host + workspace
+ * chips sit beside the harness controls so the user can see where the agent
+ * runs without leaving the tile. The host select is locked because a PTY
+ * can't migrate; the workspace picker remains editable and restarts the PTY
+ * after a committed folder-binding change.
+ *
+ * The binding is read via `worktree.getBinding` (a unary RPC) so the chip can
+ * render `repo · branch` accurately even though terminal-agents do not
+ * subscribe to `chat.subscribe`. While the query is loading we pass
+ * `binding={null}` so the chip degrades to "not selected"; once it resolves
+ * the chip reflects Local / worktree branch deterministically.
+ */
 function TerminalAgentPreLaunchToolbar(
   props: TerminalAgentPreLaunchToolbarProps,
 ) {

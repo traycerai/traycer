@@ -250,6 +250,14 @@ export function describeExitCode(code: number): string | null {
 }
 
 /**
+ * The host's forced-shutdown line, written by `host-shutdown.ts` in
+ * traycer-internal. Anchored to a line start, as the host writes it, so a
+ * phrase inside other stderr is not read as one. One line, no ids.
+ */
+const HOST_SHUTDOWN_FORCED_LINE =
+  /^host-shutdown-forced reason=[a-z-]+ pending=.*$/gm;
+
+/**
  * Head+tail capture over stderr chunks: the FIRST `maxHeadBytes` seen plus a
  * rolling window of the LAST `maxTailBytes`. See the module header for why
  * tail-only capture loses the V8 fatal headline.
@@ -344,6 +352,32 @@ export class StderrCaptureBuffer {
   }
 
   /**
+   * The line a host writes to stderr when its exit did not finish its
+   * teardown, or `null` when the capture holds none. The exit code cannot say
+   * this: a forced stop keeps the 0 or 87 its intent chose, because any other
+   * code reads here as a crash. It is the last thing the host writes, and the
+   * host caps it inside the tail capture, so a whole line survives however
+   * much stderr came before it. Never throws.
+   */
+  forcedShutdownLine(): string | null {
+    try {
+      return this.heldText().match(HOST_SHUTDOWN_FORCED_LINE)?.at(-1) ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  private heldText(): string {
+    return (
+      Buffer.concat(this.headChunks).toString("utf8") +
+      // Contiguous unless the middle was dropped; a separator inside an
+      // unbroken stream would split a line across the head/tail boundary.
+      (this.elidedBytes > 0 ? "\n" : "") +
+      Buffer.concat(this.tailChunks).toString("utf8")
+    );
+  }
+
+  /**
    * Which kind of fatal the capture holds (see {@link StderrFatalKind}).
    * Reads only what is already held: the FATAL-anchored window decides the
    * `FATAL ERROR` and `# Fatal error` kinds from its first line, so a heap
@@ -367,12 +401,7 @@ export class StderrCaptureBuffer {
       if (this.isEmpty()) {
         return streamEnded ? "none" : "incomplete";
       }
-      const held =
-        Buffer.concat(this.headChunks).toString("utf8") +
-        // Contiguous unless the middle was dropped; a separator inside an
-        // unbroken stream would split a line across the head/tail boundary.
-        (this.elidedBytes > 0 ? "\n" : "") +
-        Buffer.concat(this.tailChunks).toString("utf8");
+      const held = this.heldText();
       if (
         ASSERTION_FAILED_FORM.test(held) ||
         ASSERTION_QUOTED_FORM.test(held)

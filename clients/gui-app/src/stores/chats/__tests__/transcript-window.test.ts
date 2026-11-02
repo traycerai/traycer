@@ -1315,7 +1315,7 @@ describe("range responses", () => {
   });
 
   it("invalidates on a contradiction so the planner cannot spin on it", () => {
-    // Codex P1 (#1459): dropping the response and leaving the window valid
+    // Dropping the response and leaving the window valid
     // makes the planner re-request the SAME ordinals, which the host answers
     // with the same contradicting ids under the same epoch - forever. Only a
     // resnapshot can repair a coordinate disagreement, so raise the flag that

@@ -1,6 +1,6 @@
 /**
  * Renderer parking: the per-epic "nobody is looking at this" signal, and the
- * release it drives (plan C, decisions C1, C3, C5, C6).
+ * release it drives (plan C, decision C6).
  *
  * ## What parking is
  *

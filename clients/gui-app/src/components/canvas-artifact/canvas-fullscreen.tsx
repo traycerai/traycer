@@ -144,7 +144,6 @@ export function CanvasFullscreen({
               }
         }
       />
-      {events.renderToolbarControls?.()}
       <div
         className="ml-auto flex shrink-0 items-center gap-1"
         role="group"
@@ -167,6 +166,7 @@ export function CanvasFullscreen({
           Fill width
         </Button>
       </div>
+      {events.renderToolbarControls?.()}
     </div>
   );
 }

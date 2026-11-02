@@ -13,7 +13,7 @@ import {
   POOL_HOST_LABEL,
   type HostKind,
 } from "@traycer-clients/shared/host-client/host-directory";
-import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
+import { useHostDirectoryReading } from "@/hooks/host/use-host-directory-reading";
 import { useLoadDeadline } from "@/hooks/host/use-load-deadline";
 import { useHostLease } from "@/hooks/host/use-host-lease";
 import { isUnknownHost } from "@/lib/host/constants";
@@ -126,7 +126,7 @@ export interface HostReachability {
  * carries `basis: "starting-deadline"` - read it before driving anything
  * destructive off "unreachable".
  *
- * An EXPECTED restart holds it (D4): while the host's lease says
+ * An EXPECTED restart holds it: while the host's lease says
  * `restarting-expected`, a directory `offline` reads "host-starting" too, and
  * the budget above does not run. The lease's own bounds end the hold - one
  * restart episode for any host, the mutation lane's ceiling for this machine -
@@ -151,7 +151,10 @@ export interface HostReachability {
  */
 export function useHostReachability(hostId: string): HostReachability {
   const lease = useHostLease(hostId);
-  const list = useHostDirectoryList();
+  // A panel-provided reading where one exists (the sidebar tree), else this
+  // consumer's own subscription; see `HostDirectoryReadingContext`.
+  const { entries: directory, loading: directoryLoading } =
+    useHostDirectoryReading();
   const hasReadySession = useRemoteSessionPollReadiness(hostId);
   const poolRestartExpected = usePoolRestartExpected(hostId);
   const directoryVerdict = useMemo<HostReachability>(() => {
@@ -167,12 +170,12 @@ export function useHostReachability(hostId: string): HostReachability {
         hostKind: "pool",
       };
     }
-    if (list.data === undefined) {
+    if (directory === undefined) {
       // The directory query is disabled when no host binding exists
       // (e.g., test harnesses that do not mount the renderer's host
       // provider). With no source of truth we cannot gate the tile;
       // fall through to "reachable" so the live render path proceeds.
-      if (list.fetchStatus === "idle") {
+      if (!directoryLoading) {
         return {
           status: "reachable",
           hostLabel: UNNAMED_HOST_LABEL,
@@ -208,7 +211,7 @@ export function useHostReachability(hostId: string): HostReachability {
     // is "host-starting", never a per-tab death: the 2026-07-14 incident
     // rendered every chat as "Bound host is offline" + Clone CTA (and
     // terminals as "permanently closed") from exactly this window.
-    if (list.data.length === 0) {
+    if (directory.length === 0) {
       return {
         status: "host-starting",
         hostLabel: UNNAMED_HOST_LABEL,
@@ -217,7 +220,7 @@ export function useHostReachability(hostId: string): HostReachability {
         hostKind: "unknown",
       };
     }
-    const entry = list.data.find((e) => e.hostId === hostId);
+    const entry = directory.find((e) => e.hostId === hostId);
     if (entry === undefined) {
       // A bound host the directory does not list at all: a machine that left
       // the account, or a past identity's. `unknown` rather than `remote` -
@@ -332,13 +335,13 @@ export function useHostReachability(hostId: string): HostReachability {
     };
   }, [
     hostId,
-    list.data,
-    list.fetchStatus,
+    directory,
+    directoryLoading,
     hasReadySession,
     poolRestartExpected,
   ]);
 
-  // D4. An announced restart is not an outage. While the lease says
+  // An announced restart is not an outage. While the lease says
   // `restarting-expected`, the authority expects the host back: inside a
   // restart episode, which only a host that announces its restart opens
   // (`RESTART_INTENT_EPISODE_MS`, 60 s), or for this machine while its
@@ -368,7 +371,7 @@ export function useHostReachability(hostId: string): HostReachability {
     };
   }, [directoryVerdict, restartExpected]);
 
-  // F4/S2. `host-starting` was the one arm with no way out: the directory
+  // S2. `host-starting` was the one arm with no way out: the directory
   // cannot distinguish "this machine's host is three seconds from publishing"
   // from "it is never going to", and it answered the optimistic one FOREVER.
   // A chat bound to a host that never came back therefore sat behind
@@ -386,7 +389,7 @@ export function useHostReachability(hostId: string): HostReachability {
   // so the persisted "Terminal permanently closed" notification stays gated on
   // directory evidence. See `HostReachabilityBasis`.
   //
-  // The budget does not run while the lease vouches for a restart (D4, above):
+  // The budget does not run while the lease vouches for a restart (above):
   // the lease's own bounds end that wait, and the 15 s start when it stops
   // vouching, so a restart that outlives its episode still reaches the fall.
   const startingBudgetElapsed = useLoadDeadline(

@@ -1,4 +1,7 @@
-import type { BotListResponse } from "@traycer/protocol/host/bot/schemas";
+import type {
+  BotListResponse,
+  BotRecord,
+} from "@traycer/protocol/host/bot/schemas";
 
 /** `bot.list`'s environment-to-main-bot map; `null` from a host that predates it. */
 export type MainBotIds = BotListResponse["mainBotIds"];
@@ -12,6 +15,25 @@ export function mainBotIdOf(
   return Object.hasOwn(mainBotIds, environmentId)
     ? mainBotIds[environmentId]
     : null;
+}
+
+/**
+ * The environment's main bot as the list has it, unarchived; `null` when the
+ * list names none, or names one the list does not carry. Who the fixed Tracy
+ * entry and the voice talk to by default; both read it here, so neither
+ * depends on the other's setting.
+ */
+export function mainBotOf(
+  list: BotListResponse,
+  environmentId: string,
+): BotRecord | null {
+  const botId = mainBotIdOf(list.mainBotIds, environmentId);
+  if (botId === null) return null;
+  return (
+    list.bots.find(
+      (candidate) => candidate.botId === botId && candidate.archivedAt === null,
+    ) ?? null
+  );
 }
 
 /**

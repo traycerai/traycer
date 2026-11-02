@@ -208,7 +208,7 @@ describe("hostFailureReportIssueAction — busySessionCount null vs 0 (traycer#8
 });
 
 describe("hostFailureReportIssueAction — the compat verdict word", () => {
-  // Found by a SURVIVED kill probe (P3.2 R6): with `compatibilityPresentation`
+  // Found by a SURVIVED kill probe: with `compatibilityPresentation`
   // mutated to report every failed probe as `compatible`, all six tests above
   // stayed green. They vary `hostStatus` and never the verdict - so the health
   // line's whole reason-for-existing, telling triage WHY the probe failed, had

@@ -22,6 +22,8 @@ import {
 } from "@/components/notifications/notification-indicator-tones";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { NotificationRowBotAvatar } from "@/components/notifications/notification-bots";
+import { useStandaloneBotName } from "@/hooks/bots/use-standalone-bot-name";
+import { notificationRowBotId } from "@/lib/notifications/notification-row-bot-id";
 import { SecretGrantRequestCard } from "@/components/notifications/secret-grant-request-card";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import {
@@ -304,9 +306,13 @@ function NotificationRowMain(props: {
   readonly originUnavailability: HostUnavailability | null;
   readonly onActivate: (row: MergedNotificationRow) => void;
 }): ReactNode {
+  const title = useStandaloneBotName(
+    notificationRowBotId(props.row),
+    props.row.title,
+  );
   const body = (
     <NotificationRowBody
-      title={props.row.title}
+      title={title}
       body={props.row.body}
       isRead={props.isRead}
     />
@@ -532,6 +538,9 @@ const HOST_KIND_GLYPHS: Record<
   },
   // A secret is the subject of this row, whatever the request's state.
   "secret.grant.requested": SECRET_GLYPH,
+  // The reader's own role is the subject, so the row carries the same shield as
+  // the task-sharing role change it mirrors.
+  "team.role.changed": { icon: Shield, colorClassName: INVITE_COLOR },
   // Never rendered: the merged rows drop the kind.
   "secret.export.minted": NEUTRAL_BELL,
   "secret.rotated": NEUTRAL_BELL,
@@ -545,7 +554,6 @@ const HOST_KIND_GLYPHS: Record<
   "team.installing_admin.gone": NEUTRAL_BELL,
   "team.plan.unlinked": NEUTRAL_BELL,
   "team.pods.full": NEUTRAL_BELL,
-  "team.role.changed": NEUTRAL_BELL,
   "team.host.returned": NEUTRAL_BELL,
   "environment.move.stalled": NEUTRAL_BELL,
   "environment.apply.failed": NEUTRAL_BELL,

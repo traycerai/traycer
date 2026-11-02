@@ -3,7 +3,7 @@ import { readView, settle, startTimeline } from "./support/chat-scroll-oracle";
 import { fixture, nextFrames, wheelsDelivered } from "./support/fixtures";
 
 /**
- * R3 on the windowed line: the saved FREE anchor is in a turn that is not
+ * On the windowed line, the saved FREE anchor is in a turn that is not
  * hydrated at the reopen (`remountEvicted`, hydration slowed to 600ms). The
  * reader's finger lands 150ms after the new list exists and drags further into
  * the scrollback; then the anchor's turn hydrates. The view must stay with the

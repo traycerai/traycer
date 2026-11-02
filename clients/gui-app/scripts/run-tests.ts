@@ -29,6 +29,7 @@ const testArgs = process.argv.slice(2);
  * a hardcoded path (which the store layout would break). `vitest.mjs` is not
  * reachable through the package's `exports`, so resolve the manifest and join.
  */
+
 /**
  * Exit codes for the signals a killed Vitest run realistically reports.
  * 128+n is the shell convention, so 137 reads as SIGKILL (the OOM killer's

@@ -177,7 +177,7 @@ describe("deriveHostHealth — the two actionable local states", () => {
 
 describe("deriveHostHealth — connectivity mapping for a remote row", () => {
   /**
-   * F26. `connectable` is a cloud lease with a 15-minute TTL and nothing in
+   * `connectable` is a cloud lease with a 15-minute TTL and nothing in
    * this app has dialled the machine, so the row states the report rather than
    * asserting liveness — and, more importantly, draws NO green dot.
    *

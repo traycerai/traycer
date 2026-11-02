@@ -36,7 +36,7 @@ import {
 } from "@/lib/settings/settings-availability";
 
 /**
- * The transcript's own three regions (customization audit R1, R3). Each is the
+ * The transcript's own three regions. Each is the
  * DEFAULT a new row opens in: a row the user has opened or closed in a chat
  * keeps that choice, so the setting never folds what someone is reading.
  */
@@ -114,7 +114,7 @@ export const TIMESTAMPS_REGION: LayoutRegion<"timestamps"> = {
  * layout never draws: its Minimap is the tile bar's drawer, and that ignores
  * the region (`shouldMountChatTurnMinimap`). So it is nothing at all in the
  * installed app (its shell gate) and a note in a narrow browser tab, where
- * widening the window brings the rail back (C5). The Side row under it says
+ * widening the window brings the rail back. The Side row under it says
  * nothing of its own: the note is said once, on the region's row.
  */
 const minimapRule: RegionRule = (context) =>

@@ -98,7 +98,7 @@ import {
   type OverviewHostFixture,
 } from "@/components/settings/panels/__tests__/host-overview-test-support";
 
-// G5: `HostOverviewOperationCard` renders measured byte progress
+// `HostOverviewOperationCard` renders measured byte progress
 // (`host-overview-operation-bytes`) independently of percentage — the
 // counterpart to the landing banner's own bytes coverage, since both surfaces
 // share `operationProgressBytes`/`showsProgressBar`.
@@ -2482,7 +2482,7 @@ describe("HostOverviewOperationCard — the floor sentence and its affordance", 
         screen.queryByRole("button", { name: "Show installation help" }),
       ).toBeNull();
     });
-    // T2's Status tab withholds the update card entirely once the host
+    // The Status tab withholds the update card entirely once the host
     // can't be reached - the offline notice is the tab's only unreachable
     // wording then, and its clause (`describeLastSeenUpdateClause`) never
     // names the CLI-floor fix at all (it is built with `cliFloorBlocked:
@@ -2986,7 +2986,7 @@ describe("HostOverviewOperationCard — terminal acknowledgement (Settings)", ()
     },
   );
 
-  // PR2069 (CodeRabbit): disconnecting demotes a live view to
+  // Disconnecting demotes a live view to
   // `unknown`/`lastKnownKind` with the same attemptId, and the completion
   // hook used to resolve an id only off `view.kind` — so a retained success
   // lost its dismiss/timer, and a fresh dismissal stopped matching once the
@@ -3014,7 +3014,7 @@ describe("HostOverviewOperationCard — terminal acknowledgement (Settings)", ()
     }
 
     it("a completed attempt is dismissible while reachable; once the scope goes unusable the offline notice takes over and the card (with it) withdraws", async () => {
-      // T2 changes what "retained" MEANS for this card: the Status tab now
+      // The Status tab changes what "retained" MEANS for this card: it now
       // withholds the update card entirely while the host can't be reached
       // (`offline`) and shows the ONE offline notice in its place — carrying
       // whatever phase clause applies, which for `complete` is none (see
@@ -3075,7 +3075,7 @@ describe("HostOverviewOperationCard — terminal acknowledgement (Settings)", ()
 
     it("a FAILED attempt is dismissible while reachable; once the scope goes unusable the offline notice replaces the card and the dismissal holds", async () => {
       // A terminal `failed` phase: staleness retains the raw phase, so only
-      // a phase that already IS "failed" retains as failed. T2's Status tab
+      // a phase that already IS "failed" retains as failed. The Status tab
       // withholds the update card entirely once the host can't be reached —
       // the offline notice is the tab's only unreachable wording then — so
       // the retained "Last seen: Update failed" sentence this pin used to
@@ -3119,7 +3119,7 @@ describe("HostOverviewOperationCard — terminal acknowledgement (Settings)", ()
       // The timer this pin is about (`useHostUpdateCompletion`) lives at
       // PANEL level, not on the card, specifically so it keeps running
       // whatever the card is showing — see that hook's own doc comment. Once
-      // the scope goes unusable T2's Status tab withholds the card in favor
+      // the scope goes unusable the Status tab withholds the card in favor
       // of the offline notice, which makes `host-overview-operation-card`
       // absent from the moment of disconnect regardless of the timer — so
       // this pin now reads the timer's effect off the STORE it writes to,

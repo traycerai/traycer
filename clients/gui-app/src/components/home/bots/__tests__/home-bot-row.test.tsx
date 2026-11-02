@@ -1,8 +1,8 @@
 /**
  * A Home bot row (Tracy Bots): says working, idle or paused and never which
- * machine the bot runs on, and opens its tab through the host this window
- * reads (the effective host), moving an existing tab off a host this client
- * can no longer dial.
+ * machine the bot runs on, and opens the Tracy surface on its channel through
+ * the host this window reads (the effective host), moving an open surface off
+ * a host this client can no longer dial.
  */
 import { StrictMode } from "react";
 import { cleanup, render, screen } from "@testing-library/react";
@@ -26,7 +26,7 @@ const mocks = vi.hoisted(() => {
     effectiveHostId: "host-effective",
     snapshot: null,
   };
-  return { state, navigate: vi.fn(), navigateToTabIntent: vi.fn() };
+  return { state, navigate: vi.fn(), activateTabIntent: vi.fn() };
 });
 
 vi.mock("@tanstack/react-router", () => ({
@@ -45,14 +45,18 @@ vi.mock("@/hooks/bots/use-bot-subscription", () => ({
   }),
 }));
 vi.mock("@/lib/tab-navigation", () => ({
-  navigateToTabIntent: mocks.navigateToTabIntent,
+  activateTabIntent: (_navigate: unknown, intent: unknown) => {
+    mocks.activateTabIntent(intent);
+    return true;
+  },
 }));
 
 import {
   HomeBotRow,
   type HomeBotHostReach,
 } from "@/components/home/bots/home-bot-row";
-import { lookupBotTab, useBotTabsStore } from "@/stores/bots/bot-tabs-store";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
 
 const BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
 const OWN = "host-own";
@@ -175,16 +179,32 @@ function stateBadge(): { text: string; state: string | null } {
   return { text: badge.textContent, state: badge.getAttribute("data-state") };
 }
 
-function tabHostId(): string | null {
-  const record = lookupBotTab(useBotTabsStore.getState().tabs, BOT_ID);
-  return record === null ? null : record.hostId;
+/** The surface left open on `hostId`, as an earlier opener would have. */
+function openSurfaceOn(hostId: string): void {
+  useTracySurfaceStore.setState({
+    open: true,
+    hostId,
+    botId: null,
+    visitedBotIds: [],
+  });
+}
+
+/** The window's host, as the row's hook and the opener each read it. */
+function setEffectiveHost(hostId: string | null): void {
+  mocks.state.effectiveHostId = hostId;
+  useSelectionAuthorityStore.setState({ effectiveHostId: hostId });
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mocks.state.effectiveHostId = EFFECTIVE;
+  setEffectiveHost(EFFECTIVE);
   mocks.state.snapshot = null;
-  useBotTabsStore.setState({ tabs: {} });
+  useTracySurfaceStore.setState({
+    open: false,
+    hostId: null,
+    botId: null,
+    visitedBotIds: [],
+  });
 });
 
 afterEach(() => {
@@ -369,15 +389,21 @@ describe("<HomeBotRow /> state", () => {
 });
 
 describe("<HomeBotRow /> open", () => {
-  it("opens a new tab through the effective host, never the bound host", async () => {
+  it("opens the surface on the bot's channel through the effective host, never the bound host", async () => {
     const user = userEvent.setup();
     mountRow(OWN_AND_DIALABLE);
 
     await user.click(screen.getByTestId("home-bot-row"));
 
-    expect(tabHostId()).toBe(EFFECTIVE);
-    expect(useBotTabsStore.getState().tabs[BOT_ID].title).toBe("Release Bot");
-    expect(mocks.navigateToTabIntent).toHaveBeenCalledTimes(1);
+    expect(useTracySurfaceStore.getState()).toMatchObject({
+      open: true,
+      hostId: EFFECTIVE,
+    });
+    expect(mocks.activateTabIntent).toHaveBeenCalledTimes(1);
+    expect(mocks.activateTabIntent).toHaveBeenCalledWith({
+      kind: "tracy",
+      botId: BOT_ID,
+    });
   });
 
   it("opens through the effective host for a paused bot too", async () => {
@@ -386,41 +412,35 @@ describe("<HomeBotRow /> open", () => {
 
     await user.click(screen.getByTestId("home-bot-row"));
 
-    expect(tabHostId()).toBe(EFFECTIVE);
-    expect(mocks.navigateToTabIntent).toHaveBeenCalledTimes(1);
+    expect(useTracySurfaceStore.getState().hostId).toBe(EFFECTIVE);
+    expect(mocks.activateTabIntent).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps an open tab on a host this client can still dial", async () => {
+  it("keeps an open surface on a host this client can still dial", async () => {
     const user = userEvent.setup();
-    useBotTabsStore
-      .getState()
-      .openBotTab({ botId: BOT_ID, hostId: OWN, title: "Release Bot" });
+    openSurfaceOn(OWN);
     mountRow(OWN_AND_DIALABLE);
 
     await user.click(screen.getByTestId("home-bot-row"));
 
-    expect(tabHostId()).toBe(OWN);
-    expect(mocks.navigateToTabIntent).toHaveBeenCalledTimes(1);
+    expect(useTracySurfaceStore.getState().hostId).toBe(OWN);
+    expect(mocks.activateTabIntent).toHaveBeenCalledTimes(1);
   });
 
-  it("moves an open tab off a host this client can no longer dial onto the effective host", async () => {
+  it("moves an open surface off a host this client can no longer dial onto the effective host", async () => {
     const user = userEvent.setup();
-    useBotTabsStore
-      .getState()
-      .openBotTab({ botId: BOT_ID, hostId: TEAMMATE, title: "Release Bot" });
+    openSurfaceOn(TEAMMATE);
     mountRow(OWN_AND_DIALABLE);
 
     await user.click(screen.getByTestId("home-bot-row"));
 
-    expect(tabHostId()).toBe(EFFECTIVE);
-    expect(mocks.navigateToTabIntent).toHaveBeenCalledTimes(1);
+    expect(useTracySurfaceStore.getState().hostId).toBe(EFFECTIVE);
+    expect(mocks.activateTabIntent).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps an open tab where it is while the directory has not answered, whatever host it is on", async () => {
+  it("keeps an open surface where it is while the directory has not answered, whatever host it is on", async () => {
     const user = userEvent.setup();
-    useBotTabsStore
-      .getState()
-      .openBotTab({ botId: BOT_ID, hostId: TEAMMATE, title: "Release Bot" });
+    openSurfaceOn(TEAMMATE);
     mountRow({
       ...OWN_AND_DIALABLE,
       connectable: [],
@@ -429,21 +449,21 @@ describe("<HomeBotRow /> open", () => {
 
     await user.click(screen.getByTestId("home-bot-row"));
 
-    expect(tabHostId()).toBe(TEAMMATE);
-    expect(mocks.navigateToTabIntent).toHaveBeenCalledTimes(1);
+    expect(useTracySurfaceStore.getState().hostId).toBe(TEAMMATE);
+    expect(mocks.activateTabIntent).toHaveBeenCalledTimes(1);
   });
 
   it("opens nothing, and disables the row, while there is no effective host", async () => {
     const user = userEvent.setup();
-    mocks.state.effectiveHostId = null;
+    setEffectiveHost(null);
     mountRow(OWN_AND_DIALABLE);
 
     const row = screen.getByTestId("home-bot-row");
     expect(row).toHaveProperty("disabled", true);
     await user.click(row);
 
-    expect(tabHostId()).toBeNull();
-    expect(mocks.navigateToTabIntent).not.toHaveBeenCalled();
+    expect(useTracySurfaceStore.getState().hostId).toBeNull();
+    expect(mocks.activateTabIntent).not.toHaveBeenCalled();
   });
 });
 

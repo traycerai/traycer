@@ -50,7 +50,7 @@ import "@/lib/theme-applier";
 import "@/index.css";
 
 /**
- * THE VERTICAL STRIP'S DRAG GESTURE (S-11), in real Chrome with real mouse
+ * THE VERTICAL STRIP'S DRAG GESTURE, in real Chrome with real mouse
  * input.
  *
  * The real `SideTabStrip` at `?edge=left|right` inside the real
@@ -64,7 +64,7 @@ import "@/index.css";
  * The content beside the strip is an empty surface, and the strip's other
  * side is a 48px margin so the window edge is not the strip's own edge: that
  * margin is where "pulling toward the window edge" lands, which must not tear
- * off until the pointer leaves the viewport (tech plan 3.5).
+ * off until the pointer leaves the viewport.
  *
  * The real `TabNavigationRouteBridge` is mounted, as the shell mounts it, so a
  * drop that pairs two tabs commits through the tab navigation controller the

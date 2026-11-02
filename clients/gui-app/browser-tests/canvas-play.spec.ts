@@ -468,20 +468,14 @@ test.describe("comments mode and the shared sidebar", () => {
 });
 
 test.describe("the comment draft composer", () => {
-  function commentTool(page: Page) {
-    return page.getByRole("button", { name: "Comment (C)" });
-  }
-
   async function openArtifactDraft(page: Page): Promise<void> {
-    // Selecting the Comment TOOL is what turns comment mode on
-    // (`chooseTool`: `setCommenting(next === "comment")`); the sidebar's
-    // Comments toggle reaches the same `commenting` flag by a separate
-    // path. The toolbar stays up either way.
-    await commentTool(page).click();
-    // Empty canvas below both boards (laid out at y 0..420, 0.6 zoom).
+    // Focus the canvas and arm comments with its shortcut.
     const pane = page.getByRole("application", { name: "Canvas workspace" });
     const box = await pane.boundingBox();
     if (box === null) throw new Error("the canvas pane has no box");
+    await page.mouse.click(box.x + 80, box.y + box.height - 40);
+    await page.keyboard.press("c");
+    // Empty canvas below both boards (laid out at y 0..420, 0.6 zoom).
     await page.mouse.click(box.x + 80, box.y + box.height - 40);
     await expect(
       page.getByRole("dialog", { name: "New comment" }),
@@ -519,6 +513,33 @@ test.describe("the comment draft composer", () => {
       0,
     );
     await expect(commentsToggle(page)).toHaveAttribute("aria-pressed", "true");
+  });
+});
+
+test.describe("the C keyboard shortcut toggles comment mode", () => {
+  test("a second C exits comment mode, and another tool key cannot steal it first", async ({
+    page,
+  }) => {
+    await open(page);
+    const pane = page.getByRole("application", { name: "Canvas workspace" });
+    const box = await pane.boundingBox();
+    if (box === null) throw new Error("the canvas pane has no box");
+
+    await page.mouse.click(box.x + 80, box.y + box.height - 40);
+    await page.keyboard.press("c");
+    await expect(commentsToggle(page)).toHaveAttribute("aria-pressed", "true");
+
+    await page.keyboard.press("n");
+    await page.mouse.click(box.x + 80, box.y + box.height - 40);
+    await expect(
+      page.getByRole("dialog", { name: "New comment" }),
+    ).toBeVisible();
+    await page.getByRole("button", { name: "Cancel" }).click();
+
+    // Return focus without planting another comment.
+    await canvasSurface(page).focus();
+    await page.keyboard.press("c");
+    await expect(commentsToggle(page)).toHaveAttribute("aria-pressed", "false");
   });
 });
 

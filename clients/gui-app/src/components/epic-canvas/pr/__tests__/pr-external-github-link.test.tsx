@@ -80,7 +80,7 @@ describe("PrExternalGitHubLink", () => {
 
   it("drops a click while an OS handoff is still in flight", () => {
     // Each call fires a fresh bridge request, so a click landing on top of one
-    // would open a second OS tab (R10).
+    // would open a second OS tab.
     bridge.isPending = true;
     renderLink();
 

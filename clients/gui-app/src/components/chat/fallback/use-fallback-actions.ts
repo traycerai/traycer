@@ -186,8 +186,8 @@ export const IGNORE_FALLBACK_OUTCOME = (): void => undefined;
  *
  * There is no toast branch any more. The bare Retry and Wait buttons used to
  * toast, on the argument that an unchanged row had nowhere to write; the
- * failed-turn card now writes the refusal where the button was (spec Flow 4:
- * "a toast never carries a refusal").
+ * failed-turn card now writes the refusal where the button was:
+ * "a toast never carries a refusal".
  *
  * `inlineMenuOpen` rather than "is the component mounted", because mounted is
  * not the question - and the name predates the failed-turn card's note, which
@@ -353,7 +353,7 @@ export interface FailedTurnRungReporting extends FallbackOutcomeReporting {
  * So the answer is recorded from HERE, the Mutation's own callback, and not
  * from a per-call handler: TanStack skips a per-call handler once the pressing
  * card has unmounted, and another tile's card of the same attempt may still be
- * on screen, drawing the buttons the host just refused (review F7).
+ * on screen, drawing the buttons the host just refused.
  */
 export function useFailedTurnRunManualRung(
   client: HostClient<HostRpcRegistry> | null,

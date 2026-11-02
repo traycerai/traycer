@@ -335,7 +335,7 @@ describe("isElementInViewport", () => {
     // case reads `true` even though a tile scrolled out of an
     // `overflow-hidden` epic canvas is not really on screen - the
     // IntersectionObserver is the authority on that and tears the eligible
-    // state back down a beat later. Same geometry as before D68, flipped
+    // state back down a beat later. Same geometry as before the camera split, flipped
     // expectation.
     stubViewport(1024, 768);
     const parent = document.createElement("div");
@@ -490,7 +490,7 @@ function soleMotion(scene: OfficeScene): Motion {
  * The gate driven the way the canvas actually drives it, not through
  * `shouldDraw` alone: `gate.elapsed` gates the tick, `scene.tick` advances the
  * simulation, `scene.isAnimating` reads the state THAT tick just produced, and
- * only then does `gate.shouldDraw` decide whether this frame paints. F1 lived
+ * only then does `gate.shouldDraw` decide whether this frame paints. The defect lay
  * in that order - the tick that lands a walker in its chair or takes an
  * envelope off the floor is the tick after which `isAnimating` answers false,
  * so a gate asked only the fresh answer refuses the very frame that would show

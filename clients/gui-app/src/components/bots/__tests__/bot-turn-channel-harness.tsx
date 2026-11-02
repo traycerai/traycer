@@ -49,6 +49,7 @@ function Channel(): ReactNode {
   const openMemory = rail?.kind === "memory" ? rail : null;
   return (
     <BotChannelView
+      tiles={null}
       botId={BOT_ID}
       hostId={HOST_ID}
       boundHostId="host-runs-bot"
@@ -78,13 +79,14 @@ function Channel(): ReactNode {
       environmentId={ENVIRONMENT_ID}
       botNameOf={(botId) => (botId === OTHER_BOT_ID ? OTHER_BOT_TITLE : null)}
       onOpenActivity={vi.fn()}
+      setupHistory={null}
     />
   );
 }
 
 /**
  * The channel as the bot tab draws it with the bot's identity and its
- * memory (T87): the bot's name opens its card, whose memory row opens the
+ * memory: the bot's name opens its card, whose memory row opens the
  * memory over the rail the way the tab's opener does (`memoryRailOver`).
  */
 function KnowingChannel(): ReactNode {

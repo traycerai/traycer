@@ -18,7 +18,7 @@ interface RelayRowProps {
  * than copied through the editor store: this row is the only thing in the app
  * that wants it, and it mounts only inside an open session. Failures never
  * reach it, because "an agent is waiting for you" is not what a failed task
- * means (C-05). The editor never auto-exits - this row asks, and the user
+ * means. The editor never auto-exits - this row asks, and the user
  * answers.
  *
  * `.relay` in the prototype.

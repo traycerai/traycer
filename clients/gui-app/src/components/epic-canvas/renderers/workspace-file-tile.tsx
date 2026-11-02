@@ -155,7 +155,7 @@ export function WorkspaceFileTile(props: {
   const isDeadTile = reachability.status === "unreachable";
 
   // A reveal target on a dead / inactive tile can never be consumed: the live
-  // preview that runs the consume effect (G4) never mounts. Drop it so these
+  // preview that runs the consume effect never mounts. Drop it so these
   // states don't strand entries on the channel (CL-5). Keyed on the target so a
   // fresh click while the tile stays dead still evicts.
   useEffect(() => {
@@ -184,11 +184,11 @@ export function WorkspaceFileTile(props: {
 }
 
 /**
- * Extension gate BEFORE any RPC (image-preview decision log, decision #6):
+ * Extension gate BEFORE any RPC:
  * a non-image extension takes the untouched text path below unconditionally.
  * `.svg` is the one format with a source view - it defaults to image with a
  * per-tile, non-persisted toggle back to `WorkspaceFileTileLive`'s existing
- * (fully-functional, including editing) text path, matching decision #5.
+ * (fully-functional, including editing) text path.
  */
 function WorkspaceFileTileRouter(props: {
   readonly node: WorkspaceFileRef;
@@ -270,7 +270,7 @@ function WorkspaceFileTileRouter(props: {
  * Image mode for a workspace file tile: fetches over `useFileAsset` (never
  * `workspace.readFile`) and renders `ImagePreview`, or the shared
  * `BinaryPlaceholder` for a `fallback` status - uniformly, regardless of
- * WHY the fetch fell back (image-preview decision log, decision #14).
+ * WHY the fetch fell back.
  * Editing/drafts/markdown/find never mount here.
  */
 function WorkspaceImageFileTile(props: {
@@ -286,8 +286,8 @@ function WorkspaceImageFileTile(props: {
     filePath: node.filePath,
   });
   // Magic-valid, header-parseable bytes can still fail to decode in the
-  // browser (pre-landing review, P1) - `<img onError>` has no other signal
-  // path. `reportDecodeFailure` (re-review P1 follow-up) discards the exact
+  // browser `<img onError>` has no other signal
+  // path. `reportDecodeFailure` discards the exact
   // cache entry AND transitions the hook's own state to `fallback`, so this
   // tile renders straight from `assetState.status` like every other
   // failure - no local decode-failed flag to track or reset.
@@ -744,8 +744,8 @@ function WorkspaceFileTileLive(props: {
     renderedContent !== null &&
     renderedContent.length > MAX_MARKDOWN_PREVIEW_CHARS;
   // A pending line target forces source view so the line is addressable -
-  // rendered markdown has none (G5). Purely derived: the child consumes the
-  // target right after the scroll (G4), so a markdown file the user had on
+  // rendered markdown has none. Purely derived: the child consumes the
+  // target right after the scroll, so a markdown file the user had on
   // preview returns to preview once the one-shot reveal completes. Line links
   // are almost always to code files, where source is the only view anyway.
   const effectiveViewMode = editing

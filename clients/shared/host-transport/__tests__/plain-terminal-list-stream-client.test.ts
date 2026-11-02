@@ -43,8 +43,9 @@ class StubSession implements IStreamSession {
   emitStatus(
     status: Parameters<StatusChangeHandler>[0],
     reason: StreamCloseReason | null,
+    continuity: "held" | "continued" | null,
   ): void {
-    this.statusChangeHandler(status, reason, null);
+    this.statusChangeHandler(status, reason, null, continuity);
   }
 }
 
@@ -255,18 +256,72 @@ describe("PlainTerminalListStreamClient", () => {
     }
   });
 
+  it("keeps its v1 baseline through a held reconnect and a continued open, and drops it on a null reconnect", () => {
+    const h = harness();
+    h.session.negotiatedSchemaVersion = { major: 1, minor: 0 };
+    h.session.emitFrame({
+      kind: "snapshot",
+      hasBinaryPayload: false,
+      terminals: [dormant],
+    });
+    h.session.emitFrame({ kind: "initialized", hasBinaryPayload: false });
+    h.onState.mockClear();
+
+    // The host continues the subscription: an incremental frame lands on the
+    // retained baseline and no new snapshot is needed.
+    h.session.emitStatus("reconnecting", null, "held");
+    h.session.emitStatus("open", null, "continued");
+    expect(h.onConnectionStatus).toHaveBeenLastCalledWith(
+      "open",
+      null,
+      null,
+      "continued",
+    );
+    h.session.emitFrame({
+      kind: "upsert",
+      hasBinaryPayload: false,
+      terminal: running,
+    });
+    expect(h.onState).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        state: expect.objectContaining({ terminals: [running] }),
+      }),
+    );
+
+    // The hold ending is an ordinary reconnect: the baseline is gone, so an
+    // incremental frame waits for the next snapshot and initialized marker.
+    h.onState.mockClear();
+    h.session.emitStatus("reconnecting", null, "held");
+    h.session.emitStatus("reconnecting", null, null);
+    h.session.emitFrame({
+      kind: "upsert",
+      hasBinaryPayload: false,
+      terminal: dormant,
+    });
+    expect(h.onState).not.toHaveBeenCalled();
+    h.client.close();
+  });
+
   it("propagates connection status and closes its session idempotently", () => {
     const h = harness();
     const reason: StreamCloseReason = { kind: "caller" };
-    h.session.emitStatus("reconnecting", null);
-    h.session.emitStatus("closed", reason);
+    h.session.emitStatus("reconnecting", null, null);
+    h.session.emitStatus("closed", reason, null);
 
     expect(h.onConnectionStatus).toHaveBeenNthCalledWith(
       1,
       "reconnecting",
       null,
+      null,
+      null,
     );
-    expect(h.onConnectionStatus).toHaveBeenNthCalledWith(2, "closed", reason);
+    expect(h.onConnectionStatus).toHaveBeenNthCalledWith(
+      2,
+      "closed",
+      reason,
+      null,
+      null,
+    );
 
     h.client.close();
     h.client.close();

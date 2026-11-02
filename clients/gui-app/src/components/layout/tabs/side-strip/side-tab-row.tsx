@@ -9,11 +9,13 @@ import type {
 } from "react";
 import { ChevronRight, X } from "lucide-react";
 import * as m from "motion/react-m";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { DropLine } from "@/components/ui/drop-line";
 import { HoverCard } from "@/components/ui/hover-card";
 import { useIsTextTruncated } from "@/hooks/ui/use-is-text-truncated";
 import { useMotionEnabled } from "@/lib/animation/use-motion-enabled";
+import { formatUnreadCount } from "@/lib/notifications/unread-count";
 import { cn } from "@/lib/utils";
 import { SESSION_TAB_LABEL_CLASS } from "../header-tab-visual";
 import { MonogramChip } from "../monogram-chip";
@@ -27,6 +29,8 @@ import {
   SIDE_SPLIT_HALF_FOCUSED_CLASS,
   SIDE_SPLIT_HALF_REST_CLASS,
   SIDE_SPLIT_PREVIEW_TILE_CLASS,
+  SIDE_STRIP_GROUND_FILL_CLASS,
+  SIDE_STRIP_NAV_TILE_COUNT_CLASS,
   SIDE_TAB_ACTIVE_CLASS,
   SIDE_TAB_DROP_LINE_SEAT_CLASS,
   SIDE_TAB_HOVER_CLASS,
@@ -135,10 +139,11 @@ export interface SideTabRowProps {
   /** The tab's tile: the collapsed row's content. */
   readonly tile: SideTabTile;
   /**
-   * The one state that needs the user (D5): the collapsed tile's badge, the
-   * meter's attention pip, and what starts the entry pulse.
+   * The one state that needs the user: the collapsed tile's badge, the
+   * meter's attention pip, and what starts the entry pulse. A count is drawn
+   * as the unread-count pill in the same corner.
    */
-  readonly badge: RailBadgeKind | null;
+  readonly badge: RailBadgeKind | { readonly count: number } | null;
   /** The task's live agents, drawn by the collapsed tile's meter. */
   readonly agents: SideTabLiveAgents;
   /** Expanded: the one trailing status, or `null` for a row with none. */
@@ -182,10 +187,12 @@ const REVEAL_CLASS =
 /**
  * Hides what yields its place while the row is hovered or focused: the status
  * glyph, to the close. It crossfades with the close under the same timing as
- * `REVEAL_CLASS`.
+ * `REVEAL_CLASS`, and lets go of the pointer while it yields: at opacity 0 it
+ * still paints, and hit-tests, above the close sharing its cell, so a click
+ * on the close landed on the glyph and activated the row.
  */
 const YIELD_TO_CLOSE_CLASS =
-  "transition-opacity duration-100 motion-reduce:transition-none group-hover/side-tab:opacity-0 group-focus-visible/side-tab:opacity-0 group-focus-visible/side-tab:duration-0 group-has-[:focus-visible]/side-tab:opacity-0 group-has-[:focus-visible]/side-tab:duration-0";
+  "transition-opacity duration-100 motion-reduce:transition-none group-hover/side-tab:pointer-events-none group-hover/side-tab:opacity-0 group-focus-visible/side-tab:pointer-events-none group-focus-visible/side-tab:opacity-0 group-focus-visible/side-tab:duration-0 group-has-[:focus-visible]/side-tab:pointer-events-none group-has-[:focus-visible]/side-tab:opacity-0 group-has-[:focus-visible]/side-tab:duration-0";
 
 /**
  * The room of a trailing control that joins the row's content: none at rest,
@@ -196,8 +203,8 @@ const JOIN_ON_REVEAL_CLASS =
 
 /**
  * The row's per-tab accent colour: the tab's own colour, ignored while the
- * title is still generating (the tile stays neutral then, S-17) and never a
- * stand-in for the auto-tint hash (D11) - that no longer reaches this row at
+ * title is still generating (the tile stays neutral then) and never a
+ * stand-in for the auto-tint hash - that no longer reaches this row at
  * all. `null` means no colour: `SideTabAccent` renders it transparent.
  */
 function tabAccentOf(tint: string | null, tile: SideTabTile): string | null {
@@ -209,7 +216,7 @@ function tabAccentOf(tint: string | null, tile: SideTabTile): string | null {
  * reply): only on the transition, never on mount or a re-render, never in a
  * loop, and not at all while motion is off. The pulse ends with its animation.
  */
-function useWaitingPulse(badge: RailBadgeKind | null): {
+function useWaitingPulse(badge: SideTabRowProps["badge"]): {
   readonly pulsing: boolean;
   readonly onAnimationEnd: (event: AnimationEvent<HTMLDivElement>) => void;
 } {
@@ -448,7 +455,7 @@ function SideSessionMark(props: {
  * The per-tab colour accent (owner ruling, fix/layout-regression-and-improvements):
  * always mounted so toggling a tab's colour never shifts the row. `color` is
  * `null` for a colourless tab, rendered transparent rather than a
- * hash-derived stand-in (D11's `tabAutoTint` no longer feeds this mark).
+ * hash-derived stand-in (`tabAutoTint` no longer feeds this mark).
  * Skipped on the session tab, which already carries its own edge mark
  * (`SideSessionMark`, L-163).
  */
@@ -473,8 +480,31 @@ function SideTabAccent(props: {
   );
 }
 
-function CornerBadge(props: { readonly badge: RailBadgeKind | null }) {
+function CornerBadge(props: { readonly badge: SideTabRowProps["badge"] }) {
   if (props.badge === null) return null;
+  if (typeof props.badge !== "string") {
+    // The pill's tint is translucent: seated on the strip's ground, the glyph
+    // under the corner never shows through it.
+    return (
+      <span
+        className={cn(
+          SIDE_TAB_RAIL_BADGE_POSITION_CLASS,
+          SIDE_STRIP_GROUND_FILL_CLASS,
+          "pointer-events-none flex rounded-md",
+        )}
+      >
+        <Badge
+          variant="destructive"
+          size="xs"
+          aria-hidden
+          data-testid="side-tab-rail-count"
+          className={cn(SIDE_STRIP_NAV_TILE_COUNT_CLASS, "static tabular-nums")}
+        >
+          {formatUnreadCount(props.badge.count)}
+        </Badge>
+      </span>
+    );
+  }
   return (
     <span
       className={cn(SIDE_TAB_RAIL_BADGE_POSITION_CLASS, "pointer-events-none")}

@@ -31,7 +31,7 @@ const messengerRef = vi.hoisted(() => ({
 }));
 
 vi.mock("@/lib/host/runtime", () => ({
-  // Spine and app-wide client are separate exports since redesign P2.1.
+  // Spine and app-wide client are separate exports.
   useHostRuntimeClient: () => {
     if (globalClientRef.value === null) {
       throw new Error("test global client not configured");

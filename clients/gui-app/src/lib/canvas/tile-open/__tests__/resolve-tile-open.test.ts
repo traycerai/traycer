@@ -1,6 +1,6 @@
 /**
- * The resolver IS the placement spec (plan §5.1 steps 1-7, decisions C3-C7,
- * C10), so this suite is the spec's executable form: one case per rule, built
+ * The resolver IS the placement spec, so this suite is its executable form:
+ * one case per rule, built
  * on the real canvas fixtures the store suites use.
  */
 import { describe, expect, it } from "vitest";
@@ -23,6 +23,8 @@ import type { TilePlacementSettings } from "@/stores/settings/settings-store";
 import {
   tileCategoryOf,
   tileIntent,
+  type MobileTileOpenSlots,
+  type MobileTileSlot,
   type TileOpenGesture,
   type TileOpenIntent,
   type TileOpenMode,
@@ -111,7 +113,7 @@ const BASE_INTENT: TileOpenIntent = tileIntent(
 
 const NO_MODS = { shift: false, alt: false, middle: false } as const;
 
-/** default + per-category, at the shipped defaults (C3). */
+/** default + per-category, at the shipped defaults. */
 const DEFAULT_SETTINGS: TilePlacementSettings = {
   default: "per-category",
   content: "tab",
@@ -132,6 +134,7 @@ function resolve(input: {
     canvas: input.canvas,
     resolveTargetTabForEpic: (epicId) => `tab-for-${epicId}`,
     singleTileViewport: input.singleTileViewport,
+    mobileSlots: null,
   });
 }
 
@@ -179,7 +182,7 @@ describe("target", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 2. Dedupe (C6, B4)
+// 2. Dedupe (B4)
 // ---------------------------------------------------------------------------
 
 describe("dedupe", () => {
@@ -208,7 +211,7 @@ describe("dedupe", () => {
     });
   });
 
-  // R1: the old `openTile(preview: false)` cleared the pane's preview slot on
+  // The old `openTile(preview: false)` cleared the pane's preview slot on
   // a dedupe hit; the plan has to carry that or a double-click stops pinning.
   it("promotes a permanent hit on the pane's own preview", () => {
     const plan = resolve({
@@ -255,7 +258,7 @@ describe("dedupe", () => {
     ).toMatchObject({ kind: "focus-existing", promote: false });
   });
 
-  // C1: `openTileInBackgroundTab` was idempotent - a host re-registering an
+  // `openTileInBackgroundTab` was idempotent - a host re-registering an
   // already-open tile must not steal focus.
   it("is a no-op when a background open hits an open tile", () => {
     expect(resolveDefault({ ...BASE_INTENT, gesture: "host" })).toEqual({
@@ -303,7 +306,7 @@ describe("dedupe", () => {
     });
   });
 
-  // R14: middle = "a fresh background tab", whatever the category.
+  // Middle = "a fresh background tab", whatever the category.
   it("middle-click bypasses dedupe for a non-browser node too", () => {
     expect(
       resolveDefault({
@@ -322,7 +325,7 @@ describe("dedupe", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 3. Gesture -> mode (C4)
+// 3. Gesture -> mode
 // ---------------------------------------------------------------------------
 
 describe("gesture -> mode", () => {
@@ -369,7 +372,7 @@ describe("gesture -> mode", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 4. Explicit placement (C7)
+// 4. Explicit placement
 // ---------------------------------------------------------------------------
 
 describe("explicit placement", () => {
@@ -428,7 +431,7 @@ describe("explicit placement", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 4b. Setting + modifiers (C3, C4)
+// 4b. Setting + modifiers
 // ---------------------------------------------------------------------------
 
 describe("setting and modifiers", () => {
@@ -494,7 +497,7 @@ describe("setting and modifiers", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 5. Viewport clamp (C10) and pip
+// 5. Viewport clamp and pip
 // ---------------------------------------------------------------------------
 
 describe("single-tile viewport", () => {
@@ -568,7 +571,7 @@ describe("pip", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 6. Category affinity (C5)
+// 6. Category affinity
 // ---------------------------------------------------------------------------
 
 describe("category affinity", () => {
@@ -629,8 +632,8 @@ describe("category affinity", () => {
     });
   });
 
-  // R5: a background open creates no geometry, but it still belongs beside
-  // its own category rather than in whatever pane is active (C5).
+  // A background open creates no geometry, but it still belongs beside
+  // its own category rather than in whatever pane is active.
   it("groups a background open into the category's pane", () => {
     expect(
       resolve({
@@ -1032,7 +1035,164 @@ describe("beside placement", () => {
 });
 
 // ---------------------------------------------------------------------------
-// tileCategoryOf (C2)
+// The phone shell's second tile
+// ---------------------------------------------------------------------------
+
+describe("mobile second tile", () => {
+  // p1 (active) holds SPEC_A, the tile the person reads; p2 holds SPEC_B, which
+  // the second slot may name; CHAT_A is open too and in neither slot.
+  const CANVAS = canvasOf({
+    root: group("g1", "horizontal", [
+      pane("p1", [SPEC_A.instanceId]),
+      pane("p2", [SPEC_B.instanceId, CHAT_A.instanceId]),
+    ]),
+    activePaneId: "p1",
+    tiles: [SPEC_A, SPEC_B, CHAT_A],
+  });
+
+  function slots(
+    target: MobileTileSlot,
+    secondaryInstanceId: string | null,
+  ): MobileTileOpenSlots {
+    return {
+      target,
+      primaryInstanceId: SPEC_A.instanceId,
+      secondaryInstanceId,
+    };
+  }
+
+  function resolveMobile(
+    intent: TileOpenIntent,
+    mobileSlots: MobileTileOpenSlots,
+  ): TileOpenPlan {
+    return resolveTileOpen({
+      intent,
+      settings: DEFAULT_SETTINGS,
+      canvas: CANVAS,
+      resolveTargetTabForEpic: (epicId) => `tab-for-${epicId}`,
+      // The installed app is a single-tile viewport at every width.
+      singleTileViewport: true,
+      mobileSlots,
+    });
+  }
+
+  function intentFor(
+    node: EpicCanvasTileRef,
+    overrides: Partial<TileOpenIntent>,
+  ): TileOpenIntent {
+    return { ...BASE_INTENT, node, ...overrides };
+  }
+
+  it("shows a new tile in the second slot, transient only for a single click", () => {
+    expect(
+      resolveMobile(intentFor(CHAT_C, {}), slots("secondary", null)),
+    ).toEqual({
+      kind: "show-in-mobile-secondary",
+      tabId: TAB_ID,
+      existingInstanceId: null,
+      transient: false,
+    });
+    expect(
+      resolveMobile(
+        intentFor(CHAT_C, { gesture: "single" }),
+        slots("secondary", null),
+      ),
+    ).toMatchObject({ kind: "show-in-mobile-secondary", transient: true });
+  });
+
+  it("shows a tile already on the canvas in the second slot without making it transient", () => {
+    expect(
+      resolveMobile(
+        intentFor(CHAT_A, { gesture: "single" }),
+        slots("secondary", SPEC_B.instanceId),
+      ),
+    ).toEqual({
+      kind: "show-in-mobile-secondary",
+      tabId: TAB_ID,
+      existingInstanceId: CHAT_A.instanceId,
+      transient: false,
+    });
+  });
+
+  it.each<MobileTileSlot>(["primary", "secondary"])(
+    "keeps a tile the second slot already holds there, aimed at the %s",
+    (target) => {
+      expect(
+        resolveMobile(intentFor(SPEC_B, {}), slots(target, SPEC_B.instanceId)),
+      ).toEqual({
+        kind: "show-in-mobile-secondary",
+        tabId: TAB_ID,
+        existingInstanceId: SPEC_B.instanceId,
+        transient: false,
+      });
+    },
+  );
+
+  it("focuses a tile the first slot holds instead of showing it twice", () => {
+    expect(
+      resolveMobile(
+        intentFor(SPEC_A, {}),
+        slots("secondary", SPEC_B.instanceId),
+      ),
+    ).toMatchObject({
+      kind: "focus-existing",
+      paneId: "p1",
+      instanceId: SPEC_A.instanceId,
+    });
+  });
+
+  it("opens into the current tile when the open is aimed at the first slot", () => {
+    expect(
+      resolveMobile(intentFor(CHAT_C, {}), slots("primary", null)),
+    ).toMatchObject({ kind: "open-in-pane", paneId: "p1" });
+  });
+
+  it("leaves a caller's explicit tab placement alone", () => {
+    expect(
+      resolveMobile(
+        intentFor(CHAT_C, {
+          placement: { kind: "tab", paneId: "p2", index: null },
+        }),
+        slots("secondary", null),
+      ),
+    ).toMatchObject({ kind: "open-in-pane", paneId: "p2" });
+  });
+
+  it("leaves an open that asks for a second view (dedupe off) to its own pane", () => {
+    expect(
+      resolveMobile(
+        intentFor(CHAT_C, { dedupe: false }),
+        slots("secondary", null),
+      ),
+    ).toMatchObject({ kind: "open-in-pane", paneId: "p1" });
+  });
+
+  it("does not route a background open to the second slot", () => {
+    expect(
+      resolveMobile(
+        intentFor(CHAT_C, { gesture: "host" }),
+        slots("secondary", null),
+      ),
+    ).toMatchObject({ kind: "open-in-pane", mode: "background" });
+  });
+
+  it("routes a beside placement to the second slot", () => {
+    expect(
+      resolveMobile(
+        intentFor(CHAT_C, {
+          placement: { kind: "beside", paneId: "p1", category: "side-chat" },
+        }),
+        slots("secondary", null),
+      ),
+    ).toMatchObject({
+      kind: "show-in-mobile-secondary",
+      existingInstanceId: null,
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// tileCategoryOf
 // ---------------------------------------------------------------------------
 
 describe("tileCategoryOf", () => {

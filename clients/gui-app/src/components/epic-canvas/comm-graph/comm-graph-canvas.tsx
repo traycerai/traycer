@@ -201,12 +201,6 @@ export interface CommGraphCanvasProps {
   readonly onOpenAgent: (agent: CommGraphAgentNode) => void;
 }
 
-/**
- * A node with no resolvable host has no subscription behind it at all - a
- * legacy chat record that predates `Chat.hostId`. That is deliberately kept
- * distinct from "the host exists but we cannot reach it", because the reasons
- * and the remedies differ.
- */
 /** Flattens the travel resolution into the edge's two data fields. */
 function travelData(travel: CommGraphEdgeTravel | null): {
   readonly pulse: CommGraphPulseKind | null;
@@ -216,6 +210,12 @@ function travelData(travel: CommGraphEdgeTravel | null): {
   return { pulse: travel.kind, pulseReversed: travel.reversed };
 }
 
+/**
+ * A node with no resolvable host has no subscription behind it at all - a
+ * legacy chat record that predates `Chat.hostId`. That is deliberately kept
+ * distinct from "the host exists but we cannot reach it", because the reasons
+ * and the remedies differ.
+ */
 function nodeHostStatus(
   hostId: string | null,
   byHost: ReadonlyMap<string, CommGraphHostStatus>,

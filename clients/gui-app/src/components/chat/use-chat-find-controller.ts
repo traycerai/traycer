@@ -109,7 +109,7 @@ interface ChatFindControllerArgs {
   readonly rowIndexByKeyRef: RefObject<ReadonlyMap<string, number>>;
   readonly getScroller: () => HTMLElement | null;
   readonly scrollToLocation: (location: ChatTimelineNavigationLocation) => void;
-  /** Manual-navigation cancel (decision #21: find performs it first). */
+  /** Manual-navigation cancel (find performs it first). */
   readonly cancelManualNavigation: () => void;
   /**
    * `ChatMessages`' reader-navigation generation: a reader gesture or a

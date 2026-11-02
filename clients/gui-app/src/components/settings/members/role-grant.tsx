@@ -8,7 +8,9 @@ import type { TeamRole } from "@/components/settings/members/types";
 
 /**
  * One role prefix, the common grant text, then How Traycer handles this.
- * Shown before an invitation's Accept and as the body of `team.role.changed`.
+ * Shown before an invitation's Accept, which is its one caller. The
+ * `team.role.changed` row is a title and a one-line body composed from the
+ * payload, and has never been this.
  */
 export function RoleGrant(props: {
   readonly role: TeamRole;

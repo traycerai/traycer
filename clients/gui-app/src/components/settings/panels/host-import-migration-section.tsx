@@ -71,7 +71,7 @@ export function HostImportMigrationSection(props: {
 }
 
 /**
- * The single "Import your work" entry (spec §5): one row for every provider,
+ * The single "Import your work" entry: one row for every provider,
  * not one per provider and not in the Providers panel. Hidden entirely on a host
  * that predates the feature - it is deliberately de-emphasised, so there is
  * nothing worth explaining in its absence.

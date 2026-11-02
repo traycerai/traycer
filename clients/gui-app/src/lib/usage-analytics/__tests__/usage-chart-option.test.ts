@@ -163,7 +163,7 @@ describe("buildUsageChartOption", () => {
 
 describe("buildUsageChartOption — all-zero visible series", () => {
   it("draws no stroke for a series whose every value is zero", () => {
-    // Ticket 19 (live staging): an unpriced grok turn contributed $0, yet
+    // Live staging: an unpriced grok turn contributed $0, yet
     // its stacked boundary line traced the top of claude's mass in grok's
     // color - a $0 harness read as owning the whole total. All-zero
     // series render nothing; the legend chip and tooltip stay.

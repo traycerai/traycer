@@ -89,7 +89,7 @@ The host is the background process that runs agents, terminals, and Tasks on a m
 
 | Command | Purpose |
 | --- | --- |
-| `traycer host status` | Show whether the host is running, with its process, address, and recent activity. It only reads; it never installs or starts anything. |
+| `traycer host status` | Show whether the host is running, with its process, address, recent activity, and how the last update ended. It only reads; it never installs or starts anything. |
 | `traycer host doctor` | Diagnose the host and CLI install. For a problem it can name, it prints the command that fixes it. |
 | `traycer host logs` | Print the last 200 lines of the host log. |
 | `traycer host logs --tail <n>` | Print the last `n` lines. |
@@ -160,9 +160,10 @@ In particular, `set none` leaves a running host alone and switches Desktop to re
 
 | Command | Purpose |
 | --- | --- |
-| `traycer cli upgrade` | Download and install the CLI version Traycer currently publishes. For a CLI installed by npm, Homebrew, or another package manager, it prints that package manager's upgrade command instead. If the binary is in use, usually because the host runs from it, the upgrade finishes on the next `traycer host restart`. |
+| `traycer cli upgrade` | Download and install the CLI version Traycer currently publishes. For a CLI installed by npm, Homebrew, or another package manager, it prints that package manager's upgrade command instead. If the binary is in use, usually because the host runs from it, the upgrade finishes on the next `traycer host restart`. If the published version is older than the one you have, as it is while you run a release candidate, nothing is changed. |
 | `traycer cli upgrade --dry-run` | Show the version and download URL without installing anything. |
-| `traycer cli upgrade --target <version>` | Fail unless the published version is exactly `<version>`. It does not install older versions. |
+| `traycer cli upgrade --target <version>` | Fail unless the published version is exactly `<version>`. |
+| `traycer cli upgrade --target <version> --allow-downgrade` | Install `<version>` even though it is older than the one you have. Both flags are needed, so a plain upgrade never moves you backwards. |
 | `traycer cli re-anchor --binary-path <path> --installed-version <version>` | Point upgrade tracking at a CLI binary you installed or moved by hand. Use it when `cli upgrade` reports that there is no recorded install. |
 
 ## Config Commands

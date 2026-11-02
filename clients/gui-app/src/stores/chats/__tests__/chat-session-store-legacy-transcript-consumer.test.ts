@@ -104,7 +104,7 @@ class FakeChatWireSession implements IStreamSession {
   }
 
   close(): void {
-    this.statusChangeHandler?.("closed", { kind: "caller" }, null);
+    this.statusChangeHandler?.("closed", { kind: "caller" }, null, null);
   }
 
   /** Feed a raw wire envelope through the REAL `ChatStreamClient` parse. */
@@ -119,7 +119,7 @@ class FakeChatWireSession implements IStreamSession {
     status: "connecting" | "open" | "reconnecting" | "closed",
     reason: StreamCloseReason | null,
   ): void {
-    this.statusChangeHandler?.(status, reason, null);
+    this.statusChangeHandler?.(status, reason, null, null);
   }
 }
 
@@ -352,6 +352,7 @@ function capturedLegacySnapshotEnvelope(): StreamFrameEnvelope {
         updatedAt: 1787993069475,
         isTitleEditedByUser: false,
         settings: {
+          ultracode: false,
           harnessId: "claude",
           model: "test-model",
           permissionMode: "full_access",
@@ -636,7 +637,7 @@ describe("chat-session-store - real windowed -> legacy transcript downgrade", ()
     }
   });
 
-  // F14-8: `findReadOrdinal` is reset at the SAME downgrade site as
+  // `findReadOrdinal` is reset at the SAME downgrade site as
   // `jumpTargetOrdinal` - both are "the rest of the windowed line's aux
   // state, back to its initial values" in the same `applyAuthoritativeSnapshot`
   // call (`chat-session-store.ts`, the windowed -> legacy downgrade branch).
@@ -688,8 +689,8 @@ describe("chat-session-store - real windowed -> legacy transcript downgrade", ()
       // Route the envelope through the windowed union deliberately: this makes
       // the REAL `ChatStreamClient` parse and deliver it, so the assertion is
       // about the store consumer's abandoned-line latch rather than about a
-      // legacy-schema rejection one layer earlier. T4 owns the independent
-      // retired-stream-generation guard.
+      // legacy-schema rejection one layer earlier. This does not exercise the
+      // independent retired-stream-generation guard.
       harness.session.negotiatedVersion = WINDOWED_VERSION;
       harness.session.fireServerFrame(strandedRangeEnvelope());
       unsubscribe();
@@ -703,7 +704,7 @@ describe("chat-session-store - real windowed -> legacy transcript downgrade", ()
   });
 });
 
-// ─── T5's process-wide chat-windows holder, driven by the same real frames ─
+// ─── The process-wide chat-windows holder, driven by the same real frames ─
 
 function sixWholeSetSlicesOf(state: ChatSessionState): ChatWholeSetSlices {
   return {

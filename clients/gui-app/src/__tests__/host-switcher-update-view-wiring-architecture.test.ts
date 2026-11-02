@@ -7,7 +7,7 @@ import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
 /**
- * The Q3 ruling (Ticket 06) is a WIRING decision, not a rendering one: fleet
+ * The Q3 ruling is a WIRING decision, not a rendering one: fleet
  * update state lives in Settings, and every other host picker on the shared
  * `<HostSwitcher>` row passes `updateViewForHost: null` on purpose (see
  * `HostOptionRow`'s doc comment — "opt-in by data, not a flag"). Neither the

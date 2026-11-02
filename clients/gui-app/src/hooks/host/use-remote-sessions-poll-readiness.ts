@@ -10,7 +10,7 @@ import {
  * whole directory list - the readiness controller's per-scope resolution, and
  * the per-entry `isHostDialable` behind the host-scope options - where a
  * hook-per-row is not an option. (It also fed the gate's `anyHostDialable`
- * directory scan until P3.2 deleted that card; the remaining consumers ask
+ * directory scan until that card was deleted; the remaining consumers ask
  * per host, not "is anything dialable".)
  *
  * Returns a lookup whose IDENTITY changes exactly when some listed host's

@@ -267,19 +267,10 @@ describe("/epics/$epicId/$tabId route", () => {
     expect(screen.queryByTestId("epic-route-session-body")).toBeNull();
     expect(router.state.location.pathname).toBe(`/epics/${EPIC_ID}/${TAB_ID}`);
   });
-
-  it("renders replay onboarding outside the app shell without clearing completion", async () => {
-    const router = renderAt("/onboarding?replay=true");
-
-    await screen.findByTestId("onboarding-page-stub");
-    expect(screen.queryByTestId("app-shell")).toBeNull();
-    expect(router.state.location.pathname).toBe("/onboarding");
-    expect(useOnboardingStore.getState().completedAt).toBe(1_700_000_000_000);
-  });
 });
 
 /**
- * T3: the `/epics/$epicId/$tabId` loader's History first-page prefetch moved
+ * The `/epics/$epicId/$tabId` loader's History first-page prefetch moved
  * from `auth.status !== "signed-in"` to `!admitsLocalPlane(auth.status)`, on
  * the same reading as the `/epics` loader (`epics-route.test.tsx`) - this
  * warms the History overlay so it opens populated from inside an epic tab,

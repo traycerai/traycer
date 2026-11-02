@@ -5,7 +5,6 @@ import {
   Circle,
   Hand,
   MousePointer2,
-  MessageSquarePlus,
   Pen,
   Square,
   StickyNote,
@@ -27,7 +26,6 @@ import type { CanvasTool } from "./canvas-model";
 const NAVIGATION_TOOLS = [
   { tool: "select", label: "Select", key: "V", icon: MousePointer2 },
   { tool: "hand", label: "Hand", key: "H", icon: Hand },
-  { tool: "comment", label: "Comment", key: "C", icon: MessageSquarePlus },
 ] as const;
 const CONTENT_TOOLS = [
   { tool: "sticky", label: "Note", key: "N", icon: StickyNote },
@@ -57,7 +55,6 @@ export interface CanvasZoomModel {
 /** The pages and tools pill floating at the canvas's top left. */
 export function CanvasToolbar(props: {
   readonly viewOnly: boolean;
-  readonly commentsEnabled: boolean;
   readonly pages: ReactNode;
   readonly tool: CanvasTool;
   readonly onTool: (tool: CanvasTool) => void;
@@ -72,9 +69,7 @@ export function CanvasToolbar(props: {
       {props.viewOnly ? null : (
         <>
           <ToolbarDivider />
-          {NAVIGATION_TOOLS.filter(
-            ({ tool }) => tool !== "comment" || props.commentsEnabled,
-          ).map((item) => (
+          {NAVIGATION_TOOLS.map((item) => (
             <ToolButton key={item.tool} {...props} item={item} />
           ))}
           <ToolbarDivider />

@@ -87,25 +87,6 @@ export function commentThreadsShouldPoll(
 }
 
 /**
- * TanStack Query backed read of the host's comment thread snapshot for a
- * single artifact. The host `epic.listCommentThreads` resolver wraps
- * `CommentThreadManager.readArtifactCommentThreads`, which is fed by the
- * artifact room's `TiptapCollabProvider` Y.Doc, cloud-backed or locally
- * durable. Mutations from gui-app + Views land in the same Y.Doc, so this
- * query always returns the union of writers.
- *
- * Cross-product writes from Views currently rely on TanStack Query's default
- * stale window plus mutation-driven invalidation; a future iteration should
- * subscribe to Y.Doc updates over `/stream` and invalidate eagerly so the
- * sidebar updates without requiring a tab focus.
- *
- * `client` is the caller's, and there is deliberately no app-wide wrapper: every
- * mount of this query is Epic-scoped - the collab TILE and its hover popover
- * (tab client), and the Epic sidebar (session client). An app-wide read here
- * asked the machine the app happened to be pointed at for another host's
- * threads during an A→B re-point, and keyed the cache under that host (D15).
- */
-/**
  * The read twin of `assertCommentWriteAuthorized`, taken at DISPATCH.
  *
  * `enabled: !commentsUnavailable` stops the NEXT fetch. It does not stop a
@@ -137,6 +118,23 @@ function commentThreadReadPreflight(
   };
 }
 
+/**
+ * TanStack Query backed read of the host's comment thread snapshot for a
+ * single artifact. The host `epic.listCommentThreads` resolver wraps
+ * `CommentThreadManager.readArtifactCommentThreads`, which is fed by the
+ * artifact room's `TiptapCollabProvider` Y.Doc, cloud-backed or locally
+ * durable. Mutations from gui-app + Views land in the same Y.Doc, so this
+ * query always returns the union of writers.
+ *
+ * This query uses a 15-second stale window. While the records lane is down,
+ * it uses the table-owned poll cadence.
+ *
+ * `client` is the caller's, and there is deliberately no app-wide wrapper: every
+ * mount of this query is Epic-scoped - the collab TILE and its hover popover
+ * (tab client), and the Epic sidebar (session client). An app-wide read here
+ * asked the machine the app happened to be pointed at for another host's
+ * threads during an A→B re-point, and keyed the cache under that host (D15).
+ */
 export function useEpicCommentThreadsForClient(args: {
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly epicId: string;

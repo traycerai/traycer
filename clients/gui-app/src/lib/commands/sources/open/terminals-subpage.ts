@@ -511,7 +511,7 @@ export function useTerminalsOpenerItems(
         // (`hostClient` above) - there is no cross-host terminal listing
         // today, so every session here IS already on `defaultHostId`. A badge
         // can never legitimately apply until that plumbing exists (flagged
-        // back per T22's scope - inventing it is a separate, larger change).
+        // back as a scope limitation - inventing it is a separate, larger change).
         null,
       );
     });

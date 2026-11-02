@@ -16,6 +16,7 @@ import { BrowserSessionsStreamClient } from "@traycer-clients/shared/host-transp
 import type {
   StreamCloseReason,
   StreamConnectionStatus,
+  StreamContinuity,
 } from "@traycer-clients/shared/host-transport/i-stream-session";
 import {
   BROWSER_SESSIONS_WINDOW_CAP_MESSAGE,
@@ -318,6 +319,7 @@ export class BrowserSessionsRegistry {
         key,
         event: {
           kind: "status",
+          continuity: null,
           lifecycle: "failed",
           errorMessage: BROWSER_SESSIONS_WINDOW_CAP_MESSAGE,
         },
@@ -495,7 +497,7 @@ export class BrowserSessionsRegistry {
   private sendPrimaryProfileDelta(delta: BrowserPrimaryProfileDelta): void {
     const carriers = new Map<string, BrowserSessionsStream>();
     for (const stream of this.streams.values()) {
-      if (!stream.primaryProfileDeltaReady || !stream.ackReceived) continue;
+      if (!stream.primaryProfileReady || !stream.ackReceived) continue;
       const carrier = carriers.get(stream.hostId);
       if (carrier === undefined || stream.lastAckOrder > carrier.lastAckOrder) {
         carriers.set(stream.hostId, stream);
@@ -566,6 +568,7 @@ class BrowserSessionsStream {
    */
   private terminal = false;
   private connectionStatus: StreamConnectionStatus = "connecting";
+  private streamHeld = false;
   private snapshotReady = false;
   private lifecycleReadySent = false;
   /**
@@ -674,6 +677,7 @@ class BrowserSessionsStream {
     this.emitStatus(
       browserSessionsLifecycle(this.connectionStatus, null),
       null,
+      null,
     );
     if (!this.snapshotReady) return;
     // A main-owned preparation can predate the renderer coordinator. Ask the
@@ -709,7 +713,7 @@ class BrowserSessionsStream {
   start(): void {
     if (this.disposed) return;
     this.preparationUnavailable = false;
-    this.emitStatus("connecting", null);
+    this.emitStatus("connecting", null, null);
     const userId = this.deps.userId();
     if (userId === null) {
       // Signed out: there is no identity to open a stream for. A sign-in
@@ -762,7 +766,7 @@ class BrowserSessionsStream {
    * socket already had.
    */
   private failToOpen(errorMessage: string): void {
-    this.emitStatus("failed", errorMessage);
+    this.emitStatus("failed", errorMessage, null);
     this.onReleaseRequested();
   }
 
@@ -799,8 +803,8 @@ class BrowserSessionsStream {
           onServerFrame: (frame) => {
             this.handleServerFrame(frame);
           },
-          onConnectionStatus: (status, reason) => {
-            this.handleConnectionStatus(status, reason);
+          onConnectionStatus: (status, reason, _retryCause, continuity) => {
+            this.handleConnectionStatus(status, reason, continuity);
           },
         },
       });
@@ -849,12 +853,15 @@ class BrowserSessionsStream {
     return true;
   }
 
-  get primaryProfileDeltaReady(): boolean {
-    return this.connectionStatus === "open" && this.lifecycleReadySent;
+  get primaryProfileReady(): boolean {
+    return (
+      (this.connectionStatus === "open" || this.streamHeld) &&
+      this.lifecycleReadySent
+    );
   }
 
   sendPrimaryProfileDelta(delta: BrowserPrimaryProfileDelta): void {
-    if (!this.primaryProfileDeltaReady) return;
+    if (!this.primaryProfileReady) return;
     this.sendClientFrame({
       kind: "primaryProfileDelta",
       hasBinaryPayload: false,
@@ -1013,7 +1020,7 @@ class BrowserSessionsStream {
         ? FINAL_PRIMARY_PROFILE_FLUSH_TIMEOUT_MS
         : Math.max(0, deadline - Date.now());
     const expired = (): boolean => deadline !== null && Date.now() >= deadline;
-    if (this.connectionStatus !== "open") return "not-sent";
+    if (!this.primaryProfileReady) return "not-sent";
     const requestId = this.standingCaptureRequestId;
     // No standing id means this host either never authorized the jar plane for
     // this connection or never unsealed the store, so a capture would be
@@ -1022,9 +1029,9 @@ class BrowserSessionsStream {
     if (requestId === null) return "not-sent";
     // The jar read is asynchronous, and the stream can close - or the host
     // can re-issue its standing id - while it runs. A frame that could not
-    // be sent, or that would quote an id the host no longer holds, never
-    // LEFT: the registry must be free to try this host's healthy sibling
-    // stream, which `unacked` would forbid.
+    // be accepted, or that would quote an id the host no longer holds,
+    // leaves the registry free to try a sibling. A frame accepted by the
+    // held FIFO owns its ACK slot and must not fall back to another stream.
     const answer = this.answerCaptureRequest(
       requestId,
       () => this.standingCaptureRequestId === requestId && !expired(),
@@ -1035,8 +1042,8 @@ class BrowserSessionsStream {
         ? await answer
         : await settledWithin(answer, remainingMs(), "not-sent");
     if (sent === "not-sent") return "not-sent";
-    // The ack waiter - and its timeout - start once the frame has LEFT, not
-    // before the jar read. No ack can be missed: the send was synchronous,
+    // The ACK waiter and timeout start once the FIFO accepts the frame,
+    // after the jar read. No ACK can be missed: acceptance was synchronous,
     // and this continuation runs before any socket delivery. Awaited for a
     // frame that carried no jar too - the host acks every captured frame it
     // receives, in order, and this frame's slot must absorb its own ack
@@ -1093,12 +1100,12 @@ class BrowserSessionsStream {
   }
 
   /**
-   * `sendClientFrame` that says whether the frame LEFT. The client drops a
-   * frame silently unless its stream is open, and a caller that counts what
-   * a host took - the whole-jar capture - must not mistake a drop for a send.
+   * Whether the live or held authorized subscription accepted this capture.
+   * A held frame queues in the same FIFO as its ledger digest and deltas.
+   * Acceptance prevents sibling fallback; only its eventual ACK counts a host.
    */
-  private sendClientFrameIfOpen(frame: BrowserSessionsClientFrame): boolean {
-    if (this.disposed || this.connectionStatus !== "open") return false;
+  private sendPrimaryProfileFrame(frame: BrowserSessionsClientFrame): boolean {
+    if (this.disposed || !this.primaryProfileReady) return false;
     if (this.client === null) return false;
     this.client.sendClientFrame(frame);
     return true;
@@ -1112,16 +1119,19 @@ class BrowserSessionsStream {
   private emitStatus(
     lifecycle: BrowserSessionsLifecycle,
     errorMessage: string | null,
+    continuity: StreamContinuity,
   ): void {
-    this.emit({ kind: "status", lifecycle, errorMessage });
+    this.emit({ kind: "status", lifecycle, errorMessage, continuity });
   }
 
   private handleConnectionStatus(
     status: StreamConnectionStatus,
     reason: StreamCloseReason | null,
+    continuity: StreamContinuity,
   ): void {
     if (this.disposed) return;
     this.connectionStatus = status;
+    this.streamHeld = status === "reconnecting" && continuity === "held";
     if (status === "closed") this.notifyPreparationsUnavailable();
     if (this.disposed) return;
     if (reason?.kind === "fatalError") {
@@ -1131,7 +1141,7 @@ class BrowserSessionsStream {
       // into the transport, so the restart has to re-read it.
       this.deps.directory.invalidate(this.hostId);
     }
-    if (status === "open") {
+    if (status === "open" && continuity !== "continued") {
       this.preparationUnavailable = false;
       this.connectionId = randomUUID();
       // A new incarnation has been told nothing yet, so it can ack nothing
@@ -1139,7 +1149,15 @@ class BrowserSessionsStream {
       this.sentForgetLedgerRevision = 0;
       this.electronTabs?.connect();
       this.sendLifecycleReadyIfReady();
-    } else {
+    } else if (status === "open") {
+      this.sendLifecycleReadyIfReady();
+      if (
+        this.deps.jar.readForgetLedger(this.hostId).revision >
+        this.sentForgetLedgerRevision
+      ) {
+        this.pushForgetLedger("forget");
+      }
+    } else if (continuity !== "held") {
       this.retireConnection();
       this.resolveCaptureAckWaiters();
       this.electronTabs?.disconnect();
@@ -1149,6 +1167,7 @@ class BrowserSessionsStream {
     this.emitStatus(
       browserSessionsLifecycle(status, reason),
       browserSessionsError(status, reason),
+      continuity,
     );
   }
 
@@ -1160,6 +1179,7 @@ class BrowserSessionsStream {
    */
   private retireConnection(): void {
     const closed = this.connectionId;
+    this.streamHeld = false;
     this.connectionId = null;
     this.sentForgetLedgerRevision = 0;
     this.ackReceived = false;
@@ -1301,15 +1321,15 @@ class BrowserSessionsStream {
    * in a log that gets pasted into support threads.
    */
   private pushForgetLedger(stage: "attach" | "forget"): void {
-    if (this.connectionStatus !== "open" || !this.lifecycleReadySent) return;
+    if (!this.primaryProfileReady) return;
     const ledger = this.deps.jar.readForgetLedger(this.hostId);
     this.sendClientFrame({
       kind: "primaryProfileForgetLedger",
       hasBinaryPayload: false,
       ...ledger,
     });
-    // AFTER the send, and only the digests that left: this is the fact an ack
-    // is measured against, so it must not record one the wire never carried.
+    // After acceptance by the live or held FIFO: an ACK can only price a
+    // digest this subscription accepted, whether it had to queue or not.
     this.sentForgetLedgerRevision = Math.max(
       this.sentForgetLedgerRevision,
       ledger.revision,
@@ -1360,12 +1380,12 @@ class BrowserSessionsStream {
    * The one code path that answers "what is in the primary profile right now".
    * Both callers use it: a host-issued `capturePrimaryProfile`, and the final
    * capture before a desktop route disappears. It always sends exactly one
-   * `primaryProfileCaptured` and never rejects. Answers whether that frame
-   * left, and whether it carried a jar: the read is asynchronous, and a
-   * stream that closed underneath it drops the frame silently - and
+   * `primaryProfileCaptured` and never rejects. Answers whether the live or
+   * held FIFO accepted it, and whether it carried a jar. A stream that closed
+   * underneath the asynchronous read drops the frame silently, and
    * `stillWanted`, read once the jar has been read, says whether the request
    * is still the host's to answer (a standing id the host re-issued meanwhile
-   * is not), in which case nothing is sent. A frame that left with no jar -
+   * is not), in which case nothing is accepted. A frame accepted with no jar -
    * the read failed, or the jar was unavailable - is told apart from one that
    * carried one, so a caller counting the hosts that TOOK the jar cannot
    * count a host that acked an empty-handed frame.
@@ -1431,14 +1451,14 @@ class BrowserSessionsStream {
       };
     }
     if (!stillWanted()) return "not-sent";
-    if (!this.sendClientFrameIfOpen(frame)) return "not-sent";
+    if (!this.sendPrimaryProfileFrame(frame)) return "not-sent";
     return carriesJar ? "sent" : "sent-no-jar";
   }
 
   /**
-   * Resolves `true` only on a real ack from the host. A timeout, a connection
-   * that is not open, and a teardown all resolve `false`, so a caller counting
-   * what a host took cannot count a capture that merely left.
+   * Resolves `true` only on a real ACK from the host. A timeout, an ended
+   * subscription, or a teardown resolves `false`; accepting a capture into
+   * the held FIFO never counts as the host taking it.
    *
    * `timeoutMs` is what remains of the caller's budget; the slot is queued
    * even for a budget already spent, since the frame left and its ack must
@@ -1449,7 +1469,7 @@ class BrowserSessionsStream {
     timeoutMs: number,
   ): Promise<boolean> {
     return new Promise<boolean>((resolve) => {
-      if (this.connectionStatus !== "open") {
+      if (!this.primaryProfileReady) {
         resolve(false);
         return;
       }

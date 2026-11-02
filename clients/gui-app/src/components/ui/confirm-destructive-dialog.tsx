@@ -20,6 +20,15 @@ export interface ConfirmDestructiveDialogProps {
   description: ReactNode;
   /** Optional cascade summary inlined into the description. Omit when no descendants. */
   cascadeSummary: string | null;
+  /**
+   * What the cascade sentence says the summary is nested under: one row is
+   * "nested under it", a selection of rows is "nested under them".
+   *
+   * Omitted means "it", which every caller deleting a single target is. Only a
+   * caller that can delete several at once passes the other, and it passes the
+   * word rather than a count because the word is all the sentence needs.
+   */
+  cascadeNestedUnder?: "it" | "them";
   /** Label for the destructive action button (e.g. "Delete" or "Remove"). */
   actionLabel: string;
   isPending: boolean;
@@ -169,7 +178,7 @@ export function ConfirmDestructiveDialog(props: ConfirmDestructiveDialogProps) {
                 <span className="font-medium text-foreground">
                   {cascadeSummary}
                 </span>{" "}
-                nested under it.
+                nested under {props.cascadeNestedUnder ?? "it"}.
               </p>
             ) : null}
             {blockedReason !== null && blockedReason.length > 0 ? (

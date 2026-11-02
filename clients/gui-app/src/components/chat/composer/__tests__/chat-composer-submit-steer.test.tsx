@@ -683,6 +683,7 @@ function mountSubmit(input: MountSubmitInput): {
     reasoningFallback: "model-default",
     seedKey: "chat-submit-steer-test",
     values: {
+      ultracode: false,
       permission,
       selection: {
         harnessId: "claude",
@@ -695,6 +696,7 @@ function mountSubmit(input: MountSubmitInput): {
     onSettingsChange: null,
     tuiOnly: false,
     chatLineCarriesAutoMode: null,
+    ultracodeCarried: false,
     hostId: null,
   });
 
@@ -727,8 +729,9 @@ function mountSubmit(input: MountSubmitInput): {
         onSubmitMessage: props.onSubmitMessage,
         onSideChat: null,
         targetHostId: null,
+        restingSandbox: null,
         queueEditTargetId: null,
-        // T5's gate is off in these fixtures: they predate it and assert the
+        // The gate is off in these fixtures: they predate it and assert the
         // inline behaviour, which is what `false` preserves exactly.
         getDraftBlobBridgeSupported: () => false,
       }),

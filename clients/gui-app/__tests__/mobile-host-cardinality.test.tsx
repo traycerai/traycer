@@ -113,7 +113,7 @@ describe("<TraycerApp /> mobile cardinality behavior", () => {
     // The footer belongs to the gated AppShell; with zero hosts the gate
     // short-circuits to the no-host card so no RPC probe mounts.
     expect(screen.queryByLabelText("Host status")).toBeNull();
-    // The shell-owned picker port is gone (redesign P3.4); the assertion that
+    // The shell-owned picker port is gone; the assertion that
     // survives is the one about the DOM - no picker surface is mounted here.
     expect(screen.queryByTestId("host-picker")).toBeNull();
   });

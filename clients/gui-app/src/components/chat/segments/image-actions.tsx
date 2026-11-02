@@ -8,7 +8,7 @@ import type { LinkClickEvent } from "@/lib/links/open-link";
 
 /** Remote images swap Download for Open-in-browser; local blobs pass null. */
 export interface ImageRemoteOpen {
-  /** True while the OS handoff is in flight - the control disables (R12). */
+  /** True while the OS handoff is in flight - the control disables. */
   readonly pending: boolean;
   readonly onOpen: (event: LinkClickEvent) => void;
 }

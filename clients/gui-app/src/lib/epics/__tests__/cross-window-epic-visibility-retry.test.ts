@@ -10,7 +10,7 @@ import type {
 } from "@/lib/windows/types";
 
 /**
- * Fixup 2, item 2: `installCrossWindowEpicVisibility`'s retry on a failed
+ * `installCrossWindowEpicVisibility`'s retry on a failed
  * report (`clients/gui-app/src/lib/epics/cross-window-epic-visibility.ts`).
  *
  * A separate file from `epic-parking.test.ts` on purpose. Pinning "the retry
@@ -399,9 +399,9 @@ describe("installCrossWindowEpicVisibility - failed-report retry (fixup 2, item 
 });
 
 /**
- * Fixup 2, the class sweep on item 2: the INBOUND startup read retries too.
+ * The class sweep: the INBOUND startup read retries too.
  *
- * CodeRabbit flagged the outbound `report`; the `snapshot()` leg one line down
+ * The outbound `report` was not alone; the `snapshot()` leg one line down
  * was the same fire-and-forget shape, and it is the worse of the two. A dropped
  * report is corrected by the next visibility edge; a dropped snapshot is not
  * corrected by anything this window does, because what it is missing is what

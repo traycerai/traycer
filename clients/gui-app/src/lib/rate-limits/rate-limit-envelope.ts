@@ -94,7 +94,7 @@ function retainCodexResetCreditDetails(
 /**
  * Renderer-memory envelope the `host.getRateLimitUsage` provider-pull query
  * cache entry holds (replacing the raw wire response as the cached `data`),
- * so a transient fetch failure (Core Flows: "couldn't fetch usage - will
+ * so a transient fetch failure ("couldn't fetch usage - will
  * retry") doesn't blank a real, recent reading the way replacing `data`
  * outright would.
  *

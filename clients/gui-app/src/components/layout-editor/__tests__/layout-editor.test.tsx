@@ -265,7 +265,7 @@ describe("the mounted editor root", () => {
       "statusBar",
     );
 
-    // Off the bottom rung: Escape never closes the editor (audit F5).
+    // Off the bottom rung: Escape never closes the editor.
     act(() => {
       escape(document.body);
     });
@@ -315,7 +315,7 @@ describe("the mounted editor root", () => {
     expect(useLayoutEditorStore.getState().selected).toBe("usageLimits");
   });
 
-  // Finding 1 (final-review/canvas-and-editor): Escape used to only pop the
+  // Escape used to only pop the
   // inspector selection, leaving an in-hand surface drag's own listeners
   // live - the pointer release right after still wrote the placement. The
   // fix consumes Escape as a drag cancel first (L-31's own top rung), before

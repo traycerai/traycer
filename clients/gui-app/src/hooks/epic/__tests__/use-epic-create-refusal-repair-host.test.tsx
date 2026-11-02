@@ -18,7 +18,7 @@ import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import { hostRpcRegistry, type HostRpcRegistry } from "@traycer/protocol/host";
 import type {
-  CreateEpicRequestV13,
+  CreateEpicRequestV14,
   CreateEpicResponse,
   CreateEpicResponseV12,
   EpicCreateRefusal,
@@ -81,7 +81,7 @@ const REFUSAL: EpicCreateRefusal = {
   remedy: "Quit the other Traycer running on this machine, then rebind.",
 };
 
-const CREATE_VARIABLES: CreateEpicRequestV13 = {
+const CREATE_VARIABLES: CreateEpicRequestV14 = {
   epic: {
     id: "epic-1",
     title: "Epic",
@@ -383,6 +383,26 @@ describe("a second refusal for the same host while the dialog is mounted", () =>
     expect(description).not.toContain(REBIND_REFUSAL.remedy);
     expect(description).not.toContain(REFUSAL_A.message);
   });
+
+  /**
+   * The rebind warning used to go in `cascadeSummary`, which the confirm dialog
+   * wraps in "This will also delete … nested under it" - so the warning rendered
+   * as a claim about deleting a paragraph of prose. It belongs in the
+   * description, where it reads as the sentence it is.
+   */
+  it("states the rebind warning as prose, not as a cascade count", () => {
+    openLocalStoreRepair({ hostId: PLACEMENT_HOST_ID, refusal: REFUSAL_A });
+    render(createElement(LocalStoreRepairDialogHost));
+
+    const dialog = screen.getByRole("dialog");
+    expect(dialog.textContent).toContain(
+      "Rebinding claims this data directory for this host.",
+    );
+    expect(dialog.textContent).not.toContain("This will also delete");
+    expect(dialog.querySelector('[data-testid="confirm-cascade-meta"]')).toBe(
+      null,
+    );
+  });
 });
 
 describe("a missing-attachment-bytes refusal retries once under the same idempotency key", () => {
@@ -393,6 +413,7 @@ describe("a missing-attachment-bytes refusal retries once under the same idempot
   };
 
   const SETTINGS = {
+    ultracode: false,
     harnessId: "codex" as const,
     model: "gpt-5.4",
     permissionMode: "supervised" as const,
@@ -422,7 +443,7 @@ describe("a missing-attachment-bytes refusal retries once under the same idempot
     };
   }
 
-  function createVariablesWithHash(hash: string): CreateEpicRequestV13 {
+  function createVariablesWithHash(hash: string): CreateEpicRequestV14 {
     return {
       epic: {
         id: "epic-mab",

@@ -445,10 +445,10 @@ describe("what the bot knows, in the rail", () => {
     );
   });
 
-  it("lists the shared entries below, each with the bot that wrote it, and a shared entry the bot also keeps only as its own", async () => {
+  it("lists the shared entries below under the two group titles, each with the bot that wrote it, a legacy entry tagged both ways reading as shared", async () => {
     const user = userEvent.setup();
     render(<MountedKnowingChannel />);
-    const alsoOwn = entry({
+    const legacyBoth = entry({
       id: "01ARZ3NDEKTSV4RRFFQ69G5FA7",
       text: "The repository uses bun",
       tags: ["all", BOT_ID],
@@ -458,19 +458,54 @@ describe("what the bot knows, in the rail", () => {
       at: NOW - 4 * DAY,
       confirmedAt: NOW - 4 * DAY,
     });
-    const pane = await openPane(user, memoryOf([...MEMORY.entries, alsoOwn]));
-
-    expect(textsOf(within(pane).getByTestId("bot-memory-own"))).toContain(
-      alsoOwn.text,
+    const pane = await openPane(
+      user,
+      memoryOf([...MEMORY.entries, legacyBoth]),
     );
+
+    expect(
+      within(pane)
+        .getAllByRole("heading", { level: 3 })
+        .map((heading) => heading.firstChild?.textContent),
+    ).toEqual(["Its own", "Shared"]);
+    const own = within(pane).getByTestId("bot-memory-own");
+    expect(textsOf(own)).not.toContain(legacyBoth.text);
     const shared = within(pane).getByTestId("bot-memory-shared");
     expect(within(shared).getByRole("heading").textContent).toBe(
-      "Shared with every bot1 · tidied by the main bot",
+      "Shared2 · tidied by the main bot",
     );
-    expect(textsOf(shared)).toEqual([SHARED.text]);
-    expect(metaOf(rowsOf(shared)[0])).toMatch(
+    expect(textsOf(shared)).toEqual([legacyBoth.text, SHARED.text]);
+    expect(metaOf(rowsOf(shared)[1])).toMatch(
       /^Written .+ by Audit Bot · never confirmed since$/,
     );
+  });
+
+  it("says which other bots an own entry is kept for, by name, leaving out the ones it cannot name", async () => {
+    const user = userEvent.setup();
+    render(<MountedKnowingChannel />);
+    const keptForOthers = entry({
+      id: "01ARZ3NDEKTSV4RRFFQ69G5FA9",
+      text: "Deploys freeze on Fridays",
+      tags: [BOT_ID, OTHER_BOT_ID, "bot_01ARZ3NDEKTSV4RRFFQ69G5FAZ"],
+      botId: BOT_ID,
+      chatId: TRUNK_ID,
+      requestId: null,
+      at: NOW,
+      confirmedAt: NOW,
+    });
+    const pane = await openPane(
+      user,
+      memoryOf([...MEMORY.entries, keptForOthers]),
+    );
+
+    const own = within(pane).getByTestId("bot-memory-own");
+    const [kept, ...rest] = rowsOf(own);
+    expect(kept.textContent).toContain(keptForOthers.text);
+    expect(metaOf(kept)).toContain(" · also kept for Audit Bot");
+    expect(metaOf(kept)).not.toContain("Audit Bot,");
+    for (const row of rest) {
+      expect(metaOf(row)).not.toContain("also kept for");
+    }
   });
 
   it("says where the bot learned a shared entry it wrote, as its own entries do", async () => {
@@ -516,7 +551,7 @@ describe("what the bot knows, in the rail", () => {
       "4",
     );
     expect(within(pane).getByTestId("bot-memory-meter-line").textContent).toBe(
-      "Release Bot's own memories: 3, nearly empty. When it fills, Release Bot is asked to tidy them, removing the ones that no longer hold; nothing is dropped on its own.",
+      "Release Bot's own memories: 3, nearly empty (300 of 8,000 characters). When it's full, adds are refused until an entry is removed.",
     );
 
     sendMemory({
@@ -530,7 +565,9 @@ describe("what the bot knows, in the rail", () => {
     );
     expect(
       within(pane).getByTestId("bot-memory-meter-line").textContent,
-    ).toMatch(/^Release Bot's own memories: 3, about half full\. /);
+    ).toMatch(
+      /^Release Bot's own memories: 3, about half full \(3,600 of 8,000 characters\)\. /,
+    );
   });
 
   it("marks an entry written while it is open as new, and claims nothing of the entry it may have replaced", async () => {

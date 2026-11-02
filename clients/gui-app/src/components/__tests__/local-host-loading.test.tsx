@@ -251,7 +251,7 @@ describe("<LocalHostLoadingContent />", () => {
     // the dialog title ("Setting up Traycer"), the lane heading ("Setting up
     // Traycer Host…") and the bar's own short label ("Setting up…"), stacked
     // within ~60px. The title is gone with the modal presentation, and the
-    // bar's label slot is now bytes-or-nothing - so the F19 heading is the
+    // bar's label slot is now bytes-or-nothing - so the heading is the
     // single voice for the event, and the bar speaks only about POSITION.
     //
     // `shortLabel` itself stays in the copy table: Settings ▸ Host is free to

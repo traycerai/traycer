@@ -476,7 +476,7 @@ describe("insertPaneAtEdge - rejections", () => {
 });
 
 /**
- * Ticket 20: read-only dissolve predictor used by close/move/tear-off action
+ * Read-only dissolve predictor used by close/move/tear-off action
  * creators to know which surviving panes' painted chats remount when a pane
  * removal dissolves its 2-child parent. Must mirror `removePaneFromTree`'s
  * single-survivor branch exactly - a multi-pane promoted survivor remounts
@@ -568,7 +568,7 @@ describe("paneRemovalDissolveHandoffTargets", () => {
   });
 
   /**
-   * Review round 1, finding 4: the original version of this test only
+   * The original version of this test only
    * checked `result.root?.kind` (pane vs group) - it would stay green even
    * if the helper flushed the WRONG pane's tabs, or missed panes nested
    * under a multi-pane survivor, as long as the root's shape matched.

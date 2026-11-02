@@ -35,6 +35,7 @@ export function chatRunSettings(input: {
   readonly profileId: string | null;
 }): ChatRunSettings {
   return {
+    ultracode: false,
     harnessId: input.harnessId,
     model: input.model,
     permissionMode: "supervised",

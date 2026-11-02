@@ -47,7 +47,7 @@ export function PlansCard(props: {
       <div className="divide-y divide-border/60 rounded-lg border border-border/60">
         {props.plans.length === 0 ? (
           <p className="p-3 text-ui-sm text-muted-foreground">
-            No plans linked yet.
+            No plans linked.
           </p>
         ) : (
           props.plans.map((plan) => (
@@ -101,12 +101,23 @@ export function PlansCard(props: {
       </div>
       {!props.canAdminister ? (
         <p className="text-ui-xs text-muted-foreground">
-          Admins link a plan
-          {props.adminNames.length > 0
-            ? `: ${props.adminNames.join(", ")}.`
-            : "."}
+          {askAnAdminLine(props.adminNames)}
         </p>
       ) : null}
     </section>
   );
+}
+
+/**
+ * What a reader who cannot link a plan is told: who to ask, two admins by
+ * name and the rest by count, so a long list stays one line.
+ */
+function askAnAdminLine(adminNames: readonly string[]): string {
+  const opening = "Only an admin can link a plan";
+  const [first, second] = adminNames;
+  if (adminNames.length === 0) return `${opening}.`;
+  if (adminNames.length === 1) return `${opening}: ask ${first}.`;
+  if (adminNames.length === 2) return `${opening}: ask ${first} or ${second}.`;
+  const others = adminNames.length - 2;
+  return `${opening}: ask ${first}, ${second} or ${others === 1 ? "1 other" : `${others} others`}.`;
 }

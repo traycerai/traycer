@@ -1,5 +1,5 @@
 /**
- * D7 (overlay placement): the real `SideTabStrip` provides `ColumnEdgeContext`
+ * Overlay placement: the real `SideTabStrip` provides `ColumnEdgeContext`
  * with its own edge, and the strip's real Notifications drawer (`SideStripNavRows`,
  * top block) and real `UserMenu` (foot's account row) must actually read it
  * through that boundary - a context wired at the wrong layer would still pass
@@ -593,7 +593,7 @@ describe("header overlays outside a column keep today's placement (D7)", () => {
     renderHarness(
       <>
         <HeaderNotificationsBell />
-        <HeaderIdentity showAppSettings={false} />
+        <HeaderIdentity showAppSettings={false} hostsSignOutConfirm={false} />
       </>,
     );
 

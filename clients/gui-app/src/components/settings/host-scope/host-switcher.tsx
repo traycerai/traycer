@@ -36,6 +36,7 @@ import {
   groupComposerHostOptions,
   groupHostOptions,
   hostOptionKindLabel,
+  hostRowTitle,
   hostRowSurfaceState,
   hostOptionStatusWord,
   isHostOptionSelectable,
@@ -58,14 +59,12 @@ import {
   splitNewRows,
   type HostSwitcherNewRow,
 } from "@/components/settings/host-scope/host-switcher-new-rows";
-import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 import {
   IN_THIS_TASK_LABEL,
   MANAGE_SANDBOXES_IN_SETTINGS,
   NO_MATCH_ELSEWHERE_LINE,
   SANDBOXES_YOU_STARTED_LABEL,
   SEARCH_HOSTS_PLACEHOLDER,
-  THIS_COMPUTER,
   YOURS_GROUP_LABEL,
   collapsedConfigurationsLabel,
   configurationLabel,
@@ -98,19 +97,6 @@ function hostSwitcherLabel(
     : `${subject}: ${name}${status === null ? "" : `, ${status}`}`;
 }
 
-/**
- * What a host is called on the chip and its row. The composer and in-task
- * pickers call the machine this app runs on `This computer`, its own name
- * moving to the row's sub-line, so it reads beside the sandbox rows; every
- * other list names it, and so does a build without sandboxes
- * (`unreleased-features.ts`).
- */
-function hostRowTitle(host: HostScopeOption, composer: boolean): string {
-  return composer && host.isLocalMachine && UNRELEASED_FEATURES_ENABLED
-    ? THIS_COMPUTER
-    : host.name;
-}
-
 export type HostSwitcherActionKind = "add-host" | "manage-hosts";
 
 /**
@@ -141,7 +127,7 @@ interface HostSwitcherActionPresentation {
 }
 
 /**
- * The composer and new-terminal pickers' mode (sandboxes redesign D9): the
+ * The composer and new-terminal pickers' mode (the sandboxes redesign): the
  * person's computers under `Yours`, the sandboxes they started or kept in one
  * collapsed group, a New sandbox row per configuration with a gear, and
  * `Manage sandboxes in Settings` at the foot. A pick here only STAGES: no
@@ -301,8 +287,9 @@ export function HostSwitcher(props: {
   readonly selected: HostScopeOption | null;
   readonly activeHostId: string | null;
   readonly onSelect: (hostId: string) => void;
-  /** How this list ends — see `HostSwitcherAction`. */
   /**
+   * How this list ends — see `HostSwitcherAction`.
+   *
    * `null` for a surface with nowhere to send host management - the onboarding
    * tour renders outside the app shell, so the Settings overlay it would open
    * has no surface to appear on, and a row that does nothing is worse than no
@@ -763,16 +750,12 @@ function HostSwitcherEmptyList(props: {
   );
 }
 
-/**
- * The list's ending: the caller's action, or the composer's Manage row. A
- * build without sandboxes (`unreleased-features.ts`) has no Sandboxes page
- * for that row to open, so the composer's list ends with its hosts.
- */
+/** The list's ending: the caller's action, or the composer's Manage row. */
 function hostSwitcherTrailingAction(
   action: HostSwitcherAction | null,
   composer: HostSwitcherComposerMode | null,
 ): (HostSwitcherActionPresentation & { readonly onSelect: () => void }) | null {
-  if (composer !== null && UNRELEASED_FEATURES_ENABLED) {
+  if (composer !== null) {
     return {
       label: MANAGE_SANDBOXES_IN_SETTINGS,
       icon: Settings,

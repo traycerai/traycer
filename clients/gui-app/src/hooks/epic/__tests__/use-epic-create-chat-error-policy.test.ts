@@ -219,7 +219,7 @@ describe("useEpicCreateChatForHostClient error policy", () => {
     );
   });
 
-  // Review #1297 finding 1. The clone flow recovers from both of these - it
+  // The clone flow recovers from both of these - it
   // narrates the downgrade and retries without `forkSource` - so a toast here
   // describes an attempt, not an outcome, and the detail policy above makes it
   // read as a specific terminal failure moments before the clone succeeds.

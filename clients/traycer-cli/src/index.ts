@@ -189,7 +189,6 @@ import {
   writeStderr,
   writeStdout,
 } from "./runner/std-write";
-import { UNRELEASED_FEATURES_ENABLED } from "./unreleased-features";
 
 // Helper: register a runner-aware action handler. The runner owns
 // process termination, so anything composed via `withRunner` participates in
@@ -924,8 +923,7 @@ function registerCommands(program: Command, agentRolesEnabled: boolean): void {
   registerWorktreeCommands(program);
   registerTaskCommands(program);
   registerAgentCommands(program, agentRolesEnabled);
-  // `traycer bot`: not a command of a build without bots.
-  if (UNRELEASED_FEATURES_ENABLED) registerBotCommands(program);
+  registerBotCommands(program);
   registerMonitorCommand(program);
 }
 
@@ -2506,7 +2504,8 @@ function registerCliCommands(program: Command): void {
           // from rendered help, and its full-help test enforces that.
           "When the file is in use - usually because the host is running from it - the new binary is staged and " +
           "finalized on a later 'traycer host restart'; a restart retries the swap rather than guaranteeing it, and any staged " +
-          "upgrade that is still outstanding is reported by 'traycer host doctor'.",
+          "upgrade that is still outstanding is reported by 'traycer host doctor'. " +
+          "When the published version is older than the one installed, nothing is changed; pass --target with that version and --allow-downgrade to install it anyway.",
       )
       .option(
         "--dry-run",
@@ -2514,12 +2513,17 @@ function registerCliCommands(program: Command): void {
       )
       .option(
         "--target <version>",
-        "Fail unless the release feed still publishes exactly this version. The feed carries one build's assets and cannot install older versions, so this asserts which build you expect rather than selecting one",
+        "Fail unless the release feed still publishes exactly this version. The feed carries one build's assets, so this asserts which build you expect rather than selecting one",
+      )
+      .option(
+        "--allow-downgrade",
+        "Install the published version even when it is older than the one you have. Needs --target naming that version as well, so a plain upgrade can never move you backwards",
       ),
     (opts) =>
       buildCliUpgradeCommand({
         dryRun: opts.dryRun === true,
         targetVersion: typeof opts.target === "string" ? opts.target : null,
+        allowDowngrade: opts.allowDowngrade === true,
       }),
   );
 

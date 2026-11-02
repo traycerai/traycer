@@ -323,7 +323,7 @@ export function usePublishedPlanContent(args: {
  *
  * The cloud reader deliberately serves a bounded PREFIX of a large payload and
  * says so on the response. Dropping that flag was a restoration regression in
- * the strictest sense: the viewer this ticket demolished rendered a truncation
+ * the strictest sense: the viewer this replaced rendered a truncation
  * notice, so a surface that silently presents 64 KiB of a 65,547-byte file as
  * the whole thing is worse than the thing it replaced. Every consumer of these
  * hooks must be able to say "this is a prefix", so it travels beside the text

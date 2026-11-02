@@ -24,7 +24,7 @@ import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
 /**
- * F11 - the review's finding. `withManualRungAnchor` (`rendered-messages.ts`)
+ * F11. `withManualRungAnchor` (`rendered-messages.ts`)
  * resolves `manualRungAnchorSegmentId` over the WHOLE turn's segments, so a
  * turn that fails, gets steered, and only then reaches its real terminal error
  * still gets ONE recovery group rather than one per split row. Nothing
@@ -262,7 +262,7 @@ describe("F11: manualRungAnchorId over a turn that splits", () => {
     expect(assistantRows[0].manualRungAnchorId).toBe("err-terminal-u");
   });
 
-  // F11 (review): every case above also carries a terminal `err-terminal*`
+  // Every case above also carries a terminal `err-terminal*`
   // block, so `lastWithFailure` always wins and the QUEUE_PAUSED_AFTER_ERROR_CODE
   // skip in `manualRungAnchorSegmentId` could be deleted without turning any
   // of them red. This case removes the terminal failure entirely, so
@@ -284,7 +284,7 @@ describe("F11: manualRungAnchorId over a turn that splits", () => {
     // Same reasoning as the positive control above: guarded by the length
     // assertion, and `noUncheckedIndexedAccess` is off in this workspace.
     //
-    // Falsification (the review's own finding): delete the
+    // Falsification: delete the
     // `if (segment.code === QUEUE_PAUSED_AFTER_ERROR_CODE) continue;` guard in
     // `manualRungAnchorSegmentId` and this must go red - with the guard gone,
     // the queue-paused block becomes eligible as `lastCandidate` too, and
@@ -693,7 +693,7 @@ describe("F11: exactly one recovery group reaches the document for a split turn"
       </>,
     );
 
-    // Falsification (the review's own finding): change `withManualRungAnchor`
+    // Falsification: change `withManualRungAnchor`
     // to stamp `manualRungAnchorSegmentId(row.segments)` on EACH assistant row
     // instead of resolving over `assistantTurnSegments(rows)` first. Predicted:
     // TWO rows carry an anchor (the pre-steer row picks its own last

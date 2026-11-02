@@ -653,9 +653,30 @@ const unavailableProviderRateLimitsSchemaV151 = lazySchema(() =>
   }),
 );
 
+// The credential a provider's chats actually authenticate with, when it is not
+// the plan whose usage the read would report. `kind` is Traycer's own closed
+// classification; `source` is the provider's own token for it (Claude Code's
+// `apiKeySource`, `tokenSource` or `apiProvider`), kept a free string so a
+// value the CLI adds later still reaches the client, which names it verbatim.
+export const rateLimitChatCredentialSchema = lazySchema(() =>
+  z.object({
+    kind: z.enum(["api-key", "token", "cloud-provider"]),
+    source: z.string().min(1),
+  }),
+);
+export type RateLimitChatCredential = z.infer<
+  typeof rateLimitChatCredentialSchema
+>;
+
 const unavailableProviderRateLimitsSchema = lazySchema(() =>
   unavailableProviderRateLimitsSchemaV151.extend({
     reason: rateLimitUnavailableReasonSchemaV3,
+    // Present only on a Claude Code `rate_limits_not_available` read whose
+    // handshake reported a credential other than the plan login: the plan's
+    // limits are not what those chats spend. Rides the unreleased heads only;
+    // `degradeProviderRateLimitsToV151` drops it for every older line, which
+    // then sees the bare `rate_limits_not_available` it always did.
+    chatCredential: rateLimitChatCredentialSchema.optional(),
   }),
 );
 
@@ -877,19 +898,38 @@ function mapNotSignedInToNotAvailable(
   return providerRateLimits;
 }
 
+// The frozen lines' object schemas would strip `chatCredential` on parse
+// anyway; dropping it here means no older line depends on that.
+function dropChatCredential(
+  providerRateLimits: ProviderRateLimits | null,
+): ProviderRateLimits | null {
+  if (
+    providerRateLimits === null ||
+    providerRateLimits.available ||
+    providerRateLimits.chatCredential === undefined
+  ) {
+    return providerRateLimits;
+  }
+  const { chatCredential: _dropped, ...rest } = providerRateLimits;
+  return rest;
+}
+
 /**
  * Degrades a live snapshot to one `providerRateLimitsSchemaV151` can parse:
  * every bridge below `host.getRateLimitUsage@6.0`,
  * `providers.refreshProfileStatus@4.0` and
  * `agent.getProviderProfileRateLimits@8.0` runs it before its own frozen-line
  * degrades and parse. Each map covers one thing the live union added since the
- * 1.5.1 tags: the Kimi available arm and the `not_signed_in` reason.
+ * 1.5.1 tags: the Kimi available arm, the `not_signed_in` reason and the
+ * unavailable arm's `chatCredential`.
  */
 export function degradeProviderRateLimitsToV151(
   providerRateLimits: ProviderRateLimits | null,
 ): ProviderRateLimits | null {
-  return mapNotSignedInToNotAvailable(
-    mapKimiAvailableToUnavailable(providerRateLimits),
+  return dropChatCredential(
+    mapNotSignedInToNotAvailable(
+      mapKimiAvailableToUnavailable(providerRateLimits),
+    ),
   );
 }
 

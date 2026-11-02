@@ -6,6 +6,7 @@ import type {
   StatusChangeHandler,
   StreamCloseReason,
   StreamConnectionStatus,
+  StreamContinuity,
   StreamFrameEnvelope,
 } from "../stream-session";
 import type { QosClassValue } from "@traycer/protocol/host-transport/mux";
@@ -120,6 +121,12 @@ export class LogicalStream implements IStreamSession, OutboundDebtStream {
   private status: StreamConnectionStatus = "connecting";
   private statusReason: StreamCloseReason | null = null;
   private disposed = false;
+  /**
+   * An `open` stream the session has marked `"held"`. Only those are owed
+   * `"continued"`: a stream still waiting on its first frame will get the
+   * snapshot that frame carries, so its `open` is a real cycle.
+   */
+  private held = false;
 
   constructor(init: LogicalStreamInit) {
     this.currentStreamId = init.streamId;
@@ -146,7 +153,7 @@ export class LogicalStream implements IStreamSession, OutboundDebtStream {
     envelope: StreamFrameEnvelope,
     binaryPayload: Uint8Array | null,
   ): void {
-    if (this.disposed || this.status !== "open") {
+    if (this.disposed || (this.status !== "open" && !this.held)) {
       return;
     }
     this.port.sendStreamFrame(this.streamId, envelope, binaryPayload);
@@ -164,9 +171,9 @@ export class LogicalStream implements IStreamSession, OutboundDebtStream {
     // terminal transition. Replay it once so they can fail over instead of
     // remaining permanently pending.
     if (this.status === "closed") {
-      // `null`: a retry cause belongs to a `reconnecting` transition, and
-      // this replays only a close.
-      handler(this.status, this.statusReason, null);
+      // `null`s: a retry cause and a continuity belong to the transitions
+      // that carry them, and this replays only a close.
+      handler(this.status, this.statusReason, null, null);
     }
   }
 
@@ -189,7 +196,7 @@ export class LogicalStream implements IStreamSession, OutboundDebtStream {
     }
     this.disposed = true;
     this.port.closeStream(this.streamId, "closed-by-caller");
-    this.transition("closed", { kind: "caller" }, null);
+    this.transition("closed", { kind: "caller" }, null, null);
   }
 
   // ---- OutboundDebtStream ------------------------------------------------ //
@@ -271,7 +278,11 @@ export class LogicalStream implements IStreamSession, OutboundDebtStream {
     if (handler === null) {
       return false;
     }
-    this.transition("open", null, null);
+    // A straggler the host sent before it left says nothing about the host
+    // being back, so a held stream stays held.
+    if (!this.held) {
+      this.transition("open", null, null, null);
+    }
     // The status handler runs inside that transition and may close the stream.
     if (this.isDisposed()) {
       return false;
@@ -298,11 +309,35 @@ export class LogicalStream implements IStreamSession, OutboundDebtStream {
     }
     if (status !== "open") {
       // The negotiated version belongs to the connection that negotiated it. A
-      // resume re-runs `openSubscription`, which re-establishes it; until then
-      // this stream has no agreed version, exactly as before its first open.
+      // re-attach re-runs `openSubscription`, which re-establishes it; until
+      // then this stream has no agreed version, exactly as before its first
+      // open.
       this.negotiated = false;
     }
-    this.transition(status, reason, retryCause);
+    this.held = false;
+    this.transition(status, reason, retryCause, null);
+  }
+
+  /**
+   * The session lost its host but the host holds this subscription (see
+   * {@link StreamContinuity}). The negotiated version survives: nothing about
+   * the connection that agreed it has been discarded.
+   */
+  notifyHeld(): void {
+    if (this.disposed || this.held) {
+      return;
+    }
+    this.held = this.status === "open";
+    this.transition("reconnecting", null, null, "held");
+  }
+
+  /** The session resumed. A stream never held has nothing to go back to. */
+  notifyContinued(): void {
+    if (this.disposed || !this.held) {
+      return;
+    }
+    this.held = false;
+    this.transition("open", null, null, "continued");
   }
 
   /** Terminal close driven by a host/stream fatal error. */
@@ -311,13 +346,14 @@ export class LogicalStream implements IStreamSession, OutboundDebtStream {
       return;
     }
     this.disposed = true;
-    this.transition("closed", { kind: "fatalError", details }, null);
+    this.transition("closed", { kind: "fatalError", details }, null, null);
   }
 
   private transition(
     next: StreamConnectionStatus,
     reason: StreamCloseReason | null,
     retryCause: FatalErrorDetails | null,
+    continuity: StreamContinuity,
   ): void {
     if (this.status === next && next !== "reconnecting") {
       return;
@@ -326,7 +362,7 @@ export class LogicalStream implements IStreamSession, OutboundDebtStream {
     this.statusReason = reason;
     const handler = this.statusHandler;
     if (handler !== null) {
-      handler(next, reason, retryCause);
+      handler(next, reason, retryCause, continuity);
     }
   }
 }

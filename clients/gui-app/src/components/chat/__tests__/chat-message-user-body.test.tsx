@@ -13,11 +13,26 @@ import { useState, type ReactNode } from "react";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import { ChatExpansionTestProviders } from "@/components/chat/__tests__/chat-expansion-test-providers";
 import { deriveA2AReceivedCollapsibleKey } from "@/components/chat/chat-collapsible-key";
+import type { AgentMessagePeer } from "@traycer/protocol/host/agent/message-peer";
+import { ChatContainerContext } from "@/components/chat/chat-container-context";
+import { ChatTranscriptProvider } from "@/components/chat/chat-transcript-context";
+import {
+  EMPTY_DIRECTORY_STATE,
+  ONE_TEAM_MAIN_BOT_DIRECTORY,
+  TEAM_MAIN_BOT_ID,
+  TWO_MAIN_BOTS_DIRECTORY,
+} from "@/lib/home-bots/__tests__/standalone-bots-fixtures";
+import type { StandaloneBotsDirectory } from "@/lib/home-bots/standalone-bot-name";
+import { useStandaloneBotsStore } from "@/stores/bots/standalone-bots-store";
 import { UserMessageBody } from "@/components/chat/chat-message-user-body";
 import { CHAT_TIMELINE_SCROLLER_MOVED_EVENT } from "@/components/chat/chat-timeline-follow-latch";
 import type { SetupWorkspaceState } from "@/components/chat/segments/setup-card-segment";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import type { TabNavigationIntent } from "@/lib/tab-navigation/intents";
+import { useBotTabLandingStore } from "@/stores/bots/bot-tab-landing-store";
+import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import {
   buildComposerClipboardHtml,
   composerClipboardPlainText,
@@ -55,7 +70,7 @@ import { formatFullTimestamp, formatMessageTime } from "@/lib/relative-time";
 import { useWorkspaceFoldersStore } from "@/stores/workspace/workspace-folders-store";
 import { installFreshIndexedDb } from "@/lib/composer/__tests__/fake-idb";
 
-// T4: the inline edit composer now runs `reingestPendingImages` on mount and
+// The inline edit composer now runs `reingestPendingImages` on mount and
 // a real file paste through `putImage` - both write to the window's image
 // partition (IndexedDB), which this environment has none of by default.
 // Every test in this file that touches the edit composer needs one, the same
@@ -154,7 +169,19 @@ function render(ui: ReactNode) {
 const navigationMocks = vi.hoisted(() => ({
   navigate: vi.fn(),
   activateTabIntent:
-    vi.fn<(navigate: unknown, intent: unknown, extra: unknown) => void>(),
+    vi.fn<
+      (
+        navigate: unknown,
+        intent: TabNavigationIntent,
+        extra: unknown,
+      ) => boolean
+    >(),
+  navigateToTabIntent:
+    vi.fn<(navigate: unknown, intent: unknown, options: unknown) => void>(),
+}));
+
+vi.mock("@/hooks/host/use-connectable-host-ids", () => ({
+  useConnectableHostIds: () => ({ hostIds: [], resolved: false }),
 }));
 
 vi.mock("@tanstack/react-router", async (importOriginal) => {
@@ -165,7 +192,11 @@ vi.mock("@tanstack/react-router", async (importOriginal) => {
 
 vi.mock("@/lib/tab-navigation", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/tab-navigation")>();
-  return { ...actual, activateTabIntent: navigationMocks.activateTabIntent };
+  return {
+    ...actual,
+    activateTabIntent: navigationMocks.activateTabIntent,
+    navigateToTabIntent: navigationMocks.navigateToTabIntent,
+  };
 });
 
 function expectCrossTaskActivation(node: {
@@ -188,8 +219,23 @@ function expectCrossTaskActivation(node: {
   expect(tileNavigationMocks.openTile).not.toHaveBeenCalled();
 }
 
+// The one host read the real `useA2AMessagePeer` makes for a cross-task sender.
+const peerRpc = vi.hoisted(() => ({
+  peer: null as AgentMessagePeer | null,
+}));
+
 vi.mock("@/hooks/host/use-host-query", () => ({
-  useHostQuery: () => ({ data: undefined }),
+  useHostQuery: (input: {
+    readonly method: string;
+    readonly options: { readonly enabled: boolean };
+  }) => ({
+    data:
+      input.method === "agent.resolveMessagePeer" &&
+      input.options.enabled &&
+      peerRpc.peer !== null
+        ? { peer: peerRpc.peer }
+        : undefined,
+  }),
 }));
 
 vi.mock("@/lib/epic-selectors", () => ({
@@ -216,7 +262,7 @@ vi.mock("@/lib/epic-selectors", () => ({
     }
     return null;
   },
-  useOpenEpicId: () => "epic-1",
+  useMaybeOpenEpicId: () => "epic-1",
 }));
 
 const tileNavigationMocks = vi.hoisted(() => ({
@@ -236,6 +282,7 @@ const peerMocks = vi.hoisted(() => ({
       hostId: string;
       title: string | null;
       surface: "gui" | "tui";
+      bot: { botId: string; title: string } | null;
     } | null
   >,
 }));
@@ -959,8 +1006,11 @@ describe("<UserMessageBody /> agent messages", () => {
         drainFrames();
         expect(scrollTo).toHaveBeenCalledWith({ top: 436, behavior: "auto" });
       });
-      // The fixture lays out no scroll range, so the target clamps to it.
-      expect(moves).toEqual([{ from: 300, fromEnd: 0, to: 436, intended: 0 }]);
+      // The fixture lays out no scroll range, so the target clamps to it. The
+      // reveal writes the offset, so it announces `cause: "offset"`.
+      expect(moves).toEqual([
+        { from: 300, fromEnd: 0, to: 436, intended: 0, cause: "offset" },
+      ]);
       expect(scrollTo).not.toHaveBeenCalledWith(
         expect.objectContaining({ top: 620 - 500 + 16 }),
       );
@@ -1029,7 +1079,7 @@ describe("<UserMessageBody /> agent messages", () => {
     expect(Array.from((await getImageBytes(hash)) ?? [])).toEqual([1, 2, 3]);
   });
 
-  // T4 format fallback: a declared MIME type outside the host's storable set
+  // Format fallback: a declared MIME type outside the host's storable set
   // (PNG/JPEG/GIF/WebP/SVG) is never hashed - it takes the inline path for that
   // file alone, and still arrives as `b64content` with a null `hash`.
   //
@@ -1076,7 +1126,7 @@ describe("<UserMessageBody /> agent messages", () => {
     ]);
   });
 
-  // T4: a storable PNG paste reads `file.arrayBuffer()` and `putImage`s the
+  // A storable PNG paste reads `file.arrayBuffer()` and `putImage`s the
   // bytes; `FileReader` is not involved on any paste path any more. The
   // "blocked until it finishes" contract still holds; only the mechanism under
   // it changed, so the delay is injected at `arrayBuffer()`.
@@ -1106,7 +1156,7 @@ describe("<UserMessageBody /> agent messages", () => {
     // appearing and the send button re-enabling are two different state
     // updates - and asserting the second synchronously after awaiting the
     // first raced the gap. That gap is real and correct: the button must stay
-    // disabled until ingest has genuinely settled, which since T4 includes the
+    // disabled until ingest has genuinely settled, which includes the
     // `putImage` write, not just the byte read.
     const readySend = await screen.findByRole("button", { name: "Send edit" });
     await waitFor(() => {
@@ -1350,8 +1400,27 @@ describe("<UserMessageBody /> agent messages", () => {
   describe("cross-task senders", () => {
     const CROSS_ID = "agent-sender-cross";
 
+    beforeEach(() => {
+      // The controller acknowledges a Tracy intent and commits its channel.
+      navigationMocks.activateTabIntent.mockImplementation((_nav, intent) => {
+        if (intent.kind === "tracy") {
+          useTracySurfaceStore.getState().selectChannel(intent.botId);
+        }
+        return true;
+      });
+      useSelectionAuthorityStore.setState({ effectiveHostId: TAB_HOST_ID });
+    });
+
     afterEach(() => {
-      navigationMocks.activateTabIntent.mockClear();
+      navigationMocks.activateTabIntent.mockReset();
+      navigationMocks.navigateToTabIntent.mockClear();
+      useTracySurfaceStore.setState({
+        open: false,
+        hostId: null,
+        botId: null,
+        visitedBotIds: [],
+      });
+      useBotTabLandingStore.setState({ byBotId: {} });
       peerMocks.byId = {};
       peerMocks.origins = [];
     });
@@ -1384,6 +1453,7 @@ describe("<UserMessageBody /> agent messages", () => {
         hostId: "host-2",
         title: "Cross Task Sender",
         surface: "gui",
+        bot: null,
       };
       const message = crossMessage(null);
       render(<UserMessageBody actions={null} message={message} />);
@@ -1408,6 +1478,48 @@ describe("<UserMessageBody /> agent messages", () => {
       ).toEqual({ kind: "receipt", messageId: message.id });
     });
 
+    describe("a bot sender resolved by the host", () => {
+      afterEach(() => {
+        peerRpc.peer = null;
+        useStandaloneBotsStore.setState(EMPTY_DIRECTORY_STATE);
+      });
+
+      function renderTeamBotSender(directory: StandaloneBotsDirectory): void {
+        peerRpc.peer = {
+          epicId: TEAM_MAIN_BOT_ID,
+          agentId: CROSS_ID,
+          hostId: "host-2",
+          title: "Tracy",
+          surface: "gui",
+          bot: { botId: TEAM_MAIN_BOT_ID, title: "Tracy" },
+        };
+        useStandaloneBotsStore.setState({ directory, settled: true });
+        render(
+          <ChatContainerContext value="epic-1">
+            <ChatTranscriptProvider
+              value={{ chatId: "chat-1", hostId: "host-1" }}
+            >
+              <UserMessageBody actions={null} message={crossMessage(null)} />
+            </ChatTranscriptProvider>
+          </ChatContainerContext>,
+        );
+      }
+
+      it("places a team's bot by its environment when two main bots are visible", () => {
+        renderTeamBotSender(TWO_MAIN_BOTS_DIRECTORY);
+
+        expect(
+          screen.getByRole("button", { name: "Tracy · traycerai" }),
+        ).toBeTruthy();
+      });
+
+      it("keeps a team's bot to its name when it is the only main bot", () => {
+        renderTeamBotSender(ONE_TEAM_MAIN_BOT_DIRECTORY);
+
+        expect(screen.getByRole("button", { name: "Tracy" })).toBeTruthy();
+      });
+    });
+
     it("opens a cross-task terminal sender without parking a jump", () => {
       peerMocks.byId[CROSS_ID] = {
         epicId: "epic-2",
@@ -1415,6 +1527,7 @@ describe("<UserMessageBody /> agent messages", () => {
         hostId: "host-2",
         title: "Cross Terminal",
         surface: "tui",
+        bot: null,
       };
       render(<UserMessageBody actions={null} message={crossMessage(null)} />);
 
@@ -1428,6 +1541,41 @@ describe("<UserMessageBody /> agent messages", () => {
       expect(useChatTranscriptJumpStore.getState().requestsByChatId).toEqual(
         {},
       );
+    });
+
+    it("opens a bot sender's channel on the window host, landing on the session, and parks no transcript jump", () => {
+      peerMocks.byId[CROSS_ID] = {
+        epicId: "bot-1",
+        agentId: CROSS_ID,
+        hostId: "host-2",
+        title: "Release bot",
+        surface: "gui",
+        bot: { botId: "bot-1", title: "Release bot" },
+      };
+      render(<UserMessageBody actions={null} message={crossMessage(null)} />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Release bot" }));
+
+      expect(useTracySurfaceStore.getState()).toMatchObject({
+        open: true,
+        hostId: TAB_HOST_ID,
+        botId: "bot-1",
+      });
+      expect(navigationMocks.activateTabIntent).toHaveBeenCalledTimes(1);
+      expect(navigationMocks.activateTabIntent).toHaveBeenCalledWith(
+        navigationMocks.navigate,
+        { kind: "tracy", botId: "bot-1" },
+        expect.anything(),
+      );
+      expect(navigationMocks.navigateToTabIntent).not.toHaveBeenCalled();
+      expect(useBotTabLandingStore.getState().byBotId["bot-1"]).toEqual({
+        kind: "sender",
+        chatId: CROSS_ID,
+      });
+      expect(useChatTranscriptJumpStore.getState().requestsByChatId).toEqual(
+        {},
+      );
+      expect(tileNavigationMocks.openTile).not.toHaveBeenCalled();
     });
 
     it("renders the stamped title as plain text when the peer cannot be resolved", () => {
@@ -1756,7 +1904,7 @@ function plainUserMessage(content: string): ChatMessageModel {
 }
 
 function imageNode(id: string, fileName: string): JsonContent {
-  // A REAL base64 payload, not the bare id: T4's `reingestPendingImages` now
+  // A REAL base64 payload, not the bare id: `reingestPendingImages` now
   // runs on every editor mount and decodes any surviving `b64content` node
   // through `decodeValidatedPastedImage`, which rejects a non-base64 string
   // (the bare id used to contain a `-`, which is not in the standard
@@ -2379,7 +2527,7 @@ describe("<ChatMessage /> sender overline timestamp", () => {
     },
   );
 
-  // Layout > Chat > Timestamps (audit R1, R3): the stamp and the " · " that
+  // Layout > Chat > Timestamps: the stamp and the " · " that
   // joins it to the sender label are one region, and hiding it must not
   // strand the separator any more than an unrepresentable instant does above.
   it("renders the stamp and its ' · ' separator when Timestamps is shown, neither when hidden", () => {

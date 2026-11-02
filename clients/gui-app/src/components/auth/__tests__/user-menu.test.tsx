@@ -1,3 +1,4 @@
+import { SignOutConfirmDialog } from "@/components/auth/sign-out-confirm-dialog";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   act,
@@ -382,13 +383,16 @@ describe("<UserMenu />", () => {
     );
     const result = mountMenu(
       host,
-      <UserMenu
-        userName="Ada Lovelace"
-        email="ada@example.com"
-        avatarUrl={null}
-        showAppSettings={false}
-        trigger={null}
-      />,
+      <>
+        <UserMenu
+          userName="Ada Lovelace"
+          email="ada@example.com"
+          avatarUrl={null}
+          showAppSettings={false}
+          trigger={null}
+        />
+        <SignOutConfirmDialog />
+      </>,
     );
 
     const trigger = await screen.findByTestId("user-menu-trigger");
@@ -417,13 +421,16 @@ describe("<UserMenu />", () => {
     );
     const result = mountMenu(
       host,
-      <UserMenu
-        userName="Ada Lovelace"
-        email="ada@example.com"
-        avatarUrl={null}
-        showAppSettings={false}
-        trigger={null}
-      />,
+      <>
+        <UserMenu
+          userName="Ada Lovelace"
+          email="ada@example.com"
+          avatarUrl={null}
+          showAppSettings={false}
+          trigger={null}
+        />
+        <SignOutConfirmDialog />
+      </>,
     );
 
     fireEvent.click(await screen.findByTestId("user-menu-trigger"));

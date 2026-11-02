@@ -1,8 +1,7 @@
 /**
- * Independent acceptance suite — seam S4: the managed-command output window.
+ * Independent acceptance suite — the managed-command output window.
  *
- * Expected behavior comes from the records (`traycer-host/src/domain/
- * managed-command/UI.md` §§3-4, 9, 9a and root `CONTEXT.md`), never from the
+ * Expected behavior comes from the records, never from the
  * component code. The tile, its session hook, its zustand store and the epic
  * canvas store are all real; the one seam faked is the WebSocket stream
  * client, replaced through the production factory override. Every frame fed
@@ -443,7 +442,7 @@ describe("S4 · output window", () => {
     expect(rows[2].textContent).toContain("warning: low disk");
     expect(rows[3].textContent).toContain("half-written record");
 
-    // "Tinted stderr" and "visually distinct" lifecycle rows (UI.md §4): the
+    // "Tinted stderr" and "visually distinct" lifecycle rows: the
     // three channels must not share one presentation.
     const textSpanOf = (row: HTMLElement): string => {
       const spans = row.querySelectorAll("span");
@@ -452,7 +451,7 @@ describe("S4 · output window", () => {
     expect(textSpanOf(rows[2])).not.toBe(textSpanOf(rows[1]));
     expect(textSpanOf(rows[0])).not.toBe(textSpanOf(rows[1]));
 
-    // Timestamps shown by default on every line (UI.md §4). A line the host
+    // Timestamps shown by default on every line. A line the host
     // could not date still gets a visible placeholder, not a missing cell.
     for (const [index, row] of rows.entries()) {
       const time = within(row).getByTestId(
@@ -680,13 +679,18 @@ describe("S4 · output window", () => {
     renderTile();
 
     act(() => {
-      connectedWire().callbacks.onConnectionStatus("closed", {
-        kind: "fatalError",
-        details: fatalErrorDetails(
-          "MANAGED_COMMAND_NOT_FOUND",
-          "MANAGED_COMMAND_NOT_FOUND: no such managed command in this epic",
-        ),
-      });
+      connectedWire().callbacks.onConnectionStatus(
+        "closed",
+        {
+          kind: "fatalError",
+          details: fatalErrorDetails(
+            "MANAGED_COMMAND_NOT_FOUND",
+            "MANAGED_COMMAND_NOT_FOUND: no such managed command in this epic",
+          ),
+        },
+        null,
+        null,
+      );
     });
 
     const panel = screen.getByTestId("managed-command-output-availability");
@@ -708,13 +712,18 @@ describe("S4 · output window", () => {
     });
 
     act(() => {
-      connectedWire().callbacks.onConnectionStatus("closed", {
-        kind: "fatalError",
-        details: fatalErrorDetails(
-          "UNAUTHORIZED",
-          "UNAUTHORIZED: role revoked",
-        ),
-      });
+      connectedWire().callbacks.onConnectionStatus(
+        "closed",
+        {
+          kind: "fatalError",
+          details: fatalErrorDetails(
+            "UNAUTHORIZED",
+            "UNAUTHORIZED: role revoked",
+          ),
+        },
+        null,
+        null,
+      );
     });
 
     expect(
@@ -738,13 +747,18 @@ describe("S4 · output window", () => {
     const callsBeforeRetry = outputWireFactoryCalls;
 
     act(() => {
-      firstWire.callbacks.onConnectionStatus("closed", {
-        kind: "fatalError",
-        details: fatalErrorDetails(
-          "MANAGED_COMMAND_OUTPUT_FAILED",
-          "MANAGED_COMMAND_OUTPUT_FAILED: log reader crashed",
-        ),
-      });
+      firstWire.callbacks.onConnectionStatus(
+        "closed",
+        {
+          kind: "fatalError",
+          details: fatalErrorDetails(
+            "MANAGED_COMMAND_OUTPUT_FAILED",
+            "MANAGED_COMMAND_OUTPUT_FAILED: log reader crashed",
+          ),
+        },
+        null,
+        null,
+      );
     });
 
     const banner = screen.getByTestId("managed-command-output-availability");
@@ -785,7 +799,7 @@ describe("S4 · output window", () => {
 
     // The socket declaring itself open is not the snapshot landing.
     act(() => {
-      connectedWire().callbacks.onConnectionStatus("open", null);
+      connectedWire().callbacks.onConnectionStatus("open", null, null, null);
     });
     expect(screen.getByText("Connecting…")).toBeTruthy();
 
@@ -824,13 +838,18 @@ describe("S4 · output window", () => {
     ).toBeTruthy();
 
     act(() => {
-      connectedWire().callbacks.onConnectionStatus("closed", {
-        kind: "fatalError",
-        details: fatalErrorDetails(
-          "MANAGED_COMMAND_OUTPUT_FAILED",
-          "MANAGED_COMMAND_OUTPUT_FAILED: log reader crashed",
-        ),
-      });
+      connectedWire().callbacks.onConnectionStatus(
+        "closed",
+        {
+          kind: "fatalError",
+          details: fatalErrorDetails(
+            "MANAGED_COMMAND_OUTPUT_FAILED",
+            "MANAGED_COMMAND_OUTPUT_FAILED: log reader crashed",
+          ),
+        },
+        null,
+        null,
+      );
     });
 
     expect(

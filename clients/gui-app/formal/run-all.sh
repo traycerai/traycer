@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 # Runs one config until every invariant it lists either holds or has a
 # counterexample: formal/run-all.sh <Config> [TLC args...]
-# Each pass checks all remaining invariants breadth-first, so each violation
-# is a shortest trace; the violated invariant is then dropped and the rest
-# re-run. Traces land in results/<Config>.<Invariant>.out, the final run's
+# Each pass checks all remaining invariants breadth-first; the violated
+# invariant is then dropped and the rest re-run. Traces land in results/<Config>.<Invariant>.out, the final run's
 # log in results/<Config>.ok.out. Read a trace with formal/trace.py.
 # TLC_TIMEOUT (seconds, default 600) caps each pass; a pass that reaches it
 # without a violation stops the run and records the bound it reached, so

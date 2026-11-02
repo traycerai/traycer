@@ -12,7 +12,7 @@ import type { SizedValues } from "@/lib/layout/layout-values";
  *
  * Named arguments, like its sibling below: two interchangeable booleans is a
  * signature a caller can swap and still compile, which is the class of mistake
- * this module exists to prevent (R2-09).
+ * this module exists to prevent.
  */
 export function dockMemberMaterialised(input: {
   readonly shown: boolean;

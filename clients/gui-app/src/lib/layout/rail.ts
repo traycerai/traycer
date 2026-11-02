@@ -267,7 +267,7 @@ export const DEFAULT_RAIL_DIVIDER_SEQ = 0;
 /**
  * The panels the rail draws, in its own order, with the hidden ones dropped.
  *
- * THE visibility filter for the sidebar (R5R-05): the rail's icon column, the
+ * THE visibility filter for the sidebar: the rail's icon column, the
  * body's choice of panel and the PR retention all ask it, so a new rule about
  * which panels are drawn is applied in one place rather than in three copies
  * of "walk the rail, drop the dividers, drop the hidden".
@@ -295,7 +295,7 @@ export function visibleRailPanelIds(
  * itself stays in the model: hiding a panel is not unstacking it, and showing
  * it again puts it back.
  *
- * Dividers follow the same rule (T3). At rest a divider is space BETWEEN two
+ * Dividers follow the same rule. At rest a divider is space BETWEEN two
  * drawn icons (L-140), so `"spacing"` drops one at either end and one right
  * after another: with the panels around it hidden it would only pad an edge or
  * widen a gap nothing marks. While customizing every divider is a handle the

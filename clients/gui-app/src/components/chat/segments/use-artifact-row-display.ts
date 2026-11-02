@@ -4,7 +4,12 @@ import type { CheckpointFileOperation } from "@traycer/protocol/persistence/epic
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import { EPIC_NODE_LABELS } from "@/lib/artifacts/node-display";
-import { useArtifactById, useOpenEpicId } from "@/lib/epic-selectors";
+import {
+  useArtifactById,
+  useEpicFileArtifactViewer,
+  useOpenEpicId,
+} from "@/lib/epic-selectors";
+import type { ArtifactFileViewer } from "@/lib/files/artifact-file-viewer";
 import { tileIntent } from "@/lib/canvas/tile-open/intent";
 
 function nonEmpty(value: string | null | undefined): string | null {
@@ -15,6 +20,8 @@ function nonEmpty(value: string | null | undefined): string | null {
 
 export interface ArtifactRowDisplay {
   readonly displayKind: EpicArtifactKind;
+  /** The viewer a file artifact opens in, for its glyph; null otherwise. */
+  readonly fileViewer: ArtifactFileViewer | null;
   readonly title: string;
   readonly isDeleted: boolean;
   readonly canOpen: boolean;
@@ -34,6 +41,7 @@ export function useArtifactRowDisplay(input: {
   readonly operation: CheckpointFileOperation;
 }): ArtifactRowDisplay {
   const live = useArtifactById(input.artifactId);
+  const fileViewer = useEpicFileArtifactViewer(input.artifactId);
   const epicId = useOpenEpicId();
   const activeHostId = useTabHostId();
   const { openTile } = useEpicTileNavigation();
@@ -63,7 +71,7 @@ export function useArtifactRowDisplay(input: {
     );
   };
 
-  return { displayKind, title, isDeleted, canOpen, openArtifact };
+  return { displayKind, fileViewer, title, isDeleted, canOpen, openArtifact };
 }
 
 /**
@@ -77,6 +85,7 @@ export function sessionlessArtifactRowDisplay(input: {
 }): ArtifactRowDisplay {
   return {
     ...rowDisplayFields(null, input),
+    fileViewer: null,
     openArtifact: () => undefined,
   };
 }
@@ -88,7 +97,7 @@ function rowDisplayFields(
     readonly fallbackTitle: string | null;
     readonly operation: CheckpointFileOperation;
   },
-): Omit<ArtifactRowDisplay, "openArtifact"> {
+): Omit<ArtifactRowDisplay, "fileViewer" | "openArtifact"> {
   const displayKind: EpicArtifactKind =
     live?.kind ?? input.artifactKind ?? "spec";
   const title =

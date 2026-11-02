@@ -9,6 +9,13 @@ export interface DetailsSubject {
    */
   readonly kind: string;
   readonly key: string;
+  /**
+   * The role the surface that opened the drawer knows its subject holds,
+   * where a read cannot answer it: a member's role is committed inside the
+   * item's value, and `environment.history` ships no values. Absent for every
+   * other kind.
+   */
+  readonly roleLabel?: string | null;
 }
 
 export type DetailsReaderScope = "full" | "own" | "status_only";
@@ -72,6 +79,16 @@ export interface DetailsHistoryEntry {
   readonly outcome: string;
   readonly hosts: readonly DetailsHostStatus[];
 }
+
+/**
+ * The `outcome` authn writes for a cleanup confirmed on a host that no longer
+ * exists, and the one entry whose `actor` is a HOST rather than a person.
+ * `outcome` is an open string, so nothing here type-checks against the
+ * producer: it is `authn-v3/src/service/environments/history.ts`, which
+ * derives the destroyed host's name once and uses it for both this outcome
+ * and that actor. A rename there lands on this constant, and nowhere else.
+ */
+export const HOST_DESTROYED_OUTCOME = "host_destroyed";
 
 /** Value-free history: server readerScope governs both display and export. */
 export interface DetailsHistory {

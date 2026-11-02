@@ -6,6 +6,7 @@
  * everything importing it. Pure string builders.
  */
 import { formatAbsoluteDateTime } from "@/lib/relative-time";
+import { collaboratorReference } from "@/lib/chats/collaborator-reference";
 
 /**
  * What the copy on screen is doing about a NEWER publication, once the record
@@ -77,6 +78,11 @@ export function publishedChatLockReason(input: {
    * name a machine and promise a resume this copy is not waiting on.
    */
   readonly environmentOwned: boolean;
+  /**
+   * The collaborator who owns the chat, by name, or `null` until the task's
+   * collaborator list names them. Only the collaborator arm reads it.
+   */
+  readonly ownerName: string | null;
   readonly ownerLabel: string;
   readonly unreadableCount: number;
   readonly fidelityNotice: string | null;
@@ -152,6 +158,8 @@ export function replicaChatLockReason(input: {
   readonly ownedByViewer: boolean;
   /** Same fact, same reason, as `publishedChatLockReason`'s. */
   readonly environmentOwned: boolean;
+  /** Same fact, same reason, as `publishedChatLockReason`'s. */
+  readonly ownerName: string | null;
   readonly ownerLabel: string;
   readonly unreadableCount: number;
 }): string {
@@ -195,6 +203,7 @@ function publishedCopySentence(input: {
   readonly ownerIsThisHost: boolean;
   readonly ownedByViewer: boolean;
   readonly environmentOwned: boolean;
+  readonly ownerName: string | null;
   readonly ownerLabel: string;
 }): string {
   // A team environment's chat, ahead of the collaborator arm: it is no
@@ -209,7 +218,7 @@ function publishedCopySentence(input: {
   // cannot observe. Aligned with the dead-tile banner's foreign-owner
   // sentence, which sits directly above this footer.
   if (!input.ownedByViewer) {
-    return `This agent belongs to another collaborator — showing the last published copy. It isn't available live from here.`;
+    return `This agent belongs to ${collaboratorReference(input.ownerName)} — showing the last published copy.`;
   }
   if (!input.ownerIsReachable) {
     return `This agent lives on ${input.ownerLabel}, which is offline — showing the last published copy. Sending resumes when that host is back.`;
@@ -236,6 +245,7 @@ function replicaCopySentence(input: {
   readonly ownerIsThisHost: boolean;
   readonly ownedByViewer: boolean;
   readonly environmentOwned: boolean;
+  readonly ownerName: string | null;
   readonly ownerLabel: string;
 }): string {
   // Same precedence, same reason, as `publishedCopySentence`'s environment
@@ -244,7 +254,7 @@ function replicaCopySentence(input: {
     return `This chat's sandbox isn't available — showing this device's synced copy.`;
   }
   if (!input.ownedByViewer) {
-    return `This agent belongs to another collaborator — showing this device's synced copy. It isn't available live from here.`;
+    return `This agent belongs to ${collaboratorReference(input.ownerName)} — showing this device's synced copy.`;
   }
   if (!input.ownerIsReachable) {
     return `This agent lives on ${input.ownerLabel}, which is offline — showing this device's synced copy. Sending resumes when that host is back.`;

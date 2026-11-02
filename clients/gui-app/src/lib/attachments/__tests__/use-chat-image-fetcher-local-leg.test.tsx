@@ -1,11 +1,11 @@
 /**
- * Covers T3's reader acceptance for the chat composer strip: a hash present
+ * Covers the reader acceptance for the chat composer strip: a hash present
  * ONLY in this window's local image store still renders, through
  * `useChatImageFetcher`'s EXISTING local-store leg (`use-chat-image-fetcher.ts`,
  * the `getImageBytes` fallback after the chat-plane and epic-doc legs miss).
- * T3 deliberately did not add a second, draft-specific leg to this fetcher -
- * see the ticket's "known deviations" - so this is a test of behaviour that
- * predates this ticket, written because nothing else exercised it.
+ * There is no second, draft-specific leg in this fetcher -
+ * so this is a test of behaviour that
+ * predates this change, written because nothing else exercised it.
  *
  * A separate, minimal harness from `use-chat-image-fetcher.test.tsx`'s (which
  * this file does not import from) so it is not entangled with that suite's

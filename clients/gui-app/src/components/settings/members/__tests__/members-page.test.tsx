@@ -306,7 +306,9 @@ describe("MembersPage members read", () => {
     });
 
     const notice = await screen.findByTestId("members-legacy-notice");
-    expect(notice.textContent).toContain("Set a role beside each name.");
+    expect(notice.textContent).toContain(
+      "With this update every existing member can edit Acme's settings. Priya can now edit. Set a role beside each name to change that.",
+    );
     view.rerender(<MembersPage environmentId="env-a" />);
     expect(screen.getByTestId("members-legacy-notice")).toBeTruthy();
     expect(harness.paramsOf("environment.members.noticeSeen")).toHaveLength(0);
@@ -558,11 +560,14 @@ describe("MembersPage offboarding previews", () => {
       {
         "environment.list": () => ({ environments: [TEAM] }),
         "environment.members": () => membersPage([ADA, GRACE]),
+        // A demotion shows the preview rows only when it unlinks a plan, so a
+        // case about what those rows say names a linked plan.
         "environment.members.removePreview": () => ({
           ...PREVIEW,
           activeTurns: null,
           terminals: null,
           localHostId: null,
+          linkedPlan: "Claude Max",
         }),
       },
     );
@@ -581,7 +586,7 @@ describe("MembersPage offboarding previews", () => {
     expect(table.textContent).not.toMatch(/\d+ turns? on Claude Code/);
   });
 
-  it("keeps a failed demotion preview as a failure, with Change role off", async () => {
+  it("reports a failed demotion preview and still offers the change", async () => {
     const harness = mountTeamPage(
       { kind: "host" },
       {
@@ -602,20 +607,27 @@ describe("MembersPage offboarding previews", () => {
     await userEvent.click(
       await screen.findByRole("option", { name: "Viewer" }),
     );
+    // A refused read is an answer, so the dialog opens on it rather than
+    // staying shut — and it opens with the failure line already in it, which
+    // is why nothing here waits for the check to settle.
     const dialog = await screen.findByTestId("members-demotion-preview");
-    await vi.waitFor(() => {
-      expect(
-        within(dialog).queryByTestId("members-demotion-preview-busy"),
-      ).toBeNull();
-    });
     expect(dialog.textContent).not.toContain("0 turns");
-    expect(
-      within(dialog).getByTestId<HTMLButtonElement>("members-demotion-confirm")
-        .disabled,
-    ).toBe(true);
     expect(
       within(dialog).getByTestId("members-demotion-preview-failed").textContent,
     ).toContain("Couldn't load what changing Grace's role interrupts");
+    // The check failed, so there are no plan rows to show — but the role is
+    // still the person's to set, and the line about what Grace loses needs
+    // no read.
+    expect(
+      within(dialog).queryByTestId("members-demotion-preview-table"),
+    ).toBeNull();
+    expect(
+      within(dialog).getByTestId("members-demotion-loss").textContent,
+    ).toContain("Grace");
+    expect(
+      within(dialog).getByTestId<HTMLButtonElement>("members-demotion-confirm")
+        .disabled,
+    ).toBe(false);
   });
 });
 
@@ -920,6 +932,7 @@ describe("MembersPage refused writes", () => {
       {
         "environment.list": () => ({ environments: [TEAM] }),
         "environment.members": () => membersPage([ADA, PRIYA]),
+        "environment.members.removePreview": () => PREVIEW,
         "environment.members.setRole": () => ({ outcome: "forbidden" }),
       },
     );
@@ -932,6 +945,11 @@ describe("MembersPage refused writes", () => {
     );
     await userEvent.click(
       await screen.findByRole("option", { name: "Viewer" }),
+    );
+    // A demotion is confirmed before it is written, so the refusal answers
+    // the confirmed write.
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Change to viewer" }),
     );
 
     expect((await screen.findByTestId("members-banner")).textContent).toBe(

@@ -56,8 +56,8 @@ const hostBindingRef = vi.hoisted(
 /**
  * The rows `useHostClientForHostId` resolves against, keyed by host id.
  *
- * The provider reads its owner-identity discriminator off THE SESSION'S client
- * (redesign P4.2), so a rotation is now expressed the way production expresses
+ * The provider reads its owner-identity discriminator off THE SESSION'S client,
+ * so a rotation is now expressed the way production expresses
  * it - the host's directory row changes - rather than by binding a new entry
  * into a slot that no longer exists.
  */
@@ -73,7 +73,7 @@ interface StubSessionHostClient {
   /**
    * The host this client addresses.
    *
-   * Absent from this stub since T11 gave the store a memory book keyed by host
+   * Absent from this stub since the store gained a memory book keyed by host
    * (`store.ts` reads it at construction), which made every test in this file
    * throw `getActiveHostId is not a function` before the store was built. The
    * stub is already one object per host id, so the honest answer is the id it
@@ -286,21 +286,6 @@ const setupWorkerFactory = getEpicRuntimeWorkerFactoryOverride();
 let workerFactoryBeforeTest: (() => RuntimeWorkerLike) | null = null;
 
 /**
- * Install this test's stream factory, one seam over.
- *
- * Every call site below used to read `installStreamFactory(fn)`
- * and passed the SAME `fn` unchanged; only the seam moved, because a factory
- * built on MAIN cannot cross `postMessage` to a runtime living in the worker.
- * Keeping one helper rather than inlining the composition twenty-two times is
- * what makes that a rename at each site instead of twenty-two chances to differ.
- *
- * A FRESH worker per spawn: one helper instance owns one bridge pair and one
- * composition, so a shared instance would hand two sessions the same runtime -
- * and this file re-points sessions across hosts, which acquires a second one.
- * The deleted stream override was called once per session too, so this matches
- * what these tests have always exercised.
- */
-/**
  * What {@link installWorkerWithFatalOnFirstSpawn} hands back.
  *
  * `spawnCount` is the pin's real observable: "Retry rebuilt" and "Retry
@@ -455,6 +440,21 @@ function installWorkerWithTogglableConstruction(
   };
 }
 
+/**
+ * Install this test's stream factory, one seam over.
+ *
+ * Every call site below used to read `installStreamFactory(fn)`
+ * and passed the SAME `fn` unchanged; only the seam moved, because a factory
+ * built on MAIN cannot cross `postMessage` to a runtime living in the worker.
+ * Keeping one helper rather than inlining the composition twenty-two times is
+ * what makes that a rename at each site instead of twenty-two chances to differ.
+ *
+ * A FRESH worker per spawn: one helper instance owns one bridge pair and one
+ * composition, so a shared instance would hand two sessions the same runtime -
+ * and this file re-points sessions across hosts, which acquires a second one.
+ * The deleted stream override was called once per session too, so this matches
+ * what these tests have always exercised.
+ */
 function installStreamFactory(factory: EpicStreamClientFactory): void {
   __setEpicRuntimeWorkerFactoryForTests(() =>
     createInProcessEpicRuntimeWorker({
@@ -530,7 +530,7 @@ function deliverSnapshot(stream: ControlledEpicStream, roomId: string): void {
   // write-throughs only while LIVE (snapshot loaded, host transport open), so
   // a fixture that stops at the snapshot describes a session that writes
   // nothing.
-  stream.callbacks.onConnectionStatus("open", null, false);
+  stream.callbacks.onConnectionStatus("open", null, false, null);
   stream.callbacks.onSnapshot(snapshotMeta(roomId), new Uint8Array([0, 0]));
 }
 
@@ -580,7 +580,7 @@ function HandleProbe(props: {
 
 /**
  * Records the handle at every render commit, in the render body itself
- * rather than an effect. Fixup 2, item 4's pin needs this: an effect only
+ * rather than an effect. The pin needs this: an effect only
  * runs AFTER a commit, and a spy checked once after an `await` would miss a
  * handle that was published for exactly one render and then corrected -
  * which is precisely the shape of the bug it pins.
@@ -1287,7 +1287,7 @@ describe("<TestEpicSessionTab />", () => {
   });
 
   // ── `handleHostClients` stamping ──────────────────────────────────────────
-  // Oracle for the risk review's "`releaseMounted` on unmount;
+  // Oracle for the risk analysis's "`releaseMounted` on unmount;
   // `handleHostClients` stamping; imported-unseen `markSeen`" untested list.
   // The stamp is read by imperative callers OUTSIDE this subtree (the DnD
   // reparent commit); nothing in this suite reads it today.
@@ -1611,7 +1611,7 @@ describe("<TestEpicSessionTab />", () => {
   });
 
   it("keys the session identity on the canonical user id, so two accounts sharing an email do NOT share a session", async () => {
-    // Codex #1243 T-66. The arm above seeds `userId: email`, so it is green
+    // The arm above seeds `userId: email`, so it is green
     // whether the provider reads the id or the address - it cannot tell them
     // apart. This one seeds DIFFERENT canonical ids behind ONE address, which
     // is the real-world shape: keyed on the email the identity comparison saw
@@ -2370,8 +2370,8 @@ describe("<TestEpicSessionTab />", () => {
 
   it("(R-1, PINNED) keys owner identity on the SESSION's host, not the effective one", async () => {
     // THE DISCRIMINATOR for reading `ownerIdentityKey` off
-    // `resolvedSessionHostClient` instead of the app-wide client (redesign
-    // P4.2). Every other R-1 case leaves the session UNPINNED, where the two
+    // `resolvedSessionHostClient` instead of the app-wide client.
+    // Every other R-1 case leaves the session UNPINNED, where the two
     // hosts coincide and both readings pass - so this is the only case that
     // can tell them apart, and without it the change would be uncovered.
     //
@@ -2588,7 +2588,7 @@ describe("<TestEpicSessionTab />", () => {
 
       await act(() => Promise.resolve());
       // Invariant 6 does not exempt a bridge that never attaches: an unbounded
-      // hold here is the infinite skeleton this ticket exists to delete.
+      // hold here is the infinite skeleton this guards against.
       await act(async () => {
         await vi.advanceTimersByTimeAsync(15_000);
       });
@@ -3871,7 +3871,7 @@ describe("<TestEpicSessionTab />", () => {
       expect(__getOpenEpicRegistryForTests().size()).toBe(1);
 
       // Same remount, host unmoved: adoption must stay a silent no-op. This
-      // arm passes before AND after the F1 fix - it pins the fix against
+      // arm passes before AND after the fix - it pins the fix against
       // over-widening (an adoption that rebuilds or re-points here would
       // churn every tab reopen).
       const remountHandles: OpenEpicStoreHandle[] = [];
@@ -4435,7 +4435,7 @@ describe("<TestEpicSessionTab />", () => {
   });
 
   it("hands a FRESH surface a new handle during the corpse window, before any Retry", async () => {
-    // The path finding 8's first fix could not reach. `retireDeadMounted` was
+    // The path the first fix could not reach. `retireDeadMounted` was
     // called from the acquire effect, gated on the surface ALREADY holding the
     // dead handle - so a second tab opening this epic between the fatal and any
     // Retry has no `current`, skips that gate entirely, and adopts the corpse
@@ -4576,7 +4576,7 @@ describe("<TestEpicSessionTab />", () => {
     expect(streams[1].closeCount).toBe(1);
   });
 
-  // ── Renderer parking (plan C, decision C1) ─────────────────────────────
+  // ── Renderer parking ─────────────────────────────
   //
   // Pin: "showing a parked tab re-acquires the session ... with a NEW fence
   // identity" (`epics/.../tickets/renderer-parking`). The session-identity
@@ -4661,7 +4661,7 @@ describe("<TestEpicSessionTab />", () => {
     act(() => {
       setEpicSurfaceVisibility(EPIC_ID, EPIC_ID, false);
     });
-    // Both arms in one flow, matching the ticket's "delete the threshold and
+    // Both arms in one flow, matching the "delete the threshold and
     // this cannot fail" bar: nothing released one second short of the window.
     await act(async () => {
       await vi.advanceTimersByTimeAsync(PARK_HIDDEN_EPIC_AFTER_MS - 1_000);
@@ -4684,8 +4684,7 @@ describe("<TestEpicSessionTab />", () => {
     expect(isEpicParked(EPIC_ID)).toBe(false);
 
     // Re-acquisition is the provider's own acquire effect reacting to
-    // `parked` flipping back - a cold open, exactly as decision C5 asks a
-    // shown parked tab to look like.
+    // `parked` flipping back - a cold open when a parked tab is shown again.
     await waitFor(() => {
       expect(streams).toHaveLength(2);
     });
@@ -4705,7 +4704,7 @@ describe("<TestEpicSessionTab />", () => {
     expect(streams[1].closeCount).toBe(0);
   });
 
-  // Fixup 2, item 4: the park effect's `setSession(null)` is now SYNCHRONOUS
+  // The park effect's `setSession(null)` is now SYNCHRONOUS
   // (`epic-session-provider.tsx`, ~1707), not deferred to a `queueMicrotask`
   // with a cancel-on-cleanup guard. The old deferred shape had a race: an
   // unpark landing before that microtask fired ran the effect's cleanup
@@ -4763,7 +4762,7 @@ describe("<TestEpicSessionTab />", () => {
     // has returned to the microtask queue in between - flips visibility back
     // on and unparks. A `queueMicrotask` scheduled by the park effect (the
     // pre-fix shape) would still be sitting unflushed at this exact point,
-    // which is what makes this the race the ticket describes; the fix's
+    // which is what makes this the race under test; the fix's
     // synchronous `setSession(null)` has nothing left for the unpark to beat.
     act(() => {
       vi.advanceTimersByTime(PARK_HIDDEN_EPIC_AFTER_MS);

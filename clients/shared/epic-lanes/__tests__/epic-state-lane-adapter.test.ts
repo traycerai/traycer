@@ -951,7 +951,7 @@ describe("createEpicStateLaneAdapter - generation guard", () => {
       deltaFrame({ epicMeta: { revision: 1, meta: { title: "x" } } }),
     );
     stale.onResumed(resumedFrame("epoch-1", 1, true));
-    stale.onConnectionStatus("closed", { kind: "caller" });
+    stale.onConnectionStatus("closed", { kind: "caller" }, null, null);
 
     expect(log).toEqual([]);
   });

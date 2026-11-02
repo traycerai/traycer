@@ -2,16 +2,8 @@ import { type ReactNode } from "react";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { useAuthService } from "@/lib/host";
-
-export interface SignOutConfirmDialogProps {
-  readonly open: boolean;
-  readonly onOpenChange: (open: boolean) => void;
-  /**
-   * The surface's own teardown, run when the user confirms - e.g. the mobile
-   * drawer closing itself so it isn't left open behind the sign-out.
-   */
-  readonly onConfirm: () => void;
-}
+import { useSignOutConfirmStore } from "@/stores/auth/sign-out-confirm-store";
+import { useMobileNavStore } from "@/stores/layout/mobile-nav-store";
 
 /**
  * Confirmation step in front of `auth.signOut()`. Both entry points are a
@@ -23,25 +15,30 @@ export interface SignOutConfirmDialogProps {
  * `isPending` is fixed `false`: `signOut` is fire-and-forget at every existing
  * call site (the auth store transition tears this tree down), so there is no
  * promise to gate the button on.
+ *
+ * Mounted once by each frame the entry points live in, the app shell and the
+ * host gate's header, and only one of those is ever up. So it outlives both
+ * entry points when a rotation swaps the drawer and the strip.
  */
-export function SignOutConfirmDialog(
-  props: SignOutConfirmDialogProps,
-): ReactNode {
+export function SignOutConfirmDialog(): ReactNode {
   const auth = useAuthService();
+  const open = useSignOutConfirmStore((state) => state.open);
+  const setOpen = useSignOutConfirmStore((state) => state.setOpen);
 
   return (
     <ConfirmDestructiveDialog
       blockedReason={null}
-      open={props.open}
-      onOpenChange={props.onOpenChange}
+      open={open}
+      onOpenChange={setOpen}
       title="Sign out?"
       description="You'll need to sign in again to use Traycer on this device."
       cascadeSummary={null}
       actionLabel="Sign out"
       isPending={false}
       onConfirm={() => {
-        props.onOpenChange(false);
-        props.onConfirm();
+        setOpen(false);
+        // So the drawer isn't left open behind the sign-out.
+        useMobileNavStore.getState().setOpen(false);
         Analytics.getInstance().track(AnalyticsEvent.SignOutRequested, {
           source: "direct_ui",
         });

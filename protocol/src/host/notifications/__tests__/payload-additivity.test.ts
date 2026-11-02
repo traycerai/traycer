@@ -8,6 +8,8 @@ import {
 import {
   hostNotificationAgentStalledPayloadSchema,
   hostNotificationApprovalPayloadSchema,
+  hostNotificationBotConversationPayloadSchema,
+  hostNotificationBotThreadVerdictPayloadSchema,
   hostNotificationBrowserHumanNeededPayloadSchema,
   hostNotificationChatStoppedPayloadSchema,
   hostNotificationEpicStoppedPayloadSchema,
@@ -60,6 +62,8 @@ const LIVE_PAYLOAD_SCHEMAS: Record<
   worktree_auto_cleanup: hostNotificationWorktreeAutoCleanupPayloadSchema,
   managed_command_delivery_parked:
     hostNotificationManagedCommandDeliveryParkedPayloadSchema,
+  bot_thread_verdict: hostNotificationBotThreadVerdictPayloadSchema,
+  bot_conversation: hostNotificationBotConversationPayloadSchema,
   browser_human_needed: hostNotificationBrowserHumanNeededPayloadSchema,
   secret_grant_request: hostNotificationSecretGrantRequestPayloadSchema,
   secret_export_minted: hostNotificationSecretExportMintedPayloadSchema,
@@ -92,6 +96,8 @@ const KINDS = [
   "worktree_deletion",
   "worktree_auto_cleanup",
   "managed_command_delivery_parked",
+  "bot_thread_verdict",
+  "bot_conversation",
   "browser_human_needed",
   "secret_grant_request",
   "secret_export_minted",

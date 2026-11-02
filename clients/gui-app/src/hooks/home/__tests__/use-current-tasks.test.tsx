@@ -1297,6 +1297,7 @@ describe("useCurrentTasks when an owner host's local read fails", () => {
       TEST_LOCAL_ACTIVITY_HOST_ID,
       "open",
       null,
+      null,
     );
     publishAgentActivity([]);
   });

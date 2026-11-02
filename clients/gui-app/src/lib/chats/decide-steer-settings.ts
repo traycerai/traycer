@@ -21,6 +21,8 @@ import type {
  * composer toolbar for a change that had already taken effect.) The host
  * derives provider-session fork policy from the accepted settings; this
  * function is renderer-only confirmation policy.
+ * Ultracode is excluded too: its request is reconciled at the next fresh
+ * prompt, so a change never requires restarting the running turn.
  *
  * `activeTurn.profileId` defaults to `null` (ambient) for a turn received from
  * a host, or read from persisted state, before this field existed. During that

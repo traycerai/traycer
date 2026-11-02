@@ -13,8 +13,8 @@ import {
  * replacement at MODULE LOAD TIME (before any test body runs, so it is in
  * place before this coordinator's lazily-constructed singleton observer is
  * ever created) lets these tests fire real RO callbacks on demand. Same
- * technique this repo already used for the ticket-17/18 stack's height-only
- * resize pin - see [[legendlist-pass-through-mock-ref-tee]] in memory.
+ * technique this repo already used for the height-only
+ * resize pin.
  */
 class ControllableResizeObserver implements ResizeObserver {
   readonly callback: ResizeObserverCallback;
@@ -262,7 +262,7 @@ describe("unregister and re-registration", () => {
 
     // The first registration's own cleanup fires late, after the second
     // registration has already replaced it under the identical key -
-    // exactly the StrictMode double-invoke ordering ticket 22's sentinel
+    // exactly the StrictMode double-invoke ordering the sentinel
     // bug got wrong ("cleanup cancelled but didn't clear").
     unregisterFirst();
 
@@ -355,7 +355,7 @@ describe("displaced-element unobserve (design-review F2)", () => {
     stubRect(newSlot, { left: 0, top: 0, width: 200, height: 200 });
     registerTileSurfaceGeometrySlot("chat-1", newSlot, () => {});
 
-    // New registration survives (the reviewer's own phrasing)...
+    // New registration survives...
     expect(soleObserver().observed.has(newSlot)).toBe(true);
     // ...and the displaced target is no longer observed.
     expect(soleObserver().observed.has(oldSlot)).toBe(false);

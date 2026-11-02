@@ -122,27 +122,50 @@ describe("Team skills upload", () => {
     });
   });
 
-  it("swaps the upload form for the no-host line when the host does not serve the team", async () => {
-    const harness = mountTeamPage(
-      poolSource("editor"),
-      handlers([host], () => ({ outcome: "not_served", reason: null })),
-    );
-    render(<TeamSkillsPage />, { wrapper: harness.Wrapper });
-
-    await userEvent.type(await screen.findByLabelText("Skill name"), "review");
-    await userEvent.upload(
-      screen.getByLabelText("Skill folder archive"),
-      skillArchive(),
-    );
-    await userEvent.click(screen.getByRole("button", { name: "Add a skill" }));
-
-    await waitFor(() => {
-      expect(screen.getByRole("status").textContent).toBe(
-        "Skills need a host running Acme.Pick one.",
+  it.each([
+    {
+      what: "the only host there is, is the one that refused",
+      hosts: [host],
+      line: "Skills need a host running Acme.",
+      switchable: false,
+    },
+    {
+      what: "another host could take it",
+      hosts: [host, { ...host, hostId: "host-b", hostLabel: "Studio" }],
+      line: "Skills need a host running Acme.Pick one.",
+      switchable: true,
+    },
+  ])(
+    "swaps the upload form for the no-host line when the host does not serve the team, and offers a switch only where there is one: $what",
+    async ({ hosts, line, switchable }) => {
+      const harness = mountTeamPage(
+        poolSource("editor"),
+        handlers(hosts, () => ({ outcome: "not_served", reason: null })),
       );
-    });
-    expect(screen.queryByRole("button", { name: "Add a skill" })).toBeNull();
-  });
+      render(<TeamSkillsPage />, { wrapper: harness.Wrapper });
+
+      await userEvent.type(
+        await screen.findByLabelText("Skill name"),
+        "review",
+      );
+      await userEvent.upload(
+        screen.getByLabelText("Skill folder archive"),
+        skillArchive(),
+      );
+      await userEvent.click(
+        screen.getByRole("button", { name: "Add a skill" }),
+      );
+
+      await waitFor(() => {
+        expect(screen.getByRole("status").textContent).toBe(line);
+      });
+      expect(screen.queryByRole("button", { name: "Add a skill" })).toBeNull();
+      // A refusal is the moment this page needs a host of its own, so the
+      // picker is mounted here - and it draws a switch only when there is a
+      // host to switch to.
+      expect(screen.queryAllByRole("combobox").length > 0).toBe(switchable);
+    },
+  );
 
   it("refuses an archive over 32 MB without sending it", async () => {
     const harness = mountTeamPage(

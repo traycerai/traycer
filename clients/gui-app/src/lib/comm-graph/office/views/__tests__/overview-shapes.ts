@@ -141,7 +141,7 @@ export function overviewShapeContains(
  * The three fractions every overview sweep samples at, on each of a shape's
  * two edges: just inside each end, and the middle.
  *
- * The numbers are the T5 review's own probe's, kept to the digit so a sweep
+ * The numbers are the probe's, kept to the digit so a sweep
  * here and the evidence it was written against are asking the same question.
  * Nine points per region: both near corners, both edge midpoints, the centre,
  * and the four in between.

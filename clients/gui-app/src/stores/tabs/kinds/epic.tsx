@@ -77,7 +77,7 @@ export const epicTabModule: TabKindModule<"epic", EpicTabBuildSource> = {
       duplication: "allowed",
       singleton: "per-instance",
       newWindow: "move",
-      // T11 adds a durable per-Epic host binding. Until then the session
+      // The session
       // provider resolves through the renderer default host, so readiness must
       // use that same scope rather than inventing a tile-derived binding.
       readinessScope: "default-host",

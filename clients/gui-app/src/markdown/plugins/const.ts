@@ -10,3 +10,4 @@ export const TRAYCER_CHAT_TAG = "traycer-chat";
 export const TRAYCER_AGENT_TAG = "traycer-agent";
 export const TRAYCER_MERMAID_TAG = "traycer-mermaid";
 export const TRAYCER_WIREFRAME_TAG = "traycer-wireframe";
+export const TRAYCER_MENTION_TAG = "traycer-mention";

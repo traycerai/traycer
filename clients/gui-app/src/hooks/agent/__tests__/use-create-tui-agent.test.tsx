@@ -48,14 +48,14 @@ const fakeHostClient: FakeHostClient = {
 
 vi.mock("@/lib/host", () => ({
   useHostClient: () => fakeHostClient,
-  // The SPINE, a separate export since redesign P2.1.
+  // The SPINE, a separate export.
   useHostRuntimeClient: () => fakeHostClient,
   useHostBinding: () => ({ hostClient: fakeHostClient }),
 }));
 
 vi.mock("@/lib/host/runtime", () => ({
   useHostClient: () => fakeHostClient,
-  // The SPINE, a separate export since redesign P2.1.
+  // The SPINE, a separate export.
   useHostRuntimeClient: () => fakeHostClient,
   useHostBinding: () => ({ hostClient: fakeHostClient }),
 }));
@@ -72,7 +72,7 @@ vi.mock("@/stores/epics/canvas/store", () => ({
 }));
 
 // `useEpicTileNavigation` itself stays REAL, so the test also proves the hook
-// commits through the nested-focus route boundary (T5) rather than mutating
+// commits through the nested-focus route boundary rather than mutating
 // the canvas behind it: the executor seam is captured and compared against the
 // epic's own `navigateNestedFocus`.
 vi.mock("@/hooks/epic/use-epic-nested-focus-navigation", () => ({
@@ -719,7 +719,7 @@ describe("useCreateTuiAgent", () => {
 
     // An explicit worktree intent is present precisely to prove it is never
     // dispatched - the preflight must reject BEFORE `dispatchWorktreeIntent`
-    // (client-side ordering from the governing technical plan).
+    // (client-side ordering).
     const intent: WorktreeIntent = {
       entries: [
         {
@@ -783,7 +783,7 @@ describe("useCreateTuiAgent", () => {
   });
 
   it("amend-02: a tombstoned-source fork to ambient is ADMITTED by the real preflight and proceeds through the full create sequence", async () => {
-    // Host-verdict-driven, not a mocked-create-only assertion (T5 amend-02
+    // Host-verdict-driven, not a mocked-create-only assertion (amend-02
     // requirement #4): `sourceProfileId` is a raw, no-longer-live managed
     // profile and `profileId` (the target) is ambient (`null`) - genuinely
     // different, so `resolveForkProfilePreflightTarget` must NOT skip the

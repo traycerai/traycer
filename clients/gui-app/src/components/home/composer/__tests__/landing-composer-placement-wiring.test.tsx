@@ -19,7 +19,7 @@ import type { WorktreeStagingKey } from "@/stores/worktree/worktree-intent-stagi
 import { LandingComposer } from "@/components/home/composer/landing-composer";
 
 /**
- * F4, wiring half: the landing composer must hand its actions the FROZEN
+ * The landing composer must hand its actions the FROZEN
  * submit target, not the mutable read one.
  *
  * `useComposerPlacement` freezing the client is worthless if the composer
@@ -100,7 +100,7 @@ const testState = vi.hoisted(() => ({
   // `isPinned` would never actually take.
   composerIsPinned: true,
   /**
-   * The §54 refusal `useLandingComposerActions().submit` hands back - `null`
+   * The placement refusal `useLandingComposerActions().submit` hands back - `null`
    * for a create that goes through, `{message}` for a submit-time refusal.
    * Real refusal DERIVATION (`resolveLandingPlacement`) has its own unit
    * suite; this file only needs to pin that the composer's `hostNotice` slot
@@ -139,6 +139,12 @@ const stagingStoreMocks = vi.hoisted(() => ({
     (key: WorktreeStagingKey) => WorktreeIntent | null
   >(() => null),
 }));
+vi.mock("@/components/settings/host-scope/use-host-options", async () => {
+  const { hostOptionsFixture } =
+    await import("@/components/settings/host-scope/host-scope-fixture");
+  const options = hostOptionsFixture({ hosts: [] });
+  return { useHostOptions: () => options };
+});
 vi.mock("@/stores/worktree/worktree-intent-staging-store", () => ({
   useWorktreeIntentStagingStore: {
     getState: () => ({
@@ -223,6 +229,7 @@ vi.mock("@/stores/home/landing-draft-store", () => {
     drafts: [],
     setDraftComposerMode: vi.fn(),
     setDraftSettings: vi.fn(),
+    seedUnseededDraft: vi.fn(() => false),
     createDraft: vi.fn(() => "draft-for-test"),
     // handleSnapshot's unbound-create branch now calls createDraftWithId
     // (reusing a pre-minted pendingCreateId when present) rather than
@@ -278,6 +285,7 @@ vi.mock("@/hooks/sandboxes/use-staged-send-sign-in-check", () => ({
 vi.mock("@/components/home/hooks/use-composer-toolbar-store", async () => {
   const { createStore } = await import("zustand/vanilla");
   interface ToolbarMockState {
+    readonly selectedModel: null;
     readonly values: {
       readonly selection: {
         readonly harnessId: string;
@@ -301,6 +309,8 @@ vi.mock("@/components/home/hooks/use-composer-toolbar-store", async () => {
     };
   }
   const toolbarStore = createStore<ToolbarMockState>(() => ({
+    ultracode: false,
+    selectedModel: null,
     selection: {
       harnessId: "claude",
       modelSlug: "claude-sonnet",
@@ -448,7 +458,7 @@ vi.mock("@/components/composer/use-staged-sandbox-send", () => ({
 vi.mock("@/lib/host", () => ({
   useHostBinding: () => null,
   useHostClient: () => null,
-  // The SPINE, a separate export since redesign P2.1.
+  // The SPINE, a separate export.
   useHostRuntimeClient: () => null,
 }));
 vi.mock(
@@ -672,7 +682,7 @@ describe("landing composer G4 re-point", () => {
   });
 });
 
-// Codex review finding: a §54 refusal names the placement it refused, so ANY
+// A placement refusal names the placement it refused, so ANY
 // change of the RESOLVED host retires it - a derivation move, or the picker
 // writing a new pin. Real refusal DERIVATION has its own unit suite
 // (`resolveLandingPlacement`); this only pins that the composer's own

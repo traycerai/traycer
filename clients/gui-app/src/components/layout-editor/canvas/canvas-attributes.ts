@@ -1,7 +1,7 @@
 /**
  * The two attribute NAMES a canvas drag reads off the app's own elements.
  *
- * A leaf with no imports, deliberately (R3-05). The surfaces that stamp these
+ * A leaf with no imports, deliberately. The surfaces that stamp these
  * are app surfaces, not editor ones - the epic sidebar's icon rail mounts on
  * every epic - and reading a string from `region-drag.ts` pulled the drag
  * engine, the gesture writer and `layout-arrangement.ts` into their module

@@ -1,4 +1,4 @@
-import { EPIC_READ_ARTIFACT_OBJECT_RANGE_MAX_BYTES } from "@traycer/protocol/host/epic/artifact-objects";
+import { ARTIFACT_OBJECT_SPAN_BYTES } from "@traycer-clients/shared/platform/sandbox-artifacts";
 import type { ArtifactObjectRef } from "@traycer/protocol/persistence/epic/artifacts";
 import type { ArtifactReadSpan } from "@/lib/sandbox/artifact-serving/artifact-server";
 
@@ -24,7 +24,7 @@ export async function readArtifactBlobPrefix(
   do {
     signal.throwIfAborted();
     const length = Math.min(
-      EPIC_READ_ARTIFACT_OBJECT_RANGE_MAX_BYTES,
+      ARTIFACT_OBJECT_SPAN_BYTES,
       Math.max(1, end - offset),
     );
     const result = await readSpan(object.sha256, offset, length, signal);

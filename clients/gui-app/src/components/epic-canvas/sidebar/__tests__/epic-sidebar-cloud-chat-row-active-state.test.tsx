@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { v4 as uuidv4 } from "uuid";
 import { vi } from "vitest";
 import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
@@ -11,6 +12,7 @@ import type { UnifiedCloudChatEntry } from "@/lib/chats/unified-chat-list";
 import type { HostReachabilityStatus } from "@/hooks/agent/use-host-reachability";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { makePublishedChatTileRef } from "@/stores/epics/canvas/tile-schema/published-chat-tile";
+import type { TreeRowExpansion } from "@/components/epic-canvas/sidebar/epic-sidebar-tree-shared";
 
 /**
  * The row's active-state wiring, verified against the REAL canvas store.
@@ -45,12 +47,24 @@ vi.mock("@/hooks/epic/use-epic-nested-focus-navigation", () => ({
       prepare(),
 }));
 
+function staticExpansion(
+  expandedIds: ReadonlySet<string>,
+  toggleExpanded: (id: string) => void,
+): TreeRowExpansion {
+  return {
+    subscribe: () => () => undefined,
+    isExpanded: (id) => expandedIds.has(id),
+    toggleExpanded,
+    ensureExpanded: () => undefined,
+  };
+}
+
 /** A leaf row: no subagents beneath it, so no expansion state to consult. */
 const NO_CHILDREN: readonly UnifiedCloudChatEntry[] = [];
-const LEAF_EXPANSION: CloudChatRowExpansion = {
-  expandedIds: new Set<string>(),
-  toggleExpanded: () => undefined,
-};
+const LEAF_EXPANSION: CloudChatRowExpansion = staticExpansion(
+  new Set<string>(),
+  () => undefined,
+);
 
 const CHAT: CloudChatSummary = {
   identity: {
@@ -85,14 +99,16 @@ afterEach(() => {
 
 function renderRow(tabId: string): HTMLElement {
   render(
-    <EpicSidebarCloudChatRow
-      chat={CHAT}
-      childEntries={NO_CHILDREN}
-      expansion={LEAF_EXPANSION}
-      tabId={tabId}
-      depth={0}
-      selectionMode={false}
-    />,
+    <QueryClientProvider client={new QueryClient()}>
+      <EpicSidebarCloudChatRow
+        chat={CHAT}
+        childEntries={NO_CHILDREN}
+        expansion={LEAF_EXPANSION}
+        tabId={tabId}
+        depth={0}
+        selectionMode={false}
+      />
+    </QueryClientProvider>,
   );
   return screen.getByTestId(`epic-sidebar-cloud-item-${CHAT.identity.chatId}`);
 }

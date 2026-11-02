@@ -177,7 +177,7 @@ function ReferenceChipButton(props: {
         className={cn(
           "mx-px inline-flex max-w-full items-center gap-1 rounded-md border border-border/60 bg-muted/60 px-1.5 py-0.5 align-baseline text-ui-sm font-medium text-foreground/90 no-underline",
           "transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none",
-          // Affordance (plan section 6): whole pill is the drag surface -
+          // Affordance: whole pill is the drag surface -
           // grab cursor + a subtle border/ring emphasis on hover, no inline grip.
           drag !== null &&
             "cursor-grab hover:border-primary/40 hover:ring-1 hover:ring-primary/40",

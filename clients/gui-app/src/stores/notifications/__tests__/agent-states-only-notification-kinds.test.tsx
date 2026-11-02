@@ -6,6 +6,7 @@ import type { NotificationShowOutcome } from "@traycer-clients/shared/platform/r
 import { projectNotificationFeedDisplay } from "@traycer-clients/shared/notifications/feed-delivery";
 import type { NotificationShowRequest } from "@/hooks/notifications/use-notifications";
 import {
+  displayCloudSnapshotArrivals,
   displayHostChannelEmission,
   resetNotificationFeedDisplayReceiptsForTests,
 } from "@/lib/notifications/notification-display";
@@ -276,24 +277,6 @@ const DROPPED_CASES: ReadonlyArray<{
     }),
   },
   {
-    name: "team.role.changed",
-    make: (id) => ({
-      ...BASE,
-      id,
-      kind: "team.role.changed",
-      sourceRef: id,
-      severity: "info",
-      outcome: "completed",
-      payload: {
-        kind: "team_role_changed",
-        environmentId: "env-1",
-        teamName: "Acme",
-        from: "viewer",
-        to: "admin",
-      },
-    }),
-  },
-  {
     name: "team.host.returned",
     make: (id) => ({
       ...BASE,
@@ -469,6 +452,28 @@ function droppedEntries(): HostNotificationFeedEntry[] {
   return DROPPED_CASES.map((c, index) => c.make(`dropped-${index}`));
 }
 
+/**
+ * The one non-agent kind the center still carries: a member is told their own
+ * role moved, the way a task's collaborators are told theirs did.
+ */
+function roleChangedEntry(id: string): HostNotificationFeedEntry {
+  return {
+    ...BASE,
+    id,
+    kind: "team.role.changed",
+    sourceRef: id,
+    severity: "info",
+    outcome: "completed",
+    payload: {
+      kind: "team_role_changed",
+      environmentId: "env-1",
+      teamName: "Acme",
+      from: "editor",
+      to: "admin",
+    },
+  };
+}
+
 function applyHost(
   entries: ReadonlyArray<HostNotificationFeedEntry>,
   summary: { readonly unreadCount: number; readonly attentionCount: number },
@@ -563,6 +568,51 @@ describe("the notification center carries agent states only", () => {
 
     expect(readCenter()).toEqual(ONE_AGENT_FAILURE);
   });
+
+  // The owner's named exception. A role change is a membership state, so it is
+  // read in the center and counted unread like the task-sharing tell it mirrors;
+  // what it never does is announce itself (see the live-emission suite below).
+  it("keeps a role change, counted unread beside the agent row", () => {
+    const rows = [agentFailureEntry(AGENT_ID), roleChangedEntry("role-kept")];
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: rows.map(cloudRow),
+      summary: {
+        totalCount: rows.length,
+        unreadCount: rows.length,
+        attentionCount: attentionCount(rows),
+      },
+      version: 3,
+    });
+
+    expect(readCenter()).toEqual({
+      sourceIds: [AGENT_ID, "role-kept"],
+      // `info` is news, not something to act on, so the bell stays on the
+      // failure's tier and the role change only raises the unread count.
+      bell: { kind: "attention", count: 1 },
+      unread: 2,
+    });
+  });
+
+  it("keeps a role change a host still holds", () => {
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [],
+      summary: { totalCount: 0, unreadCount: 0, attentionCount: 0 },
+      version: 3,
+    });
+    const rows = [roleChangedEntry("role-held"), ...droppedEntries()];
+    applyHost(rows, {
+      unreadCount: rows.length,
+      attentionCount: attentionCount(rows),
+    });
+
+    expect(readCenter()).toEqual({
+      sourceIds: ["role-held"],
+      // Unread but nothing to act on, so the bell is the quiet dot rather than
+      // a count — the same state the task-sharing tell puts it in.
+      bell: { kind: "quietDot" },
+      unread: 1,
+    });
+  });
 });
 
 describe("live emission shows agent states only", () => {
@@ -599,6 +649,30 @@ describe("live emission shows agent states only", () => {
 
     expect(target.showNotification).not.toHaveBeenCalled();
     expect(target.playChime).not.toHaveBeenCalled();
+    expect(toastCalls).toHaveLength(0);
+  });
+
+  // Held and shown in the center, announced on neither live lane. The cloud lane
+  // needs its own case: an arrival is a row the store already KEPT, so the read
+  // policy cannot be what keeps it quiet.
+  it("announces a role change nowhere, whichever lane it arrives on", async () => {
+    const fromHost = displayTarget();
+    await displayHostChannelEmission(
+      [roleChangedEntry("role-live-host")],
+      fromHost,
+      "host-1",
+    );
+
+    const fromCloud = displayTarget();
+    await displayCloudSnapshotArrivals(
+      [cloudRow(roleChangedEntry("role-live-cloud"))],
+      fromCloud,
+    );
+
+    for (const target of [fromHost, fromCloud]) {
+      expect(target.showNotification).not.toHaveBeenCalled();
+      expect(target.playChime).not.toHaveBeenCalled();
+    }
     expect(toastCalls).toHaveLength(0);
   });
 

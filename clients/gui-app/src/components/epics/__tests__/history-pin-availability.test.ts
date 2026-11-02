@@ -13,7 +13,7 @@ import type { HistoryItem } from "@/components/home/data/home-page.data";
  * case as falling through to the session check; the shipped code and its own
  * docstring - "does not require a cloud verdict... returns from its own
  * branch and never reaches the session check" - say otherwise. Pinned against
- * the code, and flagged back rather than silently matched to the brief.)
+ * the code.)
  */
 function historyItem(overrides: Partial<HistoryItem>): HistoryItem {
   return {

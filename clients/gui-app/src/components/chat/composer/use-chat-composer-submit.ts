@@ -1,4 +1,3 @@
-import { sniffImageMimeType } from "@/lib/attachments/image-mime-signature";
 import {
   use,
   useCallback,
@@ -19,6 +18,7 @@ import { toast } from "sonner";
 
 import { appLogger } from "@/lib/logger";
 import { QueuedMessageStagesContext } from "@/components/chat/queued-message-stages";
+import { TileMinimapContext } from "@/components/epic-canvas/tile-minimap/tile-minimap-context";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import {
   appendImageAttachmentAtoms,
@@ -41,20 +41,24 @@ import {
   prepareDraftImageInlining,
 } from "@/lib/drafts/draft-image-inlining";
 import { draftImageByteTargetForHost } from "@/lib/drafts/draft-image-byte-target";
-import { bytesToBase64 } from "@/lib/composer/image-base64";
 import {
-  getImageBytes,
-  sessionImageBytes,
-} from "@/lib/composer/landing-image-store";
+  resolveAnnotationImageAtoms,
+  type AnnotationImageAtom,
+} from "@/lib/composer/annotation-image-atoms";
 import type { BrowserAnnotationRecord } from "@/lib/browser-view/annotation/browser-annotation-record";
 import type { ChatSendRestore } from "@/stores/chats/chat-session-store";
-import { v4 as uuidv4 } from "uuid";
 import {
   buildAttachmentsFromJSONContent,
   buildSubmittedChatJSONContent,
   extractPlainTextFromComposerJSONContent,
 } from "@/lib/composer/tiptap-json-content";
 import { buildChatRunSettings } from "@/lib/composer/chat-run-settings";
+import type { RestingChatSandbox } from "@/lib/sandboxes/chat-sandbox-state";
+import {
+  composerModelUnresolved,
+  composerSendRefusal,
+  publishComposerSendState,
+} from "@/lib/chats/composer-send-gates";
 import { decideSteerSettings } from "@/lib/chats/decide-steer-settings";
 import {
   resolveSubmitDeliveryPolicy,
@@ -144,6 +148,8 @@ interface UseChatComposerSubmitArgs {
    * hash-only image node's bytes.
    */
   readonly targetHostId: string | null;
+  /** The chat's sandbox rests: a send wakes it, through `onSubmitMessage`. */
+  readonly restingSandbox: RestingChatSandbox | null;
   /**
    * The queued prompt this composer is currently editing, or `null` for an
    * ordinary send. Part of the submit INTENT: `onSubmitMessage`'s destination
@@ -153,7 +159,7 @@ interface UseChatComposerSubmitArgs {
   readonly queueEditTargetId: string | null;
   /**
    * Whether THIS chat's live stream can materialize a hash-only draft image at
-   * send (T1's `chat.subscribe` 1.12 capability). The gate is per-session and
+   * send (`chat.subscribe` 1.12 capability). The gate is per-session and
    * not app-wide: one host can serve one chat on a bridging stream and another
    * on a 1.9 one.
    *
@@ -237,6 +243,7 @@ export function useChatComposerSubmit(
     onSubmitMessage,
     onSideChat,
     targetHostId,
+    restingSandbox,
     queueEditTargetId,
     getDraftBlobBridgeSupported,
     getQueuedSteerRestartConfirmationSupported,
@@ -411,12 +418,14 @@ export function useChatComposerSubmit(
   // one path can never miss the other.
   const submitBlocked = useCallback(
     (): boolean =>
-      activeTurnStatus === "stopping" ||
-      hasPendingApprovals ||
-      sendDisabled === true ||
-      workspaceBlocked ||
-      imagesUnsupported ||
-      attachmentPreparationPending,
+      composerSendRefusal({
+        activeTurnStatus,
+        hasPendingApprovals,
+        sendDisabled,
+        workspaceBlocked,
+        imagesUnsupported,
+        attachmentPreparationPending,
+      }) !== null,
     [
       activeTurnStatus,
       attachmentPreparationPending,
@@ -426,6 +435,44 @@ export function useChatComposerSubmit(
       workspaceBlocked,
     ],
   );
+
+  // The voice sends to a chat with no composer of its own, and takes the same
+  // answer this one gives. Layout-timed for the reason `submitBlockedRef` is.
+  const tileInstanceId = use(TileMinimapContext);
+  useLayoutEffect(() => {
+    if (targetHostId === null || tileInstanceId === null) return undefined;
+    return publishComposerSendState(targetHostId, taskId, tileInstanceId, {
+      sendDisabled,
+      workspaceBlocked,
+      imagesUnsupported,
+      attachmentPreparationPending,
+      restingSandbox: restingSandbox !== null,
+      sandboxFrozen: restingSandbox?.sandbox.frozen === true,
+      submit: (input) => onSubmitMessage?.(input) ?? false,
+      modelSlug: () => toolbarStore.getState().selection.modelSlug,
+      runSettings: () => {
+        const toolbar = toolbarStore.getState();
+        return buildChatRunSettings({
+          selection: toolbar.selection,
+          permission: toolbar.permission,
+          reasoning: toolbar.reasoning,
+          serviceTier: toolbar.serviceTier,
+          ultracode: toolbar.ultracode,
+        });
+      },
+    });
+  }, [
+    attachmentPreparationPending,
+    imagesUnsupported,
+    onSubmitMessage,
+    restingSandbox,
+    sendDisabled,
+    targetHostId,
+    taskId,
+    tileInstanceId,
+    toolbarStore,
+    workspaceBlocked,
+  ]);
 
   // The LIVE blocking predicate, for the deferred confirmation's continuation.
   // `submitBlocked` is rebuilt per render from props; a continuation holds the
@@ -507,7 +554,9 @@ export function useChatComposerSubmit(
         return { toolbar, editor, annotationRecords, editorContent };
       };
       const readSendableDraft = (): ReadDraft | null => {
-        if (toolbarStore.getState().selection.modelSlug.length === 0) {
+        if (
+          composerModelUnresolved(toolbarStore.getState().selection.modelSlug)
+        ) {
           return null;
         }
         return readDraftToSend();
@@ -577,6 +626,7 @@ export function useChatComposerSubmit(
           permission: toolbar.permission,
           reasoning: toolbar.reasoning,
           serviceTier: toolbar.serviceTier,
+          ultracode: toolbar.ultracode,
         });
         const submittedContent = appendImageAttachmentAtoms(
           buildSubmittedChatJSONContent(
@@ -1285,53 +1335,4 @@ function isEmptyComposerSubmit(input: {
     !containsImageAtoms(input.editorContent) &&
     input.annotationRecords.length === 0
   );
-}
-
-type AnnotationImageAtom = {
-  readonly id: string;
-  readonly fileName: string;
-  readonly mimeType: string;
-  readonly size: number | null;
-  readonly b64content: string;
-  readonly hash: string;
-};
-
-async function resolveAnnotationImageAtoms(
-  records: ReadonlyArray<BrowserAnnotationRecord>,
-): Promise<ReadonlyArray<AnnotationImageAtom> | null> {
-  const atoms: AnnotationImageAtom[] = [];
-  for (const record of records) {
-    if (record.imageHash === null || record.imageFileName === null) continue;
-    const sessionBytes = sessionImageBytes(record.imageHash);
-    const bytes =
-      sessionBytes ??
-      // An IndexedDB open/transaction failure is "the crop is not available",
-      // the same outcome as a missing key - and it must reach the caller as
-      // `null` rather than a rejection, which nothing above awaits with a
-      // `catch` and which would silently abandon the submit with no toast.
-      (await getImageBytes(record.imageHash).catch((error: unknown) => {
-        appLogger.error(
-          "[chat-composer] annotation image read failed",
-          { imageHash: record.imageHash },
-          error,
-        );
-        return undefined;
-      })) ??
-      null;
-    if (bytes === null) return null;
-    atoms.push({
-      id: uuidv4(),
-      fileName: record.imageFileName,
-      // SNIFFED, not assumed. A crop is a PNG when the browser view captures
-      // it, and it is not one after a stash round trip: the stash canonicalizes
-      // a large PNG to WebP and re-points the record at those bytes. Labelling
-      // WebP bytes `image/png` was wrong in the atom, in the media type and in
-      // the data URL a preview builds from them.
-      mimeType: sniffImageMimeType(bytes) ?? "image/png",
-      size: bytes.byteLength,
-      b64content: bytesToBase64(bytes),
-      hash: record.imageHash,
-    });
-  }
-  return atoms;
 }

@@ -88,8 +88,9 @@ const EMPTY_OCCUPANCY: ReadonlyMap<string, string> = new Map();
 const EMPTY_NEEDS: ReadonlyArray<string> = [];
 const EMPTY_ACTIVITY: ReadonlyMap<string, number> = new Map();
 
-/** Measured from `planMissionControl` on triage seed 1; not the ticket estimates. */
 /**
+ * Measured from `planMissionControl` on triage seed 1; not estimates.
+ *
  * Re-measured for the medbay's two rows: the hall is two rows taller than it was
  * before it had a ward, so every fit the HEIGHT binds moved. The 309-agent
  * narrow fit is unchanged because width binds there, which is the check that
@@ -1913,7 +1914,7 @@ describe("mission-control cold-review findings", () => {
 });
 
 /**
- * Fixup 5 (finding M3, amphitheatre half): a lead's plate used to be
+ * Finding M3, amphitheatre half: a lead's plate used to be
  * `widthTiles: 1` at a single tile beside the lead's console, drawn at a
  * fixed face and centred on that one tile - so a twelve-character
  * `team-26-lead` reached several consoles either side and the next opaque
@@ -1930,7 +1931,7 @@ describe("mission-control cold-review findings", () => {
  * 309-agent triage population the live finding came from. Case 2 walks the
  * ladder itself on a synthetic tier of two-seat teams. The last case guards
  * the fix against leaking into the HQ board, the Lounge area sign and the
- * host signs, which this fixup does not touch.
+ * host signs, which this case does not touch.
  */
 describe("mission control plates: fixup 5 - plates fit their own arc segment and never overlap", () => {
   /**
@@ -2227,7 +2228,7 @@ describe("mission control plates: fixup 5 - plates fit their own arc segment and
     );
     // 4. Half of the narrowest rung's own threshold: nothing on the ladder
     //    fits any more, so the plate is dropped rather than drawn over the
-    //    run next door - the ticket's "team keeps only its hover name".
+    //    run next door - "team keeps only its hover name".
     expect(resolvedAt(thresholds[3] * 0.5)).toBeUndefined();
   });
 
@@ -2260,7 +2261,7 @@ describe("mission control plates: fixup 5 - plates fit their own arc segment and
 });
 
 /**
- * COLD REVIEW, FINDINGS 1-3: ONE HALL FOR EVERY HOST, and three things that
+ * ONE HALL FOR EVERY HOST, and three things that
  * assumed otherwise.
  *
  * This view is the only one whose single storey serves the whole epic, and every
@@ -2401,7 +2402,7 @@ describe("mission-control cold review: one hall for every host", () => {
     const ward = infirmaryOf(planned.layout);
     for (const id of first) expect(scene.whereabouts(id)).toBe(ward.name);
 
-    // HOST B ASKS SECOND, into a ward with nothing left. C2: capacity is the
+    // HOST B ASKS SECOND, into a ward with nothing left. Capacity is the
     // cap, and an agent that finds it full keeps its console.
     scene.sync({
       ...base,
@@ -2486,7 +2487,7 @@ describe("mission-control cold review: one hall for every host", () => {
     }
 
     // FOUR ARRIVALS, ONE PER SYNC, alternating hosts. Each one finds the ward
-    // full and keeps its console, which is the queue forming (C2, C3).
+    // full and keeps its console, which is the queue forming.
     const order = [waitersB[0], waitersA[0], waitersB[1], waitersA[1]];
     for (const waiter of order) {
       syncWith(waiter.id);
@@ -2737,7 +2738,7 @@ describe("mission-control cold review: one hall for every host", () => {
 });
 
 /**
- * Fixup 6, rule 4, mission control's own version (see
+ * Rule 4, mission control's own version (see
  * `MissionControlFrozen.reserveLabelSeatIds`'s own doc comment): `paintSeat`
  * used to letter `reserve` under every empty console, which on a full bank
  * was several identical grey words in a row. `missionControlLettersReserve`
@@ -2853,7 +2854,7 @@ describe("mission control painters: fixup 6 rule 4 - one reserve label per tier,
       // ON THE FLOOR UNDER THE CHAIR - the seated agents' own name-tag line,
       // read straight off the seat's own chair-tile geometry - not the
       // console's bottom edge, which is where `deskY + OFFICE_TILE` used to
-      // land it (feedback round 1: grey-on-grey, unreadable against the
+      // land it (grey-on-grey, unreadable against the
       // console art).
       expect(label.drawable.y).toBe(
         (seat.chairTile.row + 1) * OFFICE_TILE + OFFICE_LABEL_GAP,

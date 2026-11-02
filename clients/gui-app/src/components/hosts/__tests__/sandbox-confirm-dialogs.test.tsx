@@ -212,6 +212,7 @@ describe("sandbox confirm dialogs", () => {
         kind: "terminal",
         viewer: "presentation",
         streamClientFactory: () => ({
+          supportsViewerFrames: () => false,
           sendAction: () => undefined,
           close: () => undefined,
         }),

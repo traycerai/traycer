@@ -226,6 +226,7 @@ export function useTerminalSessionHandle(
       );
       return {
         sendAction: (frame) => result.client.sendAction(frame),
+        supportsViewerFrames: () => result.client.supportsViewerFrames(),
         close: result.close,
       };
     };

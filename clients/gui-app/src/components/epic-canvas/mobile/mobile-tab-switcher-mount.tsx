@@ -1,5 +1,6 @@
 import { useCallback, useEffect } from "react";
 import { TabSwitcherSheet } from "@/components/epic-canvas/mobile/tab-switcher-sheet";
+import { useMobileTileLevel2Form } from "@/components/epic-canvas/mobile/use-mobile-tile-level2-form";
 import {
   useIsMobileSwitcherOpen,
   useMobileSwitcherStore,
@@ -16,12 +17,18 @@ import {
  * screen in states no sheet is listening in. Registering the tab id while
  * mounted is what lets the trigger see that and disable itself, rather than
  * writing an open flag nothing renders.
+ *
+ * The sheet draws only in the `bar` form. The menu reads the same open flag from
+ * under the tile's name. The column is already open, so a request to open
+ * (revealing a comment thread asks for one) is answered by being on screen, and
+ * is cleared here rather than left to pop the sheet open at the next rotation.
  */
 export function MobileTabSwitcherMount(props: {
   readonly epicId: string;
   readonly tabId: string;
 }) {
   const { epicId, tabId } = props;
+  const level2 = useMobileTileLevel2Form(tabId);
   const open = useIsMobileSwitcherOpen(tabId);
   const setOpen = useMobileSwitcherStore((s) => s.setOpen);
   const registerMount = useMobileSwitcherStore((s) => s.registerMount);
@@ -34,6 +41,11 @@ export function MobileTabSwitcherMount(props: {
     registerMount(tabId);
     return () => unregisterMount(tabId);
   }, [registerMount, tabId, unregisterMount]);
+  const columnDrawn = typeof level2 === "object";
+  useEffect(() => {
+    if (columnDrawn && open) setOpen(tabId, false);
+  }, [columnDrawn, open, setOpen, tabId]);
+  if (level2 !== "bar") return null;
   return (
     <TabSwitcherSheet
       epicId={epicId}

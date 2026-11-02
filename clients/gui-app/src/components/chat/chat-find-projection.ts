@@ -1,5 +1,9 @@
 import { lexer, type MarkedToken, type Token, type Tokens } from "marked";
-import { paintedBotSendOf, type BotSend } from "@/lib/bots/bot-send-tool";
+import {
+  paintedBotSendOf,
+  slackSendPlace,
+  type BotSend,
+} from "@/lib/bots/bot-send-tool";
 import { segmentsShownInTranscript } from "@/stores/chats/hidden-transcript-notices";
 import {
   buildChatActivityTimeline,
@@ -132,7 +136,7 @@ interface ChatFindRendering {
    */
   readonly splitLongTurns: boolean;
   /**
-   * In a bot's session (Tracy Bots T94), what a question's send card says of
+   * In a bot's session, what a question's send card says of
    * each question, read from the post the send wrote as the card reads it;
    * `null` outside a session.
    */
@@ -174,7 +178,7 @@ export function buildChatFindRows(
 }
 
 /**
- * A question's send card in a bot's session whose post is read (T94): what
+ * A question's send card in a bot's session whose post is read: what
  * it posted, and under each settled question what the card says of it.
  * `null` for every other item, which indexes as any tool row does.
  */
@@ -185,7 +189,7 @@ function botQuestionSendSearchUnits(
   if (statesOf === null || item.kind !== "segment") return null;
   if (item.segment.kind !== "tool") return null;
   const send = paintedBotSendOf(item.segment);
-  if (send?.kind !== "ask" || send.receipt === null) return null;
+  if (send?.kind !== "ask" || send.receipt?.slack !== null) return null;
   const states = statesOf(send.receipt);
   if (states === null) return null;
   return compactUnits([
@@ -201,29 +205,34 @@ function botQuestionSendSearchUnits(
  * What a bot's send card paints of what it posted: a question's text and
  * options, with each settled question's state where `states` names it, or a
  * reply's or announcement's text as its `TextSegment` paints it and a
- * reply's choices.
+ * reply's choices. A send posted in Slack leads with its place line (S4b).
  */
 function botSendSearchText(
   send: BotSend,
   states: ReadonlyArray<string | null> | null,
 ): string {
+  const slackPlace = slackSendPlace(send);
+  const place = slackPlace === null ? [] : [slackPlace];
   if (send.kind === "ask") {
     return normalizeSearchableText(
-      send.questions
-        .flatMap((question, index) => {
+      [
+        ...place,
+        ...send.questions.flatMap((question, index) => {
           const state = states?.[index] ?? null;
           return [
             question.text,
             ...question.options,
             ...(state === null ? [] : [state]),
           ];
-        })
-        .join("\n"),
+        }),
+      ].join("\n"),
     );
   }
   const choices = send.kind === "reply" ? send.options : [];
   return normalizeSearchableText(
-    [...textSegmentSearchText(send.text, false), ...choices].join("\n"),
+    [...place, ...textSegmentSearchText(send.text, false), ...choices].join(
+      "\n",
+    ),
   );
 }
 
@@ -883,7 +892,8 @@ function toolSegmentSearchText(segment: ToolSegment): ReadonlyArray<string> {
   const send = paintedBotSendOf(segment);
   if (send !== null) {
     // A bot's send card paints what it posted; its destination line names
-    // where, which is not the transcript's text.
+    // where, which is not the transcript's text - except a Slack send's,
+    // which is the only place that send is named (S4b).
     return [botSendSearchText(send, null)];
   }
   if (segment.agentMessageSend !== null) {

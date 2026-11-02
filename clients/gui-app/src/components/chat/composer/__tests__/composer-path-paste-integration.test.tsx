@@ -39,9 +39,9 @@ afterEach(() => {
 });
 
 /**
- * Real-editor integration coverage for the review-fix round on paste/drop
+ * Real-editor integration coverage for the fix round on paste/drop
  * path insertion. Mounts the actual `ComposerPromptEditor` wired to the
- * actual `useComposerHashPaste` handlers - the seam the prior review
+ * actual `useComposerHashPaste` handlers - the seam the prior pass
  * called out as untested (plain div / mocked handle would hide ProseMirror
  * ownership races, position mapping, undo grouping, and unmount liveness).
  */
@@ -129,7 +129,7 @@ describe("composer path paste/drop integration (real editor)", () => {
     });
   });
 
-  // Finding 1: ProseMirror must not also insert text/plain for file-like
+  // ProseMirror must not also insert text/plain for file-like
   // clipboards that carry a textual sibling (e.g. VS Code uri-list + plain).
   describe("finding 1 - file-like paste/drop ownership (no ProseMirror text race)", () => {
     it("keeps a stable URI-only workspace path relative and avoids a plain-text duplicate", async () => {
@@ -212,7 +212,7 @@ describe("composer path paste/drop integration (real editor)", () => {
     });
   });
 
-  // Finding 2 (+ concurrent race that relies on the same position mapping).
+  // The concurrent race that relies on the same position mapping.
   describe("finding 2 - paste-time position capture through caret moves", () => {
     it("inserts at the original paste position after a real post-paste edit moves the caret", async () => {
       let resolvePaths: ((paths: readonly string[]) => void) | null = null;
@@ -314,7 +314,7 @@ describe("composer path paste/drop integration (real editor)", () => {
       expect(joined.indexOf("mid.txt")).toBeLessThan(joined.indexOf("NEW"));
     });
   });
-  // Round-2 finding 3: `hasClaimableFileTransfer` parses URI content instead
+  // `hasClaimableFileTransfer` parses URI content instead
   // of trusting the `text/uri-list` type name alone, so an ordinary link
   // paste isn't silently swallowed.
   describe("round-2 finding 3 - ordinary link paste is not claimed as file-like", () => {
@@ -348,7 +348,7 @@ describe("composer path paste/drop integration (real editor)", () => {
     });
   });
 
-  // Finding 7: commit after unmount must not insert or toast.
+  // Commit after unmount must not insert or toast.
   describe("finding 7 - unmount liveness guard on path resolution", () => {
     it("does not insert or toast when path resolution settles after unmount", async () => {
       let resolvePaths: ((paths: readonly string[]) => void) | null = null;

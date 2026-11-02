@@ -119,7 +119,7 @@ export function FallbackLadderEditor(
       {/* The page's one statement of what a switch COSTS, and it belongs here -
           beside the two steps that cause it - rather than beside the
           switch-back choice, which is where it used to be implied and nowhere
-          stated. A user-lens review found the return row's "starts a fresh
+          stated. The return row's "starts a fresh
           session too" had no antecedent anywhere on the page: nothing had ever
           said the OUTBOUND switch started one either, so "too" pointed at a
           fact the reader had never been given. Said once, up front, it earns
@@ -189,8 +189,8 @@ export function FallbackLadderEditor(
             reopening. A rewrite compressed that to "stays in the list and comes
             back where it was", which reads as a contradiction - if it never
             left, what comes back? - and dropped the CONDITION. The fix for that
-            restored the condition by restoring the whole sequence, and a second
-            user-lens review caught what the sequence then implied: "turn it
+            restored the condition by restoring the whole sequence, and that
+            exposed what the sequence then implied: "turn it
             back on before you leave this page and it keeps its position" reads
             as advice to re-enable a step you had just deliberately disabled.
             The only fact worth the words is that steps STILL OFF move on

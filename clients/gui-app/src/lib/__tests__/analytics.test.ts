@@ -1438,7 +1438,7 @@ describe("analytics", () => {
       ).toBeNull();
     });
 
-    // The ticket's own rule: never draft text, titles, task/chat names, ids,
+    // The rule: never draft text, titles, task/chat names, ids,
     // host ids or paths. A payload carrying only those must fail closed.
     it("rejects a draft event payload carrying only what must never be sent", async () => {
       const { AnalyticsEvent, sanitizeAnalyticsProperties } =
@@ -1666,8 +1666,8 @@ describe("Layout page settings analytics", () => {
   // rather than the one property.
   //
   // The `layout.statusBar.*`, `layout.sidebar.*`, `layout.composer.*` and
-  // `layout.preset.*` ids join the list here for the same reason (L-46, L-54,
-  // C-47): Layout fires no per-control `setting_changed` at all now that
+  // `layout.preset.*` ids join the list here for the same reason (L-46, L-54):
+  // Layout fires no per-control `setting_changed` at all now that
   // `layout_snapshot` reports it (`trackLayoutSetting` and every one of these
   // ids were deleted with the old visual editor's analytics).
   //

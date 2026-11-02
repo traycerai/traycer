@@ -356,7 +356,7 @@ describe("surfaceHostOpenedTab", () => {
 
     surface({ source: "agent" });
 
-    // Browser category default is `split` (C3), so the tab lands in a NEW
+    // Browser category default is `split`, so the tab lands in a NEW
     // pane to the right, and that pane becomes the active one.
     const after = panes();
     expect(after).toHaveLength(2);

@@ -42,6 +42,7 @@ import { artifactSubscribeV10 } from "@traycer/protocol/host/epic/artifact-subsc
 import type {
   StreamCloseReason,
   StreamConnectionStatus,
+  StreamContinuity,
   StreamFrameEnvelope,
 } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
@@ -233,6 +234,7 @@ export interface StreamProxyStatus {
   readonly reason: StreamCloseReason | null;
   /** The transition's retry cause (see `StatusChangeHandler`). */
   readonly retryCause: FatalErrorDetails | null;
+  readonly continuity: StreamContinuity;
 }
 
 /** The per-SESSION negotiated version, replicated for a synchronous read. */

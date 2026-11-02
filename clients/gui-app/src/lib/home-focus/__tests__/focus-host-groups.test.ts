@@ -469,7 +469,7 @@ describe("groupRowsByHost", () => {
 });
 
 describe("groupRowsByHost with no active host", () => {
-  // The case the review found: two named hosts turn grouping on, and the
+  // The case: two named hosts turn grouping on, and the
   // unresolved row has nothing to resolve to. It must still appear.
   it("keeps unresolved rows in an unknown group, last, and loses none", () => {
     const rows = [

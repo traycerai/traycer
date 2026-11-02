@@ -52,7 +52,7 @@ import type {
 /**
  * Cross-seam coverage for `s6-renderer-local-admission`.
  *
- * The composition this ticket fixes has no other test owner: host Vitest
+ * The composition this change fixes has no other test owner: host Vitest
  * globally stubs auth, and GUI tests mock the host away. This file drives
  * the REAL `AuthService` (constructed internally by the REAL
  * `HostRuntimeProvider`, exactly as production boots it) through a faked
@@ -69,12 +69,12 @@ import type {
  * loading skeleton under `unverified` rather than the local rows the host
  * would happily serve", scoped OUT of `s6-renderer-local-admission`.
  *
- * That was accurate, and it was the P1 an external reviewer later filed
- * against this branch — written down here, in prose, before the review
+ * That was accurate, and it was the defect later filed
+ * against this branch — written down here, in prose, before the filing
  * existed. It sat because a limitation recorded in a comment has no owner
  * and no trigger; the same night, the `it.skip` in
  * `hooks/epics/__tests__/use-cloud-epic-tasks-query.test.tsx` recorded the
- * same gap a second time and was un-skipped only after the reviewer found it.
+ * same gap a second time and was un-skipped only after it was found.
  *
  * `resolveCloudTasksUserId` now gates on `admitsLocalPlane` and issues the
  * `localFirstPhase: "initial"` leg for an admitted identity, so the
@@ -94,7 +94,7 @@ import type {
  * This file's `LocalEpicsProbe` still drives `epic.listTasks` directly through
  * the same real `useHostQuery` primitive those components use internally,
  * WITHOUT their auth gate — now to keep this file testing only what THIS
- * ticket owns (whether the renderer ADMITS the user to a point where local,
+ * change owns (whether the renderer ADMITS the user to a point where local,
  * disk-served content renders and is interactive), rather than because the
  * surfaces cannot do it themselves.
  */
@@ -429,23 +429,6 @@ const DEFAULT_STORED_IDENTITY: StoredCredentialsIdentity = {
 };
 
 /**
- * `storedIdentity` parameterises WHICH principal `host.tokenStore.signIn`
- * mints the stored session for. `MockRunnerHost.tokenStore.signIn` already
- * accepts any identity (see its mock implementation), so this is fixture
- * plumbing only - no credential-layer work. Defaults to
- * {@link DEFAULT_STORED_IDENTITY} when the caller passes `undefined`, so both
- * existing arms below are unaffected; a later cross-principal test mints a
- * SECOND harness with a different identity to drive a two-principal scenario
- * through the same real `AuthService` × `useAuthStore` wiring.
- *
- * `T | undefined` with every caller passing explicitly, NOT `storedIdentity?:`.
- * The repo bans optional parameters in favour of this shape, and the three
- * lines below (`workspaceFolderPickerPaths: undefined`, `hasLocalHost`,
- * `traycerCli`) are the same convention in the same function. ESLint's
- * `optionalParameterRestrictions` happens not to reach a `TSPropertySignature`,
- * but that is an enforcement gap rather than a licence.
- */
-/**
  * Harnesses mounted by the current test, torn down unconditionally in
  * `afterEach`. See the note at the push site for why the per-test tail calls
  * are not sufficient on their own.
@@ -456,6 +439,23 @@ function mountHarness(opts: {
   readonly storedToken: string;
   readonly initialFetch: FetchHandler;
   readonly tasksHandler: ListTasksHandler;
+  /**
+   * `storedIdentity` parameterises WHICH principal `host.tokenStore.signIn`
+   * mints the stored session for. `MockRunnerHost.tokenStore.signIn` already
+   * accepts any identity (see its mock implementation), so this is fixture
+   * plumbing only - no credential-layer work. Defaults to
+   * {@link DEFAULT_STORED_IDENTITY} when the caller passes `undefined`, so all
+   * three existing arms below are unaffected; a later cross-principal test
+   * mints a SECOND harness with a different identity to drive a two-principal
+   * scenario through the same real `AuthService` × `useAuthStore` wiring.
+   *
+   * `T | undefined` with every caller passing explicitly, NOT `storedIdentity?:`.
+   * The repo bans optional parameters in favour of this shape, and the three
+   * lines below (`workspaceFolderPickerPaths: undefined`, `hasLocalHost`,
+   * `traycerCli`) are the same convention in the same function. ESLint's
+   * `optionalParameterRestrictions` happens not to reach a `TSPropertySignature`,
+   * but that is an enforcement gap rather than a licence.
+   */
   readonly storedIdentity: StoredCredentialsIdentity | undefined;
 }): Harness {
   const host = new MockRunnerHost({
@@ -514,7 +514,7 @@ function mountHarness(opts: {
           invalidator={null}
           requestId={null}
           // `null` installs the REAL `buildDefaultRemoteFetcher` (via
-          // `createAuthBoundHostDirectory`) — the path this ticket's fix
+          // `createAuthBoundHostDirectory`) — the path the fix
           // lives on. A stubbed fetcher here would suppress `GET
           // /api/v3/hosts` itself, making the absence assertions below
           // vacuous; see the file header.
@@ -532,7 +532,7 @@ function mountHarness(opts: {
       {/* Persistent, routing-independent admission sentinel: the REAL
           `RootLandingPage`, driven by the REAL store. It renders the REAL
           `AuthLandingPage` whenever `!admitsLocalPlane(status)` and `null`
-          otherwise — this is the mechanism the ticket fixes, not a stand-in
+          otherwise — this is the mechanism the fix is for, not a stand-in
           for it. */}
       <div data-testid="admission-sentinel">
         <RootLandingPage />
@@ -634,7 +634,7 @@ describe("renderer local admission — cross-seam (real AuthService × real useA
     );
     expect(ledger.validationSuccesses).toBe(0);
     expect(ledger.validationAttempts).toBeGreaterThan(0);
-    // network-error never authorizes a rotate spend (tech plan §5).
+    // network-error never authorizes a rotate spend.
     expect(ledger.refreshAttempts).toBe(0);
     // DISCRIMINATING ASSERTION, at the fetch boundary: the REAL
     // `buildDefaultRemoteFetcher` is installed (no stub — see

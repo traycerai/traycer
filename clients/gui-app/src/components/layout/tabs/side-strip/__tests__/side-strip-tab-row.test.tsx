@@ -90,7 +90,7 @@ const EPIC_TAB: Extract<HeaderTab, { kind: "epic" }> = {
   appearance: null,
 };
 
-/** The layout editor's session tab: its own solid amber object, never joined (audit F2). */
+/** The layout editor's session tab: its own solid amber object, never joined. */
 const SAMPLE_WORKSPACE_TAB: Extract<HeaderTab, { kind: "sample-workspace" }> = {
   kind: "sample-workspace",
   id: "s-session",

@@ -31,6 +31,7 @@ import {
   notificationEntityMatchesPresence,
 } from "@/lib/notifications/notification-entity";
 import { occurrenceKeyForNotification } from "@/lib/notifications/notification-occurrence";
+import { notificationRowBotId } from "@/lib/notifications/notification-row-bot-id";
 import { useCloudNotificationsStore } from "@/stores/notifications/cloud-notifications-store";
 import { useHostNotificationsStore } from "@/stores/notifications/host-notifications-store";
 import {
@@ -43,13 +44,15 @@ import {
   type ParsedNotificationActivationPayload,
 } from "@/lib/notifications/notification-activation-envelope";
 import type { NotificationPayload } from "@/lib/notifications/payload";
-import { isDroppedNotification } from "@/lib/notifications/dropped-notification-kinds";
+import { isLiveAnnouncedNotification } from "@/lib/notifications/dropped-notification-kinds";
 import {
   notificationChimeEventTypeForSeverities,
   playNotificationChimeSound,
   type NotificationChimeEventType,
 } from "@/lib/notifications/notification-chime";
 import { useSettingsStore } from "@/stores/settings/settings-store";
+import { standaloneBotName } from "@/lib/home-bots/standalone-bot-name";
+import { useStandaloneBotsStore } from "@/stores/bots/standalone-bots-store";
 
 export interface NotificationDisplayTarget {
   readonly showNotification: NotificationShow;
@@ -172,13 +175,14 @@ function eligibleForegroundDisplay(
   return projection === null ? null : { ...display, ...projection };
 }
 
+function currentAccountId(): string | null {
+  return useAuthStore.getState().contextMetadata?.userId ?? null;
+}
+
 function feedOccurrenceMatchesAccount(
   occurrence: NotificationFeedOccurrence,
 ): boolean {
-  return (
-    occurrence.userId ===
-    (useAuthStore.getState().contextMetadata?.userId ?? null)
-  );
+  return occurrence.userId === currentAccountId();
 }
 
 function feedOccurrenceIsFocused(
@@ -474,9 +478,12 @@ export async function displayHostChannelEmission(
 ): Promise<void> {
   const focused = readFocusedHostNotificationPresence();
   const rows: MergedNotificationRow[] = [];
-  const occurrences: NotificationFeedOccurrence[] = [];
+  const kept: {
+    readonly key: string;
+    readonly entry: HostNotificationCloudEntryV26;
+  }[] = [];
   for (const entry of entries) {
-    if (isDroppedNotification(entry, null)) continue;
+    if (!isLiveAnnouncedNotification(entry, null)) continue;
     const key = feedOccurrenceKey(originHostId, entry.id, entry);
     if (feedDisplayReceipts.has(key) || entry.readAt !== null) {
       continue;
@@ -490,19 +497,64 @@ export async function displayHostChannelEmission(
     ) {
       continue;
     }
-    const row = rowFromHostEntry(entry);
-    rows.push(row);
-    occurrences.push(
-      feedOccurrenceDisplay({
-        row,
-        key,
-        originHostId,
-        feedSource: "host",
-        entry,
-      }),
-    );
+    rows.push(rowFromHostEntry(entry));
+    kept.push({ key, entry });
   }
-  await displayFeedOccurrences(rows, occurrences, target);
+  await displayOnceBotNamesSettle(
+    rows,
+    (userId) =>
+      rows.map((row, index) =>
+        feedOccurrenceDisplay({
+          row,
+          key: kept[index].key,
+          userId,
+          originHostId,
+          feedSource: "host",
+          entry: kept[index].entry,
+        }),
+      ),
+    target,
+  );
+}
+
+/**
+ * Resolves once the directory is an answer, or `userId` is no longer the
+ * signed-in account and the arrival waiting on it is not theirs to see.
+ */
+function botNamesSettledOrAccountLeft(userId: string | null): Promise<void> {
+  const ended = (): boolean =>
+    useStandaloneBotsStore.getState().settled || currentAccountId() !== userId;
+  if (ended()) return Promise.resolve();
+  return new Promise((resolve) => {
+    const listener = (): void => {
+      if (!ended()) return;
+      leaveDirectory();
+      leaveAuth();
+      resolve();
+    };
+    const leaveDirectory = useStandaloneBotsStore.subscribe(listener);
+    const leaveAuth = useAuthStore.subscribe(listener);
+  });
+}
+
+/**
+ * The first accepted occurrence's title is the one the native banner keeps, so
+ * a bot's row is not named until the directory has answered; any other row
+ * goes straight on. The occurrence keeps the account the arrival came to, so
+ * one whose account left during the wait fails the account fence below it.
+ */
+async function displayOnceBotNamesSettle(
+  rows: ReadonlyArray<MergedNotificationRow>,
+  occurrences: (
+    userId: string | null,
+  ) => ReadonlyArray<NotificationFeedOccurrence>,
+  target: NotificationDisplayTarget,
+): Promise<void> {
+  const userId = currentAccountId();
+  if (rows.some((row) => notificationRowBotId(row) !== null)) {
+    await botNamesSettledOrAccountLeft(userId);
+  }
+  await displayFeedOccurrences(rows, occurrences(userId), target);
 }
 
 /** Cloud copies use the origin's semantic key, never their replica row id. */
@@ -513,6 +565,9 @@ export async function displayCloudSnapshotArrivals(
   const focused = readFocusedHostNotificationPresence();
   const deliveries: Promise<void>[] = [];
   for (const entry of entries) {
+    // An arrival is a row the cloud store already KEPT, so the read policy has
+    // run; what is left to decide is whether this kind announces itself.
+    if (!isLiveAnnouncedNotification(entry.entry, entry.entryId)) continue;
     const key = feedOccurrenceKey(
       entry.originHostId,
       entry.coalesceKey,
@@ -535,12 +590,13 @@ export async function displayCloudSnapshotArrivals(
     }
     const row = rowFromCloudFeedRow(entry);
     deliveries.push(
-      displayFeedOccurrences(
+      displayOnceBotNamesSettle(
         [row],
-        [
+        (userId) => [
           feedOccurrenceDisplay({
             row,
             key,
+            userId,
             originHostId: entry.originHostId,
             feedSource: "cloud",
             entry: entry.entry,
@@ -556,12 +612,14 @@ export async function displayCloudSnapshotArrivals(
 function feedOccurrenceDisplay({
   row,
   key,
+  userId,
   originHostId,
   feedSource,
   entry,
 }: {
   readonly row: MergedNotificationRow;
   readonly key: string;
+  readonly userId: string | null;
   readonly originHostId: string | null;
   readonly feedSource: "host" | "cloud";
   readonly entry: HostNotificationCloudEntryV26;
@@ -569,7 +627,7 @@ function feedOccurrenceDisplay({
   const content = buildNotificationToastContent([row]);
   return {
     key,
-    userId: useAuthStore.getState().contextMetadata?.userId ?? null,
+    userId,
     chimeEventType: content.chimeEventType,
     title: content.title,
     body: content.body,
@@ -744,7 +802,11 @@ function buildNotificationToastContent(
     "done";
   if (rows.length === 1) {
     return {
-      title: first.title,
+      title: standaloneBotName(
+        useStandaloneBotsStore.getState().directory,
+        notificationRowBotId(first),
+        first.title,
+      ),
       body: first.body,
       row: first,
       payload: first.payload,

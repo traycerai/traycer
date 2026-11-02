@@ -259,6 +259,7 @@ function surfacesProps(
       steerCapable: false,
       steerProtocolSupported: true,
       autoPermissionModeProtocolSupported: null,
+      ultracodeProtocolSupported: false,
       getDraftBlobBridgeSupported: () => false,
       // Composer-only under the new contract; Stop no longer reads this.
       getActiveTurnForSteer: () => null,

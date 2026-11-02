@@ -33,8 +33,8 @@ export interface RailEntry {
    *  not here. */
   readonly degraded: boolean;
   /** Bottom-right accent-dot data, present only when the provider has 2+
-   *  selectable profiles (progressive disclosure - see the multi-profile
-   *  decision log's "V1 surfaces" row). `null` renders no dot at all. */
+   *  selectable profiles (progressive disclosure).
+   *  `null` renders no dot at all. */
   readonly accentDot: ProfileAccentDotInput | null;
   /** Non-null while this provider's managed pack is downloading or stuck on an
    *  error. The entry always stays VISIBLE and labelled - the dictation-mic

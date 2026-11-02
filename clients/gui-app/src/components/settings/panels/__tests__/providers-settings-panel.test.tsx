@@ -371,7 +371,7 @@ vi.mock("@/hooks/providers/use-providers-skills-mutate-mutation", () => ({
   }),
 }));
 
-// Sibling ticket 11 owns the MCP tab; mock its hooks so panel tests stay isolated.
+// The MCP tab is owned elsewhere; mock its hooks so panel tests stay isolated.
 vi.mock("@/hooks/providers/use-providers-mcp-list-query", () => ({
   useProvidersMcpList: () => ({
     data: { servers: [] },
@@ -527,7 +527,7 @@ vi.mock("@/hooks/providers/use-providers-delete-env-override-mutation", () => ({
 
 // Both the plain and `*ForClient` names are exported: the inline profile
 // re-auth panel calls the plain hooks (host-runtime-context-
-// scoped, unchanged by S8), while `AddProviderProfileDialog` calls the
+// scoped), while `AddProviderProfileDialog` calls the
 // `*ForClient` variants with an explicit client (also Settings' own host in
 // this tree - see the `@/lib/host` mock below). Both resolve to the same
 // recorded mock so assertions don't care which path fired.
@@ -805,7 +805,7 @@ vi.mock("@/lib/host", async (importOriginal) => {
     // wrapper and the selected-host refresh lands on the ambient host.
     useHostBinding: () => providerMocks.ambientBinding,
     useHostClient: () => null,
-    // The SPINE, a separate export since redesign P2.1.
+    // The SPINE, a separate export.
     useHostRuntimeClient: () => null,
   };
 });
@@ -904,8 +904,8 @@ vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => "local",
 }));
 
-vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
-  useHostDirectoryList: () => ({
+vi.mock("@/hooks/host/use-host-directory-list-query", () => {
+  const useHostDirectoryList = () => ({
     data: [
       {
         hostId: "local",
@@ -915,8 +915,12 @@ vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
         websocketUrl: "ws://127.0.0.1:0",
       },
     ],
-  }),
-}));
+  });
+  return {
+    useHostDirectoryList,
+    useHostDirectoryListQuery: useHostDirectoryList,
+  };
+});
 
 vi.mock("@/hooks/host/use-host-client-for", () => ({
   useHostClientFor: () => null,
@@ -1213,7 +1217,7 @@ const FULL_TABS: ProviderNativeCapabilities = {
   plugins: {
     addModes: ["cli-source"],
     marketplaceBrowse: false,
-    // Both scopes so the F5 scope picker renders (global-only contracts get a
+    // Both scopes so the scope picker renders (global-only contracts get a
     // plain "every workspace" line instead of a trigger with locationLabel).
     actionScopes: {
       list: [...BOTH_SCOPES],
@@ -2549,7 +2553,7 @@ describe("<ProvidersSettingsPanel />", () => {
     // hidesCliCandidates(amp||cursor) used to suppress this whole tab on the
     // premise that those two have no user-selectable binary. Both spawn the
     // Traycer-resolved binary for MCP write verbs, so the table is the only
-    // route out of the F2 dead end when nothing is on PATH.
+    // route out of the dead end when nothing is on PATH.
     providerMocks.listResult.data = {
       providers: [
         providerState({
@@ -3242,6 +3246,73 @@ describe("<ProvidersSettingsPanel />", () => {
       );
       expect(container2.querySelector("[inert]")).toBeNull();
     });
+
+    it("names the reason at the top of the greyed tabs", () => {
+      singleProvider({ enabled: false });
+      render(
+        <TooltipProvider>
+          <ProvidersSettingsPanel />
+        </TooltipProvider>,
+      );
+      selectTab("CLI & Args");
+
+      expect(
+        screen.getByText(
+          "Traycer is off. Turn it on to add a key or change its settings.",
+        ),
+      ).toBeTruthy();
+    });
+
+    it("control: names no reason once the provider is on", () => {
+      singleProvider({ enabled: true });
+      render(
+        <TooltipProvider>
+          <ProvidersSettingsPanel />
+        </TooltipProvider>,
+      );
+
+      expect(screen.queryByText(/is off\. Turn it on/)).toBeNull();
+    });
+
+    it("names no reason on the Usage tab, which stays usable while the provider is off", () => {
+      singleProvider({ enabled: false });
+      render(
+        <TooltipProvider>
+          <ProvidersSettingsPanel />
+        </TooltipProvider>,
+      );
+
+      selectTab("Profiles & Limits");
+
+      expect(screen.queryByText(/is off\. Turn it on/)).toBeNull();
+    });
+  });
+
+  it("describes Cursor as its coding agent, signed in with its own API key", () => {
+    providerMocks.listResult.data = {
+      providers: [
+        providerState({
+          providerId: "cursor",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+          nativeCapabilities: CURSOR_TABS,
+        }),
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    expect(
+      screen.getByText(
+        "Cursor's coding agent, signed in with your Cursor API key.",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByText(/SDK-driven agents/)).toBeNull();
   });
 
   it("renders capability-driven tabs and hides unsupported ones", () => {
@@ -3987,7 +4058,7 @@ describe("<ProvidersSettingsPanel />", () => {
     );
 
     selectTab("Plugins");
-    // F5 replaced the "Installed plugins" heading with the shared scope
+    // The "Installed plugins" heading was replaced with the shared scope
     // picker. Match the MCP suite's aria-label idiom so this both identifies
     // the Plugins tab body and covers the control the heading used to stand
     // in for.
@@ -4314,8 +4385,14 @@ describe("<ProvidersSettingsPanel />", () => {
   });
 
   describe("the own-login row on a Local pick", () => {
+    // Both sources of the reconciled verdict (`isProviderAmbientSignedOut` /
+    // `isProviderAmbientAuthenticated`) are driven from the SAME status here,
+    // as a real `providers.list` row keeps them: the top-level summary and
+    // the ambient profile row answer together, never one lagging the other
+    // in a fixture that only varies one of the two.
     function renderOwnLogin(
       authStatus: ProviderProfile["auth"]["status"],
+      authPending: boolean,
     ): HTMLElement {
       useSettingsEnvironmentPickStore.setState({
         pick: {
@@ -4324,35 +4401,45 @@ describe("<ProvidersSettingsPanel />", () => {
           hostName: "windows-test-machine",
         },
       });
+      const auth: ProviderAuth = {
+        status: authStatus,
+        badgeText: null,
+        label: null,
+        detail: null,
+      };
       providerMocks.listResult.data = {
         providers: [
           {
-            ...providerState({
-              providerId: "claude-code",
-              selected: { kind: "bundled" },
-              candidates: [
-                {
-                  kind: "bundled",
-                  path: "/opt/traycer/bin/claude",
-                  version: "1.0.0",
-                  available: true,
-                  versionPending: false,
-                },
-              ],
-              envOverrides: [],
-              profiles: [
-                profile({
-                  profileId: "ambient",
-                  kind: "ambient",
-                  label: "Terminal account",
-                  email: null,
-                  tier: null,
-                  authStatus,
-                  duplicateOfProfileId: null,
-                  ambientDriftNotice: null,
-                }),
-              ],
-            }),
+            ...providerStateWithAuth(
+              {
+                providerId: "claude-code",
+                selected: { kind: "bundled" },
+                candidates: [
+                  {
+                    kind: "bundled",
+                    path: "/opt/traycer/bin/claude",
+                    version: "1.0.0",
+                    available: true,
+                    versionPending: false,
+                  },
+                ],
+                envOverrides: [],
+              },
+              auth,
+              authPending,
+            ),
+            profiles: [
+              profile({
+                profileId: "ambient",
+                kind: "ambient",
+                label: "Terminal account",
+                email: null,
+                tier: null,
+                authStatus,
+                duplicateOfProfileId: null,
+                ambientDriftNotice: null,
+              }),
+            ],
             loginCapability: {
               oauthArgs: ["auth", "login"],
               token: null,
@@ -4370,37 +4457,48 @@ describe("<ProvidersSettingsPanel />", () => {
         </TooltipProvider>,
       );
       openProfilesTab();
-      const row = screen
-        .getByText("works on this computer only")
-        .closest('[data-slot="profile-summary-actions"]');
+      // The ambient profile is the only one here, so it is also the
+      // selected row: one match regardless of which branch it renders.
+      const row = document.querySelector(
+        '[data-slot="profile-summary-actions"]',
+      );
       if (!(row instanceof HTMLElement))
         throw new Error("Expected own-login row");
       return row;
     }
 
     it("names the computer and badges an authenticated login Signed in", () => {
-      const row = renderOwnLogin("authenticated");
+      const row = renderOwnLogin("authenticated", false);
 
+      expect(
+        within(row).getByText("works on this computer only"),
+      ).toBeDefined();
       expect(
         within(row).getByText("Signed in", { selector: '[data-slot="badge"]' }),
       ).toBeDefined();
-      expect(within(row).queryByText(/couldn't be checked/)).toBeNull();
+      expect(within(row).queryByText(/isn't signed in/)).toBeNull();
+      expect(within(row).queryByText(/Couldn't check/)).toBeNull();
     });
 
-    it("badges an unauthenticated login Signed out", () => {
-      const row = renderOwnLogin("unauthenticated");
+    it("shows no own-login row for a definitively signed-out login, only Sign in", () => {
+      const row = renderOwnLogin("unauthenticated", false);
 
+      expect(within(row).getByText(/isn't signed in on/)).toBeDefined();
+      expect(within(row).queryByText("works on this computer only")).toBeNull();
       expect(
-        within(row).getByText("Signed out", {
+        within(row).queryByText("Signed out", {
           selector: '[data-slot="badge"]',
         }),
+      ).toBeNull();
+      expect(
+        within(row).getByRole("button", { name: "Sign in" }),
       ).toBeDefined();
     });
 
-    it("says an unavailable login couldn't be checked, never Unavailable, and Retry refreshes the providers", () => {
-      const row = renderOwnLogin("unavailable");
+    it("says a failed check couldn't be checked, never Unavailable, and Retry refreshes the providers", () => {
+      const row = renderOwnLogin("unavailable", false);
 
-      expect(within(row).getByText(/couldn't be checked/)).toBeDefined();
+      expect(within(row).getByText(/Couldn't check/)).toBeDefined();
       expect(within(row).queryByText(/Unavailable/i)).toBeNull();
       expect(
         within(row).queryByText("Signed in", {
@@ -4412,6 +4510,19 @@ describe("<ProvidersSettingsPanel />", () => {
       fireEvent.click(within(row).getByRole("button", { name: "Retry" }));
 
       expect(providerMocks.refreshProviders).toHaveBeenCalledOnce();
+    });
+
+    it("renders a neutral checking state while the probe is still running, never the failure message or Retry", () => {
+      const row = renderOwnLogin("unavailable", true);
+
+      expect(within(row).getByText(/Checking/)).toBeDefined();
+      expect(within(row).queryByText(/Couldn't check/)).toBeNull();
+      expect(within(row).queryByRole("button", { name: "Retry" })).toBeNull();
+      expect(
+        within(row).queryByText("Signed in", {
+          selector: '[data-slot="badge"]',
+        }),
+      ).toBeNull();
     });
   });
 

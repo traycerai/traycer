@@ -40,11 +40,16 @@ function firsthandHost(host: HostScopeOption): FirsthandHost {
  * Every surface that names or counts these hosts reads this: the status
  * chip and its popover, Personal's dropdown row, Getting started, the move
  * sheet's reach line.
+ *
+ * `enabled` is the caller's own: a Local row's save reaches only this
+ * computer and never reads `hosts`, so it passes `false` rather than firing
+ * the polled `environment.host.list` read for a result it discards.
  */
 export function useHostsRunningConfiguration(
   target:
     | { readonly kind: "personal" }
     | { readonly kind: "team"; readonly environmentId: string },
+  enabled: boolean,
 ): HostsRunningConfiguration {
   const client = usePoolTierHostClient(useHostClient());
   const personalTarget = target.kind === "personal";
@@ -58,7 +63,7 @@ export function useHostsRunningConfiguration(
     params: { environmentId: environmentId ?? "" },
     cacheKeyIdentity: [viewerUserId],
     options: {
-      enabled: environmentId !== null && viewerUserId.length > 0,
+      enabled: enabled && environmentId !== null && viewerUserId.length > 0,
       poll: true,
     },
   });
@@ -117,6 +122,7 @@ export function useHostsRunningConfiguration(
     state = "failed";
   return {
     hosts: model.hosts,
+    thisComputerUnread: unreadHostIds.size > 0,
     collisions: model.collisions,
     state,
     retry,
@@ -128,6 +134,8 @@ export function useHostsRunningConfiguration(
  * The computers and sandboxes running Personal
  * ({@link useHostsRunningConfiguration}).
  */
-export function useHostsRunningPersonal(): HostsRunningConfiguration {
-  return useHostsRunningConfiguration(PERSONAL_TARGET);
+export function useHostsRunningPersonal(
+  enabled: boolean,
+): HostsRunningConfiguration {
+  return useHostsRunningConfiguration(PERSONAL_TARGET, enabled);
 }

@@ -27,7 +27,6 @@ import {
 import { HowTraycerHandlesThis } from "@/components/settings/members/how-traycer-handles-this";
 import { dataHandlingNoticeText } from "@/components/settings/members/data-handling-notice-text";
 import { SECRET_CUSTODY_SENTENCE } from "@/lib/sandboxes/secrets-page-copy";
-import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 
 type ProviderId = ProviderCliState["providerId"];
 
@@ -256,11 +255,7 @@ export function ProviderApiKeySection({
   );
 }
 
-/**
- * Under the key field, where the key comes from and where a saved one is
- * kept. A build without environments (`unreleased-features.ts`) draws one
- * line, as before them: the shell's key, or the stored one.
- */
+/** Under the key field, where the key comes from and where a saved one is kept. */
 function ApiKeySourceLines(props: {
   readonly providerId: ProviderId;
   readonly fromShell: boolean;
@@ -270,15 +265,11 @@ function ApiKeySourceLines(props: {
 }): ReactNode {
   const { providerId, fromShell, personalSecret } = props;
   const envVar = envNamePlaceholder(providerId);
-  const custody =
-    !personalSecret && (UNRELEASED_FEATURES_ENABLED || !fromShell);
   return (
     <>
       {fromShell ? (
         <p className="text-ui-xs text-muted-foreground">
-          {UNRELEASED_FEATURES_ENABLED
-            ? `Using ${envVar} from your shell. Save a key here to override it.`
-            : `Using ${envVar} from your shell environment. Save a key here to override it.`}
+          {`Using ${envVar} from your shell. Save a key here to override it.`}
         </p>
       ) : null}
       {personalSecret ? (
@@ -289,7 +280,7 @@ function ApiKeySourceLines(props: {
           <HowTraycerHandlesThis noticeText={dataHandlingNoticeText()} />
         </>
       ) : null}
-      {custody ? (
+      {personalSecret ? null : (
         <p className="text-ui-xs text-muted-foreground">
           {deviceKeyCustodyLine(
             props.hostName,
@@ -298,7 +289,7 @@ function ApiKeySourceLines(props: {
             hostRunsPersonal(props.principal),
           )}
         </p>
-      ) : null}
+      )}
     </>
   );
 }

@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import * as Y from "yjs";
 import { routeNotificationForHost } from "@/lib/notifications/payload";
 import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
 import {
@@ -13,15 +12,8 @@ import type {
   EpicCanvasTileRef,
 } from "@/stores/epics/canvas/types";
 import type { TilePane } from "@/stores/epics/canvas/tile-tree";
-import {
-  __getOpenEpicRegistryForTests,
-  getOpenEpicRegistry,
-  handleHostIds,
-} from "@/lib/registries/epic-session-registry";
-import { openStoreForTest } from "@/stores/epics/open-epic/test-support/open-store-for-test";
-import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
-import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
-import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
+import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
+import { newEmptyEpicSession } from "@/stores/epics/open-epic/test-support/empty-epic-session";
 
 /**
  * Ticket: a cloned agent can leave TWO tiles with the SAME chat id open in
@@ -354,80 +346,16 @@ describe("open-chat notification routing, an active tile A + a CLOSED same-id ti
   });
 });
 
-function encodeBase64(bytes: Uint8Array): string {
-  return btoa(String.fromCharCode(...bytes));
-}
-
-function makeDeadSessionMeta(epicId: string): SnapshotMetaEpic {
-  return {
-    schemaVersion: "1.0",
-    epicLight: {
-      id: epicId,
-      title: "Epic test",
-      initialUserPrompt: "",
-      ticketCount: 0,
-      specCount: 0,
-      storyCount: 0,
-      reviewCount: 0,
-      status: "open",
-      createdAt: 0,
-      updatedAt: 0,
-      createdBy: "u",
-      version: "1",
-    },
-    permissionRole: "editor",
-    repos: [],
-    workspaces: [],
-    repoMapping: [],
-    workspaceFolders: [],
-    unresolvedRepos: [],
-    hostStateVectorBase64: encodeBase64(Y.encodeStateVector(new Y.Doc())),
-  };
-}
-
-/**
- * A live, loaded Epic session with an EMPTY tree - the projection a remote
- * deletion leaves behind once it has synced. No `tuiAgents`/`chats` entry is
- * ever seeded for the closed row this suite proves dead.
- */
-function newDeadEpicSession(epicId: string, hostId: string): void {
-  const captured: { value: EpicStreamCallbacks | null } = { value: null };
-  const factory: EpicStreamClientFactory = (_id, callbacks) => {
-    captured.value = callbacks;
-    return {
-      applyUpdate: () => undefined,
-      awareness: () => undefined,
-      applyArtifactRoomUpdate: () => undefined,
-      artifactRoomAwareness: () => undefined,
-      retryMigration: () => undefined,
-      close: () => undefined,
-    };
-  };
-  const handle = openStoreForTest({
-    epicId,
-    userId: null,
-    factories: { streamClientFactory: factory, laneSelection: null },
-    writeCommand: null,
-  });
-  if (captured.value === null) throw new Error("stream factory not invoked");
-  captured.value.onSnapshot(
-    makeDeadSessionMeta(epicId),
-    Y.encodeStateAsUpdate(new Y.Doc()),
-  );
-  getOpenEpicRegistry().acquireMounted(epicId, () => handle);
-  const sessionHandle = getOpenEpicRegistry().peek(epicId);
-  if (sessionHandle === null) throw new Error("expected a mounted session");
-  // The check this suite exercises judges same-host-ness against the
-  // SESSION's own stamped host, not the app-wide effective one.
-  handleHostIds.set(sessionHandle, hostId);
-}
-
-describe("open-chat notification routing, a closed tile whose record is proven dead", () => {
+describe("open-chat notification routing, a closed tile with no record in the session", () => {
   afterEach(() => {
     __getOpenEpicRegistryForTests().disposeAll();
   });
 
-  it("does not reopen a proven-dead closed agent tile, and discards the stale payload", () => {
+  /** Opens and closes a terminal-agent tile, leaving its preserved payload. */
+  function closeAgentTile(): {
+    readonly tabId: string;
+    readonly closedAgent: EpicCanvasTileRef;
+  } {
     const store = useEpicCanvasStore.getState();
     const tabId = store.openEpicTab("epic-1", "Epic 1");
     const closedAgent = makeOpenableNodeRef({
@@ -444,18 +372,28 @@ describe("open-chat notification routing, a closed tile whose record is proven d
         closedAgent.instanceId
       ],
     ).toBeDefined();
+    return { tabId, closedAgent };
+  }
 
-    // A remote deletion has since synced: the session's own loaded tree no
-    // longer carries this agent at all.
-    newDeadEpicSession("epic-1", "host-open");
-
-    const navigate = vi.fn();
-    const routed = routeNotificationForHost(
-      navigate,
+  function routeAgentNotification(): boolean {
+    return routeNotificationForHost(
+      vi.fn(),
       { kind: "chat", epicId: "epic-1", chatId: "agent-1" },
       1_000,
       { originHostId: "host-open", effectiveHostId: "host-open" },
     );
+  }
+
+  it("does not reopen a proven-dead closed agent tile, and discards the stale payload", () => {
+    const { tabId, closedAgent } = closeAgentTile();
+
+    // A remote deletion has since synced: the session's own loaded tree no
+    // longer carries this agent, and the answered `epic.listTuiAgents` is what
+    // proves the row is missing rather than not here yet.
+    const session = newEmptyEpicSession("epic-1", "host-open");
+    session.store.getState().markTuiAgentRecordListAuthoritative();
+
+    const routed = routeAgentNotification();
 
     expect(routed).toBe(false);
     const after = useEpicCanvasStore.getState();
@@ -465,5 +403,14 @@ describe("open-chat notification routing, a closed tile whose record is proven d
     expect(
       after.closedTilePayloadsByTabId[tabId]?.[closedAgent.instanceId],
     ).toBeUndefined();
+  });
+
+  /** A missing row proves nothing until the list that would carry it answers. */
+  it("reopens a closed agent tile while its record list has not answered", () => {
+    const { tabId, closedAgent } = closeAgentTile();
+    newEmptyEpicSession("epic-1", "host-open");
+
+    expect(routeAgentNotification()).toBe(true);
+    expect(requirePane(tabId).previewTabId).toBe(closedAgent.instanceId);
   });
 });

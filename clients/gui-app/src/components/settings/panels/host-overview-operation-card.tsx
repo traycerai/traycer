@@ -65,7 +65,7 @@ import type { HostUpdateCompletion } from "@/hooks/host/use-host-update-completi
  *
  * When the view carries an ATTEMPT and the host advertises the bound update
  * methods, the panel routes these two handlers to `host.update.activate` and
- * `host.update.continue` against that attempt instead (D17). Deliberately no
+ * `host.update.continue` against that attempt instead. Deliberately no
  * new prop and no new branch here: the decision is "what is this park waiting
  * for, and can this host be asked directly", which is a question about the
  * host's capabilities and the attempt's continuation — neither of which this

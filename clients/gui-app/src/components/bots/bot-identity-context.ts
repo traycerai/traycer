@@ -2,7 +2,7 @@ import { createContext, useContext } from "react";
 import type { EnvironmentMember } from "@traycer/protocol/host/environment/contracts";
 
 /**
- * Who answers for a bot (Tracy Bots, T62): the person whose personal bot it
+ * Who answers for a bot: the person whose personal bot it
  * is, or the team whose bot it is.
  */
 export type BotOwner =

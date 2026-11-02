@@ -22,7 +22,7 @@ import {
 } from "@/hooks/host/use-host-negotiated-method-version";
 
 /**
- * Pins the tri-state contract fixed by the A2 fixup: `null` for "not yet
+ * Pins the tri-state contract fixed by A2: `null` for "not yet
  * negotiated" must not collapse into `false` for "negotiated but absent",
  * mirroring `useHostMethodSupport`'s precedent.
  */
@@ -96,7 +96,7 @@ describe("useHostNegotiatedMethodVersion", () => {
   });
 
   /**
-   * Cold-review finding 3: a fresh legacy (name-only) recording of a PRESENT
+   * A fresh legacy (name-only) recording of a PRESENT
    * method must not read as `false` ("negotiated absent") - the method is
    * present, only its version is unknown, which stays `null`.
    */
@@ -111,7 +111,7 @@ describe("useHostNegotiatedMethodVersion", () => {
   });
 
   /**
-   * Cold-review finding 3, second ablation: a full-manifest version must not
+   * Second ablation: a full-manifest version must not
    * outlive a later legacy name-only recording for the same host. Once the
    * name-only writer has run, the stale `{major, minor}` must not resurface -
    * the read stays `null` (present, version unknown), not the old version.

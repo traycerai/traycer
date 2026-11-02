@@ -588,9 +588,31 @@ describe("projectProfileUsage", () => {
       kind: "unavailable",
       severity: "unknown",
       reason: "insufficient_permissions",
+      chatCredential: null,
       compactWindow: null,
       windows: [],
       checkedAt: NOW,
+    });
+  });
+
+  it("carries the chat credential the host named on an unavailable reading", () => {
+    const unavailable: ProviderRateLimitEnvelope = {
+      latest: {
+        provider: "claude-code",
+        available: false,
+        reason: "rate_limits_not_available",
+        chatCredential: { kind: "cloud-provider", source: "bedrock" },
+      },
+      lastGood: null,
+      lastGoodAt: null,
+      lastFailureAt: null,
+      credentialGeneration: null,
+      episode: NO_EPISODE,
+    };
+    expect(project("unknown", NOW, unavailable, false)).toMatchObject({
+      kind: "unavailable",
+      reason: "rate_limits_not_available",
+      chatCredential: { kind: "cloud-provider", source: "bedrock" },
     });
   });
 

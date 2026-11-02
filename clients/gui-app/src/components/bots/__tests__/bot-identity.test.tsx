@@ -1,5 +1,5 @@
 /**
- * A bot looks like a bot (Tracy Bots, T62): on a bot's channel rows the
+ * A bot looks like a bot: on a bot's channel rows the
  * bot's picture is a squircle and a person's a circle, read from the
  * rendered element's clip; a row names no owner, which the bot's card
  * carries; and the bot's card says what it is doing now from the real `useBotActivity` over the real shared
@@ -17,6 +17,7 @@ import type {
 } from "@traycer/protocol/host/bot/schemas";
 import type { EnvironmentMember } from "@traycer/protocol/host/environment/contracts";
 import { avatarShape } from "@/components/bots/__tests__/avatar-shape";
+import { creatureMark, drawCreatureMark } from "@/lib/bots/creature-mark";
 import {
   BotIdentityContext,
   type BotIdentity,
@@ -31,7 +32,7 @@ import {
 import { ChatMessage } from "@/components/chat/chat-message";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { __resetBotSubscriptionsForTesting } from "@/hooks/bots/use-bot-subscription";
-import { useBotTabsStore } from "@/stores/bots/bot-tabs-store";
+import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 import {
   StubHostStreamClient,
@@ -66,8 +67,6 @@ const EMPTY_BACKGROUND_TOOL_BLOCK_IDS: ReadonlySet<string> = new Set();
 
 const PRESENTATION: ChatBotPresentation = {
   botTitle: "Tracy",
-  scrollToMessage: null,
-  replyFollowsPost: null,
   threadLine: null,
   openThread: null,
   openAnnouncementThread: null,
@@ -210,15 +209,19 @@ function mount(
 }
 
 beforeEach(() => {
-  useBotTabsStore
-    .getState()
-    .openBotTab({ botId: BOT_ID, hostId: HOST_ID, title: "Tracy" });
+  useTracySurfaceStore.getState().openSurface(HOST_ID);
+  useTracySurfaceStore.getState().selectChannel(BOT_ID);
 });
 
 afterEach(() => {
   cleanup();
   __resetBotSubscriptionsForTesting();
-  useBotTabsStore.setState({ tabs: {} });
+  useTracySurfaceStore.setState({
+    open: false,
+    hostId: null,
+    botId: null,
+    visitedBotIds: [],
+  });
   stream.client = null;
 });
 
@@ -234,8 +237,13 @@ describe("a bot channel's rows", () => {
     expect(
       avatarShape(within(memberRow).getByTestId("chat-sender-avatar")),
     ).toBe("circle");
-    // Without a picture, the initials stand in.
-    expect(within(botRow).getByTestId("bot-avatar").textContent).toBe("TR");
+    // The bot is its own creature mark, at the message row's 40 px.
+    expect(
+      within(botRow)
+        .getByTestId("bot-avatar")
+        .querySelector('[data-slot="bot-creature"] path')
+        ?.getAttribute("d"),
+    ).toBe(drawCreatureMark(creatureMark(BOT_ID), 40).path);
   });
 });
 

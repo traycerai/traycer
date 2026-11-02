@@ -327,7 +327,7 @@ type LeftPanelRailDragSource = Extract<
  * `source.origin` does not part the branches.
  *
  * It resolves through the arrangement's own movers rather than a second copy
- * of them (R5R-06), so the app's rail drag and the editor's canvas drop place
+ * of them, so the app's rail drag and the editor's canvas drop place
  * a member by exactly the same rule.
  */
 export function resolveRailForDrop(
@@ -480,7 +480,7 @@ function placeResolvedCanvasTile(
     return false;
   }
   // A drop position IS the placement decision, so it travels as the intent's
-  // explicit placement (C7) - center lands as a tab at the drop index, an
+  // explicit placement - center lands as a tab at the drop index, an
   // edge splits. Everything else (focus, route, analytics) is the resolver's.
   //
   // A ref ALREADY OPEN in this canvas moves to the drop target instead of

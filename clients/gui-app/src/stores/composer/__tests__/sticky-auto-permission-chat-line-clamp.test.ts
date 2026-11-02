@@ -42,6 +42,7 @@ function createStickyAutoStore(
     reasoningFallback: "model-default",
     seedKey: "seed-sticky-auto",
     values: {
+      ultracode: false,
       permission: "auto",
       selection: {
         harnessId: "claude",
@@ -54,11 +55,13 @@ function createStickyAutoStore(
     onSettingsChange: null,
     tuiOnly: false,
     chatLineCarriesAutoMode,
+    ultracodeCarried: false,
     hostId: HOST_ID,
   });
   store.getState().setCatalog({
     hostId: HOST_ID,
     chatLineCarriesAutoMode,
+    ultracodeCarried: false,
     keepsUnavailablePick: false,
     harnesses: [AUTO_HONORING_CLAUDE],
     modelsHarnessId: "claude",
@@ -123,6 +126,7 @@ describe("composer-toolbar-store: the sticky clamp consults BOTH the catalog lin
     const catalog: ComposerToolbarCatalog = {
       hostId: HOST_ID,
       chatLineCarriesAutoMode: true,
+      ultracodeCarried: false,
       keepsUnavailablePick: false,
       harnesses: [AUTO_HONORING_CLAUDE],
       modelsHarnessId: "claude",
@@ -135,6 +139,7 @@ describe("composer-toolbar-store: the sticky clamp consults BOTH the catalog lin
       reasoningFallback: "model-default",
       seedKey: "seed-sticky-auto-same-catalog",
       values: {
+        ultracode: false,
         permission: "auto",
         selection: {
           harnessId: "claude",
@@ -147,6 +152,7 @@ describe("composer-toolbar-store: the sticky clamp consults BOTH the catalog lin
       onSettingsChange: null,
       tuiOnly: false,
       chatLineCarriesAutoMode: true,
+      ultracodeCarried: false,
       hostId: HOST_ID,
     });
     store.getState().setCatalog(catalog);
@@ -155,6 +161,7 @@ describe("composer-toolbar-store: the sticky clamp consults BOTH the catalog lin
     store.getState().setCatalog({
       ...catalog,
       chatLineCarriesAutoMode: false,
+      ultracodeCarried: false,
     });
 
     expect(store.getState().permission).toBe("auto_accept_edits");

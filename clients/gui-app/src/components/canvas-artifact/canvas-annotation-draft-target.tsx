@@ -57,6 +57,7 @@ function DraftTarget(props: {
       targets={targets}
       open={open}
       onOpenChange={setOpen}
+      onClosed={null}
       onSelectNewChat={null}
       onSelectChat={(chatId) => {
         const store = useComposerDraftStore.getState();

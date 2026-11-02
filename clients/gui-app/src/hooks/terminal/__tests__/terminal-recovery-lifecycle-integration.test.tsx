@@ -311,6 +311,7 @@ describe("terminal recovery lifecycle integration (real recovery + registry + li
       hostEntryRef.value = { ...mockLocalHostEntry, hostId: HOST_ID };
       globalClientRef.value = fixture.client;
       __setTerminalStreamClientFactoryForTests(() => ({
+        supportsViewerFrames: () => false,
         sendAction: () => undefined,
         close: () => undefined,
       }));
@@ -367,6 +368,7 @@ describe("terminal recovery lifecycle integration (real recovery + registry + li
       hostEntryRef.value = { ...mockLocalHostEntry, hostId: HOST_ID };
       globalClientRef.value = fixture.client;
       __setTerminalStreamClientFactoryForTests(() => ({
+        supportsViewerFrames: () => false,
         sendAction: () => undefined,
         close: () => undefined,
       }));

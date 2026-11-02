@@ -1,5 +1,5 @@
 /**
- * `SideStripReadings` (F6): the header-hosted usage/resource readings drawn
+ * `SideStripReadings`: the header-hosted usage/resource readings drawn
  * as one row above the strip's account row, only for the regions whose bar
  * placement names the header. `RateLimitIconButton` / `ResourceMonitorPopover`
  * are stubbed at their own boundary (as `app-header-bar-clusters.test.tsx`

@@ -51,7 +51,7 @@ export function notifyDraftLocalDelete(draftId: string): void {
   deleteListener?.(draftId);
 }
 
-/** Decision #10: flush the pending upsert on draft close / reopen. */
+/** Flush the pending upsert on draft close / reopen. */
 export function notifyDraftLocalFlush(draftId: string): void {
   flushListener?.(draftId);
 }

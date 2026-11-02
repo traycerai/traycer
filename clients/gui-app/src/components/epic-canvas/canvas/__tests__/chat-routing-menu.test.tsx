@@ -42,6 +42,7 @@ vi.mock("@/hooks/agent/use-configure-agent-mutation", () => ({
 }));
 
 const SETTINGS: ChatRunSettings = {
+  ultracode: false,
   harnessId: "claude",
   model: "claude-sonnet-4-5",
   permissionMode: "supervised",

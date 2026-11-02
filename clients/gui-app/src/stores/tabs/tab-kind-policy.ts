@@ -14,7 +14,7 @@ import type { HeaderTabKind } from "@/stores/tabs/registry";
 export const TAB_KIND_SPLIT_ELIGIBILITY = {
   epic: "eligible",
   draft: "eligible",
-  bot: "eligible",
+  tracy: "eligible",
   history: "eligible",
   settings: "eligible",
   home: "ineligible",

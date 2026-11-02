@@ -17,6 +17,14 @@ import { v4 as uuidv4 } from "uuid";
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
 import { useTaskHostsView } from "@/hooks/epic/use-task-hosts-view";
 import {
+  HostDirectoryReadingContext,
+  useHostDirectoryReading,
+} from "@/hooks/host/use-host-directory-reading";
+import {
+  AgentRolesEnabledContext,
+  useAgentRolesEnabled,
+} from "@/hooks/runner/use-runner-feature-settings-query";
+import {
   TaskHostReachContext,
   useOwnerHostNotReachable,
 } from "@/hooks/epic/use-task-host-reach";
@@ -70,8 +78,9 @@ import {
   type EpicNodeKind,
 } from "@/lib/artifacts/node-display";
 import {
-  countDirectAgentChildren,
-  formatAgentDeleteNesting,
+  describeTreeDeleteDisclosure,
+  selectNestedAgentsKnown,
+  type TreeDeleteDisclosure,
 } from "@/lib/epic-tree-cascade";
 import { useOpenEpicHandle } from "@/providers/use-open-epic-handle";
 import { cn } from "@/lib/utils";
@@ -251,8 +260,12 @@ import {
   SIDEBAR_REVEAL_HIGHLIGHT_CLASS,
   anyMutationPending,
   chatRowClassName,
+  createExpandedIdsStore,
   revealSidebarNode,
   useNodeIconDisplay,
+  useTreeRowExpanded,
+  useTreeRowMotion,
+  type TreeRowExpansion,
 } from "./epic-sidebar-tree-shared";
 import { ChatRowLeadingIconSlot, ChatRowView } from "./chat-row-view";
 import { TreeGroupGuide } from "./epic-sidebar-tree-guide";
@@ -591,11 +604,7 @@ function useChatDescendantStatus(args: {
   );
 }
 
-interface ExpansionController {
-  expandedIds: ReadonlySet<string>;
-  toggleExpanded: (id: string) => void;
-  ensureExpanded: (id: string) => void;
-}
+type ExpansionController = TreeRowExpansion;
 
 function usePanelRootIds(
   panelId: RootCreatePanelId,
@@ -1025,6 +1034,13 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
   const canEdit = isEditableRole(permissionRole);
   const canMutate = canEdit && !isDisconnected;
   const taskHostsView = useTaskHostsView(epicId);
+  // Read once here for every row under the tree: a row's owner-host
+  // reachability and its role claims otherwise each subscribe to a query per
+  // row, and a branch of forty rows expanding is forty observers joining,
+  // forty directory refetches and one notification fan-out across all of
+  // them, inside the expand animation.
+  const directoryReading = useHostDirectoryReading();
+  const agentRolesEnabled = useAgentRolesEnabled();
   // The hosts whose agents get the reach mark, computed once here and read by
   // each row from context. From `reach` alone; no rows, no marks.
   const taskHosts = taskHostsView.kind === "hosts" ? taskHostsView.hosts : null;
@@ -1103,12 +1119,24 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
   );
   const expandAction = useEpicSidebarExpansionStore((s) => s.expand);
   const collapseAction = useEpicSidebarExpansionStore((s) => s.collapse);
+  // The rows read the effective set through this store rather than as a
+  // prop, so a toggle re-renders the rows whose own boolean flips and not the
+  // whole tree (see `TreeRowExpansion`). Seeded with the mount-time set so the
+  // first render is already right; later sets publish from the layout effect
+  // below, before paint.
+  const [expandedIdsStore] = useState(() =>
+    createExpandedIdsStore(expandedIds),
+  );
+  useLayoutEffect(() => {
+    expandedIdsStore.set(expandedIds);
+  }, [expandedIdsStore, expandedIds]);
   const toggleExpanded = useCallback(
     (id: string) => {
-      if (expandedIds.has(id)) collapseAction(tabId, panelId, id);
+      // Read at call time, so the callback's identity does not follow the set.
+      if (expandedIdsStore.get().has(id)) collapseAction(tabId, panelId, id);
       else expandAction(tabId, panelId, id);
     },
-    [tabId, panelId, expandedIds, expandAction, collapseAction],
+    [tabId, panelId, expandedIdsStore, expandAction, collapseAction],
   );
   const ensureExpanded = useCallback(
     (id: string) => {
@@ -1139,9 +1167,18 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
     visibleCloudChats,
   ]);
 
+  const isExpanded = useCallback(
+    (id: string) => expandedIdsStore.get().has(id),
+    [expandedIdsStore],
+  );
   const expansion = useMemo<ExpansionController>(
-    () => ({ expandedIds, toggleExpanded, ensureExpanded }),
-    [expandedIds, toggleExpanded, ensureExpanded],
+    () => ({
+      subscribe: expandedIdsStore.subscribe,
+      isExpanded,
+      toggleExpanded,
+      ensureExpanded,
+    }),
+    [expandedIdsStore, isExpanded, toggleExpanded, ensureExpanded],
   );
   // The content clock each LOCAL chat sorts by - the same value its idle-time
   // chip renders, so the order and the chip cannot disagree (see
@@ -1487,38 +1524,44 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
       <SidebarChatSharingContext.Provider value={chatSharingValue}>
         <TaskHostReachContext value={unreachableHostIds}>
           <TaskHostsViewContext value={taskHostsView}>
-            <SidebarViewerContext.Provider value={isViewer}>
-              <SidebarSortContext.Provider value={comparator}>
-                <SidebarSortClockContext.Provider value={sortClock}>
-                  <SidebarFilterVisibilityContext.Provider value={visibleIds}>
-                    {searchOpen &&
-                    !selectionMode &&
-                    surfaceSearchQuery === null ? (
-                      <ChatSearchHeaderInput
-                        tabId={tabId}
-                        resultCount={searchResultCount}
-                      />
-                    ) : null}
-                    {/* One clock for the tree's rows, owner cards and name labels
+            <HostDirectoryReadingContext value={directoryReading}>
+              <AgentRolesEnabledContext value={agentRolesEnabled}>
+                <SidebarViewerContext.Provider value={isViewer}>
+                  <SidebarSortContext.Provider value={comparator}>
+                    <SidebarSortClockContext.Provider value={sortClock}>
+                      <SidebarFilterVisibilityContext.Provider
+                        value={visibleIds}
+                      >
+                        {searchOpen &&
+                        !selectionMode &&
+                        surfaceSearchQuery === null ? (
+                          <ChatSearchHeaderInput
+                            tabId={tabId}
+                            resultCount={searchResultCount}
+                          />
+                        ) : null}
+                        {/* One clock for the tree's rows, owner cards and name labels
                     alike: the first waits, the next row's opens at once. */}
-                    <HoverCardGroup>
-                      <SidebarContent>
-                        <SidebarGroup className="min-h-0 flex-1">
-                          <SidebarGroupContent
-                            ref={treeRegionRef}
-                            className="flex min-h-0 flex-1 flex-col"
-                            data-testid="epic-chat-tree-region"
-                          >
-                            {panelContent}
-                            {messageHits.node}
-                          </SidebarGroupContent>
-                        </SidebarGroup>
-                      </SidebarContent>
-                    </HoverCardGroup>
-                  </SidebarFilterVisibilityContext.Provider>
-                </SidebarSortClockContext.Provider>
-              </SidebarSortContext.Provider>
-            </SidebarViewerContext.Provider>
+                        <HoverCardGroup>
+                          <SidebarContent>
+                            <SidebarGroup className="min-h-0 flex-1">
+                              <SidebarGroupContent
+                                ref={treeRegionRef}
+                                className="flex min-h-0 flex-1 flex-col"
+                                data-testid="epic-chat-tree-region"
+                              >
+                                {panelContent}
+                                {messageHits.node}
+                              </SidebarGroupContent>
+                            </SidebarGroup>
+                          </SidebarContent>
+                        </HoverCardGroup>
+                      </SidebarFilterVisibilityContext.Provider>
+                    </SidebarSortClockContext.Provider>
+                  </SidebarSortContext.Provider>
+                </SidebarViewerContext.Provider>
+              </AgentRolesEnabledContext>
+            </HostDirectoryReadingContext>
           </TaskHostsViewContext>
         </TaskHostReachContext>
       </SidebarChatSharingContext.Provider>
@@ -1648,7 +1691,7 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
     selectedIds,
     onToggleSelection,
   } = props;
-  const { expandedIds, toggleExpanded } = expansion;
+  const { toggleExpanded } = expansion;
   const node = useChatRowNode(nodeId);
   const childIds = useFilteredPanelChildIds(nodeId, treeFilter);
   const { openTile } = useEpicTileNavigation();
@@ -1669,25 +1712,36 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
   const renameTerminalAgent = useEpicRenameTuiAgent();
   const renameArtifactInTab = useEpicCanvasStore((s) => s.renameArtifactInTab);
 
-  // How many agents sit directly under this row (they move to the top level
-  // when it is deleted), subscribed to its ANSWER rather than to the record
-  // list it is computed from.
+  // What this row's delete dialog says about the agents nested under it (they
+  // are kept and move to the top level), subscribed to its ANSWER rather than
+  // to the record list it is computed from.
   //
   // `useEpicArtifactRecords()` hands back an array whose identity moves whenever
   // ANY record in the epic changes - a body write, a chat token, a timestamp
   // stamp - so every one of these rows re-rendered on every one of those, for a
-  // count that almost never moves. Measured on the field's shape (40 rows, 12
+  // sentence that almost never moves. Measured on the field's shape (40 rows, 12
   // bursted): 40 of 40 re-rendered per burst, bystanders included. `memo` is no
   // defence, because this is the row's OWN subscription rather than a prop.
   //
   // `childrenByParent` and `nodeById` are the normalised structure this sidebar
-  // already renders, so the count agrees with what the user sees. The selector
-  // returns a number, so it needs no `useShallow`.
-  const nestedAgentCount = useEpicStore((state: OpenEpicState) =>
-    countDirectAgentChildren(state.tree, nodeId),
+  // already renders, so the sentence agrees with what the user sees.
+  //
+  // `useShallow` is required, not decorative: the selector mints a fresh
+  // object each call, so without it `useSyncExternalStore` sees a change on
+  // every notification and loops. Its fields are a string, a string-or-null
+  // and a string, so a shallow compare settles.
+  const deleteDisclosure = useEpicStore(
+    useShallow((state: OpenEpicState) =>
+      describeTreeDeleteDisclosure({
+        tree: state.tree,
+        kind: "agent",
+        nodeIds: [nodeId],
+        nestedAgentsKnown: selectNestedAgentsKnown(state),
+      }),
+    ),
   );
 
-  const expanded = expandedIds.has(nodeId);
+  const expanded = useTreeRowExpanded(expansion, nodeId);
   const hasChildren = childIds.length > 0;
   const showChildren = hasChildren && expanded;
   const artifactType = node?.type ?? "chat";
@@ -2042,7 +2096,6 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
   if (node === null) return null;
   if (!treeFilter(node.type)) return null;
 
-  const nestingNote = formatAgentDeleteNesting(nestedAgentCount);
   const rowClick = (event: React.MouseEvent<HTMLButtonElement>) => {
     if (selectionMode || event.ctrlKey || event.metaKey) {
       event.preventDefault();
@@ -2098,7 +2151,7 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
       onPerformDelete={performDelete}
       confirmDeleteOpen={confirmDeleteOpen}
       onConfirmDeleteOpenChange={setConfirmDeleteOpen}
-      nestingNote={nestingNote}
+      deleteDisclosure={deleteDisclosure}
       deletePending={deletePending}
       onConfirmDelete={confirmDelete}
       archive={archiveRow}
@@ -2148,7 +2201,7 @@ interface ChatNodeShellProps {
   readonly onPerformDelete: () => void;
   readonly confirmDeleteOpen: boolean;
   readonly onConfirmDeleteOpenChange: (open: boolean) => void;
-  readonly nestingNote: string | null;
+  readonly deleteDisclosure: TreeDeleteDisclosure;
   readonly deletePending: boolean;
   readonly onConfirmDelete: () => void;
   readonly archive: ChatRowArchiveInputs;
@@ -2178,7 +2231,7 @@ const CHAT_ROW_ARCHIVE_ABSENT: ChatRowArchiveDecision = Object.freeze({
  * This matters most exactly when the feature is newest: until the host RPC
  * ships, NO host advertises the method, so without this split every row in
  * every sidebar would pay for a status resolution that is then discarded. It
- * also preserves T1's constraint that the open-chat session read is "paid by
+ * also preserves the constraint that the open-chat session read is "paid by
  * those few rows rather than by every row".
  */
 function ChatNodeShell(props: ChatNodeShellProps) {
@@ -2217,7 +2270,7 @@ function ChatNodeShellArchivable(props: ChatNodeShellProps) {
 function ChatNodeShellBody(
   props: ChatNodeShellProps & { readonly decision: ChatRowArchiveDecision },
 ) {
-  const shouldReduceMotion = useReducedMotion() === true;
+  const motion = useTreeRowMotion();
   const {
     epicId,
     tabId,
@@ -2249,7 +2302,7 @@ function ChatNodeShellBody(
     onPerformDelete,
     confirmDeleteOpen,
     onConfirmDeleteOpenChange,
-    nestingNote,
+    deleteDisclosure,
     deletePending,
     onConfirmDelete,
     archive: archiveRow,
@@ -2285,7 +2338,7 @@ function ChatNodeShellBody(
       // Names no host, exactly like the panel's own `+`: the modal resolves
       // this Epic's placement memory (last created chat's host, else the
       // session's host) with the picker live. The PARENT row's owner host is
-      // deliberately not passed - naming it would freeze the picker (§55) and
+      // deliberately not passed - naming it would freeze the picker and
       // a child is not required to live on its parent's machine.
       hostId: null,
     });
@@ -2326,9 +2379,9 @@ function ChatNodeShellBody(
 
   return (
     <m.li
-      layout={shouldReduceMotion ? false : "position"}
-      exit={shouldReduceMotion ? undefined : { opacity: 0, x: -8 }}
-      transition={{ duration: 0.16, ease: "easeOut" }}
+      layout={motion.layout}
+      exit={motion.exit}
+      transition={motion.transition}
       role="treeitem"
       aria-selected={isActive}
       aria-expanded={hasChildren ? expanded : undefined}
@@ -2423,12 +2476,9 @@ function ChatNodeShellBody(
         open={confirmDeleteOpen}
         onOpenChange={onConfirmDeleteOpenChange}
         title={`Delete ${EPIC_NODE_SENTENCE_NOUNS[artifactType]} "${nodeName}"?`}
-        description={
-          nestingNote === null
-            ? "This action cannot be undone."
-            : `This action cannot be undone. ${nestingNote}`
-        }
-        cascadeSummary={null}
+        description={deleteDisclosure.description}
+        cascadeSummary={deleteDisclosure.cascadeSummary}
+        cascadeNestedUnder={deleteDisclosure.cascadeNestedUnder}
         actionLabel="Delete"
         isPending={deletePending}
         onConfirm={onConfirmDelete}

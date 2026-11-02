@@ -25,6 +25,11 @@ import { devRendererUrlFromEnv } from "../../ipc-contracts/dev-renderer-origin";
 import { minimumWindowSize } from "./window-layout";
 import { installBackgroundRenderingReset } from "./background-rendering";
 import {
+  installVoiceAwayTracking,
+  installVoiceLiveReset,
+  voiceLiveWindows,
+} from "./voice-live-windows";
+import {
   placementToBrowserWindowBounds,
   type WindowGeometryPlacement,
 } from "./window-geometry";
@@ -164,6 +169,8 @@ export function createMainWindow(options: MainWindowOptions): BrowserWindow {
   installResponsivenessListeners(window.webContents);
   installBackgroundRenderingReset(window.webContents);
   installWebviewAttachGuards(window.webContents, options.windowId);
+  installVoiceLiveReset(window, options.windowId, voiceLiveWindows);
+  installVoiceAwayTracking(window, options.windowId, voiceLiveWindows);
 
   const devWindowTitle = options.devWindowTitle;
   if (devWindowTitle !== null) {

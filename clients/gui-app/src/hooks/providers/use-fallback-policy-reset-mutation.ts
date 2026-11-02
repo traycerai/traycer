@@ -31,7 +31,7 @@ interface FallbackPolicyResetContext {
  * stored, so writing it into the cache is exact. `reset` returns the DEFAULT
  * policy - empty model groups - and also clears the seed marker, which means the
  * very next read of this row re-seeds the default groups and marks the user
- * (D116/D127). So the response is accurate only until something reads again, and
+ * So the response is accurate only until something reads again, and
  * writing it in place would leave the panel showing NO model groups while the
  * engine's next tier rung resolves against a full seeded set. That is a rendered
  * status that lies about live data, not a one-frame cosmetic lag.

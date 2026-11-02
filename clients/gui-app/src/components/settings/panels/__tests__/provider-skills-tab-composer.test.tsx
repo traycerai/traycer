@@ -14,6 +14,18 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ProviderSkillsTab } from "@/components/settings/panels/provider-skills-tab";
 
+// A host from before environments: `use-skill-environment-route.test.tsx` has
+// the other kind.
+vi.mock("../use-skill-environment-route", () => ({
+  useSkillEnvironmentRoute: () => ({
+    hostRunsEnvironments: false,
+    served: null,
+    hostClient: null,
+    writing: false,
+    write: () => Promise.resolve(null),
+  }),
+}));
+
 const skillMocks = vi.hoisted(() => ({
   skills: [] as ProviderSkill[],
   createScopes: [] as string[],
@@ -28,7 +40,7 @@ vi.mock("@/hooks/host/use-host-credential-refusal", () => ({
   useHostCredentialRefusal: () => skillMocks.credentialRefusal,
 }));
 
-// Entry-button suite never switches scope; stub shared hook so F5 workspace
+// Entry-button suite never switches scope; stub shared hook so workspace
 // resolution does not require a QueryClient. Dynamic import: `vi.mock` is
 // hoisted above static imports.
 vi.mock("@/components/settings/panels/use-provider-native-scope", async () => {

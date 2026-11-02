@@ -14,7 +14,7 @@ interface Row {
 const state = vi.hoisted(() => ({ rows: [] as ReadonlyArray<Row> }));
 
 vi.mock("@/hooks/worktree/use-worktree-list-bindings-for-epic-query", () => ({
-  // Read on the epic's own host client since PR #1243 round 6; this suite is
+  // Read on the epic's own host client since PR #1243; this suite is
   // about which roots are listed, not which client asked.
   useWorktreeListBindingsForEpicForClient: () => ({
     data: { rows: state.rows },

@@ -15,8 +15,13 @@ import {
 } from "@/stores/composer/composer-draft-store";
 
 import { QuoteSelectionPopover } from "../quote-selection-popover";
+import { quoteSnapshotIntoDraft } from "../quote-snapshot-into-draft";
 import { firstLineRect, firstVisibleLineRect } from "../quote-anchor-rect";
 import type { QuoteSelectionSnapshot } from "../use-quote-selection";
+
+function quoteIntoTaskDraft(snapshot: QuoteSelectionSnapshot): void {
+  quoteSnapshotIntoDraft("task-1", snapshot);
+}
 
 // No transcript viewport: the popover falls back to first-line anchoring and
 // never clips, which is what most of these focus/guard tests want.
@@ -82,7 +87,7 @@ function renderPopover(
   render(
     <TooltipProvider>
       <QuoteSelectionPopover
-        taskId="task-1"
+        onQuote={quoteIntoTaskDraft}
         snapshot={snapshot}
         onDismiss={onDismiss}
         onQuoted={() => undefined}
@@ -146,7 +151,7 @@ describe("QuoteSelectionPopover - quote action", () => {
     render(
       <TooltipProvider>
         <QuoteSelectionPopover
-          taskId="task-1"
+          onQuote={quoteIntoTaskDraft}
           snapshot={snapshot}
           onDismiss={() => {
             calls.push("dismiss");
@@ -263,7 +268,7 @@ describe("QuoteSelectionPopover - scrolled-past-start (viewport clipping)", () =
     render(
       <TooltipProvider>
         <QuoteSelectionPopover
-          taskId="task-1"
+          onQuote={quoteIntoTaskDraft}
           snapshot={snapshot}
           onDismiss={onDismiss}
           onQuoted={() => undefined}

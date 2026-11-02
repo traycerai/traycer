@@ -76,6 +76,7 @@ const landingMocks = vi.hoisted(() => ({
 
 vi.mock("@tanstack/react-router", () => ({
   useNavigate: () => landingMocks.navigate,
+  useRouter: () => ({ state: { location: { pathname: "/" } } }),
 }));
 
 vi.mock("@/lib/host", () => ({
@@ -516,6 +517,7 @@ function queryClientWrapper(
 
 function defaultToolbar() {
   return {
+    ultracode: false,
     selection: {
       harnessId: "codex" as const,
       modelSlug: "gpt-5-codex",

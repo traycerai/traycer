@@ -945,7 +945,6 @@ const PLAZA_BAY_DOOR_ROW = 3;
 const BED_WIDTH_TILES = 2;
 /** Beds on the bay's first and third rows, so each row has a clear one under it. */
 const PLAZA_BED_ROWS: ReadonlyArray<number> = [0, 2];
-/** Where the chair run starts: one clear tile past the pingpong's right spot. */
 /** The plaza's aisle row, which is also its street. */
 const PLAZA_ROAD_ROW = 4;
 
@@ -1088,7 +1087,7 @@ interface PlazaCivic {
  * The plaza's civic rooms, their furniture and the street they face.
  *
  * Two are places that were already standing here and are given
- * their record now: the help desk IS the reception (C7), and the archive is a
+ * their record now: the help desk IS the reception, and the archive is a
  * door in the outer wall. The ward adds beds; waiting agents keep their desks.
  */
 function buildPlazaCivic(
@@ -1236,7 +1235,7 @@ function buildPlazaCivic(
       hostScope: "host",
       // OPEN: one tile, and it is a door in the plaza's edge.
       enclosure: "open",
-      // Nobody is collected from the archive (C6).
+      // Nobody is collected from the archive.
       kerbTile: null,
     },
   ];
@@ -1630,7 +1629,7 @@ function materializeRooms(
     // Building - `TEAM-0-LEAD` printed 10.4 px into its own team's count.
     //
     // So the plate stops short of the tile its board letters, which is the rule
-    // T3 fixup 6 already wrote - a plate is its own arc segment wide - with the
+    // already stated - a plate is its own arc segment wide - with the
     // segment measured honestly: a board's tile is a FIXTURE's, like the
     // partition beside it, not the plate's to letter over.
     //
@@ -1639,7 +1638,7 @@ function materializeRooms(
     // desks is the fact those two desks already show, while a name cut to fit
     // one tile comes out as manufactured initials (`A-ROOT` resolved to `AR`,
     // measured) - which reads as wrong rather than as short, and is the rung
-    // T3 fixup 6 removed from the HQ board's ladder for that reason. The board
+    // removed from the HQ board's ladder for that reason. The board
     // PROP stays either way: it is furniture, and only its lettering is what a
     // narrow pod has no room for.
     const boardLettered = cols - BOARD_PLATE_TILES >= PLATE_MIN_TILES;

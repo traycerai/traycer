@@ -25,7 +25,7 @@
  *   is mandatory: `tile-surface-membership.ts` decides which hosted chat
  *   RECORDS exist from the same policy, and a record whose slot stopped
  *   rendering freezes at its last published environment and paints over the
- *   pane's real selection. This supersedes decision log #17 ("a chat mounts
+ *   pane's real selection. This supersedes the old policy ("a chat mounts
  *   only while it is the active tab"), whose remount is what made an inner
  *   tab switch visibly re-converge the transcript; a retained chat now takes
  *   the same hide/show path a backgrounded top-level tab already took, and
@@ -184,7 +184,7 @@ export function useMountedPaneTabs(
   // a pane holding a dead chat among its two most recent retains only one live
   // chat and the second still churns. Both are strictly better than the
   // reverse - a member with no slot strands a hosted body on a disconnected
-  // anchor (cold review F1).
+  // anchor (F1).
   const retainedChatIds = useMemo(
     () =>
       new Set(

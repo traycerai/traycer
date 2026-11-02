@@ -20,7 +20,7 @@ import {
  * Which group an edit came from, so its status renders under the control that
  * produced it rather than once at the foot of the panel.
  *
- * The ticket's wording is "inline under the changed control", and a single
+ * The rule is "inline under the changed control", and a single
  * panel-wide line cannot satisfy it: this page has five groups, and a message
  * beneath the last one does not tell someone which of a dozen settings was
  * refused. The reducer therefore carries the origin of the edit - not the exact
@@ -41,7 +41,7 @@ export type FallbackPolicyField =
 /**
  * The panel's edit model.
  *
- * Every control in the Fallback section writes through this, so the ticket's
+ * Every control in the Fallback section writes through this, so the
  * failure handling is decided once rather than per group. The ticket names two
  * kinds; the reducer distinguishes four, because the second kind kept turning
  * out not to be one thing:
@@ -277,7 +277,7 @@ export interface FallbackPolicyDraftState {
    * Correlating instead of serialising is deliberate: serialising would delay
    * the second request until the first settled, which changes WHEN a commit is
    * dispatched. Nothing about FC3 needs that, and the commit-on-blur/Enter rule
-   * (D181) is pinned on the dispatch being synchronous with the gesture.
+   * is pinned on the dispatch being synchronous with the gesture.
    */
   readonly pendingSaves: readonly PendingFallbackSave[];
   /**
@@ -1130,8 +1130,8 @@ export type FallbackPolicyValidation =
  *
  * Validating locally at all (rather than letting the host refuse) is what keeps
  * the draft: a rejected save reverts the control, and reverting someone's
- * half-typed family name because it is half-typed is the behaviour the ticket
- * separates the two failure kinds to prevent.
+ * half-typed family name because it is half-typed is the behaviour the two
+ * failure kinds are separated to prevent.
  *
  * A model in two tiers is NOT a validation failure - see
  * {@link fallbackTierConflicts}.
@@ -1286,7 +1286,7 @@ export function createFallbackPolicyDraftState(
     draft: policy,
     displayOrder: fallbackDisplayOrder(policy.ladder),
     // Hydration: the stored rows get their identities as they enter the draft,
-    // once, here. This is the seeding D174 names - a row loaded from the policy
+    // once, here. This is the seeding - a row loaded from the policy
     // is as much a row as one the user adds, and the two are indistinguishable
     // from then on.
     keyedTierGroups: toKeyedGroups(policy.tierGroups),
@@ -1771,8 +1771,7 @@ export function adoptedViewOnScreen(
  *
  *  - {@link applySaveSucceeded}'s correcting branch clears the refusal marker
  *    when it adopts, so a SECOND newer reply saw an unmarked display and
- *    advanced `persisted` past controls it had itself installed (the OSS
- *    review's first P2);
+ *    advanced `persisted` past controls it had itself installed;
  *  - `reconciled`'s adopt gate is reachable with an ADOPTED display and no
  *    refusal: a save's reply is lost at revision 2, an edit moves to revision
  *    3, a later save is refused there, an OLDER save then succeeds and takes

@@ -35,7 +35,7 @@ import { managedCommandMutationKeys } from "@/lib/query-keys";
 import { toastFromHostError } from "@/lib/host-error-toast";
 
 /**
- * The three human capabilities over a managed command (`UI.md` §2): start,
+ * The three human capabilities over a managed command: start,
  * stop, delete. There is deliberately no create or edit - authoring is the
  * agent's job.
  *

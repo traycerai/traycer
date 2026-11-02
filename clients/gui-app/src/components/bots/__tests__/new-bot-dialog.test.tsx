@@ -1,6 +1,6 @@
 /**
- * The create form for one more bot in the person's own section (Tracy Bots,
- * T67), behind its + in the channel sidebar: titled New bot, with the create
+ * The create form for one more bot in the person's own section,
+ * behind its + in the channel sidebar: titled New bot, with the create
  * form for the environment it was opened for. Dismissed (Escape, Close, the
  * form's Cancel) it gives focus back to the control that opened it; a bot
  * created closes it and leaves focus to the destination. The real dialog runs

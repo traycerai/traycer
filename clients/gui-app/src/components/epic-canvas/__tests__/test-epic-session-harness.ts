@@ -111,7 +111,7 @@ export function createEpicSessionTestHarness(epicId: string): TestEpicHarness {
               // durability silence in a suite reads as UNKNOWN rather than as
               // a legacy peer's calm - the same value the old stream-seam
               // harness passed.
-              stream.callbacks.onConnectionStatus("open", null, true);
+              stream.callbacks.onConnectionStatus("open", null, true, null);
               stream.callbacks.onSnapshot(
                 makeMeta(epicId, permissionRole),
                 snapshot,

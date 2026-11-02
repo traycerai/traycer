@@ -1,5 +1,5 @@
 /**
- * `stash-entry` documents a host still lists (D20 keeps the kind on the
+ * `stash-entry` documents a host still lists (the kind stays on the
  * wire) convert into a closed start-page draft exactly once, reserve the
  * cloud absence-sweep fence, and retire the source row on its owner host.
  */

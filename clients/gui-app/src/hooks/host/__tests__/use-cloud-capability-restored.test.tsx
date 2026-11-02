@@ -118,7 +118,7 @@ describe("useCloudCapabilityRestored", () => {
   });
 
   /**
-   * The end-to-end of T23, with the REAL pacer rather than a spy: a demotion
+   * End-to-end coverage, with the REAL pacer rather than a spy: a demotion
    * walks the streak to its ceiling on one endpoint, and the promotion back
    * has to make the very next rebuild immediate. Asserting the delay - not
    * that a callback ran - is what makes this about the dark window a person

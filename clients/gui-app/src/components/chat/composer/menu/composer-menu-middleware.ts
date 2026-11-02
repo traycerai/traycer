@@ -56,6 +56,35 @@ export function readComposerMenuReservedEdges(): ComposerMenuReservedEdges {
 }
 
 /**
+ * The fewest result rows a menu kept clear of the composer's row still shows:
+ * what `clearOfRow`'s `rowsHeightPx` has to hold.
+ */
+export const COMPOSER_MENU_ROWS_ABOVE_ROW = 3;
+
+/**
+ * `reserved` with the composer's own row added to the bottom edge, so the menu
+ * ends above it: on the keyboard focus layout's one row, the query being typed
+ * sits in that row, and a menu over it hides what the person types. The row
+ * comes off only while the room above it, between the gutters, still holds the
+ * menu down to its third result row (`rowsHeightPx`, measured from the menu's
+ * top, header included). With less room the rows win: the menu keeps
+ * `reserved` and runs over the row.
+ */
+export function clearOfRow(
+  reserved: ComposerMenuReservedEdges,
+  rowTopPx: number,
+  viewportHeightPx: number,
+  rowsHeightPx: number,
+): ComposerMenuReservedEdges {
+  const room = rowTopPx - reserved.topPx - 2 * MENU_VIEWPORT_PADDING_PX;
+  if (rowsHeightPx > room) return reserved;
+  return {
+    ...reserved,
+    bottomPx: Math.max(reserved.bottomPx, viewportHeightPx - rowTopPx),
+  };
+}
+
+/**
  * The padding the composer's floating surfaces keep from the viewport: a small
  * gutter on every side, plus that side's reserved edge.
  */

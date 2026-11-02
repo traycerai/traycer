@@ -48,7 +48,7 @@ import { useReactiveOwnerIdentityKey } from "@/hooks/host/use-reactive-owner-ide
  * off the registry alone - plus the render-suppression pin that keeps the
  * coarse arm's unconditional wake from churning the tree. The pair that made
  * the original flip readable is now history: it lives in the execution log
- * and in P4.1's K15 result, not in a case that can no longer fail for the
+ * and in the redesign's K15 result, not in a case that can no longer fail for the
  * reason it was written for.
  */
 

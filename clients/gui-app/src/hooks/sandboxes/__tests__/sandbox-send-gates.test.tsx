@@ -112,6 +112,9 @@ vi.mock("@/hooks/providers/use-providers-list-query", () => ({
         : { providers: answers.providers },
   }),
 }));
+vi.mock("@/hooks/sandboxes/use-sandbox-traycer-models-query", () => ({
+  useSandboxTraycerModels: () => ({ data: undefined, isFetching: false }),
+}));
 vi.mock("@/hooks/sandboxes/use-sandbox-catalogue-query", () => ({
   useSandboxCatalogue: () => ({
     data: answers.catalogue,
@@ -552,7 +555,10 @@ function checkFor(harnessId: "codex" | "claude" | null) {
   return renderHook(() =>
     useStagedSendSignInCheck({
       harnessId,
+      modelSlug: "",
+      modelName: "",
       active: true,
+      chooseAnotherHostLabel: "Use This computer",
       onOpenTerminalInstead: answers.onOpenTerminalInstead,
       onChooseAnotherHost: answers.onChooseAnotherHost,
     }),
@@ -622,7 +628,7 @@ describe("useStagedSendSignInCheck", () => {
         "Your Acme allowance is short $0.21. $0.21 more starts this sandbox for an hour.",
     });
     expect(notice?.secondaryActions?.map((action) => action.label)).toEqual([
-      "Choose another host",
+      "Use This computer",
     ]);
     expect(readStagedSandbox("surface")).toBe(stage);
   });
@@ -653,7 +659,13 @@ describe("useStagedSendSignInCheck", () => {
         teamName: "Acme",
       });
       const gate = renderHook(() =>
-        useStagedSendSignInCheck({ harnessId: "codex", active: true }),
+        useStagedSendSignInCheck({
+          harnessId: "codex",
+          modelSlug: "",
+          modelName: "",
+          active: true,
+          chooseAnotherHostLabel: "Use This computer",
+        }),
       ).result.current;
       const refusal = await gate.beforeSend(stage);
       if (stillShort)
@@ -683,7 +695,7 @@ describe("useStagedSendSignInCheck", () => {
       action: { label: "Choose a model" },
       secondaryActions: [
         { label: "Open terminal instead" },
-        { label: "Choose another host" },
+        { label: "Use This computer" },
       ],
     });
     refusal?.action?.onAction();

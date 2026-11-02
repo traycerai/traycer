@@ -11,6 +11,22 @@
 export const SHUTDOWN_FORCE_EXIT_MS = 30_000;
 
 /**
+ * How long after `process.exit` the host process may still exist: the detached
+ * hard-exit watchdog (`traycer-host/src/lifecycle/hard-exit.ts`) SIGKILLs a
+ * host that is still alive this long after `process.exit` was called. The
+ * shutdown watchdog above can first call `process.exit` at
+ * `SHUTDOWN_FORCE_EXIT_MS`, so the longest a host can take to die after its
+ * SIGTERM is this on top of that; every service stop bound is sized from both.
+ *
+ * Generous on purpose. A legitimate exit can spend seconds here: a pool
+ * thread in a stalled fsync is joined only when the device answers, and a
+ * worker mid-task is terminated and joined. A kill that lands inside such an
+ * exit turns a clean 0 or 87 into a signal death the supervisor reads as a
+ * crash, so the deadline errs toward waiting.
+ */
+export const HARD_EXIT_DEADLINE_MS = 10_000;
+
+/**
  * Deliberate host restart. This remains non-zero so every service supervisor
  * relaunches the host, while the CLI supervisor recognizes it as intentional
  * rather than recording a crash or spending relaunch budget.

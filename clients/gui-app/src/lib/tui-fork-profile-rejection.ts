@@ -18,7 +18,7 @@ export class TuiForkProfileRejectedError extends Error {
 
 /**
  * A cross-profile fork/continue rejection, resolved into copy the dialog can
- * render inline (tech plan "Rejection UX": inline dialog alert, dialog stays
+ * render inline (an inline dialog alert; the dialog stays
  * open). `residueNote` is populated ONLY for a late (`agent.tui.prepareLaunch`)
  * rejection - the authoritative guard's own message, which may carry the
  * host's static retained-worktree disclosure sentence

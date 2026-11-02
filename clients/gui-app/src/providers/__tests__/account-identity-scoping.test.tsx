@@ -6,7 +6,7 @@ import { useSurfaceHostSelectionStore } from "@/stores/host/surface-host-selecti
 import { surfaceHostSelectionKey } from "@/lib/persist";
 
 /**
- * Codex #1243 T-60, and the nine sibling bridges the invariant census found
+ * The nine sibling bridges the invariant census found
  * alongside it.
  *
  * Persisted per-account state is scoped by the identity

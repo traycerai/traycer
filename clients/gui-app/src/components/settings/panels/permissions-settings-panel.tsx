@@ -51,7 +51,6 @@ import { EnvironmentHostBinding } from "@/components/settings/environment/enviro
 import { TeamPermissions } from "@/components/settings/environment/team-permissions";
 import { BrowserAgentAccessGroup } from "@/components/settings/panels/browser-agent-access-group";
 import { UNNAMED_HOST_LABEL } from "@/hooks/agent/use-host-reachability";
-import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 import type { EnvironmentPick } from "@/lib/settings-environment-pages";
 
 /**
@@ -310,17 +309,13 @@ function HostPermissionsSettingsPanel(): ReactNode {
             />,
           )}
         </TabsContent>
-        {/* Settings > Browser's row in a build without environments
-            (`PERMISSIONS_TABS`). */}
-        {UNRELEASED_FEATURES_ENABLED ? (
-          <TabsContent
-            value="browser"
-            className="pt-5"
-            {...contentLabel("browser")}
-          >
-            <PermissionsBrowserAgentAccess />
-          </TabsContent>
-        ) : null}
+        <TabsContent
+          value="browser"
+          className="pt-5"
+          {...contentLabel("browser")}
+        >
+          <PermissionsBrowserAgentAccess />
+        </TabsContent>
       </Tabs>
     </SettingsPanelShell>
   );

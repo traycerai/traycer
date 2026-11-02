@@ -21,7 +21,6 @@ import {
 import { cn } from "@/lib/utils";
 import { onMiddleClick } from "@/lib/dom/on-middle-click";
 import { EpicSessionGate } from "@/providers/epic-session-gate";
-import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 
 interface AgentReferenceChipProps {
   readonly agentId: string;
@@ -142,16 +141,7 @@ function AgentReferenceButton(props: {
 }
 
 function notAnAgent(props: AgentReferenceChipProps) {
-  // Without bots there are no task chips: an id that names no agent of the
-  // open epic is the id as written, and nothing is read to title it.
-  return UNRELEASED_FEATURES_ENABLED ? (
+  return (
     <TaskReferenceChip referenceId={props.agentId} display={props.display} />
-  ) : (
-    fallbackAgentId(props.agentId, props.display)
   );
-}
-
-function fallbackAgentId(agentId: string, display: "text" | "code") {
-  if (display === "code") return <code>{agentId}</code>;
-  return <>{agentId}</>;
 }

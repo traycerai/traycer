@@ -56,7 +56,7 @@ import {
 } from "./projection-helpers";
 
 /** The minor of `epic.listTuiAgents` that first serves the doc remainder. */
-const TUI_AGENTS_REMAINDER_MINOR = 1;
+export const TUI_AGENTS_REMAINDER_MINOR = 1;
 
 /**
  * The doc-arm verdict for `hostId`, read live.

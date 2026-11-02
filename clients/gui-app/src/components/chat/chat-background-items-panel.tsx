@@ -164,7 +164,7 @@ function itemScheduledFor(item: BackgroundItem): number | null {
 
 // The workflow row's aggregate story - current phase, the most recently
 // active fleet-agent label, and finished/started counts - matching what the
-// transcript's workflow card shows in its own live line (Flow 2). Any piece
+// transcript's workflow card shows in its own live line. Any piece
 // the host hasn't populated yet is omitted rather than shown as a placeholder.
 function workflowRowSummary(
   item: Extract<BackgroundItem, { kind: "workflow" }>,

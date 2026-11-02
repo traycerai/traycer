@@ -381,7 +381,7 @@ export function createHostRuntime<Registry extends VersionedRpcRegistry>(
         // input devices are served by (`selected-host` in the routing table).
         selectedHostId: () =>
           useSelectionAuthorityStore.getState().effectiveHostId,
-        // The window's connection-registry wiring (connection-registry §1).
+        // The window's connection-registry wiring.
         // Both halves are READ PORTS: the registry keeps no copy of a row or
         // a lease, so there is still exactly one directory and exactly one
         // lease vocabulary in the app. What it adds is the per-host verdict -
@@ -428,7 +428,7 @@ export function createHostRuntime<Registry extends VersionedRpcRegistry>(
       // `buildRuntimeChangeScopeHandler` for which reasons and why. The filter
       // lives there rather than inline here so that it is a thing a test can
       // hold: this provider's startup path has no integration coverage, so an
-      // inline closure would be unobservable (redesign P4.2).
+      // inline closure would be unobservable.
       const runtimeTransportUnsubscribe = activeRuntime.hostClient.onChange(
         buildRuntimeChangeScopeHandler({
           resetMessenger: () => runtimeMessenger?.reset(),

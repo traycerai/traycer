@@ -7,5 +7,6 @@ export {
   type StatusChangeHandler,
   type StreamCloseReason,
   type StreamConnectionStatus,
+  type StreamContinuity,
   type StreamFrameEnvelope,
 } from "@traycer/protocol/host-transport/stream-session";

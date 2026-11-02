@@ -30,7 +30,7 @@ import { useTitleBarDragSuppression } from "@/stores/layout/title-bar-drag-store
 const BAR_GAP = 8;
 
 /**
- * The placement bar (D14): a small floating bar on the selected tab strip or
+ * The placement bar: a small floating bar on the selected tab strip or
  * sidebar, with a pictogram per edge the surface can take - and, while the
  * strip is vertical, the View pair.
  *
@@ -38,7 +38,7 @@ const BAR_GAP = 8;
  * (`writeArrangementField`), so each press is one recorded gesture, and it
  * honours the same availability. It is portalled to `<body>` because the
  * app column is behind the edit firewall, and it sits toward the content, the
- * side the overlay hook (ticket 01) names for the surface's edge.
+ * side the overlay hook names for the surface's edge.
  */
 export function SurfacePlacementBar(): ReactNode {
   const surface = useLayoutEditorStore((state) => state.selectedSurface);

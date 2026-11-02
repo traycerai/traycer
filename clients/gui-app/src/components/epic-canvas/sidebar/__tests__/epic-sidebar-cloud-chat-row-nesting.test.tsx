@@ -6,6 +6,7 @@ import {
   screen,
   within,
 } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
 import { EpicSidebarCloudChatRow } from "@/components/epic-canvas/sidebar/epic-sidebar-cloud-chat-row";
 import {
@@ -14,6 +15,7 @@ import {
 } from "@/lib/chats/unified-chat-list";
 import type { HostReachabilityStatus } from "@/hooks/agent/use-host-reachability";
 import type { TileOpenIntent } from "@/lib/canvas/tile-open/intent";
+import type { TreeRowExpansion } from "@/components/epic-canvas/sidebar/epic-sidebar-tree-shared";
 
 /** Nested shared subagents: the tree affordances of a cloud row. */
 
@@ -89,25 +91,36 @@ const CHILD_ENTRIES: readonly UnifiedCloudChatEntry[] = [
 ];
 const PARENT_KEY = cloudChatRowKey(PARENT.identity);
 
+function staticExpansion(
+  expandedIds: ReadonlySet<string>,
+  toggleExpanded: (id: string) => void,
+): TreeRowExpansion {
+  return {
+    subscribe: () => () => undefined,
+    isExpanded: (id) => expandedIds.has(id),
+    toggleExpanded,
+    ensureExpanded: () => undefined,
+  };
+}
+
 function renderParent(input: {
   readonly childEntries: readonly UnifiedCloudChatEntry[];
   readonly expandedIds: ReadonlySet<string>;
   readonly toggleExpanded: (id: string) => void;
 }): void {
   render(
-    <ul role="tree">
-      <EpicSidebarCloudChatRow
-        chat={PARENT}
-        childEntries={input.childEntries}
-        expansion={{
-          expandedIds: input.expandedIds,
-          toggleExpanded: input.toggleExpanded,
-        }}
-        tabId="tab-1"
-        depth={0}
-        selectionMode={false}
-      />
-    </ul>,
+    <QueryClientProvider client={new QueryClient()}>
+      <ul role="tree">
+        <EpicSidebarCloudChatRow
+          chat={PARENT}
+          childEntries={input.childEntries}
+          expansion={staticExpansion(input.expandedIds, input.toggleExpanded)}
+          tabId="tab-1"
+          depth={0}
+          selectionMode={false}
+        />
+      </ul>
+    </QueryClientProvider>,
   );
 }
 

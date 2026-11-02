@@ -1635,7 +1635,7 @@ export const STAIRS_SIDE_MAP: SpriteMap = [
  * It used to be a hollow metal frame - a tinted lintel, an outline, and twelve
  * rows of nothing - with the occupant drawn behind it showing straight
  * through. A row of those reads as people standing in glass boxes rather than
- * sitting at desks, which is what feedback round 1 said in as many words:
+ * sitting at desks, and that is the reading in as many words:
  * "these transparent desks look weird".
  *
  * So the lower band is a DESK: one row of `woodLight` for the top edge over

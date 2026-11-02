@@ -34,7 +34,7 @@ export interface VersionSkewInput {
 }
 
 /**
- * Direction-aware `INCOMPATIBLE` copy (Architecture §13, R4-D2): "every
+ * Direction-aware `INCOMPATIBLE` copy (R4-D2): "every
  * supported app version can open a session to every host >= floor" is the
  * two-sided invariant, so above the floor an `INCOMPATIBLE` failure is a
  * genuine bug, not routine drift — the failure copy names the leg that's

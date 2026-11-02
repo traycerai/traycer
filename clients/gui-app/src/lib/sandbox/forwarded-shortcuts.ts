@@ -4,10 +4,10 @@ import {
   type ChordString,
 } from "@traycer-clients/shared/keybindings/chord-core";
 import { streamedBrowserChordsFor } from "@/lib/browser-view/reserved-chords-registration";
-import type { ActionId } from "@/lib/keybindings/actions";
+import { effectiveBinding, type ActionId } from "@/lib/keybindings/actions";
 
 /**
- * One app chord a sandboxed page must not keep (D11). The frame's bootstrap
+ * One app chord a sandboxed page must not keep. The frame's bootstrap
  * matches keydowns against these physically (`KeyboardEvent.code` plus exact
  * modifiers), swallows a match and forwards it; every other key is the page's.
  */
@@ -62,32 +62,48 @@ function codeForKey(key: string): string | null {
 }
 
 /**
- * The chords a page forwards: exactly the APP-FORWARDED rows a focused browser
- * tile replays (palette, tab and task navigation), resolved from the reader's
- * live bindings. The browser-scoped rows (⌘W/⌘T/⌘L) are a browser's, not a
- * page's, so a page keeps them. `mod` is ⌘ on macOS and Control elsewhere.
+ * Close tab is forwarded on top of the shared rows. A browser tile keeps ⌘W
+ * because it has a tab of its own to close; a sandboxed page has none, so a
+ * ⌘W it keeps reaches nothing. Forwarding it closes the tile holding the
+ * page, as ⌘W does with focus anywhere else in the canvas.
+ */
+const PAGE_FORWARDED_ACTIONS: readonly ActionId[] = ["tab.close"];
+
+/**
+ * The chords a page forwards: the APP-FORWARDED rows a focused browser tile
+ * replays (palette, tab and task navigation) plus {@link PAGE_FORWARDED_ACTIONS},
+ * resolved from the reader's live bindings. The other browser-scoped rows
+ * (⌘T/⌘L) are a browser's, not a page's, so a page keeps them. `mod` is ⌘ on
+ * macOS and Control elsewhere.
  */
 export function sandboxForwardedShortcuts(
   bindings: Readonly<Record<ActionId, ChordString | null>>,
   mac: boolean,
 ): readonly ForwardedShortcut[] {
-  return streamedBrowserChordsFor(bindings, { landingSurfaceActive: false })
-    .filter((row) => row.command === null)
-    .flatMap((row): ForwardedShortcut[] => {
-      const parts = parseChordString(row.token);
-      if (parts === null) return [];
-      const code = codeForKey(parts.key);
-      if (code === null) return [];
-      return [
-        {
-          code,
-          ctrl: parts.ctrl || (parts.mod && !mac),
-          meta: parts.mod && mac,
-          alt: parts.alt,
-          shift: parts.shift,
-        },
-      ];
-    });
+  const tokens = [
+    ...streamedBrowserChordsFor(bindings, { landingSurfaceActive: false })
+      .filter((row) => row.command === null)
+      .map((row) => row.token),
+    ...PAGE_FORWARDED_ACTIONS.flatMap((action) => {
+      const chord = effectiveBinding(bindings, action);
+      return chord === null ? [] : [chord];
+    }),
+  ];
+  return tokens.flatMap((token): ForwardedShortcut[] => {
+    const parts = parseChordString(token);
+    if (parts === null) return [];
+    const code = codeForKey(parts.key);
+    if (code === null) return [];
+    return [
+      {
+        code,
+        ctrl: parts.ctrl || (parts.mod && !mac),
+        meta: parts.mod && mac,
+        alt: parts.alt,
+        shift: parts.shift,
+      },
+    ];
+  });
 }
 
 export function isForwardedShortcut(

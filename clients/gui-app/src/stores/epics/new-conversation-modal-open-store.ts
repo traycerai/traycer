@@ -19,7 +19,7 @@ export interface NewConversationModalOpenRequest {
   readonly tabId: string;
   /**
    * Explicit placement for the tile the modal creates, or `null` to let the
-   * conversation tile-placement setting decide (C3, C8). Only the in-pane
+   * conversation tile-placement setting decide. Only the in-pane
    * PaneOpener names a pane; the sidebar `+` and the palette pass `null`.
    */
   readonly placement: ExplicitTilePlacement | null;

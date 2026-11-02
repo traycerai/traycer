@@ -37,7 +37,7 @@ vi.mock("@/hooks/host/use-addressable-host-id", () => ({
 }));
 vi.mock("@/lib/host", () => ({
   useHostClient: () => mocks.client,
-  // The SPINE, a separate export since redesign P2.1.
+  // The SPINE, a separate export.
   useHostRuntimeClient: () => mocks.client,
 }));
 // Normalizes each fixture with the defaults a real `ConfiguredRateLimitProvider`

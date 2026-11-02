@@ -985,7 +985,7 @@ describe("<GitDiffTile /> image routing", () => {
     expect(state.editableCalls.at(-1)?.queryEnabled).toBe(false);
   });
 
-  // Live E2E (ticket 06) found a real conflicted binary image falling
+  // Live E2E found a real conflicted binary image falling
   // through to the old generic BinaryPlaceholder instead of ImageDiffView.
   // The host's bulk listChangedFiles numstat path has no MERGE_HEAD-aware
   // fallback for unmerged paths (unlike its single-file getFileDiff path),

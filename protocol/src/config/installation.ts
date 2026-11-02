@@ -38,11 +38,11 @@ import {
   hostHeldVersionRecordSchema,
   hostInstallRecordSchema,
   hostStagedRecordSchema,
-  storedCliInstallManifestSchema,
+  storedCliInstallManifestOnDiskSchema,
   type HostHeldVersionRecord,
   type HostInstallRecord,
   type HostStagedRecord,
-  type StoredCliInstallManifest,
+  type StoredCliInstallManifestOnDisk,
 } from "./installation-records";
 
 /**
@@ -193,15 +193,18 @@ export async function readHostHeldVersionAtPath(
 /** Reads only an on-disk CLI manifest; synthetic package-manager state is CLI-owned. */
 export async function readStoredCliInstallManifest(
   environment: Environment,
-): Promise<StoredCliInstallManifest | null> {
+): Promise<StoredCliInstallManifestOnDisk | null> {
   return readStoredCliInstallManifestAtPath(cliManifestPath(environment));
 }
 
 /** Shared strict persisted-manifest reader for CLI-owned explicit paths. */
 export function readStoredCliInstallManifestAtPath(
   path: string,
-): Promise<StoredCliInstallManifest | null> {
-  return readRecord(path, storedCliInstallManifestSchema);
+): Promise<StoredCliInstallManifestOnDisk | null> {
+  // The ON-DISK schema: the file's owner reads fields the frozen wire shape
+  // does not carry. A wire response built from this value keeps the released
+  // schema, which drops them.
+  return readRecord(path, storedCliInstallManifestOnDiskSchema);
 }
 
 /** Prevent a staged sidecar from pointing its executable outside `staged/`. */

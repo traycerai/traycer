@@ -49,6 +49,7 @@ import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Arch } from "electron-builder";
+import { LAUNCHD_EXIT_TIMEOUT_SECONDS } from "@traycer-clients/shared/host-start-adoption/spawn-edge-bounds";
 import {
   labelForEnvironment,
   smAppServiceAgentLabelId,
@@ -442,6 +443,11 @@ describe("inject-host-launch-agent afterPack", () => {
     <integer>8192</integer>
   </dict>`);
         expect(agentPlist).not.toContain("HardResourceLimits");
+        // Pinned to the CLI's own plist (`buildPlist`), which this file
+        // cannot import: a different bound would SIGKILL the supervisor of
+        // a registration made by one writer while the other waits.
+        expect(agentPlist).toContain(`<key>ExitTimeOut</key>
+  <integer>${LAUNCHD_EXIT_TIMEOUT_SECONDS}</integer>`);
         expect(agentPlist).not.toContain("<key>HOME</key>");
         // Relocatable-path regression guard: must not bake this fixture's
         // temp appOutDir (electron-builder's real appOutDir is deleted once

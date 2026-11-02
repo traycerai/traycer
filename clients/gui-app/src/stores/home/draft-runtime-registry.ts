@@ -278,7 +278,7 @@ export class DraftRuntime {
 
   /**
    * Undo `close()` on a runtime that outlived unmount (an in-flight create
-   * is not disposable). T11's open-from-history path reopens a retained
+   * is not disposable). The open-from-history path reopens a retained
    * draft; without this, `startSubmission` stays blocked and settlement
    * still reports `"closed"` → `deleteDraft` of the draft the user just
    * restored.

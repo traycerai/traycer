@@ -378,8 +378,8 @@ describe("HostOverviewAnswerCard CLI floor remedy", () => {
       await waitFor(() =>
         expect(bridge.checkForUpdates).not.toHaveBeenCalled(),
       );
-      // D02's automatic retry mapping or D04's removal of only
-      // `if (checkOnMount)` would dispatch on this failure mount. Retaining
+      // An automatic retry mapping, or removing only
+      // `if (checkOnMount)`, would dispatch on this failure mount. Retaining
       // `[bridge, checkOnMount]` isolates the mount guard; this count must
       // remain zero through rerenders until the user clicks.
       rendered.rerender(
@@ -403,7 +403,7 @@ describe("HostOverviewAnswerCard CLI floor remedy", () => {
       );
 
       // Removing the retry button's manual dispatch would keep this genuine
-      // spy at zero; these exact per-click counts must turn RED under D03.
+      // spy at zero; these exact per-click counts must turn RED.
       fireEvent.click(screen.getByRole("button", { name: "Check again" }));
       expect(bridge.checkForUpdates).toHaveBeenCalledTimes(1);
       expect(bridge.checkForUpdates).toHaveBeenCalledWith("manual");

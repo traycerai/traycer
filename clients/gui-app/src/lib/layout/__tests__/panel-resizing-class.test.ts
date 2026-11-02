@@ -267,7 +267,7 @@ describe("panel-resizing-class participant registry", () => {
       // Registered BEFORE beginPanelResizeInteraction - models
       // use-pointer-drag-commit.ts's own window-level pointerup listener
       // (registered at pointerdown time, ahead of this module's, per the
-      // row-1 drag fix under parallel review). DOM listeners for the same
+      // row-1 drag fix). DOM listeners for the same
       // target/event type fire in registration order, so the hook's own
       // commit/cancel resolves before this module's `stop()` - which is
       // exactly what makes `stop()`'s idempotent guard safe to rely on here

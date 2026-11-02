@@ -246,6 +246,7 @@ function installRecordingStreamFactory(): {
     };
     streams.push(record);
     return {
+      supportsViewerFrames: () => false,
       sendAction: (frame) => {
         record.frames.push(frame);
       },

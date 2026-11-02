@@ -7,7 +7,7 @@ import { useWhollyInTabStrip } from "./use-wholly-in-tab-strip";
 
 /**
  * The selected header tab's box. `joined` runs it into its task's sheet (the
- * sheet join in `index.css`, which supersedes staging round 1's F4 "boxy"
+ * sheet join in `index.css`, which supersedes staging round 1's "boxy"
  * ruling) and names the pane it meets there (`surfaceJoinPane`): from md the
  * box takes that pane's fill and the sheet's border, opens at the bottom, and
  * the column's bridge runs it down onto the sheet.

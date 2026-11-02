@@ -19,7 +19,7 @@ import {
 } from "@/stores/layout/layout-store";
 
 /**
- * The app column plus two regions, mounted the way ticket 07's shell will
+ * The app column plus two regions, mounted the way the shell will
  * mount them: the hook is handed the column element and nothing else.
  */
 function Canvas(props: {
@@ -247,7 +247,7 @@ describe("the session's canvas", () => {
 
     expect(useLayoutEditorStore.getState().hovered).toBe("minimap");
     // The name AND the state the region is in, which is the question hovering
-    // asks (C-05). The name alone labelled something already under the pointer.
+    // asks. The name alone labelled something already under the pointer.
     expect(chip()?.textContent).toBe("Minimap · Right");
     expect(chip()?.hidden).toBe(false);
   });
@@ -255,7 +255,7 @@ describe("the session's canvas", () => {
   // The chip names the state the region is in RIGHT NOW, so a write while the
   // pointer is resting on the region has to move it. This is the one thing
   // that can go wrong now that the label is remembered between paints instead
-  // of rebuilding all 23 regions' values on each one (R1-11).
+  // of rebuilding all 23 regions' values on each one.
   it("moves the chip's state word when the layout is written under the pointer", () => {
     openSession();
     const view = render(
@@ -511,7 +511,7 @@ describe("a region part (data-layout-region-part)", () => {
 });
 
 /**
- * Fixed chrome the canvas names without it being a setting (C4): the Message
+ * Fixed chrome the canvas names without it being a setting: the Message
  * queue always sits above the composer and is never hidden, so it carries a
  * `data-layout-cue` label rather than being a region a session could select.
  */

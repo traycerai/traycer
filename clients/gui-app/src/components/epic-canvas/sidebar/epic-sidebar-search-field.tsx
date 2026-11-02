@@ -42,11 +42,6 @@ import {
 import { cn } from "@/lib/utils";
 
 /**
- * The combobox ARIA a caller wires when its results are a listbox the field
- * drives. `null` when results are not a popup the field owns - the switcher's
- * hits are ordinary rows in the list below it, not an overlay it controls.
- */
-/**
  * The one phone treatment: the git-diff repo switcher's box, literally - its
  * `h-8` included. That box is the one that was chosen by eye on a phone, and
  * its proportions are part of what was chosen; a taller field wearing the same
@@ -103,6 +98,11 @@ export function PanelSearchField({
    * path is reading, which is exactly what the refs lint rule exists to catch.
    */
   readonly ref: RefObject<HTMLInputElement | null> | null;
+  /**
+   * The combobox ARIA a caller wires when its results are a listbox the field
+   * drives. `null` when results are not a popup the field owns - the switcher's
+   * hits are ordinary rows in the list below it, not an overlay it controls.
+   */
   readonly combobox: PanelSearchFieldCombobox | null;
   readonly placeholder: string;
   readonly label: string;

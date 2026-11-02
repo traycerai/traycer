@@ -61,7 +61,7 @@ vi.mock("@/lib/host/runtime", () => ({
 
 vi.mock("@/lib/host", () => ({
   useHostClient: () => ({ getActiveHostId: () => "host-1" }),
-  // The SPINE, a separate export since redesign P2.1.
+  // The SPINE, a separate export.
   useHostRuntimeClient: () => ({ getActiveHostId: () => "host-1" }),
 }));
 

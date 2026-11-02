@@ -192,7 +192,7 @@ import {
 
 /**
  * HOW THIS SUITE POINTS THE PROVIDER AT A HOST, and why it never calls
- * `HostClient.bind()` (redesign P4.1 Leg D).
+ * `HostClient.bind()`.
  *
  * P4.2 deletes `bind()` and the active slot. Every case below therefore drives
  * the provider the way production will after that deletion: the window holds a
@@ -689,7 +689,7 @@ describe("HostStreamProvider", () => {
   });
 
   // WHERE THE OLD "publishes the host its client was built for, not the
-  // render's" CASE WENT (redesign P4.1 Leg D).
+  // render's" CASE WENT.
   //
   // That case drove a `bind()` to a DIFFERENT hostId from a child's layout
   // effect, so the render's `readiness.hostId` and the effect's live
@@ -713,7 +713,7 @@ describe("HostStreamProvider", () => {
   // rather than kept green: a case that can no longer fail is not coverage.
   //
   // The `hostId: target.hostId` publish itself is deliberately LEFT IN PLACE in
-  // `stream-runtime.tsx`. It is correct, it is free, and P4.2 re-points this
+  // `stream-runtime.tsx`. It is correct, it is free, and the redesign re-points this
   // provider next - a guard removed because today's binding shape cannot
   // exercise it is a guard missing when the shape changes again.
 
@@ -889,7 +889,7 @@ describe("HostStreamProvider", () => {
   });
 
   // R-1: the owner-layer discriminator the S1 cache test cannot provide (see
-  // `active-remote-sessions.test.ts` "review finding #2" for the cache-layer
+  // `active-remote-sessions.test.ts` for the cache-layer
   // half). Drives the REAL production chain end to end - the directory row
   // move, the registry's row-changed signal, this provider's
   // `remoteAwareOwnerIdentity` `identityKey`, and the shared
@@ -959,7 +959,7 @@ describe("HostStreamProvider", () => {
   });
 
   it("stops stream work when the window points at no host and recreates it only on re-point", () => {
-    // The client is keyed on the resolved host identity (D5.3), not on
+    // The client is keyed on the resolved host identity, not on
     // default-host surface readiness. Pointing the window at ∅ drops the
     // client; pointing it back mints a fresh one. Same-id endpoint loss
     // (websocketUrl null) is not an identity change for a local host - the
@@ -992,7 +992,7 @@ describe("HostStreamProvider", () => {
   });
 
   it("builds the stream client from the resolved host identity even while default-host readiness is non-ready", () => {
-    // D5.3: availability recovery (notifyRecoveredForNamedHost) is the only
+    // Availability recovery (notifyRecoveredForNamedHost) is the only
     // designed un-strand signal for host-scoped queries. Gating the stream
     // client on default-host readiness inverted that dependency - the
     // mechanism that restores readiness was disabled for exactly as long as

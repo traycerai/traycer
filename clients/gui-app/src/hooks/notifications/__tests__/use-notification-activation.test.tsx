@@ -376,7 +376,7 @@ describe("useNotificationActivation", () => {
     expect(onResult).toHaveBeenCalledWith("success");
   });
 
-  // F8 (closure): a retained CLOSED tab that owns the terminal must be reopened
+  // A retained CLOSED tab that owns the terminal must be reopened
   // by the EXACT payload tabId - never resolved by epic, which prefers the
   // active/MRU same-epic sibling and lands on the wrong tab.
   it("reopens the exact retained tab that owns the terminal, not an MRU sibling", () => {
@@ -407,7 +407,7 @@ describe("useNotificationActivation", () => {
       ownerTabId,
     );
     expect(useEpicCanvasStore.getState().activeTabId).toBe(siblingTabId);
-    // Confirm the resolver WOULD pick the sibling (the exact trap F8 fixes).
+    // Confirm the resolver WOULD pick the sibling.
     expect(useEpicCanvasStore.getState().resolveTabIdForEpic("epic-dup")).toBe(
       siblingTabId,
     );
@@ -495,7 +495,7 @@ describe("useNotificationActivation", () => {
     expect(onResult).toHaveBeenCalledWith("success");
   });
 
-  // Cold review #8: retained closed epic tab records must reopen (via
+  // Retained closed epic tab records must reopen (via
   // coordinator resolve) before nested-focus preparation + activation.
   it("reopens a retained closed terminal tab before nested-focus activation", () => {
     const store = useEpicCanvasStore.getState();
@@ -1051,12 +1051,12 @@ describe("useNotificationActivation origin-host guard (P0-1)", () => {
   // "selects an approval's origin host before routing to its exact tile" is
   // deleted: its subject, `ensureOriginHostSelected`, no longer exists.
   // Activation does not move the app-wide selection at all now (redesign
-  // P1.2, D7) - a notification click routes against whatever host the target
+  // P1.2) - a notification click routes against whatever host the target
   // surface already resolves through.
   //
   // The fail-closed half of that guard came BACK, one limb narrower, and the
   // pin below is it. Deleting the function took the refusal along with the
-  // selection write, and only the write was the D7 violation: an origin-
+  // selection write, and only the write was the violation: an origin-
   // required prompt that routed through the wrong host still reported
   // SUCCESS, so the popover closed and marked it read. What is refused now is
   // the acknowledgment, never the navigation, and only on positive evidence
@@ -1096,7 +1096,7 @@ describe("useNotificationActivation origin-host guard (P0-1)", () => {
     expect(navigateSpy).toHaveBeenCalledTimes(1);
     expect(onResult).toHaveBeenCalledTimes(1);
     expect(onResult).toHaveBeenCalledWith("failure");
-    // ...and the app-wide pointer did NOT move to satisfy the origin (D7).
+    // ...and the app-wide pointer did NOT move to satisfy the origin.
     expect(useSelectionAuthorityStore.getState().effectiveHostId).toBe(
       hostA.hostId,
     );

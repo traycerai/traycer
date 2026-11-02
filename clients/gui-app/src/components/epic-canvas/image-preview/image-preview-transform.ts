@@ -1,6 +1,6 @@
 /**
  * Pure pan/zoom transform math shared between `ImagePreview` and
- * `ImageDiffView` (ticket 07) - kept out of `image-preview.tsx` so that
+ * `ImageDiffView` - kept out of `image-preview.tsx` so that
  * file stays component-only (Fast Refresh only works when a file exports
  * ONLY components).
  */
@@ -13,7 +13,7 @@ export interface ImagePreviewTransformState {
 }
 
 /**
- * Why a transform changed (review finding #3): `"gesture"` is a genuine
+ * Why a transform changed: `"gesture"` is a genuine
  * user pan/pinch/wheel, reported by the library's own event handlers.
  * `"programmatic"` is a transform `ImagePreview` issued itself - Fit,
  * Actual-size, zoom in/out, or its own autonomous resize-refit. A caller
@@ -25,7 +25,7 @@ export type TransformOrigin = "gesture" | "programmatic";
 
 /**
  * Everything a caller linking multiple `ImagePreview` instances needs from
- * one `onTransform` firing (round-2 review, findings #3/#4): the raw
+ * one `onTransform` firing: the raw
  * `state` to mirror, its `origin`, the CHILD's OWN derived fit/actual-size
  * mode (so a caller never re-derives or manually toggles it), and the
  * child's live interactive floor (so a caller's shared zoom-boundary UI
@@ -52,13 +52,13 @@ export interface ContainerSize {
 
 /** The workspace tile's animation duration - named so it isn't a magic-number duplicate at the call site. */
 export const DEFAULT_ANIMATION_MS = 200;
-/** Interactive zoom floor for images that already fit at or above this scale - NOT a floor on the fit scale itself (review finding #7: a huge image's fit can and must go below this). */
+/** Interactive zoom floor for images that already fit at or above this scale - NOT a floor on the fit scale itself (a huge image's fit can and must go below this). */
 export const MIN_SCALE = 0.25;
 export const MAX_SCALE = 8;
 export const ZOOM_STEP = 0.2;
 /** Float-comparison tolerance for scale (0-1 ratio) checks - zoom-boundary and actual-size derivations both used the same value under separate names. */
 export const SCALE_EPSILON = 0.001;
-/** Pixel tolerance for "is this position the fit position" (review finding #2/#3's mode derivation) - looser than a scale epsilon since position is in raw px, not a 0-1 ratio. */
+/** Pixel tolerance for "is this position the fit position" - looser than a scale epsilon since position is in raw px, not a 0-1 ratio. */
 const FIT_POSITION_EPSILON_PX = 1;
 /** Mermaid `pan-zoom-svg-viewer.tsx`'s `FIT_PADDING_PX` convention - a fit transform never sits flush against the pane edge/header. */
 const FIT_PADDING_PX = 32;
@@ -69,13 +69,13 @@ const MIN_SAFE_SCALE = 1e-3;
  * Fit-to-container scale from a measured size vs an image's own natural
  * pixels, inset by `FIT_PADDING_PX` on every side - clamped only against
  * `MAX_SCALE` and a degenerate-input floor, NEVER against the interactive
- * `MIN_SCALE` (review finding #7): a huge image in a small pane must fit at
+ * `MIN_SCALE`: a huge image in a small pane must fit at
  * whatever scale that actually takes, even below the normal zoom-out floor.
  * `centerView`/`setTransform` bypass the library's own `minScale`/`maxScale`
  * setup entirely (verified against installed v4.0.4's `setState`), so this
  * clamp is the only one that applies to a caller-supplied fit scale. Used by
  * `ImageDiffView` to compute the SAME fit independently for each of its two
- * linked sides (ticket 07) rather than forcing one side's shared number onto
+ * linked sides rather than forcing one side's shared number onto
  * a differently-sized peer.
  */
 export function fitScaleFor(
@@ -93,7 +93,7 @@ export function fitScaleFor(
 }
 
 /**
- * The wrapper's effective interactive-zoom floor (review finding #7): no
+ * The wrapper's effective interactive-zoom floor: no
  * greater than the current fit scale, so a huge image's "Fit to screen"
  * value is always reachable by zooming out, and Zoom Out only disables once
  * the user is actually AT that fit (or the constant floor, whichever is
@@ -117,7 +117,7 @@ export function initialFitTransform(
 }
 
 /**
- * Whether `transform` IS the fit transform right now (review finding #2: the
+ * Whether `transform` IS the fit transform right now (the
  * single source of truth for "is this image currently fitted", replacing a
  * manually-toggled flag that gesture handlers could leave stuck). Compares
  * scale AND position - a pure pan away from an unchanged fit SCALE is still
@@ -134,16 +134,16 @@ export function transformMatchesFit(
   );
 }
 
-/** Round-2 review finding #5: the endpoints themselves paint zero visible pixels (content only touching the wrapper edge), so the clamp must stay strictly inside them by at least this much. */
+/** The endpoints themselves paint zero visible pixels (content only touching the wrapper edge), so the clamp must stay strictly inside them by at least this much. */
 const MIN_VISIBLE_OVERLAP_PX = 1;
 
 /**
  * Clamps a mirrored position so the (differently-sized) peer's content can
- * never end up wholly (or effectively) offscreen (review finding #5) - the
+ * never end up wholly (or effectively) offscreen - the
  * loosest bound that guarantees at least `MIN_VISIBLE_OVERLAP_PX` of
  * overlap between the scaled content rect and the wrapper rect on one
  * axis, nothing tighter. Deliberately NOT a reimplementation of the
- * library's own padding-aware bounds engine (ticket 07: "do not over-
+ * library's own padding-aware bounds engine ("do not over-
  * engineer sub-pixel alignment for mismatched dimensions") - a same-
  * dimension mirror (the common case) is already exact and never gets
  * anywhere near this range; only a genuine mismatch can.

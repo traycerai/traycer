@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { SignOutConfirmDialog } from "@/components/auth/sign-out-confirm-dialog";
 import { UserMenu } from "@/components/auth/user-menu";
 import { SignInButton } from "@/components/layout/header/sign-in-button";
 import { RateLimitIconButton } from "@/components/layout/header/rate-limit-icon";
@@ -74,7 +75,7 @@ export function HeaderBarCluster(): ReactNode {
  *
  * `display: contents` generates no box, so `getBoundingClientRect()` answers
  * 0,0,0,0 and the travelling ring collapsed to a 6px dot at the top-left of
- * the window while the hover outline had nothing to paint on (C-06). A session
+ * the window while the hover outline had nothing to paint on. A session
  * needs a real box here and the header needs none of its own, so this is the
  * mic slot's pattern: the region's children keep laying out in the header's
  * own cluster at rest, and become a box of their own exactly while the editor
@@ -172,7 +173,7 @@ export function HeaderResourceRegion(props: {
 // behind its own verdict gate - and on a desktop-width header this bell is
 // the ONLY entry point to those lanes, so gating it on the cloud verdict left
 // locally served failures, approvals and agent activity accumulating with no
-// way to see or act on them. Found in review.
+// way to see or act on them.
 export function HeaderNotificationsBell(): ReactNode {
   const admitted = useAuthStore((state) => admitsLocalPlane(state.status));
   if (!admitted) {
@@ -183,6 +184,11 @@ export function HeaderNotificationsBell(): ReactNode {
 
 export interface HeaderIdentityProps {
   readonly showAppSettings: boolean;
+  /**
+   * The host gate's header: no app shell is up to host the menu's sign-out
+   * confirmation, so this does.
+   */
+  readonly hostsSignOutConfirm: boolean;
 }
 
 export function HeaderIdentity(props: HeaderIdentityProps): ReactNode {
@@ -190,13 +196,16 @@ export function HeaderIdentity(props: HeaderIdentityProps): ReactNode {
   const isSignedIn = useAuthStore((state) => state.status === "signed-in");
   if (isSignedIn && profile !== null) {
     return (
-      <UserMenu
-        userName={profile.userName}
-        email={profile.email}
-        avatarUrl={profile.avatarUrl ?? null}
-        showAppSettings={props.showAppSettings}
-        trigger={null}
-      />
+      <>
+        <UserMenu
+          userName={profile.userName}
+          email={profile.email}
+          avatarUrl={profile.avatarUrl ?? null}
+          showAppSettings={props.showAppSettings}
+          trigger={null}
+        />
+        {props.hostsSignOutConfirm ? <SignOutConfirmDialog /> : null}
+      </>
     );
   }
   return <SignInButton layout="compact" />;

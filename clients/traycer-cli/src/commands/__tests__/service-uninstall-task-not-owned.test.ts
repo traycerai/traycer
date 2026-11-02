@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CommandContext } from "../../runner/runner";
+import type { WindowsTaskOwnershipProbe } from "../../service/platforms/windows-task-gate";
 
 // `traycer host service uninstall` asks for the service registration and
 // nothing else. Over a Scheduled Task another Windows user owns there is
@@ -25,6 +26,7 @@ const state = vi.hoisted(() => ({
     | {
         kind: "not-owned";
         reason: "other-owner" | "unconfirmed";
+        probe: WindowsTaskOwnershipProbe;
         detail: string;
       },
   uninstall: vi.fn(),
@@ -140,7 +142,12 @@ afterEach(() => {
 describe("host service uninstall over a task another Windows user owns", () => {
   for (const reason of ["other-owner", "unconfirmed"] as const) {
     it(`fails E_SERVICE_TASK_NOT_OWNED (${reason}) and mutates nothing: no controller call, so no stop, sweep, launcher or task write`, async () => {
-      state.ownership = { kind: "not-owned", reason, detail: "" };
+      state.ownership = {
+        kind: "not-owned",
+        reason,
+        probe: "definition-read-failed",
+        detail: "",
+      };
       const { serviceUninstallCommand } = await import("../service-uninstall");
       await expect(serviceUninstallCommand(fakeCtx())).rejects.toMatchObject({
         code: "E_SERVICE_TASK_NOT_OWNED",
@@ -152,7 +159,12 @@ describe("host service uninstall over a task another Windows user owns", () => {
   }
 
   it("the refusal says another Windows user owns it and names no account", async () => {
-    state.ownership = { kind: "not-owned", reason: "other-owner", detail: "" };
+    state.ownership = {
+      kind: "not-owned",
+      reason: "other-owner",
+      probe: "principal-other-sid",
+      detail: "",
+    };
     const { serviceUninstallCommand } = await import("../service-uninstall");
     const caught = await serviceUninstallCommand(fakeCtx()).then(
       () => null,
@@ -165,7 +177,12 @@ describe("host service uninstall over a task another Windows user owns", () => {
   });
 
   it("(unconfirmed) the refusal says ownership could not be confirmed, never another Windows user", async () => {
-    state.ownership = { kind: "not-owned", reason: "unconfirmed", detail: "" };
+    state.ownership = {
+      kind: "not-owned",
+      reason: "unconfirmed",
+      probe: "definition-read-failed",
+      detail: "",
+    };
     const { serviceUninstallCommand } = await import("../service-uninstall");
     const caught = await serviceUninstallCommand(fakeCtx()).then(
       () => null,

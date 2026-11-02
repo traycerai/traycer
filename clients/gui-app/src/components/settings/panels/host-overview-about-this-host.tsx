@@ -55,7 +55,10 @@ export function HostOverviewAboutThisHost(
           label="Last seen"
           value={about.lastSeen}
           kind="text"
-          tone={about.online ? "success" : "default"}
+          // A timestamp has no tone. The row used to paint itself `success`
+          // for the same flag that worded it "Online now", so the colour
+          // carried the liveness claim the wording no longer makes.
+          tone="default"
           copy={null}
           testId="host-overview-about-last-seen"
         />

@@ -35,6 +35,9 @@ export type RegionSize = "full" | "chip";
 /** How the model chip draws the thinking effort. */
 export type ModelStyle = "text" | "bars" | "bars-text";
 
+/** How the model chip draws a requested Ultracode, after the effort. */
+export type UltracodeStyle = "text" | "icon" | "icon-text";
+
 /**
  * The composer toolbar's chrome: a bordered chip on the app's own background,
  * or flat with just a hover highlight. One setting for the whole row (attach,
@@ -75,8 +78,7 @@ export type ContextBreakdownField = ContextUsageRowKey;
  * `lib/analytics.ts` validates every `layout_<region>_<key>` property against
  * this set. Hand-listing it there let a fourth `ModelStyle` land with the
  * allowlist behind, and a declared value that fails its validator drops the
- * WHOLE `layout_snapshot` event for every user with nothing red anywhere
- * (G3-03).
+ * WHOLE `layout_snapshot` event for every user with nothing red anywhere.
  */
 export const LAYOUT_VALUE_ENUM_MEMBERS: ReadonlyArray<string> = Object.keys({
   ...({ shown: true, hidden: true } satisfies Record<Visibility, true>),
@@ -87,6 +89,10 @@ export const LAYOUT_VALUE_ENUM_MEMBERS: ReadonlyArray<string> = Object.keys({
   ...({ full: true, chip: true } satisfies Record<RegionSize, true>),
   ...({ text: true, bars: true, "bars-text": true } satisfies Record<
     ModelStyle,
+    true
+  >),
+  ...({ text: true, icon: true, "icon-text": true } satisfies Record<
+    UltracodeStyle,
     true
   >),
   ...({ flat: true, bordered: true } satisfies Record<ToolbarStyle, true>),
@@ -116,7 +122,7 @@ export interface SizedValues extends ShownValues {
 
 /**
  * The permission picker: a size and no Shown. It reports the permission the
- * next send runs under, so the chip is its floor and it is never hidden (G6).
+ * next send runs under, so the chip is its floor and it is never hidden.
  */
 export interface AccessValues {
   readonly size: RegionSize;
@@ -198,6 +204,7 @@ export interface ContextUsageValues extends ShownValues {
  */
 export interface ModelValues {
   readonly style: ModelStyle;
+  readonly ultracodeStyle: UltracodeStyle;
   readonly reasoningControl: ReasoningControl;
   readonly toolbarStyle: ToolbarStyle;
 }
@@ -235,8 +242,7 @@ export interface LayoutValues {
 
 /**
  * The regions that can be hidden: every one with a `shown` leaf. Access, Model
- * and Tool activity are the three without - each is a floor that always draws
- * (G6).
+ * and Tool activity are the three without - each is a floor that always draws.
  */
 export type HideableRegionId = {
   [K in RegionId]: LayoutValues[K] extends { readonly shown: unknown }
@@ -266,8 +272,7 @@ export type LayoutOverrides = {
  * gives (`shown`, the only key all twenty-six share). It is the type a caller
  * walking every region can still name a control's key with - the registry's
  * own `ControlSpec<K>.key` stays tied to its region - so `region-control-io.ts`
- * takes this rather than a bare `string` and a typo cannot be passed at all
- * (G1-08).
+ * takes this rather than a bare `string` and a typo cannot be passed at all.
  */
 export type RegionValueKey = {
   readonly [K in RegionId]: keyof LayoutValues[K] & string;
@@ -288,7 +293,7 @@ export function sameFieldList(
  * Per-key equality over a region's value bag.
  *
  * Every leaf but `pinnedFields` is a scalar, which is the whole reason the
- * four resource metrics are booleans rather than a list (C-10), so `===` is
+ * four resource metrics are booleans rather than a list, so `===` is
  * the rule and the one list gets the one declared comparator.
  */
 export function sameRegionValue(

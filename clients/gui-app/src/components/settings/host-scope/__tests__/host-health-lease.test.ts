@@ -72,7 +72,7 @@ describe("deriveHostHealth — absence of evidence is not death", () => {
    * nothing for the attach flag to gate, so the test passes identically
    * whether `authorityAttached` is consulted or ignored entirely. It would be
    * an assertion about an input the code never reaches, which is the same
-   * vacuity that let sealed probe P12 survive. A ready lease that must NOT be
+   * vacuity that let a sealed probe survive. A ready lease that must NOT be
    * believed is what makes the flag load-bearing.
    */
   it("ignores even a READY lease until the authority has attached", () => {
@@ -124,6 +124,39 @@ describe("deriveHostHealth — absence of evidence is not death", () => {
 
     expect(health.state).toBe("reported-reachable");
   });
+
+  /**
+   * ONE detail serves every way the lease step declines — that is the
+   * contract, and it needs every path in one case to be expressed at all.
+   *
+   * It is what makes the detail unable to say whether anything has dialled the
+   * host. `connecting` is `deriveLease`'s fall-through, derived for every
+   * registered host once the authority attaches (`transport-evidence.ts`: "with
+   * nothing reporting, every lease reads `connecting`"), AND what a host reads
+   * while a re-dial is in flight. A path-dependent sentence — either
+   * direction — fails here instead of passing on the path its author had in
+   * mind. The `state` is left to the cases above: this string is produced by no
+   * other arm.
+   */
+  it.each([
+    [
+      "a connecting lease",
+      { lease: lease("connecting"), authorityAttached: true },
+    ],
+    ["no lease", { lease: null, authorityAttached: true }],
+    [
+      "an unattached authority",
+      { lease: lease("connecting"), authorityAttached: false },
+    ],
+    ["neither", { lease: null, authorityAttached: false }],
+  ] as const)(
+    "says only what the account reported, declining through %s",
+    (_label, options) => {
+      expect(deriveHostHealth({ ...BASE, ...options }).detail).toBe(
+        "Your account last heard from this host.",
+      );
+    },
+  );
 });
 
 describe("deriveHostHealth — the lease outranks the cloud DTO", () => {
@@ -142,7 +175,7 @@ describe("deriveHostHealth — the lease outranks the cloud DTO", () => {
   /**
    * The direction the DTO can never produce. The cloud still holds a
    * `connectable` lease — it has up to 15 minutes to notice — while this app's
-   * own transports have concluded the host is gone. F26's window, narrowed by
+   * own transports have concluded the host is gone. This window is narrowed by
    * evidence instead of waited out.
    */
   it("says Offline for a dead lease even while the cloud still reports connectable", () => {
@@ -158,7 +191,7 @@ describe("deriveHostHealth — the lease outranks the cloud DTO", () => {
   });
 
   /**
-   * `degraded` is a live SERVING state, not a demotion (P3.2's disambiguation:
+   * `degraded` is a live SERVING state, not a demotion (disambiguation:
    * `HostCompatibility.degraded` died as user-facing, `HostLeaseSnapshot`'s
    * `degraded` is a lease that still works). Rendering it as a failure would
    * put a fault on a host that is answering.

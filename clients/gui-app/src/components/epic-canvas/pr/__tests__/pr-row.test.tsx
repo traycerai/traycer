@@ -181,7 +181,7 @@ describe("PrRow band 1: identity badges", () => {
 
   it("drops a badge click while an OS handoff is still in flight", () => {
     // Each call fires a fresh bridge request, so a click landing on one would
-    // open a second OS tab (R10).
+    // open a second OS tab.
     bridge.isPending = true;
     renderRow({});
 

@@ -24,6 +24,8 @@
   </dict>
   <key>ThrottleInterval</key>
   <integer>10</integer>
+  <key>ExitTimeOut</key>
+  <integer>47</integer>
   <key>ProcessType</key>
   <string>Interactive</string>
   <key>SoftResourceLimits</key>

@@ -98,6 +98,7 @@ function renderTree(id: "open:agents" | "open:artifacts"): void {
           {
             ...baseItem("root", "Root"),
             artifactTreeRow: {
+              epicId: "epic-1",
               nodeId: "root",
               depth: 0,
               ancestorIds: [],
@@ -109,6 +110,7 @@ function renderTree(id: "open:agents" | "open:artifacts"): void {
           {
             ...baseItem("child", "Child"),
             artifactTreeRow: {
+              epicId: "epic-1",
               nodeId: "child",
               depth: 1,
               ancestorIds: ["root"],
@@ -120,6 +122,7 @@ function renderTree(id: "open:agents" | "open:artifacts"): void {
           {
             ...baseItem("grandchild", "Grandchild"),
             artifactTreeRow: {
+              epicId: "epic-1",
               nodeId: "grandchild",
               depth: 2,
               ancestorIds: ["root", "child"],

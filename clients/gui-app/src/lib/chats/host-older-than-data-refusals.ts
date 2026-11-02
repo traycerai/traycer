@@ -66,7 +66,7 @@ const listenersByKey = new Map<string, Set<() => void>>();
  *
  * Written as an ESCAPE, never as the raw byte: a literal NUL in this file made
  * git classify the whole module as binary, so its diff rendered as "Binary
- * files differ" and no reviewer saw a line of it for eight rounds.
+ * files differ" instead of a line of its source.
  */
 export function hostOlderThanDataRefusalKey(
   hostId: string,

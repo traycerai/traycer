@@ -8,7 +8,7 @@ import {
 import { fixture, nextFrames, wheelsDelivered } from "./support/fixtures";
 
 /**
- * R4 (ported from chat-scroll-diag-long-anchor.spec.ts): the saved reading
+ * Ported from chat-scroll-diag-long-anchor.spec.ts: the saved reading
  * anchor is not at a turn boundary but deep inside one long row — a reply
  * split across many paragraphs. A remount must put the reader back at that
  * exact row and offset, not just "somewhere in the right turn".

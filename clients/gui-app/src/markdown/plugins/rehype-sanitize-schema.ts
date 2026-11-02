@@ -2,6 +2,7 @@ import {
   TRAYCER_AGENT_TAG,
   TRAYCER_CHAT_TAG,
   TRAYCER_EPIC_TAG,
+  TRAYCER_MENTION_TAG,
   TRAYCER_MERMAID_TAG,
   TRAYCER_SPEC_TAG,
   TRAYCER_TICKET_TAG,
@@ -30,6 +31,7 @@ const TRAYCER_TAG_NAMES = [
   TRAYCER_TICKET_TAG,
   TRAYCER_MERMAID_TAG,
   TRAYCER_WIREFRAME_TAG,
+  TRAYCER_MENTION_TAG,
 ] as const;
 
 const TRAYCER_TAG_ATTRIBUTES: Schema["attributes"] = {
@@ -40,6 +42,7 @@ const TRAYCER_TAG_ATTRIBUTES: Schema["attributes"] = {
   [TRAYCER_TICKET_TAG]: ["data-epic-id", "data-ticket-id", "data-title"],
   [TRAYCER_MERMAID_TAG]: ["data-code"],
   [TRAYCER_WIREFRAME_TAG]: ["data-code"],
+  [TRAYCER_MENTION_TAG]: ["data-user-id"],
 };
 
 /**

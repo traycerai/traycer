@@ -7,6 +7,7 @@ import {
 import {
   chatRoutingSchema,
   chatRunSettingsSchema,
+  chatRunSettingsSchemaPreUltracode,
   chatRunSettingsSchemaPreAuto,
   chatRunSettingsSchemaPreReasonix,
 } from "@traycer/protocol/persistence/epic/foundation";
@@ -263,14 +264,15 @@ export const chatSchemaPreInReplyTo = lazySchema(() =>
  * (see `chat-sync/version.ts`).
  *
  * Derived from `chatSchema` rather than hand-frozen, deliberately: only this
- * event enum, the pre-HTML artifact-operation block and browser-only
- * annotations are pinned; other chat fields keep following the live shape.
+ * event enum, the pre-HTML artifact-operation block, browser-only annotations
+ * and pre-Ultracode settings are pinned; other chat fields follow the live shape.
  * Canvas annotations live in chat.db/chat-sync, never in this legacy Yjs map.
  */
 export const chatSchemaPreImported = lazySchema(() =>
   chatSchema.extend({
     messages: z.array(messageSchemaPreHtml),
     events: z.array(chatEventSchemaPreImported).default([]),
+    settings: chatRunSettingsSchemaPreUltracode.nullable().default(null),
   }),
 );
 

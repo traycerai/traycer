@@ -32,6 +32,39 @@ export function clipCanvasBox(
     : null;
 }
 
+/**
+ * The window region a screenshot of the selected element covers: the box with
+ * some page around it for context, in window coordinates, clipped to what is
+ * actually on screen. `null` when none of it is.
+ */
+export function canvasSelectionCaptureRect(
+  frame: HTMLIFrameElement,
+  box: CanvasBox,
+): CanvasBox | null {
+  if (frame.clientWidth === 0 || frame.clientHeight === 0) return null;
+  const bounds = frame.getBoundingClientRect();
+  const padded = clipCanvasBox(
+    {
+      x: box.x - 20,
+      y: box.y - 20,
+      width: box.width + 40,
+      height: box.height + 40,
+    },
+    { x: 0, y: 0, width: frame.clientWidth, height: frame.clientHeight },
+  );
+  return padded === null
+    ? null
+    : clipCanvasBox(
+        transformCanvasBox(padded, {
+          x: bounds.x,
+          y: bounds.y,
+          scaleX: bounds.width / frame.clientWidth,
+          scaleY: bounds.height / frame.clientHeight,
+        }),
+        { x: 0, y: 0, width: window.innerWidth, height: window.innerHeight },
+      );
+}
+
 /** Four transparent shields leave only the selected element available to text drag. */
 export function canvasSelectionShields(
   selection: CanvasBox | null,

@@ -128,7 +128,7 @@ vi.mock("@/components/ui/select", () => ({
 vi.mock("@/lib/host", () => ({
   useHostBinding: () => ({ directory: { selectById: mocks.selectHost } }),
   useHostClient: () => hostClient,
-  // The SPINE, a separate export since redesign P2.1.
+  // The SPINE, a separate export.
   useHostRuntimeClient: () => hostClient,
 }));
 
@@ -136,7 +136,7 @@ vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => mocks.activeHostId.current,
 }));
 
-// P1.2: the picker's non-fixed arm resolves `pin ?? effective` and takes its
+// The picker's non-fixed arm resolves `pin ?? effective` and takes its
 // client from `useHostClientForHostId`. Both are mocked at their own boundary
 // (like the host list above) so this suite stays about the refresh edge.
 vi.mock("@/hooks/host/use-effective-host-id", () => ({

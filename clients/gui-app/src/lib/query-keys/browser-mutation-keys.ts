@@ -29,7 +29,7 @@ export const browserMutationKeys = {
     ["browser.closeTab", hostId, sessionId, tabId] as const,
   /**
    * "Save website sessions on this computer". Desktop-local rather than
-   * host-scoped (decision #18), and there is one switch per machine, so a
+   * host-scoped, and there is one switch per machine, so a
    * static key is the whole scope - the same shape `runner.logLevels` and the
    * other machine-local prefs take.
    */

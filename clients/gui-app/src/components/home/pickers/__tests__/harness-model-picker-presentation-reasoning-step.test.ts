@@ -34,6 +34,7 @@ function presentationFor(reasoningFooter: ReasoningFooterConfig | null) {
   return deriveHarnessModelPickerPresentation({
     selection: SELECTION,
     models: [],
+    stagedModelName: "",
     reasoningFooter,
     serviceTierFooter: null,
     harnessesPending: false,

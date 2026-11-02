@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { cleanup, render } from "@testing-library/react";
+import { MobileStripFormScope } from "@/components/layout/tabs/mobile-strip-form-scope";
 import { actionsSource } from "@/lib/commands/sources/actions.source";
 import type { CommandContext, CommandItem } from "@/lib/commands/types";
 import { ACTION_META, getDefaultBindings } from "@/lib/keybindings/actions";
-import { setMobileApp } from "@/lib/mobile-app";
+import { setMobileApp, setPhoneLayoutOnly } from "@/lib/mobile-app";
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
 import {
   DEFAULT_LAYOUT_SNAPSHOT,
@@ -45,6 +46,28 @@ function captureItems(): ReadonlyArray<CommandItem> {
   return captured;
 }
 
+/** The real scope and width rule, in the installed app, at a `#root` width. */
+function captureItemsInInstalledApp(
+  contentWidthPx: number,
+): ReadonlyArray<CommandItem> {
+  const root = document.createElement("div");
+  root.id = "root";
+  root.getBoundingClientRect = () => new DOMRect(0, 0, contentWidthPx, 402);
+  document.body.append(root);
+  let captured: ReadonlyArray<CommandItem> = [];
+  function Probe() {
+    captured = actionsSource.useItems(ctx());
+    return null;
+  }
+  render(
+    <MobileStripFormScope>
+      <Probe />
+    </MobileStripFormScope>,
+  );
+  root.remove();
+  return captured;
+}
+
 describe("actionsSource", () => {
   beforeEach(() => {
     window.localStorage.clear();
@@ -56,6 +79,7 @@ describe("actionsSource", () => {
   afterEach(() => {
     cleanup();
     setMobileApp(false);
+    setPhoneLayoutOnly(false);
     useKeybindingStore.setState({ bindings: getDefaultBindings() });
     useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
     useLayoutStore.getState().setRegionValues("homeTab", { shown: "hidden" });
@@ -202,5 +226,15 @@ describe("actionsSource", () => {
         expect(item?.label).toBe("Collapse vertical tabs");
       },
     );
+
+    it("offers the row in the installed app only where the expanded strip fits", () => {
+      setMobileApp(true);
+      setPhoneLayoutOnly(true);
+      const idsAt = (width: number): ReadonlyArray<string> =>
+        captureItemsInInstalledApp(width).map((item) => item.id);
+
+      expect(idsAt(750)).not.toContain("action:app.tabs.vertical.collapse");
+      expect(idsAt(1210)).toContain("action:app.tabs.vertical.collapse");
+    });
   });
 });

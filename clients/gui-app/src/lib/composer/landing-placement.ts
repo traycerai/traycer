@@ -10,6 +10,9 @@ import {
   type AuthStatus,
 } from "@/stores/auth/auth-store";
 
+/** What a surface says when it needs a device and the window has none. */
+export const NO_DEVICE_AVAILABLE = "No device is available right now.";
+
 /**
  * Display name for a host the composer is about to talk about. The generic
  * fallbacks are deliberate: the composer names a device in refusal and notice
@@ -81,7 +84,7 @@ export type LandingPlacement =
  *
  * Applied AFTER `resolveLandingPlacement` says `ready`, on the same host id
  * that placement named, so the version consulted is the target's own. A
- * `signed-in` session is never refused here. Found in review.
+ * `signed-in` session is never refused here.
  */
 export function refuseCreateWithoutCloudVerdict(input: {
   readonly status: AuthStatus;
@@ -107,7 +110,7 @@ export function createWithoutCloudVerdictMessage(hostLabel: string): string {
 }
 
 /**
- * Selection model §54's submit-time re-validation, as a pure function.
+ * The submit-time re-validation, as a pure function.
  *
  * "The composer additionally re-validates at submit time - submit re-validates
  * the resolved host is usable (refuse with an inline error, never create on a
@@ -137,8 +140,7 @@ export function resolveLandingPlacement(
   if (target.resolvedHostId === null) {
     return {
       kind: "refused",
-      message:
-        "No device is available right now. Connect a device before starting a task.",
+      message: `${NO_DEVICE_AVAILABLE} Connect a device before starting a task.`,
     };
   }
   if (target.namedHostDead) {
@@ -146,7 +148,7 @@ export function resolveLandingPlacement(
       kind: "refused",
       // Deliberately offers no in-place remedy: this arm is reachable only
       // from a request that NAMED this device, and that surface's picker is
-      // inert (§55), so "pick another device" would point at a control the
+      // inert, so "pick another device" would point at a control the
       // reader cannot use.
       message: `${target.hostLabel} is offline. Start this from another device, or try again once it's back.`,
     };

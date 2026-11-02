@@ -47,7 +47,7 @@ export interface BuildComposerExtensionsArgs {
     | null;
 }
 
-// Blockquote is button-only (T5): the composer schema stays blockquote-valid
+// Blockquote is button-only: the composer schema stays blockquote-valid
 // (so quoted drafts and edited sent messages round-trip) but grants none of
 // the extension's default authoring affordances - no `> ` wrapping input rule,
 // no Cmd-Shift-B toggle. `addCommands` (setBlockquote/toggleBlockquote/

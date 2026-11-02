@@ -10,6 +10,7 @@ import {
   expect,
   it,
   vi,
+  type Mock,
 } from "vitest";
 
 // Redirect HOME and the CLI install home into private temp roots before any
@@ -174,19 +175,29 @@ function taskXml(userId: string, enabled: string | null): string {
 let registered: ScheduledTaskXmlQuery = { kind: "absent" };
 let queryCount = 0;
 
-/** The three states in which the task is NOT the caller's. */
+/** A task resolved to ANOTHER account: refused by every verb, always. */
+const FOREIGN_TASK: ScheduledTaskXmlQuery = {
+  kind: "xml",
+  xml: taskXml(OTHER_SID, "true"),
+};
+
+/**
+ * A task this account's ownership could not be CONFIRMED for: refused by every
+ * verb that changes its definition or existence, and STARTED by the write-free
+ * `/Run`, whose authority is Task Scheduler's own permissions on the task.
+ */
+const UNATTRIBUTED_TASK: ScheduledTaskXmlQuery = {
+  kind: "failed",
+  reason: "access denied",
+};
+
+/** The two states in which the task is NOT the caller's. */
 const NOT_OWNED_CASES: readonly {
   readonly name: string;
   readonly query: ScheduledTaskXmlQuery;
 }[] = [
-  {
-    name: "another user's",
-    query: { kind: "xml", xml: taskXml(OTHER_SID, "true") },
-  },
-  {
-    name: "unconfirmed (query failed)",
-    query: { kind: "failed", reason: "access denied" },
-  },
+  { name: "another user's", query: FOREIGN_TASK },
+  { name: "unconfirmed (query failed)", query: UNATTRIBUTED_TASK },
 ];
 
 function stageEvidenceForImmediateStart(): void {
@@ -383,33 +394,49 @@ describe("a task that is not the caller's: stop, restart's stop half and quit ne
   }
 });
 
-describe("a task that is not the caller's: start and restart never /Run or /End it", () => {
-  for (const c of NOT_OWNED_CASES) {
-    it(`start over a task that is ${c.name}: E_SERVICE_TASK_NOT_OWNED, 0 /Run, no spawn edge, no evidence baseline`, async () => {
-      registered = c.query;
-      const baseline = vi.fn(async () => emptySpawnBaseline());
-      setWindowsStartEvidenceDepsForTests({
-        captureBaseline: baseline,
-        createEvidenceReader: () => ({ collect: async () => null }),
-        sleep: async () => undefined,
-        verifyTimeoutMs: 10,
-        verifyPollMs: 1,
-      });
-      const publish = vi.fn(async (): Promise<null> => null);
-      const { runner, calls } = recordingRunner([]);
-      await expect(
-        runWithLeaseAtServiceSpawnEdge(publish, () =>
-          createWindowsController(runner, noTimingDeps).start(label),
-        ),
-      ).rejects.toMatchObject({
-        code: CLI_ERROR_CODES.SERVICE_TASK_NOT_OWNED,
-        details: { task: taskName, verb: "run" },
-      });
-      expect(calls).toEqual([]);
-      expect(baseline).not.toHaveBeenCalled();
-      expect(publish).not.toHaveBeenCalled();
+describe("a task that is not the caller's: start refuses another account's and starts one it could not attribute", () => {
+  it("start over another account's task: E_SERVICE_TASK_NOT_OWNED, 0 /Run, no spawn edge, no evidence baseline", async () => {
+    registered = FOREIGN_TASK;
+    const baseline = vi.fn(async () => emptySpawnBaseline());
+    setWindowsStartEvidenceDepsForTests({
+      captureBaseline: baseline,
+      createEvidenceReader: () => ({ collect: async () => null }),
+      sleep: async () => undefined,
+      verifyTimeoutMs: 10,
+      verifyPollMs: 1,
     });
+    const publish = vi.fn(async (): Promise<null> => null);
+    const { runner, calls } = recordingRunner([]);
+    await expect(
+      runWithLeaseAtServiceSpawnEdge(publish, () =>
+        createWindowsController(runner, noTimingDeps).start(label),
+      ),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_TASK_NOT_OWNED,
+      details: { task: taskName, verb: "run" },
+    });
+    expect(calls).toEqual([]);
+    expect(baseline).not.toHaveBeenCalled();
+    expect(publish).not.toHaveBeenCalled();
+  });
 
+  // The paired case: `/Run` writes no definition and can neither take a task
+  // over nor destroy one, so a read that confirmed nothing does not get to
+  // refuse it. The scheduler's own permissions on the task decide, and the
+  // verified start reports whatever it answers.
+  it("start over a task it could not attribute: one /Run, through the spawn edge, start verified", async () => {
+    registered = UNATTRIBUTED_TASK;
+    stageEvidenceForImmediateStart();
+    const publish = vi.fn(async (): Promise<null> => null);
+    const { runner, calls } = recordingRunner([]);
+    await runWithLeaseAtServiceSpawnEdge(publish, () =>
+      createWindowsController(runner, noTimingDeps).start(label),
+    );
+    expect(verbCalls(calls, "/Run")).toHaveLength(1);
+    expect(publish).toHaveBeenCalledTimes(1);
+  });
+
+  for (const c of NOT_OWNED_CASES) {
     it(`restart over a task that is ${c.name}: refuses before its stop half - 0 /End, 0 /Run, 0 process calls of any kind`, async () => {
       registered = c.query;
       stageEvidenceForImmediateStart();
@@ -451,40 +478,85 @@ describe("a task that is not the caller's: refresh never redefines it", () => {
   }
 });
 
-describe("a task that is not the caller's: install never registers, runs or starts anything", () => {
+describe("a task that is not the caller's: install never registers it, and starts it only when nothing confirmed an owner", () => {
   const options = {
     label,
     cli: { command: "C:\\traycer.exe", args: [] },
     enableLinger: false,
   };
 
-  for (const c of NOT_OWNED_CASES) {
-    it(`install over a task that is ${c.name}: refuses first - 0 /Create, 0 /Run, no grant, nothing staged, no launcher`, async () => {
-      registered = c.query;
-      const stage = vi.fn(async () => ({
+  function neverStage(): Mock<WindowsTaskInstallDeps["stageTaskDefinition"]> {
+    const stage = vi.fn<WindowsTaskInstallDeps["stageTaskDefinition"]>(
+      async () => ({
         tmpDir: "/tmp/never",
         xmlPath: "/tmp/never/task.xml",
-      }));
-      setWindowsTaskInstallDepsForTests({
-        stageTaskDefinition: stage,
-        removeStagedTaskDefinition: async () => undefined,
-      });
-      const publish = vi.fn(async (): Promise<null> => null);
-      const { runner, calls } = recordingRunner([]);
-      await expect(
-        runWithLeaseAtServiceSpawnEdge(publish, () =>
-          createWindowsController(runner, noTimingDeps).install(options),
-        ),
-      ).rejects.toMatchObject({
-        code: CLI_ERROR_CODES.SERVICE_TASK_NOT_OWNED,
-        details: { task: taskName, verb: "create" },
-      });
-      expect(calls).toEqual([]);
-      expect(stage).not.toHaveBeenCalled();
-      expect(publish).not.toHaveBeenCalled();
-      expect(await exists(launcherPath())).toBe(false);
+      }),
+    );
+    setWindowsTaskInstallDepsForTests({
+      stageTaskDefinition: stage,
+      removeStagedTaskDefinition: async () => undefined,
     });
+    return stage;
   }
+
+  it("install over another account's task: refuses first - 0 /Create, 0 /Run, no grant, nothing staged, no launcher", async () => {
+    registered = FOREIGN_TASK;
+    const stage = neverStage();
+    const publish = vi.fn(async (): Promise<null> => null);
+    const { runner, calls } = recordingRunner([]);
+    await expect(
+      runWithLeaseAtServiceSpawnEdge(publish, () =>
+        createWindowsController(runner, noTimingDeps).install(options),
+      ),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_TASK_NOT_OWNED,
+      details: { task: taskName, verb: "create" },
+    });
+    expect(calls).toEqual([]);
+    expect(stage).not.toHaveBeenCalled();
+    expect(publish).not.toHaveBeenCalled();
+    expect(await exists(launcherPath())).toBe(false);
+  });
+
+  // The split: the definition refresh still writes nothing - no staging, no
+  // launcher, no `/Create` - but the host the swap just replaced still has to
+  // come up, so the install goes straight to the verified start.
+  it("install over a task it could not attribute: 0 /Create, nothing staged, no launcher - and one verified /Run", async () => {
+    registered = UNATTRIBUTED_TASK;
+    const stage = neverStage();
+    stageEvidenceForImmediateStart();
+    const publish = vi.fn(async (): Promise<null> => null);
+    const { runner, calls } = recordingRunner([]);
+    await runWithLeaseAtServiceSpawnEdge(publish, () =>
+      createWindowsController(runner, noTimingDeps).install(options),
+    );
+    expect(verbCalls(calls, "/Create")).toHaveLength(0);
+    expect(verbCalls(calls, "/Run")).toHaveLength(1);
+    expect(stage).not.toHaveBeenCalled();
+    expect(await exists(launcherPath())).toBe(false);
+    expect(publish).toHaveBeenCalledTimes(1);
+  });
+
+  // `traycer host service install` exists to WRITE the registration, and it
+  // is the repair the unconfirmed refusal's own copy names. It must not report
+  // success for a definition it did not rewrite, so it keeps failing closed;
+  // `traycer host service start` is what then starts the host.
+  it("the explicit repair over a task it could not attribute: still refuses - 0 /Create, 0 /Run", async () => {
+    registered = UNATTRIBUTED_TASK;
+    const stage = neverStage();
+    stageEvidenceForImmediateStart();
+    const { runner, calls } = recordingRunner([]);
+    await expect(
+      runAsExplicitRegistrationRepair(() =>
+        createWindowsController(runner, noTimingDeps).install(options),
+      ),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_TASK_NOT_OWNED,
+      details: { task: taskName, verb: "create", reason: "unconfirmed" },
+    });
+    expect(calls).toEqual([]);
+    expect(stage).not.toHaveBeenCalled();
+  });
 
   it("install over a task the query cannot see but that is hidden from this account: refuses as another user's - 0 /Create, nothing staged", async () => {
     registered = { kind: "absent" };

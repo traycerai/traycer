@@ -13,7 +13,7 @@ export type OpenManagedCommandOutput = (args: {
  * opens one: a Shells row, a queued-delivery chip, a resume divider, a
  * running-work strip row.
  *
- * One window per command (`UI.md` §9) falls out of the canvas itself: the
+ * One window per command falls out of the canvas itself: the
  * tile's content id IS the command id, and the epic-level open focuses an
  * already open tab for the same content instead of opening a second one.
  *

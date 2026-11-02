@@ -58,7 +58,7 @@ const CLAUDE_MODEL_SLUG = "claude-sonnet";
 const TRAYCER_MODEL_SLUG = "traycer:judge-model";
 const WAIT_TIMEOUT_MS = 2000;
 
-// Mock only the two host-negotiation hooks the brief names; every other host
+// Mock only the two host-negotiation hooks; every other host
 // hook the SUT calls runs for real against the mock messenger below.
 const useHostClientForHostIdMock = vi.hoisted(() =>
   vi.fn<(hostId: string | null) => HostClient<HostRpcRegistry> | null>(

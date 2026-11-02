@@ -27,9 +27,9 @@ export interface TouchSheetAction {
 
 /**
  * A coarse pointer has no hover to reveal a row's hover bar with, so a page or
- * an app wears an always-visible round actions button that opens a sheet (D40,
- * MobileChat and MobileActions). Rendered inside the row's `relative` box; it
- * is hidden for a fine pointer.
+ * an app wears an always-visible round actions button that opens a sheet.
+ * Rendered inside the row's `relative` box; it is hidden for a fine
+ * pointer.
  */
 export function TouchActionsSheet(props: {
   /** The … button's accessible name. */

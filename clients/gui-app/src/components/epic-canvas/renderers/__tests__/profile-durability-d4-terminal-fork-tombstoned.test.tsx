@@ -30,7 +30,7 @@ import type { ForkableTuiAgent } from "../terminal-agent-fork-dialog";
  * production store), so this exercises the actual code path that decides
  * what `profileId` gets sent to `createAgent.create`.
  *
- * A cold reviewer flagged the FIRST version of this fix: the seed-resolution
+ * The FIRST version of this fix was wrong: the seed-resolution
  * hook originally read `providers.list` from the APP-WIDE ACTIVE host
  * (`useProvidersList`) instead of the host the fork's `createAgent.create`
  * call actually targets (this dialog's explicit `hostClient` prop). `mock
@@ -393,8 +393,7 @@ describe("D4: TerminalAgentForkDialog seeded from a tombstoned profile", () => {
   it("ticket 07: resolves the seeded profileId to ambient once the target host SETTLES on an empty profiles[] (old host, or flag-off/unsupported provider) - a settled empty list means 'no support', not 'unknown'", async () => {
     // The target host HAS responded - just with no profiles for this
     // provider (an old host upgraded to `profiles: []`, or a new host with
-    // the flag off / an unsupported provider). Per the protocol-schema-
-    // contract-compat review's Major finding, preserving the pin here would
+    // the flag off / an unsupported provider). Preserving the pin here would
     // silently run the account on ambient while the UI/artifact still
     // claimed the managed profile - this must clear it instead.
     dialogMocks.providersByClient.set(TARGET_HOST_CLIENT, [claudeState([])]);

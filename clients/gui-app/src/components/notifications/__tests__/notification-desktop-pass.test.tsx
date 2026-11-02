@@ -426,7 +426,7 @@ function mountBell(options: {
   // Same shell as notifications-bell.test.tsx: no router. Nested-dismissal
   // only needs the real Popover + DropdownMenu layering; settings navigation
   // is not exercised here (useRouter may warn if the overflow item is opened).
-  // Optional underlying page control reproduces the review's bleed-through
+  // Optional underlying page control reproduces the bleed-through
   // repro (click reaches a non-popover button while a nested menu is open).
   render(
     <QueryClientProvider client={createTestQueryClient()}>
@@ -1030,6 +1030,18 @@ describe("notification desktop-pass design corrections", () => {
   });
 
   describe("temporal separator subordination", () => {
+    // Fixed to local noon: a bucketing assertion must not depend on the
+    // first minute of the real local day, where `now - 60_000` lands
+    // yesterday and drops the Today separator. Noon also keeps the
+    // `- DAY_MS / 2` and `- 3 * DAY_MS` arithmetic clear of DST edges.
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date(2026, 9, 15, 12, 0, 0));
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
     it("keeps separators sentence-case and micro while section headers stay overline/uppercase", async () => {
       const now = Date.now();
       applyHostSnapshot(
@@ -1163,7 +1175,7 @@ describe("notification desktop-pass design corrections", () => {
     });
 
     it("does not synthetic-Escape the popover when the filter menu already closed itself first", async () => {
-      // Regression for the deferred onPointerDownOutside ordering P0: when
+      // Regression for the deferred onPointerDownOutside ordering: when
       // the menu's own outside handler closes it before the popover guard
       // runs, nestedMenuOpenRef is already false and the guard must NOT
       // dispatch Escape (which would hit the popover as the new topmost

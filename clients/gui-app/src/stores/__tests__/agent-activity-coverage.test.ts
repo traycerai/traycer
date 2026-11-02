@@ -85,8 +85,8 @@ describe("selectAgentActivityCoverage", () => {
   });
 
   it("reads a null host id as indeterminate even when a NARROW union answers", () => {
-    // Reported as unpinned by the test author who found it, and confirmed by
-    // the cold reviewer: the docstring promised "indeterminate by
+    // Reported as unpinned by the test author who found it:
+    // the docstring promised "indeterminate by
     // construction" for a `null` host while the implementation fell through to
     // `selectPlaneAnswers(byHost) ? "unserved" : "indeterminate"`, so a local
     // union answering for SOME host made every host-less surface read

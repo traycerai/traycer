@@ -23,7 +23,7 @@ import {
 } from "@/stores/layout/layout-store";
 
 /**
- * The canvas half of ticket 09 (D14): selecting the tab strip and the sample
+ * The canvas half: selecting the tab strip and the sample
  * sidebar as SURFACES rather than regions, and dragging the selected one to
  * an edge. Mirrors `layout-canvas.test.tsx`'s own harness shape - a bare
  * column handed to the hook, real region/rail-divider members inside it -

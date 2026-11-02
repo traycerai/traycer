@@ -8,8 +8,11 @@ import { fixture, nextFrames } from "./support/fixtures";
  * P6: a wheel while a reopened chat's restore command waits in the list for
  * its layout to settle. The list must not run that command after the wheel,
  * and what the reader sees moves by the wheel's own travel and nothing else.
- * While the command is held nothing may be painted under the edge yet; the
- * reference is then the first element painted there after the wheel.
+ * The reference is the element under the edge in the last frame painted
+ * before the wheel, but only when nothing held the scroller at that paint -
+ * a frame painted mid-restore is not a frame the reader ever read as still.
+ * Otherwise the reference is the first element painted there after the
+ * wheel.
  *
  * P6b: a minimap pick during a stream, with and without a wheel right after
  * it. When the list finishes that scroll it re-lays out every row. The reader
@@ -174,7 +177,11 @@ function installP6Recorder(): void {
     }
     return null;
   };
-  // Its `scheduledWork` says whether a command waits.
+  // Whether the list owns the next paint: its `scheduledWork` says a command
+  // waits to run, `pendingScrollToEnd` says one is queued, and `scrollingTo`
+  // says one is already in flight toward its own target - a frame painted
+  // under any of these is the list moving the view, not the reader's settled
+  // one.
   const readHeld = (node: HTMLElement): boolean | null => {
     const state = listState(node);
     const work: unknown = state?.scheduledWork;
@@ -182,7 +189,8 @@ function installP6Recorder(): void {
       return null;
     return (
       Reflect.apply(work.has, work, ["imperativeScrollReady"]) === true ||
-      state.pendingScrollToEnd !== undefined
+      state.pendingScrollToEnd !== undefined ||
+      state.scrollingTo !== undefined
     );
   };
   // What its next anchored adjustment holds still: a scroll target, then an
@@ -213,14 +221,16 @@ function installP6Recorder(): void {
     element === null || !element.isConnected
       ? null
       : element.getBoundingClientRect().top - node.getBoundingClientRect().top;
-  // The last painted frame: its scroll position, the element under its edge
-  // and where the reference element sat in it.
+  // The last painted frame: its scroll position, the element under its edge,
+  // where the reference element sat in it, and whether the list held a scroll
+  // command when the frame painted.
   let lastFrame: {
     readonly t: number;
     readonly scrollTop: number;
     readonly under: Element | null;
     readonly underTop: number | null;
     readonly edgeTop: number | null;
+    readonly held: boolean | null;
   } | null = null;
   const paintedAfterWheel: ProofPainted[] = [];
   const note = (line: string): void => {
@@ -231,7 +241,16 @@ function installP6Recorder(): void {
     (event) => {
       const node = scrollNode();
       if (node === null) return;
-      if (edge === null && lastFrame !== null) edge = lastFrame.under;
+      // The last painted frame is the reader's settled view only if nothing
+      // held the scroller when it painted: a frame painted mid-restore (the
+      // list's own command still adjusting toward its target) is not
+      // something the reader ever read as still - adopting it would charge
+      // the restore's own travel to the window this measures. Leave `edge`
+      // null then; the ResizeObserver callback below supplies the first
+      // frame painted after the wheel instead.
+      if (edge === null && lastFrame !== null && lastFrame.held === false) {
+        edge = lastFrame.under;
+      }
       let top: number | null = null;
       if (edge !== null && lastFrame !== null) {
         top = edge === lastFrame.under ? lastFrame.underTop : lastFrame.edgeTop;
@@ -338,6 +357,7 @@ function installP6Recorder(): void {
         under,
         underTop,
         edgeTop: sample.edgeTop,
+        held: readHeld(node),
       };
     });
     resize.observe(probe);
@@ -615,8 +635,9 @@ test.describe("P6: a wheel while the reopened chat's restore command is held", (
         const first = recorded.wheels.at(0);
         if (first === undefined) throw new Error("no wheel recorded");
         // What the reader saw: the element under the edge in the last frame
-        // painted before the wheel, or, when that frame showed none, the
-        // first one painted after it.
+        // painted before the wheel, but only when nothing held the scroller
+        // at that paint - a frame painted mid-restore is not one the reader
+        // ever read as still. Otherwise, the first one painted after it.
         const reference =
           first.painted ?? recorded.paintedAfterWheel.at(0) ?? null;
         if (first.held !== true || reference === null) {

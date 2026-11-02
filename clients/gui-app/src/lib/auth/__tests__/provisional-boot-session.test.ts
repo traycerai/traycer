@@ -287,7 +287,7 @@ interface RawTeam {
 
 /**
  * A local variant of {@link authenticatedUserRawPayload} that parameterizes
- * `teamSubscriptions`, for C.8 - the reorder-vs-change pin on
+ * `teamSubscriptions`, for the reorder-vs-change check on
  * `reprojectSameUserIdentity`'s teams comparison.
  */
 function authenticatedUserRawPayloadWithTeams(
@@ -561,7 +561,7 @@ describe("AuthService provisional boot session", () => {
       expect(useAuthStore.getState().shareableTeams).toBe(teamsBefore);
     });
 
-    // C.8 - `reprojectSameUserIdentity`'s `unchanged` check (auth-service.ts
+    // `reprojectSameUserIdentity`'s `unchanged` check (auth-service.ts
     // :3820-3828) compares `shareableTeams` INDEX-BY-INDEX, and
     // `projectShareableTeams` preserves server order verbatim - so the same
     // team set returned in a different order reads as "changed" and fires a
@@ -910,7 +910,7 @@ describe("AuthService provisional boot session", () => {
       expect(service.getLastError()).toBe(AUTH_ERROR_LAUNCH_FAILED);
     });
 
-    // C.7 - `revalidateCurrentContextOnce`'s same-user `valid` arm (auth-service.ts
+    // `revalidateCurrentContextOnce`'s same-user `valid` arm (auth-service.ts
     // :2303-2316) is the exact predicate A5/A6 pin at BOOT, unapplied at the
     // mid-session revalidation this reactive 401 path drives. It commits
     // subscription status only and never calls `reprojectSameUserIdentity`.

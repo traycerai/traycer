@@ -195,7 +195,7 @@ export function ComposerBody({
         onDragEnter={chatPasteActive ? paste.onDragEnter : NOOP}
         onDragLeave={chatPasteActive ? paste.onDragLeave : NOOP}
         dragOverlayVariant={chatPasteActive ? paste.dragOverlayVariant : null}
-        // D11: a terminal-mode draft is still a draft, so the rail renders in
+        // A terminal-mode draft is still a draft, so the rail renders in
         // both modes. The attachments strip below stays chat-only - the
         // terminal launcher has no attachments.
         utilityRail={draftsControl}

@@ -50,10 +50,8 @@ import {
   highlightSegmentsFromByteRanges,
   type SnippetByteRange,
 } from "@/lib/artifacts/highlight-byte-ranges";
-import {
-  EPIC_NODE_ICONS,
-  isEpicArtifactKind,
-} from "@/lib/artifacts/node-display";
+import { isEpicArtifactKind } from "@/lib/artifacts/node-display";
+import { EpicArtifactIcon } from "@/components/epic-canvas/epic-node-tab-icon";
 import { displayTitle } from "@/lib/display-title";
 import { listNavigationKey } from "@/lib/keybindings/list-navigation-key";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
@@ -555,6 +553,7 @@ function ArtifactSearchResultsRegion(props: ArtifactSearchResultsRegionProps) {
         {props.results.map((hit, index) => (
           <ArtifactSearchResultRow
             key={hit.artifactId}
+            epicId={props.epicId}
             optionId={`${props.listboxId}-option-${index}`}
             hit={hit}
             active={index === props.activeIndex}
@@ -576,6 +575,7 @@ function ArtifactSearchResultsRegion(props: ArtifactSearchResultsRegionProps) {
 }
 
 interface ArtifactSearchResultRowProps {
+  readonly epicId: string;
   readonly optionId: string;
   readonly hit: SearchArtifactHit;
   readonly active: boolean;
@@ -591,7 +591,6 @@ const ArtifactSearchResultRow = memo(function ArtifactSearchResultRow(
   props: ArtifactSearchResultRowProps,
 ) {
   const { hit, active, stale, onActivate, onHover } = props;
-  const Icon = EPIC_NODE_ICONS[hit.kind];
   const title = displayTitle(hit.title, hit.kind);
   // The RPC breadcrumb includes the artifact's own folder slug last; drop it so
   // only the ancestor trail shows (the title already names the artifact) -
@@ -637,7 +636,12 @@ const ArtifactSearchResultRow = memo(function ArtifactSearchResultRow(
             aria-label={STATUS_LABELS[hit.status]}
           />
         ) : null}
-        <Icon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+        <EpicArtifactIcon
+          epicId={props.epicId}
+          artifactId={hit.artifactId}
+          kind={hit.kind}
+          className="size-3.5 shrink-0"
+        />
         <span className="min-w-0 flex-1 truncate text-ui-sm text-foreground">
           {title}
         </span>

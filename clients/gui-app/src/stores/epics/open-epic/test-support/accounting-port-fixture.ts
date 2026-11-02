@@ -1,6 +1,6 @@
 /**
  * A recording {@link EpicRuntimeAccountingPort}, for the suites that drive the
- * accounting seam without T5's real books.
+ * accounting seam without the real books.
  *
  * One site for the same reason `INERT_ROOT_STATE_PORT` is one: the port is a
  * type that fixtures MIRROR by hand, so every member added to it is a compile

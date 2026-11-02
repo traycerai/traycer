@@ -273,6 +273,307 @@ describe("the browser.sessions jar plane lives in main", () => {
     expect(session.framesOfKind("primaryProfileCaptured")).toHaveLength(0);
   });
 
+  describe("while the host holds the stream", () => {
+    const standingCapture = {
+      kind: "capturePrimaryProfile",
+      hasBinaryPayload: false,
+      requestId: "standing-1",
+      standing: true,
+    } as const;
+    const ledgerAck = {
+      kind: "primaryProfileForgetLedgerAck",
+      hasBinaryPayload: false,
+      revision: 4,
+    } as const;
+
+    it("keeps the incarnation, its digest ledger and the standing capture id across a held drop and a continued open", async () => {
+      harness.jar.ledger = { forgetAllAt: null, domains: [], revision: 4 };
+      const session = await openLiveStream(harness, registry, "window-1");
+      session.emit(standingCapture, null);
+
+      session.emitContinuityStatus("reconnecting", "held");
+      session.emitContinuityStatus("open", "continued");
+
+      // No new incarnation: nothing released and no second readiness.
+      expect(harness.jar.releasedConnectionIds).toEqual([]);
+      expect(session.framesOfKind("electronTabLifecycleReady")).toHaveLength(1);
+      // The ack is priced against the digest this same connection was sent.
+      session.emit(ledgerAck, null);
+      expect(harness.jar.acks[0]?.sentRevision).toBe(4);
+      // The standing capture request is still the one to quote.
+      const flushed = registry.captureFinalPrimaryProfiles("window-1");
+      await settle();
+      await settle();
+      expect(session.framesOfKind("primaryProfileCaptured")[0]?.requestId).toBe(
+        "standing-1",
+      );
+      session.emit(
+        {
+          kind: "primaryProfileCaptureAck",
+          hasBinaryPayload: false,
+          requestId: "standing-1",
+        },
+        null,
+      );
+      await flushed;
+    });
+
+    it("queues a forget that lands while the stream is held right away, and a continued open does not send it again", async () => {
+      harness.jar.ledger = { forgetAllAt: null, domains: [], revision: 4 };
+      const session = await openLiveStream(harness, registry, "window-1");
+
+      session.emitContinuityStatus("reconnecting", "held");
+      harness.jar.ledger = { forgetAllAt: 99, domains: [], revision: 9 };
+      harness.jar.emitLedgerChange();
+
+      const digests = (): readonly unknown[] =>
+        session
+          .framesOfKind("primaryProfileForgetLedger")
+          .map((frame) => frame.revision);
+      expect(digests().at(-1)).toBe(9);
+      const sent = digests().length;
+
+      session.emitContinuityStatus("open", "continued");
+      expect(digests()).toHaveLength(sent);
+    });
+
+    it("tells the renderer the continuity of each status it projects", async () => {
+      const session = await openLiveStream(harness, registry, "window-1");
+
+      session.emitContinuityStatus("reconnecting", "held");
+      session.emitContinuityStatus("open", "continued");
+      session.emitContinuityStatus("reconnecting", null);
+
+      const statuses = harness.emitted
+        .map((entry) => entry.envelope.event)
+        .filter((event) => event.kind === "status")
+        .map((event) => [event.lifecycle, event.continuity]);
+      expect(statuses.slice(-3)).toEqual([
+        ["reconnecting", "held"],
+        ["live", "continued"],
+        ["reconnecting", null],
+      ]);
+    });
+
+    describe("a cookie delta", () => {
+      const heldDelta = (issuedAt: number): BrowserPrimaryProfileDelta => ({
+        domain: "example.com",
+        cookies: SEED.cookies,
+        removedKeys: [],
+        issuedAt,
+      });
+
+      it("reaches a lifecycle-ready stream once while it is held, and a continued open adds no duplicate", async () => {
+        const session = await openLiveStream(harness, registry, "window-1");
+
+        session.emitContinuityStatus("reconnecting", "held");
+        harness.jar.emitDelta(heldDelta(1));
+        expect(session.framesOfKind("primaryProfileDelta")).toHaveLength(1);
+
+        session.emitContinuityStatus("open", "continued");
+        expect(session.framesOfKind("primaryProfileDelta")).toHaveLength(1);
+
+        harness.jar.emitDelta(heldDelta(2));
+        expect(session.framesOfKind("primaryProfileDelta")).toHaveLength(2);
+      });
+
+      it("is dropped once the hold ends, until the next open has a snapshot and lifecycle readiness", async () => {
+        const session = await openLiveStream(harness, registry, "window-1");
+
+        session.emitContinuityStatus("reconnecting", "held");
+        session.emitContinuityStatus("reconnecting", null);
+        session.emitContinuityStatus("open", null);
+        harness.jar.emitDelta(heldDelta(1));
+        expect(session.framesOfKind("primaryProfileDelta")).toHaveLength(0);
+
+        session.emit(snapshotFrame(), null);
+        harness.jar.emitDelta(heldDelta(2));
+        expect(session.framesOfKind("primaryProfileDelta")).toHaveLength(1);
+      });
+
+      it("never reaches a held stream that was not lifecycle-ready", async () => {
+        harness.localHostId = null;
+        const session = await openLiveStream(harness, registry, "window-1");
+        expect(session.sentFrames).toEqual([]);
+
+        session.emitContinuityStatus("reconnecting", "held");
+        harness.jar.emitDelta(heldDelta(1));
+
+        expect(session.framesOfKind("primaryProfileDelta")).toHaveLength(0);
+      });
+    });
+
+    describe("a held import", () => {
+      const standing = {
+        kind: "capturePrimaryProfile",
+        hasBinaryPayload: false,
+        requestId: "standing-1",
+        standing: true,
+      } as const;
+      const captureAck = {
+        kind: "primaryProfileCaptureAck",
+        hasBinaryPayload: false,
+        requestId: "standing-1",
+      } as const;
+      const turns = async (): Promise<void> => {
+        for (let tick = 0; tick < 8; tick += 1) await Promise.resolve();
+      };
+
+      it("sends the forget digest before the captured jar, and counts the host only on the ack after the continued open", async () => {
+        harness.jar.ledger = { forgetAllAt: null, domains: [], revision: 4 };
+        const session = await openLiveStream(harness, registry, "window-1");
+        session.emit(standing, null);
+        const sentBefore = session.sentFrames.length;
+
+        session.emitContinuityStatus("reconnecting", "held");
+        harness.jar.ledger = { forgetAllAt: 99, domains: [], revision: 9 };
+        harness.jar.emitLedgerChange();
+        const pushed = registry.capturePrimaryProfileOnEveryHost();
+        let counted: number | null = null;
+        void pushed.then((count) => {
+          counted = count;
+        });
+        await turns();
+
+        expect(session.sentFrames.slice(sentBefore).map((f) => f.kind)).toEqual(
+          ["primaryProfileForgetLedger", "primaryProfileCaptured"],
+        );
+        // Queued is not delivered: no ack has come, so no host is counted.
+        expect(counted).toBeNull();
+
+        session.emitContinuityStatus("open", "continued");
+        await turns();
+        expect(counted).toBeNull();
+
+        session.emit(captureAck, null);
+        expect(await pushed).toBe(1);
+      });
+
+      it("does not let the late ack of a capture queued while held satisfy the next capture", async () => {
+        vi.useFakeTimers();
+        try {
+          const session = await openLiveStream(harness, registry, "window-1");
+          session.emit(standing, null);
+
+          session.emitContinuityStatus("reconnecting", "held");
+          const firstPushed = registry.capturePrimaryProfileOnEveryHost();
+          await turns();
+          expect(session.framesOfKind("primaryProfileCaptured")).toHaveLength(
+            1,
+          );
+          await vi.advanceTimersByTimeAsync(
+            FINAL_PRIMARY_PROFILE_FLUSH_TIMEOUT_MS,
+          );
+          expect(await firstPushed).toBe(0);
+
+          session.emitContinuityStatus("open", "continued");
+          const secondPushed = registry.capturePrimaryProfileOnEveryHost();
+          await turns();
+          expect(session.framesOfKind("primaryProfileCaptured")).toHaveLength(
+            2,
+          );
+          let secondSettled = false;
+          void secondPushed.then(() => {
+            secondSettled = true;
+          });
+
+          // The late ack belongs to the timed-out held capture.
+          session.emit(captureAck, null);
+          await turns();
+          expect(secondSettled).toBe(false);
+
+          session.emit(captureAck, null);
+          expect(await secondPushed).toBe(1);
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
+      it("counts no host for a capture queued while held once the hold ends", async () => {
+        const session = await openLiveStream(harness, registry, "window-1");
+        session.emit(standing, null);
+
+        session.emitContinuityStatus("reconnecting", "held");
+        const pushed = registry.capturePrimaryProfileOnEveryHost();
+        await turns();
+        expect(session.framesOfKind("primaryProfileCaptured")).toHaveLength(1);
+
+        session.emitContinuityStatus("reconnecting", null);
+        session.emitContinuityStatus("open", null);
+        // The standing authorization went with the incarnation: this ack
+        // answers nothing the new connection was sent.
+        session.emit(captureAck, null);
+
+        expect(await pushed).toBe(0);
+        const again = registry.capturePrimaryProfileOnEveryHost();
+        await turns();
+        expect(session.framesOfKind("primaryProfileCaptured")).toHaveLength(1);
+        expect(await again).toBe(0);
+      });
+    });
+
+    it("keeps the acked stream as the delta carrier through a held drop", async () => {
+      const a = await openLiveStream(harness, registry, "window-a");
+      const b = await openLiveStream(harness, registry, "window-b");
+      a.emit(ledgerAck, null);
+
+      a.emitContinuityStatus("reconnecting", "held");
+      a.emitContinuityStatus("open", "continued");
+      harness.jar.emitDelta({
+        domain: "example.com",
+        cookies: SEED.cookies,
+        removedKeys: [],
+        issuedAt: 1,
+      });
+
+      expect(a.framesOfKind("primaryProfileDelta")).toHaveLength(1);
+      expect(b.framesOfKind("primaryProfileDelta")).toHaveLength(0);
+    });
+
+    it("keeps a pending native tab so its acceptance still binds after a continued open", async () => {
+      const session = await openLiveStream(harness, registry, "window-1");
+      session.emit(createTabFrame(), null);
+      await settle();
+
+      session.emitContinuityStatus("reconnecting", "held");
+      session.emitContinuityStatus("open", "continued");
+      session.emit(
+        {
+          kind: "electronTabAccepted",
+          hasBinaryPayload: false,
+          requestId: "create-1",
+          sessionId: "session-1",
+          tabId: "tab-1",
+          registrationId: "registration-1",
+        },
+        null,
+      );
+      await settle();
+
+      expect(harness.tabs.accepted).toHaveLength(1);
+      expect(harness.tabs.released).toEqual([]);
+    });
+
+    it("retires the incarnation once the hold ends, so the next open starts a new cycle", async () => {
+      harness.jar.ledger = { forgetAllAt: null, domains: [], revision: 4 };
+      const session = await openLiveStream(harness, registry, "window-1");
+      session.emit(standingCapture, null);
+      session.emit(ledgerAck, null);
+      const connectionId = harness.jar.acks[0]?.connectionId;
+      session.emitContinuityStatus("reconnecting", "held");
+
+      session.emitContinuityStatus("reconnecting", null);
+      expect(harness.jar.releasedConnectionIds).toEqual([connectionId]);
+      session.emitContinuityStatus("open", null);
+      session.emit(ledgerAck, null);
+      await registry.captureFinalPrimaryProfiles("window-1");
+
+      expect(harness.jar.acks[1]?.sentRevision).toBe(0);
+      expect(harness.jar.acks[1]?.connectionId).not.toBe(connectionId);
+      expect(session.framesOfKind("primaryProfileCaptured")).toHaveLength(0);
+    });
+  });
+
   it("a host-issued capture waits for the jar barrier before reading", async () => {
     const session = await openLiveStream(harness, registry, "window-1");
     harness.jar.deferBarrier = true;

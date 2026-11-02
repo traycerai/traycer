@@ -3,6 +3,7 @@ import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe
 import { landingComposerSettingsSeedForDraft } from "@/components/home/composer/landing-composer-settings-seed";
 
 const DRAFT_SETTINGS: ChatRunSettings = {
+  ultracode: false,
   harnessId: "claude",
   model: "haiku",
   permissionMode: "supervised",
@@ -13,6 +14,7 @@ const DRAFT_SETTINGS: ChatRunSettings = {
 };
 
 const GLOBAL_SETTINGS: ChatRunSettings = {
+  ultracode: false,
   harnessId: "claude",
   model: "sonnet",
   permissionMode: "supervised",
@@ -33,9 +35,18 @@ describe("landingComposerSettingsSeedForDraft", () => {
     ).toEqual(GLOBAL_SETTINGS);
   });
 
-  it("keeps an active draft with null settings from following global settings", () => {
+  it("falls back to the host's settings with the request off for an active draft that has none", () => {
     expect(
-      landingComposerSettingsSeedForDraft("draft-empty", null, GLOBAL_SETTINGS),
+      landingComposerSettingsSeedForDraft("draft-empty", null, {
+        ...GLOBAL_SETTINGS,
+        ultracode: true,
+      }),
+    ).toEqual(GLOBAL_SETTINGS);
+  });
+
+  it("seeds nothing for an active draft with no settings on a host that has none", () => {
+    expect(
+      landingComposerSettingsSeedForDraft("draft-empty", null, null),
     ).toBeNull();
   });
 

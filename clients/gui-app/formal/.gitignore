@@ -2,3 +2,4 @@ tools/
 states/
 results/
 *.out
+__pycache__/

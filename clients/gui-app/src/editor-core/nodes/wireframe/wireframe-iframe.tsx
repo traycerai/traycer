@@ -69,7 +69,7 @@ function clampManualHeight(height: number, maxHeight: number): number {
 function ignoreSandboxEvent(): void {}
 
 /**
- * A wireframe preview in the shared sandbox frame (D12): the same opaque,
+ * A wireframe preview in the shared sandbox frame: the same opaque,
  * own-origin loader agent pages and MCP Apps use, always https-only because
  * artifact text is peer-editable. Wireframes keep their light srcdoc look
  * (`sandboxTheme`) and get the theme variables and link handling for free.

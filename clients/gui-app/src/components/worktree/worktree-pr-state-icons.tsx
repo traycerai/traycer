@@ -75,7 +75,7 @@ function WorktreePrStateIcon(props: {
       event.stopPropagation();
       event.preventDefault();
       // Keyboard activation carries modifiers too (ctrl+Enter forces the OS
-      // browser); only the mouse button is missing (R7).
+      // browser); only the mouse button is missing.
       void openLink(url, "github", {
         altKey: event.altKey,
         ctrlKey: event.ctrlKey,

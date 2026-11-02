@@ -215,7 +215,9 @@ describe("useWorktreeGetBinding condition cadence", () => {
     expect(query.options.meta).toMatchObject({
       hostRpcMethod: "worktree.getBinding",
     });
-    expect(query.options.retry).toBe(false);
+    expect(query.options.retry).toBe(
+      fixture.queryClient.getDefaultOptions().queries?.retry,
+    );
     expect(refetchIntervalFor(query)).toBe(false);
   });
 

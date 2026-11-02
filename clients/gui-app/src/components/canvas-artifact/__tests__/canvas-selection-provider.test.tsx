@@ -50,6 +50,7 @@ vi.mock("../canvas-editing-overlay", () => ({
       onPick={props.onPick}
       onRetire={props.onRetire}
       onEscape={props.onEscape}
+      onSelectParent={props.onSelectParent}
     />
   ),
 }));
@@ -117,6 +118,7 @@ function scope(artifactId: string) {
     epicId: "epic-1",
     artifactId,
     artifactTitle: artifactId,
+    artifactType: "canvas" as const,
     hostId: "host-1",
     viewTabId: "tab-1",
   };

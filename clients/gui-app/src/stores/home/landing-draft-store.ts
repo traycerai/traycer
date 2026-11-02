@@ -1,4 +1,8 @@
 import {
+  chatRunSettingsSchemaPreUltracode,
+  type ChatRunSettingsPreUltracode,
+} from "@traycer/protocol/persistence/epic/foundation";
+import {
   pruneRecoveryDraft,
   recoveryDraftIds,
 } from "@/lib/tab-recovery/history";
@@ -14,6 +18,7 @@ import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe
 import type { DraftDocument, DraftPublication } from "@traycer/protocol/host";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import { chatRunSettingsSchema } from "@traycer/protocol/persistence/epic/schemas";
+import type { DraftComposerPortable } from "@traycer/protocol/persistence/draft/schemas";
 import {
   adoptDraftImageHandoff,
   draftImageHashes,
@@ -79,6 +84,7 @@ import {
 } from "@/lib/drafts/draft-local-edits";
 import { collectImageAtoms } from "@/lib/composer/image-atoms";
 import { isEmptyLandingDraftContent } from "@/lib/composer/landing-draft-empty";
+import { runSettingsFromDraftEcho } from "@/lib/drafts/draft-write-codec";
 
 const SHA256_HEX = /^[0-9a-f]{64}$/;
 
@@ -97,7 +103,7 @@ export interface LandingDraftTab {
   readonly content: JsonContent;
   /** Cursor position (from/to), mirroring the in-epic composer draft. */
   readonly selection: DraftSelection | null;
-  /** Bumped on every content/selection edit; drives LRU eviction (T5). */
+  /** Bumped on every content/selection edit; drives LRU eviction. */
   readonly lastTouchedAt: number;
   readonly settings: ChatRunSettings | null;
   readonly composerMode: ComposerMode;
@@ -209,6 +215,14 @@ interface LandingDraftStoreState {
    */
   createDraftWithId: (id: string, settings: ChatRunSettings | null) => string;
   /**
+   * Give an unseeded draft (`isUnseededLandingDraft`) what `createDraftWithId`
+   * would have given it had `hostId` been resolved at mint: that host's
+   * last-run settings and folder bucket. True when it wrote. A host that
+   * remembers nothing writes nothing, so the draft stays unseeded and nothing
+   * is published for it.
+   */
+  seedUnseededDraft: (id: string, hostId: string | null) => boolean;
+  /**
    * Mint `nextId` as a fresh, unadopted draft carrying `sourceId`'s content,
    * caret, settings, mode and workspace, with `supersedes` naming the
    * source. The fork rule for a foreign row: the copy adopts and publishes
@@ -240,8 +254,8 @@ interface LandingDraftStoreState {
    */
   closeDraft: (id: string) => void;
   /**
-   * Explicit destroy — local row plus host delete when adopted. T11
-   * surfaces this; submit/replace-with-epic also uses it. Close does not.
+   * Explicit destroy — local row plus host delete when adopted.
+   * Submit/replace-with-epic also uses it. Close does not.
    */
   deleteDraft: (id: string) => void;
   /**
@@ -253,7 +267,7 @@ interface LandingDraftStoreState {
   applyHostDelete: (id: string) => void;
   /**
    * Restore a retained draft to the tab strip (`closed: false`) and make
-   * it active. T11's "open" action. No-op if id is not in the store.
+   * it active. The "open" action. No-op if id is not in the store.
    */
   openDraft: (id: string) => void;
   /**
@@ -630,6 +644,19 @@ export function isLandingDraftEmpty(draft: LandingDraftTab): boolean {
 }
 
 /**
+ * A draft that holds nothing anyone chose: no content, no settings, no folders.
+ * It was minted before its placement host resolved, so seeding it from that
+ * host's memory loses nothing.
+ */
+function isUnseededLandingDraft(draft: LandingDraftTab): boolean {
+  return (
+    isLandingDraftEmpty(draft) &&
+    draft.settings === null &&
+    draft.workspace.folders.length === 0
+  );
+}
+
+/**
  * Newest OPEN landing draft, for the installed mobile app's single stable
  * composer: an id-less "new draft" activation reuses this instead of minting
  * (see `createDraft`). `null` when no open draft exists. A closed draft is
@@ -706,6 +733,29 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
           activeDraftId: next.id,
         }));
         return next.id;
+      },
+
+      seedUnseededDraft: (id, hostId) => {
+        if (hostId === null) return false;
+        const draft = get().drafts.find((d) => d.id === id);
+        if (draft === undefined || !isUnseededLandingDraft(draft)) return false;
+        const settings = copyChatRunSettings(
+          useComposerRunSettingsStore.getState().getGlobalRunSettings(hostId),
+        );
+        const workspace = readLandingDraftWorkspaceSnapshotForHost(hostId);
+        if (settings === null && workspace.folders.length === 0) return false;
+        // `generation` from the row as read above: the workspace update bumps
+        // it only when the folders moved, and this is one edit either way.
+        set((state) => ({
+          drafts: updateDraftWorkspace(state, id, () => workspace).drafts.map(
+            (d) =>
+              d.id === id
+                ? { ...d, settings, generation: draft.generation + 1 }
+                : d,
+          ),
+        }));
+        notifyDraftLocalEdit(id);
+        return true;
       },
 
       forkDraft: (sourceId, nextId) => {
@@ -1076,6 +1126,10 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
       partialize: (state) => ({
         drafts: state.drafts.map((draft) => ({
           ...draft,
+          settings:
+            draft.settings === null
+              ? null
+              : chatRunSettingsSchemaPreUltracode.parse(draft.settings),
           ...stripBase64ImageNodesWithSelection(draft.content, draft.selection),
         })),
         activeDraftId: state.activeDraftId,
@@ -1325,13 +1379,13 @@ function parseComposerMode(value: unknown): ComposerMode {
 export function parseChatRunSettings(value: unknown): ChatRunSettings | null {
   if (value === null || value === undefined) return null;
   const parsed = chatRunSettingsSchema.safeParse(value);
-  return parsed.success ? parsed.data : null;
+  return parsed.success ? { ...parsed.data, ultracode: false } : null;
 }
 
 function copyChatRunSettings(
-  settings: ChatRunSettings | null,
+  settings: ChatRunSettingsPreUltracode | null,
 ): ChatRunSettings | null {
-  return settings === null ? null : { ...settings };
+  return settings === null ? null : { ...settings, ultracode: false };
 }
 
 export function sameNullableChatRunSettings(
@@ -1344,8 +1398,9 @@ export function sameNullableChatRunSettings(
 
 function sameChatRunSettings(a: ChatRunSettings, b: ChatRunSettings): boolean {
   return (
+    a.ultracode === b.ultracode &&
     JSON.stringify(normalizeChatRunSettings(a)) ===
-    JSON.stringify(normalizeChatRunSettings(b))
+      JSON.stringify(normalizeChatRunSettings(b))
   );
 }
 
@@ -1365,6 +1420,9 @@ function normalizeChatRunSettings(
     reasoningEffort: settings.reasoningEffort,
     serviceTier: settings.serviceTier,
     agentMode: settings.agentMode,
+    // `??` guards a pre-profile persisted blob (the field is missing, not
+    // `null`, on an old serialized `ChatRunSettings`).
+    profileId: settings.profileId ?? null,
   };
 }
 
@@ -2018,6 +2076,17 @@ function keptReturnedSandbox(
 }
 
 /**
+ * A host document's frozen settings carry no Ultracode request; the row's own
+ * same-draft Claude request survives the echo.
+ */
+function echoedRunSettings(
+  runSettings: DraftComposerPortable["runSettings"],
+  existing: LandingDraftTab | undefined,
+): ChatRunSettings | null {
+  return runSettingsFromDraftEcho(runSettings, existing?.settings ?? null);
+}
+
+/**
  * Applies a landing document to the store. Returns whether the row was
  * mutated by it: a retired id, or an older document from the row's current
  * owner, is rejected without touching the row.
@@ -2063,7 +2132,7 @@ export function applyLandingHostDocument(
     content,
     selection: document.portable.selection,
     lastTouchedAt: document.lastTouchedAt,
-    settings: document.portable.runSettings,
+    settings: echoedRunSettings(document.portable.runSettings, existing),
     composerMode: document.portable.composerMode,
     workspace:
       document.workspace === null

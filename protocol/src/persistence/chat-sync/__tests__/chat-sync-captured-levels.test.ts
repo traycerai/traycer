@@ -64,6 +64,7 @@ const FROZEN_LEVEL_KEYS: Readonly<Record<string, readonly string[]>> = {
     "serviceTier",
     "agentMode",
     "profileId",
+    "ultracode",
   ],
   hostPrivate: ["revision", "data"],
 };

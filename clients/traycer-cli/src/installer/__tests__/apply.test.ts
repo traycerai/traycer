@@ -487,7 +487,7 @@ describe("applyHost", () => {
     // the exact synthetic string `host install --from` produces - only
     // `commitInstallFromSource`'s direct callers can. What IS reachable, and
     // what these tests pin instead, is `apply.ts`'s own wiring of
-    // `storeFormatFloorTargetVersion(staged.runtimeVersion, staged.version)`:
+    // `storeFormatFloorBuildVersion(staged.runtimeVersion, staged.version)`:
     // a staged record's own declared runtime stamp must be the version the
     // gate judges, not the record's `version` field, whenever the two
     // diverge.
@@ -520,6 +520,139 @@ describe("applyHost", () => {
       expect(onWillCommitStaged).not.toHaveBeenCalled();
       expect(mocks.callOrder).not.toContain("busy-check");
       expect(mocks.lifecycleCalls).toHaveLength(0);
+    });
+
+    it("evaluates a staged registry build whose stamp disagrees with its catalog version", async () => {
+      // Both strings sort above the install, so the version shortcut would
+      // stand aside. Nothing places the stamp, and a store is on disk.
+      await writeInstall("1.3.0-rc.4", {});
+      await writeStaged("1.4.0", { runtimeVersion: "1.5.0" });
+      await writeStampedChatDbFor(ENV, "epic-on-disk", 9);
+
+      await expect(
+        applyHost({
+          environment: ENV,
+          force: false,
+          noService: false,
+          expectedStageFingerprint: null,
+          onProgress: () => {},
+        }),
+      ).rejects.toMatchObject({ code: "E_HOST_STORE_FORMAT_FLOOR" });
+
+      // The commit tail repeats the identity test, so this gate's own answer
+      // shows in where it refuses: before the busy gate.
+      expect(mocks.callOrder).not.toContain("busy-check");
+    });
+
+    it("evaluates a staged registry build over a side-load, whose version is no identity", async () => {
+      await writeInstall("local-host-20261017", {
+        runtimeVersion: "1.5.2",
+        source: { kind: "local-file", value: "dl/host.tar.gz" },
+      });
+      await writeStaged("1.5.9", { runtimeVersion: "1.5.9" });
+      await writeStampedChatDbFor(ENV, "epic-on-disk", 22);
+
+      await expect(
+        applyHost({
+          environment: ENV,
+          force: false,
+          noService: false,
+          expectedStageFingerprint: null,
+          onProgress: () => {},
+        }),
+      ).rejects.toMatchObject({ code: "E_HOST_STORE_FORMAT_FLOOR" });
+
+      expect(mocks.callOrder).not.toContain("busy-check");
+    });
+
+    it("judges a staged registry build by its catalog version when its stamp is off the ladder", async () => {
+      await writeInstall("local-host-20261017", {
+        runtimeVersion: "1.5.2",
+        source: { kind: "local-file", value: "dl/host.tar.gz" },
+      });
+      await writeStaged("1.5.1", {
+        runtimeVersion: "staging.1783550586518.bb8c937d9",
+      });
+      await writeStampedChatDbFor(ENV, "epic-on-disk", 22);
+
+      await expect(
+        applyHost({
+          environment: ENV,
+          force: false,
+          noService: false,
+          expectedStageFingerprint: null,
+          onProgress: () => {},
+        }),
+      ).rejects.toMatchObject({ code: "E_HOST_STORE_FORMAT_FLOOR" });
+
+      expect(mocks.callOrder).not.toContain("busy-check");
+    });
+
+    it("lets a local stage's off-ladder stamp stand, with no catalog version to judge instead", async () => {
+      await writeInstall("local-host-20261017", {
+        runtimeVersion: "1.5.2",
+        source: { kind: "local-file", value: "dl/host.tar.gz" },
+      });
+      await writeStaged("1.5.1", {
+        runtimeVersion: "staging.1783550586518.bb8c937d9",
+        source: { kind: "local-file", value: "dl/host.tar.gz" },
+      });
+      await writeStampedChatDbFor(ENV, "epic-on-disk", 22);
+
+      const result = await applyHost({
+        environment: ENV,
+        force: false,
+        noService: false,
+        expectedStageFingerprint: null,
+        onProgress: () => {},
+      });
+
+      expect(result.outcome).toBe("applied");
+    });
+
+    it("reads no registry entry into a promoted stage, so its released stamp alone places it", async () => {
+      await writeInstall("1.3.0-rc.1", {});
+      await writeStaged("1.9.0", { runtimeVersion: "1.3.0-rc.4" });
+      await writeStampedChatDbFor(ENV, "epic-on-disk", 9);
+
+      const result = await applyHost({
+        environment: ENV,
+        force: false,
+        noService: false,
+        expectedStageFingerprint: null,
+        onProgress: () => {},
+      });
+
+      expect(result.outcome).toBe("applied");
+    });
+
+    it("judges a side-loaded install by its runtime version and clears the identical archive", async () => {
+      await writeInstall("local-host.tar.gz-2026-11-01T07-54-28-844Z", {
+        runtimeVersion: "1.3.0-rc.4",
+        source: { kind: "local-file", value: "dl/host.tar.gz" },
+        archiveSha256: "a".repeat(64),
+      });
+      await writeStaged("1.4.0", {
+        runtimeVersion: "1.2.0",
+        archiveSha256: "a".repeat(64),
+      });
+      await writeStampedChatDbFor(ENV, "epic-on-disk", 9);
+
+      const result = await applyHost({
+        environment: ENV,
+        force: false,
+        noService: false,
+        expectedStageFingerprint: null,
+        onProgress: () => {},
+      });
+
+      expect(result.outcome).toBe("applied");
+      expect(
+        mocks.assertHostStoreFormatFloorMock.mock.calls[0]?.[0],
+      ).toMatchObject({
+        installedVersion: "1.3.0-rc.4",
+        provenance: { sameArchive: true },
+      });
     });
 
     it("applies when the staged tree's own version.json declares a storeFormats that clears the chat store on disk", async () => {
@@ -1111,6 +1244,25 @@ describe("applyHost", () => {
         "local-host-20261017",
       );
       expect(mocks.lifecycleCalls).toHaveLength(0);
+    });
+
+    it("applies a staged build over a side-loaded install its runtime version orders", async () => {
+      dataRootMock.movedRoot = join(sandboxRoot, "moved-data");
+      await writeInstall("local-host-20261017", {
+        runtimeVersion: "1.0.0",
+        source: { kind: "local-file", value: "dl/host.tar.gz" },
+      });
+      await writeStaged("2.0.0", {});
+
+      const result = await applyHost({
+        environment: ENV,
+        force: false,
+        noService: false,
+        expectedStageFingerprint: null,
+        onProgress: () => {},
+      });
+
+      expect(result.outcome).toBe("applied");
     });
 
     it("control: the same stage applies when the data folder is the default one", async () => {

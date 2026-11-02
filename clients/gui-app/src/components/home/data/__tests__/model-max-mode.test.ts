@@ -214,6 +214,7 @@ describe("chatMaxModeContextForToolbar", () => {
     ["normal effort, no tier", "low", ""],
   ])("builds the tuple a send commits: %s", (_name, reasoning, serviceTier) => {
     const sent = buildChatRunSettings({
+      ultracode: false,
       selection: { harnessId: "cursor", modelSlug: "example", profileId: null },
       permission: "supervised",
       reasoning,

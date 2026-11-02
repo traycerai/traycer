@@ -191,7 +191,7 @@ vi.mock("@/hooks/epic/use-epic-set-pinned-mutation", async (importOriginal) => {
  * outside a `<HostRuntimeProvider>` - absent everywhere in this file.
  * Defaults to `false` (reset every test): every legacy pin case in this file
  * predates lane 9 item 5 and pins the pre-`@1.1` reading (`local-home`
- * permanently unavailable). The §3.2 cases (lane 9 evidence artifact) flip
+ * permanently unavailable). The `unverified` carve-out cases flip
  * this to `true` for the duration of one test to exercise the negotiated
  * `@1.1` local-home pin path through the tab strip's two dispatch edges.
  */
@@ -760,7 +760,7 @@ interface RevealGeometryShim {
  * writes `scrollLeft` itself, and the amount it writes is the assertion.
  *
  * Two boxes, not one, and the pair is what makes the production walk
- * measurable (R4B-05). `tab-strip.tsx` deliberately climbs from the selected
+ * measurable. `tab-strip.tsx` deliberately climbs from the selected
  * NODE to the scroller's own child, because inside a split group the selected
  * node is one HALF of the member - so the shim gives the scroller's child the
  * member box and gives anything nested below it the member's leading half.
@@ -1090,7 +1090,7 @@ describe("<TabStrip />", () => {
   });
 
   /**
-   * The editing signal on the tab (L-87, L-138, L-163, F4): ACTIVE, the
+   * The editing signal on the tab (L-87, L-138, L-163): ACTIVE, the
    * editor's own tab IS the colour and wears none of it on its edge. The
    * fill is the colour the tab is handed, at full strength, and the border is
    * the ordinary canvas border every other active tab gets - so the frame
@@ -2815,8 +2815,8 @@ describe("<TabStrip />", () => {
   });
 
   /**
-   * `06641bf75` - the `unverified` local-home carve-out's tab-strip half
-   * (lane 9 evidence artifact, §3.2). The desktop-History/mobile-tray half
+   * `06641bf75` - the `unverified` local-home carve-out's tab-strip half.
+   * The desktop-History/mobile-tray half
    * is `use-epic-set-pinned-mutation.test.tsx`'s "refuses at dispatch"
    * case; this pins the tab strip's own two entry points into the SAME
    * `epicPinDispatchAdmitted` gate - the menu select and the toast's Undo

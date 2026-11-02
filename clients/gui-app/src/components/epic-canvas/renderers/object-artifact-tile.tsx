@@ -8,6 +8,7 @@ import { HtmlArtifactDownloadButton } from "@/components/html-artifact/html-arti
 import { HtmlArtifactVersionPicker } from "@/components/html-artifact/html-artifact-version-picker";
 import { useEpicHtmlArtifactVersion } from "@/hooks/epic/use-epic-html-artifact-version";
 import { HtmlArtifactFrame } from "@/components/html-artifact/html-artifact-frame";
+import { HtmlArtifactCommentSurface } from "@/components/html-artifact/html-artifact-comment-surface";
 import { isMobileApp } from "@/lib/mobile-app";
 import { resolveDesktopPlatform } from "@/lib/windows/desktop-capabilities";
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
@@ -32,6 +33,7 @@ export function ObjectArtifactTile(props: {
 }) {
   const runnerHost = useRunnerHostOrNull();
   const hostId = useTabHostId();
+  const viewTabId = useEpicViewTabId();
   const desktop =
     runnerHost !== null && resolveDesktopPlatform(runnerHost) !== null;
   const artifact = useArtifactById(props.node.id);
@@ -119,21 +121,36 @@ export function ObjectArtifactTile(props: {
     );
   }
   if (source?.kind === "artifact") {
+    const toolbarControls = (
+      <>
+        <HtmlArtifactVersionPicker version={version} />
+        <HtmlArtifactDownloadButton
+          source={source}
+          title={artifact.title}
+          hostId={hostId}
+        />
+      </>
+    );
+    // Comments anchor to the live page: an older version is read-only here.
+    if (viewTabId === null || !latest)
+      return (
+        <HtmlArtifactFrame
+          key={artifact.id}
+          source={source}
+          title={artifact.title}
+          toolbarControls={toolbarControls}
+        />
+      );
     return (
-      <HtmlArtifactFrame
+      <HtmlArtifactCommentSurface
         key={artifact.id}
+        epicId={props.epicId}
+        artifactId={artifact.id}
+        artifactTitle={artifact.title}
+        hostId={hostId}
+        viewTabId={viewTabId}
         source={source}
-        title={artifact.title}
-        toolbarControls={
-          <>
-            <HtmlArtifactVersionPicker version={version} />
-            <HtmlArtifactDownloadButton
-              source={source}
-              title={artifact.title}
-              hostId={hostId}
-            />
-          </>
-        }
+        toolbarControls={toolbarControls}
       />
     );
   }
@@ -191,6 +208,7 @@ function CanvasTileSurface({
       epicId={epicId}
       artifactId={artifact.id}
       artifactTitle={artifact.title}
+      artifactType="canvas"
       hostId={hostId}
       viewTabId={viewTabId}
       viewOnly={viewOnly}

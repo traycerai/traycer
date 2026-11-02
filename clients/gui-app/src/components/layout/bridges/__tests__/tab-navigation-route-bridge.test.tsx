@@ -417,7 +417,7 @@ describe("TabNavigationRouteBridge restored-route replacement", () => {
   });
 
   it("spends the launch route even when the escape hatch wins, so a later remount cannot replay it", () => {
-    // Raised in review (#1328). Declining to APPLY the restored route is not a
+    // Declining to APPLY the restored route is not a
     // reason to leave it PENDING: `pendingRestoredRoute` is cleared only by
     // `WindowsBridgeProvider`'s cleanup, and that provider outlives auth
     // changes, while `RootComponent` unmounts and remounts this bridge on

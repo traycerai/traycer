@@ -758,7 +758,10 @@ function normalizedEffort(reasoningEffort: string | null): string | null {
  * launch.
  */
 export function fallbackDestinationOfTuple(
-  tuple: ChatRunSettings,
+  tuple: Pick<
+    ChatRunSettings,
+    "harnessId" | "model" | "profileId" | "reasoningEffort"
+  >,
   labelFor: FallbackProfileLabelResolver,
   modelLabelFor: FallbackModelLabelResolver,
 ): FallbackDestinationDescription {
@@ -921,7 +924,7 @@ export function pendingFallbackOffersSignIn(pending: PendingFallback): boolean {
  * every tuple a surface renders and so this is testable without a host.
  */
 export function fallbackTupleIdentity(
-  tuple: ChatRunSettings,
+  tuple: Pick<ChatRunSettings, "harnessId" | "model" | "profileId">,
   labelFor: FallbackProfileLabelResolver,
   modelLabelFor: FallbackModelLabelResolver,
 ): FallbackTupleIdentity {

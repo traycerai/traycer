@@ -135,6 +135,7 @@ function dockHeightFor(lines: number): number {
 }
 
 const SETTINGS: ChatRunSettings = {
+  ultracode: false,
   harnessId: "claude",
   model: "claude-sonnet-4-5",
   permissionMode: "supervised",
@@ -586,7 +587,7 @@ class WindowedHostDouble {
 
   /** Subscribe: the bounded snapshot, then the skeleton in chunks. */
   bootstrap(): void {
-    this.cb().onConnectionStatus("open", null, null);
+    this.cb().onConnectionStatus("open", null, null, null);
     this.indexRevision = null;
     this.sendSnapshot();
     this.skeleton = this.buildSkeleton();

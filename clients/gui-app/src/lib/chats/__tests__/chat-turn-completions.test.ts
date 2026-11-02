@@ -150,6 +150,7 @@ describe("toChatTurnPhase", () => {
               },
               sender: { type: "user", userId: "user-1" },
               settings: {
+                ultracode: false,
                 harnessId: "claude",
                 model: "claude-opus",
                 permissionMode: "supervised",

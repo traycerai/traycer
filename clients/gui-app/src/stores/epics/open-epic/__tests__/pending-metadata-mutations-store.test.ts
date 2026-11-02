@@ -30,6 +30,7 @@ import {
   type MetadataOverlaySources,
 } from "../runtime/metadata-overlay-store";
 import type { PendingRename } from "../pending-metadata-overlay";
+import { isRenameInFlight } from "../rename-in-flight";
 
 function metadataOverlayFixture() {
   const scheduled: Array<() => void> = [];
@@ -404,6 +405,41 @@ describe("beginRenameMutation", () => {
     handle.dispose();
   });
 
+  it("marks the node's rename in flight until a FAILED retire has revealed the authoritative title", async () => {
+    const { handle } = newSession("editor");
+    const id = createArtifactInDocForTests(handle.doc, "spec", null);
+    expect(isRenameInFlight("epic-test", id)).toBe(false);
+
+    const requestId = await handle.store
+      .getState()
+      .beginRenameMutation(id, "Renamed live");
+    if (requestId === null) throw new Error("expected a request id");
+    expect(isRenameInFlight("epic-test", id)).toBe(true);
+
+    await handle.store.getState().retirePendingMutation(requestId, "failed");
+
+    expect(handle.store.getState().artifacts.byId[id].title).toBe("New spec");
+    expect(isRenameInFlight("epic-test", id)).toBe(false);
+    handle.dispose();
+  });
+
+  it("releases the in-flight mark on a LANDED retire, the acked title being the host's", async () => {
+    const { handle } = newSession("editor");
+    const id = createArtifactInDocForTests(handle.doc, "spec", null);
+    const requestId = await handle.store
+      .getState()
+      .beginRenameMutation(id, "Renamed live");
+    if (requestId === null) throw new Error("expected a request id");
+
+    await handle.store.getState().retirePendingMutation(requestId, "landed");
+
+    expect(handle.store.getState().artifacts.byId[id].title).toBe(
+      "Renamed live",
+    );
+    expect(isRenameInFlight("epic-test", id)).toBe(false);
+    handle.dispose();
+  });
+
   it("returns null for a viewer role", async () => {
     const { handle } = newSession("viewer");
     const id = createArtifactInDocForTests(handle.doc, "spec", null);
@@ -411,6 +447,8 @@ describe("beginRenameMutation", () => {
     expect(
       await handle.store.getState().beginRenameMutation(id, "Nope"),
     ).toBeNull();
+    // A refused stamp patched nothing, so nothing is left marked in flight.
+    expect(isRenameInFlight("epic-test", id)).toBe(false);
     handle.dispose();
   });
 

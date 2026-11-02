@@ -1,5 +1,5 @@
 /**
- * T5's send gate (`submitHostHeldImageHashes`, consumed through
+ * The send gate (`submitHostHeldImageHashes`, consumed through
  * `useChatComposerSubmit`) applies to an ORDINARY chat send only. The initial
  * create paths - the landing composer's `epic.create` and the in-epic
  * new-conversation modal's `epic.createChat` - never go through
@@ -25,7 +25,7 @@
  * and the claim itself is about which FUNCTIONS a call site imports, which a
  * render cannot observe more directly than a static check can. If either
  * surface starts importing the gate, this goes red and the acceptance claim
- * (T5 item 8) needs re-examining, not silently waived.
+ * needs re-examining, not silently waived.
  */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";

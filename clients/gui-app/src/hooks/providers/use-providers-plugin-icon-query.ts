@@ -93,12 +93,14 @@ export function useProvidersPluginIcon(args: {
       // `cacheKeyIdentity` above carries that version, so an upgrade retires
       // the old entry rather than needing a refetch of the unchanged one.
       poll: false,
-      // No `retry` here: `providers.list` is a condition-polled method, so the
-      // shared poll table already pins `retry: false` and the option is typed
-      // away from callers. That default is the one this hook wants anyway - a
-      // host predating the `pluginIcon` arm rejects the request outright, and
-      // re-asking costs real round trips for a decoration that already has a
-      // working fallback.
+      // No `retry` here, and none to state: the option is typed away from a
+      // condition method's callers. Opting out of the poll above also opts out
+      // of the branded poller's `retry: false`, so this query carries the app
+      // client's ordinary retry - which is what recovers it, since an
+      // opted-out reader owns no poll episode and no error lane can re-ask for
+      // it. It costs no doomed round trip: `hasIcon` defaults to `false` on a
+      // host predating the `pluginIcon` arm, and the caller gates `enabled` on
+      // it, so a host that would refuse the request is never asked at all.
     },
   });
 }

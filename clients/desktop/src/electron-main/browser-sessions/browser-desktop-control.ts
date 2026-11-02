@@ -97,9 +97,9 @@ export class BrowserDesktopControl {
         {},
       );
       this.session = session;
-      session.onStatusChange((status) => {
+      session.onStatusChange((status, _reason, _retryCause, continuity) => {
         if (generation !== this.generation) return;
-        if (status !== "open") this.releaseAll();
+        if (status !== "open" && continuity !== "held") this.releaseAll();
         if (status === "closed") this.terminal = true;
       });
       session.onServerFrame((envelope, binaryPayload) => {

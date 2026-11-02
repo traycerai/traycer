@@ -9,8 +9,7 @@ import type { HostListItem } from "@traycer/protocol/host/host-status";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type {
   IStreamSession,
-  StreamCloseReason,
-  StreamConnectionStatus,
+  StatusChangeHandler,
   StreamFrameEnvelope,
 } from "./i-stream-session";
 import type { IHostStreamClient } from "./host-stream-client";
@@ -49,10 +48,7 @@ export interface HostInventorySnapshot {
 
 export interface HostInventoryStreamCallbacks {
   onSnapshot(snapshot: HostInventorySnapshot): void;
-  onConnectionStatus(
-    status: StreamConnectionStatus,
-    reason: StreamCloseReason | null,
-  ): void;
+  readonly onConnectionStatus: StatusChangeHandler;
 }
 
 export interface HostInventoryStreamClientOptions {
@@ -132,8 +128,8 @@ export class HostInventoryStreamClient {
     this.session.onServerFrame((envelope) => {
       this.handleServerFrame(envelope);
     });
-    this.session.onStatusChange((status, reason) => {
-      this.callbacks.onConnectionStatus(status, reason);
+    this.session.onStatusChange((status, reason, retryCause, continuity) => {
+      this.callbacks.onConnectionStatus(status, reason, retryCause, continuity);
     });
   }
 

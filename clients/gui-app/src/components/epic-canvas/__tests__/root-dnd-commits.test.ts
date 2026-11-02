@@ -237,7 +237,7 @@ const rawNestedFocus: NavigateNestedFocus = (_epicId, _tabId, prepare) =>
 
 /**
  * A canvas whose `group-a` already holds `TERMINAL_TILE`, so a drop of the
- * same ref onto another pane must MOVE the open tab (R2) rather than dedupe
+ * same ref onto another pane must MOVE the open tab rather than dedupe
  * into focus-existing.
  */
 function seedCanvasWithTerminalTile(): void {

@@ -13,6 +13,7 @@ import {
   type BotSessionAccess,
 } from "@/components/bots/bot-session-context";
 import { TileFindScope } from "@/components/epic-canvas/tile-find/tile-find-scope";
+import { QuoteSinkContext } from "@/components/chat/quote/quote-sink-context";
 import {
   botMemberName,
   type BotMemberResolver,
@@ -93,7 +94,7 @@ function watchConversationMessages(
 }
 
 /**
- * A bot's session, readable whole (Tracy Bots T93, decision 129): its trunk
+ * A bot's session, readable whole (Tracy Bots, decision 129): its trunk
  * or a thread's session as the agent chat renders it - every turn with its
  * activity, model and cost, and everything between turns (check-ins and
  * their results, model fallbacks and routing, background work, messages to
@@ -227,17 +228,22 @@ export function BotSessionView(props: {
           epicId={botId}
           isActive
         >
-          <BotChatTranscript
-            botId={botId}
-            chatId={session.chatId}
-            hostId={hostId}
-            title={botTitle}
-            instanceId={instanceId}
-            surface={null}
-            resolveMember={resolveMember}
-            showConnecting
-            landOn={session.landOn}
-          />
+          {/* A session has no box to quote into: its text selects and
+              copies, and no Quote is offered. */}
+          <QuoteSinkContext value={null}>
+            <BotChatTranscript
+              botId={botId}
+              chatId={session.chatId}
+              hostId={hostId}
+              title={botTitle}
+              instanceId={instanceId}
+              surface={null}
+              resolveMember={resolveMember}
+              showConnecting
+              header={null}
+              landOn={session.landOn}
+            />
+          </QuoteSinkContext>
         </TileFindScope>
       </BotSessionContext>
       <footer

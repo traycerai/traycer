@@ -25,6 +25,9 @@ interface HarnessModelPickerPresentationInput {
   readonly selection: HarnessModelSelection;
   readonly models: ReadonlyArray<ModelOption>;
   readonly selectedModel?: ModelOption | null;
+  /** The name a stage holds its pick under, which `models` may not list; empty
+   *  with no stage, or with no pick to name. */
+  readonly stagedModelName: string;
   readonly reasoningFooter: ReasoningFooterConfig | null;
   readonly serviceTierFooter: ServiceTierFooterConfig | null;
   readonly maxModeContext?: MaxModeContext;
@@ -104,9 +107,13 @@ export function deriveHarnessModelPickerPresentation(
     modelsPending,
     selectedHarnessAvailable,
     selectedHarnessProfiles,
+    stagedModelName,
   } = input;
 
-  const label = findModelLabel(models, selection);
+  const label =
+    stagedModelName.length > 0
+      ? stagedModelName
+      : findModelLabel(models, selection);
   const reasoningLabel =
     reasoningFooter !== null && reasoningFooter.options.length > 0
       ? findReasoningLabel(reasoningFooter.value, reasoningFooter.options)

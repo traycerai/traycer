@@ -15,6 +15,7 @@ export function ComposerModelPicker(
   );
   return (
     <HarnessModelPicker
+      withUltracode
       labelDisplay="responsive"
       store={props.store}
       maxModeContext={maxModeContext}

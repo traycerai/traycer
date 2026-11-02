@@ -50,7 +50,7 @@ const authService = {
 
 vi.mock("@/lib/host", () => ({
   useHostClient: () => hostClient,
-  // The SPINE, a separate export since redesign P2.1.
+  // The SPINE, a separate export.
   useHostRuntimeClient: () => hostClient,
   useHostBinding: () => ({ hostClient }),
   useAuthService: () => authService,
@@ -391,7 +391,9 @@ describe("<EpicShell />", () => {
 
     renderShell(queryClient);
 
-    controlled.streams()[0].callbacks.onConnectionStatus("open", null, true);
+    controlled
+      .streams()[0]
+      .callbacks.onConnectionStatus("open", null, true, null);
     controlled
       .streams()[0]
       .callbacks.onSnapshot(
@@ -455,7 +457,9 @@ describe("<EpicShell />", () => {
       ).toBe("false");
     });
 
-    controlled.streams()[0].callbacks.onConnectionStatus("open", null, true);
+    controlled
+      .streams()[0]
+      .callbacks.onConnectionStatus("open", null, true, null);
     controlled
       .streams()[0]
       .callbacks.onSnapshot(
@@ -487,7 +491,9 @@ describe("<EpicShell />", () => {
 
     renderShell(queryClient);
 
-    controlled.streams()[0].callbacks.onConnectionStatus("open", null, true);
+    controlled
+      .streams()[0]
+      .callbacks.onConnectionStatus("open", null, true, null);
     controlled
       .streams()[0]
       .callbacks.onSnapshot(
@@ -517,7 +523,9 @@ describe("<EpicShell />", () => {
 
     renderShell(queryClient);
 
-    controlled.streams()[0].callbacks.onConnectionStatus("open", null, true);
+    controlled
+      .streams()[0]
+      .callbacks.onConnectionStatus("open", null, true, null);
     controlled
       .streams()[0]
       .callbacks.onSnapshot(

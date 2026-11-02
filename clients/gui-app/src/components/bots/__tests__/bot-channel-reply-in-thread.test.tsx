@@ -1,5 +1,5 @@
 /**
- * "Reply in thread" on every row of a bot's channel (Tracy Bots T68,
+ * "Reply in thread" on every row of a bot's channel (Tracy Bots,
  * decision 79), through the REAL `BotChannelView`, transcript and
  * `ChatBotMessage`: a member's post, the bot's direct answer, a plain
  * announcement and an announcement carrying a surface each offer it, on
@@ -82,6 +82,7 @@ vi.mock("@/hooks/host/use-host-supports-method", async (importOriginal) => ({
 }));
 vi.mock("@/components/epic-tabs/pane-visibility-context", () => ({
   usePaneVisible: () => true,
+  usePaneFocused: () => true,
 }));
 vi.mock("@/hooks/bots/use-bot-conversation-list-query", () => ({
   useBotConversationListQuery: () => ({
@@ -125,7 +126,10 @@ vi.mock("@/hooks/bots/use-bot-activity", async (importOriginal) => ({
 vi.mock("@/components/chat/chat-messages", async () => {
   const { ChatExpansionTestProviders: Providers } =
     await import("@/components/chat/__tests__/chat-expansion-test-providers");
+  const { use } = await import("react");
   const { ChatMessage } = await import("@/components/chat/chat-message");
+  const { ChatTimelineHeaderContext } =
+    await import("@/components/chat/chat-timeline-header-context");
   const noBackgroundToolBlockIds: ReadonlySet<string> = new Set();
   return {
     ChatMessages: (props: {
@@ -137,6 +141,7 @@ vi.mock("@/components/chat/chat-messages", async () => {
           data-testid="chat-messages-stub"
           data-instance-id={props.instanceId}
         >
+          {use(ChatTimelineHeaderContext)}
           {props.messages.map((message) => (
             <div key={message.id} data-row-id={message.persistentMessageId}>
               <ChatMessage
@@ -325,7 +330,7 @@ describe("the box of a listed thread under a row of the bot, opened by its ancho
     sent: null,
   } as const;
 
-  const NOTICE_THREAD: BotThreadSummary = {
+  const NOTICE_THREAD = {
     threadId: "thread-notice",
     conversationId: CHANNEL_ID,
     sessionChatId: "session-notice",
@@ -335,12 +340,13 @@ describe("the box of a listed thread under a row of the bot, opened by its ancho
       senderUserId: null,
       sentAt: 3_000,
       resolvedAt: null,
+      excerpt: null,
     },
     replyCount: 1,
     lastReplyAt: 5_000,
     openRequestCount: 1,
     costUsd: null,
-  };
+  } satisfies BotThreadSummary;
 
   async function sendEnabledAfterTyping(): Promise<boolean> {
     const user = userEvent.setup();
@@ -390,10 +396,7 @@ describe("the box of a listed thread under a row of the bot, opened by its ancho
       {
         ...NOTICE_THREAD,
         threadId: "thread-question",
-        anchor:
-          NOTICE_THREAD.anchor === null
-            ? null
-            : { ...NOTICE_THREAD.anchor, messageId: "question-1" },
+        anchor: { ...NOTICE_THREAD.anchor, messageId: "question-1" },
       },
     ];
     mocks.threadAnchors = anchorsNaming([]);
@@ -427,10 +430,7 @@ describe("the box of a listed thread under a row of the bot, opened by its ancho
       mocks.threads = [
         {
           ...NOTICE_THREAD,
-          anchor:
-            NOTICE_THREAD.anchor === null
-              ? null
-              : { ...NOTICE_THREAD.anchor, messageId: "notice-cold" },
+          anchor: { ...NOTICE_THREAD.anchor, messageId: "notice-cold" },
         },
       ];
       mocks.threadAnchors = { hostId: BOUND_HOST_ID, epoch, kinds: [...kinds] };

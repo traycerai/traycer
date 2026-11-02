@@ -71,7 +71,7 @@ describe("nextTitleFollow", () => {
   });
 
   it("follows again after the heading is cleared and retyped", () => {
-    // The regression CodeRabbit flagged: clearing (null) must not sever the
+    // Clearing (null) must not sever the
     // link, so retyping renames the artifact rather than stranding the old title.
     expect(
       drive([{ type: "Foo" }, { type: null }, { type: "Bar" }], {

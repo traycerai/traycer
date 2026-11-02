@@ -195,11 +195,9 @@ vi.mock(
 );
 
 const navigateMock = vi.fn();
-const historyBackMock = vi.fn();
 vi.mock("@tanstack/react-router", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@tanstack/react-router")>()),
   useNavigate: () => navigateMock,
-  useRouter: () => ({ history: { back: historyBackMock } }),
 }));
 
 vi.mock("@/lib/links/open-link", () => ({
@@ -291,10 +289,10 @@ function fakeWsStreamClient(
   };
 }
 
-function renderPage(replay: boolean) {
+function renderPage() {
   vi.useFakeTimers();
   try {
-    const view = render(<OnboardingPage replay={replay} />);
+    const view = render(<OnboardingPage />);
     const skipWelcome = screen.queryByTestId("onboarding-welcome-skip");
     if (skipWelcome !== null) {
       fireEvent.click(skipWelcome);
@@ -433,7 +431,6 @@ describe("OnboardingPage", () => {
     safeAreaInsetsMock.right = 0;
     openLinkMock.mockReset();
     navigateMock.mockReset();
-    historyBackMock.mockReset();
   });
 
   afterEach(() => {
@@ -446,7 +443,7 @@ describe("OnboardingPage", () => {
   });
 
   it("shows the fixed three-step desktop flow and advances by step id", async () => {
-    renderPage(false);
+    renderPage();
 
     expect(currentStepId()).toBe("task-tabs");
     expect(
@@ -480,7 +477,7 @@ describe("OnboardingPage", () => {
   // guard that says so: the eyebrow, the wordmark and a footer Back are all
   // things the phone branch removes, and all three still belong here.
   it("keeps the desktop shell: the eyebrow, the wordmark, and Back in the footer", async () => {
-    const { container } = renderPage(false);
+    const { container } = renderPage();
 
     expect(container.querySelector(".onboarding-eyebrow")?.textContent).toBe(
       "Workspace · 1 of 3",
@@ -504,7 +501,7 @@ describe("OnboardingPage", () => {
   it("shows the welcome first, prefetches provider data, then reveals the tour after both transitions", () => {
     vi.useFakeTimers();
     try {
-      render(<OnboardingPage replay={false} />);
+      render(<OnboardingPage />);
 
       expect(screen.getByTestId("onboarding-welcome-skip")).toBeTruthy();
       expect(onboardingTourLayer().getAttribute("aria-hidden")).toBe("true");
@@ -541,7 +538,7 @@ describe("OnboardingPage", () => {
   it("lets Skip welcome bypass the hold without skipping the onboarding steps", () => {
     vi.useFakeTimers();
     try {
-      render(<OnboardingPage replay={false} />);
+      render(<OnboardingPage />);
       fireEvent.click(screen.getByTestId("onboarding-welcome-skip"));
 
       expect(onboardingTourLayer().getAttribute("aria-hidden")).toBe("true");
@@ -568,7 +565,7 @@ describe("OnboardingPage", () => {
     }));
     vi.useFakeTimers();
     try {
-      render(<OnboardingPage replay={false} />);
+      render(<OnboardingPage />);
 
       void act(() => vi.advanceTimersByTime(299));
       expect(screen.getByTestId("onboarding-welcome-skip")).toBeTruthy();
@@ -594,7 +591,7 @@ describe("OnboardingPage", () => {
 
   it("omits session import and its scan when the host does not support it", async () => {
     capabilityMock.available = false;
-    renderPage(false);
+    renderPage();
 
     await advanceToStep("providers");
     expect(screen.queryByTestId("onboarding-session-import-stage")).toBeNull();
@@ -611,20 +608,8 @@ describe("OnboardingPage", () => {
     });
   });
 
-  it("finishes a replay by returning to history without navigating to a new draft", () => {
-    renderPage(true);
-    fireEvent.click(screen.getByTestId("onboarding-skip"));
-
-    expect(useOnboardingStore.getState().completedAt).toEqual(
-      expect.any(Number),
-    );
-    expect(historyBackMock).toHaveBeenCalledOnce();
-    expect(navigateMock).not.toHaveBeenCalled();
-    expect(useFirstTaskGuideStore.getState().status).toBe("inactive");
-  });
-
   it("consumes the login import announcement when first-run onboarding mounts", () => {
-    renderPage(false);
+    renderPage();
 
     expect(
       useFeatureAnnouncementsStore.getState().consumed["login-import"],
@@ -635,7 +620,7 @@ describe("OnboardingPage", () => {
   });
 
   it("spends the import announcement only once the import act is on screen", async () => {
-    renderPage(false);
+    renderPage();
 
     // Still owed: someone who skips from here never saw the act, so the toast
     // is how they hear about importing.
@@ -650,44 +635,16 @@ describe("OnboardingPage", () => {
     ).toEqual(expect.any(Number));
   });
 
-  it("does not consume the login import announcement when onboarding is replayed", () => {
-    renderPage(true);
-
-    expect(
-      useFeatureAnnouncementsStore.getState().consumed["login-import"],
-    ).toBeUndefined();
-  });
-
   it("dismisses the first-task guide when first-run onboarding is skipped", () => {
-    renderPage(false);
+    renderPage();
     fireEvent.click(screen.getByTestId("onboarding-skip"));
 
     expect(useFirstTaskGuideStore.getState().status).toBe("finished");
   });
 
-  it("does not activate the guide when replay onboarding completes", async () => {
-    renderPage(true);
-    await advanceToStep("session-import");
-    fireEvent.click(screen.getByTestId("onboarding-advance"));
-
-    expect(historyBackMock).toHaveBeenCalledOnce();
-    expect(useFirstTaskGuideStore.getState().status).toBe("inactive");
-  });
-
-  it("starts every replay from the first step without clearing completion", () => {
-    useOnboardingStore.setState({ completedAt: 123, step: 2 });
-    renderPage(true);
-
-    expect(currentStepId()).toBe("task-tabs");
-    expect(useOnboardingStore.getState()).toMatchObject({
-      completedAt: 123,
-      step: 0,
-    });
-  });
-
   it("keeps the provider and import screens on the host selected in the provider screen", async () => {
     hostsMock.ids = ["host-a", "host-b"];
-    renderPage(false);
+    renderPage();
     await advanceToStep("providers");
 
     fireEvent.click(screen.getByTestId("settings-host-switcher-option-host-b"));
@@ -708,7 +665,7 @@ describe("OnboardingPage", () => {
   it("withholds host-scoped content while the stream does not match the selected host", async () => {
     hostsMock.ids = ["host-a", "host-b"];
     hostReadinessMock.streamMismatchFor = "host-b";
-    renderPage(false);
+    renderPage();
     await advanceToStep("providers");
     fireEvent.click(screen.getByTestId("settings-host-switcher-option-host-b"));
 
@@ -725,7 +682,7 @@ describe("OnboardingPage", () => {
   it("shows the selected host's import refusal when that host lacks scan support", async () => {
     hostsMock.ids = ["host-a", "host-b"];
     hostReadinessMock.unsupportedImportFor = "host-b";
-    renderPage(false);
+    renderPage();
     await advanceToStep("providers");
     fireEvent.click(screen.getByTestId("settings-host-switcher-option-host-b"));
     await advanceToStep("session-import");
@@ -741,7 +698,7 @@ describe("OnboardingPage", () => {
     // import onto their host, and a sandbox takes neither.
     hostsMock.ids = ["sbx-1", "host-a", "host-b"];
     hostsMock.sandboxIds = ["sbx-1"];
-    renderPage(false);
+    renderPage();
     await advanceToStep("providers");
 
     await waitFor(() => {
@@ -760,7 +717,7 @@ describe("OnboardingPage", () => {
   it("holds the provider and import stages on the notice when the only host is a sandbox", async () => {
     hostsMock.ids = ["sbx-1"];
     hostsMock.sandboxIds = ["sbx-1"];
-    renderPage(false);
+    renderPage();
     await advanceToStep("providers");
 
     expect(screen.getByTestId("host-unavailable")).toBeTruthy();
@@ -780,7 +737,7 @@ describe("OnboardingPage", () => {
   it("does not move a tour that is already on a personal host", async () => {
     hostsMock.ids = ["host-a", "sbx-1"];
     hostsMock.sandboxIds = ["sbx-1"];
-    renderPage(false);
+    renderPage();
     await advanceToStep("providers");
 
     expect(
@@ -796,7 +753,7 @@ describe("OnboardingPage", () => {
   });
 
   it("uses arrows, Enter, and Escape for navigation while ignoring controls, editors, and overlays", async () => {
-    renderPage(false);
+    renderPage();
     fireEvent.keyDown(window, { key: "ArrowRight" });
     await waitFor(() => expect(currentStepId()).toBe("providers"));
 
@@ -834,7 +791,7 @@ describe("OnboardingPage", () => {
   });
 
   it("skips the tour on Escape from its own controls, and leaves an open picker's Escape alone", () => {
-    renderPage(false);
+    renderPage();
 
     const picker = document.createElement("div");
     picker.setAttribute("data-slot", "popover-content");
@@ -860,7 +817,7 @@ describe("OnboardingPage", () => {
   // Input inside an act is not navigation: only the deliberate gestures swap
   // the step, and the block the eye is on is the SAME element afterwards.
   it("keeps the act stable for in-step input", async () => {
-    renderPage(false);
+    renderPage();
     await advanceToStep("providers");
 
     const currentStep = screen.getByTestId("onboarding-step");
@@ -905,7 +862,6 @@ describe("OnboardingPage on the installed mobile app", () => {
     prefetchMock.renders = 0;
     scanMock.activeCalls.length = 0;
     navigateMock.mockReset();
-    historyBackMock.mockReset();
   });
 
   afterEach(() => {
@@ -921,7 +877,7 @@ describe("OnboardingPage on the installed mobile app", () => {
   it("plays only the welcome, then completes and opens a new draft with the guide armed", () => {
     vi.useFakeTimers();
     try {
-      render(<OnboardingPage replay={false} />);
+      render(<OnboardingPage />);
 
       expect(screen.getByTestId("onboarding-welcome-skip")).toBeTruthy();
       // Not a hidden tour layer - no tour at all. Nothing of the acts exists to
@@ -964,7 +920,6 @@ describe("OnboardingPage on the installed mobile app", () => {
         to: "/draft/new",
         replace: true,
       });
-      expect(historyBackMock).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
     }
@@ -978,7 +933,7 @@ describe("OnboardingPage on the installed mobile app", () => {
     }));
     vi.useFakeTimers();
     try {
-      render(<OnboardingPage replay={false} />);
+      render(<OnboardingPage />);
 
       void act(() => vi.advanceTimersByTime(300));
       expect(
@@ -1007,7 +962,7 @@ describe("OnboardingPage on the installed mobile app", () => {
   it("gives Skip welcome the same outcome as letting the welcome finish", () => {
     vi.useFakeTimers();
     try {
-      render(<OnboardingPage replay={false} />);
+      render(<OnboardingPage />);
       fireEvent.click(screen.getByTestId("onboarding-welcome-skip"));
 
       expect(useOnboardingStore.getState().completedAt).toBeNull();
@@ -1029,51 +984,13 @@ describe("OnboardingPage on the installed mobile app", () => {
     }
   });
 
-  // "Replay" has to show the tour again, and on this shell the tour the user
-  // would recognise is the landing guide - so the replay re-arms it from
-  // scratch and goes to the page it lives on, rather than back to Settings.
-  it("re-arms the landing guide on replay and navigates instead of going back", () => {
-    useOnboardingStore.setState({ completedAt: 123, step: 0 });
-    useFirstTaskGuideStore.setState({
-      status: "finished",
-      acknowledgedHints: new Set(["tasks-menu"]),
-    });
+  it("consumes the login import announcement on first run", () => {
     vi.useFakeTimers();
     try {
-      render(<OnboardingPage replay />);
-      fireEvent.click(screen.getByTestId("onboarding-welcome-skip"));
-      void act(() => vi.advanceTimersByTime(320));
-
-      expect(useFirstTaskGuideStore.getState().status).toBe("active");
-      // `prepare()` ran, so last run's acknowledgements are not still retiring
-      // the steps this replay is meant to show.
-      expect(useFirstTaskGuideStore.getState().acknowledgedHints.size).toBe(0);
-      expect(navigateMock).toHaveBeenCalledWith({
-        to: "/draft/new",
-        replace: true,
-      });
-      expect(historyBackMock).not.toHaveBeenCalled();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  // A replay is not a first run: the announcement it would otherwise consume is
-  // still owed to the user, exactly as on the desktop.
-  it("consumes the login import announcement on first run only", () => {
-    vi.useFakeTimers();
-    try {
-      render(<OnboardingPage replay={false} />);
+      render(<OnboardingPage />);
       expect(
         useFeatureAnnouncementsStore.getState().consumed["login-import"],
       ).toEqual(expect.any(Number));
-
-      cleanup();
-      resetFeatureAnnouncementsStore();
-      render(<OnboardingPage replay />);
-      expect(
-        useFeatureAnnouncementsStore.getState().consumed["login-import"],
-      ).toBeUndefined();
     } finally {
       vi.useRealTimers();
     }
@@ -1112,7 +1029,7 @@ describe("OnboardingPage phone layout", () => {
   });
 
   it("puts Back in the header past act one, and renders no eyebrow or wordmark", async () => {
-    const { container } = renderPage(false);
+    const { container } = renderPage();
 
     // Act 1's leading slot is the brand mark, so there is nothing to go back to.
     expect(screen.queryByTestId("onboarding-back")).toBeNull();
@@ -1134,7 +1051,7 @@ describe("OnboardingPage phone layout", () => {
   });
 
   it("gives act one a subtitle and the later acts none", async () => {
-    const { container } = renderPage(false);
+    const { container } = renderPage();
 
     const subtitle = container.querySelector(".onboarding-subtitle");
     expect(subtitle?.textContent).toBe(
@@ -1146,7 +1063,7 @@ describe("OnboardingPage phone layout", () => {
   });
 
   it("shows one full-width primary, and hands act three's footer to the wizard", async () => {
-    const { container } = renderPage(false);
+    const { container } = renderPage();
 
     const advance = screen.getByTestId("onboarding-advance");
     expect(advance.className).toContain("onboarding-button--block");
@@ -1169,7 +1086,7 @@ describe("OnboardingPage phone layout", () => {
   });
 
   it("runs the whole step list, leaves vertical drags alone, and navigates on horizontal ones", async () => {
-    const { container } = renderPage(false);
+    const { container } = renderPage();
     const surface = swipeSurface(container);
 
     expect(currentStepId()).toBe("task-tabs");
@@ -1207,7 +1124,7 @@ describe("OnboardingPage phone layout", () => {
   });
 
   it("springs a short drag home and commits a flick that barely travelled", async () => {
-    const { container } = renderPage(false);
+    const { container } = renderPage();
     const surface = swipeSurface(container);
 
     // 60px of a 393px surface is under the quarter a slow release has to cover,
@@ -1229,7 +1146,7 @@ describe("OnboardingPage phone layout", () => {
   });
 
   it("resists at the ends instead of leaving the tour", () => {
-    const { container } = renderPage(false);
+    const { container } = renderPage();
     const surface = swipeSurface(container);
 
     // Back from the first act: there is nothing behind it, so the act rubber
@@ -1244,7 +1161,7 @@ describe("OnboardingPage phone layout", () => {
   });
 
   it("does not steal swipes from controls or the platform edge zones", async () => {
-    const { container } = renderPage(false);
+    const { container } = renderPage();
     const surface = swipeSurface(container);
 
     drag(
@@ -1271,7 +1188,7 @@ describe("OnboardingPage phone layout", () => {
   });
 
   it("widens platform edge zones by the safe-area inset", async () => {
-    const { container } = renderPage(false);
+    const { container } = renderPage();
     const surface = swipeSurface(container);
     safeAreaInsetsMock.left = 20;
     safeAreaInsetsMock.right = 20;

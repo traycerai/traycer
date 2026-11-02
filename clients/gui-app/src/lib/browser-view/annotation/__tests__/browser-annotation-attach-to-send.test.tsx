@@ -100,6 +100,7 @@ function mountSubmit(args: {
     reasoningFallback: "model-default",
     seedKey: "browser-annotation-attach-to-send",
     values: {
+      ultracode: false,
       permission: "supervised",
       selection: {
         harnessId: "codex",
@@ -112,6 +113,7 @@ function mountSubmit(args: {
     onSettingsChange: null,
     tuiOnly: false,
     chatLineCarriesAutoMode: null,
+    ultracodeCarried: false,
     hostId: null,
   });
   return renderHook(() =>
@@ -134,8 +136,9 @@ function mountSubmit(args: {
       onSubmitMessage: args.onSubmitMessage,
       onSideChat: null,
       targetHostId: null,
+      restingSandbox: null,
       queueEditTargetId: null,
-      // T5's gate is off in these fixtures: they predate it and assert the
+      // The gate is off in these fixtures: they predate it and assert the
       // inline behaviour, which is what `false` preserves exactly.
       getDraftBlobBridgeSupported: () => false,
     }),

@@ -52,7 +52,7 @@ export interface SnapshotFetchError {
   readonly code: FatalErrorDetails["code"];
   readonly message: string;
   /**
-   * Direction-aware version-skew signal (R4-D2), carried through only for an
+   * Direction-aware version-skew signal, carried through only for an
    * `INCOMPATIBLE` close — `null` for every other fatal code. See
    * `describeVersionSkew` (`@/lib/host/version-skew-copy`).
    */
@@ -139,6 +139,11 @@ export interface EpicRecordsProjection extends EpicProjectedSlices {
    */
   readonly chatRecordListAuthoritative: boolean;
   /**
+   * Whether `epic.listTuiAgents` has produced an answer this session - the
+   * terminal twin of {@link EpicRecordsProjection.chatRecordListAuthoritative}.
+   */
+  readonly tuiAgentRecordListAuthoritative: boolean;
+  /**
    * The record tables' ingest counters, projected.
    *
    * A caller captures one of these before issuing a list RPC and compares it
@@ -217,6 +222,7 @@ export const EMPTY_RECORDS_PROJECTION: EpicRecordsProjection = Object.freeze({
   ...EMPTY_PROJECTED_SLICES,
   chatRecords: EMPTY_CHATS_SLICE,
   chatRecordListAuthoritative: false,
+  tuiAgentRecordListAuthoritative: false,
   chatIngestSeq: 0,
   tuiAgentIngestSeq: 0,
   chatSnapshotIncompleteSeq: 0,

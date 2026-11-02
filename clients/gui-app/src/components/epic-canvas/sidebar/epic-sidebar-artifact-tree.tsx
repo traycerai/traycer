@@ -13,6 +13,7 @@ import {
 import {
   DEFAULT_EPIC_NODE_NAMES,
   EPIC_NODE_ICONS,
+  FILE_ARTIFACT_VIEWER_ICONS,
   isCreatableArtifactKind,
   isEpicArtifactKind,
   isMarkdownArtifactKind,
@@ -25,8 +26,8 @@ import {
 } from "@/lib/disabled-presentation";
 import { ARTIFACT_PANEL_EXCLUDED_TYPES } from "@/components/epic-canvas/add-node-options";
 import {
-  computeDescendantCountsFromTree,
-  formatCascadeSummary,
+  describeTreeDeleteDisclosure,
+  type TreeDeleteDisclosure,
 } from "@/lib/epic-tree-cascade";
 import { useOpenEpicHandle } from "@/providers/use-open-epic-handle";
 import { requestArtifactEditorFocus } from "@/lib/artifacts/pending-editor-focus";
@@ -39,6 +40,7 @@ import {
 } from "@/lib/canvas/tile-open/intent";
 import { useEpicExportArtifacts } from "@/hooks/epic/use-epic-export-artifacts-mutation";
 import { cn } from "@/lib/utils";
+import { useDeletedArtifactsAvailable } from "@/hooks/epic/use-deleted-artifacts-available";
 import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
 import { ArtifactPanelSearchShell } from "@/components/epic-canvas/sidebar/epic-sidebar-artifact-search";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -89,6 +91,7 @@ import {
   useAncestorIds,
   useEpicArtifactStatus,
   useEpicConnectionStatus,
+  useEpicFileArtifactViewer,
   useEpicPermissionRole,
   useEpicTreeIndex,
 } from "@/lib/epic-selectors";
@@ -225,7 +228,7 @@ function usePanelRootIds(
   // .type` is the same value space this `treeFilter` already uses for CHILD
   // nodes (`usePanelChildIds`), so the result is identical.
   //
-  // ## Subscribed to the ANSWER (epic-sync-overhaul finding 12, round 2)
+  // ## Subscribed to the ANSWER
   //
   // That earlier fix read `useEpicTreeIndex()` and derived in a `useMemo`, on
   // the stated premise that "the tree index does NOT change on chat tokens".
@@ -321,18 +324,6 @@ function collectDescendantArtifactEntries(
   return entries;
 }
 
-/**
- * Per-node unread marker variant, subscribed narrowly so marking one artifact
- * read re-renders only the affected row and its collapsed ancestors - never the
- * whole tree. The read-state selector returns a scalar variant, so Zustand
- * bails the render for any node whose variant did not flip. Returns:
- *   - "self": this artifact itself has unread changes.
- *   - "descendant": this collapsed parent hides unread artifacts.
- *   - null: nothing to show (non-artifact row, or expanded parent with no self
- *     unread).
- * This mirrors the per-entity `useIsActive...` pattern instead of threading a
- * tab-wide map through the recursive node tree.
- */
 /** The read-state fields the variant is computed from. */
 interface ArtifactReadStateFacts {
   readonly seedAtByEpic: Readonly<Record<string, number>>;
@@ -417,6 +408,18 @@ function useArtifactRowNode(nodeId: string): ArtifactRowNodeFacts | null {
   );
 }
 
+/**
+ * Per-node unread marker variant, subscribed narrowly so marking one artifact
+ * read re-renders only the affected row and its collapsed ancestors - never the
+ * whole tree. The read-state selector returns a scalar variant, so Zustand
+ * bails the render for any node whose variant did not flip. Returns:
+ *   - "self": this artifact itself has unread changes.
+ *   - "descendant": this collapsed parent hides unread artifacts.
+ *   - null: nothing to show (non-artifact row, or expanded parent with no self
+ *     unread).
+ * This mirrors the per-entity `useIsActive...` pattern instead of threading a
+ * tab-wide map through the recursive node tree.
+ */
 function useArtifactUnreadMarkerVariant(args: {
   readonly epicId: string;
   readonly nodeId: string;
@@ -874,9 +877,15 @@ const ArtifactNode = memo(function ArtifactNode(props: ArtifactNodeProps) {
   // `useShallow` is required, not decorative: a deriving selector returns a
   // fresh object each call, so without it `useSyncExternalStore` sees a change
   // on every notification and loops. See `epic-sidebar-filter.ts`.
-  const cascadeCounts = useEpicStore(
+  const restoreAvailable = useDeletedArtifactsAvailable(useEpicSessionHostId());
+  const deleteDisclosure = useEpicStore(
     useShallow((state: OpenEpicState) =>
-      computeDescendantCountsFromTree(state.tree, nodeId),
+      describeTreeDeleteDisclosure({
+        tree: state.tree,
+        kind: "artifact",
+        nodeIds: [nodeId],
+        restoreAvailable,
+      }),
     ),
   );
   const statusValue = useEpicArtifactStatus(nodeId);
@@ -918,7 +927,11 @@ const ArtifactNode = memo(function ArtifactNode(props: ArtifactNodeProps) {
     expanded,
   });
 
-  const Icon = EPIC_NODE_ICONS[artifactType];
+  const fileViewer = useEpicFileArtifactViewer(nodeId);
+  const Icon =
+    fileViewer === null
+      ? EPIC_NODE_ICONS[artifactType]
+      : FILE_ARTIFACT_VIEWER_ICONS[fileViewer];
   const artifactIconColorMode = useSettingsStore(
     (state) => state.artifactIconColorMode,
   );
@@ -1186,13 +1199,6 @@ const ArtifactNode = memo(function ArtifactNode(props: ArtifactNodeProps) {
   if (node === null) return null;
   if (!treeFilter(node.type)) return null;
 
-  // Cascade counts feed only the delete-confirm dialog, computed from the
-  // canonical tree structure rather than the churning record list. Subscribed
-  // at the top of this component rather than derived here, because a hook
-  // cannot live below the two early returns above - see the note at the
-  // subscription for why it stopped reading the whole slice.
-  const cascadeSummary = formatCascadeSummary(cascadeCounts);
-
   const showStatusDot = computeArtifactNodeStatusDot(artifactType, statusValue);
 
   const addChildIsPending = computeArtifactNodeAddChildPending({
@@ -1253,7 +1259,7 @@ const ArtifactNode = memo(function ArtifactNode(props: ArtifactNodeProps) {
       confirmDeleteOpen={confirmDeleteOpen}
       renderDeleteDialog={confirmDeleteOpen || deleteDialogEverOpened}
       onConfirmDeleteOpenChange={changeConfirmDeleteOpen}
-      cascadeSummary={cascadeSummary}
+      deleteDisclosure={deleteDisclosure}
       deletePending={deletePending}
       onConfirmDelete={confirmDelete}
       selectionMode={selectionMode}
@@ -1306,7 +1312,7 @@ interface ArtifactNodeShellProps {
   /** First-open latch: see the note beside `deleteDialogEverOpened`. */
   readonly renderDeleteDialog: boolean;
   readonly onConfirmDeleteOpenChange: (open: boolean) => void;
-  readonly cascadeSummary: string | null;
+  readonly deleteDisclosure: TreeDeleteDisclosure;
   readonly deletePending: boolean;
   readonly onConfirmDelete: () => void;
   readonly treeFilter: TreeFilterFn;
@@ -1358,7 +1364,7 @@ function ArtifactNodeShell(props: ArtifactNodeShellProps) {
     confirmDeleteOpen,
     renderDeleteDialog,
     onConfirmDeleteOpenChange,
-    cascadeSummary,
+    deleteDisclosure,
     deletePending,
     onConfirmDelete,
     treeFilter,
@@ -1479,8 +1485,9 @@ function ArtifactNodeShell(props: ArtifactNodeShellProps) {
           open={confirmDeleteOpen}
           onOpenChange={onConfirmDeleteOpenChange}
           title={`Delete ${artifactType} "${nodeName}"?`}
-          description="This action cannot be undone."
-          cascadeSummary={cascadeSummary}
+          description={deleteDisclosure.description}
+          cascadeSummary={deleteDisclosure.cascadeSummary}
+          cascadeNestedUnder={deleteDisclosure.cascadeNestedUnder}
           actionLabel="Delete"
           isPending={deletePending}
           onConfirm={onConfirmDelete}

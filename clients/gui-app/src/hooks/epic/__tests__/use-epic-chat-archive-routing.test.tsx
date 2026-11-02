@@ -1502,8 +1502,7 @@ describe("replaceMounted during a delayed ACK", () => {
   });
 });
 
-// Codex threads on d74e2198 (4303240629, 4303240636, 4303240645,
-// 4303240648) and on 318466c2, and the round-7 cold review: one class - a
+// One class - a
 // step after a write keyed to the row's host instead of the host that
 // enacted the write. Each write below is routed by a row naming REMOTE, which
 // is down; OTHER stands in. Every step's refreshes are observed on keys
@@ -1512,6 +1511,7 @@ describe("a write enacted by a stand-in", () => {
   const TUI_ID = "tui-moved";
   const TASK_ID = "task-moved";
   const SETTINGS: ChatRunSettings = {
+    ultracode: false,
     harnessId: "codex",
     model: "gpt-5-codex",
     permissionMode: "supervised",

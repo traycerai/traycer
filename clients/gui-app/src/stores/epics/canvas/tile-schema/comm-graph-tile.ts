@@ -51,8 +51,8 @@ export const DEFAULT_COMM_GRAPH_VIEW: CommGraphTileViewState = {
   officeCameraView: null,
   // Nobody has framed the office. The tile projects this into the three fields
   // above before building the office canvas, and `null` is what that canvas
-  // reads as "fit yourself" - so a fresh tile auto-fits, exactly as before D68
-  // gave the office a camera of its own.
+  // reads as "fit yourself" - so a fresh tile auto-fits, exactly as before the
+  // camera split gave the office one of its own.
   officeCamera: null,
 };
 
@@ -246,7 +246,7 @@ export function parseCommGraphTileViewState(
   const mode = readCommGraphViewMode(value.mode);
   const camera: CommGraphTileCamera = {
     // NOT zeroed by `stale`. Staleness is a fact about an OFFICE view id this
-    // build cannot draw, and since D68 these three are the Graph's fields -
+    // build cannot draw, and these three are the Graph's fields -
     // so retiring them here wiped a Graph framing that had nothing to do with
     // the unknown office view. What `stale` retires is the office's own
     // camera, below. The one case where these numbers do go neutral is a
@@ -260,7 +260,7 @@ export function parseCommGraphTileViewState(
     zoom: zoom <= 0 ? DEFAULT_COMM_GRAPH_VIEW.zoom : zoom,
   };
   /**
-   * D68's MIGRATION: before the split there was one camera, and in `office`
+   * THE MIGRATION: before the split there was one camera, and in `office`
    * mode it was the office's. A record saved then carries sprite pixels in
    * the three shared fields and no `officeCamera` at all, so the numbers are
    * handed to the field that now owns them.
@@ -274,7 +274,7 @@ export function parseCommGraphTileViewState(
    *
    * A STALE record still migrates, and must: the office camera it produces is
    * retired to `null` a few lines down, but the three shared fields have to
-   * go neutral with it, because on a pre-D68 office record they were the
+   * go neutral with it, because on a pre-split office record they were the
    * office's numbers and are meaningless to the Graph that now owns them.
    */
   const migrates =
@@ -294,7 +294,7 @@ export function parseCommGraphTileViewState(
     // The GRAPH's camera now. A migrated record's numbers went to the office
     // just above, and sprite pixels read as flow units would open the graph
     // off-screen the first time somebody switched to it - the same units
-    // mismatch D68 exists to end, pointed the other way.
+    // mismatch the split exists to end, pointed the other way.
     x: migrates ? DEFAULT_COMM_GRAPH_VIEW.x : camera.x,
     y: migrates ? DEFAULT_COMM_GRAPH_VIEW.y : camera.y,
     zoom: migrates ? DEFAULT_COMM_GRAPH_VIEW.zoom : camera.zoom,

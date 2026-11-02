@@ -580,6 +580,7 @@ describe("useEpicCreateChatForPendingSandbox", () => {
       title: "",
       chatId: "chat-2",
       settings: {
+        ultracode: false,
         harnessId: "codex",
         model: "gpt-6.1-sol",
         permissionMode: "supervised",
@@ -594,6 +595,7 @@ describe("useEpicCreateChatForPendingSandbox", () => {
         content: hashOnlyAttachmentDoc("a".repeat(64)),
         sender: { type: "user", userId: "user-1" },
         settings: {
+          ultracode: false,
           harnessId: "codex",
           model: "gpt-6.1-sol",
           permissionMode: "supervised",
@@ -1036,7 +1038,7 @@ describe("useEpicArchiveChat", () => {
     };
     // Still no optimistic CACHE WRITE - nothing here fabricates an archived
     // row. What the handlers do is refresh the host's record list, and that is
-    // a correction rather than an addition (chat-sync-v2 ticket 49): this test
+    // a correction rather than an addition: this test
     // used to assert both were absent, on the premise that "the archive flag
     // lives in the epic Y.Doc, so the host's write replicates back through the
     // epic stream". Since the single-write pivot `archivedAt` is a chat-DATABASE
@@ -1801,7 +1803,7 @@ describe("useEpicArchiveChats", () => {
     );
   });
 
-  // Thread round 9: a selected child moved out of the parent while the
+  // A selected child moved out of the parent while the
   // archive was in flight is not archived with it. The request stands for
   // fewer rows at settlement than at the gesture, and the rows it no longer
   // covers are unconfirmed - never archived, never failed.

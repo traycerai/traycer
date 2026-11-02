@@ -60,7 +60,7 @@ type SharedSubscription =
  * the cache key - see `prQueryKeys.listForEpic`) so a background session
  * (the epic shell's standing subscription) and a foreground session (the
  * panel) coexist as two independent transport lifecycles instead of one
- * collapsing into the other, per the tech plan's session-key rule.
+ * collapsing into the other.
  */
 const subscriptions: SharedStreamSubscriptionRegistry<PrSubscribeListForEpicServerFrame> =
   new Map();

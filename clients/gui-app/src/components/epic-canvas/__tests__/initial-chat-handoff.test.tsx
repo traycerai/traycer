@@ -43,6 +43,7 @@ const HANDOFF_CONTENT = {
   ],
 } satisfies JsonContent;
 const HANDOFF_SETTINGS = {
+  ultracode: false,
   harnessId: "codex",
   model: "codex-test",
   permissionMode: "supervised",
@@ -128,8 +129,8 @@ vi.mock("@/hooks/host/use-addressable-host-id", () => ({
 }));
 
 // The Epic session resolves its host through the selection authority's derived
-// pointer (selection model §1), not the active-host projection above - seed the
-// decider at its own name (the P1.2 convention in epic-shell-usage-entry-point).
+// pointer, not the active-host projection above - seed the
+// decider at its own name (the convention in epic-shell-usage-entry-point).
 vi.mock("@/hooks/host/use-effective-host-id", () => ({
   useEffectiveHostId: () => HOST_ID,
 }));
@@ -340,7 +341,7 @@ describe("initial chat handoff route coordinator", () => {
     // Owner snapshot with no chat seeded yet (epic.create's chat write has not
     // projected). The hook eager-opens the tab but must not create a chat.
     act(() => {
-      epicCallbacks.onConnectionStatus("open", null, true);
+      epicCallbacks.onConnectionStatus("open", null, true, null);
       epicCallbacks.onSnapshot(
         makeMeta("owner"),
         Y.encodeStateAsUpdate(new Y.Doc()),
@@ -384,7 +385,7 @@ describe("initial chat handoff route coordinator", () => {
     const donor = new Y.Doc();
     seedDocWithChat(donor);
     act(() => {
-      epicCallbacks.onConnectionStatus("open", null, true);
+      epicCallbacks.onConnectionStatus("open", null, true, null);
       epicCallbacks.onSnapshot(makeMeta("owner"), Y.encodeStateAsUpdate(donor));
     });
 
@@ -429,7 +430,7 @@ describe("initial chat handoff route coordinator", () => {
     const donor = new Y.Doc();
     seedDocWithChat(donor);
     act(() => {
-      epicCallbacks.onConnectionStatus("open", null, true);
+      epicCallbacks.onConnectionStatus("open", null, true, null);
       // Viewer is not `epicReady`, so adoption must not advance the handoff.
       epicCallbacks.onSnapshot(
         makeMeta("viewer"),
@@ -478,7 +479,7 @@ describe("initial chat handoff route coordinator", () => {
     const donor = new Y.Doc();
     seedDocWithChat(donor);
     act(() => {
-      epicCallbacks.onConnectionStatus("open", null, true);
+      epicCallbacks.onConnectionStatus("open", null, true, null);
       epicCallbacks.onSnapshot(makeMeta("owner"), Y.encodeStateAsUpdate(donor));
     });
 
@@ -495,7 +496,7 @@ describe("initial chat handoff route coordinator", () => {
   });
 
   it("stamps the seeded chat's tile with the host the handoff RECORD names, not the window's host", async () => {
-    // Codex #1243 T-46: the handoff's lookup key already ignores the host
+    // The handoff's lookup key already ignores the host
     // (`initialChatHandoffKey`), but the tile it opens is stamped with a
     // separately-read host id and carries that binding for life. Read
     // app-wide it stamped a chat created on the landing composer's PLACEMENT
@@ -558,7 +559,7 @@ describe("initial chat handoff route coordinator", () => {
     // Owner snapshot, live connection, and NO chat in the projection: the
     // epic is ready and the chat still is not there.
     act(() => {
-      epicCallbacks.onConnectionStatus("open", null, true);
+      epicCallbacks.onConnectionStatus("open", null, true, null);
       epicCallbacks.onSnapshot(
         makeMeta("owner"),
         Y.encodeStateAsUpdate(new Y.Doc()),
@@ -629,7 +630,7 @@ describe("initial chat handoff route coordinator", () => {
     // 0ms timer this test now controls.
     vi.useFakeTimers();
     act(() => {
-      epicCallbacks.onConnectionStatus("open", null, true);
+      epicCallbacks.onConnectionStatus("open", null, true, null);
     });
 
     act(() => {
@@ -672,7 +673,7 @@ describe("initial chat handoff route coordinator", () => {
     const epicCallbacks = callbacks;
 
     act(() => {
-      epicCallbacks.onConnectionStatus("open", null, true);
+      epicCallbacks.onConnectionStatus("open", null, true, null);
       epicCallbacks.onSnapshot(
         makeMeta("owner"),
         Y.encodeStateAsUpdate(new Y.Doc()),

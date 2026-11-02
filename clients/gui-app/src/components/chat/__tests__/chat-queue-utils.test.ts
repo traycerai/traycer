@@ -10,6 +10,7 @@ import {
 } from "@/components/chat/chat-queue-utils";
 
 const SETTINGS = {
+  ultracode: false,
   harnessId: "grok" as const,
   model: "grok-4.7",
   permissionMode: "supervised" as const,

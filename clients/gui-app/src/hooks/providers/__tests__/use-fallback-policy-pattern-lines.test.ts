@@ -10,7 +10,7 @@ import {
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 
 /**
- * Cold-review finding R3: the version gate `useFallbackPolicyPatternLines`
+ * The version gate `useFallbackPolicyPatternLines`
  * computes was untested - every suite that reaches it mocks the hook whole,
  * so `lineReaches` and the choice of which negotiated line feeds which
  * answer were never exercised. This drives the REAL registry and mocks only

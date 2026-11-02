@@ -176,7 +176,7 @@ vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => {
 
 vi.mock("@/lib/host/runtime", () => ({
   useHostClient: () => ({ getActiveHostId: () => "active-host" }),
-  // The SPINE, a separate export since redesign P2.1.
+  // The SPINE, a separate export.
   useHostRuntimeClient: () => ({ getActiveHostId: () => "active-host" }),
 }));
 
@@ -426,7 +426,7 @@ describe("<SharingPanel />", () => {
   });
 
   it("reads the collaborator list on the EPIC SESSION's client, not the app-wide one", () => {
-    // Codex #1243 sweep: the panel's grant/revoke/role mutations were moved
+    // The panel's grant/revoke/role mutations were moved
     // onto the Epic session's client, and the list must agree with the host
     // those writes land on. The controller's own comment recorded this as
     // deferred ("would have to move the mutation hooks with it"); this pins
@@ -692,7 +692,7 @@ describe("<SharingPanel />", () => {
     ).toContain("Editor");
   });
 
-  // T16: `isOwner` and `canInvitePeople` now AND the role with the cloud
+  // `isOwner` and `canInvitePeople` now AND the role with the cloud
   // capability verdict. An `unverified` session holds an owner ROLE but no
   // verdict, and every owner-only affordance must go inert on that split, not
   // just the invite card.
@@ -745,7 +745,7 @@ describe("<SharingPanel />", () => {
     expect(screen.queryByText(/^0 /)).toBeNull();
   });
 
-  // T16: the revoke dialog and refresh outlive the render that opened them -
+  // The revoke dialog and refresh outlive the render that opened them -
   // `readCloudAuthorizedNow()` exists precisely because the verdict can be
   // withdrawn while a confirm dialog sits open with a human in it, and a
   // render-time-only assertion would never reach that re-read.

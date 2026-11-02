@@ -388,7 +388,7 @@ function BrowserTileToolbarTrailing(props: {
 /**
  * The clear-site action for one tile. `null` hides the item outright, for the
  * two tiles that have no jar of their own to clear: a private session, whose
- * partition dies with the session and is shared with nothing (spec §6.1), and
+ * partition dies with the session and is shared with nothing, and
  * a screencast tile, which watches a context on the host.
  *
  * A `null` `site` keeps the item visible but disabled: the tile is on

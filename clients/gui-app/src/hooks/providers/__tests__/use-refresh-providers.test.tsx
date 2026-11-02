@@ -27,7 +27,7 @@ const runtimeMock = vi.hoisted(() => ({
 
 vi.mock("@/lib/host/runtime", () => ({
   useHostClient: () => runtimeMock.client,
-  // The SPINE, a separate export since redesign P2.1.
+  // The SPINE, a separate export.
   useHostRuntimeClient: () => runtimeMock.client,
 }));
 

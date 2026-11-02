@@ -109,7 +109,7 @@ export const MOBILE_RETENTION_PROFILE: RetentionProfile = Object.freeze({
 /**
  * How long an epic must have had NO visible pane in ANY window before its tabs
  * are parked - every host subscription they cause released, the tabs themselves
- * left open (plan C, decisions C1/C3/C6).
+ * left open (plan C, decision C6).
  *
  * A TIME cap beside the four count caps above, and it belongs with them: the
  * counts bound how much stays resident while the user is elsewhere, this bounds

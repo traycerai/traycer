@@ -20,7 +20,7 @@ export type EditorOpenMutation = UseMutationResult<
 
 /**
  * App-wide form, for a FOLLOWING surface with no host of its own - the dead-tile
- * "open in editor" button (selection model §2). Every Epic-scoped caller (a diff
+ * "open in editor" button. Every Epic-scoped caller (a diff
  * tile, a workspace-file tile) must use {@link useEditorOpenForClient} with its
  * own tab client instead: `editor.openPaths` resolves the path on the host it is
  * sent to, so an app-wide read opens the wrong machine's file during an A→B

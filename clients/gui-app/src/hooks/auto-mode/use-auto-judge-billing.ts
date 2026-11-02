@@ -273,7 +273,7 @@ function storedJudgeModelSlug(
 }
 
 /**
- * The composer's half of round 12's profile-availability read.
+ * The composer's half of the profile-availability read.
  *
  * Extracted rather than inlined because `useAutoJudgeBilling` is at gui-app's
  * complexity ceiling (16) and this is the branch that pushed it over - the same

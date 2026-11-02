@@ -18,7 +18,7 @@ import { makeBrowserSessionTileRef } from "@/stores/epics/canvas/tile-schema/bro
 import { makeOpenableNodeRef } from "@/stores/epics/canvas/types";
 
 /**
- * Open on a bot's surface card (Tracy Bots T89): where a notification of the
+ * Open on a bot's surface card: where a notification of the
  * same surface opens it - the question's block or the approval's row in the
  * task's chat on its machine, the browser tile on its machine - and the
  * artifact in its task through the channel's link policy. Like Home's focus

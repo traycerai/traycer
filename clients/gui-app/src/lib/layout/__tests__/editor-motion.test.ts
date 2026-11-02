@@ -367,7 +367,7 @@ describe("the fallback exit (5.2)", () => {
   });
 
   it("does not hold an ENTRY back for anything", () => {
-    // A re-open inside the previous session's slide-out (G3-05): the panel is
+    // A re-open inside the previous session's slide-out: the panel is
     // still wearing the exit attribute and its exit animation is still pending.
     const inspector = mountInspector();
     stubExitAnimation(inspector);
@@ -387,7 +387,7 @@ describe("the fallback exit (5.2)", () => {
 });
 
 /**
- * R2-05. `apply` begins the session, and `beginSession` fires
+ * `apply` begins the session, and `beginSession` fires
  * `useLayoutRegion`'s store subscription synchronously - so what React has
  * COMMITTED at that moment decides which surface's instances register. On the
  * transition path that is settled for free, because the callback runs a frame

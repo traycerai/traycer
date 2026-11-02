@@ -1,3 +1,4 @@
+import type { StreamContinuity } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type {
   BrowserViewportIntent,
   BrowserViewportState,
@@ -343,7 +344,7 @@ interface BrowserSessionsCoordinator {
   sweptSinceFailure: boolean;
   /**
    * Snapshot-only capture of one tab on this coordinator's host, for a chat
-   * pinned to ANOTHER host (spec decision #10). It hangs off the coordinator
+   * pinned to ANOTHER host. It hangs off the coordinator
    * rather than off `BrowserSessionsState` because only the mention picker
    * calls it, keyed by coordinator.
    */
@@ -724,6 +725,7 @@ function createBrowserSessionsCoordinator(args: {
   let runtime = args.runtime;
   let session: BrowserSessionsSession | null = null;
   let lifecycle: BrowserSessionsLifecycle = "connecting";
+  let heldLiveCycle = false;
   let disposed = false;
 
   const publish = (state: BrowserSessionsState): void => {
@@ -979,14 +981,21 @@ function createBrowserSessionsCoordinator(args: {
   const onStatus = (
     next: BrowserSessionsLifecycle,
     errorMessage: string | null,
+    continuity: StreamContinuity,
   ): void => {
-    const wasLive = lifecycle === "live";
+    const wasLive = lifecycle === "live" || heldLiveCycle;
+    heldLiveCycle = false;
     lifecycle = next;
     // The PiP store is keyed by epic, and an `independent` stream has no epic
     // to key by. Nothing downstream would break on a sentinel; the store would
     // just grow a bucket no PiP surface ever reads.
     if (args.scope.kind === "epic") {
       applyPipHostLifecycle(args.scope.epicId, args.owner.hostId, next);
+    }
+    if (continuity === "held") {
+      heldLiveCycle = wasLive;
+      patchState({ lifecycle: next, errorMessage });
+      return;
     }
     if (next !== "live" && wasLive) {
       rejectEveryPendingRequest();
@@ -1099,6 +1108,7 @@ function createBrowserSessionsCoordinator(args: {
       errorMessage: null,
     });
     lifecycle = "connecting";
+    heldLiveCycle = false;
     session = openBrowserSessionsSession({
       key: {
         scope: args.scope,
@@ -1123,6 +1133,7 @@ function createBrowserSessionsCoordinator(args: {
     session?.close();
     session = null;
     lifecycle = "closed";
+    heldLiveCycle = false;
     removeOwnedElectronTabBindings(tabBindingOwner);
     rejectEveryPendingRequest();
   };

@@ -16,7 +16,7 @@ interface ComposerHostNoticeControl {
 }
 
 /**
- * The composer's §54 refusal slot, retired whenever the placement moves.
+ * The composer's placement refusal slot, retired whenever the placement moves.
  *
  * A refusal is a statement ABOUT A HOST - "the client this create would go out
  * on no longer addresses the host the chip is showing" - so it stops being

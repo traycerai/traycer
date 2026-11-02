@@ -26,7 +26,7 @@ class StatusDrivableSession extends FakeStreamSession {
     status: StreamConnectionStatus,
     reason: StreamCloseReason | null,
   ): void {
-    this.statusListener?.(status, reason, null);
+    this.statusListener?.(status, reason, null, null);
   }
 }
 

@@ -36,7 +36,7 @@ export function resolveChatTimelineIsAtEnd(
  * align-at-end pad). `positionAtIndex` is content-relative (excludes that
  * top pad), while DOM `scroll` includes it - so the viewOffset that
  * round-trips exact pixels is `(position + topOffsetAdjustment) - scroll`,
- * not bare `position - scroll` (decision #18).
+ * not bare `position - scroll`.
  */
 export interface ChatFreeScrollingMeasurementSource {
   readonly getState: () => {

@@ -128,6 +128,7 @@ function segment(
     hidden: false,
     state: "live",
     reason: null,
+    chatCredential: null,
     fetching: false,
     retryOffered: false,
     windows,

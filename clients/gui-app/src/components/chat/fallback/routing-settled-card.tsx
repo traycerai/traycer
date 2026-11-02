@@ -36,8 +36,7 @@ export interface RoutingSettledNotice {
 }
 
 /**
- * Routing tried everything and gave up: ONE card, on the latest attempt's row
- * (spec Flow 5).
+ * Routing tried everything and gave up: ONE card, on the latest attempt's row.
  *
  * It is the failed-turn card with the routing account folded in - the notice's
  * headline and message, a numbered receipt of what was tried and why each step

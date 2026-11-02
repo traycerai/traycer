@@ -1,7 +1,7 @@
 /**
  * Quote-to-chat payloads for the PR full view.
  *
- * The view is read-only (decision #4), so the ONE thing it can do that GitHub
+ * The view is read-only, so the ONE thing it can do that GitHub
  * cannot is hand a fact to the agent that wrote the branch. Every quotable
  * surface therefore produces a structured block - a provenance header line
  * plus the body - rather than bare selected text, so the receiving agent knows

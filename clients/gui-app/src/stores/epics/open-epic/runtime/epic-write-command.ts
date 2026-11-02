@@ -74,24 +74,6 @@ export type EpicWriteCommandIntent =
     };
 
 /**
- * The intent's wire form, narrowed.
- *
- * It crosses `command/enqueue` as `unknown` for the same reason
- * `main/write-command`'s does - it is the caller's clonable form and the
- * worker carries it opaquely - but the QUEUE is typed, so one side has to
- * narrow. Here, beside the union, so a member added above is one arm away from
- * the parser that has to accept it.
- *
- * `status` is validated with the REGISTRY's own schema rather than a list of
- * literals copied out of it: `TicketStatus` is registry-derived, and a copied
- * vocabulary rots against the registry the moment a status is added - silently,
- * by refusing a status the rest of the app accepts.
- *
- * Unrecognised payloads answer `null`, and the caller turns that into a
- * REFUSAL rather than an error. Enqueuing a malformed intent would mint an id
- * for a command that can never be dispatched, which is the never-settles hang.
- */
-/**
  * The ARTIFACT-shaped intents: every one keyed by an `artifactId`.
  *
  * Split from the epic-title arm below because `complexity` counts each `case`,
@@ -135,6 +117,24 @@ function readArtifactIntent(
   }
 }
 
+/**
+ * The intent's wire form, narrowed.
+ *
+ * It crosses `command/enqueue` as `unknown` for the same reason
+ * `main/write-command`'s does - it is the caller's clonable form and the
+ * worker carries it opaquely - but the QUEUE is typed, so one side has to
+ * narrow. Here, beside the union, so a member added above is one arm away from
+ * the parser that has to accept it.
+ *
+ * `status` is validated with the REGISTRY's own schema rather than a list of
+ * literals copied out of it: `TicketStatus` is registry-derived, and a copied
+ * vocabulary rots against the registry the moment a status is added - silently,
+ * by refusing a status the rest of the app accepts.
+ *
+ * Unrecognised payloads answer `null`, and the caller turns that into a
+ * REFUSAL rather than an error. Enqueuing a malformed intent would mint an id
+ * for a command that can never be dispatched, which is the never-settles hang.
+ */
 export function readWriteCommandIntent(
   value: unknown,
 ): EpicWriteCommandIntent | null {

@@ -11,6 +11,14 @@ export const authQueryKeys = {
     authService,
     userId,
   ],
+  // PREFIX over every `environmentInvitations` entry, whatever AuthService or
+  // user it is keyed to, for a caller that holds neither — cancelling the
+  // invitations read in flight, say, where what has to stop is whichever
+  // entry is answering it in this window.
+  environmentInvitationsAll: (): readonly unknown[] => [
+    "auth",
+    "environment-invitations",
+  ],
   // `authService: object` keys the query to the live AuthService instance,
   // mirroring the runner-host `traycerCli` keying. Prefix-stable so a broad
   // `["auth"]` invalidation still drops it.
@@ -19,7 +27,7 @@ export const authQueryKeys = {
     "user",
     authService,
   ],
-  // Remote Host Support (§7): the cross-device host registry + live status.
+  // The cross-device host registry + live status.
   // Keyed to the signed-in user like `userSessions`, and for the same reason:
   // an AuthService survives account changes, so without the user id the
   // previous account's cached host list (names, ids, platforms) would be

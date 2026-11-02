@@ -1,6 +1,7 @@
 import { useLayoutEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { ChatMessages } from "@/components/chat/chat-messages";
+import { ChatTimelineHeaderContext } from "@/components/chat/chat-timeline-header-context";
 import { useSubagentDrillIn } from "@/components/chat/segments/subagent-open-as-chat";
 import { TileMinimapScope } from "@/components/epic-canvas/tile-minimap/tile-minimap-scope";
 import type { ChatMessage } from "@/stores/composer/chat-store";
@@ -80,6 +81,35 @@ function initialMessages(): ChatMessage[] {
     if (index === tallAt) return assistantMessage(index, tallParagraphs);
     return assistantMessage(index, short ? 1 : 1 + (index % 4));
   });
+}
+
+/**
+ * `?header=<px>`: the list shows a header of that height above its first row
+ * (`ChatTimelineHeaderContext`, as a bot thread's post is), `window.
+ * __setHeaderHeight` changes it live, and a stand-in for the composer sits
+ * below the list. `?pane=<px>` bounds the whole fixture to that height.
+ */
+const HEADER_PARAM = new URLSearchParams(window.location.search).get("header");
+const PANE_PARAM = new URLSearchParams(window.location.search).get("pane");
+
+function TallHeader() {
+  const [height, setHeight] = useState(Number(HEADER_PARAM));
+  useLayoutEffect(() => {
+    window.__setHeaderHeight = setHeight;
+  }, []);
+  return (
+    <div
+      data-testid="tall-header"
+      style={{ height: `${String(height)}px` }}
+      className="shrink-0 bg-muted"
+    />
+  );
+}
+
+declare global {
+  interface Window {
+    __setHeaderHeight?: (height: number) => void;
+  }
 }
 
 function windowedOnly(): never {
@@ -406,7 +436,11 @@ export function Fixture() {
 
   const hidden = hideKind !== "none";
   return (
-    <div className="flex h-full w-full flex-col">
+    <div
+      className="flex h-full w-full flex-col"
+      style={PANE_PARAM === null ? undefined : { height: `${PANE_PARAM}px` }}
+      data-testid="chat-pane"
+    >
       <div
         className="flex min-h-0 flex-1 flex-col"
         data-chat-keyboard-scroll-scope=""
@@ -418,33 +452,43 @@ export function Fixture() {
       >
         {blank ? null : (
           <TileMinimapScope tileInstanceId={instance.id}>
-            <ChatMessages
-              key={`${instance.id}:${String(instance.mount)}`}
-              taskTitle="Chat scroll model"
-              taskId={TASK_ID}
-              epicId={EPIC_ID}
-              hostId={null}
-              messages={messages}
-              transcriptWindow={null}
-              onVisibleOrdinalRangeChange={() => undefined}
-              onFindReadOrdinalChange={() => undefined}
-              baselineEpoch={0}
-              hydrationSequence={0}
-              coldRewrittenMessageIds={new Set()}
-              backgroundItems={undefined}
-              getMessageActions={() => null}
-              nextStepActions={null}
-              instanceId={instance.id}
-              visible={!hidden}
-              systemOverlayActive={false}
-              scrollRequest={null}
-              onScrollRequestSettled={null}
-              composerOverlayHeight={0}
-              subagentDrillIn={subagentDrillIn}
-            />
+            <ChatTimelineHeaderContext
+              value={HEADER_PARAM === null ? null : <TallHeader />}
+            >
+              <ChatMessages
+                key={`${instance.id}:${String(instance.mount)}`}
+                taskTitle="Chat scroll model"
+                taskId={TASK_ID}
+                epicId={EPIC_ID}
+                hostId={null}
+                messages={messages}
+                transcriptWindow={null}
+                onVisibleOrdinalRangeChange={() => undefined}
+                onFindReadOrdinalChange={() => undefined}
+                baselineEpoch={0}
+                hydrationSequence={0}
+                coldRewrittenMessageIds={new Set()}
+                backgroundItems={undefined}
+                getMessageActions={() => null}
+                nextStepActions={null}
+                instanceId={instance.id}
+                visible={!hidden}
+                systemOverlayActive={false}
+                scrollRequest={null}
+                onScrollRequestSettled={null}
+                composerOverlayHeight={0}
+                subagentDrillIn={subagentDrillIn}
+              />
+            </ChatTimelineHeaderContext>
           </TileMinimapScope>
         )}
       </div>
+      {HEADER_PARAM === null ? null : (
+        <div
+          className="h-12 shrink-0 border-t"
+          data-testid="composer-standin"
+        />
+      )}
     </div>
   );
 }

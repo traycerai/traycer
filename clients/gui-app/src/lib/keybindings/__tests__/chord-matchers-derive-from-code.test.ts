@@ -25,7 +25,7 @@ import ts from "typescript";
  * follows from whether the site resolves one of OUR tokens or a convention that
  * belongs to the platform.
  *
- * This file exists because "we fixed the class" has been wrong twice. Round 15
+ * This file exists because "we fixed the class" has been wrong twice. One fix
  * moved two matchers onto `code` and called the class closed; the streamed
  * screencast matcher was still on `key`. Fixing that at the shared point then
  * swept the PASTE caller physical too, breaking native paste on Dvorak - the
@@ -110,10 +110,11 @@ const KEYBOARD_KEY_READS: Readonly<Record<string, number>> = {
   // not resolve registered shortcut identity, which remains code-derived.
   "gui-app/src/components/browser-tile/browser-viewport-handles.tsx": 6,
   "gui-app/src/components/browser-tile/browser-viewport-toolbar.tsx": 5,
-  // Escape on a canvas artifact: the overlay clears the selected element
-  // before the board itself deselects, and the structure gesture abandons a
-  // drag or resize in flight. A named key, not a registered chord.
-  "gui-app/src/components/canvas-artifact/canvas-selection-overlay.tsx": 1,
+  // Escape and Shift+Enter on a canvas artifact: the overlay clears the
+  // selected element before the board itself deselects, or moves the
+  // selection to its parent element, and the structure gesture abandons a
+  // drag or resize in flight. Named keys, not registered chords.
+  "gui-app/src/components/canvas-artifact/canvas-selection-overlay.tsx": 2,
   "gui-app/src/components/canvas-artifact/use-canvas-structure-gesture.ts": 1,
   "gui-app/src/components/chat/chat-messages.tsx": 10,
   "gui-app/src/components/chat/composer/menu/github-mention-filter-popover.tsx": 3,
@@ -171,6 +172,10 @@ const KEYBOARD_KEY_READS: Readonly<Record<string, number>> = {
   // ContextMenu and Shift+F10, plus Enter and Space on a surface that opts in
   // (the Activity label). Named keys, none of them a registered chord.
   "gui-app/src/components/layout/tabs/group-editor-anchor.tsx": 5,
+  // The phone's talk button under push-to-talk: Space and Enter are held, not
+  // clicked, so the key-down and key-up handlers read the button's own
+  // activation keys by name. Named keys, not a registered chord.
+  "gui-app/src/components/layout/voice/voice-phone-view.tsx": 2,
   // The guided tour's card answers arrows, Enter and Escape by name; none is
   // a registered chord.
   // Arrows, Home and End walking the minimap's own list - named keys inside an

@@ -28,7 +28,7 @@ interface PanelResizeParticipant {
 const panelResizeParticipants = new Set<PanelResizeParticipant>();
 
 /**
- * Registers a surface (ticket 23's D20 port: one per mounted `ChatTimeline`)
+ * Registers a surface (one per mounted `ChatTimeline`)
  * that imperatively snapshots/clears its own visible-row markers around a
  * panel-resize drag. Returns an unregister function. A participant's own
  * `capture`/`clear` failure is isolated (logged, not thrown) so one broken

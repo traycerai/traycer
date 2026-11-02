@@ -5,7 +5,7 @@ import {
 
 /**
  * The global top-level-surface MRU/retention policy, shared by
- * `TopLevelTabHost`'s keep-alive layer and Ticket 21 slice 2's stable
+ * `TopLevelTabHost`'s keep-alive layer and the stable
  * tile-surface-host membership mirror (`tile-surface-membership.ts`).
  *
  * Pure recency + cap algorithm over kind-qualified `TabRef` keys (the
@@ -15,6 +15,7 @@ import {
  * `availableKeys`/`activeKeys` from their own reactive inputs and persisting
  * `recency` between calls.
  */
+
 /**
  * The DESKTOP cap, kept as a named constant for the suites that count against
  * it. The live value is the active retention profile's, read per recompute

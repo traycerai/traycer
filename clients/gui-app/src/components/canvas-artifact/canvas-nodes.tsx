@@ -184,7 +184,7 @@ function CanvasBoardButtons({
 /**
  * The plain caption above a board. Counter-scaled against the viewport zoom so
  * it reads at the same size near normal zoom, with the scale bounded so it
- * cannot grow into nearby captions as the viewport zooms far out. It remains
+ * occupies at most 100 canvas pixels above its board. It remains
  * the board's drag handle.
  */
 function CanvasBoardHeader({
@@ -199,7 +199,7 @@ function CanvasBoardHeader({
   readonly actions: CanvasNodeActions;
 }) {
   const zoom = useStore((state) => state.transform[2]);
-  const captionScale = Math.min(1.5, 1 / zoom);
+  const captionScale = Math.min(100 / BOARD_HEADER_HEIGHT, 1 / zoom);
   const [renaming, setRenaming] = useState(false);
   return (
     <div

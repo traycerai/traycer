@@ -1,5 +1,5 @@
 /**
- * F1 (batch-1 review, P1): canceling a queue edit during byte resolution could
+ * F1: canceling a queue edit during byte resolution could
  * submit into the WRONG destination and clear the restored draft. The
  * incarnation guard alone cannot catch this - `restoreQueuedEditDraft` swaps
  * the document via `replaceDraft` (which bumps `resetEpoch`), NOT by
@@ -127,6 +127,7 @@ function mountSubmit(
     reasoningFallback: "model-default",
     seedKey: "queue-edit-intent-submit",
     values: {
+      ultracode: false,
       permission: "supervised",
       selection: { harnessId: "codex", modelSlug: "gpt-5", profileId: null },
       reasoning: "medium",
@@ -135,6 +136,7 @@ function mountSubmit(
     onSettingsChange: null,
     tuiOnly: false,
     chatLineCarriesAutoMode: null,
+    ultracodeCarried: false,
     hostId: null,
   });
   return renderHook(
@@ -158,8 +160,9 @@ function mountSubmit(
         onSubmitMessage,
         onSideChat: null,
         targetHostId: null,
+        restingSandbox: null,
         queueEditTargetId: props.queueEditTargetId,
-        // T5's gate is off in this fixture: it predates the gate and asserts the
+        // The gate is off in this fixture: it predates the gate and asserts the
         // inline behaviour, which is what `false` preserves exactly.
         getDraftBlobBridgeSupported: () => false,
       }),
@@ -340,6 +343,7 @@ describe("steering a queue edit that changes settings", () => {
       reasoningFallback: "model-default",
       seedKey: "queue-edit-steer-restart",
       values: {
+        ultracode: false,
         permission: "supervised",
         selection: { harnessId: "codex", modelSlug: "gpt-5", profileId: null },
         reasoning: "medium",
@@ -348,6 +352,7 @@ describe("steering a queue edit that changes settings", () => {
       onSettingsChange: null,
       tuiOnly: false,
       chatLineCarriesAutoMode: null,
+      ultracodeCarried: false,
       hostId: null,
     });
     const hook = renderHook(() =>
@@ -370,6 +375,7 @@ describe("steering a queue edit that changes settings", () => {
         onSubmitMessage: submit,
         onSideChat: null,
         targetHostId: null,
+        restingSandbox: null,
         queueEditTargetId: input.queueEditTargetId,
         getDraftBlobBridgeSupported: () => false,
         getQueuedSteerRestartConfirmationSupported: () =>

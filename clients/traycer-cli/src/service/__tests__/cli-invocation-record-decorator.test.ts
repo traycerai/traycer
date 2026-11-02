@@ -252,7 +252,7 @@ describe("withCliInvocationRecord retireCompetingRegistration wiring", () => {
     // halves both did nothing (a failed bootout on an already-absent
     // manifest) and every other outcome touched nothing on the OS side and
     // must leave the record alone. This drives the captured `removed`
-    // predicate directly against all five `CompetingRegistrationRetirement`
+    // predicate directly against every `CompetingRegistrationRetirement`
     // kinds, rather than relying on whichever one kind a single call
     // happens to produce - the case ablation D targets specifically
     // (`removed: () => false` would flip only the first two).
@@ -276,6 +276,11 @@ describe("withCliInvocationRecord retireCompetingRegistration wiring", () => {
         agentStartRequested: false,
       }),
     ).toBe(true);
+    // Booted out, but the host it ran was still exiting: the registration is
+    // gone all the same.
+    expect(
+      removed({ kind: "removed-host-still-exiting", manifestRemoved: false }),
+    ).toBe(true);
     // Half-retired: the bootout failed but the manifest went.
     expect(
       removed({
@@ -285,6 +290,7 @@ describe("withCliInvocationRecord retireCompetingRegistration wiring", () => {
         bootedOut: false,
         bootoutIndeterminate: false,
         manifestRemoved: true,
+        retiredHostStillExiting: false,
       }),
     ).toBe(true);
     // The other half: evicted, but the manifest could not be removed.
@@ -296,6 +302,7 @@ describe("withCliInvocationRecord retireCompetingRegistration wiring", () => {
         bootedOut: true,
         bootoutIndeterminate: false,
         manifestRemoved: false,
+        retiredHostStillExiting: false,
       }),
     ).toBe(true);
     // Attempted and unconfirmed: a `bootout --wait` timeout kills the waiter
@@ -309,6 +316,7 @@ describe("withCliInvocationRecord retireCompetingRegistration wiring", () => {
         bootedOut: false,
         bootoutIndeterminate: true,
         manifestRemoved: false,
+        retiredHostStillExiting: false,
       }),
     ).toBe(true);
     // Nothing happened: no bootout was attempted (the owner could not be
@@ -322,6 +330,7 @@ describe("withCliInvocationRecord retireCompetingRegistration wiring", () => {
         bootedOut: false,
         bootoutIndeterminate: false,
         manifestRemoved: false,
+        retiredHostStillExiting: false,
       }),
     ).toBe(false);
     expect(removed({ kind: "not-applicable" })).toBe(false);

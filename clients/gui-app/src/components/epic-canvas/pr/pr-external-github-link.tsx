@@ -13,7 +13,7 @@ import { onMiddleClick } from "@/lib/dom/on-middle-click";
  *
  * A click landing while the OS handoff is still in flight is dropped, and the
  * anchor reports `aria-disabled` meanwhile: each call fires a fresh bridge
- * request, so a double click would otherwise open the browser twice (R10).
+ * request, so a double click would otherwise open the browser twice.
  */
 export function PrExternalGitHubLink(props: {
   readonly href: string;

@@ -107,6 +107,20 @@ export function settingsSectionPath(section: SettingsSectionId): string {
   return `${SETTINGS_PATH_PREFIX}/${section}`;
 }
 
+/**
+ * Whether `pathname` is a Settings route, which is what makes a Settings
+ * surface showing it the OWNER of the route: it then draws that route's
+ * section in preference to its remembered path (`SettingsSurface`).
+ *
+ * The surface that reads the rule and the mover that has to respect it share
+ * this one spelling of it. Two spellings is how they came apart: a mover that
+ * only remembered the path moved every presentation except the one owning the
+ * route, which is the one it was most likely to be moving.
+ */
+export function settingsOwnsPath(pathname: string): boolean {
+  return pathname.startsWith(SETTINGS_PATH_PREFIX);
+}
+
 export function settingsSectionFromPath(
   pathname: string | null,
 ): SettingsSectionId {

@@ -748,10 +748,6 @@ function ConnectForm(props: {
 }
 
 /**
- * A single choice is not a choice: with one way in, the picker would be a
- * control whose only job is to display a constant.
- */
-/**
  * Shown BEFORE the fields, not in place of them: what already supplies this
  * provider's credential outranks what the user is about to save, but the
  * sign-in is still legitimate and still stored.
@@ -767,6 +763,10 @@ function PrecedenceNotice(props: {
   );
 }
 
+/**
+ * A single choice is not a choice: with one way in, the picker would be a
+ * control whose only job is to display a constant.
+ */
 function MethodPicker(props: {
   readonly choices: readonly ConnectChoice[];
   readonly selectedId: string;

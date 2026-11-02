@@ -8,6 +8,7 @@ import {
 import type { ArtifactObjectRef } from "@traycer/protocol/persistence/epic/artifacts";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
+import { useReactiveLocalHostId } from "@/hooks/host/use-reactive-local-host-id";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import {
@@ -32,11 +33,86 @@ export function MediaArtifactContent(props: {
   readonly readSpan: ArtifactReadSpan;
 }) {
   const runnerHost = useRunnerHostOrNull();
-  return runnerHost !== null && runnerHost.sandboxArtifacts !== null ? (
+  const bridge = runnerHost?.sandboxArtifacts ?? null;
+  const source = useMediaSource(props, bridge !== null);
+  if (source === null) return <MediaStatus loading />;
+  return source === "host" && runnerHost !== null && bridge !== null ? (
     <NativeMediaContent {...props} runnerHost={runnerHost} />
   ) : (
     <CloudMediaContent {...props} />
   );
+}
+
+type MediaSource = "host" | "cloud";
+
+const PROBE_DEADLINE_MS = 1_000;
+
+/**
+ * Where this viewing takes its bytes from, settled once so an object that
+ * publishes while it plays keeps its mount.
+ *
+ * A published object's bytes live in the cloud, and every host mirrors them
+ * to its own disk in the background. The player should never wait on that
+ * mirror, and never route bytes through a machine whose disk is not the
+ * viewer's: relaying spans through another host hands the player base64
+ * unary replies under the 30 s remote deadline, which is how a 5 MB recording
+ * became unplayable on a bad link. So another machine's host answers with
+ * its cloud URL, and this machine's host is asked for one byte: the byte
+ * means the file is on its disk and plays from there for free; any other
+ * answer, a failed probe, or no answer within {@link PROBE_DEADLINE_MS}
+ * means it plays from the cloud this time while the host finishes fetching
+ * it for the next. The deadline matters because a host asked for a sha it
+ * does not hold starts the fetch and holds the reply up to 3 s before saying
+ * so. An unpublished object exists only on its host.
+ */
+function useMediaSource(
+  props: {
+    readonly epicId: string;
+    readonly hostId: string;
+    readonly object: MediaObject;
+  },
+  hasBridge: boolean,
+): MediaSource | null {
+  // `null` until the binding resolves, which is not yet "another machine".
+  const localHostId = useReactiveLocalHostId();
+  const isLocalHost = localHostId !== null && props.hostId === localHostId;
+  const [source, setSource] = useState<MediaSource | null>(() => {
+    if (!hasBridge) return "cloud";
+    if (props.object.status !== "published") return "host";
+    return localHostId !== null && !isLocalHost ? "cloud" : null;
+  });
+  const client = useHostClientForHostId(props.hostId);
+  // Each viewing asks afresh: an earlier viewing's cached answer, or its probe
+  // still in flight, says nothing about whether the file is on disk now.
+  const [probeViewing] = useState(() => crypto.randomUUID());
+  const probe = useHostQuery({
+    client,
+    method: "epic.readArtifactObject",
+    params: {
+      epicId: props.epicId,
+      sha256: props.object.sha256,
+      want: { kind: "range", offset: 0, length: 1 },
+    },
+    cacheKeyIdentity: [probeViewing],
+    options: { enabled: source === null && isLocalHost, staleTime: 0 },
+  });
+  useEffect(() => {
+    if (source !== null) return;
+    const timer = setTimeout(() => setSource("cloud"), PROBE_DEADLINE_MS);
+    return () => clearTimeout(timer);
+  }, [source]);
+  // Latched during render from the first answer: the method's policy keeps
+  // polling a `downloading` answer, and a later "bytes" must not move a
+  // playing element off the cloud.
+  const answer = probe.data?.kind;
+  if (source === null) {
+    if (localHostId !== null && !isLocalHost) {
+      setSource("cloud");
+    } else if (isLocalHost && (answer !== undefined || probe.isError)) {
+      setSource(answer === "bytes" ? "host" : "cloud");
+    }
+  }
+  return source;
 }
 
 function NativeMediaContent(props: {

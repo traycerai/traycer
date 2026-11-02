@@ -1106,7 +1106,7 @@ describe("Recent filters leave Attention invariant", () => {
   });
 
   it("drops a global row from Recent immediately after store markAsRead while unreadOnly is active", () => {
-    // Regression for the T03 review: reading global entries via the store
+    // Regression: reading global entries via the store
     // must invalidate the filtered Recent projection. Going through
     // useMergedNotificationsActions would mask a missing entries dep.
     seedGlobal([globalEntry("collab-unread", 60, null)]);

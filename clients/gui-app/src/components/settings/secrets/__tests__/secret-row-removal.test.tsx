@@ -1,3 +1,13 @@
+const toastCall = vi.hoisted(() => vi.fn<(message: string) => string>());
+vi.mock("sonner", () => ({
+  toast: Object.assign(toastCall, {
+    info: toastCall,
+    message: toastCall,
+    success: toastCall,
+    warning: toastCall,
+    error: toastCall,
+  }),
+}));
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useHostClient: () => requireTeamHostClient(),
@@ -36,6 +46,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   EnvironmentSecretV12,
+  EnvironmentSecretRemoval,
   EnvironmentSecretRemovalV12,
   EnvironmentSecretsDestroyResponseV11,
   SecretVersion,
@@ -122,11 +133,31 @@ function removal(
   };
 }
 
+/** The versions read (@1.1) carries no host failure; only the list (@1.2) does. */
+function withoutFailures(
+  full: EnvironmentSecretRemovalV12,
+): EnvironmentSecretRemoval {
+  return {
+    ...full,
+    targets: full.targets.map((target) => ({
+      target: target.target,
+      hostId: target.hostId,
+      hostName: target.hostName,
+      state: target.state,
+      at: target.at,
+    })),
+  };
+}
+
 interface Host {
   removal: EnvironmentSecretRemovalV12 | null;
   /** The host finishes the removal when it answers a destroy. */
   finishesOnDestroy: boolean;
   destroyAnswer: EnvironmentSecretsDestroyResponseV11;
+  /** Runs when a destroy is answered, to change what the next versions read says. */
+  onDestroy: (() => void) | null;
+  /** The versions read fails: set by `onDestroy` to fail the read after a destroy. */
+  versionsFail: boolean;
   secrets: EnvironmentSecretV12[];
   /** The list's `removed`: secrets revoked within the last 30 days. */
   removed: {
@@ -155,12 +186,16 @@ function mountRowAs(host: Host, role: "viewer" | "editor"): TeamPageHarness {
       secrets: host.secrets,
       removed: host.removed,
     }),
-    "environment.secrets.versions": () => ({
-      versions: versionsFixture(),
-      removal: host.removal,
-    }),
+    "environment.secrets.versions": () => {
+      if (host.versionsFail) throw new Error("the host is unreachable");
+      return {
+        versions: versionsFixture(),
+        removal: host.removal === null ? null : withoutFailures(host.removal),
+      };
+    },
     "environment.secrets.destroy": () => {
       if (host.finishesOnDestroy) host.removal = removal("destroyed");
+      if (host.onDestroy !== null) host.onDestroy();
       return host.destroyAnswer;
     },
     "environment.secrets.rotation": () => ({
@@ -240,6 +275,8 @@ function freshHost(overrides: Partial<Host>): Host {
     removal: null,
     finishesOnDestroy: false,
     destroyAnswer: { outcome: "revoked" },
+    onDestroy: null,
+    versionsFail: false,
     secrets: [secretFixture()],
     removed: [],
     ...overrides,
@@ -253,6 +290,7 @@ function destroyCalls(harness: TeamPageHarness) {
 }
 
 beforeEach(() => {
+  toastCall.mockClear();
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(new Date(2026, 9, 25, 12, 0));
   useSettingsEnvironmentPickStore.setState({ pick: null });
@@ -429,6 +467,7 @@ describe("a secret with a removal", () => {
       expect(screen.queryByTestId("secret-row")).toBeNull();
     });
     expect(destroyCalls(harness)).toEqual([]);
+    expect(toastCall).not.toHaveBeenCalled();
   });
 
   it("counts the hosts still holding a copy", async () => {
@@ -628,11 +667,61 @@ describe("a removed secret the list has moved to removed", () => {
     expect(screen.queryByTestId("secrets-empty")).toBeNull();
   });
 
-  it("shows the empty state to a viewer who cannot see a pending removal row", async () => {
+  // NEW-154-24: a viewer saw an empty page while a removal was still under
+  // way. They see the name and its state, and none of the editor's row.
+  it("shows a viewer a removal still under way, without the editor's row", async () => {
     mountRowAs(removedHost(removal("cleanup_requested")), "viewer");
 
-    expect(await screen.findByTestId("secrets-empty")).toBeTruthy();
+    expect(await screen.findByText("STRIPE_KEY")).toBeTruthy();
+    expect(screen.getByText("Removing · no longer usable")).toBeTruthy();
     expect(screen.queryByTestId("removed-secret-row")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    expect(screen.queryByTestId("secrets-empty")).toBeNull();
+    expect(screen.queryByText("No secrets.")).toBeNull();
+  });
+
+  // The ordinary way a secret is rotated by hand: remove it, set it again
+  // under the same name. For the span before the old copy is destroyed the
+  // list carries both, and a viewer's list is the one place they are rendered
+  // side by side — so the two have to be two rows, not one name twice.
+  it("gives a viewer both rows when a removed secret's name is set again", async () => {
+    const keyWarnings: unknown[][] = [];
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation((...args: unknown[]) => {
+        keyWarnings.push(args);
+      });
+    try {
+      mountRowAs(
+        freshHost({
+          secrets: [{ ...secretFixture(), secretId: "sec-2" }],
+          removed: [
+            {
+              id: "sec-1",
+              name: "STRIPE_KEY",
+              removal: removal("cleanup_requested"),
+            },
+          ],
+          removal: removal("cleanup_requested"),
+        }),
+        "viewer",
+      );
+
+      expect(
+        await screen.findByText("Removing · no longer usable"),
+      ).toBeTruthy();
+      expect(screen.getByText("Set")).toBeTruthy();
+      expect(screen.getAllByText("STRIPE_KEY")).toHaveLength(2);
+      expect(
+        keyWarnings.filter((args) =>
+          args.some(
+            (arg) => typeof arg === "string" && arg.includes("same key"),
+          ),
+        ),
+      ).toEqual([]);
+    } finally {
+      consoleError.mockRestore();
+    }
   });
 
   it("counts the hosts still holding a copy", async () => {
@@ -710,5 +799,197 @@ describe("a removed secret the list has moved to removed", () => {
       "This is the current value. Replace or revoke it first.",
     );
     expect(destroyCalls(harness)).toHaveLength(1);
+  });
+});
+
+describe("Retry on a removal still waiting for a host", () => {
+  const WAITING =
+    "Still waiting for e2e-sbx-t1. It deletes its copy the next time it's reachable.";
+
+  function waitingOn(...names: string[]): EnvironmentSecretRemovalV12 {
+    const [first] = removal("cleanup_requested").targets;
+    return {
+      ...removal("cleanup_requested"),
+      targets: names.map((name) => ({
+        ...first,
+        hostId: `host-${name}`,
+        hostName: name,
+      })),
+    };
+  }
+
+  function methodOrder(harness: TeamPageHarness): string[] {
+    return harness.messenger.calls
+      .map((call) => call.method)
+      .filter(
+        (method) =>
+          method === "environment.secrets.versions" ||
+          method === "environment.secrets.destroy",
+      );
+  }
+
+  async function retry(): Promise<void> {
+    const status = await screen.findByTestId("secret-removal-status");
+    await userEvent
+      .setup()
+      .click(within(status).getByRole("button", { name: "Retry" }));
+  }
+
+  it("says the unchanged host is still waited on, after re-reading the versions the destroy left", async () => {
+    const host = freshHost({ removal: waitingOn("e2e-sbx-t1") });
+    const harness = mountRow(host);
+
+    await retry();
+
+    await waitFor(() => {
+      expect(toastCall).toHaveBeenCalledTimes(1);
+    });
+    expect(toastCall).toHaveBeenCalledWith(WAITING);
+    expect(destroyCalls(harness)).toHaveLength(1);
+    const order = methodOrder(harness);
+    expect(order.lastIndexOf("environment.secrets.versions")).toBeGreaterThan(
+      order.indexOf("environment.secrets.destroy"),
+    );
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("keeps the same sentence for the same host on a removed row", async () => {
+    const waiting = waitingOn("e2e-sbx-t1");
+    mountRow(
+      freshHost({
+        secrets: [],
+        removed: [{ id: "sec-1", name: "STRIPE_KEY", removal: waiting }],
+        removal: waiting,
+      }),
+    );
+
+    await retry();
+
+    await waitFor(() => {
+      expect(toastCall).toHaveBeenCalledWith(WAITING);
+    });
+  });
+
+  it("says nothing stale when the retry completed the removal", async () => {
+    const harness = mountRow(
+      freshHost({ removal: waitingOn("e2e-sbx-t1"), finishesOnDestroy: true }),
+    );
+
+    await retry();
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("secret-row")).toBeNull();
+    });
+    expect(destroyCalls(harness)).toHaveLength(1);
+    await waitFor(() => {
+      expect(harness.queryClient.isMutating()).toBe(0);
+    });
+    expect(toastCall).not.toHaveBeenCalled();
+  });
+
+  it("says nothing stale when the set of hosts waited on changed", async () => {
+    const host = freshHost({ removal: waitingOn("e2e-sbx-t1", "laptop") });
+    host.onDestroy = () => {
+      host.removal = waitingOn("e2e-sbx-t1");
+    };
+    const harness = mountRow(host);
+
+    await retry();
+
+    await waitFor(() => {
+      expect(destroyCalls(harness)).toHaveLength(1);
+    });
+    await waitFor(() => {
+      expect(harness.queryClient.isFetching()).toBe(0);
+    });
+    await waitFor(() => {
+      expect(harness.queryClient.isMutating()).toBe(0);
+    });
+    expect(toastCall).not.toHaveBeenCalled();
+  });
+
+  it("keeps a refusal as the row's error and shows no waiting message", async () => {
+    const harness = mountRow(
+      freshHost({
+        removal: waitingOn("e2e-sbx-t1"),
+        destroyAnswer: { outcome: "refused", code: "version_current" },
+      }),
+    );
+
+    await retry();
+
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "This is the current value. Replace or revoke it first.",
+    );
+    expect(destroyCalls(harness)).toHaveLength(1);
+    expect(toastCall).not.toHaveBeenCalled();
+  });
+
+  it("re-reads the secret after a destroy even when the follow-up versions read fails, with no error for a destroy that went through", async () => {
+    const host = freshHost({ removal: waitingOn("e2e-sbx-t1") });
+    host.onDestroy = () => {
+      host.versionsFail = true;
+    };
+    const harness = mountRow(host);
+    await screen.findByTestId("secret-removal-status");
+    const listReads = harness.paramsOf("environment.secrets.list").length;
+
+    await retry();
+
+    await waitFor(() => {
+      expect(
+        harness.paramsOf("environment.secrets.list").length,
+      ).toBeGreaterThan(listReads);
+    });
+    expect(destroyCalls(harness)).toHaveLength(1);
+    await waitFor(() => {
+      expect(harness.queryClient.isMutating()).toBe(0);
+    });
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(toastCall).not.toHaveBeenCalled();
+  });
+
+  it("keeps the list's host failure line and says nothing more when a Retry changed nothing", async () => {
+    const failing = waitingOn("e2e-sbx-t1");
+    const listed: EnvironmentSecretRemovalV12 = {
+      ...failing,
+      targets: failing.targets.map((target) => ({ ...target, failedAt: AT })),
+    };
+    const harness = mountRow(
+      freshHost({
+        secrets: [],
+        removed: [{ id: "sec-1", name: "STRIPE_KEY", removal: listed }],
+        removal: listed,
+      }),
+    );
+
+    await retry();
+
+    await waitFor(() => {
+      expect(destroyCalls(harness)).toHaveLength(1);
+    });
+    await waitFor(() => {
+      expect(harness.queryClient.isFetching()).toBe(0);
+    });
+    await waitFor(() => {
+      expect(harness.queryClient.isMutating()).toBe(0);
+    });
+    expect(screen.getByTestId("secret-removal-status").textContent).toContain(
+      "e2e-sbx-t1 couldn't delete its copy",
+    );
+    expect(toastCall).not.toHaveBeenCalled();
+  });
+
+  it("counts the hosts when more than one is unchanged", async () => {
+    mountRow(freshHost({ removal: waitingOn("e2e-sbx-t1", "laptop") }));
+
+    await retry();
+
+    await waitFor(() => {
+      expect(toastCall).toHaveBeenCalledTimes(1);
+    });
+    expect(toastCall).toHaveBeenCalledWith(
+      "Still waiting for 2 hosts. They delete their copies the next time they're reachable.",
+    );
   });
 });

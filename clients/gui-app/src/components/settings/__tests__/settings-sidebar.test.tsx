@@ -88,6 +88,7 @@ vi.mock("@/components/settings/move-sheet", () => ({
 // The rows have their own suite; a Personal pick names no team.
 vi.mock("@/components/settings/environment/team-pick-label", () => ({
   usePickedTeamLabel: () => null,
+  useInvitedTeamName: () => null,
 }));
 vi.mock("@/components/settings/environment/team-rows", () => ({
   TeamRows: () => null,

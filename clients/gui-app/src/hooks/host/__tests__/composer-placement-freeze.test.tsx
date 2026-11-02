@@ -8,7 +8,7 @@ import {
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 
 /**
- * F4: a composer's SUBMIT client must be frozen to the resolved host, while
+ * A composer's SUBMIT client must be frozen to the resolved host, while
  * its READ client stays mutable.
  *
  * The bug this guards is invisible to any single-RPC test. A following
@@ -136,7 +136,7 @@ describe("composer placement freezes its submit client", () => {
     expect(result.current.submitTarget.client?.getActiveHostId()).toBe(
       "host-row",
     );
-    // §55: a caller-supplied host is a pin for D6 purposes, so a dead one is
+    // A caller-supplied host is a pin for placement purposes, so a dead one is
     // refusable rather than silently substituted.
     expect(result.current.target.isPinned).toBe(true);
   });

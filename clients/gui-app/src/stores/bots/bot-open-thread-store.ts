@@ -47,7 +47,7 @@ export interface BotSentPost {
 
 /**
  * One of the bot's own sessions to open as a read-only chat in place of its
- * channel (Tracy Bots T93): the trunk's (`threadId` `null`) or a thread's,
+ * channel: the trunk's (`threadId` `null`) or a thread's,
  * and the message of it the view lands on (`null`: where it opens).
  * `sendPostId` is a post the session's send wrote (T94): the view lands on
  * that send's card where the session has one, else on `messageId`.
@@ -83,7 +83,7 @@ export function sessionTargetOfTurn(
 }
 
 /**
- * What the bot knows, open in the rail (Tracy Bots T87): read-only, and the
+ * What the bot knows, open in the rail: read-only, and the
  * thread it displaced, which its back button restores (`null` when it
  * displaced none).
  */

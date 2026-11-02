@@ -859,7 +859,7 @@ describe("landing-image-budget module isolation", () => {
 });
 
 /**
- * §3.1: an unmeasured resident root is charged the per-image ceiling, measured
+ * An unmeasured resident root is charged the per-image ceiling, measured
  * at the last free byte rather than asserted as a refusal - a wrong constant
  * fails as surely as a missing one.
  *

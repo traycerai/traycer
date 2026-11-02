@@ -66,27 +66,40 @@ export type HostQueryTanstackOptions<
   ? Omit<BaseHostQueryTanstackOptions<TData>, "retry">
   : BaseHostQueryTanstackOptions<TData>;
 
-export interface UseHostQueryWithResponseMapOptions<
+/**
+ * Everything that decides WHICH cache entry a host query reads: the client
+ * whose serving tier answers, the method, the params and any extra identity.
+ *
+ * Declared apart from the rest of the options because a caller that has to
+ * NAME that entry supplies exactly these and nothing else.
+ */
+export interface HostQueryEntryArgs<
   Registry extends HostRpcRegistry,
   Method extends keyof Registry & keyof HostRpcRegistry & string,
-  TData,
-  TRequestContext = undefined,
 > {
   readonly client: HostRequester<Registry> | null;
   readonly method: Method;
   readonly params: RequestOfMethod<Registry, Method>;
-  /**
-   * Opt into the method's declared response allowance without losing query
-   * cancellation. HostClient rejects values the scheduling policy disallows;
-   * omitted keeps the ordinary transport response deadline.
-   */
-  readonly responseTimeoutMs?: number;
   /**
    * Extra cache identity that is not sent to the host. Use this when the RPC
    * request addresses a stable resource id but the cached representation must
    * vary by a newer content identity, such as a blob hash or revision.
    */
   readonly cacheKeyIdentity: ReadonlyArray<unknown> | undefined;
+}
+
+export interface UseHostQueryWithResponseMapOptions<
+  Registry extends HostRpcRegistry,
+  Method extends keyof Registry & keyof HostRpcRegistry & string,
+  TData,
+  TRequestContext = undefined,
+> extends HostQueryEntryArgs<Registry, Method> {
+  /**
+   * Opt into the method's declared response allowance without losing query
+   * cancellation. HostClient rejects values the scheduling policy disallows;
+   * omitted keeps the ordinary transport response deadline.
+   */
+  readonly responseTimeoutMs?: number;
   /**
    * The wire payload for THIS dispatch, derived from `params` at the moment
    * the request goes out. Omitted (the default) sends `params` itself.
@@ -175,6 +188,71 @@ export type UseHostQueryOptions<
 >;
 
 /**
+ * The cache entry a host query for these arguments reads, and whether the
+ * bound client can execute it.
+ *
+ * The ONE place a host query's key is built. A caller that has to name the
+ * entry a read lands in gets it from here rather than deriving it a second
+ * time: a second derivation agrees until this one moves, and then it silently
+ * names a different entry with every type still checking.
+ */
+function useHostQueryEntry<
+  Registry extends HostRpcRegistry,
+  Method extends keyof Registry & keyof HostRpcRegistry & string,
+>(
+  args: HostQueryEntryArgs<Registry, Method>,
+): { readonly queryKey: QueryKey; readonly canExecute: boolean } {
+  const readiness = useReactiveHostReadiness(args.client);
+  const effectiveHostId = useEffectiveHostId();
+  // Keyed by the tier that ANSWERS, not the host the caller named: the client
+  // routes a pool-only method to the pool and an input-device method to the
+  // selected host whatever requester carried it, so keying by the caller
+  // would file one answer under every host and miss the serving tier's
+  // recovery sweeps.
+  const servingHostId = hostRpcServingTierHostId(
+    args.method,
+    readiness.hostId,
+    readProcessHostRpcTierPlan(),
+    effectiveHostId,
+  );
+  return {
+    queryKey: [
+      ...queryKeys.hostMethod<Registry, Method>(
+        servingHostId,
+        args.method,
+        args.params,
+      ),
+      ...(args.cacheKeyIdentity ?? []),
+    ],
+    canExecute: readiness.canExecute,
+  };
+}
+
+/**
+ * The `queryHash` of the entry a `useHostQuery` with these arguments reads.
+ *
+ * For a caller that has to say "the read I am RENDERING is this one" — holding
+ * evidence against a read, or watching one entry's state. It is computed from
+ * the SAME inputs and the same key builder as the read, in the same render, so
+ * the two move together. A cache-side answer cannot do that: TanStack moves an
+ * observer to its new key in an EFFECT (`useBaseQuery`) while handing the
+ * render its new key's data, so for exactly the render in which the key changes
+ * the cache still has the observer on the old entry — and that is the render a
+ * caller judging freshly-read data decides in.
+ *
+ * Hashed by the query client, so it is the spelling the cache files the entry
+ * under, including the app's own `queryKeyHashFn`.
+ */
+export function useHostQueryEntryHash<
+  Registry extends HostRpcRegistry,
+  Method extends keyof Registry & keyof HostRpcRegistry & string,
+>(args: HostQueryEntryArgs<Registry, Method>): string {
+  const queryClient = useQueryClient();
+  const { queryKey } = useHostQueryEntry<Registry, Method>(args);
+  return queryClient.defaultQueryOptions({ queryKey }).queryHash;
+}
+
+/**
  * Thin typed wrapper over TanStack `useQuery`.
  *
  * Emits a request through the bound `HostClient` every time the active
@@ -223,52 +301,48 @@ export function useHostQueryWithResponseMap<
   const queryClient = useQueryClient();
   const conditionPollCoordinator =
     getConditionPollEpisodeCoordinator(queryClient);
-  const readiness = useReactiveHostReadiness(client);
-  const effectiveHostId = useEffectiveHostId();
+  const { queryKey, canExecute } = useHostQueryEntry<Registry, Method>({
+    client,
+    method,
+    params,
+    cacheKeyIdentity: args.cacheKeyIdentity,
+  });
   const baseOptions = args.options ?? {};
   const { meta, poll, select, ...queryOptionsWithoutReservedFields } =
     baseOptions;
   const pollPolicy = HOST_METHOD_POLL_TABLE[method].poll;
   let tablePollingOptions:
     | {
-        readonly refetchInterval: ConditionPollRefetchInterval | false;
+        readonly refetchInterval: ConditionPollRefetchInterval;
         readonly retry: false;
       }
+    | { readonly refetchInterval: false }
     | {
         readonly refetchInterval: number | false;
         readonly refetchIntervalInBackground: false;
       }
     | Record<never, never> = {};
   if (pollPolicy !== null && pollPolicy.kind === "condition") {
-    tablePollingOptions = {
-      refetchInterval:
-        poll === false
-          ? false
-          : conditionPollCoordinator.refetchIntervalFor(method),
-      retry: false,
-    };
+    // `retry: false` belongs to the BRANDED poller, whose episode re-asks on
+    // its error lanes - which is why the coordinator asks for it of that
+    // observer alone. A reader that opts out owns no episode, so those lanes
+    // can never recover it: it keeps the ordinary retry, the only recovery it
+    // has left, and a single transient failure does not freeze it on a stale
+    // answer until some other producer happens to read the key.
+    tablePollingOptions =
+      poll === false
+        ? { refetchInterval: false }
+        : {
+            refetchInterval:
+              conditionPollCoordinator.refetchIntervalFor(method),
+            retry: false,
+          };
   } else if (pollPolicy !== null) {
     tablePollingOptions = {
       refetchInterval: poll === true ? pollPolicy.intervalMs : false,
       refetchIntervalInBackground: false,
     };
   }
-  // Keyed by the tier that ANSWERS, not the host the caller named: the client
-  // routes a pool-only method to the pool and an input-device method to the
-  // selected host whatever requester carried it, so keying by the caller
-  // would file one answer under every host and miss the serving tier's
-  // recovery sweeps.
-  const servingHostId = hostRpcServingTierHostId(
-    method,
-    readiness.hostId,
-    readProcessHostRpcTierPlan(),
-    effectiveHostId,
-  );
-  const queryKey: QueryKey = [
-    ...queryKeys.hostMethod<Registry, Method>(servingHostId, method, params),
-    ...(args.cacheKeyIdentity ?? []),
-  ];
-
   // The boundary normalizes every non-control-flow failure into the declared
   // `HostRpcError`, including throws from caller-supplied `mapResponse`.
   // Coordinator control flow deliberately remains TanStack cancellation.
@@ -340,7 +414,7 @@ export function useHostQueryWithResponseMap<
       // collapsed to a boolean up front - or a caller's dynamic condition is
       // silently replaced by "always true" the moment a client is bound.
       enabled: (query) => {
-        if (client === null || !readiness.canExecute) return false;
+        if (client === null || !canExecute) return false;
         const callerEnabled = args.options?.enabled;
         return typeof callerEnabled === "function"
           ? callerEnabled(query)

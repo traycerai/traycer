@@ -2,7 +2,7 @@
  * The main-thread half of the accounting seam.
  *
  * The worker reports its bytes as pushes; this turns them back into calls on
- * the real, process-backed {@link EpicRuntimeAccountingPort}, so T5's books see
+ * the real, process-backed {@link EpicRuntimeAccountingPort}, so the books see
  * a worker-resident runtime exactly as they see an in-process one. Everything
  * about identity - the runtime token, the book key, the four holder-id families
  * - stays where it already was, inside the process-backed port. Nothing about

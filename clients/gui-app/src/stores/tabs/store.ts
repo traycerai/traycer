@@ -54,6 +54,11 @@ import type { SystemTab, TabRef } from "@/stores/tabs/types";
 import { isHomeTabEnabled } from "@/stores/layout/layout-store";
 import { canMutateTabSplits } from "@/stores/tabs/tab-split-compatibility";
 import { isTabStructurallyLocked } from "@/stores/tabs/tab-structural-lock";
+import {
+  collapseTracyRefs,
+  legacyActiveBotIdOf,
+} from "@/stores/tabs/tracy-layout-migration";
+import { adoptLegacyActiveBotTab } from "@/stores/bots/tracy-surface-store";
 
 export type PersistedTabsStoreState = PersistedTabStripLayout;
 
@@ -295,27 +300,42 @@ function firstRefPosition(
   );
 }
 
+/**
+ * Reads a persisted layout - this store's own, or a desktop window's
+ * snapshot - into the current shape. A layout from before the Tracy surface
+ * names a bot tab per bot; each is read as the surface's one ref and the
+ * duplicates collapsed (`collapseTracyRefs`), and the bot tab that was active
+ * carries its channel and host onto the surface (`adoptLegacyActiveBotTab`),
+ * all before the layout is restored or reconciled.
+ */
 export function migrateTabsPersistedState(
   value: unknown,
 ): PersistedTabsStoreState {
   if (!isRecord(value)) return committedLayout(emptyTabStripLayout());
+  const legacyActiveBotId = legacyActiveBotIdOf(value);
+  if (legacyActiveBotId !== null) adoptLegacyActiveBotTab(legacyActiveBotId);
   const systemTabs = parseSystemTabs(value.systemTabs);
   const v2Items = Array.isArray(value.items)
     ? value.items.flatMap(parseStripItem)
     : null;
   if (v2Items !== null) {
-    return committedLayout({
-      version: 2,
-      items: v2Items,
-      activeItemId:
-        typeof value.activeItemId === "string" ? value.activeItemId : null,
-      systemTabs,
-      customizations: parseTabCustomizations(value.customizations),
-      groups: parseTabGroups(value.groups),
-      activationHistory: Array.isArray(value.activationHistory)
-        ? value.activationHistory.flatMap(parseTabRef)
-        : undefined,
-    });
+    return committedLayout(
+      collapseTracyRefs(
+        {
+          version: 2,
+          items: v2Items,
+          activeItemId:
+            typeof value.activeItemId === "string" ? value.activeItemId : null,
+          systemTabs,
+          customizations: parseTabCustomizations(value.customizations),
+          groups: parseTabGroups(value.groups),
+          activationHistory: Array.isArray(value.activationHistory)
+            ? value.activationHistory.flatMap(parseTabRef)
+            : undefined,
+        },
+        legacyActiveBotId,
+      ),
+    );
   }
   const legacyRefs = Array.isArray(value.stripOrder)
     ? value.stripOrder.flatMap(parseTabRef)
@@ -351,7 +371,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function parseTabRef(value: unknown): ReadonlyArray<TabRef> {
   if (!isRecord(value)) return [];
   if (typeof value.kind !== "string" || typeof value.id !== "string") return [];
-  if (!isRegisteredTabKind(value.kind) || value.id.length === 0) return [];
+  if (value.id.length === 0) return [];
+  // A bot tab from before the Tracy surface is the surface now
+  // (`collapseTracyRefs` keeps one).
+  if (value.kind === "bot") return [{ kind: "tracy", id: "tracy" }];
+  if (!isRegisteredTabKind(value.kind)) return [];
+  if (value.kind === "tracy" && value.id !== "tracy") return [];
   if (value.kind === "history" && value.id !== "history") return [];
   if (value.kind === "settings" && value.id !== "settings") return [];
   // Home is never persisted as a strip ref; `repairLayout` would drop one

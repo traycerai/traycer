@@ -82,7 +82,7 @@ function chipText(): string {
 }
 
 describe("the team page chip", () => {
-  it("says No hosts yet while the team has no host", async () => {
+  it("says the team is on no host while it has none", async () => {
     const harness = mountTeamPage(poolSource("editor"), {
       "environment.host.list": () => ({ hosts: [] }),
     });
@@ -94,7 +94,7 @@ describe("the team page chip", () => {
     );
 
     await waitFor(() => {
-      expect(chipText()).toBe("No hosts yet");
+      expect(chipText()).toBe("Not on any host");
     });
   });
 

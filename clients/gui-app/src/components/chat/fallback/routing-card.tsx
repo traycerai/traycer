@@ -240,7 +240,7 @@ function CountdownRoutingCard({
   }, [chatId, epicId, pending.revision, pending.traversalId, proceed]);
 
   // `switching` has committed: no window is left to act in. A plan the host is
-  // still resolving disables the row too (spec Flow 1, "Still deciding"), and
+  // still resolving disables the row too ("Still deciding"), and
   // says so beside it.
   const committed = pending.state === "switching";
   const busy = signIn.cancelPending || proceed.isPending;

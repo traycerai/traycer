@@ -172,7 +172,7 @@ export class FakeStreamSession implements IStreamSession {
     if (this.statusHandler === null) {
       throw new Error("the command installed no onStatusChange handler");
     }
-    this.statusHandler(status, reason, null);
+    this.statusHandler(status, reason, null, null);
   }
 }
 

@@ -9,8 +9,8 @@ import {
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 
 /**
- * The in-Epic new-conversation modal's placement (user ruling 2026-08-18,
- * Codex #1243 T-48): the landing composer's chip pattern, resolved per EPIC
+ * The in-Epic new-conversation modal's placement (user ruling 2026-08-18):
+ * the landing composer's chip pattern, resolved per EPIC
  * with a memory tier -
  *
  *     override ?? pin(epic) ?? Epic session's host ?? effective

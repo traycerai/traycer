@@ -1,7 +1,7 @@
 import { v4 as uuidv4 } from "uuid";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
-import type { CreateChatInitialMessageV12 } from "@traycer/protocol/host/epic/unary-schemas";
+import type { CreateChatInitialMessageV14 } from "@traycer/protocol/host/epic/unary-schemas";
 import type { WorktreeIntent } from "@traycer/protocol/host/worktree-schemas";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 
@@ -75,7 +75,7 @@ export interface StartSideChatArgs {
   /** The prompt with the command stripped; empty for a bare `/btw`. */
   readonly content: JsonContent;
   readonly settings: ChatRunSettings;
-  readonly accountContext: CreateChatInitialMessageV12["accountContext"];
+  readonly accountContext: CreateChatInitialMessageV14["accountContext"];
   /** The source chat's visible workspace, so the fork works in the same place. */
   readonly worktreeIntent: WorktreeIntent | null;
   readonly placement: ExplicitTilePlacement | null;
@@ -112,7 +112,7 @@ export function startSideChat(args: StartSideChatArgs): CancelFn {
       createdAt: now,
     });
   }
-  const initialMessage: CreateChatInitialMessageV12 | null = hasMessage
+  const initialMessage: CreateChatInitialMessageV14 | null = hasMessage
     ? {
         messageId,
         clientActionId,

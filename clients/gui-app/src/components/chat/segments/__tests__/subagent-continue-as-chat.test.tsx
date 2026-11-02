@@ -34,6 +34,7 @@ import type {
 
 function settings(harnessId: ChatRunSettings["harnessId"]): ChatRunSettings {
   return {
+    ultracode: false,
     harnessId,
     model: "model-1",
     permissionMode: "supervised",

@@ -1,5 +1,5 @@
 import type { ButtonHTMLAttributes, Ref } from "react";
-import { ChevronDown, Zap } from "lucide-react";
+import { ChevronDown, Network, Zap } from "lucide-react";
 import { ToolbarPillButton } from "@/components/home/toolbar/toolbar-buttons";
 import { HarnessIcon } from "@/components/home/pickers/harness-icon";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
@@ -11,7 +11,7 @@ import {
 } from "@/components/home/pickers/harness-model-picker-presentation";
 import { ReasoningBarsGlyph } from "@/components/home/pickers/reasoning-bars-glyph";
 import type { ProfileAccentDotInput } from "@/components/providers/provider-profile-model";
-import type { ModelStyle } from "@/lib/layout/layout-values";
+import type { ModelStyle, UltracodeStyle } from "@/lib/layout/layout-values";
 import { cn } from "@/lib/utils";
 
 interface HarnessModelTriggerProps extends Omit<
@@ -33,6 +33,11 @@ interface HarnessModelTriggerProps extends Omit<
   reasoningIndicator: ModelStyle;
   serviceTierLabel: string | null;
   serviceTierActive: boolean;
+  /**
+   * How the chip draws the chat's Ultracode request (Layout ▸ Model ▸
+   * Ultracode), or `null` when there is no request the model offers.
+   */
+  ultracode: UltracodeStyle | null;
   maxModeRequired?: boolean;
   profileLabel: string | null;
   /** Bottom-right corner dot on the harness icon (`AccentDot`).
@@ -58,6 +63,7 @@ function triggerSummary(input: {
   readonly reasoningLabel: string | null;
   readonly serviceTierLabel: string | null;
   readonly serviceTierActive: boolean;
+  readonly ultracode: UltracodeStyle | null;
   readonly maxModeRequired: boolean | undefined;
   readonly profileLabel: string | null;
 }): string {
@@ -69,6 +75,7 @@ function triggerSummary(input: {
     input.label,
     input.reasoningLabel === null ? null : `Thinking ${input.reasoningLabel}`,
     serviceTierSummary,
+    input.ultracode === null ? null : "Ultracode requested",
     input.maxModeRequired ? "Max Mode" : null,
     input.profileLabel,
   ]
@@ -85,6 +92,7 @@ export function HarnessModelTrigger(props: HarnessModelTriggerProps) {
     reasoningIndicator,
     serviceTierLabel,
     serviceTierActive,
+    ultracode,
     maxModeRequired,
     profileLabel,
     profileAccentDot,
@@ -110,6 +118,7 @@ export function HarnessModelTrigger(props: HarnessModelTriggerProps) {
     reasoningLabel,
     serviceTierLabel,
     serviceTierActive,
+    ultracode,
     maxModeRequired,
     profileLabel,
   });
@@ -126,6 +135,7 @@ export function HarnessModelTrigger(props: HarnessModelTriggerProps) {
       className={cn(
         "max-w-[min(50cqw,18rem)] min-w-0 justify-start",
         collapseWhenNarrow &&
+          ultracode === null &&
           "@max-lg:size-7 @max-lg:justify-center @max-lg:px-0",
       )}
       {...rest}
@@ -196,10 +206,48 @@ export function HarnessModelTrigger(props: HarnessModelTriggerProps) {
           {reasoningLabel}
         </span>
       )}
+      {ultracode === null ? null : (
+        <UltracodeMark variant={ultracode} narrowHidden={narrowHidden} />
+      )}
       <ChevronDown
         className={cn("size-3.5 shrink-0 text-muted-foreground", narrowHidden)}
       />
     </ToolbarPillButton>
+  );
+}
+
+/**
+ * The request after the effort, as Claude Code's own status line writes it,
+ * drawn as the word, an icon, or both. It stays when the rest of the label
+ * collapses, so a narrow chip still shows the request; only the separator
+ * goes with the label.
+ */
+function UltracodeMark(props: {
+  readonly variant: UltracodeStyle;
+  readonly narrowHidden: string;
+}) {
+  const { variant, narrowHidden } = props;
+  return (
+    <>
+      <span
+        aria-hidden="true"
+        className={cn("shrink-0 text-muted-foreground/70", narrowHidden)}
+      >
+        ·
+      </span>
+      {variant === "text" ? null : (
+        <Network
+          aria-hidden="true"
+          data-testid="model-ultracode-icon"
+          className="size-3.5 shrink-0 text-muted-foreground"
+        />
+      )}
+      {variant === "icon" ? null : (
+        <span className="shrink-0 whitespace-nowrap text-muted-foreground">
+          Ultracode
+        </span>
+      )}
+    </>
   );
 }
 

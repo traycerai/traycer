@@ -4,7 +4,7 @@
  * `workspace.searchPaths` artifact result.
  *
  * Path resolution is delegated to the SHARED, fail-closed
- * {@link buildArtifactPathIndex} (Ticket 7's `artifact-path-resolver.ts`) so the
+ * {@link buildArtifactPathIndex} (`artifact-path-resolver.ts`) so the
  * two opener flows cannot diverge: a logical path claimed by two or more live
  * artifacts is ambiguous and resolves to NO identity (never first/last-writer
  * wins), so an ambiguous result opens nothing. This module only layers the

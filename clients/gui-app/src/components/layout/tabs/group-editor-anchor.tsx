@@ -35,7 +35,7 @@ export function GroupEditorAnchor(props: {
   const { groupId, group } = props;
   const placement = useColumnOverlayPlacement("row");
   const { open, setOpen } = useGroupEditor(groupId);
-  // The editor can open over the strip's drag spacer (S-44).
+  // The editor can open over the strip's drag spacer.
   useTitleBarDragSuppression(`group-editor:${useId()}`, open);
   return (
     <Popover open={open} onOpenChange={setOpen}>

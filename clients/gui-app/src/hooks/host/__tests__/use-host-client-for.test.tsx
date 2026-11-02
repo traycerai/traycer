@@ -23,7 +23,7 @@ vi.mock("@/hooks/agent/use-host-reachability", () => ({
 }));
 
 // `useHostClientFor` builds a requester for an EXPLICITLY named host, so it
-// reads the spine (redesign P2.1) - never the effective host's own requester.
+// reads the spine - never the effective host's own requester.
 vi.mock("@/lib/host/runtime", () => ({
   useHostRuntimeClient: () => {
     if (globalClientRef.value === null) {

@@ -161,6 +161,89 @@ function stepPlainHistory(history: RouterHistory, direction: -1 | 1): void {
 }
 
 /**
+ * Whether a preserved closed-tile payload still names a record worth
+ * restoring. Lifted out of {@link reopenClosedTilePreview}, whose guard
+ * sequence was over this repo's complexity ceiling; the checks and their order
+ * are unchanged.
+ */
+export function preservedTileRecordIsLive(
+  preserved: ClosedTilePayload,
+  epicId: string,
+  pendingCreateArtifactIds: ReadonlySet<string>,
+): boolean {
+  if (preserved.pendingCreate) return true;
+  const epicHandle = getOpenEpicRegistry().peek(epicId);
+  const hasLiveRecord =
+    epicHandle !== null && epicHandle.store.getState().snapshotLoaded
+      ? (id: string) =>
+          Object.hasOwn(epicHandle.store.getState().tree.nodeById, id)
+      : () => true;
+  // The host whose projection supplies `hasLiveRecord`: the Epic SESSION's
+  // stamped host, falling back to the app-wide effective host only when no
+  // session is live (the imperative twin of `useCanvasHostId`, and the same
+  // identity `useEpicRouteSynchronization` polices with). The two differ for
+  // the whole of a re-point that is establishing or one that failed - the
+  // provider keeps the previous handle rendered, so `records` are still host
+  // A's while the app-wide pointer says B. Reading B here would (a) trip
+  // `isTileRefRecordLive`'s cross-host exemption for every A-bound chat, so the
+  // record check this guard exists to run never runs, and (b) ask the
+  // cloud-known cache under B, a slot no writer for this Epic fills any more.
+  const activeHostId =
+    (epicHandle === null ? null : getEpicSessionHandleHostId(epicHandle)) ??
+    getAppHostClientSnapshot()?.getActiveHostId() ??
+    null;
+  const recordState = epicHandle?.store.getState();
+  const recordListAuthorizesChatAbsence =
+    recordState?.chatRecordListAuthoritative ?? false;
+  const recordListAuthorizesTuiAgentAbsence =
+    recordState?.tuiAgentRecordListAuthoritative ?? false;
+  return isTileRefRecordLive(
+    preserved.node,
+    pendingCreateArtifactIds,
+    {
+      hasLiveRecord,
+      isCloudKnown: cloudKnownPredicate(activeHostId, epicId),
+      recordListAuthorizesChatAbsence,
+      recordListAuthorizesTuiAgentAbsence,
+    },
+    activeHostId,
+  );
+}
+
+/**
+ * The same-host cloud-known exemption, on the one path that has no hooks.
+ *
+ * The route-sync reap and the tab-group-view substitution both get this from a
+ * mounted `useCloudChatList`. This path cannot: it runs inside a synchronous
+ * `history.go` and must answer before the navigation fires. It therefore reads
+ * the slot that hook has already filled - which is not a fallback so much as the
+ * same answer, since the epic tab whose href we are landing on is by definition
+ * open, and its route synchronization mounts that very query for this epic.
+ *
+ * `null` from the cache reader is "no answer that may be acted on", and it maps
+ * to a predicate that says LIVE for every id. Absence of evidence is not
+ * evidence here, and the asymmetry of the two mistakes is what decides it:
+ * refusing the restore calls `discardClosedTilePayload`, which drops the
+ * preserved payload permanently, while restoring a tile whose record really is
+ * gone is loop-safe - route sync closes it and canonicalizes the URL, exactly as
+ * documented for the remote-deletion case above. It is also the rule
+ * `hasLiveRecord` already follows two lines up, where neither "no live session"
+ * nor "snapshot not loaded yet" is allowed to prove a record gone.
+ */
+function cloudKnownPredicate(
+  activeHostId: string | null,
+  epicId: string,
+): (id: string) => boolean {
+  const cloudKnownIds = readCloudKnownChatIds(queryClient, {
+    hostId: activeHostId,
+    viewerUserId: cloudChatViewerIdSnapshot(),
+    taskId: epicId,
+  });
+  if (cloudKnownIds === null) return () => true;
+  return (id: string) => cloudKnownIds.has(id);
+}
+
+/**
  * When the landing entry targets a tile under an OPEN Task that no longer
  * resolves, reopens that tile as a preview BEFORE the router navigation
  * fires. Reuses the preserved payload's ORIGINAL `instanceId` (not a fresh
@@ -202,85 +285,6 @@ function stepPlainHistory(history: RouterHistory, direction: -1 | 1): void {
  *    - accepted: the stale restore that can follow is loop-safe (route sync
  *    closes it and canonicalizes once its session loads).
  */
-/**
- * Whether a preserved closed-tile payload still names a record worth
- * restoring. Lifted out of {@link reopenClosedTilePreview}, whose guard
- * sequence was over this repo's complexity ceiling; the checks and their order
- * are unchanged.
- */
-export function preservedTileRecordIsLive(
-  preserved: ClosedTilePayload,
-  epicId: string,
-  pendingCreateArtifactIds: ReadonlySet<string>,
-): boolean {
-  if (preserved.pendingCreate) return true;
-  const epicHandle = getOpenEpicRegistry().peek(epicId);
-  const hasLiveRecord =
-    epicHandle !== null && epicHandle.store.getState().snapshotLoaded
-      ? (id: string) =>
-          Object.hasOwn(epicHandle.store.getState().tree.nodeById, id)
-      : () => true;
-  // The host whose projection supplies `hasLiveRecord`: the Epic SESSION's
-  // stamped host, falling back to the app-wide effective host only when no
-  // session is live (the imperative twin of `useCanvasHostId`, and the same
-  // identity `useEpicRouteSynchronization` polices with). The two differ for
-  // the whole of a re-point that is establishing or one that failed - the
-  // provider keeps the previous handle rendered, so `records` are still host
-  // A's while the app-wide pointer says B. Reading B here would (a) trip
-  // `isTileRefRecordLive`'s cross-host exemption for every A-bound chat, so the
-  // record check this guard exists to run never runs, and (b) ask the
-  // cloud-known cache under B, a slot no writer for this Epic fills any more.
-  const activeHostId =
-    (epicHandle === null ? null : getEpicSessionHandleHostId(epicHandle)) ??
-    getAppHostClientSnapshot()?.getActiveHostId() ??
-    null;
-  const recordListAuthorizesChatAbsence =
-    epicHandle?.store.getState().chatRecordListAuthoritative ?? false;
-  return isTileRefRecordLive(
-    preserved.node,
-    pendingCreateArtifactIds,
-    {
-      hasLiveRecord,
-      isCloudKnown: cloudKnownPredicate(activeHostId, epicId),
-      recordListAuthorizesChatAbsence,
-    },
-    activeHostId,
-  );
-}
-
-/**
- * The same-host cloud-known exemption, on the one path that has no hooks.
- *
- * The route-sync reap and the tab-group-view substitution both get this from a
- * mounted `useCloudChatList`. This path cannot: it runs inside a synchronous
- * `history.go` and must answer before the navigation fires. It therefore reads
- * the slot that hook has already filled - which is not a fallback so much as the
- * same answer, since the epic tab whose href we are landing on is by definition
- * open, and its route synchronization mounts that very query for this epic.
- *
- * `null` from the cache reader is "no answer that may be acted on", and it maps
- * to a predicate that says LIVE for every id. Absence of evidence is not
- * evidence here, and the asymmetry of the two mistakes is what decides it:
- * refusing the restore calls `discardClosedTilePayload`, which drops the
- * preserved payload permanently, while restoring a tile whose record really is
- * gone is loop-safe - route sync closes it and canonicalizes the URL, exactly as
- * documented for the remote-deletion case above. It is also the rule
- * `hasLiveRecord` already follows two lines up, where neither "no live session"
- * nor "snapshot not loaded yet" is allowed to prove a record gone.
- */
-function cloudKnownPredicate(
-  activeHostId: string | null,
-  epicId: string,
-): (id: string) => boolean {
-  const cloudKnownIds = readCloudKnownChatIds(queryClient, {
-    hostId: activeHostId,
-    viewerUserId: cloudChatViewerIdSnapshot(),
-    taskId: epicId,
-  });
-  if (cloudKnownIds === null) return () => true;
-  return (id: string) => cloudKnownIds.has(id);
-}
-
 function reopenClosedTilePreview(href: string): void {
   const epicTab = parseEpicTabHref(href);
   if (epicTab === null) {

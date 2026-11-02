@@ -142,6 +142,10 @@ vi.mock("@/components/settings/move/environment-sheets-host", () => ({
 vi.mock("@/components/layout/tabs/tracy-entry-controller", () => ({
   TracyEntryController: () => null,
 }));
+// The voice layer resolves the runner host the same way, so it stays unmounted.
+vi.mock("@/components/layout/voice/voice-session-controller", () => ({
+  VoiceSessionController: () => null,
+}));
 
 // The shell's two-finger history swipe reads the desktop bridge through the
 // runner host, which this tree does not build. With no bridge it stays inert.

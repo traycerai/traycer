@@ -19,6 +19,7 @@ const SCOPE: InitialChatHandoffScope = {
 const CHAT_ID = "chat-1";
 const CONTENT: JsonContent = { type: "doc", content: [] };
 const SETTINGS: ChatRunSettings = {
+  ultracode: false,
   harnessId: "codex",
   model: "gpt-5-codex",
   permissionMode: "supervised",

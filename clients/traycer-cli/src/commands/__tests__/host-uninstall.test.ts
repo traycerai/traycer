@@ -1,4 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  SHUTDOWN_FORCE_EXIT_MS,
+  STOP_EXIT_GRACE_MARGIN_MS,
+} from "@traycer/protocol/host/lifecycle-constants";
 import { noopLogger } from "../../logger";
 import { CLI_ERROR_CODES, cliError } from "../../runner/errors";
 import {
@@ -9,11 +13,46 @@ import {
 import type { PublishedProcessIdentityVerdict } from "../../store/process-identity";
 import type { UninstallHostOptions } from "../../installer";
 import {
-  runHostUninstall,
+  runHostUninstall as runHostUninstallCommand,
   stopServiceBeforeRuntimePurge,
   type HostUninstallActuators,
+  type HostUninstallArgs,
+  type RunHostUninstallContext,
   type RunHostUninstallDeps,
 } from "../host-uninstall";
+import type { CommandResult } from "../../runner/runner";
+
+// The host's own shutdown budget: how long a host that is still exiting after
+// the stop is waited on, and no longer.
+const HOST_EXIT_WAIT_MS = SHUTDOWN_FORCE_EXIT_MS + STOP_EXIT_GRACE_MARGIN_MS;
+// Longer than that wait, for a case that does not care about it.
+const PAST_THE_EXIT_WAIT_MS = 2 * HOST_EXIT_WAIT_MS;
+
+beforeEach(() => {
+  vi.useFakeTimers();
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+// The command polls a live host on timers: run them to the end, then settle
+// the command, so a case that does not care about the wait reads as before.
+async function runHostUninstall(
+  args: HostUninstallArgs,
+  ctx: RunHostUninstallContext,
+  deps: RunHostUninstallDeps,
+  actuators: HostUninstallActuators,
+): Promise<CommandResult> {
+  const outcome = runHostUninstallCommand(args, ctx, deps, actuators).then(
+    (result) => ({ result }),
+    (error: unknown) => ({ error }),
+  );
+  await vi.advanceTimersByTimeAsync(PAST_THE_EXIT_WAIT_MS);
+  const settled = await outcome;
+  if ("error" in settled) throw settled.error;
+  return settled.result;
+}
 
 const NOT_INSTALLED_STATUS: ServiceStatus = {
   state: "not-installed",
@@ -361,6 +400,111 @@ describe("runHostUninstall", () => {
     expect(receivedOptions).toEqual([]);
   });
 
+  // The 2026-10 dev teardown: `bootout --wait` returns once launchd has killed
+  // the supervisor, the host (already without a pid.json) is still shutting
+  // down, and the stop resolves at once for lack of a pid to wait on. The
+  // captured pid is the only evidence left.
+  describe("a host still exiting after a stop that resolved at once", () => {
+    function exitingHostDeps(args: {
+      readonly receivedOptions: UninstallHostOptions[];
+      // What each poll answers, in order; the host is gone after the last.
+      readonly polls: readonly PublishedProcessIdentityVerdict[];
+    }): { readonly deps: RunHostUninstallDeps; readonly probes: () => number } {
+      const base = commandDeps({
+        stop: async () => undefined,
+        receivedOptions: args.receivedOptions,
+        status: async () => NOT_INSTALLED_STATUS,
+        liveness: "dead",
+        successorAfterTeardown: null,
+        publishedPid: null,
+      });
+      let probes = 0;
+      return {
+        deps: {
+          ...base,
+          probeProcessExited: async () => {
+            probes += 1;
+            return args.polls[probes - 1] ?? "dead";
+          },
+        },
+        probes: () => probes,
+      };
+    }
+
+    it("waits for the captured host to exit, then removes the install", async () => {
+      const receivedOptions: UninstallHostOptions[] = [];
+      // Entry probe plus a few seconds of polls, then the host is gone.
+      const { deps, probes } = exitingHostDeps({
+        receivedOptions,
+        polls: Array.from({ length: 30 }, () => "current" as const),
+      });
+
+      await runHostUninstall(
+        { all: true, force: false },
+        COMMAND_CONTEXT,
+        deps,
+        testActuators(deps),
+      );
+
+      expect(probes()).toBeGreaterThan(30);
+      expect(receivedOptions).toHaveLength(1);
+    });
+
+    // The identity probe reads liveness, then the start identity: an exit
+    // between the two reads answers `indeterminate` for a dead process.
+    it("keeps waiting for the whole budget when the identity stays indeterminate, then refuses and keeps the install", async () => {
+      const receivedOptions: UninstallHostOptions[] = [];
+      const { deps } = exitingHostDeps({
+        receivedOptions,
+        polls: Array.from({ length: 1_000 }, () => "indeterminate" as const),
+      });
+      let outcome: unknown = null;
+      void runHostUninstallCommand(
+        { all: true, force: false },
+        COMMAND_CONTEXT,
+        deps,
+        testActuators(deps),
+      ).then(
+        () => {
+          outcome = "resolved";
+        },
+        (error: unknown) => {
+          outcome = error;
+        },
+      );
+
+      // Still waiting just before the budget runs out: no early refusal.
+      await vi.advanceTimersByTimeAsync(HOST_EXIT_WAIT_MS - 1);
+      expect(outcome).toBeNull();
+      expect(receivedOptions).toEqual([]);
+
+      // Refused within one poll of the deadline, the install kept.
+      await vi.advanceTimersByTimeAsync(200);
+      expect(outcome).toMatchObject({
+        code: CLI_ERROR_CODES.HOST_UNINSTALL_HOST_RUNNING,
+      });
+      expect(receivedOptions).toEqual([]);
+    });
+
+    it("keeps waiting through an indeterminate poll and removes the install once the host is gone", async () => {
+      const receivedOptions: UninstallHostOptions[] = [];
+      const { deps, probes } = exitingHostDeps({
+        receivedOptions,
+        polls: ["current", "current", "indeterminate", "dead"],
+      });
+
+      await runHostUninstall(
+        { all: true, force: false },
+        COMMAND_CONTEXT,
+        deps,
+        testActuators(deps),
+      );
+
+      expect(probes()).toBe(4);
+      expect(receivedOptions).toHaveLength(1);
+    });
+  });
+
   it("with --force, removes the install even though the host is still serving", async () => {
     const receivedOptions: UninstallHostOptions[] = [];
     const stopOptions: StopServiceOptions[] = [];
@@ -418,14 +562,30 @@ describe("runHostUninstall", () => {
       publishedPid: null,
     });
 
-    await expect(
-      runHostUninstall(
-        { all: true, force: false },
-        COMMAND_CONTEXT,
-        deps,
-        testActuators(deps),
-      ),
-    ).rejects.toMatchObject({
+    let outcome: unknown = null;
+    void runHostUninstallCommand(
+      { all: true, force: false },
+      COMMAND_CONTEXT,
+      deps,
+      testActuators(deps),
+    ).then(
+      () => {
+        outcome = "resolved";
+      },
+      (error: unknown) => {
+        outcome = error;
+      },
+    );
+
+    // Still waiting just before the host's shutdown budget runs out: nothing
+    // refused, nothing removed.
+    await vi.advanceTimersByTimeAsync(HOST_EXIT_WAIT_MS - 1);
+    expect(outcome).toBeNull();
+    expect(receivedOptions).toEqual([]);
+
+    // Refused at the budget, within one poll of it.
+    await vi.advanceTimersByTimeAsync(200);
+    expect(outcome).toMatchObject({
       code: CLI_ERROR_CODES.HOST_UNINSTALL_HOST_RUNNING,
       exitCode: 1,
       details: {

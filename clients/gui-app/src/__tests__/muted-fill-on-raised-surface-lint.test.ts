@@ -43,7 +43,7 @@ const SRC_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
  * that renders one is standing on a card without ever spelling it. Nearly
  * every settings surface in the app is one of those two.
  *
- * `<HoverCard` rather than `HoverCardContent`: G8 rebuilt `ui/hover-card.tsx`
+ * `<HoverCard` rather than `HoverCardContent`: `ui/hover-card.tsx` was rebuilt
  * on Floating UI as a single props-only `HoverCard` component (`trigger` +
  * `content`, no separate `HoverCardContent`), so the old marker now matches
  * nothing and every hover-card call site would silently drop out of scope.

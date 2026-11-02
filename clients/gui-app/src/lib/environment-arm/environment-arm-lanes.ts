@@ -142,10 +142,10 @@ function openLane<State, Frame>(
       reopen.resetBackoff();
       publish(spec.reduce(lane.state, parsed.frame));
     });
-    current.onStatusChange((status, reason) => {
+    current.onStatusChange((status, reason, _retryCause, continuity) => {
       if (session !== current) return;
       if (status === "open") {
-        newestGeneration = -1;
+        if (continuity !== "continued") newestGeneration = -1;
         return;
       }
       if (status !== "closed") return;

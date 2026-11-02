@@ -178,8 +178,8 @@ export interface BrowserTabMentionEntry {
   readonly coordinatorKey: string;
   /**
    * The tab lives on a DIFFERENT host than the chat, so it can only ever be
-   * snapshot context - url, title, screenshot - never a drive handle (spec
-   * decision #10). Picking one attaches an image plus a text line instead of
+   * snapshot context - url, title, screenshot - never a drive handle.
+   * Picking one attaches an image plus a text line instead of
    * emitting a `browser-tab:` token the agent could try to attach to.
    */
   readonly contextOnly: boolean;

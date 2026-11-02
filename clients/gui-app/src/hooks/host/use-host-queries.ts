@@ -272,22 +272,31 @@ export function useHostQueriesWithResponseMap<
     const pollPolicy = HOST_METHOD_POLL_TABLE[request.method].poll;
     let tablePollingOptions:
       | {
-          readonly refetchInterval: ConditionPollRefetchInterval | false;
+          readonly refetchInterval: ConditionPollRefetchInterval;
           readonly retry: false;
         }
+      | { readonly refetchInterval: false }
       | {
           readonly refetchInterval: number | false;
           readonly refetchIntervalInBackground: false;
         }
       | Record<never, never> = {};
     if (pollPolicy !== null && pollPolicy.kind === "condition") {
-      tablePollingOptions = {
-        refetchInterval:
-          poll === false
-            ? false
-            : conditionPollCoordinator.refetchIntervalFor(request.method),
-        retry: false,
-      };
+      // Same split as `useHostQuery`'s, and for the same reason: `retry: false`
+      // belongs to the BRANDED poller, whose episode re-asks on its error
+      // lanes. A reader that opts out owns no episode, so those lanes can never
+      // recover it - it keeps the ordinary retry, the only recovery it has
+      // left. The two helpers answer one contract, so they say this once each
+      // rather than differently.
+      tablePollingOptions =
+        poll === false
+          ? { refetchInterval: false }
+          : {
+              refetchInterval: conditionPollCoordinator.refetchIntervalFor(
+                request.method,
+              ),
+              retry: false,
+            };
     } else if (pollPolicy !== null) {
       tablePollingOptions = {
         refetchInterval: poll === true ? pollPolicy.intervalMs : false,

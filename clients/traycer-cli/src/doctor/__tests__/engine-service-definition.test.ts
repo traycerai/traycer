@@ -197,6 +197,28 @@ describe("runDoctor service-definition issues", () => {
     expect(issue?.details).toMatchObject({ appliesAt: "next-login" });
   });
 
+  it.each(["ask", "linked", "stop-if-idle", "none"])(
+    "mode '%s' with a stale-stop-budget (exit-timeout) definition: no issue, the launch form is unaffected - inspect IS called",
+    async (mode) => {
+      stageQuietEnvironment();
+      writePolicy(mode);
+      mocks.inspect.mockResolvedValue({
+        kind: "stale",
+        form: "exit-timeout",
+        appliesAt: "next-login",
+      });
+
+      const result = await runDoctorHere();
+
+      expect(
+        result.issues.find((candidate) =>
+          candidate.code.startsWith("HOST_SERVICE_DEFINITION_"),
+        ),
+      ).toBeUndefined();
+      expect(mocks.inspect).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it("HOST_SERVICE_DEFINITION_UNRECOGNIZED: fixAction 'service-install', terminalCommand names the install command", async () => {
     stageQuietEnvironment();
     writePolicy("stop-if-idle");

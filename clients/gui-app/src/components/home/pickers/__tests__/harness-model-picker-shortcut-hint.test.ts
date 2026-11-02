@@ -57,7 +57,7 @@ describe("pickerProfileShortcutHintForIndex", () => {
   });
 });
 
-// Parent-control accessible name: CodeRabbit flagged the badge's own
+// Parent-control accessible name: the badge's own
 // `aria-label` as unreachable through a parent that already owns an
 // accessible name, so the spoken hint now lives on the CONTROL's label via
 // this helper instead of on the badge (`harness-model-picker-leader-badge.tsx`

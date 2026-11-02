@@ -455,7 +455,7 @@ describe("worktree PR metadata", () => {
     expect(within(ownerContent).getByText("#42")).toBeTruthy();
     // jsdom can't reproduce Chromium making an overflowing scroll container an
     // implicit tab stop - assert the explicit opt-out is present instead
-    // (verified against real Chromium separately; see the ticket notes).
+    // (verified against real Chromium separately).
     expect(
       screen
         .getByTestId("owner-workspace-metadata-content")

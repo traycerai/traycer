@@ -16,7 +16,7 @@ import {
  * Reads `host.status` for a remote row over a session that ALREADY EXISTS, or
  * declines.
  *
- * This is the whole "other remote row" leg of plan §6, and its contract is
+ * This is the whole "other remote row" leg, and its contract is
  * negative as much as positive: it may improve a badge, and it may never cause
  * a connection. The borrow enforces that structurally
  * ({@link tryAcquireReadyRemoteSession} has no session factory to call), so

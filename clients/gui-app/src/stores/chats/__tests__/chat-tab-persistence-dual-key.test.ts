@@ -1,10 +1,10 @@
 /**
- * Ticket 15 (decision #29): dual-key persistence pins - unit-level coverage
+ * Dual-key persistence pins - unit-level coverage
  * for the scroll cache, the other five registries, eviction, multi-view, and
  * stale-anchor nearest-neighbor. Component-level streaming / composer-resize
  * / restore-first pins live in chat-messages.test.tsx.
  *
- * Ticket 15 review round 3 (mandated simplification): the durable COMMIT
+ * Mandated simplification: the durable COMMIT
  * moved from per-hook/component unmounts to the canvas close sweep's
  * promotion choke point (store.ts - see its own tests in
  * `store-scroll-anchor-eviction.test.ts` for the end-to-end path through
@@ -123,12 +123,12 @@ function createNoopAdapter(tileInstanceId: string): TileFindAdapter {
 // key - the two dedicated eviction/tombstone tests below use their OWN
 // chatId so a tombstone they set never blocks any other test's writes
 // (`evictChatTabPersistenceForChat` tombstones by EXACT chat-key, terminal
-// until something re-opens that exact identity - ticket 15 review round 3).
+// until something re-opens that exact identity).
 const DELETE_SINGLE_CHAT = "chat-t15-delete-single";
 const DELETE_ALL_REGISTRIES_CHAT = "chat-t15-delete-all-registries";
 
 function clearEpicDurableStateForTests(epicId: string): void {
-  // Ticket 15 review round 3: uses the individual (non-tombstoning) evict
+  // Uses the individual (non-tombstoning) evict
   // functions - `evictChatTabPersistenceForEpic` is now a TERMINAL
   // deletion (it tombstones the epic prefix), which would permanently
   // block every other test sharing this epicId if used for mere
@@ -200,6 +200,81 @@ describe("chat-tab-persistence-key", () => {
 });
 
 describe("ticket 15 dual-key scroll cache", () => {
+  describe("a steer splitting the anchored turn", () => {
+    // A same-turn steer renames every row of the turn it lands in
+    // (`assistant:<key>` -> `assistant:<key>:part:<n>`), so a position saved
+    // inside that turn names a row no list draws again - gone, not cold.
+    const turn = "assistant:turn-7";
+    const splitRowKeys = [
+      "row-before",
+      `${turn}:part:0`,
+      `${turn}:part:0#text-later`,
+      "steer:queue-item-1",
+      `${turn}:part:1`,
+      "row-after",
+    ];
+    it("lands a part anchor on the slice part cutting at its segment, offset kept", () => {
+      const id = chatIdIdentity("split-part-anchor");
+      saveChatTabState({
+        identity: id,
+        mode: "free-scrolling",
+        anchorMessageId: `${turn}#text-later`,
+        anchorRowKey: turn,
+        anchorIndex: 2,
+        offset: 31,
+      });
+      const expected = {
+        mode: "free-scrolling",
+        anchorMessageId: `${turn}:part:0#text-later`,
+        anchorRowKey: `${turn}:part:0`,
+        anchorIndex: 2,
+        offset: 31,
+      };
+      expect(restoreChatTabState(id, splitRowKeys)).toEqual(expected);
+      expect(restoreChatTabStateForMount(id, splitRowKeys)).toEqual(expected);
+    });
+
+    it("lands the turn's own anchor on its first slice, offset kept", () => {
+      const id = chatIdIdentity("split-turn-anchor");
+      saveChatTabState({
+        identity: id,
+        mode: "free-scrolling",
+        anchorMessageId: turn,
+        anchorIndex: 1,
+        offset: 12,
+      });
+      expect(restoreChatTabState(id, splitRowKeys)).toEqual({
+        mode: "free-scrolling",
+        anchorMessageId: `${turn}:part:0`,
+        anchorIndex: 1,
+        offset: 12,
+      });
+    });
+
+    it("leaves a part no slice names yet in the pending shape", () => {
+      // Part keys exist only on drawn rows: the part is behind a cold slice
+      // or gone, which keys alone cannot tell apart. The mount decides from
+      // the rows (chat-messages.test.tsx covers both outcomes).
+      const id = chatIdIdentity("split-unnamed-segment");
+      saveChatTabState({
+        identity: id,
+        mode: "free-scrolling",
+        anchorMessageId: `${turn}#text-streaming`,
+        anchorRowKey: turn,
+        anchorIndex: 3,
+        offset: 40,
+      });
+      const pending = {
+        mode: "free-scrolling",
+        anchorMessageId: null,
+        anchorIndex: null,
+        offset: 0,
+      };
+      expect(restoreChatTabState(id, splitRowKeys)).toEqual(pending);
+      expect(restoreChatTabStateForMount(id, splitRowKeys)).toEqual(pending);
+    });
+  });
+
   describe("mounting a free scroll that resolves to no anchor", () => {
     const followingLatest = {
       mode: "following-end",
@@ -445,7 +520,7 @@ describe("ticket 15 dual-key scroll cache", () => {
     expect(peekSavedChatTabState(reopened) !== null).toBe(false);
 
     // Terminal regardless of who writes DURABLE state after the delete -
-    // the whole point of the tombstone (round-3 finding: a late-arriving
+    // the whole point of the tombstone (a late-arriving
     // sweep promotion used to resurrect a just-deleted chat). A save while
     // this identity is still live legitimately writes the ephemeral
     // tab-key entry (real-time scroll tracking for whatever view is
@@ -610,7 +685,7 @@ describe("ticket 15 dual-key registries (round 3: sweep-simulated promotion)", (
     const closed = chatIdIdentity("reg-a2a");
     getOrCreateA2AOpenStore(closed).getState().setSentOpen("sent-1", true);
     // Simulates the canvas sweep's promotion (store.ts), BEFORE tab-key
-    // eviction - round 3's ONE close-commit choke point.
+    // eviction - the ONE close-commit choke point.
     promoteA2AOpenStoreToDurable(closed);
     evictA2AOpenStores([closed.tileInstanceId]);
     const reopened = chatIdIdentity("reopen-new");
@@ -700,8 +775,8 @@ describe("ticket 15 dual-key registries (round 3: sweep-simulated promotion)", (
     useTileFindStore.getState().setQuery(closedId, "needle");
     useTileFindStore.getState().openForTile(closedId);
     // Production order: the canvas sweep's promotion (reading
-    // `uiByTileInstanceId` directly - round 3 dropped the
-    // `targetsByTileInstanceId` dependency the F1/F2/F3 round had) runs
+    // `uiByTileInstanceId` directly - the design dropped the
+    // `targetsByTileInstanceId` dependency of the earlier design) runs
     // BEFORE `evictTileFindUi`, which itself runs BEFORE the adapter's own
     // `unregister()` (React unmount, fires last).
     promoteTileFindUiToDurable(chatIdIdentity(closedId));
@@ -870,7 +945,7 @@ describe("ticket 15 review round 3: useChatScopedOpenStoreDualKeySeed (F2)", () 
         .openIds.has(`${closed.tileInstanceId}\0seg-1`),
     ).toBe(true);
 
-    // Production order (round 3): the sweep promotes THEN resets, all
+    // Production order: the sweep promotes THEN resets, all
     // synchronously, before this tab's own component (if any) ever
     // unmounts - simulate exactly that here, with no hook cleanup involved.
     promoteToolOpenToDurable(closed);
@@ -1014,7 +1089,7 @@ describe("ticket 15 review round 3: useChatScopedOpenStoreDualKeySeed (F2)", () 
   });
 });
 
-// Ticket 15 review round 4 (finding 5): the round-3 version of this test
+// The earlier version of this test
 // invoked each registry's `promoteXToDurable` MANUALLY, in the order the
 // sweep is supposed to call them - it proved every registry's own
 // last-write-wins property, but never actually drove the canvas's real
@@ -1109,8 +1184,8 @@ describe("ticket 15 review round 4: real close order drives the canvas sweep (F3
     // temporally LAST event, so its promotion must win.
     //
     // A's own `getOrCreate*`/seed calls below legitimately INHERIT B's
-    // just-closed state (restore-first, decision #29 - the whole point of
-    // this ticket) - a fresh A2A/activity-group/tool/subagent store for the
+    // just-closed state (restore-first - the whole point of
+    // this change) - a fresh A2A/activity-group/tool/subagent store for the
     // SAME chat starts from B's durable snapshot, not empty. So proving A's
     // LATER close wins isn't "does B's key vanish" (it wouldn't, even under
     // correct behavior, since A never touched it) - it's "does A's own

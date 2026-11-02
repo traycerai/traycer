@@ -13,7 +13,7 @@ import {
 import { cn } from "@/lib/utils";
 
 /**
- * The two-hour and thirty-minute balance warnings (core flows, flow 5) in
+ * The two-hour and thirty-minute balance warnings in
  * the host list. Renders nothing while the balance covers more than two
  * hours or nothing is awake, and reads no cost at all for a user with no
  * sandboxes.

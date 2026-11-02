@@ -14,7 +14,7 @@ export const HOST_UPDATE_BANNER_SNOOZE_MS = 24 * 60 * 60 * 1000;
 /**
  * How long a completed update stays visible in Settings before collapsing.
  *
- * "Completion may auto-collapse after a short acknowledgement" (experience doc).
+ * "Completion may auto-collapse after a short acknowledgement".
  * Long enough to read one sentence, short enough that a success nobody needs to
  * act on does not keep occupying the banner — which, for a durable attempt
  * record retained for days, is otherwise exactly what happens.

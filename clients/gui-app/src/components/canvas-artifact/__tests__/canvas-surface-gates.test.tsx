@@ -267,7 +267,8 @@ function mount(overrides: Partial<Options>) {
         }
         boardFiles={null}
         frameEvents={options.frameEvents}
-        liveFrameLimit={options.live ? 1 : 0}
+        liveSlotBudget={options.live ? 1 : 0}
+        boardByteLengths={null}
         viewOnly={options.viewOnly}
         onAddError={options.onAddError}
       />

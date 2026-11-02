@@ -139,7 +139,7 @@ describe("ChatSessionRegistry", () => {
     expect(registry.peek("epic-1", "chat-1", HOST)).not.toBeNull();
   });
 
-  // The headline of ticket 43. Two tiles, ONE (epic, chat), TWO hosts - which
+  // Two tiles, ONE (epic, chat), TWO hosts - which
   // is reachable in production (post-fork twins keep the source's chat id) and
   // trivially reachable in dev (`--adopt-store` copies one identity store onto
   // a second host). The pre-fix registry keyed entries on `epic:chat` only, so
@@ -575,6 +575,7 @@ describe("ChatSessionRegistry", () => {
 
   describe("a docked send that the host queues, through real frames", () => {
     const DOCKED_SETTINGS = {
+      ultracode: false,
       harnessId: "claude" as const,
       model: "claude-sonnet-4-5",
       permissionMode: "supervised" as const,
@@ -630,7 +631,7 @@ describe("ChatSessionRegistry", () => {
         pinnedUserProviderHandle: null,
         lastDeliveredRolesDigest: null,
       };
-      stream.onConnectionStatus("open", null, null);
+      stream.onConnectionStatus("open", null, null, null);
       stream.onSnapshot({
         kind: "snapshot",
         hasBinaryPayload: false,

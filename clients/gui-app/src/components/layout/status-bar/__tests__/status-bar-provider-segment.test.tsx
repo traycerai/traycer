@@ -48,6 +48,7 @@ function segmentFixture(overrides: {
   readonly providerId?: StatusBarProviderSegmentModel["providerId"];
   readonly state?: StatusBarProviderSegmentState;
   readonly reason?: StatusBarProviderSegmentModel["reason"];
+  readonly chatCredential?: StatusBarProviderSegmentModel["chatCredential"];
   readonly windows?: ReadonlyArray<StatusBarRateLimitWindow>;
   readonly shown?: ReadonlyArray<StatusBarRateLimitWindow>;
   readonly profileId?: string | null;
@@ -64,6 +65,7 @@ function segmentFixture(overrides: {
     hidden: false,
     state: overrides.state ?? "live",
     reason: overrides.reason ?? null,
+    chatCredential: overrides.chatCredential ?? null,
     fetching: overrides.fetching ?? false,
     retryOffered: overrides.retryOffered ?? false,
     windows,
@@ -636,6 +638,26 @@ describe("<StatusBarProviderSegment /> states", () => {
     expect(
       screen.getByTestId("status-bar-provider-unavailable"),
     ).not.toBeNull();
+  });
+
+  it("names the chat credential in the tooltip of an unavailable claude-code segment, not the reason", async () => {
+    renderSegment(
+      segmentFixture({
+        providerId: "claude-code",
+        state: "unavailable",
+        reason: "rate_limits_not_available",
+        chatCredential: { kind: "api-key", source: "ANTHROPIC_API_KEY" },
+      }),
+      DISPLAY,
+    );
+
+    fireEvent.focus(screen.getByTestId("status-bar-provider-tooltip-target"));
+
+    const text = (await screen.findByRole("tooltip")).textContent;
+    expect(text).toContain(
+      "Chats here are billed to ANTHROPIC_API_KEY, not your Claude plan, so there are no plan limits to show.",
+    );
+    expect(text).not.toContain("not available for this account");
   });
 
   it("transient says it could not load, and underlines that only while a click would read again", () => {

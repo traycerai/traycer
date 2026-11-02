@@ -12,7 +12,7 @@ import { Button } from "@/components/ui/button";
 /**
  * Rename dialog for a switcher row. Desktop renames inline in the tree row,
  * which has no touch analog, so mobile drives the same canonical rename
- * mutations from a minimal dialog (mirrors the P1.3 epic-rename dialog shape).
+ * mutations from a minimal dialog (mirrors the epic-rename dialog shape).
  * The caller's `onSubmit` fires the matching mutation; the dialog closes on
  * submit and the new name lands via the projection.
  */

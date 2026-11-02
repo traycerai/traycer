@@ -46,7 +46,7 @@ import {
  * stamp maps from there rather than declaring them: the maps have to live in
  * the module that holds the registry INSTANCE handing back warm handles, so
  * that no module replacement can leave a surviving warm handle whose stamp was
- * left behind. That colocation is load-bearing (F1) and unchanged by this
+ * left behind. That colocation is load-bearing and unchanged by this
  * extraction - see `requireConstructionHostStamp` in the provider, and
  * {@link handleStreamClients}'s own doc. Importing them here rather than
  * moving them also keeps the direction acyclic: the registry never imports
@@ -545,7 +545,7 @@ export function createEpicSessionHandle(
     // opened with this run's `hostId`, so the stamp IS the handle's transport
     // binding. Nothing re-stamps a live handle - a label that can drift from
     // the binding routes RPCs and capability answers to a host that does not
-    // own the stream (F1).
+    // own the stream.
     // The transport outlives every client on it, so the two lifetimes that end
     // the session have to close it: dispose (the registry evicting) and
     // detachTransport (a retained-dirty buffer that must stop dialling a host
@@ -569,7 +569,7 @@ export function createEpicSessionHandle(
     // returning a wrapper leaves every lookup answering "no construction host
     // stamp" - which is a thrown invariant, not a silent miss, because the
     // stamp is what routes RPCs and capability answers to the host that owns
-    // the stream (F1).
+    // the stream.
     handleHostIds.set(handle, hostId);
     // Stamped on the SAME escaping handle and for the same reason: this is the
     // socket the failure card's Retry silence gate asks, and it must travel

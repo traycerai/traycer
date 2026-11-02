@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 /**
  * The composer's host-placement slot.
  *
- * `refused` is the selection model's §2/§54 refusal: submit-time
+ * `refused` is the placement refusal: submit-time
  * re-validation refused to create. Nothing was created, the draft is
  * untouched, and this states why. It is deliberately inline rather than a
  * toast: a toast that scrolls away leaves the user pressing send again on a

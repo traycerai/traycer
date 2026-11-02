@@ -490,7 +490,7 @@ describe("EpicResourceChip", () => {
 });
 
 // The overlay/ghost technique (`registersHotspot`, the Customize session, the
-// hotspot proxy) is gone (ticket 05): the component is now a plain gate over
+// hotspot proxy) is gone: the component is now a plain gate over
 // `OwnerResourceChip`, so its own coverage is just the null-owner short
 // circuit plus the delegation - `OwnerResourceChip`'s own suite above owns
 // everything about the reading itself.

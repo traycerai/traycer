@@ -6,7 +6,7 @@ import type {
 /**
  * Why a bot tab shows the paused banner: one of `bot.open`'s paused
  * reasons. Paused says only that no host can run the bot's turns now; the
- * channel still renders, served by the tab's host (Tracy Bots T65).
+ * channel still renders, served by the tab's host.
  */
 export type BotTabPausedReason = BotOpenPausedReason;
 

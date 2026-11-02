@@ -45,13 +45,13 @@ export interface ComposerPlacement {
 }
 
 /**
- * One resolution of "where would this composer place new work" (redesign
- * P1.2), so the chip, the RPCs the composer makes, its creates, and its
+ * One resolution of "where would this composer place new work",
+ * so the chip, the RPCs the composer makes, its creates, and its
  * submit-time refusal can never be derived independently and disagree.
  *
  * `overrideHostId` is a caller-supplied host that outranks the pin: the
  * new-conversation modal's row-scoped request names one, and the picker goes
- * inert for it (§55). `null` means "this surface owns its placement": the
+ * inert for it. `null` means "this surface owns its placement": the
  * landing composer resolves its WINDOW-keyed pin ?? effective (this hook);
  * the in-Epic new-conversation modal resolves its per-EPIC pin ?? the Epic
  * session's host ?? effective (`useEpicConversationPlacement` below).
@@ -99,8 +99,8 @@ export interface EpicConversationPlacementInput {
 }
 
 /**
- * The in-Epic new-conversation modal's placement (redesign follow-up to
- * P1.2 §2, user ruling 2026-08-18): the SAME chip and pin pattern as the
+ * The in-Epic new-conversation modal's placement (redesign follow-up,
+ * user ruling 2026-08-18): the SAME chip and pin pattern as the
  * landing composer, resolved per EPIC with a memory tier -
  *
  *     override ?? pin(epic) ?? Epic session's host ?? effective

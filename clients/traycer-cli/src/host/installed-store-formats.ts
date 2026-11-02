@@ -12,6 +12,11 @@ import { dirname, isAbsolute } from "node:path";
 import type { HostStoreFormats } from "@traycer/protocol/host/store-formats";
 import { readExtractedStoreFormats } from "../installer/version-sidecar";
 import {
+  installedFloorVersion,
+  installedProvenanceOf,
+  type InstalledProvenance,
+} from "./store-format-floor";
+import {
   readHostInstallRecord,
   type HostInstallRecord,
 } from "../manifest/host-install";
@@ -19,7 +24,14 @@ import { errorFromUnknown, type ILogger } from "../logger";
 import type { Environment } from "../runner/environment";
 
 export interface InstalledFloorOperands {
-  /** `install.json`'s version, or `null` when nothing is installed. */
+  /**
+   * The installed build's version, or `null` when nothing is installed.
+   *
+   * `installedFloorVersion`, because `install.json`'s `version` is only a
+   * label for a `--from` install: `local-<basename>-<timestamp>` places on no
+   * ladder and resolves in no table, so judged by it a side-loaded release
+   * reads as a build nobody can name.
+   */
   readonly version: string | null;
   /**
    * What the installed TREE declares it writes, from its runtime
@@ -34,10 +46,12 @@ export interface InstalledFloorOperands {
    * turns a move that could not lose anything into a refusal.
    */
   readonly storeFormats: HostStoreFormats | null;
+  /** The record behind `version`; `null` when `version` is. */
+  readonly provenance: InstalledProvenance | null;
 }
 
 /**
- * Both operands, collapsing every unreadable state to "nothing known".
+ * Every operand, collapsing every unreadable state to "nothing known".
  *
  * `null` is the CONSERVATIVE answer, which is why the strict reader's throw is
  * swallowed rather than propagated: `storeFloorApplicability` treats a null
@@ -62,12 +76,15 @@ export async function readInstalledFloorOperands(
         errorMessage: errorFromUnknown(err).message,
       },
     );
-    return { version: null, storeFormats: null };
+    return { version: null, storeFormats: null, provenance: null };
   }
-  if (record === null) return { version: null, storeFormats: null };
+  if (record === null) {
+    return { version: null, storeFormats: null, provenance: null };
+  }
   return {
-    version: record.version,
+    version: installedFloorVersion(record),
     storeFormats: await readInstalledDeclaration(record, environment, logger),
+    provenance: installedProvenanceOf(record),
   };
 }
 

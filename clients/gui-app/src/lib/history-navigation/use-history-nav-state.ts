@@ -43,7 +43,7 @@ const BACK_ONLY_STATE: HistoryNavState = {
  * on every real navigation (the history callbacks poke the controller
  * store), AND when closing/reopening a Task flips eligibility with no
  * history event at all - none of these ever read `router.stores.location`,
- * so none force a `router.load()` (tech plan §3.5).
+ * so none force a `router.load()`.
  *
  * "Enabled" now means an ELIGIBLE entry exists in that direction (closed-Task
  * entries don't count - see `findEligibleOffset`), not just that the raw

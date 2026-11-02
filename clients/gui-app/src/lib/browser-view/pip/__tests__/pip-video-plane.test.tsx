@@ -15,7 +15,7 @@ import {
 } from "@/lib/browser-view/tiles/webrtc-media-registry";
 
 /**
- * PiP against the REAL module-scoped registry - the point of the ticket is
+ * PiP against the REAL module-scoped registry - the point is
  * that PiP is a second consumer of the tile's entry, so a fake registry would
  * assert nothing. Only the peer connection is stood in (jsdom has no
  * `RTCPeerConnection`), through the registry's own `createPeer` seam.

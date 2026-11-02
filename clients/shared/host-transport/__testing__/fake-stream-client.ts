@@ -5,6 +5,7 @@ import type {
   IStreamSession,
   ServerFrameHandler,
   StatusChangeHandler,
+  StreamContinuity,
   StreamFrameEnvelope,
 } from "../i-stream-session";
 
@@ -33,12 +34,14 @@ export class FakeStreamSession implements IStreamSession {
   private serverHandler: ServerFrameHandler | null = null;
   private statusHandler: StatusChangeHandler | null = null;
   private status: StreamStatus = "connecting";
+  /** A held stream queues sends for delivery after the resume, as the real session does. */
+  private held = false;
 
   sendClientFrame(
     frame: StreamFrameEnvelope,
     _binaryPayload: Uint8Array | null,
   ): void {
-    if (this.closed || this.status !== "open") return;
+    if (this.closed || (this.status !== "open" && !this.held)) return;
     this.sentFrames.push(frame);
   }
 
@@ -54,7 +57,7 @@ export class FakeStreamSession implements IStreamSession {
    */
   onStatusChange(handler: StatusChangeHandler): void {
     this.statusHandler = handler;
-    if (this.status === "open") handler("open", null, null);
+    if (this.status === "open") handler("open", null, null, null);
   }
 
   requestReconnect(): void {}
@@ -69,7 +72,18 @@ export class FakeStreamSession implements IStreamSession {
 
   emitStatus(status: StreamStatus): void {
     this.status = status;
-    this.statusHandler?.(status, null, null);
+    this.held = false;
+    this.statusHandler?.(status, null, null, null);
+  }
+
+  /** The transition a resumable stream reports while its host holds the subscription. */
+  emitContinuityStatus(
+    status: StreamStatus,
+    continuity: StreamContinuity,
+  ): void {
+    this.status = status;
+    this.held = continuity === "held";
+    this.statusHandler?.(status, null, null, continuity);
   }
 
   /** The terminal close a host's bearer-expiry disconnect produces. */
@@ -86,6 +100,7 @@ export class FakeStreamSession implements IStreamSession {
           upgradeGuidance: null,
         },
       },
+      null,
       null,
     );
   }

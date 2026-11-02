@@ -185,15 +185,20 @@ function createCountingArtifactFactory(): CountingArtifactFactory {
     },
     deliverMethodUnsupported(artifactId): void {
       const callbacks = requireLive(artifactId);
-      callbacks.onConnectionStatus("closed", {
-        kind: "fatalError",
-        details: {
-          code: "INCOMPATIBLE",
-          reason: "artifact.subscribe is not served by this host",
-          incompatibleMethods: null,
-          upgradeGuidance: null,
+      callbacks.onConnectionStatus(
+        "closed",
+        {
+          kind: "fatalError",
+          details: {
+            code: "INCOMPATIBLE",
+            reason: "artifact.subscribe is not served by this host",
+            incompatibleMethods: null,
+            upgradeGuidance: null,
+          },
         },
-      });
+        null,
+        null,
+      );
     },
   };
 }
@@ -243,15 +248,20 @@ function createCountingStatusFactory(): CountingStatusFactory {
      */
     deliverMethodUnsupported(): void {
       if (live === null) throw new Error("no status client was constructed");
-      live.onConnectionStatus("closed", {
-        kind: "fatalError",
-        details: {
-          code: "INCOMPATIBLE",
-          reason: "epic.status.subscribe is not served by this host",
-          incompatibleMethods: null,
-          upgradeGuidance: null,
+      live.onConnectionStatus(
+        "closed",
+        {
+          kind: "fatalError",
+          details: {
+            code: "INCOMPATIBLE",
+            reason: "epic.status.subscribe is not served by this host",
+            incompatibleMethods: null,
+            upgradeGuidance: null,
+          },
         },
-      });
+        null,
+        null,
+      );
     },
   };
 }
@@ -321,15 +331,20 @@ function createCountingStateFactory(): CountingStateFactory {
     closeCount: () => closes,
     deliverMethodUnsupported(): void {
       if (live === null) throw new Error("no state client was constructed");
-      live.onConnectionStatus("closed", {
-        kind: "fatalError",
-        details: {
-          code: "INCOMPATIBLE",
-          reason: "epic.state.subscribe is not served by this host",
-          incompatibleMethods: null,
-          upgradeGuidance: null,
+      live.onConnectionStatus(
+        "closed",
+        {
+          kind: "fatalError",
+          details: {
+            code: "INCOMPATIBLE",
+            reason: "epic.state.subscribe is not served by this host",
+            incompatibleMethods: null,
+            upgradeGuidance: null,
+          },
         },
-      });
+        null,
+        null,
+      );
     },
   };
 }
@@ -383,14 +398,6 @@ interface RuntimeRig {
 
 let nextEpicSequence = 0;
 
-/**
- * Builds a real `createEpicReplicaRuntime`, with a real (lane-capable)
- * `laneSelection` wired to counting factories. Every non-lane source is the
- * same one `store.ts` passes in production - `createRendererRuntimeEnvironment`,
- * `createBatchingDelivery`, `DOC_IS_THE_ONLY_RECORD_SOURCE` - reused rather
- * than reinvented, so the only thing under test is the lane-selection wiring
- * itself.
- */
 /**
  * The two support sources a pin may run against.
  *
@@ -447,6 +454,12 @@ function buildSupportSource(mode: SupportMode): SupportController | null {
   return null;
 }
 
+/**
+ * Builds a real `createEpicReplicaRuntime`, with a real (lane-capable)
+ * `laneSelection` wired to counting factories. `createRendererRuntimeEnvironment`,
+ * `createBatchingDelivery` and `DOC_IS_THE_ONLY_RECORD_SOURCE` supply the
+ * environment, delivery and doc arm.
+ */
 function buildRuntimeRig(mode: SupportMode): RuntimeRig {
   nextEpicSequence += 1;
   const legacy = createCountingLegacyFactory();
@@ -1021,7 +1034,7 @@ function createControllableStatusFactory(): ControllableStatusFactory {
   }
   return {
     factory,
-    open: () => requireLive().onConnectionStatus("open", null),
+    open: () => requireLive().onConnectionStatus("open", null, null, null),
     deliverSnapshot: (frame) => requireLive().onSnapshot(frame, true),
   };
 }
@@ -1045,7 +1058,7 @@ function createControllableStateFactory(): ControllableStateFactory {
   }
   return {
     factory,
-    open: () => requireLive().onConnectionStatus("open", null),
+    open: () => requireLive().onConnectionStatus("open", null, null, null),
     deliverSnapshot: (frame) => requireLive().onSnapshot(frame),
   };
 }

@@ -19,7 +19,6 @@ import { useHostQuery } from "@/hooks/host/use-host-query";
 import { cloudChatListCacheKeyIdentity } from "@/lib/chats/cloud-chat-list-cache";
 import { cloudVerdictPreflight } from "@/lib/host/cloud-verdict-preflight";
 import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
-import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 
 /**
  * `epic.listTaskHosts`: the task's hosts with their
@@ -44,13 +43,7 @@ export function useTaskHosts(
     params,
     preflight: cloudVerdictPreflight("epic.listTaskHosts"),
     options: {
-      // Never asked in a build without environments and sandboxes
-      // (`unreleased-features.ts`): the task reads as hostless, "none".
-      enabled:
-        UNRELEASED_FEATURES_ENABLED &&
-        cloudAuthorized &&
-        taskId.length > 0 &&
-        viewerUserId.length > 0,
+      enabled: cloudAuthorized && taskId.length > 0 && viewerUserId.length > 0,
       staleTime: 30_000,
       // Permanent ends can arrive after the host leaves every live list.
       poll: true,

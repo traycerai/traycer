@@ -170,7 +170,7 @@ describe("PhaseMigrationController", () => {
   it("completePhaseMigration returns false and leaves surfaceMode alone when a listener races the resolution to a different epic first", () => {
     // `execute`'s listeners fire before `applySources`, so this racer wins
     // BEFORE `completePhaseMigration`'s own resolution call ever runs - the
-    // pre-commit window (closed since round 1/2). See the pin below for a
+    // pre-commit window (now closed). See the pin below for a
     // listener that races the commit itself instead.
     const unsubscribeRace = tabCommandCoordinator.subscribe(() => {
       const current = useEpicCanvasStore.getState().tabsById[PHASE_TAB_ID];

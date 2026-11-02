@@ -34,7 +34,7 @@ import type {
  * whose only route back was the restart being blocked.
  *
  * That is the third instance of one class in this epic, after the parked-attempt
- * gate and Ticket 05's TOCTOU: **a fact consumed outside the conditions that
+ * gate and the TOCTOU: **a fact consumed outside the conditions that
  * keep it true.** A correct predicate evaluated against a reading nobody is
  * still refreshing is not a guarantee, and the fix is never a second opinion
  * about the reading — it is to carry the conditions with the fact.

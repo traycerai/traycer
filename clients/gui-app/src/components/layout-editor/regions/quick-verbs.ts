@@ -27,7 +27,7 @@ export function offeredQuickVerbs(
 /**
  * What the context menu calls a verb, with the region named where it reads
  * better. Access's size is "Icon only / Icon and label", the words its form
- * control uses; "chip" is only a dock member's word (C11).
+ * control uses; "chip" is only a dock member's word.
  */
 export function quickVerbLabel(
   verb: QuickVerbId,

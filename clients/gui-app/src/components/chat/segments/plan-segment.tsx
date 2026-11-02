@@ -255,7 +255,7 @@ function LivePlanModal(props: PlanModalProps) {
       isFetching={planQuery.isFetching}
       truncationNotice={null}
       // Unchanged: the local path folds its own failure into `unavailable`, and
-      // this ticket did not touch it.
+      // this change did not touch it.
       failure={null}
     />
   );

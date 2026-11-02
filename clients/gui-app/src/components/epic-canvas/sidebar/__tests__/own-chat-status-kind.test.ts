@@ -1,5 +1,5 @@
 /**
- * `ownChatStatusKind` (F8): the ladder `chatDescendantKind` already pins,
+ * `ownChatStatusKind`: the ladder `chatDescendantKind` already pins,
  * plus the `unknown` arm - only reached when the ladder itself falls through
  * to idle AND the coverage argument says the plane excluded this chat's host
  * (`AgentActivityCoverage` `"unserved"`). `"covered"` and `"indeterminate"`

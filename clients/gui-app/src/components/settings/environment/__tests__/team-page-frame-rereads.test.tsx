@@ -11,6 +11,7 @@ import type { EnvironmentConfigurationItem } from "@traycer/protocol/host/enviro
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { useConfigurationMcpServersQuery } from "@/hooks/environment/team/use-mcp-servers";
+import { useCanEditConfiguration } from "@/components/settings/environment/configuration-source";
 import { TeamMcpServers } from "@/components/settings/environment/team-mcp-servers";
 import { PersonalPageFrame } from "@/components/settings/personal/personal-page-frame";
 import type { EnvironmentPick } from "@/lib/settings-environment-pages";
@@ -94,6 +95,15 @@ function HostVariablesReader(): ReactNode {
     options: { enabled: true },
   });
   return null;
+}
+
+/** Whether the page may write, the way every cloud-read page decides it. */
+function RoleProbe(): ReactNode {
+  return (
+    <p data-testid="role">
+      {useCanEditConfiguration() ? "can edit" : "read only"}
+    </p>
+  );
 }
 
 /** A page's own read of the computer's shell, which no poll re-reads. */
@@ -228,6 +238,44 @@ describe("a team page under PersonalPageFrame", () => {
       expect(
         harness.paramsOf("environment.configuration.items").length,
       ).toBeGreaterThan(before);
+    });
+  });
+
+  /**
+   * NEW-154-19(b): a page's own items were reread on every revision tick,
+   * focus and stale-write recovery, but the role that decides whether it
+   * offers a form was not — so a demoted member kept the editor's form on the
+   * Variables page long after every other page had switched.
+   */
+  it("rereads the team's role with its items, so a demotion switches the page", async () => {
+    const role: { current: EnvironmentDescriptorV11["effectiveRole"] } = {
+      current: "editor",
+    };
+    const harness = mountFrame(
+      { kind: "team", environmentId: "env-a" },
+      {
+        "environment.list": () => ({
+          environments: [{ ...acme, effectiveRole: role.current }],
+        }),
+        "environment.host.list": () => ({ hosts: [] }),
+      },
+      { section: "mcp-servers", element: <RoleProbe /> },
+    );
+    expect((await screen.findByTestId("role")).textContent).toBe("can edit");
+    const before = harness.paramsOf("environment.list").length;
+
+    role.current = "viewer";
+    act(() => {
+      window.dispatchEvent(new Event("focus"));
+    });
+
+    await waitFor(() => {
+      expect(harness.paramsOf("environment.list").length).toBeGreaterThan(
+        before,
+      );
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId("role").textContent).toBe("read only");
     });
   });
 

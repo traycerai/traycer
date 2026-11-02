@@ -6,6 +6,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type ReactNode,
   type Ref,
 } from "react";
 import { EditorContent, useEditor, useEditorState } from "@tiptap/react";
@@ -76,6 +77,11 @@ export interface CommentComposerProps {
   /** Optional cancel hook. Receives `isDirty` so callers can decide whether
    *  to confirm before discarding. */
   readonly onCancel: ((isDirty: boolean) => void) | null;
+  /**
+   * Controls on the footer's left, apart from Cancel and Submit on the right:
+   * a destination the text can go to instead of becoming a comment.
+   */
+  readonly leadingActions: ReactNode;
   readonly className: string | undefined;
   readonly ref?: Ref<CommentComposerHandle>;
 }
@@ -84,6 +90,8 @@ export interface CommentComposerHandle {
   /** Empty the editor doc back to a single empty paragraph. */
   reset(): void;
   isDirty(): boolean;
+  /** The document as typed so far, for a destination other than Submit. */
+  getContent(): JsonContent;
   /** Imperatively focus the editor (used after Submit so the user can keep
    *  typing in the next reply slot without click-fishing). */
   focus(): void;
@@ -125,6 +133,7 @@ export function CommentComposer(props: CommentComposerProps) {
     isPending,
     onSubmit,
     onCancel,
+    leadingActions,
     className,
     ref,
   } = props;
@@ -372,6 +381,9 @@ export function CommentComposer(props: CommentComposerProps) {
       isDirty() {
         return editor !== null && !editor.isEmpty;
       },
+      getContent() {
+        return editor?.getJSON() ?? { type: "doc", content: [] };
+      },
       reset() {
         if (editor === null || sharedDraftRef.current !== undefined) return;
         editor.commands.clearContent();
@@ -399,6 +411,11 @@ export function CommentComposer(props: CommentComposerProps) {
     >
       <EditorContent editor={editor} />
       <div className="flex items-center justify-end gap-2">
+        {leadingActions === null ? null : (
+          <div className="flex min-w-0 flex-1 items-center">
+            {leadingActions}
+          </div>
+        )}
         {onCancel === null ? null : (
           <Button
             type="button"

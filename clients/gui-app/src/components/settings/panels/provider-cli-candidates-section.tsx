@@ -425,24 +425,6 @@ function managedLinesCaption(
 }
 
 /**
- * An empty candidate list means "nothing runnable was found on this machine",
- * not "nothing detected yet": the host only omits the bundled row for the
- * providers it ships no binary for (`PROVIDERS_WITHOUT_BUNDLED_BINARY`), and
- * for everyone else the row is always present even when unavailable. So an
- * empty table is a terminal state that owes the user a sentence and, where one
- * exists, a link - not a bare header with no rows under it.
- *
- * This used to be hermes-only, by id. Amp and cursor joined the host's set
- * (their SDKs spawn their own copies, so Traycer vendors neither) and would
- * otherwise have rendered that bare table - which for amp is exactly the dead
- * end this whole change is about: MCP add/remove/auth silently gone, and the
- * one screen that could explain it saying nothing.
- *
- * Extracted for the same reason as `CandidateNotices`: it keeps the section
- * below orchestration, and keeps this anchor's RunnerHost branch out of that
- * component's complexity budget.
- */
-/**
  * What the candidate area shows: the table, or one of the two empty states.
  *
  * A plain function rather than nested ternaries in the JSX — the three-way
@@ -464,6 +446,24 @@ function candidateAreaFor(args: {
   return args.probePending ? "probing" : "missing";
 }
 
+/**
+ * Once the host's PATH probe settles, an empty candidate list means
+ * "nothing runnable was found on this machine", not "nothing detected yet": the host only omits the bundled row for the
+ * providers it ships no binary for (`PROVIDERS_WITHOUT_BUNDLED_BINARY`), and
+ * for everyone else the row is always present even when unavailable. So a settled
+ * empty table is a terminal state that owes the user a sentence and, where one
+ * exists, a link - not a bare header with no rows under it.
+ *
+ * This used to be hermes-only, by id. Amp and cursor joined the host's set
+ * (their SDKs spawn their own copies, so Traycer vendors neither) and would
+ * otherwise have rendered that bare table - which for amp is exactly the dead
+ * end this whole change is about: MCP add/remove/auth silently gone, and the
+ * one screen that could explain it saying nothing.
+ *
+ * Extracted for the same reason as `CandidateNotices`: it keeps the section
+ * below orchestration, and keeps this anchor's RunnerHost branch out of that
+ * component's complexity budget.
+ */
 function CandidateEmptyArea({
   area,
   providerId,
@@ -548,7 +548,7 @@ function CliBinaryMissingNotice({
 }
 
 /**
- * S14: the CLI-path-management subsection of `ProviderDetail` (binary
+ * The CLI-path-management subsection of `ProviderDetail` (binary
  * selection table + "Add custom path" flow), extracted so the panel stays
  * orchestration.
  *
@@ -621,7 +621,7 @@ export function ProviderCliCandidatesSection({
   // (`undefined`), which reads identically to an explicit `null` everywhere
   // below.
   const managedInstallState = state.managedInstallState ?? null;
-  // P2/P4. Derived from the WHOLE row, which is the only place the fallback
+  // Derived from the WHOLE row, which is the only place the fallback
   // candidates live - the point of `providerPackPreparingForProvider` taking a
   // provider rather than a state. This section used to build its own
   // `ProviderPackPreparing` at the two render sites with `fallbackRunnable:

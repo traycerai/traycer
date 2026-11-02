@@ -379,7 +379,7 @@ describe("useArtifactLinkOpener", () => {
 
   it("drops an external link while an OS handoff is still in flight", () => {
     // Each call fires a fresh bridge request, so a second click landing on an
-    // outstanding handoff would open a second OS tab (R10).
+    // outstanding handoff would open a second OS tab.
     bridge.isPending = true;
     const { result } = renderHook(
       () =>

@@ -14,7 +14,7 @@ Restart=on-failure
 RestartSec=5
 # Bound a stop at the host's own shutdown watchdog plus the supervisor's
 # wind-down, instead of systemd's 90s default.
-TimeoutStopSec=37
+TimeoutStopSec=47
 
 [Install]
 WantedBy=default.target

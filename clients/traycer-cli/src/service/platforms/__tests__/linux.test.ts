@@ -127,6 +127,7 @@ import {
   type RunResult,
 } from "../../process-runner";
 import {
+  HARD_EXIT_DEADLINE_MS,
   SHUTDOWN_FORCE_EXIT_MS,
   STOP_EXIT_GRACE_MARGIN_MS,
 } from "@traycer/protocol/host/lifecycle-constants";
@@ -1085,18 +1086,21 @@ describe("recycle timeout (systemctl restart / start)", () => {
   // (e) PAST THE BOUND: the runner's own timer killed systemctl.
   async function pastTheBound(args: readonly string[]): Promise<RunResult> {
     throw new ProcessTimeoutError(
-      `systemctl ${args.join(" ")} timed out after 52000ms (killed via SIGTERM): `,
+      `systemctl ${args.join(" ")} timed out after 62000ms (killed via SIGTERM): `,
       "systemctl",
       args,
       -1,
       "",
       "",
-      52_000,
+      62_000,
     );
   }
 
+  // Built from the protocol's own terms, the hard-exit watchdog's SIGKILL of a
+  // host that outlives `process.exit` included.
   const independentFloorMs =
     SHUTDOWN_FORCE_EXIT_MS +
+    HARD_EXIT_DEADLINE_MS +
     STDERR_END_WAIT_TIMEOUT_MS +
     STDERR_FLUSH_TIMEOUT_MS +
     CRASH_REPORT_SCAN_TIMEOUT_MS +
@@ -1184,7 +1188,7 @@ describe("recycle timeout (systemctl restart / start)", () => {
         .catch((error: unknown) => error);
       expect(rejection).toMatchObject({
         code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
-        message: expect.stringContaining("did not return within 52000ms"),
+        message: expect.stringContaining("did not return within 62000ms"),
       });
       expect(rejection).toMatchObject({
         message: expect.stringContaining("unconfirmed"),
@@ -1193,7 +1197,7 @@ describe("recycle timeout (systemctl restart / start)", () => {
         message: expect.stringContaining("failed for"),
       });
       expect(rejection).toMatchObject({
-        details: expect.objectContaining({ timedOut: true, timeoutMs: 52_000 }),
+        details: expect.objectContaining({ timedOut: true, timeoutMs: 62_000 }),
       });
     });
   });
@@ -1252,7 +1256,7 @@ describe("recycle timeout (systemctl restart / start)", () => {
         .catch((error: unknown) => error);
       expect(rejection).toMatchObject({
         code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
-        message: expect.stringContaining("did not return within 52000ms"),
+        message: expect.stringContaining("did not return within 62000ms"),
       });
       expect(rejection).toMatchObject({
         message: expect.stringContaining("unconfirmed"),
@@ -1261,7 +1265,7 @@ describe("recycle timeout (systemctl restart / start)", () => {
         message: expect.stringContaining("failed for"),
       });
       expect(rejection).toMatchObject({
-        details: expect.objectContaining({ timedOut: true, timeoutMs: 52_000 }),
+        details: expect.objectContaining({ timedOut: true, timeoutMs: 62_000 }),
       });
     });
   });
@@ -1273,13 +1277,13 @@ describe("recycle timeout (systemctl restart / start)", () => {
 // `EMITTED_SERVICE_KEYS` / `EMITTED_SERVICE_VALUES`) mirrors this list and
 // admits nothing else, so a change here needs the same change there.
 describe("systemd unit — [Service] directive pin", () => {
-  it("buildSystemdUnit emits TimeoutStopSec=37 inside [Service]", () => {
+  it("buildSystemdUnit emits TimeoutStopSec=47 inside [Service]", () => {
     const unit = buildSystemdUnit({
       label: labelFor("ai.traycer.host.dev"),
       cli: { command: "/home/test/.traycer/cli/bin/traycer", args: [] },
     });
 
-    expect(unit).toContain("\nTimeoutStopSec=37\n");
+    expect(unit).toContain("\nTimeoutStopSec=47\n");
 
     const serviceSection = unit
       .split(/\n\[Service\]\n/)[1]
@@ -1309,7 +1313,7 @@ describe("systemd unit — [Service] directive pin", () => {
       OOMPolicy: "continue",
       Restart: "on-failure",
       RestartSec: "5",
-      TimeoutStopSec: "37",
+      TimeoutStopSec: "47",
     });
     expect(Object.keys(SYSTEMD_UNIT_SERVICE_DIRECTIVES)).toEqual([
       "Type",
@@ -1479,7 +1483,7 @@ describe("Linux controller — spawn-edge placement", () => {
 // install edge now, not after `enable --now` - see linux.ts `installService`'s
 // doc comment (linger held the controller call open past the launch, pushing
 // the host-start lease end past HOST_START_ADOPTION_MAX_AGE_MS's 140s cap:
-// 62s + 30s + 50s = 142s). One shared ordered log, exactly like the
+// 72s + 30s + 50s = 152s). One shared ordered log, exactly like the
 // spawn-edge-placement describe above, so the assertion is about the actual
 // sequence of runner calls plus the publish - not two separately-kept
 // counters that could each look right while disagreeing about order.

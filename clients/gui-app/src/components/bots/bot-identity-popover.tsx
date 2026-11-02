@@ -17,7 +17,7 @@ import { WorkingShimmerText } from "@/components/ui/working-shimmer-text";
 import { Button } from "@/components/ui/button";
 import { BotAvatar } from "@/components/bots/bot-avatars";
 import {
-  useBotMemoryAccess,
+  BotMemoryContext,
   type BotMemoryAccess,
 } from "@/components/bots/bot-memory-context";
 import {
@@ -150,7 +150,7 @@ function BotCard(props: {
  * serve them.
  */
 function BotMemoryRow(): ReactNode {
-  const access = useBotMemoryAccess();
+  const access = useContext(BotMemoryContext);
   if (access === null) return null;
   return <BotMemoryCount access={access} />;
 }

@@ -18,7 +18,6 @@ import {
 } from "@/hooks/bots/use-bot-memory";
 import {
   confirmedSinceWritten,
-  fillOf,
   fullnessOf,
   initialMemoryMarks,
   memorySections,
@@ -231,7 +230,7 @@ function MemoryList(props: ListProps): ReactNode {
         />
       </div>
       <MemorySection
-        title={`${botTitle}'s own`}
+        title="Its own"
         note={null}
         count={own.length}
         testId="bot-memory-own"
@@ -258,7 +257,7 @@ function MemoryList(props: ListProps): ReactNode {
       </MemorySection>
       {shared.length === 0 && searching ? null : (
         <MemorySection
-          title="Shared with every bot"
+          title="Shared"
           note="tidied by the main bot"
           count={shared.length}
           testId="bot-memory-shared"
@@ -334,9 +333,9 @@ function EmptyLine(props: { readonly text: string }): ReactNode {
 
 /**
  * One entry: its text, then when it was confirmed and when and where it was
- * written - or that it was never confirmed since - and for a shared entry
- * the bot that wrote it. An entry written while the pane is open says it is
- * new.
+ * written - or that it was never confirmed since - for a shared entry the
+ * bot that wrote it, and for its own the other bots that keep it too. An
+ * entry written while the pane is open says it is new.
  */
 function MemoryRow(
   props: ListProps & {
@@ -348,6 +347,7 @@ function MemoryRow(
   const { entry, marks } = props;
   const isNew = marks.added.has(entry.id);
   const writer = props.shared ? writerOf(props, entry.writtenBy.botId) : null;
+  const alsoFor = props.shared ? [] : otherKeepers(props, entry);
   return (
     <li
       data-testid="bot-memory-entry"
@@ -384,9 +384,19 @@ function MemoryRow(
         {isNew || confirmedSinceWritten(entry)
           ? null
           : " · never confirmed since"}
+        {alsoFor.length === 0 ? null : ` · also kept for ${alsoFor.join(", ")}`}
       </p>
     </li>
   );
+}
+
+/** The other bots an entry of this bot's own is kept for, by name, those known. */
+function otherKeepers(props: ListProps, entry: BotMemoryEntry): string[] {
+  return entry.tags.flatMap((tag) => {
+    if (tag === props.botId) return [];
+    const name = props.botNameOf(tag);
+    return name === null ? [] : [name];
+  });
 }
 
 /** The bot that wrote a shared entry, by name; `null` when none is known. */
@@ -504,8 +514,9 @@ function WhereLink(props: {
 }
 
 /**
- * How full the bot's own memory is, as a meter and in words, and the one
- * sentence on what happens when it fills.
+ * How full the bot's own memory is, as a meter and against its limit, and
+ * the one sentence on what happens when it fills: the same the bot's memory
+ * tool tells it.
  */
 function MemoryMeter(props: {
   readonly botTitle: string;
@@ -514,9 +525,11 @@ function MemoryMeter(props: {
   const { botTitle, usage } = props;
   const fullness = fullnessOf(usage);
   const over = usage.chars > usage.ceiling;
-  const percent = Math.round(fillOf(usage) * 100);
+  const percent = Math.round(Math.min(1, usage.chars / usage.ceiling) * 100);
   const count =
-    fullness === null ? "none yet." : `${usage.entries}, ${fullness}.`;
+    fullness === null
+      ? "none yet."
+      : `${usage.entries}, ${fullness} (${usage.chars.toLocaleString("en-US")} of ${usage.ceiling.toLocaleString("en-US")} characters).`;
   return (
     <div className="mt-auto flex flex-col gap-1.5 px-4 pt-4 pb-3">
       <div
@@ -537,7 +550,7 @@ function MemoryMeter(props: {
         className="text-ui-xs text-muted-foreground"
         data-testid="bot-memory-meter-line"
       >
-        {`${botTitle}'s own memories: ${count} When it fills, ${botTitle} is asked to tidy them, removing the ones that no longer hold; nothing is dropped on its own.`}
+        {`${botTitle}'s own memories: ${count} When it's full, adds are refused until an entry is removed.`}
       </p>
     </div>
   );

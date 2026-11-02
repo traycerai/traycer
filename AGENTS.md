@@ -153,6 +153,7 @@ ReturnType<typeof fn>          // name the concrete type
 | Treat a sleep or fixed microtask count as operation completion. | Await the operation's completion or its observable outcome before asserting.          |
 | Keep runtime declarations with no production consumer.          | Remove unused declarations and tests that exercise only them.                         |
 | Check for a result the private implementation cannot return.    | Make its return type exact and remove the unreachable branch.                         |
+| Cast a partial fixture to a constructible browser type.         | Use the real constructor to create the fixture.                                       |
 
 ## Skills
 

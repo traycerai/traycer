@@ -235,14 +235,16 @@ vi.mock("@/hooks/host/use-host-directory-list-query", async (importActual) => {
     await importActual<
       typeof import("@/hooks/host/use-host-directory-list-query")
     >();
+  const useHostDirectoryList = () => {
+    const real = actual.useHostDirectoryList();
+    const entries = directoryListTestState.entries;
+    if (entries === null) return real;
+    return { ...real, data: entries, fetchStatus: "idle" as const };
+  };
   return {
     ...actual,
-    useHostDirectoryList: () => {
-      const real = actual.useHostDirectoryList();
-      const entries = directoryListTestState.entries;
-      if (entries === null) return real;
-      return { ...real, data: entries, fetchStatus: "idle" as const };
-    },
+    useHostDirectoryList,
+    useHostDirectoryListQuery: useHostDirectoryList,
   };
 });
 
@@ -288,7 +290,7 @@ vi.mock("@/lib/host", () => ({
     revalidateCurrentContext: () => Promise.resolve({ kind: "valid" as const }),
   }),
   useHostClient: () => MOCK_HOST_CLIENT,
-  // The SPINE, a separate export since redesign P2.1.
+  // The SPINE, a separate export.
   useHostRuntimeClient: () => MOCK_HOST_CLIENT,
 }));
 
@@ -443,14 +445,14 @@ vi.mock("@/hooks/host/use-addressable-host-id", () => ({
 }));
 
 // The Epic session resolves its host through the selection authority's derived
-// pointer (selection model §1), not the active-host projection above - seed the
-// decider at its own name (the P1.2 convention in epic-shell-usage-entry-point).
+// pointer, not the active-host projection above - seed the
+// decider at its own name (the convention in epic-shell-usage-entry-point).
 vi.mock("@/hooks/host/use-effective-host-id", () => ({
   useEffectiveHostId: () => "host-test",
 }));
 
 // The tile's record gate consults `epic.listCloudChats` for a chat with no
-// local doc record (chat-sync-v2 ticket 49 - post-sweep that is the ordinary
+// local doc record (post-sweep that is the ordinary
 // state of a healthy owned chat, so the published row is the only local
 // evidence left that it exists). Driven from test state at the hook boundary
 // so a test can put this suite's chat in or out of the cloud list; `data` is
@@ -527,6 +529,8 @@ import {
 } from "@/components/epic-canvas/renderers/chat-tile";
 import * as chatPrewarmHandoff from "@/components/epic-canvas/chat-prewarm-handoff";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
+import { TileMinimapContext } from "@/components/epic-canvas/tile-minimap/tile-minimap-context";
+import { executePageAct } from "@/lib/voice/page-acts";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import {
@@ -644,6 +648,7 @@ const PENDING_DRAFT_CONTENT: JsonContent = {
   ],
 };
 const QUEUED_SETTINGS: ChatRunSettings = {
+  ultracode: false,
   harnessId: "codex",
   model: "queued-model",
   permissionMode: "supervised",
@@ -653,6 +658,7 @@ const QUEUED_SETTINGS: ChatRunSettings = {
   profileId: null,
 };
 const UPDATED_QUEUE_SETTINGS: ChatRunSettings = {
+  ultracode: false,
   harnessId: "claude",
   model: "claude-live",
   permissionMode: "full_access",
@@ -671,6 +677,7 @@ const INITIAL_HANDOFF_CONTENT: JsonContent = {
   ],
 };
 const INITIAL_HANDOFF_SETTINGS: ChatRunSettings = {
+  ultracode: false,
   harnessId: "codex",
   model: "codex-handoff",
   permissionMode: "supervised",
@@ -680,6 +687,7 @@ const INITIAL_HANDOFF_SETTINGS: ChatRunSettings = {
   profileId: null,
 };
 const SESSION_SETTINGS: ChatRunSettings = {
+  ultracode: false,
   harnessId: "claude",
   model: "claude-live",
   permissionMode: "full_access",
@@ -771,7 +779,7 @@ function createChatHarness(): ChatHarness {
       streamCreations += 1;
       if (snapshot !== null) {
         setTimeout(() => {
-          nextCallbacks.onConnectionStatus("open", null, null);
+          nextCallbacks.onConnectionStatus("open", null, null, null);
           emitChatSnapshotWithMessages({
             callbacks: nextCallbacks,
             access: snapshot.access,
@@ -1578,6 +1586,19 @@ function chatTileSessionViewTestTree(
 }
 
 function renderRestingCopy(handle: ChatSessionStoreHandle) {
+  return render(restingCopyTree(handle));
+}
+
+/** The resting copy in a canvas tile of its own, as the voice reads it. */
+function renderRestingCopyInTile(handle: ChatSessionStoreHandle) {
+  return render(
+    <TileMinimapContext.Provider value={CHAT_ARTIFACT.instanceId}>
+      {restingCopyTree(handle)}
+    </TileMinimapContext.Provider>,
+  );
+}
+
+function restingCopyTree(handle: ChatSessionStoreHandle) {
   act(() => {
     handle.store.setState({
       access: { role: "owner", ownerUserId: "owner-1", canAct: false },
@@ -1595,7 +1616,7 @@ function renderRestingCopy(handle: ChatSessionStoreHandle) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
   });
-  return render(chatTileSessionViewTestTree(queryClient, handle, false));
+  return chatTileSessionViewTestTree(queryClient, handle, false);
 }
 
 /**
@@ -1851,8 +1872,8 @@ describe("<ChatTile />", () => {
     // the renderer must not open the epic via `chat.subscribe` before the
     // create has landed. `cloudChatListTestState` is empty here, which is
     // what a create in flight looks like - the owning host publishes long
-    // after `epic.createChat` returns, so no cloud row can vouch for it yet
-    // (chat-sync-v2 ticket 49).
+    // after `epic.createChat` returns, so no cloud row can vouch for it
+    // yet.
     harness.teardown();
     chatHarness.teardown();
     harness.install(null, "editor");
@@ -1878,8 +1899,8 @@ describe("<ChatTile />", () => {
 
   it("opens chat.subscribe for a record-less chat that is still cloud-known (ticket 49)", async () => {
     // The post-migration steady state of a HEALTHY chat: publication proven,
-    // so `ChatDocEntrySweep` deleted the doc entry (ticket 20) and creation
-    // never re-projects one (ticket 19). The record gate used to refuse this
+    // so `ChatDocEntrySweep` deleted the doc entry and creation
+    // never re-projects one. The record gate used to refuse this
     // shape forever, which is why every swept chat opened as the locked
     // published copy on its own connected host.
     harness.teardown();
@@ -2199,12 +2220,17 @@ describe("<ChatTile />", () => {
     // Three refusals from a host that is up bring the buttons early.
     act(() => {
       for (let attempt = 0; attempt < 3; attempt += 1) {
-        chatHarness.callbacks().onConnectionStatus("reconnecting", null, {
-          code: "SESSION_CLOSED",
-          reason: "SESSION_CLOSED: chat session is closing",
-          incompatibleMethods: null,
-          upgradeGuidance: null,
-        });
+        chatHarness.callbacks().onConnectionStatus(
+          "reconnecting",
+          null,
+          {
+            code: "SESSION_CLOSED",
+            reason: "SESSION_CLOSED: chat session is closing",
+            incompatibleMethods: null,
+            upgradeGuidance: null,
+          },
+          null,
+        );
       }
     });
     const body = screen.getByTestId("chat-tile-pre-content-chat-1");
@@ -2404,6 +2430,64 @@ describe("<ChatTile />", () => {
     useStagedSandboxStore.getState().clearAll();
   });
 
+  it("lets the voice wake a resting copy through the composer in its tile: the message is held in the pending store", async () => {
+    const liveTile = renderChatTile();
+    await waitForChatTileLoaded();
+    const handle = __getChatSessionRegistryForTests().peek(
+      EPIC_ID,
+      CHAT_ARTIFACT.id,
+      HOST_ID,
+    );
+    if (handle === null) {
+      throw new Error("expected the live chat session handle");
+    }
+    liveTile.unmount();
+    sandboxCatalogueTestState.catalogue = {
+      providers: [],
+      offeredAgents: ["codex"],
+    };
+    renderRestingCopyInTile(handle);
+    await waitFor(() => {
+      const button = screen.getByRole("button", { name: "Send" });
+      if (!(button instanceof HTMLButtonElement)) {
+        throw new Error("expected send button");
+      }
+      expect(button.disabled).toBe(false);
+    });
+
+    const outcome = await executePageAct({
+      row: {
+        action: `agent.tell:${CHAT_ARTIFACT.id}`,
+        label: "Tell the agent",
+        takesWords: true,
+        confirm: true,
+      },
+      text: "use the other branch",
+      turnId: null,
+      reads: {
+        agentSession: () => ({
+          handle,
+          chatId: CHAT_ARTIFACT.id,
+          epicId: EPIC_ID,
+          hostId: HOST_ID,
+          tileInstanceId: CHAT_ARTIFACT.instanceId,
+          title: CHAT_ARTIFACT.name,
+        }),
+        paletteRow: () => null,
+      },
+    });
+
+    expect(outcome).toEqual({ kind: "executed" });
+    const sends = Object.values(usePendingSandboxSendStore.getState().sends);
+    expect(sends).toHaveLength(1);
+    expect(sends[0]).toMatchObject({
+      text: "use the other branch",
+      request: { kind: "message", chatId: CHAT_ARTIFACT.id },
+    });
+    usePendingSandboxSendStore.setState({ sends: {} });
+    useStagedSandboxStore.getState().clearAll();
+  });
+
   it.each(["owner", "viewer"] as const)(
     "keeps a suspended live tile's footer as its only availability line for the %s before copy substitution",
     async (role) => {
@@ -2427,7 +2511,9 @@ describe("<ChatTile />", () => {
         }),
       ];
       act(() => {
-        chatHarness.callbacks().onConnectionStatus("reconnecting", null, null);
+        chatHarness
+          .callbacks()
+          .onConnectionStatus("reconnecting", null, null, null);
       });
 
       await waitFor(() => {
@@ -2487,7 +2573,9 @@ describe("<ChatTile />", () => {
       }),
     ];
     act(() =>
-      chatHarness.callbacks().onConnectionStatus("reconnecting", null, null),
+      chatHarness
+        .callbacks()
+        .onConnectionStatus("reconnecting", null, null, null),
     );
 
     await waitFor(() =>
@@ -2543,7 +2631,9 @@ describe("<ChatTile />", () => {
       }),
     ];
     act(() => {
-      chatHarness.callbacks().onConnectionStatus("reconnecting", null, null);
+      chatHarness
+        .callbacks()
+        .onConnectionStatus("reconnecting", null, null, null);
     });
     await waitFor(() => {
       expect(
@@ -2560,7 +2650,9 @@ describe("<ChatTile />", () => {
     renderChatTile();
     await waitForChatTileLoaded();
     act(() => {
-      chatHarness.callbacks().onConnectionStatus("reconnecting", null, null);
+      chatHarness
+        .callbacks()
+        .onConnectionStatus("reconnecting", null, null, null);
     });
     expect(
       screen.getByTestId("chat-composer-reconnecting").textContent,
@@ -3102,7 +3194,9 @@ describe("<ChatTile />", () => {
       savedPrompts: ReadonlyArray<SentPrompt>,
     ): void {
       act(() => {
-        chatHarness.callbacks().onConnectionStatus("reconnecting", null, null);
+        chatHarness
+          .callbacks()
+          .onConnectionStatus("reconnecting", null, null, null);
         emitChatSnapshotWithMessages({
           callbacks: chatHarness.callbacks(),
           access: "owner",
@@ -5324,8 +5418,10 @@ describe("<ChatTile />", () => {
     });
 
     act(() => {
-      chatHarness.callbacks().onConnectionStatus("reconnecting", null, null);
-      chatHarness.callbacks().onConnectionStatus("open", null, null);
+      chatHarness
+        .callbacks()
+        .onConnectionStatus("reconnecting", null, null, null);
+      chatHarness.callbacks().onConnectionStatus("open", null, null, null);
     });
 
     expect(screen.getByText("Host chat content")).not.toBeNull();
@@ -5398,8 +5494,10 @@ describe("<ChatTile />", () => {
     });
 
     act(() => {
-      chatHarness.callbacks().onConnectionStatus("reconnecting", null, null);
-      chatHarness.callbacks().onConnectionStatus("open", null, null);
+      chatHarness
+        .callbacks()
+        .onConnectionStatus("reconnecting", null, null, null);
+      chatHarness.callbacks().onConnectionStatus("open", null, null, null);
     });
 
     expect(chatHarness.sent).toHaveLength(1);
@@ -5899,7 +5997,7 @@ describe("<ChatTile />", () => {
     expect(settingsFrame?.settings).toEqual(UPDATED_QUEUE_SETTINGS);
   });
 
-  // Decision 14 save-and-steer routing (mod-enter → after_safe_point →
+  // The save-and-steer routing (mod-enter → after_safe_point →
   // queueEdit + queueSteerNow) lives in chat-tile-queue-edit-steer.test.tsx,
   // which drives the real useChatComposerSubmit + the tile's edit-arm logic
   // without depending on TipTap DOM key events under jsdom. Plain Enter edit
@@ -6946,6 +7044,7 @@ describe("<ChatTile />", () => {
             upgradeGuidance: null,
           },
         },
+        null,
         null,
       );
     });

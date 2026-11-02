@@ -627,7 +627,7 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
       );
     });
     expect(screen.queryByTestId("host-busy-force-defer-dialog")).toBeNull();
-    // CodeRabbit: absence pinned by ACCESSIBLE ROLE, not the testid — a
+    // Absence pinned by ACCESSIBLE ROLE, not the testid — a
     // future markup change that drops the testid but leaves a real "Force
     // restart" button behind must still fail this.
     expect(screen.queryByRole("button", { name: "Force restart" })).toBeNull();
@@ -682,7 +682,7 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
       );
     });
     expect(screen.queryByTestId("host-busy-force-defer-dialog")).toBeNull();
-    // CodeRabbit: absence pinned by ACCESSIBLE ROLE, not the testid — a
+    // Absence pinned by ACCESSIBLE ROLE, not the testid — a
     // future markup change that drops the testid but leaves a real "Force
     // restart" button behind must still fail this.
     expect(screen.queryByRole("button", { name: "Force restart" })).toBeNull();
@@ -760,8 +760,7 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
     await waitFor(() => {
       expect(screen.queryByTestId("host-busy-force-defer-dialog")).toBeNull();
     });
-    // Wording unified across every restart surface (`host-restart-toast.ts`,
-    // already-landed audit F15-F17/F19/F20/F25, unrelated to this ticket) -
+    // Wording unified across every restart surface (`host-restart-toast.ts`) -
     // the host name doesn't earn its place here since the surface the click
     // came from already names it.
     expect(toast.success).toHaveBeenCalledWith("Host restart requested");
@@ -1155,7 +1154,7 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
   });
 
   it("Force restart armed on host A stays counted after a remount to host B, locking B's lifecycle writes until it settles", async () => {
-    // The regression Codex proved: `forceRestart.isPending` is the LOCAL
+    // The regression: `forceRestart.isPending` is the LOCAL
     // `useMutation` observer's flag, and that observer dies with the
     // scope-keyed remount (`HostSettingsPanel` keys `HostSettingsPanelInner`
     // by `scopeId`). A swap away mid-flight used to mount a FRESH observer
@@ -1259,7 +1258,7 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
   });
 
   it("a PAGE-WIDE write arming under the open offer closes it, so Force cannot recycle the host beside another lifecycle write", async () => {
-    // Codex P1, carried over from the deleted busy band: its buttons gated
+    // Carried over from the deleted busy band: its buttons gated
     // only each OTHER, so Force stayed clickable while a rename, an update
     // install or a service write was running - any of which a forced bridge
     // respawn would then race. `pageGatePending` closed that on the band; the
@@ -1374,7 +1373,7 @@ describe("<HostSettingsPanel /> Overview update-install degrade", () => {
 
     // The whole REGION retires, not just the install button. This test used to
     // assert a disabled install button beside a live "Check now", which is the
-    // shape a review called out: `externally-managed` means the cloud pin
+    // shape called out: `externally-managed` means the cloud pin
     // governs updates for this host, so leaving a check control behind keeps
     // offering the one action the host has just said leads nowhere.
     expect(

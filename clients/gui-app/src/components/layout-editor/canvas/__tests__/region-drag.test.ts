@@ -110,7 +110,7 @@ const CHIP_STRIP_TOP = 160;
 /**
  * The dock's own shape, with the chip-sized rows drawn WHERE THE APP DRAWS
  * THEM - in the composer's compact strip, a container of its own with the
- * whole transcript between it and the dock (G3-01).
+ * whole transcript between it and the dock.
  */
 function mountDock(
   rows: ReadonlyArray<{
@@ -364,12 +364,6 @@ describe("dragging a region on the canvas", () => {
 });
 
 /**
- * The sidebar rail, which L-115 restored to the canvas: one cluster, and a
- * drop placed by an entry's id. A stacked pair draws as ONE icon (G3) - the
- * top's - so the members a press reorders against are the panels that stand
- * alone, whatever dividers the user placed, and one member per pair.
- */
-/**
  * The nine panels with no link and no divider.
  *
  * What most of these cases are about is the drag ENGINE's geometry, so they
@@ -381,6 +375,12 @@ const FLAT_RAIL: ReadonlyArray<RailEntry> = DEFAULT_RAIL.filter(
   (entry) => entry.kind === "panel",
 );
 
+/**
+ * The sidebar rail, which L-115 restored to the canvas: one cluster, and a
+ * drop placed by an entry's id. A stacked pair draws as ONE icon (G3) - the
+ * top's - so the members a press reorders against are the panels that stand
+ * alone, whatever dividers the user placed, and one member per pair.
+ */
 describe("dragging in the sidebar rail", () => {
   it("moves a panel past its neighbour, placed by id", () => {
     // Artifacts sits at 40..76 and Terminals at 80..116 (centre 98). A slot is
@@ -491,7 +491,7 @@ describe("dragging in the sidebar rail", () => {
 /**
  * The dock is the one group the app draws in TWO containers: a chip-sized row
  * stands in the composer's compact strip while its full-size siblings stay in
- * the dock, with the whole transcript between them (G3-01).
+ * the dock, with the whole transcript between them.
  */
 describe("a dock whose members are not all the same size", () => {
   it("reorders the rows drawn in the dock, leaving the chip where it stands", () => {

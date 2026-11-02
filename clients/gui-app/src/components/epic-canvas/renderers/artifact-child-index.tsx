@@ -1,4 +1,3 @@
-import type { CSSProperties } from "react";
 import { useCallback, type MouseEvent } from "react";
 import { v4 as uuidv4 } from "uuid";
 import {
@@ -12,17 +11,16 @@ import {
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import { modifiersFromMouseEvent } from "@/lib/canvas/tile-open/intent";
 import {
-  EPIC_NODE_ICONS,
   isEpicArtifactKind,
   type EpicNodeKind,
 } from "@/lib/artifacts/node-display";
+import { EpicArtifactIcon } from "@/components/epic-canvas/epic-node-tab-icon";
 import { useChildIdsOf, useTreeNodeById } from "@/lib/epic-selectors";
 import { cn } from "@/lib/utils";
 import {
   isOpenableEpicNodeKind,
   makeOpenableNodeRef,
 } from "@/stores/epics/canvas/types";
-import { useSettingsStore } from "@/stores/settings/settings-store";
 import { appLogger } from "@/lib/logger";
 import { onMiddleClick } from "@/lib/dom/on-middle-click";
 
@@ -82,8 +80,6 @@ function ChildIndexRow(props: {
   const { epicId, childId, viewTabId, hostId } = props;
   const treeNode = useTreeNodeById(childId);
   const { openTile } = useEpicTileNavigation();
-  const iconColorMode = useSettingsStore((s) => s.artifactIconColorMode);
-  const iconColors = useSettingsStore((s) => s.artifactIconColors);
   const type = treeNode?.type ?? null;
   const title = treeNode?.title ?? "";
   const treeNodeExists = treeNode !== null;
@@ -141,12 +137,6 @@ function ChildIndexRow(props: {
     return null;
   }
 
-  const Icon = EPIC_NODE_ICONS[type];
-  const iconStyle =
-    iconColorMode === "byType"
-      ? ({ "--swatch": iconColors[type] } as CSSProperties)
-      : undefined;
-
   return (
     <button
       ref={isDraggable ? dragRef : undefined}
@@ -162,12 +152,11 @@ function ChildIndexRow(props: {
         isDragging && "cursor-grabbing opacity-60",
       )}
     >
-      <Icon
-        className={cn(
-          "size-4 shrink-0",
-          iconColorMode === "byType" && "text-[var(--swatch)]",
-        )}
-        style={iconStyle}
+      <EpicArtifactIcon
+        epicId={epicId}
+        artifactId={childId}
+        kind={type}
+        className="size-4 shrink-0"
       />
       <span className="min-w-0 flex-1 truncate">{title}</span>
       <ArtifactStatusDot type={type} status={treeNode.status} />

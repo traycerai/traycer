@@ -446,10 +446,7 @@ function CreditOfferRow(props: {
   );
 }
 
-/**
- * "5 days left", with the exact end on hover or focus. A leaf of its own so the
- * shared minute clock repaints the label and not the row around it.
- */
+/** "5 days left", with the exact end on hover or focus. */
 function CreditOfferTimeLeft(props: { readonly endsAt: string }): ReactNode {
   const now = useSampledNow();
   const end = Date.parse(props.endsAt);

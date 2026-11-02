@@ -15,12 +15,14 @@ export function HtmlArtifactFrame(props: {
       title={props.title}
       className="h-full w-full"
       height={null}
+      pageZoom
       onSize={noop}
       onStatus={noop}
       onBridge={null}
       onTextSelection={null}
       onFrame={null}
       renderOverlay={null}
+      sourceEquivalent={undefined}
       toolbarControls={props.toolbarControls}
     />
   );

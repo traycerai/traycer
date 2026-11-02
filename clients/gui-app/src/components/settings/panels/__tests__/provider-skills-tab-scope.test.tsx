@@ -27,11 +27,23 @@ import { useProvidersWorkspaceSelectionStore } from "@/stores/settings/providers
 import { useWorkspaceFoldersStore } from "@/stores/workspace/workspace-folders-store";
 
 /**
- * F5: Skills tab reuses `useProviderNativeScope` + `McpScopePicker` with
+ * Skills tab reuses `useProviderNativeScope` + `McpScopePicker` with
  * locationLabel "Skills location". Global/project is WHERE skill files live;
  * composer's "Available to" / providerScoped is a different axis and must not
  * be conflated here.
  */
+
+// A host from before environments: `use-skill-environment-route.test.tsx` has
+// the other kind.
+vi.mock("../use-skill-environment-route", () => ({
+  useSkillEnvironmentRoute: () => ({
+    hostRunsEnvironments: false,
+    served: null,
+    hostClient: null,
+    writing: false,
+    write: () => Promise.resolve(null),
+  }),
+}));
 
 const skillMocks = vi.hoisted(() => ({
   skills: [] as ProviderSkill[],

@@ -236,6 +236,7 @@ describe("buildCliUpgradeCommand refuses an unwritable install dir before downlo
           await buildCliUpgradeCommand({
             dryRun: false,
             targetVersion: null,
+            allowDowngrade: false,
           })(fakeCtx());
         } catch (err) {
           caught = err;
@@ -287,6 +288,7 @@ describe("buildCliUpgradeCommand refuses an unwritable install dir before downlo
     const result = await buildCliUpgradeCommand({
       dryRun: false,
       targetVersion: null,
+      allowDowngrade: false,
     })(fakeCtx());
 
     expect(result.data).toMatchObject({

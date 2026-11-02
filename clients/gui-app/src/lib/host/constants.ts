@@ -5,8 +5,8 @@
  * provider has not produced an active id yet, and on legacy artifacts
  * created before per-tile host binding existed.
  *
- * IT DOES NOT FAIL REACHABILITY, and this doc used to claim it did (audit
- * F24). `useHostReachability` answers "reachable" for it ON PURPOSE, and says
+ * IT DOES NOT FAIL REACHABILITY, and this doc used to claim it did.
+ * `useHostReachability` answers "reachable" for it ON PURPOSE, and says
  * so at its own arm: a row carrying this placeholder has no host of its own to
  * be unreachable, so it renders against whichever host the renderer is
  * currently using rather than going dead. Making the placeholder fail the

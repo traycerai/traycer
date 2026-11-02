@@ -4,8 +4,8 @@ import type { TierModelIdentity } from "@traycer/protocol/host/fallback-policy";
 /**
  * Which "one model, one tier" conflicts the panel has already ANNOUNCED.
  *
- * The spec puts `role="alert"` on a conflict block on its FIRST appearance
- * only (§Accessibility). A permanent alert re-interrupts on every mount, and
+ * A conflict block carries `role="alert"` on its FIRST appearance
+ * only. A permanent alert re-interrupts on every mount, and
  * a block mounts far more often than a conflict appears: the Equivalent
  * models tab unmounts when the user leaves it (`TabsContent` has no
  * `forceMount`), so every return re-inserts every block, and deleting an

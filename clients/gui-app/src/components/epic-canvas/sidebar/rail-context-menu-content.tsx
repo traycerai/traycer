@@ -167,7 +167,7 @@ export function RailContextMenuContent(props: {
         </ContextMenuCheckboxItem>
       ))}
       <ContextMenuSeparator />
-      {/* S-32: the sidebar's own side, beside its visibility verbs. Writes
+      {/* The sidebar's own side, beside its visibility verbs. Writes
           through the same recordGesture-wrapped path as every item above it,
           so a move made while customizing is an Undo step. */}
       <ContextMenuItem
@@ -184,7 +184,7 @@ export function RailContextMenuContent(props: {
       {/* The way in (L-19), on the panel the pointer was over so the editor
           opens on that region's own section. This menu already carries its
           own placement verbs - the hide item and checkbox list for show/hide,
-          and the item above for the sidebar's side (S-32, which supersedes
+          and the item above for the sidebar's side (which supersedes
           L-19 / L-72 for this surface) - so there is nothing left for a quick
           verb to add. */}
       <CustomizeLayoutMenuItem

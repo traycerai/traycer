@@ -59,7 +59,7 @@ export function defaultBelongsTo(
   return { kind: "personal" };
 }
 
-/** The four lines a team pick always shows, in order (core flows, flow 5). */
+/** The four lines a team pick always shows, in order. */
 export function sandboxTeamCreateLines(teamName: string): readonly string[] {
   return [
     `Belongs to: ${teamName}`,

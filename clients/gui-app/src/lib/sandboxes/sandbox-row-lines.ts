@@ -566,7 +566,7 @@ function idleMinutesOf(summary: SandboxSummary): number {
 }
 
 /**
- * The three frozen causes, each its own sentence (Flow 5). The payer whose
+ * The three frozen causes, each its own sentence. The payer whose
  * credits ran out is the row's last payer; the third cause (the payer left
  * the team) is not on the summary, so it reads as the second.
  */
@@ -648,7 +648,7 @@ function joinParts(...items: ReadonlyArray<string | null>): string {
 }
 
 /**
- * The row's clock line, per state (Flow 6 › The page). A destroy in flight
+ * The row's clock line, per state. A destroy in flight
  * reads `Destroying · pending`: the row's clock and its keep promise no longer
  * hold.
  */
@@ -780,7 +780,6 @@ export function sandboxFailedChatLine(summary: SandboxSummary): string {
   return joinParts(
     `Couldn't start ${summary.displayName} at ${formatSandboxTime(summary.lastTransitionAt)}`,
     sandboxSupportReference(summary.failureCode),
-    "nothing was charged",
   );
 }
 
@@ -945,7 +944,7 @@ export function sandboxSessionsLine(
   }
 }
 
-// ── Actions (Flow 6's matrix) ───────────────────────────────────────────────
+// ── Actions ─────────────────────────────────────────────────────────────────
 
 export type SandboxRowAction =
   | "suspend"
@@ -1137,9 +1136,10 @@ export function sandboxGiveAnotherLabel(
 
 /**
  * `5 sandboxes and Automations · $0.34 today (UTC day), $0.16 of it yours.`
- * The share is left out when it is all of the day's or none of it. The count
- * is of the rows shown, an Automations host not created yet
- * (`unstartedAutomations`) included.
+ * The share is left out only when it is none of the day's or not known
+ * (`null`); all of it reads `$0.04 of it yours`. The count is of the rows
+ * shown, an Automations host not created yet (`unstartedAutomations`)
+ * included; Automations with no sandbox reads `Automations only`.
  */
 export function sandboxListHeader(input: {
   readonly rows: readonly SandboxSummary[];
@@ -1154,16 +1154,13 @@ export function sandboxListHeader(input: {
     (row) => row.kind !== "automation",
   ).length;
   const noun = sandboxes === 1 ? "sandbox" : "sandboxes";
-  const count = automations
-    ? `${sandboxes} ${noun} and Automations`
-    : `${sandboxes} ${noun}`;
+  let count = `${sandboxes} ${noun}`;
+  if (automations) {
+    count = sandboxes === 0 ? "Automations only" : `${count} and Automations`;
+  }
   if (input.todayMc === null) return count;
   const today = `${formatSandboxCost(input.todayMc)} today (UTC day)`;
-  if (
-    input.todayYoursMc === null ||
-    input.todayYoursMc <= 0 ||
-    input.todayYoursMc === input.todayMc
-  ) {
+  if (input.todayYoursMc === null || input.todayYoursMc <= 0) {
     return `${count} · ${today}`;
   }
   return `${count} · ${today}, ${formatSandboxCost(input.todayYoursMc)} of it yours`;

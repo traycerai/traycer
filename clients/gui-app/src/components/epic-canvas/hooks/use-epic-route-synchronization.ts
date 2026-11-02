@@ -33,6 +33,7 @@ import {
   epicNodeRecency,
   useEpicArtifactRecords,
   useEpicChatRecordListAuthoritative,
+  useEpicTuiAgentRecordListAuthoritative,
   useEpicLastFocusedArtifactId,
   useEpicSnapshotLoaded,
 } from "@/lib/epic-selectors";
@@ -97,8 +98,8 @@ export function useEpicRouteSynchronization(
   const snapshotLoaded = useEpicSnapshotLoaded();
   const persistedFocus = useEpicLastFocusedArtifactId();
   const records = useEpicArtifactRecords();
-  // Same-host counterpart of the cross-host cloud fallback (chat-sync-v2
-  // ticket 36): `epic.listCloudChats` already excludes anything this host's
+  // Same-host counterpart of the cross-host cloud fallback:
+  // `epic.listCloudChats` already excludes anything this host's
   // own registry has tombstoned, so "still cloud-known" is what tells a
   // never-adopted chat apart from a genuinely deleted one for
   // `isTileRefRecordLive` below. `useCloudChatList`'s TanStack Query cache is
@@ -442,7 +443,7 @@ export function useEpicRouteSynchronization(
     if (activeArtifactId === target.id) {
       return;
     }
-    // Route landing uses the same gesture mapping as a link click (C11), but
+    // Route landing uses the same gesture mapping as a link click, but
     // it is the LANDING itself: the focus params it derives belong on the
     // entry the user already navigated to, so the commit REPLACES rather than
     // pushing a second entry they would have to press Back through twice.
@@ -522,6 +523,8 @@ export function useEpicRouteSynchronization(
   // a committed re-point both flip together, never one before the other.
   const activeHostId = useCanvasHostId();
   const chatRecordListAuthoritative = useEpicChatRecordListAuthoritative();
+  const tuiAgentRecordListAuthoritative =
+    useEpicTuiAgentRecordListAuthoritative();
 
   // Close any open tab whose underlying record was removed (sidebar delete,
   // server-side cascade, or remote delete by another collaborator). The
@@ -553,8 +556,9 @@ export function useEpicRouteSynchronization(
   //
   // Only the chat verdict is withheld, though, not the sweep. Artifacts are
   // doc-shared and a same-host terminal agent is this host's own record, so
-  // their absence from the projection is evidence of deletion whatever the
-  // cloud list can or cannot say - and an unverified user deleting a record
+  // once its own list has answered, absence from the projection is evidence
+  // of deletion whatever the cloud list can or cannot say - and an unverified
+  // user deleting a record
   // in a local-homed epic used to leave its tile open and stale until a
   // verdict returned. The sweep therefore runs for an unauthorized session
   // with chat absence marked NON-authoritative: `isTileRefRecordLive` keeps
@@ -590,6 +594,7 @@ export function useEpicRouteSynchronization(
       hasLiveRecord,
       isCloudKnown,
       recordListAuthorizesChatAbsence: chatAbsenceAuthoritative,
+      recordListAuthorizesTuiAgentAbsence: tuiAgentRecordListAuthoritative,
     };
     const pendingClosedInstances = new Set(
       Object.values(useEpicCanvasStore.getState().closedTilePayloadsByTabId)
@@ -633,6 +638,7 @@ export function useEpicRouteSynchronization(
     snapshotLoaded,
     recordSweepRuns,
     chatAbsenceAuthoritative,
+    tuiAgentRecordListAuthoritative,
     canvas,
     records,
     cloudChats.data,
@@ -796,7 +802,7 @@ function findActivePaneElement(paneId: string): HTMLElement | null {
  * around `TileSurfaceSlot`'s bare geometry anchor (it carries layout, tab
  * strip, and DnD target duties independent of hosting), so it is always
  * found by the physical query and would shadow the hosted fallback if tried
- * second (design-review slice-4 finding 4). The hosted record, when one
+ * second. The hosted record, when one
  * exists for this exact `tileInstanceId`, is therefore checked FIRST: its
  * presence unambiguously means the real body lives there, never in the
  * physical wrapper. With the stable-tile-surface-host switch off (or for a

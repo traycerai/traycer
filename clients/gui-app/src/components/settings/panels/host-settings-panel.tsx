@@ -335,19 +335,6 @@ function renderOverviewBody(input: {
 }
 
 /**
- * The doctor's local-only repairs (`service-install`, `free-port-and-restart`,
- * `host-install-latest`) over the CLI bridge.
- *
- * These stay local by design and not for want of an RPC: they repair a host
- * that is down or broken, and such a host generally cannot answer one. The
- * remote degrade is the terminal command, not a remote verb — the plan dropped
- * those deliberately, because they would be dead controls.
- *
- * The issue shape crosses transports here. The RPC report and the bridge report
- * describe the same CLI diagnostics, and `runFixAction` reads only `fixAction`
- * and `details`, so the bridge runner serves both.
- */
-/**
  * What the bridge fix actually did, carried out of `mutationFn` so the
  * callbacks can tell "applied" from "nothing was enqueued". A discriminated
  * pair rather than a bare boolean, because the declined arm is the only one
@@ -450,6 +437,19 @@ function doctorRepairIntentFor(
   return null;
 }
 
+/**
+ * The doctor's local-only repairs (`service-install`, `free-port-and-restart`,
+ * `host-install-latest`) over the CLI bridge.
+ *
+ * These stay local by design and not for want of an RPC: they repair a host
+ * that is down or broken, and such a host generally cannot answer one. The
+ * remote degrade is the terminal command, not a remote verb — the plan dropped
+ * those deliberately, because they would be dead controls.
+ *
+ * The issue shape crosses transports here. The RPC report and the bridge report
+ * describe the same CLI diagnostics, and `runFixAction` reads only `fixAction`
+ * and `details`, so the bridge runner serves both.
+ */
 function useLocalDoctorFixMutation(
   management: IHostManagement | null,
   /**

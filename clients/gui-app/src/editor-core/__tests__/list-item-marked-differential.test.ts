@@ -400,7 +400,7 @@ describe("a checkbox needs text after it, as marked requires", () => {
     expect(mixed).toEqual(mixedTheirs("- x\n- [ ]  a"));
   });
 
-  // D6: marked's `listIsTask` (`\S` after the checkbox's space) refuses a
+  // marked's `listIsTask` (`\S` after the checkbox's space) refuses a
   // no-break space, but a task whose text starts with one is written exactly
   // so, and has to read back as that task, alone or after a bullet.
   it("reads a checkbox, a space and text that starts with a no-break space as a task", () => {
@@ -416,7 +416,7 @@ describe("a checkbox needs text after it, as marked requires", () => {
     expect(textOf(tasks ?? { type: "none" })).toBe("\u00a0ab");
   });
 
-  // D7: a checkbox with nothing after it is an empty task item, because the
+  // A checkbox with nothing after it is an empty task item, because the
   // serializer writes an empty task as its marker line and it has to read
   // back. marked reads it as a plain bullet whose text is `[ ]`.
   it("reads `- [ ] ` as an empty task item on its own and after a plain bullet (D7)", () => {
@@ -562,7 +562,7 @@ describe("a task item reads the same in a mixed list as in a list of tasks", () 
     [
       ["a checked task of one extra space", "- x\n- [x]  ", true, ""],
       ["an unchecked task of one extra space", "- x\n- [ ]  ", false, ""],
-      // The cold reviewer's input (29162a99): marked trims the last item's
+      // Marked trims the last item's
       // no-break space away, the one reader keeps it.
       [
         "a checked task of a no-break space",
@@ -755,7 +755,7 @@ describe("a plain-text ordered paste reads as marked reads it", () => {
   });
 });
 
-// ---- the cold reviewer's rows
+// ---- the added rows
 
 describe("a continuation line's tabs read as marked reads them", () => {
   const ROWS: ReadonlyArray<readonly [string, string]> = [

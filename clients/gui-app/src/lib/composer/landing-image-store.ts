@@ -594,10 +594,6 @@ async function hydrateMeasuredImageSizes(): Promise<void> {
 }
 
 /**
- * Resolves once this partition's sizes are as known as they are going to get.
- * Admission consults it rather than blocking: see `landing-image-budget.ts`.
- */
-/**
  * A FAILED hydration is not a hydrated empty partition.
  *
  * Swallowing the error and reporting "ready" would tell admission that every

@@ -190,7 +190,7 @@ function renderPanel(): void {
 
 describe("<UsageSettingsPanel /> account-group scoping", () => {
   it("reads through the active host even when the sidebar's host pick is dead", async () => {
-    // Ticket 13 moved this section from the Host group to Account, but it kept
+    // This section moved from the Host group to Account, but it kept
     // resolving transport and gating through the Host-group picker's REMEMBERED
     // scope. Picking a host that had gone away therefore hid an account-level
     // dashboard whose own default is "All hosts", behind a notice about a host

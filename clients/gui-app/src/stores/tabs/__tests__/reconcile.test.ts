@@ -1,5 +1,5 @@
 /**
- * Hydration race regression guard for ticket 03.
+ * Hydration race regression guard.
  *
  * `WindowsBridgeProvider` registers a one-shot hydration promise with
  * the reconciler at module load. Until the promise resolves, the

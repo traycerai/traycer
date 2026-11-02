@@ -35,6 +35,7 @@ import {
   useEpicCollaboratorsQuery,
   type EpicCollaboratorsView,
 } from "@/hooks/epics/use-epic-collaborators-query";
+import { useStageFallbackHostLine } from "@/hooks/sandboxes/use-stage-fallback-host-line";
 import { useSandboxCatalogue } from "@/hooks/sandboxes/use-sandbox-catalogue-query";
 import { useSandboxCosts } from "@/hooks/sandboxes/use-sandbox-costs-query";
 import { useMaybeEpicStore } from "@/hooks/use-epic-store";
@@ -102,7 +103,6 @@ import {
 } from "@/stores/sandboxes/sandboxes-page-store";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
 import type { OpenEpicState } from "@/stores/epics/open-epic/store";
-import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 
 /**
  * What an in-task picker knows about its task: the hosts it already uses,
@@ -208,6 +208,7 @@ export interface SandboxStaging {
   /** The block's `Open terminal instead`; `null` when nothing is staged. */
   readonly openTerminalInstead: (() => void) | null;
   readonly chooseAnotherHost?: () => void;
+  readonly chooseAnotherHostLabel: string;
   /** The shape sheet, mounted beside the picker. */
   readonly sheet: ReactNode;
 }
@@ -229,7 +230,7 @@ interface NewRowFacts {
 }
 
 /**
- * The composer and new-terminal pickers' staging (sandboxes redesign D9): the
+ * The composer and new-terminal pickers' staging (the sandboxes redesign): the
  * New rows, what a pick stages, the staged chip's label, the consequences
  * block's input and the shape sheet. A pick only stages; the surface's first
  * action runs the create or wake.
@@ -252,10 +253,8 @@ export function useSandboxStaging(input: {
 }): SandboxStaging | null {
   const { forkOnNew } = input;
   const { memoryHostId } = input;
-  // No surface stages in a build without sandboxes
-  // (`unreleased-features.ts`): the hook answers `null` for every caller, so
-  // each picker draws the plain `Host` group and its own search threshold.
-  const surface = UNRELEASED_FEATURES_ENABLED ? input.surface : null;
+  const chooseAnotherHostLabel = useStageFallbackHostLine(memoryHostId);
+  const { surface } = input;
   const surfaceKey = surface === null ? "" : surface.surfaceKey;
   const task = surface === null ? null : surface.task;
   const viewerUserId = useCloudChatViewerId();
@@ -482,8 +481,7 @@ export function useSandboxStaging(input: {
         if (summary === null || !summary.burst) return null;
         return hostConfigurationLabel(host);
       },
-      // No New sandbox row in a build without sandboxes.
-      newRows: UNRELEASED_FEATURES_ENABLED ? rows.map(newRowPresentation) : [],
+      newRows: rows.map(newRowPresentation),
       rememberedConfigurationKey:
         memoryHostId === null
           ? null
@@ -619,6 +617,7 @@ export function useSandboxStaging(input: {
       supersedeReturnedSandbox(surfaceKey);
       useStagedSandboxStore.getState().clear(surfaceKey);
     },
+    chooseAnotherHostLabel,
   };
 }
 

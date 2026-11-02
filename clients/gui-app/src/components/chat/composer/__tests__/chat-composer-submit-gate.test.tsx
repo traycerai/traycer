@@ -28,7 +28,7 @@ import {
 } from "@/hooks/composer/use-composer-paste";
 
 /**
- * Chat-composer submit gate (finding 3).
+ * Chat-composer submit gate.
  *
  * `chat-composer.tsx` feeds `attachmentPreparationPending` into
  * `useChatComposerSubmit` from `isAttachmentIngestPending({isIngestingImages,
@@ -84,6 +84,7 @@ describe("chat-composer submit gate (path resolution)", () => {
       reasoningFallback: "model-default",
       seedKey: "chat-submit-gate-test",
       values: {
+        ultracode: false,
         permission: "supervised",
         selection: {
           harnessId: "claude",
@@ -96,6 +97,7 @@ describe("chat-composer submit gate (path resolution)", () => {
       onSettingsChange: null,
       tuiOnly: false,
       chatLineCarriesAutoMode: null,
+      ultracodeCarried: false,
       hostId: null,
     });
 
@@ -120,8 +122,9 @@ describe("chat-composer submit gate (path resolution)", () => {
           onSubmitMessage,
           onSideChat: null,
           targetHostId: null,
+          restingSandbox: null,
           queueEditTargetId: null,
-          // T5's gate is off in these fixtures: they predate it and assert the
+          // The gate is off in these fixtures: they predate it and assert the
           // inline behaviour, which is what `false` preserves exactly.
           getDraftBlobBridgeSupported: () => false,
         }),
@@ -789,6 +792,7 @@ function mountSubmitHookWith(args: {
     reasoningFallback: "model-default",
     seedKey: "chat-submit-gate-ready-test",
     values: {
+      ultracode: false,
       permission: "supervised",
       selection: {
         harnessId: "claude",
@@ -801,6 +805,7 @@ function mountSubmitHookWith(args: {
     onSettingsChange: null,
     tuiOnly: false,
     chatLineCarriesAutoMode: null,
+    ultracodeCarried: false,
     hostId: null,
   });
 
@@ -825,8 +830,9 @@ function mountSubmitHookWith(args: {
         onSubmitMessage: args.onSubmitMessage,
         onSideChat: null,
         targetHostId: args.targetHostId,
+        restingSandbox: null,
         queueEditTargetId: null,
-        // T5's gate is off in these fixtures: they predate it and assert the
+        // The gate is off in these fixtures: they predate it and assert the
         // inline behaviour, which is what `false` preserves exactly.
         getDraftBlobBridgeSupported: () => false,
       }),

@@ -1603,7 +1603,9 @@ describe("pickedRunSettings", () => {
   it("carries the agent the person picked, not the one this host's toolbar shows in its place", () => {
     expect(
       pickedRunSettings({
+        ultracode: false,
         values: {
+          ultracode: false,
           selection: {
             harnessId: "codex",
             modelSlug: "gpt-6.1-sol",
@@ -1624,7 +1626,9 @@ describe("pickedRunSettings", () => {
   it("takes the model and settings shown for the same agent when the pick has no model yet", () => {
     expect(
       pickedRunSettings({
+        ultracode: false,
         values: {
+          ultracode: false,
           selection: { harnessId: "claude", modelSlug: "", profileId: null },
           permission: "supervised",
           reasoning: "high",
@@ -1673,6 +1677,7 @@ describe("the pick through the run toolbar store, as a sandbox's catalog answers
       reasoningFallback: "model-default",
       seedKey: "landing",
       values: {
+        ultracode: false,
         permission: "supervised",
         selection: {
           harnessId: "codex",
@@ -1685,12 +1690,14 @@ describe("the pick through the run toolbar store, as a sandbox's catalog answers
       onSettingsChange: null,
       tuiOnly: false,
       chatLineCarriesAutoMode: null,
+      ultracodeCarried: false,
       hostId: "sbx-host",
     });
 
     store.getState().setCatalog({
       hostId: "sbx-host",
       chatLineCarriesAutoMode: null,
+      ultracodeCarried: false,
       keepsUnavailablePick: false,
       harnesses: [
         harnessRow("codex", { available: false }),

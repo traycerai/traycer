@@ -145,7 +145,7 @@ describe("chat-session-store queuePauseReasonProtocolSupported", () => {
   it("takes the probe's false answer at open", () => {
     const harness = createHarness(false);
     try {
-      harness.callbacks().onConnectionStatus("open", null, null);
+      harness.callbacks().onConnectionStatus("open", null, null, null);
       expect(flag(harness.handle.store.getState())).toBe(false);
     } finally {
       harness.handle.dispose();
@@ -155,7 +155,7 @@ describe("chat-session-store queuePauseReasonProtocolSupported", () => {
   it("takes the probe's true answer at open", () => {
     const harness = createHarness(true);
     try {
-      harness.callbacks().onConnectionStatus("open", null, null);
+      harness.callbacks().onConnectionStatus("open", null, null, null);
       expect(flag(harness.handle.store.getState())).toBe(true);
     } finally {
       harness.handle.dispose();
@@ -165,7 +165,7 @@ describe("chat-session-store queuePauseReasonProtocolSupported", () => {
   it("stays null at open when the stream client has no probe at all", () => {
     const harness = createHarness(null);
     try {
-      harness.callbacks().onConnectionStatus("open", null, null);
+      harness.callbacks().onConnectionStatus("open", null, null, null);
       expect(flag(harness.handle.store.getState())).toBe(null);
     } finally {
       harness.handle.dispose();
@@ -175,10 +175,10 @@ describe("chat-session-store queuePauseReasonProtocolSupported", () => {
   it("keeps the value unchanged through a transition to reconnecting", () => {
     const harness = createHarness(false);
     try {
-      harness.callbacks().onConnectionStatus("open", null, null);
+      harness.callbacks().onConnectionStatus("open", null, null, null);
       expect(flag(harness.handle.store.getState())).toBe(false);
 
-      harness.callbacks().onConnectionStatus("reconnecting", null, null);
+      harness.callbacks().onConnectionStatus("reconnecting", null, null, null);
       expect(flag(harness.handle.store.getState())).toBe(false);
     } finally {
       harness.handle.dispose();
@@ -188,7 +188,7 @@ describe("chat-session-store queuePauseReasonProtocolSupported", () => {
   it("resets to null on retry()", () => {
     const harness = createHarness(true);
     try {
-      harness.callbacks().onConnectionStatus("open", null, null);
+      harness.callbacks().onConnectionStatus("open", null, null, null);
       expect(flag(harness.handle.store.getState())).toBe(true);
 
       harness.handle.store.getState().retry();
@@ -202,14 +202,14 @@ describe("chat-session-store queuePauseReasonProtocolSupported", () => {
     const harness = createLiveProbeHarness(false);
     try {
       const callbacks = harness.callbacks();
-      callbacks.onConnectionStatus("open", null, null);
+      callbacks.onConnectionStatus("open", null, null, null);
       expect(flag(harness.handle.store.getState())).toBe(false);
 
-      callbacks.onConnectionStatus("reconnecting", null, null);
+      callbacks.onConnectionStatus("reconnecting", null, null, null);
       expect(flag(harness.handle.store.getState())).toBe(false);
 
       harness.setProbe(true);
-      callbacks.onConnectionStatus("open", null, null);
+      callbacks.onConnectionStatus("open", null, null, null);
       expect(flag(harness.handle.store.getState())).toBe(true);
 
       expect(harness.factoryCallCount()).toBe(1);
@@ -222,14 +222,14 @@ describe("chat-session-store queuePauseReasonProtocolSupported", () => {
     const harness = createLiveProbeHarness(true);
     try {
       const callbacks = harness.callbacks();
-      callbacks.onConnectionStatus("open", null, null);
+      callbacks.onConnectionStatus("open", null, null, null);
       expect(flag(harness.handle.store.getState())).toBe(true);
 
-      callbacks.onConnectionStatus("reconnecting", null, null);
+      callbacks.onConnectionStatus("reconnecting", null, null, null);
       expect(flag(harness.handle.store.getState())).toBe(true);
 
       harness.setProbe(false);
-      callbacks.onConnectionStatus("open", null, null);
+      callbacks.onConnectionStatus("open", null, null, null);
       expect(flag(harness.handle.store.getState())).toBe(false);
 
       expect(harness.factoryCallCount()).toBe(1);

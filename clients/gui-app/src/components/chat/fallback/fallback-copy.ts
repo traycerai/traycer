@@ -12,7 +12,7 @@ import type { ProfileRateLimitSeverity } from "@/lib/rate-limits/rate-limit-scop
 /**
  * User-facing copy for the provider-fallback chat surfaces.
  *
- * Centralised because the vocabulary is FIXED by the UX spec's table and is the
+ * Centralised because the vocabulary is FIXED and is the
  * kind of thing that drifts one card at a time. The words that must never
  * appear anywhere below: "tier", "ladder", "rung", "grace", "fallback",
  * "Inherit", a raw reason code, or a time this client invented. The words that
@@ -103,7 +103,7 @@ export const NOTHING_COULD_BE_TRIED_LABEL = "Nothing could be tried";
  * `turn_error`.
  *
  * The tooltip says why the row is held and how to send it, and promises no
- * more (review sweep, 2026-09-27, replacing the spec's "Retry or switch sends
+ * more (replacing the earlier "Retry or switch sends
  * it after; Resume sends it now"): a successful manual Retry or Switch leaves
  * the held rows paused - the host's own notice says "still paused - resume the
  * queue to send them" - and while one is in flight Resume is gated rather than
@@ -146,7 +146,7 @@ export const FRESH_SESSION_HELPER =
  * chain, so without this the user answering "Stay" lost the one fact that
  * argues against staying: the account they would be staying on is itself
  * running out. Taking the SLOT and dropping the SENTENCE is what MF09 found;
- * UX §2 asks for one banner carrying both facts, not a collision resolved by
+ * One banner carries both facts, not a collision resolved by
  * silence.
  *
  * The wording is the advisory banner's own, deliberately
@@ -154,7 +154,7 @@ export const FRESH_SESSION_HELPER =
  * same family qualifier): the user may see this clause here and the full
  * advisory a message later, and two wordings for one reading would read as two
  * different findings. A CLAUSE rather than a sentence - the headline joins it
- * to the reset with "and", which is the shape UX §2 spells out.
+ * to the reset with "and".
  *
  * `limitedFamilies` is empty when the triggering limit is shared or per-scope
  * data is unavailable; the copy is then profile-wide, exactly as the advisory's
@@ -235,12 +235,12 @@ export function joinCostClauses(
 /**
  * The hold the host declined - the chooser says so.
  *
- * NO CAUSE, deliberately (D220). This used to end "— this chat has moved on",
+ * NO CAUSE, deliberately. This used to end "— this chat has moved on",
  * which is one cause stated as the only one and unproven at every site that
  * renders it: an ACCEPTED ack carrying no token refuses too (the host took the
  * freeze and minted nothing), and since B1 made reopening from `choosing` a
  * normal path, a refusal no longer implies the traversal advanced. Same class
- * as MF10/F6 - refusal copy names no cause unless advancement is proven.
+ * as MF10 - refusal copy names no cause unless advancement is proven.
  *
  * A "try again" or "the countdown is still running" tail is not a fix either:
  * both are causes in disguise. The card or menu state above this line is the
@@ -332,7 +332,7 @@ export function describeWaitDisposition(
       // SILENT, deliberately.
       //
       // The line here used to read "Waiting isn't available for this message."
-      // It claimed no cause, which was right (D220 - the host withheld the wait
+      // It claimed no cause, which was right (the host withheld the wait
       // replay envelope, and why is not ours to state), but a sentence that
       // claims no cause and names no remedy is a sentence with nothing in it.
       // The reader never saw a wait control on this row, so its absence needs
@@ -606,7 +606,7 @@ export function describeManualRungRefusal(input: {
   if (outcome === "applied") return null;
   if (outcome === "attempt_not_latest") {
     // The card has room for the next step, which a toast or a picker footer
-    // does not (spec Flow 4's table).
+    // does not.
     return {
       text: `${CHAT_MOVED_ON_LABEL} Send a new message to continue.`,
       remaining: "none",
@@ -644,3 +644,18 @@ export function routingSwitchLine(
 ): string {
   return `Replays on ${modelLabel} · ${accountLabel} in a new session`;
 }
+
+/**
+ * The chooser's footer line on a bot's chat, in place of
+ * {@link routingSwitchLine}: a bot's chats all run on the bot's model, so the
+ * confirm moves that and then retries the failed answer.
+ */
+export function botRoutingSwitchLine(botTitle: string): string {
+  return `Changes ${botTitle}'s model for all its chats, then retries this answer.`;
+}
+
+/** The chooser's confirm on a bot's chat. */
+export const BOT_SWITCH_AND_RETRY_LABEL = "Switch and retry";
+
+/** The chooser's link to the bot tab's Channel settings. */
+export const BOT_SETTINGS_LINK_LABEL = "Bot settings";

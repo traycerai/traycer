@@ -10,7 +10,7 @@
  * element as `data-anchored`, so a browser regression can assert it.
  */
 
-/** Section 6: the chip sits 6px off the region it names. */
+/** The chip sits 6px off the region it names. */
 const CHIP_MARGIN = 6;
 
 /** Kept inside the app column rather than flush against the window edge. */

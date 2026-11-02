@@ -12,7 +12,6 @@ import type { AuthEra } from "../auth/request-context-provider";
 import { applyHostKeyPins } from "./host-key-pin";
 import { isSandboxFrozenInEffect } from "./sandbox-control";
 import type { HostDirectoryEntry } from "./host-directory";
-import { UNRELEASED_FEATURES_ENABLED } from "../unreleased-features";
 
 /**
  * Remote-host discovery for Remote Host Support S1 (Architecture §7, §9).
@@ -66,12 +65,7 @@ function hostsApiUrl(authnBaseUrl: string): string {
     "api/v3/hosts",
     authnBaseUrl.endsWith("/") ? authnBaseUrl : `${authnBaseUrl}/`,
   );
-  // A build without sandboxes and environments (`unreleased-features.ts`)
-  // asks for neither, so authn answers the row set the release before them
-  // read: no sandbox rows, no team owners.
-  if (UNRELEASED_FEATURES_ENABLED) {
-    url.searchParams.set("include", "sandboxState,owner");
-  }
+  url.searchParams.set("include", "sandboxState,owner");
   return url.toString();
 }
 

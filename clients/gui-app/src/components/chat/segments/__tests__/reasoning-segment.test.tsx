@@ -893,7 +893,7 @@ describe("<ReasoningSegment />", () => {
   });
 });
 
-// Chat display settings (audit R1): a completed block's default disclosure
+// Chat display settings: a completed block's default disclosure
 // follows Layout > Chat > Thinking's size, and a reader's own click wins over
 // it for the rest of the block's life (L-176).
 describe("<ReasoningSegment /> default disclosure follows Thinking's size", () => {

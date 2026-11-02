@@ -163,6 +163,7 @@ const HOST_ID = "host-1";
 const MINUS = "−";
 
 const SETTINGS: ChatRunSettings = {
+  ultracode: false,
   harnessId: "codex",
   model: "codex-test",
   permissionMode: "supervised",
@@ -372,6 +373,7 @@ function surfacesProps(patch: {
       steerCapable: false,
       steerProtocolSupported: true,
       autoPermissionModeProtocolSupported: null,
+      ultracodeProtocolSupported: false,
       getDraftBlobBridgeSupported: () => false,
       getActiveTurnForSteer: () => null,
       // Unused by this suite - it covers dock-chrome folding, not Stop.

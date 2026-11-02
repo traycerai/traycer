@@ -42,7 +42,7 @@ function subsets(): ReadonlyArray<ReadonlyArray<Flag>> {
   return out;
 }
 
-/** Lower is stronger, written out independently of the implementation (D5). */
+/** Lower is stronger, written out independently of the implementation. */
 const STRENGTH: Readonly<Record<RailBadgeKind | "none", number>> = {
   reply: 0,
   approval: 1,

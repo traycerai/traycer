@@ -1,5 +1,5 @@
 /**
- * T2 intermediate-state tests for the tab command coordinator.
+ * Intermediate-state tests for the tab command coordinator.
  *
  * Every affected store and the transaction ledger are subscribed during
  * commands. Each subscription-visible snapshot must keep visible refs unique
@@ -903,7 +903,7 @@ describe("tab command coordinator transactions", () => {
       .getState()
       .drafts.map((d) => d.id);
 
-    // Simulate the review failure mode: Zustand draft state is committed, then
+    // Simulate the failure mode: Zustand draft state is committed, then
     // the synchronous persistence write throws before layout apply. Wrapping
     // createDraftWithId is more reliable than localStorage spies under the
     // test env (and matches "in-memory source exists, applySources throws").
@@ -1498,6 +1498,7 @@ describe("tab command coordinator transactions", () => {
     };
 
     const LOCAL_SETTINGS: ChatRunSettings = {
+      ultracode: false,
       harnessId: "claude",
       model: "local-model",
       permissionMode: "supervised",
@@ -1507,6 +1508,7 @@ describe("tab command coordinator transactions", () => {
       profileId: null,
     };
     const REMOTE_SETTINGS: ChatRunSettings = {
+      ultracode: false,
       harnessId: "codex",
       model: "remote-model",
       permissionMode: "supervised",
@@ -1516,6 +1518,7 @@ describe("tab command coordinator transactions", () => {
       profileId: null,
     };
     const EXPLICIT_SETTINGS: ChatRunSettings = {
+      ultracode: false,
       harnessId: "claude",
       model: "explicit-model",
       permissionMode: "supervised",

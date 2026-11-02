@@ -374,7 +374,7 @@ export function projectChat(
     isTitleEditedByUser: readMaybeBoolean(entry, "isTitleEditedByUser"),
     // A chat projected FROM THE DOC is doc-homed by construction - the doc is
     // where this row lives, whatever the registry may also hold - so this arm
-    // is the one place the fact needs no plane to state it. T9's ruling reads
+    // is the one place the fact needs no plane to state it. The rule reads
     // the same way from the host side: a legacy-hydrated row is `home: "doc"`,
     // and the routing gate must see `true` rather than today's `false`, which
     // would send its rename to a writer that cannot address it.
@@ -578,6 +578,7 @@ function chatRunSettingsEq(
     reasoningEffort: a.reasoningEffort === b.reasoningEffort,
     serviceTier: a.serviceTier === b.serviceTier,
     agentMode: a.agentMode === b.agentMode,
+    ultracode: a.ultracode === b.ultracode,
     profileId: a.profileId === b.profileId,
   } satisfies Record<keyof ChatRunSettings, boolean>;
   return Object.values(fieldsEqual).every((equal) => equal);
@@ -1530,16 +1531,6 @@ export function projectTreeSlice(
 // ─── Full-doc projection (snapshot + initial attach) ──────────────────────
 
 /**
- * Everything a projection folds in besides the doc itself.
- *
- * Grouped rather than passed positionally because all three share one
- * property: they arrive on their own schedule and must be read AT projection
- * time, never captured when the session was constructed. The projector holds a
- * lazy getter for each for that reason. (It also keeps `projectFullState`
- * inside the repo's parameter-count limit, which is the same pressure pointing
- * the same way.)
- */
-/**
  * Whether the epic doc is still a record SOURCE, per population.
  *
  * `false` - the post-cutover normal - means the record plane covers that
@@ -1601,6 +1592,16 @@ export const DOC_IS_THE_ONLY_RECORD_SOURCE: EpicDocRecordArms = Object.freeze({
   tuiAgents: true,
 });
 
+/**
+ * Everything a projection folds in besides the doc itself.
+ *
+ * Grouped rather than passed positionally because all three share one
+ * property: they arrive on their own schedule and must be read AT projection
+ * time, never captured when the session was constructed. The projector holds a
+ * lazy getter for each for that reason. (It also keeps `projectFullState`
+ * inside the repo's parameter-count limit, which is the same pressure pointing
+ * the same way.)
+ */
 export interface ProjectionInputs {
   /**
    * The host's store-backed chat records (`epic.listChatRecords`). Empty in
@@ -1634,7 +1635,7 @@ export interface ProjectionInputs {
   /**
    * Whether the doc is still a record source, per population. Required and
    * never defaulted: an absent-means-`true` convention would silently restore
-   * the double-count this ticket removes on every caller someone forgets, and
+   * the double-count this change removes on every caller someone forgets, and
    * an absent-means-`false` one would silently empty a released-floor host's
    * epic. See {@link EpicDocRecordArms}.
    */

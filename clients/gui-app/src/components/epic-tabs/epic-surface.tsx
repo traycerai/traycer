@@ -135,7 +135,7 @@ export function EpicSurfaceSheets(props: {
   // coordinator reads inside a ResizeObserver callback, and a ResizeObserver
   // reports SIZE changes only. Moving the sidebar to the other side moves the
   // content sheet by the panel's width without resizing it, so without this
-  // the chat body stays at its old x, drawn over the panel (Staging F2) - the
+  // the chat body stays at its old x, drawn over the panel - the
   // same position-only move `TopLevelTabHost` handles for "Reverse views".
   // Layout effect: the re-read has to see this commit's order before paint.
   useLayoutEffect(() => {
@@ -148,7 +148,7 @@ export function EpicSurfaceSheets(props: {
       className="flex min-h-0 min-w-0 flex-1 flex-row md:overflow-clip"
       data-epic-surface={tabId}
     >
-      {/* DOM order follows `sidebarSide` (S-06), never CSS `order`, so
+      {/* DOM order follows `sidebarSide`, never CSS `order`, so
           focus and reading order track what is on screen. Split panes each
           render an `EpicSurface`, so both follow the one global side. */}
       {sidebarSide === "right" ? null : sidebar}

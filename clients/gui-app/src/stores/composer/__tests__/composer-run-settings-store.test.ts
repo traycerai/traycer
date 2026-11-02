@@ -16,6 +16,7 @@ const HOST_A = "host-a";
 const HOST_B = "host-b";
 
 const REGULAR_RUN_SETTINGS: ChatRunSettings = {
+  ultracode: false,
   harnessId: "codex",
   model: "gpt-5-codex",
   permissionMode: "supervised",
@@ -26,6 +27,7 @@ const REGULAR_RUN_SETTINGS: ChatRunSettings = {
 };
 
 const EPIC_RUN_SETTINGS: ChatRunSettings = {
+  ultracode: false,
   harnessId: "claude",
   model: "sonnet-4.5",
   permissionMode: "full_access",

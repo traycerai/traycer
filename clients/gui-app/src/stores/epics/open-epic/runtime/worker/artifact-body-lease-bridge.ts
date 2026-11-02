@@ -336,7 +336,7 @@ interface AwaitingBody {
  * shared by N holders and each of them owes its own idempotent release, so the
  * closures are minted per holder by `grantFor` rather than carried once here.
  * A single shared release would let the first unmount cancel the hold for all
- * of them, which is finding 11 wearing a different hat.
+ * of them, which is the same defect wearing a different hat.
  */
 type InFlightOutcome =
   | { readonly kind: "unavailable"; readonly reason: string }
@@ -352,7 +352,7 @@ interface InFlightAcquire {
    *
    * Incremented SYNCHRONOUSLY as each one joins - the whole point of the
    * record. A holder counted only when its own answer resolves is invisible to
-   * a release that lands first, and that under-count is finding 11.
+   * a release that lands first, and that under-count is the defect.
    */
   holders: number;
   readonly answer: Promise<InFlightOutcome>;
@@ -938,7 +938,7 @@ export function createArtifactBodyLeaseBridge(options: {
       // the first one's `body/materialize` is still outstanding joins it here
       // rather than issuing its own, and - the load-bearing half - it is
       // counted NOW, before any answer exists. Counting a holder only when its
-      // own answer resolves is finding 11: four acquires were outstanding
+      // own answer resolves: four acquires were outstanding
       // together, the first answer installed a hold of one, and that holder's
       // release took the count to zero and posted `body/release` while three
       // holders were still waiting.

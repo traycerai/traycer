@@ -239,29 +239,6 @@ export interface EpicShareableTeam {
 }
 
 /**
- * Invariant: when `admitsLocalPlane(status)` - that is, `signed-in` OR
- * `unverified` - `profile` and `contextMetadata` are both non-null. The
- * `setSignedIn` / `setUnverifiedSession` reducers enforce this at the type
- * level by requiring both values. They stay nullable on the state shape
- * because `signed-out` and `signing-in` still need to represent the absence
- * of a resolved identity.
- *
- * Under `unverified` that identity is read from the on-disk credentials file
- * rather than from a `/api/v3/user` response, so it is exactly as trustworthy
- * as the disk it came from - which is precisely the trust level the local
- * plane needs, and no more. `subscriptionStatus` deliberately stays `null`
- * there: entitlement is a server verdict and we hold none.
- *
- * The Zustand store deliberately holds NO raw bearer token. The runtime auth
- * authority for host / shared-core / runtime consumers is the
- * `RequestContext` exposed through `AuthService.getRequestContextProvider()`.
- * Persistence-boundary callers that genuinely need the bearer (the desktop
- * windows bridge cross-window projection, the persisted token store) read it
- * through the explicit `AuthService.getCurrentSessionSnapshot()` /
- * `AuthService.onSessionSnapshotChange(...)` boundary - never through
- * `useAuthStore`. Static guard tests below enforce this constraint.
- */
-/**
  * Why an `unverified` session holds no cloud verdict. Meaningful only under
  * that status.
  *
@@ -292,6 +269,29 @@ export type CloudVerdictLoss =
 /** The losses that latch: every one except the merely unreachable. */
 export type TerminalCloudVerdictLoss = Exclude<CloudVerdictLoss, "unreachable">;
 
+/**
+ * Invariant: when `admitsLocalPlane(status)` - that is, `signed-in` OR
+ * `unverified` - `profile` and `contextMetadata` are both non-null. The
+ * `setSignedIn` / `setUnverifiedSession` reducers enforce this at the type
+ * level by requiring both values. They stay nullable on the state shape
+ * because `signed-out` and `signing-in` still need to represent the absence
+ * of a resolved identity.
+ *
+ * Under `unverified` that identity is read from the on-disk credentials file
+ * rather than from a `/api/v3/user` response, so it is exactly as trustworthy
+ * as the disk it came from - which is precisely the trust level the local
+ * plane needs, and no more. `subscriptionStatus` deliberately stays `null`
+ * there: entitlement is a server verdict and we hold none.
+ *
+ * The Zustand store deliberately holds NO raw bearer token. The runtime auth
+ * authority for host / shared-core / runtime consumers is the
+ * `RequestContext` exposed through `AuthService.getRequestContextProvider()`.
+ * Persistence-boundary callers that genuinely need the bearer (the desktop
+ * windows bridge cross-window projection, the persisted token store) read it
+ * through the explicit `AuthService.getCurrentSessionSnapshot()` /
+ * `AuthService.onSessionSnapshotChange(...)` boundary - never through
+ * `useAuthStore`. Static guard tests below enforce this constraint.
+ */
 export interface AuthState {
   readonly status: AuthStatus;
   /**

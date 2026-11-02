@@ -16,7 +16,7 @@ import { createAppQueryClient } from "@/lib/query-client";
 import { useEpicMentionEntries } from "../use-epic-mention-entries";
 
 /**
- * `useEpicMentionEntries` now takes its host `client` explicitly (S11: it no
+ * `useEpicMentionEntries` now takes its host `client` explicitly (it no
  * longer resolves `useHostBinding()` internally) - a composer bound to a
  * non-default host must list THAT host's epics/specs, never the app-wide
  * default's. `HostClient` has private fields, so it can't be duck-typed; each
@@ -207,7 +207,7 @@ describe("useEpicMentionEntries", () => {
     });
   });
 
-  // Coverage for the new required `client` param (S11): the composer's host
+  // Coverage for the new required `client` param: the composer's host
   // is the ONE the request actually reaches - not a sibling host, and not the
   // app-wide default - and a `null` client (the composer's host not resolved
   // yet) issues nothing at all rather than silently falling back.

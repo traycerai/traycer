@@ -1,8 +1,24 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type Mock,
+} from "vitest";
 import type { PluginListenerHandle } from "@capacitor/core";
-import type { DeviceFlowResult } from "@traycer-clients/shared/platform/runner-host";
+import type {
+  DeviceFlowResult,
+  SystemSuspendCause,
+} from "@traycer-clients/shared/platform/runner-host";
 import { MobileRunnerHost } from "../src/mobile-runner-host";
 import { MobileSandboxArtifacts } from "../src/sandbox-artifacts-plugin";
+import {
+  MobileVoiceAudio,
+  type MicrophonePermissionState,
+  type VoiceAudioPluginSlice,
+} from "../src/voice-audio";
 import {
   MobileAuthSheet,
   type AppUrlOpenSlice,
@@ -276,6 +292,7 @@ function runner(returnScheme: string | null): MobileRunnerHost {
     // `null` is every other platform's answer.
     systemBack: null,
     statusBarTap: null,
+    voiceAudio: null,
   });
 }
 
@@ -309,6 +326,7 @@ function runnerWithSandboxReason(
     // `null` is every other platform's answer.
     systemBack: null,
     statusBarTap: null,
+    voiceAudio: null,
   });
 }
 
@@ -393,6 +411,7 @@ function runnerAround(
     canCopyImages: true,
     systemBack: null,
     statusBarTap: null,
+    voiceAudio: null,
   });
 }
 
@@ -466,6 +485,80 @@ function runnerWithAuthSheet(
     canCopyImages: true,
     systemBack: null,
     statusBarTap: null,
+    voiceAudio: null,
+  });
+}
+
+/**
+ * The native `VoiceAudio` plugin faked at its boundary: the permission the OS
+ * reports, what a prompt would answer, and the `interrupted` listener the
+ * host registers (captured so a test can play the native side of the edge).
+ */
+interface FakeVoiceAudioPlugin extends VoiceAudioPluginSlice {
+  readonly checkMicrophone: Mock<VoiceAudioPluginSlice["checkMicrophone"]>;
+  readonly requestMicrophone: Mock<VoiceAudioPluginSlice["requestMicrophone"]>;
+  readonly setLive: Mock<VoiceAudioPluginSlice["setLive"]>;
+  readonly removeInterruptionListener: Mock<() => Promise<void>>;
+  /** Resolves once the host's `addListener` registration has settled. */
+  readonly interruptionRegistered: () => Promise<void>;
+  fireInterrupted(): void;
+}
+
+function fakeVoiceAudioPlugin(
+  permission: MicrophonePermissionState,
+  promptAnswer: MicrophonePermissionState,
+): FakeVoiceAudioPlugin {
+  const listeners: Array<() => void> = [];
+  let registration: Promise<PluginListenerHandle> | null = null;
+  const removeInterruptionListener = vi.fn<() => Promise<void>>(() =>
+    Promise.resolve(),
+  );
+  return {
+    checkMicrophone: vi.fn<VoiceAudioPluginSlice["checkMicrophone"]>(() =>
+      Promise.resolve({ state: permission }),
+    ),
+    requestMicrophone: vi.fn<VoiceAudioPluginSlice["requestMicrophone"]>(() =>
+      Promise.resolve({ state: promptAnswer }),
+    ),
+    setLive: vi.fn<VoiceAudioPluginSlice["setLive"]>(() => Promise.resolve()),
+    removeInterruptionListener,
+    addListener: (_eventName, listener) => {
+      listeners.push(listener);
+      registration = Promise.resolve({ remove: removeInterruptionListener });
+      return registration;
+    },
+    interruptionRegistered: async () => {
+      await registration;
+    },
+    fireInterrupted: () => {
+      for (const listener of listeners) {
+        listener();
+      }
+    },
+  };
+}
+
+function runnerWithVoiceAudio(voiceAudio: MobileVoiceAudio): MobileRunnerHost {
+  return new MobileRunnerHost({
+    signInUrl: "http://localhost:32352/sign-in",
+    authnBaseUrl: "http://localhost:32350",
+    hostLabel: "test-slot",
+    relayBaseUrl: "ws://localhost:8787/attach",
+    serverBaseUrl: "http://localhost:5010",
+    sandboxControlUnavailableReason: null,
+    fleetHostIds: null,
+    pushRegistration: null,
+    openPushSettings: null,
+    returnScheme: null,
+    authSheet: null,
+    linkCodeScanner: null,
+    deviceDescriber: null,
+    linkLoginDeepLinks: null,
+    fileSave: null,
+    canCopyImages: true,
+    systemBack: null,
+    statusBarTap: null,
+    voiceAudio,
   });
 }
 
@@ -1024,6 +1117,174 @@ describe("MobileRunnerHost", () => {
       throwing.dispose();
       live.dispose();
       errorSpy.mockRestore();
+    });
+  });
+
+  describe("voice session", () => {
+    let visibility: DocumentVisibilityState = "visible";
+
+    function suspendCauses(host: MobileRunnerHost): {
+      readonly causes: SystemSuspendCause[];
+      readonly dispose: () => void;
+    } {
+      const causes: SystemSuspendCause[] = [];
+      const subscription = host.onSystemSuspended((cause) => {
+        causes.push(cause);
+      });
+      return { causes, dispose: () => subscription.dispose() };
+    }
+
+    function hostWithVoiceAudio(
+      permission: MicrophonePermissionState,
+      promptAnswer: MicrophonePermissionState,
+    ): {
+      readonly host: MobileRunnerHost;
+      readonly plugin: FakeVoiceAudioPlugin;
+      readonly openSettings: Mock<() => Promise<void>>;
+    } {
+      const plugin = fakeVoiceAudioPlugin(permission, promptAnswer);
+      const openSettings = vi.fn<() => Promise<void>>(() => Promise.resolve());
+      const host = runnerWithVoiceAudio(
+        new MobileVoiceAudio(plugin, openSettings),
+      );
+      return { host, plugin, openSettings };
+    }
+
+    beforeEach(() => {
+      visibility = "visible";
+      Object.defineProperty(document, "visibilityState", {
+        configurable: true,
+        get: () => visibility,
+      });
+    });
+
+    afterEach(() => {
+      Reflect.deleteProperty(document, "visibilityState");
+    });
+
+    it("grants without prompting when the OS already granted the microphone", async () => {
+      const { host, plugin } = hostWithVoiceAudio("granted", "denied");
+
+      await expect(host.requestMicrophoneAccess()).resolves.toBe("granted");
+      expect(plugin.requestMicrophone).not.toHaveBeenCalled();
+    });
+
+    it("prompts when the OS has not been asked and returns the person's answer", async () => {
+      const allowed = hostWithVoiceAudio("prompt", "granted");
+      await expect(allowed.host.requestMicrophoneAccess()).resolves.toBe(
+        "granted",
+      );
+      expect(allowed.plugin.requestMicrophone).toHaveBeenCalledTimes(1);
+
+      const refused = hostWithVoiceAudio("prompt", "denied");
+      await expect(refused.host.requestMicrophoneAccess()).resolves.toBe(
+        "denied",
+      );
+      expect(refused.plugin.requestMicrophone).toHaveBeenCalledTimes(1);
+    });
+
+    it("answers denied without prompting when the person already refused", async () => {
+      const { host, plugin } = hostWithVoiceAudio("denied", "granted");
+
+      await expect(host.requestMicrophoneAccess()).resolves.toBe("denied");
+      expect(plugin.requestMicrophone).not.toHaveBeenCalled();
+    });
+
+    it("opens the app's settings page through the injected opener", async () => {
+      const { host, openSettings } = hostWithVoiceAudio("denied", "denied");
+
+      await host.openMicrophoneSettings();
+
+      expect(openSettings).toHaveBeenCalledTimes(1);
+    });
+
+    it("tells the plugin when a session goes live and when it stops", async () => {
+      const { host, plugin } = hostWithVoiceAudio("granted", "granted");
+
+      await host.setVoiceSessionLive(true);
+      await host.setVoiceSessionLive(false);
+
+      expect(plugin.setLive.mock.calls).toEqual([
+        [{ live: true }],
+        [{ live: false }],
+      ]);
+    });
+
+    it("without a voice plugin: access resolves granted and nothing throws", async () => {
+      const host = runner(null);
+
+      await expect(host.requestMicrophoneAccess()).resolves.toBe("granted");
+      await expect(host.openMicrophoneSettings()).resolves.toBeUndefined();
+      await expect(host.setVoiceSessionLive(true)).resolves.toBeUndefined();
+    });
+
+    it("iOS: raises background once per episode on pause, not on a duplicate pause", () => {
+      const { host } = hostWithVoiceAudio("granted", "granted");
+      const { causes, dispose } = suspendCauses(host);
+
+      fireAppPause();
+      fireAppPause();
+      expect(causes).toEqual(["background"]);
+
+      // A completed episode re-arms the edge.
+      fireAppResume();
+      fireAppPause();
+      expect(causes).toEqual(["background", "background"]);
+
+      dispose();
+    });
+
+    it("Android: raises background once when appStateChange reports inactive", () => {
+      capacitorEventMocks.platform = "android";
+      const { host } = hostWithVoiceAudio("granted", "granted");
+      const { causes, dispose } = suspendCauses(host);
+
+      // Activity pause under a dialog is not an edge on Android.
+      fireAppPause();
+      expect(causes).toEqual([]);
+
+      fireAppState(false);
+      fireAppState(false);
+      expect(causes).toEqual(["background"]);
+
+      dispose();
+    });
+
+    it("web: raises background once when the document goes hidden", () => {
+      capacitorEventMocks.platform = "web";
+      const { host } = hostWithVoiceAudio("granted", "granted");
+      const { causes, dispose } = suspendCauses(host);
+
+      visibility = "hidden";
+      document.dispatchEvent(new Event("visibilitychange"));
+      document.dispatchEvent(new Event("visibilitychange"));
+
+      expect(causes).toEqual(["background"]);
+      dispose();
+    });
+
+    it("raises interrupted from the plugin's listener", async () => {
+      const { host, plugin } = hostWithVoiceAudio("granted", "granted");
+      const { causes, dispose } = suspendCauses(host);
+      await plugin.interruptionRegistered();
+
+      plugin.fireInterrupted();
+
+      expect(causes).toEqual(["interrupted"]);
+      dispose();
+    });
+
+    it("raises nothing after dispose and releases the plugin listener", async () => {
+      const { host, plugin } = hostWithVoiceAudio("granted", "granted");
+      const { causes, dispose } = suspendCauses(host);
+      await plugin.interruptionRegistered();
+
+      dispose();
+      fireAppPause();
+      plugin.fireInterrupted();
+
+      expect(causes).toEqual([]);
+      expect(plugin.removeInterruptionListener).toHaveBeenCalledTimes(1);
     });
   });
 

@@ -150,7 +150,7 @@ describe("offeredQuickVerbs", () => {
   });
 
   it("offers the size a region is NOT in, for a size-only region with no hide/show pair", () => {
-    // Access (G6): size-only, so the size verb is the one thing left.
+    // Access: size-only, so the size verb is the one thing left.
     expect(
       offeredQuickVerbs(SIZE_ONLY_VERBS, { hidden: false, chip: false }),
     ).toEqual(["chip"]);
@@ -161,7 +161,7 @@ describe("offeredQuickVerbs", () => {
 });
 
 describe("<LayoutRegionContextMenu />", () => {
-  // The chat display settings (audit R1, R3) take the same hide path as the
+  // The chat display settings take the same hide path as the
   // minimap. Each row resolves its own toast before finishing (there is one
   // pending-verb slot, module-wide) so it leaves nothing for a later test's
   // own `Analytics.track` spy to catch (L-19, L-46).
@@ -265,7 +265,7 @@ describe("<LayoutRegionContextMenu />", () => {
     );
   });
 
-  // Chat display settings (audit R1, R3): Tool activity is Closed by
+  // Chat display settings: Tool activity is Closed by
   // default, so its one offered verb is the size verb, worded as an
   // open/close pair like Thinking's. It resolves its own toast before
   // finishing, for the same reason as the hide rows above.
@@ -420,7 +420,7 @@ describe("layout_quick_verb analytics (L-19, L-46)", () => {
 });
 
 /**
- * One root for a whole strip of regions (G3-10). The verbs still belong to the
+ * One root for a whole strip of regions. The verbs still belong to the
  * item the pointer was on, which is the thing a shared root could get wrong.
  */
 describe("<LayoutClusterContextMenu />", () => {

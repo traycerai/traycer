@@ -20,7 +20,7 @@ import {
 } from "@/stores/host/surface-host-selection-store";
 
 /**
- * The composer's surface key: window-scoped (selection model §2 / M4).
+ * The composer's surface key: window-scoped (M4).
  *
  * The composer is the one multi-instance surface whose instances must AGREE -
  * a window shows at most one placement composer at a time (the landing
@@ -28,8 +28,8 @@ import {
  * all place new work on the same machine. Keying per component instance would
  * let the modal silently contradict the landing chip behind it.
  *
- * Outside desktop there is no windows bridge, so the browser TAB is the window
- * - and it has to be identified, not assumed. This used to fold every browser
+ * In a browser there is no windows bridge, so the TAB is the window - and it
+ * has to be identified, not assumed. This used to fold every browser
  * tab onto the literal key `"browser"`, and because the pin store persists to
  * localStorage (origin-wide, not per-tab) a pin chosen in one tab was hydrated
  * by the next one opened or reloaded. The composer is PLACEMENT, so that tab's
@@ -37,10 +37,14 @@ import {
  * life. The doc here said it folded "the whole browser tab onto one key"; it
  * folded every tab onto one key, which is the bug.
  *
- * `browserTabId()` is the shared claim protocol, not a `sessionStorage` read -
- * see its module for why the difference matters (a duplicated tab inherits its
- * origin's `sessionStorage`). Desktop keeps its bridge `windowId`, which is
+ * There, `browserTabId()` is the shared claim protocol, not a `sessionStorage`
+ * read - see its module for why the difference matters (a duplicated tab inherits
+ * its origin's `sessionStorage`). Desktop keeps its bridge `windowId`, which is
  * already stable and finite.
+ *
+ * The installed mobile app has no bridge either, and is not a tab: there
+ * `browserTabId()` itself returns one id per install (`lib/browser-tab-identity.ts`
+ * says why). That id never rotates, so the migration effect below never fires.
  */
 export function useComposerSurfaceHostKey(): string {
   const bridgeWindowId = useWindowsBridge()?.windowId ?? null;
@@ -88,7 +92,7 @@ export function useComposerSurfaceHostKey(): string {
 /**
  * This window's composer host pin. `selection === null` follows the effective
  * host; `resolvedHostId` is what the chip renders and what every create the
- * composer performs must address (selection model §54 - the composer is
+ * composer performs must address (the composer is
  * placement, and its resolved host decides where a chat/epic lives for life).
  *
  * Writing it is the ONLY thing the composer's host picker does: it never

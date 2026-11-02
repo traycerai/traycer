@@ -10,6 +10,7 @@ public class MainActivity extends BridgeActivity {
         // in this app module is registered here, before the bridge loads.
         registerPlugin(AuthSessionPlugin.class);
         registerPlugin(SandboxArtifactsPlugin.class);
+        registerPlugin(VoiceAudioPlugin.class);
         super.onCreate(savedInstanceState);
     }
 }

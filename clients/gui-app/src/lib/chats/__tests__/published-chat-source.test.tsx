@@ -238,9 +238,9 @@ describe("published chat source", () => {
   });
 
   it("reports a truncated payload as a prefix, with its real byte length", () => {
-    // The reviewer's witness: a 65,547-byte payload served as a 65,536-byte
+    // The witness: a 65,547-byte payload served as a 65,536-byte
     // prefix. Dropping `isTruncated` made the surface present the prefix as the
-    // whole file - worse than the viewer this ticket demolished, which said so.
+    // whole file - worse than the viewer it replaced, which said so.
     payloadAnswer.current = {
       kind: "text",
       text: "x",

@@ -1,7 +1,7 @@
 import { useLayoutEffect, useSyncExternalStore } from "react";
 
 /**
- * The one fullscreen MCP App a window may show (plan §2.7, Overlay).
+ * The one fullscreen MCP App a window may show.
  *
  * Fullscreen sits in the top layer, above everything else in the window, so it
  * must never cover something the reader has to answer. Two rules hold that:

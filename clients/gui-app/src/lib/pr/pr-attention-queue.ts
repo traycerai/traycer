@@ -3,7 +3,7 @@
  * that need a decision, ranked, each one routable to an agent.
  *
  * This is the inversion that separates our PR view from GitHub's. GitHub's
- * page is a conversation you can act inside; ours is read-only (decision #4),
+ * page is a conversation you can act inside; ours is read-only,
  * so a chronological feed presents a discussion with no way to participate.
  * What we can do that GitHub cannot is hand a finding straight to the agent
  * that wrote the branch - so the hero is a queue of blockers, not a timeline.

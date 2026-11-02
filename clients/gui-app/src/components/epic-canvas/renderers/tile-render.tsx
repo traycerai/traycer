@@ -219,6 +219,16 @@ function tileRenderer<K extends TileKindId>(
 }
 
 /**
+ * The gesture a tile's open wake is recorded under: Open terminal for a
+ * terminal, Open files for a workspace file, none for any other tile.
+ */
+function tileWakeGesture(node: EpicCanvasTileRef): SandboxVerbGesture | null {
+  if (node.type === "terminal") return "open-terminal";
+  if (isWorkspaceFileRef(node)) return "open-files";
+  return null;
+}
+
+/**
  * Render any canvas tile. Wraps the kind-specific body in
  * `<TabHostProvider>` so every tile reads its bound host via
  * `useTabHostId()`, in `<LinkTargetProvider>` so an in-app link opens on this
@@ -239,22 +249,11 @@ function tileRenderer<K extends TileKindId>(
  * surfaces and stay interactive; personal hosts have no lifecycle overlay.
  *
  * Accepted cost: the coordinator is acquired EAGERLY while the tile is
- * mounted - a lazy one would not be live at click time, so the first link
- * click would still fall out to the OS browser. A tile on a host that is
- * asleep therefore holds a capped-backoff (1s→30s) reconnect loop, one socket
- * per host per epic. Gating on reachability was rejected: stale or pending
+ * mounted if its transport is ready, or retained if it already exists - a lazy one would not be live at click time, so the first link
+ * click would still fall out to the OS browser. A new coordinator is not created while its
+ * transport is unavailable. Gating on reachability was rejected: stale or pending
  * reachability reintroduces exactly the first-click failure this closes.
  */
-/**
- * The gesture a tile's open wake is recorded under: Open terminal for a
- * terminal, Open files for a workspace file, none for any other tile.
- */
-function tileWakeGesture(node: EpicCanvasTileRef): SandboxVerbGesture | null {
-  if (node.type === "terminal") return "open-terminal";
-  if (isWorkspaceFileRef(node)) return "open-files";
-  return null;
-}
-
 export function renderTile(args: TileRenderArgs<EpicCanvasTileRef>): ReactNode {
   return (
     <TabHostProvider hostId={args.node.hostId}>

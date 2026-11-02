@@ -10,6 +10,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import {
   readStagedSandbox,
   stagedCreateNeedsFreshKey,
+  stagedSandboxRested,
   useStagedSandboxStore,
   type StagedSandboxTarget,
 } from "@/stores/composer/staged-sandbox-store";
@@ -353,6 +354,62 @@ function restoreStageStorage(
   for (const key of keys) localStorage.removeItem(key);
   for (const [key, value] of entries) localStorage.setItem(key, value);
 }
+
+describe("a stage whose sandbox rested on its own", () => {
+  function stageAt(
+    step: "creating" | "booting" | "applying" | "delivering",
+    phase: "creating" | "handoff",
+  ) {
+    const store = useStagedSandboxStore.getState();
+    store.stage(SURFACE, NEW_TARGET);
+    store.begin(SURFACE, false, 1_000, false);
+    store.report(SURFACE, {
+      createdSandboxId: "sbx-1",
+      createdHostId: "host-1",
+      step,
+      phase,
+    });
+    return stageOf(SURFACE);
+  }
+
+  it.each([
+    ["applying", "creating"],
+    ["delivering", "creating"],
+    ["creating", "handoff"],
+  ] as const)("is rested at step %s in phase %s", (step, phase) => {
+    expect(stagedSandboxRested(stageAt(step, phase), true)).toBe(true);
+  });
+
+  it.each([
+    ["creating", "creating"],
+    ["booting", "creating"],
+  ] as const)("is not rested at step %s in phase %s", (step, phase) => {
+    expect(stagedSandboxRested(stageAt(step, phase), true)).toBe(false);
+  });
+
+  it("is not rested while its row is not resting", () => {
+    expect(stagedSandboxRested(stageAt("creating", "handoff"), false)).toBe(
+      false,
+    );
+  });
+
+  it("is rested for a recorded rest at step booting, only while its row rests", () => {
+    stageAt("booting", "creating");
+    useStagedSandboxStore.getState().report(SURFACE, {
+      failure: { kind: "rested" },
+    });
+    expect(stagedSandboxRested(stageOf(SURFACE), true)).toBe(true);
+    expect(stagedSandboxRested(stageOf(SURFACE), false)).toBe(false);
+  });
+
+  it("leaves a settings failure to its own line, even past handoff", () => {
+    stageAt("creating", "handoff");
+    useStagedSandboxStore.getState().report(SURFACE, {
+      failure: { kind: "settings", code: "SBX-0520" },
+    });
+    expect(stagedSandboxRested(stageOf(SURFACE), true)).toBe(false);
+  });
+});
 
 describe("a retry request written by a window that does not own the send", () => {
   it("survives the owner's stale progress write made before its window hydrates it", async () => {

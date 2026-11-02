@@ -445,7 +445,7 @@ const reopenWithClick = (page: Page, how: Reopen): Promise<void> =>
     how,
   );
 
-// E9 (ported from chat-scroll-diag-restore-cancel.spec.ts's R2): a click on a
+// E9 (ported from chat-scroll-diag-restore-cancel.spec.ts): a click on a
 // non-interactive part of a row lands the same task the tile remounts, while
 // the restore is still converging. The click must not cancel it.
 test("legacy E9[reopen]: detached, reopen, a click on mount during the restore -> kept", async ({

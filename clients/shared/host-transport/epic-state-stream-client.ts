@@ -47,8 +47,7 @@ import type { EpicLaneCursor } from "@traycer/protocol/host/epic/lane-cursor";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type {
   IStreamSession,
-  StreamCloseReason,
-  StreamConnectionStatus,
+  StatusChangeHandler,
   StreamFrameEnvelope,
 } from "./i-stream-session";
 import type { IStreamClient } from "./i-stream-client";
@@ -94,10 +93,7 @@ export interface EpicStateStreamCallbacks {
    * a snapshot would have to claim a `basis` that is not true.
    */
   readonly onTrustChanged: (frame: EpicStateTrustChangedFrame) => void;
-  readonly onConnectionStatus: (
-    status: StreamConnectionStatus,
-    reason: StreamCloseReason | null,
-  ) => void;
+  readonly onConnectionStatus: StatusChangeHandler;
 }
 
 export interface EpicStateStreamClientOptions {
@@ -125,8 +121,8 @@ export class EpicStateStreamClient {
     this.session.onServerFrame((envelope, binaryPayload) => {
       this.handleServerFrame(envelope, binaryPayload);
     });
-    this.session.onStatusChange((status, reason) => {
-      this.callbacks.onConnectionStatus(status, reason);
+    this.session.onStatusChange((status, reason, retryCause, continuity) => {
+      this.callbacks.onConnectionStatus(status, reason, retryCause, continuity);
     });
   }
 

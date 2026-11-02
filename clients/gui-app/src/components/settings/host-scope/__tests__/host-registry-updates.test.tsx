@@ -1,7 +1,7 @@
 /**
  * `ApplyNowControl` refusal composition: the drain-gate force names a count
  * ("Apply now — ends N sessions") and destroys that many sessions on
- * confirm. This pins the review's ask directly — with the dialog open,
+ * confirm. This pins the ask directly — with the dialog open,
  * `liveBusySessionCount` changing underneath it (to a different number, and
  * to `null`) must make confirming a NO-OP and change the description copy,
  * following the same arm-time-capture pattern `targetMoved` already uses.
@@ -178,7 +178,7 @@ describe("ApplyNowControl — armed count vs settled count at confirm time", () 
 });
 
 /**
- * The display/destructive split (repair round 3, finding 4).
+ * The display/destructive split.
  *
  * A retained-through-refetch count is good enough to READ and not good enough
  * to DESTROY things by. The two tests below are the two halves of that

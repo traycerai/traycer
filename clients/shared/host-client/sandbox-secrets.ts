@@ -5,7 +5,7 @@ import {
   type SecretRequestDecision,
 } from "@traycer/protocol/host/sandbox-secrets";
 import { z } from "zod";
-import { composeRequestAbort } from "../auth/request-abort";
+import { composeRequestAbort, untilAborted } from "../auth/request-abort";
 import { PATH_ID_PATTERN } from "./path-id";
 
 /**
@@ -142,25 +142,28 @@ async function call(
   // bounds.
   const abort = composeRequestAbort(null, SANDBOX_SECRETS_FETCH_TIMEOUT_MS);
   try {
-    const response = await fetch(url, {
-      method,
-      headers:
-        body === null
-          ? {
-              Authorization: `Bearer ${bearerToken}`,
-              Accept: "application/json",
-            }
-          : {
-              Authorization: `Bearer ${bearerToken}`,
-              Accept: "application/json",
-              "Content-Type": "application/json",
-            },
-      body,
-      signal: abort.signal,
-    });
+    const response = await untilAborted(
+      fetch(url, {
+        method,
+        headers:
+          body === null
+            ? {
+                Authorization: `Bearer ${bearerToken}`,
+                Accept: "application/json",
+              }
+            : {
+                Authorization: `Bearer ${bearerToken}`,
+                Accept: "application/json",
+                "Content-Type": "application/json",
+              },
+        body,
+        signal: abort.signal,
+      }),
+      abort.signal,
+    );
     // An empty or non-JSON body (a proxy's HTML page) reads as `null` rather
     // than throwing before the status is classified.
-    const text = await response.text();
+    const text = await untilAborted(response.text(), abort.signal);
     return {
       kind: "response",
       status: response.status,

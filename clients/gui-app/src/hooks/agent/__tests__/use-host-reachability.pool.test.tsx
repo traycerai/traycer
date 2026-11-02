@@ -21,9 +21,16 @@ const directory = vi.hoisted<{ value: readonly HostDirectoryEntry[] }>(() => ({
   value: [],
 }));
 
-vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
-  useHostDirectoryList: () => ({ data: directory.value, fetchStatus: "idle" }),
-}));
+vi.mock("@/hooks/host/use-host-directory-list-query", () => {
+  const useHostDirectoryList = () => ({
+    data: directory.value,
+    fetchStatus: "idle",
+  });
+  return {
+    useHostDirectoryList,
+    useHostDirectoryListQuery: useHostDirectoryList,
+  };
+});
 
 const readySessionHosts = vi.hoisted(() => ({ value: new Set<string>() }));
 const readinessListeners = vi.hoisted(() => ({

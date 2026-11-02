@@ -26,11 +26,8 @@ export type LandingGiveBack =
 export interface LandingSandboxSendHandoff {
   readonly isCurrent: () => boolean;
   readonly confirm: () => void;
-  /**
-   * `taskCreated`: the task exists, so a send that cannot go back to its
-   * composer stays with it. With no task, the message is never left behind.
-   */
-  readonly giveBack: (taskCreated: boolean) => LandingGiveBack | null;
+  /** Returns the message; a setup that fails leaves no task to keep it. */
+  readonly giveBack: () => LandingGiveBack | null;
 }
 
 /** Landing setup returns its destination with the message if create or attach fails. */
@@ -50,17 +47,15 @@ export function handLandingSandboxSend(
   return {
     isCurrent,
     confirm: () => confirmPendingSandboxSendEpic(id),
-    giveBack: (taskCreated) => {
+    giveBack: () => {
       if (!isCurrent()) return null;
       const send = usePendingSandboxSendStore.getState().sends[id];
       const stage = readStagedSandbox(pendingSendSurfaceKey(id));
       if (send.epicConfirmed || stage === null) return null;
       const returnedSandbox = stagedSandboxDestination(stage);
       // A reused composer belongs to the newer choice. Keep this send's
-      // only message and destination together on its task, or, with no
-      // task, in Drafts.
+      // only message and destination together in Drafts.
       if (readStagedSandbox(input.fromSurfaceKey) !== null) {
-        if (taskCreated) return null;
         const saved = returnPendingSandboxSendToDraft(id);
         if (saved.kind !== "landing-draft") return null;
         useLandingDraftStore

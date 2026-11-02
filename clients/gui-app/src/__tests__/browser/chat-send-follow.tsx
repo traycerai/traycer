@@ -24,6 +24,8 @@ import type {
   ChatRunSettings,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport/chat-stream-client";
+import { ComposerFocusLayoutContext } from "@/components/home/composer/composer-focus-layout-context";
+import { setPhoneLayoutOnly } from "@/lib/mobile-app";
 import {
   ChatComposer,
   type ChatComposerSubmitInput,
@@ -97,6 +99,7 @@ const OWNER_ID = "owner-send";
 const HOST_ID = "host-send";
 
 const SETTINGS: ChatRunSettings = {
+  ultracode: false,
   harnessId: "claude",
   model: "claude-sonnet-4-5",
   permissionMode: "supervised",
@@ -333,7 +336,7 @@ function open(kind: ScenarioKind): void {
   if (kind === "activating") activeTurn = earlierTurn("starting");
   if (kind === "running") activeTurn = earlierTurn("running");
   const cb = liveCallbacks();
-  cb.onConnectionStatus("open", null, null);
+  cb.onConnectionStatus("open", null, null, null);
   cb.onSnapshot({
     kind: "snapshot",
     hasBinaryPayload: false,
@@ -802,6 +805,34 @@ const queryClient = new QueryClient({
 });
 
 /**
+ * `?focus-row`: the composer as the keyboard focus layout draws it, in the phone
+ * layout that layout only ever draws in, which is what gives it its pull zone.
+ */
+const FOCUS_ROW = new URLSearchParams(window.location.search).has("focus-row");
+if (FOCUS_ROW) setPhoneLayoutOnly(true);
+
+/**
+ * `?keyboard=<px>`: the installed iOS app's keyboard over a window that keeps
+ * its height. The native bridge writes `--keyboard-inset`, and the shell's
+ * safe-height tokens end the app's box at the keyboard's top, which `#root`'s
+ * height stands in for here.
+ */
+const KEYBOARD_INSET = new URLSearchParams(window.location.search).get(
+  "keyboard",
+);
+if (KEYBOARD_INSET !== null) {
+  document.documentElement.style.setProperty(
+    "--keyboard-inset",
+    `${KEYBOARD_INSET}px`,
+  );
+  // `index.css` gives `#root` a 100vh floor, so the floor moves too.
+  const above = `calc(100vh - ${KEYBOARD_INSET}px)`;
+  const root = document.querySelector<HTMLElement>("#root");
+  root?.style.setProperty("height", above);
+  root?.style.setProperty("min-height", above);
+}
+
+/**
  * What the tile's `dispatchUserSend` does once the composer has built its
  * submit input: put it in the store as the person's own send.
  */
@@ -1040,41 +1071,47 @@ export function Fixture(): ReactElement {
                 onBackgroundItemsStopAll={sampleNoopAction}
                 onBackgroundSessionStop={sampleNoopAction}
               />
-              <ChatComposer
-                taskId={CHAT_ID}
-                isActive
-                sendDisabled={false}
-                sendDisabledHint={null}
-                mentionRoots={[]}
-                fallbackToGlobalMentionRoots={false}
-                currentEpicId={EPIC_ID}
-                viewTabId="view-tab"
-                settingsSeed={SETTINGS}
-                fallbackSettingsSeed={SETTINGS}
-                providerFallback={NO_PROVIDER_FALLBACK}
-                onSubmitMessage={submitFromComposer}
-                onSideChat={null}
-                onSettingsChange={null}
-                activeTurnStatus={composerStatus}
-                steerCapable={false}
-                steerProtocolSupported={false}
-                autoPermissionModeProtocolSupported={null}
-                getDraftBlobBridgeSupported={() => false}
-                getActiveTurnForSteer={() => null}
-                editingQueueItemId={null}
-                onCancelQueueEdit={null}
-                hasPendingApprovals={false}
-                stopDisabled={false}
-                onStopTurn={() => {
-                  handle.store.getState().stopTurn();
-                }}
-                workspaceControls={null}
-                workspaceAvailability={{ status: "ready", disabledHint: null }}
-                topSpacing="normal"
-                topSlot={null}
-                suggestedPrompt={undefined}
-                restingSandbox={null}
-              />
+              <ComposerFocusLayoutContext value={FOCUS_ROW}>
+                <ChatComposer
+                  taskId={CHAT_ID}
+                  isActive
+                  sendDisabled={false}
+                  sendDisabledHint={null}
+                  mentionRoots={[]}
+                  fallbackToGlobalMentionRoots={false}
+                  currentEpicId={EPIC_ID}
+                  viewTabId="view-tab"
+                  settingsSeed={SETTINGS}
+                  fallbackSettingsSeed={SETTINGS}
+                  providerFallback={NO_PROVIDER_FALLBACK}
+                  onSubmitMessage={submitFromComposer}
+                  onSideChat={null}
+                  onSettingsChange={null}
+                  activeTurnStatus={composerStatus}
+                  steerCapable={false}
+                  steerProtocolSupported={false}
+                  autoPermissionModeProtocolSupported={null}
+                  ultracodeProtocolSupported={false}
+                  getDraftBlobBridgeSupported={() => false}
+                  getActiveTurnForSteer={() => null}
+                  editingQueueItemId={null}
+                  onCancelQueueEdit={null}
+                  hasPendingApprovals={false}
+                  stopDisabled={false}
+                  onStopTurn={() => {
+                    handle.store.getState().stopTurn();
+                  }}
+                  workspaceControls={null}
+                  workspaceAvailability={{
+                    status: "ready",
+                    disabledHint: null,
+                  }}
+                  topSpacing="normal"
+                  topSlot={null}
+                  suggestedPrompt={undefined}
+                  restingSandbox={null}
+                />
+              </ComposerFocusLayoutContext>
             </ChatDockCompactStripProvider>
           </ChatDiffTargetContext.Provider>
         </TabHostContext.Provider>

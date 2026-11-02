@@ -577,7 +577,7 @@ function CommGraphEmptyTrack(props: { readonly following: boolean }) {
  *
  * It used to be a chip over the office floor - `Paused at 14:32:07` in the
  * top-left corner, the last read-only sentence drawn over the drawing, and
- * removed with the rest of them in feedback round 2 ("no more hidden labels or
+ * removed with the rest of them ("no more hidden labels or
  * anything left now, right?").
  *
  * The reading itself is worth keeping, because nothing else says it: a floor

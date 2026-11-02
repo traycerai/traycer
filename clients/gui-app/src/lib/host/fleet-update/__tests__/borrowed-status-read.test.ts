@@ -23,7 +23,7 @@ import {
 import { FLEET_MAX_CONCURRENT_READS } from "@/lib/host/fleet-update/fleet-poll-policy";
 import { isRecordObservation } from "@/lib/host/fleet-update/fleet-update-view";
 
-// G10(a): `observationFromStatus` builds a PROVISIONAL observation with a
+// `observationFromStatus` builds a PROVISIONAL observation with a
 // synthetic `freshUntilMs: Number.POSITIVE_INFINITY` so the projection it
 // needs to compute the real deadline has something to project from — and the
 // module's own comment says that value must never escape the function. A test

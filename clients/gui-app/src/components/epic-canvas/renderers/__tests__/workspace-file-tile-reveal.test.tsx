@@ -170,7 +170,7 @@ describe("<WorkspaceFileTile /> line reveal", () => {
     renderTile(CODE_NODE, TAB_1);
 
     // The targeted gutter row is scrolled into view and the one-shot target is
-    // consumed (G4) so a later remount won't re-scroll a stale line.
+    // consumed so a later remount won't re-scroll a stale line.
     await waitFor(() => {
       expect(scrollIntoViewSpy).toHaveBeenCalled();
       expect(revealEntry(TAB_1, CODE_NODE.id)).toBeUndefined();
@@ -227,8 +227,8 @@ describe("<WorkspaceFileTile /> line reveal", () => {
     fireEvent.click(screen.getByRole("button", { name: "Preview" }));
     expect(screen.getByRole("heading", { name: "Heading" })).toBeTruthy();
 
-    // A line link arrives: source is forced (G5) so the code view mounts and the
-    // row scrolls; the one-shot target is then consumed (G4). With the target
+    // A line link arrives: source is forced so the code view mounts and the
+    // row scrolls; the one-shot target is then consumed. With the target
     // gone the view returns to the user's rendered preview - acceptable for the
     // rare markdown+preview+line case; code files (the common line target) only
     // ever have a source view.

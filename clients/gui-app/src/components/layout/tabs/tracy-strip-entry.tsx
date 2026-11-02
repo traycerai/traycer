@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { Bot } from "lucide-react";
+import { BotMutedGlyph } from "@/components/bots/bot-muted-glyph";
 import { useEpicDndStore } from "@/components/epic-canvas/dnd/dnd-store";
 import { Badge } from "@/components/ui/badge";
 import { HoverCard } from "@/components/ui/hover-card";
@@ -27,15 +28,23 @@ export const TRACY_ENTRY_LABEL = "Tracy";
 
 /**
  * The entry's glyph, in every strip placement, wearing the bot's unread count
- * on its top-right corner; the bare glyph at zero, and where the host does
- * not count.
+ * on its top-right corner (the rail tile passes none: its row draws the count)
+ * and the muted mark on its bottom-right while the person set the channel to
+ * Nothing; the bare glyph at zero, and where the host does not count.
  */
 export function TracyEntryIcon(props: {
   readonly className: string | undefined;
   readonly unreadCount: number | null;
+  readonly muted: boolean;
 }): ReactNode {
-  const { className, unreadCount } = props;
-  if (unreadCount === null || unreadCount <= 0) {
+  const { className, unreadCount, muted } = props;
+  const mutedMark = muted ? (
+    <BotMutedGlyph
+      className="absolute right-0 bottom-0 translate-x-1/2 translate-y-1/4 rounded-full bg-background"
+      testId="tracy-entry-muted"
+    />
+  ) : null;
+  if ((unreadCount === null || unreadCount <= 0) && !muted) {
     return (
       <Bot
         className={cn("size-4 shrink-0", className)}
@@ -51,35 +60,39 @@ export function TracyEntryIcon(props: {
         aria-hidden="true"
         data-testid="tracy-entry-icon"
       />
-      <Badge
-        variant="destructive"
-        size="xs"
-        aria-hidden
-        data-testid="tracy-entry-unread-count"
-        className={cn(
-          SIDE_STRIP_NAV_TILE_COUNT_CLASS,
-          "translate-x-1/2 -translate-y-1/2 tabular-nums",
-        )}
-      >
-        {formatUnreadCount(unreadCount)}
-      </Badge>
+      {mutedMark}
+      {unreadCount === null || unreadCount <= 0 ? null : (
+        <Badge
+          variant="destructive"
+          size="xs"
+          aria-hidden
+          data-testid="tracy-entry-unread-count"
+          className={cn(
+            SIDE_STRIP_NAV_TILE_COUNT_CLASS,
+            "translate-x-1/2 -translate-y-1/2 tabular-nums",
+          )}
+        >
+          {formatUnreadCount(unreadCount)}
+        </Badge>
+      )}
     </span>
   );
 }
 
 /**
- * The hover card's body: the bot by its name, and what it is doing while it
- * works, or "Idle" when it is known to be; nothing when its state is not
- * known.
+ * The hover card's body: the channel the surface shows, by its bot's name,
+ * and what the bot is doing while it works, or "Idle" when it is known to
+ * be; nothing when its state is not known.
  */
 export function TracyEntryHoverBody(props: {
-  readonly title: string;
   readonly signals: TracyEntrySignals;
 }): ReactNode {
-  const { title, signals } = props;
+  const { signals } = props;
   return (
     <div data-testid="tracy-entry-hover-body" className="flex flex-col gap-1">
-      <div className="text-ui-sm font-medium text-foreground">{title}</div>
+      <div className="text-ui-sm font-medium text-foreground">
+        {signals.channelTitle ?? TRACY_ENTRY_LABEL}
+      </div>
       {signals.working || signals.idle ? (
         <div className="text-muted-foreground">
           {signals.working ? (signals.step ?? "Replying…") : "Idle"}
@@ -94,7 +107,7 @@ export function TracyEntryHoverBody(props: {
  * the scrolling tabs: the Tracy glyph with the bot's unread count and
  * "Tracy", bold while unread, and how
  * long the bot has been working while it runs a turn; the hover names the
- * bot. Like Home it has no drag,
+ * channel the surface shows. Like Home it has no drag,
  * no close, no menu and no Alt-digit; unlike Home it is a real tab, so it
  * joins the sheet when selected.
  */
@@ -102,7 +115,7 @@ export function TracyStripSlot(props: {
   readonly entry: TracyStripEntry;
 }): ReactNode {
   const { tab, isActive, onActivate } = props.entry;
-  const signals = useTracyEntrySignals(tab.id);
+  const signals = useTracyEntrySignals();
   const dragging = useEpicDndStore((state) => state.activeHeaderTab !== null);
   const joined = useSurfaceJoinPane(
     isActive && !dragging ? { kind: tab.kind, id: tab.id } : null,
@@ -138,6 +151,7 @@ export function TracyStripSlot(props: {
           <TracyEntryIcon
             className="relative z-20"
             unreadCount={signals.unreadCount}
+            muted={signals.muted}
           />
           <span
             className={cn(
@@ -156,7 +170,7 @@ export function TracyStripSlot(props: {
           )}
         </button>
       }
-      content={<TracyEntryHoverBody title={tab.name} signals={signals} />}
+      content={<TracyEntryHoverBody signals={signals} />}
       appearance="preview"
       semantics={{ role: "tooltip" }}
       side="bottom"

@@ -70,6 +70,7 @@ function catalogWithLoadedModels(): ComposerToolbarCatalog {
     modelsLoaded: true,
     tuiOnly: false,
     chatLineCarriesAutoMode: null,
+    ultracodeCarried: false,
     keepsUnavailablePick: false,
   };
 }
@@ -81,6 +82,7 @@ describe("D4: composer-toolbar-store trusts its seeded profileId (validation is 
       reasoningFallback: "model-default",
       seedKey: "seed-tombstoned",
       values: {
+        ultracode: false,
         permission: "supervised",
         selection: {
           harnessId: "claude",
@@ -93,6 +95,7 @@ describe("D4: composer-toolbar-store trusts its seeded profileId (validation is 
       onSettingsChange: null,
       tuiOnly: false,
       chatLineCarriesAutoMode: null,
+      ultracodeCarried: false,
       hostId: HOST_ID,
     });
     store.getState().setCatalog(catalogWithLoadedModels());
@@ -124,6 +127,7 @@ describe("D4: composer-toolbar-store trusts its seeded profileId (validation is 
       reasoningFallback: "model-default",
       seedKey: "seed-unavailable-harness",
       values: {
+        ultracode: false,
         permission: "supervised",
         selection: {
           harnessId: "claude",
@@ -136,6 +140,7 @@ describe("D4: composer-toolbar-store trusts its seeded profileId (validation is 
       onSettingsChange: null,
       tuiOnly: false,
       chatLineCarriesAutoMode: null,
+      ultracodeCarried: false,
       hostId: HOST_ID,
     });
     store.getState().setCatalog({
@@ -146,6 +151,7 @@ describe("D4: composer-toolbar-store trusts its seeded profileId (validation is 
       modelsLoaded: true,
       tuiOnly: false,
       chatLineCarriesAutoMode: null,
+      ultracodeCarried: false,
       keepsUnavailablePick: false,
     });
 

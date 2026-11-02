@@ -133,7 +133,7 @@ export function useEpicArtifactRecords(
  * two - only the presence lookup differs.
  *
  * `isCloudKnown` is the same shape, added for the SAME-host counterpart of
- * the cross-host exemption above (chat-sync-v2 ticket 36): a chat can be
+ * the cross-host exemption above: a chat can be
  * bound to THIS device's active host and still have no local record - a
  * leased identity that never adopted its rows - which is a different chat
  * than one this host's registry has genuinely tombstoned. `epic.listCloudChats`
@@ -146,6 +146,14 @@ export interface TileRefLivenessCheck {
   readonly hasLiveRecord: (id: string) => boolean;
   readonly isCloudKnown: (id: string) => boolean;
   readonly recordListAuthorizesChatAbsence: boolean;
+  /**
+   * Whether `epic.listTuiAgents` has answered, so a same-host terminal agent's
+   * absence is evidence. A doc entry or a push delta can add a row, and a delta
+   * can retract one it names, but only the answered list can show that a row
+   * which never arrived is gone, so before the answer a missing row says
+   * nothing about the agent.
+   */
+  readonly recordListAuthorizesTuiAgentAbsence: boolean;
 }
 
 /**
@@ -203,6 +211,9 @@ export function isTileRefRecordLive(
   }
   if (pendingCreateArtifactIds.has(ref.id)) return true;
   if (hasLiveRecord(ref.id)) return true;
+  if (ref.type === "terminal-agent") {
+    return !liveness.recordListAuthorizesTuiAgentAbsence;
+  }
   if (ref.type !== "chat") return false;
   if (isCloudKnown(ref.id)) return true;
   return !liveness.recordListAuthorizesChatAbsence;
@@ -236,13 +247,6 @@ export function useActiveEpicArtifactId(
   return useEpicCanvasStore(selector);
 }
 
-/**
- * Same active-tile resolution and filtering as
- * {@link makeSelectActiveEpicArtifactId}, but returns the ref itself rather
- * than just its id - callers that need to discriminate the active tile's
- * kind (e.g. "chat" vs "terminal-agent" for support-context capture) would
- * otherwise have to re-walk the pane tree.
- */
 /**
  * The tile showing in `tabId`'s ACTIVE pane, or `null`. The one place the
  * active-pane walk lives, shared by every selector below it - the rules for
@@ -279,6 +283,13 @@ export function useActiveTileRef(
   return useEpicCanvasStore(selector);
 }
 
+/**
+ * Same active-tile resolution and filtering as
+ * {@link makeSelectActiveEpicArtifactId}, but returns the ref itself rather
+ * than just its id - callers that need to discriminate the active tile's
+ * kind (e.g. "chat" vs "terminal-agent" for support-context capture) would
+ * otherwise have to re-walk the pane tree.
+ */
 export function makeSelectActiveEpicArtifactRef(tabId: string | undefined) {
   return (state: EpicCanvasStore): EpicCanvasTileRef | null => {
     const active = activeTileRef(state, tabId);

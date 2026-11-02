@@ -17,6 +17,7 @@ import type {
   BotQuestion,
   BotSurfaceReference,
 } from "@traycer/protocol/persistence/epic/messages";
+import type { BotSendReceipt } from "@traycer/protocol/persistence/epic/content-blocks";
 import type {
   ChatActiveTurn,
   ChatApprovalState,
@@ -521,8 +522,7 @@ function checkpointSignature(view: CheckpointManifestView | null): string {
  * rendered rows. `withTurnCompletion` upgrades this into the UI-facing
  * `ChatMessageStoppedInfo` (adding `turnHadOutput`) once it has row
  * visibility, which this pure scan does not.
- */
-/*
+ *
  * `turn.stopped` folding lives in the shared row projection: a stopped turn can
  * ADD a row (the synthesized boundary after a trailing steer) and can BE a row
  * (a Stop that landed before any assistant record), so the host numbers
@@ -2056,8 +2056,7 @@ function pinImportedChatMarkers(
  * Filtered and identified THROUGH the projection's own helpers: the host
  * numbers this row's ordinal from `importedChatMarkerRowSource`, and a row that
  * existed here but not there is exactly what the windowed transcript used to
- * lose - an event no row needs is never served on reopen (spec
- * `session-import.md` §8e).
+ * lose - an event no row needs is never served on reopen.
  */
 function buildImportedChatMarkerMessages(
   events: ReadonlyArray<OpenChatEvent>,
@@ -2581,11 +2580,6 @@ function userMessagesByIdFromMessages(
   return usersById;
 }
 
-/*
- * Steered-user suppression decides whether a persisted user record occupies a
- * top-level row, so it decides an ordinal. Shared with the host - see
- * `row-projection.ts`.
- */
 /**
  * Which user rows render the completed-steer badge.
  *
@@ -2629,6 +2623,11 @@ function completedSteerMessageIds(
   return widened;
 }
 
+/*
+ * Steered-user suppression decides whether a persisted user record occupies a
+ * top-level row, so it decides an ordinal. Shared with the host - see
+ * `row-projection.ts`.
+ */
 function nestedSteeredMessageIdsFromTurns(
   turnAccumulator: ReadonlyMap<string, AssistantTurnAccumulator>,
   usersById: ReadonlyMap<string, OpenUserMessage>,
@@ -5284,6 +5283,17 @@ function absentAsNull<T>(value: T | null): T | null {
   return read === undefined ? null : value;
 }
 
+/**
+ * A bot send's receipt, or `null`, normalizing older records: one from
+ * before the receipt's `slack` member (S4b) names a Traycer post.
+ */
+function botSendReceiptOf(
+  receipt: BotSendReceipt | null,
+): BotSendReceipt | null {
+  const read = absentAsNull(receipt);
+  return read === null ? null : { ...read, slack: absentAsNull(read.slack) };
+}
+
 /** A tool call's app stamp, or `null`, normalizing older records that omit the field. */
 function toolCallMcpAppStamp(
   block: Extract<OpenContentBlock, { type: "tool_call" }>,
@@ -5357,7 +5367,7 @@ const BLOCK_HANDLERS: {
     managedCommand: block.managedCommand,
     agentMessageReceipt: absentAsNull(block.agentMessageReceipt),
     agentMessageDelivery: absentAsNull(block.agentMessageDelivery),
-    botSendReceipt: absentAsNull(block.botSendReceipt),
+    botSendReceipt: botSendReceiptOf(block.botSendReceipt),
     isStreaming: block.status === "streaming",
     endState: segmentEndState(block.status),
     stopped: block.stopped,

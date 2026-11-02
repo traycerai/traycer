@@ -17,11 +17,14 @@ import { harnessLabel } from "@/components/settings/panels/fallback/fallback-har
 import {
   hostLabelAtSentenceStart,
   hostNameFromLabel,
+  resolvedHostLabel,
   UNNAMED_HOST_LABEL,
+  useHostReachability,
 } from "@/hooks/agent/use-host-reachability";
+import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 
 /**
- * Lifted out of `chat-tile.tsx` (P1.2 fixup F5) so the host it targets is
+ * Lifted out of `chat-tile.tsx` so the host it targets is
  * reachable by a test. The defect this module exists to keep fixed is a
  * TIMING one - the clone resolves settings asynchronously before it creates -
  * and it is only observable by driving the hook across that window, which is
@@ -58,7 +61,7 @@ interface CloneProfileRecoveryOffer {
  * `cloneChatOnHostSwitch`. Targets the directory's currently selected
  * host (the user's active default). Tracks the returned cancel in a
  * ref and disposes it on unmount so an aborted clone doesn't leak the
- * projection-wait subscription (ticket 10).
+ * projection-wait subscription.
  */
 export interface ChatCloneOnHostSwitch {
   readonly clone: () => void;
@@ -241,7 +244,7 @@ export function useChatCloneOnHostSwitch(
     args.chatId,
     // The cloud list can resolve AFTER this banner first renders, so the
     // callback must be rebuilt when the owner lands - otherwise a click still
-    // sends the `null` this closed over on the first pass (ticket 37).
+    // sends the `null` this closed over on the first pass.
     args.sourceOwnerUserId,
     args.sourceHostId,
     args.sourceSettings,
@@ -253,4 +256,17 @@ export function useChatCloneOnHostSwitch(
     cloning,
     profileRecovery,
   };
+}
+
+/**
+ * The host {@link useChatCloneOnHostSwitch} clones onto, by name, for copy
+ * that promises the clone before it is pressed. `null` when there is no
+ * active host or it has no name, which the copy reads as "the active host".
+ */
+export function useChatCloneTargetLabel(): string | null {
+  const targetHostId = useEffectiveHostId();
+  const reachability = useHostReachability(
+    targetHostId ?? UNKNOWN_HOST_PLACEHOLDER,
+  );
+  return targetHostId === null ? null : resolvedHostLabel(reachability);
 }

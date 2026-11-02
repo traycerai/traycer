@@ -67,7 +67,7 @@ export interface TileController {
   readonly onResetZoom: () => void;
   readonly onOpenDevTools: () => void;
   /**
-   * "Clear cookies for this site" (spec §6.5): removes this tile's registrable
+   * "Clear cookies for this site": removes this tile's registrable
    * domain from the shared `primary` jar, here and - through the host's
    * tombstones - in every other live context for this user. `null` where there
    * is no desktop jar to clear (a screencast tile). The site is derived in the

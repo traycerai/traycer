@@ -4,7 +4,7 @@ import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { v4 as uuidv4 } from "uuid";
 import { useFirstTaskGuideStore } from "@/stores/onboarding/first-task-guide-store";
 import type {
-  CreateEpicChatSeedV12,
+  CreateEpicChatSeedV14,
   CreateEpicResponseV12,
   CreateEpicWorkspaceIdentifier,
   EpicCreateOwner,
@@ -30,9 +30,11 @@ import { useEpicCreateForClient } from "@/hooks/epic/use-epic-create-mutation";
 import {
   ATTACH_ENVIRONMENT_NEEDS_OWN_HOST_COPY,
   isAttachEnvironmentUnsupported,
+  isAttachPromotionPending,
   useEpicAttachmentClient,
   useEpicAttachEnvironment,
 } from "@/hooks/epic/use-epic-attach-environment-mutation";
+import { useEpicDiscardCreatedIfEmpty } from "@/hooks/epic/use-epic-batch-delete-mutation";
 import { useCreateTuiAgentForClient } from "@/hooks/agent/use-create-tui-agent";
 import {
   authorizesCloudCapability,
@@ -153,6 +155,11 @@ import type {
   ServiceTier,
 } from "@/components/home/data/landing-options";
 import { deriveWorkspaceMode } from "@/lib/worktree/workspace-mode";
+import {
+  classifySendRefusal,
+  toastSendRefusal,
+  type SendRefusal,
+} from "@/lib/host-error-toast";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import { useTabsStore } from "@/stores/tabs/store";
 import { selectHostFocusedRef } from "@/stores/tabs/selectors";
@@ -168,7 +175,10 @@ import {
   mainCheckoutHasCommit,
 } from "@/lib/worktree/worktree-intent-seeding";
 import { useSettingsStore } from "@/stores/settings/settings-store";
-import type { LandingSandboxSendHandoff } from "./landing-sandbox-send-handoff";
+import type {
+  LandingGiveBack,
+  LandingSandboxSendHandoff,
+} from "./landing-sandbox-send-handoff";
 
 export interface LandingComposerSubmitArgs {
   /** The caller-owned draft; null creates one before the exact attempt starts. */
@@ -186,6 +196,7 @@ export interface LandingComposerSubmitArgs {
     readonly reasoning: ReasoningLevel;
     readonly serviceTier: ServiceTier;
     readonly permission: PermissionMode;
+    readonly ultracode: boolean;
   };
   /**
    * Who the new task belongs to: the resolved host's owner, read by the
@@ -233,9 +244,8 @@ export interface LandingStagedSandboxTaskArgs {
    * task is created and attached to the sandbox's team, which lets the sandbox
    * start; `giveBack` returns the message to a draft that records its
    * sandbox if setup fails, for the composer showing it to stage. A
-   * reused source keeps its newer choice: the pending send stays with a
-   * created task, and with none the message is saved in Drafts. `null` when
-   * there was nothing to hand, and nothing is created.
+   * reused source keeps its newer choice, and the message is saved in
+   * Drafts. `null` when there was nothing to hand, and nothing is created.
    */
   readonly hand: (epicId: string) => LandingSandboxSendHandoff | null;
 }
@@ -251,7 +261,7 @@ export interface TerminalAgentLaunch {
 }
 
 /**
- * Both actions return the submit-time placement refusal (selection model §54)
+ * Both actions return the submit-time placement refusal
  * instead of dispatching, or `null` otherwise; `settled` then says whether the
  * create went out. The caller renders the message inline on the composer -
  * never a toast-and-proceed, and never a silent fallback onto another host.
@@ -347,7 +357,7 @@ interface FinalizeLandingSubmissionInput {
  * composer), which is exactly when these callbacks must stop addressing the
  * old machine.
  *
- * `target` is the composer's resolved placement (selection model §54), and it
+ * `target` is the composer's resolved placement, and it
  * is the ONLY host any create below touches: the epic create, its folded chat
  * seed, and the terminal-agent chain all run on `target.client`, whose host
  * identity is re-validated at the top of each action. A staged sandbox's team
@@ -360,8 +370,9 @@ export function useLandingComposerActions(
   const queryClient = useQueryClient();
   const createEpic = useEpicCreateForClient(target.client);
   const attachClient = useEpicAttachmentClient(target.client);
-  const attachEnvironment = useEpicAttachEnvironment(attachClient);
+  const attachEnvironment = useEpicAttachEnvironment(attachClient, "landing");
   const attachEnvironmentAsync = attachEnvironment.mutateAsync;
+  const discardCreatedIfEmpty = useEpicDiscardCreatedIfEmpty();
   const terminalAgentCreate = useCreateTuiAgentForClient(
     target.client,
     target.resolvedHostId ?? UNKNOWN_HOST_PLACEHOLDER,
@@ -404,7 +415,7 @@ export function useLandingComposerActions(
       readonly hostId: string;
       readonly title: string;
       readonly initialUserPrompt: string;
-      readonly chat: CreateEpicChatSeedV12 | null;
+      readonly chat: CreateEpicChatSeedV14 | null;
       /** `epic.create@1.3`'s owner; `null` is the person. */
       readonly owner: EpicCreateOwner | null;
       readonly workspaceFolders: ReadonlyArray<string>;
@@ -443,7 +454,7 @@ export function useLandingComposerActions(
       // (e.g. chat-tile's availability query, which resolves via the tab host)
       // read this seed. Keep the create-time tab binding and the placement
       // host in lockstep, or seed under the host the initial tabs bind to
-      // instead. (Before P1.2 this was the app-wide active host, which the
+      // instead. (Before the redesign this was the app-wide active host, which the
       // picker rebound; it is now the surface pin's resolved host.)
       const seededBindingsKey =
         optimisticRows.length > 0
@@ -636,6 +647,7 @@ export function useLandingComposerActions(
         permission: toolbar.permission,
         reasoning: toolbar.reasoning,
         serviceTier: toolbar.serviceTier,
+        ultracode: toolbar.ultracode,
       });
       if (settings.model.length === 0) {
         draftRuntimeRegistry.complete(attempt);
@@ -797,7 +809,7 @@ export function useLandingComposerActions(
         }
         // Content changed after send: keep that later edit. A close during
         // create used to be the same branch because close destroyed the row;
-        // now close retains, so `"closed"` must still delete (decision #13) or
+        // now close retains, so `"closed"` must still delete, or
         // the sent text stays as a draft alongside the new epic.
         placeCreatedEpicInBackground(epicId, epicTitle);
         if (settlement.kind === "closed") {
@@ -1012,22 +1024,6 @@ export function useLandingComposerActions(
   );
 
   /**
-   * The by-hash submit: confirm the bytes are on the placement host, inline
-   * only what could not be confirmed, and send the rest as hashes.
-   *
-   * ALWAYS ASYNC, unlike the two inline paths beside it, because "is it on the
-   * host" is not a question this window can answer synchronously. That costs
-   * the landing composer its one-stack-frame submit for a message with images,
-   * which is why the re-entry guard and the pending flag both cover it.
-   *
-   * REFUSES rather than dropping an image, which is the landing composer's own
-   * rule and not a general one: a hash here names bytes that were pasted into
-   * THIS window and exist nowhere else (no epic exists yet to hold them), so a
-   * hash it can neither confirm nor inline is an image that would silently
-   * vanish from the message. The chat and edit composers inline best-effort for
-   * the opposite reason - their hashes routinely address the host's epic store.
-   */
-  /**
    * The authoritative cap check, on the hashes the create will actually carry.
    *
    * The pre-upload check below sees only the plan's ELIGIBLE set, which is not
@@ -1054,6 +1050,22 @@ export function useLandingComposerActions(
     },
     [],
   );
+  /**
+   * The by-hash submit: confirm the bytes are on the placement host, inline
+   * only what could not be confirmed, and send the rest as hashes.
+   *
+   * ALWAYS ASYNC, unlike the two inline paths beside it, because "is it on the
+   * host" is not a question this window can answer synchronously. That costs
+   * the landing composer its one-stack-frame submit for a message with images,
+   * which is why the re-entry guard and the pending flag both cover it.
+   *
+   * REFUSES rather than dropping an image, which is the landing composer's own
+   * rule and not a general one: a hash here names bytes that were pasted into
+   * THIS window and exist nowhere else (no epic exists yet to hold them), so a
+   * hash it can neither confirm nor inline is an image that would silently
+   * vanish from the message. The chat and edit composers inline best-effort for
+   * the opposite reason - their hashes routinely address the host's epic store.
+   */
   const dispatchByHashSubmission = useCallback(
     (input: {
       readonly args: LandingComposerSubmitArgs;
@@ -1527,7 +1539,7 @@ export function useLandingComposerActions(
     [createLandingEpic, navigate, terminalAgentCreateFn],
   );
 
-  // Selection model §54's submit-time re-validation, and the FIRST thing both
+  // The submit-time re-validation, and the FIRST thing both
   // actions do. It runs before any store write, navigation, or optimistic
   // seed: a refusal must leave the composer exactly as the user left it, with
   // the message rendered inline next to the send button.
@@ -1647,15 +1659,19 @@ export function useLandingComposerActions(
       const sameAccount = (): boolean =>
         (useAuthStore.getState().profile?.userId ?? null) === dispatchUserId;
       // A create or attachment refusal returns the only message copy. An
-      // attachment refusal leaves the already-created task on its placement.
-      const giveBack = (taskCreated: boolean): void => {
-        if (!sameAccount() || !handed.isCurrent()) return;
-        const returned = handed.giveBack(taskCreated);
-        if (returned === null) return;
+      // attachment refused because the task is still reaching the cloud then
+      // deletes it, unless an agent was started in it meanwhile: the next Send
+      // creates its own. Any other refusal keeps it: the task may have reached
+      // the cloud, where an agent on another host can't be ruled out. So does
+      // a message that didn't come back: its send still names the task.
+      const giveBack = (): LandingGiveBack | null => {
+        if (!sameAccount() || !handed.isCurrent()) return null;
+        const returned = handed.giveBack();
+        if (returned === null) return null;
         const { draftId } = returned;
         if (returned.kind === "opened") {
           openLandingDraft(navigate, draftId);
-          return;
+          return returned;
         }
         // The composer holds the person's next message: saved, not opened.
         toast(returnedSandboxMessageLine(true), {
@@ -1664,11 +1680,27 @@ export function useLandingComposerActions(
             onClick: () => openLandingDraft(navigate, draftId),
           },
         });
+        return returned;
       };
       const refused = (): void => {
         if (!sameAccount()) return;
         unmarkEpicCreatedThisSession(epicId);
-        giveBack(false);
+        giveBack();
+      };
+      const attachRefused = (error: unknown): void => {
+        // The account moved on, or the person took the message back: nothing
+        // here is theirs to hear about.
+        if (!sameAccount() || !handed.isCurrent()) return;
+        const returned = giveBack();
+        const line = landingAttachRefusalLine(
+          classifySendRefusal(error),
+          returned,
+        );
+        if (line !== null) toastSendRefusal(error, line);
+        if (returned === null || !isAttachPromotionPending(error)) return;
+        void discardCreatedIfEmpty({ epicId, hostId }).then((discarded) => {
+          if (discarded) unmarkEpicCreatedThisSession(epicId);
+        });
       };
       void createLandingEpic({
         epicId,
@@ -1701,7 +1733,7 @@ export function useLandingComposerActions(
               await attachEnvironmentAsync({ epicId, teamId: attachTeamId });
             } catch (error) {
               if (!isAttachEnvironmentUnsupported(error)) {
-                giveBack(true);
+                attachRefused(error);
                 return;
               }
             }
@@ -1715,6 +1747,7 @@ export function useLandingComposerActions(
       attachClient,
       attachEnvironmentAsync,
       createLandingEpic,
+      discardCreatedIfEmpty,
       navigate,
       resolveAdmittedPlacement,
     ],
@@ -1754,6 +1787,33 @@ export function useLandingComposerActions(
       terminalAgentCreate.isPending,
     ],
   );
+}
+
+/**
+ * What a landing Send refused at its attachment says, given where its message
+ * went (`returned`), or `null` to say nothing. Saved in Drafts, `giveBack`'s
+ * own line says so. With nothing returned, no line may claim the message is
+ * back, or offer another Send of it.
+ */
+function landingAttachRefusalLine(
+  refusal: SendRefusal,
+  returned: LandingGiveBack | null,
+): string | null {
+  switch (refusal.kind) {
+    case "silent":
+      return null;
+    case "actionable":
+      return refusal.message;
+    case "setting-up":
+      return returned === null
+        ? "Couldn't send your message."
+        : "This task was still being set up. Send again in a moment.";
+    case "failed":
+      if (returned === null) return "Couldn't send your message.";
+      return returned.kind === "opened"
+        ? "Couldn't send your message. It's back in the composer."
+        : null;
+  }
 }
 
 /**

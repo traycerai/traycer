@@ -121,6 +121,7 @@ function SampleModelPickerBody(): ReactNode {
       onHoverRow={sampleNoop}
       onActiveRow={sampleNoop}
       onSelectRow={sampleNoop}
+      ultracodeFooter={null}
       reasoningFooter={{
         value: SAMPLE_TOOLBAR_VALUES.reasoning,
         options: SAMPLE_REASONING_LEVELS,

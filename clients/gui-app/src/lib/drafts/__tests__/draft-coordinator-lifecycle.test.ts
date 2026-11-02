@@ -484,7 +484,7 @@ interface DeferredForeignSubmitLog {
 // `mountTabHostSession`'s fake has no way to hold a `drafts.retract` open, and
 // every existing caller resolves it immediately - adding that here rather
 // than threading a knob through `ForeignSubmitLog` keeps the six passing
-// fixup-B/round-3 cases untouched. This also answers `drafts.upsert`, which
+// round-3 cases untouched. This also answers `drafts.upsert`, which
 // `mountTabHostSession` does not: the one test below that needs this fixture
 // edits the row while the retract is parked, and with zero debounce that
 // edit's dirty write reaches the session as an upsert.

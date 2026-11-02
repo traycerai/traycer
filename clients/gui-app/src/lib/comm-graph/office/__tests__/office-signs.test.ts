@@ -1,7 +1,7 @@
 /**
  * Resolver-level coverage for `office-signs.ts` - the sign anchor projection
- * (F5), the LOD-0 sign/host-label gate (F10), and board roster filtering
- * (F11), all without a camera or a canvas in the way. The component's own
+ * (F5), the LOD-0 sign/host-label gate (F10), and board roster filtering,
+ * all without a camera or a canvas in the way. The component's own
  * suite keeps one integration case per finding; these pin the rule itself so
  * a camera-only regression there cannot be mistaken for a projection defect
  * here, and vice versa.
@@ -93,14 +93,14 @@ function boardWidthPx(widthTiles: number): number {
 }
 
 /**
- * FIXUP 7's OWN INVARIANT, shared between the sweep (below) and the real
+ * THE INVARIANT, shared between the sweep (below) and the real
  * 309 Building case: the HQ board's ladder no longer has a rung of
  * manufactured initials, because the third `nameRungs` element it used to
- * letter with is gone. The ticket wrote down two regexes for this and both
+ * letter with is gone. Two regexes capture this, and both
  * are approximations - narrowed here to what the ladder is actually allowed
  * to produce:
  *
- * - `\w` matches digits as well as letters, so the ticket's
+ * - `\w` matches digits as well as letters, so the
  *   `/^(\w( |$))+$/` also matches the legitimate bare-total rung ("5",
  *   "309"). Narrowed to `[A-Za-z]` so a digit can never trip it.
  * - `/^\w{2,5}$/` likewise matches "309". Narrowed to `[A-Za-z]{2,5}`.
@@ -170,7 +170,7 @@ function unacceptableBoardRungReason(text: string): string | null {
   return `"${text}" is neither a name, a number, the overflow glyph, nor empty`;
 }
 
-/** A projector that shifts every projected x by +2048px - the review's own F5 recipe. */
+/** A projector that shifts every projected x by +2048px - the F5 recipe. */
 const SHIFTED_PROJECTOR: OfficeProjector = {
   project: (col, row) => ({
     x: 2048 + col * OFFICE_TILE,
@@ -281,7 +281,7 @@ describe("officeSignsToDraw - F5 projected anchor", () => {
     // Projected tile (2,2): x = 2048 + 2*16 = 2080, y = 2*16 = 32.
     expect(resolved.anchor).toEqual({ x: 2080, y: 32 });
     // Centre of a two-tile board hanging off that anchor: 2080 + 16 = 2096 -
-    // the same value the review's own reproduction and the component's
+    // the same value the original reproduction and the component's
     // integration case (plus its fixed camera) both pin.
     expect(officeSignCenterX(resolved)).toBe(2096);
   });
@@ -369,7 +369,7 @@ describe("officeBoardText - F11 roster filtering and width", () => {
     // (38 chars, 266.4px) as both written and first names - and neither fits
     // 128px. The ladder falls straight to the roster's counts, which is
     // exactly what an ordinary `board` over the same roster would say: this
-    // is the fixup's own point, not a coincidence.
+    // is the point, not a coincidence.
     const sign = boardSign({
       kind: "hq-board",
       agentIds: ["a", "b", "c", "d", "e"],
@@ -439,7 +439,7 @@ describe("officeBoardText - F11 roster filtering and width", () => {
 });
 
 describe("officeBoardText - F11 five HQ names, laid out to the board", () => {
-  /** The reviewer's own fixture: six agents, ordinary two-word names. */
+  /** The fixture: six agents, ordinary two-word names. */
   const ROSTER = ["a", "b", "c", "d", "e", "f"];
   const STATUS_BY_ID = new Map<string, OfficeAgentStatus>([
     ["a", "attention"],
@@ -461,7 +461,7 @@ describe("officeBoardText - F11 five HQ names, laid out to the board", () => {
   it("fixup 7: names all five hottest agents once the first-names rung fits, never dropping the fifth", () => {
     // EIGHT TILES no longer letters these five names - the ladder falls to
     // the roster's counts there instead (see the "agrees ... at the board's
-    // own eight tiles" case above). This pins the other half of the fixup's
+    // own eight tiles" case above). This pins the other half of the
     // promise: at a width wide enough for the FIRST-NAMES rung, all five are
     // still named, never four-plus-a-drop.
     const firstNamesJoined = "Alpha · Beta · Gamma · Delta · Epsilon";
@@ -586,7 +586,7 @@ for (const viewId of ["towers", "building"] as const) {
       // The same counts the spelt-out reading would have carried - the hidden
       // member excluded rather than defaulted to idle - said at the rung a
       // six-tile board has the pixels for. What this case is about is WHO was
-      // counted; the vocabulary is D55's ladder doing its own job.
+      // counted; the vocabulary is the ladder doing its own job.
       expect(drawn[0].text).toBe(`${counted}D · 0W · 0I`);
       // That rung is the one MEASUREMENT picks, not the one a character budget
       // would have. Six tiles is ninety-six pixels and the spelt-out reading
@@ -832,7 +832,7 @@ describe("officeBoardText - fixup 3 F11 the ladder never overflows its board", (
   const visible = new Set(FIVE);
 
   /**
-   * The reviewer's first reproduction: five SINGLE-WORD names on the eight-tile
+   * The first reproduction: five SINGLE-WORD names on the eight-tile
    * board a real HQ has. The old ladder held every one-word name whole at all
    * three rungs, so the separators were the only width it could give back, and
    * the widest reading was also the narrowest: 212.61px against 128.
@@ -879,7 +879,7 @@ describe("officeBoardText - fixup 3 F11 the ladder never overflows its board", (
   });
 
   /**
-   * The reviewer's other two: zoom 0.7, the included lower boundary of lod 1,
+   * The other two: zoom 0.7, the included lower boundary of lod 1,
    * where every rung the ladder had ran wider than the board.
    */
   it("steps a six-tile count board below its last rung at the 0.7 zoom boundary", () => {
@@ -986,7 +986,7 @@ describe("officeBoardText - fixup 3 F11 the ladder never overflows its board", (
 });
 
 /**
- * Fixup 7 (finding L2): the HQ board used to letter its way down PAST the
+ * Finding L2: the HQ board used to letter its way down PAST the
  * first-names rung into manufactured initials - " · "-joined, then spaced,
  * then run together - and a real HQ board is eight tiles, which at office
  * zoom (0.92x) is well under the first-names rung's own width for any real
@@ -1272,7 +1272,7 @@ describe("compareHeat - the comparator contract", () => {
 });
 
 /**
- * Fixup 6, rule 1 (finding M2): `officeFloorSignsToDraw` used to gate on
+ * Rule 1 (finding M2): `officeFloorSignsToDraw` used to gate on
  * `floors.length <= 1`, so a host holding several floors got a label on
  * EVERY ONE of them - `host-a` x9 and `host-b` x10 down the two towers,
  * `Unattributed` x21 down the thousand-agent Building. The plan already
@@ -1402,13 +1402,13 @@ describe("officeFloorSignsToDraw - fixup 6 rule 1: one host label per building, 
 });
 
 /**
- * Fixup 6, rule 3 (finding L1): the resolver used to hand the renderer the
+ * Rule 3 (finding L1): the resolver used to hand the renderer the
  * plan's literal text unconditionally, so a bullpen plate's `Bullpen · 9 live
  * solos` (22 characters) went in whole and the RENDERER's own twelve-char
  * budget (`OFFICE_SIGN_PLATE_MAX_CHARS`, `truncateSign` in the canvas) cut it
  * to `BULLPEN · 9…` - the count is the part that got cut, because it sits
  * after everything else in the string being trimmed. That assertion would
- * have passed before this fixup too: the ellipsis was never the resolver's to
+ * have passed before this change too: the ellipsis was never the resolver's to
  * add or withhold. What is actually new is that the RESOLVER now steps the
  * reading down itself, so nothing it hands the renderer is left for that
  * budget to cut - proven here by size (the character budget) and by pixels
@@ -1598,7 +1598,7 @@ describe("officeSignsToDraw - fixup 6 rule 3: bullpen and solo plates come down 
 });
 
 /**
- * FEEDBACK ROUND 1: fixture lettering ("SOLO DESKS", "CAFETERIA", a
+ * Fixture lettering ("SOLO DESKS", "CAFETERIA", a
  * counterless "FRONT DESK") waits for close-up now; lettering that reports
  * something - a count, a name, which machine this is - still shows at office
  * zoom. `officeSignLetteredAt` is the rule alone, with no camera or resolver
@@ -1699,7 +1699,7 @@ describe("officeSignLetteredAt - fixture lettering waits for close-up", () => {
         }),
       ).toBe(true);
       // No owner: the plan's own written summary ("Solo desks", "Bullpen ·
-      // N live solos") is the repetition feedback round 1 pointed at, and
+      // N live solos") is the repetition at issue, and
       // the BOARD beside it still carries the count at this band.
       expect(
         officeSignLetteredAt({
@@ -1856,7 +1856,7 @@ describe("officeCivicSignText - the civic counter ladder", () => {
   });
 
   it("says the counter rung at lod 1 too, now that a civic sign reports at office zoom (OFFICE_SIGN_COUNTER_LOD)", () => {
-    // Feedback round 1 named a ward's counter-less reading ("FRONT DESK")
+    // A ward's counter-less reading ("FRONT DESK") was named
     // as prominent and not adding value - the counter is what makes the
     // sign worth its pixels, so the band that draws the sign and the band
     // that draws its number are the same band by construction now. This
@@ -2037,7 +2037,7 @@ describe("officeCivicSignText - the civic counter ladder", () => {
       (room) => room.kind === "help-desk",
     );
     if (desk === undefined) throw new Error("expected a help-desk room");
-    // C7: the queue in front of the desk IS the count. The real Floor
+    // The queue in front of the desk IS the count. The real Floor
     // help-desk has no seats, so a case that handed that room through
     // would get `null` from the empty-`seatIds` branch and never
     // exercise the help-desk rule. Seats and an occupancy entry make
@@ -2120,7 +2120,7 @@ describe("officeCivicSignText - the civic counter ladder", () => {
 
 /**
  * THE MEDBAY BEACON. Mission control has no street, so no ambulance can
- * come (C6): the light on the ward's own sign is the whole of the alarm
+ * come: the light on the ward's own sign is the whole of the alarm
  * there. A floor WITH a road keeps the light off, because the vehicle is
  * the alarm on that view.
  */
@@ -2262,7 +2262,7 @@ describe("officeSignsToDraw - the medbay beacon", () => {
     });
     // The sign still draws - a missing plate would also look like
     // `sirenFrame === null`. Occupied, so a roadless floor would be
-    // blinking; the road is what keeps the light off (C6).
+    // blinking; the road is what keeps the light off.
     expect(
       resolveBeacon({
         floor,
@@ -2448,7 +2448,7 @@ describe("officeSignsToDraw - lod 1 fixture lettering gate (feedback round 1)", 
       seatIds: ["bed-0", "bed-1", "bed-2", "bed-3"],
     });
     // ROADLESS: no ambulance can come, so the light on the sign is the whole
-    // of the alarm (C6) - it must survive even where the counter cannot.
+    // of the alarm - it must survive even where the counter cannot.
     const floor = emptyFloor({ road: null, civic: [room] });
     // NARROW: room for the bare word but not for "Infirmary · 3 of 4" -
     // `reports` comes back false, which is exactly the case a beacon has to

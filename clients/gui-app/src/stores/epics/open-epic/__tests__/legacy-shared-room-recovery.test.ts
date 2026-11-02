@@ -1,5 +1,5 @@
 /**
- * P2 regression, at the level the defect actually lives: two `@1` artifacts
+ * Regression, at the level the defect actually lives: two `@1` artifacts
  * sharing ONE room, where the artifact that first materialized it leaves the
  * room before the room comes back.
  *
@@ -143,7 +143,7 @@ function createSharedRoomRig(): SharedRoomRig {
     handle,
     donorArtifacts,
     open(): void {
-      live().onConnectionStatus("open", null, false);
+      live().onConnectionStatus("open", null, false, null);
       live().onSnapshot(buildMeta(), Y.encodeStateAsUpdate(donor));
     },
     materializeRoom(contentA: string, contentB: string): void {

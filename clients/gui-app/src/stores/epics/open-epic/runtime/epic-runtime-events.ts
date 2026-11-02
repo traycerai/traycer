@@ -53,6 +53,7 @@ import type {
 import type {
   StreamCloseReason,
   StreamConnectionStatus,
+  StreamContinuity,
 } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type { DocSeedMode } from "@traycer-clients/shared/replica-runtime";
 import type { EpicArtifactRoomAvailability } from "../types";
@@ -317,6 +318,7 @@ export type EpicControlEvent =
    */
   | {
       readonly kind: "transport-status";
+      readonly continuity: StreamContinuity;
       readonly status: StreamConnectionStatus;
       readonly reason: StreamCloseReason | null;
       /**

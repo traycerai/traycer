@@ -263,6 +263,37 @@ describe("CanvasNoteContent text editing", () => {
     expect(onCommit).not.toHaveBeenCalledWith(PLACEHOLDER);
   });
 
+  it("also commits a title on Enter, the way Escape does", async () => {
+    const { textarea, onCommit, onRootKeyDown } = editNote({
+      type: "title",
+      text: "Roadmap",
+    });
+    await userEvent.type(textarea, " 2027{Enter}");
+    expect(onCommit).toHaveBeenCalledTimes(1);
+    expect(onCommit).toHaveBeenCalledWith("Roadmap 2027");
+    expect(onRootKeyDown).not.toHaveBeenCalled();
+  });
+
+  it("does not let Enter commit a sticky note, which takes a newline instead", async () => {
+    const { textarea, onCommit } = editNote({ type: "sticky", text: "" });
+    await userEvent.type(textarea, "one{Enter}two");
+    expect(onCommit).not.toHaveBeenCalled();
+    expect(textarea.value).toBe("one\ntwo");
+  });
+
+  it("opens a title editor on a single line even when the saved text has newlines", () => {
+    const { textarea } = editNote({ type: "title", text: "Roadmap\nfor 2027" });
+    expect(textarea.value).toBe("Roadmap for 2027");
+  });
+
+  it("collapses a newline pasted or typed into a title to a single line", () => {
+    const { textarea, onGrow } = editNote({ type: "title", text: "" });
+    fireEvent.input(textarea, { target: { value: "Roadmap\nfor 2027" } });
+    expect(textarea.value).toBe("Roadmap for 2027");
+    // A title never grows its note from typed text; only a sticky does.
+    expect(onGrow).not.toHaveBeenCalled();
+  });
+
   it("reports the textarea's measured scroll height on mount, input and resize", () => {
     // jsdom has no layout: the height and the observer are injected to prove
     // the editor reports the element's own measurement rather than computing
@@ -365,7 +396,11 @@ describe("CanvasNoteContent text display", () => {
 
   it("shows a dimmed placeholder for an empty note instead of saved text", () => {
     displayText({ type: "title", text: "" }, {});
-    const placeholder = screen.getByText("Type something");
+    // The title's hidden measuring span carries the same placeholder text, so
+    // the query is scoped to the visible placeholder's own class.
+    const placeholder = screen.getByText("Type something", {
+      selector: "span.opacity-50",
+    });
     expect(placeholder.className).toContain("opacity-50");
   });
 

@@ -4,8 +4,8 @@ import { STATS_SAMPLE_INTERVAL_MS } from "@/lib/browser-view/sessions/video-plan
 import type { WebrtcVideoStatsSample } from "@/lib/browser-view/tiles/webrtc-media-registry";
 
 /**
- * Dev-only per-tile stats readout (ticket 11, webrtc-display-plane spec §5
- * Instrumentation). There is no dev/debug settings flag anywhere in gui-app
+ * Dev-only per-tile stats readout. There is no dev/debug settings flag
+ * anywhere in gui-app
  * to gate a UI affordance behind (only `import.meta.env.DEV`, the same
  * build-time check `traycer-app.tsx` already gates `ReactQueryDevtools`
  * behind), so this follows that precedent rather than inventing a new

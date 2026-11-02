@@ -75,6 +75,7 @@ function chatRecord(overrides: Record<string, unknown>) {
     updatedAt: 1,
     isTitleEditedByUser: false,
     settings: {
+      ultracode: false,
       harnessId: "opencode",
       model: "m",
       permissionMode: "supervised",
@@ -202,6 +203,7 @@ describe("ContinueOnOpencodeTwoTabMenu", () => {
       {
         opencodeLine: 1,
         settings: {
+          ultracode: false,
           harnessId: "claude",
           model: "m",
           permissionMode: "supervised",

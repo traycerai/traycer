@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CommandContext } from "../../runner/runner";
+import type { ProcessRunner } from "../../service/platforms/macos";
 import type { ServiceInstallArgs } from "../service-install";
 import { writeInstalledHostFixture } from "./service-install-host-fixture";
 
@@ -146,6 +147,26 @@ function fakeCtx(): CommandContext {
   };
 }
 
+// The install boots the loaded job out, then polls `launchctl print` until
+// launchd says it is gone; a runner that always answers success would leave
+// it "loaded" for the whole wait. The print that follows a bootout answers
+// not-found.
+function drainsAfterBootout(runner: ProcessRunner): ProcessRunner {
+  let bootedOut = false;
+  return async (command, args, options) => {
+    if (args[0] === "bootout") bootedOut = true;
+    else if (args[0] === "print" && bootedOut) {
+      bootedOut = false;
+      return {
+        stdout: "",
+        stderr: 'Could not find service "x" in domain for user gui: 501\n',
+        exitCode: 113,
+      };
+    }
+    return runner(command, args, options);
+  };
+}
+
 const CONFIRMED_HOST = { pid: 4242, startIdentity: "linux:boot-a 4242" };
 
 function boundTakeoverArgs(): ServiceInstallArgs {
@@ -225,10 +246,12 @@ describe.skipIf(process.platform === "win32")(
         return { kind: "cli-host-stopped", cooperativeStop: "stopped" };
       });
       const calls: string[] = [];
-      mocks.realController = createMacosController(async (command, args) => {
-        calls.push([command, ...args].join(" "));
-        return { stdout: "", stderr: "", exitCode: 0 };
-      });
+      mocks.realController = createMacosController(
+        drainsAfterBootout(async (command, args) => {
+          calls.push([command, ...args].join(" "));
+          return { stdout: "", stderr: "", exitCode: 0 };
+        }),
+      );
 
       await expect(
         buildServiceInstallCommand(boundTakeoverArgs())(fakeCtx()),
@@ -256,21 +279,23 @@ describe.skipIf(process.platform === "win32")(
         identity: CONFIRMED_HOST.startIdentity,
       });
       const calls: string[] = [];
-      mocks.realController = createMacosController(async (command, args) => {
-        calls.push([command, ...args].join(" "));
-        if (args[0] === "bootstrap") {
-          await publishReplacement();
-          throw new ProcessRunError(
-            "launchctl bootstrap exited with code 37",
-            command,
-            args,
-            37,
-            "",
-            "Bootstrap failed: 37: Service is already loaded\n",
-          );
-        }
-        return { stdout: "", stderr: "", exitCode: 0 };
-      });
+      mocks.realController = createMacosController(
+        drainsAfterBootout(async (command, args) => {
+          calls.push([command, ...args].join(" "));
+          if (args[0] === "bootstrap") {
+            await publishReplacement();
+            throw new ProcessRunError(
+              "launchctl bootstrap exited with code 37",
+              command,
+              args,
+              37,
+              "",
+              "Bootstrap failed: 37: Service is already loaded\n",
+            );
+          }
+          return { stdout: "", stderr: "", exitCode: 0 };
+        }),
+      );
 
       await expect(
         buildServiceInstallCommand(boundTakeoverArgs())(fakeCtx()),
@@ -330,11 +355,13 @@ describe.skipIf(process.platform === "win32")(
         };
         const calls: string[] = [];
         const checksAtCall: number[] = [];
-        mocks.realController = createMacosController(async (command, argv) => {
-          calls.push([command, ...argv].join(" "));
-          checksAtCall.push(checks);
-          return { stdout: "", stderr: "", exitCode: 0 };
-        });
+        mocks.realController = createMacosController(
+          drainsAfterBootout(async (command, argv) => {
+            calls.push([command, ...argv].join(" "));
+            checksAtCall.push(checks);
+            return { stdout: "", stderr: "", exitCode: 0 };
+          }),
+        );
         const error = await buildServiceInstallCommand(args)(fakeCtx()).then(
           () => null,
           (cause: unknown) => cause,

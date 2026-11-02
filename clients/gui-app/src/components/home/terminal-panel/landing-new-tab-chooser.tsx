@@ -82,7 +82,7 @@ export function LandingNewTabChooser(
     }
     if (!placedRef.current) {
       placedRef.current = true;
-      // Terminal takes focus, per the core flows - unless it is the one that
+      // Terminal takes focus - unless it is the one that
       // cannot be picked, in which case parking focus on a dead control would
       // make Enter do nothing with no explanation of why.
       const initial =
@@ -112,7 +112,7 @@ export function LandingNewTabChooser(
   // Read from the ACTIVE bindings, not written into the copy: the chords are
   // `Ctrl+Shift+…` off a Mac, and either can be rebound or unbound entirely -
   // so a literal is wrong for most readers and goes stale for the rest. The
-  // line's shape is still the core-flows spec; only the symbols were.
+  // line's shape stays the same; only the literal symbols were wrong.
   const terminalChord = useBindingForAction("app.terminal.new");
   const browserChord = useBindingForAction("app.browser.new");
   const shortcutHint = [

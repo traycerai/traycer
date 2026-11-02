@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { useQueryClient } from "@tanstack/react-query";
 import type { SandboxVerbGesture } from "@traycer/protocol/host/sandbox-control";
 import { isRemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
@@ -7,11 +8,18 @@ import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { useHostBinding } from "@/lib/host";
 import { startSandboxWake } from "@/lib/sandboxes/sandbox-wake";
 
+/** Whether opening a tile on this host starts its sandbox's wake. */
+export function hostEntryNeedsWake(entry: HostDirectoryEntry | null): boolean {
+  const facts =
+    entry !== null && isRemoteHostDirectoryEntry(entry) ? entry.sandbox : null;
+  return facts !== null && (facts.frozen || isSandboxAsleep(facts.state));
+}
+
 /**
  * Wakes a tile's sandbox host. Mounted only for a tile that was OPENED in this
  * session (`SandboxWakeOnTileOpen` gates on the open provenance), never for
- * one a layout restored: opening a tab is the inbound action the core flows
- * name, while a restore (or a session's reconnect loop) waking every sandbox a
+ * one a layout restored: opening a tab is the inbound action that wakes it,
+ * while a restore (or a session's reconnect loop) waking every sandbox a
  * canvas ever showed would keep forgotten machines awake on the meter.
  *
  * Fires at most once per mount, decided on the host's FIRST directory entry:
@@ -27,10 +35,7 @@ export function useSandboxWakeForOpenedTile(
   gesture: SandboxVerbGesture | null,
 ): void {
   const entry = useHostDirectoryEntry(hostId);
-  const facts =
-    entry !== null && isRemoteHostDirectoryEntry(entry) ? entry.sandbox : null;
-  const needsWake =
-    facts !== null && (facts.frozen || isSandboxAsleep(facts.state));
+  const needsWake = hostEntryNeedsWake(entry);
 
   const binding = useHostBinding();
   const queryClient = useQueryClient();

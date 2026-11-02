@@ -66,14 +66,22 @@ interface SandboxCreateContext {
 }
 
 /**
- * `POST /api/sandboxes` for a failed row's Retry. The server answers `202` once
- * the sandbox is created and its host is enrolling (the request can take
- * minutes: provider capacity, boot, boot-token delivery); the sandbox then
- * appears in the host list and the sandbox list, so the end of the request
- * refreshes both (one prefix covers both, see `sandboxQueryKeys.list`) and
- * the directory.
+ * Where a failed create says why: a `toast`, or `inline`, where the caller
+ * draws the error's message beside the control that sent it.
  */
-export function useSandboxCreate(): UseMutationResult<
+export type SandboxCreateRefusals = "toast" | "inline";
+
+/**
+ * `POST /api/sandboxes` for a failed row's Retry and a team's Enable cloud.
+ * The server answers `202` once the sandbox is created and its host is
+ * enrolling (the request can take minutes: provider capacity, boot,
+ * boot-token delivery); the sandbox then appears in the host list and the
+ * sandbox list, so the end of the request refreshes both (one prefix covers
+ * both, see `sandboxQueryKeys.list`) and the directory.
+ */
+export function useSandboxCreate(
+  refusals: SandboxCreateRefusals,
+): UseMutationResult<
   SandboxCreateAccepted,
   Error,
   SandboxCreateSubmit,
@@ -137,7 +145,7 @@ export function useSandboxCreate(): UseMutationResult<
       }
     },
     onError: (error, _variables, context) => {
-      if (!settledForStartingAccount(context)) return;
+      if (refusals === "inline" || !settledForStartingAccount(context)) return;
       if (error instanceof SandboxCreateError) {
         toast.error(error.message);
         return;

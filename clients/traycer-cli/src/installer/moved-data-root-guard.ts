@@ -4,6 +4,7 @@ import {
   currentDataRootResolution,
   defaultDataRoot,
 } from "@traycer/protocol/config/data-root";
+import { isReleasedHostVersion } from "@traycer/protocol/host/store-formats";
 import { configuredSupportedHostVersion } from "../host/supported-host-version";
 import type { Environment } from "../runner/environment";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
@@ -29,10 +30,11 @@ export function movedDataRoot(): string | null {
  *
  * Two floors, both judged before any transfer, staging or swap:
  *
- *  - the installed version (`installedVersion`, `null` when nothing is
- *    installed): a target must be at or above it. One this cannot order (a
- *    `local-*` build) is refused, because nothing proves the target is not
- *    such an older build. The same version re-installed passes;
+ *  - the installed build's version (`installedVersion`, from
+ *    `installedFloorVersion`, `null` when nothing is installed): a
+ *    target must be at or above it. One this cannot order (a `local-*` record
+ *    with no runtime version) is refused, because nothing proves the target is
+ *    not such an older build. The same version re-installed passes;
  *  - this CLI's stamped supported host (`configuredSupportedHostVersion`):
  *    the release pipeline stamps the exact host this CLI ships with, so a
  *    target below it may predate relocation - the registry's `latest` lags
@@ -41,6 +43,11 @@ export function movedDataRoot(): string | null {
  *
  * Call it only where a registry target would be installed: a `--from` archive
  * is not its business.
+ *
+ * Both messages carry `Traycer's data folder was moved to`, and the host's
+ * `classifyBoundIntentRejection` reads that phrase with the error's code to
+ * latch a parked `continue` this refuses. Change it there too, or the host
+ * spawns the same refusal on every idle tick.
  */
 export function refuseOlderHostWhileDataMoved(input: {
   readonly command: string;
@@ -80,8 +87,13 @@ export function refuseOlderHostWhileDataMoved(input: {
   });
 }
 
-/** `target` is orderable against `floor` and not below it. */
+/**
+ * `target` is orderable against `floor` and not below it. The source-tree
+ * sentinel parses as SemVer and sorts below every release, but says nothing
+ * about what wrote the data, so it orders nothing.
+ */
 function atOrAbove(target: string, floor: string): boolean {
+  if (!isReleasedHostVersion(floor)) return false;
   const comparison = compareHostVersions(target, floor);
   return comparison.comparable && comparison.ordering !== "less";
 }

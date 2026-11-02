@@ -39,6 +39,7 @@ function thread(anchorRequestId: string): BotThreadSummary {
       senderUserId: "user-1",
       sentAt: 1_000,
       resolvedAt: null,
+      excerpt: null,
     },
     replyCount: 1,
     lastReplyAt: 2_000,

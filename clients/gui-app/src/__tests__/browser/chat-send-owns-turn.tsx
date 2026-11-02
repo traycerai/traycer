@@ -96,6 +96,7 @@ const OWNER_ID = "owner-send";
 const HOST_ID = "host-send";
 
 const SETTINGS: ChatRunSettings = {
+  ultracode: false,
   harnessId: "claude",
   model: "claude-sonnet-4-5",
   permissionMode: "supervised",
@@ -253,7 +254,7 @@ function open(kind: ScenarioKind): void {
   if (kind === "activating") activeTurn = earlierTurn("starting");
   if (kind === "running") activeTurn = earlierTurn("running");
   const cb = liveCallbacks();
-  cb.onConnectionStatus("open", null, null);
+  cb.onConnectionStatus("open", null, null, null);
   cb.onSnapshot({
     kind: "snapshot",
     hasBinaryPayload: false,
@@ -690,6 +691,7 @@ export function Fixture(): ReactElement {
               steerCapable={false}
               steerProtocolSupported={false}
               autoPermissionModeProtocolSupported={null}
+              ultracodeProtocolSupported={false}
               getDraftBlobBridgeSupported={() => false}
               getActiveTurnForSteer={() => null}
               editingQueueItemId={null}

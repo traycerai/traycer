@@ -123,8 +123,8 @@ interface EpicLeftPanelRailContentProps {
  * At rest a divider is extra space and in a session a handle (L-140), which is
  * `LeftPanelRailDivider`'s answer rather than this list's. Which panels are
  * drawn, which pairs survive as pairs, and which dividers still separate two
- * drawn icons at rest (T3) is `railDisplayEntries`' answer, not a second copy
- * of the rule here (R5R-05, L-166) - so a hidden member leaves its stack on
+ * drawn icons at rest is `railDisplayEntries`' answer, not a second copy
+ * of the rule here (L-166) - so a hidden member leaves its stack on
  * the rail and in the body by the same walk.
  */
 type RailItem =
@@ -702,7 +702,7 @@ const RAIL_ACTIVE_INDICATOR_CLASS: Readonly<Record<EdgeSide, string>> = {
 
 /**
  * One rail tile, presentational: the live rail wires it to dnd and the panel
- * store, and the sample workspace's sidebar draws the same tile (F3).
+ * store, and the sample workspace's sidebar draws the same tile.
  */
 export function RailButton(props: RailButtonProps) {
   const {

@@ -32,7 +32,7 @@ export interface ArtifactDragIdentity {
  * `useDraggable` registration. Each caller keeps its own eligibility gate
  * (`enabled`) and attaches the returned wiring to its own element.
  *
- * - C1: callers supply their exact owning `viewTabId`; a missing owner makes the
+ * - Callers supply their exact owning `viewTabId`; a missing owner makes the
  *   source non-draggable rather than resolving globally to an active/MRU tab.
  * - C2: the payload carries identity only; the `instanceId` is minted per drop
  *   at commit time, so it is absent here.

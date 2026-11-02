@@ -53,7 +53,7 @@ import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
  * Every entry point - the palette, the chrome's context menus, the Appearance
  * card, a Settings search result - lands here, because the canvas, the lease,
  * the width gate and the teardown are session facts and not properties of
- * whichever gesture reached them. The entry points themselves are ticket 10;
+ * whichever gesture reached them. The entry points live elsewhere;
  * what this module owns is what happens once one of them fires.
  *
  * The canvas is ALWAYS the sample workspace (L-87, superseding L-15): a user
@@ -478,8 +478,8 @@ function stopWatchingSession(): void {
 }
 
 /**
- * `layout_editor_session`, fired once per session at the exit (L-46, L-54,
- * tech-plan section 7). Assembled here, the one place a session's whole
+ * `layout_editor_session`, fired once per session at the exit (L-46,
+ * L-54). Assembled here, the one place a session's whole
  * record - the gesture that opened it, its entry and exit snapshots, its
  * undo count - is still in hand; `session.entry`/`.source` are carried on the
  * session itself for exactly this call.

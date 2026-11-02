@@ -1,16 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, afterEach, vi } from "vitest";
-
-// The suites describe the whole client library, as every build but production
-// has it. The build-time switch (`unreleased-features.ts`) is committed
-// `true`; the mock keeps the suites on that build in a checkout stamped
-// `--off` for a production comparison. A suite of the production build mocks
-// the module itself with `false`.
-vi.mock("./unreleased-features", () => ({
-  UNRELEASED_FEATURES_ENABLED: true,
-}));
+import { afterAll, afterEach } from "vitest";
 
 // Pin the home directory to a private temp dir for every test file, BEFORE
 // the file - or anything it imports - is evaluated. The same guard as

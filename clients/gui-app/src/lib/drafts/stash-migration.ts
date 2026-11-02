@@ -1,6 +1,6 @@
 /**
  * Client-side conversion of the retired prompt stash into closed start-page
- * drafts (D19). Two entry points share one converted map and one install
+ * drafts. Two entry points share one converted map and one install
  * sequence:
  *
  * - `migrateLocalStash()` reads the app-global IndexedDB stash once per
@@ -12,7 +12,7 @@
  * shared by every desktop window - unlike the landing draft store, which is
  * per window. That is what makes the database delete below safe: window A
  * only drops the database once the SHARED map accounts for every entry,
- * including the ones window B converted (G4).
+ * including the ones window B converted.
  */
 import { PERSIST_PREFIX, persistKey } from "@/lib/persist/keys";
 
@@ -42,7 +42,7 @@ import {
 // this reader outlives: db `traycer-gui-app:prompt-stash` at version 2, with
 // `entries` keyed by `id` and `blobs` keyed by `hash` (`meta` is ignored -
 // nothing here reads a revision). The constants are duplicated rather than
-// imported because T07 deletes that module.
+// imported because the original module is deleted.
 export const STASH_DB_NAME = `${PERSIST_PREFIX}:prompt-stash`;
 const STASH_DB_VERSION = 2;
 const ENTRIES_STORE = "entries";
@@ -59,8 +59,8 @@ interface StashEntryRecord {
 }
 
 /**
- * Realm-safe `Uint8Array` check, from `prompt-stash-codec.ts` (deleted in
- * T07): IndexedDB's structured clone - and fake-indexeddb under jsdom - can
+ * Realm-safe `Uint8Array` check, from the deleted `prompt-stash-codec.ts`:
+ * IndexedDB's structured clone - and fake-indexeddb under jsdom - can
  * hand back a byte view whose prototype is not this realm's `Uint8Array`, so
  * a plain `instanceof` would false-negative every stored blob.
  */
@@ -276,7 +276,7 @@ const conversionsInFlight = new Map<string, Promise<StashConversionOutcome>>();
  *
  * Images route through `importImagesIntoLanding`, which holds its budget
  * reservation across the writes AND this install, so the bytes are never
- * unreferenced roots while an image reconcile runs (C5). A budget refusal or
+ * unreferenced roots while an image reconcile runs. A budget refusal or
  * an unreadable/mismatched blob installs the ORIGINAL content instead: the
  * row is worth more than its images, and a hash whose bytes never landed
  * renders as unavailable.
@@ -410,7 +410,7 @@ export async function migrateLocalStash(): Promise<void> {
         .toSorted((left, right) => right.createdAt - left.createdAt);
       // `now - rank` keeps the stash's own order while putting every migrated
       // row at the top of the list on this first launch - and out of the
-      // front of the adopted-mirror LRU, which evicts oldest first (C4).
+      // front of the adopted-mirror LRU, which evicts oldest first.
       const migrationStart = Date.now();
       // Captured ONCE, before the first conversion. The pass can run for
       // seconds across many entries, and every one of them installs into a

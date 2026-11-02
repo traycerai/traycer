@@ -430,10 +430,15 @@ describe("host apply over a registration that is disabled, or another user's", (
     expect(outcome.postSwapError).toBeNull();
   });
 
-  // T08 ruling 13: a task whose owner could not be confirmed is refused the
-  // same way and carried as the same warning code, but the warning never
-  // says another Windows user owns it.
-  it("a task whose owner could not be confirmed: applied, warning E_SERVICE_TASK_NOT_OWNED with the unconfirmed copy and reason", async () => {
+  // T08 ruling 13: a `/Create` refused because the task's owner could not be
+  // confirmed is carried as the same warning code as another user's, but the
+  // warning never says another Windows user owns it. Reached when the write's
+  // own confirm-read stops answering - the task changed under the create, or
+  // its reads broke mid-registration - and by the explicit repair, whose
+  // deliverable is the write; the Windows install's FIRST read answering this
+  // way now skips the definition refresh and starts the registration that is
+  // there instead (`windows-install-unattributed-start.test.ts`).
+  it("a /Create refused because the owner could not be confirmed: applied, warning E_SERVICE_TASK_NOT_OWNED with the unconfirmed copy and reason", async () => {
     await writeInstallAndStage();
     const calls: string[] = [];
     mocks.controller = controllerWhoseInstall(async () => {

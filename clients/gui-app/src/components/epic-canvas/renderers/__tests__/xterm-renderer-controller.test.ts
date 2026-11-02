@@ -284,7 +284,7 @@ describe("createXtermRendererController", () => {
   });
 
   it("reports the renderer as unsettled only between disposal and the next present", () => {
-    // Finding 1's gate at the controller boundary: `isRendererSettled()` is
+    // The gate at the controller boundary: `isRendererSettled()` is
     // what stops a grid measured through the temporary DOM renderer reaching
     // the host.
     vi.useFakeTimers();

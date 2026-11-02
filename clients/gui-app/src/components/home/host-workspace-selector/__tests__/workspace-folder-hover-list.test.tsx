@@ -102,7 +102,7 @@ describe("WorkspaceFolderHoverList", () => {
     ).toHaveLength(2);
     // jsdom can't reproduce Chromium making an overflowing scroll container an
     // implicit tab stop - assert the explicit opt-out is present instead
-    // (verified against real Chromium separately; see the ticket notes).
+    // (verified against real Chromium separately).
     // `HTMLElement.tabIndex` reads -1 for a plain div with NO tabindex
     // attribute, so read the content attribute explicitly.
     expect(list.getAttribute("tabindex")).toBe("-1");

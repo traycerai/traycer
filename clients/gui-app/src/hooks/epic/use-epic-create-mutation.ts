@@ -93,7 +93,7 @@ function taskCreationMode(
 }
 
 /**
- * `epic.create` on an explicit client (redesign P1.2).
+ * `epic.create` on an explicit client.
  *
  * There is no app-wide variant on purpose. Epic creation is PLACEMENT - the
  * epic and its folded chat live on the created-on host for life - so the

@@ -69,8 +69,8 @@ afterEach(() => {
 // worker's port, which is what makes the owed #4 pin's second arm exist at
 // all).
 //
-// The correction matters beyond this file: §8 argued Arm B was not
-// constructible BECAUSE the entry did not compose, and that argument expired
+// The correction matters beyond this file: the argument that Arm B was not
+// constructible BECAUSE the entry did not compose expired
 // with this comment. A reader checking the claim would have found this text and
 // stopped.
 __setEpicRuntimeWorkerFactoryForTests(() => {
@@ -114,21 +114,6 @@ __setEpicRuntimeWorkerFactoryForTests(() => {
 // file-level `vi.mock` takes precedence over this one - twenty do. The suite
 // that exercises the real dialing path targets `durable-stream-transport.ts`,
 // a different module, and is untouched by this.
-// The suites describe the whole product: every feature on, as every build but
-// production has it. The build-time switch (`unreleased-features.ts`) is
-// committed `true`; the mock keeps the suites on that build in a checkout
-// stamped `--off` for a production comparison. A suite of the production
-// build mocks the module itself with `false`; a file-level `vi.mock` takes
-// precedence over this one.
-vi.mock("@/unreleased-features", () => ({
-  UNRELEASED_FEATURES_ENABLED: true,
-}));
-// The shared client library has its own switch, read by the transport and
-// the auth calls the app bundles.
-vi.mock("@traycer-clients/shared/unreleased-features", () => ({
-  UNRELEASED_FEATURES_ENABLED: true,
-}));
-
 vi.mock("@/lib/host/use-durable-stream-transport", async () => {
   const { fakeDurableStreamTransports } =
     await import("@/lib/host/test-support/fake-durable-stream-transport");

@@ -1,4 +1,5 @@
 import { useState, type ReactNode } from "react";
+import { SignOutConfirmDialog } from "@/components/auth/sign-out-confirm-dialog";
 import { DiffWorkerPoolProvider } from "@/components/diff-worker-pool-provider";
 import { LayoutEditor } from "@/components/layout-editor/layout-editor";
 import { RootDndProvider } from "@/components/epic-canvas/dnd/root-dnd-provider";
@@ -11,9 +12,11 @@ import { AppColumnFrame } from "@/components/layout/app-column-frame";
 import { AppHeader } from "@/components/layout/header/app-header";
 import {
   appColumnChrome,
+  PHONE_SHELL_STRIP_CHROME,
   sideStripOwnsTitleBar,
 } from "@/components/layout/header/app-title-band-kind";
 import { useAppColumnChromeInput } from "@/components/layout/use-app-column-chrome-input";
+import { useMobileStripForm } from "@/components/layout/tabs/mobile-strip-form-context";
 import { SideTabStrip } from "@/components/layout/tabs/side-strip/side-tab-strip";
 import { TabStripKeybindingBridge } from "@/components/layout/tabs/tab-strip-keybinding-bridge";
 import { MobileNavDrawer } from "@/components/layout/shell/mobile-nav-drawer";
@@ -33,7 +36,10 @@ import { TopLevelSurfaceActivationProvider } from "@/components/layout/top-level
 import { HostScopeReady } from "@/components/layout/host-readiness-controller";
 import { MigrationRunController } from "@/components/migration/migration-run-controller";
 import { TracyEntryController } from "@/components/layout/tabs/tracy-entry-controller";
-import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
+import { TalkShortcutBridge } from "@/components/layout/voice/talk-control";
+import { VoiceSessionController } from "@/components/layout/voice/voice-session-controller";
+import { VoiceSessionChrome } from "@/components/layout/voice/voice-session-chrome";
+import { VoiceColumnTopRow } from "@/components/layout/voice/voice-top-row";
 import { LandingTerminalHost } from "@/components/home/terminal-panel/landing-terminal-host";
 import { OpenFolderDialog } from "@/components/open-folder-dialog";
 import { RemoteFolderPickerDialog } from "@/components/remote-folder-picker-dialog";
@@ -109,7 +115,11 @@ function AppShellBody(props: AppShellProps) {
   // because the editor has to re-run its effects when the node arrives.
   const [appColumn, setAppColumn] = useState<HTMLDivElement | null>(null);
   const chromeInput = useAppColumnChromeInput();
-  const chrome = appColumnChrome(chromeInput);
+  const mobileStripForm = useMobileStripForm();
+  const chrome =
+    mobileStripForm === null
+      ? appColumnChrome(chromeInput)
+      : PHONE_SHELL_STRIP_CHROME;
   const stripEdge = sideTabStripEdge(chromeInput.placement);
 
   return (
@@ -119,18 +129,22 @@ function AppShellBody(props: AppShellProps) {
           shell: a side dock is the inspector taking its share of this row, so
           the app reflows beside it in one frame and is never scaled (L-02).
           No new wrapper - `aria-hidden` and the firewall go on the column
-          below, which must never be an ancestor of the inspector (C-06). */}
+          below, which must never be an ancestor of the inspector. */}
         <div className="flex min-h-safe-dvh bg-canvas text-canvas-foreground">
           <RootDndProvider>
             <AppColumnFrame
               columnRef={setAppColumn}
               {...chrome}
               header={<AppHeader variant="app" />}
+              voiceTopRow={<VoiceColumnTopRow titleBand={chrome.titleBand} />}
               strip={
                 stripEdge === null ? null : (
                   <SideTabStrip
                     edge={stripEdge}
-                    ownsTitleBar={sideStripOwnsTitleBar(chromeInput)}
+                    ownsTitleBar={
+                      mobileStripForm === null &&
+                      sideStripOwnsTitleBar(chromeInput)
+                    }
                   />
                 )
               }
@@ -143,6 +157,9 @@ function AppShellBody(props: AppShellProps) {
                   <SessionConnectivityStrip
                     connectivity={sessionConnectivity}
                   />
+                  {/* The phone's full-screen view, and its bar while that
+                    view is down (V5). Desktop's strip is in the top row. */}
+                  <VoiceSessionChrome />
                 </>
               }
               surface={
@@ -208,12 +225,22 @@ function AppShellBody(props: AppShellProps) {
                   <TabStripKeybindingBridge />
                   {/* Once per window, for every strip placement: the fixed
                     Tracy entry's tab, its lock and its place first. */}
-                  {UNRELEASED_FEATURES_ENABLED ? (
-                    <TracyEntryController />
-                  ) : null}
+                  <TracyEntryController />
+                  {/* Once per window: the voice session's owner (the
+                    microphone, the engine, the scheduler), which the Talk
+                    control and the strip drive through the store, from the
+                    top row and the phone's channel header. */}
+                  <VoiceSessionController />
+                  <TalkShortcutBridge />
                   <MigrationRunController />
                   <MigrationBlockingModalHost />
-                  {isMobile ? <MobileNavDrawer /> : null}
+                  {/* Above the drawer's mount gate: a rotation that replaces
+                    the drawer with the strip must not take a pending
+                    confirmation with it. */}
+                  <SignOutConfirmDialog />
+                  {isMobile && mobileStripForm === null ? (
+                    <MobileNavDrawer />
+                  ) : null}
                   {/* Test-only probe: binds the active hostId to a hidden DOM
                     attribute so the mobile-cardinality integration tests can
                     assert the runner-host auto-bind machinery without

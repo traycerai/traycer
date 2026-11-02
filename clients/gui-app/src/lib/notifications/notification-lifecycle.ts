@@ -3,7 +3,8 @@ import type { MergedNotificationSource } from "@/stores/notifications/merged-not
 
 /**
  * Attention's classes, in order: prompts that block, failures, then a bot's
- * answers to the person, which need them without anything having gone wrong.
+ * rows that need the person without anything having gone wrong: its answers,
+ * replies in threads they follow, and rows that mention them.
  */
 export type NotificationAttentionTier = "blocking" | "failure" | "answer";
 
@@ -11,7 +12,11 @@ export interface NotificationLifecycleInput {
   readonly source: MergedNotificationSource;
   readonly severity: HostNotificationSeverity;
   readonly readAt: number | null;
-  /** A bot's answer to the person (`isBotThreadVerdictNotification`). */
+  /**
+   * A bot's answer to the person (`isBotThreadVerdictNotification`), a reply
+   * in a thread they follow or a row that mentions them
+   * (`isBotConversationAttention`).
+   */
   readonly botAnswer?: boolean;
 }
 

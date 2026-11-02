@@ -35,8 +35,8 @@
  * were compared against. It is repointed here, and the copy is gone.
  *
  * The note this replaces said the two differed by "one argument (`draftId`)".
- * That was true when it was written and false by the time it was acted on: the
- * review that hardened this hook gave it FIVE behaviours the private copy never
+ * That was true when it was written and false by the time it was acted on:
+ * hardening this hook gave it FIVE behaviours the private copy never
  * received - a deadline on the store write, a reconcile for a write that lands
  * after that deadline, the format verdict running before budget admission,
  * reservations keyed by image index rather than a running counter, and leaving

@@ -1,12 +1,14 @@
 /**
- * The bot tab's sidebar (Tracy Bots, decision 41): every environment is a
+ * The Tracy surface's sidebar (Tracy Bots, decision 41): every environment is a
  * section, every bot in it an avatar and name channel, unread channels are
  * marked. The sections list channels only. The person's own section carries a
  * + that opens the create form, and an empty one a call to action doing the
  * same; a team's + opens the team's main bot, which for a new team with no bot
  * is the one still to be set up (T67), drawn as a row marked as needing a
- * host. A person in no team is offered "Create a team".
- * The real sidebar, the real new-bot dialog and the real bot-tabs store run
+ * host. A person in no team is offered "Create a team". A bot that is not its
+ * environment's main bot is made main from its row's menu. "Threads", above
+ * the sections, counts the followed threads with new replies across every
+ * bot. The real sidebar, the real new-bot dialog and the real Tracy surface store run
  * over mocked reads; `bot.onboarding.read` answers per environment from a
  * script, the create form and the navigation helper are stubs, so the dialog's
  * focus on closing is read off the real thing.
@@ -19,14 +21,31 @@ import {
 import {
   act,
   cleanup,
+  fireEvent,
   render,
   screen,
   waitFor,
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
+import { EMPTY_DIRECTORY_STATE } from "@/lib/home-bots/__tests__/standalone-bots-fixtures";
+import { buildHomeBotsModel } from "@/lib/home-bots/bots-model";
+import { useStandaloneBotsStore } from "@/stores/bots/standalone-bots-store";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type MockInstance,
+} from "vitest";
+import type {
+  BotReadCursorReadResponse,
+  BotRecord,
+  BotThreadFollow,
+} from "@traycer/protocol/host/bot/schemas";
+import type { BotThreadSummary } from "@traycer/protocol/host/bot/conversation-schemas";
 import type { EnvironmentDescriptor } from "@traycer/protocol/host/environment/contracts";
 import type {
   BotOnboardingReadResponse,
@@ -39,6 +58,12 @@ interface IndicatorState {
   unreadFailure: boolean;
   unreadCount: number | null;
 }
+
+type ThreadReads = {
+  threads: BotThreadSummary[];
+  follows: Record<string, BotThreadFollow>;
+  cursors: BotReadCursorReadResponse;
+};
 
 type ReadScript =
   | ({ setup: BotOnboardingSetup | null } & Partial<
@@ -56,24 +81,43 @@ const mocks = vi.hoisted(() => {
   const reads: Record<string, ReadScript | undefined> = {};
   /** The environments `bot.onboarding.read` was asked about, in order. */
   const readRequests: string[] = [];
+  /**
+   * What each bot's `bot.thread.list`, `bot.threadFollow.read` and
+   * `bot.readCursor.read` answer; a bot not named has no threads.
+   */
+  const threadReads: Record<string, ThreadReads> = {};
   return {
     client: { stub: "tab-host-client" },
     navigate: vi.fn(),
     openLink: vi.fn<(url: string, kind: string) => Promise<void>>(),
     hasShell: true,
-    navigateToTabIntent: vi.fn<(intent: unknown) => void>(),
+    activateTabIntent: vi.fn<(intent: unknown) => void>(),
+    setMainBot: vi.fn<(variables: object) => void>(),
     bindings: { stub: "environment-bindings" },
     state: {
       environments: [] as EnvironmentDescriptor[],
       bots: [] as BotRecord[],
+      /** `bot.list` has not answered: no data, as while it loads or fails. */
+      botListPending: false,
       mainBotIds: null as Record<string, string> | null,
       connectable: { hostIds: [] as string[], resolved: true },
       epics,
       reads,
       /** Whether the host advertises `bot.onboarding.read`; `null` while unknown. */
       support: null as boolean | null,
+      /** Whether the host advertises `environment.setMainBot`; `null` while unknown. */
+      setMainBotSupport: null as boolean | null,
+      /** What `environment.setMainBot` reports as its error; `null` = accepted. */
+      setMainBotRefusal: null as string | null,
       /** The line the host negotiated for `bot.onboarding.read`. */
       version: { major: 1, minor: 1 },
+      /** What `bot.notificationLevel.read` answers: levels by channel id. */
+      levels: {},
+      /** What `bot.readCursor.read` answers; `undefined` while unread. */
+      readCursor: undefined as BotReadCursorReadResponse | undefined,
+      /** Methods the host does not advertise, whatever `support` says. */
+      unsupported: new Set<string>(),
+      threadReads,
     },
     readRequests,
   };
@@ -83,11 +127,14 @@ vi.mock("@tanstack/react-router", () => ({
   useNavigate: () => mocks.navigate,
 }));
 vi.mock("@/lib/tab-navigation", () => ({
-  navigateToTabIntent: (
+  activateTabIntent: (
     _navigate: unknown,
     intent: TabNavigationIntent,
     _extra: unknown,
-  ) => mocks.navigateToTabIntent(intent),
+  ) => {
+    mocks.activateTabIntent(intent);
+    return true;
+  },
 }));
 vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHostOrNull: () =>
@@ -96,6 +143,12 @@ vi.mock("@/providers/use-runner-host", () => ({
 vi.mock("@/lib/links/open-link", () => ({
   useOpenLink: () => mocks.openLink,
 }));
+vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/chats/use-cloud-chat-queries")
+  >()),
+  useCloudChatViewerId: () => "user-1",
+}));
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => mocks.client,
 }));
@@ -103,20 +156,53 @@ vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
   useTabHostId: () => "host-tab",
 }));
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
-  useHostMethodSupport: () => mocks.state.support,
+  useHostMethodSupport: (_hostId: string | null, method: string) => {
+    if (method === "environment.setMainBot") {
+      return mocks.state.setMainBotSupport;
+    }
+    return mocks.state.unsupported.has(method) ? false : mocks.state.support;
+  },
   useHostMethodSchemaVersion: () => mocks.state.version,
   useHostSupportsMethod: () => true,
 }));
 // The host RPC boundary: `bot.onboarding.read` answers what the test scripted,
-// and a query that is not enabled reads as pending, as TanStack's does.
+// each bot's thread reads answer `threadReads`, and a query that is not
+// enabled reads as pending, as TanStack's does.
 vi.mock("@/hooks/host/use-host-queries", () => ({
   useHostQueries: (args: {
-    requests: ReadonlyArray<{ params: { environmentId: string } }>;
+    requests: ReadonlyArray<{
+      method: string;
+      params: { environmentId: string; botId: string };
+    }>;
     options: { enabled?: boolean } | null;
   }) =>
     args.requests.map((request) => {
       if (args.options?.enabled !== true) {
-        return { status: "pending", data: undefined };
+        return { status: "pending", isPending: true, data: undefined };
+      }
+      if (request.method !== "bot.onboarding.read") {
+        const reads = Object.hasOwn(
+          mocks.state.threadReads,
+          request.params.botId,
+        )
+          ? mocks.state.threadReads[request.params.botId]
+          : { threads: [], follows: {}, cursors: { cursors: {}, latest: {} } };
+        const answers: Record<string, unknown> = {
+          "bot.thread.list": {
+            threads: reads.threads,
+            trunkCostUsd: null,
+            threadAnchors: null,
+          },
+          "bot.threadFollow.read": { follows: reads.follows },
+          "bot.readCursor.read": reads.cursors,
+          "bot.notificationLevel.read": { levels: mocks.state.levels },
+        };
+        return {
+          status: "success",
+          isPending: false,
+          isError: false,
+          data: answers[request.method],
+        };
       }
       const { environmentId } = request.params;
       mocks.readRequests.push(environmentId);
@@ -146,9 +232,34 @@ vi.mock("@/hooks/bots/use-environment-list-query", async () => {
       ),
   };
 });
+// The person's notification levels, as the host answers them.
+vi.mock("@/hooks/host/use-host-query", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/hooks/host/use-host-query")>()),
+  useHostQuery: (args: { method: string }) => {
+    if (args.method === "bot.notificationLevel.read") {
+      return { data: { levels: mocks.state.levels } };
+    }
+    if (args.method === "bot.readCursor.read") {
+      return { data: mocks.state.readCursor };
+    }
+    return { data: undefined };
+  },
+}));
 vi.mock("@/hooks/bots/use-bot-list-query", () => ({
   useBotListQuery: () => ({
-    data: { bots: mocks.state.bots, mainBotIds: mocks.state.mainBotIds },
+    data: mocks.state.botListPending
+      ? undefined
+      : { bots: mocks.state.bots, mainBotIds: mocks.state.mainBotIds },
+  }),
+}));
+vi.mock("@/hooks/bots/use-environment-set-main-bot-mutation", () => ({
+  useEnvironmentSetMainBotMutation: () => ({
+    isPending: false,
+    error:
+      mocks.state.setMainBotRefusal === null
+        ? null
+        : { message: mocks.state.setMainBotRefusal },
+    mutate: mocks.setMainBot,
   }),
 }));
 vi.mock("@/hooks/host/use-connectable-host-ids", () => ({
@@ -169,9 +280,14 @@ vi.mock("@/components/home/bots/create-bot-form", () => ({
   ),
 }));
 
-import { BotChannelSidebar } from "@/components/bots/bot-channel-sidebar";
+import {
+  BotChannelSidebar,
+  type BotThreadsViewState,
+} from "@/components/bots/bot-channel-sidebar";
 import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
-import { lookupBotTab, useBotTabsStore } from "@/stores/bots/bot-tabs-store";
+import { useBotColumnLayoutStore } from "@/stores/bots/bot-column-layout-store";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
 
 const TAB_HOST = "host-tab";
 const OTHER_HOST = "host-other";
@@ -215,7 +331,9 @@ const SETUP_BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
 
 /** What the host answers for a new team: its main bot, still to be set up. */
 function setupRead(title: string): ReadScript {
-  return { setup: { botId: SETUP_BOT_ID, title } };
+  return {
+    setup: { botId: SETUP_BOT_ID, title, state: "needs_host", arrival: null },
+  };
 }
 
 /**
@@ -224,7 +342,7 @@ function setupRead(title: string): ReadScript {
  */
 function degradedSetupRead(title: string): ReadScript {
   return {
-    setup: { botId: SETUP_BOT_ID, title },
+    setup: { botId: SETUP_BOT_ID, title, state: "needs_host", arrival: null },
     github: {
       state: "needs_installing_admin",
       installingAdmin: null,
@@ -257,7 +375,12 @@ function row(botId: string): HTMLElement {
   return found;
 }
 
-function mount(activeBotId: string): void {
+const channelOpened = vi.fn<() => void>();
+
+function mount(
+  activeBotId: string,
+  threadsView: BotThreadsViewState | null,
+): void {
   const queryClient = new QueryClient();
   const seeded = queryOptions({
     queryKey: [...hostQueryKeys.methodScope(TAB_HOST, "environment.list"), {}],
@@ -268,7 +391,12 @@ function mount(activeBotId: string): void {
   });
   render(
     <QueryClientProvider client={queryClient}>
-      <BotChannelSidebar activeBotId={activeBotId} hostId={TAB_HOST} />
+      <BotChannelSidebar
+        activeBotId={activeBotId}
+        hostId={TAB_HOST}
+        threadsView={threadsView}
+        onChannelOpened={channelOpened}
+      />
     </QueryClientProvider>,
   );
 }
@@ -291,21 +419,42 @@ beforeEach(() => {
   mocks.state.connectable = { hostIds: [TAB_HOST, OTHER_HOST], resolved: true };
   mocks.state.epics = {};
   mocks.state.support = true;
+  mocks.state.setMainBotSupport = true;
+  mocks.state.setMainBotRefusal = null;
   mocks.state.version = { major: 1, minor: 1 };
+  mocks.state.levels = {};
+  mocks.state.readCursor = undefined;
+  mocks.state.unsupported.clear();
+  mocks.state.threadReads = {};
   for (const key of Object.keys(mocks.state.reads)) {
     delete mocks.state.reads[key];
   }
   mocks.readRequests.length = 0;
-  useBotTabsStore.setState({ tabs: {} });
+  mocks.state.botListPending = false;
+  localStorage.clear();
+  useBotColumnLayoutStore.setState({
+    sectionOrder: [],
+    channelOrder: {},
+    collapsed: [],
+  });
+  // The window's host, and the surface the sidebar is drawn in, bound to it.
+  useSelectionAuthorityStore.setState({ effectiveHostId: TAB_HOST });
+  useTracySurfaceStore.setState({
+    open: true,
+    hostId: TAB_HOST,
+    botId: null,
+    visitedBotIds: [],
+  });
 });
 
 afterEach(() => {
   cleanup();
+  useStandaloneBotsStore.setState(EMPTY_DIRECTORY_STATE);
 });
 
 describe("<BotChannelSidebar /> sections", () => {
   it("lists each environment as a section with its bots as avatar and name channels, an empty environment included", () => {
-    mount("bot-release");
+    mount("bot-release", null);
 
     const sections = screen.getAllByTestId("bot-channel-section");
     expect(sections.map((s) => s.getAttribute("data-environment-id"))).toEqual([
@@ -313,18 +462,12 @@ describe("<BotChannelSidebar /> sections", () => {
       "env-team",
       "env-empty",
     ]);
-    // A section's header is its name and its +, with nothing to fold.
     expect(within(section("env-team")).getByText("Acme")).toBeTruthy();
-    expect(
-      screen
-        .getByTestId("bot-channel-sidebar")
-        .querySelectorAll("[aria-expanded]"),
-    ).toHaveLength(0);
     expect(
       within(section("env-team"))
         .getAllByTestId("bot-channel-row")
         .map((r) => r.textContent),
-    ).toEqual(["RErelease-bot", "TRtriage-bot"]);
+    ).toEqual(["release-bot", "triage-bot"]);
     expect(
       within(section("env-team")).getAllByTestId("bot-avatar"),
     ).toHaveLength(2);
@@ -349,7 +492,7 @@ describe("<BotChannelSidebar /> sections", () => {
       "bot-triage": { unreadDone: true, unreadFailure: false, unreadCount: 1 },
       "bot-notes": { unreadDone: false, unreadFailure: true, unreadCount: 1 },
     };
-    mount("bot-release");
+    mount("bot-release", null);
 
     expect(row("bot-triage").getAttribute("data-unread")).toBe("true");
     expect(row("bot-notes").getAttribute("data-unread")).toBe("true");
@@ -357,6 +500,10 @@ describe("<BotChannelSidebar /> sections", () => {
     expect(row("bot-release").getAttribute("aria-current")).toBe("page");
     expect(row("bot-triage").getAttribute("aria-current")).toBeNull();
     expect(row("bot-notes").getAttribute("aria-current")).toBeNull();
+    // The task panel's quiet highlight, never the accent pill.
+    expect(row("bot-release").classList.contains("bg-accent")).toBe(true);
+    expect(row("bot-release").classList.contains("bg-primary")).toBe(false);
+    expect(row("bot-triage").classList.contains("bg-accent")).toBe(false);
   });
 
   it("counts a channel's unread notifications at the end of its row, and draws nothing at zero or where the host does not count", () => {
@@ -373,7 +520,7 @@ describe("<BotChannelSidebar /> sections", () => {
         unreadCount: null,
       },
     };
-    mount("bot-release");
+    mount("bot-release", null);
 
     expect(
       within(
@@ -391,10 +538,154 @@ describe("<BotChannelSidebar /> sections", () => {
   });
 });
 
+describe("<BotChannelSidebar /> muted channels", () => {
+  function withChannels(): void {
+    mocks.state.bots = [
+      {
+        ...bot("bot-release", "env-team", "release-bot"),
+        appConversationChatId: "chan-release",
+      },
+      {
+        ...bot("bot-triage", "env-team", "triage-bot"),
+        appConversationChatId: "chan-triage",
+      },
+      {
+        ...bot("bot-notes", "env-me", "notes-bot"),
+        appConversationChatId: "chan-notes",
+      },
+      bot("bot-bare", "env-me", "bare-bot"),
+    ];
+  }
+
+  it("marks only the channel the person set to Nothing", () => {
+    withChannels();
+    mocks.state.levels = {
+      "chan-release": "off",
+      "chan-triage": "mentions",
+      "chan-notes": "all",
+    };
+    mount("bot-release", null);
+
+    // The channel in view: the glyph takes the quiet row's foreground.
+    const glyph = within(row("bot-release")).getByTestId(
+      "bot-channel-row-muted",
+    );
+    expect(glyph.classList.contains("text-accent-foreground")).toBe(true);
+    expect(glyph.classList.contains("text-primary-foreground")).toBe(false);
+    for (const botId of ["bot-triage", "bot-notes", "bot-bare"]) {
+      expect(
+        within(row(botId)).queryByTestId("bot-channel-row-muted"),
+      ).toBeNull();
+    }
+  });
+
+  it("marks nothing for a channel with no level set", () => {
+    withChannels();
+    mount("bot-release", null);
+
+    expect(screen.queryByTestId("bot-channel-row-muted")).toBeNull();
+  });
+});
+
+describe("<BotChannelSidebar /> read-cursor bold", () => {
+  const NEW_ROW = { messageId: "m-new", seq: 2_000 };
+  const OLD_ROW = { messageId: "m-old", seq: 1_000 };
+
+  beforeEach(() => {
+    mocks.state.bots = [
+      {
+        ...bot("bot-release", "env-team", "release-bot"),
+        appConversationChatId: "chan-release",
+      },
+      {
+        ...bot("bot-triage", "env-team", "triage-bot"),
+        appConversationChatId: "chan-triage",
+      },
+    ];
+  });
+
+  it("bolds a channel with a row past the cursor, with no count when the mailbox holds nothing", () => {
+    mocks.state.readCursor = {
+      cursors: { "chan-release": OLD_ROW },
+      latest: { "chan-release": NEW_ROW },
+    };
+    mount("bot-triage", null);
+
+    expect(row("bot-release").getAttribute("data-unread")).toBe("true");
+    expect(
+      within(row("bot-release")).queryByTestId("bot-channel-row-unread-count"),
+    ).toBeNull();
+  });
+
+  it("does not bold a channel at Nothing, though a new row has landed", () => {
+    mocks.state.readCursor = {
+      cursors: {},
+      latest: { "chan-release": NEW_ROW },
+    };
+    mocks.state.levels = { "chan-release": "off" };
+    mount("bot-triage", null);
+
+    expect(row("bot-release").getAttribute("data-unread")).toBe("false");
+  });
+
+  it("does not bold a channel the cursor has caught up with, whatever the mailbox says", () => {
+    mocks.state.readCursor = {
+      cursors: { "chan-release": NEW_ROW },
+      latest: { "chan-release": NEW_ROW },
+    };
+    mocks.state.epics = {
+      "bot-release": {
+        unreadDone: true,
+        unreadFailure: false,
+        unreadCount: 1,
+      },
+    };
+    mount("bot-triage", null);
+
+    expect(row("bot-release").getAttribute("data-unread")).toBe("false");
+  });
+
+  it("keeps the mailbox indicator's bold on a host without bot.readCursor.read", () => {
+    mocks.state.unsupported.add("bot.readCursor.read");
+    mocks.state.readCursor = {
+      cursors: {},
+      latest: { "chan-release": NEW_ROW },
+    };
+    mocks.state.epics = {
+      "bot-triage": { unreadDone: true, unreadFailure: false, unreadCount: 1 },
+    };
+    mount("bot-release", null);
+
+    expect(row("bot-release").getAttribute("data-unread")).toBe("false");
+    expect(row("bot-triage").getAttribute("data-unread")).toBe("true");
+  });
+});
+
 describe("<BotChannelSidebar /> main bot", () => {
+  it("draws no environment beside a bot's name while two main bots are visible", () => {
+    mocks.state.mainBotIds = {
+      "env-me": "bot-notes",
+      "env-team": "bot-release",
+    };
+    useStandaloneBotsStore.setState({
+      directory: {
+        model: buildHomeBotsModel({
+          environments: mocks.state.environments,
+          bots: mocks.state.bots,
+          mainBotIds: mocks.state.mainBotIds,
+        }),
+        setups: [],
+      },
+      settled: true,
+    });
+    mount("bot-release", null);
+
+    expect(row("bot-release").textContent).toBe("release-bot");
+  });
+
   it("stars the environment's main bot after its name and no other channel", () => {
     mocks.state.mainBotIds = { "env-team": "bot-triage" };
-    mount("bot-release");
+    mount("bot-release", null);
 
     const star = within(row("bot-triage")).getByRole("img", {
       name: "Main bot",
@@ -416,7 +707,7 @@ describe("<BotChannelSidebar /> main bot", () => {
     mocks.state.epics = {
       "bot-triage": { unreadDone: true, unreadFailure: false, unreadCount: 2 },
     };
-    mount("bot-release");
+    mount("bot-release", null);
 
     const star = within(row("bot-triage")).getByRole("img", {
       name: "Main bot",
@@ -432,87 +723,253 @@ describe("<BotChannelSidebar /> main bot", () => {
 
   it("draws the main bot's star in its row's own colour while its channel is in view", () => {
     mocks.state.mainBotIds = { "env-team": "bot-triage" };
-    mount("bot-triage");
+    mount("bot-triage", null);
 
     const star = within(row("bot-triage")).getByRole("img", {
       name: "Main bot",
     });
     expect(row("bot-triage").getAttribute("class")).toContain(
-      "text-primary-foreground",
+      "text-accent-foreground",
     );
     expect(star.getAttribute("class")).toContain("text-current");
     expect(star.getAttribute("class")).not.toContain("text-muted-foreground");
   });
 
   it("stars no channel when the host's list names no main bots", () => {
-    mount("bot-release");
+    mount("bot-release", null);
 
     expect(screen.queryByRole("img", { name: "Main bot" })).toBeNull();
   });
 });
 
-describe("<BotChannelSidebar /> opening a channel", () => {
-  it("opens the other bot's tab on the sidebar's host and navigates to it", async () => {
+describe("<BotChannelSidebar /> making a bot main", () => {
+  function menuOf(botId: string): HTMLElement | null {
+    const item = row(botId).closest("li");
+    if (item === null) throw new Error(`no list item for ${botId}`);
+    return within(item).queryByTestId("bot-channel-row-menu");
+  }
+
+  it("makes a bot that is not main the main bot from its row's menu and its context menu, in one click with no confirmation", async () => {
     const user = userEvent.setup();
-    mount("bot-release");
+    mocks.state.mainBotIds = { "env-team": "bot-release" };
+    mount("bot-release", null);
+
+    const menu = menuOf("bot-triage");
+    if (menu === null) throw new Error("expected the triage bot's menu");
+    await user.click(menu);
+    await user.click(screen.getByRole("menuitem", { name: "Make main" }));
+
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(mocks.setMainBot).toHaveBeenCalledTimes(1);
+    expect(mocks.setMainBot.mock.calls[0][0]).toEqual({
+      environmentId: "env-team",
+      botId: "bot-triage",
+    });
+
+    await user.pointer({ keys: "[MouseRight]", target: row("bot-triage") });
+    await user.click(screen.getByRole("menuitem", { name: "Make main" }));
+    expect(mocks.setMainBot).toHaveBeenCalledTimes(2);
+    expect(mocks.setMainBot.mock.calls[1][0]).toEqual({
+      environmentId: "env-team",
+      botId: "bot-triage",
+    });
+  });
+
+  it("offers no menu on the main bot, nor in an environment with no main bot", () => {
+    mocks.state.mainBotIds = { "env-team": "bot-release" };
+    mount("bot-release", null);
+
+    expect(menuOf("bot-triage")).not.toBeNull();
+    expect(menuOf("bot-release")).toBeNull();
+    expect(menuOf("bot-notes")).toBeNull();
+  });
+
+  it.each([false, null])(
+    "offers no menu on a host whose support for environment.setMainBot is %s",
+    (support) => {
+      mocks.state.setMainBotSupport = support;
+      mocks.state.mainBotIds = { "env-team": "bot-release" };
+      mount("bot-release", null);
+
+      expect(screen.queryByTestId("bot-channel-row-menu")).toBeNull();
+    },
+  );
+
+  it("states a refusal under the bot's row, and nowhere else", () => {
+    mocks.state.setMainBotRefusal = "Only an admin can change the main bot";
+    mocks.state.mainBotIds = { "env-team": "bot-release" };
+    mount("bot-release", null);
+
+    const refusal = screen.getByRole("alert");
+    expect(refusal.textContent).toBe("Only an admin can change the main bot");
+    expect(row("bot-triage").closest("li")?.contains(refusal)).toBe(true);
+  });
+});
+
+describe("<BotChannelSidebar /> opening a channel", () => {
+  it("swaps the surface to the other bot's channel in place, on the surface's host", async () => {
+    const user = userEvent.setup();
+    mount("bot-release", null);
 
     await user.click(row("bot-triage"));
 
-    const opened = lookupBotTab(useBotTabsStore.getState().tabs, "bot-triage");
-    expect(opened).toMatchObject({
+    expect(mocks.activateTabIntent).toHaveBeenCalledTimes(1);
+    expect(mocks.activateTabIntent).toHaveBeenCalledWith({
+      kind: "tracy",
       botId: "bot-triage",
+    });
+    expect(useTracySurfaceStore.getState()).toMatchObject({
+      open: true,
       hostId: TAB_HOST,
-      title: "triage-bot",
     });
-    expect(mocks.navigateToTabIntent).toHaveBeenCalledTimes(1);
-    expect(mocks.navigateToTabIntent).toHaveBeenCalledWith({
-      kind: "bot",
-      botId: "bot-triage",
-    });
+  });
+
+  it("reports a channel pick to its surface, so a picker's menu can close, for the open channel and for another's", async () => {
+    const user = userEvent.setup();
+    mount("bot-release", null);
+
+    await user.click(row("bot-triage"));
+    await user.click(row("bot-release"));
+
+    expect(channelOpened).toHaveBeenCalledTimes(2);
   });
 
   it("does nothing when the channel in view is clicked", async () => {
     const user = userEvent.setup();
-    mount("bot-release");
+    mount("bot-release", null);
 
     await user.click(row("bot-release"));
 
-    expect(useBotTabsStore.getState().tabs).toEqual({});
-    expect(mocks.navigateToTabIntent).not.toHaveBeenCalled();
+    expect(mocks.activateTabIntent).not.toHaveBeenCalled();
   });
 
-  it("keeps an open tab on its own host while this client can still dial it", async () => {
+  it("keeps the surface on its own host while this client can still dial it", async () => {
     const user = userEvent.setup();
-    useBotTabsStore.getState().openBotTab({
-      botId: "bot-triage",
-      hostId: OTHER_HOST,
-      title: "triage-bot",
-    });
-    mount("bot-release");
+    useTracySurfaceStore.setState({ hostId: OTHER_HOST });
+    mount("bot-release", null);
 
     await user.click(row("bot-triage"));
 
-    expect(
-      lookupBotTab(useBotTabsStore.getState().tabs, "bot-triage")?.hostId,
-    ).toBe(OTHER_HOST);
-    expect(mocks.navigateToTabIntent).toHaveBeenCalledTimes(1);
+    expect(useTracySurfaceStore.getState().hostId).toBe(OTHER_HOST);
+    expect(mocks.activateTabIntent).toHaveBeenCalledTimes(1);
   });
 
-  it("moves an open tab onto the sidebar's host when its host can no longer be dialled", async () => {
+  it("moves the surface onto the window's host when its host can no longer be dialled", async () => {
     const user = userEvent.setup();
-    useBotTabsStore.getState().openBotTab({
-      botId: "bot-triage",
-      hostId: "host-gone",
-      title: "triage-bot",
-    });
-    mount("bot-release");
+    useTracySurfaceStore.setState({ hostId: "host-gone" });
+    mount("bot-release", null);
 
     await user.click(row("bot-triage"));
 
-    expect(
-      lookupBotTab(useBotTabsStore.getState().tabs, "bot-triage")?.hostId,
-    ).toBe(TAB_HOST);
-    expect(mocks.navigateToTabIntent).toHaveBeenCalledTimes(1);
+    expect(useTracySurfaceStore.getState().hostId).toBe(TAB_HOST);
+    expect(mocks.activateTabIntent).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("<BotChannelSidebar /> Threads", () => {
+  const FOLLOWING: BotThreadFollow = {
+    state: "following",
+    reason: "participated",
+  };
+
+  function thread(threadId: string, lastReplyAt: number): BotThreadSummary {
+    return {
+      threadId,
+      conversationId: "channel",
+      sessionChatId: `session-${threadId}`,
+      anchor: null,
+      replyCount: 1,
+      lastReplyAt,
+      openRequestCount: 0,
+      costUsd: null,
+    };
+  }
+
+  function view(shown: boolean): BotThreadsViewState {
+    return { shown, onShow: vi.fn(), onLeave: vi.fn() };
+  }
+
+  function threadsRow(): HTMLElement {
+    return screen.getByTestId("bot-channel-threads-row");
+  }
+
+  it("stands above the first section and counts the followed threads with new replies across every bot", () => {
+    // Two followed threads with new replies on two bots count; a caught-up
+    // one and an unfollowed one with new replies do not.
+    mocks.state.threadReads = {
+      "bot-release": {
+        threads: [thread("release-new", 2_000), thread("release-read", 2_000)],
+        follows: { "release-new": FOLLOWING, "release-read": FOLLOWING },
+        cursors: {
+          cursors: { "release-read": { messageId: "m-1", seq: 2_000 } },
+          latest: {},
+        },
+      },
+      "bot-notes": {
+        threads: [thread("notes-new", 3_000), thread("notes-other", 3_000)],
+        follows: {
+          "notes-new": FOLLOWING,
+          "notes-other": { state: "unfollowed", reason: "manual" },
+        },
+        cursors: { cursors: {}, latest: {} },
+      },
+    };
+    mount("bot-release", view(false));
+
+    const nav = screen.getByTestId("bot-channel-sidebar");
+    expect(nav.firstElementChild).toBe(threadsRow());
+    expect(threadsRow().textContent).toBe("Threads2 with new replies");
+    expect(threadsRow().getAttribute("aria-current")).toBeNull();
+    expect(row("bot-release").getAttribute("aria-current")).toBe("page");
+  });
+
+  it("is the current row while Threads shows, the tab's channel row is not, and that row goes back to the channel", async () => {
+    const user = userEvent.setup();
+    const threads = view(true);
+    mount("bot-release", threads);
+
+    expect(threadsRow().getAttribute("aria-current")).toBe("page");
+    expect(threadsRow().className).toContain("bg-accent");
+    expect(row("bot-release").getAttribute("aria-current")).toBeNull();
+    expect(screen.queryByTestId("bot-channel-threads-count")).toBeNull();
+
+    await user.click(row("bot-release"));
+
+    expect(threads.onLeave).toHaveBeenCalledTimes(1);
+    expect(mocks.activateTabIntent).not.toHaveBeenCalled();
+  });
+
+  it("shows Threads when chosen, and another bot's row opens that bot's channel and leaves Threads alone", async () => {
+    const user = userEvent.setup();
+    const threads = view(false);
+    mount("bot-release", threads);
+
+    await user.click(threadsRow());
+    expect(threads.onShow).toHaveBeenCalledTimes(1);
+
+    await user.click(row("bot-triage"));
+    expect(threads.onLeave).not.toHaveBeenCalled();
+    expect(mocks.activateTabIntent).toHaveBeenCalledWith({
+      kind: "tracy",
+      botId: "bot-triage",
+    });
+  });
+
+  it("draws no count on a host that cannot read follows, and no row on a tab with no channel to swap", () => {
+    mocks.state.unsupported.add("bot.threadFollow.read");
+    mocks.state.threadReads = {
+      "bot-release": {
+        threads: [thread("release-new", 2_000)],
+        follows: { "release-new": FOLLOWING },
+        cursors: { cursors: {}, latest: {} },
+      },
+    };
+    mount("bot-release", view(false));
+    expect(threadsRow().textContent).toBe("Threads");
+    cleanup();
+
+    mount("bot-release", null);
+    expect(screen.queryByTestId("bot-channel-threads-row")).toBeNull();
   });
 });
 
@@ -522,7 +979,7 @@ describe("<BotChannelSidebar /> a team's main bot", () => {
       ...mocks.state.bots,
       bot("bot-orphan", "env-left", "orphan-bot"),
     ];
-    mount("bot-release");
+    mount("bot-release", null);
 
     expect(
       within(section("env-me")).getByRole("button", { name: "New bot" }),
@@ -547,7 +1004,7 @@ describe("<BotChannelSidebar /> a team's main bot", () => {
   it("opens the team's main bot from its + when the list names one, and no create form", async () => {
     const user = userEvent.setup();
     mocks.state.mainBotIds = { "env-team": "bot-triage" };
-    mount("bot-notes");
+    mount("bot-notes", null);
 
     await user.click(
       within(section("env-team")).getByRole("button", {
@@ -555,17 +1012,11 @@ describe("<BotChannelSidebar /> a team's main bot", () => {
       }),
     );
 
-    expect(
-      lookupBotTab(useBotTabsStore.getState().tabs, "bot-triage"),
-    ).toMatchObject({
-      botId: "bot-triage",
-      hostId: TAB_HOST,
-      title: "triage-bot",
-    });
-    expect(mocks.navigateToTabIntent).toHaveBeenCalledWith({
-      kind: "bot",
+    expect(mocks.activateTabIntent).toHaveBeenCalledWith({
+      kind: "tracy",
       botId: "bot-triage",
     });
+    expect(useTracySurfaceStore.getState().hostId).toBe(TAB_HOST);
     expect(screen.queryByTestId("new-bot-dialog")).toBeNull();
   });
 });
@@ -575,21 +1026,21 @@ describe("<BotChannelSidebar /> a team still to be set up", () => {
     mocks.state.reads["env-empty"] = setupRead("Tracy");
   });
 
-  it("shows the team's future main bot as a row marked as the main bot and as needing a host, in place of the empty section", () => {
-    mount("bot-release");
+  it("shows the team's future main bot as a row marked as the main bot, with no state label, in place of the empty section", () => {
+    mount("bot-release", null);
 
     const setup = within(section("env-empty")).getByTestId(
       "bot-channel-setup-row",
     );
     expect(setup.getAttribute("data-bot-id")).toBe(SETUP_BOT_ID);
-    expect(within(setup).getByText("Tracy")).toBeTruthy();
     expect(within(setup).getByTestId("bot-avatar")).toBeTruthy();
+    expect(
+      within(setup).queryByTestId("bot-channel-setup-row-needs-host"),
+    ).toBeNull();
+    expect(within(setup).getByText("Tracy")).toBeTruthy();
     expect(
       within(setup).getByTestId("bot-channel-setup-row-main"),
     ).toBeTruthy();
-    expect(
-      within(setup).getByTestId("bot-channel-setup-row-needs-host").textContent,
-    ).toBe("Needs a host");
     expect(
       within(section("env-empty")).queryAllByTestId("bot-channel-row"),
     ).toHaveLength(0);
@@ -613,65 +1064,55 @@ describe("<BotChannelSidebar /> a team still to be set up", () => {
         }),
     },
   ])(
-    "opens a bot tab on the setup bot's id and title from $label",
+    "opens the surface on the setup bot's channel from $label",
     async ({ control }) => {
       const user = userEvent.setup();
-      mount("bot-release");
+      mount("bot-release", null);
 
       await user.click(control());
 
-      expect(
-        lookupBotTab(useBotTabsStore.getState().tabs, SETUP_BOT_ID),
-      ).toMatchObject({
-        botId: SETUP_BOT_ID,
-        hostId: TAB_HOST,
-        title: "Tracy",
-      });
-      expect(mocks.navigateToTabIntent).toHaveBeenCalledTimes(1);
-      expect(mocks.navigateToTabIntent).toHaveBeenCalledWith({
-        kind: "bot",
+      expect(mocks.activateTabIntent).toHaveBeenCalledTimes(1);
+      expect(mocks.activateTabIntent).toHaveBeenCalledWith({
+        kind: "tracy",
         botId: SETUP_BOT_ID,
       });
+      expect(useTracySurfaceStore.getState().hostId).toBe(TAB_HOST);
       expect(screen.queryByTestId("new-bot-dialog")).toBeNull();
     },
   );
 
-  it("still shows the setup row, its Needs a host badge and the team's +, when the host could not read GitHub", async () => {
+  it("still shows the setup row and the team's +, when the host could not read GitHub", async () => {
     mocks.state.reads["env-empty"] = degradedSetupRead("Tracy");
     const user = userEvent.setup();
-    mount("bot-release");
+    mount("bot-release", null);
 
     const setup = within(section("env-empty")).getByTestId(
       "bot-channel-setup-row",
     );
     expect(setup.getAttribute("data-bot-id")).toBe(SETUP_BOT_ID);
-    expect(
-      within(setup).getByTestId("bot-channel-setup-row-needs-host").textContent,
-    ).toBe("Needs a host");
 
     await user.click(
       within(section("env-empty")).getByRole("button", { name: "Open Tracy" }),
     );
 
-    expect(
-      lookupBotTab(useBotTabsStore.getState().tabs, SETUP_BOT_ID),
-    ).toMatchObject({ botId: SETUP_BOT_ID, hostId: TAB_HOST, title: "Tracy" });
-    expect(mocks.navigateToTabIntent).toHaveBeenCalledWith({
-      kind: "bot",
+    expect(mocks.activateTabIntent).toHaveBeenCalledWith({
+      kind: "tracy",
       botId: SETUP_BOT_ID,
     });
+    expect(useTracySurfaceStore.getState().hostId).toBe(TAB_HOST);
   });
 
   it("marks the setup row as the current page while its channel is in view, and does nothing when it is clicked", async () => {
     const user = userEvent.setup();
-    mount(SETUP_BOT_ID);
+    mount(SETUP_BOT_ID, null);
 
     const setup = screen.getByTestId("bot-channel-setup-row");
     expect(setup.getAttribute("aria-current")).toBe("page");
+    expect(setup.classList.contains("bg-accent")).toBe(true);
+    expect(setup.classList.contains("bg-primary")).toBe(false);
     await user.click(setup);
 
-    expect(useBotTabsStore.getState().tabs).toEqual({});
-    expect(mocks.navigateToTabIntent).not.toHaveBeenCalled();
+    expect(mocks.activateTabIntent).not.toHaveBeenCalled();
   });
 });
 
@@ -679,7 +1120,7 @@ describe("<BotChannelSidebar /> a team that is not to be set up", () => {
   it("shows a team with its bots and no setup row, reading no team that has a bot", () => {
     // A team whose bots pre-date onboarding: the read answers no setup.
     mocks.state.reads["env-team"] = NO_SETUP;
-    mount("bot-release");
+    mount("bot-release", null);
 
     expect(
       within(section("env-team"))
@@ -698,7 +1139,7 @@ describe("<BotChannelSidebar /> a team that is not to be set up", () => {
     ({ support }) => {
       mocks.state.support = support;
       mocks.state.reads["env-empty"] = setupRead("Tracy");
-      mount("bot-release");
+      mount("bot-release", null);
 
       expect(screen.queryByTestId("bot-channel-setup-row")).toBeNull();
       expect(
@@ -711,7 +1152,7 @@ describe("<BotChannelSidebar /> a team that is not to be set up", () => {
   it("shows no setup row and no team + on a host that answers bot.onboarding.read at 1.0, and asks for nothing", () => {
     mocks.state.version = { major: 1, minor: 0 };
     mocks.state.reads["env-empty"] = setupRead("Tracy");
-    mount("bot-release");
+    mount("bot-release", null);
 
     expect(screen.queryByTestId("bot-channel-setup-row")).toBeNull();
     expect(
@@ -722,7 +1163,7 @@ describe("<BotChannelSidebar /> a team that is not to be set up", () => {
 
   it("shows no setup row and no team + when the read fails", () => {
     mocks.state.reads["env-empty"] = "fails";
-    mount("bot-release");
+    mount("bot-release", null);
 
     expect(screen.queryByTestId("bot-channel-setup-row")).toBeNull();
     expect(
@@ -737,7 +1178,7 @@ describe("<BotChannelSidebar /> the person's own section", () => {
     mocks.state.bots = mocks.state.bots.filter(
       (b) => b.environmentId !== "env-me",
     );
-    mount("bot-release");
+    mount("bot-release", null);
 
     expect(
       within(section("env-me")).getByTestId("bot-channel-section-set-up")
@@ -769,7 +1210,7 @@ describe("<BotChannelSidebar /> the person's own section", () => {
 
   it("gives focus back to the + that opened the dialog on Escape", async () => {
     const user = userEvent.setup();
-    mount("bot-release");
+    mount("bot-release", null);
     const plus = within(section("env-me")).getByTestId(
       "bot-channel-section-add",
     );
@@ -791,7 +1232,7 @@ describe("<BotChannelSidebar /> create a team", () => {
   it("offers Create a team to a person in no team, opening the dashboard's create-team page", async () => {
     const user = userEvent.setup();
     mocks.state.environments = [environment("env-me", "Personal", "user")];
-    mount("bot-notes");
+    mount("bot-notes", null);
 
     await user.click(screen.getByTestId("bot-channel-create-team"));
 
@@ -805,7 +1246,7 @@ describe("<BotChannelSidebar /> create a team", () => {
   it("re-reads the environment list when the window regains focus, so a team made on the dashboard replaces Create a team", async () => {
     mocks.state.environments = [environment("env-me", "Personal", "user")];
     mocks.state.bots = [];
-    mount("bot-notes");
+    mount("bot-notes", null);
     expect(screen.getByTestId("bot-channel-create-team")).toBeTruthy();
     expect(screen.queryAllByTestId("bot-channel-section")).toHaveLength(1);
 
@@ -824,13 +1265,319 @@ describe("<BotChannelSidebar /> create a team", () => {
   });
 
   it("draws nothing when a team environment is present, or when there is no shell to open it", () => {
-    mount("bot-release");
+    mount("bot-release", null);
     expect(screen.queryByTestId("bot-channel-create-team")).toBeNull();
     cleanup();
 
     mocks.state.environments = [environment("env-me", "Personal", "user")];
     mocks.hasShell = false;
-    mount("bot-notes");
+    mount("bot-notes", null);
     expect(screen.queryByTestId("bot-channel-create-team")).toBeNull();
+  });
+});
+
+const DRAG_ROW_HEIGHT = 30;
+const DRAG_SECTION_HEIGHT = 120;
+
+function rectAt(top: number, height: number): DOMRect {
+  return {
+    x: 0,
+    y: top,
+    top,
+    left: 0,
+    right: 200,
+    bottom: top + height,
+    width: 200,
+    height,
+    toJSON: () => ({}),
+  };
+}
+
+function indexAmong(element: HTMLElement, selector: string): number {
+  const parent = element.parentElement;
+  if (parent === null) return 0;
+  return Array.from(parent.children)
+    .filter((child) => child.matches(selector))
+    .indexOf(element);
+}
+
+/**
+ * jsdom lays nothing out, so dnd-kit would see every row at the origin. A
+ * channel's sortable node is its `li`, stacked 30px apart in its list; a
+ * section is stacked 120px apart in the column; the lifted copy dnd-kit
+ * positions over the dragged row, which dnd-kit measures through its child,
+ * is where that row stood. jsdom cannot read
+ * back the transforms dnd-kit puts on the nodes, so a rect never moves with
+ * them, as the transform-agnostic rect dnd-kit asks for does not.
+ */
+function layOutColumn(): MockInstance<() => DOMRect> {
+  return vi
+    .spyOn(Element.prototype, "getBoundingClientRect")
+    .mockImplementation(function (this: Element) {
+      if (!(this instanceof HTMLElement)) return rectAt(0, 0);
+      const overlay = this.parentElement;
+      if (overlay !== null && overlay.style.position === "fixed") {
+        return rectAt(
+          Number.parseFloat(overlay.style.top),
+          Number.parseFloat(overlay.style.height),
+        );
+      }
+      if (this.tagName === "LI") {
+        return rectAt(
+          indexAmong(this, "li") * DRAG_ROW_HEIGHT,
+          DRAG_ROW_HEIGHT,
+        );
+      }
+      if (this.dataset.testid === "bot-channel-section") {
+        return rectAt(
+          indexAmong(this, "[data-testid='bot-channel-section']") *
+            DRAG_SECTION_HEIGHT,
+          DRAG_SECTION_HEIGHT,
+        );
+      }
+      return rectAt(0, 0);
+    });
+}
+
+function pointerOptions(clientX: number, clientY: number): PointerEventInit {
+  return {
+    isPrimary: true,
+    button: 0,
+    pointerType: "mouse",
+    clientX,
+    clientY,
+  };
+}
+
+/** The lifted copy dnd-kit draws while a row is dragged, gone once it is dropped. */
+async function liftedCopyGone(): Promise<void> {
+  await waitFor(() => {
+    expect(document.querySelector("[inert]")).toBeNull();
+  });
+}
+
+/**
+ * A mouse drag of `handle` down by `distance` px from where its row stands:
+ * the press, a first move that crosses the activation distance, a second that
+ * carries the row, then `release` px sideways before the release.
+ */
+async function dragBy(
+  handle: HTMLElement,
+  distance: number,
+  release: number,
+): Promise<void> {
+  const row = handle.closest("li, [data-testid='bot-channel-section']");
+  if (row === null) throw new Error("the handle is in no row");
+  const y = row.getBoundingClientRect().top + 5;
+  fireEvent.pointerDown(handle, pointerOptions(10, y));
+  fireEvent.pointerMove(document, pointerOptions(10, y + 10));
+  fireEvent.pointerMove(document, pointerOptions(10, y + distance));
+  expect(document.querySelector("[inert]")).not.toBeNull();
+  fireEvent.pointerMove(document, pointerOptions(10 + release, y + distance));
+  fireEvent.pointerUp(document, pointerOptions(10 + release, y + distance));
+  await liftedCopyGone();
+}
+
+function botIdsIn(environmentId: string): Array<string | null> {
+  return within(section(environmentId))
+    .getAllByTestId("bot-channel-row")
+    .map((element) => element.getAttribute("data-bot-id"));
+}
+
+function sectionIdsInColumn(): Array<string | null> {
+  return screen
+    .getAllByTestId("bot-channel-section")
+    .map((element) => element.getAttribute("data-environment-id"));
+}
+
+describe("<BotChannelSidebar /> arranging the column", () => {
+  let layout: MockInstance<() => DOMRect>;
+
+  beforeEach(() => {
+    layout = layOutColumn();
+    // Rows of env-team by title: alerts-bot, release-bot, triage-bot.
+    mocks.state.bots.push(bot("bot-alerts", "env-team", "alerts-bot"));
+  });
+
+  afterEach(() => {
+    layout.mockRestore();
+  });
+
+  it("writes a channel's new place as its section's full order when it is dragged onto another, and the rows follow", async () => {
+    mount("bot-notes", null);
+    expect(botIdsIn("env-team")).toEqual([
+      "bot-alerts",
+      "bot-release",
+      "bot-triage",
+    ]);
+
+    await dragBy(row("bot-release"), DRAG_ROW_HEIGHT, 0);
+
+    expect(useBotColumnLayoutStore.getState().channelOrder).toEqual({
+      "env-team": ["bot-alerts", "bot-triage", "bot-release"],
+    });
+    expect(botIdsIn("env-team")).toEqual([
+      "bot-alerts",
+      "bot-triage",
+      "bot-release",
+    ]);
+  });
+
+  it("changes nothing when a channel is dropped over nothing of its section", async () => {
+    mount("bot-notes", null);
+
+    await dragBy(row("bot-release"), 600, 0);
+
+    expect(useBotColumnLayoutStore.getState().channelOrder).toEqual({});
+    expect(botIdsIn("env-team")).toEqual([
+      "bot-alerts",
+      "bot-release",
+      "bot-triage",
+    ]);
+    expect(useBotColumnLayoutStore.getState().sectionOrder).toEqual([]);
+  });
+
+  it("changes nothing when the pointer leaves the section sideways after carrying a channel over another", async () => {
+    mount("bot-notes", null);
+
+    // Over triage-bot, then out into the conversation pane: the column
+    // keeps the lifted row on its axis, the pointer is outside the list.
+    await dragBy(row("bot-release"), DRAG_ROW_HEIGHT, 600);
+
+    expect(useBotColumnLayoutStore.getState().channelOrder).toEqual({});
+    expect(botIdsIn("env-team")).toEqual([
+      "bot-alerts",
+      "bot-release",
+      "bot-triage",
+    ]);
+  });
+
+  it("writes the sections' new order when a section is dragged by its label, and the sections follow", async () => {
+    mount("bot-notes", null);
+    const labels = screen.getAllByTestId("bot-channel-section-label");
+    expect(labels.map((label) => label.textContent)).toEqual([
+      "Personal",
+      "Acme",
+      "Quiet team",
+    ]);
+
+    await dragBy(labels[2], -2 * DRAG_SECTION_HEIGHT, 0);
+
+    expect(useBotColumnLayoutStore.getState().sectionOrder).toEqual([
+      "env-empty",
+      "env-me",
+      "env-team",
+    ]);
+    expect(sectionIdsInColumn()).toEqual(["env-empty", "env-me", "env-team"]);
+  });
+
+  it("reorders a channel from the keyboard: Space lifts it, an arrow moves it, Space drops it", async () => {
+    mount("bot-notes", null);
+    const handle = row("bot-release");
+    handle.focus();
+
+    fireEvent.keyDown(handle, { code: "Space", key: " " });
+    expect(document.querySelector("[inert]")).not.toBeNull();
+    // dnd-kit starts listening for the arrows on a timer after the lift.
+    await act(async () => {
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 0);
+      });
+    });
+    fireEvent.keyDown(document, { code: "ArrowDown", key: "ArrowDown" });
+    fireEvent.keyDown(document, { code: "Space", key: " " });
+    await liftedCopyGone();
+
+    expect(useBotColumnLayoutStore.getState().channelOrder).toEqual({
+      "env-team": ["bot-alerts", "bot-triage", "bot-release"],
+    });
+    expect(botIdsIn("env-team")).toEqual([
+      "bot-alerts",
+      "bot-triage",
+      "bot-release",
+    ]);
+  });
+});
+
+describe("<BotChannelSidebar /> putting a section away", () => {
+  beforeEach(() => {
+    mocks.state.bots.push(bot("bot-alerts", "env-team", "alerts-bot"));
+    mocks.state.epics = {
+      "bot-triage": { unreadDone: true, unreadFailure: false, unreadCount: 2 },
+    };
+  });
+
+  it("collapses to the channel in view and the channels with something unread, and opens again", async () => {
+    const user = userEvent.setup();
+    mount("bot-release", null);
+    const collapse = screen.getByRole("button", { name: "Collapse Acme" });
+    expect(collapse.getAttribute("aria-expanded")).toBe("true");
+    expect(botIdsIn("env-team")).toEqual([
+      "bot-alerts",
+      "bot-release",
+      "bot-triage",
+    ]);
+
+    await user.click(collapse);
+
+    const expand = screen.getByRole("button", { name: "Expand Acme" });
+    expect(expand.getAttribute("aria-expanded")).toBe("false");
+    expect(section("env-team").getAttribute("data-collapsed")).toBe("true");
+    expect(botIdsIn("env-team")).toEqual(["bot-release", "bot-triage"]);
+    // The other sections are left as they were.
+    expect(section("env-me").getAttribute("data-collapsed")).toBe("false");
+    expect(botIdsIn("env-me")).toEqual(["bot-notes"]);
+
+    await user.click(expand);
+
+    expect(
+      screen
+        .getByRole("button", { name: "Collapse Acme" })
+        .getAttribute("aria-expanded"),
+    ).toBe("true");
+    expect(botIdsIn("env-team")).toEqual([
+      "bot-alerts",
+      "bot-release",
+      "bot-triage",
+    ]);
+  });
+
+  it("keeps the whole arrangement when a section is collapsed before the bot list answers", async () => {
+    const user = userEvent.setup();
+    const arranged = {
+      sectionOrder: ["env-team", "env-me", "env-empty"],
+      channelOrder: { "env-team": ["bot-triage", "bot-release"] },
+      collapsed: [],
+    };
+    useBotColumnLayoutStore.setState(arranged);
+    mocks.state.botListPending = true;
+    mount("bot-release", null);
+
+    await user.click(screen.getByRole("button", { name: "Collapse Acme" }));
+
+    const state = useBotColumnLayoutStore.getState();
+    expect(state.collapsed).toEqual(["env-team"]);
+    expect(state.sectionOrder).toEqual(arranged.sectionOrder);
+    expect(state.channelOrder).toEqual(arranged.channelOrder);
+  });
+
+  it("drops the ids the answered lists no longer carry when a section is collapsed", async () => {
+    const user = userEvent.setup();
+    useBotColumnLayoutStore.setState({
+      sectionOrder: ["env-gone", "env-team"],
+      channelOrder: {
+        "env-team": ["bot-gone", "bot-triage"],
+        "env-gone": ["bot-x"],
+      },
+      collapsed: [],
+    });
+    mount("bot-release", null);
+
+    await user.click(screen.getByRole("button", { name: "Collapse Acme" }));
+
+    const state = useBotColumnLayoutStore.getState();
+    expect(state.collapsed).toEqual(["env-team"]);
+    expect(state.sectionOrder).toEqual(["env-team"]);
+    expect(state.channelOrder).toEqual({ "env-team": ["bot-triage"] });
   });
 });

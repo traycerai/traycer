@@ -631,8 +631,9 @@ export const hostStatusUpgradeV13ToV14 = defineUpgradePath<
  * what the sidecar beside the installed executable says, or `null` for every
  * way of not getting one (absent, malformed, unreadable) - the same collapse
  * the CLI's `readInstalledFloorOperands` performs, so both ends resolve the
- * installed side to one `HostStoreFormatsKnowledge` through
- * `resolveHostStoreFormats(version, declaredFormats)`.
+ * installed side through `resolveHostStoreFormats(version, declaredFormats)`.
+ * The one difference: for a local install with no declaration the CLI passes
+ * the record's runtime version, which this report does not carry.
  */
 export const hostStatusInstallSchema = lazySchema(() =>
   z.object({

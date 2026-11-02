@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ApplyHostOutcome } from "../../installer/apply";
 
@@ -8,6 +9,7 @@ import type { ApplyHostOutcome } from "../../installer/apply";
 
 const mocks = vi.hoisted(() => ({
   outcome: null as ApplyHostOutcome | null,
+  refusal: null as Error | null,
   applyHostCalls: 0,
   readHostHeldVersionMock: vi.fn(),
   readHostInstallRecordMock: vi.fn(),
@@ -16,8 +18,10 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../installer/apply", () => ({
-  applyHost: async () => {
+  applyHost: async (options: { readonly onWillDisruptHost: () => void }) => {
     mocks.applyHostCalls += 1;
+    if (mocks.refusal !== null) throw mocks.refusal;
+    options.onWillDisruptHost();
     if (mocks.outcome === null) throw new Error("test outcome not set");
     return mocks.outcome;
   },
@@ -74,7 +78,14 @@ vi.mock("../../registry/client", () => ({
   },
 }));
 
+import {
+  acquireUpdateAttemptLock,
+  readHostUpdateLastAttempt,
+} from "@traycer-clients/shared/host-update";
+import { mkdir, rm } from "node:fs/promises";
 import { buildHostApplyCommand } from "../host-apply";
+import { CLI_ERROR_CODES, cliError } from "../../runner/errors";
+import { hostHomeDir } from "../../store/paths";
 import type { CommandContext } from "../../runner/runner";
 import type { HostInstallRecord } from "../../manifest/host-install";
 
@@ -125,7 +136,10 @@ function fakeCtx(): CommandContext {
 
 function runApply(
   outcome: ApplyHostOutcome,
-  overrides: { readonly respectHold?: boolean },
+  overrides: {
+    readonly respectHold?: boolean;
+    readonly lifecycleOrigin?: "desktop" | "terminal";
+  },
 ): Promise<{
   readonly data: unknown;
   readonly human: string | null;
@@ -138,12 +152,16 @@ function runApply(
     expectedStageFingerprint: null,
     respectHold: overrides.respectHold ?? false,
     attemptAdoption: null,
-    lifecycleOrigin: "terminal",
+    lifecycleOrigin: overrides.lifecycleOrigin ?? "terminal",
     acceptStoreFormatLoss: false,
   })(fakeCtx());
 }
 
-beforeEach(() => {
+beforeEach(async () => {
+  await rm(join(hostHomeDir("production"), "update-last-attempt.json"), {
+    force: true,
+  });
+  mocks.refusal = null;
   mocks.applyHostCalls = 0;
   mocks.readHostHeldVersionMock.mockReset().mockResolvedValue(null);
   mocks.readHostInstallRecordMock.mockReset().mockResolvedValue(null);
@@ -487,4 +505,148 @@ describe("host apply - respectHold", () => {
   // consulting gate (`held !== installed`) once the install moves forward.
   // There is nothing to clear, so `respectHold` above is this command's
   // ONLY hold interaction; no test here asserts a write/clear side effect.
+});
+
+describe("host apply - the last-attempt record", () => {
+  const home = (): string => hostHomeDir("production");
+  const last = () => readHostUpdateLastAttempt(home());
+  const applied = (
+    runningActivated: boolean,
+    postSwapError: string | null,
+  ): ApplyHostOutcome => ({
+    outcome: "applied",
+    record: record("1.3.0", "install-test"),
+    previous: record("1.2.0", "install-test"),
+    runningActivated,
+    installGeneration: "gen-1",
+    serviceLifecycle: null,
+    postSwapError,
+    postSwapWarning: null,
+  });
+
+  it("the app's apply with its start accepted is applied: nothing has seen the host yet", async () => {
+    await runApply(applied(true, null), { lifecycleOrigin: "desktop" });
+    expect(await last()).toEqual({
+      command: "host apply",
+      initiator: "desktop",
+      outcome: "applied",
+      targetVersion: "1.3.0",
+      attemptId: null,
+      code: null,
+      message: null,
+      recordedAt: expect.any(String),
+    });
+  });
+
+  it("a person's apply is theirs", async () => {
+    await runApply(applied(false, null), {});
+    expect(await last()).toMatchObject({
+      initiator: "manual",
+      outcome: "applied",
+    });
+  });
+
+  it("a start that failed after the swap is failed", async () => {
+    await runApply(applied(false, "the service would not start"), {});
+    expect(await last()).toMatchObject({
+      outcome: "failed",
+      targetVersion: "1.3.0",
+      message: "the service would not start",
+    });
+  });
+
+  it("a no-op names the installed version", async () => {
+    await runApply({ outcome: "no-op", installedVersion: "1.2.0" }, {});
+    expect(await last()).toMatchObject({
+      outcome: "no-op",
+      targetVersion: "1.2.0",
+    });
+  });
+
+  it("a stage that changed is refused, in words", async () => {
+    await runApply(
+      {
+        outcome: "stage-fingerprint-mismatch",
+        installedVersion: "1.2.0",
+        expectedStageFingerprint: "a",
+        actualStageFingerprint: "b",
+      },
+      {},
+    );
+    const attempt = await last();
+    expect(attempt).toMatchObject({
+      outcome: "refused",
+      code: "stage-fingerprint-mismatch",
+    });
+    expect(attempt?.message).not.toBe("stage-fingerprint-mismatch");
+  });
+
+  it("an apply that lost the lock is refused", async () => {
+    await mkdir(home(), { recursive: true });
+    const held = await acquireUpdateAttemptLock({
+      hostHomeDir: home(),
+      reason: "host-update",
+      waitMs: 0,
+      pollIntervalMs: 25,
+    });
+    if (held.kind !== "acquired") throw new Error("the lock was not free");
+    try {
+      await expect(runApply(applied(true, null), {})).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.CLI_LOCK_BUSY,
+      });
+    } finally {
+      await held.handle.release();
+    }
+    expect(await last()).toMatchObject({
+      outcome: "refused",
+      code: CLI_ERROR_CODES.CLI_LOCK_BUSY,
+    });
+    expect(mocks.applyHostCalls).toBe(0);
+  });
+
+  it("a busy host is waiting, not failed", async () => {
+    mocks.refusal = cliError({
+      code: CLI_ERROR_CODES.HOST_BUSY,
+      message: "the host is busy",
+      details: null,
+      exitCode: 1,
+    });
+    await expect(runApply(applied(true, null), {})).rejects.toBe(mocks.refusal);
+    expect(await last()).toMatchObject({
+      outcome: "parked",
+      code: CLI_ERROR_CODES.HOST_BUSY,
+    });
+  });
+
+  it("a refusal under the lock that changed nothing did not run", async () => {
+    mocks.refusal = cliError({
+      code: CLI_ERROR_CODES.HOST_NOT_INSTALLED,
+      message: "no host installed",
+      details: null,
+      exitCode: 1,
+    });
+    await expect(runApply(applied(true, null), {})).rejects.toBe(mocks.refusal);
+    expect(await last()).toMatchObject({ outcome: "refused" });
+  });
+
+  it("an apply that throws once it has touched the host is failed", async () => {
+    mocks.outcome = null;
+    await expect(
+      buildHostApplyCommand({
+        force: false,
+        noService: false,
+        expectedStageFingerprint: null,
+        respectHold: false,
+        attemptAdoption: null,
+        lifecycleOrigin: "desktop",
+        acceptStoreFormatLoss: false,
+      })(fakeCtx()),
+    ).rejects.toThrow("test outcome not set");
+    expect(await last()).toMatchObject({
+      initiator: "desktop",
+      outcome: "failed",
+      targetVersion: null,
+      message: "test outcome not set",
+    });
+  });
 });

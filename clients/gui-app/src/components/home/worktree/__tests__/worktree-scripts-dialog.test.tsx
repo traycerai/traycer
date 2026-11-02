@@ -967,7 +967,7 @@ describe("<WorktreeScriptsDialog />", () => {
     expect(readEffectiveBranchValue()).toBe("feat/login");
   });
 
-  // Item 5 (layered-settings review findings): while the post-save
+  // Item 5 (layered-settings): while the post-save
   // regeneration offer is active, Effective branch must show the CAPTURED
   // candidate (not the old staged proposal), the offer must name that old
   // proposal separately, Use new prefix stages exactly the visible candidate,
@@ -1170,7 +1170,7 @@ describe("<WorktreeScriptsDialog />", () => {
     });
   });
 
-  // Item 6 (layered-settings review findings): starting another repository-
+  // Item 6 (layered-settings): starting another repository-
   // prefix edit while a regeneration offer is active must dismiss that stale
   // offer immediately (before any draft typing). Dismissal is silent - not an
   // implicit "Keep current" / stage. A later successful Apply may create a

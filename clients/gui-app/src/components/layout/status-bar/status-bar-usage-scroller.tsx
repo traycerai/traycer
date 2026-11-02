@@ -52,7 +52,7 @@ import { cn } from "@/lib/utils";
  * where the user scrolled to. A DOM write from an effect rather than state:
  * the position is the scroller's to keep, and nothing rendered depends on it.
  *
- * The ROW is also `usageLimits`'s canvas node (C-02). Usage limits is ONE
+ * The ROW is also `usageLimits`'s canvas node. Usage limits is ONE
  * region however many accounts it draws, so it registers ONCE here instead of
  * once per provider segment: the editor stamps `data-selected` on every
  * instance of a region by design (L-23), so a registration per segment drew

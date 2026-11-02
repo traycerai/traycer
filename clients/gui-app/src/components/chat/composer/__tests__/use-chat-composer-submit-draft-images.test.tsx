@@ -186,6 +186,7 @@ function mountSubmit(args: {
     reasoningFallback: "model-default",
     seedKey: "draft-image-submit",
     values: {
+      ultracode: false,
       permission: "supervised",
       selection: { harnessId: "codex", modelSlug: "gpt-5", profileId: null },
       reasoning: "medium",
@@ -194,6 +195,7 @@ function mountSubmit(args: {
     onSettingsChange: null,
     tuiOnly: false,
     chatLineCarriesAutoMode: null,
+    ultracodeCarried: false,
     hostId: null,
   });
   return renderHook(() =>
@@ -216,8 +218,9 @@ function mountSubmit(args: {
       onSubmitMessage: args.onSubmitMessage,
       onSideChat: null,
       targetHostId: args.targetHostId ?? null,
+      restingSandbox: null,
       queueEditTargetId: null,
-      // T5's gate is off by default in these fixtures: most predate it and
+      // The gate is off by default in these fixtures: most predate it and
       // assert the inline behaviour, which is what `false` preserves exactly.
       getDraftBlobBridgeSupported: () => args.draftBlobBridgeSupported ?? false,
     }),
@@ -457,7 +460,7 @@ describe("useChatComposerSubmit draft images", () => {
   });
 });
 
-// ─── T5's send gate, through the real submit hook ─────────────────────────
+// ─── The send gate, through the real submit hook ─────────────────────────
 
 const GATE_HOST = "host-gate-submit";
 const GATE_OWNER = "owner-gate-submit";
@@ -660,6 +663,7 @@ function mountSubmitRerenderable(initial: {
     reasoningFallback: "model-default",
     seedKey: "draft-image-submit-rerender",
     values: {
+      ultracode: false,
       permission: "supervised",
       selection: { harnessId: "codex", modelSlug: "gpt-5", profileId: null },
       reasoning: "medium",
@@ -668,6 +672,7 @@ function mountSubmitRerenderable(initial: {
     onSettingsChange: null,
     tuiOnly: false,
     chatLineCarriesAutoMode: null,
+    ultracodeCarried: false,
     hostId: null,
   });
   const bridgeSource = mutableBridgeSource(initial.draftBlobBridgeSupported);
@@ -692,6 +697,7 @@ function mountSubmitRerenderable(initial: {
         onSubmitMessage: initial.onSubmitMessage,
         onSideChat: null,
         targetHostId: initial.targetHostId,
+        restingSandbox: null,
         queueEditTargetId: null,
         // A STABLE getter over a mutable source, which is what production
         // supplies: `chat-tile.tsx` builds it with `useCallback(() =>
@@ -1025,6 +1031,7 @@ describe("useChatComposerSubmit draft images - /btw re-inlines before forking", 
       reasoningFallback: "model-default",
       seedKey: "btw-inline-submit",
       values: {
+        ultracode: false,
         permission: "supervised",
         selection: { harnessId: "codex", modelSlug: "gpt-5", profileId: null },
         reasoning: "medium",
@@ -1033,6 +1040,7 @@ describe("useChatComposerSubmit draft images - /btw re-inlines before forking", 
       onSettingsChange: null,
       tuiOnly: false,
       chatLineCarriesAutoMode: null,
+      ultracodeCarried: false,
       hostId: null,
     });
     const { result } = renderHook(() =>
@@ -1055,6 +1063,7 @@ describe("useChatComposerSubmit draft images - /btw re-inlines before forking", 
         onSubmitMessage: submit,
         onSideChat,
         targetHostId: GATE_HOST,
+        restingSandbox: null,
         queueEditTargetId: null,
         getDraftBlobBridgeSupported: () => true,
       }),

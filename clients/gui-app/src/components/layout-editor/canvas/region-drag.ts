@@ -28,7 +28,7 @@ import { getLayoutSnapshot } from "@/stores/layout/layout-store";
 /**
  * The markers live in `canvas-attributes.ts`, a leaf with no imports, because
  * the surfaces that stamp them are app surfaces and must not pull this module's
- * graph in to read a string (R3-05). Re-exported here so the editor's own
+ * graph in to read a string. Re-exported here so the editor's own
  * callers keep one import.
  */
 export { LAYOUT_CLUSTER_ATTRIBUTE, LAYOUT_MEMBER_ATTRIBUTE };
@@ -81,7 +81,7 @@ export function armCanvasDrag(input: {
  *
  * The scope is the PRESSED member's own container - the element the surface
  * marked `data-layout-cluster` - and never an ancestor found by counting
- * members upwards (G3-01). One group is drawn in two containers whenever a
+ * members upwards. One group is drawn in two containers whenever a
  * dock region is sized to Chip: that region stands in the composer's compact
  * strip while its full-size siblings stay in the dock, with the whole
  * transcript between them. A scope resolved by walking up would then be the
@@ -123,7 +123,7 @@ function resolveGroup(
  * A member's id off the element: its own where it has one, otherwise the
  * region's. Only ever used to SELECT from the stored order, never to build
  * one, so an id this build does not know selects nothing rather than narrowing
- * something away (G1-23).
+ * something away.
  */
 function memberId(node: HTMLElement): string {
   return (

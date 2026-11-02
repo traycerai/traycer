@@ -455,7 +455,7 @@ function hostOverviewActivateReason(
     return `${hostName} has no dialable route from this window, so it can't become this window's host.`;
   }
   // Not "tabs stay on the host they started on" - the active-host switch
-  // still reloads open tabs today (F2/F3/F7), so that promise would be
+  // still reloads open tabs today, so that promise would be
   // false. This only says what IS true.
   return "Switching changes where new work starts.";
 }

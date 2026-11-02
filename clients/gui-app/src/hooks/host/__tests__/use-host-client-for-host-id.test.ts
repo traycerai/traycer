@@ -53,7 +53,7 @@ vi.mock("@/lib/host", () => ({
   useHostRuntimeClient: getGlobalClient,
 }));
 
-// Two distinct hooks since redesign P2.1: `useHostRuntimeClient` is the
+// Two distinct hooks: `useHostRuntimeClient` is the
 // SPINE (what a host id is resolved against) and `useHostClient` is the
 // effective host resolved through it. These tests only exercise EXPLICIT ids,
 // so the following-client mirror below exists to keep the mock honest about

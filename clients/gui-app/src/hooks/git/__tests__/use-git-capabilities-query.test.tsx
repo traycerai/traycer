@@ -15,7 +15,7 @@ const mockHostClient = {
 
 vi.mock("@/lib/host", () => ({
   useHostClient: () => mockHostClient,
-  // The SPINE, a separate export since redesign P2.1.
+  // The SPINE, a separate export.
   useHostRuntimeClient: () => mockHostClient,
 }));
 // `useGitCapabilitiesQuery` resolves its client from the `hostId` it is HANDED,

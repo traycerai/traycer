@@ -9,7 +9,7 @@ import {
 } from "../support/layout-editor/input.ts";
 import { layoutEditorUse, sharedPage } from "../support/layout-editor/pages.ts";
 
-// THE VERTICAL STRIP'S DRAG TOWARD THE WINDOW EDGE (S-11).
+// THE VERTICAL STRIP'S DRAG TOWARD THE WINDOW EDGE.
 //
 // `side-tab-strip.html` mounts the real vertical strip against a real window
 // edge. Pulling a row sideways INTO the content past the 24px threshold tears

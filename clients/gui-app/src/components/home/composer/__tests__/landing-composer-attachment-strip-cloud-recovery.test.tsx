@@ -1,5 +1,5 @@
 /**
- * F1 - the landing attachment strip must render a cloud-recovered image on
+ * The landing attachment strip must render a cloud-recovered image on
  * its OWN first fetch, not on some later remount.
  *
  * Before the fix, `LandingComposerAttachmentStrip` resolved hash-only chips

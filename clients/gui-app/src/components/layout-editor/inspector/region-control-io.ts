@@ -25,7 +25,7 @@ import {
  * rather than a type assertion - the same way `layout-editor-store.ts`'s
  * `persistedDockMode` already reads one dynamic field.
  *
- * Two things make that seam sound rather than a cast in disguise (G1-08).
+ * Two things make that seam sound rather than a cast in disguise.
  *
  * The KEY is `RegionValueKey`, the union of every region's own value keys, so
  * a caller cannot hand this module an arbitrary string; which of those keys
@@ -53,7 +53,7 @@ export function readControlValue(
   }
   // A key the region does not have is a registry mistake, not a state:
   // answering `false` draws it as an off switch, which is how such a mistake
-  // ships looking like a feature that does nothing (G1-22). Loud where it can
+  // ships looking like a feature that does nothing. Loud where it can
   // be fixed, and still a switch rather than a white screen where it cannot.
   if (import.meta.env.DEV) {
     throw new Error(`layout region has no control value for key: ${key}`);
@@ -92,7 +92,7 @@ export function isControlValueChanged(
 
 /**
  * Several of one region's controls at once, for a block that owns more than
- * one key: the Style examples, which write five between them (L-20, G1-17).
+ * one key: the Style examples, which write five between them (L-20).
  *
  * `ReadonlyArray<string>` rather than `RegionValueKey` here because the caller
  * gets its keys from an example PATCH rather than from a declared control, and

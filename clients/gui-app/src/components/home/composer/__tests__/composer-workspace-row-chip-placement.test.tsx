@@ -18,7 +18,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
  *
  * The row's `overflow-hidden` is why the move matters beyond looks: it clipped
  * anything a child overhung with, which is what sliced the per-region mark off
- * the chips (C-04) before L-94 deleted that mark outright.
+ * the chips before L-94 deleted that mark outright.
  */
 function renderRow() {
   return render(

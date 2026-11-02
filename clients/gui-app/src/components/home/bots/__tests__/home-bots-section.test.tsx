@@ -29,12 +29,11 @@ import type {
   EnvironmentDescriptor,
   EnvironmentHostRecord,
 } from "@traycer/protocol/host/environment/contracts";
+import type { BotOnboardingSetup } from "@traycer/protocol/host/bot/onboarding-schemas";
 import type { TeamSetup } from "@/hooks/bots/use-team-setups";
 
 /** What a scripted `bot.onboarding.read` answers for one environment. */
-type OnboardingScript =
-  | { setup: { botId: string; title: string } | null }
-  | "fails";
+type OnboardingScript = { setup: BotOnboardingSetup | null } | "fails";
 
 const mocks = vi.hoisted(() => {
   const initialSupport = (): boolean | null => true;
@@ -204,7 +203,7 @@ vi.mock("@/components/home/bots/home-bots-group", () => ({
     group: {
       environmentId: string;
       label: string;
-      bots: unknown[];
+      bots: Array<{ botId: string }>;
       mainBotId: string | null;
     };
     hostReach: {
@@ -230,6 +229,7 @@ vi.mock("@/components/home/bots/home-bots-group", () => ({
       <div
         data-testid="home-bots-group"
         data-environment-id={props.group.environmentId}
+        data-bot-ids={props.group.bots.map((entry) => entry.botId).join(" ")}
       >
         {props.group.label}
       </div>
@@ -239,6 +239,7 @@ vi.mock("@/components/home/bots/home-bots-group", () => ({
 
 import { HomeBotsSection } from "@/components/home/bots/home-bots-section";
 import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
+import { useBotColumnLayoutStore } from "@/stores/bots/bot-column-layout-store";
 
 const PERSONAL: EnvironmentDescriptor = {
   environmentId: "env-personal",
@@ -335,6 +336,12 @@ beforeEach(() => {
   mocks.state.onboardingReads = {};
   mocks.onboardingReadCalls.length = 0;
   mocks.groupProps.length = 0;
+  localStorage.clear();
+  useBotColumnLayoutStore.setState({
+    sectionOrder: [],
+    channelOrder: {},
+    collapsed: [],
+  });
   mocks.useHostMethodSupport.mockImplementation((_hostId, method) => {
     if (method === "environment.host.list") return mocks.state.hostListSupport;
     if (method === "bot.onboarding.read") return mocks.state.onboardingSupport;
@@ -495,6 +502,35 @@ describe("HomeBotsSection supported states", () => {
     expect(screen.getByTestId("home-bots-count").textContent).toBe("2 bots");
     expect(screen.queryByTestId("home-bots-error")).toBeNull();
     expect(screen.queryByTestId("home-bots-unavailable")).toBeNull();
+  });
+
+  it("renders the groups and their bots in the order the person gave the channel column", () => {
+    mocks.state.environments.data = { environments: [PERSONAL, TEAM] };
+    mocks.state.bots.data = {
+      bots: [
+        bot("bot_a", "env-team", "Alpha"),
+        bot("bot_b", "env-team", "Bravo"),
+        bot("bot_c", "env-team", "Charlie"),
+        bot("bot_p", "env-personal", "Papa"),
+      ],
+      mainBotIds: null,
+    };
+    useBotColumnLayoutStore.setState({
+      sectionOrder: ["env-team", "env-personal"],
+      channelOrder: { "env-team": ["bot_c", "bot_a"] },
+      collapsed: [],
+    });
+    mountSection();
+
+    const groups = screen.getAllByTestId("home-bots-group");
+    expect(groups.map((g) => g.getAttribute("data-environment-id"))).toEqual([
+      "env-team",
+      "env-personal",
+    ]);
+    expect(groups.map((g) => g.getAttribute("data-bot-ids"))).toEqual([
+      "bot_c bot_a bot_b",
+      "bot_p",
+    ]);
   });
 
   it("renders a group for an environment that holds no bot, and counts one bot singularly", () => {
@@ -686,7 +722,12 @@ describe("HomeBotsSection what each group is told", () => {
  * answers it at 1.1 or later, and handed to that team's group alone.
  */
 describe("HomeBotsSection team setup", () => {
-  const SETUP = { botId: "bot-tracy-env-team", title: "Tracy" };
+  const SETUP: BotOnboardingSetup = {
+    botId: "bot-tracy-env-team",
+    title: "Tracy",
+    state: "needs_host",
+    arrival: null,
+  };
 
   /** The personal environment holds a bot; the team holds none. */
   function resolveWithBotlessTeam(): void {

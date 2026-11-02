@@ -14,7 +14,7 @@ import { createFakeRunnerHost } from "../../../../__tests__/create-fake-runner-h
 import { HostDirectoryService } from "@/lib/host/host-directory-service";
 
 /**
- * F6b, end to end: a host registered LATE - from the CLI, or from another
+ * End to end: a host registered LATE - from the CLI, or from another
  * machine - must become activatable without waiting for an unrelated refresh.
  *
  * The renderer's directory learns about it on its own poll. The selection
@@ -70,7 +70,7 @@ function buildWorld() {
     localHostEnsure: unavailableLocalHostEnsurePort,
     localOutage: inertLocalHostOutageSignal,
     preferredStore: new InMemoryPreferredHostStore(),
-    // The shared fake, not a hand-rolled one: `AuthorityClock` is P1.3's and
+    // The shared fake, not a hand-rolled one: `AuthorityClock` is
     // still moving, and a local stub would drift from it silently.
     clock: createFakeAuthorityClock(0),
     newIncarnationId: () => "incarnation-1",

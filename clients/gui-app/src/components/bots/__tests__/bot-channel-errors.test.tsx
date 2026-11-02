@@ -1,5 +1,5 @@
 /**
- * Where a bot channel says an error (Tracy Bots T61): in the channel or the
+ * Where a bot channel says an error: in the channel or the
  * thread, never on the tab. The REAL `BotChannelView`, its thread panel, the
  * message box and its send-failure notice run over real stores; only the
  * host hooks are scripted. `bot.conversation.send` is a mutation each case
@@ -67,6 +67,7 @@ vi.mock("@/hooks/host/use-host-supports-method", async (importOriginal) => ({
 }));
 vi.mock("@/components/epic-tabs/pane-visibility-context", () => ({
   usePaneVisible: () => true,
+  usePaneFocused: () => true,
 }));
 vi.mock("@/hooks/bots/use-bot-conversation-list-query", () => ({
   useBotConversationListQuery: () => ({
@@ -201,6 +202,7 @@ const LISTED_THREAD: BotThreadSummary = {
     senderUserId: "user-teammate",
     sentAt: 1_000,
     resolvedAt: null,
+    excerpt: null,
   },
   replyCount: 1,
   lastReplyAt: 2_000,
@@ -229,6 +231,7 @@ function mount(openThread: BotOpenThread | null): void {
       <TooltipProvider>
         <ChatExpansionTestProviders tileInstanceId="tile-1">
           <BotChannelView
+            tiles={null}
             botId={BOT_ID}
             hostId={HOST_ID}
             boundHostId={HOST_ID}
@@ -250,6 +253,7 @@ function mount(openThread: BotOpenThread | null): void {
             openThread={openThread}
             onOpenThread={vi.fn()}
             onOpenActivity={onOpenActivity}
+            setupHistory={null}
           />
         </ChatExpansionTestProviders>
       </TooltipProvider>
@@ -297,7 +301,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("<BotChannelView /> a message the host refuses", () => {
+describe("<BotChannelView tiles={null} /> a message the host refuses", () => {
   it("says so in the channel with the text kept, and a second Enter sends it again as a plain send", async () => {
     mount(null);
     const box = screen.getByRole("textbox", { name: "Message Release Bot" });
@@ -341,7 +345,42 @@ describe("<BotChannelView /> a message the host refuses", () => {
   });
 });
 
-describe("<BotChannelView /> an option pick the host refuses", () => {
+describe("<BotChannelView tiles={null} /> a channel message left unsent when the pane goes", () => {
+  it("shows the typed text again when the channel is shown again", async () => {
+    mount(null);
+    const user = userEvent.setup();
+    await user.type(
+      screen.getByRole("textbox", { name: "Message Release Bot" }),
+      "Ship it",
+    );
+
+    cleanup();
+    mount(null);
+
+    const box = screen.getByRole("textbox", { name: "Message Release Bot" });
+    expect((box as HTMLTextAreaElement).value).toBe("Ship it");
+  });
+
+  it("keeps nothing of a message once the host has taken it", async () => {
+    mount(null);
+    const box = screen.getByRole("textbox", { name: "Message Release Bot" });
+    await typeAndEnter(box, "Ship it");
+    await settle("succeed");
+
+    cleanup();
+    mount(null);
+
+    const remounted = screen.getByRole("textbox", {
+      name: "Message Release Bot",
+    });
+    expect((remounted as HTMLTextAreaElement).value).toBe("");
+    expect(
+      useBotDraftsStore.getState().threadBoxes[BOT_ID]?.[CHANNEL_ID],
+    ).toBeUndefined();
+  });
+});
+
+describe("<BotChannelView tiles={null} /> an option pick the host refuses", () => {
   it("says so in the channel's dock, not in a toast, and a new pick clears it", async () => {
     const user = userEvent.setup();
     mount(null);
@@ -372,7 +411,7 @@ describe("<BotChannelView /> an option pick the host refuses", () => {
   });
 });
 
-describe("<BotChannelView /> a thread's reply the host refuses", () => {
+describe("<BotChannelView tiles={null} /> a thread's reply the host refuses", () => {
   beforeEach(() => {
     mocks.state.threads = [LISTED_THREAD];
   });

@@ -13,11 +13,11 @@ import {
 const TEST_WEBSOCKET_URL = "ws://127.0.0.1:4917/rpc";
 
 /**
- * Submit-time re-validation for the landing composer (redesign P1.2,
- * selection model §54): "submit re-validates the resolved host is usable
+ * Submit-time re-validation for the landing composer:
+ * "submit re-validates the resolved host is usable
  * (refuse with an inline error, never create on a silently different host)".
  *
- * The property under test is the second clause. Before P1.2 the composer's
+ * The property under test is the second clause. Before the redesign the composer's
  * picker moved the app-wide selection, so "the host the chip shows" and "the
  * host the create lands on" were the same thing by construction. Now they are
  * two values, and this is the gate that refuses to let them differ.
@@ -199,7 +199,7 @@ describe("resolveLandingPlacement", () => {
     expect(placement.kind).toBe("refused");
   });
 
-  // D6: a pin is never blocked by the `namedHostDead` arm. A pinned host that
+  // A pin is never blocked by the `namedHostDead` arm. A pinned host that
   // dies has already auto-followed to `effective` by the time this runs -
   // `resolvedHostId` names the live host, `namedHostDead` stays false, and a
   // good client for it resolves ready, exactly like an unpinned target.

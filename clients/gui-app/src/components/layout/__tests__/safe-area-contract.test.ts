@@ -97,14 +97,6 @@ function centresFixedOnTheViewport(source: string): boolean {
 }
 
 /**
- * The portalled frames that centre themselves over the viewport. Each has to
- * carry its own width cap, because `#root`'s padding never reaches a `fixed`
- * element and CSS allows exactly one width clamp per element - so the cap is a
- * default a call site can displace, not a floor it cannot. That is what makes
- * it worth asserting: the guarantee is only ever one unmodified `max-w-*`
- * away from being gone, and nothing else would notice.
- */
-/**
  * The anchored (trigger-positioned) primitives, which Radix places against the
  * viewport rather than inside `#root`. `tooltip.tsx` is deliberately absent: it
  * reads the insets inline and predates the shared hook.
@@ -144,6 +136,14 @@ const AVOID_COLLISIONS_ALLOWLIST = [
   "components/epic-canvas/git-diff/git-diff-panel-actions.tsx",
 ];
 
+/**
+ * The portalled frames that centre themselves over the viewport. Each has to
+ * carry its own width cap, because `#root`'s padding never reaches a `fixed`
+ * element and CSS allows exactly one width clamp per element - so the cap is a
+ * default a call site can displace, not a floor it cannot. That is what makes
+ * it worth asserting: the guarantee is only ever one unmodified `max-w-*`
+ * away from being gone, and nothing else would notice.
+ */
 const WIDTH_CAPPED_FIXED_FRAMES = [
   "components/ui/dialog.tsx",
   "components/ui/sheet.tsx",

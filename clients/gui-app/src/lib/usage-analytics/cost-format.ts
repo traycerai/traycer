@@ -7,7 +7,7 @@ export type UsageServedBy = UsageSummaryResponse["servedBy"];
 /**
  * The exact standing footnote every priced headline carries - the
  * pricing-provenance artifact's binding product framing (amended
- * 2026-08-10, fixup-01): asterisk on the figure, this five-word footnote
+ * 2026-08-10): asterisk on the figure, this five-word footnote
  * below it, matching t3code's density. Centralized so no render site can
  * drift from the exact wording.
  */
@@ -45,7 +45,7 @@ export interface UsageCostHeadline {
 }
 
 /**
- * The headline + footnote pairing (fixup-01): a bare, unqualified dollar
+ * The headline + footnote pairing: a bare, unqualified dollar
  * figure never appears - every priced total carries its asterisk, and the
  * footnote is the ONLY place coverage gaps get standing pixels, via the one
  * allowed suffix. Everything else that used to live here (the "priced
@@ -75,7 +75,7 @@ export function describeCostHeadline(
  * old standing text used to say, now on-demand: the estimate-at-list-prices
  * framing, that a subscription bills separately, the exact-vs-estimate
  * split with amounts, and the not-counted detail. The words "provenance",
- * "modeled", and "unpriced" never appear here (fixup-01, user ruling) - call
+ * "modeled", and "unpriced" never appear here (user ruling) - call
  * only when `totals.factCount > 0` (nothing to explain about an empty
  * window).
  */

@@ -62,6 +62,8 @@ interface GateCreateChatRequest {
 
 /** The toolbar slices the modal reads; the catalog is the new host's answer. */
 interface ToolbarMockState {
+  readonly ultracode: boolean;
+  readonly selectedModel: null;
   readonly values: {
     readonly selection: {
       readonly harnessId: string;
@@ -122,6 +124,12 @@ const testState = vi.hoisted(() => ({
 
 // Sandbox staging has its own suites (`composer/__tests__`): here the picker
 // stages nothing and the send is never intercepted.
+vi.mock("@/components/settings/host-scope/use-host-options", async () => {
+  const { hostOptionsFixture } =
+    await import("@/components/settings/host-scope/host-scope-fixture");
+  const options = hostOptionsFixture({ hosts: [] });
+  return { useHostOptions: () => options };
+});
 vi.mock(
   "@/components/composer/use-sandbox-staging",
   async (importOriginal) => ({
@@ -222,6 +230,8 @@ vi.mock("@/hooks/auth/use-registered-hosts-query", async (importOriginal) => {
 });
 
 const TOOLBAR_DEFAULTS = vi.hoisted((): ToolbarMockState => ({
+  ultracode: false,
+  selectedModel: null,
   values: {
     selection: {
       harnessId: "claude",
@@ -299,7 +309,7 @@ vi.mock("@/lib/host/runtime", () => ({
   }),
 }));
 
-// P1.2: the body resolves its placement through this hook and refuses to
+// The body resolves its placement through this hook and refuses to
 // create when it is unusable. This suite is about the SUBMIT GATE, not
 // placement, so it presents a usable one addressing the stub client's host.
 vi.mock("@/hooks/host/use-composer-placement", () => {
@@ -819,7 +829,7 @@ describe("NewConversationModalBody direct submit gate", () => {
     expect(testState.createChat).toHaveBeenCalledTimes(1);
   });
 
-  // Finding 3: pure path-resolution must also hold submit open.
+  // Pure path-resolution must also hold submit open.
   it("blocks the actual new-conversation submit path while file-path resolution is pending", () => {
     testState.resolvingPaths = true;
     const view = render(

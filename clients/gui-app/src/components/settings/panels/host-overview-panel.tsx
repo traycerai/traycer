@@ -26,7 +26,6 @@ import {
   HostOverviewNameAction,
 } from "@/components/settings/panels/host-overview-status-card";
 import { HostEnvironmentSection } from "@/components/settings/panels/host-environment-section";
-import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 import { HostOverviewTabs } from "@/components/settings/panels/host-overview-tabs";
 import {
   NO_HOST_OVERVIEW_TAB_BADGES,
@@ -829,7 +828,7 @@ export function HostOverviewPanel(props: {
   // ATTEMPT-AWARE, with the coarse field as the fallback — and the difference
   // is a lockout bug, not a refinement.
   //
-  // Ticket 04's coarse derivation maps a PARKED attempt
+  // The coarse derivation maps a PARKED attempt
   // (`waiting-for-work`/`waiting-to-activate`) to `{state:"updating"}`, which is
   // right for what that field means. But this gate reads "updating" as "a
   // mutation is in flight, lock the page", and `waiting-to-activate` is designed
@@ -960,7 +959,7 @@ export function HostOverviewPanel(props: {
   const updatesExternallyManaged =
     statusQuery.data?.updatesExternallyManaged === true;
 
-  // DISPATCH OWNERSHIP (D8). One token per mount, registered while this panel
+  // DISPATCH OWNERSHIP. One token per mount, registered while this panel
   // is on screen, captured by every update dispatch at arm time.
   //
   // It answers one question and gates one thing: may THIS page open a dialog
@@ -994,7 +993,7 @@ export function HostOverviewPanel(props: {
           },
     );
   }, [scope.hostId, reportedOperation]);
-  // THE DISPATCH SLOT'S UNSEEN-TTL CLEAR (D8) - the first of the two the
+  // THE DISPATCH SLOT'S UNSEEN-TTL CLEAR - the first of the two the
   // status stream cannot express, beside the deregister clear in
   // `host-overview-rpc.ts`, and the third of the slot's four in total. An
   // acknowledged attempt that no frame ever named.
@@ -1183,7 +1182,7 @@ export function HostOverviewPanel(props: {
   // the projector's, which already qualifies a read that aged, and its
   // dispatch revalidates against the record on the host.
 
-  // THE BOUND-DISPATCH OFFER (D8, D17): one state and one dialog for both
+  // THE BOUND-DISPATCH OFFER: one state and one dialog for both
   // intents, because the decision has the same shape either way — live work
   // stands between the person and the update, and they choose whether to end
   // it. What "force" DOES differs, which is what the intent selects: an
@@ -1247,7 +1246,7 @@ export function HostOverviewPanel(props: {
   if (!usable && boundOffer !== null) {
     setBoundOffer(null);
   }
-  // THE ONE-SHOT AUTO-OPEN (D8). A dispatch this page made, acknowledged by
+  // THE ONE-SHOT AUTO-OPEN. A dispatch this page made, acknowledged by
   // the host, then SEEN on a status frame, that has parked waiting for a
   // restart: the person pressed a button and the answer is "one more click".
   // Putting that click in front of them is the whole point of tracking
@@ -1444,7 +1443,7 @@ export function HostOverviewPanel(props: {
 
   const registryItem = host.item;
 
-  // ATTEMPT-DERIVED CARD CONTROLS (D17). When the view carries an attempt AND
+  // ATTEMPT-DERIVED CARD CONTROLS. When the view carries an attempt AND
   // this host advertises the matching bound method, the card's control comes
   // from the attempt's own continuation rather than from the install records:
   // the attempt knows what it was doing and what it is waiting for, where the
@@ -1923,11 +1922,12 @@ export function HostOverviewPanel(props: {
       usable={usable}
       hostName={displayName}
       // The account's record, so it reads with or without a route. "Online
-      // now" follows the header's own live evidence, on the scope's clock.
+      // now" is the account's own reach, derived from that record; the
+      // timestamp is worded on the scope's clock.
       about={
         registryItem === null
           ? null
-          : { item: registryItem, live: host.health.live, nowMs: scope.nowMs }
+          : { item: registryItem, nowMs: scope.nowMs }
       }
       installInfoDegrade={installInfoDegrade}
       record={
@@ -2035,25 +2035,19 @@ export function HostOverviewPanel(props: {
             which configuration this host runs, for the host the picker names;
             and the settings card on every tab like the lines above it: whether
             this computer's settings are its own, moving, moved, shared by an
-            earlier version or stopped. None in a build without environments
-            (`unreleased-features.ts`): a host there runs its own settings,
-            has nowhere to move them, and asks no remote access question. */}
-        {UNRELEASED_FEATURES_ENABLED ? (
-          <>
-            <RemoteAccessQuestion
-              client={client}
-              hostId={scope.hostId}
-              enabled={usable}
-            />
-            <HostEnvironmentSection scope={scope} />
-            <HostOverviewSettingsCardSlot
-              client={client}
-              hostId={scope.hostId}
-              hostName={displayName}
-              usable={usable}
-            />
-          </>
-        ) : null}
+            earlier version or stopped. */}
+        <RemoteAccessQuestion
+          client={client}
+          hostId={scope.hostId}
+          enabled={usable}
+        />
+        <HostEnvironmentSection scope={scope} />
+        <HostOverviewSettingsCardSlot
+          client={client}
+          hostId={scope.hostId}
+          hostName={displayName}
+          usable={usable}
+        />
         {/* The tab bar and the one body showing, pinned under the header.
             The Ports count and the Installation dot hang on `badges`. */}
         <HostOverviewTabs
@@ -2081,9 +2075,7 @@ export function HostOverviewPanel(props: {
           bodies={{
             installation: installationTab,
             updates: updatesTab,
-            // No Access and setup tab in a build without environments
-            // (`HOST_OVERVIEW_TABS`).
-            access: UNRELEASED_FEATURES_ENABLED ? accessTab : null,
+            access: accessTab,
             data: dataTab,
             ports: portsTab,
             simulators: simulatorsTab,
@@ -2557,7 +2549,7 @@ function deriveAttemptControl(input: {
  * What a bound dispatch's confirmation says, by intent.
  *
  * WHAT DEFER PROMISES IS THE PART THAT DIFFERS, and the two arms differ
- * because the evidence does. Round 11 rewrote the staged-wait force's Defer
+ * because the evidence does. The staged-wait force's Defer was rewritten
  * (`forceUpdateMessage` below) for exactly this reason: a stage on disk has
  * nobody scheduled to install it, so "it continues on its own" was a promise
  * this page had no evidence of. The lesson is the unevidenced promise, not

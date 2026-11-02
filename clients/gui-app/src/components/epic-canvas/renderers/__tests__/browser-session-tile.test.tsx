@@ -137,7 +137,7 @@ const surfaceCapture = vi.hoisted(() => ({
 }));
 
 /**
- * Cross-host fence bookkeeping (ticket 13): who each seam was actually
+ * Cross-host fence bookkeeping: who each seam was actually
  * called for, so a test can prove the tile bound to the TILE's own
  * `node.hostId` rather than the canvas host.
  */
@@ -1322,7 +1322,7 @@ describe("BrowserSessionTile lifecycle projection", () => {
       await Promise.resolve();
     });
 
-    // Unchanged by this ticket: a host's own refusal is transient, the reader's
+    // Unchanged: a host's own refusal is transient, the reader's
     // next activation is its retry, and the tile renders exactly what it
     // renders without it.
     expect(screen.getByText("Reconnecting browser tab…")).toBeTruthy();
@@ -1347,7 +1347,7 @@ describe("BrowserSessionTile lifecycle projection", () => {
   });
 
   it("issues the window hint before the screencast wake on the mount path", () => {
-    // The activation this ticket exists for: a dormant tab, in a window that
+    // The activation under test: a dormant tab, in a window that
     // is not the scope's default route. The surface takes the peek branch, so
     // both frames go out on the same commit - and the order decides the
     // outcome, because the host answers an attach for a tab already bound

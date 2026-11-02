@@ -1,10 +1,11 @@
-import { useCallback, useMemo } from "react";
+import { use, useCallback, useMemo } from "react";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import type { TileOpenIntent } from "@/lib/canvas/tile-open/intent";
 import {
   MANUAL_TILE_OPEN,
   openTileWithNavigation,
 } from "@/lib/canvas/tile-open/open-tile";
+import { MobileTileOpenTargetContext } from "@/lib/canvas/tile-open/mobile-tile-open-target-context";
 import type { NestedFocusTarget } from "@/lib/epic-nested-focus-route";
 
 export interface EpicTileNavigation {
@@ -20,11 +21,15 @@ export interface EpicTileNavigation {
 
 export function useEpicTileNavigation(): EpicTileNavigation {
   const navigateNested = useEpicNestedFocusNavigation();
+  const mobileTarget = use(MobileTileOpenTargetContext);
 
   const openTile = useCallback(
     (intent: TileOpenIntent): NestedFocusTarget | null =>
-      openTileWithNavigation(intent, navigateNested, MANUAL_TILE_OPEN),
-    [navigateNested],
+      openTileWithNavigation(intent, navigateNested, {
+        ...MANUAL_TILE_OPEN,
+        mobileTarget,
+      }),
+    [mobileTarget, navigateNested],
   );
 
   return useMemo(() => ({ openTile }), [openTile]);

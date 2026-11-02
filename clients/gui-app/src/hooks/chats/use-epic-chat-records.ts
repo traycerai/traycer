@@ -114,8 +114,8 @@ interface ChatRecordListAnswer {
  *
  * `OpenEpicStore.chats` used to have exactly one producer: the epic Y.Doc's
  * `chats` map. Since chat-sync-v2 nothing maintains that map - a chat created
- * after the upgrade never gets an entry (ticket 19) and the upgrade sweep
- * deletes the entries it can prove published (ticket 20) - so the renderer's
+ * after the upgrade never gets an entry and the upgrade sweep
+ * deletes the entries it can prove published - so the renderer's
  * record set was a frozen, shrinking remainder. A chat with no record has no
  * tree row, no rename/archive affordances, and (through a record-gated
  * subscribe) opened as its read-only published copy on its own owning host.
@@ -185,7 +185,7 @@ export function useEpicSyncChatRecords(epicId: string): void {
   //
   // Without it a cached answer outlives the store it was read for and is
   // served to the NEXT one, which is not a hypothetical: renderer parking
-  // (plan C, C1) unmounts this hook, releases the session, and remounts it
+  // unmounts this hook, releases the session, and remounts it
   // against a fresh store the moment the tab is shown again. Inside
   // `staleTime` that remount is served entirely from cache - no request, and
   // a chat deleted at the host while the epic was parked reappears as though

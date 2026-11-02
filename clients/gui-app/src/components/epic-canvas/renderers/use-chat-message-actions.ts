@@ -328,13 +328,6 @@ const NO_DRAFT_IMAGE_BYTES: ReadonlyMap<string, string> = new Map<
 >();
 
 /**
- * Encapsulates the inline-edit lifecycle (begin, update, submit, delete) and the
- * `messageActionsFor` factory that wires them into the per-message action surface.
- *
- * All callbacks preserve the same `useCallback` dependency structure as the
- * original view-model so memoized children are not disturbed.
- */
-/**
  * The inline edit as it is RIGHT NOW, published synchronously at every dispatch
  * site rather than read back after React commits.
  *
@@ -400,6 +393,13 @@ function inlineEditSendOutstanding(
   );
 }
 
+/**
+ * Encapsulates the inline-edit lifecycle (begin, update, submit, delete) and the
+ * `messageActionsFor` factory that wires them into the per-message action surface.
+ *
+ * All callbacks preserve the same `useCallback` dependency structure as the
+ * original view-model so memoized children are not disturbed.
+ */
 export function useChatMessageActions(
   input: ChatMessageActionsInput,
 ): ChatMessageActionsResult {

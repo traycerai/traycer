@@ -91,7 +91,7 @@ export function TraycerSubscriptionSection() {
               type="button"
               onClick={(event) => {
                 // Same as the user menu: the event carries the modifiers (L9),
-                // and the analytics event means "opened", not "asked" (R11).
+                // and the analytics event means "opened", not "asked".
                 void openLink(manageUrl, "account", event).then(
                   () =>
                     Analytics.getInstance().track(

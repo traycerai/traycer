@@ -16,7 +16,7 @@ const refresh = vi.fn<() => Promise<readonly []>>();
 // F6: the shell capability the success path announces a membership change on.
 // Deliberately reached off the runner host, NOT the selection-authority
 // client - announcing "your copy is stale" must not widen the selection write
-// path this ticket narrowed.
+// path this change narrowed.
 const refreshHostFleet = vi.fn<() => Promise<void>>();
 
 const auth = { deregisterHostFromAccount } as Pick<

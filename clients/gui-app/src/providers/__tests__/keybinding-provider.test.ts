@@ -54,6 +54,7 @@ function setActiveSystemOverlay(kind: SystemOverlayKind): void {
     openHistory: () => undefined,
     close: () => undefined,
     setSection: (_section: SettingsSectionId) => undefined,
+    replaceOwnedSettingsRoute: (_section: SettingsSectionId) => undefined,
     promoteToTab: () => undefined,
     isOverlayActive: (candidate) => candidate === kind,
   });
@@ -135,9 +136,9 @@ function buildRouter(initialPath: string): MockRouter {
       } else if (intent.kind === "sample-workspace") {
         calls.push({ kind: "home", epicId: null, sectionId: null });
         pathname = "/sample-workspace";
-      } else if (intent.kind === "bot") {
+      } else if (intent.kind === "tracy") {
         calls.push({ kind: "home", epicId: null, sectionId: null });
-        pathname = `/bot/${intent.botId}`;
+        pathname = intent.botId === null ? "/bot" : `/bot/${intent.botId}`;
       } else {
         calls.push({
           kind: "section",
@@ -693,7 +694,7 @@ describe("leader digit dispatch (global scope)", () => {
   });
 
   it("settings section digit no-ops when [Settings | empty] is focused on empty", () => {
-    // F4 (closure): the section leader was pathname-owned. With the empty side
+    // The section leader was pathname-owned. With the empty side
     // of a [Settings | empty] split focused, routeBackingSide keeps the URL on
     // /settings, but Settings does NOT own focus - an Alt-digit section command
     // must no-op instead of stealing focus back to Settings.

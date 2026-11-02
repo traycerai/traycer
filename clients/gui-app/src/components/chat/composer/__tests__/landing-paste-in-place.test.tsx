@@ -1,7 +1,7 @@
 /**
- * Round-4 landing paste: in-place pending b64 nodes (no anchors).
+ * Landing paste: in-place pending b64 nodes (no anchors).
  *
- * Covers the review findings that the strip+anchor design could not fix cleanly:
+ * Covers what the strip+anchor design could not fix cleanly:
  * mixed-content order, non-collapsed selection placement, image-only rapid pastes,
  * and failed ingest (remove node + toast + reconcile). Fake only idb-keyval;
  * putImage / rewrite-by-id run for real.
@@ -146,7 +146,7 @@ afterEach(() => {
 });
 
 describe("landing paste in-place pending nodes", () => {
-  // Finding 1: mixed content keeps exact document order; rewrite flips in place.
+  // Mixed content keeps exact document order; rewrite flips in place.
   it("structured JSON mixed paste keeps text/image order and rewrites b64→hash in place", async () => {
     const jobs: Array<Promise<void>> = [];
     const editor = makeLandingEditor(jobs);
@@ -295,7 +295,7 @@ describe("landing paste in-place pending nodes", () => {
     expect(imageMarkNames(editor)).toEqual([["bold"]]);
   });
 
-  // Finding 2: non-collapsed selection — image-leading paste lands at paste START.
+  // Non-collapsed selection — image-leading paste lands at paste START.
   // Use raw HTML (open slice) so the paste merges inline into the paragraph,
   // matching a mid-paragraph native copy of an image atom + trailing text.
   it("image-leading paste over a non-collapsed selection places the image at the selection start", async () => {
@@ -359,7 +359,7 @@ describe("landing paste in-place pending nodes", () => {
     expect(imageSnapshots(editor)[0]?.pos).toBe(3);
   });
 
-  // Finding 3: two image-only rapid pastes keep paste order regardless of IDB order.
+  // Two image-only rapid pastes keep paste order regardless of IDB order.
   it("two rapid image-only pastes keep document order = paste order under reverse IDB completion", async () => {
     const jobs: Array<Promise<void>> = [];
     const editor = makeLandingEditor(jobs);

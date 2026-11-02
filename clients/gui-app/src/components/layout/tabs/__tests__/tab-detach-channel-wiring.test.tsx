@@ -1,5 +1,5 @@
 /**
- * S2 coverage for the router-optional fix.
+ * Coverage for the router-optional fix.
  *
  * Sprint 04 made `RootDndProvider` router-REQUIRED by calling the tear-off flow
  * from inside it: that flow reaches `useRouterState`, which THROWS without a
@@ -406,7 +406,7 @@ describe("tab detach channel wiring", () => {
   });
 
   it("S2.7 - a real tear-off drag reaches the published handler", async () => {
-    // The assertion the whole of S2 exists for. `channel !== null` proves
+    // `channel !== null` proves
     // publication; this proves CONSUMPTION - it drives a real dnd-kit header
     // drag, releases BELOW the measured strip bottom, and asserts the handler
     // the provider read is the one that ran. Deleting `readTabDetachHandler()`

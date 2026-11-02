@@ -10,6 +10,8 @@ import type {
   SandboxCreateRequest,
   SandboxPatchRequest,
 } from "@traycer/protocol/host/sandbox-control";
+import { SLACK_SETTINGS_UNAVAILABLE_IN_STAGING } from "@traycer-clients/shared/host-client/slack-app";
+import type { SlackAppRegisterRequest } from "@traycer/protocol/host/slack-app";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import { AuthService } from "@/lib/auth/auth-service";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -42,7 +44,35 @@ const PATCH_REQUEST: SandboxPatchRequest = {
   destroyAfterRestingMinutes: null,
 };
 
+const SLACK_REGISTER_REQUEST: SlackAppRegisterRequest = {
+  botId: "bot-1",
+  appId: "A07K2M9QX4T",
+  clientId: "123.456",
+  clientSecret: "client-secret-value",
+  signingSecret: "signing-secret-value",
+};
+
 const trackedServices: AuthService[] = [];
+
+function slackSpies() {
+  return {
+    readSlackApp: vi.fn<IRunnerHost["readSlackApp"]>(() =>
+      Promise.resolve({ kind: "network-error" as const, detail: "unscripted" }),
+    ),
+    getSlackAppManifest: vi.fn<IRunnerHost["getSlackAppManifest"]>(() =>
+      Promise.resolve({ kind: "network-error" as const, detail: "unscripted" }),
+    ),
+    registerSlackApp: vi.fn<IRunnerHost["registerSlackApp"]>(() =>
+      Promise.resolve({ kind: "network-error" as const, detail: "unscripted" }),
+    ),
+    mintSlackAppInstallUrl: vi.fn<IRunnerHost["mintSlackAppInstallUrl"]>(() =>
+      Promise.resolve({ kind: "network-error" as const, detail: "unscripted" }),
+    ),
+    disconnectSlackApp: vi.fn<IRunnerHost["disconnectSlackApp"]>(() =>
+      Promise.resolve({ kind: "network-error" as const, detail: "unscripted" }),
+    ),
+  };
+}
 
 function sandboxSpies() {
   return {
@@ -84,14 +114,16 @@ function sandboxSpies() {
 
 function makeService(reason: string | null) {
   const spies = sandboxSpies();
+  const slack = slackSpies();
   const service = new AuthService({
     runnerHost: createFakeRunnerHost({
       ...spies,
+      ...slack,
       sandboxControlUnavailableReason: reason,
     }),
   });
   trackedServices.push(service);
-  return { service, spies };
+  return { service, spies, slack };
 }
 
 afterEach(() => {
@@ -196,5 +228,49 @@ describe("AuthService sandbox control on a build that cannot reach it", () => {
     expect(spies.listSandboxes).not.toHaveBeenCalled();
     expect(spies.getSandboxAutomation).not.toHaveBeenCalled();
     expect(spies.openSandboxAutomation).not.toHaveBeenCalled();
+  });
+  it("answers every Slack app call with the staging failure and never reaches the runner host", async () => {
+    const { service, slack } = makeService(REASON);
+    const unavailable = {
+      kind: "unavailable",
+      reason: SLACK_SETTINGS_UNAVAILABLE_IN_STAGING,
+    };
+
+    expect(await service.readSlackApp("bot-1")).toEqual(unavailable);
+    expect(await service.getSlackAppManifest("bot-1")).toEqual(unavailable);
+    expect(await service.registerSlackApp(SLACK_REGISTER_REQUEST)).toEqual(
+      unavailable,
+    );
+    expect(await service.mintSlackAppInstallUrl("bot-1")).toEqual(unavailable);
+    expect(await service.disconnectSlackApp("bot-1")).toEqual(unavailable);
+
+    expect(slack.readSlackApp).not.toHaveBeenCalled();
+    expect(slack.getSlackAppManifest).not.toHaveBeenCalled();
+    expect(slack.registerSlackApp).not.toHaveBeenCalled();
+    expect(slack.mintSlackAppInstallUrl).not.toHaveBeenCalled();
+    expect(slack.disconnectSlackApp).not.toHaveBeenCalled();
+  });
+
+  it("control: with no reason set, signed-out Slack calls answer unauthorized instead of unavailable", async () => {
+    const { service, slack } = makeService(null);
+
+    expect(await service.readSlackApp("bot-1")).toEqual({
+      kind: "unauthorized",
+    });
+    expect(await service.getSlackAppManifest("bot-1")).toEqual({
+      kind: "unauthorized",
+    });
+    expect(await service.registerSlackApp(SLACK_REGISTER_REQUEST)).toEqual({
+      kind: "unauthorized",
+    });
+    expect(await service.mintSlackAppInstallUrl("bot-1")).toEqual({
+      kind: "unauthorized",
+    });
+    expect(await service.disconnectSlackApp("bot-1")).toEqual({
+      kind: "unauthorized",
+    });
+    // Signed out, the bearer read stops them before the runner host.
+    expect(slack.readSlackApp).not.toHaveBeenCalled();
+    expect(slack.disconnectSlackApp).not.toHaveBeenCalled();
   });
 });

@@ -109,8 +109,8 @@ const SURFACES = [
 ] as const;
 
 describe("chat.subscribe@1.35 registration", () => {
-  it("binds chatSubscribeV135 above the frozen 1.34, under the 1.40 head", () => {
-    expect(line.latestMinor).toBe(40);
+  it("binds chatSubscribeV135 above the frozen 1.34, under the 1.41 head", () => {
+    expect(line.latestMinor).toBe(41);
     expect(line.versions[40].contract).toBe(chatSubscribeV140);
     expect(line.versions[39].contract).toBe(chatSubscribeV139);
     expect(line.versions[38].contract).toBe(chatSubscribeV138);
@@ -128,7 +128,7 @@ describe("chat.subscribe@1.35 registration", () => {
     expect(chatSubscribeV139.serverFrameSchema).not.toBe(
       openChatSubscribeWindowedServerFrameSchema,
     );
-    expect(chatSubscribeV140.serverFrameSchema).toBe(
+    expect(chatSubscribeV140.serverFrameSchema).not.toBe(
       openChatSubscribeWindowedServerFrameSchema,
     );
     expect(chatSubscribeV135.serverFrameSchema).not.toBe(

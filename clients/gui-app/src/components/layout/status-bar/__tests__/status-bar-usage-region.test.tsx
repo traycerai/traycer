@@ -13,7 +13,7 @@ import type { RateLimitProviderId } from "@/lib/rate-limit-providers";
 import { useLayoutEditorStore } from "@/stores/layout/layout-editor-store";
 
 /**
- * Usage limits is ONE region, however many accounts it draws (C-02).
+ * Usage limits is ONE region, however many accounts it draws.
  *
  * Every provider segment used to register its own instance of `usageLimits`.
  * The editor stamps `data-selected` on every instance of a region by design
@@ -48,6 +48,7 @@ function segment(
     hidden: false,
     state: "live",
     reason: null,
+    chatCredential: null,
     fetching: false,
     retryOffered: false,
     windows: [limit],

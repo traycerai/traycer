@@ -10,7 +10,7 @@ const panelMocks = vi.hoisted(() => ({
   providers: [
     { providerId: "claude-code", terminalAgentArgs: "--from-settings" },
   ],
-  // S11 coverage (see the new "forwards a non-null hostId..." test below):
+  // Coverage (see the new "forwards a non-null hostId..." test below):
   // records every argument these mocks receive so a test can assert the
   // panel's `hostId` prop actually reaches the launch host's client, the
   // `providers.list` read, and the picker - not just that SOME client/host
@@ -78,6 +78,7 @@ function makeToolbarStore() {
     reasoningFallback: "model-default",
     seedKey: "test",
     values: {
+      ultracode: false,
       permission: "supervised",
       selection: { harnessId: "claude", modelSlug: "", profileId: null },
       reasoning: "",
@@ -86,6 +87,7 @@ function makeToolbarStore() {
     onSettingsChange: null,
     tuiOnly: true,
     chatLineCarriesAutoMode: null,
+    ultracodeCarried: false,
     hostId: "host-a",
   });
   // The Start gate reads the selected harness's runtime `modes` from the
@@ -116,6 +118,7 @@ function makeToolbarStore() {
     modelsLoaded: true,
     tuiOnly: true,
     chatLineCarriesAutoMode: null,
+    ultracodeCarried: false,
     keepsUnavailablePick: false,
   });
   return store;
@@ -127,6 +130,7 @@ function makeGuiOnlyToolbarStore() {
     reasoningFallback: "model-default",
     seedKey: "test",
     values: {
+      ultracode: false,
       permission: "supervised",
       selection: { harnessId: "traycer", modelSlug: "", profileId: null },
       reasoning: "",
@@ -135,6 +139,7 @@ function makeGuiOnlyToolbarStore() {
     onSettingsChange: null,
     tuiOnly: true,
     chatLineCarriesAutoMode: null,
+    ultracodeCarried: false,
     hostId: "host-a",
   });
   // A GUI-only harness cannot back a terminal agent. The Start gate follows
@@ -160,6 +165,7 @@ function makeGuiOnlyToolbarStore() {
     modelsLoaded: true,
     tuiOnly: true,
     chatLineCarriesAutoMode: null,
+    ultracodeCarried: false,
     keepsUnavailablePick: false,
   });
   return store;
@@ -312,6 +318,7 @@ describe("<TerminalLaunchPanel /> terminal-agent args handoff", () => {
       reasoningFallback: "model-default",
       seedKey: "test",
       values: {
+        ultracode: false,
         permission: "supervised",
         selection: { harnessId: "claude", modelSlug: "", profileId: null },
         reasoning: "",
@@ -320,6 +327,7 @@ describe("<TerminalLaunchPanel /> terminal-agent args handoff", () => {
       onSettingsChange: null,
       tuiOnly: true,
       chatLineCarriesAutoMode: null,
+      ultracodeCarried: false,
       hostId: null,
     });
     const onStart = vi.fn();
@@ -344,7 +352,7 @@ describe("<TerminalLaunchPanel /> terminal-agent args handoff", () => {
     );
   });
 
-  // S11 coverage: a regression back to the app-wide default host would leave
+  // Coverage: a regression back to the app-wide default host would leave
   // `useHostClientForHostId`, `providers.list`, and the picker all pinned to
   // `null` regardless of the `hostId` prop - this asserts the non-null host
   // actually threads through every one of them, not just that the panel

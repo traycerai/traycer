@@ -1,7 +1,10 @@
 import "fake-indexeddb/auto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
-import type { DraftDocument } from "@traycer/protocol/host";
+import type { DraftDocument, DraftWrite } from "@traycer/protocol/host";
+import type { DraftComposerPortable } from "@traycer/protocol/persistence/draft/schemas";
+import { chatRunSettingsSchemaPreUltracode } from "@traycer/protocol/persistence/epic/foundation";
+import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type {
   IStreamSession,
   ServerFrameHandler,
@@ -76,6 +79,70 @@ import {
   installTabSyncCoordinator,
 } from "@/lib/tab-sync/tab-sync-coordinator";
 
+const LIVE_CLAUDE_SETTINGS: ChatRunSettings = {
+  harnessId: "claude",
+  model: "claude-opus-4-7",
+  permissionMode: "supervised",
+  reasoningEffort: "high",
+  serviceTier: null,
+  agentMode: "regular",
+  profileId: null,
+  ultracode: true,
+};
+
+const FROZEN_CLAUDE_SETTINGS = chatRunSettingsSchemaPreUltracode.parse({
+  harnessId: "claude",
+  model: "claude-opus-4-7",
+  permissionMode: "supervised",
+  reasoningEffort: "high",
+  serviceTier: null,
+  agentMode: "regular",
+  profileId: null,
+});
+
+const FROZEN_CODEX_SETTINGS = chatRunSettingsSchemaPreUltracode.parse({
+  harnessId: "codex",
+  model: "gpt-5.5",
+  permissionMode: "supervised",
+  reasoningEffort: "high",
+  serviceTier: null,
+  agentMode: "regular",
+  profileId: null,
+});
+
+function frozenLandingHostDocument(
+  draftId: string,
+  revision: number,
+  runSettings: DraftComposerPortable["runSettings"],
+): DraftDocument {
+  return {
+    draftId,
+    kind: "landing",
+    target: { epicId: null, chatId: null, blockId: null },
+    revision,
+    lastTouchedAt: 1,
+    workspace: null,
+    supersedes: null,
+    ownerHostId: "host-landing-ultracode",
+    origin: "own",
+    adoption: { state: "adopted", hostId: "host-landing-ultracode" },
+    publication: {
+      status: "unpublished",
+      lastPublishedAt: null,
+      publishedRevision: null,
+      halted: null,
+    },
+    portable: {
+      content: EMPTY_LANDING_DRAFT_CONTENT,
+      selection: null,
+      runSettings,
+      composerMode: "chat",
+      blobHashes: [],
+      closed: false,
+    },
+  };
+}
+
 function controlledStream(): {
   readonly client: never;
   readonly started: { value: boolean };
@@ -121,6 +188,107 @@ describe("landing draft host-mirror bookkeeping", () => {
     useTabRecoveryHistory.setState({ entries: [], ready: true });
     resetLandingDraftRetirementsForTests();
     resetDraftMirrorCoordinatorForTests();
+  });
+
+  it("keeps same-line Claude intent across a frozen settings echo", async () => {
+    const hostId = "host-landing-ultracode";
+    const draftId = useLandingDraftStore.getState().createDraft(null);
+    adoptLandingDraft(draftId, hostId);
+    useLandingDraftStore
+      .getState()
+      .setDraftSettings(draftId, LIVE_CLAUDE_SETTINGS);
+
+    const session = acquireDraftMirrorSession({
+      hostId,
+      client: {
+        request: (method: string, params: unknown) => {
+          if (method === "drafts.list") {
+            return Promise.resolve({
+              drafts: [],
+              tombstones: [],
+              snapshotSeq: 0,
+              scopeId: null,
+            });
+          }
+          if (method === "drafts.upsert") {
+            const write = (params as { readonly draft: DraftWrite }).draft;
+            return Promise.resolve({
+              draft: frozenLandingHostDocument(
+                write.draftId,
+                7,
+                FROZEN_CLAUDE_SETTINGS,
+              ),
+            });
+          }
+          return Promise.reject(new Error(`unexpected ${method}`));
+        },
+      } as never,
+      streamClient: fakeDraftStreamClient(),
+      timing: { debounceMs: 0, maxWaitMs: 0 },
+    });
+    await session.flush([draftId]);
+
+    const findDraft = (id: string) =>
+      useLandingDraftStore.getState().drafts.find((draft) => draft.id === id);
+    const settingsOf = (id: string) => findDraft(id)?.settings ?? null;
+    expect(findDraft(draftId)?.generation).toBe(
+      findDraft(draftId)?.syncedGeneration,
+    );
+    expect(
+      applyLandingHostDocument(
+        frozenLandingHostDocument(draftId, 8, FROZEN_CLAUDE_SETTINGS),
+        EMPTY_LANDING_DRAFT_CONTENT,
+      ),
+    ).toBe(true);
+    expect(settingsOf(draftId)).toMatchObject({
+      harnessId: "claude",
+      ultracode: true,
+    });
+
+    expect(
+      applyLandingHostDocument(
+        frozenLandingHostDocument(draftId, 9, FROZEN_CODEX_SETTINGS),
+        EMPTY_LANDING_DRAFT_CONTENT,
+      ),
+    ).toBe(true);
+    expect(settingsOf(draftId)).toMatchObject({
+      harnessId: "codex",
+      ultracode: false,
+    });
+
+    expect(
+      applyLandingHostDocument(
+        frozenLandingHostDocument(draftId, 10, FROZEN_CLAUDE_SETTINGS),
+        EMPTY_LANDING_DRAFT_CONTENT,
+      ),
+    ).toBe(true);
+    expect(settingsOf(draftId)).toMatchObject({
+      harnessId: "claude",
+      ultracode: false,
+    });
+
+    expect(
+      applyLandingHostDocument(
+        frozenLandingHostDocument(draftId, 11, null),
+        EMPTY_LANDING_DRAFT_CONTENT,
+      ),
+    ).toBe(true);
+    expect(settingsOf(draftId)).toBeNull();
+
+    useLandingDraftStore
+      .getState()
+      .setDraftSettings(draftId, LIVE_CLAUDE_SETTINGS);
+    await session.flush([draftId]);
+    expect(settingsOf(draftId)).toMatchObject({ ultracode: true });
+
+    const nextDraftId = "landing-after-frozen-echo";
+    expect(
+      applyLandingHostDocument(
+        frozenLandingHostDocument(nextDraftId, 1, FROZEN_CLAUDE_SETTINGS),
+        EMPTY_LANDING_DRAFT_CONTENT,
+      ),
+    ).toBe(true);
+    expect(settingsOf(nextDraftId)).toMatchObject({ ultracode: false });
   });
 
   it("createDraft starts unadopted so typing never requires a host", () => {

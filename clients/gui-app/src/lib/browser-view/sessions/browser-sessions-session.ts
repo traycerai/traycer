@@ -1,3 +1,4 @@
+import type { StreamContinuity } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type {
   BrowserSessionsServerFrame,
   BrowserSessionsUxClientFrame,
@@ -23,6 +24,7 @@ export interface BrowserSessionsSessionCallbacks {
   readonly onStatus: (
     lifecycle: BrowserSessionsLifecycle,
     errorMessage: string | null,
+    continuity: StreamContinuity,
   ) => void;
   readonly onFrame: (frame: BrowserSessionsUxServerFrame) => void;
   readonly onTabBound: (capability: BrowserViewNativeTabCapability) => void;
@@ -88,7 +90,11 @@ function openIpcSession(
     const event = envelope.event;
     switch (event.kind) {
       case "status":
-        args.callbacks.onStatus(event.lifecycle, event.errorMessage);
+        args.callbacks.onStatus(
+          event.lifecycle,
+          event.errorMessage,
+          event.continuity,
+        );
         return;
       case "frame":
         args.callbacks.onFrame(event.frame);
@@ -120,7 +126,7 @@ function openIpcSession(
     // incarnations, so a late `failed` from a dead session would be reported
     // against the live one that replaced it.
     if (closed) return;
-    args.callbacks.onStatus("failed", "Browser sessions stream failed.");
+    args.callbacks.onStatus("failed", "Browser sessions stream failed.", null);
   });
   return {
     send: (frame) => {
@@ -151,10 +157,11 @@ function openDirectSession(
           if (ux === null) return;
           args.callbacks.onFrame(ux);
         },
-        onConnectionStatus: (status, reason) => {
+        onConnectionStatus: (status, reason, _retryCause, continuity) => {
           args.callbacks.onStatus(
             browserSessionsLifecycle(status, reason),
             browserSessionsError(status, reason),
+            continuity,
           );
         },
       },

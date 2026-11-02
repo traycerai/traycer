@@ -28,6 +28,7 @@ describe("chat run settings", () => {
   it("maps GUI permissions to runtime permissions", () => {
     expect(
       buildChatRunSettings({
+        ultracode: false,
         selection: {
           harnessId: "codex",
           modelSlug: "gpt-test",
@@ -38,6 +39,7 @@ describe("chat run settings", () => {
         serviceTier: "",
       }),
     ).toEqual({
+      ultracode: false,
       harnessId: "codex",
       model: "gpt-test",
       permissionMode: "supervised",
@@ -49,12 +51,14 @@ describe("chat run settings", () => {
 
     expect(
       buildChatRunSettings({
+        ultracode: false,
         selection: { harnessId: "codex", modelSlug: "", profileId: null },
         permission: "full_access",
         reasoning: "",
         serviceTier: "",
       }),
     ).toEqual({
+      ultracode: false,
       harnessId: "codex",
       model: "",
       permissionMode: "full_access",
@@ -66,6 +70,7 @@ describe("chat run settings", () => {
 
     expect(
       buildChatRunSettings({
+        ultracode: false,
         selection: {
           harnessId: "opencode",
           modelSlug: "opencode-live",
@@ -76,6 +81,7 @@ describe("chat run settings", () => {
         serviceTier: "fast",
       }),
     ).toEqual({
+      ultracode: false,
       harnessId: "opencode",
       model: "opencode-live",
       permissionMode: "auto_accept_edits",
@@ -89,6 +95,7 @@ describe("chat run settings", () => {
   it("maps runtime permissions back to GUI permissions", () => {
     expect(
       permissionFromChatRunSettings({
+        ultracode: false,
         harnessId: "codex",
         model: "gpt-5-codex",
         permissionMode: "supervised",
@@ -100,6 +107,7 @@ describe("chat run settings", () => {
     ).toBe("supervised");
     expect(
       permissionFromChatRunSettings({
+        ultracode: false,
         harnessId: "codex",
         model: "gpt-5-codex",
         permissionMode: "auto_accept_edits",
@@ -111,6 +119,7 @@ describe("chat run settings", () => {
     ).toBe("auto_accept_edits");
     expect(
       permissionFromChatRunSettings({
+        ultracode: false,
         harnessId: "codex",
         model: "gpt-5-codex",
         permissionMode: "full_access",

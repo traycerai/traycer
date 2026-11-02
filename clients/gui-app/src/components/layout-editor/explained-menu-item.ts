@@ -1,5 +1,5 @@
 /**
- * A menu item that is OFF but says why, and stays reachable (review 7): the
+ * A menu item that is OFF but says why, and stays reachable: the
  * held-elsewhere "Customize layout..." and the rail's last shown panel. Its
  * label is `ExplainedMenuItemLabel` (`explained-menu-item-label.tsx`).
  *

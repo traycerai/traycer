@@ -50,8 +50,8 @@ export interface FallbackDangerZoneProps {
  * For a long time the sentence stopped at the true half - "keep the steps and
  * timings they started with" - on the reasoning that a smaller true statement
  * beats a tidier false one. That was right about the two candidates it was
- * choosing between and wrong that they were the only two. A user-lens review
- * read the half-sentence exactly as it is written: as reassurance that
+ * choosing between and wrong that they were the only two. The
+ * half-sentence reads exactly as it is written: as reassurance that
  * in-flight chats carry on untouched. Withholding the known second half does
  * not leave the reader neutral, it leaves them confidently wrong - and this is
  * a confirm dialog, where that is least affordable. Both halves now, which was

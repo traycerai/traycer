@@ -14,7 +14,6 @@ import {
 } from "@/lib/sandboxes/team-sandbox-harness";
 import { PickerProfileDropdown } from "@/components/home/pickers/picker-profile-dropdown";
 import { TerminalAccountFirstMention } from "@/components/home/pickers/terminal-account-first-mention";
-import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 import { isProfileUsageSidecarTarget } from "@/components/providers/profile-usage-sidecar-target";
 import { useProviderProfileAddFlowStore } from "@/stores/settings/provider-profile-add-flow-store";
 import { pickerProfileShortcutHintForIndex } from "@/components/home/pickers/harness-model-picker-shortcut-hint";
@@ -47,6 +46,10 @@ import {
   type ServiceTierFooterConfig,
 } from "@/components/home/pickers/harness-model-picker-footers";
 import type { MaxModeContext } from "@/components/home/data/model-max-mode";
+import {
+  UltracodeFooterButton,
+  type UltracodeFooterConfig,
+} from "@/components/home/pickers/ultracode-footer-button";
 
 /**
  * What the picker's body draws from. Props only: the live picker feeds it from
@@ -116,6 +119,7 @@ export interface HarnessModelPickerPanelBodyProps {
   readonly onActiveRow: (rowId: string) => void;
   readonly onSelectRow: (row: HarnessModelRow) => void;
   readonly reasoningFooter: ReasoningFooterConfig | null;
+  readonly ultracodeFooter: UltracodeFooterConfig | null;
   /** The picker's `visibleOpen`, for the footer's max treatment. */
   readonly reasoningPickerOpen: boolean;
   readonly serviceTierFooter: ServiceTierFooterConfig | null;
@@ -293,6 +297,7 @@ export function HarnessModelPickerPanelBody(
     onActiveRow,
     onSelectRow,
     reasoningFooter,
+    ultracodeFooter,
     reasoningPickerOpen,
     serviceTierFooter,
     maxModeContextKind,
@@ -393,16 +398,13 @@ export function HarnessModelPickerPanelBody(
                 runTargetHostId={runTargetHostId}
                 admissionByProfileId={profileAdmission}
               />
-              {/* The Personal sign-in hint, absent in a build without
-                  environments (`unreleased-features.ts`). */}
-              {UNRELEASED_FEATURES_ENABLED ? (
-                <TerminalAccountFirstMention
-                  named={activeProviderProfiles.some(
-                    (profile) => profile.kind === "ambient",
-                  )}
-                  runTargetHostId={runTargetHostId}
-                />
-              ) : null}
+              {/* The Personal sign-in hint. */}
+              <TerminalAccountFirstMention
+                named={activeProviderProfiles.some(
+                  (profile) => profile.kind === "ambient",
+                )}
+                runTargetHostId={runTargetHostId}
+              />
             </div>
           ) : (
             <PickerProviderAuthLine
@@ -451,6 +453,9 @@ export function HarnessModelPickerPanelBody(
               rowsDisabled={teamBlocked}
             />
           </div>
+          {ultracodeFooter === null ? null : (
+            <UltracodeFooterButton {...ultracodeFooter} />
+          )}
           <HarnessModelPickerModelSettingsFooter
             reasoning={reasoningFooter}
             pickerOpen={reasoningPickerOpen}
@@ -477,6 +482,6 @@ function isInsideEmbeddingFooter(target: EventTarget): boolean {
 function isInsideSpeedMenu(target: EventTarget): boolean {
   return (
     target instanceof Element &&
-    target.closest("[data-picker-speed-menu]") !== null
+    target.closest("[data-picker-speed-menu], [data-picker-ultracode]") !== null
   );
 }

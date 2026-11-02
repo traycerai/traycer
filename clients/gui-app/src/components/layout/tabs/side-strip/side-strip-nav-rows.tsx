@@ -2,6 +2,7 @@ import type { ComponentPropsWithRef, ReactNode } from "react";
 import { Bell, History, Plus } from "lucide-react";
 import { useRouterState } from "@tanstack/react-router";
 import { useColumnOverlayPlacement } from "@/components/layout/column-edge-context";
+import { useMobileStripForm } from "@/components/layout/tabs/mobile-strip-form-context";
 import { NotificationsPopover } from "@/components/notifications/notifications-popover";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -42,7 +43,7 @@ import {
 } from "./side-strip-tokens";
 
 /**
- * The strip's nav rows under the top block's controls (D6): Notifications, which
+ * The strip's nav rows under the top block's controls: Notifications, which
  * opens the notification center as a drawer on the strip's edge, and All
  * tasks, which opens History. Collapsed, both are 32px icon tiles.
  */
@@ -61,7 +62,7 @@ export function SideStripNavRows(props: {
 }
 
 /**
- * New Task (F7): the button that closes the nav list - after Home
+ * New Task: the button that closes the nav list - after Home
  * expanded, after All tasks on the rail - and does what the header's `+` does.
  * Expanded, a row lined up with the nav rows, its shortcut trailing as All
  * tasks' does; collapsed, a primary 32px tile. Solid primary in every view:
@@ -313,6 +314,7 @@ function InboxNavRow(props: {
         sideOffset={0}
         alignOffset={0}
         data-testid="side-strip-inbox-drawer"
+        {...usePhoneShellTouchScope()}
         className="h-[var(--radix-popover-trigger-height)] w-auto overflow-hidden"
         {...contentHandlers}
       >
@@ -329,6 +331,18 @@ function InboxNavRow(props: {
 }
 
 const NO_SHELL_STYLE = {};
+
+/**
+ * The drawer's controls take the phone shell's touch floor, as the sheet it
+ * stands in for does.
+ */
+function usePhoneShellTouchScope(): {
+  readonly "data-mobile-shell-touch-scope"?: string;
+} {
+  return useMobileStripForm() === null
+    ? {}
+    : { "data-mobile-shell-touch-scope": "" };
+}
 
 /** What the Notifications pill's one count says, which its colour names. */
 type InboxPillTone = "needs-you" | "attention" | "unread";

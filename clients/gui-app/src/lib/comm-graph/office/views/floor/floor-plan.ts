@@ -2,7 +2,7 @@
  * The Floor's plan: today's `layoutOffice`, behind the contract's signature.
  *
  * It is deliberately the thinnest wrapper in the set. `layoutOffice` already
- * returns a whole `OfficeLayout` - T1 decorated it in place with seat ids,
+ * returns a whole `OfficeLayout` - it is decorated in place with seat ids,
  * anchors, corridors, signs and the stability flags - so there is nothing left
  * to add here, and adding anything would be a second packer's worth of Floor
  * behaviour living outside the packer.

@@ -82,13 +82,14 @@ interface TestState {
   canvasTiles: Readonly<Record<string, EpicCanvasTileRef>>;
   records: ReadonlyArray<{ readonly id: string; readonly type?: string }>;
   /** Chat ids the `useCloudChatList` mock answers as present
-   * (chat-sync-v2 ticket 36's same-host cloud-known reap exemption). */
+   * (the same-host cloud-known reap exemption). */
   cloudChatIds: ReadonlySet<string>;
   /** Chat ids the mock answers as present but owned by a COLLABORATOR
    * (`isOwnedByViewer: false`) - rows the sweep's liveness set must ignore,
    * because the substitution resolver refuses to serve them. */
   cloudCollaboratorChatIds: ReadonlySet<string>;
   chatRecordListAuthoritative: boolean;
+  tuiAgentRecordListAuthoritative: boolean;
   /**
    * The verdict `useCloudChatHasCloudAuthorization()` answers - whether this session
    * may SPEND the account's cloud capability. `false` models `unverified`: the
@@ -123,6 +124,7 @@ const testState = vi.hoisted<TestState>(() => ({
   cloudChatIds: new Set<string>(),
   cloudCollaboratorChatIds: new Set<string>(),
   chatRecordListAuthoritative: true,
+  tuiAgentRecordListAuthoritative: true,
   cloudAuthorized: true,
   canvasStore: {
     renameTab: vi.fn(),
@@ -139,7 +141,7 @@ const testState = vi.hoisted<TestState>(() => ({
 
 const tileNavigationMocks = vi.hoisted(() => ({
   openTile: vi.fn(),
-  /** The navigation seam each open was committed through (C6). */
+  /** The navigation seam each open was committed through. */
   navigationSeams: [] as Array<
     (
       epicId: string,
@@ -204,6 +206,30 @@ vi.mock("@/stores/epics/canvas/store", async (importOriginal) => {
           : testState.canvasStore,
     },
   );
+  // Keeps one identity while the fixture does, as the store's own state does.
+  // A fresh object per render would re-fire the sweep on any rerender, which
+  // hides a dependency the effect is missing.
+  let fakeCanvas: {
+    readonly root: TileLayoutNode | null;
+    readonly activePaneId: string | null;
+    readonly tilesByInstanceId: Readonly<Record<string, EpicCanvasTileRef>>;
+    readonly sizesByGroupId: Readonly<Record<string, never>>;
+  } | null = null;
+  function readFakeCanvas() {
+    if (
+      fakeCanvas?.root !== testState.canvasRoot ||
+      fakeCanvas.activePaneId !== testState.canvasActivePaneId ||
+      fakeCanvas.tilesByInstanceId !== testState.canvasTiles
+    ) {
+      fakeCanvas = {
+        root: testState.canvasRoot,
+        activePaneId: testState.canvasActivePaneId,
+        tilesByInstanceId: testState.canvasTiles,
+        sizesByGroupId: {},
+      };
+    }
+    return fakeCanvas;
+  }
   return {
     ...actual,
     useActiveEpicArtifactId: (tabId: string) =>
@@ -213,12 +239,7 @@ vi.mock("@/stores/epics/canvas/store", async (importOriginal) => {
     useEpicCanvas: (tabId: string) =>
       testState.useRealCanvasStore
         ? actual.useEpicCanvas(tabId)
-        : {
-            root: testState.canvasRoot,
-            activePaneId: testState.canvasActivePaneId,
-            tilesByInstanceId: testState.canvasTiles,
-            sizesByGroupId: {},
-          },
+        : readFakeCanvas(),
     useEpicCanvasStore,
     useEpicTab: (tabId: string) =>
       testState.useRealCanvasStore ? actual.useEpicTab(tabId) : null,
@@ -230,6 +251,8 @@ vi.mock("@/lib/epic-selectors", () => ({
   useEpicArtifactRecords: () => testState.records,
   useEpicChatRecordListAuthoritative: () =>
     testState.chatRecordListAuthoritative,
+  useEpicTuiAgentRecordListAuthoritative: () =>
+    testState.tuiAgentRecordListAuthoritative,
   useEpicLastFocusedArtifactId: () => null,
   useEpicSnapshotLoaded: () => true,
   useEpicTitle: () => "",
@@ -250,8 +273,8 @@ vi.mock("@/lib/epic-auto-open", () => ({
   resolveAutoOpenTarget: () => testState.autoOpenTarget,
 }));
 
-// The reap effect's same-host cloud-known exemption (chat-sync-v2 ticket
-// 36) reads these two - stubbed at the hook boundary, same reason as every
+// The reap effect's same-host cloud-known exemption reads these two -
+// stubbed at the hook boundary, same reason as every
 // other seam in this provider-less suite.
 vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
@@ -293,18 +316,40 @@ vi.mock("@/hooks/chats/use-cloud-chat-queries", () => {
     throughRecordSeq: null,
     isOwnedByViewer,
   });
+  // Keeps one identity while the fixture does, as the query's own `data` does.
+  // A fresh object per render would re-fire the sweep on any rerender, which
+  // hides a dependency the effect is missing.
+  let fakeCloudChats: {
+    readonly key: string;
+    readonly data: { readonly chats: ReadonlyArray<CloudChatSummary> };
+  } | null = null;
+  function readFakeCloudChats(): {
+    readonly chats: ReadonlyArray<CloudChatSummary>;
+  } {
+    const key = JSON.stringify([
+      [...testState.cloudChatIds],
+      [...testState.cloudCollaboratorChatIds],
+    ]);
+    if (fakeCloudChats?.key !== key) {
+      fakeCloudChats = {
+        key,
+        data: {
+          chats: [
+            ...[...testState.cloudChatIds].map((chatId) =>
+              cloudRow(chatId, true),
+            ),
+            ...[...testState.cloudCollaboratorChatIds].map((chatId) =>
+              cloudRow(chatId, false),
+            ),
+          ],
+        },
+      };
+    }
+    return fakeCloudChats.data;
+  }
   return {
     useCloudChatList: () => ({
-      data: {
-        chats: [
-          ...[...testState.cloudChatIds].map((chatId) =>
-            cloudRow(chatId, true),
-          ),
-          ...[...testState.cloudCollaboratorChatIds].map((chatId) =>
-            cloudRow(chatId, false),
-          ),
-        ],
-      },
+      data: readFakeCloudChats(),
       // `isEnabled` too: the sweep asks `cloudChatListAuthorizesRecordSweep`,
       // which reads a DISABLED query as authorizing (nothing will answer it).
       // A stub omitting this answers `undefined`, which that predicate reads
@@ -403,6 +448,7 @@ function resetStores(): void {
   testState.cloudChatIds = new Set();
   testState.cloudCollaboratorChatIds = new Set();
   testState.chatRecordListAuthoritative = true;
+  testState.tuiAgentRecordListAuthoritative = true;
   testState.cloudAuthorized = true;
   vi.mocked(testState.canvasStore.renameTab).mockClear();
   tileNavigationMocks.openTile.mockClear();
@@ -1509,6 +1555,131 @@ describe("useEpicRouteSynchronization", () => {
     });
   });
 
+  /**
+   * The prune is the destructive direction: a recovery entry forgotten while
+   * the list is unanswered is gone for good, though the agent is alive.
+   */
+  it("keeps a same-host terminal agent's recovery entry until its own list is authoritative", async () => {
+    testState.autoOpenTarget = null;
+    testState.records = [];
+    testState.tuiAgentRecordListAuthoritative = false;
+    const closedAgent: EpicCanvasTileRef = {
+      id: "tui-recovery",
+      instanceId: "inst-tui-recovery",
+      type: "terminal-agent",
+      name: "Closed agent",
+      hostId: "host-1",
+    };
+    const deletedSpec = specTile("deleted-spec", "inst-deleted-spec", "Gone");
+    const recordClosedTab = (tabId: string, tile: EpicCanvasTileRef): void => {
+      recordClosedHeaderTab({
+        kind: "epic",
+        tab: { epicId: EPIC_ID, tabId, name: EPIC_ID },
+        canvas: canvasWithSingleTile(tile),
+        index: 0,
+      });
+    };
+    recordClosedTab("closed-agent-tab", closedAgent);
+    recordClosedTab("closed-spec-tab", deletedSpec);
+    const intent: EpicRouteFocusIntent = {
+      epicId: EPIC_ID,
+      tabId: TAB_ID,
+      focusedAt: undefined,
+      focusArtifactId: undefined,
+      focusThreadId: undefined,
+      focusPaneId: undefined,
+      focusTileInstanceId: undefined,
+    };
+    const { rerender } = renderHook(
+      (props: EpicRouteFocusIntent) => useEpicRouteSynchronization(props),
+      { initialProps: intent },
+    );
+
+    // The spec going proves the prune ran and judged the agent.
+    await waitFor(() => {
+      expect(recoveryTiles().map(({ tile }) => tile.instanceId)).toEqual([
+        closedAgent.instanceId,
+      ]);
+    });
+
+    testState.tuiAgentRecordListAuthoritative = true;
+    rerender({ ...intent });
+
+    await waitFor(() => {
+      expect(recoveryTiles()).toEqual([]);
+    });
+  });
+
+  it("does not close a same-host terminal agent until its own list is authoritative", async () => {
+    testState.autoOpenTarget = null;
+    testState.tuiAgentRecordListAuthoritative = false;
+    const unansweredAgent: EpicCanvasTileRef = {
+      id: "tui-list-unanswered",
+      instanceId: "inst-tui-list-unanswered",
+      type: "terminal-agent",
+      name: "Terminal-agent list unanswered",
+      hostId: "host-1",
+    };
+    const removedSpec: EpicCanvasTileRef = {
+      id: "removed-spec",
+      instanceId: "inst-removed-spec",
+      type: "spec",
+      name: "Removed spec",
+      hostId: "host-1",
+    };
+    testState.canvasRoot = {
+      kind: "pane",
+      id: "group-1",
+      tabInstanceIds: [unansweredAgent.instanceId, removedSpec.instanceId],
+      activeTabId: unansweredAgent.instanceId,
+      previewTabId: null,
+      activationHistory: [unansweredAgent.instanceId],
+    };
+    testState.canvasTiles = {
+      [unansweredAgent.instanceId]: unansweredAgent,
+      [removedSpec.instanceId]: removedSpec,
+    };
+
+    const intent: EpicRouteFocusIntent = {
+      epicId: EPIC_ID,
+      tabId: TAB_ID,
+      focusedAt: undefined,
+      focusArtifactId: undefined,
+      focusThreadId: undefined,
+      focusPaneId: undefined,
+      focusTileInstanceId: undefined,
+    };
+    const { rerender } = renderHook(
+      (props: EpicRouteFocusIntent) => useEpicRouteSynchronization(props),
+      { initialProps: intent },
+    );
+
+    // The sweep ran: the spec closing proves the agent was judged and kept.
+    await waitFor(() => {
+      expect(testState.canvasStore.closeCanvasTab).toHaveBeenCalledWith(
+        TAB_ID,
+        "group-1",
+        removedSpec.instanceId,
+      );
+    });
+    expect(testState.canvasStore.closeCanvasTab).not.toHaveBeenCalledWith(
+      TAB_ID,
+      "group-1",
+      unansweredAgent.instanceId,
+    );
+
+    testState.tuiAgentRecordListAuthoritative = true;
+    rerender({ ...intent });
+
+    await waitFor(() => {
+      expect(testState.canvasStore.closeCanvasTab).toHaveBeenCalledWith(
+        TAB_ID,
+        "group-1",
+        unansweredAgent.instanceId,
+      );
+    });
+  });
+
   it("does not close a same-host chat until the local record list is authoritative", async () => {
     testState.autoOpenTarget = null;
     testState.chatRecordListAuthoritative = false;
@@ -1568,7 +1739,7 @@ describe("useEpicRouteSynchronization", () => {
     );
   });
 
-  // chat-sync-v2 ticket 36: a chat with no local record but still known to
+  // A chat with no local record but still known to
   // `epic.listCloudChats` must NOT be reaped - a leased identity that never
   // adopted this chat's rows, not a genuine deletion.
   it("does not close a record-less chat tile that is still cloud-known", async () => {
@@ -1645,7 +1816,7 @@ describe("useEpicRouteSynchronization", () => {
     );
   });
 
-  // T17: an `unverified` session's cloud-chat list is disabled for want of
+  // An `unverified` session's cloud-chat list is disabled for want of
   // AUTHORIZATION, not because there is nothing left to ask - the cloud rows
   // exist and this session simply may not look. `cloudChatListAuthorizesRecordSweep`
   // must fail closed on that ignorance, so a restored record-less chat tab
@@ -2217,7 +2388,7 @@ describe("useEpicRouteSynchronization", () => {
 
     // No hosted record anywhere - mirrors the switch-off / non-chat-tile
     // shape, where `findHostedTileElement` always misses and the ORIGINAL
-    // physical lookup must still resolve exactly as it did before F4.
+    // physical lookup must still resolve as before.
     const selectedWrapperEl = document.createElement("div");
     selectedWrapperEl.setAttribute("data-tab-instance-id", "tile-unhosted");
     selectedWrapperEl.setAttribute("data-selected", "true");

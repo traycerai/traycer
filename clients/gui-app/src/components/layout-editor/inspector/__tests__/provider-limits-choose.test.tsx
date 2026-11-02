@@ -233,7 +233,7 @@ describe('the provider row\'s "Choose..." checklist (L-96, I-14)', () => {
     const describedById = choose.getAttribute("aria-describedby");
     expect(describedById).not.toBeNull();
     const reason = document.getElementById(describedById as string);
-    expect(reason?.textContent).toBe("No limits reported yet.");
+    expect(reason?.textContent).toBe("No limits reported.");
 
     // Functionally inert, not just visually: a disabled radio must not flip
     // the mode on a click, which is the difference `aria-disabled` alone

@@ -6,7 +6,7 @@ import { appLogger } from "@/lib/logger";
 
 /**
  * This renderer's evidence kernel, owned at the RENDERER's lifetime rather
- * than at a React effect's (redesign P1.3, review finding F2).
+ * than at a React effect's (redesign P1.3, F2).
  *
  * ## Why the effect could not own it
  *

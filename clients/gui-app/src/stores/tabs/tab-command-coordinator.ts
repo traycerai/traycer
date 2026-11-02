@@ -40,8 +40,8 @@ import {
 } from "@/stores/tabs/store";
 import { isHomeTabEnabled } from "@/stores/layout/layout-store";
 import { HOME_TAB_REF } from "@/stores/tabs/kinds/home";
-import { isOpenBotTab } from "@/stores/tabs/kinds/bot";
-import { useBotTabsStore } from "@/stores/bots/bot-tabs-store";
+import { isTracySurfaceOpen } from "@/stores/tabs/kinds/tracy";
+import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
 import {
   createEmptySplit,
   createLayoutItem,
@@ -160,11 +160,6 @@ export interface ReplaceDraftWithDocumentCommand {
   readonly previousDraftId: string;
   readonly nextDraftId: string;
   /**
-   * Installs the successor row (`nextDraftId`) in the landing store, open.
-   * Runs inside the transaction, after the strip item has been re-keyed
-   * and before the previous row is retired.
-   */
-  /**
    * Puts the successor row in the landing store. Returns whether it did: a
    * `false` aborts the transaction before the layout moves, so the strip
    * item is never re-keyed onto a row that does not exist.
@@ -277,7 +272,7 @@ function currentLayout(): PersistedTabStripLayout {
     );
   if (transactionDepth > 0 || matchesProjection) return layout;
   // Existing tests and unconverted flat callers can still seed `stripOrder`
-  // directly. Outside a coordinator transaction, treat that as the T1
+  // directly. Outside a coordinator transaction, treat that as the
   // compatibility write it is and rebuild the authoritative flat layout.
   return state.stripOrder.reduce(createLayoutItem, {
     version: 2,
@@ -375,7 +370,7 @@ function sourceHasRef(ref: TabRef): boolean {
       .getState()
       .drafts.some((draft) => draft.id === ref.id && isOpenLandingDraft(draft));
   }
-  if (ref.kind === "bot") return isOpenBotTab(ref.id);
+  if (ref.kind === "tracy") return isTracySurfaceOpen();
   // Home owns no source record and no strip item, so it is never a placement
   // this reconciles - `resolveHomeActivation` is its only entry point.
   if (ref.kind === "home") return false;
@@ -655,8 +650,8 @@ export class TabCommandCoordinator {
       if (next.drafts === previous.drafts) return;
       this.onSourceStoreChange();
     });
-    useBotTabsStore.subscribe((next, previous) => {
-      if (next.tabs === previous.tabs) return;
+    useTracySurfaceStore.subscribe((next, previous) => {
+      if (next.open === previous.open) return;
       this.onSourceStoreChange();
     });
   }
@@ -1375,8 +1370,8 @@ export class TabCommandCoordinator {
         useLandingDraftStore.getState().setActiveDraft(ref.id);
       });
     }
-    if (ref.kind === "bot") {
-      if (!isOpenBotTab(ref.id)) return null;
+    if (ref.kind === "tracy") {
+      if (!isTracySurfaceOpen()) return null;
       return this.activationForRef(layout, ref, () => undefined);
     }
     if (ref.kind === "sample-workspace")
@@ -1791,12 +1786,12 @@ export class TabCommandCoordinator {
     pruneRecoveryEpics(epicIds);
     const ids = new Set(epicIds);
     if (ids.size === 0) return;
-    // Ticket 15 (decision #29): drop every durable chat-key entry under
+    // Drop every durable chat-key entry under
     // these epics across all seven per-tab registries - independent of
     // whether any tab for them is currently open (a chat can leave a
     // durable entry behind long after its own tab closed).
     //
-    // Ticket 15 review round 5 (item 2): ONE batched call, not a `forEach`
+    // (item 2): ONE batched call, not a `forEach`
     // of the singular per-epic evict - the canvas close sweep below writes
     // durable state back for whichever of these epics still had open tiles,
     // so every epic in this access-loss batch must still be fenced by the
@@ -2081,9 +2076,9 @@ export class TabCommandCoordinator {
       });
       return;
     }
-    if (ref.kind === "bot") {
+    if (ref.kind === "tracy") {
       this.applyExpectedSourceMutation(() => {
-        useBotTabsStore.getState().closeBotTab(ref.id);
+        useTracySurfaceStore.getState().closeSurface();
       });
     }
   }

@@ -390,7 +390,7 @@ describe("applyTuiAgentRecords merges rather than replaces", () => {
     // to report. The ordinary revision guard ("apply only when strictly
     // greater") would then reject every refresh of a doc-resident row against
     // itself - `0 <= 0` - freezing it at whatever the session's first answer
-    // said, for the life of the session (H1 in the cold review). The two
+    // said, for the life of the session (H1). The two
     // titles below are the only way to observe the freeze: an unfixed guard
     // keeps "First poll" forever.
     //

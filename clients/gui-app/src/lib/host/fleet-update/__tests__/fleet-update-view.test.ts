@@ -59,7 +59,7 @@ const TRANSACTION: HostUpdateTransactionCapability = {
 };
 
 // Builds a WIRE observation. Retyped (annotation only — no assertion changed)
-// when Ticket 07 §5.2.7 made `FleetUpdateObservation` a union: `Partial<union>`
+// when `FleetUpdateObservation` became a union: `Partial<union>`
 // does not narrow, so the literal below no longer identified an arm.
 function observation(
   overrides: Partial<FleetUpdateWireObservation>,
@@ -342,7 +342,7 @@ describe("projectFleetUpdateView — staleness", () => {
   });
 });
 
-// G4 (independent cold review, finding 4): staleness used to overwrite the
+// Staleness used to overwrite the
 // observed phase with `unknown` and drop it. `lastKnownKind` is what a surface
 // reads to say "last seen preparing v1.2.3" instead of a bare "offline" — and
 // the invariant that makes it SAFE to add beside `kind` is that it can never
@@ -636,7 +636,7 @@ describe("projectFleetUpdateView — a refused completion write is not a failure
     // announcing "Updated … Finalizing the update record." over an operation
     // that is still running and can still fail.
     //
-    // Found by reviewer C hoisting the route above that guard: all 173 stayed
+    // Hoisting the route above that guard: all 173 stayed
     // green, because every `finalizing-record` fixture here is interrupted and
     // every live `verifying` row uses a non-matching version, so "live +
     // verifying + already at target" existed in neither suite.
@@ -775,7 +775,7 @@ describe("projectFleetUpdateView — a refused completion write is not a failure
     expect(isQuietUpdateView(view)).toBe(false);
   });
 
-  // PR2069 (CodeRabbit): the `stale` branch used to read only the raw phase,
+  // The `stale` branch used to read only the raw phase,
   // so a wire that had concluded finalizing-record lost that conclusion the
   // instant it expired and fell back to the bare `verifying` phase.
   it("a stale wire read that concluded finalizing-record keeps that as its retained kind, not bare verifying", () => {
@@ -897,7 +897,7 @@ describe("projectFleetUpdateView — a host that refused the authenticated check
 
   it("survives a WIDENED finalizing-record phase set, at either running version", () => {
     // What this row actually holds, measured rather than assumed — the title
-    // used to claim it pinned the ORDER, and reviewer C showed it does not:
+    // used to claim it pinned the ORDER, and it does not:
     //
     //   - reorder alone (demote this route below Q11's, phase set untouched):
     //     fully green. Q11's predicate refuses a `failed` phase, so today the
@@ -954,7 +954,7 @@ describe("projectFleetUpdateView — a host that refused the authenticated check
   it("a STALE read carrying the code is not this state — freshness is a precondition", () => {
     // Symmetric with the terminal-phase row above, and the same class of gap
     // Y1 was: the route sits BELOW the stale arm, and nothing held it there.
-    // Reviewer C hoisted it above and all 140/41/41 stayed green.
+    // Hoisted above and all 140/41/41 stayed green.
     //
     // Why the position is load-bearing rather than incidental: the sentence
     // this kind renders says the host **is running** — present tense — and a
@@ -1074,7 +1074,7 @@ describe("projectFleetUpdateView — progress", () => {
     });
   });
 
-  // G5 (independent cold review, finding 5): the wire makes `percent`,
+  // The wire makes `percent`,
   // `bytes` and `totalBytes` independently nullable, so an active operation
   // with no percentage can still have MEASURED bytes — a host streaming an
   // unsized body. The first shape of `projectProgress` discarded them the
@@ -1246,7 +1246,7 @@ describe("warrantsFastPoll", () => {
   );
 });
 
-// G8: direct `holdsLifecycleGate` unit coverage, independently of any banner
+// Direct `holdsLifecycleGate` unit coverage, independently of any banner
 // or Overview seam — the finding-7 gap was that the only proof lived behind an
 // interaction test that could not fail for the right reason.
 describe("holdsLifecycleGate — direct unit coverage", () => {
@@ -1297,7 +1297,7 @@ describe("holdsLifecycleGate — direct unit coverage", () => {
   });
 });
 
-// ---- Ticket 07 §5.2.7 — the record-derived arm ----------------------------
+// ---- The record-derived arm -----------------------------------------------
 
 /**
  * One instant for both legs, for the cases that are not ABOUT the split.
@@ -1339,7 +1339,7 @@ function recordObservation(
 
 describe("projectFleetUpdateView — the durable-record arm (host-down window)", () => {
   it("a FAILED record projects unknown + lastKnownKind:'failed', never a live failure", () => {
-    // Codex round 3, end to end. The read boundary now lets `failed` through
+    // End to end: the read boundary now lets `failed` through
     // (it used to be dropped with every terminal phase), and this asserts what
     // it becomes: the retained-phase channel, not a live `kind`.
     //
@@ -1399,7 +1399,7 @@ describe("projectFleetUpdateView — the durable-record arm (host-down window)",
   });
 
   it("distinguishes 'attempt exists, host unreachable' from 'attempt progressing'", () => {
-    // The §5.2.7 requirement, asserted directly rather than inferred from the
+    // The host-down requirement, asserted directly rather than inferred from the
     // shape. Same phase, two evidence sources, two different renderings.
     const fromWire = projectFleetUpdateView({
       observation: observation({
@@ -1580,7 +1580,7 @@ describe("projectFleetUpdateView — probed local liveness on a `restarting` rec
 
   it("a NEGATIVE age beyond the clock-slack bound projects unknown, gate released", () => {
     // Falsifies: dropping the lower bound entirely from
-    // `localLivenessProofHolds` (the ticket's own ablation) — a wall-clock
+    // `localLivenessProofHolds` — a wall-clock
     // step backward would otherwise read as "even fresher than new" to a
     // check that only looks at the upper bound. Stepped back well past
     // `LOCAL_LIVENESS_CLOCK_SLACK_MS` (1s) rather than by ~500ms, because a
@@ -1739,7 +1739,7 @@ describe("preferLiveOverRecord — same-attempt ordering and the different-attem
     // green. This is the case that separates them.
     //
     // The split is not contrived, it is the steady state this two-clock design
-    // exists for (round-1 F3): `wireNowMs` is the status query's own
+    // exists for: `wireNowMs` is the status query's own
     // `dataUpdatedAt`, which STOPS ADVANCING exactly when the host goes down,
     // while `recordNowMs` is a one-second renderer tick that keeps running.
     // So a current record judged against a frozen wire instant is rejected as
@@ -1755,7 +1755,7 @@ describe("preferLiveOverRecord — same-attempt ordering and the different-attem
     // the wire clock too, so a window measured against the tick would let the
     // frozen instant read as fresh and the pin would never reach the bound it
     // is about. This is the shape an unhealthy read actually has — the health
-    // is folded into `freshUntilMs`, which is what round-1 F3 established.
+    // is folded into `freshUntilMs`.
     const staleWire = observation({
       freshUntilMs: NOW_MS - 20_000,
       operation: attemptOperation({ attemptId: "attempt-1" }),
@@ -1947,7 +1947,7 @@ describe("isQuietUpdateView", () => {
   });
 });
 
-// ---- record-derived parks (legacyFacts) — Ticket beside 07 §5.2.7 ----------
+// ---- record-derived parks (legacyFacts) — Ticket beside 07 -----------------
 //
 // `legacyFactsView` is consulted in BOTH the `operation === null` arm and the
 // `operation.kind === "none"` arm, AFTER the coarse `updateProgress` marker
@@ -2290,7 +2290,7 @@ describe("projectFleetUpdateView — terminal attempts yield to the record parks
     // not make a stage stop waiting any more than it makes an install stop
     // needing a restart. Falsification: narrow the fall-back to
     // `facts.activationDebt !== null` and this reddens while pin (1) stays
-    // green — which is exactly the asymmetry cold review C flagged as
+    // green — which is exactly the asymmetry flagged as
     // unpinned.
     const view = projectFleetUpdateView({
       observation: observation({
@@ -2367,7 +2367,7 @@ describe("projectFleetUpdateView — terminal attempts yield to the record parks
  *
  * ## Why the pairing is pinned rather than the null arm
  *
- * The brief asked for a row where an observation with NO identity sends no
+ * The null arm is a row where an observation with NO identity sends no
  * `expected`. Through the panel that state does not exist: `deriveAttemptControl`
  * returns no offer unless `view.attemptId !== null`, and every site that builds
  * a view sets the two together — so a null position never reaches a dispatch.

@@ -72,7 +72,7 @@ export type SortableRowDecorator = (id: string) => SortableRowDecoration;
  * An undecorated row: what a host that decorates nothing leaves behind.
  *
  * Every builder below spreads the decoration FIRST and sets its own fields
- * after it (R1-21). The two key sets are disjoint today, so the order is
+ * after it. The two key sets are disjoint today, so the order is
  * invisible - which is the point: a field added to
  * {@link SortableRowDecoration} that happens to share a builder's name would
  * otherwise overwrite what the builder had just decided, silently.

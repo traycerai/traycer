@@ -55,7 +55,7 @@ export const useAccountContextStore = create<AccountContextStoreState>()(
 /**
  * Resolves a (possibly stale) stored context against the teams currently on the
  * authed user. Falls back to Personal when the persisted team is gone - the
- * brief's default - so a left team never leaves the panel pointing at nothing.
+ * default - so a left team never leaves the panel pointing at nothing.
  */
 export function resolveAccountContext(
   stored: AccountContext,

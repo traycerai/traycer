@@ -41,8 +41,8 @@ import type { HostRpcRegistry } from "@/lib/host";
  *
  * This is the Settings selector's whole data source, and its defining property
  * is negative: "the selector decorates every host with the best known state …
- * Settings does not silently connect to other hosts to improve their badges"
- * (experience doc, Flow B). So a host is only ever read over a session that
+ * Settings does not silently connect to other hosts to improve their badges".
+ * So a host is only ever read over a session that
  * already exists, and every other host projects `unknown`, which the badge
  * renders as nothing at all.
  *

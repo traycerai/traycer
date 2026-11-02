@@ -74,6 +74,7 @@ function createOwnedHandle(sessionId: string): {
     kind: "terminal",
     viewer: "presentation",
     streamClientFactory: () => ({
+      supportsViewerFrames: () => false,
       sendAction: () => undefined,
       close: () => {
         closeCount += 1;

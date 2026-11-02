@@ -8,7 +8,7 @@ import { useChatSessionHandleForContainer } from "@/lib/registries/chat-session-
 
 /**
  * The agent chat's reason and actions for a post the bot did not answer
- * (Tracy Bots T86, decision 117), read off the session that answers the
+ * (Tracy Bots, decision 117), read off the session that answers the
  * surface's posts - the trunk beside the channel, a thread's session in its
  * panel - which this holds open while the surface shows. Offered for a post
  * whose turn (`turnOfRequest`) is the one that session names as its last

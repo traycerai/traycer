@@ -5,7 +5,7 @@ import {
 } from "@/lib/host/fleet-update/fleet-read-gate";
 import { FLEET_MAX_CONCURRENT_READS } from "@/lib/host/fleet-update/fleet-poll-policy";
 
-// G3(c)/(d): the global semaphore bounding concurrent remote reads across the
+// The global semaphore bounding concurrent remote reads across the
 // whole fleet, and the hand-off release the module's own comment calls out as
 // load-bearing.
 //

@@ -645,7 +645,7 @@ describe("the Tabs placement radio group", () => {
     fireEvent.click(await screen.findByTestId(`tab-strip-placement-${to}`));
 
     expect(placement()).toBe(to);
-    // Finding 8: the same writer every placement call site now shares
+    // The same writer every placement call site now shares
     // (`writeArrangementField`) - every other field stays exactly as seeded.
     expect(useLayoutStore.getState().arrangement).toEqual({
       ...seeded,

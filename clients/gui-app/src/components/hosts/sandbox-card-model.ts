@@ -123,7 +123,7 @@ const STATE_LINE: Record<HostSandboxState, string> = {
   starting: "Starting. Booting from its disk.",
   destroying: "Destroying. Its disk is being deleted.",
   destroyed: "Destroyed. Its disk is gone and nothing more is billed.",
-  failed: "Failed to start. Nothing is billed for a sandbox that never woke.",
+  failed: "Failed to start.",
   released: "Suspended, files kept. The next shell starts it.",
 };
 
@@ -288,7 +288,7 @@ export function sandboxStateLine(
   if (frozen) return sandboxFrozenLine(summary?.frozenAt ?? null);
   if (state === null) return "Sandbox";
   if (state === "failed" && summary !== null && summary.failureCode !== null) {
-    return `${sandboxFailedToStart(summary.failureCode)}. Nothing is billed for a sandbox that never woke.`;
+    return `${sandboxFailedToStart(summary.failureCode)}.`;
   }
   // The control plane clears the code only when the row next wakes, so on a
   // stopped row it is a start (or stop) that did not complete: a rolled-back
@@ -314,7 +314,7 @@ function formatMinutes(minutes: number): string {
 
 /**
  * The idle rule as the card states it. A burst sandbox is destroyed, not
- * suspended, once idle for its period (core flows, flow 2); the Automations
+ * suspended, once idle for its period; the Automations
  * row is released, its files kept, once no shell has run for its period.
  */
 export function sandboxIdleLine(summary: SandboxSummary): string {
@@ -328,8 +328,8 @@ export function sandboxIdleLine(summary: SandboxSummary): string {
 }
 
 /**
- * What a suspend keeps on this sandbox's provider (core flows, flows 1 and
- * 4), from the catalogue's `suspendFidelity`, or `null` for a value this
+ * What a suspend keeps on this sandbox's provider,
+ * from the catalogue's `suspendFidelity`, or `null` for a value this
  * build does not know.
  */
 export function sandboxSuspendKeepsLine(
@@ -436,7 +436,7 @@ export function sandboxSecretsReadiness(
 
 /**
  * What a tab on a sandbox host shows over its last screen while the sandbox
- * is not awake (core flows, "what a tab on it shows"), or `null` for a tab
+ * is not awake, or `null` for a tab
  * that renders normally.
  */
 export type SandboxTileOverlay =

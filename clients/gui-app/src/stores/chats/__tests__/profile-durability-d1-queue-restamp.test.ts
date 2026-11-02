@@ -39,6 +39,7 @@ const CONTENT: JsonContent = {
 };
 
 const PROFILE_A_SETTINGS: ChatRunSettings = {
+  ultracode: false,
   harnessId: "claude",
   model: "sonnet-4.5",
   permissionMode: "supervised",
@@ -100,7 +101,7 @@ function createHarness(): Harness {
 }
 
 function emitSnapshot(harness: Harness): void {
-  harness.callbacks().onConnectionStatus("open", null, null);
+  harness.callbacks().onConnectionStatus("open", null, null, null);
   harness.callbacks().onSnapshot({
     kind: "snapshot",
     hasBinaryPayload: false,

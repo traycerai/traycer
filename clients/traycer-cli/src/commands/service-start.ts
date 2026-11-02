@@ -6,6 +6,7 @@ import type {
 } from "../runner/runner";
 import {
   createServiceController,
+  serviceJobIdFor,
   serviceLabelFor,
   type ServiceLabel,
   type ServiceStatus,
@@ -209,7 +210,7 @@ async function runServiceStart(
           );
           return {
             data: startData(label, "running", before, true),
-            human: humanSummary(label.id, true, before),
+            human: humanHostAlreadyServing(before),
             exitCode: 0,
           };
         }
@@ -281,12 +282,13 @@ async function runServiceStart(
               supervisorPid: outcome.supervisorPid,
             },
           );
+          const jobId = await serviceJobIdFor(controller, label);
           return {
             data: {
               ...startData(label, before?.state ?? null, before, false),
               supervisorRelaunchingPid: outcome.supervisorPid,
             },
-            human: `service '${label.id}' is already running: its supervisor (pid ${String(outcome.supervisorPid)}) is relaunching the host, so no start was requested; run 'traycer host status' to confirm the host came back`,
+            human: `service '${jobId}' is already running: its supervisor (pid ${String(outcome.supervisorPid)}) is relaunching the host, so no start was requested; run 'traycer host status' to confirm the host came back`,
             exitCode: 0,
           };
         }
@@ -307,7 +309,10 @@ async function runServiceStart(
         });
         return {
           data: startData(label, before?.state ?? null, after, false),
-          human: humanSummary(label.id, false, after),
+          human: humanStartRequested(
+            await serviceJobIdFor(controller, label),
+            after,
+          ),
           exitCode: 0,
         };
       }),
@@ -332,27 +337,24 @@ function startData(
   };
 }
 
-function humanSummary(
-  labelId: string,
-  // The CONFIRMED decision, not the prior state it was derived from. A
-  // `running` status that identity refused still starts the service, and
-  // saying "was already running" there contradicted both the action taken and
-  // the `alreadyRunning: false` in the same payload.
-  alreadyRunning: boolean,
+function humanHostAlreadyServing(observed: ServiceStatus | null): string {
+  const pid = observed?.pid ?? null;
+  // Deliberately says "a host", not "the service". Nothing here can attribute
+  // the running process to the SERVICE MANAGER: Linux and Windows both derive
+  // `running` from the environment's shared pid metadata plus
+  // `isProcessAlive`, so a foreground `traycer host start` in another
+  // terminal satisfies it while the registration sits inactive. Claiming the
+  // service was already running there would report success for a background
+  // start that never happened, and the host would disappear when that
+  // terminal closed.
+  return `a host is already serving this environment${pid === null ? "" : ` (pid ${pid})`}, so no start was requested. If you started it with 'traycer host start' in a terminal, the background service is NOT running - stop it, then run this again`;
+}
+
+function humanStartRequested(
+  jobId: string,
   after: ServiceStatus | null,
 ): string {
   const pid = after?.pid ?? null;
-  if (alreadyRunning) {
-    // Deliberately says "a host", not "the service". Nothing here can attribute
-    // the running process to the SERVICE MANAGER: Linux and Windows both derive
-    // `running` from the environment's shared pid metadata plus
-    // `isProcessAlive`, so a foreground `traycer host start` in another
-    // terminal satisfies it while the registration sits inactive. Claiming the
-    // service was already running there would report success for a background
-    // start that never happened, and the host would disappear when that
-    // terminal closed.
-    return `a host is already serving this environment${pid === null ? "" : ` (pid ${pid})`}, so no start was requested. If you started it with 'traycer host start' in a terminal, the background service is NOT running - stop it, then run this again`;
-  }
   // "requested", not "started": every backend returns once the service
   // manager has ACCEPTED the launch, and a job that is registered but
   // unspawnable still reports success there. `host status` is the honest
@@ -364,6 +366,6 @@ function humanSummary(
   // finding that incumbent. What is genuinely known is that the start was
   // accepted and that something is answering.
   return after?.state === "running"
-    ? `requested start for service '${labelId}'; a host is now serving${pid === null ? "" : ` (pid ${pid})`}`
-    : `requested start for service '${labelId}'; run 'traycer host status' to confirm the host came up`;
+    ? `requested start for service '${jobId}'; a host is now serving${pid === null ? "" : ` (pid ${pid})`}`
+    : `requested start for service '${jobId}'; run 'traycer host status' to confirm the host came up`;
 }

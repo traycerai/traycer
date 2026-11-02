@@ -22,7 +22,7 @@ import {
 } from "@/lib/browser-view/tiles/webrtc-media-registry";
 
 /**
- * The tile's plane machine driven against the REAL media registry (ticket 09),
+ * The tile's plane machine driven against the REAL media registry,
  * with only the peer connection faked - jsdom has none, and the seam the
  * registry offers for exactly this is its `createPeer` factory.
  */
@@ -227,7 +227,7 @@ function iceFrame(
 /**
  * The host's answer to a DataChannel ping. NOT `pong`: that kind belongs to
  * the stream transport's heartbeat, which swallows it client-side before this
- * handler ever runs (ticket 18 - it is why this measurement read null in
+ * handler ever runs (which is why this measurement read null in
  * production while this test was green against the wrong frame).
  */
 function inputPongFrame(): BrowserScreencastServerFrame {
@@ -482,7 +482,7 @@ describe("video plane session", () => {
       packetsLost: 0,
       jitterMs: 4,
       roundTripTimeMs: 42,
-      // No rVFC metadata was fed and the channels are not up, so ticket 17's
+      // No rVFC metadata was fed and the channels are not up, so the
       // timings have nothing to report - null, and not a fabricated zero.
       glassToGlassMs: null,
       glassToGlassP95Ms: null,
@@ -612,7 +612,7 @@ describe("video plane session", () => {
   });
 
   /**
-   * Ticket 17's telemetry (glass-to-glass latency + DataChannel RTT), driven
+   * The telemetry (glass-to-glass latency + DataChannel RTT), driven
    * over the same real `createVideoPlaneSession` harness above. The
    * stale/duplicate-round rule itself is pinned once, at the registry layer
    * (`webrtc-media-registry.test.ts`) - nothing here re-pins it.

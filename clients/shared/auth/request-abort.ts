@@ -68,6 +68,45 @@ export function composeRequestAbort(
 }
 
 /**
+ * `work`, or the signal's abort, whichever comes first: rejects with the
+ * signal's reason the moment it aborts, whether or not `work` itself honours
+ * the signal.
+ *
+ * The fetch a mobile shell patches in (CapacitorHttp) drops `signal` for every
+ * method it hands to the native layer, so an aborted request there never
+ * settles and its caller's deadline means nothing. Racing it here settles the
+ * caller at the deadline on every platform; a native request that answers
+ * later is discarded. Where the fetch does honour the signal (Electron main,
+ * a browser), it rejects at the same moment, so nothing changes there.
+ */
+export function untilAborted<T>(
+  work: Promise<T>,
+  signal: AbortSignal,
+): Promise<T> {
+  if (signal.aborted) {
+    // The work still settles on its own; nothing may observe its failure.
+    work.catch(() => undefined);
+    return Promise.reject(signal.reason);
+  }
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = (): void => {
+      reject(signal.reason);
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    work.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error);
+      },
+    );
+  });
+}
+
+/**
  * Keeps each composed controller alive exactly as long as its signal, so the
  * sources hold only a weak reference to it and a long-lived source never pins
  * the requests it once fed.

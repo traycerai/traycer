@@ -144,6 +144,7 @@ export const CHAT_STATE_FIELD_ACCOUNTING = {
   unacknowledgedDeliveryRestore: true,
   runStatus: "small scalar included in the fixed store charge",
   activeTurn: true,
+  renamedTurnIds: true,
   turnLifecycleRevision: "counter included in the fixed store charge",
   steerProtocolSupported: "boolean included in the fixed store charge",
   draftBlobBridgeSupported: "boolean included in the fixed store charge",
@@ -151,6 +152,7 @@ export const CHAT_STATE_FIELD_ACCOUNTING = {
     "boolean included in the fixed store charge",
   autoPermissionModeProtocolSupported:
     "small scalar included in the fixed store charge",
+  ultracodeProtocolSupported: "boolean included in the fixed store charge",
   queuePauseReasonProtocolSupported:
     "small scalar included in the fixed store charge",
   turnInProgress: "boolean included in the fixed store charge",

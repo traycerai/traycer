@@ -1467,7 +1467,7 @@ describe("forget — a still-held, still-releasing, or lingering body", () => {
 
 /**
  * A last release must not drop the worker's demand while another acquire is
- * still resolving it (P1).
+ * still resolving it.
  *
  * The worker keeps ONE demand per doc key, and every later `body/materialize`
  * for an already-demanded key folds its own lease into it
@@ -1633,7 +1633,7 @@ describe("a last release must not drop demand while an acquire is still in fligh
 
 /**
  * `retryAwaitingBodies` retries with the artifact the caller now prefers, not
- * necessarily the one that first acquired the body (P2).
+ * necessarily the one that first acquired the body.
  *
  * On `@1`, a doc key is a ROOM hosting several artifacts. A body `forget`
  * sends back to `awaiting` carries whichever artifact installed it - but that

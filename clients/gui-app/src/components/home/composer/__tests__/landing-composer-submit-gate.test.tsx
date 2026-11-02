@@ -249,6 +249,7 @@ vi.mock("@/stores/home/landing-draft-store", () => {
     },
     setDraftComposerMode: vi.fn(),
     setDraftSettings: vi.fn(),
+    seedUnseededDraft: vi.fn(() => false),
     createDraft: vi.fn(() => "draft-for-test"),
     // handleSnapshot's unbound-create branch now calls createDraftWithId
     // (reusing a pre-minted pendingCreateId when present) rather than
@@ -296,6 +297,8 @@ vi.mock("@/stores/composer/composer-run-settings-store", () => {
 
 vi.mock("@/components/home/hooks/use-composer-toolbar-store", () => {
   const toolbarStore = createStore(() => ({
+    ultracode: false,
+    selectedModel: null,
     selection: {
       get harnessId() {
         return testState.displayedHarness;
@@ -316,6 +319,7 @@ vi.mock("@/components/home/hooks/use-composer-toolbar-store", () => {
     },
     // The raw pick; `selection` above is what this host's catalog shows.
     values: {
+      ultracode: false,
       selection: {
         get harnessId() {
           return testState.pickHarness;
@@ -379,9 +383,18 @@ function answerProviders(
 // The Terminal-account line reads the host picker's options for the run's
 // host; with none named it is this computer.
 vi.mock("@/components/settings/host-scope/use-host-options", async () => {
-  const { hostOptionsFixture } =
+  const { hostOptionsFixture, hostScopeOptionFixture } =
     await import("@/components/settings/host-scope/host-scope-fixture");
-  return { useHostOptions: () => hostOptionsFixture({ hosts: [] }) };
+  const options = hostOptionsFixture({
+    hosts: [
+      hostScopeOptionFixture({
+        hostId: "host-test",
+        name: "Hardiks-MacBook-Pro---Traycer.local",
+        isLocalMachine: true,
+      }),
+    ],
+  });
+  return { useHostOptions: () => options };
 });
 vi.mock("@/hooks/sandboxes/use-sandbox-agent-gate", () => ({
   useSandboxAgentGate: () => testState.agentGate,
@@ -547,7 +560,7 @@ vi.mock("@/hooks/composer/use-landing-image-fetcher", () => ({
 // tree reaches these two hooks - confirmed by removing them and finding the
 // suite stays green. Left removed rather than kept as a second, unreachable
 // copy of the same intent.
-// P1.2: the composer resolves its placement (pin ?? effective) through this
+// The composer resolves its placement (pin ?? effective) through this
 // one hook. These suites are about paste/gating/banner behaviour, not
 // selection derivation, so it is stubbed at that single boundary - the same
 // treatment the other host-backed hooks above get.
@@ -613,7 +626,7 @@ vi.mock("@/lib/host", () => ({
     findById: () => null,
     onChange: () => ({ dispose: () => undefined }),
   }),
-  // The SPINE, a separate export since redesign P2.1.
+  // The SPINE, a separate export.
   useHostRuntimeClient: () => null,
 }));
 vi.mock(
@@ -1350,6 +1363,7 @@ describe("LandingComposer direct submit gate", () => {
       await sendFromComposer();
 
       expect(onlyPendingSend().settings).toEqual({
+        ultracode: false,
         harnessId: "codex",
         model: "gpt-6.1-sol",
         permissionMode: "supervised",
@@ -1555,7 +1569,7 @@ describe("LandingComposer direct submit gate", () => {
         for (const action of [
           "Choose a model",
           "Open terminal instead",
-          "Choose another host",
+          "Use This computer",
         ]) {
           expect(notice.getByRole("button", { name: action })).toHaveProperty(
             "disabled",
@@ -1626,7 +1640,7 @@ describe("LandingComposer direct submit gate", () => {
           ["traycer"],
         );
         fireEvent.click(
-          screen.getByRole("button", { name: "Choose another host" }),
+          screen.getByRole("button", { name: "Use This computer" }),
         );
         expect(readStagedSandbox("landing:window-test")).toBeNull();
       },
@@ -2013,7 +2027,7 @@ describe("LandingComposer direct submit gate", () => {
     expect(testState.submit).toHaveBeenCalledTimes(1);
   });
 
-  // Finding 3: pure path-resolution must also hold submit open.
+  // Pure path-resolution must also hold submit open.
   it("blocks the actual landing submit path while file-path resolution is pending", () => {
     testState.resolvingPaths = true;
     const view = render(

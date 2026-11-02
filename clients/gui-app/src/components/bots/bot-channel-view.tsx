@@ -2,6 +2,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   useSyncExternalStore,
   type ReactNode,
@@ -15,7 +16,9 @@ import type {
 } from "@traycer/protocol/host/bot/conversation-schemas";
 import type {
   BotSurfaceActionState,
+  BotReadCursorReadResponse,
   BotTaskEntry,
+  BotThreadFollow,
 } from "@traycer/protocol/host/bot/schemas";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
@@ -33,13 +36,30 @@ import { BotRoutingCard } from "@/components/bots/bot-routing-card";
 import { useChatSessionHandleForContainer } from "@/lib/registries/chat-session-registry";
 import { threadOpenOf } from "@/lib/bots/bot-trunk-model";
 import {
+  channelMuted,
+  followingOf,
+} from "@/lib/bots/bot-notification-settings";
+import { useBotNotificationLevelsQuery } from "@/hooks/bots/use-bot-notification-level";
+import { useBotThreadFollows } from "@/hooks/bots/use-bot-thread-follow";
+import {
+  useBotReadCursorAdvanceMutation,
+  useBotReadCursors,
+} from "@/hooks/bots/use-bot-read-cursor";
+import { advanceTarget, threadHasNewReplies } from "@/lib/bots/bot-read-cursor";
+import {
   BotMemoryPanel,
   type BotMemoryNavigation,
 } from "@/components/bots/bot-memory-panel";
 import {
   BotMessageComposer,
   type BotComposerEdit,
+  type BotComposerQuote,
 } from "@/components/bots/bot-message-composer";
+import { clearBrowserSelection } from "@/components/chat/quote/quote-snapshot-into-draft";
+import {
+  QuoteSinkContext,
+  type QuoteSink,
+} from "@/components/chat/quote/quote-sink-context";
 import { useBotSendFailure } from "@/hooks/bots/use-bot-send-failure";
 import { BotReadFailure } from "@/components/bots/bot-read-failure";
 import { BotReplyingStrip } from "@/components/bots/bot-replying-strip";
@@ -68,7 +88,7 @@ import {
   type BotSessionActivity,
 } from "@/hooks/bots/use-bot-activity";
 import { useNotificationIndicators } from "@/hooks/notifications/use-notification-indicators-query";
-import { useNotificationMarkEntityRead } from "@/hooks/notifications/use-notification-mark-entity-read-mutation";
+import { usePublishPresentedBotConversation } from "@/hooks/notifications/use-publish-presented-bot-conversation";
 import { indicatorHasUnread } from "@/stores/notifications/notification-indicator-state";
 import {
   botMemberName,
@@ -80,6 +100,7 @@ import {
 } from "@/lib/dom/document-visibility";
 import { isDocumentFocused } from "@/lib/notifications/notification-presence";
 import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
+import { useKeptBoxDraft } from "@/hooks/bots/use-kept-box-draft";
 import type {
   BotOpenMemory,
   BotOpenThread,
@@ -88,11 +109,11 @@ import type {
 } from "@/stores/bots/bot-open-thread-store";
 import { useAuthStore, type AuthProfile } from "@/stores/auth/auth-store";
 import type { StackedIdentity } from "@/components/bots/bot-avatars";
+import type { MobileTileCount } from "@/lib/layout/mobile-layout-form";
 import { cn } from "@/lib/utils";
 
 const EMPTY_THREADS: ReadonlyArray<BotThreadSummary> = [];
 const NO_EPIC_IDS: ReadonlyArray<string> = [];
-const NO_CHAT_IDS: ReadonlyArray<string> = [];
 
 /**
  * Whether the person is in this window: it is on screen and has focus, the
@@ -143,13 +164,6 @@ function channelConversation(
 export type BotChannelLanding = BotTranscriptLanding & {
   readonly threadId: string | null;
 };
-
-/** The landing the channel's own transcript takes: one on a message of the channel. */
-function channelLandingOf(
-  landOn: BotChannelLanding | null,
-): BotTranscriptLanding | null {
-  return landOn !== null && landOn.threadId === null ? landOn : null;
-}
 
 /**
  * The listed thread whose panel is drawn: none while the channel's own read
@@ -223,7 +237,7 @@ function useThreadPanelLanding(
  * The rail beside the channel is one slot: a thread, or the bot's memory,
  * which takes the thread's place and brings it back from its header. A
  * reply's receipt, in the channel or in the thread (Tracy Bots T86), opens
- * the turn's session in place of the channel (T93). The trunk's routing card sits above the channel's
+ * the turn's session in place of the channel. The trunk's routing card sits above the channel's
  * box, as the agent chat's sits above its composer.
  */
 export function BotChannelView(props: {
@@ -281,6 +295,10 @@ export function BotChannelView(props: {
   readonly botNameOf: (botId: string) => string | null;
   /** Opens the bot's Activity tab, from the open thread's header. */
   readonly onOpenActivity: () => void;
+  /** A live team main bot's setup history at the top of the channel (T67b); `null` for none. */
+  readonly setupHistory: ReactNode;
+  /** How many tiles the installed app shows; `null` where the container decides. */
+  readonly tiles: MobileTileCount | null;
 }): ReactNode {
   const {
     botId,
@@ -303,6 +321,8 @@ export function BotChannelView(props: {
     environmentId,
     botNameOf,
     onOpenActivity,
+    setupHistory,
+    tiles,
   } = props;
   const openThreadPostId = open?.anchorMessageId ?? null;
   const client = useTabHostClient();
@@ -315,6 +335,12 @@ export function BotChannelView(props: {
       ),
     [appConversationChatId, conversations.data],
   );
+  // What the channel's box holds unsent, kept under the bot by the channel's
+  // conversation, so it outlives the pane when another channel is shown.
+  const { seed: channelSeed, keptDraft: channelKeptDraft } = useKeptBoxDraft(
+    botId,
+    appConversationChatId,
+  );
 
   const {
     supported: threadListSupported,
@@ -323,6 +349,9 @@ export function BotChannelView(props: {
     isUnread,
     unreadCountOf,
     threadAnchorKinds,
+    follows,
+    readCursors,
+    newRepliesOf,
   } = useChannelThreads({
     client,
     botId,
@@ -482,7 +511,9 @@ export function BotChannelView(props: {
   // channel opens where the tab asked it to: it mounts afresh each time a
   // session shown in its place closes.
   const [landing, setLanding] = useState<BotTranscriptLanding | null>(() =>
-    channelLandingOf(props.landOn),
+    props.landOn !== null && props.landOn.threadId === null
+      ? props.landOn
+      : null,
   );
   const memoryNavigation = useMemo(
     (): BotMemoryNavigation => ({
@@ -521,6 +552,8 @@ export function BotChannelView(props: {
           replying:
             postMessageId !== openThreadPostId &&
             activity?.threads[thread.threadId]?.state === "replying",
+          followedUnwritten: followedUnwritten(follows, thread.threadId),
+          newReplies: newRepliesOf(thread),
         };
       },
       // A host without the thread list has no thread to open.
@@ -544,6 +577,7 @@ export function BotChannelView(props: {
       openTurn: onOpenTurn,
       sessionChatId: trunkChatId,
       intro: { botTitle, directive },
+      history: setupHistory,
     }),
     [
       answerQuestion,
@@ -554,7 +588,9 @@ export function BotChannelView(props: {
       directive,
       discussQuestion,
       failedRequest,
+      follows,
       isUnread,
+      newRepliesOf,
       unreadCountOf,
       onOpenThread,
       openAnnouncementThread,
@@ -562,6 +598,7 @@ export function BotChannelView(props: {
       onOpenTurn,
       resolveMember,
       sending,
+      setupHistory,
       threadListSupported,
       threadAnchorKinds,
       threadsByPost,
@@ -591,6 +628,7 @@ export function BotChannelView(props: {
     openThreadPostId === null
       ? null
       : (threadsByPost.get(openThreadPostId) ?? null);
+  const { quoteIntoOpenBox, quoteFor } = useBoxQuotes(railThreadPostId);
   const threadLanding = useThreadPanelLanding(
     props.landOn,
     drawnPanelThreadId({
@@ -639,24 +677,29 @@ export function BotChannelView(props: {
     threadAnchorKinds,
     threadList.isError,
   ]);
-  useReadThreadWhilePresented({
+  const presentedThreadId = useReadThreadWhilePresented({
     client,
     botId,
     thread: openThread,
-    isUnread,
+    readCursors,
     shown: threadOpen,
   });
   const [channelSection, setChannelSection] = useState<HTMLElement | null>(
     null,
   );
-  useReadChannelWhilePresented({
+  const presentedChannelId = useReadChannelWhilePresented({
     client,
-    hostId,
     botId,
     channelId,
+    readCursors,
     threadOpen: railOpen,
     section: channelSection,
   });
+  usePublishPresentedBotConversation(
+    botId,
+    presentedThreadId,
+    presentedChannelId,
+  );
 
   const anchorSenderLabel = useCallback(
     (senderUserId: string | null): string =>
@@ -708,107 +751,116 @@ export function BotChannelView(props: {
   }
   return (
     <BotSurfaceCardsContext.Provider value={surfaceCards}>
-      <div className="@container flex min-h-0 flex-1">
-        <div className="flex min-h-0 w-full">
-          <section
-            ref={setChannelSection}
-            aria-label={botTitle}
-            data-testid="bot-channel"
-            data-conversation-id={channel.conversationId}
-            className={cn(
-              "min-h-0 min-w-0 flex-1 flex-col",
-              railOpen ? "hidden @3xl:flex" : "flex",
-            )}
-          >
-            <BotChatTranscript
-              botId={botId}
-              chatId={channel.conversationId}
-              hostId={hostId}
-              title={botTitle}
-              instanceId={`bot-channel:${botId}`}
-              surface={surface}
-              resolveMember={resolveMember}
-              showConnecting
-              landOn={landing}
-            />
-            <BotReplyingStrip
-              botTitle={botTitle}
-              activity={trunkReply}
-              testId="bot-channel-replying"
-            />
-            <BotRoutingCard
-              botId={botId}
-              hostId={hostId}
-              sessionChatId={trunkChatId}
-            />
-            <BotMessageComposer
-              botId={botId}
-              conversationId={channel.conversationId}
-              threadId={null}
-              announcementId={null}
-              sendable
-              placeholder={`Message ${botTitle}`}
-              label={`Message ${botTitle}`}
-              testId="bot-channel-composer"
-              failure={sendFailure}
-              edit={edit}
-              onEditEnd={endEdit}
-              seed={null}
-              keptDraft={null}
-              onSent={openPostedThread}
-            />
-          </section>
-          <ChannelMemoryPane
-            memory={openMemory}
-            render={(memory) => (
-              <BotMemoryPanel
+      <QuoteSinkContext value={quoteIntoOpenBox}>
+        <div className="@container flex min-h-0 flex-1">
+          <div className="flex min-h-0 w-full">
+            <section
+              ref={setChannelSection}
+              aria-label={botTitle}
+              data-testid="bot-channel"
+              data-conversation-id={channel.conversationId}
+              className={cn(
+                "min-h-0 min-w-0 flex-1 flex-col",
+                railOpen ? channelBesideRailClass(tiles) : "flex",
+              )}
+            >
+              <BotChatTranscript
                 botId={botId}
+                chatId={channel.conversationId}
                 hostId={hostId}
-                environmentId={environmentId}
-                botTitle={botTitle}
-                channelId={channel.conversationId}
-                trunkChatId={trunkChatId}
-                threads={threadList.data?.threads ?? null}
-                botNameOf={botNameOf}
-                back={memory.back}
-                onBack={
-                  memory.back === null ? null : () => onOpenThread(memory.back)
-                }
-                onClose={() => onOpenMemory(null)}
-                navigation={memoryNavigation}
-              />
-            )}
-          />
-          <ChannelThreadPane
-            postId={railThreadPostId}
-            render={(postId) => (
-              <BotThreadPanel
-                key={postId}
-                botId={botId}
-                hostId={hostId}
-                boundHostId={boundHostId}
-                botTitle={botTitle}
-                conversationId={channel.conversationId}
-                originMessageId={postId}
-                sent={open?.sent ?? null}
-                thread={panelThread}
-                tasks={tasks}
-                anchorSenderLabel={anchorSenderLabel}
+                title={botTitle}
+                instanceId={`bot-channel:${botId}`}
+                surface={surface}
                 resolveMember={resolveMember}
-                landOn={threadLanding.landing}
-                onClose={() => {
-                  threadLanding.spend();
-                  onOpenThread(null);
-                }}
-                onOpenActivity={onOpenActivity}
-                onEditPost={editPostFromThread}
-                onOpenTurn={onOpenTurn}
-                onOpenSession={onOpenSession}
+                showConnecting
+                header={null}
+                landOn={landing}
               />
-            )}
-          />
+              <BotReplyingStrip
+                botTitle={botTitle}
+                activity={trunkReply}
+                testId="bot-channel-replying"
+              />
+              <BotRoutingCard
+                botId={botId}
+                hostId={hostId}
+                sessionChatId={trunkChatId}
+              />
+              <BotMessageComposer
+                botId={botId}
+                conversationId={channel.conversationId}
+                threadId={null}
+                announcementId={null}
+                sendable
+                placeholder={`Message ${botTitle}`}
+                label={`Message ${botTitle}`}
+                testId="bot-channel-composer"
+                failure={sendFailure}
+                edit={edit}
+                onEditEnd={endEdit}
+                seed={channelSeed}
+                keptDraft={channelKeptDraft}
+                quote={quoteFor(null)}
+                onSent={openPostedThread}
+              />
+            </section>
+            <ChannelMemoryPane
+              tiles={tiles}
+              memory={openMemory}
+              render={(memory) => (
+                <BotMemoryPanel
+                  botId={botId}
+                  hostId={hostId}
+                  environmentId={environmentId}
+                  botTitle={botTitle}
+                  channelId={channel.conversationId}
+                  trunkChatId={trunkChatId}
+                  threads={threadList.data?.threads ?? null}
+                  botNameOf={botNameOf}
+                  back={memory.back}
+                  onBack={
+                    memory.back === null
+                      ? null
+                      : () => onOpenThread(memory.back)
+                  }
+                  onClose={() => onOpenMemory(null)}
+                  navigation={memoryNavigation}
+                />
+              )}
+            />
+            <ChannelThreadPane
+              tiles={tiles}
+              postId={railThreadPostId}
+              render={(postId) => (
+                <BotThreadPanel
+                  key={postId}
+                  botId={botId}
+                  hostId={hostId}
+                  boundHostId={boundHostId}
+                  botTitle={botTitle}
+                  conversationId={channel.conversationId}
+                  originMessageId={postId}
+                  sent={open?.sent ?? null}
+                  thread={panelThread}
+                  tasks={tasks}
+                  anchorSenderLabel={anchorSenderLabel}
+                  resolveMember={resolveMember}
+                  landOn={threadLanding.landing}
+                  onClose={() => {
+                    threadLanding.spend();
+                    onOpenThread(null);
+                  }}
+                  onOpenActivity={onOpenActivity}
+                  onEditPost={editPostFromThread}
+                  onOpenTurn={onOpenTurn}
+                  onOpenSession={onOpenSession}
+                  quote={quoteFor(postId)}
+                />
+              )}
+            />
+          </div>
         </div>
-      </div>
+      </QuoteSinkContext>
     </BotSurfaceCardsContext.Provider>
   );
 }
@@ -866,20 +918,55 @@ function useSurfaceCards(args: {
   );
 }
 
+/**
+ * The channel while the rail is open: the rail takes its place on one tile, and
+ * sits beside it on two. Either way it stays mounted, so its scroll and its draft
+ * are there when the rail closes.
+ */
+function channelBesideRailClass(tiles: MobileTileCount | null): string {
+  if (tiles === null) return "hidden @3xl:flex";
+  return tiles === 2 ? "flex" : "hidden";
+}
+
+/**
+ * The rail's pane. Off the installed app the tab's container places it and the
+ * person drags its width; in the installed app the width rule places it, and two
+ * tiles split the row equally with nothing to drag.
+ */
+function railPanePlacement(tiles: MobileTileCount | null): {
+  readonly className: string;
+  readonly handleClassName: string;
+} {
+  if (tiles === null) {
+    return {
+      className:
+        "flex min-h-0 min-w-0 flex-1 flex-col @3xl:w-(--bot-pane-width) @3xl:max-w-[60%] @3xl:flex-none @3xl:border-l @3xl:border-border/60",
+      handleClassName: "hidden @3xl:block",
+    };
+  }
+  return {
+    className: cn(
+      "flex min-h-0 min-w-0 flex-1 flex-col",
+      tiles === 2 && "border-l border-border/60",
+    ),
+    handleClassName: "hidden",
+  };
+}
+
 /** The bot's memory open in the rail; nothing for none (`null`). */
 function ChannelMemoryPane(props: {
+  readonly tiles: MobileTileCount | null;
   readonly memory: BotOpenMemory | null;
   readonly render: (memory: BotOpenMemory) => ReactNode;
 }): ReactNode {
-  const { memory, render } = props;
+  const { tiles, memory, render } = props;
   if (memory === null) return null;
   return (
     <BotResizablePane
       pane="thread"
       edge="left"
       label="Resize panel"
-      className="flex min-h-0 min-w-0 flex-1 flex-col @3xl:w-(--bot-pane-width) @3xl:max-w-[60%] @3xl:flex-none @3xl:border-l @3xl:border-border/60"
-      handleClassName="hidden @3xl:block"
+      {...railPanePlacement(tiles)}
       testId="bot-memory-pane"
     >
       {render(memory)}
@@ -889,18 +976,18 @@ function ChannelMemoryPane(props: {
 
 /** The thread open in the rail, by its post's id; nothing for none (`null`). */
 function ChannelThreadPane(props: {
+  readonly tiles: MobileTileCount | null;
   readonly postId: string | null;
   readonly render: (postId: string) => ReactNode;
 }): ReactNode {
-  const { postId, render } = props;
+  const { tiles, postId, render } = props;
   if (postId === null) return null;
   return (
     <BotResizablePane
       pane="thread"
       edge="left"
       label="Resize thread"
-      className="flex min-h-0 min-w-0 flex-1 flex-col @3xl:w-(--bot-pane-width) @3xl:max-w-[60%] @3xl:flex-none @3xl:border-l @3xl:border-border/60"
-      handleClassName="hidden @3xl:block"
+      {...railPanePlacement(tiles)}
       testId="bot-thread-pane"
     >
       {render(postId)}
@@ -965,6 +1052,12 @@ function useChannelThreads(args: {
   readonly unreadCountOf: (threadId: string) => number | null;
   /** The rows of the bot its host opens their own thread under. */
   readonly threadAnchorKinds: readonly string[];
+  /** The person's follows of the threads; `undefined` until read, or where the host keeps none. */
+  readonly follows: Readonly<Record<string, BotThreadFollow>> | undefined;
+  /** The person's read cursors on the bot; `undefined` until read, or where the host keeps none. */
+  readonly readCursors: BotReadCursorReadResponse | undefined;
+  /** A thread line's `newReplies`: `null` where the host keeps no read cursors. */
+  readonly newRepliesOf: (thread: BotThreadSummary) => boolean | null;
 } {
   const { client, botId, hostId, boundHostId, boundHostEpoch } = args;
   const supported = useHostMethodSupport(hostId, "bot.thread.list") === true;
@@ -1023,6 +1116,30 @@ function useChannelThreads(args: {
         : [],
     [anchors, boundHostEpoch, boundHostId, supported],
   );
+  const follows = useBotThreadFollows(botId, hostId)?.data?.follows;
+  const readCursorQuery = useBotReadCursors(botId, hostId);
+  const cursorsKept = readCursorQuery !== null;
+  const readCursors = readCursorQuery?.data;
+  const levels = useBotNotificationLevelsQuery(
+    client,
+    botId,
+    useHostMethodSupport(hostId, "bot.notificationLevel.read") === true,
+  ).data?.levels;
+  // A followed thread of a muted channel never has new replies to show
+  // (decision 138).
+  const newRepliesOf = useCallback(
+    (thread: BotThreadSummary): boolean | null =>
+      cursorsKept
+        ? threadHasNewReplies(
+            readCursors,
+            thread.threadId,
+            thread.lastReplyAt,
+            followingOf(follows, thread.threadId) !== null &&
+              !channelMuted(levels, thread.conversationId),
+          )
+        : null,
+    [cursorsKept, follows, levels, readCursors],
+  );
   return {
     supported,
     threadList,
@@ -1030,7 +1147,22 @@ function useChannelThreads(args: {
     isUnread,
     unreadCountOf,
     threadAnchorKinds,
+    follows,
+    readCursors,
+    newRepliesOf,
   };
+}
+
+/**
+ * Whether the person follows a thread without having written in it: they
+ * were mentioned in it, or chose to follow it.
+ */
+function followedUnwritten(
+  follows: Readonly<Record<string, BotThreadFollow>> | undefined,
+  threadId: string,
+): boolean {
+  const follow = followingOf(follows, threadId);
+  return follow !== null && follow.reason !== "participated";
 }
 
 /**
@@ -1124,70 +1256,153 @@ function useDisplayed(element: HTMLElement | null): boolean {
 }
 
 /**
- * Marks the channel read while the person can see it: a direct reply that
- * answered their post lights the channel's unread mark, as a verdict lights
- * its thread's (T52), and the channel transcript presented in the pane on
- * screen, in a window they are in, has been read.
+ * Advances the channel's read cursor while the person can see it: the channel
+ * transcript presented in the pane on screen, in a window they are in, has been
+ * read. The channel it presents, or `null`.
  */
 function useReadChannelWhilePresented(args: {
   readonly client: HostClient<HostRpcRegistry> | null;
-  readonly hostId: string;
   readonly botId: string;
   readonly channelId: string | null;
+  readonly readCursors: BotReadCursorReadResponse | undefined;
   readonly threadOpen: boolean;
   /** The channel's section: beside an open thread a container query hides it on a narrow pane, which only its size tells. */
   readonly section: HTMLElement | null;
-}): void {
-  const { client, hostId, botId, channelId, threadOpen, section } = args;
+}): string | null {
+  const { client, botId, channelId, threadOpen, section } = args;
   const displayed = useDisplayed(section);
-  const chatIds = useMemo(
-    () => (channelId === null ? NO_CHAT_IDS : [channelId]),
-    [channelId],
-  );
-  const chatEpicIds = useMemo(
-    () => (channelId === null ? {} : { [channelId]: botId }),
-    [botId, channelId],
-  );
-  const indicators = useNotificationIndicators({
-    hostId,
-    epicIds: NO_EPIC_IDS,
-    chatIds,
-    chatEpicIds,
-    enabled: channelId !== null,
-  });
   const presented = usePresented(!threadOpen || displayed);
-  const state =
-    channelId !== null && Object.hasOwn(indicators.chats, channelId)
-      ? indicators.chats[channelId]
-      : null;
-  const unread = state !== null && indicatorHasUnread(state);
-  const { mutate: markRead } = useNotificationMarkEntityRead(client);
-  useEffect(() => {
-    if (!presented || channelId === null || !unread) return;
-    markRead({ epicId: botId, chatId: channelId });
-  }, [botId, channelId, markRead, presented, unread]);
+  useAdvanceWhilePresented({
+    client,
+    botId,
+    conversationId: channelId,
+    readCursors: args.readCursors,
+    presented,
+  });
+  return presented ? channelId : null;
 }
 
 /**
- * Marks the open thread read while the person can see it: its panel is shown
- * in the pane on screen, in a window they are in. An unread thread kept open
- * elsewhere stays unread until they come back to it.
+ * Advances the open thread's read cursor while the person can see it: its panel
+ * is shown in the pane on screen, in a window they are in. The thread it
+ * presents, or `null`.
  */
 function useReadThreadWhilePresented(args: {
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly botId: string;
   readonly thread: BotThreadSummary | null;
-  readonly isUnread: (threadId: string) => boolean;
+  readonly readCursors: BotReadCursorReadResponse | undefined;
   /** The thread panel is rendered. */
   readonly shown: boolean;
-}): void {
-  const { client, botId, thread, isUnread, shown } = args;
+}): string | null {
+  const { client, botId, thread, shown } = args;
   const presented = usePresented(shown);
   const threadId = thread?.threadId ?? null;
-  const unread = threadId !== null && isUnread(threadId);
-  const { mutate: markRead } = useNotificationMarkEntityRead(client);
+  useAdvanceWhilePresented({
+    client,
+    botId,
+    conversationId: threadId,
+    readCursors: args.readCursors,
+    presented,
+  });
+  return presented ? threadId : null;
+}
+
+/**
+ * Moves the person's read cursor on a conversation they can see to its
+ * newest row (decision 139), as that row arrives: one advance per newest
+ * row, never while it is not presented. The read cursor's own read follows
+ * the rows (the bot's subscription reads it again as they land), so a row
+ * landing while the conversation is in view advances the cursor past it.
+ */
+function useAdvanceWhilePresented(args: {
+  readonly client: HostClient<HostRpcRegistry> | null;
+  readonly botId: string;
+  readonly conversationId: string | null;
+  readonly readCursors: BotReadCursorReadResponse | undefined;
+  readonly presented: boolean;
+}): void {
+  const { client, botId, conversationId, readCursors, presented } = args;
+  const { mutateAsync: advance } = useBotReadCursorAdvanceMutation(client);
+  const target =
+    !presented || conversationId === null || readCursors === undefined
+      ? null
+      : advanceTarget(readCursors, conversationId);
+  // The newest row advanced to, or being advanced to, per conversation: a
+  // read that has not caught up with the advance yet asks for the same row
+  // again. A failed advance is forgotten, so the row is asked for again.
+  const advanced = useRef(new Map<string, number>());
+  const targetMessageId = target?.messageId ?? null;
+  const targetSeq = target?.seq ?? null;
   useEffect(() => {
-    if (!presented || threadId === null || !unread) return;
-    markRead({ epicId: botId, chatId: threadId });
-  }, [botId, markRead, presented, threadId, unread]);
+    if (
+      conversationId === null ||
+      targetMessageId === null ||
+      targetSeq === null
+    ) {
+      return;
+    }
+    const done = advanced.current.get(conversationId);
+    if (done !== undefined && done >= targetSeq) return;
+    advanced.current.set(conversationId, targetSeq);
+    advance({
+      botId,
+      conversationId,
+      messageId: targetMessageId,
+      seq: targetSeq,
+    }).catch(() => {
+      if (advanced.current.get(conversationId) === targetSeq) {
+        advanced.current.delete(conversationId);
+      }
+    });
+  }, [advance, botId, conversationId, targetMessageId, targetSeq]);
+}
+
+/** Quotes waiting for their box, by the thread's post; `null` for the channel's. */
+type PendingQuotes = ReadonlyMap<string | null, BotComposerQuote>;
+
+/**
+ * A quote, from the channel or the thread beside it, goes into the box that
+ * is open: the thread's while a thread is open (`openPostId`), else the
+ * channel's. The box adds it after what it shows and hands it back once it
+ * has. Quotes wait per box: a thread's box not drawn yet, or closed, takes
+ * its quotes, in order, once it is drawn.
+ */
+function useBoxQuotes(openPostId: string | null): {
+  readonly quoteIntoOpenBox: QuoteSink;
+  /** The quotes waiting for the box of the thread `postId`; `null` for the channel's. */
+  readonly quoteFor: (postId: string | null) => BotComposerQuote | null;
+} {
+  const quoteCount = useRef(0);
+  const [pendingQuotes, setPendingQuotes] = useState<PendingQuotes>(
+    () => new Map(),
+  );
+  const quoteIntoOpenBox = useCallback<QuoteSink>(
+    (_chatId, snapshot) => {
+      quoteCount.current += 1;
+      const id = quoteCount.current;
+      const postId = openPostId;
+      const taken = (): void =>
+        setPendingQuotes((current) => {
+          if (current.get(postId)?.id !== id) return current;
+          const next = new Map(current);
+          next.delete(postId);
+          return next;
+        });
+      setPendingQuotes((current) => {
+        const earlier = current.get(postId)?.snapshots ?? [];
+        return new Map(current).set(postId, {
+          id,
+          snapshots: [...earlier, snapshot],
+          taken,
+        });
+      });
+      clearBrowserSelection();
+    },
+    [openPostId],
+  );
+  return {
+    quoteIntoOpenBox,
+    quoteFor: (postId) => pendingQuotes.get(postId) ?? null,
+  };
 }

@@ -233,6 +233,130 @@ describe("runner Sentry capture", () => {
     expect(process.exitCode).toBe(4);
   });
 
+  // `cli upgrade` declining a backwards move the caller explicitly asked
+  // for is a user-controlled refusal the person resolves by re-running with
+  // `--allow-downgrade` - the same kind of outcome as its host twin
+  // E_HOST_UPDATE_NOT_NEWER, which is already classified expected. A code
+  // absent from `EXPECTED_CLI_ERROR_CODES` is captured by default, so
+  // mirroring the host error's code, message and details without its
+  // classification would have sent an ordinary refusal to Sentry.
+  it("does not capture the cli-upgrade downgrade refusal, which is a user-controlled outcome", async () => {
+    const { CLI_ERROR_CODES, CliError } = await import("../errors");
+
+    await runThrowing(
+      new CliError({
+        code: CLI_ERROR_CODES.CLI_UPGRADE_NOT_NEWER,
+        message:
+          "cli upgrade: the installed cli is 1.5.2-rc.2, newer than the requested 1.5.1",
+        details: null,
+        exitCode: 1,
+      }),
+    );
+
+    expect(sentryMocks.captureException).not.toHaveBeenCalled();
+    expect(sentryMocks.addBreadcrumb).toHaveBeenCalledTimes(1);
+    const crumb = sentryMocks.addBreadcrumb.mock.calls[0][0] as Breadcrumb;
+    expect(crumb.data.code).toBe("E_CLI_UPGRADE_NOT_NEWER");
+    const terminal = terminalEnvelope();
+    expect((terminal?.error as Record<string, unknown>).code).toBe(
+      "E_CLI_UPGRADE_NOT_NEWER",
+    );
+    expect(process.exitCode).toBe(1);
+  });
+
+  // The rest of the updater's user-controlled refusals, swept once against
+  // the same classifier. Each reports a state of the install or of the
+  // request - a version the rolling feed never had, no recorded install, a
+  // package manager that owns the binary, another updater already holding the
+  // work, a bookkeeping write the next run finishes - and each is resolved by
+  // the person, from the message. None of them means the feed or the installer
+  // failed, which is the only thing this set exists to let through, so none of
+  // them may consume a Sentry event. Pinned over the group because they differ
+  // in what they tell the caller and not in how the runner answers.
+  it.each([
+    {
+      key: "CLI_UPGRADE_TARGET_UNAVAILABLE" as const,
+      expected: "E_CLI_UPGRADE_TARGET_UNAVAILABLE",
+      message:
+        "cli upgrade: --target 1.4.9 is not available. The CLI release feed publishes assets for exactly one build (1.5.1).",
+    },
+    {
+      key: "CLI_UPGRADE_NO_MANIFEST" as const,
+      expected: "E_CLI_UPGRADE_NO_MANIFEST",
+      message:
+        "cli upgrade: no CLI install manifest found for this environment.",
+    },
+    {
+      key: "CLI_UPGRADE_PACKAGE_MANAGER_OWNED" as const,
+      expected: "E_CLI_UPGRADE_PACKAGE_MANAGER_OWNED",
+      message:
+        "cli upgrade: CLI is installed via homebrew; self-upgrade is disabled to keep package-manager ownership intact.",
+    },
+    {
+      key: "HOST_UPDATE_CONCURRENT_LEGACY_UPDATER" as const,
+      expected: "E_HOST_UPDATE_CONCURRENT_LEGACY_UPDATER",
+      message: "host update: a legacy updater is holding the update marker",
+    },
+  ])(
+    "does not capture the user-controlled refusal $expected",
+    async ({ key, expected, message }) => {
+      const { CLI_ERROR_CODES, CliError } = await import("../errors");
+
+      await runThrowing(
+        new CliError({
+          code: CLI_ERROR_CODES[key],
+          message,
+          details: null,
+          exitCode: 1,
+        }),
+      );
+
+      expect(sentryMocks.captureException).not.toHaveBeenCalled();
+      expect(sentryMocks.addBreadcrumb).toHaveBeenCalledTimes(1);
+      const crumb = sentryMocks.addBreadcrumb.mock.calls[0][0] as Breadcrumb;
+      expect(crumb.data.code).toBe(expected);
+
+      const terminal = terminalEnvelope();
+      expect(terminal?.status).toBe("error");
+      const reported = terminal?.error as Record<string, unknown>;
+      expect(reported.code).toBe(expected);
+      // The remedy the person acts on is in the message, so it has to reach
+      // the caller intact even though nothing was reported.
+      expect(reported.message).toBe(message);
+      expect(process.exitCode).toBe(1);
+    },
+  );
+
+  // The near miss of that sweep, pinned so the next one does not repeat it.
+  // This code reads like a user-controlled outcome - the update DID land, and
+  // only the attempt record's completion write was refused - but the arm that
+  // raises it carries two refusal kinds under one code, and
+  // `durability-unverified` means the record's medium is broken (a symlinked
+  // path, a roundtrip mismatch). So the code as a whole is a machine fault
+  // and has to keep reaching Sentry. Quieting the other half means giving the
+  // two kinds two codes, not adding this one to the expected set.
+  it("captures the not-concluded update record, which can mean the record's medium is broken", async () => {
+    const { CLI_ERROR_CODES, CliError } = await import("../errors");
+    const err = new CliError({
+      code: CLI_ERROR_CODES.HOST_UPDATE_RECORD_NOT_CONCLUDED,
+      message:
+        "host update: 1.5.1 is installed and the host is running it. The update itself is done - only the completion write for the attempt record was refused.",
+      details: { outcome: "durability-unverified" },
+      exitCode: 1,
+    });
+
+    await runThrowing(err);
+
+    expect(sentryMocks.captureException).toHaveBeenCalledWith(err, {
+      extra: { repeatsSinceLastReport: 0 },
+    });
+    expect(sentryMocks.addBreadcrumb).not.toHaveBeenCalled();
+    // The caller still gets the full answer; capture is a separate decision.
+    const reported = terminalEnvelope()?.error as Record<string, unknown>;
+    expect(reported.code).toBe("E_HOST_UPDATE_RECORD_NOT_CONCLUDED");
+    expect(process.exitCode).toBe(1);
+  });
+
   it("leaves a breadcrumb naming the skipped code", async () => {
     const { CLI_ERROR_CODES, CliError } = await import("../errors");
 

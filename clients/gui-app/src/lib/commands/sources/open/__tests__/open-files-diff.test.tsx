@@ -60,7 +60,7 @@ vi.mock("@/lib/commands/actions", () => ({
 }));
 vi.mock("@/hooks/worktree/use-worktree-list-bindings-for-epic-query", () => ({
   // The source list reads the epic's bindings on the epic's host client
-  // (PR #1243 round 6); this suite is about the leaves, not the client.
+  // (PR #1243); this suite is about the leaves, not the client.
   useWorktreeListBindingsForEpicForClient: () => ({
     data: { rows: state.rows },
     isPending: false,

@@ -44,7 +44,7 @@ import {
 } from "@/stores/chats/chat-announcements";
 
 /**
- * F22 pure-deriver pins for `chat-announcements.ts`'s fallback exports.
+ * Pure-deriver pins for `chat-announcements.ts`'s fallback exports.
  *
  * These test the ADAPTER's frozen sentences and the OBSERVER's provenance
  * rules, entirely independent of React, the store, and the eventual
@@ -65,6 +65,7 @@ const DAY_MS = 24 * 60 * 60_000;
 // model-family prefix or a bare label string, instead of the full tuple,
 // fails loudly.
 const FAILED_TUPLE: ChatRunSettings = {
+  ultracode: false,
   harnessId: "codex",
   model: "gpt-6-astra",
   permissionMode: "supervised",
@@ -74,6 +75,7 @@ const FAILED_TUPLE: ChatRunSettings = {
   profileId: "acct-north",
 };
 const TARGET_TUPLE: ChatRunSettings = {
+  ultracode: false,
   harnessId: "codex",
   model: "gpt-6-astra-mini",
   permissionMode: "supervised",
@@ -85,6 +87,7 @@ const TARGET_TUPLE: ChatRunSettings = {
 // Duplicate account LABEL ("acct-north") as `FAILED_TUPLE`, but a different
 // provider (claude, not codex) and a different model family entirely.
 const PREFERRED_TUPLE: ChatRunSettings = {
+  ultracode: false,
   harnessId: "claude",
   model: "claude-opus-5",
   permissionMode: "supervised",
@@ -484,7 +487,7 @@ describe("fallbackTraversalAnnouncement", () => {
   });
 
   it("hold: a due-now deadline names no switch on a resume or a wait either - the class is every non-switch plan, not just notify", () => {
-    // CodeRabbit flagged `notify`. The predicate is wider: a resume attempts
+    // The predicate is wider than `notify`: a resume attempts
     // the same tuple and a wait parks until a reset, so neither has a switch
     // to be due, and both read the same false sentence before this fix.
     const dueNowFor = (
@@ -531,7 +534,7 @@ describe("fallbackTraversalAnnouncement", () => {
   });
 
   it("hold: a null plan (host found no takeable rung) states exhaustion truthfully, distinct from a genuinely still-resolving 'checking' plan and from an unresolved switch destination", () => {
-    // `impendingAction: null` on the real F5 DTO means exhaustion, not
+    // `impendingAction: null` on the real DTO means exhaustion, not
     // "still resolving" - `plan === null` here must read the same way.
     const exhausted = fallbackTraversalAnnouncement({
       pending: pendingFallback({
@@ -1287,7 +1290,7 @@ describe("fallbackAnnouncementPlan: the announcer reads the frame the card reads
 
   const RESUME_SENTENCE = `The chat will resume on ${FAILED_IDENTITY}.`;
 
-  // The live D8 frame: a profile rung whose target is the account that
+  // The live frame: a profile rung whose target is the account that
   // failed. The card said "Resuming in 12s"; the announcer said "The chat will
   // switch to" that same account.
   it("a profile rung whose target is the failed tuple announces a resume, never a switch - hold and switching", () => {

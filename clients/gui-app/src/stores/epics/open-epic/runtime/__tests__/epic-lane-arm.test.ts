@@ -1,6 +1,6 @@
 /**
  * Behavioural coverage for `createEpicLaneArm` - the composition that wires
- * T10's lane adapters to T12's replicas (status + state + per-body lanes).
+ * the lane adapters to the replicas (status + state + per-body lanes).
  *
  * `epic-lane-arm.ts`'s own module doc names four wiring obligations; this
  * suite pins the ones observable from OUTSIDE the arm, through the factory
@@ -127,7 +127,7 @@ function createCountingStatusFactory(): CountingStatusFactory {
     },
     deliverClosed(reason: StreamCloseReason): void {
       if (live === null) throw new Error("no status client was constructed");
-      live.onConnectionStatus("closed", reason);
+      live.onConnectionStatus("closed", reason, null, null);
     },
   };
 }

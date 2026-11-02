@@ -14,7 +14,7 @@ import { HOST_STORE_FORMAT_FLOOR_CODE } from "@traycer/protocol/config/host-upda
  * differently — which is the whole reason the projection is a single function
  * one layer down.
  *
- * The governing rule from the experience doc: **"Updating this host…" is not**
+ * The governing rule: **"Updating this host…" is not**
  * **sufficient. Every active operation names its phase.** So there is no generic
  * fallback string here; each arm says what is actually happening.
  */
@@ -167,7 +167,7 @@ const PHASE_SENTENCE: Record<
   applying: ({ to }) => `Installing update${to}`,
   "waiting-for-work": ({ view, cliFloorBlocked }) =>
     waitingForWorkSentence(view.blockingSessionCount, cliFloorBlocked),
-  // The plan names this string explicitly (§3.1): a parked activation must NOT
+  // A parked activation must NOT
   // keep saying "Updating". It is placed, it is waiting for a restart, and the
   // host is still serving in the meantime.
   "waiting-to-activate": () => "Update installed — restart host to finish",

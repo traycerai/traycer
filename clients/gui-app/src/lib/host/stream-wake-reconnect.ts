@@ -81,7 +81,7 @@ export function subscribeWakeSignals(
  *    probe answer can vouch for - the reply proves the NEW path works, not
  *    that the mux session survived the migration - so force the redial.
  *  - `wake-resume` with a measured background dwell (a mobile shell):
- *    T3-shaped duration gate. Under
+ *    A duration gate. Under
  *    `WAKE_FORCE_RECONNECT_AFTER_BACKGROUND_MS` the socket may well have
  *    survived the quick app switch, so probe it - but on the short
  *    backgrounded deadline, and with a failed probe redialing immediately

@@ -40,6 +40,7 @@
     "@typescript-eslint/parser": "catalog:",
     "@typescript/native-preview": "7.0.0-dev.20260707.2",
     "@vitest/web-worker": "^5.0.4",
+    "axe-core": "4.12.1",
     "concurrently": "^10.0.6",
     "esbuild": "catalog:",
     "eslint": "catalog:",

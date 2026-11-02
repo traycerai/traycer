@@ -12,7 +12,7 @@ import { USAGE_SUMMARY_RESPONSE_TIMEOUT_MS } from "@/lib/usage-analytics/usage-s
 
 /**
  * The window picker offers 7/30/90; 365 is the activity heatmap's fixed
- * year window (ticket 15), never a picker option. The wire itself accepts
+ * year window, never a picker option. The wire itself accepts
  * any positive integer (`windowDays: z.number().int().positive()`), so this
  * union is a GUI discipline, not a protocol bound.
  */
@@ -30,10 +30,10 @@ export type UsageSummaryResponse = ResponseOfMethod<
 export function buildUsageSummaryRequest(input: {
   readonly windowDays: UsageSummaryWindowDays;
   readonly epicId: string | null;
-  /** Ticket 10 addition. Chat implies its epic - `epicId` need not also be set. */
+  /** Chat implies its epic - `epicId` need not also be set. */
   readonly chatId?: string | null;
   /**
-   * Ticket 10 addition. `"epic"` bounds the read to the epic/chat's own fact
+   * `"epic"` bounds the read to the epic/chat's own fact
    * span instead of `windowDays` - only valid alongside a non-null `epicId`
    * or `chatId`. `windowDays` is still sent unconditionally (the request
    * schema requires it either way) even though the host ignores it for this
@@ -41,7 +41,7 @@ export function buildUsageSummaryRequest(input: {
    */
   readonly window?: "epic";
   /**
-   * Ticket 13 addition. `null`/absent = every host on the account - the
+   * `null`/absent = every host on the account - the
    * global dashboard's "All hosts" default. Only the dashboard sets it; the
    * epic- and chat-scoped dialogs leave it alone, because at those scopes
    * the host dimension answers a question nobody asked (an epic's work is

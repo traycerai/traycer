@@ -1,5 +1,5 @@
 /**
- * Local IndexedDB stash -> closed start-page drafts (D19). The stash schema
+ * Local IndexedDB stash -> closed start-page drafts. The stash schema
  * is driven through a real `fake-indexeddb` database, so the reader's
  * version pin and its refusal to CREATE the database are exercised for real;
  * the landing image partition is the usual `idb-keyval` fake.
@@ -243,7 +243,7 @@ describe("local stash migration", () => {
     expect(byTime[0]?.lastTouchedAt).toBeGreaterThan(
       byTime[1]?.lastTouchedAt ?? 0,
     );
-    // The active draft is the user's, never the migration's (C4).
+    // The active draft is the user's, never the migration's.
     expect(useLandingDraftStore.getState().activeDraftId).toBe("live-draft");
     // Bytes moved into this window's landing partition under the same
     // content hash, so the rewritten nodes resolve.

@@ -68,7 +68,6 @@ import {
 import { LocalRowNote } from "@/components/settings/environment/local-row-note";
 import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
 import { providerRailStateWord } from "./provider-rail-state-word";
-import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 import type { HostRpcRegistry } from "@/lib/host";
 import { HostRuntimeContext } from "@/lib/host/runtime";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
@@ -235,18 +234,7 @@ const VIEW_COPY: Readonly<
  * Providers on a Local row: the old page whole, about that one computer, so
  * its subtitle names it.
  */
-/**
- * The page's blurb in a build without environments (`unreleased-features.ts`),
- * where every host is read as its own Local row under the Host picker: what
- * the page said before environments.
- */
-const PROVIDERS_DESCRIPTION_WITHOUT_ENVIRONMENTS =
-  "Choose the CLI binary Traycer runs for each coding agent. Pick the bundled binary, one found on your PATH, or a custom install. Disable a provider to hide it when creating an agent.";
-
 function localProvidersDescription(hostName: string): string {
-  if (!UNRELEASED_FEATURES_ENABLED) {
-    return PROVIDERS_DESCRIPTION_WITHOUT_ENVIRONMENTS;
-  }
   return `Sign-ins, keys and tools for each coding agent on ${hostName}.`;
 }
 
@@ -344,8 +332,7 @@ const PROVIDER_DESCRIPTIONS: Record<ProviderId, string> = {
   "claude-code": "Anthropic's Claude Code CLI.",
   codex: "OpenAI's Codex CLI.",
   opencode: "OpenCode CLI agent.",
-  cursor:
-    "Cursor coding agent - SDK-driven agents authenticated with your Cursor API key.",
+  cursor: "Cursor's coding agent, signed in with your Cursor API key.",
   traycer:
     "Traycer's managed harness uses the selected OpenCode CLI binary. Turning it on or off changes this computer only.",
   openrouter:
@@ -1548,6 +1535,18 @@ function ProviderDetail({
           // by the body, the clip edge and the rule are the same line.
           className="flex flex-1 flex-col gap-0 md:min-h-0"
         >
+          {/* The one reason every OTHER tab is greyed, named once at the top
+              rather than left for the pointer-events-none pane to explain on
+              its own - the inert styling alone gave no reason at all. Usage
+              stays off this gate the same way it stays off the inert styling
+              below: it is deliberately still usable while the provider is
+              off, so a reader on it is not told to turn the provider on. */}
+          {detailPaneInert && activeTab !== "usage" ? (
+            <p className="px-0 pb-2 text-ui-xs text-muted-foreground">
+              {PROVIDER_DISPLAY_NAMES[providerId]} is off. Turn it on to add a
+              key or change its settings.
+            </p>
+          ) : null}
           {/* Two presentations of ONE selection, off the same `tabs` list and
               the same labels. The pointer-width rail is the line bar; below
               `md` it is a dropdown, because the bar's `flex-wrap` is what a
@@ -1929,7 +1928,7 @@ function ProviderMcpTabBody(props: {
   }
   if (personal)
     return (
-      <ConfigurationSourceBoundary target={{ kind: "personal" }}>
+      <ConfigurationSourceBoundary target={{ kind: "personal" }} section={null}>
         <EnvironmentProviderMcpTab providerId={state.providerId} />
       </ConfigurationSourceBoundary>
     );
@@ -1954,7 +1953,7 @@ function ProviderSkillsTabBody(props: {
   const personal = useEnvironmentPick().kind === "personal";
   if (personal)
     return (
-      <ConfigurationSourceBoundary target={{ kind: "personal" }}>
+      <ConfigurationSourceBoundary target={{ kind: "personal" }} section={null}>
         <EnvironmentProviderSkillsTab providerId={props.state.providerId} />
       </ConfigurationSourceBoundary>
     );

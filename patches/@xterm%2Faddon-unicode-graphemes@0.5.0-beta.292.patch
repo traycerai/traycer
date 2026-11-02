@@ -1,6 +1,3 @@
-diff --git a/node_modules/@xterm/addon-unicode-graphemes/.bun-tag-52c1201b611bc19e b/.bun-tag-52c1201b611bc19e
-new file mode 100644
-index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
 diff --git a/lib/addon-unicode-graphemes.js b/lib/addon-unicode-graphemes.js
 index eacf18406a3786014369c64398b3abdb60380996..574438deb6ab052b92b9f2e5fe120fffc35cb68c 100644
 --- a/lib/addon-unicode-graphemes.js

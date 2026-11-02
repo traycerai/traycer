@@ -41,7 +41,7 @@ import {
 } from "../support/layout-editor/waits.ts";
 import { nextFrames } from "../support/fixtures.ts";
 
-// THE TOP PLACEMENT'S TABS ARE BOXES ON THE GROUND (staging round 1, F4).
+// THE TOP PLACEMENT'S TABS ARE BOXES ON THE GROUND.
 //
 // `layout-editor-canvas.html` with `header=app` mounts the REAL `AppHeader`
 // above the task surface, on `tabs=top` with the sidebar panel on the left and
@@ -118,7 +118,7 @@ interface ThinLine {
    * The width of the single strip item (`[data-strip-item-id]`) this line
    * sits inside, or `null` off any item. A coloured tab's own edge-to-edge
    * mark (`TabColorEdgeLine`) is exactly its own item's width; a rule that
-   * actually spans the strip - the folder-baseline language F4 retired - has
+   * actually spans the strip - the retired folder-baseline language - has
    * no such bound, or exceeds it.
    */
   readonly ownItemWidth: number | null;

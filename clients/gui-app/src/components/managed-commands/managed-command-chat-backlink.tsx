@@ -19,7 +19,7 @@ export interface ManagedCommandChatBacklinkProps {
 }
 
 /**
- * The backlink every managed-command surface carries (`UI.md` §1): from a
+ * The backlink every managed-command surface carries: from a
  * command back to the agent that created it. Renders nothing when that agent
  * is not in this epic's projection - another user's private chat, or one not
  * yet hydrated - because there would be nothing to open.

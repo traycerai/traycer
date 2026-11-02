@@ -106,7 +106,7 @@ type RenderOptions = {
   readonly currentProposedBranchName: string | null;
   // Non-null while the dialog's post-save regeneration offer is up: must win
   // over `currentProposedBranchName` so Effective branch matches what the
-  // offer would stage (item 5 of the layered-settings review findings).
+  // offer would stage (layered-settings item 5).
   readonly activeRegenerateCandidate: string | null;
   readonly multiRepoSlug: string | null;
   readonly onEditingCancelAvailable: (cancel: (() => void) | null) => void;

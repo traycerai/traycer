@@ -13,7 +13,7 @@ import type { BrowserAnnotationRecord } from "@traycer/protocol/persistence/epic
 import type { ChatQueueDeliveryPolicy } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type {
-  CreateChatRequestV13,
+  CreateChatRequestV14,
   CreateChatForkSourceV11,
 } from "@traycer/protocol/host/epic/unary-schemas";
 import type { ExplicitTilePlacement } from "@/lib/canvas/tile-open/intent";
@@ -103,7 +103,7 @@ export interface PendingSandboxSendDelivery {
 
 /** The exact request remains replayable even after the account's stage is cleared. */
 export interface PendingSandboxSendDispatch {
-  readonly input: CreateChatRequestV13 & { readonly settings: ChatRunSettings };
+  readonly input: CreateChatRequestV14 & { readonly settings: ChatRunSettings };
   readonly delivery: PendingSandboxSendDelivery;
   /** A transport failure cannot say whether the host accepted the request. */
   readonly status: "sending" | "uncertain";
@@ -111,7 +111,7 @@ export interface PendingSandboxSendDispatch {
 }
 
 /**
- * A message sent to a staged sandbox (sandboxes redesign, Flow 1 step 2): the
+ * A message sent to a staged sandbox: the
  * task opened at once and the message waits in it, behind the setup line,
  * until the agent the person asked for is ready on the sandbox. The create's
  * state is the stage under {@link pendingSendSurfaceKey}; this is the message
@@ -389,10 +389,7 @@ function legacyObservationBoundary(
 }
 
 /** A pending stage's run and each async continuation need the owner's current authority. */
-export function pendingSandboxStageRunAllowed(
-  surfaceKey: string,
-  host: PendingSendFacts["host"],
-): boolean {
+export function pendingSandboxStageRunAllowed(surfaceKey: string): boolean {
   if (!surfaceKey.startsWith(PENDING_SEND_SURFACE_PREFIX)) return true;
   const id = surfaceKey.slice(PENDING_SEND_SURFACE_PREFIX.length);
   const { sends } = usePendingSandboxSendStore.getState();
@@ -404,13 +401,12 @@ export function pendingSandboxStageRunAllowed(
     "observe",
     pendingSandboxSendFacts(id, {
       ...UNKNOWN_PENDING_SEND_FACTS,
-      host,
       observation: { kind: "intent" },
       clientReady: true,
       stageStatus: stage?.phase ?? "missing",
     }),
   );
-  return plan.effects.includes("run-stage") || plan.effects.includes("wake");
+  return plan.effects.includes("run-stage");
 }
 
 /** Core runner rows/results use the same provenance decoder as visible observers. */
@@ -448,7 +444,6 @@ export function holdPendingSandboxStageObservation(
     "observe",
     pendingSandboxSendFacts(id, {
       ...UNKNOWN_PENDING_SEND_FACTS,
-      host: stage?.phase === "handoff" ? "resting" : "unknown",
       observation: { kind: "intent" },
       stageStatus: stage?.phase ?? "missing",
     }),

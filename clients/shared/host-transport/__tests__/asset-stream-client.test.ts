@@ -23,6 +23,7 @@ import {
   type AssetStreamHeader,
 } from "../asset-stream-client";
 import { WsStreamClient } from "../ws-stream-client";
+import { FakeStreamClient } from "../__testing__/fake-stream-client";
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
 import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
 
@@ -812,6 +813,111 @@ describe("AssetStreamClient", () => {
     expect(recorded.ready).toHaveLength(1);
     expect(Array.from(recorded.ready[0]?.bytes ?? [])).toEqual([9, 8, 7, 6]);
     expect(closedCount(sockets[0])).toBe(1);
+    asset.close();
+  });
+});
+
+describe("AssetStreamClient held continuity", () => {
+  function startHeld(): {
+    readonly asset: AssetStreamClient<"workspace.streamAsset">;
+    readonly recorded: RecordedCallbacks;
+    readonly session: FakeStreamClient["sessions"][number];
+  } {
+    const fake = new FakeStreamClient(true);
+    const { callbacks, recorded } = recordingCallbacks();
+    const asset = new AssetStreamClient({
+      wsStreamClient: fake,
+      method: "workspace.streamAsset",
+      params: WORKSPACE_PARAMS,
+      callbacks,
+    });
+    const session = fake.sessions[0];
+    if (session === undefined) throw new Error("no session was subscribed");
+    return { asset, recorded, session };
+  }
+
+  function emitHeader(
+    session: FakeStreamClient["sessions"][number],
+    sizeBytes: number,
+  ): void {
+    session.emit(
+      {
+        kind: "assetHeader",
+        hasBinaryPayload: false,
+        mediaType: "image/png",
+        sizeBytes,
+        width: 10,
+        height: 20,
+        contentIdentity: "blob-test",
+      },
+      null,
+    );
+  }
+
+  function emitChunk(
+    session: FakeStreamClient["sessions"][number],
+    index: number,
+    bytes: number[],
+  ): void {
+    session.emit(
+      {
+        kind: "assetChunk",
+        hasBinaryPayload: true,
+        index,
+        byteLength: bytes.length,
+      },
+      new Uint8Array(bytes),
+    );
+  }
+
+  it("keeps partial chunks across a held reconnect and assembles the continued tail without a header", () => {
+    const { asset, recorded, session } = startHeld();
+    emitHeader(session, 3);
+    emitChunk(session, 0, [1]);
+
+    session.emitContinuityStatus("reconnecting", "held");
+    session.emitContinuityStatus("open", "continued");
+    emitChunk(session, 1, [2, 3]);
+    session.emit({ kind: "assetComplete", hasBinaryPayload: false }, null);
+
+    expect(recorded.headers).toHaveLength(1);
+    expect(recorded.failures).toEqual([]);
+    expect(Array.from(recorded.ready[0]?.bytes ?? [])).toEqual([1, 2, 3]);
+    asset.close();
+  });
+
+  it("resets the partial payload on a plain reconnect and expects a fresh header", () => {
+    const { asset, recorded, session } = startHeld();
+    emitHeader(session, 3);
+    emitChunk(session, 0, [1]);
+
+    session.emitContinuityStatus("reconnecting", null);
+    session.emitContinuityStatus("open", null);
+    emitChunk(session, 0, [4, 5, 6]);
+
+    expect(recorded.failures).toEqual([
+      {
+        reason: "fatal",
+        message: "assetChunk arrived before the reconnect retry's assetHeader",
+      },
+    ]);
+    expect(recorded.ready).toEqual([]);
+    asset.close();
+  });
+
+  it("assembles only the retry's bytes after a plain reconnect's header", () => {
+    const { asset, recorded, session } = startHeld();
+    emitHeader(session, 3);
+    emitChunk(session, 0, [1]);
+
+    session.emitContinuityStatus("reconnecting", null);
+    session.emitContinuityStatus("open", null);
+    emitHeader(session, 3);
+    emitChunk(session, 0, [4, 5, 6]);
+    session.emit({ kind: "assetComplete", hasBinaryPayload: false }, null);
+
+    expect(recorded.failures).toEqual([]);
+    expect(Array.from(recorded.ready[0]?.bytes ?? [])).toEqual([4, 5, 6]);
     asset.close();
   });
 });

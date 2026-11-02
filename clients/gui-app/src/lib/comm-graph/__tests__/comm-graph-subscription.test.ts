@@ -61,7 +61,7 @@ function makeEvent(
 }
 
 function liveSubscription(entry: FakeSubscription): void {
-  entry.handlers.onStatus("live");
+  entry.handlers.onStatus("live", null);
 }
 
 describe("CommGraphSubscriptionManager", () => {
@@ -246,7 +246,7 @@ describe("CommGraphSubscriptionManager", () => {
     manager.setHostIds(["host-a"]);
 
     opened[0].handlers.onSnapshot([makeEvent({ id: 1, timestamp: 10 })], 1);
-    opened[0].handlers.onStatus("reconnecting");
+    opened[0].handlers.onStatus("reconnecting", null);
     // Rows that appeared while we were disconnected are ARRIVALS, not history,
     // so the initialization line must stay where it was first drawn.
     opened[1].handlers.onSnapshot([makeEvent({ id: 2, timestamp: 20 })], 2);
@@ -329,7 +329,7 @@ describe("CommGraphSubscriptionManager", () => {
       2,
     );
 
-    opened[0].handlers.onStatus("reconnecting");
+    opened[0].handlers.onStatus("reconnecting", null);
 
     expect(opened[0].closed).toBe(true);
     expect(opened).toHaveLength(2);
@@ -355,8 +355,8 @@ describe("CommGraphSubscriptionManager", () => {
     manager.attach();
     manager.setHostIds(["host-a"]);
 
-    opened[0].handlers.onStatus("reconnecting");
-    opened[0].handlers.onStatus("reconnecting");
+    opened[0].handlers.onStatus("reconnecting", null);
+    opened[0].handlers.onStatus("reconnecting", null);
 
     expect(opened).toHaveLength(1);
     manager.dispose();
@@ -371,15 +371,15 @@ describe("CommGraphSubscriptionManager", () => {
     manager.attach();
     manager.setHostIds(["host-a"]);
 
-    opened[0].handlers.onStatus("reconnecting");
+    opened[0].handlers.onStatus("reconnecting", null);
     expect(manager.getSnapshot().hosts[0].status).toBe("reconnecting");
 
-    opened[0].handlers.onStatus("connecting");
-    opened[0].handlers.onStatus("reconnecting");
+    opened[0].handlers.onStatus("connecting", null);
+    opened[0].handlers.onStatus("reconnecting", null);
     expect(manager.getSnapshot().hosts[0].status).toBe("unreachable");
 
     // Still muted while the session keeps retrying underneath.
-    opened[0].handlers.onStatus("connecting");
+    opened[0].handlers.onStatus("connecting", null);
     expect(manager.getSnapshot().hosts[0].status).toBe("unreachable");
     manager.dispose();
   });
@@ -389,14 +389,14 @@ describe("CommGraphSubscriptionManager", () => {
     const manager = new CommGraphSubscriptionManager("epic-1", opener);
     manager.attach();
     manager.setHostIds(["host-a"]);
-    opened[0].handlers.onStatus("reconnecting");
-    opened[0].handlers.onStatus("reconnecting");
+    opened[0].handlers.onStatus("reconnecting", null);
+    opened[0].handlers.onStatus("reconnecting", null);
     expect(manager.getSnapshot().hosts[0].status).toBe("unreachable");
 
-    opened[0].handlers.onStatus("live");
+    opened[0].handlers.onStatus("live", null);
 
     expect(manager.getSnapshot().hosts[0].status).toBe("live");
-    opened[0].handlers.onStatus("reconnecting");
+    opened[0].handlers.onStatus("reconnecting", null);
     expect(manager.getSnapshot().hosts[0].status).toBe("reconnecting");
     manager.dispose();
   });
@@ -408,7 +408,7 @@ describe("CommGraphSubscriptionManager", () => {
     manager.setHostIds(["host-a", "host-b"]);
     const [hostA, hostB] = opened;
 
-    hostA.handlers.onStatus("unsupported");
+    hostA.handlers.onStatus("unsupported", null);
     liveSubscription(hostB);
     hostB.handlers.onSnapshot([makeEvent({ id: 1, timestamp: 10 })], 1);
 
@@ -538,7 +538,9 @@ describe("CommGraphSubscriptionManager failure containment", () => {
 
     dialBroken = true;
     // The socket reports its own drop; nothing may escape that callback.
-    expect(() => opened[0].handlers.onStatus("reconnecting")).not.toThrow();
+    expect(() =>
+      opened[0].handlers.onStatus("reconnecting", null),
+    ).not.toThrow();
 
     const [hostA] = manager.getSnapshot().hosts;
     expect(hostA.status).toBe("failed");

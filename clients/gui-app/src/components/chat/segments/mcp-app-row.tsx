@@ -121,7 +121,7 @@ const WAKING_AFTER_MS = 700;
 
 /**
  * Chromium refuses camera, microphone and location to an opaque origin, so
- * only clipboard-write is passed on; the others fail closed (D41).
+ * only clipboard-write is passed on; the others fail closed.
  */
 function grantedPermissions(
   app: ToolCallMcpAppStamp,
@@ -135,7 +135,7 @@ function grantedPermissions(
 /**
  * An MCP App, rendered in place of the tool call that produced it (McpApp
  * state 1): a label line, then the app in the shared sandbox frame, with a
- * border only when the app asks for one (D40). A reader with no chat scope
+ * border only when the app asks for one. A reader with no chat scope
  * (a published transcript) sees the ordinary tool row (state 6).
  */
 export function McpAppRow(props: McpAppRowProps): ReactNode {
@@ -601,7 +601,7 @@ function LiveMcpApp(props: LiveMcpAppProps) {
                 fullscreen
                   ? "min-h-0 flex-1"
                   : // Rounded either way: a light-only app keeps its white
-                    // canvas in dark mode (D43), and a card's corners keep
+                    // canvas in dark mode, and a card's corners keep
                     // it from reading as a slab.
                     cn(
                       "overflow-hidden rounded-lg",
@@ -793,7 +793,7 @@ function AppLabelLine(props: {
   );
 }
 
-/** The hover bar's actions, for a coarse pointer (D40). */
+/** The hover bar's actions, for a coarse pointer. */
 function AppTouchActions(props: {
   readonly app: ToolCallMcpAppStamp;
   readonly showDetails: boolean;

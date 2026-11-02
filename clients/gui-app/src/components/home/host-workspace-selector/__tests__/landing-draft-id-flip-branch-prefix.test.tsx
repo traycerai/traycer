@@ -117,7 +117,7 @@ vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => "host-test",
 }));
 
-// P1.2: the picker's non-fixed arm resolves `pin ?? effective` and takes its
+// The picker's non-fixed arm resolves `pin ?? effective` and takes its
 // client from `useHostClientForHostId`. Mocked at their own boundary (like the
 // host list below) so this suite stays about the draft-id flip.
 vi.mock("@/hooks/host/use-effective-host-id", () => ({

@@ -120,7 +120,7 @@ function emitSnapshot(
   callbacks: ChatStreamCallbacks,
   lifecycle: SnapshotLifecycle,
 ): void {
-  callbacks.onConnectionStatus("open", null, null);
+  callbacks.onConnectionStatus("open", null, null, null);
   callbacks.onSnapshot({
     kind: "snapshot",
     hasBinaryPayload: false,
@@ -370,7 +370,7 @@ describe("chat-session-store turnLifecycleRevision", () => {
       });
       expect(running.handle.store.getState().turnLifecycleRevision).toBe(1);
 
-      callbacks.onConnectionStatus("closed", null, null);
+      callbacks.onConnectionStatus("closed", null, null, null);
       const closed = running.handle.store.getState();
       // The close's own state rewrite - asserted so the revision bump below
       // is read against the transition it is actually reporting, not taken
@@ -396,7 +396,7 @@ describe("chat-session-store turnLifecycleRevision", () => {
       });
       expect(idle.handle.store.getState().turnLifecycleRevision).toBe(0);
 
-      callbacks.onConnectionStatus("closed", null, null);
+      callbacks.onConnectionStatus("closed", null, null, null);
       const closed = idle.handle.store.getState();
       expect(closed.activeTurn).toBeNull();
       expect(closed.runStatus).toBe("idle");

@@ -26,7 +26,9 @@ interface PageHistory {
   /** Pages to go back to, the most recent last. There is no Forward. */
   readonly backStack: readonly string[];
   readonly missing: boolean;
-  /** Counts Back and Home, see {@link SandboxPageNavigation.visit}. */
+  /** The current page exists and its bytes did not arrive from the host. */
+  readonly unreachable: boolean;
+  /** Counts Back, Home and retry, see {@link SandboxPageNavigation.visit}. */
   readonly visit: number;
 }
 
@@ -36,6 +38,7 @@ function freshHistory(entryPath: string): PageHistory {
     currentPath: entryPath,
     backStack: [],
     missing: false,
+    unreachable: false,
     visit: 0,
   };
 }
@@ -53,6 +56,12 @@ export function ArtifactPagesFrame(props: {
   readonly className: string;
   /** The page's height in px, or `null` to fill what the row leaves. */
   readonly height: number | null;
+  /**
+   * Whether the zoom cluster is offered. A filling page zooms through its
+   * viewer script; a document served without that script has nothing to
+   * answer the buttons.
+   */
+  readonly pageZoom: boolean;
   readonly onSize: (size: SandboxSize) => void;
   readonly onStatus: (status: SandboxStatus) => void;
   readonly onBridge: ((bridge: SandboxBridgeHost | null) => void) | null;
@@ -66,6 +75,14 @@ export function ArtifactPagesFrame(props: {
    * entry page's bytes, so they are told when another page is showing.
    */
   readonly renderOverlay: ((onEntryPage: boolean) => ReactNode) | null;
+  /**
+   * Keeps the mounted document through a source change it already carries,
+   * such as the entry page's own first-comment id; `null` reloads on every
+   * change. See the frame's own `sourceEquivalent`.
+   */
+  readonly sourceEquivalent:
+    | ((previous: SandboxSource, next: SandboxSource) => boolean)
+    | undefined;
   readonly toolbarControls?: ReactNode;
 }) {
   const {
@@ -73,12 +90,14 @@ export function ArtifactPagesFrame(props: {
     title,
     className,
     height,
+    pageZoom,
     onSize,
     onStatus,
     onBridge,
     onTextSelection,
     onFrame,
     renderOverlay,
+    sourceEquivalent,
   } = props;
   const entryPath = source.entryPath === "" ? "index.html" : source.entryPath;
   const bridgeRef = useRef<SandboxBridgeHost | null>(null);
@@ -96,7 +115,7 @@ export function ArtifactPagesFrame(props: {
     current = freshHistory(entryPath);
     setHistory(current);
   }
-  const { currentPath, backStack, missing } = current;
+  const { currentPath, backStack } = current;
 
   const pageNavigation: SandboxPageNavigation = {
     path: currentPath,
@@ -104,17 +123,31 @@ export function ArtifactPagesFrame(props: {
     onNavigate: (path) => {
       setHistory((previous) =>
         path === previous.currentPath
-          ? { ...previous, missing: false }
+          ? { ...previous, missing: false, unreachable: false }
           : {
               ...previous,
               currentPath: path,
               backStack: [...previous.backStack, previous.currentPath],
               missing: false,
+              unreachable: false,
             },
       );
     },
+    // One load has one answer, so each of these displaces the other rather
+    // than stacking a second overlay on the first.
     onPageMissing: () => {
-      setHistory((previous) => ({ ...previous, missing: true }));
+      setHistory((previous) => ({
+        ...previous,
+        missing: true,
+        unreachable: false,
+      }));
+    },
+    onPageUnreachable: () => {
+      setHistory((previous) => ({
+        ...previous,
+        missing: false,
+        unreachable: true,
+      }));
     },
   };
   const goBack = (): void => {
@@ -126,6 +159,7 @@ export function ArtifactPagesFrame(props: {
         currentPath: target,
         backStack: previous.backStack.slice(0, -1),
         missing: false,
+        unreachable: false,
         visit: previous.visit + 1,
       };
     });
@@ -136,24 +170,34 @@ export function ArtifactPagesFrame(props: {
       currentPath: previous.entryPath,
       backStack: [],
       missing: false,
+      unreachable: false,
+      visit: previous.visit + 1,
+    }));
+  };
+  // The same page again, which is a reload: the server caches nothing it could
+  // not read, so this is a fresh read of the page the reader asked for.
+  const readAgain = (): void => {
+    setHistory((previous) => ({
+      ...previous,
+      unreachable: false,
       visit: previous.visit + 1,
     }));
   };
 
+  const standIn = pageStandIn(current, { goHome, readAgain });
   const fills = height === null;
+  const zooms = fills && pageZoom;
+  const navigated = currentPath !== entryPath || backStack.length > 0;
   return (
     <div className={cn("relative flex w-full flex-col", fills && "h-full")}>
-      {fills ||
-      currentPath !== entryPath ||
-      backStack.length > 0 ||
-      props.toolbarControls ? (
+      {zooms || navigated || props.toolbarControls ? (
         <div className="pointer-events-none absolute top-2 right-2 z-30 flex max-w-[calc(100%-1rem)] items-start">
           <div
             role="toolbar"
             aria-label="HTML artifact controls"
             className="pointer-events-auto flex flex-wrap items-center justify-end gap-1 rounded-md border border-border/60 bg-canvas p-0.5 shadow-sm"
           >
-            {currentPath !== entryPath || backStack.length > 0 ? (
+            {navigated ? (
               <>
                 <TooltipWrapper
                   label="Back"
@@ -190,7 +234,7 @@ export function ArtifactPagesFrame(props: {
                 </TooltipWrapper>
               </>
             ) : null}
-            {fills ? (
+            {zooms ? (
               <HtmlPageZoomControls
                 ready={ready}
                 scale={scale}
@@ -234,18 +278,65 @@ export function ArtifactPagesFrame(props: {
           }}
           onTextSelection={(selection) => onTextSelection?.(selection)}
           pageNavigation={pageNavigation}
+          sourceEquivalent={sourceEquivalent}
           ref={onFrame}
         />
-        {renderOverlay?.(currentPath === entryPath && !missing)}
-        {missing ? (
-          <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-2 bg-background p-4 text-ui-sm text-muted-foreground">
-            <span>This page is not in the artifact.</span>
-            <Button type="button" variant="outline" size="sm" onClick={goHome}>
-              Go home
-            </Button>
-          </div>
-        ) : null}
+        {renderOverlay?.(currentPath === entryPath && standIn === null)}
+        {standIn}
       </div>
+    </div>
+  );
+}
+
+/**
+ * What stands in for the page when the frame has none to show, and the way
+ * out it offers. The two answers are exclusive — one load has one answer —
+ * and they offer different ways out on purpose: a page the folder lacks was
+ * reached by a link and has the artifact's own entry page to fall back to,
+ * while a page whose bytes did not arrive exists and is worth asking for
+ * again. The second is usually the entry page itself, where Home would reload
+ * the very document that failed.
+ */
+function pageStandIn(
+  history: PageHistory,
+  actions: { readonly goHome: () => void; readonly readAgain: () => void },
+): ReactNode {
+  if (history.unreachable) {
+    return (
+      <PageStandIn
+        sentence="Couldn't load this page from its host."
+        action="Retry"
+        onAct={actions.readAgain}
+      />
+    );
+  }
+  if (history.missing) {
+    return (
+      <PageStandIn
+        sentence="This page is not in the artifact."
+        action="Go home"
+        onAct={actions.goHome}
+      />
+    );
+  }
+  return null;
+}
+
+/** Both answers replace the page, so both are announced where one is read. */
+function PageStandIn(props: {
+  readonly sentence: string;
+  readonly action: string;
+  readonly onAct: () => void;
+}) {
+  return (
+    <div
+      role="status"
+      className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-2 bg-background p-4 text-ui-sm text-muted-foreground"
+    >
+      <span>{props.sentence}</span>
+      <Button type="button" variant="outline" size="sm" onClick={props.onAct}>
+        {props.action}
+      </Button>
     </div>
   );
 }

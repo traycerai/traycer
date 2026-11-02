@@ -6,7 +6,7 @@ import type { CommandItem, ReactCommandSource } from "@/lib/commands/types";
 import { useLayoutEditorStore } from "@/stores/layout/layout-editor-store";
 
 /**
- * The palette's two layout doors (L-15, L-33, C15): "Customize layout" opens
+ * The palette's two layout doors (L-15, L-33): "Customize layout" opens
  * the editor on the sample workspace, "Layout settings" opens the same form in
  * Settings. Both outrank tasks for "layout" (`paletteFilter`).
  *

@@ -72,7 +72,7 @@ const mocks = vi.hoisted<MockState>(() => ({
 
 vi.mock("@/lib/host", () => ({
   useHostClient: () => null,
-  // The SPINE, a separate export since redesign P2.1.
+  // The SPINE, a separate export.
   useHostRuntimeClient: () => null,
 }));
 
@@ -626,8 +626,8 @@ describe("useStatusBarRateLimitSegments", () => {
     // The two cases this used to cover - a union of the automatic entry with a
     // pick, and the tightest being drawn once when it is also picked - were
     // both about a selection that said `automatic: true` AND named a window.
-    // That selection no longer exists: an empty pick list IS Automatic
-    // (R1-15), so there is one list to draw and no union to de-duplicate. What
+    // That selection no longer exists: an empty pick list IS Automatic,
+    // so there is one list to draw and no union to de-duplicate. What
     // survives of the pair is the ORDER claim, which is the filter's own.
     it("draws explicit picks in catalog order rather than pick order", () => {
       codexSelection({ limitKeys: ["codex:secondary", "codex:primary"] });

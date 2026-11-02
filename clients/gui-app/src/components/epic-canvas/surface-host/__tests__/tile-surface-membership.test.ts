@@ -37,6 +37,7 @@ import {
 import {
   collectCanvasWideRetainedChatMembership,
   getTileSurfaceMembership,
+  mobileSecondaryChatMembership,
   resetTileSurfaceMembershipForTesting,
   subscribeTileSurfaceMembership,
 } from "@/components/epic-canvas/surface-host/tile-surface-membership";
@@ -298,6 +299,57 @@ describe("collectCanvasWideRetainedChatMembership (layer 1, pure)", () => {
       },
     });
     expect(membership.size).toBe(0);
+  });
+});
+
+describe("mobileSecondaryChatMembership (the phone shell's second tile, pure)", () => {
+  afterEach(() => resetChatRemoteDeletionRegistryForTesting());
+
+  function canvasOfTiles(tiles: ReadonlyArray<EpicNodeRef>): EpicCanvasState {
+    return {
+      root: pane(
+        "p1",
+        tiles.map((tile) => tile.instanceId),
+      ),
+      activePaneId: "p1",
+      tilesByInstanceId: Object.fromEntries(
+        tiles.map((tile) => [tile.instanceId, tile]),
+      ),
+      sizesByGroupId: {},
+    };
+  }
+
+  it("admits a chat the slot names, attributed to the slot's tab", () => {
+    const membership = mobileSecondaryChatMembership(
+      { "tab-1": canvasOfTiles([chatRef("chat-a"), chatRef("chat-b")]) },
+      { "tab-1": { instanceId: "chat-b", transient: false } },
+    );
+    expect([...membership]).toEqual([["chat-b", "tab-1"]]);
+  });
+
+  it("admits no artifact, however the slot names it", () => {
+    const membership = mobileSecondaryChatMembership(
+      { "tab-1": canvasOfTiles([terminalRef("term-a")]) },
+      { "tab-1": { instanceId: "term-a", transient: false } },
+    );
+    expect(membership.size).toBe(0);
+  });
+
+  it("admits no tile that has left the canvas, or a chat that is remote-deleted", () => {
+    const canvas = canvasOfTiles([chatRef("chat-a")]);
+    expect(
+      mobileSecondaryChatMembership(
+        { "tab-1": canvas },
+        { "tab-1": { instanceId: "chat-gone", transient: true } },
+      ).size,
+    ).toBe(0);
+    reportChatRemoteDeletionState("chat-a", true);
+    expect(
+      mobileSecondaryChatMembership(
+        { "tab-1": canvas },
+        { "tab-1": { instanceId: "chat-a", transient: false } },
+      ).size,
+    ).toBe(0);
   });
 });
 
@@ -792,7 +844,7 @@ describe("tile surface membership - live store integration", () => {
 
   it("add-background: openTileInBackgroundTab does not touch active-chat membership", () => {
     // Correction vs brief: `openTileInPane` always activates the new tab
-    // (and would deselect the prior active chat under decision #17). The
+    // (and would deselect the prior active chat under the old policy). The
     // real "add background without switching active tab" store action is
     // `openTileInBackgroundTab`.
     useEpicCanvasStore.setState({
@@ -960,7 +1012,7 @@ describe("design-review F2: shared eligibility discriminator (remote-deletion)",
       // Mirrors what `TileSurfaceSlot` does once mounted for a real hosted
       // chat - a published environment is the thing that would otherwise
       // linger as a second, orphaned owner alongside the inline
-      // `DeletedArtifactBody` (design-review slice-4 finding 2).
+      // `DeletedArtifactBody`.
       publishTileSurfaceEnvironment(
         buildSyntheticTileSurfaceEnvironment("chat-1", {
           placement: {

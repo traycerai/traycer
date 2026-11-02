@@ -26,7 +26,7 @@ import type { LayoutValues } from "@/lib/layout/layout-values";
 import type { RegionId } from "@/lib/layout/region-id";
 
 /**
- * Structural parity (P2, L-11, L-53), at the level a unit test can decide: a
+ * Structural parity (L-11, L-53), at the level a unit test can decide: a
  * picture of a region is drawn BY the component the app draws that region
  * with, that component really paints, and the regions that cannot work this
  * way are enumerated rather than discovered.
@@ -394,7 +394,7 @@ describe("the depiction layer's imports", () => {
    * their pictures WITHOUT the host frame - the same region, two looks. One
    * way in is what stops that coming back.
    *
-   * Asked of the app rather than of the declaration's spelling (G3-17): what
+   * Asked of the app rather than of the declaration's spelling: what
    * matters is that no module OUTSIDE this one reads the table, which a
    * reflowed `const` or a second export under another name would both leave
    * true or false independently of how the declaration is written.

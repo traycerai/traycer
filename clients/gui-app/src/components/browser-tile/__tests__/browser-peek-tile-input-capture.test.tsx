@@ -1788,7 +1788,7 @@ describe("BrowserPeekTile input capture", () => {
     ]);
   });
   it("withholds pointer input while the tile is on its connecting loader", () => {
-    // The host stopped the cast to attempt video (ticket 26), so the frame
+    // The host stopped the cast to attempt video, so the frame
     // that was on screen is retired and nothing has replaced it yet. There is
     // no box to normalize a pointer against, and aiming at a surface the
     // viewer cannot see is worse than dropping the frame. Epoch correlation

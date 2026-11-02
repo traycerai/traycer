@@ -8,8 +8,8 @@ import {
  * Client apply rule for `drafts.subscribe` frames.
  *
  * The protocol helper is the merge rule against `snapshotSeq` / held
- * revision (T4 MUST: never treat an omitted list id as apply-any). The
- * extra local-dirty gate is the client-plan overlay: unsynced edits stay
+ * revision (never treat an omitted list id as apply-any). The
+ * extra local-dirty gate is a client-side overlay: unsynced edits stay
  * in place and win by arriving last on the host LWW upsert.
  */
 export function clientDraftSubscribeFrameApplies(input: {

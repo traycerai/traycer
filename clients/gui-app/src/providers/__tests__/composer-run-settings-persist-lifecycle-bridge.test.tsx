@@ -7,6 +7,7 @@ import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-sett
 import { composerRunSettingsKey } from "@/lib/persist";
 
 const ALICE_SETTINGS: ChatRunSettings = {
+  ultracode: false,
   harnessId: "codex",
   model: "gpt-5-codex",
   permissionMode: "supervised",
@@ -17,6 +18,7 @@ const ALICE_SETTINGS: ChatRunSettings = {
 };
 
 const BOB_SETTINGS: ChatRunSettings = {
+  ultracode: false,
   harnessId: "claude",
   model: "sonnet-4.5",
   permissionMode: "full_access",

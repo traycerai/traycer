@@ -1157,7 +1157,7 @@ describe('<LocalHostRestartFlow /> - firstLeg="service" (the lifecycle card idle
   });
 
   it("a host identity change between render and confirm refuses instead of dispatching", async () => {
-    // Same mutable-binding technique as the cooperative-arm "Finding 1" test
+    // Same mutable-binding technique as the cooperative-arm test
     // above: `getLocalEntry` is swapped out from under the mounted component
     // after the confirm dialog is already open, no re-render.
     const mutableBinding: {

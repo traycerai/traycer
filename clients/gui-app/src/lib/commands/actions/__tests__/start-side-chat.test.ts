@@ -49,6 +49,7 @@ const USER_ID = "user-1";
 const SOURCE_CHAT_ID = "source-chat-1";
 
 const SETTINGS: ChatRunSettings = {
+  ultracode: false,
   harnessId: "claude",
   model: "sonnet-4.5",
   permissionMode: "supervised",

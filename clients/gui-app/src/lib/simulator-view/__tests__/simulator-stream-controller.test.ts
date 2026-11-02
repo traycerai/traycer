@@ -67,6 +67,7 @@ class CodedStreamSession extends FakeStreamSession {
         },
       },
       null,
+      null,
     );
   }
 }
@@ -103,12 +104,35 @@ interface Harness {
   readonly session: () => CodedStreamSession;
 }
 
+/** Like {@link CodedStreamClient}, but its sessions have not opened yet. */
+class UnopenedStreamClient extends CodedStreamClient {
+  override subscribe(method: string, params: unknown): CodedStreamSession {
+    const session = new CodedStreamSession();
+    this.sessions.push(session);
+    this.subscribes.push({ method, params });
+    return session;
+  }
+}
+
 function harness(
   platform: "ios" | "android",
   supported: boolean,
   preferMjpeg: boolean,
 ): Harness {
-  const client = new CodedStreamClient(true);
+  return harnessOn(
+    new CodedStreamClient(true),
+    platform,
+    supported,
+    preferMjpeg,
+  );
+}
+
+function harnessOn(
+  client: CodedStreamClient,
+  platform: "ios" | "android",
+  supported: boolean,
+  preferMjpeg: boolean,
+): Harness {
   const codec = fakeCodecRuntime(supported);
   const sink = recordingSink();
   const states: SimulatorStreamState[] = [];
@@ -455,10 +479,13 @@ describe("simulator stream controller", () => {
   });
 
   it("gives up after the first-frame window with a Reconnect, and restart opens a new stream", () => {
-    const h = harness("ios", true, false);
+    const h = harnessOn(new UnopenedStreamClient(true), "ios", true, false);
     h.controller.start();
+    vi.advanceTimersByTime(SIMULATOR_FIRST_FRAME_TIMEOUT_MS / 2);
+    h.session().emitStatus("open");
     emitConfig(h.session(), IOS_CONFIG);
-    vi.advanceTimersByTime(SIMULATOR_FIRST_FRAME_TIMEOUT_MS);
+    // The first open keeps the deadline that start() already armed.
+    vi.advanceTimersByTime(SIMULATOR_FIRST_FRAME_TIMEOUT_MS / 2);
     expect(h.controller.getState()).toMatchObject({
       lifecycle: "error",
       terminal: false,
@@ -540,6 +567,206 @@ describe("simulator stream controller", () => {
     emitVideo(h.session(), "keyframe", ANNEX_B_KEYFRAME);
     h.codec.decoders.at(-1)?.emitFrame(1179, 2556);
     expect(h.controller.getState().lifecycle).toBe("streaming");
+  });
+
+  describe("while the host holds the stream", () => {
+    async function streamingH264(): Promise<Harness> {
+      const h = harness("ios", true, false);
+      h.controller.start();
+      emitConfig(h.session(), IOS_CONFIG);
+      emitVideo(h.session(), "description", AVCC_DESCRIPTION);
+      await flushAsync();
+      emitVideo(h.session(), "keyframe", ANNEX_B_KEYFRAME);
+      h.codec.decoders[0].emitFrame(1179, 2556);
+      expect(h.controller.getState().lifecycle).toBe("streaming");
+      return h;
+    }
+
+    it("reads as reconnecting while held, then streams on the same decoder after a continued open with no new keyframe", async () => {
+      const h = await streamingH264();
+
+      h.session().emitContinuityStatus("reconnecting", "held");
+      expect(h.controller.getState()).toMatchObject({
+        lifecycle: "reconnecting",
+        stalled: false,
+      });
+      expect(h.controller.getState().input.connected).toBe(false);
+      vi.advanceTimersByTime(SIMULATOR_FIRST_FRAME_TIMEOUT_MS * 2);
+      expect(h.controller.getState().lifecycle).toBe("reconnecting");
+
+      h.session().emitContinuityStatus("open", "continued");
+      expect(h.controller.getState()).toMatchObject({
+        lifecycle: "streaming",
+        stalled: false,
+      });
+      vi.advanceTimersByTime(200 * SIMULATOR_STALL_GAP_FRAME_INTERVALS);
+      expect(h.controller.getState().stalled).toBe(true);
+      // The host never restarts the unit stream, so a delta is decodable.
+      emitVideo(h.session(), "delta", ANNEX_B_DELTA);
+      h.codec.decoders[0].emitFrame(1179, 2556);
+      expect(h.controller.getState().stalled).toBe(false);
+      expect(h.codec.decoders).toHaveLength(1);
+      expect(h.codec.decoders[0].chunks).toHaveLength(2);
+      expect(h.client.sessions).toHaveLength(1);
+    });
+
+    it("keeps the MJPEG plane across a held drop and a continued open", () => {
+      setMobileAppPlatform("ios");
+      const h = harness("ios", true, prefersMjpegFirst());
+      h.controller.start();
+      const mjpeg = { ...IOS_CONFIG, codec: "mjpeg" } as const;
+      emitConfig(h.session(), mjpeg);
+      emitVideo(h.session(), "jpeg", new Uint8Array([0xff, 0xd8, 0xff, 0xd9]));
+      expect(h.controller.getState().plane).toBe("image");
+
+      h.session().emitContinuityStatus("reconnecting", "held");
+      expect(h.controller.getState().lifecycle).toBe("reconnecting");
+      h.session().emitContinuityStatus("open", "continued");
+
+      expect(h.controller.getState()).toMatchObject({
+        lifecycle: "streaming",
+        plane: "image",
+      });
+    });
+
+    describe("held on the initial subscribe, before the transport's first frame", () => {
+      function unopened(): Harness {
+        return harnessOn(new UnopenedStreamClient(true), "ios", true, false);
+      }
+
+      it("reads streaming on the first frame once the stream opens", async () => {
+        const h = unopened();
+        h.controller.start();
+
+        h.session().emitContinuityStatus("reconnecting", "held");
+        h.session().emitContinuityStatus("open", null);
+        emitConfig(h.session(), IOS_CONFIG);
+        emitVideo(h.session(), "description", AVCC_DESCRIPTION);
+        await flushAsync();
+        emitVideo(h.session(), "keyframe", ANNEX_B_KEYFRAME);
+        h.codec.decoders.at(-1)?.emitFrame(1179, 2556);
+
+        expect(h.controller.getState().lifecycle).toBe("streaming");
+      });
+
+      it("keeps the first-frame window running once the stream opens", () => {
+        const h = unopened();
+        h.controller.start();
+
+        h.session().emitContinuityStatus("reconnecting", "held");
+        h.session().emitContinuityStatus("open", null);
+        vi.advanceTimersByTime(SIMULATOR_FIRST_FRAME_TIMEOUT_MS);
+
+        expect(h.controller.getState()).toMatchObject({
+          lifecycle: "error",
+          detail: SIMULATOR_NO_VIDEO_MESSAGE,
+        });
+      });
+    });
+
+    describe("held after a plain reconnect, before the new cycle's first frame", () => {
+      it("reads streaming on the new cycle's first frame instead of staying masked as reconnecting", async () => {
+        const h = await streamingH264();
+
+        h.session().emitStatus("reconnecting");
+        h.session().emitContinuityStatus("reconnecting", "held");
+        h.session().emitContinuityStatus("open", null);
+        emitConfig(h.session(), IOS_CONFIG);
+        emitVideo(h.session(), "description", AVCC_DESCRIPTION);
+        await flushAsync();
+        emitVideo(h.session(), "keyframe", ANNEX_B_KEYFRAME);
+        h.codec.decoders.at(-1)?.emitFrame(1179, 2556);
+
+        expect(h.controller.getState().lifecycle).toBe("streaming");
+      });
+
+      it("rearms the first-frame window for the new cycle", async () => {
+        const h = await streamingH264();
+
+        h.session().emitStatus("reconnecting");
+        h.session().emitContinuityStatus("reconnecting", "held");
+        h.session().emitContinuityStatus("open", null);
+        vi.advanceTimersByTime(SIMULATOR_FIRST_FRAME_TIMEOUT_MS);
+
+        expect(h.controller.getState()).toMatchObject({
+          lifecycle: "error",
+          detail: SIMULATOR_NO_VIDEO_MESSAGE,
+        });
+      });
+    });
+
+    it("waits for a fresh keyframe once the hold ends", async () => {
+      const h = await streamingH264();
+
+      h.session().emitContinuityStatus("reconnecting", "held");
+      h.session().emitContinuityStatus("reconnecting", null);
+      h.session().emitContinuityStatus("open", null);
+      vi.advanceTimersByTime(200 * SIMULATOR_STALL_GAP_FRAME_INTERVALS);
+      expect(h.controller.getState().stalled).toBe(false);
+      emitVideo(h.session(), "delta", ANNEX_B_DELTA);
+      expect(h.codec.decoders.at(-1)?.chunks).toHaveLength(0);
+
+      emitVideo(h.session(), "keyframe", ANNEX_B_KEYFRAME);
+      h.codec.decoders.at(-1)?.emitFrame(1179, 2556);
+      expect(h.controller.getState().lifecycle).toBe("streaming");
+      vi.advanceTimersByTime(200 * SIMULATOR_STALL_GAP_FRAME_INTERVALS);
+      expect(h.controller.getState().stalled).toBe(true);
+    });
+
+    it.each(["initial", "streaming"] as const)(
+      "starts a fresh no-video deadline after an expired hold on the %s stream",
+      async (phase) => {
+        const h =
+          phase === "streaming"
+            ? await streamingH264()
+            : harnessOn(new UnopenedStreamClient(true), "ios", true, false);
+        if (phase === "initial") h.controller.start();
+
+        h.session().emitContinuityStatus("reconnecting", "held");
+        vi.advanceTimersByTime(SIMULATOR_FIRST_FRAME_TIMEOUT_MS * 2);
+        expect(h.controller.getState()).toMatchObject({
+          lifecycle: "reconnecting",
+          stalled: false,
+          detail: null,
+        });
+
+        h.session().emitContinuityStatus("reconnecting", null);
+        vi.advanceTimersByTime(SIMULATOR_FIRST_FRAME_TIMEOUT_MS * 2);
+        expect(h.controller.getState().lifecycle).toBe("reconnecting");
+        h.session().emitContinuityStatus("open", null);
+        vi.advanceTimersByTime(SIMULATOR_FIRST_FRAME_TIMEOUT_MS - 1);
+        expect(h.controller.getState()).toMatchObject({
+          lifecycle: "reconnecting",
+          stalled: false,
+        });
+        vi.advanceTimersByTime(1);
+
+        expect(h.controller.getState()).toMatchObject({
+          lifecycle: "error",
+          detail: SIMULATOR_NO_VIDEO_MESSAGE,
+        });
+        expect(h.session().closed).toBe(true);
+      },
+    );
+
+    it("waits through a plain outage, then times out if the fresh cycle sends no video", async () => {
+      const h = await streamingH264();
+
+      h.session().emitStatus("reconnecting");
+      vi.advanceTimersByTime(SIMULATOR_FIRST_FRAME_TIMEOUT_MS * 2);
+      expect(h.controller.getState()).toMatchObject({
+        lifecycle: "reconnecting",
+        detail: null,
+        stalled: false,
+      });
+      h.session().emitStatus("open");
+      vi.advanceTimersByTime(SIMULATOR_FIRST_FRAME_TIMEOUT_MS);
+
+      expect(h.controller.getState()).toMatchObject({
+        lifecycle: "error",
+        detail: SIMULATOR_NO_VIDEO_MESSAGE,
+      });
+    });
   });
 
   describe("a quiet hub", () => {

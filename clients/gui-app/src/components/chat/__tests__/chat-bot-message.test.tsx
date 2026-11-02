@@ -87,8 +87,6 @@ function channelPresentation(
 ): ChatBotPresentation {
   return {
     botTitle: "Release Bot",
-    scrollToMessage: null,
-    replyFollowsPost: null,
     threadLine,
     openThread,
     openAnnouncementThread: null,
@@ -188,7 +186,6 @@ describe("<ChatMessage /> in a bot channel", () => {
     );
     expect(screen.queryByTestId("conversation-request")).toBeNull();
     expect(within(row).queryByText("Resolved")).toBeNull();
-    expect(screen.queryByTestId("conversation-request-reply-link")).toBeNull();
   });
 
   it("draws no badge on a post whose request is unresolved", () => {
@@ -219,6 +216,8 @@ describe("<ChatMessage /> in a bot channel", () => {
           unread: false,
           unreadCount: 0,
           replying: false,
+          followedUnwritten: false,
+          newReplies: false,
         }),
         openThread,
       ),
@@ -235,6 +234,119 @@ describe("<ChatMessage /> in a bot channel", () => {
     expect(openThread).toHaveBeenCalledWith(POST_ID);
   });
 
+  it.each([
+    [true, 1],
+    [false, 0],
+  ])(
+    "marks the thread line as followed when followedUnwritten is %s",
+    (followedUnwritten, count) => {
+      renderRow(
+        memberPost(undefined),
+        channelPresentation(
+          () => ({
+            participants: [],
+            replyCount: 2,
+            lastReplyAt: Date.now() - 5 * 60_000,
+            unread: false,
+            unreadCount: 0,
+            replying: false,
+            followedUnwritten,
+            newReplies: false,
+          }),
+          vi.fn(),
+        ),
+      );
+
+      const line = screen.getByTestId("bot-thread-line");
+      expect(
+        within(line).queryAllByTestId("bot-thread-following-mark"),
+      ).toHaveLength(count);
+      if (count === 1) {
+        expect(
+          within(line).getByTestId("bot-thread-following-mark").textContent,
+        ).toBe("following");
+      }
+    },
+  );
+
+  it.each([
+    [true, 1, "true"],
+    [false, 0, "false"],
+  ])(
+    "says new replies on the thread line when newReplies is %s",
+    (newReplies, count, attribute) => {
+      renderRow(
+        memberPost(undefined),
+        channelPresentation(
+          () => ({
+            participants: [],
+            replyCount: 2,
+            lastReplyAt: Date.now() - 5 * 60_000,
+            unread: false,
+            unreadCount: 0,
+            replying: false,
+            followedUnwritten: false,
+            newReplies,
+          }),
+          vi.fn(),
+        ),
+      );
+
+      const line = screen.getByTestId("bot-thread-line");
+      expect(line.getAttribute("data-new-replies")).toBe(attribute);
+      expect(
+        within(line).queryAllByTestId("bot-thread-new-replies"),
+      ).toHaveLength(count);
+    },
+  );
+
+  it.each([
+    { label: "a caught-up line", unread: true, newReplies: false, bold: false },
+    {
+      label: "an unread line where the host keeps no cursor",
+      unread: true,
+      newReplies: null,
+      bold: true,
+    },
+    {
+      label: "a line with new replies",
+      unread: false,
+      newReplies: true,
+      bold: true,
+    },
+    {
+      label: "a read line where the host keeps no cursor",
+      unread: false,
+      newReplies: null,
+      bold: false,
+    },
+  ])(
+    "draws the reply count of $label bold: $bold",
+    ({ unread, newReplies, bold }) => {
+      renderRow(
+        memberPost(undefined),
+        channelPresentation(
+          () => ({
+            participants: [],
+            replyCount: 2,
+            lastReplyAt: Date.now() - 5 * 60_000,
+            unread,
+            unreadCount: unread ? 1 : 0,
+            replying: false,
+            followedUnwritten: false,
+            newReplies,
+          }),
+          vi.fn(),
+        ),
+      );
+
+      const count = within(screen.getByTestId("bot-thread-line")).getByText(
+        "2 replies",
+      );
+      expect(count.className.includes("font-bold")).toBe(bold);
+    },
+  );
+
   it("offers Reply in thread among a member post's hover actions, with no thread line until the thread has a reply", async () => {
     const user = userEvent.setup();
     const openThread = vi.fn<(postMessageId: string) => void>();
@@ -248,6 +360,8 @@ describe("<ChatMessage /> in a bot channel", () => {
           unread: false,
           unreadCount: 0,
           replying: false,
+          followedUnwritten: false,
+          newReplies: false,
         }),
         openThread,
       ),
@@ -286,6 +400,8 @@ describe("<ChatMessage /> in a bot channel", () => {
           unread: false,
           unreadCount: 0,
           replying: true,
+          followedUnwritten: false,
+          newReplies: false,
         }),
         vi.fn(),
       ),
@@ -313,6 +429,8 @@ describe("<ChatMessage /> in a bot channel", () => {
           unread: false,
           unreadCount: 0,
           replying: false,
+          followedUnwritten: false,
+          newReplies: false,
         }),
         vi.fn(),
       ),
@@ -350,6 +468,8 @@ describe("<ChatMessage /> in a bot channel", () => {
           unread: false,
           unreadCount: 0,
           replying: false,
+          followedUnwritten: false,
+          newReplies: false,
         }),
         vi.fn(),
       ),
@@ -381,6 +501,8 @@ describe("<ChatMessage /> in a bot channel", () => {
           unread: true,
           unreadCount: null,
           replying: false,
+          followedUnwritten: false,
+          newReplies: null,
         }),
         vi.fn(),
       ),
@@ -401,6 +523,8 @@ describe("<ChatMessage /> in a bot channel", () => {
           unread: false,
           unreadCount: null,
           replying: false,
+          followedUnwritten: false,
+          newReplies: false,
         }),
         vi.fn(),
       ),
@@ -422,6 +546,8 @@ describe("<ChatMessage /> in a bot channel", () => {
           unread: true,
           unreadCount: 2,
           replying: false,
+          followedUnwritten: false,
+          newReplies: null,
         }),
         vi.fn(),
       ),
@@ -446,6 +572,8 @@ describe("<ChatMessage /> in a bot channel", () => {
           unread: false,
           unreadCount: 0,
           replying: false,
+          followedUnwritten: false,
+          newReplies: false,
         }),
         vi.fn(),
       ),
@@ -457,9 +585,7 @@ describe("<ChatMessage /> in a bot channel", () => {
 });
 
 describe("<ChatMessage /> in a bot thread", () => {
-  it("draws no thread line, and a resolved request's See reply lands the list on the reply", async () => {
-    const user = userEvent.setup();
-    const scrollToMessage = vi.fn<(messageId: string) => void>();
+  it("draws no thread line under a resolved request", () => {
     renderRow(
       memberPost({
         requestId: "req-3",
@@ -468,7 +594,6 @@ describe("<ChatMessage /> in a bot thread", () => {
       }),
       {
         botTitle: "Release Bot",
-        scrollToMessage,
         threadLine: null,
         openThread: null,
         openAnnouncementThread: null,
@@ -479,20 +604,11 @@ describe("<ChatMessage /> in a bot thread", () => {
         failedRecovery: null,
         replyReceipt: null,
         requestReceipt: null,
-        replyFollowsPost: null,
       },
     );
 
     expect(screen.queryByTestId("bot-thread-line")).toBeNull();
     expect(screen.queryByTestId("bot-message-actions")).toBeNull();
-    const link = screen.getByTestId("conversation-request-reply-link");
-    expect(link.textContent).toBe("See reply");
-    expect(scrollToMessage).not.toHaveBeenCalled();
-
-    await user.click(link);
-
-    expect(scrollToMessage).toHaveBeenCalledTimes(1);
-    expect(scrollToMessage).toHaveBeenCalledWith("reply-9");
   });
 });
 
@@ -778,30 +894,11 @@ describe("<ChatMessage /> a message the bot failed to answer", () => {
     expect(screen.queryByTestId("bot-message-edit")).toBeNull();
     expect(screen.queryByTestId("bot-message-unanswered")).toBeNull();
   });
-
-  it("shows no See reply on a request a later message of the member's took over", () => {
-    renderRow(
-      memberPost({
-        requestId: "req-replaced",
-        resolvedAt: 5_000,
-        resolvedByMessageId: "conversation-request:req-new",
-      }),
-      {
-        ...channelPresentation(NO_THREAD_LINE, vi.fn()),
-        scrollToMessage: vi.fn(),
-      },
-    );
-
-    expect(screen.getByText("Please review the release")).toBeTruthy();
-    expect(screen.queryByTestId("conversation-request-reply-link")).toBeNull();
-  });
 });
 
 describe("<ChatMessage /> bot rows", () => {
   const presentation: ChatBotPresentation = {
     botTitle: "Release Bot",
-    scrollToMessage: null,
-    replyFollowsPost: null,
     threadLine: null,
     openThread: null,
     openAnnouncementThread: null,
@@ -926,8 +1023,6 @@ describe("<ChatMessage /> bot row choices and announcement threads", () => {
   }): ChatBotPresentation {
     return {
       botTitle: "Release Bot",
-      scrollToMessage: null,
-      replyFollowsPost: null,
       threadLine: input.threadLine,
       openThread: null,
       openAnnouncementThread: input.openAnnouncementThread,
@@ -1061,6 +1156,8 @@ describe("<ChatMessage /> bot row choices and announcement threads", () => {
         unread: false,
         unreadCount: 0,
         replying: false,
+        followedUnwritten: false,
+        newReplies: false,
       }));
       const openAnnouncementThread = vi.fn<(announcementId: string) => void>();
       renderRow(
@@ -1123,6 +1220,8 @@ describe("<ChatMessage /> bot row choices and announcement threads", () => {
         unread: false,
         unreadCount: 0,
         replying: false,
+        followedUnwritten: false,
+        newReplies: false,
       }));
       renderRow(announcementRow(kind), {
         ...withActions({
@@ -1192,8 +1291,6 @@ describe("<ChatMessage /> direct replies in a bot channel", () => {
   const REPLY_ID = "reply-9";
   const CHANNEL: ChatBotPresentation = {
     botTitle: "Release Bot",
-    scrollToMessage: null,
-    replyFollowsPost: null,
     threadLine: NO_THREAD_LINE,
     openThread: null,
     openAnnouncementThread: null,
@@ -1206,13 +1303,13 @@ describe("<ChatMessage /> direct replies in a bot channel", () => {
     requestReceipt: null,
   };
 
-  function resolvedPost(direct: boolean): ChatMessageModel {
-    const request: ConversationRequest = {
+  function resolvedDirectPost(): ChatMessageModel {
+    return memberPost({
       requestId: "req-d",
       resolvedAt: 5_000,
       resolvedByMessageId: REPLY_ID,
-    };
-    return memberPost(direct ? { ...request, direct: true } : request);
+      direct: true,
+    });
   }
 
   it("opens the thread box under a direct post, not a post thread", async () => {
@@ -1256,45 +1353,11 @@ describe("<ChatMessage /> direct replies in a bot channel", () => {
     expect(openAnnouncementThread).not.toHaveBeenCalled();
   });
 
-  it("jumps from a resolved direct post to the reply that is in the channel", async () => {
-    const user = userEvent.setup();
-    const scrollToMessage = vi.fn<(messageId: string) => void>();
-    renderRow(resolvedPost(true), {
-      ...CHANNEL,
-      scrollToMessage,
-      replyFollowsPost: () => false,
-    });
+  it("draws no link to the reply under a resolved direct post", () => {
+    renderRow(resolvedDirectPost(), CHANNEL);
 
-    const link = screen.getByTestId("conversation-request-reply-link");
-    expect(link.textContent).toBe("See reply");
-
-    await user.click(link);
-
-    expect(scrollToMessage).toHaveBeenCalledTimes(1);
-    expect(scrollToMessage).toHaveBeenCalledWith(REPLY_ID);
-  });
-
-  it("offers no jump from a resolved direct post whose reply is the very next row", () => {
-    const replyFollowsPost = vi.fn<(post: string, reply: string) => boolean>(
-      () => true,
-    );
-    renderRow(resolvedPost(true), {
-      ...CHANNEL,
-      scrollToMessage: vi.fn(),
-      replyFollowsPost,
-    });
-
-    expect(replyFollowsPost).toHaveBeenCalledWith(POST_ID, REPLY_ID);
-    expect(screen.queryByTestId("conversation-request-reply-link")).toBeNull();
-  });
-
-  it("offers no jump from a resolved post that is not direct, whose reply is in its thread", () => {
-    renderRow(resolvedPost(false), {
-      ...CHANNEL,
-      scrollToMessage: vi.fn(),
-    });
-
-    expect(screen.queryByTestId("conversation-request-reply-link")).toBeNull();
+    expect(screen.getByText("Please review the release")).toBeTruthy();
+    expect(screen.queryByText("See reply")).toBeNull();
   });
 
   it("opens a direct reply's own thread from its hover action, by the reply's id and not the post's, where the bot's host takes replies under one", async () => {
@@ -1338,6 +1401,8 @@ describe("<ChatMessage /> direct replies in a bot channel", () => {
       unread: false,
       unreadCount: 0,
       replying: false,
+      followedUnwritten: false,
+      newReplies: false,
     }));
     renderRow(
       {
@@ -1370,6 +1435,8 @@ describe("<ChatMessage /> direct replies in a bot channel", () => {
             unread: false,
             unreadCount: 0,
             replying: false,
+            followedUnwritten: false,
+            newReplies: false,
           }
         : null,
     );
@@ -1748,8 +1815,6 @@ describe("<ChatEmptyState /> in a bot channel", () => {
   it("draws nothing for an empty thread, so its box follows the post it opens on", () => {
     renderEmpty({
       botTitle: "Release Bot",
-      scrollToMessage: vi.fn(),
-      replyFollowsPost: null,
       threadLine: null,
       openThread: null,
       openAnnouncementThread: null,

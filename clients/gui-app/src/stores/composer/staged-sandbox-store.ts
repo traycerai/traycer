@@ -93,6 +93,8 @@ export type StagedSandboxFailure =
     }
   /** The budget ran out with the sandbox still on its way. */
   | { readonly kind: "timed-out"; readonly step: StagedSandboxStep }
+  /** A reload's run found the sandbox at rest: nobody asked it to wake. */
+  | { readonly kind: "rested" }
   /** The sandbox is up, and runs no agent the send can take. */
   | { readonly kind: "no-provider" }
   /** The sandbox is up; its own Traycer Inference switch is off. */
@@ -178,6 +180,7 @@ export function refusedBeforeCreate(
     case "failed":
     case "settings":
     case "timed-out":
+    case "rested":
     case "no-provider":
     case "traycer-off":
     case "agent-not-offered":
@@ -202,6 +205,29 @@ export function stagedCreateNeedsFreshKey(stage: StagedSandbox): boolean {
     return stage.target.kind === "new" && stage.failure.code !== "wake";
   }
   return refusedBeforeCreate(stage.failure, stage.createdSandboxId);
+}
+
+/**
+ * The stage's sandbox rested on its own while its delivery waited: it had
+ * woken (the settings step is reported only once its row reads awake, and a
+ * handoff only once it is ready) and is listed suspended or stopped now.
+ * Nobody asked for that rest, so nothing wakes it and the delivery is over.
+ * A send, Keep waiting or Retry starts the wait again from its first step, so
+ * its own wake never reads as one; a reload's run is nobody's gesture, so what
+ * it finds at rest counts whatever the step. Settings that didn't apply keep their own
+ * line, which says the sandbox's state.
+ */
+export function stagedSandboxRested(
+  stage: StagedSandbox,
+  resting: boolean,
+): boolean {
+  if (!resting || stage.failure?.kind === "settings") return false;
+  if (stage.phase === "handoff" || stage.failure?.kind === "rested")
+    return true;
+  return (
+    stage.phase === "creating" &&
+    (stage.step === "applying" || stage.step === "delivering")
+  );
 }
 
 interface StagedSandboxStoreState {

@@ -8,10 +8,10 @@
  * a second reference to one, and nothing in-process can observe the difference
  * because in-process there is only ever one copy.
  *
- * **This is not a mirror of T5.** A mirror restates someone else's contract and
+ * **This is not a mirror of the process-wide accountant.** A mirror restates someone else's contract and
  * rots against it. These members are named for what the RUNTIME does — settle
  * the root, settle a cold room, settle the command overlay, settle/charge/
- * release a hot doc — and T5's books are one implementation of them, living on
+ * release a hot doc — and the books are one implementation of them, living on
  * main. That is why the identity vocabulary is absent here: `bookKey`,
  * `runtimeToken` and the four holder-id families are how the ACCOUNTANT names
  * holders, so they belong to the implementation, not to the caller.
@@ -28,21 +28,6 @@ import type {
 } from "@traycer-clients/shared/replica-runtime";
 import type { EpicReplicaProjectionCounts } from "@/stores/replica-memory/epic-replica-budget";
 
-/**
- * What the accounting books need to ask the runtime, in the runtime's terms.
- *
- * **This is the direction that makes 4e hard.** The outbound members below are
- * all `void` and push cleanly across a thread; these four are called
- * SYNCHRONOUSLY by the accountant during a reconcile, and after the flip the
- * accountant is on main while the tier is in the worker — so a synchronous
- * main→worker call is exactly what cannot exist.
- *
- * Three of the four are pure reads and are answerable from a main-side cache
- * the worker refreshes on every settle push. {@link demoteColdestUnpinned} is
- * not: it performs the eviction, and its return decrements a running total.
- * At the flip it becomes a request — the proxy answers `reclaimedBytes: 0`,
- * dispatches, and the worker's settles reconcile on arrival.
- */
 /**
  * An {@link EvictionOutcome} that can also say "accepted, not yet performed".
  *
@@ -73,6 +58,21 @@ export interface HotDocEvictionOutcome extends EvictionOutcome {
   readonly deferredBytes: number;
 }
 
+/**
+ * What the accounting books need to ask the runtime, in the runtime's terms.
+ *
+ * **This is the direction that makes 4e hard.** The outbound members below are
+ * all `void` and push cleanly across a thread; these five are called
+ * SYNCHRONOUSLY by the accountant during a reconcile, and after the flip the
+ * accountant is on main while the tier is in the worker — so a synchronous
+ * main→worker call is exactly what cannot exist.
+ *
+ * Four of the five are pure reads and are answerable from a main-side cache
+ * the worker refreshes on every settle push. {@link demoteColdestUnpinned} is
+ * not: it performs the eviction, and its return decrements a running total.
+ * At the flip it becomes a request — the proxy answers `reclaimedBytes: 0`,
+ * dispatches, and the worker's settles reconcile on arrival.
+ */
 export interface EpicRuntimeAccountingSource {
   /** Rooms currently resident as live `Y.Doc`s. */
   materializedRoomIds(): readonly string[];

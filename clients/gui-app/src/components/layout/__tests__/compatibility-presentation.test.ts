@@ -13,18 +13,18 @@ import type { HostCompatibility } from "@/lib/host/compatibility-state";
  * for the seam; the lint rule decided its shape.
  *
  * It is here because of how its absence was discovered, and that story is the
- * reason these tests assert what they assert. Sealed probe R6 (redesign P3.2)
+ * reason these tests assert what they assert. A sealed kill probe
  * mutated this function and SURVIVED. The lane added the demanded pin, re-fired,
  * and it survived a SECOND time — because the pin asserted on
  * `describeCompatHealth`, one layer downstream, while the probe mutated this
  * function. Two different functions; the re-fire measured the same hole twice
- * instead of closing it. The residual travelled to P4.3 as a named rider.
+ * instead of closing it. The residual travelled forward as a named rider.
  *
  * So the discipline here is: assert THIS function's output, field by field, for
  * every arm of `HostCompatibility`. A test that reaches for the report line
  * would reproduce exactly the mistake being corrected.
  *
- * What the mapping is FOR: a pre-filled failure report (D13, P3.2). The verdict
+ * What the mapping is FOR: a pre-filled failure report (D13). The verdict
  * reaches the user through the lease's `incompatible` arm — this shape exists so
  * triage can tell an unreachable probe from a rejected handshake, and a held
  * verdict from a fresh one.
@@ -169,7 +169,7 @@ describe("compatibilityPresentation — every arm of the probe verdict", () => {
   /**
    * The status word is carried through UNCHANGED for all four arms.
    *
-   * This is the assertion R6 was aimed at, stated as its own case rather than
+   * This is the assertion the probe was aimed at, stated as its own case rather than
    * left implicit in the four above: the probe's mutation was to the mapping
    * from verdict to presented status, and a suite that only ever checked one
    * arm's other fields could pass with every status collapsed to a constant.

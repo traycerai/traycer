@@ -372,7 +372,7 @@ function FallbackSettingsPanelBody(props: {
   return (
     // Which tier conflicts have been announced, for exactly the editor's
     // lifetime - the same key - so leaving the Equivalent models tab and
-    // coming back does not read every conflict out again (review R2).
+    // coming back does not read every conflict out again (R2).
     <FallbackConflictAnnouncementsProvider key={editorKey}>
       <FallbackPolicyEditor
         key={editorKey}
@@ -530,7 +530,7 @@ function FallbackPolicyEditor(props: {
   );
 
   /**
-   * The Test a model panel (spec §Wireframe 4): whether it is open, and the
+   * The Test a model panel: whether it is open, and the
    * header button the keyboard goes back to when Escape or ✕ closes it - the
    * panel's own controls are about to unmount, so the browser would otherwise
    * drop focus on the body.
@@ -630,7 +630,7 @@ function FallbackPolicyEditor(props: {
 
   /**
    * The one write path. Every control reaches the host through this and nothing
-   * else, which is what makes the ticket's three save outcomes a property of the
+   * else, which is what makes the three save outcomes a property of the
    * panel rather than of whichever control happened to be edited:
    *
    *  - invalid draft: kept on screen with its error, and NOTHING is sent;
@@ -845,7 +845,7 @@ function FallbackPolicyEditor(props: {
     setOverrideSavePolicy(null);
     const requestId = createFallbackSaveRequestId();
     // A restore sends nothing from the screen - the host picks the default
-    // groups - so it must not make the displayed values count as dispatched
+    // groups - so it must not make the displayed values count as dispatched,
     // (D339), and if its own reply is lost the notice has to say that the
     // RESTORE is what went unanswered (D347).
     dispatch({
@@ -1407,37 +1407,6 @@ function masterToggleDescription(inFlightCount: number): string {
 }
 
 /**
- * What the panel says when the stored policy could not be read.
- *
- * The host answers a corrupt row with the DEFAULT policy plus this flag rather
- * than throwing, precisely so this page still renders and the user can
- * overwrite it - a panel that failed to load would leave the bad row with no
- * way to replace it. So the copy has to be clear that what is on screen is not
- * what is stored, and that saving is the repair.
- */
-/**
- * A reset the host confirmed, whose result this page could not read.
- *
- * A banner rather than a line under the danger zone, because it is not about
- * the button that was pressed - it is about every control above it. The reset
- * SUCCEEDED and cleared the seed marker, so the host's row is now the default
- * plus whatever the next read re-seeds; the values still rendered are the ones
- * from before it. That is a claim about the whole editor, and it has to sit
- * where the whole editor is, next to the other notice that says the same kind
- * of thing.
- *
- * "Reload settings", not "Check saved settings": there is nothing to check. The
- * question the unknown-outcome notice asks - what did the host store? - is
- * already answered here, and only the read is outstanding.
- *
- * It was "Try again" until a user-lens review pointed out that the nearest
- * antecedent for "again" is the RESET - so on a banner that appears precisely
- * because a reset just succeeded, the button read as an offer to re-run the
- * destructive thing. The distinction this comment draws, between checking an
- * unknown outcome and reloading a known one, was right; only the label was
- * wrong, and it was wrong in the most expensive direction available here.
- */
-/**
  * What the controls are currently showing, which decides how much the staleness
  * banner is entitled to say about them.
  *
@@ -1481,6 +1450,28 @@ function unrefreshedResetBody(subject: UnrefreshedResetSubject): string {
   }
 }
 
+/**
+ * A reset the host confirmed, whose result this page could not read.
+ *
+ * A banner rather than a line under the danger zone, because it is not about
+ * the button that was pressed - it is about every control above it. The reset
+ * SUCCEEDED and cleared the seed marker, so the host's row is now the default
+ * plus whatever the next read re-seeds; the values still rendered may be the
+ * ones from before it, the user's edits, or restored values. That is a claim about the whole editor, and it has to sit
+ * where the whole editor is, next to the other notice that says the same kind
+ * of thing.
+ *
+ * "Reload settings", not "Check saved settings": there is nothing to check. The
+ * question the unknown-outcome notice asks - what did the host store? - is
+ * already answered here, and only the read is outstanding.
+ *
+ * It was "Try again" until it was pointed out that the nearest
+ * antecedent for "again" is the RESET - so on a banner that appears precisely
+ * because a reset just succeeded, the button read as an offer to re-run the
+ * destructive thing. The distinction this comment draws, between checking an
+ * unknown outcome and reloading a known one, was right; only the label was
+ * wrong, and it was wrong in the most expensive direction available here.
+ */
 function UnrefreshedResetNotice(props: {
   readonly message: string;
   /**
@@ -1535,6 +1526,15 @@ function UnrefreshedResetNotice(props: {
   );
 }
 
+/**
+ * What the panel says when the stored policy could not be read.
+ *
+ * The host answers a corrupt row with the DEFAULT policy plus this flag rather
+ * than throwing, precisely so this page still renders and the user can
+ * overwrite it - a panel that failed to load would leave the bad row with no
+ * way to replace it. So the copy has to be clear that what is on screen is not
+ * what is stored, and that saving is the repair.
+ */
 function UnreadablePolicyNotice(): ReactNode {
   return (
     <div
@@ -1559,14 +1559,6 @@ function UnreadablePolicyNotice(): ReactNode {
 }
 
 /**
- * The inline account of the last write, and it states BOTH values on purpose.
- *
- * A user who has just been told "couldn't save" needs to know which of the two
- * things they are looking at: their own edit (kept, so they can fix it) or the
- * value that is actually in force (restored, because the host refused theirs).
- * Saying only that something failed leaves the control ambiguous.
- */
-/**
  * Whether the status line has something the reader must ACT on.
  *
  * Read by two places that must never disagree: the line itself, and the tab
@@ -1586,6 +1578,14 @@ function fallbackStatusNeedsAttention(
   return state.localError !== null || state.hostError !== null;
 }
 
+/**
+ * The inline account of the last write, and it states BOTH values on purpose.
+ *
+ * A user who has just been told "couldn't save" needs to know which of the two
+ * things they are looking at: their own edit (kept, so they can fix it) or the
+ * value that is actually in force (restored, because the host refused theirs).
+ * Saying only that something failed leaves the control ambiguous.
+ */
 function FallbackSaveStatus(props: {
   readonly state: FallbackPolicyDraftState;
   /** Renders only for the group the last edit came from. */
@@ -1639,7 +1639,7 @@ function FallbackSaveStatus(props: {
   // the failure also claims `activeField`, so its own notice landed in a group
   // whose status line was already spoken for, and an early return took the
   // notice AND the only "Check saved settings" off the page while its ticket stayed
-  // open. That is the R9 defect from the other side - an affordance dropped
+  // open. That is the defect from the other side - an affordance dropped
   // because a rendered claim was keyed on something other than the fact it
   // describes - and it predates the preservation on the `refused-kept` arm,
   // which never wrote `localError` and so could always be masked by one.
@@ -1928,81 +1928,6 @@ function TierStepHint({
 }
 
 /**
- * What follows the failure's own sentence, and it is the only part that makes a
- * claim about the HOST.
- *
- * Kept beside the outcome union rather than inlined per branch so the FOUR arms
- * are read together: the difference between them is the whole of FC7.
- *
- * ## Why it takes a second argument rather than growing more outcomes
- *
- * The union says what happened to one SAVE. Everything in `status` is a fact
- * about the PAGE at the moment of rendering - what the controls are showing,
- * and what the host has confirmed - which is independent of that save and
- * outlives it. Folding those in would mean an outcome per combination.
- *
- * ## Which arms claim what, because that is what decides the evidence needed
- *
- * TWO arms claim a setting is IN FORCE, not one as this used to say:
- * `refused-reverted` ("your last saved settings are back on screen and still in
- * force") and `refused-kept`'s confirmed branch. Each needs its own evidence,
- * and each was wrong for a different reason before this pass:
- *
- *  - `refused-reverted` reverts to `persisted`, which after an unread reset may
- *    be the PRE-reset policy the host has already discarded - so it would say
- *    "still in force" beside a banner saying those settings are not what the
- *    host is using. But `persisted` is only pre-reset until some write lands
- *    AFTER the reset; once one has, the rollback restores a policy the host is
- *    actively using and the stale sentence becomes the false one. Hence
- *    `persistedUnverified` rather than a bare "is the page stale".
- *  - `refused-kept` claims the DISPLAYED values are stored, and that takes TWO
- *    facts, not one (**D330**). Comparing the values against `persisted`
- *    settles only SAMENESS - see {@link fallbackPolicyValuesEqual} - and
- *    sameness with a copy the host may have discarded is not storage. So this
- *    arm consults `persistedUnverified` too, and where `persisted` is
- *    unverified it gives the same pre-reset account `refused-reverted` gives
- *    rather than claiming force. It deliberately says nothing about which
- *    request was newer: a refusal can arrive for a request OLDER than the one
- *    that succeeded, and it can arrive for a NEWER one that a correcting
- *    rollback then displaced, so any ordering word in this sentence is wrong
- *    half the time.
- *
- * Both of those arms also consult `authorityInvalidated`, and that was the
- * follow-up: `persistedUnverified` is only the CONFIRMED-reset case, so a reset
- * whose own reply was lost left both sentences claiming force over a row nobody
- * had read. The rule is now stated once for all three consumers of display
- * authority - `persistedUnverified || authorityInvalidated !== null` - which is
- * the same input {@link displayAccount} already took. See
- * {@link outstandingOperationAccount} for the sequence and for why the sentence
- * relates the two events with "also" and no order.
- *
- * The remaining two claim nothing about what is stored, and only one of them
- * needs a fact at all: `unknown` names the DRAFT it is uncertain about, which
- * is not always the draft on screen. `refused-unverified` composes unchanged,
- * and says "another change" rather than "an earlier change" for the same
- * ordering reason as above.
- */
-/**
- * What the DISPLAYED values' own request is doing, from that request's actual
- * state rather than from a revision comparison (D330), and from POSITIVE
- * evidence rather than from elimination (D339).
- *
- * Two rewrites, one direction. `unknownSave.revision !== revision` was standing
- * in for "the display was never sent" and covered four situations, three of
- * which contradict it: a save in flight, a save the host confirmed, a rollback
- * this reducer performed, and only lastly an edit nobody dispatched. Splitting
- * those four out fixed the three, and left the LAST arm still reached by
- * elimination - which three further sequences satisfy with values that had in
- * fact been sent, because `pendingSaves` is the only record that a request
- * carried them and it is dropped the moment that request settles.
- *
- * So the last arm now asks the question directly, of the values rather than of
- * the request: is this display above everything this editor has ever
- * dispatched? Only that PROVES it unsent. Anything else that reaches the end -
- * dispatched, unconfirmed, unanswered by any outstanding ticket - is
- * `sent-unknown`, which claims neither verdict.
- */
-/**
  * Which of the three things the staleness banner is looking at, as one function
  * rather than a nested ternary at the call site.
  *
@@ -2045,6 +1970,26 @@ type FallbackDisplayDispatch =
    */
   | "refused-on-screen";
 
+/**
+ * What the DISPLAYED values' own request is doing, from that request's actual
+ * state rather than from a revision comparison (D330), and from POSITIVE
+ * evidence rather than from elimination (D339).
+ *
+ * Two rewrites, one direction. `unknownSave.revision !== revision` was standing
+ * in for "the display was never sent" and covered four situations, three of
+ * which contradict it: a save in flight, a save the host confirmed, a rollback
+ * this reducer performed, and only lastly an edit nobody dispatched. Splitting
+ * those four out fixed the three, and left the LAST arm still reached by
+ * elimination - which three further sequences satisfy with values that had in
+ * fact been sent, because `pendingSaves` is the only record that a request
+ * carried them and it is dropped the moment that request settles.
+ *
+ * So the last arm now asks the question directly, of the values rather than of
+ * the request: is this display above everything this editor has ever
+ * dispatched? Only that PROVES it unsent. Anything else that reaches the end -
+ * dispatched, unconfirmed, unanswered by any outstanding ticket - is
+ * `sent-unknown`, which claims neither verdict.
+ */
 function displayDispatchState(input: {
   readonly revision: number;
   readonly unknownSave: FallbackPolicyDraftState["unknownSave"];
@@ -2263,6 +2208,61 @@ function outstandingOperationAccount(carries: FallbackSaveCarries): string {
   return `a ${operationNoun(carries)} ${OUTSTANDING_OPERATION_TAIL}`;
 }
 
+/**
+ * What follows the failure's own sentence, and it is the only part that makes a
+ * claim about the HOST.
+ *
+ * Kept beside the outcome union rather than inlined per branch so the FOUR arms
+ * are read together: the difference between them is the whole of FC7.
+ *
+ * ## Why it takes a second argument rather than growing more outcomes
+ *
+ * The union says what happened to one SAVE. Everything in `status` is a fact
+ * about the PAGE at the moment of rendering - what the controls are showing,
+ * and what the host has confirmed - which is independent of that save and
+ * outlives it. Folding those in would mean an outcome per combination.
+ *
+ * ## Which arms claim what, because that is what decides the evidence needed
+ *
+ * TWO arms claim a setting is IN FORCE, not one as this used to say:
+ * `refused-reverted` ("your last saved settings are back on screen and still in
+ * force") and `refused-kept`'s confirmed branch. Each needs its own evidence,
+ * and each was wrong for a different reason before this pass:
+ *
+ *  - `refused-reverted` reverts to `persisted`, which after an unread reset may
+ *    be the PRE-reset policy the host has already discarded - so it would say
+ *    "still in force" beside a banner saying those settings are not what the
+ *    host is using. But `persisted` is only pre-reset until some write lands
+ *    AFTER the reset; once one has, the rollback restores a policy the host is
+ *    actively using and the stale sentence becomes the false one. Hence
+ *    `persistedUnverified` rather than a bare "is the page stale".
+ *  - `refused-kept` claims the DISPLAYED values are stored, and that takes TWO
+ *    facts, not one (**D330**). Comparing the values against `persisted`
+ *    settles only SAMENESS - see {@link fallbackPolicyValuesEqual} - and
+ *    sameness with a copy the host may have discarded is not storage. So this
+ *    arm consults `persistedUnverified` too, and where `persisted` is
+ *    unverified it gives the same pre-reset account `refused-reverted` gives
+ *    rather than claiming force. It deliberately says nothing about which
+ *    request was newer: a refusal can arrive for a request OLDER than the one
+ *    that succeeded, and it can arrive for a NEWER one that a correcting
+ *    rollback then displaced, so any ordering word in this sentence is wrong
+ *    half the time.
+ *
+ * Both of those arms also consult `authorityInvalidated`, and that was the
+ * follow-up: `persistedUnverified` is only the CONFIRMED-reset case, so a reset
+ * whose own reply was lost left both sentences claiming force over a row nobody
+ * had read. The rule is now stated once for all three consumers of display
+ * authority - `persistedUnverified || authorityInvalidated !== null` - which is
+ * the same input {@link displayAccount} already took. See
+ * {@link outstandingOperationAccount} for the sequence and for why the sentence
+ * relates the two events with "also" and no order.
+ *
+ * The remaining two claim nothing about what is stored, and only one of them
+ * needs a fact at all: `unknown` names the DRAFT it is uncertain about, which
+ * is not always the draft on screen. `refused-unverified` composes unchanged,
+ * and says "another change" rather than "an earlier change" for the same
+ * ordering reason as above.
+ */
 function saveNoticeConsequence(
   outcome: FallbackSaveNoticeOutcome,
   status: FallbackSaveNoticeStatus,
@@ -2321,13 +2321,6 @@ function saveNoticeConsequence(
   }
 }
 
-/**
- * What is uncertain, named as the operation that went unanswered.
- *
- * A draft save keeps the sentence it always had. The other two say what was
- * actually lost, because "that change" is not a thing the user made when the
- * unanswered request was a reset.
- */
 /** The operation as the copy names it. */
 function operationNoun(carries: FallbackSaveCarries): string {
   switch (carries) {
@@ -2340,6 +2333,13 @@ function operationNoun(carries: FallbackSaveCarries): string {
   }
 }
 
+/**
+ * What is uncertain, named as the operation that went unanswered.
+ *
+ * A draft save keeps the sentence it always had. The other two say what was
+ * actually lost, because "that change" is not a thing the user made when the
+ * unanswered request was a reset.
+ */
 function unknownRequestAccount(carries: FallbackSaveCarries): string {
   switch (carries) {
     case "draft":

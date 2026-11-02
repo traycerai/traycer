@@ -85,7 +85,7 @@ describe("<ImagePreview />", () => {
     expect(screen.queryByTestId("image-preview-skeleton")).toBeNull();
   });
 
-  // Supersedes decisions #16/#17's click-to-toggle interaction (ticket 07):
+  // Supersedes the earlier click-to-toggle interaction:
   // the <button>-wrapped image and its cursor-zoom-in/out classes are gone,
   // replaced by a continuous pan/zoom transform driven from the toolbar
   // (plus gestures - covered separately, see the Luna-delegated transform

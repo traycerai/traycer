@@ -37,7 +37,7 @@ interface FileDiffContentProps {
  * Live Git diff renderer. Maps the host `git.getFileDiff` response onto the
  * shared `DiffContentPrimitive`, layering the Git-specific truncated banner on
  * top. The cache scope keys on the file path + both OIDs so the
- * parse cache invalidates on file/oid change (ADR-0002).
+ * parse cache invalidates on file/oid change.
  */
 export function FileDiffContent(props: FileDiffContentProps) {
   const stagedOid = props.diff.stagedOid ?? "null";

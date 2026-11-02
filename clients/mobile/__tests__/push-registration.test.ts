@@ -1404,6 +1404,66 @@ describe("activationPayloadFromPushData", () => {
     });
   });
 
+  it("carries the bot, thread and row on a chat route when the push names a bot, and leaves a chat route without one unchanged", () => {
+    expect(
+      activationPayloadFromPushData({
+        entryId: "e",
+        epicId: "ep",
+        chatId: "ch",
+        botId: "bot-1",
+        threadId: "th-1",
+        messageId: "m-1",
+      }),
+    ).toEqual({
+      kind: "notificationActivation",
+      version: 1,
+      route: {
+        kind: "chat",
+        epicId: "ep",
+        chatId: "ch",
+        botId: "bot-1",
+        threadId: "th-1",
+        messageId: "m-1",
+      },
+      feed: { source: "cloud", id: "e" },
+      originHostId: null,
+    });
+    // A row of the channel itself has no thread.
+    expect(
+      activationPayloadFromPushData({
+        entryId: "e",
+        epicId: "ep",
+        chatId: "ch",
+        botId: "bot-1",
+      }),
+    ).toMatchObject({
+      route: {
+        kind: "chat",
+        botId: "bot-1",
+        threadId: null,
+        messageId: null,
+      },
+    });
+    // Bot fields without a bot are not carried.
+    expect(
+      activationPayloadFromPushData({
+        entryId: "e",
+        epicId: "ep",
+        chatId: "ch",
+        threadId: "th-1",
+        messageId: "m-1",
+      }),
+    ).toMatchObject({ route: { kind: "chat", epicId: "ep", chatId: "ch" } });
+    expect(
+      activationPayloadFromPushData({
+        entryId: "e",
+        epicId: "ep",
+        chatId: "ch",
+        threadId: "th-1",
+      }),
+    ).toHaveProperty("route", { kind: "chat", epicId: "ep", chatId: "ch" });
+  });
+
   it("degrades unroutable or junk data to {} — the bridge opens the center", () => {
     // No epic to route to.
     expect(

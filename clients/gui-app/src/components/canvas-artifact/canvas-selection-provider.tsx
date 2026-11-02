@@ -73,10 +73,18 @@ export function CanvasSelectionProvider(
     readonly viewOnly?: boolean;
   },
 ) {
-  const { epicId, artifactId, artifactTitle, hostId, viewTabId } = props;
+  const { epicId, artifactId, artifactTitle, artifactType, hostId, viewTabId } =
+    props;
   const scope = useMemo(
-    () => ({ epicId, artifactId, artifactTitle, hostId, viewTabId }),
-    [epicId, artifactId, artifactTitle, hostId, viewTabId],
+    () => ({
+      epicId,
+      artifactId,
+      artifactTitle,
+      artifactType,
+      hostId,
+      viewTabId,
+    }),
+    [epicId, artifactId, artifactTitle, artifactType, hostId, viewTabId],
   );
   const parent = useContext(CanvasFrameEventsContext);
   const [registry] = useState(() => new CanvasFrameRegistry());
@@ -95,7 +103,7 @@ export function CanvasSelectionProvider(
       void openFrameCommentDraft({
         epicId,
         tileId: draftOwner,
-        artifactType: "canvas",
+        artifactType,
         selection,
         bridge: entry.bridge,
         frame: entry.frame,
@@ -111,7 +119,7 @@ export function CanvasSelectionProvider(
           setCommentMessage("The page changed. Select the element again."),
         );
     },
-    [commentsEnabled, registry, epicId, draftOwner, queryClient],
+    [commentsEnabled, registry, epicId, artifactType, draftOwner, queryClient],
   );
   const [selectionOwner] = useState(() => Symbol("canvas-selection"));
   // The revision each board's LIVE document adopted in place (a stamped
@@ -317,6 +325,10 @@ export function CanvasSelectionProvider(
             onCreated={() => undefined}
             onClosed={() => undefined}
             onTidInserted={adoptInsertedTid}
+            sendToChat={{
+              scope,
+              frameFor: (path) => registry.get(path).frame,
+            }}
           />
         ),
       sourceAdopted: (path, previousSha256, nextSha256) => {
@@ -602,7 +614,9 @@ export function CanvasSelectionProvider(
   return (
     <CanvasFrameEventsContext value={events}>
       <div className="relative h-full w-full">
-        {props.viewOnly === true ? (
+        {props.viewOnly === true || artifactType !== "canvas" ? (
+          // Paste edits boards; an html page has none, so it takes no
+          // clipboard boundary.
           props.children
         ) : (
           <CanvasClipboardBoundary artifactId={artifactId} registry={registry}>

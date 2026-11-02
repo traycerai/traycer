@@ -47,7 +47,7 @@ describe("mentionAttachmentFromSuggestion browser-tab entries", () => {
   // The serializer renders a tab mention's `tabId` unconditionally, so a
   // cross-host pick must never reach it as a `browser-tab:` token - the agent
   // could never attach to a tab living on another host. Cross-host picks are
-  // attached as snapshot context instead (spec decision #10); this null
+  // attached as snapshot context instead; this null
   // is the backstop for any other call site that reaches a contextOnly entry.
   it("returns null for a contextOnly (cross-host) entry", () => {
     const attachment = mentionAttachmentFromSuggestion(

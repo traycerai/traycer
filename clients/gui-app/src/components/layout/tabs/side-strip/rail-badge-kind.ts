@@ -9,7 +9,7 @@ import {
 } from "@/components/notifications/notification-indicator-tones";
 
 /**
- * The one state on a task that needs the user (D5), drawn as the tile's
+ * The one state on a task that needs the user, drawn as the tile's
  * corner badge and as the meter's attention pip. Running is not here: the
  * meter carries it.
  */

@@ -68,6 +68,7 @@ import {
   type WorkspaceFolderInfo,
 } from "@/stores/workspace/workspace-folders-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
+import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
 import type {
   DesktopJsonValue,
   DesktopPerWindowSnapshot,
@@ -99,6 +100,7 @@ import {
 const HOST_A = "host-a";
 
 const HAIKU_SETTINGS: ChatRunSettings = {
+  ultracode: false,
   harnessId: "claude",
   model: "haiku",
   permissionMode: "supervised",
@@ -109,6 +111,7 @@ const HAIKU_SETTINGS: ChatRunSettings = {
 };
 
 const SONNET_SETTINGS: ChatRunSettings = {
+  ultracode: false,
   harnessId: "claude",
   model: "sonnet",
   permissionMode: "supervised",
@@ -512,6 +515,212 @@ describe("useLandingDraftStore", () => {
     );
     expect(settingsByDraftId.get(haikuDraftId)).toEqual(HAIKU_SETTINGS);
     expect(settingsByDraftId.get(sonnetDraftId)).toEqual(SONNET_SETTINGS);
+  });
+
+  it("setDraftSettings takes a change to only the profile and bumps generation", () => {
+    const { createDraft, setDraftSettings } = useLandingDraftStore.getState();
+    const id = createDraft(HAIKU_SETTINGS);
+    const before = useLandingDraftStore.getState().drafts[0];
+
+    setDraftSettings(id, { ...HAIKU_SETTINGS, profileId: "profile-a" });
+
+    const after = useLandingDraftStore.getState().drafts[0];
+    expect(after.settings).toEqual({
+      ...HAIKU_SETTINGS,
+      profileId: "profile-a",
+    });
+    expect(after.generation).toBe(before.generation + 1);
+  });
+
+  it("setDraftSettings is a no-op when every field matches, the profile included", () => {
+    const { createDraft, setDraftSettings } = useLandingDraftStore.getState();
+    const settings = { ...HAIKU_SETTINGS, profileId: "profile-a" };
+    const id = createDraft(settings);
+    const snapshot = useLandingDraftStore.getState().drafts;
+
+    setDraftSettings(id, { ...settings });
+
+    expect(useLandingDraftStore.getState().drafts).toBe(snapshot);
+  });
+
+  describe("a draft minted before its host resolved", () => {
+    const HOST_B = "host-b";
+    const MANAGED_SETTINGS: ChatRunSettings = {
+      ...HAIKU_SETTINGS,
+      ultracode: true,
+      profileId: "profile-a",
+    };
+    const TYPED: JsonContent = {
+      type: "doc",
+      content: [
+        { type: "paragraph", content: [{ type: "text", text: "typed" }] },
+      ],
+    };
+    const HOLDS_SOMETHING: ReadonlyArray<{
+      readonly label: string;
+      readonly patch: Partial<LandingDraftTab>;
+    }> = [
+      { label: "content", patch: { content: TYPED } },
+      { label: "settings", patch: { settings: HAIKU_SETTINGS } },
+      {
+        label: "folders",
+        patch: {
+          workspace: {
+            folders: [WORKSPACE_A.path],
+            folderInfoByPath: { [WORKSPACE_A.path]: WORKSPACE_A },
+            primaryPath: WORKSPACE_A.path,
+          },
+        },
+      },
+    ];
+
+    function row(id: string): LandingDraftTab {
+      const draft = useLandingDraftStore
+        .getState()
+        .drafts.find((entry) => entry.id === id);
+      if (draft === undefined) throw new Error(`no draft ${id}`);
+      return draft;
+    }
+
+    function remember(
+      settings: ChatRunSettings | null,
+      folders: ReadonlyArray<WorkspaceFolderInfo>,
+    ): void {
+      if (settings !== null) {
+        useComposerRunSettingsStore
+          .getState()
+          .setGlobalRunSettings(HOST_B, settings, 1);
+      }
+      useWorkspaceFoldersStore.getState().addResolvedFolders(
+        HOST_B,
+        folders.map((folder) => ({ ...folder, hostId: HOST_B })),
+      );
+    }
+
+    beforeEach(() => {
+      useComposerRunSettingsStore.getState().resetForTests();
+    });
+
+    afterEach(() => {
+      useComposerRunSettingsStore.getState().resetForTests();
+      setDraftLocalEditListener(null);
+    });
+
+    it.each(HOLDS_SOMETHING)(
+      "is not seeded once it holds $label",
+      ({ patch }) => {
+        const id = useLandingDraftStore.getState().createDraft(null);
+        useLandingDraftStore.setState((state) => ({
+          drafts: state.drafts.map((entry) =>
+            entry.id === id ? { ...entry, ...patch } : entry,
+          ),
+        }));
+        remember(MANAGED_SETTINGS, [WORKSPACE_B]);
+        const before = useLandingDraftStore.getState().drafts;
+
+        expect(
+          useLandingDraftStore.getState().seedUnseededDraft(id, HOST_B),
+        ).toBe(false);
+        expect(useLandingDraftStore.getState().drafts).toBe(before);
+      },
+    );
+
+    it("takes the host's settings and folders in one edit, and asks to publish", () => {
+      const id = useLandingDraftStore.getState().createDraft(null);
+      const edits: string[] = [];
+      setDraftLocalEditListener((draftId) => {
+        edits.push(draftId);
+      });
+      remember(MANAGED_SETTINGS, [WORKSPACE_A]);
+      const before = row(id);
+
+      expect(
+        useLandingDraftStore.getState().seedUnseededDraft(id, HOST_B),
+      ).toBe(true);
+
+      const after = row(id);
+      expect(after.settings).toEqual({
+        ...MANAGED_SETTINGS,
+        ultracode: false,
+      });
+      expect(after.workspace.folders).toEqual([WORKSPACE_A.path]);
+      expect(after.workspace.primaryPath).toBe(WORKSPACE_A.path);
+      expect(after.generation).toBe(before.generation + 1);
+      expect(edits).toEqual([id]);
+    });
+
+    it("takes a settings record alone, with no folders to move", () => {
+      const id = useLandingDraftStore.getState().createDraft(null);
+      remember(MANAGED_SETTINGS, []);
+      const before = row(id);
+
+      expect(
+        useLandingDraftStore.getState().seedUnseededDraft(id, HOST_B),
+      ).toBe(true);
+
+      const after = row(id);
+      expect(after.settings?.profileId).toBe("profile-a");
+      expect(after.workspace).toBe(before.workspace);
+      expect(after.generation).toBe(before.generation + 1);
+    });
+
+    it("takes folders alone, with no settings record", () => {
+      const id = useLandingDraftStore.getState().createDraft(null);
+      remember(null, [WORKSPACE_A]);
+      const before = row(id);
+
+      expect(
+        useLandingDraftStore.getState().seedUnseededDraft(id, HOST_B),
+      ).toBe(true);
+
+      const after = row(id);
+      expect(after.settings).toBeNull();
+      expect(after.workspace.folders).toEqual([WORKSPACE_A.path]);
+      expect(after.generation).toBe(before.generation + 1);
+    });
+
+    it("is seeded once: a second call finds nothing to do", () => {
+      const id = useLandingDraftStore.getState().createDraft(null);
+      remember(MANAGED_SETTINGS, [WORKSPACE_A]);
+      const { seedUnseededDraft } = useLandingDraftStore.getState();
+      seedUnseededDraft(id, HOST_B);
+      const before = useLandingDraftStore.getState().drafts;
+
+      expect(seedUnseededDraft(id, HOST_B)).toBe(false);
+      expect(useLandingDraftStore.getState().drafts).toBe(before);
+    });
+
+    it("writes and publishes nothing for a host that remembers nothing, and can still be seeded", () => {
+      const id = useLandingDraftStore.getState().createDraft(null);
+      const edits: string[] = [];
+      setDraftLocalEditListener((draftId) => {
+        edits.push(draftId);
+      });
+      const before = useLandingDraftStore.getState().drafts;
+
+      expect(
+        useLandingDraftStore.getState().seedUnseededDraft(id, HOST_B),
+      ).toBe(false);
+
+      expect(useLandingDraftStore.getState().drafts).toBe(before);
+      expect(edits).toEqual([]);
+
+      remember(MANAGED_SETTINGS, []);
+      expect(
+        useLandingDraftStore.getState().seedUnseededDraft(id, HOST_B),
+      ).toBe(true);
+    });
+
+    it("does nothing with no host resolved, or for a draft that is gone", () => {
+      const id = useLandingDraftStore.getState().createDraft(null);
+      remember(MANAGED_SETTINGS, [WORKSPACE_A]);
+      const { seedUnseededDraft } = useLandingDraftStore.getState();
+      const before = useLandingDraftStore.getState().drafts;
+
+      expect(seedUnseededDraft(id, null)).toBe(false);
+      expect(seedUnseededDraft("missing", HOST_B)).toBe(false);
+      expect(useLandingDraftStore.getState().drafts).toBe(before);
+    });
   });
 
   it("keeps composer mode independent per draft", () => {
@@ -1234,6 +1443,53 @@ describe("useLandingDraftStore", () => {
     expect(restored[0].selection).toEqual({ from: 2, to: 5 });
   });
 
+  it.each([
+    { label: "a managed profile", profileId: "profile-a" },
+    { label: "the ambient profile", profileId: null },
+  ])(
+    "carries $label through the desktop projection and a restart",
+    ({ profileId }) => {
+      const settings: ChatRunSettings = { ...HAIKU_SETTINGS, profileId };
+      const patches: DesktopPerWindowStatePatch[] = [];
+      setLandingDraftDesktopProjectionBridge({
+        update: (patch) => {
+          patches.push(patch);
+          return Promise.resolve();
+        },
+        flush: () => Promise.resolve(),
+        dispose: () => undefined,
+      });
+
+      try {
+        useLandingDraftStore.getState().createDraft(settings);
+      } finally {
+        setLandingDraftDesktopProjectionBridge(null);
+      }
+
+      const outbound = patches.at(-1)?.landingDrafts ?? [];
+      expect(outbound).toHaveLength(1);
+      expect(outbound[0].settings).toEqual({
+        harnessId: settings.harnessId,
+        model: settings.model,
+        permissionMode: settings.permissionMode,
+        reasoningEffort: settings.reasoningEffort,
+        serviceTier: settings.serviceTier,
+        agentMode: settings.agentMode,
+        profileId,
+      });
+
+      // A restart: the window comes back holding nothing but the projection.
+      resetStore();
+      applyLandingDraftDesktopProjection(
+        emptyWindowSnapshot({ landingDrafts: outbound }),
+      );
+
+      expect(useLandingDraftStore.getState().drafts[0].settings).toEqual(
+        settings,
+      );
+    },
+  );
+
   it("drops an inbound draft whose doc `content` is not an array (malformed)", () => {
     // A corrupted snapshot: doc-typed but `content` is not an array. The inbound
     // guard must reject it, not let `draftTabName` walk a non-array and throw at
@@ -1327,7 +1583,7 @@ describe("useLandingDraftStore", () => {
     expect(parsed.state?.drafts?.[0]?.settings).toBeNull();
   });
 
-  // Mechanism A (round 5): the strip lives at the two SERIALIZATION seams — the
+  // Mechanism A: the strip lives at the two SERIALIZATION seams — the
   // localStorage `partialize` and the desktop projection — NOT in
   // `setDraftContent`. The in-memory draft is canonical and keeps a paste's
   // still-pending b64 node so a keyed remount / in-session navigate-back can
@@ -1579,7 +1835,7 @@ describe("useLandingDraftStore", () => {
     it("preserves non-empty in-memory drafts on empty inbound and re-projects outbound", () => {
       // Stub the GC gates (no call-through): this suite has no idb-keyval mock,
       // and the assertion is about whether the guard fires them, not the sweep.
-      // [B1-P2] mount→readiness is covered with the real GC in
+      // mount→readiness is covered with the real GC in
       // landing-image-gc.test.ts `[B1+B2]` (spyOn cannot intercept same-module
       // internal calls from markLandingEditorMounted → markLandingDraftsReady).
       const markReady = vi

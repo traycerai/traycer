@@ -37,6 +37,10 @@ function chatRunSettingsFixture(model: string) {
   };
 }
 
+function liveChatRunSettingsFixture(model: string) {
+  return { ...chatRunSettingsFixture(model), ultracode: false };
+}
+
 function fallbackImpendingActionFixture() {
   return {
     planId: "plan-1",
@@ -68,6 +72,19 @@ function pendingFallbackFixture() {
     maxAttempts: 5,
     queuedItemsMoving: 4,
     siblingSwitching: 1,
+  };
+}
+
+function pendingFallbackLiveExpected() {
+  const pendingFallback = pendingFallbackFixture();
+  return {
+    ...pendingFallback,
+    failedTuple: liveChatRunSettingsFixture("gpt-5"),
+    targetTuple: liveChatRunSettingsFixture("claude-opus-5"),
+    impendingAction: {
+      ...pendingFallback.impendingAction,
+      target: liveChatRunSettingsFixture("claude-opus-5"),
+    },
   };
 }
 
@@ -198,7 +215,7 @@ describe("chat.subscribe@1.10 carries a fully-populated pendingFallback", () => 
       ...baseWindowedSnapshot(),
       pendingFallback,
     });
-    expect(parsed.pendingFallback).toEqual(pendingFallback);
+    expect(parsed.pendingFallback).toEqual(pendingFallbackLiveExpected());
   });
 
   it("chatSnapshotSchema (the full, non-windowed live snapshot) retains pendingFallback intact", () => {
@@ -209,7 +226,7 @@ describe("chat.subscribe@1.10 carries a fully-populated pendingFallback", () => 
       accumulatedFileChanges: [],
       pendingFallback,
     });
-    expect(parsed.pendingFallback).toEqual(pendingFallback);
+    expect(parsed.pendingFallback).toEqual(pendingFallbackLiveExpected());
   });
 });
 
@@ -300,6 +317,15 @@ function pendingReturnFixture() {
   };
 }
 
+function pendingReturnLiveExpected() {
+  const pendingReturn = pendingReturnFixture();
+  return {
+    ...pendingReturn,
+    preferredTuple: liveChatRunSettingsFixture("gpt-5"),
+    fallbackTuple: liveChatRunSettingsFixture("claude-opus-5"),
+  };
+}
+
 function assertReturnFixtureMatchesSchema() {
   expect(Object.keys(pendingReturnFixture()).sort()).toEqual(
     Object.keys(pendingReturnSchema.shape).sort(),
@@ -343,7 +369,7 @@ describe("chat.subscribe@1.10 carries a fully-populated pendingReturn", () => {
       ...baseWindowedSnapshot(),
       pendingReturn,
     });
-    expect(parsed.pendingReturn).toEqual(pendingReturn);
+    expect(parsed.pendingReturn).toEqual(pendingReturnLiveExpected());
   });
 
   it("chatSnapshotSchema retains pendingReturn intact", () => {
@@ -354,7 +380,7 @@ describe("chat.subscribe@1.10 carries a fully-populated pendingReturn", () => {
       accumulatedFileChanges: [],
       pendingReturn,
     });
-    expect(parsed.pendingReturn).toEqual(pendingReturn);
+    expect(parsed.pendingReturn).toEqual(pendingReturnLiveExpected());
   });
 });
 
@@ -474,6 +500,14 @@ function lastFailedAttemptFixture() {
   };
 }
 
+function lastFailedAttemptLiveExpected() {
+  const lastFailedAttempt = lastFailedAttemptFixture();
+  return {
+    ...lastFailedAttempt,
+    failedTuple: liveChatRunSettingsFixture("claude-sonnet-5"),
+  };
+}
+
 function lastFailedAttemptFixtureWithoutWaitResumesAt() {
   const { waitResumesAt: _omitted, ...rest } = lastFailedAttemptFixture();
   return rest;
@@ -533,7 +567,7 @@ describe("chat.subscribe@1.10 carries a fully-populated lastFailedAttempt", () =
       ...baseWindowedSnapshot(),
       lastFailedAttempt,
     });
-    expect(parsed.lastFailedAttempt).toEqual(lastFailedAttempt);
+    expect(parsed.lastFailedAttempt).toEqual(lastFailedAttemptLiveExpected());
   });
 
   it("chatSnapshotSchema retains lastFailedAttempt intact", () => {
@@ -544,7 +578,7 @@ describe("chat.subscribe@1.10 carries a fully-populated lastFailedAttempt", () =
       accumulatedFileChanges: [],
       lastFailedAttempt,
     });
-    expect(parsed.lastFailedAttempt).toEqual(lastFailedAttempt);
+    expect(parsed.lastFailedAttempt).toEqual(lastFailedAttemptLiveExpected());
   });
 });
 

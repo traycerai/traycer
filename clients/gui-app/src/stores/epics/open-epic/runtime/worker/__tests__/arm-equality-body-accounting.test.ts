@@ -372,7 +372,7 @@ async function runScript(rig: LaneRig, calls: ArmCalls): Promise<ArmRun> {
   // On this arm the materialize IS the subscribe, so the first one legitimately
   // finds no bytes and answers AWAITING. Asserted rather than skipped: an arm
   // that answered NOT-HELD here would have closed the subscription that is
-  // about to deliver, which is the cold-open defect this ticket fixed.
+  // about to deliver, which is the cold-open defect this change fixed.
   const awaiting = await calls.materialize(ARTIFACT);
   await opened.flush();
   checkpoints.push(takeCheckpoint("awaiting"));

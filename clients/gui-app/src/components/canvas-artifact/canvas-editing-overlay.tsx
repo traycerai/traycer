@@ -1,4 +1,5 @@
 import { CanvasCommentAction } from "./canvas-comments";
+import { useAnchoredDraftStore } from "@/stores/comments/anchored-draft-store";
 import { useState, useSyncExternalStore } from "react";
 import type { CanvasAnnotationScope } from "./canvas-annotation-action";
 import type {
@@ -21,7 +22,7 @@ import { canvasRetypeTarget } from "./canvas-inline-text-edit";
 import { CANVAS_SCRIPT_TEXT_NOTE } from "./canvas-text-validation";
 import type { CanvasElementLocator } from "@/lib/sandbox/canvas-bridge";
 import { CanvasStructureOverlay } from "./canvas-structure-overlay";
-import { CanvasSelectionMenu } from "./canvas-element-menu";
+import { selectCanvasParentElement } from "./canvas-select-parent";
 
 function currentRetype(
   selection: CanvasSelection | null,
@@ -117,6 +118,17 @@ function EditingControls(props: {
     </div>
   );
 }
+/** Shift+Enter's target: the selected element's parent, except mid-retype. */
+function selectParentAction(
+  selection: CanvasSelection | null,
+  request: CanvasSelectionFrame["retype"],
+  registry: CanvasFrameRegistry,
+): (() => void) | null {
+  if (selection === null || request !== null) return null;
+  return () => {
+    void selectCanvasParentElement(selection, registry);
+  };
+}
 function boardSelection(
   state: { selection: CanvasSelection | null },
   artifactId: string,
@@ -154,6 +166,14 @@ export function CanvasEditingOverlay(props: {
     selection !== null,
   );
   const [dismissed, setDismissed] = useState<string | null>(null);
+  // A comment draft box open for this tile stands in for the action bar: the
+  // box offers the same actions, so the two together would show them twice.
+  // The bar is painted invisible rather than unmounted, so its send keeps
+  // which chat it attached to, and it shows again when the box closes, since
+  // the element is still selected.
+  const draftOpen = useAnchoredDraftStore(
+    (state) => state.byEpicId[props.scope.epicId]?.tileId === props.tileId,
+  );
   const entry = props.registry.get(props.boardPath);
   const request = currentRetype(selection, entry, generation, dismissed);
   const boardDocument = document.data ?? null;
@@ -163,8 +183,15 @@ export function CanvasEditingOverlay(props: {
   const commenting = props.registry.view?.commenting === true;
   if (commenting)
     return (
-      <CanvasSelectionOverlay {...props} commenting hideAction hideHandles />
+      <CanvasSelectionOverlay
+        {...props}
+        commenting
+        hideAction
+        hideHandles
+        onSelectParent={null}
+      />
     );
+  const selectParent = selectParentAction(selection, request, props.registry);
   const controls =
     selection === null ? null : (
       <EditingControls
@@ -206,16 +233,9 @@ export function CanvasEditingOverlay(props: {
           />
         ) : null
       }
-      menuControls={
-        selection !== null && request === null ? (
-          <CanvasSelectionMenu
-            selection={selection}
-            registry={props.registry}
-            document={boardDocument}
-          />
-        ) : null
-      }
+      onSelectParent={selectParent}
       hideAction={request !== null || additional.length > 0}
+      concealAction={draftOpen}
       hideHandles
     />
   );

@@ -110,6 +110,15 @@ function mountSend(handlers: MockHandlerMap<HostRpcRegistry>): {
     ),
     { conversations: [] },
   );
+  // The person's follows of the bot's threads, which the send may add to.
+  queryClient.setQueryData(
+    hostQueryKeys.method<HostRpcRegistry, "bot.threadFollow.read">(
+      SENDING_HOST_ID,
+      "bot.threadFollow.read",
+      params,
+    ),
+    { follows: {} },
+  );
   const wrapper = (props: { readonly children: ReactNode }): ReactNode => (
     <QueryClientProvider client={queryClient}>
       {props.children}
@@ -150,6 +159,34 @@ describe("useBotConversationSendMutation", () => {
     expect(mounted.isStale(SENDING_HOST_ID, "bot.thread.list")).toBe(true);
     expect(mounted.isStale(OTHER_HOST_ID, "bot.thread.list")).toBe(false);
     expect(mounted.isStale(SENDING_HOST_ID, "bot.conversation.list")).toBe(
+      false,
+    );
+  });
+
+  it("makes the bot's follow read stale once the send lands, since a send follows the person to its thread, and not when it is refused", async () => {
+    const accepted = mountSend({
+      "bot.conversation.send": () => ({
+        messageId: "message-1",
+        requestId: "request-1",
+        delivery: "written",
+        threadId: "thread-1",
+      }),
+    });
+    expect(accepted.isStale(SENDING_HOST_ID, "bot.threadFollow.read")).toBe(
+      false,
+    );
+    await accepted.send();
+    expect(accepted.isStale(SENDING_HOST_ID, "bot.threadFollow.read")).toBe(
+      true,
+    );
+
+    const refused = mountSend({
+      "bot.conversation.send": () => {
+        throw new Error("refused");
+      },
+    });
+    await refused.send();
+    expect(refused.isStale(SENDING_HOST_ID, "bot.threadFollow.read")).toBe(
       false,
     );
   });

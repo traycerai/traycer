@@ -73,7 +73,7 @@ const DEPTH_KIND_RANK: Readonly<Record<IsoDepthKind, number>> = {
  * Both tie-breakers folded into the FRACTION of one foot pixel.
  *
  * `depth` is one number by contract, and - this is the whole point - it is the
- * SAME number the scene gives its actors: D20's raw projected foot y. A
+ * SAME number the scene gives its actors: the raw projected foot y. A
  * painter that scaled the foot up to make room for its tie-breakers would sort
  * every prop after every character no matter which foot was nearer, which is
  * exactly the occlusion the world stream exists to get right.
@@ -121,7 +121,7 @@ export interface IsoProjectorSpec {
  *
  * A PLAN has these before it has a projector - it computed them - and it has
  * geometry questions of its own to answer while it is still building the
- * layout a projector would be made from: where a seat is painted (D53's
+ * layout a projector would be made from: where a seat is painted (the
  * `hitBox`) is the one this exists for. Deriving that from a second copy of
  * the formula is how the painted box and the clickable box drift apart, so
  * there is one formula and `createIsoProjector` calls it too.

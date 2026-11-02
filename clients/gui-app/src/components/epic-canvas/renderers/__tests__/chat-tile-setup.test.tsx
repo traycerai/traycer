@@ -149,6 +149,7 @@ function sendTestMessage(harness: Harness, content: JsonContent): void {
     content,
     sender: { type: "user", userId: OWNER_ID },
     settings: {
+      ultracode: false,
       harnessId: "codex",
       model: "gpt-5-codex",
       permissionMode: "supervised",
@@ -192,7 +193,7 @@ function emitSnapshot(
   events: ReadonlyArray<ChatEvent>,
   messages: ReadonlyArray<Message>,
 ): void {
-  callbacks.onConnectionStatus("open", null, null);
+  callbacks.onConnectionStatus("open", null, null, null);
   callbacks.onSnapshot({
     kind: "snapshot",
     hasBinaryPayload: false,
@@ -248,7 +249,7 @@ function emitWindowedSnapshot(
   callbacks: ChatStreamCallbacks,
   restorableSetupInterruption: RestorableSetupInterruption | null,
 ): void {
-  callbacks.onConnectionStatus("open", null, null);
+  callbacks.onConnectionStatus("open", null, null, null);
   callbacks.onWindowedSnapshot({
     kind: "snapshot",
     hasBinaryPayload: false,
@@ -438,6 +439,7 @@ describe("useChatSetupFailureRestoreDriver", () => {
         content: failedContent,
         sender: { type: "user", userId: OWNER_ID },
         settings: {
+          ultracode: false,
           harnessId: "codex",
           model: "gpt-5-codex",
           permissionMode: "supervised",
@@ -714,7 +716,7 @@ describe("useChatSetupFailureRestoreDriver", () => {
   });
 
   it("does not re-restore after a retry transitions setup back to running", () => {
-    // After Flow 8 restoration the user typically retries setup. The
+    // After a restore the user typically retries setup. The
     // ensuing `setup.running` (or `setup.succeeded`) for the same
     // workspace must clear the restorable failure so a re-render of
     // the driver does not seed the composer a second time on top of
@@ -1048,7 +1050,7 @@ describe("<ChatTileErrorNoticeToasts />", () => {
     expect(sonnerToastWarning).not.toHaveBeenCalled();
   });
 
-  // R7 `-oRs`: round 6 made the recovery STRING verbatim, but Sonner renders
+  // `-oRs`: the recovery STRING is verbatim, but Sonner renders
   // it as ordinary HTML - so the newlines and indentation the byte guarantee
   // exists to protect collapse on screen and on copy. The presentation layer
   // has to preserve them or the guarantee stops at the store boundary.
@@ -1083,7 +1085,7 @@ describe("<ChatTileErrorNoticeToasts />", () => {
     );
   });
 
-  // R4-3: a retained record's DELIVERY state has to be as durable as the
+  // A retained record's DELIVERY state has to be as durable as the
   // record. `clientActionIds` is FIFO-bounded at 128 while the ring exemption
   // made the records themselves unbounded, so ordinary chat traffic evicts a
   // delivered last-copy id - and the very next notice re-traverses the ring,

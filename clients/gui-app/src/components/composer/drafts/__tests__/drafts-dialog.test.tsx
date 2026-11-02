@@ -432,7 +432,7 @@ describe("<DraftsDialog />", () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
-  // Review finding 4: Cmd+S stacks the dialog above an open new-agent modal,
+  // Cmd+S stacks the dialog above an open new-agent modal,
   // and opening a chat used to close only the dialog - leaving the modal
   // covering the chat it just opened.
   it("closes an active new-conversation request before the row's open action runs", () => {

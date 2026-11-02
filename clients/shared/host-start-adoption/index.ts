@@ -534,7 +534,7 @@ async function readPendingAdoption(path: string): Promise<PendingAdoptionRead> {
  * removes a refusal without granting anything a proof-less launch does not
  * already have. Without it, a publisher that died between publishing and its
  * child's consume refused every nonce-less launch until the proof expired -
- * and the grant window has grown from 60s to 175.25s
+ * and the grant window has grown from 60s to 224s
  * (`HOST_START_ADOPTION_MAX_AGE_MS`).
  *
  * Deliberately the predicate `readHostStartAdoptionNonce` applies before it

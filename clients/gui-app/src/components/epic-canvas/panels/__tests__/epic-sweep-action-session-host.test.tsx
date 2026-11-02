@@ -8,7 +8,7 @@ import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
  * The Epic status row's sweep affordance sits INSIDE the Epic session, so the
  * rollup it shows and the flow it opens describe the SESSION's host - not the
  * app-wide one, which already answers host B while an A-backed Epic is still
- * rendered through a re-point (PR #1243, round 6: the row read
+ * rendered through a re-point (PR #1243: the row read
  * `useTaskWorktreeMetadata()` and mounted the dialog on the app-wide client).
  *
  * The affordance's GATE is the other half, and it is deliberately wider than

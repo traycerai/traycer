@@ -17,7 +17,6 @@ import {
   threadOpenOf,
   type BotTaskRequestPost,
 } from "@/lib/bots/bot-trunk-model";
-import { taskKindOf } from "@/lib/bots/bot-activity-model";
 import { formatAbsoluteDateTime } from "@/lib/relative-time";
 import { postTextOf } from "@/lib/bots/reply-row";
 import { openEpicFromListIntent } from "@/lib/tab-navigation/intents";
@@ -84,7 +83,7 @@ function taskCreator(
  * an automation's interval. A one-off task shows no interval, and an entry
  * from a host that predates where a task came from shows neither the post
  * nor the thread. In a thread's panel the title opens the task; on the bot's
- * Activity page (T86) the row also names its kind, its next check-in and the
+ * Activity page the row also names its kind, its next check-in and the
  * host that last reported it, opens the task from "Open the brief", and
  * lists its check-ins under it; an automation there also carries its Run
  * now, Pause and Stop (T92).
@@ -281,7 +280,9 @@ function BotPageTaskFacts(props: { readonly task: BotTaskEntry }): ReactNode {
   const reported = task.checkins?.find((record) => record.kind === "received");
   return (
     <>
-      <span data-testid="bot-task-kind">{taskKindOf(task)}</span>
+      <span data-testid="bot-task-kind">
+        {task.cadence.kind === "every" ? "Automation" : "One-off task"}
+      </span>
       {task.state === "tracking" && task.nextAt !== null ? (
         <span data-testid="bot-task-next" className="tabular-nums">
           next {formatAbsoluteDateTime(task.nextAt)}

@@ -240,8 +240,8 @@ const ROWS: ReadonlyArray<OpenerFixtureRow> = [
 ];
 
 /**
- * Naming the effective host is part of building an app-wide host fixture
- * (P2.1's sweep convention). The markdown reference chip resolves its host
+ * Naming the effective host is part of building an app-wide host fixture.
+ * The markdown reference chip resolves its host
  * through `useCanvasHostId()` -> `useEffectiveHostId()` -> the selection
  * authority store, so the STORE carries the host here rather than a hook
  * mock, which would strand again on the next plumbing change.

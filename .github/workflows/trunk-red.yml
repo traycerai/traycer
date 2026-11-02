@@ -47,6 +47,7 @@ on:
       - pre-commit
       - Protocol Compatibility
       - Browser regressions
+      - Formal regressions
       - Real supervisor (macOS launchd integration)
       - CodeQL
       - Secret scan

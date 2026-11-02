@@ -9,7 +9,7 @@ import { WindowsBridgeProvider } from "@/providers/windows-bridge-provider";
 import { EpicCanvasPersistLifecycleBridge } from "@/providers/epic-canvas-persist-lifecycle-bridge";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { fileEditRuntimeRegistry } from "@/lib/workspace/file-edit-runtime-registry";
-import { epicCanvasKey } from "@/lib/persist";
+import { epicCanvasKey, persistKey, STORE_KEYS } from "@/lib/persist";
 import {
   useWindowsBridge,
   useWindowsBridgeHydrated,
@@ -40,7 +40,8 @@ import {
   setLandingDraftDesktopProjectionBridge,
   useLandingDraftStore,
 } from "@/stores/home/landing-draft-store";
-import { emptyTabStripLayout } from "@/stores/tabs/layout";
+import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
+import { emptyTabStripLayout, flattenLayoutRefs } from "@/stores/tabs/layout";
 import { useTabsStore } from "@/stores/tabs/store";
 import { getTabSplitCompatibility } from "@/stores/tabs/tab-split-compatibility";
 import {
@@ -524,6 +525,287 @@ describe("<WindowsBridgeProvider />", () => {
       );
     });
     expect(getTabSplitCompatibility().supported).toBe(false);
+  });
+
+  it("restores the window's own Tracy surface before its layout and sweeps the records of windows the desktop no longer has", async () => {
+    const surfaceKey = persistKey(STORE_KEYS.botTabs);
+    const record = JSON.stringify({
+      state: { open: true, hostId: "host-1", botId: "bot-x" },
+      version: 2,
+    });
+    for (const windowId of ["window-1", "window-2", "window-3"]) {
+      window.localStorage.setItem(`${surfaceKey}:${windowId}`, record);
+    }
+    const fake = createDesktopWindowsBridge();
+    const capabilities = {
+      schemaVersion: 2,
+      features: ["tab-strip-layout-v2", "active-route-v1"],
+    } as const;
+    const windowSummary = (windowId: string): DesktopWindowSummary => ({
+      windowId,
+      title: windowId,
+      isFocused: false,
+      isVisible: true,
+    });
+    const tracyBridge = {
+      ...fake.bridge,
+      list: () =>
+        Promise.resolve([windowSummary("window-1"), windowSummary("window-3")]),
+      perWindowState: {
+        ...fake.bridge.perWindowState,
+        get: () =>
+          Promise.resolve({
+            ...emptyPerWindowSnapshot(),
+            revision: 1,
+            tabStripLayout: {
+              version: 2,
+              items: [
+                {
+                  kind: "tab",
+                  id: "tab:tracy:tracy",
+                  ref: { kind: "tracy", id: "tracy" },
+                },
+              ],
+              activeItemId: "tab:tracy:tracy",
+              systemTabs: { history: null, settings: null },
+            },
+            activeRoute: "/bot/bot-x",
+          }),
+        capabilities: () => Promise.resolve(capabilities),
+        update: () => Promise.resolve({ capabilities, revision: 2 }),
+      },
+    } satisfies DesktopWindowsBridge;
+
+    render(
+      <RunnerHostProvider runnerHost={createRunnerHostWithWindows(tracyBridge)}>
+        <WindowsBridgeProvider>
+          <HydrationProbe />
+        </WindowsBridgeProvider>
+      </RunnerHostProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("hydration-state").textContent).toBe(
+        "hydrated",
+      );
+      expect(window.localStorage.getItem(`${surfaceKey}:window-2`)).toBeNull();
+    });
+    expect({
+      refs: flattenLayoutRefs(useTabsStore.getState()),
+      surface: useTracySurfaceStore.getState().botId,
+      kept: [
+        window.localStorage.getItem(`${surfaceKey}:window-1`),
+        window.localStorage.getItem(`${surfaceKey}:window-3`),
+      ],
+    }).toEqual({
+      refs: [{ kind: "tracy", id: "tracy" }],
+      surface: "bot-x",
+      kept: [record, record],
+    });
+  });
+
+  it("hydrates from the window's own Tracy record while its window list never answers", async () => {
+    const surfaceKey = persistKey(STORE_KEYS.botTabs);
+    const record = JSON.stringify({
+      state: { open: true, hostId: "host-1", botId: "bot-x" },
+      version: 2,
+    });
+    window.localStorage.setItem(`${surfaceKey}:window-1`, record);
+    const fake = createDesktopWindowsBridge();
+    const capabilities = {
+      schemaVersion: 2,
+      features: ["tab-strip-layout-v2", "active-route-v1"],
+    } as const;
+    const lostListBridge = {
+      ...fake.bridge,
+      list: () => new Promise<readonly DesktopWindowSummary[]>(() => undefined),
+      perWindowState: {
+        ...fake.bridge.perWindowState,
+        get: () =>
+          Promise.resolve({
+            ...emptyPerWindowSnapshot(),
+            revision: 1,
+            tabStripLayout: {
+              version: 2,
+              items: [
+                {
+                  kind: "tab",
+                  id: "tab:tracy:tracy",
+                  ref: { kind: "tracy", id: "tracy" },
+                },
+              ],
+              activeItemId: "tab:tracy:tracy",
+              systemTabs: { history: null, settings: null },
+            },
+            activeRoute: "/bot/bot-x",
+          }),
+        capabilities: () => Promise.resolve(capabilities),
+        update: () => Promise.resolve({ capabilities, revision: 2 }),
+      },
+    } satisfies DesktopWindowsBridge;
+
+    render(
+      <RunnerHostProvider
+        runnerHost={createRunnerHostWithWindows(lostListBridge)}
+      >
+        <WindowsBridgeProvider>
+          <HydrationProbe />
+        </WindowsBridgeProvider>
+      </RunnerHostProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("hydration-state").textContent).toBe(
+        "hydrated",
+      );
+    });
+    const { open, hostId, botId } = useTracySurfaceStore.getState();
+    expect({
+      refs: flattenLayoutRefs(useTabsStore.getState()),
+      surface: { open, hostId, botId },
+    }).toEqual({
+      refs: [{ kind: "tracy", id: "tracy" }],
+      surface: { open: true, hostId: "host-1", botId: "bot-x" },
+    });
+  });
+
+  it("adds the Tracy tab when the window list answers after hydration with this window first", async () => {
+    const surfaceKey = persistKey(STORE_KEYS.botTabs);
+    const record = JSON.stringify({
+      state: { open: true, hostId: "host-1", botId: "bot-x" },
+      version: 2,
+    });
+    // The store loads the global record before the window is known; the
+    // window has none of its own, so it starts closed and holds it as the
+    // record it adopts once the list names it first.
+    window.localStorage.setItem(surfaceKey, record);
+    await useTracySurfaceStore.persist.rehydrate();
+    const fake = createDesktopWindowsBridge();
+    const windowList = createDeferred<readonly DesktopWindowSummary[]>();
+    const capabilities = {
+      schemaVersion: 2,
+      features: ["tab-strip-layout-v2", "active-route-v1"],
+    } as const;
+    const lateListBridge = {
+      ...fake.bridge,
+      list: () => windowList.promise,
+      perWindowState: {
+        ...fake.bridge.perWindowState,
+        // The saved layout still carries the Tracy ref; with no record of its
+        // own the surface is closed, so restoring the layout drops it.
+        get: () =>
+          Promise.resolve({
+            ...emptyPerWindowSnapshot(),
+            revision: 1,
+            tabStripLayout: {
+              version: 2,
+              items: [
+                {
+                  kind: "tab",
+                  id: "tab:tracy:tracy",
+                  ref: { kind: "tracy", id: "tracy" },
+                },
+              ],
+              activeItemId: "tab:tracy:tracy",
+              systemTabs: { history: null, settings: null },
+            },
+            activeRoute: "/bot/bot-x",
+          }),
+        capabilities: () => Promise.resolve(capabilities),
+        update: () => Promise.resolve({ capabilities, revision: 2 }),
+      },
+    } satisfies DesktopWindowsBridge;
+
+    render(
+      <RunnerHostProvider
+        runnerHost={createRunnerHostWithWindows(lateListBridge)}
+      >
+        <WindowsBridgeProvider>
+          <HydrationProbe />
+        </WindowsBridgeProvider>
+      </RunnerHostProvider>,
+    );
+    await waitFor(() => {
+      expect(screen.getByTestId("hydration-state").textContent).toBe(
+        "hydrated",
+      );
+    });
+    expect({
+      open: useTracySurfaceStore.getState().open,
+      refs: flattenLayoutRefs(useTabsStore.getState()),
+    }).toEqual({ open: false, refs: [] });
+
+    windowList.resolve([
+      { windowId: "window-1", title: "", isFocused: false, isVisible: true },
+    ]);
+
+    await waitFor(() => {
+      expect(useTracySurfaceStore.getState().open).toBe(true);
+    });
+    const { hostId, botId } = useTracySurfaceStore.getState();
+    expect({
+      surface: { hostId, botId },
+      refs: flattenLayoutRefs(useTabsStore.getState()),
+      global: window.localStorage.getItem(surfaceKey),
+      own: window.localStorage.getItem(`${surfaceKey}:window-1`),
+    }).toEqual({
+      surface: { hostId: "host-1", botId: "bot-x" },
+      refs: [{ kind: "tracy", id: "tracy" }],
+      global: null,
+      own: record,
+    });
+  });
+
+  it("sweeps only the Tracy records that existed before the window list was requested", async () => {
+    const surfaceKey = persistKey(STORE_KEYS.botTabs);
+    const record = JSON.stringify({
+      state: { open: true, hostId: "host-1", botId: "bot-x" },
+      version: 2,
+    });
+    window.localStorage.setItem(`${surfaceKey}:window-gone`, record);
+    const fake = createDesktopWindowsBridge();
+    const windowList = createDeferred<readonly DesktopWindowSummary[]>();
+    const capabilities = {
+      schemaVersion: 2,
+      features: ["tab-strip-layout-v2", "active-route-v1"],
+    } as const;
+    const listedBridge = {
+      ...fake.bridge,
+      list: () => windowList.promise,
+      perWindowState: {
+        ...fake.bridge.perWindowState,
+        capabilities: () => Promise.resolve(capabilities),
+        update: () => Promise.resolve({ capabilities, revision: 2 }),
+      },
+    } satisfies DesktopWindowsBridge;
+
+    render(
+      <RunnerHostProvider
+        runnerHost={createRunnerHostWithWindows(listedBridge)}
+      >
+        <WindowsBridgeProvider>
+          <HydrationProbe />
+        </WindowsBridgeProvider>
+      </RunnerHostProvider>,
+    );
+    await waitFor(() => {
+      expect(useTracySurfaceStore.persist.getOptions().name).toBe(
+        `${surfaceKey}:window-1`,
+      );
+    });
+    window.localStorage.setItem(`${surfaceKey}:window-new`, record);
+    windowList.resolve([
+      { windowId: "window-1", title: "", isFocused: false, isVisible: true },
+    ]);
+
+    await waitFor(() => {
+      expect(
+        window.localStorage.getItem(`${surfaceKey}:window-gone`),
+      ).toBeNull();
+    });
+    expect(window.localStorage.getItem(`${surfaceKey}:window-new`)).toBe(
+      record,
+    );
   });
 
   it("keeps a subscribed newer snapshot when the initial get resolves stale", async () => {
@@ -1178,7 +1460,7 @@ describe("<WindowsBridgeProvider /> - renderer parking's cross-window channel", 
   });
 });
 
-// ── Renderer parking's WINDOW-level input (fixup 5) ──────────────────────────
+// ── Renderer parking's WINDOW-level input ────────────────────────────────────
 //
 // The Page Visibility API is inert in a desktop window that a browser tile's
 // video plane keeps rendering unseen (`backgroundThrottling` off), which keeps
@@ -1190,7 +1472,7 @@ describe("<WindowsBridgeProvider /> - renderer parking's cross-window channel", 
 // observe the two things the signal exists for: the park clock and the
 // cross-window claim. Manually overwriting `document.visibilityState` (the
 // other parking pins) cannot see this configuration mismatch, which is how the
-// first cut of fixup 5 shipped inert on the desktop.
+// first cut shipped inert on the desktop.
 
 interface FakeWindowVisibilityChannel {
   readonly channel: NonNullable<DesktopWindowsBridge["windowVisibility"]>;
@@ -1422,7 +1704,7 @@ describe("<WindowsBridgeProvider /> - renderer parking's window visibility input
   });
 
   // ── The startup read is OLDER than any event that lands while it is in
-  // flight (Codex re-review of 343f6cc0b9, P1) ───────────────────────────────
+  // flight ───────────────────────────────────────────────────────────────────
   //
   // Main answers the snapshot from what the window looked like when the invoke
   // arrived; an `onChange` that lands before the answer does is newer. Applying
@@ -1525,7 +1807,7 @@ describe("<WindowsBridgeProvider /> - renderer parking's window visibility input
   });
 
   // ── A transient snapshot failure is retried, because "the next edge" never
-  // comes for a window minimised at startup and left alone (P2) ──────────────
+  // comes for a window minimised at startup and left alone ──────────────
   it("retries a failed startup snapshot and reclaims a quiet minimised window without any further edge", async () => {
     const EPIC = "epic-provider-snapshot-retry";
     const VIEW = "view-provider-snapshot-retry";
@@ -1645,8 +1927,8 @@ describe("<WindowsBridgeProvider /> - renderer parking's window visibility input
         // Microtasks only: the settle runs the leg's `.then`/`.catch`.
         await vi.advanceTimersByTimeAsync(0);
       });
-      // The discriminator for teardown's `snapshotLeg.cancel()` (Codex on
-      // 7f3f67441): a rejection after teardown must not ARM a retry timer.
+      // The discriminator for teardown's `snapshotLeg.cancel()`:
+      // a rejection after teardown must not ARM a retry timer.
       // Asserted on the timer count before the backoff elapses, because a
       // stray retry that does fire returns at `snapshotSuperseded()` before
       // it reads, leaving `snapshotCalls` unchanged - so the count below is
@@ -1795,6 +2077,17 @@ describe("<WindowsBridgeProvider /> - a covered macOS window's epics", () => {
 });
 
 function resetStores(): void {
+  // Binding to a window keeps the store on that window's record for the life
+  // of the renderer; every test starts from a freshly loaded one.
+  useTracySurfaceStore.persist.setOptions({
+    name: persistKey(STORE_KEYS.botTabs),
+  });
+  useTracySurfaceStore.setState({
+    open: false,
+    hostId: null,
+    botId: null,
+    visitedBotIds: [],
+  });
   setEpicCanvasDesktopProjectionBridge(null);
   setLandingDraftDesktopProjectionBridge(null);
   setActiveDesktopPerWindowProjectionBridge(null);

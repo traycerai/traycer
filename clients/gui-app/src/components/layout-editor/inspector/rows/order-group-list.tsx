@@ -50,7 +50,7 @@ import type { RateLimitProviderId } from "@/lib/rate-limit-providers";
  * Written as a branch per group rather than through one `ReadonlyArray<string>`
  * seam: only the rail actually mixes two kinds of id, and widening every group
  * to `string` meant re-narrowing each id back on the way out, where a
- * mis-routed id was silently DROPPED instead of failing (G1-23).
+ * mis-routed id was silently DROPPED instead of failing.
  *
  * THE list for its group in both hosts (L-03, L-95): the area form draws it
  * once per group, with the canvas's selected region highlighted.
@@ -120,7 +120,7 @@ export function OrderGroupList(props: {
 
 /**
  * The header that introduces one of these lists: its name, how it is operated,
- * and whatever verb belongs to the GROUP rather than to a member (R3-11) - the
+ * and whatever verb belongs to the GROUP rather than to a member - the
  * area form's order revert.
  */
 export function OrderGroupHeader(props: {
@@ -296,7 +296,7 @@ function OrderGroupRows(props: {
 
 /**
  * The providers configured on the watched host, in their saved order, then
- * the rest behind a Show all providers disclosure (C13). The disclosure is not
+ * the rest behind a Show all providers disclosure. The disclosure is not
  * a layout setting, and an unconfigured provider keeps its saved choices.
  */
 function ProviderLists(props: {

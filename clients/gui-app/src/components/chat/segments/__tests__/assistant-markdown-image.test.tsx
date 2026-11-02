@@ -281,7 +281,7 @@ describe("AssistantMarkdownImage source classification matrix", () => {
     renderImage({ src: SVG_DATA_URL, alt: undefined, context: undefined });
 
     // Thumbnails stay <img>; the lightbox owns the sanitizer on open.
-    // Ticket 07: never fail-chip SVG data URLs on the assistant surface.
+    // Never fail-chip SVG data URLs on the assistant surface.
     expect(document.querySelector("[data-assistant-image-failure]")).toBeNull();
     const img = screen.getByRole("img", { name: "diagram" });
     expect(img.getAttribute("src")).toBe(SVG_DATA_URL);

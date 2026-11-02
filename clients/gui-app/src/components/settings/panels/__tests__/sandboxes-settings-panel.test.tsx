@@ -970,7 +970,7 @@ describe("<SandboxesSettingsPanel />", () => {
 
     const failed = within(rowOf("build-box"));
     expect(failed.getByTestId("sandboxes-row-clock").textContent).toBe(
-      "Couldn't start build-box at 11:01 · SBX-0412 · nothing was charged",
+      "Couldn't start build-box at 11:01 · SBX-0412",
     );
     expect(
       failed.getByRole("button", { name: "Retry" }).hasAttribute("disabled"),
@@ -1842,6 +1842,78 @@ describe("<SandboxesSettingsPanel />", () => {
       renderPanel([row("sbx-a", { environmentId: TEAM_DAY_ENV })]);
 
       expect(header()).toBe("1 sandbox · $5.00 today (UTC day).");
+    });
+
+    function pickTeam(): void {
+      mocks.configurations = [{ kind: "personal" }, TEAM_DAY];
+      host.environments = [
+        descriptor(PERSONAL_ENV, "user", "u1", "owner"),
+        descriptor(TEAM_DAY_ENV, "organization", "team-1", "viewer"),
+      ];
+      useSettingsEnvironmentPickStore.setState({
+        pick: { kind: "team", environmentId: TEAM_DAY_ENV },
+      });
+    }
+
+    it("names the viewer's share on a team even when it is all of the day's total", () => {
+      pickTeam();
+      mocks.costs = costsOf(
+        [
+          {
+            environmentId: TEAM_DAY_ENV,
+            todayMillicredits: 40,
+            todayYoursMillicredits: 40,
+          },
+        ],
+        20,
+      );
+      renderPanel([row("sbx-a", { environmentId: TEAM_DAY_ENV })]);
+
+      expect(header()).toBe(
+        "1 sandbox · $0.04 today (UTC day), $0.04 of it yours.",
+      );
+    });
+
+    it("reads Automations only for a team with no sandboxes but a listed Automations row, with the share", () => {
+      pickTeam();
+      mocks.costs = costsOf(
+        [
+          {
+            environmentId: TEAM_DAY_ENV,
+            todayMillicredits: 40,
+            todayYoursMillicredits: 40,
+          },
+        ],
+        20,
+      );
+      renderPanel([
+        row("sbx-auto", {
+          kind: "automation",
+          hostId: "auto-host",
+          environmentId: TEAM_DAY_ENV,
+        }),
+      ]);
+
+      expect(header()).toBe(
+        "Automations only · $0.04 today (UTC day), $0.04 of it yours.",
+      );
+    });
+
+    it("reads Automations only, with no share, when only the unstarted Automations host is shown", () => {
+      mocks.automation = { available: true, sandbox: null, pods: [] };
+      mocks.costs = costsOf(
+        [
+          {
+            environmentId: "env-personal",
+            todayMillicredits: 40,
+            todayYoursMillicredits: 40,
+          },
+        ],
+        20,
+      );
+      renderPanel([]);
+
+      expect(header()).toBe("Automations only · $0.04 today (UTC day).");
     });
   });
 

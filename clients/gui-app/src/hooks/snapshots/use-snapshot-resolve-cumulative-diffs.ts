@@ -15,7 +15,7 @@ import {
 import { useHostQueries } from "@/hooks/host/use-host-queries";
 
 /**
- * Before/after contents for a CUMULATIVE snapshot tile, on either line (D7).
+ * Before/after contents for a CUMULATIVE snapshot tile, on either line.
  *
  * A cumulative tile (one file, or the whole accumulated set as a bundle) used
  * to read its contents straight out of the snapshot's `accumulatedFileChanges`.

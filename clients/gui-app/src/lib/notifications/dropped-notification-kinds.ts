@@ -1,4 +1,5 @@
 import {
+  isBotConversationAttention,
   isBotThreadVerdictNotification,
   RETIRED_HOST_NOTIFICATION_KINDS,
   type HostNotificationKind,
@@ -18,6 +19,18 @@ import {
 const DROPPED_NOTIFICATION_KINDS: ReadonlySet<HostNotificationKind> = new Set(
   RETIRED_HOST_NOTIFICATION_KINDS,
 );
+
+/**
+ * Kinds the center holds and shows without announcing: no toast, no chime.
+ * `team.role.changed` is the one — a member is told their own role moved the
+ * way a task's collaborators are, and that tell has never had a live surface
+ * or a push either. Mirrored by the server's own push set, which keeps the
+ * same kind out of the phone push. A notification hook is not a surface this
+ * set has to cover: hooks observe the host's own origin store, and this kind
+ * is written only server-side, so no hook ever sees a row of it.
+ */
+const NO_LIVE_ANNOUNCE_NOTIFICATION_KINDS: ReadonlySet<HostNotificationKind> =
+  new Set(["team.role.changed"]);
 
 /**
  * The `host.operation.finished` operations no agent produces: a session
@@ -50,6 +63,9 @@ function isDroppedHostOperation(payload: unknown): boolean {
  * push entry for a sandbox is keyed `sandbox-<kind>:<sandboxId>:<stage>`
  * whatever its row kind, so its `entryId` drops it too; host rows have no
  * such key and pass `null`.
+ *
+ * The read policy, not the live-display gate — that is the narrower
+ * {@link isLiveAnnouncedNotification}.
  */
 export function isDroppedNotification(
   entry: { readonly kind: HostNotificationKind; readonly payload: unknown },
@@ -60,6 +76,21 @@ export function isDroppedNotification(
     (entry.kind === "host.operation.finished" &&
       isDroppedHostOperation(entry.payload)) ||
     (cloudEntryId?.startsWith("sandbox-") ?? false)
+  );
+}
+
+/**
+ * Whether a feed row may announce itself as it arrives — a native toast and a
+ * chime. The read policy above, and then the kinds the center shows without
+ * announcing. The gate both live-display lanes pass through.
+ */
+export function isLiveAnnouncedNotification(
+  entry: { readonly kind: HostNotificationKind; readonly payload: unknown },
+  cloudEntryId: string | null,
+): boolean {
+  return (
+    !isDroppedNotification(entry, cloudEntryId) &&
+    !NO_LIVE_ANNOUNCE_NOTIFICATION_KINDS.has(entry.kind)
   );
 }
 
@@ -74,6 +105,7 @@ export function notificationSummaryContribution(entry: {
   const attention =
     entry.severity === "needs_action" ||
     entry.severity === "failure" ||
-    isBotThreadVerdictNotification(entry);
+    isBotThreadVerdictNotification(entry) ||
+    isBotConversationAttention(entry);
   return { unread: 1, attention: attention ? 1 : 0 };
 }

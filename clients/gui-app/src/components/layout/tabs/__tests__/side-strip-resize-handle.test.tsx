@@ -1,5 +1,5 @@
 /**
- * The vertical strip's width handle (S-20) on the shared pointer machine: the
+ * The vertical strip's width handle on the shared pointer machine: the
  * width follows the pointer toward the content on either edge, the arrow keys
  * mirror with the edge, a drag from the rail that ends short stays on it,
  * double-click resets, and the stored width stays inside 192..400.
@@ -215,7 +215,7 @@ describe("SideStripResizeHandle", () => {
   });
 
   it("stores the width the strip rendered when its own floor is wider", () => {
-    // The title row's floor under the traffic lights (S-43).
+    // The title row's floor under the traffic lights.
     const { handle } = renderHandle("left", 240, 218);
 
     drag(handle, 500, 460);

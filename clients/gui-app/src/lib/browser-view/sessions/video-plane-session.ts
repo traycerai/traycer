@@ -42,8 +42,8 @@ export function startPlayback(element: HTMLVideoElement): void {
  *
  * `active` is entered by the first decoded frame and nothing else - that is
  * what `videoPlaneState: "live"` reports. It is deliberately NOT what turns
- * the host's JPEG pump off: the pump is already off for the whole attempt
- * (ticket 26), and this report only confirms the attempt paid off.
+ * the host's JPEG pump off: the pump is already off for the whole attempt,
+ * and this report only confirms the attempt paid off.
  *
  * Between `ontrack` and that first frame the `<video>` is mounted but blank -
  * it has to be in the tree to decode - and the tile shows its connecting
@@ -55,8 +55,8 @@ export function startPlayback(element: HTMLVideoElement): void {
  * no-first-frame deadline are only visible from the `<video>` and are
  * reported in from here.
  *
- * There is no client-scheduled retry: the broker re-offers on its own backoff
- * (ticket 23), and the next natural re-subscribe - reconnect, visibility
+ * There is no client-scheduled retry: the broker re-offers on its own
+ * backoff, and the next natural re-subscribe - reconnect, visibility
  * toggle, `runtime.revision` remount - re-arms it as well.
  */
 export interface VideoPlaneView {
@@ -94,7 +94,7 @@ export interface VideoPlaneSession {
 export const NO_VIDEO_VIEW: VideoPlaneView = { media: null, active: false };
 
 /**
- * Ticket 11's stats cadence. Sampled only while the round is live (a
+ * The stats cadence. Sampled only while the round is live (a
  * `negotiating` round has no inbound-rtp stats worth reading yet), and both
  * sent to the host (`WebrtcSignalPort.sendVideoStats`) and handed to
  * `onVideoStats` for the tile's debug overlay - one sample, two consumers.
@@ -130,7 +130,7 @@ export function createVideoPlaneSession(options: {
   let measuredRound: number | null = null;
   let latency = createVideoFrameLatencyWindow();
   /**
-   * The DataChannel RTT probe (ticket 17). One `ping` in flight at a time:
+   * The DataChannel RTT probe. One `ping` in flight at a time:
    * the screencast `pong` frame carries no correlation id, so a second
    * outstanding ping would have no way to tell which reply is which. The
    * sample reports the LAST completed round trip, which is one cadence tick
@@ -156,7 +156,7 @@ export function createVideoPlaneSession(options: {
    * frame. The host's own negotiation deadline stops at "answered" - a
    * connection that never carries pixels (ICE settles, media does not flow)
    * is only visible from this end. Derived from the host's reported
-   * control-plane RTT (ticket 18), with the old 15s literal as its floor.
+   * control-plane RTT, with the old 15s literal as its floor.
    *
    * "Decoded frame" is observed through `requestVideoFrameCallback`, which a
    * hidden window never fires: an occluded viewer would otherwise fail every

@@ -114,7 +114,7 @@ export function useEpicOpenInNewWindowFlow(): EpicNewWindowFlow {
       // Grouped-move adapter (renderer-only; the move IPC itself, step 5
       // below, is unchanged): a tab paired into a split cannot be handed to
       // another window still grouped, so this separates it first and makes
-      // sure that separation is durably acknowledged by the T4 persistence
+      // sure that separation is durably acknowledged by the persistence
       // layer BEFORE the move IPC fires - otherwise a main-pushed snapshot
       // racing the move could restore the pre-separation pairing.
       void (async () => {
@@ -132,7 +132,7 @@ export function useEpicOpenInNewWindowFlow(): EpicNewWindowFlow {
         // layout itself and catches a failed separation the same way it
         // catches a later re-pair, so no separate check is needed here.
         tabCommandCoordinator.separateBeforeMove(ref);
-        // Step 3: flush + await the T4 acknowledgement - the move barrier.
+        // Step 3: flush + await the acknowledgement - the move barrier.
         // Only a *genuine* write failure (the update IPC rejecting, an
         // unrecognizable acknowledgement, a stale revision) can leave the
         // separation's durability unconfirmed, so only that case aborts the

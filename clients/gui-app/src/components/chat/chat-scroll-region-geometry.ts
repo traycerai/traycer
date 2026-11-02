@@ -2,7 +2,7 @@
  * Contract between the transcript scroll region (producer) and any overlay
  * that clips/clamps its geometry to it (consumer: the user-message minimap,
  * the quote-selection popover). The composer/queue dock overlays the BOTTOM
- * of the region (decision #3, #13) without shrinking the region's own box -
+ * of the region without shrinking the region's own box -
  * so a naive `getBoundingClientRect()` on the region reports a bottom edge
  * that extends behind the opaque dock. Consumers must clamp against the
  * CURRENT measured inset instead - passed explicitly as a value (a prop, not

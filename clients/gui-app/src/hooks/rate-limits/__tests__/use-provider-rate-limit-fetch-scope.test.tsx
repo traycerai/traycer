@@ -21,7 +21,7 @@ vi.mock("@/lib/host", () => ({
   useHostClient: () => ({
     requestWithResponseTimeout: mocks.requestWithResponseTimeout,
   }),
-  // The SPINE, a separate export since redesign P2.1.
+  // The SPINE, a separate export.
   useHostRuntimeClient: () => ({
     requestWithResponseTimeout: mocks.requestWithResponseTimeout,
   }),

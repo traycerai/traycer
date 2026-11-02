@@ -17,9 +17,8 @@ export type LocalRowVerb = "move_to_personal" | "finish_moving";
  *   verb; `defaultsToLocal` makes it the window's default pick when the host
  *   is this window's own.
  *
- * `null` leaves the decision to the picker's own rule (a Local row while
- * setup awaits consent, `its own settings, not in Personal yet · …` or
- * `partly in Personal · Finish moving`).
+ * `none` is the whole answer for a computer with no plane of its own left:
+ * the planes decide, and there is no second rule behind this one.
  */
 export type LocalRowCohort =
   | { readonly kind: "none" }
@@ -32,7 +31,7 @@ export type LocalRowCohort =
 
 export function localRowCohort(
   status: EnvironmentStatusResponseV11,
-): LocalRowCohort | null {
+): LocalRowCohort {
   const cohort = cohortFromPlanes(
     status.planes,
     status.pendingUploads.length > 0,

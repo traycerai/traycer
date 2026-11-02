@@ -30,7 +30,7 @@ export function FallbackCrossLinkRow(): ReactNode {
   return (
     <div className="rounded-lg border border-border/60 bg-card/40 px-5 py-4">
       <p className="max-w-[68ch] text-ui-sm text-muted-foreground">
-        {/* The causes came BACK after a user-lens review. Cutting them was
+        {/* The causes came BACK. Cutting them was
             the one change that made this row worse: "when a provider stops a
             turn" is the team's abstraction and reads like a refused request,
             while "rate limit" is the words on the error the reader just saw.

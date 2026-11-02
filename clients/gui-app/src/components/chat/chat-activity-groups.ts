@@ -474,7 +474,7 @@ function shouldPromoteToolSegment(
   // An app is the call's result, rendered where the call was made.
   if (isMcpAppToolCall(segment)) return true;
   if (segment.agentMessageSend !== null) return true;
-  // A bot's reply, question or announcement (Tracy Bots T93) is what its
+  // A bot's reply, question or announcement is what its
   // session said to people: a send, drawn as its own card. Keyed on the name,
   // which the call has for its whole life, so a send whose input is still
   // streaming or that failed stands on its own as well.

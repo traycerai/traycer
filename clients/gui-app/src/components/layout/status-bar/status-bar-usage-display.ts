@@ -3,7 +3,10 @@ import type {
   StatusBarRateLimitCluster,
 } from "@/hooks/rate-limits/use-status-bar-rate-limit-segments";
 import { providerDisplayName } from "@/lib/provider-ordering";
-import { formatUnavailableReason } from "@/lib/provider-rate-limit-content";
+import {
+  chatCredentialNoticeText,
+  formatUnavailableReason,
+} from "@/lib/provider-rate-limit-content";
 import { useRegionValues } from "@/lib/layout-overrides";
 import { windowPercentText } from "@/lib/rate-limits/status-bar-window-text";
 import type { RateLimitWindowSeverity } from "@/lib/rate-limits/window-severity";
@@ -186,6 +189,9 @@ export function statusBarSegmentTooltip(
     return segment.reason === null
       ? `${providerName} · couldn't refresh usage, showing the last reading`
       : `${providerName} · ${formatUnavailableReason(segment.reason)} · showing the last reading`;
+  }
+  if (segment.state === "unavailable" && segment.chatCredential !== null) {
+    return `${providerName} · ${chatCredentialNoticeText(segment.chatCredential)}`;
   }
   if (segment.state === "unavailable" && segment.reason !== null) {
     return `${providerName} · ${formatUnavailableReason(segment.reason)}`;

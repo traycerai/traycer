@@ -62,6 +62,7 @@ const OWNER_ID = "owner-r9-ack-retire";
 const HOST_ID = "host-r9-ack-retire";
 
 const SETTINGS: ChatRunSettings = {
+  ultracode: false,
   harnessId: "codex",
   model: "gpt-5-codex",
   permissionMode: "supervised",
@@ -148,7 +149,7 @@ function createHarness(): Harness {
 }
 
 function emitOwnerSnapshot(callbacks: ChatStreamCallbacks): void {
-  callbacks.onConnectionStatus("open", null, null);
+  callbacks.onConnectionStatus("open", null, null, null);
   const chat: Chat = {
     id: CHAT_ID,
     parentId: null,
@@ -327,7 +328,7 @@ describe("retireSweptEvidenceOnAck: an ACCEPTED ack retires the settled action's
 
     // Give the retry SOMETHING in the sticky map to retire: a sweep while it
     // is live folds evidence into its record via the consumer-observing
-    // subscription (same mechanism R9F2/R9F3 exercise).
+    // subscription.
     useWorktreeIntentStagingStore
       .getState()
       .purgeRemovedWorktreeIntents(HOST_ID, {

@@ -561,6 +561,8 @@ export interface RuntimeCommandMap {
   "apply-tui-agent-record-delta": { readonly delta: TuiAgentRecordDelta };
   "mark-chat-records-authoritative": Record<string, never>;
   "mark-chat-records-not-authoritative": Record<string, never>;
+  "mark-tui-agent-records-authoritative": Record<string, never>;
+  "mark-tui-agent-records-not-authoritative": Record<string, never>;
   /**
    * `pending` is `unknown` for the same reason `projectionCounts` and the
    * manifest's `docArm` are: `PendingChatCreation` belongs to gui-app, and a
@@ -624,6 +626,8 @@ const RUNTIME_COMMAND_COVERAGE: {
   "apply-tui-agent-record-delta": true,
   "mark-chat-records-authoritative": true,
   "mark-chat-records-not-authoritative": true,
+  "mark-tui-agent-records-authoritative": true,
+  "mark-tui-agent-records-not-authoritative": true,
   "begin-pending-chat-creation": true,
   "clear-pending-chat-creation": true,
   "expire-pending-chat-creation-for-cloud-row": true,

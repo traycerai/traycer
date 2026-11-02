@@ -119,11 +119,11 @@ export interface HostStreamClientBinding {
    * `hostTransportKey` - a caller comparing this across renders to decide
    * "is this still the same owned session" must see a remote public-key
    * rotation as a distinct value, or it would silently misuse a stale
-   * session the same way the S1-era owners did.
+   * session.
    */
   readonly transportKey: string;
   /**
-   * Opt-in transport lease (Codex re-review, image-preview coalescing).
+   * Opt-in transport lease (image-preview coalescing).
    *
    * A caller that hands `client` to a consumer outliving this hook instance -
    * a stream a sibling instance also reads from - must `pin()` it first and
@@ -230,7 +230,7 @@ export function buildHostStreamClient(params: {
   readonly auth: StreamAuthRevalidator | null;
   /**
    * The signed-in user this transport is built for. Part of the shared
-   * `(hostId, userId)` remote-session cache key (Architecture §4 / S1) - only
+   * `(hostId, userId)` remote-session cache key (S1) - only
    * consulted on the remote and pool branches.
    */
   readonly userId: string;
@@ -484,7 +484,7 @@ export function useHostStreamClientBindingFor(
   // double-invoke, or a discarded concurrent render in prod) used to be
   // harmless (each built its own independent, unstarted client that GC
   // reclaimed); under the shared `(hostId, userId)` session cache
-  // (Architecture §4 / S1) a discarded acquire instead holds a live,
+  // (S1) a discarded acquire instead holds a live,
   // never-released reference on the ONE shared session, so the session's
   // refCount would never return to zero. This effect's cleanup is guaranteed
   // to run for exactly the committed acquire, so it supersedes both the old

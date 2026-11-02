@@ -21,6 +21,15 @@ import { createStore } from "zustand/vanilla";
 import type { CanvasAnnotationRecord } from "@traycer/protocol/persistence/epic/messages";
 import type { QuoteChatTarget } from "@/components/epic-canvas/renderers/chat-target-menu/quote-chat-targets";
 import type { ArtifactReadSpan } from "@/lib/sandbox/artifact-serving";
+import {
+  recordNegotiatedHostManifest,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import { useNewConversationAnnotationStore } from "@/stores/epics/new-conversation-annotation-store";
+import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
+import type { CanvasBox } from "@/lib/sandbox/canvas-bridge";
+import { useAnchoredDraftStore } from "@/stores/comments/anchored-draft-store";
+import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
 import { CanvasEditingOverlay } from "../canvas-editing-overlay";
 import {
   useCanvasSelectionStore,
@@ -30,6 +39,7 @@ import {
   BOARD_PATH,
   disposeBridges,
   pendingSaves,
+  canvasElement,
   quotedSelection,
   realBridge,
   registryServing,
@@ -60,11 +70,25 @@ interface Outside {
   >;
   readonly reveal: Mock<(chatId: string) => void>;
   readonly source: { current: { kind: "text"; text: string } | null };
+  /** The desktop's window screenshot bridge, or `null` where there is none (web). */
+  readonly capture: {
+    current: {
+      captureRegion: Mock<(rect: CanvasBox) => Promise<ArrayBuffer | null>>;
+    } | null;
+  };
+  /**
+   * The mocked roster's exit animation. With `hold` set, a closed menu stays
+   * mounted and `onClosed` waits until `release` is called, the way Radix
+   * keeps the content until its exit animation ends.
+   */
+  readonly menuExit: { hold: boolean; release: (() => void) | null };
 }
 const outside = vi.hoisted((): Outside => ({
   attach: vi.fn(),
   reveal: vi.fn(),
   source: { current: null },
+  capture: { current: null },
+  menuExit: { hold: false, release: null },
 }));
 
 vi.mock("@/providers/use-open-epic-handle", () => ({
@@ -99,50 +123,91 @@ vi.mock(
 );
 vi.mock(
   "@/components/epic-canvas/renderers/chat-target-menu/chat-target-menu",
-  () => ({
+  async () => {
+    const { useEffect, useRef, useState } = await import("react");
     // The roster is Radix's; what matters here is that it lists the chats only
-    // once the trigger has opened it.
-    ChatTargetMenu: (props: {
+    // once the trigger has opened it, and that it reports the menu gone the
+    // way Radix does: from the unmount that follows a close, not from the
+    // close itself. With `outside.menuExit.hold` the closed menu stays on
+    // screen until the test releases it, standing in for the exit animation.
+    function ChatTargetMenu(props: {
       readonly trigger: ReactNode;
       readonly targets: readonly QuoteChatTarget[];
       readonly open: boolean;
       readonly onOpenChange: (open: boolean) => void;
+      readonly onClosed: (() => void) | null;
       readonly onSelectChat: (chatId: string) => void;
-    }) => (
-      <div>
-        <div
-          role="presentation"
-          onClick={() => props.onOpenChange(!props.open)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") props.onOpenChange(!props.open);
-          }}
-        >
-          {props.trigger}
-        </div>
-        {props.open ? (
-          <div role="menu">
-            {props.targets.map((target) => (
-              <button
-                key={target.chatId}
-                type="button"
-                role="menuitem"
-                onClick={() => props.onSelectChat(target.chatId)}
-              >
-                {target.title}
-              </button>
-            ))}
+      readonly onSelectNewChat: (() => void) | null;
+    }) {
+      const wasOpen = useRef(false);
+      const [exiting, setExiting] = useState(false);
+      const { open, onClosed } = props;
+      useEffect(() => {
+        if (wasOpen.current && !open) {
+          if (outside.menuExit.hold) {
+            setExiting(true);
+            outside.menuExit.release = () => {
+              setExiting(false);
+              if (onClosed !== null) onClosed();
+            };
+          } else if (onClosed !== null) onClosed();
+        }
+        wasOpen.current = open;
+      }, [open, onClosed]);
+      return (
+        <div>
+          <div
+            role="presentation"
+            onClick={() => props.onOpenChange(!props.open)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") props.onOpenChange(!props.open);
+            }}
+          >
+            {props.trigger}
           </div>
-        ) : null}
-      </div>
-    ),
-  }),
+          {props.open || exiting ? (
+            <div role="menu">
+              {props.targets.map((target) => (
+                <button
+                  key={target.chatId}
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    // Radix closes the menu on a pick before the item's own
+                    // handler runs; the real roster does the same.
+                    props.onOpenChange(false);
+                    props.onSelectChat(target.chatId);
+                  }}
+                >
+                  {target.title}
+                </button>
+              ))}
+              {props.onSelectNewChat === null ? null : (
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    props.onOpenChange(false);
+                    props.onSelectNewChat?.();
+                  }}
+                >
+                  New chat
+                </button>
+              )}
+            </div>
+          ) : null}
+        </div>
+      );
+    }
+    return { ChatTargetMenu };
+  },
 );
 vi.mock("@/hooks/files/use-artifact-object-text-query", () => ({
   useArtifactObjectTextQuery: () => ({ data: outside.source.current }),
 }));
 vi.mock("../canvas-annotation-attach", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../canvas-annotation-attach")>()),
-  canvasWindowCaptureBridge: () => null,
+  canvasWindowCaptureBridge: () => outside.capture.current,
   attachCanvasAnnotation: outside.attach,
 }));
 
@@ -153,6 +218,7 @@ const SCOPE = {
   epicId: "epic-1",
   artifactId: "canvas-1",
   artifactTitle: "Wiring",
+  artifactType: "canvas" as const,
   hostId: "host-1",
   viewTabId: "tab-1",
 };
@@ -196,6 +262,8 @@ function mountOverlay() {
   stage.append(frame);
   Object.defineProperty(frame, "clientWidth", { value: 640 });
   Object.defineProperty(frame, "clientHeight", { value: 360 });
+  // jsdom lays nothing out; the capture rect is the frame's box on screen.
+  frame.getBoundingClientRect = () => new DOMRect(0, 0, 640, 360);
   registry.update(BOARD_PATH, {
     frame,
     source: {
@@ -234,6 +302,7 @@ function mountOverlay() {
       />
     </QueryClientProvider>,
   );
+  return bridge;
 }
 
 function select(selection: CanvasSelection): void {
@@ -249,7 +318,15 @@ beforeEach(() => {
     .mockImplementation((input) => Promise.resolve(input.record));
   outside.reveal.mockReset();
   outside.source.current = { kind: "text", text: HTML };
+  outside.capture.current = null;
+  outside.menuExit.hold = false;
+  outside.menuExit.release = null;
   useCanvasSelectionStore.getState().clear();
+  resetNegotiatedManifests();
+  useNewConversationAnnotationStore.setState({ byEpicId: {} });
+  useNewConversationModalOpenStore.setState({ request: null });
+  useAnchoredDraftStore.setState({ byEpicId: {} });
+  useComposerDraftStore.setState({ drafts: {} });
 });
 
 afterEach(() => {
@@ -336,6 +413,45 @@ describe("a selected range's action bar", () => {
 
     expect(outside.attach).not.toHaveBeenCalled();
   });
+
+  it("steps aside while a comment draft box is open for the selection, and returns when it closes", async () => {
+    // The box carries Send to chat itself, so the bar beside it would show the
+    // same action twice. The bar is painted invisible rather than unmounted:
+    // its send remembers which chat it attached to, and the selection outlives
+    // the box, so the bar comes back as it was.
+    const bar = (): Element | null =>
+      document.querySelector("[data-canvas-selection-action]");
+    mountOverlay();
+    select(LITERAL);
+    await screen.findByRole("button", { name: "Send to chat" });
+    expect(bar()?.classList.contains("invisible")).toBe(false);
+
+    act(() => {
+      useAnchoredDraftStore.getState().setDraft(SCOPE.epicId, {
+        draftId: "draft-1",
+        tileId: "canvas-tile-1",
+        artifactId: SCOPE.artifactId,
+        artifactType: "canvas",
+        anchor: {
+          kind: "element",
+          artboard: BOARD_PATH,
+          elementId: "t",
+          label: "p",
+        },
+        quotedText: "",
+        rect: { x: 40, y: 100, width: 200, height: 24 },
+        selection: LITERAL,
+        retargeted: false,
+      });
+    });
+    expect(bar()?.classList.contains("invisible")).toBe(true);
+
+    act(() => {
+      useAnchoredDraftStore.getState().clearDraft(SCOPE.epicId, "draft-1");
+    });
+    expect(bar()?.classList.contains("invisible")).toBe(false);
+    expect(screen.getByRole("button", { name: "Send to chat" })).toBeDefined();
+  });
 });
 
 describe("attaching a selected range to a chat", () => {
@@ -397,6 +513,134 @@ describe("attaching a selected range to a chat", () => {
     expect(screen.queryByRole("menuitem", { name: "Chat one" })).toBeNull();
   });
 
+  it("still knows where it sent the card after a comment draft is opened, used and cancelled", async () => {
+    // The attached card lives in the chat's composer draft; the bar remembers
+    // it so a second send moves the card instead of adding another. Working in
+    // the draft box (a press outside the bar) must not make the bar forget.
+    outside.attach.mockImplementation((input) => {
+      useComposerDraftStore
+        .getState()
+        .addBrowserAnnotation(input.chatId, input.record);
+      return Promise.resolve(input.record);
+    });
+    mountOverlay();
+    select(LITERAL);
+    await screen.findByRole("button", { name: "Send to chat" });
+    await addToChat();
+    expect(outside.attach).toHaveBeenCalledOnce();
+
+    act(() => {
+      useAnchoredDraftStore.getState().setDraft(SCOPE.epicId, {
+        draftId: "draft-1",
+        tileId: "canvas-tile-1",
+        artifactId: SCOPE.artifactId,
+        artifactType: "canvas",
+        anchor: {
+          kind: "element",
+          artboard: BOARD_PATH,
+          elementId: "t",
+          label: "p",
+        },
+        quotedText: "",
+        rect: { x: 40, y: 100, width: 200, height: 24 },
+        selection: LITERAL,
+        retargeted: false,
+      });
+    });
+    fireEvent.pointerDown(document.body);
+    fireEvent.pointerUp(document.body);
+    act(() => {
+      useAnchoredDraftStore.getState().clearDraft(SCOPE.epicId, "draft-1");
+    });
+
+    chooseChatOne();
+    await waitFor(() => {
+      expect(outside.reveal).toHaveBeenCalledTimes(2);
+    });
+    expect(outside.attach).toHaveBeenCalledOnce();
+    expect(
+      useComposerDraftStore.getState().drafts["chat-1"]?.browserAnnotations,
+    ).toHaveLength(1);
+  });
+
+  it("screenshots the window only once the picker is gone and the selection chrome is hidden", async () => {
+    // What the window looked like at the instant it was photographed. The
+    // crop is cut from the app window as composited, so a picker still
+    // fading out or the outline around the element would be in the picture.
+    const seen = {
+      menu: true,
+      outline: true,
+      actionBarVisible: true,
+    };
+    const png = new Uint8Array([137, 80, 78, 71]);
+    outside.capture.current = {
+      captureRegion: vi.fn(() => {
+        seen.menu = screen.queryByRole("menu") !== null;
+        seen.outline =
+          document.querySelector("[data-canvas-selection-outline]") !== null;
+        seen.actionBarVisible =
+          document
+            .querySelector("[data-canvas-selection-action]")
+            ?.classList.contains("invisible") === false;
+        return Promise.resolve(png.buffer.slice(0));
+      }),
+    };
+    // The picker keeps painting through its exit animation after the pick;
+    // nothing may be photographed until it reports itself gone.
+    outside.menuExit.hold = true;
+    mountOverlay();
+    select(LITERAL);
+    await screen.findByRole("button", { name: "Send to chat" });
+    expect(
+      document.querySelector("[data-canvas-selection-outline]"),
+    ).not.toBeNull();
+    chooseChatOne();
+    await act(() => new Promise((resolve) => setTimeout(resolve, 60)));
+    expect(screen.queryByRole("menu")).not.toBeNull();
+    expect(outside.capture.current.captureRegion).not.toHaveBeenCalled();
+    act(() => outside.menuExit.release?.());
+    await waitFor(() => {
+      expect(outside.reveal).toHaveBeenCalledWith("chat-1");
+      expect(screen.queryByRole("menuitem", { name: "Chat one" })).toBeNull();
+    });
+
+    expect(outside.capture.current.captureRegion).toHaveBeenCalledOnce();
+    expect(seen).toEqual({
+      menu: false,
+      outline: false,
+      actionBarVisible: false,
+    });
+    expect(outside.attach.mock.calls[0][0].crop).toEqual(png);
+    // The chrome is back once the picture is taken: the selection is still
+    // the user's, and the action bar is where the next send starts.
+    expect(
+      document.querySelector("[data-canvas-selection-outline]"),
+    ).not.toBeNull();
+    expect(
+      document
+        .querySelector("[data-canvas-selection-action]")
+        ?.classList.contains("invisible"),
+    ).toBe(false);
+  });
+
+  it("does not wait on animation frames the window will never paint while hidden", async () => {
+    // A hidden window stops requestAnimationFrame entirely (background
+    // throttling), so a capture that waited for a frame would hang with the
+    // chrome hidden until the window came back.
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation(() => 0);
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+    outside.capture.current = {
+      captureRegion: vi.fn(() => Promise.resolve(new Uint8Array([1]).buffer)),
+    };
+    mountOverlay();
+    select(LITERAL);
+    await screen.findByRole("button", { name: "Send to chat" });
+    await addToChat();
+
+    expect(outside.capture.current.captureRegion).toHaveBeenCalledOnce();
+    expect(useCanvasSelectionStore.getState().capturing).toBe(false);
+  });
+
   it("waits for the source of a range in source text rather than attaching a guess", async () => {
     outside.source.current = null;
     mountOverlay();
@@ -442,5 +686,118 @@ describe("attaching a selected range to a chat", () => {
     expect(attachedRecord().elements[0]).toMatchObject({
       textRange: { quote: "BIG" },
     });
+  });
+});
+
+describe("the selection bar and its keyboard", () => {
+  const shield = (): HTMLElement => {
+    const overlay = document.querySelector("[data-canvas-selection-overlay]");
+    const element = overlay?.firstElementChild;
+    if (!(element instanceof HTMLElement)) throw new Error("no shield");
+    return element;
+  };
+  const SECTION = canvasElement({
+    tid: "section",
+    tagName: "section",
+    selector: "section",
+    marker: 3,
+  });
+
+  it("offers Send to chat with no Element actions menu beside it", async () => {
+    mountOverlay();
+    select(LITERAL);
+    await screen.findByRole("button", { name: "Send to chat" });
+    expect(
+      screen.queryByRole("button", { name: "Element actions" }),
+    ).toBeNull();
+  });
+
+  it("selects the literal ancestor on Shift+Enter and ignores a plain Enter", async () => {
+    const bridge = mountOverlay();
+    const literalAncestor = vi
+      .spyOn(bridge, "literalAncestor")
+      .mockResolvedValue(SECTION);
+    select(LITERAL);
+    await screen.findByRole("button", { name: "Send to chat" });
+
+    fireEvent.keyDown(shield(), { key: "Enter" });
+    expect(literalAncestor).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(shield(), { key: "Enter", shiftKey: true });
+    await waitFor(() => {
+      expect(useCanvasSelectionStore.getState().selection?.element.tid).toBe(
+        "section",
+      );
+    });
+    expect(literalAncestor).toHaveBeenCalledOnce();
+    expect(useCanvasSelectionStore.getState().selection?.textRange).toBeNull();
+  });
+
+  it("clears the selection when the ancestor is the page body", async () => {
+    const bridge = mountOverlay();
+    vi.spyOn(bridge, "literalAncestor").mockResolvedValue(
+      canvasElement({ tagName: "body", selector: "body", tid: null }),
+    );
+    select(LITERAL);
+    await screen.findByRole("button", { name: "Send to chat" });
+
+    fireEvent.keyDown(shield(), { key: "Enter", shiftKey: true });
+    await waitFor(() => {
+      expect(useCanvasSelectionStore.getState().selection).toBeNull();
+    });
+  });
+});
+
+describe("sending a selected range to a new chat", () => {
+  const newChat = (): HTMLElement | null =>
+    screen.queryByRole("menuitem", { name: "New chat" });
+
+  async function openPicker(): Promise<void> {
+    mountOverlay();
+    select(LITERAL);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Send to chat" }),
+    );
+  }
+
+  it("puts the card in the new-conversation sidecar and opens the modal once the host takes it", async () => {
+    recordNegotiatedHostManifest(SCOPE.hostId, {
+      "epic.createChat": { major: 1, minor: 5 },
+    });
+    await openPicker();
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "New chat" }));
+
+    await waitFor(() => {
+      expect(useNewConversationModalOpenStore.getState().request).toEqual({
+        epicId: SCOPE.epicId,
+        tabId: SCOPE.viewTabId,
+        placement: null,
+        parentId: null,
+        hostId: null,
+      });
+    });
+    const cards =
+      useNewConversationAnnotationStore.getState().byEpicId[SCOPE.epicId] ?? [];
+    expect(cards).toHaveLength(1);
+    expect(cards[0].elements[0]).toMatchObject({
+      tid: "t",
+      textRange: { quote: "big" },
+    });
+    expect(outside.attach).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["a host below the minor", { major: 1, minor: 4 }],
+    ["a host that has not negotiated", null],
+  ])("offers no New chat for %s", async (_name, version) => {
+    if (version !== null)
+      recordNegotiatedHostManifest(SCOPE.hostId, {
+        "epic.createChat": version,
+      });
+    await openPicker();
+
+    expect(screen.getByRole("menuitem", { name: "Chat one" })).toBeDefined();
+    expect(newChat()).toBeNull();
   });
 });

@@ -11,6 +11,7 @@ import {
   type NotificationEvent,
 } from "@traycer/protocol/notifications/notification-entry";
 import { parseKnownHostNotificationPayloadForKind } from "@traycer/protocol/host/notifications/contracts";
+import { botIdSchema } from "@traycer/protocol/host/bot/schemas";
 import {
   existingEpicTabIntentWithNestedFocus,
   navigateToTabIntent,
@@ -32,6 +33,9 @@ import {
 } from "@/stores/chats/chat-transcript-jump-store";
 import { selectWorktreeCleanupView } from "@/stores/settings/worktree-cleanup-view-store";
 import { carryViewedHostIntoSettingsScope } from "@/components/settings/host-scope/carry-viewed-host-into-settings";
+import { openBotChannel } from "@/lib/bots/open-bot-channel";
+import { tracySurfaceHostId } from "@/stores/bots/tracy-surface-store";
+import type { BotTabLanding } from "@/stores/bots/bot-tab-landing-store";
 
 export type NotificationPayloadKind =
   | "session"
@@ -77,10 +81,23 @@ export interface InterviewNotificationPayload {
   readonly interviewBlockId: string | undefined;
 }
 
+/**
+ * A bot's conversation a notification is about (a push of the bot's
+ * channel, Tracy Bots VN4): the bot, the thread of it, and the row.
+ */
+export interface BotNotificationTarget {
+  readonly botId: string;
+  /** `null` for a row of the channel no thread hangs off. */
+  readonly threadId: string | null;
+  readonly messageId: string | null;
+}
+
 export interface ChatNotificationPayload {
   readonly kind: "chat";
   readonly epicId: string;
   readonly chatId: string | undefined;
+  /** Opens the bot's tab rather than the chat, where a bot is named. */
+  readonly bot?: BotNotificationTarget;
   /** Durable host binding of the chat itself. This may differ from the host
    * that authored the notification feed row. */
   readonly hostId?: string;
@@ -220,6 +237,7 @@ function parseChatPayload(
   const hostId = readString(value.hostId);
   const messageId = readString(value.messageId);
   const eventId = readString(value.eventId);
+  const botId = readString(value.botId);
   const scrollToEnd =
     value.outcome === "completed" && value.backgroundWorkRunning !== true;
   const includeTranscriptAnchor = !scrollToEnd;
@@ -227,6 +245,15 @@ function parseChatPayload(
     kind: "chat",
     epicId,
     chatId: chatId === null ? undefined : chatId,
+    ...(botId === null
+      ? {}
+      : {
+          bot: {
+            botId,
+            threadId: readString(value.threadId),
+            messageId,
+          },
+        }),
     ...(hostId === null ? {} : { hostId }),
     messageId:
       includeTranscriptAnchor && messageId !== null ? messageId : undefined,
@@ -524,11 +551,7 @@ export function routeNotificationForHost(
       );
       return true;
     case "chat":
-      return routeEpicChatNotification(navigate, payload, receivedAt, {
-        targetHostId: payload.hostId ?? originHostId,
-        effectiveHostId,
-        transcriptTarget: chatNotificationTranscriptTarget(payload),
-      });
+      return routeChatNotification(navigate, payload, receivedAt, context);
     case "terminal":
       routeTerminalNotification(navigate, payload, receivedAt);
       return true;
@@ -815,6 +838,105 @@ function parkChatTranscriptJump(
       payload.chatId,
       context.transcriptTarget,
     );
+}
+
+/**
+ * A chat row: the Tracy surface on the bot's channel where the chat is a
+ * bot's, else the chat. A bot's
+ * chat never opens as an epic: its container id is the bot id, so the epic
+ * route would open a tab named after it.
+ */
+function routeChatNotification(
+  navigate: NotificationNavigate,
+  payload: ChatNotificationPayload,
+  receivedAt: number,
+  context: NotificationHostRouteContext,
+): boolean {
+  const { originHostId, effectiveHostId } = context;
+  const bot = botTargetOf(payload);
+  if (bot !== null) return routeBotNotification(navigate, bot, effectiveHostId);
+  return routeEpicChatNotification(navigate, payload, receivedAt, {
+    targetHostId: payload.hostId ?? originHostId,
+    effectiveHostId,
+    transcriptTarget: chatNotificationTranscriptTarget(payload),
+  });
+}
+
+/** A bot's channel to open, and where to land it. */
+interface BotOpenTarget {
+  readonly botId: string;
+  readonly landing: BotTabLanding;
+}
+
+/**
+ * The bot a chat row opens: the one the row names, landed on its thread or
+ * channel, else the bot whose container the chat lives in (a chat search hit,
+ * a session link), landed on that chat, which the tab resolves to its channel,
+ * a thread or a session. `null` for an epic's chat.
+ */
+function botTargetOf(payload: ChatNotificationPayload): BotOpenTarget | null {
+  const { bot } = payload;
+  if (bot !== undefined) {
+    return {
+      botId: bot.botId,
+      landing: {
+        kind: "thread",
+        threadId: bot.threadId,
+        messageId: bot.messageId,
+      },
+    };
+  }
+  if (!botIdSchema.safeParse(payload.epicId).success) return null;
+  if (payload.chatId === undefined) {
+    return {
+      botId: payload.epicId,
+      landing: { kind: "thread", threadId: null, messageId: null },
+    };
+  }
+  return {
+    botId: payload.epicId,
+    landing: {
+      kind: "chat",
+      chatId: payload.chatId,
+      messageId: payload.messageId ?? null,
+    },
+  };
+}
+
+/**
+ * Whether routing `payload` would open nothing because it is a bot's chat and
+ * the window has no device to open the Tracy surface on: the surface is
+ * closed and there is no effective host. An open surface reads any bot's
+ * channel through its own host, whether or not that channel was shown.
+ */
+export function isBotChatWithoutDevice(
+  payload: NotificationPayload,
+  effectiveHostId: string | null,
+): boolean {
+  if (payload.kind !== "chat") return false;
+  return (
+    botTargetOf(payload) !== null &&
+    (tracySurfaceHostId() ?? effectiveHostId) === null
+  );
+}
+
+/**
+ * Opens the Tracy surface on the bot's channel, landed where `target` asks
+ * once the channel can: the landing is asked for before the navigation. An
+ * open surface keeps its host, and a closed one is bound to the window's.
+ * `false`, with nothing opened, while the window has no host to open it on.
+ */
+function routeBotNotification(
+  navigate: NotificationNavigate,
+  target: BotOpenTarget,
+  effectiveHostId: string | null,
+): boolean {
+  if ((tracySurfaceHostId() ?? effectiveHostId) === null) return false;
+  return openBotChannel(navigate, target.botId, {
+    landing: target.landing,
+    isConnectable: null,
+    onRejected: null,
+  });
 }
 
 function routeEpicChatNotification(

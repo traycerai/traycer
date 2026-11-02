@@ -1795,7 +1795,7 @@ describe("chat find over a windowed transcript: older rows from the index", () =
   });
 
   // -------------------------------------------------------------------------
-  // Reviewer item 1: with NO loaded match, running out of page 1 must still
+  // With NO loaded match, running out of page 1 must still
   // read page 2 - whether page 1 ran out through failed reads or was dropped
   // whole by the scan.
 
@@ -1950,7 +1950,7 @@ describe("chat find over a windowed transcript: older rows from the index", () =
   });
 
   // -------------------------------------------------------------------------
-  // Reviewer item 5: a `loaded` placement over a PARTIAL skeleton is not a
+  // A `loaded` placement over a PARTIAL skeleton is not a
   // complete negative - the rows the skeleton has not named yet can hold the
   // match.
 

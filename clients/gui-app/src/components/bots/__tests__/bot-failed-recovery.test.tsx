@@ -1,6 +1,6 @@
 /**
- * A post the bot did not answer, and the routing card above its box (Tracy
- * Bots T86), through the REAL `BotChannelView` and `BotThreadPanel`: where
+ * A post the bot did not answer, and the routing card above its box,
+ * through the REAL `BotChannelView` and `BotThreadPanel`: where
  * the session that answers the surface (the trunk beside the channel, a
  * thread's session in its panel) names the post's turn as its last failed
  * attempt, the row says why in the agent chat's words and offers the agent
@@ -106,6 +106,7 @@ vi.mock("@/hooks/host/use-host-supports-method", async (importOriginal) => ({
 }));
 vi.mock("@/components/epic-tabs/pane-visibility-context", () => ({
   usePaneVisible: () => true,
+  usePaneFocused: () => true,
 }));
 vi.mock("@/hooks/bots/use-bot-conversation-list-query", () => ({
   useBotConversationListQuery: () => ({
@@ -189,7 +190,10 @@ vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
 vi.mock("@/components/chat/chat-messages", async () => {
   const { ChatExpansionTestProviders: Providers } =
     await import("@/components/chat/__tests__/chat-expansion-test-providers");
+  const { use } = await import("react");
   const { ChatMessage } = await import("@/components/chat/chat-message");
+  const { ChatTimelineHeaderContext } =
+    await import("@/components/chat/chat-timeline-header-context");
   const noBackgroundToolBlockIds: ReadonlySet<string> = new Set();
   return {
     ChatMessages: (props: {
@@ -201,6 +205,7 @@ vi.mock("@/components/chat/chat-messages", async () => {
           data-testid="chat-messages-stub"
           data-instance-id={props.instanceId}
         >
+          {use(ChatTimelineHeaderContext)}
           {props.messages.map((message) => (
             <ChatMessage
               key={message.id}

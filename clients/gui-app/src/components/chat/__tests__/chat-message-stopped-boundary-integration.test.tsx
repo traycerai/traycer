@@ -27,7 +27,7 @@ import {
 } from "@/stores/chats/rendered-messages";
 
 /**
- * Both round-2 review bugs (wrong empty-branch variant, 1ms-short duration
+ * Both bugs (wrong empty-branch variant, 1ms-short duration
  * anchor) only surfaced once the hook's synthesized boundary row was actually
  * rendered through `ChatMessage`/`AssistantMessageBody` - the hook-only tests
  * in `rendered-messages.test.tsx` verify the row's fields, and the

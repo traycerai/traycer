@@ -18,7 +18,7 @@ import type {
 import type { ChatSessionStoreHandle } from "@/stores/chats/chat-session-store";
 
 /**
- * The agent chat's routing card above a bot's box (Tracy Bots T86, decision
+ * The agent chat's routing card above a bot's box (Tracy Bots, decision
  * 117): while the session that answers it - the trunk under the channel, a
  * thread's session under its panel - is counting down to a switch, waiting
  * out a limit, or offering to switch back, the card says so with the agent

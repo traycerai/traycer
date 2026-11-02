@@ -18,6 +18,7 @@ import type {
   ReasoningLevel,
   ServiceTier,
 } from "@/components/home/data/landing-options";
+import { usePaneVisible } from "@/components/epic-tabs/pane-visibility-context";
 import { useSurfaceActivity } from "@/components/home/composer/surface-activity-hooks";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import {
@@ -43,6 +44,7 @@ import {
   serviceTierFromChatRunSettings,
 } from "@/lib/composer/chat-run-settings";
 import { useTeamSandboxHarnessGate } from "@/hooks/sandboxes/use-team-sandbox-harness-blocked";
+import { returnedSandboxRestoredOn } from "@/lib/sandboxes/returned-sandbox";
 import { useSandboxHostConfiguration } from "@/hooks/sandboxes/use-on-team-sandbox";
 import { useSandboxTraycerModels } from "@/hooks/sandboxes/use-sandbox-traycer-models-query";
 import { useStagedSandboxStore } from "@/stores/composer/staged-sandbox-store";
@@ -89,6 +91,7 @@ export interface ComposerToolbarCatalogScope {
    * the mode this composer actually sends.
    */
   readonly chatLineCarriesAutoMode: boolean | null;
+  readonly ultracodeCarried: boolean;
   /**
    * The pin key a sandbox may be staged under for this composer, or `null` on
    * a surface that stages none. While one is staged the send runs on that
@@ -121,7 +124,7 @@ export interface ComposerToolbarCatalogScope {
  * palette's "Switch model" / "Switch provider" items dispatch against this
  * composer.
  *
- * `seedSource` (S11: replaces the old positional `settingsSeed` +
+ * `seedSource` (replaces the old positional `settingsSeed` +
  * `client` + `seedIsAuthoritative` trio) decides both WHAT seeds the store
  * and WHETHER a dead `profileId` may be silently corrected to ambient - the
  * load-bearing distinction that keeps this validation from fighting the
@@ -155,10 +158,12 @@ export function useComposerToolbarStore(
     hostId,
     tuiOnly,
     chatLineCarriesAutoMode,
+    ultracodeCarried,
     stagedSurfaceKey,
     sendsToRestingSandbox,
   } = catalog;
   const activityEnabled = useSurfaceActivity();
+  const paneVisible = usePaneVisible();
   const defaultPermission = useSettingsStore((s) => s.defaultPermission);
   const defaultSelection = useSettingsStore((s) => s.defaultSelection);
   const defaultReasoning = useSettingsStore((s) => s.defaultReasoning);
@@ -190,6 +195,7 @@ export function useComposerToolbarStore(
         selection: defaultSelection,
         reasoning: defaultReasoning,
         serviceTier: defaultServiceTier,
+        ultracode: false,
       }),
     [
       defaultPermission,
@@ -213,6 +219,7 @@ export function useComposerToolbarStore(
       tuiOnly,
       hostId,
       chatLineCarriesAutoMode,
+      ultracodeCarried,
     }),
   );
   // The store's `onSettingsChange` is ALWAYS this recording wrapper, even when
@@ -245,7 +252,7 @@ export function useComposerToolbarStore(
   }, [store, recordingOnSettingsChange]);
   // Re-seed when the seed identity changes (applySeed no-ops on a matching
   // key, so default-value churn never clobbers user edits). A LAYOUT effect,
-  // not a passive one: ticket 07 round 2's transition-window gap - a seed
+  // not a passive one: the transition-window gap - a seed
   // whose `profileId` flips (e.g. `resolveSeededProfileId` clearing a stale
   // pin once `providers.list` settles) must land in the store before the
   // browser paints, so a submit triggered by the very next user interaction
@@ -293,9 +300,22 @@ export function useComposerToolbarStore(
   const modelsLoaded = modelsData !== undefined;
   const keepsUnavailablePick =
     useSandboxHostConfiguration(hostId) !== null || sandboxRunTarget !== null;
+  // Before the catalog push below: a stage's push reads these to keep the pick
+  // on screen. Read here, not in render: a restore marks its stage after
+  // writing it, and the mark lives outside React. Only a composer on screen
+  // has a shown pick: retained drafts share the window's surface, and one
+  // showing nothing keeps its own. On screen, not focused: a split's other
+  // side is unfocused and still showing.
   useEffect(() => {
-    store.setState({ sandboxRunTarget });
-  }, [store, sandboxRunTarget]);
+    store.setState({
+      sandboxRunTarget,
+      stageKeepsShownPick:
+        paneVisible &&
+        sandboxRunTarget === "staged" &&
+        stagedSurfaceKey !== null &&
+        !returnedSandboxRestoredOn(stagedSurfaceKey),
+    });
+  }, [paneVisible, store, sandboxRunTarget, stagedSurfaceKey]);
   useEffect(() => {
     store.getState().setCatalog({
       hostId,
@@ -305,6 +325,7 @@ export function useComposerToolbarStore(
       modelsLoaded,
       tuiOnly,
       chatLineCarriesAutoMode,
+      ultracodeCarried,
       keepsUnavailablePick,
     });
   }, [
@@ -316,7 +337,10 @@ export function useComposerToolbarStore(
     harnessId,
     tuiOnly,
     chatLineCarriesAutoMode,
+    ultracodeCarried,
     keepsUnavailablePick,
+    // The push re-derives a stage's model hold on its own when only this moved.
+    sandboxRunTarget,
   ]);
 
   // The palette commits too, so it is held to the same team-sandbox rule as the
@@ -361,6 +385,7 @@ interface ComposerToolbarDefaults {
   readonly selection: HarnessModelSelection;
   readonly reasoning: ReasoningLevel;
   readonly serviceTier: ServiceTier;
+  readonly ultracode: boolean;
 }
 
 /**
@@ -406,6 +431,7 @@ function chatRunSettingsSeedKey(settingsSeed: ChatRunSettings | null): string {
     settingsSeed.reasoningEffort ?? "",
     settingsSeed.serviceTier ?? "",
     settingsSeed.profileId ?? "",
+    settingsSeed.ultracode ? "true" : "false",
   ].join("\u0000");
 }
 
@@ -419,5 +445,6 @@ function valuesFromSettingsSeed(
     selection: selectionFromChatRunSettings(settingsSeed),
     reasoning: reasoningFromChatRunSettings(settingsSeed),
     serviceTier: serviceTierFromChatRunSettings(settingsSeed),
+    ultracode: settingsSeed.ultracode,
   };
 }

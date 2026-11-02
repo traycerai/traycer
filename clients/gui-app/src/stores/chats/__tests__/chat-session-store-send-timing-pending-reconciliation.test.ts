@@ -67,6 +67,7 @@ const CONTENT: JsonContent = {
 };
 
 const SETTINGS: ChatRunSettings = {
+  ultracode: false,
   harnessId: "claude",
   model: "claude-sonnet-4-5",
   permissionMode: "supervised",
@@ -141,7 +142,7 @@ function emptyChat(): Chat {
 }
 
 function emitSnapshot(callbacks: ChatStreamCallbacks): void {
-  callbacks.onConnectionStatus("open", null, null);
+  callbacks.onConnectionStatus("open", null, null, null);
   callbacks.onSnapshot({
     kind: "snapshot",
     hasBinaryPayload: false,
@@ -172,7 +173,7 @@ type WindowedSnapshotFrame = Parameters<
 >[0];
 
 function emitWindowedSnapshot(callbacks: ChatStreamCallbacks): void {
-  callbacks.onConnectionStatus("open", null, null);
+  callbacks.onConnectionStatus("open", null, null, null);
   const frame: WindowedSnapshotFrame = {
     kind: "snapshot",
     hasBinaryPayload: false,
@@ -495,7 +496,7 @@ describe("ChatSendTiming pending-row reconciliation (GUI store)", () => {
     emitSnapshot(callbacks);
     const sent = sendPrompt(harness);
 
-    callbacks.onConnectionStatus("reconnecting", null, null);
+    callbacks.onConnectionStatus("reconnecting", null, null, null);
 
     // The row is still there: a lost connection is not a reconciliation
     // event, and this store never speculatively drops an optimistic row.
@@ -512,7 +513,7 @@ describe("ChatSendTiming pending-row reconciliation (GUI store)", () => {
     expect(phases).not.toContain("pending_replaced_by_queue");
     expect(phases).not.toContain("pending_removed");
 
-    callbacks.onConnectionStatus("closed", null, null);
+    callbacks.onConnectionStatus("closed", null, null, null);
     expect(
       harness.handle.store
         .getState()

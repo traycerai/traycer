@@ -14,9 +14,11 @@ import { detailsTime } from "@/components/settings/details/details-copy";
 import type {
   DetailsEntry,
   DetailsHistory,
+  DetailsHistoryEntry,
   DetailsRecovery,
   DetailsSubject,
 } from "@/lib/settings-details-entry";
+import { HOST_DESTROYED_OUTCOME } from "@/lib/settings-details-entry";
 
 /** The parts of a line the app knows, joined; a missing one is left out. */
 function knownParts(parts: readonly (string | null)[]): string {
@@ -69,12 +71,11 @@ function CurrentStatus(props: {
       {status.currentVersion === null ? null : (
         <p>Version {status.currentVersion}</p>
       )}
-      {status.changedAt === null && status.changedBy === null ? null : (
+      {/* Labelled: the bare "<who> · <time>" read as a host name beside a
+          number. Who changed it is in History, entry by entry. */}
+      {status.changedAt === null ? null : (
         <p className="text-ui-xs text-muted-foreground">
-          {knownParts([
-            status.changedBy,
-            status.changedAt === null ? null : detailsTime(status.changedAt),
-          ])}
+          Last change {detailsTime(status.changedAt)}
         </p>
       )}
       {status.reason === null ? null : (
@@ -134,6 +135,19 @@ function CurrentStatus(props: {
   );
 }
 
+/**
+ * A host destroyed with a cleanup still outstanding has no copy of the subject
+ * left to delete, so that cleanup is over. The server says so on the event
+ * itself, naming the host as its actor; the sentence then stands in place of
+ * the event's codes, which say nothing a person can read. An older server
+ * sends no such outcome, and its events keep their generic shape.
+ */
+function destroyedHostLine(entry: DetailsHistoryEntry): string | null {
+  if (entry.outcome !== HOST_DESTROYED_OUTCOME || entry.actor === null)
+    return null;
+  return `${entry.actor.label} was destroyed, so its copy is gone.`;
+}
+
 function History(props: {
   readonly history: DetailsHistory;
   readonly onRecover: (recovery: DetailsRecovery) => void;
@@ -153,24 +167,29 @@ function History(props: {
         </p>
       ) : (
         <ol className="divide-y divide-border/60">
-          {history.entries.map((entry) => (
-            <li
-              key={`${entry.at}:${entry.operation}:${entry.outcome}`}
-              className="py-3"
-            >
-              <p>
-                {entry.operation} · {entry.outcome}
-              </p>
-              <p className="text-ui-xs text-muted-foreground">
-                {entry.actor?.label ?? "Traycer"} · {detailsTime(entry.at)}
-              </p>
-              <DetailsHostRows
-                hosts={entry.hosts}
-                onRecover={props.onRecover}
-                pending={props.pending}
-              />
-            </li>
-          ))}
+          {history.entries.map((entry) => {
+            const destroyed = destroyedHostLine(entry);
+            return (
+              <li
+                key={`${entry.at}:${entry.operation}:${entry.outcome}`}
+                className="py-3"
+              >
+                <p>{destroyed ?? `${entry.operation} · ${entry.outcome}`}</p>
+                <p className="text-ui-xs text-muted-foreground">
+                  {/* The destroyed host's name is the sentence's subject
+                      already, so its line carries the time alone. */}
+                  {destroyed === null
+                    ? `${entry.actor?.label ?? "Traycer"} · ${detailsTime(entry.at)}`
+                    : detailsTime(entry.at)}
+                </p>
+                <DetailsHostRows
+                  hosts={entry.hosts}
+                  onRecover={props.onRecover}
+                  pending={props.pending}
+                />
+              </li>
+            );
+          })}
         </ol>
       )}
     </>

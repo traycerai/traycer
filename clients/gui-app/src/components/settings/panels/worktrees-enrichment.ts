@@ -471,7 +471,7 @@ function foldEnrichedWorktrees(
 
 /**
  * The enrichment overlay, read from the TanStack Query CACHE rather than the live
- * results of the currently-requested window. This is the fix for the P0
+ * results of the currently-requested window. This is the fix for the
  * oscillation: deriving the overlay from only the current window meant a row that
  * enriched to a filtered-out tier lost its overlay entry the instant it left the
  * window, reverted to "pending" (which a tier filter keeps), and re-entered - a

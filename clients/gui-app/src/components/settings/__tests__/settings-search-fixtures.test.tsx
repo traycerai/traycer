@@ -61,6 +61,20 @@ vi.mock("@/lib/sandboxes/staged-sandbox-in-window", async (importOriginal) => {
   };
 });
 
+// This computer and where its settings stand: the move card's own boundary.
+// This anchor-only suite mounts no host runtime, so the window has no computer
+// of its own and the move card has nothing to report.
+vi.mock("@/components/settings/move/this-computer", () => ({
+  useThisComputer: () => ({
+    hostId: null,
+    hostName: "this computer",
+    client: null,
+  }),
+}));
+vi.mock("@/components/settings/move/use-this-computers-move", () => ({
+  useThisComputersMove: () => "unknown",
+}));
+
 vi.mock("@/lib/links/open-link", () => ({
   useOpenLink: () => () => Promise.resolve(),
 }));
@@ -133,8 +147,8 @@ vi.mock(
   }),
 );
 
-// General's replay button and Sounds' host link navigate; nothing here clicks
-// them, but both hooks need a router to be CALLED.
+// Sounds' host link navigates; nothing here clicks it, but its hook needs a
+// router to be CALLED.
 vi.mock("@tanstack/react-router", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@tanstack/react-router")>()),
   useNavigate: () => vi.fn(),

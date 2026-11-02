@@ -111,7 +111,7 @@ describe("<SwitcherAgentIcon /> identity glyphs", () => {
     render(renderIcon("terminal-agent", NO_INDICATORS));
     const badge = screen.getByTestId("switcher-tui-badge-n1");
     // A solid accent disc ring-cut against the sheet surface - not the bare
-    // muted glyph that vanished at phone size (the live-review defect).
+    // muted glyph that vanished at phone size.
     expect(badge.className).toContain("rounded-full");
     expect(badge.className).toContain("bg-primary");
     expect(badge.className).toContain("ring-popover");

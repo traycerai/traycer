@@ -11,6 +11,9 @@ import {
   ClipboardCheck,
   FileText,
   File,
+  FileHeadphone,
+  FileImage,
+  FilePlay,
   PanelsTopLeft,
   MessageSquare,
   Terminal,
@@ -25,6 +28,7 @@ import {
   type EpicArtifactKind,
 } from "@traycer/protocol/common/registry";
 import type { TuiHarnessId } from "@traycer/protocol/persistence/epic/schemas";
+import type { ArtifactFileViewer } from "@/lib/files/artifact-file-viewer";
 
 const HEX_COLOR_PATTERN = /^#[0-9a-f]{6}$/i;
 
@@ -121,6 +125,23 @@ export const EPIC_NODE_ICONS: Readonly<Record<EpicNodeKind, LucideIcon>> = {
   canvas: PanelsTopLeft,
   file: File,
   terminal: Terminal,
+};
+
+/**
+ * A file artifact's glyph names the viewer it opens in, so a video reads as
+ * playable before it is opened. PDF, Word and text keep the plain file: the
+ * lined page is already the spec's glyph. A file whose viewer is not known
+ * keeps `EPIC_NODE_ICONS.file`.
+ */
+export const FILE_ARTIFACT_VIEWER_ICONS: Readonly<
+  Record<ArtifactFileViewer, LucideIcon>
+> = {
+  video: FilePlay,
+  audio: FileHeadphone,
+  image: FileImage,
+  pdf: File,
+  docx: File,
+  text: File,
 };
 
 export const EPIC_NODE_LABELS: Readonly<Record<EpicNodeKind, string>> = {

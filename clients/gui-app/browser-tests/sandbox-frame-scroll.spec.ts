@@ -98,26 +98,57 @@ test("the app's focus while the window is in the background scrolls its own page
 // the app left it, reloaded in a page of the frame's size with no bootstrap,
 // and revealed natively from the same offset.
 for (const reveal of [
-  { command: "body-overflow", target: "#mid", from: 0, block: "start" },
+  {
+    command: "body-overflow",
+    target: "#mid",
+    from: 0,
+    block: "start",
+    shadow: false,
+  },
   {
     command: "contained-body-overflow",
     target: "#mid",
     from: 0,
     block: "start",
+    shadow: false,
   },
   {
     command: "container-body-overflow",
     target: "#mid",
     from: 0,
     block: "start",
+    shadow: false,
   },
-  { command: "skipped-block", target: "#mid", from: 0, block: "start" },
-  { command: "skipped-details", target: "#mid", from: 0, block: "start" },
+  {
+    command: "skipped-block",
+    target: "#mid",
+    from: 0,
+    block: "start",
+    shadow: false,
+  },
+  {
+    command: "skipped-details",
+    target: "#mid",
+    from: 0,
+    block: "start",
+    shadow: false,
+  },
+  // The root this one builds is the page's own, so the serialized form is
+  // the only one that carries it: `content()` drops a script-created root
+  // and the baseline would then be a page without the scroller at issue.
+  {
+    command: "closed-shadow-scroller",
+    target: "#mid",
+    from: 0,
+    block: "start",
+    shadow: true,
+  },
   {
     command: "covering-nearest",
     target: "#cover",
     from: 800,
     block: "nearest",
+    shadow: false,
   },
 ] as const) {
   test(`the app's reveal lands where the native one does: ${reveal.command}`, async ({
@@ -135,6 +166,7 @@ for (const reveal of [
     const contained = await page.evaluate(() => ({
       scrollY: Number(document.body.dataset.appScrollY),
       bodyScrollTop: Number(document.body.dataset.appBodyScrollTop),
+      outerScrollTop: Number(document.body.dataset.appOuterScrollTop),
     }));
     const frame = page
       .frames()
@@ -144,7 +176,25 @@ for (const reveal of [
       width: window.innerWidth,
       height: window.innerHeight,
     }));
-    const html = (await frame.content())
+    const source = reveal.shadow
+      ? await frame.evaluate(() => {
+          const serialize: unknown = Reflect.get(
+            document.documentElement,
+            "getHTML",
+          );
+          if (typeof serialize !== "function") {
+            throw new Error("getHTML is needed to carry a shadow root");
+          }
+          const out: unknown = Reflect.apply(
+            serialize,
+            document.documentElement,
+            [{ serializableShadowRoots: true }],
+          );
+          if (typeof out !== "string") throw new Error("getHTML gave no HTML");
+          return `<!doctype html><html>${out}</html>`;
+        })
+      : await frame.content();
+    const html = source
       .replace(/<script[\s\S]*?<\/script>/g, "")
       .replace(/<meta http-equiv="Content-Security-Policy"[^>]*>/g, "");
 
@@ -153,9 +203,11 @@ for (const reveal of [
     const native = await plain.evaluate(({ target, from, block }) => {
       window.scrollTo(0, from);
       document.querySelector(target)?.scrollIntoView({ block });
+      const outer = document.querySelector("#outer");
       return {
         scrollY: Math.round(window.scrollY),
         bodyScrollTop: Math.round(document.body.scrollTop),
+        outerScrollTop: outer === null ? 0 : Math.round(outer.scrollTop),
       };
     }, reveal);
     await plain.close();

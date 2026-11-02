@@ -20,6 +20,7 @@
  *     cursor instead of re-pulling every snapshot.
  */
 import type { EpicCommunicationGraphEvent } from "@traycer/protocol/host/epic/communication-graph";
+import type { StreamContinuity } from "@traycer-clients/shared/host-transport/i-stream-session";
 import { appLogger } from "@/lib/logger";
 import {
   compareCommGraphEvents,
@@ -52,7 +53,10 @@ export interface CommGraphSubscriptionHandlers {
     headId: number | null,
   ) => void;
   readonly onEvent: (event: EpicCommunicationGraphEvent) => void;
-  readonly onStatus: (status: CommGraphHostStatus) => void;
+  readonly onStatus: (
+    status: CommGraphHostStatus,
+    continuity: StreamContinuity,
+  ) => void;
 }
 
 export interface CommGraphSubscriptionRequest {
@@ -478,9 +482,9 @@ export class CommGraphSubscriptionManager {
           if (!isCurrent()) return;
           this.applyEvent(entry, event);
         },
-        onStatus: (status) => {
+        onStatus: (status, continuity) => {
           if (!isCurrent()) return;
-          this.applyStatus(entry, status);
+          this.applyStatus(entry, status, continuity);
         },
       },
     });
@@ -598,16 +602,23 @@ export class CommGraphSubscriptionManager {
     return true;
   }
 
-  private applyStatus(entry: HostEntry, status: CommGraphHostStatus): void {
+  private applyStatus(
+    entry: HostEntry,
+    status: CommGraphHostStatus,
+    continuity: StreamContinuity,
+  ): void {
     const before = reportedStatus(entry);
     entry.status = status;
-    // A dial that reached `open` proves the host is there; anything that falls
-    // back to `reconnecting` is a failed dial. A host with no dialable endpoint
-    // only ever produces the latter, which is what eventually mutes it.
+    // A live stream proves the host is there. A held subscriber has no failed
+    // dial to count; ordinary reconnect attempts still eventually mute a host
+    // whose endpoint cannot be reached.
     if (status === "live") entry.failedDials = 0;
-    if (status === "reconnecting") entry.failedDials += 1;
-    // A drop after we have already applied rows must resume from the highest
-    // seen id rather than re-pull the whole log, so re-open the subscription
+    if (status === "reconnecting" && continuity !== "held") {
+      entry.failedDials += 1;
+    }
+    // A dropped subscription after we have applied rows must resume from the
+    // highest seen id rather than re-pull the whole log. A held one retains its
+    // original subscriber, so only an ordinary reconnect re-opens it
     // with the advanced cursor. Bounded by construction: the reopen resets
     // `openedCursor` BEFORE it can throw, so a host that stays down (no new
     // rows, cursor frozen) gets exactly one extra dial per outage and then falls
@@ -618,7 +629,11 @@ export class CommGraphSubscriptionManager {
     // handling, leaving the host with no transport, no `failed` publication and
     // nothing scheduled to retry it. A resume is an external trigger, so it
     // starts a fresh retry budget.
-    if (status === "reconnecting" && entry.cursor !== entry.openedCursor) {
+    if (
+      status === "reconnecting" &&
+      continuity !== "held" &&
+      entry.cursor !== entry.openedCursor
+    ) {
       this.closeEntry(entry);
       this.openContained(entry, true);
     }

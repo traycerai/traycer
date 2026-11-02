@@ -27,7 +27,7 @@ import { useHostBinding, type HostRpcRegistry } from "@/lib/host";
 import { resolveNamedHostClient } from "@/lib/host/binding-host-client";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 
-/** How long the Undo action stays on screen (D17). */
+/** How long the Undo action stays on screen. */
 const UNDO_TOAST_MS = 6000;
 
 export interface DraftInventoryActions {

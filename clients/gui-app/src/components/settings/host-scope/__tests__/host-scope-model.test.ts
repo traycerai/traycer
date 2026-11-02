@@ -511,9 +511,9 @@ describe("buildHostScopeOptions settingUp", () => {
 
 describe("buildHostScopeOptions health — leases are looked up PER HOST", () => {
   /**
-   * The P12 pin, at the layer that does the lookup.
+   * The pin, at the layer that does the lookup.
    *
-   * Sealed probe P12 degraded `useHostLease`'s `find(hostId)` to `leases[0]`
+   * A sealed probe degraded `useHostLease`'s `find(hostId)` to `leases[0]`
    * and SURVIVED, because every suite seeded exactly one lease — so a
    * wrong-host answer and a right one produced identical output. The builder
    * does the same lookup for every row, so it inherits the same blind spot

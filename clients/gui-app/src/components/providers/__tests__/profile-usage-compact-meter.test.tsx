@@ -87,6 +87,7 @@ describe("ProfileUsageCompactMeter", () => {
           windows: [],
           compactWindow: null,
           reason: "insufficient_permissions",
+          chatCredential: null,
         })}
       />,
     );

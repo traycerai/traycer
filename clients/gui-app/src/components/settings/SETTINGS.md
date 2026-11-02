@@ -93,7 +93,7 @@ Two rules for a stacked page:
   dropdown with a sentence per option (General ▸ When you quit Traycer), not a
   permanent block of radios.
 
-One rule for a rail page, and it has three callers. **Whatever points at a
+One rule for a rail page, and it has two callers. **Whatever points at a
 control has to pick that control's area first**, because only the picked area
 is on screen (`settings-master-detail-area.ts`):
 
@@ -101,81 +101,43 @@ is on screen (`settings-master-detail-area.ts`):
   A row with no anchor of its own contributes its name to its GROUP, never to
   the page: a page result opens the page on its first area, so the page's own
   keywords name only what that first area holds.
-- **A setup guide step** picks the area that holds its target
-  (`useSettingsGuideArea`), found through the `data-settings-area` each area's
-  panel carries. Without it the coachmark has no visible target and the guide
-  has no card to continue from. An armed reveal for a row of the page outranks
-  it: a guide stays active while Settings is closed, so the page can mount
-  with both, and the reveal is what the person asked for a moment ago.
 - **A link from outside Settings** to something that is not in the first area
   arms the same reveal a search result does, with the group's anchor (the
   start page's "Customize start page" button).
 
 ## Getting started
 
-`/settings/getting-started` is the persistent setup checklist for agent selection,
-appearance and layout, and browser sign-ins.
-Cards launch guides over the existing controls
-through `SettingsSetupGuide`, shared by the modal and routed settings surfaces.
-It uses the same nonmodal coachmark as the first-task guide: no overlay or
-focus trap, and nested pickers pause it. In a modal it portals inside that modal.
+`/settings/getting-started` is the setup checklist: the cards in
+`onboarding/getting-started-checklist.ts`, each checked off by what is already
+true for the person and leading to the place that does the work. Its header
+reads "n of m complete" over the cards that apply, and each card's label and
+copy come from `getting-started-settings.definitions.ts`, like any other
+searchable setting.
+
+The first-task guide draws a nonmodal coachmark: no overlay or focus trap, and
+nested pickers pause it. In a modal it portals inside that modal.
 A halo marks the target; there is no arrow. While the card has focus, Right/Enter
 continues and Left goes back; Tab and Enter retain native button behavior.
 Action-required steps press the real control when it is a button or link, and focus it when it is a field, instead of skipping it. Once focus
 moves into a control, the coachmark does not take it back. Text fields and pickers
-keep their own keys. Keyboard navigation reveals settings instantly.
-Escape closes the guide before Settings can close and returns focus to its target, and it works from anywhere on the surface rather than only from the card or its target - unless a picker, menu or dialog is open, which answers its own Escape first.
-Closing a guide is a skip, and a skip is done: Escape and the card's X both mark that guide complete, so a card the person has seen and declined never comes back asking again.
-Closing the settings surface mid-guide is not a skip - `activeSetup` is session-local presence, so the guide simply resumes at its step when Settings reopens.
+keep their own keys.
+Escape closes the guide and returns focus to its target, and it works from anywhere on the surface rather than only from the card or its target - unless a picker, menu or dialog is open, which answers its own Escape first.
 
-**Every step names its own section**, not the guide.
-The guide draws only while the mounted section is the one the current step points at, Continue navigates to the next step's section when it differs, and Back navigates to the previous step's.
-`setupGuideStepSection` is the same answer for a card: resuming lands on the section of the step it resumes at, not on a section hardcoded per guide.
-The engine's mount point survives a section change (`SettingsPanelForSection` swaps the panel beneath it), so crossing sections does not pause the guide.
+`onboarding-store` also keeps local setup progress, which the sidebar's progress ring and the start page's reminder count: -1 means not started, and a guide's length in `stores/onboarding/setup-guides.ts` means complete.
+That file is React-free and holds only what the stored format and those counts need: each guide's length and whether this shell can offer it.
+A guide gated out (`requiresBrowserView` on a build with no browser bridge) drops out of the numerator and the denominator alike.
 
-**The guides are a table, not four special cases.**
-`stores/onboarding/setup-guides.ts` holds every step - its section, its selector, its copy - and is React-free, so the store, the coachmark and the product code a step waits on all read the same rows.
-`SETUP_GUIDE_LENGTHS` is gone with it: `setupGuideLength(id)` is the step list's own length, never a number copied beside it.
-
-The three guides: agent selection is three steps on Agents (the editor shell, its Edit/Preview toggle, the Revert button).
-Appearance and layout is six, and it crosses surfaces: theme mode, wallpaper and interface font on Appearance, then the density preset, the region sections and the Customize layout entry on Layout.
-Its final step is the one that SHOWS the editor instead of entering it (L-50): a step may carry `litChrome`, and while it is up `useLayoutLitMoment` puts `data-layout-lit` on the document element, which is the second selector on `layout-editor.css`'s passive-dim rules.
-The real chrome around Settings dims exactly as it does on the canvas; closing the step ends the effect and completes the guide, and nothing is entered, leased or written.
-The runner (`SettingsSetupGuide`) draws nothing while a layout-editor session is running - the editor owns the screen and its Escape - and resumes at the same step afterwards.
-Browser sign-ins is two steps on Browser: the "Save website sessions" switch, then the "Choose source…" button, which is action-required and is where the guide waits.
-It is also the one guide with a `requiresBrowserView` flag, because without the desktop browser bridge there is no way to finish it.
-
-Progress is local in `onboarding-store`: -1 means not started, intermediate steps
-resume, and the guide length means complete. Active guides are session-local;
-replaying a completed guide does not clear completion. Agent selection and
-appearance finish on Done, so keeping defaults is valid.
+The import mutation completes the `cookies` guide only when cookies were successfully imported, so cancelled, blocked, and empty imports leave it unfinished.
+Import is offered only when the desktop browser bridge and host binding are present.
 
 The store is persisted at version 2.
 The migration settles a checklist nobody has touched for anyone who finished the tour before the checklist shipped: every guide is marked complete and the reminder is dismissed, because they have been using the app already and three open cards would be a nag rather than a checklist.
-Someone part-way through a guide keeps their progress and is still offered the rest of it, and a user who has not finished the tour is left alone.
-
-**A step the product finishes says so in the table, and the product reports an event rather than a guide id.**
-A step carries `advanceOn` for an event that moves past it in place of Continue, and `completesOn` for the event that ends the guide from it.
-`SettingsSetupGuide` reads those flags: a step with `completesOn` offers no Done and waits, and `advanceSetup` refuses to walk off it, so the guide can only end with the real thing having happened.
-Both call sites go through `notifySetupEvent`: the "Save website sessions" switch reports `browser-save-enabled`, which auto-advances to the import step (the switch IS the step, so there is nothing to confirm), and the existing import mutation reports `browser-logins-imported` only when cookies were successfully imported.
-Cancelled, blocked, and empty imports leave the card unfinished, and neither `browser-settings-section.tsx` nor the mutation hook names a guide.
-Import is offered only when the desktop browser bridge and host binding are present.
-
-A started, unfinished card reads "Step n of total" and draws a thin meter along its bottom edge; a finished one keeps the green check and "Complete".
-The meter is a native `<progress>` filled with the steps already COMPLETED, styled through `getting-started-settings.css`: the last unfinished step draws a nearly-full bar, not a full one, and no table of width classes has to track the step counts.
-The header count is "n of m complete" over the guides this shell can OFFER - the tour plus the available ones.
-A guide gated out (`requiresBrowserView` on a build with no browser bridge) drops out of the numerator and the denominator alike, so the panel never reads one short for ever and the start page's reminder, which is that same difference, goes quiet once the reachable work is done.
-The sidebar's progress ring counts the same way.
-
-Each card's label and copy come from `getting-started-settings.definitions.ts`, like any other searchable setting.
-Only the replay card owns a search ENTRY and an anchor - it inherited the removed General "Product tour" row, keywords included, so "walkthrough" and "first run" still land on it.
-The three guide cards contribute their words to the page instead: each one names a settings page that already has an entry of its own, and a second result under the same label would outrank the page the person typing it wants.
+Someone part-way through a guide keeps their progress, and a user who has not finished the tour is left alone.
 
 **Set up Personal** (`components/onboarding/set-up-personal-group.tsx`, its
-rules in `set-up-personal.ts`) sits
-under the guide cards on this page and on Home. It is not a guide and not part
-of the "n of m complete" count: three optional steps, each a sentence about
-what it does for the person and an Open button to its page - link a plan or
+rules in `set-up-personal.ts`) is not drawn on any page. It is three optional
+steps, each a sentence about what it does for the person and an Open button to
+its page - link a plan or
 add an API key (Providers), add a secret your agents will need (Secrets),
 choose how agents are picked (Agent selection) - under "Optional. An agent can
 run as soon as one provider is set up." with its own "n of 3 done". Each step
@@ -202,16 +164,19 @@ Application. It uses the first settings leader digit; General uses the second.
 The start page offers the checklist through a persistent, dismissible toast once
 the first-task guide ends. Dismissing it is remembered locally across reloads;
 the checklist remains available in Settings. Completed checklists hide the toast.
+While this computer's settings are not in Personal, the move's own invitation
+stands there instead, under an id of its own
+(`MOVE_INVITATION_TOAST_ID`): "This computer's settings aren't in Personal." ·
+Show me what moves · Not now. Only the person takes it down - a status that
+stops naming a move does not, and the reminder never stands in its place.
 
 The Home tab draws the checklist itself, above its task sections
 (`home-focus/home-getting-started-section.tsx`), from the same cards
 (`onboarding/getting-started-cards.tsx`) and the same count
 (`onboarding/getting-started-checklist.ts`) as this panel. The Home copy is
 denser, steps between whole rows (4 / 2×2 / 1) off its own container width,
-omits a guide the shell can never offer, and carries no search anchors, so the
-reveal still lands on the Settings card when both are mounted. While anything
-is left it is open; once every offered guide is complete it folds into one row,
-closed by default each time Home mounts.
+and carries no search anchors, so the reveal still lands on the Settings card
+when both are mounted. Once every card is complete it is gone.
 
 ## Search
 
@@ -640,7 +605,7 @@ to join.
   browser tile only views a host's browser and carries none of the user's
   sign-ins, so "In Traycer" vs "In default browser" would decide nothing. The
   modifier legend under the page goes with it. Tile placement stays.
-- **Layout rows the desktop layout alone draws** - the Tabs card's Placement, Tab overflow and Side tab view, the Sidebar's Side and Readings on agent rows, Chat's Reading width and Wide column width, a reading's Location, Model's Style and the Minimap (`isDesktopLayoutRowAvailable = !mobileApp`).
+- **Layout rows the desktop layout alone draws** - the Tabs card's Placement, Tab overflow and Side tab view, the Sidebar's Side, Collapsed in new tasks and Readings on agent rows, Chat's Reading width and Wide column width, a reading's Location, Model's Style and the Minimap (`isDesktopLayoutRowAvailable = !mobileApp`).
   The installed mobile app is the phone layout at every width, so nothing can make them apply there.
   A narrow BROWSER tab keeps them, live, with the note "Applies on wider windows." (the Minimap's: "Shows on wider windows with a mouse."), because widening the window is the way back - the layout form's shell rule (Layout, below).
 - **The exception: Layout's "Status bar on small screens" ROW is keyed on the phone LAYOUT, not the build** (`isMobileFooterRowAvailable = phoneLayout`, L-51, U1).
@@ -853,46 +818,6 @@ Supporting pieces, all viewport-agnostic where possible:
   unchanged regardless of density.
 
 ## Team configuration sources
-
-A build without environments (`src/unreleased-features.ts`, off for the
-release that ships before they are ready) has no Environment dropdown and no
-Environment group: `settings-sections.ts` puts its pages under the Host
-picker in the release before's order and names (Overview, Providers,
-Worktrees, Notifications, Permissions, Agent selection, Model routing, Shell,
-Diagnostics), and every one of those pages reads the host the picker names,
-as before the feature: `usePersonalHostScope` resolves to the picker's own
-selection there (a vanished pick stays vanished), `useEnvironmentPick()` is
-that host as a Local row (never Personal, so every page takes its host arm,
-the Providers MCP and Skills tabs included), `PersonalPageFrame` wraps the
-page in a frame that reads no status, draws no chip, line or notice and never
-makes the page read-only, and none reads the cloud. The pages keep the copy
-they had before environments: the Agent selection page is the guide alone
-(no tab strip, no caption, its own description and "Revert to default"), the
-Shell page says "host env" and "Host environment", the API key and profile
-key lines say "Stored encrypted on this device", the composer's key paste
-draws no custody line, and the agent browser access switch is a row of
-Settings > Browser again (Permissions has no Browser tab, and
-`/settings/browser-agent-access` lands on Browser). No write mints or asks
-for an executable-write grant. Machine setup is not offered and its route
-redirects to Settings like the features' pages, and a routed panel for any
-page the build hides draws its replacement or General
-(`SettingsPanelForSection`). The Overview draws neither the
-configuration line, the settings card, the remote access question nor the
-Access and setup tab (`HOST_OVERVIEW_TABS` leaves `access` out and its groups
-are offered to no search), the Local row note and the move reminders are not
-drawn, and Credits, MCP servers, Skills, Secrets, Sandboxes and Members are
-not offered. Permissions keeps its earlier words too: the page's search
-description reads "How much an agent may do on its own, and who reviews the
-rest.", Rules names its first section "Environment" and its footer is Discard
-and Save with no **Reset to default**, and the Modes row carries the "All
-machines" badge and the note that the machine picker above changes nothing on
-that tab instead of the "This app only" caption. Searching for MCP servers or
-Skills lands on Providers, where each provider's own tabs for them are, and
-the Providers variables group is "Environment variables" again, as the page
-itself reads. Every host picker outside Settings lists one "Host" group, with
-its search above six hosts, the layout before sandboxes. The suites describe the build with
-everything on (`__tests__/test-browser-apis.ts` mocks the switch to `true`);
-a suite of the switched-off build mocks it to `false` itself.
 
 The Environment dropdown uses `useEnvironmentPick()`, and `PersonalPageFrame`
 decides each Environment page's source, one rule per pick. A team reads the
@@ -1442,11 +1367,27 @@ registry-backed presence words and the local service words ("Running" /
 two a person can act on. It DELEGATES to `deriveHostPresence`
 (`panels/my-hosts-model.ts`) rather than re-deriving it.
 
+`reported-reachable`'s `detail` says only what the ACCOUNT reported ("Your
+account last heard from this host."). It deliberately does NOT add whether
+anything here has dialled the host, in either direction, because the three ways
+the lease step declines are indistinguishable from here: `connecting` is both
+`deriveLease`'s fall-through - derived for every registered host once the
+authority attaches - and what a host reads while a dial or a re-dial is in
+flight. Two sentences are therefore ruled out. "Nothing has connected to it
+from here yet." was false for any host this app had dialled and lost and was
+re-dialling (a dirty drop on a non-effective host leaves no live session and a
+refusal streak short of `CONFIRMED_DEATH_REFUSAL_STREAK`, so the lease rests at
+`connecting`); "Connecting to it now." would be false for the resting case
+instead, and that one is the common one, since every registered host holds a
+`connecting` lease until something reports. What carries "not verified from
+here" is the label, the idle tone and the absent dot - the reason this state
+exists at all.
+
 The precedence across the two is one chain, and each step outranks the next for
 a stated reason: **local process read** (a direct read of the service on this
 box) -> **live session** (an open E2E connection is firsthand proof) ->
 `status.connectivity` (the cloud's relay-attachment answer, and the only one
-available for a host this client has never dialled).
+available when neither of those has a verdict).
 
 `connectivity` is the ONE cloud liveness signal. It replaced a heartbeat lease
 plus a separate relay-attach bit, and with them the states that existed only to
@@ -1601,14 +1542,6 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
       its in-flight save. The client never schedules archiving: the
       host's sweep does, and a task nothing holds open is swept when a host
       next opens it, which is why the copy makes no wall-clock promise.
-  - **Onboarding**: Product tour (replay onboarding), and nothing else. Import
-    your work and Data migration used to share this group under the name
-    "Setup & migration"; both moved to the scoped host's **Overview**, because
-    each acts on ONE machine's local data and General is app-wide - the rows
-    could only ever speak for whichever host the window happened to point at,
-    while naming none. The tour stays because it is genuinely window-level:
-    replaying it re-runs this app's onboarding, which no host owns. The group
-    is named for its subject rather than for its single row.
   - **Danger Zone** (`DangerZoneSection`, `SettingsGroup` with `tone:
 "danger"`, `data-testid="settings-danger-zone"`, kept last): **Local app state
     only** (reset tabs/layout/drafts/settings/view prefs + reload) - the one
@@ -2142,7 +2075,7 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
     `Side tab view` picks between two pictures of the strip drawn from the real rows and the sample agents, one with the open task's live agents under its tab and one without.
     It is disabled while the tabs are at the top - "Set Placement to Left or Right to use this.", which the canvas chip says too - and `Tab overflow` is disabled while they sit at a side - "Set Placement to Top to use this."; each stored value is kept.
     In the editor its canvas part is the live agents list under the sample tab: hovering or pressing the row lights or rings that list (ghosted while the value is Tabs only), a press on the list selects the row, and with no room for the list the canvas chip on the strip says why.
-    The Sidebar card opens with **`Side`** (`arrangement.sidebarSide`: Left or Right) and ends with **`Readings on agent rows`**.
+    The Sidebar card opens with **`Side`** (`arrangement.sidebarSide`: Left or Right), then **`Collapsed in new tasks`** (`arrangement.sidebarStartCollapsed`, off by default: what a task tab with no collapse record of its own opens with; a tab the user has collapsed or expanded keeps its own `mainCollapsedByTabId` entry, so the switch never moves a tab already arranged), and ends with **`Readings on agent rows`**.
     Chat opens with **`Reading width`** and, under it, **`Wide column width`**, which stays in place while Comfortable, disabled with "Set Reading width to Wide to use this." (C5); the column is never wider than the pane it is in.
     Composer opens with **`Toolbar style`** (`model.toolbarStyle`, Flat or Bordered, drawn as the real buttons): it styles every toolbar button, so it is an area row rather than a detail of the Model region it is stored on (C3).
     Usage and resources opens with **`Status bar on small screens`** where the phone layout is drawn (see Responsive Behavior).
@@ -3613,6 +3546,26 @@ window`, recorded in the type as `coverage.browsersAreMountedOnly` -
         must not touch the create/import draft fields; failure closes only the
         confirmation and renders inside the skill dialog, since the tab's own
         error banner sits behind it and would be invisible.
+    - **The shared folder is read, not written, on a host that runs
+      environments.** The capability's scopes are `global`/`project` and carry no
+      shared destination, so `useSkillEnvironmentRoute` tells the two kinds of host
+      apart by `environment.status`, which a build without environments never
+      answers (`null` until the manifest arrives: no shared-folder action and no
+      refusal yet). That host writes to `~/.agents/skills` as it always did: the
+      composer offers "Every provider", and a shared row keeps Edit and Remove. A
+      host that answers refuses those writes (`unsupported_scope` for a
+      create or import, `unsupported_action` for an edit, update or remove),
+      so the composer offers "<provider> only" and the served environment, and a
+      row directly in a `.agents/skills` folder (`isSharedFolderSkill`) keeps its
+      Shared badge with "Add to <name>" (global scope, the one
+      `promoteToPersonal` takes) in place of Edit and Remove. A folder under the
+      served root the room has not captured also lists as `shared` and is not
+      that row: it stays editable. The environment option is the
+      environment this host serves, named by its name ("Personal", or the
+      team's), since its views are what reach this host's harnesses: a written
+      skill goes up as the archive
+      `environment.configuration.skills.upload` takes (`provider-skill-archive.ts`),
+      an import hands its source to `EnvironmentSkillImportDialog`.
   - **Model Providers is the visual layer of `opencode auth login`**
     (`provider-model-providers-tab.tsx` +
     `provider-model-provider-connect-dialog.tsx`): the UPSTREAM LLM credentials
@@ -6239,7 +6192,8 @@ set-state-in-effect` forbids the effect form, and an effect would also
     closes or the host changes.
   - **Access and setup** (`host-overview-access-tab.tsx`, tab id `access`).
     The picked host's own access and setup, read
-    through that host (`environment.status`, re-read every 5 s while open). A
+    through that host (`environment.status`, re-read every 5 s while open, and
+    on the move's own pace while a move into Personal is still running). A
     host without the method shows only "Update this host to use your
     settings."; an unreachable one says its values need a connection. Top to
     bottom, each only while it applies:
@@ -7197,12 +7151,18 @@ computer`. A team's host draws no card. The move sheet names the moving computer
       host id. Rows: Host ID (shortened, with copy; Copy host ID stays in the
       `⋯` menu too), Added to account (`createdAt`), Last seen, Last reported
       version (`status.appVersion`) and Platform (`formatPlatform` plus the
-      architecture, as the header words it). Last seen reads "Online now"
-      while the header's live evidence holds (`health.live`); otherwise
-      `status.lastSeenAt` on the header's own ladder and clock
-      (`formatElapsed`, `scope.nowMs`), so the two never disagree on one
-      screen. A host the account has no record of gets no group, as it gets
-      no Danger zone.
+      architecture, as the header words it). Last seen is `status.lastSeenAt`
+      on the header's own ladder and clock (`formatElapsed`, `scope.nowMs`),
+      always, with no tone of its own - a timestamp is not a status word, and
+      the row has no second wording. It used to read "Online now" while the
+      header's live evidence held (`health.live`), whose strongest source is
+      the local process read: a host serving this computer while its relay
+      uplink is down therefore claimed an account check-in no other device
+      could see. Nothing on the record supports a second wording either -
+      `connectivity: "connectable"` is a lease read up to its TTL old, which
+      `deriveHostPresence` words "Reported reachable" and deliberately not
+      "Online", and which no surface renders directly. A host the account has
+      no record of gets no group, as it gets no Danger zone.
     - **Install record** (`host-settings-installation-details.tsx`) is shown
       open - it was a collapsed "Installation details" disclosure - and reads
       `host.getInstallationInfo`: Version, Build (only when it differs),

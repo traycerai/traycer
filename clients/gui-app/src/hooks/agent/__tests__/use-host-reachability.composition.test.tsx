@@ -208,7 +208,7 @@ describe("useHostReachability — composed against real hostListItemToDirectoryE
       expect(result.current.status).not.toBe("checking");
     });
     // Firsthand proof of life beats a cloud verdict reached minutes ago
-    // through a different leg — this is the tab-open gate the review named
+    // through a different leg — this is the tab-open gate named
     // directly ("honours a live session as firsthand proof").
     expect(result.current.status).toBe("reachable");
     expect(result.current.unavailability).toBeNull();
@@ -237,7 +237,7 @@ describe("useHostReachability — composed against real hostListItemToDirectoryE
     expect(result.current.unavailability).toBe("offline");
   });
 
-  // P1 paired tests (cold review): the same recent `lastSeenAt`, distinguished
+  // P1 paired tests: the same recent `lastSeenAt`, distinguished
   // ONLY by the recovery dial's outcome. Recency alone (the relay-fuse window)
   // must never upgrade `offline` for the dead surface - a host that cleanly
   // detached or crashed a minute ago carries the same recent timestamp as a

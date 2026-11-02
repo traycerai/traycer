@@ -616,6 +616,7 @@ describe("chat-head canonical encoding", () => {
       throw new Error("expected an encoded core object");
     }
     expect(core.settings).toEqual({
+      ultracode: false,
       harnessId: "claude",
       model: "opus",
       permissionMode: "supervised",

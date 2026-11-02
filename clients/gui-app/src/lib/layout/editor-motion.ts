@@ -6,11 +6,11 @@ import type {
 } from "@/stores/layout/layout-editor-store";
 
 /**
- * How the editor arrives and how it leaves (L-29, L-30, 5.2, section 6).
+ * How the editor arrives and how it leaves (L-29, L-30).
  *
  * Nothing here animates a width: the shell reflows beside the inspector in ONE
  * frame, and what glides is a pair of snapshots the browser composites for it,
- * so no text is ever scaled or re-laid-out mid flight (P2). The guarded
+ * so no text is ever scaled or re-laid-out mid flight. The guarded
  * fallback is that single-frame snap plus the inspector's own slide, which is
  * the stylesheet's doing; what this module adds there is holding the session
  * open until the slide-out has played, because the inspector renders session
@@ -76,7 +76,7 @@ export interface LayoutEditorMotionInput {
  *
  * The panel is authored and styled in `components/layout-editor`, so this
  * module is HANDED the element rather than going looking for it: a selector
- * string here would be the same layering inversion G1-11 closed, written as a
+ * string here would be a layering inversion, written as a
  * pairing nothing type-checks.
  */
 export function setLayoutInspectorNode(node: HTMLElement | null): void {
@@ -84,7 +84,7 @@ export function setLayoutInspectorNode(node: HTMLElement | null): void {
 }
 
 /**
- * Both reduced-motion gates, which the editor honours together (section 6):
+ * Both reduced-motion gates, which the editor honours together:
  * the OS media query, and the app's own "Panel animations" switch, which
  * `theme-applier.ts` mirrors onto `<html data-reduce-panel-motion>`.
  */
@@ -113,7 +113,7 @@ export function runLayoutEditorMotion(input: LayoutEditorMotionInput): void {
   // the pending teardown, so the new session begins in this same task and
   // React never unmounts the panel - which is still wearing the exit
   // attribute, and would sit at `translateX(100%)` for the rest of the
-  // animation before sliding back in (G3-05). The pending `finish()` then
+  // animation before sliding back in. The pending `finish()` then
   // removes an attribute that is already gone.
   if (input.phase === "enter")
     inspectorNode?.removeAttribute(EXITING_ATTRIBUTE);
@@ -126,8 +126,8 @@ export function runLayoutEditorMotion(input: LayoutEditorMotionInput): void {
       // activation. `beginSession` fires `useLayoutRegion`'s subscription
       // synchronously, so against an uncommitted activation it reads the
       // OUTGOING surface's `visible` and registers that tab's instances for a
-      // commit; a deep-link target then rings a node in the tab being hidden
-      // (R2-05). Landing that commit first is what the transition path gets
+      // commit; a deep-link target then rings a node in the tab being hidden.
+      // Landing that commit first is what the transition path gets
       // for free by running a frame later.
       flushSync(noop);
       input.apply();
@@ -172,7 +172,7 @@ export function runLayoutEditorMotion(input: LayoutEditorMotionInput): void {
  * wrong exactly where that picture is not the whole truth or not wanted:
  *
  * - a presented native tile paints outside the page, so it would sit still
- *   while everything around it moved (C-18);
+ *   while everything around it moved;
  * - either reduced-motion gate means the shell snaps and the inspector is the
  *   only thing that moves;
  * - keyboard entry is a deliberate, sightless gesture, and the fallback lands

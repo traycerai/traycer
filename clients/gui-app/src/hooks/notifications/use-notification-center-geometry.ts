@@ -153,7 +153,7 @@ function readCurrentCaps(
 }
 
 /**
- * Owns the T04 stable-shell geometry lifecycle: a one-time pre-paint
+ * Owns the stable-shell geometry lifecycle: a one-time pre-paint
  * measurement gated on Radix's actual placement (never a bounding-rect
  * viewport heuristic - the Popper measuring-phase sentinel can read as
  * in-viewport under a transformed ancestor), frozen for the open session,

@@ -59,6 +59,7 @@ function toolbarStore() {
     reasoningFallback: "model-default",
     seedKey: "composer-toolbar-presentation-test",
     values: {
+      ultracode: false,
       permission: "supervised",
       selection: {
         harnessId: "claude",
@@ -71,6 +72,7 @@ function toolbarStore() {
     onSettingsChange: null,
     tuiOnly: false,
     chatLineCarriesAutoMode: null,
+    ultracodeCarried: false,
     hostId: null,
   });
 }

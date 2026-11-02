@@ -6,7 +6,7 @@ import { useLayoutEditorStore } from "@/stores/layout/layout-editor-store";
  *
  * One gate, asked once per rail rather than once per divider, and it is the
  * same gate `useLayoutRegion` applies to a region's drag attributes: a
- * session, and the pane this rail is in being the visible one (L-109, R3-06).
+ * session, and the pane this rail is in being the visible one (L-109).
  * A retained background epic tab keeps its rail mounted, and without the
  * visibility half its dividers would answer `[data-layout-group="rail"]` for
  * the duration of every session - a second set of members the editor does not

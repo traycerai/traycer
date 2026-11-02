@@ -3,7 +3,12 @@ import {
   type HostDoctorIssue,
 } from "@traycer/protocol/host/maintenance";
 import { config } from "../config";
-import { runDoctor, type DoctorResult } from "../doctor";
+import {
+  DOCTOR_ISSUE_CODES,
+  runDoctor,
+  type DoctorIssue,
+  type DoctorResult,
+} from "../doctor";
 import { lifecycleSnapshotRows } from "../host/lifecycle-snapshot";
 import { readHostPidMetadata } from "../host/pid-metadata";
 import {
@@ -44,7 +49,8 @@ const LOCAL_ONLY_NOTICE =
 // for the lifecycle facts and as the fallback. The host's list is the
 // authority on issues: it runs this same engine and then substitutes what
 // only it knows - the credential it holds in memory, a credential it could not
-// save, the paths a non-canonical `--host-data-dir` moved.
+// save, the paths a non-canonical `--host-data-dir` moved. One check stays
+// local: see `withThisProcessPathIssue`.
 //
 // Any failure to get that list - no host running, not signed in, a refused or
 // unreachable host, a host too old for the method, a host whose own run of
@@ -66,7 +72,10 @@ export const hostDoctorCommand: CommandFn = async (
     readRunningHostIssues(),
   ]);
   const report: HostDoctorReport = {
-    issues: hostIssues ?? local.issues,
+    issues:
+      hostIssues === null
+        ? local.issues
+        : withThisProcessPathIssue(hostIssues, local.issues),
     lifecycle: local.lifecycle,
   };
   const exitCode = report.issues.some(
@@ -80,6 +89,23 @@ export const hostDoctorCommand: CommandFn = async (
     exitCode,
   };
 };
+
+/**
+ * The host's list, with the PATH check swapped for this run's own. That check
+ * answers for the PATH of the process that ran it, and the host's child read
+ * the host's, which is not the one this report's reader resolves `traycer` on.
+ */
+function withThisProcessPathIssue(
+  hostIssues: readonly HostDoctorIssue[],
+  localIssues: readonly DoctorIssue[],
+): readonly HostDoctorIssue[] {
+  const isPathIssue = (issue: HostDoctorIssue): boolean =>
+    issue.code === DOCTOR_ISSUE_CODES.CLI_SHADOWED_ON_PATH;
+  return [
+    ...hostIssues.filter((issue) => !isPathIssue(issue)),
+    ...localIssues.filter(isPathIssue),
+  ];
+}
 
 /**
  * The running host's issue list, or null when there is none to have.

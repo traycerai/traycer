@@ -202,7 +202,7 @@ function ChatDockCompactPill(props: {
     <span
       // `contents` at rest, a real box while a session is live: the hotspot
       // ref lands here, and a `display: contents` node has no rect for the
-      // hover outline or the travelling ring to measure (C-06).
+      // hover outline or the travelling ring to measure.
       className={cn(props.editing ? "inline-flex items-center" : "contents")}
       ref={hotspotRef}
     >
@@ -260,7 +260,7 @@ function ChatDockCompactPill(props: {
  * the pointer was over. The pills are regions like any other piece of
  * customizable chrome and the owner asked for them to answer a right-click
  * like one; a root per pill would be five roots per tile for a gesture used a
- * handful of times a session, which is the arithmetic G3-10 already settled.
+ * handful of times a session.
  */
 export function ChatDockCompactStrip(props: {
   readonly actionsRef: (node: HTMLDivElement | null) => void;

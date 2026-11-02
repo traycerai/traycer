@@ -170,6 +170,7 @@ export function useJudgeToolbarStore(input: {
       onSettingsChange: null,
       tuiOnly: false,
       chatLineCarriesAutoMode: null,
+      ultracodeCarried: false,
       hostId: null,
     }),
   );
@@ -213,6 +214,7 @@ export function useJudgeToolbarStore(input: {
     store.getState().setCatalog({
       hostId: null,
       chatLineCarriesAutoMode: null,
+      ultracodeCarried: false,
       harnesses,
       modelsHarnessId: harnessId,
       models: models ?? EMPTY_JUDGE_MODELS,
@@ -314,7 +316,7 @@ export function useJudgeToolbarStore(input: {
   // composer, where the same click restores that provider's remembered model.
   // It stops keeping it only once that provider's catalog has loaded without
   // listing it: a model this machine no longer offers is not one to keep, and
-  // saving it would save a judge that cannot run (flow 6). While the catalog
+  // saving it would save a judge that cannot run. While the catalog
   // is still loading nothing yet says the model is gone, so the click keeps
   // it and writes nothing, and the catalog's answer decides from then on.
   // Never an unresolved seed's `""`, which names no model of its own. Then,
@@ -352,7 +354,7 @@ export function useJudgeToolbarStore(input: {
 /**
  * The line a switch dropped for having no models, or failing to load them,
  * leaves behind: display state, so the tile still says why nothing was saved
- * (spec flow 1), while the switch itself no longer holds the store. It is
+ * while the switch itself no longer holds the store. It is
  * recorded while the abandoned switch waits for its settle and cleared when
  * the picker next opens - both while rendering, not in an effect - or when a
  * tile is chosen, through the returned clear.
@@ -395,6 +397,7 @@ function judgeToolbarValues(
     selection,
     reasoning,
     serviceTier: "",
+    ultracode: false,
   };
 }
 

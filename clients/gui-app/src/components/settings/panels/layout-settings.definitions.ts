@@ -112,7 +112,7 @@ export const LAYOUT = defineSettingsSection("layout", {
     ],
   },
   /**
-   * What the side strip shows (D8): a surface-level row beside Placement,
+   * What the side strip shows: a surface-level row beside Placement,
    * drawn by `SideStripViewRow` on both hosts.
    */
   sideStripView: {
@@ -176,6 +176,29 @@ export const LAYOUT = defineSettingsSection("layout", {
     description: "Which side of the task canvas the sidebar sits on.",
     availableWhen: isDesktopLayoutRowAvailable,
     keywords: ["sidebar", "left", "right", "side"],
+  },
+  /**
+   * Whether a task tab opened for the first time starts with the sidebar
+   * collapsed: a surface-level row, drawn by `SidebarStartCollapsedRow` on both
+   * hosts. A tab the user has collapsed or expanded keeps its own state.
+   */
+  sidebarStartCollapsed: {
+    kind: "row",
+    group: "sidebar",
+    search: { anchor: "layout-sidebar-start-collapsed" },
+    label: "Collapsed in new tasks",
+    description:
+      "New task tabs open with the sidebar collapsed to its icons. A tab you expand stays expanded.",
+    availableWhen: isDesktopLayoutRowAvailable,
+    keywords: [
+      "sidebar",
+      "collapsed",
+      "collapse",
+      "hidden",
+      "default",
+      "new task",
+      "start",
+    ],
   },
   /**
    * The resource readings beside each agent and terminal row, drawn by
@@ -274,6 +297,7 @@ export const LAYOUT = defineSettingsSection("layout", {
    * (`components/layout-editor/layout-search.definitions.ts`), so the two
    * picks are findable without an entry here.
    */
+
   /**
    * The grammar's surface tier (L-51): it belongs to no region, and it decides
    * whether the strip exists at all in the phone layout, which withholds the

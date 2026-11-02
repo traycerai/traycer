@@ -66,8 +66,8 @@ describe("secretsHostSummary", () => {
     ).toBe("Applying on dev-box…");
   });
 
-  it("says no hosts yet when none reported", () => {
-    expect(secretsHostSummary([])).toBe("No hosts yet");
+  it("says the secret is on no host when none reported", () => {
+    expect(secretsHostSummary([])).toBe("Not on any host");
   });
 });
 
@@ -160,7 +160,7 @@ function renderDrawer(input: {
 
 function status(overrides: Partial<DetailsStatus>): DetailsStatus {
   return {
-    summary: "No hosts yet",
+    summary: "Not on any host",
     currentVersion: null,
     changedBy: null,
     changedAt: null,

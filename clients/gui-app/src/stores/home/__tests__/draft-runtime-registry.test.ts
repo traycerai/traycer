@@ -48,7 +48,7 @@ function imageContent(hash: string): JsonContent {
 /**
  * ~2 MiB inline-image document. Large enough that accidental whole-document
  * `JSON.stringify` on a selection-only flush shows up as O(document) work.
- * Mirrors the Ticket 2 `multiMegabyteImageDoc` helper.
+ * Mirrors the `multiMegabyteImageDoc` helper.
  */
 function multiMegabyteImageDoc(): JsonContent {
   const b64content = "B".repeat(2 * 1024 * 1024);
@@ -448,7 +448,7 @@ describe("DraftRuntimeRegistry", () => {
   });
 
   it("selection-only flush after debounce never compares multi-megabyte content", () => {
-    // Ticket 2 proved the *synchronous* setSelection path stays cheap; this
+    // An earlier pass proved the *synchronous* setSelection path stays cheap; this
     // advances fake timers through the real 300ms debounce and proves the
     // *deferred* write also goes through writeSelection / setDraftSelection
     // without sameJsonContent or a direct content JSON.stringify.

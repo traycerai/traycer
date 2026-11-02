@@ -54,6 +54,9 @@ import { createWorkerRuntimeEnvironment } from "../worker-runtime-environment";
 import { createWorkerAccountingPort } from "./worker-accounting-port";
 import type { EpicRuntimeAccountingPort } from "../epic-runtime-accounting-port";
 
+/** What the queue answered: a minted id, or an explicit refusal. */
+export type EnqueuedWriteCommand = RuntimeWorkerCallResponse<"command/enqueue">;
+
 /**
  * The relocated composition root, as the bridge sees it.
  *
@@ -62,9 +65,6 @@ import type { EpicRuntimeAccountingPort } from "../epic-runtime-accounting-port"
  * that set is much smaller than the runtime's surface because everything else
  * the runtime does travels outward as events.
  */
-/** What the queue answered: a minted id, or an explicit refusal. */
-export type EnqueuedWriteCommand = RuntimeWorkerCallResponse<"command/enqueue">;
-
 export interface EpicRuntimeWorkerCore {
   /**
    * Content-addressed attachment bytes from the root replica, or `null` when
@@ -151,7 +151,6 @@ export interface EpicRuntimeWorkerCore {
    * own state, which is why this is a call and not a push.
    */
   enqueueWriteCommand(intent: unknown): Promise<EnqueuedWriteCommand>;
-  /** The root replica's encoded state, for a transfer into another session. */
   /**
    * Wait for attachment bytes. Settles `null` on cancel or teardown, never on
    * a timeout - "resolves when they land" is the contract.
@@ -162,6 +161,7 @@ export interface EpicRuntimeWorkerCore {
   ): Promise<Uint8Array | null>;
   /** Stop a wait. `false` when the id was never pending or has settled. */
   cancelAttachmentAwait(awaitId: number): boolean;
+  /** The root replica's encoded state, for a transfer into another session. */
   encodeRootState(): Promise<Uint8Array>;
   /** Take a root state in. `applied` is a data-loss guard, never optimistic. */
   applyRootUpdate(update: Uint8Array, asLocalEdit: boolean): Promise<boolean>;
@@ -605,6 +605,7 @@ export function startEpicRuntimeWorkerHost(
           event.status.status,
           event.status.reason,
           event.status.retryCause,
+          event.status.continuity,
         );
         return;
       }

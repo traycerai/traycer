@@ -261,8 +261,8 @@ describe("SampleWorkspaceBody - content", () => {
  * L-131 and LV2-01. The sample scene wrapped its dock, its transcript, its
  * minimap and (inside `ComposerToolbar`) its toolbar in `inert`, which removes
  * a subtree from hit testing - so not one region on the chat pane could be
- * hovered, selected by pointing or dragged, which is the whole model (P3,
- * L-01). The edit firewall is the one mechanism that keeps sample content from
+ * hovered, selected by pointing or dragged, which is the whole model
+ * (L-01). The edit firewall is the one mechanism that keeps sample content from
  * acting, and these three assertions are its two halves: the pointer reaches
  * the region, and the gesture goes no further than the column.
  */
@@ -402,7 +402,7 @@ describe("SampleWorkspaceBody - quick verbs on every pointable region", () => {
     expect(menuNames()).toEqual(["changedFiles"]);
   });
 
-  // G3-10: the timestamps, the activity rows and the minimap share ONE menu
+  // The timestamps, the activity rows and the minimap share ONE menu
   // around the transcript, resolved from the region under the pointer. No item
   // in the transcript owns a trigger of its own.
   it("offers a timestamp's verbs from the transcript's one menu", () => {

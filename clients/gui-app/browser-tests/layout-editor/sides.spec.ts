@@ -29,7 +29,7 @@ import {
 } from "../support/layout-editor/pixels.ts";
 import { waitForStableBoxes } from "../support/layout-editor/waits.ts";
 
-// THE SIDE PLACEMENTS' REGRESSION (A11, A12, A13, L-163, D4, S-04, 6.x).
+// THE SIDE PLACEMENTS' REGRESSION (A11, A12, A13, L-163, D4, 6.x).
 //
 // One load per simulated window chrome (`wco` is read once at mount: none,
 // mac, win and mac-fullscreen), each opened at the left placement with the
@@ -57,7 +57,7 @@ import { waitForStableBoxes } from "../support/layout-editor/waits.ts";
 //        `--warning-foreground` object with `--background` text.
 //   Row kit. The group is ONE tinted block holding its header and every
 //        member, the split pair's rows included.
-//   S-33. With the inspector docked left, the traffic-light reserve moves to
+//   With the inspector docked left, the traffic-light reserve moves to
 //        its header and the strip's title row drops to the 12px gutter.
 //   6.1. A right strip sits left of a right-docked inspector, never under it.
 //
@@ -319,7 +319,7 @@ interface BandExpectation {
 }
 
 /**
- * A13 and the surface frame's inset (S-04, 6.2, 6.3, D1): the geometry the
+ * A13 and the surface frame's inset (6.2, 6.3, D1): the geometry the
  * band, or its absence, gives the layout.
  */
 async function assertTitleBand(
@@ -820,7 +820,7 @@ async function assertBesideInspector(
 
 /**
  * The traffic-light reserve belongs to whatever sits at the window's top-left
- * corner (S-28, S-33): with the inspector docked left its header keeps at
+ * corner: with the inspector docked left its header keeps at
  * least the 82px inset, and the strip's title row beside it drops to 12px.
  */
 async function assertDockLeftInset(page: Page): Promise<void> {

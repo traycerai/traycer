@@ -18,9 +18,13 @@ import {
 import { splitPromptIntoComposerSegments } from "@/lib/composer/segments";
 import type { Attachment, MentionAttachment } from "@/lib/composer/types";
 import { basenameOfPath } from "@/lib/path";
-import { EPIC_NODE_ICONS } from "@/lib/artifacts/node-display";
+import {
+  EpicArtifactIcon,
+  StaticEpicNodeIcon,
+} from "@/components/epic-canvas/epic-node-tab-icon";
 
 const MENTION_ICON_CLASS = "size-3.5 shrink-0 text-muted-foreground";
+const NODE_MENTION_ICON_CLASS = "size-3.5 shrink-0";
 
 function isGithubMentionContextType(
   contextType: MentionAttachment["contextType"],
@@ -171,22 +175,29 @@ function MentionChipIcon({
   if (mention.contextType === "browser-tab") {
     return <Globe2 className={MENTION_ICON_CLASS} aria-hidden />;
   }
+  // A node is drawn the way the sidebar draws it, tinted by kind: the kind,
+  // unlike a PR's state above, does not go stale on the reader.
   if (
     mention.contextType === "chat" ||
     mention.contextType === "terminal-agent" ||
     mention.contextType === "terminal"
   ) {
-    const Icon = EPIC_NODE_ICONS[mention.contextType];
-    return <Icon className={MENTION_ICON_CLASS} aria-hidden />;
+    return (
+      <StaticEpicNodeIcon
+        type={mention.contextType}
+        className={NODE_MENTION_ICON_CLASS}
+      />
+    );
   }
-  if (
-    mention.contextType === "spec" ||
-    mention.contextType === "ticket" ||
-    mention.contextType === "story" ||
-    mention.contextType === "review"
-  ) {
-    const Icon = EPIC_NODE_ICONS[mention.contextType];
-    return <Icon className={MENTION_ICON_CLASS} aria-hidden />;
+  if ("artifactType" in mention && mention.artifactType !== null) {
+    return (
+      <EpicArtifactIcon
+        epicId={mention.epicId}
+        artifactId={mention.artifactId}
+        kind={mention.artifactType}
+        className={NODE_MENTION_ICON_CLASS}
+      />
+    );
   }
   if (pathKind === "folder") {
     return <Folder className={MENTION_ICON_CLASS} aria-hidden />;

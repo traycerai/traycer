@@ -16,6 +16,7 @@ import type {
   HostNotificationsMarkReadRequest,
 } from "@traycer/protocol/host/notifications/contracts";
 import type { HostDirectoryService } from "@/lib/host/host-directory-service";
+import type { ReactNode } from "react";
 
 /**
  * Visit-to-clear in cloud mode.
@@ -75,9 +76,13 @@ vi.mock("@/hooks/notifications/use-notification-host", () => ({
 vi.mock("@/lib/host", () => ({
   useHostBinding: () => ({ hostClient: requireHostClient(), directory }),
   useHostClient: () => requireHostClient(),
-  // The SPINE, a separate export since redesign P2.1.
+  // The SPINE, a separate export.
   useHostRuntimeClient: () => requireHostClient(),
   useAuthService: () => mockAuth,
+}));
+
+vi.mock("@/hooks/bots/use-bot-list-changed-subscription", () => ({
+  useBotListChangedSubscriptionForHost: () => undefined,
 }));
 
 // Feed-mode capability still reads the app-wide stream binding.
@@ -161,6 +166,11 @@ import {
   CLOUD_ENTITY_READ_RETRY_BASE_MS,
   resetCloudEntityReadDriver,
 } from "@/lib/notifications/cloud-entity-read-driver";
+import { PaneSurfaceActivityContext } from "@/components/epic-tabs/pane-visibility-context";
+import {
+  useClaimBotSurfaceFocus,
+  usePublishPresentedBotConversation,
+} from "@/hooks/notifications/use-publish-presented-bot-conversation";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { makeOpenableNodeRef } from "@/stores/epics/canvas/types";
 
@@ -434,7 +444,7 @@ beforeEach(() => {
   resetCloudEntityReadDriver();
   feedSupport.value = "supported";
   hostState.client = createHostClient();
-  // T28: mixed mode also requires `host.notifications.list@2.2`,
+  // Mixed mode also requires `host.notifications.list@2.2`,
   // `host.notifications.markAllRead@1.1` and
   // `host.notifications.indicatorState@1.1` negotiated on the SERVING host
   // (always `mockLocalHostEntry` here, per `useReactiveLocalHostEntry`
@@ -768,6 +778,200 @@ describe("cloud-mode view consumption", () => {
   });
 });
 
+describe("cloud-mode consumption of a presented bot conversation", () => {
+  const BOT_ID = EPIC_ID;
+  const CHANNEL_ID = CHAT_ID;
+  const OTHER_CHANNEL_ID = SIBLING_CHAT_ID;
+  const BEHIND_EPIC_ID = "epic-behind";
+  const BEHIND_CHAT_ID = "chat-behind";
+
+  function PresentedConversation(props: {
+    readonly conversationId: string | null;
+  }): null {
+    usePublishPresentedBotConversation(BOT_ID, null, props.conversationId);
+    return null;
+  }
+
+  /** The Tracy surface over a retained task chat: the surface stays, its views change. */
+  function TracySurface(props: {
+    readonly conversationId: string | null;
+  }): ReactNode {
+    useClaimBotSurfaceFocus();
+    return <PresentedConversation conversationId={props.conversationId} />;
+  }
+
+  async function visitTaskChatBehindTracy(): Promise<void> {
+    focusChat(BEHIND_EPIC_ID, BEHIND_CHAT_ID, mockLocalHostEntry.hostId);
+    await waitFor(() => {
+      expect(calls.hostMarkRead.length).toBeGreaterThan(0);
+    });
+  }
+
+  function taskChatRow(entryId: string) {
+    const row = cloudRow({
+      entryId,
+      originHostId: mockLocalHostEntry.hostId,
+      severity: "done",
+      chatId: BEHIND_CHAT_ID,
+    });
+    return { ...row, entry: { ...row.entry, epicId: BEHIND_EPIC_ID } };
+  }
+
+  /** A bot post: a cloud row from the bot's bound host, not the serving one. */
+  function botPost(entryId: string, chatId: string) {
+    return cloudRow({
+      entryId,
+      originHostId: OTHER_HOST_ID,
+      severity: "done",
+      chatId,
+    });
+  }
+
+  it("consumes a post for the presented channel, marks the host entity once, and leaves another channel's post unread", async () => {
+    renderProvider();
+    applyCloudSnapshot([], 1);
+    render(<PresentedConversation conversationId={CHANNEL_ID} />);
+    await waitFor(() => {
+      expect(calls.hostMarkRead).toEqual([
+        { kind: "entity", entity: { epicId: BOT_ID, chatId: CHANNEL_ID } },
+      ]);
+    });
+
+    const posts = [
+      botPost("entry-channel", CHANNEL_ID),
+      botPost("entry-other", OTHER_CHANNEL_ID),
+    ];
+    applyCloudSnapshot(posts, 2);
+    await waitFor(() => {
+      expect(calls.cloudMarkRead).toEqual(["entry-channel"]);
+    });
+    expect(readAtFor("entry-channel")).not.toBeNull();
+    expect(readAtFor("entry-other")).toBeNull();
+
+    applyCloudSnapshot(posts, 3);
+    expect(calls.cloudMarkRead).toEqual(["entry-channel"]);
+    expect(calls.hostMarkRead).toHaveLength(1);
+  });
+
+  it("leaves a post unread once the channel is withdrawn, and consumes it when the person comes back", async () => {
+    renderProvider();
+    const { rerender } = render(
+      <PresentedConversation conversationId={null} />,
+    );
+    applyCloudSnapshot([botPost("entry-channel", CHANNEL_ID)], 1);
+    expect(calls.cloudMarkRead).toEqual([]);
+    expect(calls.hostMarkRead).toEqual([]);
+
+    rerender(<PresentedConversation conversationId={CHANNEL_ID} />);
+
+    await waitFor(() => {
+      expect(calls.cloudMarkRead).toEqual(["entry-channel"]);
+    });
+  });
+
+  it("consumes nothing of the task chat behind Tracy when the channel withdraws while Tracy stays focused", async () => {
+    renderProvider();
+    await visitTaskChatBehindTracy();
+    const { rerender } = render(<TracySurface conversationId={CHANNEL_ID} />);
+    await waitFor(() => {
+      expect(calls.hostMarkRead.at(-1)).toEqual({
+        kind: "entity",
+        entity: { epicId: BOT_ID, chatId: CHANNEL_ID },
+      });
+    });
+    calls.hostMarkRead.length = 0;
+
+    // Choosing Tracy's Activity unmounts the channel view; the surface stays.
+    rerender(<TracySurface conversationId={null} />);
+    applyCloudSnapshot(
+      [taskChatRow("entry-behind"), botPost("entry-channel", CHANNEL_ID)],
+      1,
+    );
+
+    // Coming back drains the marks in order, so anything the withdrawal
+    // consumed would be here ahead of the channel's.
+    rerender(<TracySurface conversationId={CHANNEL_ID} />);
+    await waitFor(() => {
+      expect(calls.cloudMarkRead).toEqual(["entry-channel"]);
+    });
+    expect(calls.hostMarkRead).toEqual([
+      { kind: "entity", entity: { epicId: BOT_ID, chatId: CHANNEL_ID } },
+    ]);
+    expect(readAtFor("entry-behind")).toBeNull();
+  });
+
+  it("consumes nothing of the task chat behind Tracy while Tracy has no conversation, across a window refocus", async () => {
+    renderProvider();
+    await visitTaskChatBehindTracy();
+    const { rerender } = render(<TracySurface conversationId={null} />);
+    calls.hostMarkRead.length = 0;
+
+    applyCloudSnapshot(
+      [taskChatRow("entry-behind"), botPost("entry-channel", CHANNEL_ID)],
+      1,
+    );
+    setWindowFocused(false);
+    setWindowFocused(true);
+
+    rerender(<TracySurface conversationId={CHANNEL_ID} />);
+    await waitFor(() => {
+      expect(calls.cloudMarkRead).toEqual(["entry-channel"]);
+    });
+    expect(calls.hostMarkRead).toEqual([
+      { kind: "entity", entity: { epicId: BOT_ID, chatId: CHANNEL_ID } },
+    ]);
+    expect(readAtFor("entry-behind")).toBeNull();
+  });
+
+  it("hands focus back to the task chat when Tracy's pane loses it", async () => {
+    renderProvider();
+    await visitTaskChatBehindTracy();
+    const tracy = (focused: boolean): ReactNode => (
+      <PaneSurfaceActivityContext.Provider value={{ visible: true, focused }}>
+        <TracySurface conversationId={null} />
+      </PaneSurfaceActivityContext.Provider>
+    );
+    const { rerender } = render(tracy(true));
+    applyCloudSnapshot([taskChatRow("entry-behind")], 1);
+    expect(calls.cloudMarkRead).toEqual([]);
+
+    rerender(tracy(false));
+
+    await waitFor(() => {
+      expect(calls.cloudMarkRead).toEqual(["entry-behind"]);
+    });
+  });
+
+  it("does not pass through the canvas's chat when the channel switches", async () => {
+    renderProvider();
+    focusChat("epic-behind", "chat-behind", mockLocalHostEntry.hostId);
+    await waitFor(() => {
+      expect(calls.hostMarkRead.length).toBeGreaterThan(0);
+    });
+    const { rerender } = render(
+      <PresentedConversation conversationId={CHANNEL_ID} />,
+    );
+    await waitFor(() => {
+      expect(calls.hostMarkRead.at(-1)).toEqual({
+        kind: "entity",
+        entity: { epicId: BOT_ID, chatId: CHANNEL_ID },
+      });
+    });
+    calls.hostMarkRead.length = 0;
+
+    rerender(<PresentedConversation conversationId={OTHER_CHANNEL_ID} />);
+
+    await waitFor(() => {
+      expect(calls.hostMarkRead).toEqual([
+        {
+          kind: "entity",
+          entity: { epicId: BOT_ID, chatId: OTHER_CHANNEL_ID },
+        },
+      ]);
+    });
+  });
+});
+
 /**
  * Retrying is safe by construction (set-once, min-merged markers), so these
  * pin the PACING rather than any suppression: one request in flight, growing
@@ -1081,7 +1285,7 @@ describe("local-mode view consumption", () => {
   });
 
   /**
-   * T28's other half, at the integration layer this file owns: the stream
+   * The other half, at the integration layer this file owns: the stream
    * axis above (`feedSupport.value = "unsupported"`) is not the only way
    * local mode is reached. Per-floor and wrong-major arithmetic on
    * `useNotificationFeedModeFor` itself is already covered directly in

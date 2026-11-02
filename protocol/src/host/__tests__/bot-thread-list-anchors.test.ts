@@ -7,11 +7,11 @@ const SAID = { hostId: "host-c", epoch: 3 } as const;
 
 describe("bot.thread.list@1.1 thread anchors", () => {
   const line = hostRpcRegistry["bot.thread.list"][1];
-  const latest = line.versions[line.latestMinor].contract;
+  const v11 = line.versions[1].contract;
   const frozen = line.versions[0].contract;
 
   it("upgrades a 1.0 host's answer to one that names no anchor", () => {
-    const upgrade = line.versions[line.latestMinor].upgradeFromPreviousVersion;
+    const upgrade = line.versions[1].upgradeFromPreviousVersion;
     if (upgrade === null) throw new Error("expected a 1.0 to 1.1 upgrade path");
     expect(
       upgrade.upgradeResponse(frozen.responseSchema.parse(LISTED)),
@@ -24,7 +24,7 @@ describe("bot.thread.list@1.1 thread anchors", () => {
       threadAnchors: { ...SAID, kinds: [BOT_THREAD_ANCHOR_ANSWER] },
     };
     expect(frozen.responseSchema.parse(named)).toEqual(LISTED);
-    expect(latest.responseSchema.parse(named)).toEqual(named);
+    expect(v11.responseSchema.parse(named)).toEqual(named);
   });
 
   it("keeps an anchor a client does not know, for the client to ignore", () => {
@@ -32,6 +32,6 @@ describe("bot.thread.list@1.1 thread anchors", () => {
       ...LISTED,
       threadAnchors: { ...SAID, kinds: ["answer", "later-kind"] },
     };
-    expect(latest.responseSchema.parse(later)).toEqual(later);
+    expect(v11.responseSchema.parse(later)).toEqual(later);
   });
 });

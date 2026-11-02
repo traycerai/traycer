@@ -11,7 +11,7 @@ import {
 import { useSurfaceNotificationIndicatorState } from "@/components/notifications/notification-indicator-context";
 import { useEpicActivityStatus } from "@/hooks/epic/use-epic-activity-status";
 import { useRegisteredEpicTitleGenerating } from "@/lib/epic-selectors";
-import { useSideStripCollapsed } from "@/stores/layout/side-tab-strip-store";
+import { useSideStripDrawnCollapsed } from "@/components/layout/tabs/mobile-strip-form-context";
 import {
   groupNeedsYouByEpic,
   useNeedsYouItems,
@@ -56,7 +56,7 @@ export function SideTabDragOverlay(props: {
   readonly isActive: boolean;
 }): ReactNode {
   const { item, source } = props;
-  const collapsed = useSideStripCollapsed();
+  const collapsed = useSideStripDrawnCollapsed();
   const tearOff = useEpicDndStore((state) => state.headerTearOffPreview);
   // Faded out while a split preview shows: it covers the preview, which says
   // where the row goes, and even ghosted its title drew over the target's.

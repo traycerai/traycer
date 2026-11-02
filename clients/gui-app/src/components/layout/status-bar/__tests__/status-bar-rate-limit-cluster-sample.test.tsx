@@ -38,7 +38,7 @@ const mocks = vi.hoisted<MockState>(() => ({
 
 // The substitution that used to live in the cluster component (reading the
 // hook's cluster, then swapping in invented numbers) now lives INSIDE
-// `useStatusBarRateLimitSegments` itself (C12): the cluster component only
+// `useStatusBarRateLimitSegments` itself: the cluster component only
 // forwards `sample` to it and trusts back whatever cluster it returns. So this
 // mock stands in for an ALREADY-SUBSTITUTED cluster - the readings substitution
 // itself is covered by the hook's own tests - and records the `sample` flag
@@ -100,6 +100,7 @@ function segment(
     hidden: false,
     state,
     reason: null,
+    chatCredential: null,
     fetching: false,
     retryOffered: false,
     windows: live ? [reading] : [],

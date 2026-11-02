@@ -1,5 +1,5 @@
 /**
- * The ticket's exit line, made executable at the HEAD level: identical epic
+ * The exit line, made executable at the HEAD level: identical epic
  * content, driven through both heads into the same composition, compared as
  * WHOLE projected values.
  *
@@ -456,7 +456,7 @@ function laneProjectionThroughAdapter(): EpicProjectedSlices {
 
 describe("the exit line, end to end: identical content through BOTH adapters", () => {
   it("the real lane adapter's decode projects identically to the @1 doc head", () => {
-    // The ticket's exit criterion, at the level it is written for. Whole
+    // The exit criterion, at the level it is written for. Whole
     // values, one normalised field, same fixture as the head test.
     expect(normalized(laneProjectionThroughAdapter())).toEqual(
       normalized(legacyProjection()),

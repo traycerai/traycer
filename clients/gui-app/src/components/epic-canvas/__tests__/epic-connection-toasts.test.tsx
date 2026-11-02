@@ -76,8 +76,8 @@ vi.mock("@/hooks/host/use-addressable-host-id", () => ({
 }));
 
 // The Epic session resolves its host through the selection authority's derived
-// pointer (selection model §1), not the active-host projection above - seed the
-// decider at its own name (the P1.2 convention in epic-shell-usage-entry-point).
+// pointer, not the active-host projection above - seed the
+// decider at its own name (the convention in epic-shell-usage-entry-point).
 vi.mock("@/hooks/host/use-effective-host-id", () => ({
   useEffectiveHostId: () => "host-test",
 }));
@@ -299,7 +299,7 @@ describe("<EpicConnectionToasts />", () => {
     // first-time bootstrap (which reads as "connecting" and fires no toast).
     // Transport open + cloud caught up is what latches "connected once".
     act(() => {
-      streams[0].callbacks.onConnectionStatus("open", null, true);
+      streams[0].callbacks.onConnectionStatus("open", null, true, null);
       streams[0].callbacks.onCloudSyncStatus(
         "connected",
         NO_CLOUD_SYNC_DURABILITY,
@@ -307,11 +307,11 @@ describe("<EpicConnectionToasts />", () => {
     });
 
     act(() => {
-      streams[0].callbacks.onConnectionStatus("reconnecting", null, true);
+      streams[0].callbacks.onConnectionStatus("reconnecting", null, true, null);
     });
 
     act(() => {
-      streams[0].callbacks.onConnectionStatus("open", null, true);
+      streams[0].callbacks.onConnectionStatus("open", null, true, null);
     });
 
     expect(sonner.warning).not.toHaveBeenCalled();

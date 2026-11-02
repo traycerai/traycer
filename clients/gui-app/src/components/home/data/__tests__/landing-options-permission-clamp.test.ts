@@ -66,7 +66,7 @@ describe("harnessHonorsPermissionMode", () => {
   });
 });
 
-// FIX 2 (P1): the ROW's constraint and the HOST's own line are two different
+// FIX 2: the ROW's constraint and the HOST's own line are two different
 // questions - a pre-`auto` host serves unconstrained rows like any other, so
 // the row predicate alone lit up an option the wire cannot carry.
 describe("composerOffersPermissionMode", () => {
@@ -156,7 +156,7 @@ describe("normalizePermissionMode", () => {
     );
   });
 
-  // FIX 2 (P1): the HOST proof runs FIRST and is not foldable into the row
+  // FIX 2: the HOST proof runs FIRST and is not foldable into the row
   // walk - a pre-`auto` host's rows are routinely unconstrained, so `auto`
   // would satisfy `harnessHonorsPermissionMode` and return on the first
   // branch without ever reaching a fallback. `null` here models exactly that:
@@ -167,7 +167,7 @@ describe("normalizePermissionMode", () => {
     );
   });
 
-  // The literal shape of the P1 regression: an EMPTY (unconstrained) row -
+  // The literal shape of the regression: an EMPTY (unconstrained) row -
   // exactly what a pre-`auto` host's `chat.subscribe` line routinely serves,
   // since such a host has no way to single `auto` out even if it wanted to -
   // still gets demoted once the host proof says no. Before this fix, the
@@ -332,7 +332,7 @@ describe("PERMISSION_OPTIONS", () => {
   });
 });
 
-// C5(a): an UNCONSTRAINED row makes the whole union unknowable - one row
+// An UNCONSTRAINED row makes the whole union unknowable - one row
 // answering "all of them" and a second constraining to `["full_access"]`
 // must still come out as `null`, never as the constrained row's own value.
 describe("catalogSupportedPermissionModes - unconstrained row poisons the union", () => {
@@ -346,7 +346,7 @@ describe("catalogSupportedPermissionModes - unconstrained row poisons the union"
   });
 });
 
-// C5(b): once the HOST's negotiated catalog line proves it can spell `auto`
+// Once the HOST's negotiated catalog line proves it can spell `auto`
 // at all, an absent `auto` in a provider's own union is the PROVIDER'S doing,
 // not a reason to send the user chasing a host update that would change
 // nothing.

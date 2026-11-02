@@ -155,7 +155,7 @@ function resolveActiveHarnessContext(
 
 /**
  * Writes last-known session state into the module-level support-context
- * registry (critique D5). Mounted once inside `TraycerAuthenticatedRuntime`,
+ * registry. Mounted once inside `TraycerAuthenticatedRuntime`,
  * ABOVE nothing crash-relevant - `ReportIssueDialogHost` (which reads the
  * registry at report-open) is mounted above `RootErrorBoundary`, so a crash
  * that unmounts this bridge must not take the last-observed state with it;

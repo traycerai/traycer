@@ -86,7 +86,7 @@ function emptyChat(): Chat {
 }
 
 function emitSnapshot(callbacks: ChatStreamCallbacks): void {
-  callbacks.onConnectionStatus("open", null, null);
+  callbacks.onConnectionStatus("open", null, null, null);
   callbacks.onSnapshot({
     kind: "snapshot",
     hasBinaryPayload: false,
@@ -150,7 +150,7 @@ describe("chat-session-store connectionEpoch", () => {
       emitSnapshot(callbacks);
       const afterSnapshot = harness.handle.store.getState().connectionEpoch;
 
-      callbacks.onConnectionStatus("reconnecting", null, null);
+      callbacks.onConnectionStatus("reconnecting", null, null, null);
       // Falsification: drop the `bumpConnectionEpoch()` call from the
       // `"reconnecting"` arm of `onConnectionStatus` and this stays at
       // `afterSnapshot` instead of incrementing.
@@ -158,7 +158,7 @@ describe("chat-session-store connectionEpoch", () => {
         afterSnapshot + 1,
       );
 
-      callbacks.onConnectionStatus("closed", null, null);
+      callbacks.onConnectionStatus("closed", null, null, null);
       // Falsification: same, for the `"closed"` arm - a SEPARATE increment,
       // not a no-op because one already fired this "incident".
       expect(harness.handle.store.getState().connectionEpoch).toBe(
@@ -167,9 +167,45 @@ describe("chat-session-store connectionEpoch", () => {
 
       // Negative half: `"open"` is neither reconnecting nor closed, so it
       // must NOT bump.
-      callbacks.onConnectionStatus("open", null, null);
+      callbacks.onConnectionStatus("open", null, null, null);
       expect(harness.handle.store.getState().connectionEpoch).toBe(
         afterSnapshot + 2,
+      );
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+
+  it("a held reconnecting keeps the epoch and a continued open does not move it; a null reconnect after held still bumps", () => {
+    const harness = createHarness();
+    try {
+      const callbacks = harness.callbacks();
+      emitSnapshot(callbacks);
+      const seated = harness.handle.store.getState();
+
+      // Held: the host keeps the subscription and its frames continue, so
+      // the frames stamped in this epoch are still answerable.
+      callbacks.onConnectionStatus("reconnecting", null, null, "held");
+      expect(harness.handle.store.getState().connectionEpoch).toBe(
+        seated.connectionEpoch,
+      );
+      expect(harness.handle.store.getState().connectionStatus).toBe(
+        "reconnecting",
+      );
+
+      callbacks.onConnectionStatus("open", null, null, "continued");
+      const continued = harness.handle.store.getState();
+      expect(continued.connectionEpoch).toBe(seated.connectionEpoch);
+      expect(continued.connectionStatus).toBe("open");
+      expect(continued.transcriptBaselineEpoch).toBe(
+        seated.transcriptBaselineEpoch,
+      );
+
+      // The hold ending is an ordinary reconnect.
+      callbacks.onConnectionStatus("reconnecting", null, null, "held");
+      callbacks.onConnectionStatus("reconnecting", null, null, null);
+      expect(harness.handle.store.getState().connectionEpoch).toBe(
+        seated.connectionEpoch + 1,
       );
     } finally {
       harness.handle.dispose();
@@ -245,7 +281,7 @@ describe("chat-session-store - a connection status that settles during construct
       wakeTransport: null,
       streamFlushCoordinator: IMMEDIATE_STREAM_FLUSH_COORDINATOR,
       streamClientFactory: (_epicId, _chatId, nextCallbacks) => {
-        nextCallbacks.onConnectionStatus("closed", reason, null);
+        nextCallbacks.onConnectionStatus("closed", reason, null, null);
         return {
           sendAction: () => undefined,
           sameTurnSteeringProtocolSupported: () => true,

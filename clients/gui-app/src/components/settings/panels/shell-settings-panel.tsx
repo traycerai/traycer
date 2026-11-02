@@ -78,26 +78,18 @@ import { useOpenLink } from "@/lib/links/open-link";
 import { cn } from "@/lib/utils";
 import { useSettingsDensity } from "@/providers/settings-density-context";
 import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
-import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 import { useRunnerHost } from "@/providers/use-runner-host";
 
 import { useConfigurationSource } from "@/components/settings/environment/configuration-source";
 import { TeamVariablesAndShells } from "@/components/settings/environment/team-variables-and-shells";
 
-// A build without environments (`unreleased-features.ts`) keeps the page's
-// wording from before them, which renamed host env to variables.
-const PANEL_DESCRIPTION = UNRELEASED_FEATURES_ENABLED
-  ? "How Traycer launches terminals, the host, and provider harnesses. New terminals pick up shell changes immediately; variable changes apply on restart."
-  : "How Traycer launches terminals, the host, and provider harnesses. New terminals pick up shell changes immediately; host env changes apply on restart.";
+const PANEL_DESCRIPTION =
+  "How Traycer launches terminals, the host, and provider harnesses. New terminals pick up shell changes immediately; variable changes apply on restart.";
 const PERSONAL_PANEL_DESCRIPTION =
   "Plain values every computer and sandbox running Personal gets, and the shell agents run in.";
 const SAVED_FLASH_MS = 1600;
 
 function variablesEmptyLabel(personal: boolean): string {
-  // The host's own wording from before environments.
-  if (!UNRELEASED_FEATURES_ENABLED) {
-    return "No host environment variables. The host starts with the environment your shell produces.";
-  }
   return personal
     ? "Variables are plain values every computer and sandbox running Personal gets."
     : "Variables are plain values every host gets.";
@@ -1066,7 +1058,7 @@ function HostEnvironmentGroup(props: {
         <TransientSaveLiveStatus
           pending={props.pending ? props.saveActive : false}
           saved={props.justSaved}
-          label={UNRELEASED_FEATURES_ENABLED ? "Variables" : "Host environment"}
+          label="Variables"
         />
         <div
           className={cn(

@@ -186,6 +186,28 @@ describe("visibility of the five environments-redesign kinds", () => {
     },
   );
 
+  // Named, not derived from the retired list: the assertions around this one
+  // read that list on both sides, so they hold whatever is in it. A role change
+  // reaching a reader is the thing this kind is for, and it is one line from
+  // being retired again. The list assertion is made once, outside the loop,
+  // because it reads neither surface nor version.
+  it("serves team.role.changed on every read surface's newest version", () => {
+    expect(RETIRED_HOST_NOTIFICATION_KINDS).not.toContain("team.role.changed");
+
+    for (const [surface, version] of [
+      [LIST, { major: 2, minor: 5 }],
+      [FEED, { major: 1, minor: 7 }],
+      [CLOUD_FEED, { major: 1, minor: 6 }],
+    ] as const) {
+      expect(visibleHostNotificationKinds(surface, version)).toContain(
+        "team.role.changed",
+      );
+      expect(hiddenHostNotificationKinds(surface, version)).not.toContain(
+        "team.role.changed",
+      );
+    }
+  });
+
   it("keeps the released feed.subscribe 1.0 exclusion as it was", () => {
     const hidden = hiddenHostNotificationKinds(FEED, { major: 1, minor: 0 });
     expect(hidden).toEqual(

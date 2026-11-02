@@ -56,10 +56,13 @@ export interface PendingActivationIdleMonitorHostController {
 export interface PendingActivationIdleMonitorDeps {
   readonly hostController: PendingActivationIdleMonitorHostController;
   /**
-   * The cheap loopback busy read, asked BEFORE the activation: a non-forced
+   * The busy read, asked BEFORE the activation: a non-forced
    * `activateInstalled` reconciles the registry first, which is a CLI
    * subprocess and a network request this monitor must not make every 30
-   * seconds for as long as the host stays busy.
+   * seconds for as long as the host stays busy. Not free either - for a
+   * record carrying a creation stamp the verdict's liveness gate reads the
+   * publisher's stamp, a `ps` (or `tasklist` plus PowerShell) spawn - but a
+   * fraction of what it stands in for.
    */
   readonly probeHostBusy: () => Promise<HostBusyVerdict>;
   /** Test seam; production callers pass undefined. */

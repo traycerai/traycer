@@ -80,8 +80,8 @@ function ProviderLimitsPick(props: {
   if (!isWindowedRateLimitProvider(providerId)) return null;
 
   return (
-    // GREYED IN PLACE, which is what L-08 asks for and what `inert` was not
-    // (R3-16): the row shell's disabled `fieldset` turns every control off
+    // GREYED IN PLACE, which is what L-08 asks for and what `inert` was not:
+    // the row shell's disabled `fieldset` turns every control off
     // without hiding any of them - the mode pick's buttons and the window
     // checkboxes stop being operable by pointer OR keyboard, and each is still
     // announced, with its state and the reason, which names the Layout switch

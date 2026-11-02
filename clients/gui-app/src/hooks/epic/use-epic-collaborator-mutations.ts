@@ -21,6 +21,7 @@ import { projectCollaborators } from "@/hooks/epics/use-epic-collaborators-query
  * `hostId` is captured at mutate time, per the host-swap convention, so a
  * swap while the request is in flight cannot write another machine's cache.
  */
+
 /**
  * Mutation hook for `epic.grantAccess`.
  *

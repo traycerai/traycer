@@ -46,7 +46,7 @@ export function WorktreeBranchPrefixSection(): ReactNode {
   // set together in `onChange` and cleared together on commit/reset), so it
   // alone is enough to gate adoption below.
   const [hasLocalEdit, setHasLocalEdit] = useState(false);
-  // Transient post-save confirmation (Flow 4: spinner while saving, a brief
+  // Transient post-save confirmation (spinner while saving, a brief
   // check on success, then quiet chrome) - no permanently reserved status
   // line. Set for the current user's own resolved edits/reset; an adopted
   // EXTERNAL write clears it below (in the render-phase adoption block)
@@ -74,7 +74,7 @@ export function WorktreeBranchPrefixSection(): ReactNode {
   const debounceRef = useRef<number | null>(null);
   const savedFlashRef = useRef<number | null>(null);
   // A fresh example suffix per mount, held stable while typing so only the
-  // prefix part of the live example changes (Flow 4: "the draft remains
+  // prefix part of the live example changes ("the draft remains
   // stable while they edit" applies to the example too - a suffix that
   // re-rolled on every keystroke would be distracting noise, not signal).
   const [previewSuffix] = useState(() => pickFriendlyBranchSuffix());

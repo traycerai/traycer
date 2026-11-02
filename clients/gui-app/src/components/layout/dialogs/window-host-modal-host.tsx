@@ -42,8 +42,8 @@ import {
  * the cold start it exists for) and inside the router, which is what lets the
  * `/settings` bypass below be a route question.
  *
- * WHY THE LIFECYCLE IS NOT MOUNTED HERE (P3.4, ruled after measuring). An
- * earlier draft of this comment promised the opposite - that P3.4 would wrap
+ * WHY THE LIFECYCLE IS NOT MOUNTED HERE (ruled after measuring). An
+ * earlier draft of this comment promised the opposite - that the redesign would wrap
  * this component's body in `HostProvisioningController` and read its lifecycle
  * in place of `presentation`, "since the fields are already exactly the shape
  * it hands back". That was wrong three ways, and the note survives so nobody
@@ -163,7 +163,7 @@ function NarratingWindowHostModal(props: {
   //
   // The gate draws its own full-screen card for the kinds the narrator does not
   // own - `provisioning-error` and `removed-host`, local lifecycle terminals
-  // P3.4 deliberately left with the machinery that owns them. This modal derives
+  // that were deliberately left with the machinery that owns them. This modal derives
   // from the authority's LEASES rather than from readiness, so on a single-host
   // account whose local provision threw, both conditions held at once and the
   // user got this modal at `z-[60]` behind its blur, floating over that card,
@@ -438,7 +438,7 @@ function resolveUpdateHost(
  * TWO ARMS, gated on different things, and the difference is the point:
  *
  *  - A start that has NOT settled gets the loading body WHATEVER the target's
- *    kind. It is the shared boot headline (the lane's F19 heading when this
+ *    kind. It is the shared boot headline (the lane's heading when this
  *    machine's controller is doing something, the idle "Starting Traycer…"
  *    when it is not), the current stage's bar when it reports a percentage,
  *    and the Show details / Open settings footer - the same card the two boot
@@ -506,8 +506,8 @@ function buildBootBody(args: {
   // to wait for a start that is not happening, and they report a hang instead
   // of a crash.
   //
-  // GATED ON THE FAILURE, NOT THE CAUSE - and it was the cause until a review
-  // caught it. `cause === "no-usable-host"` covers only the arm where nothing can
+  // GATED ON THE FAILURE, NOT THE CAUSE - and it was the cause until this was
+  // caught. `cause === "no-usable-host"` covers only the arm where nothing can
   // serve the window at all. A cold start whose install has ALREADY FAILED
   // (`provisioningError` set, so the action row is offering Retry and Report
   // issue) still reached the loading body and drew a live spinner claiming a

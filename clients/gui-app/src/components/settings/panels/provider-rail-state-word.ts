@@ -3,7 +3,6 @@ import {
   isProviderAmbientAuthenticated,
   isProviderAmbientSignedOut,
 } from "@/lib/providers/provider-ambient-auth";
-import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 
 /**
  * The Providers rail's one word of state for a provider, read from its own
@@ -20,14 +19,16 @@ import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
  *   login, which it does not check until a run) counts, as the Profiles
  *   card's own-login row reads it. Not for Traycer, whose sign-in is the
  *   person's account.
+ * - `not checked`: the provider has a terminal login to check
+ *   (`loginCapability` is not `null`), the check is not still running, and it
+ *   settled on neither a signed-out nor a signed-in verdict - the probe
+ *   itself failed, which the Profiles card's own-login row answers with its
+ *   Retry.
  *
  * `null` while nothing above is known yet (a probe still running, a status
- * that is not an answer), so the rail never states a guess. The words came
- * with the sandbox rows the rail sits beside in the composer; a build without
- * them (`unreleased-features.ts`) keeps the rail to names, as it was.
+ * that is not an answer), so the rail never states a guess.
  */
 export function providerRailStateWord(state: ProviderCliState): string | null {
-  if (!UNRELEASED_FEATURES_ENABLED) return null;
   if (!state.enabled) return "off";
   const managed = state.profiles.filter(
     (profile) => profile.kind === "managed",
@@ -42,10 +43,20 @@ export function providerRailStateWord(state: ProviderCliState): string | null {
   ) {
     return "own login";
   }
+  // Pending stays `null`, never a guess: a still-running probe is not a
+  // failed one, and a surface that wants to say "checking" while it waits
+  // reads `authPending` itself. `loginCapability` is null for a provider
+  // with no terminal login to probe at all (an API-key-only provider, or
+  // Traycer's own account) - the host emits an ambient profile row for every
+  // provider regardless, so that row alone is not the right gate.
+  if (state.loginCapability !== null && !state.authPending) {
+    return "not checked";
+  }
   return null;
 }
 
-function ambientLoginConfigured(state: ProviderCliState): boolean {
+/** Shared with the Profiles card's own-login row, which reads the same two sources. */
+export function ambientLoginConfigured(state: ProviderCliState): boolean {
   return (
     state.auth.status === "configured" ||
     state.profiles.some(

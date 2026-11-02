@@ -79,6 +79,8 @@ function createSource(
     applyTuiAgentRecordDelta: () => {},
     markChatRecordListAuthoritative: () => {},
     markChatRecordListNotAuthoritative: () => {},
+    markTuiAgentRecordListAuthoritative: () => {},
+    markTuiAgentRecordListNotAuthoritative: () => {},
     beginPendingChatCreation: () => {},
     clearPendingChatCreation: () => {},
     expirePendingChatCreationForCloudRow: () => {},
@@ -294,6 +296,10 @@ describe("commands.apply", () => {
         applyTuiAgentRecordDelta: record("applyTuiAgentRecordDelta"),
         markChatRecordListAuthoritative: record("markAuthoritative"),
         markChatRecordListNotAuthoritative: record("markNotAuthoritative"),
+        markTuiAgentRecordListAuthoritative: record("markTuiAuthoritative"),
+        markTuiAgentRecordListNotAuthoritative: record(
+          "markTuiNotAuthoritative",
+        ),
         beginPendingChatCreation: record("beginPendingChatCreation"),
         clearPendingChatCreation: record("clearPendingChatCreation"),
         republishRecordsForCurrentUser: record("republish"),
@@ -330,6 +336,14 @@ describe("commands.apply", () => {
       payload: {},
     });
     ports.commands.apply({
+      kind: "mark-tui-agent-records-authoritative",
+      payload: {},
+    });
+    ports.commands.apply({
+      kind: "mark-tui-agent-records-not-authoritative",
+      payload: {},
+    });
+    ports.commands.apply({
       kind: "clear-pending-chat-creation",
       payload: { chatId: "chat-1" },
     });
@@ -356,6 +370,8 @@ describe("commands.apply", () => {
       'applyConfirmedChatMutation({"kind":"remove","ownerUserId":"user-1","originHostId":"host-1","chatId":"chat-1"})',
       "markAuthoritative()",
       "markNotAuthoritative()",
+      "markTuiAuthoritative()",
+      "markTuiNotAuthoritative()",
       'clearPendingChatCreation("chat-1")',
       "republish()",
       "reproject()",

@@ -329,7 +329,7 @@ function ComposerDraftsControlImpl(props: ComposerDraftsControlProps) {
       aria-label={draftsTriggerLabel(currentCount)}
       className="rounded-full shadow-sm"
       // Desktop keeps the editor focused behind the open list; vaul needs the
-      // pointer sequence it would otherwise lose (critique G6).
+      // pointer sequence it would otherwise lose.
       onPointerDown={mobile ? undefined : (event) => event.preventDefault()}
     >
       <LayersPlus className="size-3.5" aria-hidden />
@@ -380,6 +380,14 @@ function ComposerDraftsControlImpl(props: ComposerDraftsControlProps) {
           layout="bare"
           className="max-h-[min(70dvh,var(--radix-popover-content-available-height))] w-[calc(100vw-2rem)] max-w-lg overflow-hidden"
           onOpenAutoFocus={(event) => event.preventDefault()}
+          // The editor is where this list keeps focus while it is open, so
+          // focus arriving there is not leaving. A toast returns focus to it
+          // when it goes (sonner refocuses whatever held focus before the
+          // toast took it), and that closed the list right after its Undo
+          // put the row back.
+          onFocusOutside={(event) => {
+            if (editorRef.current?.hasFocus() === true) event.preventDefault();
+          }}
           onCloseAutoFocus={(event) => {
             event.preventDefault();
             const shouldRestore = restoreEditorFocusRef.current;
@@ -431,7 +439,7 @@ function isPlainPrintableKeydown(event: KeyboardEvent): boolean {
  * printable closes the list and reaches the still-focused editor, which is how
  * the prompt stash behaved and why typing never got trapped behind it.
  * `useBareKeyClaimer` arbitrates WHO answers a claimed letter; this predicate
- * is what stops the close-on-printable branch from firing first (critique D6),
+ * is what stops the close-on-printable branch from firing first,
  * which is precisely the bug a hardcoded `d` left in the stash.
  *
  * Read from `key`, not `code`, on purpose: these are accelerators on the

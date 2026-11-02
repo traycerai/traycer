@@ -45,7 +45,13 @@ export type ServiceDefinitionForm =
   /** Windows `wscript <vbs>` task whose launcher script is not current. */
   | "launcher-vbs"
   /** Windows task whose action is not the current `wscript` launcher. */
-  | "direct-action";
+  | "direct-action"
+  /**
+   * macOS plist whose launcher is current but whose `ExitTimeOut` is missing
+   * or below today's, so a stop SIGKILLs its supervisor before the host has
+   * shut down. Launching is unaffected.
+   */
+  | "exit-timeout";
 
 /**
  * The read-back verdict. `unrecognized` is a registration under this

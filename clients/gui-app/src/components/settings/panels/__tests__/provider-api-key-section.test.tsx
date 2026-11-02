@@ -198,7 +198,8 @@ describe("ProviderApiKeySection on a host that takes no credentials", () => {
 describe("ProviderApiKeySection on a key that belongs to another vendor", () => {
   const ANTHROPIC_KEY = "sk-ant-api03-clearly-fake-test-key-do-not-use";
   const OPENROUTER_KEY = "sk-or-v1-clearly-fake-test-key-do-not-use";
-  const REFUSAL = "That looks like an Anthropic key. Use your OpenRouter key.";
+  const FOREIGN_KEY_REFUSAL =
+    'This looks like an Anthropic key, not an OpenRouter key. OpenRouter keys start with "sk-or-".';
 
   it("shows the refusal beside the field, disables Save and sends nothing by click or by Enter", () => {
     render(
@@ -212,7 +213,7 @@ describe("ProviderApiKeySection on a key that belongs to another vendor", () => 
     const input = screen.getByLabelText("API key");
     const save = screen.getByRole("button", { name: "Save" });
     const alert = screen.getByRole("alert");
-    expect(alert.textContent).toBe(REFUSAL);
+    expect(alert.textContent).toBe(FOREIGN_KEY_REFUSAL);
     expect(input.getAttribute("aria-invalid")).toBe("true");
     expect(input.getAttribute("aria-describedby")).toBe(alert.id);
     expect(save.hasAttribute("disabled")).toBe(true);
@@ -249,6 +250,10 @@ describe("ProviderApiKeySection on a key that belongs to another vendor", () => 
     }
   });
   it("shows the refusal a saved foreign key carries on an empty or blank draft, and a valid replacement clears it and saves", () => {
+    // An opaque pass-through from the host's own auth.detail, unrelated to
+    // providerApiKeyRefusal's wording: the component renders it as-is.
+    const SAVED_KEY_AUTH_DETAIL =
+      "The host refused this key: unrecognized issuer.";
     const savedForeign: ProviderCliState = {
       ...apiKeyState("openrouter"),
       apiKey: { supported: true, configured: true, source: "stored" },
@@ -256,7 +261,7 @@ describe("ProviderApiKeySection on a key that belongs to another vendor", () => 
         status: "unauthenticated",
         badgeText: null,
         label: null,
-        detail: REFUSAL,
+        detail: SAVED_KEY_AUTH_DETAIL,
       },
     };
     const { rerender } = render(
@@ -268,7 +273,7 @@ describe("ProviderApiKeySection on a key that belongs to another vendor", () => 
     );
 
     const alert = screen.getByRole("alert");
-    expect(alert.textContent).toBe(REFUSAL);
+    expect(alert.textContent).toBe(SAVED_KEY_AUTH_DETAIL);
     expect(screen.getByLabelText("API key").getAttribute("aria-invalid")).toBe(
       "true",
     );
@@ -283,7 +288,7 @@ describe("ProviderApiKeySection on a key that belongs to another vendor", () => 
         onDraftChange={() => undefined}
       />,
     );
-    expect(screen.getByRole("alert").textContent).toBe(REFUSAL);
+    expect(screen.getByRole("alert").textContent).toBe(SAVED_KEY_AUTH_DETAIL);
 
     rerender(
       <ProviderApiKeySection

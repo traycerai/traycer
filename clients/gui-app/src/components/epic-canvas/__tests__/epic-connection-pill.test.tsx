@@ -715,8 +715,8 @@ describe("<EpicConnectionPill />", () => {
     // typed can be in this state. All three strings must stay prospective
     // ("anything you edit") rather than claim edits already exist ("recent
     // changes", "changes not saved", "changes are"): that shape is a false
-    // data-loss alarm about work that was never done. A reviewer caught the
-    // tooltip drifting prospective while the aria-label still claimed
+    // data-loss alarm about work that was never done. The
+    // tooltip drifted prospective while the aria-label still claimed
     // existing edits; this pins all three so it cannot slip again.
     vi.useFakeTimers();
     renderPill("unprotected");

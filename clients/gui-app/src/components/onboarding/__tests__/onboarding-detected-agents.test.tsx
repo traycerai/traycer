@@ -177,7 +177,7 @@ const fixtures = vi.hoisted(() => {
     setEnabledVariables: undefined as SetEnabledVariables | undefined,
     // Onboarding really can target a remote host (`OnboardingHostPickerBar`),
     // and locality is a live input to `providerSignInUnavailableHint` - so it
-    // has to be steerable rather than hardcoded, or the remote row of T7's
+    // has to be steerable rather than hardcoded, or the remote row of the
     // matrix cannot be written at all.
     isLocalMachine: true,
     toastError: vi.fn(),
@@ -1608,7 +1608,7 @@ describe("OnboardingDetectedAgents terminal-login rows", () => {
   });
 
   it("suppresses the affordance for an `authenticated` account, and does NOT promise it a setup walkthrough", () => {
-    // The row where the two predicates part company, and the one T7's matrix
+    // The row where the two predicates part company, and the one the matrix
     // gets wrong. The matrix says "unchanged from today (direct-enable arm
     // still reached)", which the specified change cannot deliver: the guard
     // lives in `providerNeedsSignInToEnable`, which DECIDES MOUNTING and may

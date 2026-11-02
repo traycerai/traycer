@@ -10,7 +10,7 @@ import {
   type FleetUpdateView,
 } from "@/lib/host/fleet-update/fleet-update-view";
 
-// G4: the retained-phase copy. `describeUpdateOperation` is the one place a
+// The retained-phase copy. `describeUpdateOperation` is the one place a
 // `lastKnownKind` becomes the "Last seen: …" sentence, and
 // `needsQualifiedMarker` must be false for it — the sentence already carries
 // the qualification, and a caller appending its own "(last known)" would say
@@ -139,7 +139,7 @@ describe("describeUpdateOperation — the coarse 'updating' kind", () => {
   });
 });
 
-// G5: measured byte progress must render independently of percentage — both
+// Measured byte progress must render independently of percentage — both
 // bytes-only and percent+bytes — and never on the `none` arm.
 describe("operationProgressBytes / operationProgressPercent", () => {
   it("bytes-only (percent absent): operationProgressBytes renders, operationProgressPercent is null", () => {
@@ -474,8 +474,8 @@ describe("describeUpdateOperation — verification-refused", () => {
     // structural precedent is the floor park, a full sentence with an
     // affordance tail, also unterminated.
     //
-    // Reviewer C raised the mixed punctuation here as a nit, then withdrew it
-    // on that count: the finding had compared this string against its two
+    // The mixed punctuation here was raised as a nit, then withdrawn
+    // on that count: the comparison had been against this string's two
     // NAMED neighbours instead of against the whole set, and "match
     // `finalizing-record`, not `unavailable`" is a choice between neighbours,
     // not a convention. Adding the period would have moved a conforming string

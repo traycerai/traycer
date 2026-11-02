@@ -34,6 +34,7 @@ const ACTIONS: SandboxSetupLineActions = {
   onKeepWaiting: vi.fn(),
   onCancel: vi.fn(),
   onChooseAnotherHost: vi.fn(),
+  chooseAnotherHostLabel: "Use This computer",
   onRetryCreation: vi.fn(),
   onRetry: vi.fn(),
   onSendAgain: vi.fn(),
@@ -53,6 +54,7 @@ function facts(smallerShapeAffordable: boolean): SandboxSetupLineFacts {
     offeredAgents: null,
     sandboxAwake: null,
     sandboxStoppable: true,
+    sandboxResting: false,
   };
 }
 
@@ -195,7 +197,7 @@ describe("withdrawing a message from every refusal or failure", () => {
                 ? "Open terminal"
                 : "Open terminal instead",
             ]),
-        "Choose another host",
+        "Use This computer",
         "Cancel the message",
         "Details",
       ];
@@ -305,7 +307,7 @@ describe("SandboxSetupLine's refusal for credits", () => {
     expect(line.textContent).toContain("Not enough credits.");
     expect(buttonLabels(line)).toEqual([
       "Add credits ↗",
-      "Choose another host",
+      "Use This computer",
       "Cancel the message",
     ]);
   });
@@ -325,7 +327,7 @@ describe("SandboxSetupLine's refusal for credits", () => {
     ).toBeDefined();
     expect(buttonLabels(line)).toEqual([
       "Add credits ↗",
-      "Choose another host",
+      "Use This computer",
       "Cancel the message",
     ]);
   });
@@ -341,14 +343,14 @@ describe("SandboxSetupLine's refusal for credits", () => {
     expect(buttonLabels(line)).toEqual([
       "Add credits ↗",
       "Choose a smaller shape",
-      "Choose another host",
+      "Use This computer",
       "Cancel the message",
     ]);
   });
 });
 
 describe("SandboxSetupLine's refusal whose answer never came", () => {
-  it("keeps Retry beside Choose another host", () => {
+  it("keeps Retry beside Use This computer", () => {
     const line = mountRefusal(
       { kind: "personal" },
       { kind: "unverified" },
@@ -359,7 +361,7 @@ describe("SandboxSetupLine's refusal whose answer never came", () => {
     expect(line.textContent).toContain("Couldn't verify your balance.");
     expect(buttonLabels(line)).toEqual([
       "Retry",
-      "Choose another host",
+      "Use This computer",
       "Cancel the message",
     ]);
   });
@@ -388,7 +390,7 @@ describe("SandboxSetupLine's agent refusals", () => {
     expect(buttonLabels(line)).toEqual([
       "Choose a model",
       "Open terminal instead",
-      "Choose another host",
+      "Use This computer",
       "Cancel the message",
     ]);
     fireEvent.click(
@@ -435,7 +437,7 @@ describe("SandboxSetupLine's agent refusals", () => {
         expect(buttonLabels(line)).toEqual([
           "Choose a model",
           "Open terminal instead",
-          "Choose another host",
+          "Use This computer",
           "Cancel the message",
         ]);
         fireEvent.click(
@@ -489,6 +491,137 @@ describe("SandboxSetupLine's failed start", () => {
     await waitFor(() => {
       expect(writeText).toHaveBeenCalledWith("SBX-0412 · sbx_made_1");
     });
+  });
+});
+
+describe("SandboxSetupLine when the sandbox rested on its own", () => {
+  const RESTING_FACTS = { ...facts(false), sandboxResting: true };
+
+  it.each([
+    ["applying", null],
+    ["delivering", null],
+    ["applying", { kind: "timed-out", step: "applying" } as const],
+  ] as const)(
+    "draws nothing for a stage at step %s with failure %j",
+    (step, failure) => {
+      const { container } = render(
+        <SandboxSetupLine
+          stage={{ ...created(), step, failure }}
+          name="api-refactor"
+          facts={RESTING_FACTS}
+          actions={ACTIONS}
+        />,
+      );
+
+      expect(container.textContent).toBe("");
+    },
+  );
+
+  it.each([true, undefined])(
+    "draws nothing for a rested stage whose send can go back (withdrawalAllowed %s)",
+    (withdrawalAllowed) => {
+      const { container } = render(
+        <SandboxSetupLine
+          stage={{ ...created(), step: "applying" }}
+          name="api-refactor"
+          facts={RESTING_FACTS}
+          actions={ACTIONS}
+          withdrawalAllowed={withdrawalAllowed}
+        />,
+      );
+
+      expect(container.textContent).toBe("");
+    },
+  );
+
+  it("says the message is still pending, with Retry, when this window can't give it back", () => {
+    const onRetry = vi.fn();
+    render(
+      <SandboxSetupLine
+        stage={{ ...created(), step: "applying" }}
+        name="api-refactor"
+        facts={RESTING_FACTS}
+        actions={{ ...ACTIONS, onRetry }}
+        withdrawalAllowed={false}
+      />,
+    );
+
+    const line = screen.getByTestId("sandbox-rested-held-line");
+    expect(line.textContent).toContain("Your message is still pending.");
+    expect(screen.queryByTestId("sandbox-setup-line")).toBeNull();
+    fireEvent.click(within(line).getByTestId("sandbox-rested-held-retry"));
+    expect(onRetry).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps waiting on the progress line, not an alert, for a recorded rest once the row no longer rests", () => {
+    render(
+      <SandboxSetupLine
+        stage={{
+          ...created(),
+          step: "booting",
+          failure: { kind: "rested" },
+        }}
+        name="api-refactor"
+        facts={{ ...RESTING_FACTS, sandboxResting: false }}
+        actions={ACTIONS}
+      />,
+    );
+
+    expect(screen.getByTestId("sandbox-setup-line")).toBeDefined();
+    expect(screen.getByTestId("sandbox-setup-keep-waiting")).toBeDefined();
+    expect(screen.getByTestId("sandbox-setup-cancel")).toBeDefined();
+    expect(
+      screen.getByTestId("sandbox-setup-choose-another-host"),
+    ).toBeDefined();
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByTestId("sandbox-refusal-line")).toBeNull();
+  });
+
+  it("still draws the settings failure's own line", () => {
+    render(
+      <SandboxSetupLine
+        stage={{
+          ...created(),
+          step: "applying",
+          failure: {
+            kind: "settings",
+            code: "SBX-0520",
+            steps: { applied: [], notApplied: ["Providers"] },
+          },
+        }}
+        name="api-refactor"
+        facts={RESTING_FACTS}
+        actions={ACTIONS}
+      />,
+    );
+
+    expect(screen.getByTestId("sandbox-setup-line")).toBeDefined();
+  });
+
+  it("still says Resuming for a wake under way at the booting step", () => {
+    render(
+      <SandboxSetupLine
+        stage={{
+          ...created(),
+          step: "booting",
+          target: {
+            kind: "existing",
+            hostId: "host-1",
+            sandboxId: "sbx_made_1",
+            name: "api-refactor",
+            configuration: { kind: "personal" },
+            verb: "resume",
+          },
+        }}
+        name="api-refactor"
+        facts={{ ...RESTING_FACTS, sandboxStoppable: false }}
+        actions={ACTIONS}
+      />,
+    );
+
+    expect(screen.getByTestId("sandbox-setup-line").textContent).toContain(
+      "Resuming",
+    );
   });
 });
 
@@ -584,7 +717,7 @@ describe("SandboxSetupLine when the settings did not apply", () => {
     expect(idle.textContent).not.toContain("waits until they apply");
   });
 
-  it("offers Retry applying, Open terminal, Stop, Choose another host and Details", () => {
+  it("offers Retry applying, Open terminal, Stop, Use This computer and Details", () => {
     const detail = mountSettings(true, {
       ...ACTIONS,
       onOpenTerminal: vi.fn(),
@@ -595,7 +728,7 @@ describe("SandboxSetupLine when the settings did not apply", () => {
       "Retry applying",
       "Open terminal",
       "Stop",
-      "Choose another host",
+      "Use This computer",
       "Details",
     ]) {
       expect(labels).toContain(label);

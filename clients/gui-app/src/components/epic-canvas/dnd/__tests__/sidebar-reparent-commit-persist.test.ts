@@ -8,7 +8,7 @@
  * childrenByParent buckets"). This file is the commit-level proof that the
  * commit is not a persist no-op.
  *
- * RETARGETED for T11's write-command queue. It used to assert a DUAL WRITE -
+ * RETARGETED for the write-command queue. It used to assert a DUAL WRITE -
  * the local Y `parentId` moved AND `epic.reparentArtifact` went out - because
  * that is what the commit did. The queue now owns the write: the drop enqueues
  * a `reparent-artifact` command, the optimistic overlay moves the PROJECTION

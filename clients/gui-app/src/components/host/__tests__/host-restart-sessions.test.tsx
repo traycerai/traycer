@@ -179,6 +179,7 @@ function makeTerminalHandle(opts: {
     kind: opts.kind ?? "terminal",
     viewer: "presentation",
     streamClientFactory: () => ({
+      supportsViewerFrames: () => false,
       sendAction: () => undefined,
       close: () => undefined,
     }),

@@ -5,7 +5,7 @@ import path from "node:path";
 /**
  * Static inventory for observer-free host writers and preserved non-condition
  * retry policy. The coordinator cannot see pure `fetchQuery` producers, so
- * this suite is their stated coverage boundary (T4).
+ * this suite is their stated coverage boundary.
  */
 const guiAppSrc = path.resolve(import.meta.dirname, "../../..");
 

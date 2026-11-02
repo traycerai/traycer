@@ -250,13 +250,6 @@ function renderPanel(): RenderResult & { readonly queryClient: QueryClient } {
   return { ...render(panelElement(queryClient)), queryClient };
 }
 
-/**
- * A `host.update.check` manifest with an arbitrary number of versions, in the
- * same shape `updateCheckManifest` (`host-overview-test-support.ts`) builds —
- * that helper deliberately produces only ONE entry, so the multi-version
- * cases here assemble the manifest by hand instead of growing a second
- * exported helper for a shape only this file needs.
- */
 /** The provenance an explicit override produces — never `installed-rc`. */
 function sourceForExplicit(
   include: boolean,
@@ -264,6 +257,13 @@ function sourceForExplicit(
   return include ? "explicit-include" : "explicit-exclude";
 }
 
+/**
+ * A `host.update.check` manifest with an arbitrary number of versions, in the
+ * same shape `updateCheckManifest` (`host-overview-test-support.ts`) builds —
+ * that helper deliberately produces only ONE entry, so the multi-version
+ * cases here assemble the manifest by hand instead of growing a second
+ * exported helper for a shape only this file needs.
+ */
 function multiVersionManifest(
   versions: readonly string[],
 ): HostAvailableManifest {
@@ -1838,7 +1838,7 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
    * The state under test is the one a boolean could not express: a host whose
    * DEFAULT catalog already includes release candidates, where "unchecked" and
    * "never touched" have to reach the host as different requests or unticking
-   * the box does nothing at all (critique finding 7).
+   * the box does nothing at all.
    */
   it("sends an explicit exclude when the box is unticked on a host whose default includes RCs", async () => {
     const requests: Array<boolean | undefined> = [];
@@ -3149,7 +3149,7 @@ describe("Overview updates — CLI floor remedy", () => {
   });
 });
 
-// T2 fixup 1: a FIRST `host.update.check` that settles with no catalog and a
+// A FIRST `host.update.check` that settles with no catalog and a
 // failure (`cli-failed` / `invalid-output`) is a SETTLED answer, not a still-
 // pending one. `describeCheckState` used to fall through this exact input
 // shape (`manifest: null`, `checking: false`, `unreachable: false`, failure
@@ -3577,7 +3577,7 @@ describe("Overview updates — stagedEntryOfferable", () => {
   });
 
   it("an unresolved platform asset (null platformKey against a multi-platform entry) is not offerable, and reads as 'couldn't verify'", async () => {
-    // CodeRabbit r3944197329: a `platformKey` this page cannot resolve is
+    // A `platformKey` this page cannot resolve is
     // NOT the same claim as "the release can't install here" - it is a
     // claim this page cannot make at all, so the refusal text has to be the
     // generic "couldn't verify" catch-all, never the asset-unavailable text
@@ -3802,7 +3802,7 @@ describe("Overview updates — activation debt", () => {
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
-    // T2: the debt is an in-flight park (`waiting-to-activate`), so it is the
+    // The debt is an in-flight park (`waiting-to-activate`), so it is the
     // notices strip's operation card that carries the sentence now - the
     // answer card withholds its own answer for any in-flight kind
     // (see host-overview-notices.test.tsx's duplication regression), so
@@ -3939,7 +3939,7 @@ describe("Overview updates — record-leg liveness and entry-level floor gates",
     const { queryClient } = renderPanel();
 
     // Live debt: the record (rc.3) is ahead of the running host (rc.2), and
-    // the catalog's rc.3 is what is installed - no offer, a restart. T2's
+    // the catalog's rc.3 is what is installed - no offer, a restart. The
     // notices strip carries this while it is live (the answer card
     // withholds its own answer for any in-flight kind - see
     // host-overview-notices.test.tsx's duplication regression), and its

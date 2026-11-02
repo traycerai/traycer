@@ -5,7 +5,7 @@ import type { ProviderNativeScope } from "@traycer/protocol/host/provider-native
 /**
  * Navigate-safe MCP OAuth pending-auth store.
  *
- * Key matches the host registry tuple from R02:
+ * Key matches the host registry tuple:
  * `(providerId, scope, workspaceRoot, serverName)`.
  * Re-issuing awaitLogin/cancelLogin with the same tuple resumes the same
  * host-side attempt after a settings navigation.

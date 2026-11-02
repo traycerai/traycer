@@ -693,7 +693,7 @@ async function stopService(
   }
   // `--force` promises the host is DOWN when this returns, and the plain
   // stop above cannot promise that: the runner caps the subprocess at 15s
-  // while the stop job may run for the unit's whole `TimeoutStopSec` (37s,
+  // while the stop job may run for the unit's whole `TimeoutStopSec` (47s,
   // or systemd's 90s default on a unit not yet re-registered), so a
   // host that survives SIGTERM outlives the subprocess and a bare return
   // would report a stop that has not happened. Confirm through systemd's own

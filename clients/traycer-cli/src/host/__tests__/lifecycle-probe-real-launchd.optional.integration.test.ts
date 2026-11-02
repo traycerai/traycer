@@ -270,37 +270,33 @@ describe.skipIf(!ENABLED)(
     );
 
     /*
-     * The producer's frame is the CURRENT Layer-0 contract, not the one this
-     * row was written against.
+     * The producer's frame is what the real lock yields on this checkout.
      *
-     * `unavailable` used to be a terminal outcome: no lock, no host. That made
-     * a new safety mechanism a new outage class - every machine that cannot
-     * load the native addon loses its host entirely - so the outcome was
-     * renamed `degraded` and the host now continues without the I1 guarantee.
-     * Asserting the old kind here would have kept a released gate green on a
-     * frame production can no longer emit.
+     * The suite only runs where the lifecycle-lock addon is built
+     * (`layer0Availability` reports `broken` otherwise, and the M9 rows load
+     * that addon directly), so the producer acquires the lock on a fresh
+     * temporary data directory and the frame it writes is the `acquired` one.
+     * This row used to assert the `degraded` / `addon-load-failed` frame,
+     * which held only while the runner had no addon; once the repository's
+     * setup built it, the row failed on the correct frame. The degraded frame
+     * is asserted where the addon load is the thing simulated,
+     * `traycer-host/src/lifecycle/__tests__/layer0-lock-addon-load.test.ts`.
      *
-     * The frame is asserted whole rather than by discriminant alone: `cause`
-     * is what tells a reader *which* guarantee was lost, and `evidence` is the
-     * only human-readable trace of why.
+     * The frame is asserted whole: an `acquired` frame carries the attempt id
+     * and the outcome and nothing else, so a `cause` or `evidence` leaking
+     * into it would be a contract change this gate must see.
      */
     it.skipIf(LAYER0_MISSING)(
-      "layer0-status-fd (needs the internal checkout): the same host WITH the flag writes exactly one framed degraded record to the pipe it names",
+      "layer0-status-fd (needs the internal checkout): the same host WITH the flag writes exactly one framed acquired record to the pipe it names",
       async () => {
         const result = await runLayer0Producer({ passStatusFdFlag: true });
 
         expect(result.framedPayloads.length).toBe(1);
         const frame: unknown = JSON.parse(result.framedPayloads[0] ?? "null");
-        expect(frame).toMatchObject({
+        expect(frame).toEqual({
           attemptId: "status-fd-contract",
-          layer0: "degraded",
-          cause: "addon-load-failed",
+          layer0: "acquired",
         });
-        expect(
-          typeof (frame as { readonly evidence: unknown }).evidence === "string"
-            ? (frame as { readonly evidence: string }).evidence.length
-            : 0,
-        ).toBeGreaterThan(0);
         expect(result.exitCode).toBe(0);
       },
       30_000,
@@ -992,9 +988,12 @@ async function withScopedSupervisorProbe(
    * discovery from a source checkout — and no caller ever passed it, so the
    * branch sat here naming an outcome production had already renamed. An
    * unexercised arm named after a status is how a probe "passes" against a
-   * union member that no longer exists. The degraded/`addon-load-failed` path
-   * has its own row above (`runLayer0Producer`), which really does drive
-   * `acquireHostLayer0Lock`, and its own packaged-SEA gate.
+   * union member that no longer exists. The `runLayer0Producer` row above
+   * drives `acquireHostLayer0Lock` through the fd contract on the real addon
+   * (the `acquired` frame); the degraded/`addon-load-failed` frame is asserted
+   * where the addon load is simulated, in traycer-host's
+   * `layer0-lock-addon-load.test.ts`, and discovery has its own packaged-SEA
+   * gate.
    */
   await writeFile(
     hostScript,

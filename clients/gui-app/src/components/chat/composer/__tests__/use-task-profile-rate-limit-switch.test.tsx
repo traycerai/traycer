@@ -75,6 +75,7 @@ function settings(
   overrides: Partial<ChatRunSettings> | undefined,
 ): ChatRunSettings {
   return {
+    ultracode: false,
     harnessId: "claude",
     model: "opus[1m]",
     permissionMode: "supervised",

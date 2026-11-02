@@ -14,7 +14,7 @@ import {
  * turn rail, the phone's Messages list), the scroll-to-end pill and the
  * keyboard, against `src/__tests__/browser/chat-scroll-model.tsx`. Every
  * scenario stops any stream and asks the oracle's at-rest questions after
- * each step; the first block below is the streaming pick (C2), which also
+ * each step; the first block below is the streaming pick, which also
  * asserts the row holds the reading line WHILE the stream runs.
  */
 

@@ -249,8 +249,8 @@ function PortsList(props: { readonly children: ReactNode }): ReactNode {
 }
 
 /**
- * The tab's one sentence when there is no list to draw - the core flows'
- * Empty and Older host tiles, which the unreachable and unreadable lines
+ * The tab's one sentence when there is no list to draw - the Empty and
+ * Older host notes, which the unreachable and unreadable lines
  * share so the tab reads the same whatever it cannot show.
  */
 function PortsNote(props: {

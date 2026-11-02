@@ -245,7 +245,7 @@ describe("visibleRailEntries: managed-pack readiness", () => {
     ]);
   });
 
-  // P5. The rail deprioritized on "has a pack state at all", which was
+  // The rail deprioritized on "has a pack state at all", which was
   // coherent while a preparing tab was unselectable. Once a download behind a
   // runnable binary stopped taking the provider away, that rule made the rail
   // reorder itself throughout a first-boot convergence - every provider sinks,

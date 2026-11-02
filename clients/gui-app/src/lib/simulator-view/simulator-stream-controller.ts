@@ -12,6 +12,7 @@ import {
   isIncompatibleCloseForMethod,
   type StreamCloseReason,
   type StreamConnectionStatus,
+  type StreamContinuity,
 } from "@traycer-clients/shared/host-transport/i-stream-session";
 import { SimulatorStreamClient } from "@traycer-clients/shared/host-transport/simulator-stream-client";
 import {
@@ -214,6 +215,7 @@ export function createSimulatorStreamController(
   const webCodecs = isWebCodecsSupported();
 
   let state: SimulatorStreamState = INITIAL_STATE;
+  let heldState: SimulatorStreamState | null = null;
   let stream: SimulatorStreamClient | null = null;
   let decoder: SimulatorDecoder | null = null;
   let streamOpen = false;
@@ -236,7 +238,17 @@ export function createSimulatorStreamController(
   let generation = 0;
 
   const publish = (patch: Partial<SimulatorStreamState>): void => {
-    state = { ...state, ...patch };
+    if (heldState !== null) {
+      heldState = { ...heldState, ...patch };
+      state = {
+        ...heldState,
+        lifecycle: "reconnecting",
+        input: { connected: false, detail: null },
+        stalled: false,
+      };
+    } else {
+      state = { ...state, ...patch };
+    }
     for (const listener of listeners) listener();
   };
 
@@ -318,6 +330,7 @@ export function createSimulatorStreamController(
     const discarded = stream;
     stream = null;
     streamOpen = false;
+    heldState = null;
     discarded?.close();
     closeDecoder();
     clearWatchdog();
@@ -495,10 +508,57 @@ export function createSimulatorStreamController(
     }
   };
 
+  function restoreHeldStream(): void {
+    if (heldState === null) return;
+    const continuedState = heldState;
+    heldState = null;
+    publish(continuedState);
+    if (!firstFrame) armWatchdog();
+    if (state.lifecycle === "streaming") armStallTimer();
+  }
+
+  function noteReconnecting(continuity: StreamContinuity): void {
+    const retained = continuity === "held" ? (heldState ?? state) : null;
+    heldState = null;
+    streamOpen = false;
+    if (retained === null) {
+      // A new subscriber starts on H.264 with its own config and keyframe.
+      mjpegRequested = false;
+      decoder?.reset();
+      firstFrame = false;
+    }
+    // Silence during an outage is not a missing-video failure. A continued
+    // stream restores its clock; a fresh open starts a new frame deadline.
+    clearWatchdog();
+    clearStallTimer();
+    publish({
+      lifecycle: "reconnecting",
+      detail: null,
+      input: { connected: false, detail: null },
+      stalled: false,
+    });
+    heldState = retained;
+  }
+
+  function noteFreshOpen(): void {
+    if (heldState !== null) {
+      // A subscribe held before its first frame opens a fresh cycle.
+      // Its first frame must not remain masked by the ended hold.
+      heldState = null;
+      mjpegRequested = false;
+      decoder?.reset();
+      publish({ lifecycle: "connecting", detail: null });
+    }
+    // open() already starts the initial deadline before subscribing.
+    // Rebuilds have no pending watchdog and owe their own first frame.
+    if (watchdog === null) armWatchdog();
+  }
+
   const handleStatus = (
     openGeneration: number,
     status: StreamConnectionStatus,
     reason: StreamCloseReason | null,
+    continuity: StreamContinuity,
   ): void => {
     if (openGeneration !== generation || !started) return;
     switch (status) {
@@ -506,24 +566,15 @@ export function createSimulatorStreamController(
         return;
       case "open":
         streamOpen = true;
+        if (continuity === "continued") {
+          restoreHeldStream();
+        } else {
+          noteFreshOpen();
+        }
         if (wantMjpeg) requestMjpeg();
         return;
       case "reconnecting":
-        // The transport re-declares the subscription on its own; the host
-        // then starts over with a config and a keyframe. Keep the last frame
-        // on screen, drop what the decoder queued for the socket that died.
-        streamOpen = false;
-        // The re-declared subscription is a new one on the host and opens on
-        // H.264 again, so MJPEG is asked for again on the next `open`.
-        mjpegRequested = false;
-        decoder?.reset();
-        clearStallTimer();
-        publish({
-          lifecycle: "reconnecting",
-          detail: null,
-          input: { connected: false, detail: null },
-          stalled: false,
-        });
+        noteReconnecting(continuity);
         return;
       case "closed": {
         if (reason === null || reason.kind === "caller") return;
@@ -567,8 +618,8 @@ export function createSimulatorStreamController(
       callbacks: {
         onServerFrame: (frame, bytes) =>
           handleServerFrame(openGeneration, frame, bytes),
-        onConnectionStatus: (status, reason) =>
-          handleStatus(openGeneration, status, reason),
+        onConnectionStatus: (status, reason, _retryCause, continuity) =>
+          handleStatus(openGeneration, status, reason, continuity),
       },
     });
     // A session that was already open replayed `open` inside the constructor,

@@ -918,14 +918,14 @@ function createXtermEntry(
   // xterm emits its OSC 10/11 colour-query replies synchronously WHILE parsing
   // written output, so `> 0` is what distinguishes a generated reply from
   // user input that merely looks like one (a pasted report while the terminal
-  // is idle) - payload shape alone cannot (CodeRabbit review on #1424).
+  // is idle) - payload shape alone cannot.
   let liveParseDepth = 0;
   // A host answers colour queries itself from `terminal.create@2.1` (it
   // replies with the session's spawn-time `themeHint`). Older hosts have no
   // responder, so this viewer's xterm reply - imperfect as it is (it misses
   // every startup probe and conflicts across viewers) - is the only answer a
-  // late-probing TUI would get there; suppressing it would be a regression
-  // (Codex review on #1424). Read per event, not captured: the negotiated
+  // late-probing TUI would get there; suppressing it would be a regression.
+  // Read per event, not captured: the negotiated
   // manifest fills in on the first completed RPC and flips when a host is
   // upgraded in place. `null` (no handshake recorded, or a legacy name-only
   // recording) fails toward forwarding, the legacy-safe side.

@@ -20,7 +20,7 @@ import { useAutoPolicySetMutation } from "@/hooks/auto-mode/use-auto-policy-set-
 import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
-// JOB 1 (Codex, P1): the account-policy cache is partitioned by signed-in
+// JOB 1: the account-policy cache is partitioned by signed-in
 // user. `useAutoPolicyQuery` now folds `viewerUserId` into its cache key
 // identity, and `useAutoPolicySetMutation`'s write-through addresses the same
 // per-viewer entry through `hostQueryKeys.autoPolicyForViewer` rather than the
@@ -426,7 +426,7 @@ describe("useAutoPolicyQuery - per-viewer cache partition", () => {
   });
 });
 
-// FIX 1 (P1): "" is the ABSENCE of an identity - `useCloudChatViewerId()`
+// FIX 1: "" is the ABSENCE of an identity - `useCloudChatViewerId()`
 // answers it whenever `contextMetadata` is absent (startup, and the gap
 // during an account transition), not a person. Before this fix the read ran
 // unconditionally, so the account that happened to be authenticated at the

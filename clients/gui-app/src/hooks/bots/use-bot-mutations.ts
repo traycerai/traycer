@@ -29,6 +29,7 @@ import {
 } from "@/hooks/bots/use-bot-send-version";
 import { botMutationKeys, hostQueryKeys } from "@/lib/query-keys";
 import { toastFromHostError } from "@/lib/host-error-toast";
+import { isFollowReadOf } from "@/hooks/bots/use-bot-thread-follow";
 
 /**
  * The `bot.*` writes (Tracy Bots). Every hook takes the client that carries the
@@ -223,7 +224,11 @@ export function useBotConversationSendMutation(
     options: {
       mutationKey: botMutationKeys.conversationSend(),
       onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),
-      onSuccess: (_response, _variables, context) => {
+      onSuccess: (_response, variables, context) => {
+        // The send follows the person to its thread (decision 137).
+        void queryClient.invalidateQueries({
+          predicate: (query) => isFollowReadOf(query.queryKey, variables.botId),
+        });
         if (context.hostId === null) return;
         void queryClient.invalidateQueries({
           queryKey: hostQueryKeys.methodScope(

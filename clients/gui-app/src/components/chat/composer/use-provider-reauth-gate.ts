@@ -24,7 +24,7 @@ import {
  * - `profile_missing`: the chat's committed `profileId` isn't among this
  *   provider's active profiles - removed/tombstoned, OR the provider's
  *   `providers.list` has SETTLED on no profile support at all for this host
- *   (old host, flag off, or an unsupported provider - ticket 07 round 2: a
+ *   (old host, flag off, or an unsupported provider: a
  *   persisted/memory/default non-null `profileId` must not silently reach the
  *   wire against a no-support host). Never silently falls back to ambient -
  *   blocks send and offers the confirm-first "Continue on Terminal account"
@@ -82,7 +82,7 @@ export interface ProviderReauthGate {
 // `null` whether the provider entry itself is missing or its `profiles[]` is
 // merely empty - both cases fall through to `profile_missing` below, exactly
 // mirroring `resolveSeededProfileId`'s round-1 fix for the fork-dialog seed
-// path (ticket 07).
+// path.
 //
 // `authoritative` is the banner-flash fix, and it gates ONLY the
 // `profile_missing` conclusion - NOT `profile_unauthenticated`. A fallback
@@ -222,7 +222,7 @@ export function useProviderReauthGate(
   profileId: string | null,
   active: boolean,
   /**
-   * S11: the SAME `ComposerSeedSource.kind` the caller's `useComposerToolbarStore`
+   * The SAME `ComposerSeedSource.kind` the caller's `useComposerToolbarStore`
    * call is fed - `"authoritative"` when `profileId` came from the chat's own
    * authoritative settings (a real pin), anything else when it came from a
    * fallback/picker-default seed. Consuming the identical discriminant (not a

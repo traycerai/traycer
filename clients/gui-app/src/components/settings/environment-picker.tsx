@@ -15,7 +15,10 @@ import {
 } from "@/components/settings/environment/hosts-running-configuration-model";
 import { useHostsRunningPersonal } from "@/components/settings/environment/use-hosts-running-configuration";
 import { EnvironmentPickerRow } from "@/components/settings/environment/environment-picker-row";
-import { usePickedTeamLabel } from "@/components/settings/environment/team-pick-label";
+import {
+  useInvitedTeamName,
+  usePickedTeamLabel,
+} from "@/components/settings/environment/team-pick-label";
 import { TeamRows } from "@/components/settings/environment/team-rows";
 import { useEnvironmentStatusModel } from "@/components/settings/environment/use-environment-status-model";
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
@@ -33,7 +36,8 @@ import {
 } from "@/components/ui/dropdown-menu";
 import {
   environmentPickValue,
-  environmentSectionShown,
+  moveEnvironmentPick,
+  moveEnvironmentSurface,
   PERSONAL_PICK,
   type EnvironmentPick,
 } from "@/lib/settings-environment-pages";
@@ -77,7 +81,7 @@ function useEnvironmentPickerModel(scope: HostScope): EnvironmentPickerModel {
 /**
  * Settings ▸ Environment's dropdown, at the head of the group: Personal, a
  * Local row under it for each computer whose own settings have not moved,
- * and the team rows (P1's slot). The pick decides what every page below it
+ * and the team rows. The pick decides what every page below it
  * shows; it never changes which host this window works on.
  */
 export function EnvironmentPicker(props: {
@@ -86,7 +90,7 @@ export function EnvironmentPicker(props: {
   readonly activeSection: SettingsSectionId | null;
 }): ReactNode {
   const model = useEnvironmentPickerModel(props.scope);
-  const running = useHostsRunningPersonal();
+  const running = useHostsRunningPersonal(true);
   const pick = useSettingsEnvironmentPickStore(
     (state) => state.pick ?? state.defaultPick,
   );
@@ -96,13 +100,13 @@ export function EnvironmentPicker(props: {
     (state) => state.setScopedHostId,
   );
   const choose = (next: EnvironmentPick): void => {
-    setPick(next);
-    if (
-      props.activeSection !== null &&
-      !environmentSectionShown(next, props.activeSection)
-    ) {
-      navigateToSettingsSection("providers");
-    }
+    moveEnvironmentPick({
+      next,
+      activeSection: props.activeSection,
+      setPick,
+      // A person just pressed this row, so the surface follows the press.
+      moveSurface: moveEnvironmentSurface.onGesture,
+    });
   };
   // Finish moving and Rename both continue on that host's Overview.
   const openHostOverview = (hostId: string): void => {
@@ -264,7 +268,12 @@ function EnvironmentPickerTrigger(props: {
     label = pick.hostName;
     local = true;
   } else if (pick.kind === "team") {
-    label = teamLabel ?? <AgentSpinningDotsLabel />;
+    // A pick the membership list cannot name is either an invitation the
+    // person has not accepted, or a read that has not landed. Only then is
+    // the account-wide invitations read mounted, by the component below.
+    label = teamLabel ?? (
+      <InvitedTeamNameLabel environmentId={pick.environmentId} />
+    );
   }
   return (
     <DropdownMenuTrigger asChild>
@@ -294,6 +303,18 @@ function EnvironmentPickerTrigger(props: {
       </Button>
     </DropdownMenuTrigger>
   );
+}
+
+/**
+ * The name of a team that has only invited the person, and the spinner until
+ * that read lands. Its own component so the read it mounts belongs to the one
+ * render that needs it.
+ */
+function InvitedTeamNameLabel(props: {
+  readonly environmentId: string;
+}): ReactNode {
+  const invited = useInvitedTeamName(props.environmentId);
+  return invited ?? <AgentSpinningDotsLabel />;
 }
 
 function AgentSpinningDotsLabel(): ReactNode {

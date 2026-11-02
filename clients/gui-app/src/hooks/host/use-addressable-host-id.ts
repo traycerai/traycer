@@ -20,7 +20,7 @@ import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readine
  * authority DERIVED (`null` there means ∅, nothing usable), while this answers
  * whether that host is addressable YET. Consumers gating on "can I talk to a
  * host" want this one; consumers narrating the selection want that one. The
- * name is bind-era vocabulary and is retired by P4.3's convergence sweep.
+ * name is bind-era vocabulary and is retired by the convergence sweep.
  *
  * "App-wide" above means the DEFAULT, not an override of the subtree: beneath a
  * host-scoped panel this answers that panel's host, because it resolves through

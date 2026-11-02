@@ -464,13 +464,13 @@ describe("linux service install — enable --now recycle timeout", () => {
     // a timeout rather than systemd's own answer.
     const { runner } = stageEnableNowRunner(async (args) => {
       throw new ProcessTimeoutError(
-        `systemctl ${args.join(" ")} timed out after 52000ms (killed via SIGTERM): `,
+        `systemctl ${args.join(" ")} timed out after 62000ms (killed via SIGTERM): `,
         "systemctl",
         args,
         -1,
         "",
         "",
-        52_000,
+        62_000,
       );
     });
 
@@ -483,7 +483,7 @@ describe("linux service install — enable --now recycle timeout", () => {
 
 // `stop --force`: a plain `systemctl stop` cannot promise the host is DOWN
 // when it returns (the runner caps the subprocess at 15s; the unit's stop job
-// may run for its whole TimeoutStopSec - 37s, or systemd's 90s default on a
+// may run for its whole TimeoutStopSec - 47s, or systemd's 90s default on a
 // unit not yet re-registered), so force confirms through the
 // unit's OWN state - `systemctl is-active`, never a pid - and escalates to
 // `systemctl kill --signal=SIGKILL` when the plain stop does not settle it

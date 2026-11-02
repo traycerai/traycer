@@ -92,8 +92,8 @@ import {
 import { LOCAL_LIVENESS_PROOF_MS } from "@/lib/host/fleet-update/fleet-update-view";
 
 /**
- * G1 — the selected-Overview lifecycle-gate matrix. This is the independent
- * cold review's finding 1 (HIGH): the Overview used to build its update
+ * The selected-Overview lifecycle-gate matrix.
+ * The Overview used to build its update
  * projection with `freshUntilMs: Infinity` / `nowMs: dataUpdatedAt` /
  * `connected: true` — three ways of asserting a retained read is current — so
  * a host that reported `downloading` and then went unreachable stayed
@@ -104,7 +104,7 @@ import { LOCAL_LIVENESS_PROOF_MS } from "@/lib/host/fleet-update/fleet-update-vi
  * The fix (`observationFromCanonicalRead`, exercised directly in
  * `canonical-status-observation.test.ts`) makes the deadline DERIVED from the
  * read's own health. This file is the integration proof at the seam the
- * review asked for: the real `HostOverviewPanel`, mounted, reading a real
+ * proof asked for: the real `HostOverviewPanel`, mounted, reading a real
  * `HostClient`.
  */
 
@@ -567,7 +567,7 @@ describe("HostOverviewPanel — lifecycle gate matrix (G1)", () => {
     // is no surface here that is gated by `holdsLifecycleGate` alone without
     // also being gated by `usable`.
     //
-    // T2 changed WHERE this shows up, not whether it is guarded: the notices
+    // The location changed, not whether it is guarded: the notices
     // strip only draws `HostOverviewOperationCard` while `!offline`
     // (`host-overview-panel.tsx`'s `operationShown`), and `offline` follows
     // `!usable` directly — so once the scope goes unusable the card is
@@ -622,7 +622,7 @@ describe("HostOverviewPanel — lifecycle gate matrix (G1)", () => {
 
     // THE FIX: the retained attempt demotes to "last known" the moment the
     // scope stops being usable, exactly as it does when the READ itself turns
-    // unhealthy in (c) — same predicate, different input. T2's Status tab
+    // unhealthy in (c) — same predicate, different input. The Status tab
     // withholds the update card entirely once the host can't be reached (the
     // offline notice is the tab's ONLY unreachable wording then, and it
     // carries the retained phase itself), so the retained "Last seen: …"
@@ -646,7 +646,7 @@ describe("HostOverviewPanel — lifecycle gate matrix (G1)", () => {
     // table, so its text alone does not distinguish a genuinely demoted view
     // from one that stayed live — and the surface that USED to make that
     // distinction (the header pill's own table, "Last seen: updating" vs.
-    // "Downloading…") no longer exists: T2 deleted the pill outright, and the
+    // "Downloading…") no longer exists: the pill was deleted outright, and the
     // operation card that still carries a demoted-vs-live table is itself
     // withdrawn here by the `offline` gate above. The demotion mechanism
     // itself stays covered independent of this scenario — see
@@ -707,7 +707,7 @@ describe("HostOverviewPanel — lifecycle gate matrix (G1)", () => {
 });
 
 /**
- * The RECORD leg (Ticket 06 D13), through the mounted Overview: the same
+ * The RECORD leg (D13), through the mounted Overview: the same
  * `useLocalAttemptRecordObservation` + `projectLocalUpdate` pair the pure
  * `fleet-update-view.test.ts` suite exercises directly, wired through a real
  * `hostManagement.getHostControllerStatus()` this time. `makeRunnerHost` above
@@ -749,15 +749,15 @@ describe("HostOverviewPanel — probed local liveness on the record leg (Ticket 
     // Falsifies: `recordObservationView` reaching its qualified-stale arm
     // instead of the live `restarting` one for a fresh, valid `live` proof —
     // or the panel still calling `projectFleetUpdateView` directly with no
-    // `localAttempt` leg at all (the invariant §19 of the ticket names).
+    // `localAttempt` leg at all.
     await waitFor(() => {
       expect(
         screen.getByTestId("host-overview-operation-phase").textContent,
       ).toContain("Restarting host");
     });
     expect(screen.getByRole("progressbar")).toBeTruthy();
-    // The gate holds exactly as it would for a live WIRE `restarting` (G1's
-    // own matrix, case (a)) — same predicate, this time fed by the record.
+    // The gate holds exactly as it would for a live WIRE `restarting`
+    // (matrix case (a)) — same predicate, this time fed by the record.
     await waitFor(async () => {
       expect(await editNameDisabled()).toBe(true);
     });
@@ -804,7 +804,7 @@ describe("HostOverviewPanel — probed local liveness on the record leg (Ticket 
   });
 
   it("INTEGRATION: the lifecycle gate releases on the renderer TICK, host.status failing throughout and the scope itself unreachable", async () => {
-    // The pin the ticket calls out by name as needing the MOUNTED Overview
+    // The pin that needs the MOUNTED Overview
     // rather than the pure projector: `fleet-update-view.test.ts` supplies
     // `nowMs` directly and can never observe whether the panel is feeding it
     // from a real ticking clock. Falsifies: wiring the panel's `nowMs` from
@@ -837,7 +837,7 @@ describe("HostOverviewPanel — probed local liveness on the record leg (Ticket 
       scopeOverrides.current = {
         ...scopeFrom("host-a", fixture),
         status: "unreachable",
-        // T2's Status tab withholds the offline notice (and shows the update
+        // The Status tab withholds the offline notice (and shows the update
         // card instead) only while the health word already reads
         // "Restarting…" - the same word this scope's own restart is
         // narrating. Without this the default fixture health ("online") made
@@ -894,7 +894,7 @@ describe("HostOverviewPanel — probed local liveness on the record leg (Ticket 
 });
 
 /**
- * C-H3 (cold review C, round 4): the MOUNTED mirror for the WIRE slot of
+ * C-H3: the MOUNTED mirror for the WIRE slot of
  * `LocalUpdateClock`.
  *
  * The record slot already has one — the tick-fed integration pin above — so a
@@ -902,7 +902,7 @@ describe("HostOverviewPanel — probed local liveness on the record leg (Ticket 
  * The wire slot had no mounted pin at all: `host-overview-panel.tsx` feeds
  * `wireNowMs` from `statusQuery.dataUpdatedAt`, and feeding it the same
  * one-second tick instead left the whole suite green. That mutation IS
- * round-1 F3 re-introduced at the call site, so the regression it caused once
+ * the clock-mixing defect re-introduced at the call site, so the regression it caused once
  * is the thing this pin exists to catch a second time.
  */
 describe("HostOverviewPanel — the WIRE leg's freshness is its own read's instant (C-H3)", () => {

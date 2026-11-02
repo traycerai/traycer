@@ -40,7 +40,7 @@ import { compositeKey } from "./browser-view-keys";
  * - The consumer reports in: the first decoded frame
  *   ({@link BrowserMediaEntry.reportFirstDecodedFrame}, which is a
  *   `requestVideoFrameCallback` tick on the `<video>` the registry never
- *   sees) and any sink-level failure such as ticket 08's "no offer arrived"
+ *   sees) and any sink-level failure such as the "no offer arrived"
  *   and "no first frame" deadlines ({@link BrowserMediaEntry.reportFailure}).
  *
  * Either way the registry owns the wire report, so `videoPlaneState` always
@@ -56,7 +56,7 @@ export interface WebrtcIceCandidate {
 }
 
 /**
- * The narrow seam to the screencast subscription. Ticket 08 implements this
+ * The narrow seam to the screencast subscription. Production implements this
  * over `BrowserScreencastStreamClient`; tests implement it with a recorder.
  */
 export interface WebrtcSignalPort {
@@ -84,7 +84,7 @@ export interface WebrtcSignalPort {
     input: { readonly negotiationId: number } & WebrtcVideoStatsSample,
   ): void;
   /**
-   * The subscription's measured control-plane RTT (ticket 18), `null` until
+   * The subscription's measured control-plane RTT, `null` until
    * an `rttProbe` has landed. A12's batch flush window derives from it - see
    * {@link ICE_TRICKLE_BATCH_DEADLINE}.
    */
@@ -98,7 +98,7 @@ export interface WebrtcVideoStatsSample {
   readonly packetsLost: number;
   readonly jitterMs: number;
   readonly roundTripTimeMs: number;
-  /** Ticket 17's rVFC-derived timings; see `video-frame-latency.ts`. */
+  /** The rVFC-derived timings; see `video-frame-latency.ts`. */
   readonly glassToGlassMs: number | null;
   readonly glassToGlassP95Ms: number | null;
   readonly networkPlusJitterMs: number | null;
@@ -147,7 +147,7 @@ export interface MediaPeerHandlers {
   readonly onIceGatheringComplete: () => void;
   /** The remote stream, once `ontrack` delivers it. */
   readonly onStream: (stream: MediaStream) => void;
-  /** An inbound DataChannel (ticket 15's input transport). */
+  /** An inbound DataChannel (the input transport). */
   readonly onDataChannel: (channel: MediaDataChannel) => void;
   /** Track death or a terminal connection state. */
   readonly onFailure: (reason: BrowserVideoPlaneFailureReason) => void;
@@ -163,7 +163,7 @@ export interface MediaPeer {
   answerOffer(sdp: string): Promise<string>;
   addRemoteCandidate(candidate: WebrtcIceCandidate): Promise<void>;
   /**
-   * Passthrough to `RTCPeerConnection.getStats()` (ticket 11) - the registry
+   * Passthrough to `RTCPeerConnection.getStats()` - the registry
    * stays DOM-free otherwise, so the caller (the video-plane session) maps
    * the raw report into the wire's `videoStats` shape.
    */
@@ -241,7 +241,7 @@ export interface BrowserMediaEntry {
   sendInput(label: BrowserInputChannelLabel, payload: string): boolean;
   /**
    * The current round's raw stats report, or `null` when no round is in
-   * flight (ticket 11's periodic sampler skips a tick rather than throwing).
+   * flight (the periodic sampler skips a tick rather than throwing).
    */
   getStats(): Promise<RTCStatsReport | null>;
 }
@@ -261,7 +261,7 @@ export const RELEASE_GRACE_MS = 1_000;
  * {@link MediaPeerHandlers.onIceGatheringComplete} before shipping anyway.
  * Either trigger sends the same batch once - whichever fires first.
  *
- * Derived off the measured control-plane RTT (ticket 18's table), not a flat
+ * Derived off the measured control-plane RTT table, not a flat
  * literal: on a fast link the window should shrink (nothing worth waiting
  * for), on a slow one it should grow with the path, same as every other
  * viewer deadline. Two round trips is the STUN gather itself - one request
@@ -289,14 +289,14 @@ function iceTrickleBatchMs(rttMs: number | null): number {
 }
 
 /**
- * Blocker fix (batch-3a review): `connectionState: "failed"` is potentially
+ * Blocker fix: `connectionState: "failed"` is potentially
  * recoverable - the host may drive a same-id ICE restart on this SAME peer
  * (see `acceptOffer`'s `===` branch) - so it must not fail the round the
  * instant it fires; that races the host's restart and always wins, tearing
  * the peer down before the restart offer can land. This is how long the
  * client waits for the connection to recover on its own before giving up and
  * reporting failure. `VIEWER_CONTROL_PLANE_DEADLINES.firstFrame` is "the
- * negotiation deadline spec" the review named as the right bound: its floor
+ * negotiation deadline spec" is the right bound: its floor
  * alone (no RTT reading is available at peer-creation time) already covers
  * the host's own restart window, which that same spec sizes.
  */
@@ -318,7 +318,7 @@ interface ActiveRound {
   readonly peer: MediaPeer;
   /**
    * The offer SDP this round last negotiated against - lets a same-id
-   * ICE-restart re-offer (blocker fix, batch-3a review) tell a genuine
+   * ICE-restart re-offer (blocker fix) tell a genuine
    * restart from a duplicate resend of the SDP it already answered.
    */
   lastOfferSdp: string;
@@ -524,7 +524,7 @@ function createRecord(createPeer: MediaPeerFactory): RegistryRecord {
   /**
    * Runs one `answerOffer` round against `started`, whether this is its
    * FIRST offer or a same-id ICE-restart re-offer on the SAME peer (blocker
-   * fix, batch-3a review: the host restarts under the SAME `negotiationId`
+   * fix: the host restarts under the SAME `negotiationId`
    * rather than minting a new one, so the round is reused, not recreated).
    * Arms the A12 batch/flush machinery fresh each call.
    */
@@ -596,7 +596,7 @@ function createRecord(createPeer: MediaPeerFactory): RegistryRecord {
     acceptOffer: ({ negotiationId, sdp, port, iceServers }) => {
       if (round !== null && negotiationId < round.negotiationId) return;
       if (round !== null && negotiationId === round.negotiationId) {
-        // Blocker fix (batch-3a review): the staleness guard used to drop
+        // Blocker fix: the staleness guard used to drop
         // this outright, silently swallowing the host's same-id ICE-restart
         // re-offer. A bit-for-bit resend of the SDP this round already
         // answered is the one degenerate case left to drop - nothing
@@ -797,7 +797,7 @@ const H264_RTPMAP_PATTERN = /a=rtpmap:\d+ h264\//i;
  * `RTCRtpReceiver.getCapabilities` reports H.264 decode support AND the
  * offer's SDP already carries an H.264 payload (the offerer negotiates
  * whatever its own `createOffer` puts on the wire; it does not itself
- * prefer a codec - that stays ticket 23's `index.html` entry point,
+ * prefer a codec - that stays the `index.html` entry point,
  * untouched here). VP8 stays the floor otherwise: `setCodecPreferences` is
  * simply never called, so the default (VP8-first) order survives. Read
  * right after `setRemoteDescription`, before `createAnswer`, since the
@@ -852,7 +852,7 @@ export function createBrowserMediaPeer(
   /** A4/F6: the video receiver, captured here so the stats sampler can tune its `jitterBufferTarget`. */
   let videoReceiver: RTCRtpReceiver | null = null;
   /**
-   * Blocker fix (batch-3a review): armed the moment `connectionState` reads
+   * Blocker fix: armed the moment `connectionState` reads
    * "failed", cleared the moment it reads anything else. "failed" is
    * potentially recoverable - the host may drive a same-id ICE restart on
    * this SAME peer - so it must not report failure the instant it fires;

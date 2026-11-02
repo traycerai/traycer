@@ -1,16 +1,16 @@
 /**
- * F2 and F4 - the TRANSFER (`transferFor`) must outlive any one caller's
+ * The TRANSFER (`transferFor`) must outlive any one caller's
  * bounded wait, and the caller's bound must cover the whole transfer,
  * verification and write-back included.
  *
- * F2: a caller timeout used to end the whole flight - `inFlightByHash` was
+ * A caller timeout used to end the whole flight - `inFlightByHash` was
  * deleted, an eager worker took another pool slot while the original
  * download was still on the wire, and a late successful reply was never
  * decoded or stored. `transferFor` now owns a flight that lives until the
  * work settles; `awaitTransferBounded` is only the caller's bounded VIEW of
  * it.
  *
- * F4: the old timer was cleared once `request()` answered, so digest
+ * The old timer was cleared once `request()` answered, so digest
  * verification and the IndexedDB write-back ran outside any deadline - a
  * stalled write-back held a caller open forever. The caller's bound now
  * covers the whole transfer.
@@ -20,10 +20,10 @@
  * unrooted reply stays ephemeral and never reaches that write; that contract
  * is covered in `cloud-draft-image-recovery.test.ts`.
  *
- * `putImageBytesAtHash` is mocked module-wide so the F4 cases can stall it,
+ * `putImageBytesAtHash` is mocked module-wide so the write-back cases can stall it,
  * but delegates to the REAL implementation by default (captured from
- * `importOriginal`) so the F2 cases still exercise genuine digest
- * verification and an actual IndexedDB write - only the two F4 cases swap in
+ * `importOriginal`) so the transfer-lifetime cases still exercise genuine digest
+ * verification and an actual IndexedDB write - only the two write-back cases swap in
  * a controlled implementation, and restore it afterward.
  *
  * Fake timers are scoped to `["setTimeout", "clearTimeout"]` only - a bare
@@ -334,7 +334,7 @@ describe("cloud-draft-image-recovery - transfer lifetime (F2)", () => {
 describe("cloud-draft-image-recovery - stalled write-back (F4)", () => {
   afterEach(async () => {
     // Restore the real implementation the mock factory captured, so a later
-    // F2 test (or a re-run of this suite) is never left pointed at a
+    // test (or a re-run of this suite) is never left pointed at a
     // never-settling stub from a prior case.
     const actual = await vi.importActual<
       typeof import("@/lib/composer/landing-image-store")

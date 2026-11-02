@@ -1,8 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { NO_EPISODE } from "@/lib/rate-limits/rate-limit-envelope";
-import type { ProviderRateLimits } from "@traycer/protocol/host";
+import type {
+  ProviderRateLimits,
+  RateLimitChatCredential,
+} from "@traycer/protocol/host";
 import { envelopeFromRateLimits } from "@/lib/rate-limits/__tests__/rate-limit-envelope-fixtures";
 import {
+  chatCredentialNoticeText,
+  formatChatCredentialNotice,
   formatUnavailableReason,
   resolvePopoverProviderRateLimitState,
   resolveProviderPlanLabel,
@@ -272,6 +277,7 @@ describe("resolvePopoverProviderRateLimitState", () => {
       kind: "unavailable",
       provider: "codex",
       reason: "cli_not_found",
+      chatCredential: null,
     });
   });
 
@@ -348,7 +354,125 @@ describe("resolvePopoverProviderRateLimitState", () => {
       kind: "unavailable",
       provider: "codex",
       reason: "timeout",
+      chatCredential: null,
     });
+  });
+
+  it("carries the chat credential the host named on an unavailable reading", () => {
+    const state = resolvePopoverProviderRateLimitState({
+      isPending: false,
+      isFetching: false,
+      isError: false,
+      envelope: envelopeOf({
+        provider: "claude-code",
+        available: false,
+        reason: "rate_limits_not_available",
+        chatCredential: { kind: "api-key", source: "ANTHROPIC_API_KEY" },
+      }),
+    });
+    expect(state).toEqual({
+      kind: "unavailable",
+      provider: "claude-code",
+      reason: "rate_limits_not_available",
+      chatCredential: { kind: "api-key", source: "ANTHROPIC_API_KEY" },
+    });
+  });
+});
+
+describe("formatChatCredentialNotice", () => {
+  const BILLED = ", not your Claude plan, so there are no plan limits to show.";
+  it.each<[string, RateLimitChatCredential, ReadonlyArray<[string, boolean]>]>([
+    [
+      "an API key variable",
+      { kind: "api-key", source: "ANTHROPIC_API_KEY" },
+      [
+        ["Chats here are billed to ", false],
+        ["ANTHROPIC_API_KEY", true],
+        [BILLED, false],
+      ],
+    ],
+    [
+      "an apiKeyHelper",
+      { kind: "api-key", source: "apiKeyHelper" },
+      [
+        ["Chats here are billed to the key from your ", false],
+        ["apiKeyHelper", true],
+        [BILLED, false],
+      ],
+    ],
+    [
+      "the Console managed key",
+      { kind: "api-key", source: "/login managed key" },
+      [["Chats here are billed to your Anthropic Console key" + BILLED, false]],
+    ],
+    [
+      "another api-key source",
+      { kind: "api-key", source: "user" },
+      [
+        ["Chats here are billed to ", false],
+        ["user", true],
+        [BILLED, false],
+      ],
+    ],
+    [
+      "a token",
+      { kind: "token", source: "CLAUDE_CODE_OAUTH_TOKEN" },
+      [
+        ["Chats here sign in with ", false],
+        ["CLAUDE_CODE_OAUTH_TOKEN", true],
+        [" instead of your Claude login.", false],
+      ],
+    ],
+    [
+      "Bedrock",
+      { kind: "cloud-provider", source: "bedrock" },
+      [
+        [
+          "Chats here run on Amazon Bedrock, so there are no plan limits to show.",
+          false,
+        ],
+      ],
+    ],
+    [
+      "Vertex",
+      { kind: "cloud-provider", source: "vertex" },
+      [
+        [
+          "Chats here run on Google Vertex AI, so there are no plan limits to show.",
+          false,
+        ],
+      ],
+    ],
+    [
+      "Foundry",
+      { kind: "cloud-provider", source: "foundry" },
+      [
+        [
+          "Chats here run on Microsoft Foundry, so there are no plan limits to show.",
+          false,
+        ],
+      ],
+    ],
+    [
+      "an unknown cloud provider, verbatim",
+      { kind: "cloud-provider", source: "gateway" },
+      [
+        [
+          "Chats here run on gateway, so there are no plan limits to show.",
+          false,
+        ],
+      ],
+    ],
+  ])("words %s", (_name, credential, parts) => {
+    expect(
+      formatChatCredentialNotice(credential).map((part) => [
+        part.text,
+        part.code,
+      ]),
+    ).toEqual(parts);
+    expect(chatCredentialNoticeText(credential)).toBe(
+      parts.map(([text]) => text).join(""),
+    );
   });
 });
 

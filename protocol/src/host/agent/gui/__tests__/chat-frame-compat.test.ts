@@ -176,7 +176,7 @@ describe("supportsInterviewSettlementActions", () => {
 });
 
 describe("projectChatClientFrameForVersion", () => {
-  it("is identity on {1,7}", () => {
+  it("is identity on {1,7} apart from the later Ultracode tuple field", () => {
     const answer = interviewAnswerFrame();
     const error = interviewErrorFrame();
     const resume = resumeQueueFrame();
@@ -190,9 +190,11 @@ describe("projectChatClientFrameForVersion", () => {
     expect(
       projectChatClientFrameForVersion(resume, { major: 1, minor: 7 }),
     ).toBe(resume);
-    expect(projectChatClientFrameForVersion(send, { major: 1, minor: 7 })).toBe(
-      send,
-    );
+    if (send.kind !== "send") throw new Error("expected send frame");
+    const { ultracode: _ultracode, ...settings } = send.settings;
+    expect(
+      projectChatClientFrameForVersion(send, { major: 1, minor: 7 }),
+    ).toEqual({ ...send, settings });
   });
 
   it("removes browser payload fields from send on every pre-1.7 line", () => {

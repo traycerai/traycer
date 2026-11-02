@@ -352,7 +352,7 @@ export interface DesktopSupportSaveDiagnosticBundleResult {
 }
 
 /**
- * Field-for-field match with ticket 09's `SupportBugReportDraftFields`
+ * Field-for-field match with `SupportBugReportDraftFields`
  * (`ipc-contracts/window-types.ts`). Keys match the GitHub issue form's field
  * ids verbatim so `buildGitHubIssueUrl` (`@traycer-clients/shared/support/
  * issue-reporter`) can assemble `URLSearchParams` straight from this object.
@@ -365,7 +365,7 @@ export interface DesktopSupportBugReportDraftFields {
   readonly repro: string;
 }
 
-/** Field-for-field match with ticket 07's `SupportFeatureRequestDraftFields`. */
+/** Field-for-field match with `SupportFeatureRequestDraftFields`. */
 export interface DesktopSupportFeatureRequestDraftFields {
   readonly problem: string;
   readonly proposal: string;
@@ -373,7 +373,7 @@ export interface DesktopSupportFeatureRequestDraftFields {
   readonly component: string;
 }
 
-/** Field-for-field match with ticket 07's `SupportGeneralDraftFields`. */
+/** Field-for-field match with `SupportGeneralDraftFields`. */
 export interface DesktopSupportGeneralDraftFields {
   readonly details: string;
 }
@@ -381,7 +381,7 @@ export interface DesktopSupportGeneralDraftFields {
 /**
  * Result of `support.buildPublicDraft`: the single main-process producer of
  * all public text, always behind the deep scrubber. Field-for-field match
- * with ticket 09/07's `SupportBuildPublicDraftResult` - a discriminated union
+ * with `SupportBuildPublicDraftResult` - a discriminated union
  * since bug/idea/other route to GitHub issue forms with different field ids.
  */
 export type DesktopSupportBuildPublicDraftResult =
@@ -405,7 +405,7 @@ export type DesktopSupportBuildPublicDraftResult =
     };
 
 /**
- * Field-for-field match with ticket 05's `PrivateErrorCause`
+ * Field-for-field match with `PrivateErrorCause`
  * (`@/lib/report-issue-draft-context`).
  */
 export interface DesktopPrivateDiagnosticsCause {
@@ -419,7 +419,7 @@ export interface DesktopPrivateDiagnosticsCause {
 }
 
 /**
- * Mirrors ticket 05's `CapturedField<T>` (`@/lib/support-context-registry`):
+ * Mirrors `CapturedField<T>` (`@/lib/support-context-registry`):
  * `known` is fresh, `stale` is a prior value no longer confirmed live,
  * `unavailable` means never observed this session.
  */
@@ -429,7 +429,7 @@ export type DesktopCapturedField<T> =
   | { readonly status: "unavailable" };
 
 /**
- * Field-for-field match with ticket 05's `SupportContextSnapshot`
+ * Field-for-field match with `SupportContextSnapshot`
  * (`@/lib/support-context-registry`). `hostId` here is the app-wide effective
  * host; `tabHostId` is the host the active chat tab is bound to. Neither is
  * necessarily the "local host" Electron main attaches logs from.
@@ -453,7 +453,7 @@ export interface DesktopContextRegistrySnapshot {
 }
 
 /**
- * Wire mirror of ticket 05's `SerializedReportIssuePrivateDiagnostics`
+ * Wire mirror of `SerializedReportIssuePrivateDiagnostics`
  * (`serializeReportIssuePrivateDiagnostics` in
  * `@/lib/report-issue-draft-context`) - same six keys, always all present:
  * `registry` is never itself absent, `correlationId` is always a fresh id,
@@ -707,7 +707,7 @@ export interface DesktopHostControllerStatusBridge {
   };
 }
 
-// Ticket 07 (T4): "bug" routes to bug_report.yml, "idea" to
+// T4: "bug" routes to bug_report.yml, "idea" to
 // feature_request.yml, "other" to general.yml.
 export type DesktopReportType = "bug" | "idea" | "other";
 
@@ -718,7 +718,7 @@ export type DesktopReportFrequency =
   | "not_sure";
 
 /**
- * Field-for-field match with ticket 08's `SupportImageAttachmentInput`
+ * Field-for-field match with `SupportImageAttachmentInput`
  * (`ipc-contracts/window-types.ts`). Bytes cross IPC as a raw `ArrayBuffer`,
  * never base64.
  */
@@ -751,7 +751,7 @@ export interface DesktopReportIssueForm {
   // the private submission / diagnostic bundle when false.
   readonly includeDesktopLog: boolean;
   readonly includeHostLog: boolean;
-  // One toggle covering both browser diagnostic files (plan D3, ticket 03):
+  // One toggle covering both browser diagnostic files (plan D3):
   // `browser-telemetry.jsonl` and `browser-trace.jsonl`. Default on, same
   // shape as `includeDesktopLog`/`includeHostLog` - withholds both frozen
   // tails when false. Field-for-field match with main's
@@ -762,7 +762,7 @@ export interface DesktopReportIssueForm {
   // bundle's environment block. Never gates the report's own identity
   // (reportId/fingerprint/correlationId).
   readonly includeDiagnostics: boolean;
-  // Up to 3 screenshots (ticket 08 / T5) - always present, empty when none
+  // Up to 3 screenshots (T5) - always present, empty when none
   // attached.
   readonly images: readonly DesktopImageAttachmentInput[];
   // `buildPublicDraft`-only (ignored by submit/bundle). The user's as-typed

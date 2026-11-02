@@ -252,7 +252,7 @@ describe("reserved browser chords", () => {
   });
 
   /**
-   * The COMPLETENESS check, and the one that would have caught round 13's
+   * The COMPLETENESS check, and the one that would have caught the
    * omission: read against the panel's ACTUAL registrations rather than
    * against a remembered list.
    *
@@ -318,7 +318,7 @@ describe("reserved browser chords", () => {
     }
   });
 
-  // The three round 13 left out, named so a deletion from the list above reads
+  // The three left out, named so a deletion from the list above reads
   // as a deliberate change rather than as a silently shorter loop.
   it("forwards maximize, close-all and the tab-number leader", () => {
     const bindings = getDefaultBindings();

@@ -240,26 +240,38 @@ export function useEpicSyncTuiAgentRecords(epicId: string): void {
   );
 
   const answer = query.data ?? null;
+  const recordListAuthoritative =
+    query.isSuccess ||
+    (query.isError && query.error.code === "E_HOST_UNSUPPORTED");
+  const recordListFailed = query.isError && !recordListAuthoritative;
   useEffect(() => {
-    if (answer === null || store === null) return;
-    if (answer.tuiAgents !== null) {
-      // The fence is used as captured - it was read from THIS store, because
-      // the generation is in the cache key. See
-      // `TuiAgentListAnswer.issuedAtSeq`.
-      store
-        .getState()
-        .applyTuiAgentRecords(answer.tuiAgents, answer.issuedAtSeq);
-    } else if (answer.touched.length > 0) {
-      // The `unchanged` arm: no rows, so no fence and no omission to
-      // authorize. Empty-guarded because that is a quiet epic's steady state
-      // and the apply crosses the runtime worker's command bridge.
-      store.getState().applyTuiAgentRecordTouches(answer.touched);
+    if (recordListFailed) store?.getState().markTuiAgentRecordListFailed();
+  }, [recordListFailed, store]);
+  useEffect(() => {
+    if (store === null || !recordListAuthoritative) return;
+    if (answer !== null) {
+      if (answer.tuiAgents !== null) {
+        // The fence is used as captured - it was read from THIS store, because
+        // the generation is in the cache key. See
+        // `TuiAgentListAnswer.issuedAtSeq`.
+        store
+          .getState()
+          .applyTuiAgentRecords(answer.tuiAgents, answer.issuedAtSeq);
+      } else if (answer.touched.length > 0) {
+        // The `unchanged` arm: no rows, so no fence and no omission to
+        // authorize. Empty-guarded because that is a quiet epic's steady state
+        // and the apply crosses the runtime worker's command bridge.
+        store.getState().applyTuiAgentRecordTouches(answer.touched);
+      }
+      // AFTER the apply, and only for an answer that reached a store - see the
+      // chat twin for why an unapplied stamp is worse than none, and why
+      // reaching a store is not yet proof the store took the answer whole.
+      stamp.hold(answer.listStamp, answer.snapshotIncompleteSeqAtDispatch);
     }
-    // AFTER the apply, and only for an answer that reached a store - see the
-    // chat twin for why an unapplied stamp is worse than none, and why reaching
-    // a store is not yet proof the store took the answer whole.
-    stamp.hold(answer.listStamp, answer.snapshotIncompleteSeqAtDispatch);
-  }, [answer, stamp, store]);
+    // AFTER the apply, so the flag never reads true over rows still on the
+    // way to the store.
+    store.getState().markTuiAgentRecordListAuthoritative();
+  }, [answer, recordListAuthoritative, stamp, store]);
 }
 
 /**

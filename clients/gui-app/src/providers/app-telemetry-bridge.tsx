@@ -15,7 +15,7 @@ import { useTabsStore } from "@/stores/tabs";
  * Two things launch from here because both are facts about the app starting
  * rather than about any surface in it, and this component is already mounted
  * once for the shell's lifetime - which is exactly the "on app launch" moment
- * they want. A third bootstrap is what tech-plan section 7 refused.
+ * they want, so neither needs a bootstrap of its own.
  *
  * The periodic resource sampler reads its workload context here rather than
  * inside the sampler, so `lib/resources/resource-telemetry.ts` stays
@@ -26,7 +26,7 @@ import { useTabsStore } from "@/stores/tabs";
  * `layout_snapshot` is at most once per 24h per device, which is what the gate
  * keeps a remount from breaking. The window is claimed BEFORE the send,
  * because a second renderer must lose the race, and given back when the send
- * does not go out (L-83, G3-04).
+ * does not go out (L-83).
  */
 export function AppTelemetryBridge(): null {
   useEffect(

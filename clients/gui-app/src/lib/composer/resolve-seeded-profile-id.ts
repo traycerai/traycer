@@ -32,7 +32,7 @@ function normalizedProfileId(profile: ProviderProfile): string | null {
  *   row; see the host's `synthesizeAmbientProfile` / `resolveProfileWireEntries`).
  *   A stray `profileId` against a settled-empty list can no longer be judged
  *   "still there" - it's judged "unsupported here" instead, so it resolves
- *   to `null` (protocol-schema-contract-compat review's Major finding:
+ *   to `null` (
  *   preserving it here silently ran the account on ambient while the
  *   UI/artifact kept claiming the managed profile).
  * - `settled: true` with a non-empty `profiles` array is judged by live

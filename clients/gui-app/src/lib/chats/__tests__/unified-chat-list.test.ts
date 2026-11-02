@@ -244,7 +244,7 @@ describe("selectUnfoldedCloudChats", () => {
 
     it("renders exactly two rows, never three", () => {
       // The local tree contributes "Walkthrough"; this must contribute exactly
-      // one more. Three rows was the shipped behaviour this ticket replaces.
+      // one more. Three rows was the shipped behaviour this change replaces.
       expect(selectUnfoldedCloudChats(inputs)).toHaveLength(1);
     });
 
@@ -500,7 +500,7 @@ describe("localChatLastActiveAtById / chatListLastActiveAtByKey", () => {
 
 describe("cross-owner folding", () => {
   /**
-   * The reviewer's executable case. `chatId` is host-minted and not unique
+   * The executable case. `chatId` is host-minted and not unique
    * under a task, and the cloud list carries every task-visible chat including
    * other people's - so an id-only fold can delete a collaborator's genuinely
    * different chat from the only agent list there now is.

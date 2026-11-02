@@ -34,7 +34,7 @@ import {
 export interface SideStripTopBlockProps {
   readonly edge: EdgeSide;
   readonly variant: SideTabRowVariant;
-  /** macOS with the strip at the left: the first row is the title bar (S-04). */
+  /** macOS with the strip at the left: the first row is the title bar. */
   readonly ownsTitleBar: boolean;
   /** The drag-region class for the title row, or `undefined` when not frameless. */
   readonly dragClass: string | undefined;
@@ -44,21 +44,24 @@ export interface SideStripTopBlockProps {
   /** The fixed Tracy entry, drawn right after Home; `null` with none. */
   readonly tracy: TracyStripEntry | null;
   readonly onNewTab: () => void;
-  /** Collapses the strip to the rail or expands it, easing the width. */
-  readonly onToggleCollapsed: () => void;
+  /**
+   * Collapses the strip to the rail or expands it, easing the width; `null`
+   * draws no toggle, where the phone shell has no room for the expanded strip.
+   */
+  readonly onToggleCollapsed: (() => void) | null;
   /** How many tabs the rows below list, for the "Tasks" label. */
   readonly taskCount: number;
 }
 
 /**
- * What leads in the header, in the strip (S-03). Expanded: history back and
- * forward beside the collapse toggle, the Notifications and All tasks nav rows (D6),
- * Home, New Task as the primary last row (F7), then the "Tasks" label over the
+ * What leads in the header, in the strip. Expanded: history back and
+ * forward beside the collapse toggle, the Notifications and All tasks nav rows,
+ * Home, New Task as the primary last row, then the "Tasks" label over the
  * rows (the Activity view's section headers replace it). On macOS with the
  * strip at the left the first row is the title bar: a drag row that reserves
- * the traffic lights and puts the arrows right of them (S-04).
+ * the traffic lights and puts the arrows right of them.
  *
- * Collapsed, one centred column (F1): the title bar's lights, the expand
+ * Collapsed, one centred column: the title bar's lights, the expand
  * toggle, Notifications, All tasks and New Task as 32px tiles 4px apart, a divider,
  * then Home as the first tile of the rail's 8px rhythm the task tiles
  * continue. The arrows are not drawn; their shortcuts still work.
@@ -70,13 +73,14 @@ export function SideStripTopBlock(props: SideStripTopBlockProps): ReactNode {
   // The Activity rail opens each run of tiles with a hairline, which parts
   // them from New Task where Home does not.
   const sectionedRail = useSectionedStrip() && collapsed;
-  const toggle = (
-    <SideStripCollapseToggle
-      edge={props.edge}
-      collapsed={collapsed}
-      onToggle={props.onToggleCollapsed}
-    />
-  );
+  const toggle =
+    props.onToggleCollapsed === null ? null : (
+      <SideStripCollapseToggle
+        edge={props.edge}
+        collapsed={collapsed}
+        onToggle={props.onToggleCollapsed}
+      />
+    );
   const newTask = (
     <SideStripNewTask variant={props.variant} onNewTab={props.onNewTab} />
   );
@@ -151,7 +155,9 @@ export function SideStripTopBlock(props: SideStripTopBlockProps): ReactNode {
   );
 }
 
-/** Home and the fixed Tracy entry after it, or `null` with neither drawn. */
+/**
+ * The fixed rows: Home and the Tracy entry, or `null` with neither drawn.
+ */
 function sideFixedRows(props: SideStripTopBlockProps): ReactNode {
   if (!props.homeTabDrawn && props.tracy === null) return null;
   return (
@@ -194,7 +200,7 @@ const COLLAPSE_ICON: Record<
   right: { collapse: PanelRightClose, expand: PanelRightOpen },
 };
 
-/** Collapses the strip to the rail and back (S-07, S-20); the icon mirrors for a right strip. */
+/** Collapses the strip to the rail and back; the icon mirrors for a right strip. */
 function SideStripCollapseToggle(props: {
   readonly edge: EdgeSide;
   readonly collapsed: boolean;

@@ -1,15 +1,15 @@
 /**
- * Independent acceptance suite — seams S6 and S7: the chat-side surfaces.
+ * Independent acceptance suite — S6 and the shell-output doors: the chat-side surfaces.
  *
- * S6 is the chat's running work: the running subset of the set the chat's own
- * stream carries (`UI.md` §5, §9a) — running commands owned by THIS chat
+ * The chat's running work is the running subset of the set the chat's own
+ * stream carries — running commands owned by THIS chat
  * appear as rows of the chat's Background panel, leave as soon as a later set
- * stops naming them as running, and click through to the output window. S7 is
- * the doors: the
- * queued-delivery chip and the resume divider open or focus the shell's
+ * stops naming them as running, and click through to the output window. The
+ * queued-delivery chip and the resume divider are the doors: they
+ * open or focus the shell's
  * output window, the divider's terminal copy names the Shell entity (a
  * kind-only "monitor" trigger is the harness's own tool and keeps that name),
- * and one shell never has two windows (`UI.md` §9).
+ * and one shell never has two windows.
  *
  * Expected behavior derives from the records only. Real stores, registry,
  * stream mount and canvas store; frames and triggers are authored through the
@@ -209,7 +209,7 @@ function renderInChatContext(children: React.ReactNode): void {
  * segment's presence read needs to tell "this chat's own set has spoken" from
  * "no chat is bound here at all". Only the tests that exercise presence
  * (remote-vs-local, cloned-onto-its-own-host, shallow-parsed) need this; every
- * other S7 door test renders without a bound chat, where presence is always
+ * other door test renders without a bound chat, where presence is always
  * `unknown` and no door ever reads as deleted.
  */
 function renderInOwnedChatContext(children: React.ReactNode): void {
@@ -253,7 +253,6 @@ function renderBackgroundPanelInChat(alongside: React.ReactNode): void {
   fireEvent.click(screen.getByRole("button", { name: /Background/ }));
 }
 
-/** Panes across the whole canvas currently holding this command's window. */
 /**
  * The instance id the pane is currently holding as its PREVIEW tab, if any -
  * the one an italic tab title and the next preview's eviction both read.
@@ -265,6 +264,7 @@ function previewInstanceIdFor(tabId: string, paneId: string): string | null {
   return pane === null ? null : pane.previewTabId;
 }
 
+/** Panes across the whole canvas currently holding this command's window. */
 function openWindowCountFor(commandId: string): number {
   const canvasByTabId = useEpicCanvasStore.getState().canvasByTabId;
   return Object.values(canvasByTabId).reduce((count, canvas) => {

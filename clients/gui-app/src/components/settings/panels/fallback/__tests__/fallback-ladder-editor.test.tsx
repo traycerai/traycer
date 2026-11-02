@@ -65,7 +65,7 @@ describe("FallbackLadderEditor", () => {
 
   it("states that switching starts a new agent session, unconditionally, above the step list", () => {
     // This paragraph answers the page's central question - what happens to my
-    // chat - and a user-lens review found nothing on the page said it before:
+    // chat - and nothing on the page said it before:
     // the switch-back row's "starts a fresh session too" had no antecedent,
     // since nothing had ever said the OUTBOUND switch started one either.
     // Falsification: delete the `<p>` above the DndContext in
@@ -80,7 +80,7 @@ describe("FallbackLadderEditor", () => {
   });
 
   it("AX7: the drag handle is hidden from assistive technology and out of the tab order, for EVERY row - not just `notify`", () => {
-    // R4/AX7 rewrite. The handle used to be exposed to AT for movable rows and
+    // AX7 rewrite. The handle used to be exposed to AT for movable rows and
     // only withheld from `notify` (the "Reorder <label>" label this cell used
     // to assert). That is gone now: dnd-kit's default handle attributes
     // promise a space-bar-and-arrows keyboard gesture this editor does not

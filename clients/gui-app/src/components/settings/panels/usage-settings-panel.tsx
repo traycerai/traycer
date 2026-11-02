@@ -28,7 +28,7 @@ import { useRequesterHostId } from "@/hooks/host/use-requester-host-id";
  * other "nothing to show for this host" case - a normal host-capability
  * gap, not an error.
  *
- * Ticket 13 moved this section out of the HOST group and into ACCOUNT.
+ * This section moved out of the HOST group and into ACCOUNT.
  * `settings-sections.ts` states the rule the groups encode - "if it varies
  * by host it sits under the picker" - and usage stopped varying by host the
  * moment the dashboard gained its own All-hosts default: what it reports is

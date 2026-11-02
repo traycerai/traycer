@@ -274,6 +274,7 @@ function mountEditing() {
           epicId="epic-1"
           artifactId={ARTIFACT_ID}
           artifactTitle="Wiring"
+          artifactType="canvas"
           hostId="host-1"
           viewTabId="tab-1"
         >

@@ -239,7 +239,7 @@ export function useWorkspaceFileListSubscription(args: {
       shared.refCount -= 1;
       shared.pruneListeners.delete(consumerId);
       shared.watchRequests.delete(consumerId);
-      // No grace period (ADR-0003): tear down as soon as the last consumer goes.
+      // No grace period: tear down as soon as the last consumer goes.
       if (shared.refCount === 0) {
         shared.unsubscribeFromStream();
         subscriptions.delete(key);
@@ -405,14 +405,14 @@ function openStreamSession(
     handleServerFrame(shared, queryClient, args, parsed.data);
   });
 
-  session.onStatusChange((status, reason) => {
+  session.onStatusChange((status, reason, _retryCause, continuity) => {
     if (sessionClosed || generation !== shared.sessionGeneration) return;
     if (status === "open") {
       // A (re)subscribe covers the workspace root and nothing else, whatever
       // this stream covered before the drop. Forgetting the applied set makes
       // the next sync restore the WHOLE requested coverage in one batched
       // `watch` frame.
-      shared.appliedWatchPaths = new Set();
+      if (continuity !== "continued") shared.appliedWatchPaths = new Set();
       shared.error = null;
       syncCoverage(shared);
       notifyEntryChanged(shared.key);

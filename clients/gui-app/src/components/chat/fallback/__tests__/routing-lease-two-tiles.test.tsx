@@ -6,6 +6,7 @@ import {
   type RenderResult,
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { Mock } from "vitest";
 import type { Chat } from "@traycer/protocol/persistence/epic/schemas";
 import type { PendingFallback } from "@traycer/protocol/host/agent/gui/subscribe";
@@ -221,7 +222,7 @@ function emitSnapshot(
   callbacks: ChatStreamCallbacks,
   pending: PendingFallback | undefined,
 ): void {
-  callbacks.onConnectionStatus("open", null, null);
+  callbacks.onConnectionStatus("open", null, null, null);
   callbacks.onSnapshot({
     kind: "snapshot",
     hasBinaryPayload: false,
@@ -312,9 +313,19 @@ function setUp() {
   registerHarness(harness);
   emitSnapshot(harness.callbacks(), HOLD);
   const spies = spyOnLease(harness.handle);
-  // Two separate roots over the ONE session handle.
-  const tileA = render(<LeaseChooser handle={harness.handle} />);
-  const tileB = render(<LeaseChooser handle={harness.handle} />);
+  // Two separate roots over the ONE session handle. The chooser's bot write
+  // is a Query mutation, built on every chooser.
+  const queryClient = new QueryClient();
+  const tileA = render(
+    <QueryClientProvider client={queryClient}>
+      <LeaseChooser handle={harness.handle} />
+    </QueryClientProvider>,
+  );
+  const tileB = render(
+    <QueryClientProvider client={queryClient}>
+      <LeaseChooser handle={harness.handle} />
+    </QueryClientProvider>,
+  );
   return { harness, spies, tileA, tileB };
 }
 

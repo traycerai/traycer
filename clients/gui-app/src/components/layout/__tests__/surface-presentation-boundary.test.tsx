@@ -203,7 +203,7 @@ describe("surface presentation boundary — kept-mounted manual portals", () => 
         </SurfacePresentationBoundary>,
       );
     });
-    // `invisible`, not an inline `visibility` - ticket 02's inline-style pass
+    // `invisible`, not an inline `visibility` - the inline-style pass
     // moved it, and reading the CSS property it used to set compares "" against
     // a value forever.
     expect(portalHostFor("manual").className.split(/\s+/)).toContain(

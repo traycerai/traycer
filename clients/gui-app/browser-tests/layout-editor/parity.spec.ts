@@ -5,7 +5,7 @@ import { violationLog } from "../support/layout-editor/dom.ts";
 import { layoutEditorUse, sharedPage } from "../support/layout-editor/pages.ts";
 import { waitUntil } from "../support/layout-editor/waits.ts";
 
-// THE LAYOUT EDITOR'S PARITY REGRESSION (P2, L-11, L-53).
+// THE LAYOUT EDITOR'S PARITY REGRESSION (L-11, L-53).
 //
 // `layout-editor-browser.html` mounts the real leaves beside their pictures
 // under the real stylesheet. Five claims, each a thing jsdom cannot decide:
@@ -18,7 +18,7 @@ import { waitUntil } from "../support/layout-editor/waits.ts";
 //      `font-size` / `line-height` / `color` where it does not. Live versus
 //      picture, never picture versus picture - the two picture entry points
 //      became one function in L-77, so comparing them with each other could
-//      not fail for any input (G3-02, L-85). Three live surfaces answer for
+//      not fail for any input (L-85). Three live surfaces answer for
 //      fifteen of the twenty regions: the sample rail (nine), the composer
 //      toolbar in presentation mode (four, since L-136 retired the harness
 //      label), and the dock's compact strip at Chip size (four, since L-98
@@ -65,7 +65,7 @@ interface LiveComparison {
  * its resolved colour, which is what a wrong type scale or a wrong token moves.
  * A region that draws no icon is compared on its own type scale and colour
  * instead; its TEXT is not, because a picture is drawn from specimen data and
- * a live leaf from the app's, and P2 is about how a region looks rather than
+ * a live leaf from the app's, and parity is about how a region looks rather than
  * what it currently says.
  */
 const LIVE_PROBE = `(() => {
@@ -208,7 +208,7 @@ const DOCK_ROW_METRIC_PROBE = `(() => {
  * The attached panel list's own `py-1.5` inset at this fixture's root size,
  * which is what an EMPTY panel measures. A bare equality check passes on five
  * identical numbers, and five 11.25s - every panel drawing its inset and no
- * rows at all - are five identical numbers (R6H-04). So the shared height has
+ * rows at all - are five identical numbers. So the shared height has
  * to clear the inset as well as be shared, and each panel has to have drawn
  * exactly the one row it was fed.
  */

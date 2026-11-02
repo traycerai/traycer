@@ -406,6 +406,7 @@ describe("cross-filesystem CLI binary publication (CLI-014)", () => {
       await buildCliUpgradeCommand({
         dryRun: false,
         targetVersion: null,
+        allowDowngrade: false,
       })(fakeCtx());
     } catch (err) {
       caught = err;

@@ -28,8 +28,8 @@ export type SwitcherActivate = (buildRef: () => EpicCanvasTileRef) => void;
  * the back/forward history path, and a tile the user kept is never the one
  * evicted.
  *
- * The sheet closes either way, so the chosen tile becomes the full-screen
- * mobile tile.
+ * `onClose` runs either way: a sheet or a menu gets out of the way of the chosen
+ * tile, and a column, which has nothing to close, stays beside it.
  */
 export function useSwitcherActivate(
   tabId: string,

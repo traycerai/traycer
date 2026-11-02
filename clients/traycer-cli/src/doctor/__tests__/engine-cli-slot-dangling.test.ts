@@ -38,10 +38,13 @@ beforeEach(() => {
   osHome.current = workHome;
   process.env.HOME = workHome;
   process.env.USERPROFILE = workHome;
+  // A live slot sends the doctor's PATH check to the first `traycer` on PATH.
+  vi.stubEnv("PATH", "");
   vi.resetModules();
 });
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   if (ORIGINAL_HOME === undefined) {
     delete process.env.HOME;
   } else {

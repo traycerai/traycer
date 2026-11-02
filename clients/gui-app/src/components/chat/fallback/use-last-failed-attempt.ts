@@ -78,7 +78,7 @@ export function useChatLastFailedAttempt(input: {
  * "Live" means a traversal the composer is DRAWING a routing card for - the
  * same predicate the composer's banner slot decides on - not merely a defined
  * `pendingFallback`. The one frame that separates them is a countdown with
- * nothing to try: the composer draws no card for it (spec Flow 1: "the
+ * nothing to try: the composer draws no card for it ("the
  * failed-turn card shows instead"), so the row must not stand down for it
  * either, or the error would sit on screen with no controls anywhere.
  */

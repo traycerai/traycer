@@ -1,6 +1,6 @@
 /**
  * Store-integration pins for the canvas-store-wide immutable tile identity
- * invariant (Ticket 21 slice 1). `tile-identity-invariant.test.ts` pins the
+ * invariant. `tile-identity-invariant.test.ts` pins the
  * pure detection/policy functions in isolation; this file drives the SAME
  * invariant through the real store wiring: the wrapped internal `set()`
  * (every action below `updateTabCanvas` AND the handful of actions - like
@@ -881,7 +881,7 @@ describe("canvas tile identity invariant: desktop-projection ingress", () => {
   });
 
   it("throws when a desktop projection changes only a tab's epicId while its canvas stays identical (round-2 adversarial probe)", () => {
-    // Round 1's shape-based allowance let exactly this through: same tab id,
+    // A shape-based allowance let exactly this through: same tab id,
     // identical canvas/instanceIds, only the projected epicId differs - a
     // stale or malformed desktop projection producing the same shape as a
     // legitimate coordinator resolution. Desktop projection has no route to

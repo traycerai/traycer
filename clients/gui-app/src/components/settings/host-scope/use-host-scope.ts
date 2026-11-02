@@ -21,7 +21,6 @@ import {
 import { useHostOptions } from "@/components/settings/host-scope/use-host-options";
 import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
 import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
-import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 import {
   findHostOption,
   resolveScopedHost,
@@ -64,8 +63,8 @@ export interface HostScope {
   readonly localMaintenanceFallback: boolean;
   readonly setHostId: (hostId: string) => void;
   /**
-   * ACTIVATE: the app's one and only writer of `preferredHostId` (selection
-   * model §1, invariant 1). It does not bind anything here - it asks the
+   * ACTIVATE: the app's one and only writer of `preferredHostId`.
+   * It does not bind anything here - it asks the
    * selection authority, which validates against the fleet, persists, and
    * re-derives; the new effective host comes back down to every window.
    */
@@ -136,7 +135,7 @@ export function useHostScope(): HostScope {
  * A team, and Personal on a window whose host does not run it, read the
  * cloud instead (`PersonalPageFrame`).
  */
-export const WINDOW_HOST_SELECTION: HostScopeSelection = {
+const WINDOW_HOST_SELECTION: HostScopeSelection = {
   scopedHostId: null,
   setScopedHostId: () => undefined,
 };
@@ -147,16 +146,7 @@ function noScopedHostWrite(): void {
 
 export function usePersonalHostScope(): HostScope {
   const pick = useEnvironmentPick();
-  // A build without environments (`unreleased-features.ts`) has no
-  // Environment dropdown: its pages sit under the Host picker and read the
-  // host it names, as they did before the feature, the picker's own
-  // selection included, so a vanished pick stays vanished there too instead
-  // of following the active host. The pages still cannot re-point it.
-  const pickedHostId = useSettingsHostScopeStore((s) => s.scopedHostId);
-  let localHostId: string | null = pickedHostId;
-  if (UNRELEASED_FEATURES_ENABLED) {
-    localHostId = pick.kind === "local" ? pick.hostId : null;
-  }
+  const localHostId = pick.kind === "local" ? pick.hostId : null;
   const selection = useMemo(
     (): HostScopeSelection => ({
       scopedHostId: localHostId,

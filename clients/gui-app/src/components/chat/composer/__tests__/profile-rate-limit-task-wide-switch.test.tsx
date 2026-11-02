@@ -399,6 +399,7 @@ describe("rate-limit banner task-wide switch", () => {
       reasoningFallback: "model-default",
       seedKey: "rate-limit-banner",
       values: {
+        ultracode: false,
         permission: "supervised",
         selection: {
           harnessId: "claude",
@@ -411,6 +412,7 @@ describe("rate-limit banner task-wide switch", () => {
       onSettingsChange: null,
       tuiOnly: false,
       chatLineCarriesAutoMode: null,
+      ultracodeCarried: false,
       hostId: null,
     });
     renderBanner({

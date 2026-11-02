@@ -40,9 +40,9 @@ export function buildRowKeyToIndex(
 }
 
 /**
- * Ticket 10: `role: "user"` covers two visually distinct row shapes -
+ * `role: "user"` covers two visually distinct row shapes -
  * genuinely human-sent turns and A2A agent-sent rows (`agentSenderInfo !==
- * null` - decision #8's fourth anchor-triggering event). Sharing one
+ * null` - the fourth anchor-triggering event). Sharing one
  * LegendList item type meant they shared one recycling pool and one running
  * measured-height average (`averageSizes[itemType]`), skewing the estimate
  * LegendList uses for not-yet-measured rows of either shape and letting a
@@ -122,10 +122,10 @@ export function chatTimelineLocationForMessage(
   };
 }
 
-/** Ticket 10: the list-state slice `chatTimelineNavigationLandedAtLocation`
+/** The list-state slice `chatTimelineNavigationLandedAtLocation`
  *  needs to validate a settled navigation - same content-relative-vs-DOM-
  *  scroll shape as `ChatFreeScrollingMeasurementSource`/
- *  `ChatViewportAnchorListState` (decision #18), but the caller supplies
+ *  `ChatViewportAnchorListState`, but the caller supplies
  *  `scroll` directly (the scroll NODE's own live `scrollTop`, not
  *  `list.getState().scroll` - that internal value can lag a completed
  *  animated scroll for exactly the reason this validation exists, see the
@@ -137,7 +137,7 @@ export interface ChatTimelineNavigationListState {
 }
 
 /**
- * Ticket 10: whether `location`'s target row is CURRENTLY sitting at its
+ * Whether `location`'s target row is CURRENTLY sitting at its
  * intended `viewOffset` from the viewport top - the validation half of the
  * settle/re-issue pattern (root-cause: rootcause-nav-landing report). An
  * ANIMATED `scrollToIndex` targets ESTIMATED geometry; the installed
@@ -247,7 +247,7 @@ export interface ChatViewportAnchorListState {
  *
  * `positionAtIndex` is content-relative (excludes the header pad); `scroll`
  * includes it - comparing them directly is off by the header's height
- * (decision #18's `topOffsetAdjustment`, same fix as
+ * (the `topOffsetAdjustment` fix, same as
  * `captureChatFreeScrollingOffset`). `targetY` is computed in
  * content-relative space (`scroll - topOffsetAdjustment`), matching
  * LegendList's own `computeViewability`'s `scroll = scrollState - topPad`.
@@ -286,15 +286,6 @@ export function chatViewportAnchorRowIndex(
 }
 
 /**
- * The hydrated message nearest the anchor row, searching at-or-before first
- * and then after. `selectActiveUserMessageId` reasons over message SEMANTICS
- * (roles, A2A senders), which a placeholder cannot answer - so when the
- * reading line sits inside unhydrated history, the nearest hydrated row is
- * the honest stand-in for "which turn is the reader inside". Transient by
- * construction: viewport-driven hydration is already fetching the rows the
- * reader is looking at.
- */
-/**
  * The indexes of the hydrated rows, ascending, built once per `rows` array.
  *
  * The scan below runs on every scroll frame, and a reading line inside a large
@@ -324,6 +315,15 @@ function hydratedIndexes(
   return indexes;
 }
 
+/**
+ * The hydrated message nearest the anchor row, searching at-or-before first
+ * and then after. `selectActiveUserMessageId` reasons over message SEMANTICS
+ * (roles, A2A senders), which a placeholder cannot answer - so when the
+ * reading line sits inside unhydrated history, the nearest hydrated row is
+ * the honest stand-in for "which turn is the reader inside". Transient by
+ * construction: viewport-driven hydration is already fetching the rows the
+ * reader is looking at.
+ */
 function nearestHydratedMessageId(
   rows: ReadonlyArray<TranscriptListRow>,
   anchorRowIndex: number,
@@ -361,13 +361,13 @@ function nearestHydratedMessageId(
  * to the owning rail entry. `null` when the list state cannot be measured
  * (concealed surface, no rows yet).
  *
- * Sole caller is the ticket-5 free-scroll save path (`scheduleActiveViewportUpdate`
+ * Sole caller is the free-scroll save path (`scheduleActiveViewportUpdate`
  * in chat-messages.tsx) - NOT the minimap, which derives its own active-dot
- * highlighting independently. That single-purpose scope is what makes the P4
+ * highlighting independently. That single-purpose scope is what makes the
  * fallback below safe here: an A2A-only transcript (zero human user rows)
  * has no candidate for `selectActiveUserMessageId`'s human-only gate (it
  * returns `null` in that case ONLY - any human row anywhere in `messages`
- * always resolves a candidate), which previously meant the ticket-5 anchor
+ * always resolves a candidate), which previously meant the save anchor
  * never tracked a reading position at all for that transcript shape -
  * the anchor row's own key (already resolved, any role, hydrated or not) is
  * the natural role-agnostic fallback. `selectActiveUserMessageId` itself is

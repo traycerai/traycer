@@ -294,7 +294,7 @@ describe("<HostSwitcher /> empty vs failed", () => {
   it("labels a host with no route by its health word 'offline', not 'unreachable'", () => {
     // The row's word comes from `health.state`, not from `connectable` — that
     // decides whether the row can be PICKED, which is a route question, while
-    // the word is a status question (P4.3's ruling D). So the fixture has to
+    // the word is a status question (ruling D). So the fixture has to
     // say what the host's health IS, and the route flag stays because pick
     // legality is still its to decide. `unreachable` is no longer a row word
     // at all, which makes the second assertion below stronger than it was

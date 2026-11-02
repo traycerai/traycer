@@ -7,6 +7,7 @@ import {
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  clearOfRow,
   composerMenuMiddleware,
   initialComposerMenuPlacement,
   readComposerMenuReservedEdges,
@@ -207,6 +208,43 @@ describe("composerMenuMiddleware with a software keyboard up", () => {
 
     expect(placed.y).toBe(59 + PADDING);
     expect(placed.maxHeight).toBe(`${keyboardTop - PADDING - 59 - PADDING}px`);
+  });
+});
+
+describe("clearOfRow, on the focus layout's one row", () => {
+  // The row sits on the keyboard (top 508), 41 tall, with the caret in it.
+  // The menu is the Pro Max's measured 189; its header and first three rows
+  // take 116.
+  const ROW_TOP = 467;
+  const THREE_ROWS = 116;
+
+  it("ends the menu above the row while its first three rows fit above it", async () => {
+    const reserved = clearOfRow(
+      KEYBOARD_UP,
+      ROW_TOP,
+      VIEWPORT.height,
+      THREE_ROWS,
+    );
+    const placed = await place(
+      initialComposerMenuPlacement(
+        new DOMRect(20, 478, 0, 20),
+        VIEWPORT.height,
+        reserved,
+      ),
+      { caret: caretAt(20, 478), menu: { width: 350, height: 189 } },
+      reserved,
+    );
+
+    expect(placed.y + 189).toBeLessThanOrEqual(ROW_TOP - PADDING);
+    expect(placed.y).toBeGreaterThanOrEqual(PADDING);
+  });
+
+  it("keeps the menu's bounds down to the keyboard, over the row, when fewer than three rows fit above it", () => {
+    // 59 of status bar and the two gutters leave 101 above a row at 176.
+    const statusBar = { ...KEYBOARD_UP, topPx: 59 };
+    expect(clearOfRow(statusBar, 176, VIEWPORT.height, THREE_ROWS)).toBe(
+      statusBar,
+    );
   });
 });
 

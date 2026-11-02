@@ -379,7 +379,7 @@ describe("useOpenLink", () => {
 
     await waitFor(() => expect(harness.intents).toHaveLength(1));
     // `alt` already inverted external -> in-app (A3); leaking it into the
-    // intent would ALSO invert tab<->split in the resolver (C4).
+    // intent would ALSO invert tab<->split in the resolver.
     expect(harness.intents[0].modifiers).toEqual({
       shift: false,
       alt: false,

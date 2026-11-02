@@ -80,7 +80,7 @@ vi.mock("@/hooks/agent/use-host-reachability", () => ({
 // through keeps that element real while skipping everything downstream of it.
 // Wrapped in `vi.fn` (a change to how the double is BUILT, not to what it
 // renders - every other test still gets the byte-identical trigger-only
-// output) so ONE test (Finding 31) can swap in a fuller implementation to
+// output) so ONE test can swap in a fuller implementation to
 // read the office's own supplement text, then restore this default.
 const AGENT_HOVER_TOOLTIP_TRIGGER_ONLY = vi.hoisted(
   () => (props: { readonly trigger: ReactNode }) => props.trigger,
@@ -192,8 +192,8 @@ const OFFICE_VIEW: CommGraphTileViewState = {
   officeAutoView: null,
   officeAutoGeneration: null,
   officeCameraView: null,
-  // Unread by this canvas, which is handed the PROJECTION the tile builds
-  // (D68): `x`, `y` and `zoom` above are this suite's camera, and the office
+  // Unread by this canvas, which is handed the PROJECTION the tile builds:
+  // `x`, `y` and `zoom` above are this suite's camera, and the office
   // canvas has no idea the field exists.
   officeCamera: null,
 };
@@ -457,7 +457,7 @@ function lastHitRegions(spy: SpiedResults): ReadonlyArray<OfficeHitRegion> {
  * available box shrinks by `FIT_PADDING` (24px) on every side, the zoom that
  * fits what is left is capped at `MAX_FIT_ZOOM` (6x), and the camera centres
  * the floor inside the padded box. Both constants come straight off the
- * fixup 10 ticket's citation of the source, not a guess.
+ * cited source, not a guess.
  */
 function fitCameraLike(
   floor: { readonly width: number; readonly height: number },
@@ -631,7 +631,7 @@ function envelopeRect(visibleIds: ReadonlySet<string>): OfficeRect {
  * the same way the component's own scene is - so a rename's effect on a
  * room's lettering can be verified WITHOUT reading it back through the
  * component's own gated hover-card update, which is exactly the behavior
- * Finding 31 is about. Same technique as {@link envelopeRect} above.
+ * at issue. Same technique as {@link envelopeRect} above.
  */
 function sceneWhereabouts(
   agents: ReadonlyArray<OfficeAgentInput>,
@@ -1400,18 +1400,18 @@ describe("CommGraphOfficeCanvas", () => {
     });
 
     it("persists the shifted MANUAL BASELINE, not the live playback camera, when a real playback pan owns the camera (Finding 26)", () => {
-      // Codex: the shift path used to track only whether playback OWNED the
+      // The shift path used to track only whether playback OWNED the
       // camera and defer the persist while it did - which left the STORED
       // last-manual camera in the OLD world's coordinates, so a Graph round
       // trip, eviction or reload jumped by the untracked translation once
       // playback let go. The fix tracks the manual framing as its own
       // baseline (`manualCameraRef`): never touched by a playback reframe,
       // but offset by the shift right alongside the live camera - so this
-      // case now PERSISTS (unlike the old Finding 12 assertion it replaces),
+      // case now PERSISTS (unlike the old assertion it replaces),
       // and what it persists is the shifted BASELINE, not the live playback
       // position that owns the camera on screen.
       //
-      // Same real-pan setup Finding 24's sibling used: a real pulse whose
+      // Same real-pan setup: a real pulse whose
       // seat is far from a deliberately distant starting camera, so
       // `requestPlaybackPan` finds the focus off screen and actually starts
       // a pan rather than declining.
@@ -1429,7 +1429,7 @@ describe("CommGraphOfficeCanvas", () => {
       };
 
       // Phase 1: calibrate the shift in WORLD units from a camera that is
-      // NOT mid-playback and NOT mid-pan - the same technique the Finding 8
+      // NOT mid-playback and NOT mid-pan - the same technique the
       // test above uses, read out here since the expected baseline needs
       // the exact shift amount. Uses its OWN `installCanvas()` (a fresh
       // `requestAnimationFrame` stub with its own callback queue) which must
@@ -1513,7 +1513,7 @@ describe("CommGraphOfficeCanvas", () => {
       if (framedAfterPan === null) throw new Error("no frame drawn after pan");
       // Anti-vacuity: the playback pan actually moved the LIVE camera away
       // from the deliberately-far starting point - a real reframe owns the
-      // camera here, not the decline case Finding 24's own test covers.
+      // camera here, not the decline case.
       expect(framedAfterPan.x).not.toBeCloseTo(farView.x);
       expect(framedAfterPan.y).not.toBeCloseTo(farView.y);
 
@@ -1567,7 +1567,7 @@ describe("CommGraphOfficeCanvas", () => {
     });
 
     it("flushes the shifted MANUAL BASELINE on a mode-switch, not the live playback camera, while a baseline write is pending (Finding 28)", () => {
-      // Codex: a world shift under a playback reframe schedules
+      // A world shift under a playback reframe schedules
       // `persistManualBaselineFromLoop` (a pending BASELINE write), sharing
       // `persistTimerRef` with `persistView`. `takePendingView` - the
       // mode-switch/unmount flush the tile calls via `onRegisterFlush` - used
@@ -1577,7 +1577,7 @@ describe("CommGraphOfficeCanvas", () => {
       // shifted manual one. `pendingBaselineWriteRef` now tracks which write
       // is pending, and the flush returns the baseline when it is one.
       //
-      // Same real-pan setup Finding 26 uses - reused here to reach the exact
+      // Same real-pan setup - reused here to reach the exact
       // same pending-baseline-write state - but this time NOT advancing the
       // debounce: the flush is read directly, synchronously, the way a mode
       // switch mid-debounce actually would.
@@ -1601,11 +1601,11 @@ describe("CommGraphOfficeCanvas", () => {
         senderAgentId: "shift-a",
       };
 
-      // Phase 1: calibrate the shift in WORLD units - same technique as
-      // Finding 26 and Finding 8, and for the same reason: the expected
+      // Phase 1: calibrate the shift in WORLD units,
+      // for the same reason as the calibrations above: the expected
       // baseline needs the exact shift amount. Its OWN `installCanvas()`
       // must run to completion, `cleanup()` included, BEFORE the outer one
-      // below - see Finding 26's test for why.
+      // below.
       const calibrateShift = (): { readonly x: number; readonly y: number } => {
         const { step: calibrateStep } = installCanvas();
         const calibrationFrames = vi.spyOn(OfficeScene.prototype, "frame");
@@ -1661,7 +1661,7 @@ describe("CommGraphOfficeCanvas", () => {
         ),
       );
       setIntersecting(true);
-      // Same three-frame choreography Finding 26 uses: two frames before a
+      // Same three-frame choreography: two frames before a
       // character even exists to resolve the pulse's focus, a third that
       // converts the pan REQUEST into an ACTIVE pan (mid-flight, not yet
       // arrived) - `persistOnArrival: false`, so no aim-destination branch in
@@ -1730,7 +1730,7 @@ describe("CommGraphOfficeCanvas", () => {
       // user's manual framing, same as the sibling "persists...while
       // manually framed" test at the top of this block. A null pulse (no
       // focus, no key) is the simplest way to force that decline: the same
-      // setup the F12 test above used to use, before it was updated to
+      // setup the real-playback-pan test above used to use, before it was updated to
       // drive a REAL pan for its own (contrasting) case.
       const { step } = installCanvas();
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
@@ -1794,7 +1794,7 @@ describe("CommGraphOfficeCanvas", () => {
     });
 
     it("scales a shifted ACTIVE PAN's endpoint by that endpoint's OWN zoom, not the live camera zoom (Finding 8)", () => {
-      // Codex: a pan interpolates fromZoom -> toZoom, so a world-growing
+      // A pan interpolates fromZoom -> toZoom, so a world-growing
       // replan's shift is `shift * fromZoom` screen pixels at the origin and
       // `shift * toZoom` at the destination - scaling BOTH endpoints by the
       // live camera zoom (itself somewhere mid-interpolation) leaves the
@@ -1804,7 +1804,7 @@ describe("CommGraphOfficeCanvas", () => {
       // real growth-triggered shift this describe block already proves,
       // mid-pan, then reads the pan's destination back through the flush the
       // tile calls on mode switch/unmount (`onRegisterFlush`) - the same
-      // reader Round 8's Finding 3 test used, since `takePendingView`
+      // reader, since `takePendingView`
       // answers an in-flight persistOnArrival pan's DESTINATION exactly.
 
       // Phase 1: calibrate the shift in WORLD units from a camera that is
@@ -1888,7 +1888,7 @@ describe("CommGraphOfficeCanvas", () => {
       });
       // ONE frame: takes the pending request into an ACTIVE pan, `startedAt`
       // = this frame's timestamp - in flight, progress 0, nowhere near
-      // arrived (same one-step idiom Round 8's Finding 3 test relies on).
+      // arrived.
       step();
 
       if (registered.current === null) {
@@ -1938,7 +1938,7 @@ describe("CommGraphOfficeCanvas", () => {
     });
 
     it("rebases an in-flight drag's origin when a growth shift lands mid-drag (Finding 29)", () => {
-      // Codex: the shift path compensated the live camera, the manual
+      // The shift path compensated the live camera, the manual
       // baseline and any pan in flight - but not a DRAG in flight. A drag's
       // stored origin (`dragRef.current.cameraX/cameraY`) is what the NEXT
       // pointer-move recomputes the camera from
@@ -1946,7 +1946,7 @@ describe("CommGraphOfficeCanvas", () => {
       // undoes the compensation the moment the pointer moves again: the
       // floor jumps back by the shift on the very next move.
       //
-      // Same calibration technique as Finding 26/28's tests, reused here to
+      // Same calibration technique, reused here to
       // learn the exact shift in world units before asserting against it.
       const calibrateShift = (): { readonly x: number; readonly y: number } => {
         const { step: calibrateStep } = installCanvas();
@@ -1983,7 +1983,7 @@ describe("CommGraphOfficeCanvas", () => {
       };
       const shiftWorld = calibrateShift();
 
-      // The OUTER installCanvas, AFTER calibration - see Finding 26's test
+      // The OUTER installCanvas, AFTER calibration - see the calibration blocks above
       // for why the ordering matters.
       const { step } = installCanvas();
       const frames = vi.spyOn(OfficeScene.prototype, "frame");
@@ -2098,7 +2098,7 @@ describe("CommGraphOfficeCanvas", () => {
     const viewport = { width: 1040, height: 700 };
     // Manually framed and deliberately far from the agent's real seat, so a
     // real playback pan (not a decline) is what seizes the camera below - the
-    // same technique the F2 Finding 26 test uses.
+    // same technique the F2 test uses.
     const farView: CommGraphTileViewState = {
       ...FIXED_CAMERA_VIEW,
       x: -10000,
@@ -2150,7 +2150,7 @@ describe("CommGraphOfficeCanvas", () => {
 
     // Play is clicked INSIDE the 150ms debounce window: a real playback pan
     // seizes the live camera before the timer fires. Same three-frame
-    // choreography as F2's Finding 26 test - two frames before a seated
+    // choreography as F2's test - two frames before a seated
     // character exists to resolve the pulse's focus, the pan request
     // converts to an ACTIVE pan (and the camera actually moves) on the frame
     // after that.
@@ -2332,7 +2332,7 @@ describe("CommGraphOfficeCanvas", () => {
     // Codex: at the 240px minimum split the floor is only ~168px wide, and
     // the view-picker group plus the mode-toggle buttons no longer fit on one
     // line - pinned only to the right the row overflowed LEFT and, under the
-    // container's overflow-hidden, clipped the view picker itself. F33: the
+    // container's overflow-hidden, clipped the view picker itself. The
     // cap is opposing spacing-token insets (`inset-x-2`), never a raw-rem
     // max-width, per the GUI fluid-sizing rule. jsdom lays nothing out, so
     // this asserts the utility classes rather than measured geometry - the
@@ -2357,21 +2357,21 @@ describe("CommGraphOfficeCanvas", () => {
     const row = modeWrapper.parentElement;
     if (row === null) throw new Error("mode toggle wrapper has no parent row");
     expect(row.className).toContain("inset-x-2");
-    // F33: no raw-rem cap on this layout surface.
+    // No raw-rem cap on this layout surface.
     expect(row.className).not.toContain("max-w-[calc");
     expect(row.className).toContain("flex-wrap");
     expect(row.className).toContain("pointer-events-none");
   });
 
   it("leaves nothing read-only in the bottom-left corner for a gesture to snag on (Finding 36)", () => {
-    // Codex, Finding 36: the bottom-left overlay (auto/catch-up/LOD chips +
+    // The bottom-left overlay (auto/catch-up/LOD chips +
     // zoom group) kept the default pointer-events on its wrapper, so a pan or
     // double-click started over the READ-ONLY chips hit the wrapper instead
     // of the canvas underneath. The answer then was a pointer-events-none
     // frame with the button group re-enabling its own.
     //
-    // The finding is now closed by subtraction instead: all three chips are
-    // gone (round 1 took two, round 2 the catching-up line), so the corner is
+    // It is now closed by subtraction instead: all three chips are
+    // gone (two of them, then the catching-up line), so the corner is
     // the button group itself - shrink-to-fit around three buttons, covering
     // no canvas a gesture could be aimed at. The frame and its opt-back-in
     // went with them; two classes that cancel out are not worth keeping to
@@ -2638,7 +2638,7 @@ describe("CommGraphOfficeCanvas", () => {
   });
 
   /**
-   * Fixup 10 (L5, live sitting): pressing Fit used to be a one-off the moment
+   * L5, live sitting: pressing Fit used to be a one-off the moment
    * a person had touched the camera even once beforehand, because
    * `takeManualControl` (which every path into `fitToFloor` calls on the way
    * in, to abandon a playback pan in flight) cleared auto-fit for good and
@@ -2739,7 +2739,7 @@ describe("CommGraphOfficeCanvas", () => {
 
       // The zoom lands AFTER the Fit this time, so it is what takes manual
       // control last - auto-fit stays off from here on, exactly as it always
-      // has, fixup 10 or not. This is the guard: nothing about re-arming Fit
+      // has, re-armed or not. This is the guard: nothing about re-arming Fit
       // is supposed to touch a camera a person deliberately moved afterward.
       fireEvent.click(screen.getByTestId("comm-graph-office-zoom-in"));
       step();
@@ -2951,8 +2951,8 @@ describe("CommGraphOfficeCanvas", () => {
   });
 
   it("cancels a pending camera persist on unmount, leaving no stale write behind", () => {
-    // The same unmount a view pick's remount performs (T6's own claim: "the
-    // unmount cancels the debounce"). A pan mid-flight when that happens must
+    // The same unmount a view pick's remount performs: the
+    // unmount cancels the debounce. A pan mid-flight when that happens must
     // not land after the fact.
     vi.useFakeTimers();
     const onCameraChange = vi.fn();
@@ -3109,7 +3109,7 @@ describe("CommGraphOfficeCanvas", () => {
   });
 
   it("flushes an in-flight persistOnArrival pan's DESTINATION when leaving Office mid-pan, not the pre-pan framing", async () => {
-    // Codex (finding 3): a Find aim pans the camera over a real ease and
+    // A Find aim pans the camera over a real ease and
     // persists ONLY ON ARRIVAL - but until it arrives no debounce is
     // scheduled either, so `takePendingView` used to answer null for a mode
     // switch caught mid-pan and the office would reopen at the pre-pan
@@ -3191,14 +3191,14 @@ describe("CommGraphOfficeCanvas", () => {
   });
 
   it("re-centers an in-flight pan's destination when the viewport resizes under it (Finding 9)", async () => {
-    // Codex: a Find pick opens the transient detail panel AND requests a pan
+    // A Find pick opens the transient detail panel AND requests a pan
     // in the same handler, but the panel steals width from the flex row a
     // frame later - so the pan resolves against the wider pre-panel box and
     // the frozen destination centres the agent where the narrowed floor no
     // longer reaches. `recenterActivePan` shifts the in-flight pan's
     // destination by half the size delta on `setViewport`, keeping the same
     // focus centred in the new box. Read back through the same
-    // `onRegisterFlush` flush Round 8's Finding 3 test uses, since it answers
+    // `onRegisterFlush` flush, since it answers
     // an in-flight `persistOnArrival` pan's destination directly.
     const { step } = installCanvas();
     const registered: {
@@ -3384,7 +3384,7 @@ describe("CommGraphOfficeCanvas", () => {
    * camera, in two SEPARATE renders - never the same one, one after another.
    * Two double-clicks in one render compound (the second zooms on top of the
    * first: `1040 / 1.25²`, not `1040 / 1.25`), which is exactly how the
-   * reviewer's own probe encoded the defect it was meant to catch: its
+   * original probe encoded the defect it was meant to catch: its
    * agent-then-empty "control" only agreed with the agent gesture while the
    * agent gesture was broken and did nothing. Pinning both against EACH
    * OTHER, not each against the bare constant, is what makes this a parity
@@ -3496,6 +3496,7 @@ describe("CommGraphOfficeCanvas", () => {
  * `createImageData` get real-shaped answers because callers read their
  * return value; everything else is a recorder.
  */
+
 /**
  * `measureText`, modelled on the face the caller actually set.
  *
@@ -4862,7 +4863,7 @@ function tagBoxesFrom(
  * Two boxes count as colliding when their baselines are within one line
  * height of each other - INCLUSIVE, so the tag `layoutNameTags` stagger
  * drops exactly one line below a collision (`NAME_TAG_LINE_HEIGHT` away,
- * never less) still counts, which is the ticket's own "centre ±
+ * never less) still counts, which is the "centre ±
  * measured width / 2" box test - AND their measured x-ranges overlap. A
  * cubby storey shares one baseline, so the ordinary case is caught at
  * `dy === 0`; the widened window is what still catches a stagger the
@@ -4995,7 +4996,7 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
     );
   }
 
-  /** A projector that shifts every projected x by +2048px - the review's own F5 recipe. */
+  /** A projector that shifts every projected x by +2048px - the F5 recipe. */
   const SHIFTED_PROJECTOR_X = 2048;
 
   it("F5: carries the projected sign anchor to the board's label text, not raw tile math", () => {
@@ -5156,8 +5157,8 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
     readonly col: number;
     readonly row: number;
     /**
-     * The seat's own tile width - a REQUIRED argument, not a default: fixup
-     * 8 fits a seated tag to exactly this width, so a caller that means to
+     * The seat's own tile width - a REQUIRED argument, not a default: a
+     * seated tag is fitted to exactly this width, so a caller that means to
      * exercise that fit (the cluster below) has to say so, and every other
      * caller has to say it does not mean to.
      */
@@ -5331,7 +5332,7 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
     // The control that makes it a walker case: the other agent is seated,
     // unselected and unhovered, so the middle band leaves it unnamed.
     //
-    // FIXUP 8: "Alpha Sitter" itself is no longer a possible reading at this
+    // "Alpha Sitter" itself is no longer a possible reading at this
     // zoom - a 1-tile seat's 16px budget only ever admits its initials, "AS"
     // (the search-matched sibling case above proves that is exactly what a
     // QUALIFIED sitter paints here). Asserting the absence of a string the
@@ -5360,7 +5361,7 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
     // and the same tag. Drop the tag for walkers and the walker's count falls
     // short of the sitter's by one label's worth of calls.
     //
-    // FIXUP 8: the sitter's own tag is now fitted to `seatAt`'s one-tile seat
+    // The sitter's own tag is now fitted to `seatAt`'s one-tile seat
     // (16px at this zoom), and "Alpha Sitter" (12 chars) fits nothing past
     // its initials - "AS" - so the FULL "Alpha Sitter" string this case used
     // to count is gone from the canvas entirely. The walker keeps its
@@ -5385,9 +5386,9 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
     // guard left to be vacuous about. This negative is real: it is the FIT
     // ladder alone standing between "Alpha Sitter" and the canvas, and
     // removing the fit (the seated tag drawing its written name, as it did
-    // before this fixup) paints it and reddens this line.
+    // before this fix) paints it and reddens this line.
     //
-    // FIXUP 8: the sitter's tag is fitted to its one-tile seat (32px at this
+    // The sitter's tag is fitted to its one-tile seat (32px at this
     // zoom), which admits "Alpha" (its first word) but not the written
     // "Alpha Sitter" (72px) or a clip that keeps the required six characters
     // in front of the ellipsis. The walker is unaffected (`fitTiles: null`).
@@ -5462,7 +5463,7 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
   });
 
   it("F11 fixup 7: names all five of a wide HQ board's hottest, spelt out rather than lettered to initials", () => {
-    // The reviewer's own fixture: ordinary two-word names. Fixup 7 removes
+    // The original fixture: ordinary two-word names. Gone now is
     // the initials rung this case used to land on ("AB BQ GS DA ED" at eight
     // tiles) - below the first-names rung the HQ board now counts instead of
     // lettering, so pinning "all five named, none dropped" needs a board
@@ -5681,10 +5682,10 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
   });
 
   /**
-   * T5 fixup 5: the block map's new `quad` drawable actually reaches the
+   * T5: the block map's new `quad` drawable actually reaches the
    * canvas as a filled path.
    *
-   * D28/D58 rewrote what a lod-0 region emits - four PROJECTED corners
+   * A rewrite changed what a lod-0 region emits - four PROJECTED corners
    * instead of an axis-aligned box - but nothing upstream of the renderer
    * proves the new `kind: "quad"` arm of `drawDrawableLayer` is wired at
    * all. A painter that started emitting `quad` and a canvas that had not
@@ -5844,11 +5845,12 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
 
   describe("CommGraphOfficeCanvas fixup 3 - N1 Find annotates an agent, not its parts", () => {
     /**
-     * The reviewer's reproduction: a real City office, everybody working, Find
+     * The reproduction: a real City office, everybody working, Find
      * matching the first agent. City builds its agents out of many parts, and
      * since F4 each part is separately hit-testable - so this is the scene where
      * "one region, one label" and "one agent, one label" differ by thirty.
      */
+
     /**
      * One agent is given a name no other agent shares a substring with, so the
      * query matches exactly one. The fixture's own names run "Agent 1",
@@ -5903,7 +5905,7 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
      *
      * The ordinary tag cuts a long name to fit - "Quilfeather Zarrowmere" is
      * painted "Quilfeather Z…" - so counting exact matches misses the very
-     * label this case is about. That is how the shipped fixup-3 case passed
+     * label this case is about. That is how the shipped case passed
      * while two names were being drawn: the long name hid the truncated tag,
      * and only Find's untruncated copy was counted.
      *
@@ -5928,12 +5930,12 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
       // ONE label. The old path walked `frame.hitRegions` and drew a label for
       // every entry, which on a real City building is its roof, its windows,
       // its body and its seat backstop - thirty-two labels stacked four pixels
-      // apart, 160 passes where the reviewer allowed ten.
+      // apart, 160 passes where ten are allowed.
       expect(namePaints(matched.name)).toBe(PASSES_PER_LABEL);
     });
 
     it("keeps one name when the ordinary tag TRUNCATES it", async () => {
-      // ZOOM RAISED FOR FIXUP 8: a City lot is one tile, and a seated tag is
+      // ZOOM RAISED: a City lot is one tile, and a seated tag is
       // now fitted to that seat's own width. At zoom 1 the one-tile budget
       // (16px) admits nothing past initials ("QZ"), which drops this case's
       // own mechanism - a TRUNCATED tag, not an initialed or dropped one.
@@ -5949,7 +5951,7 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
       // The control this case exists to be. A long name is painted
       // "Quilfe…" by the tag path and in full by Find, so the two strings
       // differ and an exact-match count sees only one of them - which is
-      // exactly how the fixup-3 case passed while two names were on screen.
+      // exactly how this case passed while two names were on screen.
       expect(namePaints(matched.name)).toBe(PASSES_PER_LABEL);
       // And the one that survived is the tag's, fitted to its own seat -
       // not Find's untruncated copy over the top of it.
@@ -6063,8 +6065,8 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
      * pairs overlap and the fourth (rightmost) is the one left with nowhere
      * to go.
      *
-     * FIXUP 8 fits a seated tag to its own seat, and requirement 4 there is
-     * that two neighbours' tags then never overlap BY CONSTRUCTION - which
+     * A seated tag is fitted to its own seat, so
+     * two neighbours' tags then never overlap BY CONSTRUCTION - which
      * retires a one-tile-pitch collision as a real scenario: a seat that
      * narrow would have fitted its neighbour's tag down to initials long
      * before the pitch mattered. So each seat here is given `width: 4` -
@@ -6162,7 +6164,7 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
      * Every `fillText` pass that NAMES this agent, truncation included - the
      * same shape as N1's `namePaints`, reused here because the tag path
      * truncates a long name while Find does not, and an exact-match count
-     * would miss the truncated tag exactly as it did before N1's fixup.
+     * would miss the truncated tag exactly as it did before N1's fix.
      */
     function namePaints(name: string): number {
       return paintedText().filter(
@@ -6218,7 +6220,7 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
      * reading as resolved. A case built from `layoutNameTags`' own strict
      * check would never see this - it would have to reimplement the exact
      * mechanism being tested, which begs the question - so this reads the
-     * canvas's actual painted boxes and checks them under the ticket's
+     * canvas's actual painted boxes and checks them under the
      * "centre ± measured width / 2" rule instead of the placer's own.
      *
      * ZOOM 3, not 2: at a one-tile budget of 16 px (zoom 2) the honest
@@ -6998,7 +7000,7 @@ describe("CommGraphOfficeCanvas fixup 2 - real Towers semantic zoom", () => {
   });
 
   it("draws a qualified real Towers name at LOD 1 when selected", () => {
-    // ZOOM RAISED FOR FIXUP 8: Orchestrator's desk is two tiles, and at
+    // ZOOM RAISED: Orchestrator's desk is two tiles, and at
     // zoom 1 that budget (32px) admits nothing readable - not even initials,
     // since "Orchestrator" is one word - so its tag is DROPPED there rather
     // than qualified. 1.5 is still inside LOD 1 (below the 1.6 close-up
@@ -7062,7 +7064,7 @@ describe("CommGraphOfficeCanvas fixup 2 - real Towers semantic zoom", () => {
   });
 
   it("draws a qualified real Towers name when Find matches it", async () => {
-    // PASSES FOR A DIFFERENT REASON since fixup 8: at zoom 1 Orchestrator's
+    // PASSES FOR A DIFFERENT REASON now: at zoom 1 Orchestrator's
     // own tag is fitted to its two-tile seat and finds nothing readable to
     // keep (not even initials - "Orchestrator" is one word), so the tag is
     // DROPPED here and it is Find's own untruncated copy that names the
@@ -7281,8 +7283,8 @@ describe("CommGraphOfficeCanvas fixup 8 - the caught-up feed is not an input to 
     // `officeElement`'s own defaults already carry `ready` and an
     // uncaught-up feed (`initialHistoryCaughtUp={false}`) - passed
     // explicitly here so the case reads as the fact under test rather than
-    // an accident of the helper's defaults. Before fixup 8 the canvas
-    // itself gated its first plan on `ready`, which the TILE computed from
+    // an accident of the helper's defaults. The canvas used to gate its
+    // own first plan on `ready`, which the TILE computed from
     // `inputsReady` (feed included); this seam proves the canvas's own plan
     // no longer needs the feed at all, only `ready` and eligibility.
     const plan = vi.spyOn(OFFICE_VIEWS.floor, "plan");
@@ -7302,8 +7304,8 @@ describe("CommGraphOfficeCanvas fixup 8 - the caught-up feed is not an input to 
 
   it("puts nothing but the three zoom buttons in the bottom-left corner", () => {
     // THREE CHIPS HAVE STOOD HERE AND ALL THREE ARE GONE. Auto's measurement
-    // and the zoom band went in feedback round 1; the catching-up line - "the
-    // feed is still replaying, statuses may lag" - went in round 2, asked for
+    // and the zoom band went first; the catching-up line - "the
+    // feed is still replaying, statuses may lag" - went next, asked for
     // by name ("why do we still have this Catching up label above the zoom
     // buttons? We were supposed to remove all those labels!").
     //
@@ -8098,7 +8100,7 @@ describe("CommGraphOfficeCanvas - Mission control ward beacon", () => {
 /**
  * NO TWO READINGS ON THE SAME PIXELS, whichever channel drew them.
  *
- * Round 2's screenshot has an agent's tag printed through a board sign, and a
+ * A screenshot has an agent's tag printed through a board sign, and a
  * census over every view, four epic shapes, four populations, two seeds and
  * four zooms found the same defect in 129 of 768 cases and in seven distinct
  * pairs - `HOSPITAL` on `BUS STOP` and `LOUNGE` on `FRONT DESK` (two plates),

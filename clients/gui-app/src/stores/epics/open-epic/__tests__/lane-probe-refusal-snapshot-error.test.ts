@@ -91,7 +91,7 @@ function createStatusRig(): StatusRig {
     openCount: () => opens,
     refuseAsIncompatible(): void {
       if (live === null) throw new Error("no status client was constructed");
-      live.onConnectionStatus("closed", INCOMPATIBLE_STATUS_CLOSE);
+      live.onConnectionStatus("closed", INCOMPATIBLE_STATUS_CLOSE, null, null);
     },
   };
 }
@@ -151,7 +151,7 @@ function createLegacyRig(): LegacyRig {
     // `false`: this fixture drives the LEGACY adapter, whose peer cannot
     // report durability - the same value `legacy-epic-stream-adapter` forwards
     // for a pre-durability `epic.subscribe` schema.
-    open: () => requireLive().onConnectionStatus("open", null, false),
+    open: () => requireLive().onConnectionStatus("open", null, false, null),
     deliverRootSnapshot(): void {
       const source = new Y.Doc();
       source.getMap("epic").set("title", "Legacy fallback epic");

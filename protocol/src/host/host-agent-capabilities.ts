@@ -26,7 +26,7 @@ import { defineRpcContract } from "@traycer/protocol/framework/index";
 import { agentModeSchema } from "@traycer/protocol/common/schemas";
 import { browserSessionReferenceSchema } from "@traycer/protocol/persistence/epic/content-blocks";
 import {
-  chatRunSettingsStrictSchema,
+  chatRunSettingsStrictSchemaPreUltracode,
   tuiHarnessIdSchema,
 } from "@traycer/protocol/persistence/epic/foundation";
 import { z } from "zod";
@@ -616,7 +616,7 @@ export const hostAgentRemoteSenderFactsSchema = lazySchema(() =>
     z.object({
       surface: z.literal("gui"),
       hostId: z.string().min(1),
-      settings: chatRunSettingsStrictSchema.nullable(),
+      settings: chatRunSettingsStrictSchemaPreUltracode.nullable(),
     }),
     z.object({
       surface: z.literal("tui"),

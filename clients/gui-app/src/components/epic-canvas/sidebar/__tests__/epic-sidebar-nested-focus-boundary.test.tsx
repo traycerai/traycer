@@ -365,7 +365,7 @@ vi.mock("@/hooks/agent/use-create-tui-agent", () => ({
 
 vi.mock("@/lib/host/runtime", () => ({
   useHostClient: () => ({ getActiveHostId: () => "host-1" }),
-  // The SPINE, a separate export since redesign P2.1.
+  // The SPINE, a separate export.
   useHostRuntimeClient: () => ({ getActiveHostId: () => "host-1" }),
 }));
 
@@ -571,7 +571,7 @@ vi.mock("@/stores/epics/epic-sidebar-expansion-store", () => ({
 }));
 
 // The rail's shape and its per-panel Hide/Show live beside the bijection
-// now, not on the panel store (G1-09), so the sidebar's two reads are
+// now, not on the panel store, so the sidebar's two reads are
 // stubbed where they are actually imported from.
 vi.mock("@/lib/layout/rail-view", () => ({
   useLayoutRail: () => [{ kind: "panel", id: "railArtifacts" }],
@@ -621,6 +621,7 @@ vi.mock("@/lib/epic-selectors", () => ({
     };
   },
   useEpicArtifactRecords: () => testState.records,
+  useEpicFileArtifactViewer: () => null,
   useEpicArtifactStatus: (artifactId: string) =>
     testState.tree.nodeById[artifactId]?.status ?? null,
   useEpicConnectionStatus: () => "open",
@@ -652,6 +653,13 @@ function fakeEpicStoreState() {
     (record) => record.type === "terminal-agent",
   );
   return {
+    // Whether each agent record list has answered, which decides how the
+    // delete dialog words nested agents. Settled here: this suite is about
+    // where focus lands after a delete, both wordings route focus identically,
+    // and the disclosure's own readings are covered in
+    // `epic-sidebar-selection-mode.test.tsx`.
+    chatRecordListAuthoritative: true,
+    tuiAgentRecordListAuthoritative: true,
     snapshotLoaded: true,
     // The tree index, because the row-level tree reads subscribe HERE now
     // rather than through `useEpicTreeIndex`. A row that used to take the

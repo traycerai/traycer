@@ -2,7 +2,7 @@ import type { SegmentOption } from "@/components/layout-editor/regions/region-gr
 
 /**
  * Which of one provider's limits its readings draw, now a section of the
- * provider's page in Settings. Everything here is about ONE provider (C-23).
+ * provider's page in Settings. Everything here is about ONE provider.
  */
 export const USAGE_PROVIDER_LEVEL = {
   /** The section's one heading: the row's label is the section's name. */
@@ -20,5 +20,5 @@ export const USAGE_PROVIDER_LEVEL = {
    * the ordinary state of one nobody has used this session - and with nothing
    * to pick, `Automatic` is the only answer there is.
    */
-  limitsEmpty: "No limits reported yet.",
+  limitsEmpty: "No limits reported.",
 };

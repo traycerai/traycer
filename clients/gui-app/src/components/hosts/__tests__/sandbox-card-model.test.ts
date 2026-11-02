@@ -238,16 +238,15 @@ describe("sandboxStateLine", () => {
       false,
       summaryOf({ failureCode: "create:kube-create-service-account" }),
     );
-    expect(failed).toBe(
-      "Failed to start (SBX-0412). Nothing is billed for a sandbox that never woke.",
-    );
+    expect(failed).toBe("Failed to start (SBX-0412).");
     expect(failed).not.toContain("create:");
     expect(
       sandboxStateLine("failed", false, summaryOf({ failureCode: "OOM_BOOT" })),
-    ).toBe("Failed to start. Nothing is billed for a sandbox that never woke.");
+    ).toBe("Failed to start.");
     expect(
       sandboxStateLine("failed", false, summaryOf({ failureCode: null })),
-    ).toBe(sandboxStateLine("failed", false, null));
+    ).toBe("Failed to start.");
+    expect(sandboxStateLine("failed", false, null)).toBe("Failed to start.");
     expect(sandboxStateLine("failed", false, null)).not.toContain("(");
   });
 
@@ -289,9 +288,7 @@ describe("sandboxStateLine", () => {
         false,
         summaryOf({ failureCode: "chat-store-newer" }),
       ),
-    ).toBe(
-      "Failed to start (SBX-0430). Nothing is billed for a sandbox that never woke.",
-    );
+    ).toBe("Failed to start (SBX-0430).");
   });
 
   it("says just Sandbox for a state it does not know", () => {

@@ -8,7 +8,9 @@ import type {
   BotSurfaceActionState,
 } from "@traycer/protocol/host/bot/schemas";
 import type { BotSurfaceAction } from "@traycer/protocol/host/bot/surface-schemas";
+import type { RuntimeInterviewAnswer } from "@traycer/protocol/host/agent/gui/agent-runtime";
 import type { BotSurfaceActionEntry } from "@/stores/bots/bot-surface-actions-store";
+import { firstLineOf } from "@/lib/bots/bot-trunk-model";
 
 /**
  * What the card under a bot's surface post shows (Tracy Bots T89): a
@@ -97,15 +99,6 @@ export function openSurfaceOf(
   );
 }
 
-function firstLine(text: string): string {
-  return (
-    text
-      .split("\n")
-      .map((line) => line.trim())
-      .find((line) => line.length > 0) ?? ""
-  );
-}
-
 /** The last segment of an artifact's path that names it, past an entry file. */
 function artifactTitle(artifactPath: string): string {
   const segments = artifactPath.split(/[\\/]+/u).filter((s) => s.length > 0);
@@ -123,22 +116,22 @@ function titleOf(
 ): string {
   if (surface.kind === "artifact") return artifactTitle(surface.artifactPath);
   const reported = open === null ? "" : openTitle(open.surface);
-  return reported || firstLine(postText);
+  return reported || firstLineOf(postText) || "";
 }
 
 /** What the task's report names an open surface by; empty when it names nothing. */
 function openTitle(item: BotInputNeeded["surface"]): string {
   switch (item.kind) {
     case "question":
-      return firstLine(item.questions[0]?.text ?? "");
+      return firstLineOf(item.questions[0]?.text ?? "") ?? "";
     case "approval": {
-      const summary = firstLine(item.summary);
+      const summary = firstLineOf(item.summary) ?? "";
       return summary.length > 0
         ? `Wants to use ${item.tool}: ${summary}`
         : `Wants to use ${item.tool}`;
     }
     case "browser":
-      return firstLine(item.title ?? "") || (item.url ?? "");
+      return firstLineOf(item.title) ?? item.url ?? "";
   }
 }
 
@@ -266,13 +259,6 @@ function heldAction(
   );
 }
 
-/** An action of the person's on the post is on its way, from any window. */
-function anyOnItsWay(
-  postActions: ReadonlyArray<BotSurfaceActionState>,
-): boolean {
-  return postActions.some((action) => action.state === "sending");
-}
-
 /**
  * The person's action is on its way: from this window (sent, or unanswered
  * while the serving host holds it on its way), or from another the serving
@@ -330,7 +316,8 @@ export function botSurfaceCardView(
       title,
       state: { kind: "refused", line },
       actions: again ? inline : null,
-      actionsBusy: again && anyOnItsWay(input.postActions),
+      actionsBusy:
+        again && input.postActions.some((action) => action.state === "sending"),
     };
   }
   if (entry !== null && entry.phase === "settled") {
@@ -354,4 +341,60 @@ export function botSurfaceCardView(
     actions: inline,
     actionsBusy: false,
   };
+}
+
+/**
+ * The answers as the task's own question card sends them: each question's
+ * id and text, the value given, and which option it was or the words typed.
+ * Every question skipped (or not given) is the Skip of the whole surface.
+ * The surface card and the voice both send through this.
+ */
+export function surfaceAnswerOf(
+  questions: ReadonlyArray<{
+    readonly questionId: string | null;
+    readonly text: string;
+    readonly options: ReadonlyArray<string>;
+  }>,
+  given: ReadonlyArray<{
+    readonly text: string;
+    readonly skipped: boolean;
+  } | null>,
+): BotSurfaceAction {
+  if (given.every((sent) => sent?.skipped !== false)) {
+    return { kind: "skip", draftAnswers: [] };
+  }
+  const answers = questions.map((question, index): RuntimeInterviewAnswer => {
+    const sent = given[index] ?? null;
+    if (sent === null || sent.skipped) {
+      return {
+        questionId: question.questionId,
+        question: question.text,
+        values: [],
+        notes: null,
+        selection: null,
+      };
+    }
+    const optionIndex = question.options.indexOf(sent.text);
+    return {
+      questionId: question.questionId,
+      question: question.text,
+      values: [sent.text],
+      notes: null,
+      selection:
+        optionIndex >= 0
+          ? {
+              questionIndex: index,
+              optionIndices: [optionIndex],
+              optionLabels: [sent.text],
+              customText: null,
+            }
+          : {
+              questionIndex: index,
+              optionIndices: [],
+              optionLabels: [],
+              customText: sent.text,
+            },
+    };
+  });
+  return { kind: "answer", answers };
 }

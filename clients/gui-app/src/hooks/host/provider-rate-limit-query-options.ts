@@ -15,7 +15,7 @@ import {
  * what lets the same `providerRateLimitQueryOptions` result compose with
  * every consumer regardless of which `TData` it reads (the raw wire response
  * for a plain `useHostQuery`, or the `ProviderRateLimitEnvelope` the
- * envelope-aware hooks in this ticket use) without a generic-variance fight.
+ * envelope-aware hooks use) without a generic-variance fight.
  */
 export interface ProviderRateLimitTanstackOptions {
   readonly enabled: boolean;

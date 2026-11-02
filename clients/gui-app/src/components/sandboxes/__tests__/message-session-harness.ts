@@ -63,7 +63,7 @@ export function createMessageSessionHarness(input: {
     handle,
     sent,
     openAsOwner: () => {
-      live().onConnectionStatus("open", null, null);
+      live().onConnectionStatus("open", null, null, null);
       live().onSnapshot({
         kind: "snapshot",
         hasBinaryPayload: false,

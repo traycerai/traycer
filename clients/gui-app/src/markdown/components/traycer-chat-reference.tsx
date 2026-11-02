@@ -4,7 +4,7 @@ import { makeTraycerReference } from "./make-traycer-reference";
 /**
  * Migrated `<traycer-chat>` tag - opens the chat by its embedded id. Same-epic
  * opens a chat preview tile; cross-epic navigates and focuses the chat via
- * `focusArtifactId` (D1 - no `focusChatId`).
+ * `focusArtifactId` (no `focusChatId`).
  */
 export const TraycerChatReference = makeTraycerReference({
   icon: <MessageSquare className="size-3.5" aria-hidden />,

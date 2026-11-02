@@ -30,7 +30,7 @@ import {
  * carrying the file's whole before AND after contents - and derive the `+`/`-`
  * from them.
  *
- * On the windowed line those contents do not arrive (D7): the snapshot carries
+ * On the windowed line those contents do not arrive: the snapshot carries
  * SUMMARIES, and contents come from `chat.readAccumulatedFileChange` when a
  * diff is actually opened. So the panel cannot keep taking a content-bearing
  * type, and this is what it takes instead.

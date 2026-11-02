@@ -122,7 +122,7 @@ function useRowDialog(
 }
 
 /**
- * One row's actions, by Flow 6's matrix: the primary button, `Give it another
+ * One row's actions: the primary button, `Give it another
  * <period>` inside the warning lead, `Details` on every row, and the ⋯ menu.
  * Interrupting and ending actions confirm in their dialogs; a wake is one click
  * after the row says who pays.

@@ -48,6 +48,7 @@ import {
   findCrashReportSince,
   isWindowsSessionEndExit,
   prepareCrashReportsDir,
+  StderrCaptureBuffer,
 } from "../host/crash-diagnostics";
 import {
   CRASH_REPORT_SCAN_TIMEOUT_MS,
@@ -152,6 +153,7 @@ import { readSupervisorRelaunchInstalledIdentity } from "../host/update-contende
 import { SUPERVISOR_ADMISSION_WAIT_MS } from "../host/update-budget";
 import { RELAUNCH_BACKOFF_MS } from "../host/relaunch-schedule";
 import { createCliLogger, errorFromUnknown, type ILogger } from "../logger";
+import { refreshServiceDefinitionAtSupervisorStart } from "./service-refresh";
 
 // `traycer host start` is the long-running supervisor invoked by the OS
 // service manager (launchd, systemd-user, or Windows Scheduled Task). The
@@ -443,6 +445,9 @@ const RESTART_OWED_EXIT_CODE = 77;
  * (`persistChildExit`).
  */
 const WINDOWS_REQUESTED_KILL_EXIT_CODE = 0xffffffff;
+
+/** Enough for the line's steps; the marker stays one short line regardless. */
+const FORCED_SHUTDOWN_MARKER_MAX_CHARS = 1_000;
 
 /**
  * A stop announced itself while this supervisor sat in the admission wait.
@@ -789,6 +794,16 @@ export interface RunHostStartDeps extends ResolveHostStartTargetDeps {
   // and a count that supervisor left open is still sent. Best-effort; must
   // never throw.
   readonly resumeCrashReports: (environment: Environment) => Promise<void>;
+  // Called once by a supervisor its service manager started, before anything
+  // else: brings that service's own definition to the current form, so a job
+  // an older CLI registered gets today's launcher and stop budget without a
+  // re-registration. Definition-only, and must never throw. The default
+  // writes the real service definition, so every test harness injects it.
+  readonly refreshServiceDefinitionAtStart: (
+    environment: Environment,
+    serviceLabel: string,
+    logger: ILogger,
+  ) => Promise<void>;
   // The lifecycle policy's park rule and the supervisor's `supervisor.json` /
   // `supervisor-run.json`. The defaults read and WRITE the real host home, so
   // a test that runs a labelled start, or reaches an admitted spawn, must
@@ -954,6 +969,13 @@ const defaultRunDeps: RunHostStartDeps = {
   maxRelaunches: MAX_CONSECUTIVE_RELAUNCHES,
   reportHostCrash: reportHostCrashToSentry,
   resumeCrashReports: resumeHostCrashReports,
+  // Resolved at call time, like the lifecycle members below.
+  refreshServiceDefinitionAtStart: (environment, serviceLabel, logger) =>
+    refreshServiceDefinitionAtSupervisorStart(
+      environment,
+      serviceLabel,
+      logger,
+    ),
   lifecycle: {
     readPolicy: readHostLifecyclePolicy,
     readPresence: readDesktopPresence,
@@ -1137,6 +1159,20 @@ export async function runHostStart(
       supervisorPid,
     });
     return deps.exit(0);
+  }
+
+  // The definition this supervisor was started from may predate this CLI: a
+  // job registered by an older one keeps its old stop budget (launchd
+  // `ExitTimeOut`, systemd `TimeoutStopSec`) until something rewrites it, and
+  // a person on a pinned or update-free install never re-registers. Only a
+  // service start, and only its own label: an interactive start was not
+  // launched by the definition, and Desktop's ships in its bundle.
+  if (serviceStarted && serviceLabel !== null) {
+    await deps.refreshServiceDefinitionAtStart(
+      opts.environment,
+      serviceLabel,
+      logger,
+    );
   }
 
   // Pick up the crash-report throttle state the previous supervisor left, so a
@@ -2398,9 +2434,10 @@ export async function runHostStart(
         // `host download` holds the update-attempt execution segment across its
         // whole transfer (documented in CONTENDER_INVENTORY.md; the inner
         // cli-lock is already narrow). If the host child crashes during that
-        // window, the supervisor's relaunch takes `waitMs: 0` and is refused
-        // `busy` - mutual exclusion on the attempt lock is unconditional on
-        // admission, decided before `dispositionFor` is ever consulted. Exiting
+        // window, the supervisor's relaunch waits `SUPERVISOR_ADMISSION_WAIT_MS`
+        // and is refused `busy` if the transfer outlasts it - mutual exclusion
+        // on the attempt lock is unconditional on admission, decided before
+        // `dispositionFor` is ever consulted. Exiting
         // 0 then tells the service manager the job finished successfully, and
         // the shipped LaunchAgent sets `KeepAlive.SuccessfulExit = false`
         // (inject-host-launch-agent.cjs), which means launchd relaunches on a
@@ -2977,6 +3014,17 @@ export async function runHostStart(
         stderrEnded,
       });
       disposeAttemptStderr(child.stderr);
+      // The relaunch below is the same either way; this only says it followed
+      // a teardown that did not finish.
+      const forcedShutdown = stderrTee.capture.forcedShutdownLine();
+      if (forcedShutdown !== null) {
+        logger.warn("Host child did not finish its shutdown", {
+          environment: opts.environment,
+          exitCode: ending.code,
+          attemptId,
+          forcedShutdown,
+        });
+      }
       // Same forgiveness rule the abnormal path applies below, and it has to be
       // applied HERE too because this branch never reaches it. A host that
       // consumed part of the budget, then ran past `SUSTAINED_UPTIME_RESET_MS`,
@@ -4302,6 +4350,45 @@ async function persistChildExit(input: {
       });
     }
     return outcome;
+  }
+  // A forced stop keeps the code its intent chose, so only its own line tells
+  // it from a clean one. Recorded as `killed`, the phase of a host that was
+  // ended rather than one that finished; it stays not `abnormal`, so what
+  // happens next is exactly what a clean exit gets: no relaunch and no crash
+  // budget. The line goes on the marker because it names the step that hung.
+  const forcedShutdown =
+    code === 0 ? input.stderrTee.capture.forcedShutdownLine() : null;
+  if (forcedShutdown !== null) {
+    logger.warn("Host child did not finish its shutdown", {
+      environment,
+      exitCode: code,
+      attemptId,
+      forcedShutdown,
+    });
+    return persistTerminalMarker({
+      deps,
+      logger,
+      environment,
+      phase: "killed",
+      fields: markerFields(
+        attemptId,
+        supervisorPid,
+        {
+          shell: undefined,
+          args: undefined,
+          bundle,
+          exitCode: code,
+          signal: undefined,
+          error: StderrCaptureBuffer.toSingleLine(
+            forcedShutdown,
+            FORCED_SHUTDOWN_MARKER_MAX_CHARS,
+          ),
+        },
+        null,
+      ),
+      exitCode: 0,
+      abnormal: false,
+    });
   }
   if (code === null || code === 0) {
     logger.info("Host child exited cleanly", {

@@ -158,8 +158,8 @@ export function Fixture(): ReactElement {
         </PopoverContent>
       </Popover>
       <QuoteSelectionPopover
-        taskId="motion-regression"
         snapshot={quoteSnapshot}
+        onQuote={() => undefined}
         onDismiss={() => undefined}
         onQuoted={() => undefined}
         boundaryRef={noBoundary}

@@ -1,5 +1,5 @@
 /**
- * Host-binding-survives-restart guard (ticket 12).
+ * Host-binding-survives-restart guard.
  *
  * Per CLAUDE.md: every
  * `EpicNodeRef` variant - chat, artifact, terminal, terminal-agent,
@@ -34,14 +34,18 @@ const directoryEntries = vi.hoisted(() => ({
   current: [] as ReadonlyArray<HostDirectoryEntry>,
 }));
 
-vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
-  useHostDirectoryList: () => ({
+vi.mock("@/hooks/host/use-host-directory-list-query", () => {
+  const useHostDirectoryList = () => ({
     data: directoryEntries.current,
     fetchStatus: "success",
     isFetching: false,
     isLoading: false,
-  }),
-}));
+  });
+  return {
+    useHostDirectoryList,
+    useHostDirectoryListQuery: useHostDirectoryList,
+  };
+});
 
 const SOURCE_HOST = "host-A";
 const REPLACEMENT_HOST = "host-B";

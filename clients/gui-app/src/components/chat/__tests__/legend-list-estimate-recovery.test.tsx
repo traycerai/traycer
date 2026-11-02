@@ -15,6 +15,19 @@ import {
   settleLegendList,
 } from "./legend-list-test-environment";
 
+/** The measurement an assertion below is about. `positionAtIndex` and
+ *  `sizeAtIndex` answer `undefined` for a row the list has not laid out or
+ *  has never measured; every caller here settles the list first, so an
+ *  `undefined` means the fixture stopped exercising what the test claims,
+ *  not that the number is zero. Reading it as one would make the
+ *  surrounding arithmetic `NaN` and the comparison pass vacuously. */
+function measured(value: number | undefined): number {
+  if (value === undefined) {
+    throw new Error("the list has not measured this row");
+  }
+  return value;
+}
+
 class ControllableResizeObserver implements ResizeObserver {
   readonly callback: ResizeObserverCallback;
   readonly observed = new Set<Element>();
@@ -139,8 +152,11 @@ function positionGapsAndSizes(list: LegendListRef): {
   const gaps: number[] = [];
   const sizes: number[] = [];
   for (let index = 0; index < 11; index += 1) {
-    gaps.push(state.positionAtIndex(index + 1) - state.positionAtIndex(index));
-    sizes.push(state.sizeAtIndex(index));
+    gaps.push(
+      measured(state.positionAtIndex(index + 1)) -
+        measured(state.positionAtIndex(index)),
+    );
+    sizes.push(measured(state.sizeAtIndex(index)));
   }
   return { gaps, sizes };
 }
@@ -174,7 +190,9 @@ describe("LegendList estimate recovery", () => {
     if (list === null) throw new Error("LegendList ref did not mount");
 
     const captureDataChangedEstimate = (position: number): void => {
-      dataChangedEstimates.push(position - list.getState().positionAtIndex(50));
+      dataChangedEstimates.push(
+        position - measured(list.getState().positionAtIndex(50)),
+      );
     };
 
     // Thresholds are expressed against the settled measurement rather than
@@ -200,7 +218,8 @@ describe("LegendList estimate recovery", () => {
     await settleLegendList();
 
     const poisonedEstimate =
-      list.getState().positionAtIndex(51) - list.getState().positionAtIndex(50);
+      measured(list.getState().positionAtIndex(51)) -
+      measured(list.getState().positionAtIndex(50));
     expect(poisonedEstimate).toBeGreaterThan(grosslyOff);
 
     act(() => {
@@ -495,7 +514,10 @@ describe("LegendList estimate recovery", () => {
 
       const effectiveSizeAt = (index: number): number => {
         const state = list.getState();
-        return state.positionAtIndex(index + 1) - state.positionAtIndex(index);
+        return (
+          measured(state.positionAtIndex(index + 1)) -
+          measured(state.positionAtIndex(index))
+        );
       };
 
       // Poison the live average through a row this test never mounts or
@@ -630,12 +652,12 @@ describe("LegendList estimate recovery", () => {
       // reader cannot see them move; this row is what the reader is looking at.
       const state = list.getState();
       let anchorIndex = 0;
-      while (state.positionAtIndex(anchorIndex) < SCROLL_TARGET) {
+      while (measured(state.positionAtIndex(anchorIndex)) < SCROLL_TARGET) {
         anchorIndex += 1;
       }
       const offsetOf = (): number => {
         const current = list.getState();
-        return current.positionAtIndex(anchorIndex) - current.scroll;
+        return measured(current.positionAtIndex(anchorIndex)) - current.scroll;
       };
       const before = offsetOf();
 
@@ -728,12 +750,12 @@ describe("LegendList estimate recovery", () => {
 
       const state = list.getState();
       let anchorIndex = 0;
-      while (state.positionAtIndex(anchorIndex) < state.scroll) {
+      while (measured(state.positionAtIndex(anchorIndex)) < state.scroll) {
         anchorIndex += 1;
       }
       const offsetOf = (): number => {
         const current = list.getState();
-        return current.positionAtIndex(anchorIndex) - current.scroll;
+        return measured(current.positionAtIndex(anchorIndex)) - current.scroll;
       };
       const before = offsetOf();
 
@@ -759,7 +781,7 @@ describe("LegendList estimate recovery", () => {
 
       const rowCount = 70;
       const positionsBefore = Array.from({ length: rowCount }, (_, index) =>
-        list.getState().positionAtIndex(index),
+        measured(list.getState().positionAtIndex(index)),
       );
 
       act(() => {
@@ -912,11 +934,11 @@ describe("LegendList estimate recovery", () => {
 
       // A row above the reader grows while the command is in flight. The
       // list holds that growth back as the anchor shift for the scroller.
-      const sizeBefore = list.getState().sizeAtIndex(19);
+      const sizeBefore = measured(list.getState().sizeAtIndex(19));
       act(() => {
         list.setItemSize("row-19", { height: measuredSize * 3, width: 800 });
       });
-      const growth = list.getState().sizeAtIndex(19) - sizeBefore;
+      const growth = measured(list.getState().sizeAtIndex(19)) - sizeBefore;
       expect(growth).toBeGreaterThan(0);
 
       // The reader's wheel moves the scroller; its scroll event has not
@@ -1115,14 +1137,14 @@ describe("LegendList estimate recovery", () => {
         },
         endBefore,
         resize: (index: number, delta: number) => {
-          const before = list.getState().sizeAtIndex(index);
+          const before = measured(list.getState().sizeAtIndex(index));
           act(() => {
             list.setItemSize(`row-${String(index)}`, {
               height: before + delta,
               width: 800,
             });
           });
-          return list.getState().sizeAtIndex(index) - before;
+          return measured(list.getState().sizeAtIndex(index)) - before;
         },
         land: () => {
           held.mockImplementation(

@@ -87,13 +87,13 @@ export interface SessionImportSecondaryAction {
 
 /**
  * The one import surface, used by the onboarding act and the Settings dialog
- * alike (spec D3). It hands the user's selection to the app-wide run
+ * alike. It hands the user's selection to the app-wide run
  * controller rather than owning the run itself - which is what lets it be
  * closed mid-import.
  *
  * The scan is the caller's (`useSessionImportScan`), because the two surfaces
  * start it at different moments: the dialog when it opens, the tour when it
- * begins - several acts before this wizard is on screen (D13, revised).
+ * begins - several acts before this wizard is on screen.
  *
  * Both surfaces submit through the wizard's own Import button. The tour used
  * to submit through its Continue instead, which imported the default selection
@@ -205,7 +205,7 @@ export function SessionImportWizard(props: {
   );
   const onboarding = surface === "onboarding";
   // The tour's act on a phone, and nothing else: the Settings dialog keeps its
-  // own toolbar at every width (spec D3 - one wizard, two presentations), so
+  // own toolbar at every width (one wizard, two presentations), so
   // this is deliberately `onboarding &&` rather than the viewport alone. Read
   // once here and passed down, so the rows below take no subscription.
   const phone = useIsMobileViewport() && onboarding;

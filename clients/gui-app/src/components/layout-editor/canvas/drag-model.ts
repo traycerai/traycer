@@ -1,5 +1,5 @@
 /**
- * The pure model of a reorder drag (L-24, L-29, section 6).
+ * The pure model of a reorder drag (L-24, L-29).
  *
  * Where the members of a list sit, which slot the dragged one currently
  * claims, where it comes to rest when it is let go, how far past a clamp it may
@@ -33,7 +33,7 @@ export interface DragSlot {
   readonly size: number;
 }
 
-/** How far a press travels before it is unmistakably a drag (section 6). */
+/** How far a press travels before it is unmistakably a drag. */
 const DRAG_ACTIVATION_DISTANCE = 6;
 
 /**
@@ -63,7 +63,7 @@ const DRAG_ACTIVATION_DISTANCE = 6;
  */
 const MIN_CLAIM_TRAVEL = DRAG_ACTIVATION_DISTANCE * 2;
 
-/** How much of a pull past a clamp survives (section 6). */
+/** How much of a pull past a clamp survives. */
 const RUBBER_BAND = 0.25;
 
 /** How long a pointer sample stays interesting, in milliseconds. */

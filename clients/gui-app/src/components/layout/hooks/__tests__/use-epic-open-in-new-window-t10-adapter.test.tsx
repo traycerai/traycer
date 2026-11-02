@@ -1,5 +1,5 @@
 /**
- * T10: grouped-move adapter (renderer-only; the move IPC itself is
+ * Grouped-move adapter (renderer-only; the move IPC itself is
  * UNCHANGED - `requestOpenEpicInNewWindow` stays exactly as it was). Drives
  * the real `useEpicOpenInNewWindowFlow` hook against real
  * `useTabsStore`/`useEpicCanvasStore` state and a REAL
@@ -7,7 +7,7 @@
  * with a controllable ownership bridge, to prove the adapter's race
  * guarantees at the actual production callsite:
  *  - cancel/wait-never-separates
- *  - separate-before-flush-before-move ordering (the T4 move barrier)
+ *  - separate-before-flush-before-move ordering (the move barrier)
  *  - abort-on-ref-change-during-await
  *  - non-moved/failure leaves two valid ordinary tabs
  *  - post-success removal routes through the coordinator
@@ -108,7 +108,7 @@ interface DeferredWrite {
   readonly reject: (error: Error) => void;
 }
 
-/** A real, controllable T4 persistence bridge - `update()` stays pending
+/** A real, controllable persistence bridge - `update()` stays pending
  * until the test explicitly resolves or rejects it, so ordering against the
  * move IPC - and genuine write-failure handling - can be observed directly
  * instead of inferred from timing. */

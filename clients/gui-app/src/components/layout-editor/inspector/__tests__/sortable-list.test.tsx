@@ -85,7 +85,7 @@ function section(regionId: RegionId, onExit: () => void): ReactNode {
 /**
  * The same list on the other host (L-03, L-95), where the rows carry their own
  * controls: the Settings page draws a surface card with `onMove: null`, so its
- * rows are unordered AND decorated, which is the combination R1-02 was about.
+ * rows are unordered AND decorated, the combination these tests need to cover.
  * Chat is the surface with no picture and no order group, so the card is its
  * two rows and nothing else.
  */
@@ -371,7 +371,7 @@ describe("what a row claims as its own (R1-02)", () => {
     // A composite widget names itself from its contents: the row is "Minimap",
     // never "Minimap Left Right Show Minimap". Said of EVERY row in the card,
     // hinted or not, because the precondition that used to stand here excluded
-    // the only rows the defect was ever about (R2-08).
+    // the only rows the defect was ever about.
     const facts = regionFacts("minimap");
     expect(grabOf(minimap).textContent).toBe(facts.name);
     const named = screen.getByRole("button", { name: facts.name });
@@ -512,14 +512,14 @@ describe("the page's row anatomy (L-120, L-121, L-122, R2-08)", () => {
     const rule = described.find((node) => node?.textContent === hint);
     expect(rule).toBeDefined();
     // A description is a SIBLING of the control it describes; inside it, it is
-    // part of the control's name instead (R2-08).
+    // part of the control's name instead.
     expect(grab.contains(rule ?? null)).toBe(false);
     // The grab instructions are still there beside it.
     expect(described.length).toBe(2);
   });
 
   /**
-   * One row height for a plain row and a hinted one (R3-08, LV2-11).
+   * One row height for a plain row and a hinted one (LV2-11).
    *
    * Measured as the thing that CAUSED the difference rather than as a pixel
    * count jsdom cannot give: the rule used to be an extra line inside the row's
@@ -569,12 +569,12 @@ describe("the page's row anatomy (L-120, L-121, L-122, R2-08)", () => {
 });
 
 /**
- * One header component, composed by both hosts (R3-11).
+ * One header component, composed by both hosts.
  *
  * The page's surface card and the dock's Providers level each used to BUILD
  * this header - the same gutter, the same `h3`, the same `max-w-[72ch]`
  * paragraph - so a change to its shape had to be made in two files or the two
- * stopped matching, which is the drift R1-04 named one layer down. What the two
+ * stopped matching. What the two
  * hosts are allowed to differ by is the row scale, and nothing else.
  */
 describe("the list header, in both hosts (R3-11)", () => {

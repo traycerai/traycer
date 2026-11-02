@@ -7,7 +7,6 @@ import {
   isVoiceInputRowAvailable,
 } from "@/lib/settings/settings-availability";
 import { defineSettingsSection } from "@/lib/settings-search/settings-definitions";
-import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 
 /**
  * The composer's steering chord, and the only General copy that is
@@ -188,14 +187,13 @@ export const GENERAL = defineSettingsSection("general", {
     availableWhen: alwaysAvailable,
     keywords: ["archive", "idle", "inactive", "auto", "cleanup", "timer"],
   },
-  // Not offered by a build without bots (`unreleased-features.ts`).
   bots: {
     kind: "group",
     search: { anchor: "general-bots" },
     label: "Bots",
     description: null,
     breadcrumb: null,
-    availableWhen: () => UNRELEASED_FEATURES_ENABLED,
+    availableWhen: alwaysAvailable,
     keywords: ["bot", "bots", "tracy", "channel"],
   },
   showTracy: {
@@ -203,9 +201,8 @@ export const GENERAL = defineSettingsSection("general", {
     group: "bots",
     search: { anchor: "general-show-tracy" },
     label: "Show Tracy",
-    description:
-      "Keep Tracy next to Home. When off, open Tracy from the bots list.",
-    availableWhen: () => UNRELEASED_FEATURES_ENABLED,
+    description: "Keep Tracy next to Home. When off, open Tracy from Home.",
+    availableWhen: alwaysAvailable,
     keywords: ["tracy", "bot", "tab strip", "home", "pin", "sidebar"],
   },
   dangerZone: {

@@ -109,6 +109,16 @@ export type FinalizeSwapOutcome =
       readonly stagedBinaryPath: string;
       readonly livePath: string;
     }
+  // The staged binary is below the installed version, so it was not
+  // published. Distinct from `swap-failed`: nothing was attempted and
+  // nothing went wrong - see the `installed-newer` outcome in
+  // `cli-upgrade.ts` for why the manifest is read as untrusted input.
+  | {
+      readonly status: "installed-newer";
+      readonly stagedVersion: string;
+      readonly installedVersion: string;
+      readonly serviceStartError: string | null;
+    }
   | {
       readonly status: "no-pending";
       readonly serviceStartError: string | null;
@@ -406,6 +416,44 @@ async function runFinalizeUpgradeSwapWithStart(
     };
   }
 
+  if (swap.status === "installed-newer") {
+    // Hand the host back like every other non-swap outcome. A marker is
+    // written only to carry a service-start failure, as the no-pending
+    // branch does: there is no swap failure to reconcile, and a
+    // `swap-failed` marker written unconditionally would report one. It
+    // leaves `pendingUpgrade` standing either way, which is what this
+    // outcome wants - the staged record is superseded, not wrong.
+    //
+    // The marker keeps both paths, so `markerDescribesUpgrade` MATCHES the
+    // pending record it was written beside. That is why doctor gives the
+    // version ordering precedence over a matching `swap-failed` marker: left
+    // alone it reported this state as a failed finalization with a
+    // host-restart fix. The identity is kept rather than blanked because the
+    // alternative - the empty-path marker the no-pending branch writes - is
+    // read as "no pending CLI upgrade remained", which is not true here.
+    const serviceStartError = await startServiceBestEffort(
+      startService,
+      opts.environment,
+      logger,
+    );
+    if (serviceStartError !== null) {
+      await writePostFinalizeMarkerFile(markerPath, {
+        status: "swap-failed",
+        attemptedAt: new Date().toISOString(),
+        livePath: swap.livePath,
+        stagedBinaryPath: swap.stagedBinaryPath,
+        errorMessage: `staged cli ${swap.stagedVersion} was not installed over the newer installed ${swap.installedVersion}`,
+        serviceStartError,
+      });
+    }
+    return {
+      status: "installed-newer",
+      stagedVersion: swap.stagedVersion,
+      installedVersion: swap.installedVersion,
+      serviceStartError,
+    };
+  }
+
   // `publish-failed` and `still-locked` are the same shape of outcome:
   // the swap did not happen, the live binary is untouched, and
   // `pendingUpgrade` stands. Both must still hand the host back.
@@ -524,6 +572,12 @@ function humanForOutcome(outcome: FinalizeSwapOutcome): string {
         `${outcome.stagedBinaryPath}; pending state retained. ` +
         "Re-run 'traycer cli upgrade' to re-stage it."
       );
+    case "installed-newer": {
+      const summary = `cli finalize-upgrade: staged ${outcome.stagedVersion} was not installed; the cli is already at ${outcome.installedVersion}`;
+      return outcome.serviceStartError === null
+        ? summary
+        : `${summary}; service did not start: ${outcome.serviceStartError}`;
+    }
     case "no-pending":
       return outcome.serviceStartError === null
         ? "cli finalize-upgrade: nothing to finalize"
