@@ -134,3 +134,38 @@ describe("browserViewIpcPayload.loginImportScan", () => {
     expect(parsed.success).toBe(false);
   });
 });
+
+describe("browserViewIpcPayload.guestDrawHoldApplied", () => {
+  const applied = {
+    holdId: "hold-1",
+    registrationId: "registration-1",
+    applied: true,
+  };
+
+  it("accepts a well-formed acknowledgement", () => {
+    expect(browserViewIpcPayload.guestDrawHoldApplied.parse(applied)).toEqual(
+      applied,
+    );
+  });
+
+  it("rejects an empty hold id, a non-boolean applied and an extra key", () => {
+    expect(
+      browserViewIpcPayload.guestDrawHoldApplied.safeParse({
+        ...applied,
+        holdId: "",
+      }).success,
+    ).toBe(false);
+    expect(
+      browserViewIpcPayload.guestDrawHoldApplied.safeParse({
+        ...applied,
+        applied: "yes",
+      }).success,
+    ).toBe(false);
+    expect(
+      browserViewIpcPayload.guestDrawHoldApplied.safeParse({
+        ...applied,
+        extra: 1,
+      }).success,
+    ).toBe(false);
+  });
+});

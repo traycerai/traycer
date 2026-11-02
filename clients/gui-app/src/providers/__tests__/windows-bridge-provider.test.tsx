@@ -51,7 +51,9 @@ import {
 import { __syncEpicParkingOpenTabsForTests } from "@/lib/epics/epic-parking-open-tabs";
 import { __resetCrossWindowEpicVisibilityForTests } from "@/lib/epics/cross-window-epic-visibility";
 import {
+  __setBrowserDocumentHiddenForTests,
   isDocumentVisible,
+  isWindowOnScreen,
   setDesktopWindowOnScreen,
 } from "@/lib/dom/document-visibility";
 import { RETRY_DELAYS_MS } from "@/lib/epics/bounded-retry";
@@ -1703,6 +1705,193 @@ describe("<WindowsBridgeProvider /> - renderer parking's window visibility input
     expect(isDocumentVisible()).toBe(true);
   });
 
+  it("a covered window that is then minimised parks and withdraws its claim, and a restore unparks it while Page Visibility stays hidden", async () => {
+    const EPIC = "epic-provider-window-covered-then-minimised";
+    const VIEW = "view-provider-window-covered-then-minimised";
+    const fake = createDesktopWindowsBridge();
+    const visibility = createEpicVisibilityChannel([]);
+    const windowVisibility = createWindowVisibilityChannel(true);
+    vi.useFakeTimers();
+    setEpicSurfaceVisibility(EPIC, VIEW, true);
+    __setBrowserDocumentHiddenForTests(true);
+    try {
+      render(
+        <RunnerHostProvider
+          runnerHost={createRunnerHostWithWindows({
+            ...bridgeWithEpicVisibility(fake, visibility),
+            windowVisibility: windowVisibility.channel,
+          })}
+        >
+          <WindowsBridgeProvider>
+            <BridgeProbe onBridge={() => undefined} />
+          </WindowsBridgeProvider>
+        </RunnerHostProvider>,
+      );
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      act(() => {
+        openEpicTabForParking(
+          "tab-provider-window-covered-then-minimised",
+          EPIC,
+        );
+      });
+      act(() => {
+        windowVisibility.emit(false);
+      });
+      expect(visibility.reports.at(-1)).toEqual([]);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(PARK_HIDDEN_EPIC_AFTER_MS);
+      });
+      expect(isEpicParked(EPIC)).toBe(true);
+
+      act(() => {
+        windowVisibility.emit(true);
+      });
+      expect(isEpicParked(EPIC)).toBe(false);
+      expect(visibility.reports.at(-1)).toContain(EPIC);
+    } finally {
+      __setBrowserDocumentHiddenForTests(false);
+      setEpicSurfaceVisibility(EPIC, VIEW, false);
+    }
+  });
+
+  it("without the channel, a hidden Page Visibility still parks the epic and withdraws its claim", async () => {
+    const EPIC = "epic-provider-window-no-channel-hidden";
+    const VIEW = "view-provider-window-no-channel-hidden";
+    const fake = createDesktopWindowsBridge();
+    const visibility = createEpicVisibilityChannel([]);
+    vi.useFakeTimers();
+    setEpicSurfaceVisibility(EPIC, VIEW, true);
+    __setBrowserDocumentHiddenForTests(true);
+    try {
+      render(
+        <RunnerHostProvider
+          runnerHost={createRunnerHostWithWindows(
+            bridgeWithEpicVisibility(fake, visibility),
+          )}
+        >
+          <WindowsBridgeProvider>
+            <BridgeProbe onBridge={() => undefined} />
+          </WindowsBridgeProvider>
+        </RunnerHostProvider>,
+      );
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      act(() => {
+        openEpicTabForParking("tab-provider-window-no-channel-hidden", EPIC);
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(PARK_HIDDEN_EPIC_AFTER_MS);
+      });
+      expect(isEpicParked(EPIC)).toBe(true);
+      expect(visibility.reports.at(-1)).toEqual([]);
+    } finally {
+      __setBrowserDocumentHiddenForTests(false);
+      setEpicSurfaceVisibility(EPIC, VIEW, false);
+    }
+  });
+
+  it.each([
+    {
+      case: "never settles",
+      arm: (channel: FakeWindowVisibilityChannel) => {
+        channel.setSnapshotPending();
+      },
+    },
+    {
+      case: "keeps failing past the retry budget",
+      arm: (channel: FakeWindowVisibilityChannel) => {
+        channel.rejectNextSnapshots(RETRY_DELAYS_MS.length + 1);
+      },
+    },
+  ])(
+    "a hidden window whose startup snapshot $case follows Page Visibility: it parks and withdraws its claim until main reports",
+    async ({ arm }) => {
+      const EPIC = "epic-provider-window-snapshot-unanswered";
+      const VIEW = "view-provider-window-snapshot-unanswered";
+      const fake = createDesktopWindowsBridge();
+      const visibility = createEpicVisibilityChannel([]);
+      const windowVisibility = createWindowVisibilityChannel(false);
+      arm(windowVisibility);
+      vi.useFakeTimers();
+      setEpicSurfaceVisibility(EPIC, VIEW, true);
+      __setBrowserDocumentHiddenForTests(true);
+      try {
+        render(
+          <RunnerHostProvider
+            runnerHost={createRunnerHostWithWindows({
+              ...bridgeWithEpicVisibility(fake, visibility),
+              windowVisibility: windowVisibility.channel,
+            })}
+          >
+            <WindowsBridgeProvider>
+              <BridgeProbe onBridge={() => undefined} />
+            </WindowsBridgeProvider>
+          </RunnerHostProvider>,
+        );
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(0);
+        });
+        act(() => {
+          openEpicTabForParking(
+            "tab-provider-window-snapshot-unanswered",
+            EPIC,
+          );
+        });
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(PARK_HIDDEN_EPIC_AFTER_MS);
+        });
+        expect(isEpicParked(EPIC)).toBe(true);
+        expect(visibility.reports.at(-1)).toEqual([]);
+
+        // Main finally answers "on screen": it overrides the hidden document.
+        act(() => {
+          windowVisibility.emit(true);
+        });
+        expect(isEpicParked(EPIC)).toBe(false);
+        expect(visibility.reports.at(-1)).toContain(EPIC);
+      } finally {
+        __setBrowserDocumentHiddenForTests(false);
+        setEpicSurfaceVisibility(EPIC, VIEW, false);
+      }
+    },
+  );
+
+  it("once the provider unmounts, the on-screen answer follows Page Visibility again", async () => {
+    const fake = createDesktopWindowsBridge();
+    const visibility = createEpicVisibilityChannel([]);
+    const windowVisibility = createWindowVisibilityChannel(true);
+    vi.useFakeTimers();
+    __setBrowserDocumentHiddenForTests(true);
+    try {
+      const view = render(
+        <RunnerHostProvider
+          runnerHost={createRunnerHostWithWindows({
+            ...bridgeWithEpicVisibility(fake, visibility),
+            windowVisibility: windowVisibility.channel,
+          })}
+        >
+          <WindowsBridgeProvider>
+            <BridgeProbe onBridge={() => undefined} />
+          </WindowsBridgeProvider>
+        </RunnerHostProvider>,
+      );
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(isWindowOnScreen()).toBe(true);
+
+      act(() => {
+        view.unmount();
+      });
+      expect(isWindowOnScreen()).toBe(false);
+    } finally {
+      __setBrowserDocumentHiddenForTests(false);
+    }
+  });
+
   // ── The startup read is OLDER than any event that lands while it is in
   // flight ───────────────────────────────────────────────────────────────────
   //
@@ -1949,18 +2138,18 @@ describe("<WindowsBridgeProvider /> - renderer parking's window visibility input
   });
 });
 
-// ── A covered macOS window parks its epics (traycer#2355) ───────────────────
+// ── A covered macOS window keeps its epics (traycer#2355) ────────────────────
 //
 // Main creates every window background-throttled and keeps a window rendering
 // unseen only while this renderer reports a browser tile's video plane
 // (`backgroundRendering.setRequired`). Throttled, a covered window on macOS
 // reports `document.visibilityState === "hidden"` while main still sees it
-// shown and not minimised, and that is what starts the park clock. Electron
-// updates visibility on occlusion only on macOS: on Windows and Linux a covered
-// window stays "visible" and parks only once minimised or hidden (the window
-// visibility pins above). The pin renders the REAL provider, so the demand
-// asserted is the one main applies, and it hides the document only once that
-// demand is released.
+// shown and not minimised: painting and polling stop, but residency follows
+// main, so its epics stay resident and claimed. Electron updates visibility on
+// occlusion only on macOS; on every platform a window parks only once main
+// reports it minimised or hidden (the window visibility pins above). The pin
+// renders the REAL provider, so the demand asserted is the one main applies,
+// and it hides the document only once that demand is released.
 
 function setDocumentVisibilityState(state: "visible" | "hidden"): void {
   Object.defineProperty(document, "visibilityState", {
@@ -1999,7 +2188,7 @@ describe("<WindowsBridgeProvider /> - a covered macOS window's epics", () => {
     vi.useRealTimers();
   });
 
-  it("park five minutes after the window is covered on macOS, once no video plane keeps it rendering", async () => {
+  it("keep a covered macOS window's epics resident once no video plane keeps it rendering", async () => {
     const EPIC = "epic-provider-window-covered";
     const VIEW = "view-provider-window-covered";
     const fake = createDesktopWindowsBridge();
@@ -2051,25 +2240,18 @@ describe("<WindowsBridgeProvider /> - a covered macOS window's epics", () => {
       });
       expect(renderingDemand).toEqual([false, true, false]);
 
-      // Throttled again, so covering the window on macOS hides the document.
+      // Throttled again, so covering the window on macOS hides the document:
+      // rendering stops, but main still says the window is shown, so its epic
+      // stays resident and claimed however long the cover lasts.
       act(() => {
         setDocumentVisibilityState("hidden");
       });
       expect(isDocumentVisible()).toBe(false);
       await act(async () => {
-        await vi.advanceTimersByTimeAsync(PARK_HIDDEN_EPIC_AFTER_MS - 1);
+        await vi.advanceTimersByTimeAsync(PARK_HIDDEN_EPIC_AFTER_MS * 2);
       });
       expect(isEpicParked(EPIC)).toBe(false);
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(1);
-      });
-      expect(isEpicParked(EPIC)).toBe(true);
-
-      // Uncovered: the epic is resident again at once.
-      act(() => {
-        setDocumentVisibilityState("visible");
-      });
-      expect(isEpicParked(EPIC)).toBe(false);
+      expect(visibility.reports.at(-1)).toContain(EPIC);
     } finally {
       setEpicSurfaceVisibility(EPIC, VIEW, false);
     }
