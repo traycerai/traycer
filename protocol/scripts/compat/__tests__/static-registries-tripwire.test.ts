@@ -414,12 +414,31 @@ function unwrapped(node: ts.Expression): ts.Expression {
     : node;
 }
 
+/** One file bound on its own, so TypeScript answers which declaration a name means. */
+function bindSingleFile(source: ts.SourceFile): ts.TypeChecker {
+  const host: ts.CompilerHost = {
+    getSourceFile: (name) => (name === source.fileName ? source : undefined),
+    writeFile: () => undefined,
+    getDefaultLibFileName: () => "lib.d.ts",
+    useCaseSensitiveFileNames: () => true,
+    getCanonicalFileName: (name) => name,
+    getCurrentDirectory: () => "",
+    getNewLine: () => "\n",
+    fileExists: (name) => name === source.fileName,
+    readFile: () => undefined,
+  };
+  return ts
+    .createProgram([source.fileName], { noLib: true, noResolve: true }, host)
+    .getTypeChecker();
+}
+
 /**
  * The lines of a test file that hand a validator a whole host registry, a copy
- * of one, or the static registry list. It follows what a file can do to those
- * in its own text: rename an import, bind a value to a new name, wrap it in a
- * cast, spread it, `Object.assign` it, or read it off a namespace. A value that
- * reaches a validator through another module's function is out of its sight.
+ * of one, or the static registry list. It resolves what a file can do to those
+ * in its own text: rename an import, bind a value to a name in any scope and
+ * order, destructure it, wrap it in a cast, spread it, `Object.assign` it, or
+ * read it off a namespace. A value that reaches a validator through a function
+ * parameter or another module is out of its sight.
  */
 function wholeHostRegistryValidationLines(
   fileName: string,
@@ -431,63 +450,88 @@ function wholeHostRegistryValidationLines(
     ts.ScriptTarget.Latest,
     true,
   );
-  const registries = new Set(HOST_REGISTRY_NAMES);
-  registries.add("STATIC_REGISTRIES");
+  const checker = bindSingleFile(source);
   const validators = new Set([
     ...HOST_REGISTRY_VALIDATORS,
     ...STATIC_REGISTRY_WALKERS,
   ]);
-  const isWhole = (expression: ts.Expression): boolean => {
+  const isRegistryName = (name: string): boolean =>
+    HOST_REGISTRY_NAMES.has(name) || name === "STATIC_REGISTRIES";
+
+  // The exported name an expression comes from, following local bindings. A
+  // name with no declaration in the file answers as itself; a parameter, or
+  // anything else computed, answers null.
+  const originName = (
+    expression: ts.Expression,
+    seen: ReadonlySet<ts.Symbol>,
+  ): string | null => {
     const node = unwrapped(expression);
-    if (ts.isIdentifier(node)) return registries.has(node.text);
-    if (ts.isPropertyAccessExpression(node)) {
-      return registries.has(node.name.text);
+    if (ts.isPropertyAccessExpression(node)) return node.name.text;
+    if (!ts.isIdentifier(node)) return null;
+    const symbol = checker.getSymbolAtLocation(node);
+    const declaration = symbol?.declarations?.[0];
+    if (symbol === undefined || declaration === undefined) return node.text;
+    if (seen.has(symbol)) return null;
+    if (ts.isImportSpecifier(declaration)) {
+      return (declaration.propertyName ?? declaration.name).text;
+    }
+    if (ts.isBindingElement(declaration)) {
+      const bound = declaration.propertyName ?? declaration.name;
+      return ts.isIdentifier(bound) ? bound.text : null;
+    }
+    if (
+      ts.isVariableDeclaration(declaration) &&
+      declaration.initializer !== undefined
+    ) {
+      return originName(declaration.initializer, new Set([...seen, symbol]));
+    }
+    return null;
+  };
+
+  const isWhole = (
+    expression: ts.Expression,
+    seen: ReadonlySet<ts.Symbol>,
+  ): boolean => {
+    const origin = originName(expression, seen);
+    if (origin !== null && isRegistryName(origin)) return true;
+    const node = unwrapped(expression);
+    if (ts.isIdentifier(node)) {
+      const symbol = checker.getSymbolAtLocation(node);
+      const declaration = symbol?.declarations?.[0];
+      return (
+        symbol !== undefined &&
+        declaration !== undefined &&
+        !seen.has(symbol) &&
+        ts.isVariableDeclaration(declaration) &&
+        declaration.initializer !== undefined &&
+        isWhole(declaration.initializer, new Set([...seen, symbol]))
+      );
     }
     if (ts.isObjectLiteralExpression(node)) {
       return node.properties.some(
         (property) =>
-          ts.isSpreadAssignment(property) && isWhole(property.expression),
+          ts.isSpreadAssignment(property) && isWhole(property.expression, seen),
       );
     }
     if (ts.isCallExpression(node)) {
       return (
         node.expression.getText(source) === "Object.assign" &&
-        node.arguments.some(isWhole)
+        node.arguments.some((argument) => isWhole(argument, seen))
       );
     }
     return false;
   };
-  const calleeText = (node: ts.CallExpression): string | null => {
-    const callee = unwrapped(node.expression);
-    if (ts.isIdentifier(callee)) return callee.text;
-    return ts.isPropertyAccessExpression(callee) ? callee.name.text : null;
-  };
+
   const lines: number[] = [];
   const visit = (node: ts.Node): void => {
-    if (ts.isImportSpecifier(node) && node.propertyName !== undefined) {
-      const imported = node.propertyName.text;
-      if (registries.has(imported)) registries.add(node.name.text);
-      if (validators.has(imported)) validators.add(node.name.text);
-    }
-    if (
-      ts.isVariableDeclaration(node) &&
-      ts.isIdentifier(node.name) &&
-      node.initializer !== undefined
-    ) {
-      if (isWhole(node.initializer)) registries.add(node.name.text);
-      const value = unwrapped(node.initializer);
-      if (ts.isIdentifier(value) && validators.has(value.text)) {
-        validators.add(node.name.text);
-      }
-    }
     if (ts.isCallExpression(node)) {
-      const name = calleeText(node);
+      const validator = originName(node.expression, new Set());
       const argument = node.arguments[0];
       if (
-        name !== null &&
-        validators.has(name) &&
+        validator !== null &&
+        validators.has(validator) &&
         argument !== undefined &&
-        isWhole(argument)
+        isWhole(argument, new Set())
       ) {
         lines.push(
           source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1,
@@ -604,6 +648,31 @@ describe("the one whole-registry validation", () => {
       "the static registry list",
       "findStaticRegistryFailures(STATIC_REGISTRIES);",
       1,
+    ],
+    [
+      "a destructured registry",
+      "const { hostRpcRegistry: r } = mod; validateVersionedRpcRegistry(r);",
+      1,
+    ],
+    [
+      "a binding declared after the call that reads it",
+      "function check() { validateVersionedRpcRegistry(registry); } const registry = hostRpcRegistry; check();",
+      1,
+    ],
+    [
+      "the same local name meaning a subset in another scope",
+      'it("a", () => { const registry = hostRpcRegistry; expect(registry).toBeDefined(); }); it("b", () => { const registry = { "a.b": hostRpcRegistry["a.b"] }; validateVersionedRpcRegistry(registry); });',
+      0,
+    ],
+    [
+      "a parameter that shadows the name",
+      "function check(hostRpcRegistry: Lines) { validateVersionedRpcRegistry(hostRpcRegistry); }",
+      0,
+    ],
+    [
+      "bindings that refer to each other",
+      "const a = b; const b = a; validateVersionedRpcRegistry(a);",
+      0,
     ],
     [
       "the lines a test claims",
