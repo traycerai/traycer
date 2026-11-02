@@ -1148,12 +1148,6 @@ export async function setAgentRolesEnabled(enabled: boolean): Promise<void> {
   }));
 }
 
-/** The `agentFeedback` block. Throws on a malformed block, like `readBrowserConfig`. */
-export async function readAgentFeedbackConfig(): Promise<AgentFeedbackConfig> {
-  return agentFeedbackOnlyConfigSchema.parse(await readCliConfig())
-    .agentFeedback;
-}
-
 /**
  * Best-effort synchronous read for the gates on `traycer_send_feedback`. No
  * config file is the unset case, so it reads on. A file that cannot be read or
@@ -1163,8 +1157,11 @@ export async function readAgentFeedbackConfig(): Promise<AgentFeedbackConfig> {
 export function readAgentFeedbackConfigSync(): AgentFeedbackConfig {
   try {
     const raw = readFileSync(cliConfigPath(), "utf8");
-    const result = agentFeedbackOnlyConfigSchema.safeParse(JSON.parse(raw));
-    if (result.success) return result.data.agentFeedback;
+    const parsed: unknown = JSON.parse(raw);
+    const result = agentFeedbackOnlyConfigSchema.safeParse(parsed);
+    if (result.success && parseCliConfig(parsed).success) {
+      return result.data.agentFeedback;
+    }
   } catch (error) {
     if (error instanceof Error && "code" in error && error.code === "ENOENT") {
       return { enabled: true };
@@ -1175,13 +1172,10 @@ export function readAgentFeedbackConfigSync(): AgentFeedbackConfig {
 
 /** Enables or disables agent feedback while preserving the rest of the config. */
 export async function setAgentFeedbackEnabled(enabled: boolean): Promise<void> {
-  await updateCliConfig((current) => {
-    const { agentFeedback } = agentFeedbackOnlyConfigSchema.parse(current);
-    return {
-      next: { ...current, agentFeedback: { ...agentFeedback, enabled } },
-      result: undefined,
-    };
-  });
+  await updateCliConfig((current) => ({
+    next: { ...current, agentFeedback: { enabled } },
+    result: undefined,
+  }));
 }
 
 /** Whether agents may drive the in-app browser (default on when unset). */

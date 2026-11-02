@@ -96,7 +96,7 @@ import {
   setDesktopLogLevel,
 } from "../app/desktop-log-level";
 import {
-  readAgentFeedbackConfig,
+  readAgentFeedbackConfigSync,
   readFeatureSettings,
   readLogLevels,
   setAgentFeedbackEnabled,
@@ -574,11 +574,11 @@ export function registerPlatformIpc(
 }
 
 async function readFeatureSettingsSnapshot(): Promise<FeatureSettingsSnapshot> {
-  const [features, agentFeedback] = await Promise.all([
-    readFeatureSettings(),
-    readAgentFeedbackConfig(),
-  ]);
-  return { agentRoles: features.agentRoles, agentFeedback: agentFeedback.enabled };
+  const features = await readFeatureSettings();
+  return {
+    agentRoles: features.agentRoles,
+    agentFeedback: readAgentFeedbackConfigSync().enabled,
+  };
 }
 
 function redactNullableText(value: string | null): string | null {

@@ -68,7 +68,6 @@ import {
   setAgentBrowserAccess,
   setAgentPages,
   setAgentFeedbackEnabled,
-  readAgentFeedbackConfig,
   readAgentFeedbackConfigSync,
   setAgentRolesEnabled,
   setAgentWorktreeCreatePolicy,
@@ -285,7 +284,6 @@ describe("cli config store", () => {
 
   it("reads agent feedback on with no file and when the block is absent", async () => {
     expect(readAgentFeedbackConfigSync()).toEqual({ enabled: true });
-    expect(await readAgentFeedbackConfig()).toEqual({ enabled: true });
     await writeRaw(
       JSON.stringify({
         version: 1,
@@ -295,7 +293,6 @@ describe("cli config store", () => {
       }),
     );
     expect(readAgentFeedbackConfigSync()).toEqual({ enabled: true });
-    expect(await readAgentFeedbackConfig()).toEqual({ enabled: true });
   });
 
   it("reads agent feedback off when the block says false", async () => {
@@ -303,7 +300,6 @@ describe("cli config store", () => {
       JSON.stringify({ version: 1, agentFeedback: { enabled: false } }),
     );
     expect(readAgentFeedbackConfigSync()).toEqual({ enabled: false });
-    expect(await readAgentFeedbackConfig()).toEqual({ enabled: false });
   });
 
   it("fails closed for malformed, wrong-typed, and future-version agent feedback reads", async () => {
@@ -371,7 +367,25 @@ describe("cli config store", () => {
     const raw = JSON.parse(await readFile(cliConfigPath(), "utf8"));
     await writeRaw(JSON.stringify({ ...raw, features: stripped }));
     expect(readAgentFeedbackConfigSync()).toEqual({ enabled: false });
-    expect(await readAgentFeedbackConfig()).toEqual({ enabled: false });
+  });
+
+  it("fails closed when the rest of the config is invalid, and a toggle repairs a bad block", async () => {
+    await writeRaw(
+      JSON.stringify({ version: 999, agentFeedback: { enabled: true } }),
+    );
+    expect(readAgentFeedbackConfigSync()).toEqual({ enabled: false });
+    await writeRaw(
+      JSON.stringify({
+        version: 1,
+        features: { agentRoles: "no" },
+        agentFeedback: { enabled: true },
+      }),
+    );
+    expect(readAgentFeedbackConfigSync()).toEqual({ enabled: false });
+
+    await writeRaw(JSON.stringify({ version: 1, agentFeedback: true }));
+    await setAgentFeedbackEnabled(true);
+    expect(readAgentFeedbackConfigSync()).toEqual({ enabled: true });
   });
 
   it("reads agent browser access as on from a pre-feature file", async () => {
