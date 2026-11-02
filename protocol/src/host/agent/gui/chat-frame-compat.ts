@@ -997,6 +997,166 @@ function projectPreCanvasAnnotationFrame(
   }
 }
 
+/** The `slack` user message first rides 1.43 (`slackUserMessageSchema`). */
+export const CHAT_SUBSCRIBE_SLACK_MESSAGE_MINOR = 43;
+
+function supportsSlackMessages(negotiated: SchemaVersion | null): boolean {
+  return (
+    negotiated !== null &&
+    negotiated.major === 1 &&
+    negotiated.minor >= CHAT_SUBSCRIBE_SLACK_MESSAGE_MINOR
+  );
+}
+
+/**
+ * A Slack message as an older peer reads it: the plain user message it
+ * degrades to, its text and images under one line naming who wrote it in
+ * Slack. Its row's sender is already the `user` sender this kind needs.
+ */
+function projectSlackPayload(value: unknown): unknown {
+  if (!isRecord(value) || value.kind !== "slack") return value;
+  const author = isRecord(value.author) ? value.author : {};
+  const name =
+    typeof author.displayName === "string" &&
+    author.displayName.trim().length > 0
+      ? author.displayName.trim()
+      : "Someone";
+  const content = isRecord(value.content) ? value.content : {};
+  const body = Array.isArray(content.content) ? content.content : [];
+  return {
+    kind: "user",
+    content: {
+      ...content,
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          content: [{ type: "text", text: `${name} in Slack:` }],
+        },
+        ...body,
+      ],
+    },
+    browserAnnotations: [],
+  };
+}
+
+function projectSlackMessage(value: unknown): unknown {
+  if (!isRecord(value) || value.role !== "user") return value;
+  const message = projectSlackPayload(value.message);
+  return message === value.message ? value : { ...value, message };
+}
+
+function projectSlackMessages(value: unknown): unknown {
+  if (!Array.isArray(value)) return value;
+  const messages = value.map(projectSlackMessage);
+  return messages.every((message, index) => message === value[index])
+    ? value
+    : messages;
+}
+
+function projectSlackQueueItem(item: unknown): unknown {
+  if (!isRecord(item) || !("message" in item)) return item;
+  const message = projectSlackPayload(item.message);
+  return message === item.message ? item : { ...item, message };
+}
+
+function projectSlackQueueItems(value: unknown): unknown {
+  if (!Array.isArray(value)) return value;
+  const items = value.map(projectSlackQueueItem);
+  return items.every((item, index) => item === value[index]) ? value : items;
+}
+
+function projectSlackQueue(value: unknown): unknown {
+  if (!isRecord(value)) return value;
+  const items = projectSlackQueueItems(value.items);
+  return items === value.items ? value : { ...value, items };
+}
+
+/** Queue events carry the payload under metadata.item or metadata.items. */
+function projectSlackEvent(value: unknown): unknown {
+  if (!isRecord(value) || !isRecord(value.metadata)) return value;
+  const metadata = value.metadata;
+  const item = projectSlackQueueItem(metadata.item);
+  const items = projectSlackQueueItems(metadata.items);
+  if (item === metadata.item && items === metadata.items) return value;
+  const projected = { ...metadata };
+  if (item !== metadata.item) projected.item = item;
+  if (items !== metadata.items) projected.items = items;
+  return { ...value, metadata: projected };
+}
+
+function projectSlackEvents(value: unknown): unknown {
+  if (!Array.isArray(value)) return value;
+  const events = value.map(projectSlackEvent);
+  return events.every((event, index) => event === value[index])
+    ? value
+    : events;
+}
+
+/**
+ * Every channel a user payload reaches a peer on - the accepted row, a queue
+ * event, the queue, a range, the snapshot's chat, tail and queue - with each
+ * Slack message degraded for a peer below 1.43, whose payload union rejects
+ * the kind.
+ */
+function projectPreSlackMessageFrame(
+  frame: ProjectedChatSubscribeServerFrame,
+  negotiated: SchemaVersion | null,
+): ProjectedChatSubscribeServerFrame {
+  if (supportsSlackMessages(negotiated)) return frame;
+  switch (frame.kind) {
+    case "messageAccepted": {
+      const message = projectSlackMessage(frame.message);
+      return message === frame.message ? frame : { ...frame, message };
+    }
+    case "eventAppended": {
+      const event = projectSlackEvent(frame.event);
+      return event === frame.event ? frame : { ...frame, event };
+    }
+    case "queueChanged": {
+      const queue = projectSlackQueue(frame.queue);
+      return queue === frame.queue ? frame : { ...frame, queue };
+    }
+    case "range": {
+      if (!isRecord(frame.range)) return frame;
+      const messages = projectSlackMessages(frame.range.messages);
+      const events = projectSlackEvents(frame.range.events);
+      if (messages === frame.range.messages && events === frame.range.events)
+        return frame;
+      const range = { ...frame.range };
+      if (messages !== frame.range.messages) range.messages = messages;
+      if (events !== frame.range.events) range.events = events;
+      return { ...frame, range };
+    }
+    case "snapshot": {
+      if (!isRecord(frame.snapshot)) return frame;
+      const original = frame.snapshot;
+      const snapshot = { ...original };
+      for (const key of ["chat", "tail"]) {
+        const container = original[key];
+        if (!isRecord(container)) continue;
+        const messages = projectSlackMessages(container.messages);
+        const events = projectSlackEvents(container.events);
+        if (messages === container.messages && events === container.events)
+          continue;
+        const projected = { ...container };
+        if (messages !== container.messages) projected.messages = messages;
+        if (events !== container.events) projected.events = events;
+        snapshot[key] = projected;
+      }
+      if ("queue" in original)
+        snapshot.queue = projectSlackQueue(original.queue);
+      return snapshot.chat === original.chat &&
+        snapshot.tail === original.tail &&
+        snapshot.queue === original.queue
+        ? frame
+        : { ...frame, snapshot };
+    }
+    default:
+      return frame;
+  }
+}
+
 function stripAnswerSelection(value: unknown): unknown {
   if (!Array.isArray(value)) return value;
   return value.map((answer) => {
@@ -1198,8 +1358,13 @@ function projectChatServerFrameBeforeUltracode(
   // an unknown member - so every pre-1.8 peer must never see the event. A
   // client that cannot render an import provenance row has nothing to do with
   // the value anyway.
+  // A Slack message degrades to a plain user row first, so every older pass
+  // below meets only the payload kinds its line names.
   const preImportSafe = projectPreCanvasAnnotationFrame(
-    projectPreImportedFrame(bridgeProjected, negotiated),
+    projectPreSlackMessageFrame(
+      projectPreImportedFrame(bridgeProjected, negotiated),
+      negotiated,
+    ),
     negotiated,
   );
   if (supportsV17(negotiated)) return preImportSafe;
