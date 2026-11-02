@@ -230,7 +230,11 @@ test("with room to spare Waiting keeps its name", async ({ page }) => {
   await page.locator("main").hover();
   await page.locator("main").hover({ position: { x: 8, y: 8 } });
   await expect(page.getByRole("tooltip")).toHaveCount(0);
-  await page.getByTestId("voice-strip-state").hover();
+  const state = page.getByTestId("voice-strip-state");
+  await state.hover();
+  await expect
+    .poll(() => state.evaluate((node) => node.matches(":hover")))
+    .toBe(true);
   await nextFrames(page, 3);
-  await expect(page.getByRole("tooltip")).toHaveCount(0);
+  await expect.poll(() => page.getByRole("tooltip").count()).toBe(0);
 });

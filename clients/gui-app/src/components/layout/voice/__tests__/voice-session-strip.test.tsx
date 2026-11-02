@@ -216,6 +216,41 @@ describe("VoiceSessionStrip", () => {
     vi.unstubAllGlobals();
   });
 
+  it("does not carry a shown focus line over to the next session's, which lays out to nothing", async () => {
+    const observers: Array<() => void> = [];
+    vi.stubGlobal(
+      "ResizeObserver",
+      class implements ResizeObserver {
+        constructor(private readonly callback: ResizeObserverCallback) {
+          observers.push(() => this.callback([], this));
+        }
+        observe(): void {}
+        unobserve(): void {}
+        disconnect(): void {}
+      },
+    );
+    goLive(makeDriver());
+    vi.spyOn(
+      screen.getByTestId("voice-strip-focus"),
+      "getBoundingClientRect",
+    ).mockReturnValue(new DOMRect(0, 0, 120, 20));
+    act(() => {
+      for (const report of observers) report();
+    });
+
+    act(() => useVoiceSessionStore.setState({ focus: null }));
+    expect(screen.queryByTestId("voice-strip-focus")).toBeNull();
+    observers.length = 0;
+    act(() => useVoiceSessionStore.setState({ focus: FOCUS }));
+
+    // The new line has no width and no observer has reported on it.
+    expect(observers).toHaveLength(1);
+    await userEvent.hover(screen.getByRole("status"));
+    const tooltip = await screen.findByRole("tooltip");
+    expect(tooltip.textContent).toContain("Personal › Tracy");
+    vi.unstubAllGlobals();
+  });
+
   it("mutes through the driver, then reads Muted and Unmute", async () => {
     const driver = goLive(makeDriver());
 

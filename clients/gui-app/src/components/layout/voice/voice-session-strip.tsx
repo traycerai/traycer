@@ -199,11 +199,18 @@ function useHasWidth(element: HTMLElement | null): boolean {
   const [hasWidth, setHasWidth] = useState(false);
   useEffect(() => {
     if (element === null) return undefined;
-    const observer = new ResizeObserver(() => {
+    const read = (): void => {
       setHasWidth(element.getBoundingClientRect().width > 0);
-    });
+    };
+    // A box that lays out to nothing gets no first delivery, so the answer is
+    // read here and never inherited from the element before it.
+    read();
+    const observer = new ResizeObserver(read);
     observer.observe(element);
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+      setHasWidth(false);
+    };
   }, [element]);
   return element !== null && hasWidth;
 }
