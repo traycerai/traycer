@@ -11,6 +11,9 @@ import { act, cleanup, render } from "@testing-library/react";
 import { useCallback, useEffect, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
+import type { RemoteHostFetchOutcome } from "@traycer-clients/shared/host-client/remote-fetcher";
+import { HostDirectoryService } from "@/lib/host/host-directory-service";
 import {
   backgroundItemSchema,
   chatApprovalStateSchema,
@@ -41,7 +44,11 @@ import {
 import { publishComposerSendState } from "@/lib/chats/composer-send-gates";
 import { SETTINGS_SECTIONS } from "@/lib/settings-sections";
 import type { VoicePaletteRow } from "@/lib/voice/page-acts";
-import { NO_PALETTE_ITEMS, type VoiceView } from "@/lib/voice/view";
+import {
+  NO_PALETTE_ITEMS,
+  readBackQuestion,
+  type VoiceView,
+} from "@/lib/voice/view";
 import { createChatSessionStore } from "@/stores/chats/chat-session-store";
 import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
 import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
@@ -74,13 +81,23 @@ vi.mock("@/hooks/home/use-history-query", () => ({
   useHistoryQuery: () => ({ data: undefined }),
 }));
 
-/** What the host directory answers for any host, read again on every ask. */
+/**
+ * What the host directory answers for any host, read again on every ask: the
+ * entry and whether the account's listing has answered, or a real service when
+ * a case drives one.
+ */
 const directoryFacts = vi.hoisted(() => ({
   entry: null as HostDirectoryEntry | null,
+  settled: false,
+  service: null as HostDirectoryService | null,
 }));
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
-  useHostDirectory: () => ({ findById: () => directoryFacts.entry }),
+  useHostDirectory: () =>
+    directoryFacts.service ?? {
+      findById: () => directoryFacts.entry,
+      hasSettledFleet: () => directoryFacts.settled,
+    },
 }));
 
 const EPIC_ID = "epic-1";
@@ -368,6 +385,8 @@ function mount(initialPath: string, props: ProbeProps): Mounted {
 beforeEach(() => {
   // A host the directory knows to be awake: an unknown one asks before an open.
   directoryFacts.entry = sandboxHostEntryFixture(HOST_ID, "awake", false);
+  directoryFacts.settled = false;
+  directoryFacts.service = null;
   window.localStorage.clear();
   useTabsStore.setState(stripOf([], null));
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
@@ -1251,5 +1270,71 @@ describe("the row that opens a tile on a host whose sandbox rests", () => {
 
     expect(confirmOf(mounted)).toBe(false);
     expect(mounted.handle().paletteRow(OPEN_AGENT)?.hostWake).toBe("none");
+  });
+
+  describe("that the account's listing has not answered for", () => {
+    const services: HostDirectoryService[] = [];
+
+    afterEach(() => {
+      for (const service of services.splice(0)) service.dispose();
+    });
+
+    /** A real directory over a registry that answers `outcomes` in turn; its first fetch happens on start. */
+    async function startedDirectory(
+      outcomes: ReadonlyArray<RemoteHostFetchOutcome>,
+    ): Promise<HostDirectoryService> {
+      const queue = [...outcomes];
+      const service = new HostDirectoryService({
+        onRegistryPollTick: null,
+        authContextId: null,
+        credentialGeneration: null,
+        runnerHost: new MockRunnerHost({
+          signInUrl: "https://auth.traycer.invalid/sign-in",
+          authnBaseUrl: "http://localhost:5005",
+          localHost: null,
+          hosts: [],
+          workspaceFolderPickerPaths: undefined,
+          hasLocalHost: undefined,
+          traycerCli: undefined,
+        }),
+        localHostIdSeeder: null,
+        remoteFetcher: () => {
+          const next = queue.shift();
+          if (next === undefined) throw new Error("the registry ran out");
+          return Promise.resolve(next);
+        },
+      });
+      services.push(service);
+      await service.start();
+      return service;
+    }
+
+    function openRow(mounted: Mounted) {
+      const view = mounted.handle().current();
+      const row = view.rows.find(
+        (candidate) => candidate.action === OPEN_AGENT,
+      );
+      if (row === undefined) throw new Error("the view has no opener row");
+      return { row, question: readBackQuestion(row, view.page, "") };
+    }
+
+    it("asks before opening after a first fetch that failed, and stops asking once a listing without the host answers, with nothing composed again", async () => {
+      directoryFacts.service = await startedDirectory([
+        { kind: "failed" },
+        { kind: "hosts", entries: [] },
+      ]);
+      taskWithWorkingAgent();
+      const mounted = mount("/", { enabled: true, palette: true });
+
+      expect(openRow(mounted)).toMatchObject({
+        row: { confirm: true },
+        question: "That may wake its sandbox. Open it anyway? Yes?",
+      });
+
+      await directoryFacts.service.refresh();
+
+      expect(openRow(mounted).row.confirm).toBe(false);
+      expect(mounted.handle().paletteRow(OPEN_AGENT)?.hostWake).toBe("none");
+    });
   });
 });

@@ -62,8 +62,8 @@ export interface VoiceView {
 
 /** The palette's items by the place each takes in the view's order. */
 /**
- * `frozen`: it would try to wake, and be refused. `unknown`: the host isn't in
- * the directory yet, and if it turns out to rest, the open wakes it then.
+ * `frozen`: it would try to wake, and be refused. `unknown`: the account's hosts
+ * haven't answered yet, and if this one turns out to rest, the open wakes it then.
  */
 export type HostWake = "none" | "wakes" | "frozen" | "unknown";
 

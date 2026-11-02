@@ -194,8 +194,15 @@ function composerAsksToWake(session: VoiceAgentSession): boolean {
   return composer?.restingSandbox === true && !composer.sandboxFrozen;
 }
 
-function hostWakeOf(entry: HostDirectoryEntry | null): HostWake {
-  if (entry === null) return "unknown";
+/**
+ * A host missing before the account's listing has answered may still turn out
+ * to rest. Missing after it, it isn't the person's to wake.
+ */
+function hostWakeOf(
+  entry: HostDirectoryEntry | null,
+  listingAnswered: boolean,
+): HostWake {
+  if (entry === null) return listingAnswered ? "none" : "unknown";
   if (!hostEntryNeedsWake(entry)) return "none";
   return isRemoteHostDirectoryEntry(entry) && entry.sandbox?.frozen === true
     ? "frozen"
@@ -518,7 +525,8 @@ export function VoiceViewPaletteItems(props: {
         themes: THEME_SUBPAGE_ITEMS,
         commands: [...navItems, ...actionItems],
         // Read when asked: a sandbox sleeps without moving anything above.
-        hostWake: (hostId) => hostWakeOf(directory.findById(hostId)),
+        hostWake: (hostId) =>
+          hostWakeOf(directory.findById(hostId), directory.hasSettledFleet()),
       },
       composedFor,
       ctx,

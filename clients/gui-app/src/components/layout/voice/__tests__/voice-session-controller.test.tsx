@@ -495,9 +495,13 @@ const catalogue = vi.hoisted(() => ({
   data: undefined as SandboxCatalogue | undefined,
 }));
 
-/** What the host directory answers for any host; `null` is a host it knows nothing of. */
+/**
+ * What the host directory answers for any host: `null` is a host it knows
+ * nothing of, and `settled` is whether the account's listing has answered.
+ */
 const directoryFacts = vi.hoisted(() => ({
   entry: null as HostDirectoryEntry | null,
+  settled: false,
 }));
 
 // The cloud catalogue (which agents sandboxes run) is the one thing a resting
@@ -559,7 +563,10 @@ vi.mock("@/lib/host", async (importOriginal) => ({
   }),
   useHostClient: () => null,
   useHostBinding: () => ({}),
-  useHostDirectory: () => ({ findById: () => directoryFacts.entry }),
+  useHostDirectory: () => ({
+    findById: () => directoryFacts.entry,
+    hasSettledFleet: () => directoryFacts.settled,
+  }),
 }));
 // The wake a tile starts on its host: the directory's entry for the tile's host
 // and the wake itself are faked, the tile's mounted wake element is the real one.
@@ -1081,6 +1088,7 @@ beforeEach(() => {
   fake.routeAnswer = null;
   // A host the directory knows to be awake: an unknown one asks before an open.
   directoryFacts.entry = sandboxHostEntryFixture("host-a", "awake", false);
+  directoryFacts.settled = false;
   fake.mintAnswers.length = 0;
   fake.navigateOutcome = () => Promise.resolve();
   fake.navigate.mockClear();
@@ -5180,6 +5188,17 @@ describe("the page in front", () => {
         expect(wasTileOpenRequested(restored.instanceId)).toBe(false);
         expect(startSandboxWake).not.toHaveBeenCalled();
       });
+    });
+
+    it("opens a tile whose host the answered listing does not have at once, with no question", async () => {
+      directoryFacts.entry = null;
+      directoryFacts.settled = true;
+      await seedTask();
+
+      const question = await openSleepy();
+
+      expect(question).toBeNull();
+      expect(sleepyTiles()).toHaveLength(1);
     });
 
     describe("whose sandbox is asleep", () => {
