@@ -102,11 +102,11 @@ import { ChatRestoreProvider } from "@/components/chat/chat-restore-context";
 import { RevertOnEditDialog } from "@/components/chat/segments/revert-on-edit-dialog";
 import { SteerSettingsConflictDialog } from "@/components/chat/segments/steer-settings-conflict-dialog";
 import {
-  accumulatedChangeRows,
   hostAccumulatedChangeRows,
   accumulatedSummarySetComplete,
   undeliveredHostChangeCount,
 } from "@/lib/chat/accumulated-change-rows";
+import { useAccumulatedChangeRows } from "@/lib/chat/use-accumulated-change-rows";
 import { TeardownCommitDialog } from "@/components/worktree/teardown-commit-dialog";
 import type { WorktreeBusyHolder } from "@traycer/protocol/framework/worktree-busy-holders";
 import {
@@ -127,7 +127,11 @@ import {
   type WorktreeStagingKey,
 } from "@/stores/worktree/worktree-intent-staging-store";
 import type { ChatRestoreContextValue } from "@/components/chat/chat-restore-context-core";
-import { buildPinnedTodoRenderState } from "@/components/chat/chat-pinned-todos";
+import {
+  buildPinnedTodoRenderState,
+  pinnedTodoSnapshotsEqual,
+} from "@/components/chat/chat-pinned-todos";
+import { useStableValue } from "@/hooks/ui/use-stable-value";
 import { withholdUnpaintedRows } from "@/components/chat/chat-special-segment";
 import { foldBackgroundEventRows } from "@/stores/chats/background-event-fold";
 import type { ChatMessageActions } from "@/components/chat/chat-message";
@@ -2800,14 +2804,10 @@ function useChatTileSessionViewModel(
       windowedTranscript,
     ],
   );
-  const accumulatedFileChanges = useMemo(
-    () =>
-      accumulatedChangeRows(
-        renderedMessages,
-        accumulatedHostRows,
-        activeTurnId,
-      ),
-    [accumulatedHostRows, activeTurnId, renderedMessages],
+  const accumulatedFileChanges = useAccumulatedChangeRows(
+    renderedMessages,
+    accumulatedHostRows,
+    activeTurnId,
   );
   const undeliveredChangeCount = undeliveredHostChangeCount({
     windowed: windowedTranscript,
@@ -3077,6 +3077,13 @@ function useChatTileSessionViewModel(
             },
       ),
     [paintedMessages, state.transcriptDerived, activeTurnId],
+  );
+  // The fold above re-runs on every streamed flush and builds a new snapshot
+  // each time, so the dock's todo chip and list are handed the checklist they
+  // already show by value only.
+  const pinnedTodo = useStableValue(
+    pinnedTodoRenderState.todo,
+    pinnedTodoSnapshotsEqual,
   );
   const hostPendingInterviewIds = useMemo(
     () =>
@@ -4332,7 +4339,7 @@ function useChatTileSessionViewModel(
       backgroundSessionStopPending: state.pendingBackgroundSessionStop !== null,
       fallback: lowerProviderFallback,
     },
-    todo: pinnedTodoRenderState.todo,
+    todo: pinnedTodo,
     revertOnEdit,
     steerRestart,
     teardownCommit: {

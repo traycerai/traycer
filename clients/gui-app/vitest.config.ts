@@ -88,11 +88,20 @@ const MAX_TEST_WORKERS = Math.min(
 //   routing setting out for as long as it stayed up.
 // - `tab-appearance-menu`: a tab whose own task lookup was pending never took
 //   the strip's batch from the cache, so Labels and grouping stayed hidden.
+// - `chat-accumulated-changes-panel`: an open panel re-rendered every row,
+//   and re-sanitised every row's file icon, on every streamed flush, because
+//   the tile handed it a new row list per flush. Its rows are skipped on an
+//   unchanged list only when it is compiled, so uncompiled the case is red on
+//   the fixed tile too.
+// - `chat-pinned-stack`: an open todo list re-rendered every row on every
+//   streamed flush, because the tile handed the dock a new checklist object
+//   per flush. Its rows are skipped on an unchanged checklist only when it is
+//   compiled.
 // `workspace-file-tile`, `split-slot-chooser`, `resource-monitor-popover`,
 // `sidebar-artwork` and `dock-modes` read the same kind of source and are
 // correct as they stand; their cases hold that once they run compiled.
 const REACT_COMPILER_REGRESSION_FILES =
-  /[/\\](?:composer-prompt-editor|use-workspace-file-list-subscription|shared-stream-subscription|use-header-tabs|use-pr-(?:list|detail)-subscription|auth-brand-splash|auth-landing-page|use-auth-splash-cover|relative-time|routing-card|use-environment-members-query|use-git-list-changed-files-subscription|workspace-file-tile|worktrees-enrichment|use-worktree-task-titles|teardown-agent-names|resource-monitor-popover|use-comm-graph-jump|comm-graph-agent-detail-surface|top-level-tab-host|split-slot-chooser|landing-terminal-tile|use-terminal-tile-bootstrap|use-host-terminal-bootstrap|terminal-tile|use-diff-highlight-ready|composer\.source|sidebar-artwork|dock-modes|use-host-client-for|use-host-stream-client-for|use-providers-login-ownership|epic-tab-existence-reconciler|chat-routing-menu|tab-appearance-menu|react-compiler-harness-probe|chat-serving-witness|sandbox-tile-state-frame|use-chat-search-coverage)\.(?:ts|tsx)$/;
+  /[/\\](?:composer-prompt-editor|use-workspace-file-list-subscription|shared-stream-subscription|use-header-tabs|use-pr-(?:list|detail)-subscription|auth-brand-splash|auth-landing-page|use-auth-splash-cover|relative-time|routing-card|use-environment-members-query|use-git-list-changed-files-subscription|workspace-file-tile|worktrees-enrichment|use-worktree-task-titles|teardown-agent-names|resource-monitor-popover|use-comm-graph-jump|comm-graph-agent-detail-surface|top-level-tab-host|split-slot-chooser|landing-terminal-tile|use-terminal-tile-bootstrap|use-host-terminal-bootstrap|terminal-tile|use-diff-highlight-ready|composer\.source|sidebar-artwork|dock-modes|use-host-client-for|use-host-stream-client-for|use-providers-login-ownership|epic-tab-existence-reconciler|chat-routing-menu|tab-appearance-menu|chat-accumulated-changes-panel|chat-pinned-stack|react-compiler-harness-probe|chat-serving-witness|sandbox-tile-state-frame|use-chat-search-coverage)\.(?:ts|tsx)$/;
 
 // The compiler runs after the JSX transform, and the suite's transform is the
 // development one: `jsxDEV(..., this)` passes `this`, the compiler bails on

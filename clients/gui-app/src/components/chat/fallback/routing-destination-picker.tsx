@@ -54,6 +54,7 @@ import {
 import { useBotUpdateRunSettingsMutation } from "@/hooks/bots/use-bot-mutations";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
+import { useStableValue } from "@/hooks/ui/use-stable-value";
 import type { HostRpcRegistry } from "@/lib/host";
 import { cn } from "@/lib/utils";
 import type { FallbackChoiceLease } from "@/stores/chats/chat-session-store";
@@ -218,6 +219,9 @@ export function RoutingDestinationPicker(props: {
       : null;
   const openBotSettings = useBotSettingsOpener();
   const [open, setOpen] = useState(false);
+  // The countdown's DTO is replaced on every frame, and a new object per tick
+  // would rebuild every memo downstream of it - and the picker with them -
+  // once a second.
   const entryTuple = useStableValue(entrySeedTuple(entry), sameRunSettings);
   const listing = useRoutingListing({
     client,
@@ -1463,18 +1467,6 @@ function sameRunSettings(a: ChatRunSettings, b: ChatRunSettings): boolean {
     a.profileId === b.profileId &&
     a.ultracode === b.ultracode
   );
-}
-
-/**
- * A value kept by identity while `same` says it is unchanged. The countdown's
- * DTO is replaced on every frame, and a new object per tick would rebuild
- * every memo downstream of it - and the picker with them - once a second.
- */
-function useStableValue<T>(value: T, same: (a: T, b: T) => boolean): T {
-  const [held, setHeld] = useState(value);
-  if (same(held, value)) return held;
-  setHeld(value);
-  return value;
 }
 
 function sameJson<T>(a: T, b: T): boolean {
