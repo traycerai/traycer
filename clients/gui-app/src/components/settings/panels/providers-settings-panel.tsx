@@ -31,6 +31,10 @@ import { ProviderCatalogTimeoutGroup } from "@/components/settings/panels/provid
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { createReportIssueContext } from "@/lib/report-issue-context";
+import {
+  HOST_UNSUPPORTED_MESSAGE,
+  isHostTransportFailure,
+} from "@/lib/host-error-toast";
 import { Button } from "@/components/ui/button";
 import {
   isProviderSettingsUnreadableError,
@@ -754,8 +758,8 @@ function ProvidersPanelBody({
     }
     // The host read its provider-settings file and failed - which it now
     // says rather than answering with a synthesized all-disabled list. The
-    // generic card below would blame the host's VERSION for a transient
-    // `EIO`, and worse, it offers no retry: `useHostQuery` pins
+    // generic card below would report it as an unexplained fault for a
+    // transient `EIO` and offer no reset: `useHostQuery` pins
     // `retry: false` on this query's condition-poll branch, so nothing
     // refetches on its own and the panel would sit on a wrong explanation
     // until the user navigated away. The host already retried the read once
@@ -776,9 +780,40 @@ function ProvidersPanelBody({
         </div>
       );
     }
+    // Each card says only what happened. The version sentence is reserved
+    // for the one verdict that proves a version gap: a host that was blocked
+    // or unreachable used to be told to update, and a current host has no
+    // update to find. `retry: false` on this query means nothing refetches on
+    // its own, so every card that is not a version gap carries Retry.
+    if (query.error.code === "E_HOST_UNSUPPORTED") {
+      return (
+        <div className="px-6 py-8 text-ui-sm text-destructive">
+          {HOST_UNSUPPORTED_MESSAGE}
+        </div>
+      );
+    }
+    const retryButton = (
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={() => void query.refetch()}
+        disabled={query.isFetching}
+      >
+        Retry
+      </Button>
+    );
+    if (isHostTransportFailure(query.error)) {
+      return (
+        <div className="flex flex-wrap items-center gap-2 px-6 py-8 text-ui-sm text-destructive">
+          Couldn't reach the host.
+          {retryButton}
+        </div>
+      );
+    }
     return (
-      <div className="px-6 py-8 text-ui-sm text-destructive">
-        Couldn't load provider state. The host may need to be updated.
+      <div className="flex flex-wrap items-center gap-2 px-6 py-8 text-ui-sm text-destructive">
+        Couldn't load provider state.
+        {retryButton}
         <ReportIssueAction
           context={createReportIssueContext({
             title: "Couldn't load provider state",
@@ -787,7 +822,7 @@ function ProvidersPanelBody({
             source: "Providers",
           })}
           presentation="link"
-          className="ml-1"
+          className={undefined}
         />
       </div>
     );
