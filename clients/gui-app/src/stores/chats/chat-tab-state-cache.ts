@@ -236,13 +236,13 @@ function restoreAcrossSteerSplit(
 
 /** What `restoreSplitTurnAnchorForMount` reads off a list row; a
  *  `TranscriptListRow` satisfies it. */
-export interface ChatTabRestoreRow {
+interface ChatTabRestoreRow {
   readonly key: string;
   readonly kind: "hydrated" | "placeholder";
   readonly ordinal: number | null;
 }
 
-export interface SplitTurnMountRestore {
+interface SplitTurnMountRestore {
   readonly state: SavedChatTabScrollState;
   /**
    * The split is answered for good - the saved part was found, or every slice

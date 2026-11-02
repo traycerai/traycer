@@ -37,7 +37,7 @@ import {
  * The 194 is the floor the layout has to work in: two 44 rows leave it 106 of
  * context.
  */
-export const KEYBOARD_FOCUS_LAYOUT_HEIGHT_LIMIT_PX = 405;
+const KEYBOARD_FOCUS_LAYOUT_HEIGHT_LIMIT_PX = 405;
 
 const FOCUS_OWNER_ATTRIBUTE = "data-keyboard-focus-owner";
 

@@ -50,12 +50,12 @@ describe("TalkControl", () => {
     expect(screen.queryByRole("button", { name: "Talk" })).toBeNull();
   });
 
-  it("the glyph form draws the glyph alone, named and working as before", async () => {
+  it("the touch form draws the glyph alone, named and working as before", async () => {
     const driver = makeDriver();
     useVoiceSessionStore.setState({ driver, availability: "live" });
     render(
       <TooltipProvider>
-        <TalkControl form="glyph" />
+        <TalkControl form="touch" />
       </TooltipProvider>,
     );
 

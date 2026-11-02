@@ -449,6 +449,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  useStandaloneBotsStore.setState(EMPTY_DIRECTORY_STATE);
 });
 
 describe("<BotChannelSidebar /> sections", () => {
@@ -680,7 +681,6 @@ describe("<BotChannelSidebar /> main bot", () => {
     mount("bot-release", null);
 
     expect(row("bot-release").textContent).toBe("release-bot");
-    useStandaloneBotsStore.setState(EMPTY_DIRECTORY_STATE);
   });
 
   it("stars the environment's main bot after its name and no other channel", () => {

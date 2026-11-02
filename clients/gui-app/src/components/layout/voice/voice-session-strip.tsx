@@ -1,9 +1,10 @@
-import type { ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Captions, Mic, MicOff } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import { Button } from "@/components/ui/button";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { useVoiceFocusLabel } from "@/hooks/voice/use-voice-focus-label";
-import { VoiceEndedLine } from "@/components/layout/voice/voice-ended-line";
+import { VoiceOutcomeLine } from "@/components/layout/voice/voice-ended-line";
 import { VoiceWaitingControl } from "@/components/layout/voice/voice-waiting-control";
 import { useOpenBotChannel } from "@/hooks/bots/use-open-bot-channel";
 import { cn } from "@/lib/utils";
@@ -14,20 +15,19 @@ import {
 } from "@/stores/voice/voice-session-store";
 
 /**
- * The session strip (V6): one row in the app chrome beneath the tab strip,
- * across every tab, while a voice session is live. It says the listening or
- * muted state, the destination the next post goes to with Change, the
- * Waiting control, Mute, End and the captions toggle.
+ * The session strip (V6): where Talk is in the window's top row, across every
+ * tab, while a voice session is live. It says the listening or muted state,
+ * the destination the next post goes to with Change, the Waiting control, Mute,
+ * End and the captions toggle.
  * No running transcript is ever drawn: captions, off by default, show the
- * last few lines said and heard, and nothing is kept when they are off or the
- * session ends. After an end the strip stays one line to say why, then
- * leaves.
+ * last few lines said and heard, under the row and over the content, and
+ * nothing is kept when they are off or the session ends. After a session the
+ * strip stays one line to say how it went, then leaves.
  */
 export function VoiceSessionStrip(): ReactNode {
   const state = useVoiceSessionStore(
     useShallow((s) => ({
       phase: s.phase,
-      endReason: s.endReason,
       focus: s.focus,
       muted: s.muted,
       pausedForDictation: s.pausedForDictation,
@@ -38,14 +38,11 @@ export function VoiceSessionStrip(): ReactNode {
     })),
   );
   const setCaptions = useVoiceSessionStore((s) => s.setCaptions);
-  const clearEndReason = useVoiceSessionStore((s) => s.clearEndReason);
 
-  if (state.phase === "idle") {
-    if (state.endReason === null) return null;
-    return (
-      <VoiceEndedLine reason={state.endReason} onDismiss={clearEndReason} />
-    );
-  }
+  const [focusLine, setFocusLine] = useState<HTMLElement | null>(null);
+  const focusLineShown = useHasWidth(focusLine);
+
+  if (state.phase === "idle") return <VoiceOutcomeLine surface="row" />;
 
   const driver = state.driver;
   const listening =
@@ -58,72 +55,86 @@ export function VoiceSessionStrip(): ReactNode {
       aria-label="Voice session"
       data-testid="voice-session-strip"
       data-state={state.phase}
-      className="flex w-full flex-col border-b border-border bg-background text-ui-xs text-muted-foreground"
+      className="relative flex min-w-0 self-stretch text-ui-xs text-muted-foreground"
     >
-      <div className="flex w-full items-center gap-3 px-3 py-1.5">
-        <span
-          aria-hidden="true"
-          data-testid="voice-strip-pulse"
-          className={cn(
-            "size-2 shrink-0 rounded-full",
-            listening ? "bg-success" : "bg-muted-foreground/40",
-            listening && state.inputActive && "animate-pulse",
+      {/* The middle column has no floor, so the state and the controls are this
+          grid's minimum width, with Waiting's glyph: the top row can take the focus
+          line and Waiting's name away, and never a control. */}
+      <div className="grid min-w-0 grid-cols-[auto_minmax(0,max-content)_auto_auto] items-center">
+        <div className="flex items-center gap-3">
+          <span
+            aria-hidden="true"
+            data-testid="voice-strip-pulse"
+            className={cn(
+              "size-2 shrink-0 rounded-full",
+              listening ? "bg-success" : "bg-muted-foreground/40",
+              listening && state.inputActive && "animate-pulse",
+            )}
+          />
+          <StateWord
+            word={stateLabel(
+              state.phase,
+              state.muted,
+              state.pausedForDictation,
+            )}
+            focus={state.focus}
+            focusLineShown={focusLineShown}
+          />
+          <ResumeAfterDictation />
+        </div>
+        <div className="flex min-w-0 items-center gap-3 overflow-hidden not-empty:pl-3">
+          {state.focus === null ? null : (
+            <FocusLine focus={state.focus} lineNode={setFocusLine} />
           )}
-        />
-        <span
-          role="status"
-          data-testid="voice-strip-state"
-          className="shrink-0 font-medium text-foreground"
-        >
-          {stateLabel(state.phase, state.muted, state.pausedForDictation)}
-        </span>
-        <ResumeAfterDictation />
-        {state.focus === null ? null : <FocusLine focus={state.focus} />}
-        <VoiceWaitingControl />
-        <span className="min-w-0 flex-1" />
-        <Button
-          type="button"
-          variant="ghost"
-          size="xs"
-          aria-pressed={state.muted}
-          data-testid="voice-strip-mute"
-          disabled={driver === null || state.phase !== "live"}
-          onClick={() => driver?.setMuted(!state.muted)}
-        >
-          {state.muted ? (
-            <MicOff aria-hidden="true" />
-          ) : (
-            <Mic aria-hidden="true" />
-          )}
-          {state.muted ? "Unmute" : "Mute"}
-        </Button>
-        <Button
-          type="button"
-          variant="ghost"
-          size="xs"
-          aria-pressed={state.captions}
-          aria-label="Captions"
-          data-testid="voice-strip-captions"
-          onClick={() => setCaptions(!state.captions)}
-        >
-          <Captions aria-hidden="true" />
-        </Button>
-        <Button
-          type="button"
-          variant="outline"
-          size="xs"
-          data-testid="voice-strip-end"
-          disabled={driver === null || state.phase === "ending"}
-          onClick={() => driver?.end()}
-        >
-          End
-        </Button>
+        </div>
+        <div className="grid items-center not-empty:pl-3">
+          <VoiceWaitingControl />
+        </div>
+        <div className="flex items-center gap-3 pl-3">
+          <Button
+            type="button"
+            variant="ghost"
+            size="xs"
+            aria-pressed={state.muted}
+            data-testid="voice-strip-mute"
+            disabled={driver === null || state.phase !== "live"}
+            onClick={() => driver?.setMuted(!state.muted)}
+          >
+            {state.muted ? (
+              <MicOff aria-hidden="true" />
+            ) : (
+              <Mic aria-hidden="true" />
+            )}
+            {state.muted ? "Unmute" : "Mute"}
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="xs"
+            aria-pressed={state.captions}
+            aria-label="Captions"
+            data-testid="voice-strip-captions"
+            onClick={() => setCaptions(!state.captions)}
+          >
+            <Captions aria-hidden="true" />
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="xs"
+            data-testid="voice-strip-end"
+            disabled={driver === null || state.phase === "ending"}
+            onClick={() => driver?.end()}
+          >
+            End
+          </Button>
+        </div>
       </div>
       {state.captions ? (
         <ul
           data-testid="voice-strip-captions-lines"
           aria-label="Captions"
-          className="flex w-full flex-col gap-0.5 px-3 pb-1.5"
+          className="absolute inset-x-0 top-full z-30 flex flex-col gap-0.5 rounded-b-md border border-t-0 border-border bg-popover px-3 py-1.5"
         >
           {state.captionLines.length === 0 ? (
             <li className="italic">Nothing said yet.</li>
@@ -183,41 +194,133 @@ function stateLabel(
   return muted ? "Muted" : "Listening";
 }
 
+/** Whether the element takes any width. Only a state read, so it moves no layout. */
+function useHasWidth(element: HTMLElement | null): boolean {
+  const [hasWidth, setHasWidth] = useState(false);
+  useEffect(() => {
+    if (element === null) return undefined;
+    const read = (): void => {
+      setHasWidth(element.getBoundingClientRect().width > 0);
+    };
+    // A box that lays out to nothing gets no first delivery, so the answer is
+    // read here and never inherited from the element before it.
+    read();
+    const observer = new ResizeObserver(read);
+    observer.observe(element);
+    return () => {
+      observer.disconnect();
+      setHasWidth(false);
+    };
+  }, [element]);
+  return element !== null && hasWidth;
+}
+
+function destinationLine(
+  environmentLabel: string | null,
+  botTitle: string,
+  threadLabel: string | null,
+): string {
+  return [environmentLabel, botTitle, threadLabel]
+    .filter((part) => part !== null)
+    .join(" › ");
+}
+
+/**
+ * The state word. While the focus line is hidden, the first thing the top row
+ * takes away, its tooltip keeps the destination reachable. The tooltip is always
+ * mounted and only its opening is gated: this span is the strip's live region,
+ * and a new node would be announced again.
+ */
+function StateWord(props: {
+  readonly word: string;
+  readonly focus: VoiceFocus | null;
+  readonly focusLineShown: boolean;
+}): ReactNode {
+  const { focus } = props;
+  const [wantsOpen, setWantsOpen] = useState(false);
+  const open = wantsOpen && focus !== null && !props.focusLineShown;
+  return (
+    <TooltipWrapper
+      label={<DestinationLabel focus={focus} />}
+      side="bottom"
+      sideOffset={undefined}
+      align={undefined}
+      open={open}
+      onOpenChange={setWantsOpen}
+    >
+      <span
+        role="status"
+        data-testid="voice-strip-state"
+        className="shrink-0 font-medium text-foreground"
+      >
+        {props.word}
+      </span>
+    </TooltipWrapper>
+  );
+}
+
+function DestinationLabel(props: {
+  readonly focus: VoiceFocus | null;
+}): ReactNode {
+  return props.focus === null ? null : <FocusDestination focus={props.focus} />;
+}
+
+function FocusDestination(props: { readonly focus: VoiceFocus }): ReactNode {
+  const { environmentLabel, botTitle, threadLabel } = useVoiceFocusLabel(
+    props.focus,
+  );
+  return destinationLine(environmentLabel, botTitle, threadLabel);
+}
+
 /**
  * Where the next post goes: environment › bot › thread, with Change, which
  * opens the bot's tab so the person can pick another channel or thread.
  */
-function FocusLine(props: { readonly focus: VoiceFocus }): ReactNode {
-  const { focus } = props;
+function FocusLine(props: {
+  readonly focus: VoiceFocus;
+  readonly lineNode: (node: HTMLElement | null) => void;
+}): ReactNode {
+  const { focus, lineNode } = props;
   const openBotChannel = useOpenBotChannel();
   const { environmentLabel, botTitle, threadLabel } = useVoiceFocusLabel(focus);
+  // The first thing the strip gives up when the top row is short of room, so
+  // the tabs keep theirs; the tooltip still names the whole destination.
+  const destination = destinationLine(environmentLabel, botTitle, threadLabel);
   return (
-    <span
-      data-testid="voice-strip-focus"
-      className="flex min-w-0 items-center gap-1 truncate"
+    <TooltipWrapper
+      label={destination}
+      side="bottom"
+      sideOffset={undefined}
+      align={undefined}
     >
-      {environmentLabel === null ? null : (
-        <>
-          <span className="truncate">{environmentLabel}</span>
-          <span aria-hidden="true">›</span>
-        </>
-      )}
-      <span className="truncate text-foreground">{botTitle}</span>
-      {threadLabel === null ? null : (
-        <>
-          <span aria-hidden="true">›</span>
-          <span className="truncate text-foreground">{threadLabel}</span>
-        </>
-      )}
-      <Button
-        type="button"
-        variant="link"
-        size="inline"
-        data-testid="voice-strip-change"
-        onClick={() => openBotChannel(focus.botId, null)}
+      <span
+        ref={lineNode}
+        data-testid="voice-strip-focus"
+        className="flex min-w-0 items-center gap-1 truncate"
       >
-        Change
-      </Button>
-    </span>
+        {environmentLabel === null ? null : (
+          <>
+            <span className="truncate">{environmentLabel}</span>
+            <span aria-hidden="true">›</span>
+          </>
+        )}
+        <span className="truncate text-foreground">{botTitle}</span>
+        {threadLabel === null ? null : (
+          <>
+            <span aria-hidden="true">›</span>
+            <span className="truncate text-foreground">{threadLabel}</span>
+          </>
+        )}
+        <Button
+          type="button"
+          variant="link"
+          size="inline"
+          data-testid="voice-strip-change"
+          onClick={() => openBotChannel(focus.botId, null)}
+        >
+          Change
+        </Button>
+      </span>
+    </TooltipWrapper>
   );
 }

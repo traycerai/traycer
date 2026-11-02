@@ -1,13 +1,14 @@
 /**
  * Query keys for the voice routes (`/api/voice`), read through `AuthService`
- * like the sandbox control plane and keyed to the live service and the
- * signed-in user for the reason `sandboxQueryKeys` gives.
+ * and keyed by the host binding's id and the signed-in user's id. Ids only: a
+ * query key is hashed by value, and the service object's value changes under
+ * it, which would make every hash a new query and defeat "read once".
  */
 export const voiceQueryKeys = {
   availability: (
-    authService: object,
+    hostId: string | null,
     userId: string | null,
-  ): readonly unknown[] => ["auth", "voice-availability", authService, userId],
+  ): readonly unknown[] => ["auth", "voice-availability", hostId, userId],
   availabilityAll: (): readonly unknown[] => ["auth", "voice-availability"],
   availabilityMissing: (): readonly unknown[] => [
     "auth",

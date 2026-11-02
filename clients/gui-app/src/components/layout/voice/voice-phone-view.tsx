@@ -3,7 +3,7 @@ import { AudioLines, Captions, Mic, MicOff, X } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
-import { VoiceEndedLine } from "@/components/layout/voice/voice-ended-line";
+import { VoiceOutcomeLine } from "@/components/layout/voice/voice-ended-line";
 import { ResumeAfterDictation } from "@/components/layout/voice/voice-session-strip";
 import { VoiceWaitingControl } from "@/components/layout/voice/voice-waiting-control";
 import { useVoiceFocusLabel } from "@/hooks/voice/use-voice-focus-label";
@@ -302,15 +302,14 @@ function TalkModeSwitch(): ReactNode {
 }
 
 /**
- * The session on the phone while its view is down, and the line about the
- * last end afterwards: under the header, on every screen, so an open
+ * The session on the phone while its view is down, and the line about how
+ * the last one went afterwards: under the header, on every screen, so an open
  * microphone is never out of sight. Open brings the view back.
  */
 export function VoicePhoneBar(): ReactNode {
   const state = useVoiceSessionStore(
     useShallow((s) => ({
       phase: s.phase,
-      endReason: s.endReason,
       focus: s.focus,
       phoneViewOpen: s.phoneViewOpen,
       muted: s.muted,
@@ -320,14 +319,8 @@ export function VoicePhoneBar(): ReactNode {
       driver: s.driver,
     })),
   );
-  const clearEndReason = useVoiceSessionStore((s) => s.clearEndReason);
   const setPhoneViewOpen = useVoiceSessionStore((s) => s.setPhoneViewOpen);
-  if (state.phase === "idle") {
-    if (state.endReason === null) return null;
-    return (
-      <VoiceEndedLine reason={state.endReason} onDismiss={clearEndReason} />
-    );
-  }
+  if (state.phase === "idle") return <VoiceOutcomeLine surface="bar" />;
   if (state.phoneViewOpen) return null;
   const driver = state.driver;
   return (
