@@ -66,6 +66,12 @@ later merge never cancels an earlier merge's run.
   every source extension the linters read. A rule that reads another file
   (`components.json`, a stylesheet) goes in the cache key too, because ESLint
   hashes only the file it lints. `build` keeps no cache.
+- A protocol test file over 10 s fails the `test (@traycer/protocol)` leg
+  unless `protocol/test-budget-allowlist.json` names it with a reason. It runs
+  once more alone first, because a file's time on the runner moves by half
+  between runs. A suite sized by case count runs the rest of its cases in
+  `measurements.yml`, once a night, behind `HOST_MEASUREMENT_FULL`; nothing but
+  that workflow's own run reports a failure there.
 - The internal repository's nightly staging train and its promotion to
   production both refuse a pinned commit of this repository whose push checks
   are not all green.
