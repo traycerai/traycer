@@ -22,6 +22,25 @@ const MODIFIER_WHEEL_PX_PER_E = 500;
 const PINCH_WHEEL_PX_PER_E = 100;
 
 /**
+ * Firefox can report a mouse wheel in lines, and a wheel set to scroll a
+ * screen per notch in pages; the rates above are in pixels. A line is what
+ * Chromium scrolls per line, and a page counts as one ordinary three-line
+ * notch, so neither unit zooms far faster or slower than a pixel wheel.
+ */
+const WHEEL_LINE_PX = 40;
+const WHEEL_PAGE_PX = 3 * WHEEL_LINE_PX;
+
+function wheelDeltaYPixels(event: WheelEvent): number {
+  if (event.deltaMode === WheelEvent.DOM_DELTA_LINE) {
+    return event.deltaY * WHEEL_LINE_PX;
+  }
+  if (event.deltaMode === WheelEvent.DOM_DELTA_PAGE) {
+    return event.deltaY * WHEEL_PAGE_PX;
+  }
+  return event.deltaY;
+}
+
+/**
  * Ctrl/⌘ + wheel zoom for a document viewer, plus the desktop trackpad pinch
  * that Chromium delivers the same way.
  *
@@ -66,7 +85,7 @@ export function useWheelZoom(
       const pixelsPerE = isPinch
         ? PINCH_WHEEL_PX_PER_E
         : MODIFIER_WHEEL_PX_PER_E;
-      zoomBy(Math.exp(-event.deltaY / pixelsPerE));
+      zoomBy(Math.exp(-wheelDeltaYPixels(event) / pixelsPerE));
     };
 
     zone.addEventListener("wheel", handleWheel, { passive: false });

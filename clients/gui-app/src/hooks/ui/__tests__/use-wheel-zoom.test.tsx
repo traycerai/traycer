@@ -75,6 +75,20 @@ describe("useWheelZoom", () => {
     expect(event.defaultPrevented).toBe(true);
   });
 
+  it("converts a wheel reported in lines to pixels before zooming", () => {
+    const { zoomBy } = mountProbe();
+    const event = new WheelEvent("wheel", {
+      deltaY: 3,
+      deltaMode: WheelEvent.DOM_DELTA_LINE,
+      metaKey: true,
+      cancelable: true,
+    });
+
+    screen.getByTestId("wheel-zone").dispatchEvent(event);
+
+    expect(zoomBy.mock.calls[0]?.[0]).toBeCloseTo(Math.exp(-120 / 500), 10);
+  });
+
   it("leaves a coasting scroll alone when a modifier is pressed mid-gesture, then zooms after a pause", () => {
     const { zoomBy } = mountProbe();
 
