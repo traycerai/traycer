@@ -41,7 +41,10 @@ afterEach(() => {
 function createDiffDom() {
   const scrollContainer = document.createElement("div");
   const diffsContainer = document.createElement("diffs-container");
-  const shadowRoot = diffsContainer.attachShadow({ mode: "open" });
+  // `@pierre/diffs` defines this tag, and a definition outlives the file that
+  // made it: when that file ran first in this worker, the element has its root.
+  const shadowRoot =
+    diffsContainer.shadowRoot ?? diffsContainer.attachShadow({ mode: "open" });
   const unified = document.createElement("div");
   unified.setAttribute("data-unified", "");
   const deletionSide = document.createElement("div");

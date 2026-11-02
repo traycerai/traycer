@@ -202,9 +202,24 @@ export default defineConfig({
     // CONTAIN "zod" (`zod-to-json-schema`, `@hookform/resolvers/zod`) are
     // not dragged in. Full rationale for the workaround itself lives in
     // `clients/desktop/vitest.shared.ts`.
-    server: { deps: { inline: [/[\\/]node_modules[\\/]zod[\\/]/] } },
+    //
+    // `sonner` is inlined for what it keeps: its toast queue is module state, and
+    // with `isolate: false` a module Node loaded natively is shared by every file
+    // a worker runs, so one file's toasts would render in the next file's Toaster.
+    server: {
+      deps: {
+        inline: [
+          /[\\/]node_modules[\\/]zod[\\/]/,
+          /[\\/]node_modules[\\/]sonner[\\/]/,
+        ],
+      },
+    },
     environment: "jsdom",
-    setupFiles: ["./__tests__/test-browser-apis.ts"],
+    setupFiles: [
+      "./__tests__/test-file-reset.ts",
+      "./__tests__/test-browser-apis.ts",
+    ],
+    sequence: { setupFiles: "list" },
     include: [
       "__tests__/**/*.test.ts",
       "__tests__/**/*.test.tsx",
@@ -213,6 +228,7 @@ export default defineConfig({
     ],
     globals: false,
     pool: "forks",
+    isolate: false,
     // A few suites advance large fake-timer windows. Limiting concurrently
     // running files keeps those timers responsive on CI's shared runners.
     maxWorkers: MAX_TEST_WORKERS,
