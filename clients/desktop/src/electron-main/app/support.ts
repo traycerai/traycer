@@ -1035,6 +1035,13 @@ const EARLIER_HOST_LOG_SECTION_MAX_BYTES = Math.floor(
  * 500-line tail can begin after the stall the report is about. Both fit in
  * `maxBytes` together: the section takes at most a quarter, the tail the
  * rest, and the section is scrubbed before it is measured, like the tail.
+ *
+ * "Before the tail" means before the lines the tail actually KEEPS, not
+ * before its nominal 500: the byte cap can drop the tail's oldest lines, and
+ * a record there must stay eligible for the section rather than be lost from
+ * both. So the boundary is taken from a tail sized with the section's whole
+ * reservation; the tail is then re-sized to the section it got, and a
+ * record the larger tail now holds is left out of the section.
  */
 async function captureHostLogTail(
   path: string,
@@ -1044,12 +1051,16 @@ async function captureHostLogTail(
 ): Promise<FrozenLogTail> {
   const content = await readFile(path, "utf-8").catch(() => "");
   const allLines = splitLogLines(content);
+  const reservation = Math.min(EARLIER_HOST_LOG_SECTION_MAX_BYTES, maxBytes);
+  const reserved = tailOfLines(
+    allLines,
+    lines,
+    Math.max(0, maxBytes - reservation - 1),
+  );
+  const reservedStart = retainedTailStart(allLines, reserved.content);
   const section = earlierHostLogSection(
-    earlierHostLogRecords(
-      allLines.slice(0, Math.max(0, allLines.length - lines)),
-      nowMs,
-    ),
-    Math.min(EARLIER_HOST_LOG_SECTION_MAX_BYTES, maxBytes),
+    earlierHostLogRecords(allLines.slice(0, reservedStart), nowMs),
+    reservation,
     scrubSupportText,
   );
   if (section === "") return tailOfLines(allLines, lines, maxBytes);
@@ -1058,10 +1069,33 @@ async function captureHostLogTail(
     lines,
     Math.max(0, maxBytes - Buffer.byteLength(section, "utf8") - 1),
   );
+  const tailStart = retainedTailStart(allLines, tail.content);
+  // Never larger than `section`, so the total still fits.
+  const kept =
+    tailStart < reservedStart
+      ? earlierHostLogSection(
+          earlierHostLogRecords(allLines.slice(0, tailStart), nowMs),
+          reservation,
+          scrubSupportText,
+        )
+      : section;
+  if (kept === "") return tail;
   return {
-    content: tail.content === "" ? section : `${tail.content}\n${section}`,
+    content: tail.content === "" ? kept : `${tail.content}\n${kept}`,
     truncated: tail.truncated,
   };
+}
+
+/**
+ * The index in `allLines` of the first line a tail's `content` kept. The
+ * scrubber maps line to line, so the kept line count locates it.
+ */
+function retainedTailStart(
+  allLines: readonly string[],
+  content: string,
+): number {
+  const kept = content === "" ? 0 : content.split("\n").length;
+  return Math.max(0, allLines.length - kept);
 }
 
 function tailOfLines(

@@ -773,6 +773,64 @@ describe("DesktopSupportService host log attachment: earlier evidence", () => {
     );
   });
 
+  /** A routine INFO line of exactly `bytes` bytes, a minute old. */
+  function routineLineOfBytes(bytes: number, nowMs: number): string {
+    const head = `${localHeader(nowMs - 60_000, "INFO")}routine `;
+    return head + "p".repeat(bytes - Buffer.byteLength(head, "utf8"));
+  }
+
+  it("keeps a recent stall WARN that the byte cap drops from a tail of fewer than 500 lines", async () => {
+    const nowMs = Date.now();
+    const stall = `${localHeader(nowMs - 120_000, "WARN")}host event loop stall detected`;
+    // 300 lines in all, the WARN 250 from the end; the 250 lines after it are
+    // 3,000 bytes each, past the cap, so the tail cannot reach back to it.
+    const fileLines = [
+      ...Array.from({ length: 50 }, () => routineLineOfBytes(200, nowMs)),
+      stall,
+      ...Array.from({ length: 249 }, () => routineLineOfBytes(3_000, nowMs)),
+    ];
+    expect(fileLines).toHaveLength(300);
+
+    const { lines, text } = await hostLogAttachment(fileLines);
+
+    const sectionStart = lines.findIndex((line) =>
+      line.startsWith("--- earlier host.log records"),
+    );
+    expect(sectionStart).toBeGreaterThan(0);
+    expect(lines.slice(0, sectionStart)).not.toContain(stall);
+    expect(lines.slice(sectionStart)).toContain(stall);
+    expect(lines[sectionStart - 1]).toBe(fileLines[fileLines.length - 1]);
+    expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(
+      REPORT_LOG_TAIL_MAX_BYTES,
+    );
+  });
+
+  it("does not repeat in the section a record the re-sized tail grew back over", async () => {
+    const nowMs = Date.now();
+    const earlyStall = `${localHeader(nowMs - 120_000, "WARN")}host event loop stall detected early`;
+    const lateStall = `${localHeader(nowMs - 110_000, "WARN")}host event loop stall detected late`;
+    // 1,000 lines of 1,000 bytes. The tail sized with the section's whole
+    // reservation keeps ~383 lines and starts near line 617, so `lateStall`
+    // (line 600) is before it and goes into the section; the tail re-sized to
+    // that small section keeps the full 500 lines, starts at line 500, and
+    // now holds `lateStall` itself.
+    const fileLines = Array.from({ length: 1_000 }, () =>
+      routineLineOfBytes(1_000, nowMs),
+    );
+    fileLines[100] = earlyStall;
+    fileLines[600] = lateStall;
+
+    const { lines } = await hostLogAttachment(fileLines);
+
+    const sectionStart = lines.findIndex((line) =>
+      line.startsWith("--- earlier host.log records"),
+    );
+    expect(sectionStart).toBeGreaterThan(0);
+    expect(lines.slice(0, sectionStart)).toContain(lateStall);
+    expect(lines.slice(sectionStart)).toContain(earlyStall);
+    expect(lines.filter((line) => line === lateStall)).toHaveLength(1);
+  });
+
   it("scrubs a secret inside an earlier WARN record", async () => {
     const nowMs = Date.now();
     const fileLines = [
