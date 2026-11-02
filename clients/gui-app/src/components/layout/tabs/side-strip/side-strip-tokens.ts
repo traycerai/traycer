@@ -67,7 +67,7 @@ export const SIDE_TAB_TWO_LINE_TRAILING_CLASS = "mt-1.75 self-start";
  * The strip's own ground, so a badge reads as cut out of what it sits on: the
  * canvas on a narrow window, the shell ground on a wide one.
  */
-const SIDE_STRIP_GROUND_FILL_CLASS = "bg-canvas md:bg-shell-ground";
+export const SIDE_STRIP_GROUND_FILL_CLASS = "bg-canvas md:bg-shell-ground";
 /** A section header's button: the "Tasks" label's type, as a full-width row. */
 export const SIDE_STRIP_SECTION_HEADER_CLASS =
   "group/side-section flex w-full shrink-0 items-center gap-1 rounded-md px-2 pt-2 pb-1 text-start text-overline font-medium uppercase tracking-wide outline-none select-none focus-visible:ring-3 focus-visible:ring-ring/50 [-webkit-app-region:no-drag]";
