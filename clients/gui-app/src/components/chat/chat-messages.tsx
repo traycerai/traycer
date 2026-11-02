@@ -2291,11 +2291,21 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   // A pending coordinate the split retired must not outlive this mount in the
   // registry: a same-instance remount prefers that entry over the position
   // this mount goes on to save, and would replay the pre-steer anchor over it.
+  //
+  // The cache is rewritten to the resolved coordinate in the same commit. The
+  // persistence gate keeps the entry this mount read until the restore
+  // validates, so a close before then saves nothing new; without this write
+  // that entry would still name the retired row. Both dependencies are fixed
+  // for the mount, so this never re-runs over a position the reader has since
+  // scrolled to.
   useLayoutEffect(() => {
-    if (mountRestore.splitSettled) {
-      forgetPendingHydrationRestore(identity);
-    }
-  }, [identity, mountRestore.splitSettled]);
+    if (!mountRestore.splitSettled) return;
+    forgetPendingHydrationRestore(identity);
+    const commit = isEpicCanvasTileInstanceLive(identity.tileInstanceId)
+      ? saveChatTabState
+      : commitChatTabStateToDurable;
+    commit({ identity, ...mountRestore.restored });
+  }, [identity, mountRestore]);
   const pendingMeasuredFreeRestoreRef =
     useRef<PendingMeasuredFreeRestore | null>(
       resolvePendingMeasuredFreeRestore(restoredTabState),
