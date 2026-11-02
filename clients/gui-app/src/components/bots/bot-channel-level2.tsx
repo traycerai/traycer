@@ -5,64 +5,86 @@ import {
 } from "@/components/bots/bot-channel-sidebar";
 import { BotResizablePane } from "@/components/bots/bot-resizable-pane";
 import {
+  MobileLevel2Column,
   MobileLevel2MenuContent,
   MobileLevel2MenuTrigger,
 } from "@/components/layout/shell/mobile-level2";
 import { Popover } from "@/components/ui/popover";
 import { useStandaloneBotName } from "@/hooks/bots/use-standalone-bot-name";
-import { isPhoneLayoutOnly } from "@/lib/mobile-app";
+import type { MobileLevel2Form } from "@/lib/layout/mobile-layout-form";
 
 function stayOpen(): void {}
 
 /**
- * The bots list beside a bot tab's channel. The tab's own container decides
- * and the person drags the width; the installed app draws no column, and a
- * channel's title is its picker there.
+ * The bots list beside a bot tab's channel. In the installed app it is the
+ * column at the resolver's width, or nothing where the form has no column.
+ * `level2` is `null` everywhere else, where the tab's own container decides and
+ * the person drags the width.
  */
 export function BotChannelColumn(props: {
+  readonly level2: MobileLevel2Form | null;
   /** The channel shown; `null` while the surface shows none. */
   readonly activeBotId: string | null;
   readonly hostId: string;
   /** The surface's Threads view; `null` where no Threads entry is offered. */
   readonly threadsView: BotThreadsViewState | null;
 }): ReactNode {
-  const { activeBotId, hostId, threadsView } = props;
-  if (isPhoneLayoutOnly()) return null;
+  const { level2, activeBotId, hostId, threadsView } = props;
+  const sidebar = (
+    <BotChannelSidebar
+      activeBotId={activeBotId}
+      hostId={hostId}
+      threadsView={threadsView}
+      onChannelOpened={stayOpen}
+    />
+  );
+  if (level2 === null) {
+    return (
+      <BotResizablePane
+        pane="sidebar"
+        edge="right"
+        label="Resize channels"
+        className="hidden min-h-0 w-(--bot-pane-width) max-w-[40%] shrink-0 flex-col border-r border-canvas-border/70 @3xl:flex"
+        handleClassName=""
+        testId="bot-channel-sidebar-pane"
+      >
+        {sidebar}
+      </BotResizablePane>
+    );
+  }
+  if (typeof level2 !== "object") return null;
   return (
-    <BotResizablePane
-      pane="sidebar"
-      edge="right"
-      label="Resize channels"
-      className="hidden min-h-0 w-(--bot-pane-width) max-w-[40%] shrink-0 flex-col border-r border-canvas-border/70 @3xl:flex"
-      handleClassName=""
-      testId="bot-channel-sidebar-pane"
-    >
-      <BotChannelSidebar
-        activeBotId={activeBotId}
-        hostId={hostId}
-        threadsView={threadsView}
-        onChannelOpened={stayOpen}
-      />
-    </BotResizablePane>
+    <MobileLevel2Column width={level2.column} testId="bot-channel-sidebar-pane">
+      {sidebar}
+    </MobileLevel2Column>
   );
 }
 
+/** Whether the installed app draws no column, so a title is the picker. */
+function titlePicks(level2: MobileLevel2Form | null): boolean {
+  return level2 === "menu" || level2 === "bar";
+}
+
 /**
- * What the surface shows with no channel selected. The installed app draws no
- * column, so a title over it is the picker, as a channel's is, so the column's
- * rows (a team still to be set up, Threads, a new bot) stay within reach.
+ * What the surface shows with no channel selected. Where the installed app
+ * draws no column, a title over it is the picker, as a channel's is, so the
+ * column's rows (a team still to be set up, Threads, a new bot) stay within
+ * reach.
  */
 export function BotUnselectedLevel2Pane(props: {
+  readonly level2: MobileLevel2Form | null;
   readonly title: string;
   readonly hostId: string;
   readonly threadsView: BotThreadsViewState;
   readonly children: ReactNode;
 }): ReactNode {
-  if (!isPhoneLayoutOnly()) return props.children;
+  const { level2 } = props;
+  if (!titlePicks(level2)) return props.children;
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       <header className="flex shrink-0 items-center gap-2 px-4 pt-3 pb-2">
         <BotChannelTitle
+          level2={level2}
           title={props.title}
           activeBotId={null}
           hostId={props.hostId}
@@ -75,11 +97,12 @@ export function BotUnselectedLevel2Pane(props: {
 }
 
 /**
- * The bot's name at the head of its channel. The installed app draws no column,
- * so the name is also the picker there: the bots list in a menu under it, closed
+ * The bot's name at the head of its channel. Where the installed app draws no
+ * column the name is also the picker: the bots list in a menu under it, closed
  * by a pick or by tapping outside.
  */
 export function BotChannelTitle(props: {
+  readonly level2: MobileLevel2Form | null;
   readonly title: string;
   /** The channel shown; `null` while the surface shows none. */
   readonly activeBotId: string | null;
@@ -87,13 +110,14 @@ export function BotChannelTitle(props: {
   /** The surface's Threads view; `null` where no Threads entry is offered. */
   readonly threadsView: BotThreadsViewState | null;
 }): ReactNode {
-  const { title } = props;
+  const { level2, title } = props;
+  const picker = titlePicks(level2);
   return (
     <h1
       className="min-w-0 truncate text-ui-md font-bold text-foreground"
       data-testid="bot-tab-title"
     >
-      {isPhoneLayoutOnly() ? (
+      {picker ? (
         <BotChannelPicker
           title={title}
           activeBotId={props.activeBotId}
@@ -134,10 +158,17 @@ function BotChannelPicker(props: {
   );
   return (
     <Popover open={open} onOpenChange={setOpen}>
-      <MobileLevel2MenuTrigger testId="bot-channel-picker-trigger">
+      <MobileLevel2MenuTrigger
+        testId="bot-channel-picker-trigger"
+        className={undefined}
+      >
         <span className="min-w-0 truncate">{name}</span>
       </MobileLevel2MenuTrigger>
-      <MobileLevel2MenuContent label="Channels" testId="bot-channel-picker">
+      <MobileLevel2MenuContent
+        label="Channels"
+        testId="bot-channel-picker"
+        tall={false}
+      >
         <BotChannelSidebar
           activeBotId={activeBotId}
           hostId={hostId}

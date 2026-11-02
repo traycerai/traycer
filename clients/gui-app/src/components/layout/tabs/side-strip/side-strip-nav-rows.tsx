@@ -2,6 +2,7 @@ import type { ComponentPropsWithRef, ReactNode } from "react";
 import { Bell, History, Plus } from "lucide-react";
 import { useRouterState } from "@tanstack/react-router";
 import { useColumnOverlayPlacement } from "@/components/layout/column-edge-context";
+import { useMobileStripForm } from "@/components/layout/tabs/mobile-strip-form-context";
 import { NotificationsPopover } from "@/components/notifications/notifications-popover";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -313,6 +314,7 @@ function InboxNavRow(props: {
         sideOffset={0}
         alignOffset={0}
         data-testid="side-strip-inbox-drawer"
+        {...usePhoneShellTouchScope()}
         className="h-[var(--radix-popover-trigger-height)] w-auto overflow-hidden"
         {...contentHandlers}
       >
@@ -329,6 +331,18 @@ function InboxNavRow(props: {
 }
 
 const NO_SHELL_STYLE = {};
+
+/**
+ * The drawer's controls take the phone shell's touch floor, as the sheet it
+ * stands in for does.
+ */
+function usePhoneShellTouchScope(): {
+  readonly "data-mobile-shell-touch-scope"?: string;
+} {
+  return useMobileStripForm() === null
+    ? {}
+    : { "data-mobile-shell-touch-scope": "" };
+}
 
 /** What the Notifications pill's one count says, which its colour names. */
 type InboxPillTone = "needs-you" | "attention" | "unread";

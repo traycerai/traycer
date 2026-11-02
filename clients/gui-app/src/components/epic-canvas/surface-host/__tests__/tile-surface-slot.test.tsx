@@ -38,6 +38,10 @@ import {
   PaneVisibilityContext,
 } from "@/components/epic-tabs/pane-visibility-context";
 import {
+  MobileTileOpenTargetContext,
+  type MobileTileOpenTarget,
+} from "@/lib/canvas/tile-open/mobile-tile-open-target-context";
+import {
   PaneActivationFocusIntentContext,
   type PaneActivationFocusIntent,
 } from "@/components/epic-canvas/pane-activation";
@@ -217,6 +221,46 @@ describe("TileSurfaceSlot environment publish", () => {
     expect(env.services.panePortalContainer).toBe(realPortalHost);
     expect(env.services.geometryAnchorElement).toBeInstanceOf(HTMLElement);
     expect(env.services.geometryAnchorElement).not.toBe(realPortalHost);
+  });
+
+  it("publishes the ambient MobileTileOpenTargetContext value as services.mobileOpenTarget, and null outside the phone shell's tiles", async () => {
+    const target: MobileTileOpenTarget = {
+      tabId: VIEW_TAB_ID,
+      slot: "secondary",
+    };
+    const { unmount } = render(
+      <EpicSessionContext.Provider value={OPEN_EPIC_HANDLE}>
+        <MobileTileOpenTargetContext value={target}>
+          <TileSurfaceSlot
+            node={CHAT_NODE}
+            epicId={EPIC_ID}
+            paneId={PANE_ID}
+            viewTabId={VIEW_TAB_ID}
+            tabSelected
+            canvasPaneActive
+          />
+        </MobileTileOpenTargetContext>
+      </EpicSessionContext.Provider>,
+    );
+    await waitFor(() => {
+      expect(getTileSurfaceEnvironment(INSTANCE_ID)).not.toBeNull();
+    });
+    expect(
+      getTileSurfaceEnvironment(INSTANCE_ID)?.services.mobileOpenTarget,
+    ).toBe(target);
+    unmount();
+
+    renderSlot({
+      visible: true,
+      focused: false,
+      tabSelected: true,
+      canvasPaneActive: true,
+    });
+    await waitFor(() => {
+      expect(
+        getTileSurfaceEnvironment(INSTANCE_ID)?.services.mobileOpenTarget,
+      ).toBeNull();
+    });
   });
 
   it("publishes topLevelFocused from the RAW PaneSurfaceActivityContext.focused, not visible&&focused (design-review finding 1)", async () => {

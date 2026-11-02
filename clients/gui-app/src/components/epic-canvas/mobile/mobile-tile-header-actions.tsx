@@ -1,7 +1,8 @@
 import type { ReactNode } from "react";
-import { ChevronLeft } from "lucide-react";
+import { ChevronLeft, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useOpenBotChannel } from "@/hooks/bots/use-open-bot-channel";
+import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useMobileTabOriginStore } from "@/stores/epics/mobile-tab-origin-store";
 import { TRACY_TAB_LABEL } from "@/stores/tabs/kinds/tracy";
 
@@ -44,6 +45,30 @@ function OriginCrumbButton(props: {
     >
       <ChevronLeft aria-hidden="true" />
       <span className="min-w-0 truncate">{TRACY_TAB_LABEL}</span>
+    </Button>
+  );
+}
+
+/**
+ * Back to one tile: the second one leaves the screen. It stays in the task's
+ * list unless nobody asked to keep it, which is what the slot's store decides.
+ */
+export function MobileSecondaryTileClose(props: {
+  readonly tabId: string;
+}): ReactNode {
+  const { tabId } = props;
+  const setSecondary = useEpicCanvasStore((s) => s.setMobileSecondaryTile);
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="icon-sm"
+      aria-label="Close this side"
+      data-testid="mobile-secondary-tile-close"
+      className="shrink-0"
+      onClick={() => setSecondary(tabId, null)}
+    >
+      <X aria-hidden="true" />
     </Button>
   );
 }

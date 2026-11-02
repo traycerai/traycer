@@ -44,6 +44,10 @@
  *    reconciles - additions and MRU eviction alike - exactly once, from the
  *    coordinator's own settle notification.
  *
+ * The phone shell's second tile joins layer 1 on its own terms: it is shown with
+ * no activation of its own, so no pane's retention window names it
+ * (`mobileSecondaryChatMembership`).
+ *
  * Membership is recomputed and diffed on every notification from
  * `useEpicCanvasStore`, `useTabsStore`, `tabCommandCoordinator`, and
  * `remote-deleted-chat-registry.ts` - deriving from observed state at each
@@ -59,7 +63,10 @@
  * alongside the inline `DeletedArtifactBody`.
  */
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
-import type { EpicCanvasState } from "@/stores/epics/canvas/types";
+import type {
+  EpicCanvasState,
+  MobileSecondaryTile,
+} from "@/stores/epics/canvas/types";
 import { collectPanes } from "@/stores/epics/canvas/tile-tree";
 import {
   RETAINED_PANE_CHAT_CAP,
@@ -118,6 +125,34 @@ export function collectCanvasWideRetainedChatMembership(
         }
         instanceIdToTabId.set(instanceId, tabId);
       }
+    }
+  }
+  return instanceIdToTabId;
+}
+
+/**
+ * The chats the phone shell shows in its second slot. The slot leaves the pane's
+ * activation alone, so `activationHistory` may never name the tile, and the pane's
+ * capped window can be full of other chats even if it does; the slot is what
+ * keeps it painted. While the width has no room the slot draws nothing, and the
+ * record stays as a retained chat does, unpresented.
+ */
+export function mobileSecondaryChatMembership(
+  canvasByTabId: Readonly<Record<string, EpicCanvasState | undefined>>,
+  slots: Readonly<Record<string, MobileSecondaryTile | undefined>>,
+): ReadonlyMap<string, string> {
+  const instanceIdToTabId = new Map<string, string>();
+  for (const [tabId, slot] of Object.entries(slots)) {
+    if (slot === undefined) continue;
+    const tile = canvasByTabId[tabId]?.tilesByInstanceId[slot.instanceId];
+    if (
+      tile !== undefined &&
+      isHostedSurfaceEligible({
+        node: tile,
+        isRemoteDeleted: isChatRemoteDeleted(slot.instanceId),
+      })
+    ) {
+      instanceIdToTabId.set(slot.instanceId, tabId);
     }
   }
   return instanceIdToTabId;
@@ -187,9 +222,13 @@ function recomputeMembership(): void {
 
   const canvasState = useEpicCanvasStore.getState();
   const retainedRefKeys = new Set(computeRetainedTopLevelRefKeys());
-  const instanceIdToTabId = collectCanvasWideRetainedChatMembership(
-    canvasState.canvasByTabId,
-  );
+  const instanceIdToTabId = [
+    ...collectCanvasWideRetainedChatMembership(canvasState.canvasByTabId),
+    ...mobileSecondaryChatMembership(
+      canvasState.canvasByTabId,
+      canvasState.mobileSecondaryTileByTabId,
+    ),
+  ];
   const nextMembership = new Set<string>();
   for (const [instanceId, tabId] of instanceIdToTabId) {
     if (!retainedRefKeys.has(tabRefKey({ kind: "epic", id: tabId }))) continue;

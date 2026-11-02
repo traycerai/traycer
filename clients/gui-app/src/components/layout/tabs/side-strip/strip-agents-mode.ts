@@ -1,8 +1,24 @@
-import { useSideStripCollapsed } from "@/stores/layout/side-tab-strip-store";
+import { useSideStripDrawnCollapsed } from "@/components/layout/tabs/mobile-strip-form-context";
 import { useTabStripPlacement } from "@/components/layout/tabs/use-tab-strip-placement";
 import { useArrangementValue } from "@/lib/layout-overrides";
-import { liveAgentsInStrip } from "@/lib/layout/layout-arrangement";
+import {
+  liveAgentsInStrip,
+  type SideStripView,
+} from "@/lib/layout/layout-arrangement";
+import { isPhoneLayoutOnly } from "@/lib/mobile-app";
 import { useLayoutEditorStore } from "@/stores/layout/layout-editor-store";
+
+/**
+ * The view the strip draws. The installed app offers neither the Side tab
+ * view row nor the layout editor, so its strip would be the plain list for
+ * good; it draws the Activity view instead, the one that lists a task's
+ * agents and sorts tasks by what they need, as the desktop strip does once the
+ * person chooses it.
+ */
+function useSideStripView(): SideStripView {
+  const stored = useArrangementValue("sideStripView");
+  return isPhoneLayoutOnly() ? "activity" : stored;
+}
 
 /**
  * How the tasks' nested agents draw: `live` in the Activity view, and
@@ -12,8 +28,8 @@ import { useLayoutEditorStore } from "@/stores/layout/layout-editor-store";
  */
 export function useStripAgentsMode(): "live" | "preview" | null {
   const placement = useTabStripPlacement();
-  const collapsed = useSideStripCollapsed();
-  const view = useArrangementValue("sideStripView");
+  const collapsed = useSideStripDrawnCollapsed();
+  const view = useSideStripView();
   const pointed = useLayoutEditorStore(
     (state) =>
       state.hoveredSetting === "sideStripView" ||
@@ -28,8 +44,8 @@ export function useStripAgentsMode(): "live" | "preview" | null {
 /** Whether this window's strip lists live agents at all (D9). */
 export function useLiveAgentsInStrip(): boolean {
   const placement = useTabStripPlacement();
-  const collapsed = useSideStripCollapsed();
-  const view = useArrangementValue("sideStripView");
+  const collapsed = useSideStripDrawnCollapsed();
+  const view = useSideStripView();
   return liveAgentsInStrip(placement, collapsed, view);
 }
 
@@ -40,6 +56,6 @@ export function useLiveAgentsInStrip(): boolean {
  */
 export function useSectionedStrip(): boolean {
   const placement = useTabStripPlacement();
-  const view = useArrangementValue("sideStripView");
+  const view = useSideStripView();
   return liveAgentsInStrip(placement, false, view);
 }

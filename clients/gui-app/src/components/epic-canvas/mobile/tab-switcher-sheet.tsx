@@ -46,7 +46,12 @@ export function TabSwitcherSheet(props: TabSwitcherSheetProps) {
             but the sheet's own content says what it is, so there is no visible
             heading for a header band to hold. */}
         <DrawerTitle className="sr-only">Switch tab</DrawerTitle>
-        <TileSwitcherList epicId={epicId} tabId={tabId} onClose={handleClose} />
+        <TileSwitcherList
+          epicId={epicId}
+          tabId={tabId}
+          onClose={handleClose}
+          trailing={null}
+        />
       </DrawerContent>
     </Drawer>
   );

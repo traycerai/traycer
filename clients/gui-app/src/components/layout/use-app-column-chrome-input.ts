@@ -6,7 +6,8 @@ import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 
 /**
  * What decides the app column's chrome in this window: the effective tab strip
- * placement, the desktop platform, and whether the window is frameless.
+ * placement, the desktop platform, and whether the window is frameless. The
+ * phone shell's strip takes `PHONE_SHELL_STRIP_CHROME` instead of this answer.
  */
 export function useAppColumnChromeInput(): AppColumnChromeInput {
   const placement = useTabStripPlacement();

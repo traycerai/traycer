@@ -1,13 +1,13 @@
 import { expect, test, type Page } from "@playwright/test";
 
-import { fixture } from "./support/fixtures.ts";
+import { fixture, nextFrames } from "./support/fixtures.ts";
 
-// The level-2 menu's plate with the installed iOS app's keyboard up. The app
-// overlays the keyboard on a window that keeps its height, so the plate, sized
-// to the room under its trigger, ran under the keyboard until the keyboard
-// came off the bottom of that room. The plate's height is layout, which jsdom
-// does not compute: this opens the production menu around a list taller than
-// the window and raises the keyboard the way the native bridge does.
+// The level-2 menu with the installed iOS app's keyboard up. The app overlays
+// the keyboard on a window that keeps its height, so the menu's 70dvh plate ran
+// under it: on the Pro Max in landscape (440 tall, keyboard 208) the plate was
+// 308 tall and its lower 151px sat under the keyboard. The plate's height is
+// layout, which jsdom does not compute: this opens the production menu in the
+// fixture and raises the keyboard the way the native bridge does.
 
 declare global {
   interface Window {
@@ -15,19 +15,24 @@ declare global {
   }
 }
 
-const TRIGGER = '[data-testid="level2-trigger"]';
-const MENU = '[data-testid="level2-menu"]';
+const TRIGGER = '[data-testid="mobile-tile-menu-trigger"]';
+const MENU = '[data-testid="mobile-tile-menu"]';
 const WINDOW_HEIGHT = 440;
-const KEYBOARD_INSET = 208;
 
 test.use({ viewport: { width: 956, height: WINDOW_HEIGHT } });
 
 async function openMenu(page: Page): Promise<void> {
-  await page.goto(fixture("mobile-level2-menu-content"));
+  await page.goto(`${fixture("mobile-level2-menu-trigger")}?width=444`);
   await page.locator(TRIGGER).click();
   await expect(page.locator(MENU)).toBeVisible();
   // The plate zooms and slides in; its box is its own once that settles.
   await page.waitForFunction("document.getAnimations().length === 0");
+}
+
+async function raiseKeyboard(page: Page, inset: number): Promise<void> {
+  await page.evaluate((value) => {
+    window.__level2Keyboard?.raise(value);
+  }, inset);
 }
 
 async function menuBox(page: Page) {
@@ -36,18 +41,15 @@ async function menuBox(page: Page) {
   return box;
 }
 
-test("ends at the keyboard's top when the keyboard rises into it, under the same trigger", async ({
+test("ends at the keyboard's top when the keyboard rises into it", async ({
   page,
 }) => {
   await openMenu(page);
   const before = await menuBox(page);
-  const keyboardTop = WINDOW_HEIGHT - KEYBOARD_INSET;
-  // Without the keyboard the plate runs past where the keyboard will be.
+  const keyboardTop = WINDOW_HEIGHT - 208;
   expect(before.y + before.height).toBeGreaterThan(keyboardTop);
 
-  await page.evaluate((inset) => {
-    window.__level2Keyboard?.raise(inset);
-  }, KEYBOARD_INSET);
+  await raiseKeyboard(page, 208);
   await expect
     .poll(async () => {
       const box = await menuBox(page);
@@ -56,4 +58,13 @@ test("ends at the keyboard's top when the keyboard rises into it, under the same
     .toBeLessThanOrEqual(keyboardTop + 0.5);
   // It shortens under its trigger; it does not flip or slide over it.
   expect((await menuBox(page)).y).toBeCloseTo(before.y, 0);
+});
+
+test("keeps its 70dvh where the keyboard leaves room for it", async ({
+  page,
+}) => {
+  await openMenu(page);
+  await raiseKeyboard(page, 60);
+  await nextFrames(page, 2);
+  expect((await menuBox(page)).height).toBeCloseTo(WINDOW_HEIGHT * 0.7, 0);
 });

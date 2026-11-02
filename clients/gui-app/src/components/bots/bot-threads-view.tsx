@@ -18,7 +18,7 @@ import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useNotificationIndicators } from "@/hooks/notifications/use-notification-indicators-query";
 import { firstLineOf } from "@/lib/bots/bot-trunk-model";
 import { postTextOf } from "@/lib/bots/reply-row";
-import { isPhoneLayoutOnly } from "@/lib/mobile-app";
+import type { MobileLevel2Form } from "@/lib/layout/mobile-layout-form";
 import { useRelativeTimestamp } from "@/lib/relative-time";
 import { cn } from "@/lib/utils";
 
@@ -35,7 +35,7 @@ const NO_EPIC_IDS: ReadonlyArray<string> = [];
  * which drops it here.
  *
  * Where the tab draws no column, whose channel row is the way back, the header
- * goes back to the tab's channel itself: always in the installed app, and
+ * goes back to the tab's channel itself: as the installed app's form says, and
  * elsewhere as the tab's own container does.
  */
 export function BotThreadsView(props: {
@@ -43,24 +43,29 @@ export function BotThreadsView(props: {
   /** The tab's channel, which the back control names. */
   readonly channelTitle: string;
   readonly onBack: () => void;
+  /** The installed app's form; `null` where the container decides. */
+  readonly level2: MobileLevel2Form | null;
 }): ReactNode {
+  const { level2 } = props;
   return (
     <div
       className="flex min-h-0 min-w-0 flex-1 flex-col"
       data-testid="bot-threads-view"
     >
       <header className="flex shrink-0 flex-col gap-0.5 px-4 pt-3 pb-2">
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          className={cn("self-start", !isPhoneLayoutOnly() && "@3xl:hidden")}
-          data-testid="bot-threads-back"
-          onClick={props.onBack}
-        >
-          <ArrowLeft aria-hidden="true" />
-          {`Back to ${props.channelTitle}`}
-        </Button>
+        {level2 !== null && typeof level2 === "object" ? null : (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className={cn("self-start", level2 === null && "@3xl:hidden")}
+            data-testid="bot-threads-back"
+            onClick={props.onBack}
+          >
+            <ArrowLeft aria-hidden="true" />
+            {`Back to ${props.channelTitle}`}
+          </Button>
+        )}
         <h1 className="text-ui-md font-bold text-foreground">Threads</h1>
         <p className="text-ui-xs text-muted-foreground">
           Threads you follow, across every bot.

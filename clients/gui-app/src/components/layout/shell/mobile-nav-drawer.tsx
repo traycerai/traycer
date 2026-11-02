@@ -112,8 +112,8 @@ export function MobileNavDrawer(): ReactNode {
   useEffect(() => {
     if (open) taskPaintGate?.markDrawerRequested();
   }, [open, taskPaintGate]);
-  // A window resize out of the phone layout unmounts the drawer while it may be
-  // open, and the store's open flag also hides the footer.
+  // A rotation into the strip's form unmounts the drawer while it may be open,
+  // and the store's open flag also hides the footer.
   useEffect(() => {
     return () => {
       setOpen(false);

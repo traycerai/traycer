@@ -99,7 +99,7 @@ const script = vi.hoisted(() => {
 });
 
 const mocks = vi.hoisted(() => ({
-  client: { stub: "tab-host-client", onChange: () => () => undefined },
+  client: { stub: "tab-host-client" },
   /** The bot of each `bot.open` call, in order. */
   opened: new Array<string>(),
   /** One stable mutation object, like TanStack's `mutate`. */

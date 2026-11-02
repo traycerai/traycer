@@ -1,4 +1,13 @@
-import { Suspense, lazy, useCallback, useEffect, useMemo, useRef } from "react";
+import {
+  Suspense,
+  lazy,
+  use,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  type ReactNode,
+} from "react";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { SwitcherCategoryTabs } from "@/components/epic-canvas/mobile/switcher-category-tabs";
@@ -13,8 +22,9 @@ import { SwitcherBrowsersList } from "@/components/epic-canvas/mobile/switcher-b
 import { SwitcherSimulatorsList } from "@/components/epic-canvas/mobile/switcher-simulators-list";
 import { SwitcherArtifactsList } from "@/components/epic-canvas/mobile/switcher-artifacts-list";
 import { SwitcherCommentsList } from "@/components/epic-canvas/mobile/switcher-comments-list";
-import { selectMobileTile } from "@/components/epic-canvas/mobile/mobile-tile-selection";
-import { useEpicCanvas } from "@/stores/epics/canvas/store";
+import { SwitcherLastTileRow } from "@/components/epic-canvas/mobile/switcher-last-tile-row";
+import { useMobileTileReading } from "@/components/epic-canvas/mobile/use-mobile-tile-level2-form";
+import { MobileTileOpenTargetContext } from "@/lib/canvas/tile-open/mobile-tile-open-target-context";
 import {
   isGitDiffTileRef,
   isPrDetailTileRef,
@@ -41,8 +51,13 @@ const SwitcherPanelEmbed = lazy(() =>
 interface TileSwitcherListProps {
   readonly epicId: string;
   readonly tabId: string;
-  /** The sheet gets out of the way of a tile just opened from it. */
+  /**
+   * The list's surface gets out of the way of a tile just opened from it: the
+   * sheet and the menu close. A column stays where it is and passes a no-op.
+   */
   readonly onClose: () => void;
+  /** What ends the category row: the column's fold control, else nothing. */
+  readonly trailing: ReactNode;
 }
 
 /**
@@ -71,11 +86,11 @@ function isEmbedOriginatedTileRef(ref: EpicCanvasTileRef): boolean {
  * Sharing panel bodies for the rest. Creating is a row inside the category that
  * owns the kind, not a list-level control.
  *
- * It has no box of its own beyond filling its parent; `TabSwitcherSheet`
- * supplies one.
+ * It has no box of its own beyond filling its parent, and whichever form level 2
+ * takes supplies one: `TabSwitcherSheet`, `MobileTileColumn`, `MobileTileMenu`.
  */
 export function TileSwitcherList(props: TileSwitcherListProps) {
-  const { epicId, tabId, onClose } = props;
+  const { epicId, tabId, onClose, trailing } = props;
   // Every panel is reachable (a chip or under More), so the rail-shared
   // selection is always one the list can show.
   const activeCategory = useActiveLeftPanelId(tabId);
@@ -107,11 +122,13 @@ export function TileSwitcherList(props: TileSwitcherListProps) {
   // re-resolve, cross-window nav on the shared canvas store) also changes the
   // shown tile, but must NOT close the surface under the user mid-browse - those
   // row opens close via their own `onClose`.
-  const canvas = useEpicCanvas(tabId);
-  const shownTile = useMemo(
-    () => selectMobileTile(canvas)?.ref ?? null,
-    [canvas],
-  );
+  //
+  // The tile this list chooses for: the second slot's menu watches the second.
+  const reading = useMobileTileReading(tabId);
+  const listsForSecondary =
+    use(MobileTileOpenTargetContext)?.slot === "secondary";
+  const shownTile =
+    (listsForSecondary ? reading.secondary : reading.primary)?.ref ?? null;
   const shownInstanceId = shownTile?.instanceId ?? null;
   const shownInstanceIdRef = useRef<ShownInstanceObservation>(UNOBSERVED);
   useEffect(() => {
@@ -132,11 +149,13 @@ export function TileSwitcherList(props: TileSwitcherListProps) {
       onValueChange={handleCategoryChange}
       className="min-h-0 flex-1 gap-0"
     >
+      <SwitcherLastTileRow epicId={epicId} tabId={tabId} onClose={onClose} />
       <div className="shrink-0 border-b border-canvas-border/70">
         <SwitcherCategoryTabs
           categories={categories}
           activeCategory={activeCategory}
           onSelect={handleCategoryChange}
+          trailing={trailing}
         />
       </div>
       <div className="flex min-h-0 flex-1 flex-col">

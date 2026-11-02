@@ -74,6 +74,7 @@ export function buildSyntheticTileSurfaceEnvironment(
       geometryAnchorElement: createDefaultGeometryAnchor(),
       panePortalContainer: null,
       isPaneFocusedNow: () => false,
+      mobileOpenTarget: null,
     },
     ...overrides,
     identity: {

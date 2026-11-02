@@ -217,6 +217,7 @@ describe("a hosted chat tile reads through the epic session's host", () => {
         geometryAnchorElement: document.createElement("div"),
         panePortalContainer: null,
         isPaneFocusedNow: () => false,
+        mobileOpenTarget: null,
       },
     });
 

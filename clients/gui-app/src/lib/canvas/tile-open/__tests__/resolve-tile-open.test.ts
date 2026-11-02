@@ -23,6 +23,8 @@ import type { TilePlacementSettings } from "@/stores/settings/settings-store";
 import {
   tileCategoryOf,
   tileIntent,
+  type MobileTileOpenSlots,
+  type MobileTileSlot,
   type TileOpenGesture,
   type TileOpenIntent,
   type TileOpenMode,
@@ -132,6 +134,7 @@ function resolve(input: {
     canvas: input.canvas,
     resolveTargetTabForEpic: (epicId) => `tab-for-${epicId}`,
     singleTileViewport: input.singleTileViewport,
+    mobileSlots: null,
   });
 }
 
@@ -1027,6 +1030,163 @@ describe("beside placement", () => {
       paneId: "p2",
       edge: "right",
       mode: "permanent",
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The phone shell's second tile
+// ---------------------------------------------------------------------------
+
+describe("mobile second tile", () => {
+  // p1 (active) holds SPEC_A, the tile the person reads; p2 holds SPEC_B, which
+  // the second slot may name; CHAT_A is open too and in neither slot.
+  const CANVAS = canvasOf({
+    root: group("g1", "horizontal", [
+      pane("p1", [SPEC_A.instanceId]),
+      pane("p2", [SPEC_B.instanceId, CHAT_A.instanceId]),
+    ]),
+    activePaneId: "p1",
+    tiles: [SPEC_A, SPEC_B, CHAT_A],
+  });
+
+  function slots(
+    target: MobileTileSlot,
+    secondaryInstanceId: string | null,
+  ): MobileTileOpenSlots {
+    return {
+      target,
+      primaryInstanceId: SPEC_A.instanceId,
+      secondaryInstanceId,
+    };
+  }
+
+  function resolveMobile(
+    intent: TileOpenIntent,
+    mobileSlots: MobileTileOpenSlots,
+  ): TileOpenPlan {
+    return resolveTileOpen({
+      intent,
+      settings: DEFAULT_SETTINGS,
+      canvas: CANVAS,
+      resolveTargetTabForEpic: (epicId) => `tab-for-${epicId}`,
+      // The installed app is a single-tile viewport at every width.
+      singleTileViewport: true,
+      mobileSlots,
+    });
+  }
+
+  function intentFor(
+    node: EpicCanvasTileRef,
+    overrides: Partial<TileOpenIntent>,
+  ): TileOpenIntent {
+    return { ...BASE_INTENT, node, ...overrides };
+  }
+
+  it("shows a new tile in the second slot, transient only for a single click", () => {
+    expect(
+      resolveMobile(intentFor(CHAT_C, {}), slots("secondary", null)),
+    ).toEqual({
+      kind: "show-in-mobile-secondary",
+      tabId: TAB_ID,
+      existingInstanceId: null,
+      transient: false,
+    });
+    expect(
+      resolveMobile(
+        intentFor(CHAT_C, { gesture: "single" }),
+        slots("secondary", null),
+      ),
+    ).toMatchObject({ kind: "show-in-mobile-secondary", transient: true });
+  });
+
+  it("shows a tile already on the canvas in the second slot without making it transient", () => {
+    expect(
+      resolveMobile(
+        intentFor(CHAT_A, { gesture: "single" }),
+        slots("secondary", SPEC_B.instanceId),
+      ),
+    ).toEqual({
+      kind: "show-in-mobile-secondary",
+      tabId: TAB_ID,
+      existingInstanceId: CHAT_A.instanceId,
+      transient: false,
+    });
+  });
+
+  it.each<MobileTileSlot>(["primary", "secondary"])(
+    "keeps a tile the second slot already holds there, aimed at the %s",
+    (target) => {
+      expect(
+        resolveMobile(intentFor(SPEC_B, {}), slots(target, SPEC_B.instanceId)),
+      ).toEqual({
+        kind: "show-in-mobile-secondary",
+        tabId: TAB_ID,
+        existingInstanceId: SPEC_B.instanceId,
+        transient: false,
+      });
+    },
+  );
+
+  it("focuses a tile the first slot holds instead of showing it twice", () => {
+    expect(
+      resolveMobile(
+        intentFor(SPEC_A, {}),
+        slots("secondary", SPEC_B.instanceId),
+      ),
+    ).toMatchObject({
+      kind: "focus-existing",
+      paneId: "p1",
+      instanceId: SPEC_A.instanceId,
+    });
+  });
+
+  it("opens into the current tile when the open is aimed at the first slot", () => {
+    expect(
+      resolveMobile(intentFor(CHAT_C, {}), slots("primary", null)),
+    ).toMatchObject({ kind: "open-in-pane", paneId: "p1" });
+  });
+
+  it("leaves a caller's explicit tab placement alone", () => {
+    expect(
+      resolveMobile(
+        intentFor(CHAT_C, {
+          placement: { kind: "tab", paneId: "p2", index: null },
+        }),
+        slots("secondary", null),
+      ),
+    ).toMatchObject({ kind: "open-in-pane", paneId: "p2" });
+  });
+
+  it("leaves an open that asks for a second view (dedupe off) to its own pane", () => {
+    expect(
+      resolveMobile(
+        intentFor(CHAT_C, { dedupe: false }),
+        slots("secondary", null),
+      ),
+    ).toMatchObject({ kind: "open-in-pane", paneId: "p1" });
+  });
+
+  it("does not route a background open to the second slot", () => {
+    expect(
+      resolveMobile(
+        intentFor(CHAT_C, { gesture: "host" }),
+        slots("secondary", null),
+      ),
+    ).toMatchObject({ kind: "open-in-pane", mode: "background" });
+  });
+
+  it("routes a beside placement to the second slot", () => {
+    expect(
+      resolveMobile(
+        intentFor(CHAT_C, {
+          placement: { kind: "beside", paneId: "p1", category: "side-chat" },
+        }),
+        slots("secondary", null),
+      ),
+    ).toMatchObject({
+      kind: "show-in-mobile-secondary",
+      existingInstanceId: null,
     });
   });
 });

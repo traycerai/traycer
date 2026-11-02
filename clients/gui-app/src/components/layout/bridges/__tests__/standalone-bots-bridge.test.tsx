@@ -43,7 +43,6 @@ import {
   displayCloudSnapshotArrivals,
   resetNotificationFeedDisplayReceiptsForTests,
 } from "@/lib/notifications/notification-display";
-import { setPhoneLayoutOnly } from "@/lib/mobile-app";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useStandaloneBotsStore } from "@/stores/bots/standalone-bots-store";
 
@@ -241,6 +240,7 @@ function mountHost(answers: HostAnswers): (children: ReactNode) => ReactNode {
 function pickerOn(botId: string): ReactNode {
   return (
     <BotChannelTitle
+      level2="menu"
       title="Tracy"
       activeBotId={botId}
       hostId="host-1"
@@ -314,7 +314,6 @@ function signIn(userId: string): void {
 }
 
 beforeEach(() => {
-  setPhoneLayoutOnly(true);
   vi.spyOn(document, "hasFocus").mockReturnValue(true);
   resetNotificationFeedDisplayReceiptsForTests();
   host.support = true;
@@ -328,7 +327,6 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
-  setPhoneLayoutOnly(false);
   vi.restoreAllMocks();
   toast.dismiss();
   __resetBotListChangedSessionsForTesting();
@@ -538,6 +536,7 @@ describe("<StandaloneBotsBridge /> and a main bot still to be set up", () => {
         }}
         client={host.client}
         hostId={mockLocalHostEntry.hostId}
+        level2="menu"
         threadsView={THREADS_CLOSED}
       />
     );

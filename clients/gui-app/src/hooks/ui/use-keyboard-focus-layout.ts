@@ -1,5 +1,9 @@
 import * as React from "react";
 import { isTextEntryFocused } from "@/components/layout/shell/shell-gestures";
+import {
+  readPhonePortrait,
+  subscribeToPhonePortrait,
+} from "@/hooks/ui/use-mobile-layout-form";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import {
   readVirtualKeyboardInset,
@@ -35,63 +39,10 @@ import {
  */
 const KEYBOARD_FOCUS_LAYOUT_HEIGHT_LIMIT_PX = 405;
 
-/**
- * Measured: the widest phone viewport in portrait is 466, and the next panel
- * up in portrait is 669, so this sits just above the first. It is a limit on
- * the VIEWPORT, not on the content box: a phone's status column can take 84 of
- * that 466.
- */
-const MOBILE_PHONE_PORTRAIT_WIDTH_LIMIT_PX = 467;
-
-// The prefixed form: range syntax needs WebKit 16.4, and on anything older the
-// query never matches, which would silently lose phone portrait in the band
-// only it decides.
-const PHONE_WIDTH_QUERY = `(max-width: ${MOBILE_PHONE_PORTRAIT_WIDTH_LIMIT_PX - 1}px)`;
-
 const FOCUS_OWNER_ATTRIBUTE = "data-keyboard-focus-owner";
 
 /** Spread on the element around a text entry the focus layout makes room for. */
 export const KEYBOARD_FOCUS_OWNER_PROPS = { [FOCUS_OWNER_ATTRIBUTE]: "" };
-
-/** Absent on iOS before 16.4, whatever the DOM types say. */
-function readScreenOrientation(): ScreenOrientation | null {
-  return "orientation" in window.screen ? window.screen.orientation : null;
-}
-
-function subscribeToPhonePortrait(onChange: () => void): () => void {
-  const mql = window.matchMedia(PHONE_WIDTH_QUERY);
-  mql.addEventListener("change", onChange);
-  // The same self-heal as `use-narrow-window.ts`: a `change` WKWebView drops
-  // cannot wedge the read, because the resize accompanying it re-asks.
-  window.addEventListener("resize", onChange);
-  const orientation = readScreenOrientation();
-  orientation?.addEventListener("change", onChange);
-  return () => {
-    mql.removeEventListener("change", onChange);
-    window.removeEventListener("resize", onChange);
-    orientation?.removeEventListener("change", onChange);
-  };
-}
-
-/**
- * The SCREEN, not the viewport's shape: Android resizes the viewport for the
- * keyboard, so `(orientation: portrait)` would flip a portrait phone to
- * landscape while the person types, moving the navigation under them.
- *
- * iOS before 16.4 has no `screen.orientation`, and its `screen` keeps its
- * portrait dimensions in every orientation. That reads as portrait throughout,
- * which the width half corrects: no phone there is under the limit on its side.
- */
-function readScreenPortrait(): boolean {
-  const orientation = readScreenOrientation();
-  if (orientation !== null) return orientation.type.startsWith("portrait");
-  return window.screen.width < window.screen.height;
-}
-
-/** The width reads the query for the reason `use-narrow-window.ts` records: `innerWidth` settles late. */
-function readPhonePortrait(): boolean {
-  return readScreenPortrait() && window.matchMedia(PHONE_WIDTH_QUERY).matches;
-}
 
 /** The native shell's keyboard: its height while open, 0 while closed. */
 function readKeyboardOverlayInset(): number {

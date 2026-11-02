@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { MoreHorizontal } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -78,13 +78,15 @@ function fadeClassForEdges(edges: ScrollEdges): string | null {
  * never scrolls away - a "More" menu holding the panels the user turned off in
  * Settings > Layout. Rendered inside the sheet's `Tabs` root so chip selection
  * flows through Radix; a More pick goes through `onSelect`, the same handler.
+ * `trailing` ends the row past More, pinned like it.
  */
 export function SwitcherCategoryTabs(props: {
   readonly categories: SwitcherCategories;
   readonly activeCategory: LeftPanelId;
   readonly onSelect: (id: LeftPanelId) => void;
+  readonly trailing: ReactNode;
 }) {
-  const { categories, activeCategory, onSelect } = props;
+  const { categories, activeCategory, onSelect, trailing } = props;
   const listRef = useRef<HTMLDivElement>(null);
   const edges = useHorizontalScrollEdges(listRef);
   return (
@@ -172,6 +174,9 @@ export function SwitcherCategoryTabs(props: {
           )}
           onSelect={onSelect}
         />
+      )}
+      {trailing === null || trailing === undefined ? null : (
+        <span className="mr-1 flex shrink-0 items-center">{trailing}</span>
       )}
     </div>
   );

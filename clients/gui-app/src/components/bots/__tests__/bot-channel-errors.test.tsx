@@ -231,6 +231,7 @@ function mount(openThread: BotOpenThread | null): void {
       <TooltipProvider>
         <ChatExpansionTestProviders tileInstanceId="tile-1">
           <BotChannelView
+            tiles={null}
             botId={BOT_ID}
             hostId={HOST_ID}
             boundHostId={HOST_ID}
