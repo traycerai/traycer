@@ -116,8 +116,22 @@ interface TeamCloudBinding extends FakeSandboxBinding {
   };
 }
 
+interface HostClientChange {
+  readonly reason: "auth-changed" | "availability-recovered";
+  readonly currentHostId: string | null;
+}
+type HostClientChangeListener = (event: HostClientChange) => void;
+
 const mocks = vi.hoisted(() => ({
-  hostClient: { stub: "tab-host-client" },
+  hostClient: {
+    stub: "tab-host-client",
+    onChange: (listener: HostClientChangeListener): (() => void) => {
+      mocks.changeListeners.add(listener);
+      return () => mocks.changeListeners.delete(listener);
+    },
+  },
+  /** The host client's change subscribers, fired by `emitHostChange`. */
+  changeListeners: new Set<HostClientChangeListener>(),
   /** The app's host binding; `null` (none) unless a case scripts one. */
   binding: null as TeamCloudBinding | null,
   /** What every configuration's `sandbox_defaults` read answers. */
@@ -886,6 +900,7 @@ function openSurfaceOn(botId: string): void {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.changeListeners.clear();
   queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
@@ -2538,6 +2553,56 @@ describe("<BotTabSurface /> bot.open fails", () => {
     await user.click(within(alert).getByRole("button", { name: "Retry" }));
     expect(mocks.open.mock.calls.length).toBe(callsBefore + 1);
     expect(screen.queryByTestId("bot-tab-error")).toBeNull();
+  });
+});
+
+describe("<BotTabSurface /> host availability returns", () => {
+  const emitHostChange = (event: HostClientChange): void => {
+    act(() => {
+      for (const listener of mocks.changeListeners) listener(event);
+    });
+  };
+
+  it("opens again and clears the error when this host recovers after a failed open", () => {
+    mocks.state.openResult = { kind: "error", message: "network down" };
+    render(surface());
+    expect(screen.getByTestId("bot-tab-error")).toBeTruthy();
+    const callsBefore = mocks.open.mock.calls.length;
+
+    mocks.state.openResult = answer({ kind: "serve-here", claimed: null });
+    emitHostChange({
+      reason: "availability-recovered",
+      currentHostId: TAB_HOST,
+    });
+
+    expect(mocks.open.mock.calls.length).toBe(callsBefore + 1);
+    expect(screen.queryByTestId("bot-tab-error")).toBeNull();
+  });
+
+  it("does not open again when the last open succeeded", () => {
+    render(surface());
+    const callsBefore = mocks.open.mock.calls.length;
+
+    emitHostChange({
+      reason: "availability-recovered",
+      currentHostId: TAB_HOST,
+    });
+
+    expect(mocks.open.mock.calls.length).toBe(callsBefore);
+  });
+
+  it("does not open again for another host's recovery", () => {
+    mocks.state.openResult = { kind: "error", message: "network down" };
+    render(surface());
+    const callsBefore = mocks.open.mock.calls.length;
+
+    emitHostChange({
+      reason: "availability-recovered",
+      currentHostId: BOUND_HOST,
+    });
+
+    expect(mocks.open.mock.calls.length).toBe(callsBefore);
+    expect(screen.getByTestId("bot-tab-error")).toBeTruthy();
   });
 });
 

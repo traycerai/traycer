@@ -727,6 +727,18 @@ function BotTabBody(props: {
   useEffect(() => {
     reopen();
   }, [reopen]);
+  // An open made while the connection comes back fails with nothing else to
+  // ask again, most often the one a phone sends as it returns to the app.
+  const reopenFailedOpen = useEffectEvent(() => {
+    if (openError !== null) reopen();
+  });
+  useEffect(() => {
+    if (client === null) return undefined;
+    return client.onChange((event) => {
+      if (event.reason !== "availability-recovered") return;
+      if (event.currentHostId === hostId) reopenFailedOpen();
+    });
+  }, [client, hostId]);
 
   const openState = botTabOpenState({
     response: answer,
