@@ -15,6 +15,7 @@ import {
   type VoiceFocus,
   type VoiceSessionDriver,
 } from "@/stores/voice/voice-session-store";
+import { VoiceSessionChrome } from "@/components/layout/voice/voice-session-chrome";
 import { VoiceColumnTopRow } from "../voice-top-row";
 
 const BOT_ID = "bot-1";
@@ -30,6 +31,11 @@ const viewport = vi.hoisted(() => ({ phone: false }));
 vi.mock("@/hooks/ui/use-mobile-viewport", () => ({
   useIsMobileViewport: () => viewport.phone,
   isMobileViewport: () => viewport.phone,
+}));
+
+const desktopMenus = vi.hoisted(() => ({ active: false }));
+vi.mock("@/components/layout/header/use-desktop-menu-bar-active", () => ({
+  useDesktopMenuBarActive: () => desktopMenus.active,
 }));
 
 // The header's own children need host, query and auth providers this suite is
@@ -210,6 +216,7 @@ function rowOf(testId: ChromeCase["row"]): HTMLElement {
 
 beforeEach(() => {
   viewport.phone = false;
+  desktopMenus.active = false;
   useVoiceSessionStore.setState(useVoiceSessionStore.getInitialState(), true);
   useTracySurfaceStore.setState(useTracySurfaceStore.getInitialState(), true);
   useTracySurfaceStore.getState().openSurface("host-a");
@@ -263,6 +270,38 @@ describe("Talk in the window's top row", () => {
       expect(talkButtons()).toHaveLength(0);
     },
   );
+
+  it("stays in a desktop window zoomed under the phone breakpoint, whose header stays the desktop one", () => {
+    viewport.phone = true;
+    desktopMenus.active = true;
+    offerVoice();
+    renderColumn({ placement: "top", titleBand: "header" }, "zoomed");
+
+    expect(
+      within(screen.getByTestId("app-header-centre-zone")).getAllByRole(
+        "button",
+        { name: "Talk" },
+      ),
+    ).toHaveLength(1);
+    expect(screen.getAllByRole("button", { name: "Talk" })).toHaveLength(1);
+  });
+
+  it("draws the strip and no phone chrome for a live session in that window", () => {
+    viewport.phone = true;
+    desktopMenus.active = true;
+    offerVoice();
+    useVoiceSessionStore.setState({ phase: "live" });
+    renderColumn({ placement: "top", titleBand: "header" }, "zoomed");
+    render(<VoiceSessionChrome />);
+
+    expect(
+      within(screen.getByTestId("app-header-centre-zone")).getByTestId(
+        "voice-strip-end",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByTestId("voice-phone-bar")).toBeNull();
+    expect(screen.queryByTestId("voice-phone-view")).toBeNull();
+  });
 
   it("is not drawn in the phone layout, whatever the session is doing", () => {
     viewport.phone = true;

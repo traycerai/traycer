@@ -1,9 +1,9 @@
 import { useEffect, type ReactNode } from "react";
+import { useMobileHeaderActive } from "@/components/layout/header/use-mobile-header-active";
 import {
   VoicePhoneBar,
   VoicePhoneView,
 } from "@/components/layout/voice/voice-phone-view";
-import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { useVoiceSessionStore } from "@/stores/voice/voice-session-store";
 
 /**
@@ -13,7 +13,7 @@ import { useVoiceSessionStore } from "@/stores/voice/voice-session-store";
  * row (`VoiceTopRowControl`) and nothing is drawn here.
  */
 export function VoiceSessionChrome(): ReactNode {
-  const phoneLayout = useIsMobileViewport();
+  const phoneLayout = useMobileHeaderActive();
   // The strip has no talk button to hold, so a window widened out of the
   // phone layout leaves push-to-talk with the microphone closed; Unmute is
   // the person's way back to it.

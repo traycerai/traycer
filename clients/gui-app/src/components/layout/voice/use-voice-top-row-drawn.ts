@@ -1,4 +1,4 @@
-import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
+import { useMobileHeaderActive } from "@/components/layout/header/use-mobile-header-active";
 import {
   useVoiceSessionStore,
   type VoiceSessionState,
@@ -15,10 +15,12 @@ export function voiceStripDrawn(state: VoiceSessionState): boolean {
  * Whether the top row has anything to carry: Talk once the server offers voice
  * and the session's owner is mounted, or the strip. Nothing otherwise, so a
  * deployment without voice gives up no height and no tab width for it. The
- * phone has its own places (V5).
+ * phone has its own places (V5). Decided as the header decides it, not by width:
+ * a zoomed desktop window narrower than the phone breakpoint keeps its desktop
+ * chrome, so it keeps this row.
  */
 export function useVoiceTopRowDrawn(): boolean {
-  const phoneLayout = useIsMobileViewport();
+  const phoneLayout = useMobileHeaderActive();
   const drawn = useVoiceSessionStore(
     (state) =>
       voiceStripDrawn(state) ||

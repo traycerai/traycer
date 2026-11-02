@@ -23,7 +23,7 @@ import { Button } from "@/components/ui/button";
 import { TalkControl } from "@/components/layout/voice/talk-control";
 import { useInstalledAppTileForm } from "@/hooks/ui/use-installed-app-level2-form";
 import { useKeyboardFocusOwnerWithin } from "@/hooks/ui/use-keyboard-focus-layout";
-import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
+import { useMobileHeaderActive } from "@/components/layout/header/use-mobile-header-active";
 import type {
   MobileLevel2Form,
   MobileTileCount,
@@ -1699,7 +1699,8 @@ function BotChannelHeader(props: {
   readonly activityLabel: ReadonlyArray<BotActivityLabelPart>;
 }): ReactNode {
   const { settingsOpen } = props;
-  const phoneLayout = useIsMobileViewport();
+  // Asked as the top row asks it, so a window has one Talk or the other.
+  const phoneLayout = useMobileHeaderActive();
   // With the keyboard up on a short viewport: the name row alone while the
   // channel's box has the focus, and nothing while a thread's does, since the
   // thread's own header is the identity row then. Only a box under this header

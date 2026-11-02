@@ -62,6 +62,7 @@ vi.mock("@/hooks/host/use-host-supports-method", () => ({
 vi.mock("@/lib/host", () => ({ useHostClient: () => null }));
 const runnerHost = vi.hoisted(() => ({ openMicrophoneSettings: vi.fn() }));
 vi.mock("@/providers/use-runner-host", () => ({
+  useRunnerHostOrNull: () => null,
   useRunnerHost: () => runnerHost,
 }));
 vi.mock("@/hooks/bots/use-bot-list-query", () => ({
