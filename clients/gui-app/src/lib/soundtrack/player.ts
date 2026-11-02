@@ -64,6 +64,8 @@ export class TrackPlayer {
   private readonly reportedMissing = new Set<string>();
   private phase: PlayerPhase = { kind: "stopped" };
   private scheduler: TrackScheduler | null = null;
+  /** Taken instead of a random roll when the next play begins. */
+  private chosenState: State | null = null;
   private pauseMultiplier = 1;
   private position = 0;
   private voices: ActiveVoice[] = [];
@@ -132,9 +134,43 @@ export class TrackPlayer {
     );
   }
 
-  /** The state rolled for this play; null before the first and in the silence. */
+  /**
+   * The state in force now, and never one still on its way: a move counts from
+   * the tick it lands on. Null before the first play and in the silence.
+   */
   currentState(): State | null {
-    return this.scheduler === null ? null : this.scheduler.state;
+    return this.scheduler === null
+      ? null
+      : this.scheduler.stateAt(this.elapsed());
+  }
+
+  /**
+   * Chooses the state by name, for one play: the track's end rolls at random
+   * again. While playing, the move lands on the next grid tick and cuts nothing.
+   * Enabled layers are rolled and their gains ramp at once, so call
+   * `setLayerEnabled` after this, not before. Otherwise the next play takes it,
+   * which is the next start or the end of the silence. Choosing the state already
+   * in force changes nothing, so a plan can restate it freely.
+   */
+  enterState(name: string): void {
+    const state = this.track.states.find(
+      (candidate) => candidate.name === name,
+    );
+    if (state === undefined) {
+      throw new Error(`Track "${this.track.name}" has no state "${name}"`);
+    }
+    if (this.scheduler?.decidingState() === state) {
+      this.chosenState = null;
+      return;
+    }
+    if (this.phase.kind !== "playing") {
+      this.chosenState = state;
+      return;
+    }
+    this.phase.scheduler.enterState(state, this.elapsed());
+    this.layerGains.forEach((_, layerIndex) => {
+      this.applyLayerGain(layerIndex, LAYER_RAMP_SECONDS);
+    });
   }
 
   /** Per layer; empty when there is no state. */
@@ -179,7 +215,10 @@ export class TrackPlayer {
   }
 
   private beginRun(fromElapsed: number, now: number): void {
-    const scheduler = this.scheduler ?? this.rollScheduler();
+    const scheduler =
+      this.chosenState === null && this.scheduler !== null
+        ? this.scheduler
+        : this.rollScheduler();
     scheduler.restartAt(fromElapsed);
     this.scheduler = scheduler;
     this.phase = {
@@ -195,9 +234,12 @@ export class TrackPlayer {
 
   private rollScheduler(): TrackScheduler {
     const { states } = this.track;
+    const state =
+      this.chosenState ?? states[Math.floor(this.random() * states.length)];
+    this.chosenState = null;
     return new TrackScheduler({
       track: this.track,
-      state: states[Math.floor(this.random() * states.length)],
+      state,
       random: this.random,
       pauseMultiplier: this.pauseMultiplier,
     });

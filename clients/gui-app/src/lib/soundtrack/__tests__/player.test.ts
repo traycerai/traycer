@@ -3,7 +3,7 @@ import { appLogger } from "@/lib/logger";
 import type { OutputGain, OutputVoice, SoundtrackOutput } from "../output";
 import { crossfadePlayers, TrackPlayer } from "../player";
 import type { StemSource } from "../stems";
-import type { Layer, VariableTrack } from "../variable-sound";
+import type { Layer, LayerProperties, VariableTrack } from "../variable-sound";
 import { makeAudioBuffer } from "./audio-buffer";
 
 interface PlayCall {
@@ -192,6 +192,43 @@ function makeTrack(lengthSeconds: number, variantsOfA: number): VariableTrack {
         name: "only",
         layersProperties: [properties(0), properties(0.2)],
         numberOfEnabledLayers: [2, 2],
+      },
+    ],
+  };
+}
+
+// Two layers and two states. In "first" both layers play at once and come
+// round every 6.2 s; "second" enables one layer only, which waits 1 s to start
+// and 20 s between turns.
+function makeStatesTrack(lengthSeconds: number): VariableTrack {
+  const properties = (
+    startPause: number,
+    pauseBetweenRepetitions: number,
+  ): LayerProperties => ({
+    startPause: [startPause, startPause],
+    sequenceLength: [1, 1],
+    pauseBetweenSamples: [0, 0],
+    pauseBetweenRepetitions: [pauseBetweenRepetitions, pauseBetweenRepetitions],
+  });
+  return {
+    name: "states",
+    title: "States",
+    lengthSeconds,
+    alignmentSeconds: 0.5,
+    layers: [
+      { name: "A", variants: 2, sublayers: 1, sublayerStartingOffset: null },
+      { name: "B", variants: 2, sublayers: 1, sublayerStartingOffset: null },
+    ],
+    states: [
+      {
+        name: "first",
+        layersProperties: [properties(0, 4), properties(0.2, 4)],
+        numberOfEnabledLayers: [2, 2],
+      },
+      {
+        name: "second",
+        layersProperties: [properties(1, 20), properties(1, 20)],
+        numberOfEnabledLayers: [1, 1],
       },
     ],
   };
@@ -726,5 +763,156 @@ describe("TrackPlayer stems", () => {
     stems.releaseLayer("A");
     await advance(2000);
     expect(output.plays("bus0/0")).toHaveLength(0);
+  });
+});
+
+describe("TrackPlayer enterState", () => {
+  function playerOnStatesTrack(lengthSeconds: number) {
+    const output = new FakeOutput();
+    const player = makePlayerWithRandom(
+      output,
+      new FakeStems(SAMPLE_SECONDS),
+      makeStatesTrack(lengthSeconds),
+      () => 0,
+    );
+    return { output, player };
+  }
+
+  it("is taken by the next play only, when called during the silence", async () => {
+    const { player } = playerOnStatesTrack(5);
+    player.start(0, 0.1);
+    await advance(6000);
+    expect(player.currentState()).toBeNull();
+
+    player.enterState("second");
+    await advance(1000);
+    expect(player.currentState()).toBeNull();
+
+    // The 5 s silence ends at about 10.3 s and that play runs to about 15.5 s.
+    await advance(5000);
+    expect(player.currentState()?.name).toBe("second");
+
+    await advance(5000);
+    expect(player.currentState()).toBeNull();
+    await advance(5000);
+    expect(player.currentState()?.name).toBe("first");
+  });
+
+  it("lands on a later tick while playing, cutting nothing and ramping the gains at once", async () => {
+    const { output, player } = playerOnStatesTrack(60);
+    player.start(0, 0.1);
+    await advance(1000);
+    // Layer A's first sample is at track time 0, which anchors track time.
+    const origin = output.plays("bus0/0")[0].when;
+
+    const calledAt = output.currentTime();
+    player.enterState("second");
+    expect(player.currentState()?.name).toBe("first");
+    expect(player.enabledLayers()).toEqual([true, false]);
+    expect(output.ramps("bus0/0").at(-1)).toEqual({
+      kind: "ramp",
+      gain: "bus0/0",
+      target: 1,
+      seconds: 1.5,
+      at: calledAt,
+    });
+    expect(output.ramps("bus0/1").at(-1)).toEqual({
+      kind: "ramp",
+      gain: "bus0/1",
+      target: 0,
+      seconds: 1.5,
+      at: calledAt,
+    });
+
+    // The call fell at track time 0.95, so the move lands on the tick at 1.
+    const landsAt = origin + 1;
+    const untilLanding = Math.round((landsAt - output.currentTime()) * 1000);
+    await advance(untilLanding - 10);
+    expect(player.currentState()?.name).toBe("first");
+    await advance(20);
+    expect(player.currentState()?.name).toBe("second");
+
+    await advance(26_000);
+    expect(output.cuts()).toEqual([]);
+    // Layer A's sample sounds to 2.2 s, then the 1 s start pause of "second"
+    // falls on 3.5 s, and its 20 s pause gives 3.5 + 2.2 + 20 = 26.
+    const after = output
+      .plays("bus0/0")
+      .map((call) => call.when - origin)
+      .filter((trackTime) => trackTime > 1);
+    expect(after).toHaveLength(2);
+    expect(after[0]).toBeCloseTo(3.5, 6);
+    expect(after[1]).toBeCloseTo(26, 6);
+    // Layer B was rolled out and plays no more.
+    expect(output.plays("bus0/1")).toHaveLength(1);
+  });
+
+  it("does nothing when asked for the state already in force", async () => {
+    async function runWith(restate: boolean) {
+      const { output, player } = playerOnStatesTrack(60);
+      player.start(0, 0.1);
+      await advance(1000);
+      const rampsBefore = output.calls.filter(isRamp).length;
+      if (restate) player.enterState("first");
+      expect(output.calls.filter(isRamp)).toHaveLength(rampsBefore);
+      await advance(12_000);
+      return output.allPlays().map((call) => call.when);
+    }
+
+    const untouched = await runWith(false);
+    expect(untouched.length).toBeGreaterThan(3);
+    expect(await runWith(true)).toEqual(untouched);
+  });
+
+  it("is taken at the next start when stopped, keeping the position and rolling the layers afresh", async () => {
+    const { player } = playerOnStatesTrack(60);
+    player.start(0, 0.1);
+    await advance(3000);
+    player.setLayerEnabled(0, false);
+    player.stop(0.1);
+    const position = player.elapsed();
+
+    player.enterState("second");
+    expect(player.currentState()?.name).toBe("first");
+
+    player.start(position, 0.1);
+    expect(player.currentState()?.name).toBe("second");
+    expect(player.elapsed()).toBeGreaterThanOrEqual(position);
+    expect(player.elapsed()).toBeLessThan(position + 0.2);
+    expect(player.enabledLayers()).toEqual([true, false]);
+  });
+
+  it("takes the last choice made while stopped, and keeps the layers it had", async () => {
+    const { player } = playerOnStatesTrack(60);
+    player.start(0, 0.1);
+    await advance(3000);
+    player.setLayerEnabled(0, false);
+    player.stop(0.1);
+
+    player.enterState("second");
+    player.enterState("first");
+    player.start(player.elapsed(), 0.1);
+
+    expect(player.currentState()?.name).toBe("first");
+    expect(player.enabledLayers()).toEqual([false, true]);
+  });
+
+  it("throws on an unknown name, playing or stopped, and changes nothing", async () => {
+    const { player } = playerOnStatesTrack(60);
+    player.start(0, 0.1);
+    await advance(1000);
+    expect(() => {
+      player.enterState("nowhere");
+    }).toThrow("nowhere");
+    expect(player.currentState()?.name).toBe("first");
+
+    player.stop(0.1);
+    expect(() => {
+      player.enterState("nowhere");
+    }).toThrow("nowhere");
+    expect(player.currentState()?.name).toBe("first");
+    // Nothing was kept for the next start.
+    player.start(player.elapsed(), 0.1);
+    expect(player.currentState()?.name).toBe("first");
   });
 });

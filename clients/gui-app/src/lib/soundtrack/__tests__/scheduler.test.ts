@@ -9,6 +9,7 @@ import {
   type Layer,
   type LayerProperties,
   type Range,
+  type State,
   type VariableTrack,
 } from "../variable-sound";
 
@@ -136,6 +137,199 @@ function isOnGrid(value: number, alignment: number): boolean {
   const ticks = value / alignment;
   return Math.abs(ticks - Math.round(ticks)) < 1e-6;
 }
+
+function stateOf(
+  name: string,
+  properties: LayerProperties,
+  layerCount: number,
+  enabledCount: Range,
+): State {
+  return {
+    name,
+    layersProperties: Array.from({ length: layerCount }, () => properties),
+    numberOfEnabledLayers: enabledCount,
+  };
+}
+
+function trackWithStates(
+  layers: readonly Layer[],
+  states: readonly State[],
+): VariableTrack {
+  return {
+    name: "states",
+    title: "States",
+    lengthSeconds: 300,
+    alignmentSeconds: 1,
+    layers,
+    states,
+  };
+}
+
+/** Asks and reports in half-second windows from `from` to `to`, as `runToEnd` does. */
+function runBetween(
+  scheduler: TrackScheduler,
+  from: number,
+  to: number,
+  durationSeconds: number,
+): ScheduledPlay[] {
+  const decided: ScheduledPlay[] = [];
+  for (let until = from; until <= to; until += 0.5) {
+    for (const play of scheduler.advance(until)) {
+      decided.push(play);
+      scheduler.confirm(play, durationSeconds, 0);
+    }
+  }
+  return decided;
+}
+
+describe("TrackScheduler entering a state", () => {
+  const sample = (pauseBetweenRepetitions: Range): LayerProperties =>
+    singleSample([0, 0], pauseBetweenRepetitions);
+
+  it("lands on the next undecided tick and waits a fresh start pause from there, or from the end of a sounding sample", () => {
+    const track = trackWithStates(
+      [layer(2, 1, null), layer(2, 1, null)],
+      [
+        stateOf("calm", sample([100, 100]), 2, [2, 2]),
+        stateOf("busy", singleSample([3, 3], [2, 2]), 2, [2, 2]),
+      ],
+    );
+    const [calm, busy] = track.states;
+    const scheduler = makeScheduler(track, 1, 1);
+    const [first, second] = scheduler.advance(10);
+    scheduler.confirm(first, 50, 0);
+    scheduler.confirm(second, 1, 0);
+    expect(scheduler.advance(10)).toEqual([]);
+
+    scheduler.enterState(busy, 10);
+
+    expect(scheduler.stateAt(10)).toBe(calm);
+    expect(scheduler.stateAt(11)).toBe(busy);
+    // Not after the 100 s pause drawn in calm: busy's 3 s start pause from 11.
+    expect(scheduler.advance(13)).toEqual([]);
+    const [onLayer1] = scheduler.advance(14);
+    expect(onLayer1.layerIndex).toBe(1);
+    expect(onLayer1.startAt).toBe(14);
+    expect(scheduler.confirm(onLayer1, 1, 0)).toBe(14);
+    // 14 + 1 + busy's 2, not calm's 100.
+    expect(scheduler.advance(16)).toEqual([]);
+    const [again] = scheduler.advance(17);
+    expect(again.startAt).toBe(17);
+    // Layer 0's sample sounds until 50 and plays out, then the start pause.
+    expect(scheduler.advance(52)).toEqual([]);
+    const [onLayer0] = scheduler.advance(53);
+    expect(onLayer0.layerIndex).toBe(0);
+    expect(onLayer0.startAt).toBe(53);
+  });
+
+  it("keeps the first state in force until a second move lands, and still waits for a sounding sample", () => {
+    const track = trackWithStates(
+      [layer(2, 1, null)],
+      [
+        stateOf("a", sample([100, 100]), 1, [1, 1]),
+        stateOf("b", singleSample([1, 1], [100, 100]), 1, [1, 1]),
+        stateOf("c", singleSample([3, 3], [2, 2]), 1, [1, 1]),
+      ],
+    );
+    const [a, b, c] = track.states;
+    const scheduler = makeScheduler(track, 1, 1);
+    const [play] = scheduler.advance(10);
+    scheduler.confirm(play, 50, 0);
+
+    scheduler.enterState(b, 10);
+    scheduler.enterState(c, 10);
+
+    expect(scheduler.stateAt(10)).toBe(a);
+    expect(scheduler.stateAt(11)).toBe(c);
+    expect(scheduler.advance(52)).toEqual([]);
+    expect(scheduler.advance(53)[0].startAt).toBe(53);
+  });
+
+  it("throws on a state that does not fit the track, and changes nothing", () => {
+    const scheduler = makeScheduler(AQUILO_1, 1, 1);
+    const enabled = [...scheduler.enabledLayers()];
+    const misfit = {
+      ...AQUILO_1.states[0],
+      name: "misfit",
+      layersProperties: AQUILO_1.states[0].layersProperties.slice(0, 3),
+    };
+
+    expect(() => {
+      scheduler.enterState(misfit, 5);
+    }).toThrow("3 layer properties for 4 layers");
+    expect(scheduler.stateAt(100)).toBe(AQUILO_1.states[0]);
+    expect(scheduler.enabledLayers()).toEqual(enabled);
+  });
+
+  it("ends a move still on its way when the scheduler restarts", () => {
+    const track = trackWithStates(
+      [layer(2, 1, null)],
+      [
+        stateOf("calm", sample([100, 100]), 1, [1, 1]),
+        stateOf("busy", sample([2, 2]), 1, [1, 1]),
+      ],
+    );
+    const scheduler = makeScheduler(track, 1, 1);
+    scheduler.advance(10);
+    scheduler.enterState(track.states[1], 10);
+    scheduler.restartAt(10);
+    expect(scheduler.stateAt(10)).toBe(track.states[1]);
+  });
+
+  it("rolls the enabled layers at entry, and keeps a later override", () => {
+    const track = trackWithStates(
+      [layer(2, 1, null), layer(2, 1, null)],
+      [
+        stateOf("calm", sample([1, 1]), 2, [2, 2]),
+        stateOf("busy", sample([1, 1]), 2, [1, 1]),
+      ],
+    );
+    for (let seed = 1; seed <= 10; seed += 1) {
+      const scheduler = makeScheduler(track, seed, 1);
+      expect(scheduler.enabledLayers().filter(Boolean)).toHaveLength(2);
+      scheduler.enterState(track.states[1], 0);
+      expect(scheduler.enabledLayers().filter(Boolean)).toHaveLength(1);
+
+      scheduler.setLayerEnabled(0, true);
+      scheduler.setLayerEnabled(1, true);
+      const decided = runBetween(scheduler, 1, 30, 1);
+      expect(new Set(decided.map(({ layerIndex }) => layerIndex))).toEqual(
+        new Set([0, 1]),
+      );
+      expect(scheduler.enabledLayers()).toEqual([true, true]);
+    }
+  });
+
+  it("never repeats a variant across the move, for the layer or for a sublayer", () => {
+    const properties = singleSample([0, 0], [0, 1]);
+    const track = trackWithStates(
+      [layer(3, 2, [0, 0])],
+      [
+        stateOf("calm", properties, 1, [1, 1]),
+        stateOf("busy", properties, 1, [1, 1]),
+      ],
+    );
+    for (let seed = 1; seed <= 30; seed += 1) {
+      const scheduler = makeScheduler(track, seed, 1);
+      const before = runBetween(scheduler, 0, 20, 1);
+      scheduler.enterState(track.states[1], 20);
+      const after = runBetween(scheduler, 20.5, 40, 1);
+
+      expect(after[0].variant).not.toBe(before[before.length - 1].variant);
+      for (const sublayerIndex of [0, 1]) {
+        const lastBefore = before.filter(
+          (play) => play.sublayerIndex === sublayerIndex,
+        );
+        const firstAfter = after.find(
+          (play) => play.sublayerIndex === sublayerIndex,
+        );
+        expect(firstAfter?.variant).not.toBe(
+          lastBefore[lastBefore.length - 1].variant,
+        );
+      }
+    }
+  });
+});
 
 describe("TrackScheduler", () => {
   describe("grid", () => {

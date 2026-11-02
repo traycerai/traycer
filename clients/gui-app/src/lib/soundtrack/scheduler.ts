@@ -37,6 +37,8 @@ interface SublayerCursor {
   /** Decided and handed out, its duration not back yet. */
   pending: ScheduledPlay | null;
   lastVariant: number | null;
+  /** When its last started sample ends; a state entered meanwhile waits for it. */
+  soundingUntil: number;
 }
 
 // A value already on the grid must stay on its tick; without this, 0.3 / 0.1
@@ -82,29 +84,36 @@ function rollEnabledLayers(
   return enabled;
 }
 
+function assertStateFitsTrack(track: VariableTrack, state: State): void {
+  if (state.layersProperties.length !== track.layers.length) {
+    throw new Error(
+      `State "${state.name}" of track "${track.name}" has ${String(state.layersProperties.length)} layer properties for ${String(track.layers.length)} layers`,
+    );
+  }
+}
+
 /**
- * Decides which sample starts when, in track time, for one state of one track.
- * It holds no audio and no clock: a consumer asks with `advance`, and reports
- * each decided sample back with `confirm` or `skip`, because a sample's length
- * comes from decoded audio and places the next one on that sublayer. Until the
- * report arrives, that sublayer decides nothing further.
+ * Decides which sample starts when, in track time, for one track. It holds no
+ * audio and no clock: a consumer asks with `advance`, and reports each decided
+ * sample back with `confirm` or `skip`, because a sample's length comes from
+ * decoded audio and places the next one on that sublayer. Until the report
+ * arrives, that sublayer decides nothing further.
  */
 export class TrackScheduler {
-  readonly state: State;
   private readonly track: VariableTrack;
   private readonly random: RandomSource;
-  private readonly enabled: boolean[];
+  private state: State;
+  /** The state still in force until a move to `state` reaches its tick. */
+  private outgoing: { readonly state: State; readonly until: number } | null =
+    null;
+  private enabled: boolean[];
   private pauseMultiplier: number;
   private cursors: SublayerCursor[] = [];
   private lastVariantByLayer: (number | null)[] = [];
 
   constructor(options: TrackSchedulerOptions) {
     const { track, state } = options;
-    if (state.layersProperties.length !== track.layers.length) {
-      throw new Error(
-        `State "${state.name}" of track "${track.name}" has ${String(state.layersProperties.length)} layer properties for ${String(track.layers.length)} layers`,
-      );
-    }
+    assertStateFitsTrack(track, state);
     this.track = track;
     this.state = state;
     this.random = options.random;
@@ -119,12 +128,53 @@ export class TrackScheduler {
    * its report is forgotten, and reporting it later does nothing.
    */
   restartAt(trackTime: number): void {
+    this.outgoing = null;
     this.lastVariantByLayer = this.track.layers.map(() => null);
     this.cursors = this.track.layers.flatMap((layer, layerIndex) =>
       Array.from({ length: layer.sublayers }, (_, sublayerIndex) =>
         this.createCursor(layer, layerIndex, sublayerIndex, trackTime),
       ),
     );
+  }
+
+  /**
+   * Moves to `state` on the next grid tick after `trackTime`, as a state start:
+   * enabled layers are rolled now, so the caller can override them right after,
+   * and every sublayer waits a fresh start pause. It waits from that tick, or
+   * from the end of the sample it has sounding, which plays out. No sublayer
+   * sits out a pause drawn from the old state, and none overlaps itself. A play
+   * still awaiting its report is forgotten, as in `restartAt`; one already
+   * decided and reported still starts, within the player's lookahead.
+   */
+  enterState(state: State, trackTime: number): void {
+    assertStateFitsTrack(this.track, state);
+    const landsAt = tickAfter(trackTime, this.track.alignmentSeconds);
+    this.outgoing = { state: this.stateAt(trackTime), until: landsAt };
+    this.state = state;
+    this.enabled = rollEnabledLayers(this.track, state, this.random);
+    this.cursors = this.cursors.map((cursor) => ({
+      ...this.createCursor(
+        cursor.layer,
+        cursor.layerIndex,
+        cursor.sublayerIndex,
+        Math.max(landsAt, cursor.soundingUntil),
+      ),
+      // The samples either side of the move are still back to back.
+      lastVariant: cursor.lastVariant,
+      soundingUntil: cursor.soundingUntil,
+    }));
+  }
+
+  /** The state in force at `trackTime`; a move counts from the tick it lands on. */
+  stateAt(trackTime: number): State {
+    return this.outgoing !== null && trackTime < this.outgoing.until
+      ? this.outgoing.state
+      : this.state;
+  }
+
+  /** The state new decisions draw from, which a move switches at once. */
+  decidingState(): State {
+    return this.state;
   }
 
   enabledLayers(): readonly boolean[] {
@@ -194,6 +244,7 @@ export class TrackScheduler {
       cursor.nextAt = Number.POSITIVE_INFINITY;
       return null;
     }
+    cursor.soundingUntil = startAt + durationSeconds;
     this.placeNext(cursor, startAt, durationSeconds);
     return startAt;
   }
@@ -231,6 +282,7 @@ export class TrackScheduler {
       samplesLeftInSequence: drawCount(properties.sequenceLength, this.random),
       pending: null,
       lastVariant: null,
+      soundingUntil: 0,
     };
   }
 
