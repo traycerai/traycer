@@ -252,6 +252,7 @@ function makePlayerWithRandom(
     stems,
     random,
     silenceSeconds: [5, 5],
+    resumeAt: 0,
   });
 }
 
@@ -267,6 +268,7 @@ function makePlayer(
     stems,
     random: () => 0.5,
     silenceSeconds: [silenceSeconds, silenceSeconds],
+    resumeAt: 0,
   });
 }
 
