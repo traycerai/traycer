@@ -124,9 +124,6 @@ export function parseHostPreviousExit(value: unknown): HostPreviousExit | null {
   // `exit` event's contract). Both or neither is no exit this supervisor
   // wrote, so it reads as "nothing known", never as a fact.
   if ((exitCode === null) === (signal === null)) return null;
-  // A child ends with an exit status or a signal, exactly one of them (the
-  // `exit` event's contract). Both or neither is no exit this supervisor
-  // wrote, so it reads as "nothing known", never as a fact.
   const { heapLimitBytes, heapUsedBytes } = value;
   if (!isByteCountOrNull(heapLimitBytes)) return null;
   if (!isByteCountOrNull(heapUsedBytes)) return null;
