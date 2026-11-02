@@ -165,7 +165,7 @@ for (const variant of ["plain", "no-touchmove", "control"] as const) {
 
     // Let the anchor's turn and the reader's rows hydrate.
     await call(page, "setHydrationLatency", [0]);
-    await page.waitForTimeout(3000);
+    await nextFrames(page, 60);
     await nextFrames(page, 20);
     const final = await settle(page, 20);
     const finalOrdinal = await readingOrdinal(page);
