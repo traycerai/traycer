@@ -138,7 +138,13 @@ for (const intervalMs of [40, 16, 100]) {
         () => false,
       );
 
-    // Hold: it stays there while the stream continues.
+    // Hold: it stays there while the stream continues, past the landing
+    // window, where the drift check below starts reading.
+    await page.waitForFunction(
+      (after) => (window.__samples?.at(-1)?.t ?? 0) > after,
+      LAND_WITHIN_MS,
+      { polling: "raf" },
+    );
     await nextFrames(page, HOLD_FRAMES);
 
     const final = await page.evaluate((id) => {
@@ -161,12 +167,14 @@ for (const intervalMs of [40, 16, 100]) {
       Math.abs((final.rowTop ?? 9999) - READING_LINE_PX),
       `left the reading line\n${report}`,
     ).toBeLessThanOrEqual(TOLERANCE_PX);
-    const drifted = final.samples.filter(
+    const held = final.samples.filter((s) => s.t > LAND_WITHIN_MS);
+    expect(held.length, `no samples after landing\n${report}`).toBeGreaterThan(
+      0,
+    );
+    const drifted = held.filter(
       (s) =>
-        s.t > 0 &&
-        (s.rowTop === null ||
-          Math.abs(s.rowTop - READING_LINE_PX) > TOLERANCE_PX) &&
-        s.t > LAND_WITHIN_MS,
+        s.rowTop === null ||
+        Math.abs(s.rowTop - READING_LINE_PX) > TOLERANCE_PX,
     );
     expect(drifted, `drifted off the line after landing\n${report}`).toEqual(
       [],

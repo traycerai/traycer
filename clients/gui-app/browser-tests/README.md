@@ -20,15 +20,17 @@ workflow's `changes` job lists it). Its `browser regressions` job is a
 required check on `main`, so a red shard blocks a merge. A failed shard
 uploads the Playwright report, with a trace for each failed test.
 
-CI differs from a local run in one way: it serves the fixture pages bundled.
-On the dev server a heavy fixture fetches thousands of modules in every test's
+CI serves the fixture pages bundled (`vite build` and `vite preview`), where a
+local run uses the dev server; it also runs two workers per shard, writes a
+JSON report and traces only a retry. On the dev server a heavy fixture fetches thousands of modules in every test's
 fresh context; bundled, the same load takes about a third of the time.
 `BROWSER_TESTS_BUNDLE=1 bun run test:browser <file>` runs a spec the way CI
 does, and is the first thing to try when a spec is red on CI and green locally.
 
 ## How the pieces fit
 
-- `playwright.config.ts` starts ONE Vite dev server for the whole run with
+- `playwright.config.ts` starts ONE Vite server for the whole run (the dev
+  server locally, the bundled pages on CI) with
   `vite.browser-tests.config.ts` (the app's config, which also compiles
   Tailwind for the fixtures), and drives the machine's own Google Chrome
   (`channel: "chrome"`; `CHROME_BIN` overrides it). Nothing downloads a

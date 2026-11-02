@@ -180,7 +180,14 @@ jobs:
         # Whole files, cut by measured time (the script says why), not `--shard`.
         run: |
           set -euo pipefail
-          mapfile -t files < <(node scripts/browser-test-shard-plan.ts "$SHARD")
+          # Not `mapfile < <(...)`: a planner that fails there leaves an empty
+          # list, and an empty list runs every spec in every shard.
+          plan="$(node scripts/browser-test-shard-plan.ts "$SHARD")"
+          mapfile -t files <<< "$plan"
+          if [ -z "$plan" ] || [ "${#files[@]}" -eq 0 ]; then
+            echo "The shard plan gave shard $SHARD no spec files."
+            exit 1
+          fi
           bun run test:browser "${files[@]}"
       - name: Every test is within the per-test budget
         working-directory: clients/gui-app
