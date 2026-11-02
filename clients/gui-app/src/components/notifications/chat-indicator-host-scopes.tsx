@@ -1,4 +1,5 @@
 import { useContext, useMemo, type ReactNode } from "react";
+import { useHostLease } from "@/hooks/host/use-host-lease";
 import { useHostNotificationIndicators } from "@/hooks/notifications/use-host-notification-indicators-query";
 import {
   useNotificationFeedMode,
@@ -158,13 +159,26 @@ function ChatIndicatorHostLayer(props: {
   // Same wait as `useNotificationIndicators`: a held `cloud` mode whose host
   // is re-negotiating must not ask for the `home: local` partition.
   const feedModeSettling = useNotificationFeedModeSettling();
+  // A host the selection authority has confirmed DEAD is not asked. Its remote
+  // session is parked at the relay with no host leg, so every read is refused
+  // pre-send and the method's fixed 30s error lane re-asks forever - one
+  // warning per attempt, for as long as a chat bound to that host is on
+  // screen. The verdict is `dead` ONLY, the same rule `isSurfacePinDeposed`
+  // states: `restarting-expected` is a hold the authority keeps its effective
+  // host through, and a `null` lease is "nobody has spoken yet", not death.
+  // The query keeps its last answer while disabled and refetches the moment
+  // the lease recovers, so the dot goes stale rather than dark.
+  const hostDead = useHostLease(props.hostId)?.status === "dead";
   const host = useHostNotificationIndicators({
     hostId: props.hostId,
     epicIds: NO_EPIC_IDS,
     chatIds: props.chatIds,
     chatEpicIds: props.chatEpicIds,
     home: props.isCloud ? "local" : undefined,
-    enabled: props.chatIds.length > 0 && !(props.isCloud && feedModeSettling),
+    enabled:
+      props.chatIds.length > 0 &&
+      !hostDead &&
+      !(props.isCloud && feedModeSettling),
   });
   const inherited = useContext(NotificationIndicatorsContext);
   const merged: SurfaceNotificationIndicators = useMemo(
