@@ -54,6 +54,7 @@ import type { RestingChatSandbox } from "@/lib/sandboxes/chat-sandbox-state";
 import type { KeybindingRouter } from "@/lib/keybindings/dispatch";
 import { MockWsStreamClient } from "@/components/epic-canvas/pr/__tests__/pr-stream-test-fixtures";
 import type { VoiceEngineEvents } from "@/lib/voice/engine";
+import { filedMisses } from "@/lib/voice/__tests__/fixtures/filed-misses";
 import type { ReplyRow } from "@/lib/voice/focused-replies";
 import type { HydrationRow } from "@/lib/voice/queue-sources";
 import {
@@ -543,6 +544,12 @@ vi.mock("@/providers/use-runner-host", () => ({
     },
   }),
 }));
+
+const sentry = vi.hoisted(() => ({
+  captureMessage: vi.fn(),
+  isInitialized: vi.fn(() => true),
+}));
+vi.mock("@sentry/browser", () => sentry);
 
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
@@ -1112,6 +1119,9 @@ beforeEach(() => {
   fake.getUserMedia.mockReset();
   fake.getUserMedia.mockImplementation(() => fake.media.promise);
   fake.routeAnswer = null;
+  sentry.captureMessage.mockReset();
+  sentry.isInitialized.mockReset();
+  sentry.isInitialized.mockReturnValue(true);
   // A host the directory knows to be awake: an unknown one asks before an open.
   directoryFacts.entry = sandboxHostEntryFixture("host-a", "awake", false);
   directoryFacts.settled = false;
@@ -4559,6 +4569,71 @@ describe("the page in front", () => {
     expect(fake.engines[0]?.appendCommentary).not.toHaveBeenCalled();
     expect(fake.sendMock).not.toHaveBeenCalled();
     expect(useVoiceSessionStore.getState().segments).toEqual([]);
+  });
+
+  it("files a request the router found nothing on the page for, with the page it was shown and its answer", async () => {
+    const bodies: string[] = [];
+    await bringLive();
+    focusOn(CHANNEL_FOCUS);
+    const answered = {
+      action: "missing",
+      target: {
+        environmentId: null,
+        botId: null,
+        threadId: null,
+        itemId: null,
+        actionId: null,
+        agentId: null,
+      },
+      span: { fromSegment: 0, toSegment: 0 },
+      uncertain: false,
+      question: null,
+      control: null,
+      choice: null,
+    };
+    fake.routeAnswer = (body) => {
+      bodies.push(body);
+      return {
+        output: [
+          {
+            type: "message",
+            content: [{ type: "output_text", text: JSON.stringify(answered) }],
+          },
+        ],
+      };
+    };
+
+    await say("Rename the sandbox.", "d1");
+
+    // The page as the router was shown it: its kind, then one line per action.
+    const shownLines = (requestText(bodies[0] ?? "").split("<view>\n")[1] ?? "")
+      .split("\n</view>")[0]
+      .split("\n")
+      .map((line) =>
+        z
+          .object({
+            view: z.string().optional(),
+            action: z.string().optional(),
+          })
+          .parse(JSON.parse(line)),
+      );
+    const shownKind = shownLines.at(0)?.view;
+    const shownRows = shownLines.flatMap((line) =>
+      line.action === undefined ? [] : [line.action],
+    );
+    expect(shownRows.length).toBeGreaterThan(0);
+    const filed = filedMisses(sentry.captureMessage.mock.calls);
+    expect(filed).toHaveLength(1);
+    expect(filed[0]?.options.tags).toMatchObject({
+      viewKind: shownKind,
+      missKind: "missing",
+      routerAction: "missing",
+    });
+    expect(filed[0]?.options.extra).toEqual({
+      rows: shownRows,
+      route: answered,
+      span: "Rename the sandbox.",
+    });
   });
 
   it("drops the action, reading the page when it is about to run, if the page moved while the router was answering", async () => {

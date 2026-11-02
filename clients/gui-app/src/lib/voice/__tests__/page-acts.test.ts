@@ -908,9 +908,15 @@ describe("a spoken stop that waits for its yes", () => {
         return () => undefined;
       },
       decide: (request) =>
-        Promise.resolve(
-          resolveRoute(STOP_ROUTE, DIRECTORY, VIEW, request.segments.length),
-        ),
+        Promise.resolve({
+          decision: resolveRoute(
+            STOP_ROUTE,
+            DIRECTORY,
+            VIEW,
+            request.segments.length,
+          ),
+          seen: null,
+        }),
       recheck: () => true,
       navigate: () => Promise.resolve(true),
       think: () => undefined,

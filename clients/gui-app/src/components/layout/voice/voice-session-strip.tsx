@@ -8,6 +8,7 @@ import { VoiceOutcomeLine } from "@/components/layout/voice/voice-ended-line";
 import { VoiceWaitingControl } from "@/components/layout/voice/voice-waiting-control";
 import { useOpenBotChannel } from "@/hooks/bots/use-open-bot-channel";
 import { cn } from "@/lib/utils";
+import { reportVoiceMiss } from "@/lib/voice/miss-report";
 import {
   useVoiceSessionStore,
   type VoiceFocus,
@@ -18,7 +19,7 @@ import {
  * The session strip (V6): where Talk is in the window's top row, across every
  * tab, while a voice session is live. It says the listening or muted state,
  * the destination the next post goes to with Change, the Waiting control, Mute,
- * End and the captions toggle.
+ * End and the captions toggle, and Not what I meant after a page action ran.
  * No running transcript is ever drawn: captions, off by default, show the
  * last few lines said and heard, under the row and over the content, and
  * nothing is kept when they are off or the session ends. After a session the
@@ -91,6 +92,7 @@ export function VoiceSessionStrip(): ReactNode {
           <VoiceWaitingControl />
         </div>
         <div className="flex items-center gap-3 pl-3">
+          <NotWhatIMeant />
           <Button
             type="button"
             variant="ghost"
@@ -156,6 +158,31 @@ export function VoiceSessionStrip(): ReactNode {
         </ul>
       ) : null}
     </section>
+  );
+}
+
+/**
+ * After a page action the voice carried out, until the person's next request:
+ * files that action as not what they meant, and goes. Nothing is said and
+ * nothing is undone.
+ */
+function NotWhatIMeant(): ReactNode {
+  const executedAct = useVoiceSessionStore((s) => s.executedAct);
+  const setExecutedAct = useVoiceSessionStore((s) => s.setExecutedAct);
+  if (executedAct === null) return null;
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="xs"
+      data-testid="voice-strip-not-meant"
+      onClick={() => {
+        reportVoiceMiss("not-meant", executedAct, null);
+        setExecutedAct(null);
+      }}
+    >
+      Not what I meant
+    </Button>
   );
 }
 

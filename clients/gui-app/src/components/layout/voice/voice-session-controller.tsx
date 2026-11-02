@@ -83,7 +83,6 @@ import {
   resolveRoute,
   routerRequestBody,
   type ControlVerb,
-  type RoutedDecision,
 } from "@/lib/voice/router";
 import {
   createSayLoop,
@@ -91,6 +90,7 @@ import {
   type ReplyPlace,
   type ReplyPlacement,
   type RouteRequest,
+  type Routed,
   type SayLoop,
 } from "@/lib/voice/say-loop";
 import {
@@ -448,8 +448,11 @@ export function VoiceSessionController(): ReactNode {
   );
   const view = useVoiceView(phase !== "idle");
   const { mutateAsync: routeAsync } = useVoiceRouteMutation();
-  const decideRef = useRef<(request: RouteRequest) => Promise<RoutedDecision>>(
-    () => Promise.resolve({ kind: "refused", reason: "unavailable" }),
+  const decideRef = useRef<(request: RouteRequest) => Promise<Routed>>(() =>
+    Promise.resolve({
+      decision: { kind: "refused", reason: "unavailable" },
+      seen: null,
+    }),
   );
   const recheckRef = useRef(directory.current);
   const viewRef = useRef(view);
@@ -473,7 +476,10 @@ export function VoiceSessionController(): ReactNode {
       );
       if (answer.kind !== "ok") {
         appLogger.warn("[voice] route did not answer", { kind: answer.kind });
-        return { kind: "refused", reason: "unavailable" };
+        return {
+          decision: { kind: "refused", reason: "unavailable" },
+          seen: null,
+        };
       }
       const result = parseRouterResponse(answer.body);
       const namedThread = result?.target.threadId ?? null;
@@ -487,12 +493,23 @@ export function VoiceSessionController(): ReactNode {
       ) {
         snapshot = await directory.refresh();
       }
-      return resolveRoute(
-        result,
-        snapshot,
-        viewSnapshot,
-        request.segments.length,
-      );
+      return {
+        decision: resolveRoute(
+          result,
+          snapshot,
+          viewSnapshot,
+          request.segments.length,
+        ),
+        seen:
+          result === null
+            ? null
+            : {
+                route: result,
+                viewKind: viewSnapshot.page.kind,
+                rowIds: viewSnapshot.rows.map((row) => row.action),
+                segments: request.segments,
+              },
+      };
     };
   }, [directory, routeAsync, view]);
 

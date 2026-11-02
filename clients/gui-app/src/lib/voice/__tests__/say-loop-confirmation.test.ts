@@ -213,12 +213,15 @@ function build() {
     decide: async (request) => {
       const next = answers.shift();
       if (next === undefined) throw new Error("no answer queued");
-      return resolveRoute(
-        await next(),
-        DIRECTORY,
-        wiring.routed,
-        request.segments.length,
-      );
+      return {
+        decision: resolveRoute(
+          await next(),
+          DIRECTORY,
+          wiring.routed,
+          request.segments.length,
+        ),
+        seen: null,
+      };
     },
     recheck: (tuple) => wiring.recheck && tupleHolds(DIRECTORY, tuple),
     navigate: (_target: BoundTarget) => {

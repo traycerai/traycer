@@ -193,12 +193,15 @@ function build(wiring: Wiring, directory: VoiceDirectory) {
       const next = answers.shift();
       if (next === undefined) throw new Error("no answer queued");
       // The directory is read when the route is made, as the real one does.
-      return resolveRoute(
-        await next(),
-        directory,
-        EMPTY_VIEW,
-        request.segments.length,
-      );
+      return {
+        decision: resolveRoute(
+          await next(),
+          directory,
+          EMPTY_VIEW,
+          request.segments.length,
+        ),
+        seen: null,
+      };
     },
     recheck: (tuple) => wiring.recheckHolds && tupleHolds(directory, tuple),
     navigate: (target: BoundTarget) => {

@@ -13,6 +13,7 @@ import {
   type AcceptedRequest,
   type AskOutcome,
   type ReplyPlace,
+  type Routed,
   type SayLoop,
 } from "../say-loop";
 
@@ -84,7 +85,7 @@ function harness(): Harness {
     resolve: (value: BotConversationSendResponse) => void;
     reject: (reason: Error) => void;
   }> = [];
-  const routes: Array<Promise<RoutedDecision>> = [];
+  const routes: Array<Promise<Routed>> = [];
   const loop = createSayLoop({
     store: useVoiceSessionStore,
     send: (focus, text) => {
@@ -128,7 +129,7 @@ function harness(): Harness {
         span: { from: 0, to: request.segments.length - 1 },
         confirm: null,
       };
-      const route = Promise.resolve(decision);
+      const route = Promise.resolve({ decision, seen: null });
       routes.push(route);
       return route;
     },
