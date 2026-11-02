@@ -257,6 +257,57 @@ describe("useSystemBack", () => {
     expect(systemBack.minimize).not.toHaveBeenCalled();
   });
 
+  it("closes a popover over a pulled composer first, then collapses the composer", async () => {
+    const systemBack = new FakeSystemBack();
+    const router = makeRouter(
+      createMemoryHistory({ initialEntries: ["/", "/epics"] }),
+    );
+    function PulledComposerWithPicker() {
+      useSystemBack();
+      const [expanded, setExpanded] = useState(true);
+      return (
+        <div data-composer-expanded>
+          <button
+            type="button"
+            aria-expanded={expanded}
+            onClick={() => setExpanded((current) => !current)}
+          >
+            Composer
+          </button>
+          <Popover defaultOpen modal={false}>
+            <PopoverTrigger>Open</PopoverTrigger>
+            <PopoverContent>Picker body</PopoverContent>
+          </Popover>
+        </div>
+      );
+    }
+    const view = render(
+      <RunnerHostProvider runnerHost={createFakeRunnerHost({ systemBack })}>
+        <RouterContextProvider router={router}>
+          <PulledComposerWithPicker />
+        </RouterContextProvider>
+      </RunnerHostProvider>,
+    );
+    await waitFor(() => {
+      expect(view.getByText("Picker body")).toBeTruthy();
+    });
+    const composer = (): string | null =>
+      view
+        .getByRole("button", { name: "Composer", hidden: true })
+        .getAttribute("aria-expanded");
+
+    act(() => systemBack.press());
+
+    await waitFor(() => {
+      expect(view.queryByText("Picker body")).toBeNull();
+    });
+    expect(composer()).toBe("true");
+
+    act(() => systemBack.press());
+
+    expect(composer()).toBe("false");
+  });
+
   it("closes an open non-modal popover instead of navigating", async () => {
     const history = createMemoryHistory({ initialEntries: ["/", "/epics"] });
     const backSpy = vi.spyOn(history, "back");

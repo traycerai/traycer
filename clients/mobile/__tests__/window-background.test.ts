@@ -57,16 +57,15 @@ describe("startWindowBackgroundSync", () => {
   const start = (): {
     setBackground: Mock<(color: string) => void>;
     setBarStyle: Mock<(style: WindowBarStyle) => void>;
+    toHex: Mock<(cssColor: string) => string>;
   } => {
     const setBackground = vi.fn<(color: string) => void>();
     const setBarStyle = vi.fn<(style: WindowBarStyle) => void>();
-    startWindowBackgroundSync({
-      document,
-      setBackground,
-      setBarStyle,
-      toHex: (cssColor) => cssColor.trim(),
-    });
-    return { setBackground, setBarStyle };
+    const toHex = vi.fn<(cssColor: string) => string>((cssColor) =>
+      cssColor.trim(),
+    );
+    startWindowBackgroundSync({ document, setBackground, setBarStyle, toHex });
+    return { setBackground, setBarStyle, toHex };
   };
 
   beforeEach(() => {
@@ -124,14 +123,15 @@ describe("startWindowBackgroundSync", () => {
     expect(setBarStyle).toHaveBeenLastCalledWith("LIGHT");
   });
 
-  it("does not call native when the resolved colour did not change", async () => {
-    const { setBackground, setBarStyle } = start();
+  it("resolves no colour and calls no native method when the token did not change", async () => {
+    const { setBackground, setBarStyle, toHex } = start();
 
     document.body.append(document.createElement("div"));
     document.documentElement.setAttribute("class", "unrelated");
     await Promise.resolve();
     flushFrames();
 
+    expect(toHex).toHaveBeenCalledTimes(1);
     expect(setBackground).toHaveBeenCalledTimes(1);
     expect(setBarStyle).toHaveBeenCalledTimes(1);
   });

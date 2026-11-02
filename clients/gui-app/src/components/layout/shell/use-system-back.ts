@@ -15,14 +15,15 @@ import { useMobileNavStore } from "@/stores/layout/mobile-nav-store";
  * means in this app, in the order the platform's users expect and one answer
  * per press:
  *
- * 1. An open navigation drawer closes, and so does a composer pulled open.
+ * 1. An open navigation drawer closes.
  * 2. A modal layer covering the app, an open popover, or the guide's coachmark
  *    is asked to dismiss - through the same Escape its own primitive already
  *    answers, so nothing has to be enumerated and a surface that refuses Escape
  *    (a required dialog) keeps refusing.
- * 3. Otherwise the app's history steps back through the SAME `goBack` the
+ * 3. A composer pulled open collapses.
+ * 4. Otherwise the app's history steps back through the SAME `goBack` the
  *    edge swipe and the desktop arrows call. One implementation of "go back".
- * 4. With nothing behind, the shell is asked to step out of the way.
+ * 5. With nothing behind, the shell is asked to step out of the way.
  *
  * Gated on the capability alone: shells with no OS back request pass `null`
  * and this attaches nothing. No platform is named here. A missing runner host
@@ -41,15 +42,15 @@ export function useSystemBack(): void {
         nav.setOpen(false);
         return;
       }
+      if (modalLayerCoversApp() || anchoredLayerOpen() || coachmarkShown()) {
+        dismissCoveringLayer();
+        return;
+      }
       const composerSheetToggle = document.querySelector<HTMLButtonElement>(
         "[data-composer-expanded] > button[aria-expanded='true']",
       );
       if (composerSheetToggle !== null) {
         composerSheetToggle.click();
-        return;
-      }
-      if (modalLayerCoversApp() || anchoredLayerOpen() || coachmarkShown()) {
-        dismissCoveringLayer();
         return;
       }
       if (canStepBack(router)) {

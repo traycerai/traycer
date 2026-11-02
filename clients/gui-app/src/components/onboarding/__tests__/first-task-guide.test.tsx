@@ -22,7 +22,10 @@ import {
   buildEnvironmentClient,
   environmentStatusFixture,
 } from "@/lib/environment/__tests__/environment-test-support";
-import { retireOnboardingReminder } from "@/lib/toast/onboarding-reminder-toast";
+import {
+  moveInvitationIsOutstanding,
+  retireOnboardingReminder,
+} from "@/lib/toast/onboarding-reminder-toast";
 import { useMoveSheetStore } from "@/stores/settings/move-sheet-store";
 import { useRetrospectiveSheetStore } from "@/stores/settings/retrospective-sheet-store";
 import { FirstTaskLandingGuide } from "@/components/onboarding/first-task-guide";
@@ -43,6 +46,7 @@ interface ToastOptions {
   readonly action: ToastButton | undefined;
   readonly cancel: ToastButton | undefined;
   readonly onDismiss: (() => void) | undefined;
+  readonly onAutoClose: (() => void) | undefined;
 }
 
 const toastState = vi.hoisted(() => {
@@ -393,12 +397,8 @@ describe("FirstTaskLandingGuide getting-started toast", () => {
     });
   });
 
-  it.each([
-    { shortLandscape: true, duration: 8000 },
-    { shortLandscape: false, duration: Infinity },
-  ])(
-    "gives the move invitation a duration of $duration when short landscape is $shortLandscape",
-    async ({ shortLandscape, duration }) => {
+  describe("on a phone on its side", () => {
+    const stubShortLandscape = (shortLandscape: boolean): void => {
       vi.stubGlobal(
         "matchMedia",
         (
@@ -412,14 +412,26 @@ describe("FirstTaskLandingGuide getting-started toast", () => {
           removeEventListener: () => undefined,
         }),
       );
-      try {
-        computerWithStatus(
-          environmentStatusFixture({
-            planes: { records: "local", broker: "local", room: "local" },
-            consent: null,
-            pendingUploads: [],
-          }),
-        );
+    };
+    const moveStatus = () =>
+      environmentStatusFixture({
+        planes: { records: "local", broker: "local", room: "local" },
+        consent: null,
+        pendingUploads: [],
+      });
+
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    it.each([
+      { shortLandscape: true, duration: 8000 },
+      { shortLandscape: false, duration: Infinity },
+    ])(
+      "gives the move invitation a duration of $duration when short landscape is $shortLandscape",
+      async ({ shortLandscape, duration }) => {
+        stubShortLandscape(shortLandscape);
+        computerWithStatus(moveStatus());
         renderGuide();
 
         await waitFor(() =>
@@ -428,11 +440,42 @@ describe("FirstTaskLandingGuide getting-started toast", () => {
             expect.objectContaining({ duration }),
           ),
         );
-      } finally {
-        vi.unstubAllGlobals();
-      }
-    },
-  );
+      },
+    );
+
+    it.each([
+      { shortLandscape: true, duration: 8000 },
+      { shortLandscape: false, duration: Infinity },
+    ])(
+      "gives the setup reminder a duration of $duration when short landscape is $shortLandscape",
+      async ({ shortLandscape, duration }) => {
+        stubShortLandscape(shortLandscape);
+        computerWithStatus(environmentStatusFixture({}));
+        renderGuide();
+
+        await waitFor(() =>
+          expect(toastState).toHaveBeenCalledWith(
+            "You're all set",
+            expect.objectContaining({ duration }),
+          ),
+        );
+      },
+    );
+
+    it("stops an expired invitation holding the reminder back, and records no answer", async () => {
+      stubShortLandscape(true);
+      computerWithStatus(moveStatus());
+      renderGuide();
+      await waitFor(() => expect(moveInvitationIsOutstanding()).toBe(true));
+      const [, options] =
+        toastState.mock.calls[toastState.mock.calls.length - 1];
+
+      act(() => options.onAutoClose?.());
+
+      expect(moveInvitationIsOutstanding()).toBe(false);
+      expect(useOnboardingStore.getState().setupReminderDismissed).toBe(false);
+    });
+  });
 
   it("keeps the setup reminder once this computer's settings are in Personal", async () => {
     computerWithStatus(environmentStatusFixture({}));

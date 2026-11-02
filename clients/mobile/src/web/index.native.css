@@ -39,7 +39,7 @@
  * would let one span a phone on its side or a tablet. A dialog keeps about the
  * size it has on a phone. Unlayered, so it wins over a caller's utility. */
 [data-slot="dialog-content"] {
-  max-width: min(calc(100% - 2rem), 32rem);
+  max-width: min(calc(100% - 2rem), var(--safe-area-width), 32rem);
 }
 
 /* TOUCH FIRST. Android ranks a stylus as a fine pointer, so a phone with a pen

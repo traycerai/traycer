@@ -41,15 +41,16 @@ export function barStyleForBackground(hex: string): WindowBarStyle {
  * area beside the page where an older web view pads for the bars, and the
  * status bar's icons, which otherwise follow the system theme and not the
  * app's. The theme lives on `<html>`, and which ground shows depends on what is
- * mounted, so both are watched; a mutation only costs one selector check per
- * frame, and the native side hears only a real change.
+ * mounted, so both are watched; a mutation only costs one selector check and
+ * one token read per frame, and the colour is resolved and the native side told
+ * only when that token's value changes.
  */
 export function startWindowBackgroundSync(
   deps: WindowBackgroundSyncDeps,
 ): void {
   const { document } = deps;
   const root = document.documentElement;
-  let applied: string | null = null;
+  let appliedToken: string | null = null;
   const sync = (): void => {
     const styles = document.defaultView?.getComputedStyle(root);
     if (styles === undefined) return;
@@ -57,9 +58,10 @@ export function startWindowBackgroundSync(
       document.querySelector(DARK_GROUND_SURFACE) === null
         ? "--canvas"
         : "--color-zinc-950";
-    const color = deps.toHex(styles.getPropertyValue(token));
-    if (color === applied) return;
-    applied = color;
+    const value = styles.getPropertyValue(token);
+    if (value === appliedToken) return;
+    appliedToken = value;
+    const color = deps.toHex(value);
     deps.setBackground(color);
     deps.setBarStyle(barStyleForBackground(color));
   };
