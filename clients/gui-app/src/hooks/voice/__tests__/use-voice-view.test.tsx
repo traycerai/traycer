@@ -8,7 +8,7 @@ import {
   type RouterHistory,
 } from "@tanstack/react-router";
 import { act, cleanup, render } from "@testing-library/react";
-import { useEffect, type ReactNode } from "react";
+import { useCallback, useEffect, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   backgroundItemSchema,
@@ -24,6 +24,7 @@ import {
   VoiceViewPaletteItems,
   type VoiceViewHandle,
 } from "@/hooks/voice/use-voice-view";
+import type { CommandContext, CommandItem } from "@/lib/commands/types";
 import type { KeybindingRouter } from "@/lib/keybindings/dispatch";
 import { setMobileApp } from "@/lib/mobile-app";
 import {
@@ -35,7 +36,8 @@ import {
   handleHostIds,
 } from "@/lib/registries/epic-session-registry";
 import { SETTINGS_SECTIONS } from "@/lib/settings-sections";
-import type { VoiceView } from "@/lib/voice/view";
+import type { VoicePaletteRow } from "@/lib/voice/page-acts";
+import { NO_PALETTE_ITEMS, type VoiceView } from "@/lib/voice/view";
 import { createChatSessionStore } from "@/stores/chats/chat-session-store";
 import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
 import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
@@ -256,8 +258,15 @@ function actionsOf(view: VoiceView): ReadonlyArray<string> {
   return view.rows.map((row) => row.action);
 }
 
+/** What the palette's publisher last handed the handle: the key and context its rows were composed for. */
+interface Published {
+  readonly composedFor: string | null;
+  readonly ctx: CommandContext | null;
+}
+
 interface Mounted {
   readonly handle: () => VoiceViewHandle;
+  readonly published: () => Published;
   readonly router: { readonly history: RouterHistory };
   readonly update: (props: ProbeProps) => void;
 }
@@ -286,14 +295,20 @@ function mount(initialPath: string, props: ProbeProps): Mounted {
     defaultOptions: { queries: { retry: false } },
   });
   let captured: VoiceViewHandle | null = null;
+  let published: Published = { composedFor: null, ctx: null };
   function Probe(probe: ProbeProps): ReactNode {
     const handle = useVoiceView(probe.enabled);
     useEffect(() => {
       captured = handle;
     }, [handle]);
-    return probe.palette ? (
-      <VoiceViewPaletteItems onItems={handle.setPaletteItems} />
-    ) : null;
+    const onItems = useCallback<VoiceViewHandle["setPaletteItems"]>(
+      (items, composedFor, ctx) => {
+        published = { composedFor, ctx };
+        handle.setPaletteItems(items, composedFor, ctx);
+      },
+      [handle],
+    );
+    return probe.palette ? <VoiceViewPaletteItems onItems={onItems} /> : null;
   }
   function Tree(tree: ProbeProps): ReactNode {
     return (
@@ -312,6 +327,7 @@ function mount(initialPath: string, props: ProbeProps): Mounted {
       if (captured === null) throw new Error("the hook never mounted");
       return captured;
     },
+    published: () => published,
     router,
     update: (next) => {
       rendered.rerender(<Tree {...next} />);
@@ -942,5 +958,129 @@ describe("how the agent's turn is read", () => {
       waitingOn: "approval",
     });
     expect(actionsOf(view)).not.toContain("agent.stop:chat-1");
+  });
+});
+
+function plainItem(id: string, extra: Partial<CommandItem>): CommandItem {
+  return {
+    id,
+    label: id,
+    description: null,
+    keywords: [],
+    group: "actions",
+    scope: "actions",
+    shortcut: null,
+    actionId: null,
+    run: () => undefined,
+    subpage: null,
+    ...extra,
+  };
+}
+
+describe("the palette row behind an action", () => {
+  it("is the item the palette offered, with the context it was composed for", () => {
+    const task = taskWithWorkingAgent();
+    const mounted = mount("/", { enabled: true, palette: true });
+
+    const row = mounted.handle().paletteRow("open:chats:chat-1");
+
+    expect(row?.item.id).toBe("open:chats:chat-1");
+    expect(row?.ctx).toEqual({
+      pathname: "/",
+      router: KEYBINDING_ROUTER,
+      activeTabId: task.tabId,
+      activeEpicId: EPIC_ID,
+      focusedComposerKind: null,
+      targetGroupId:
+        useEpicCanvasStore.getState().canvasByTabId[task.tabId]?.activePaneId ??
+        null,
+    });
+  });
+
+  it("is gone for a page that has since changed, and back for the page that replaced it", () => {
+    const task = taskWithWorkingAgent();
+    const mounted = mount("/", { enabled: true, palette: true });
+    const seen: Array<VoicePaletteRow | null> = [];
+
+    act(() => {
+      useTabsStore.setState(stripOf([task.ref, HISTORY_TAB], HISTORY_TAB));
+      // Before React has re-rendered the palette for History.
+      seen.push(mounted.handle().paletteRow("open:chats:chat-1"));
+    });
+
+    expect(seen).toEqual([null]);
+    expect(mounted.handle().paletteRow("open:chats:chat-1")).toBeNull();
+    expect(
+      mounted.handle().paletteRow("action:app.history.open")?.ctx.activeTabId,
+    ).toBeNull();
+  });
+
+  it("is none while the palette has published nothing", () => {
+    taskWithWorkingAgent();
+    const mounted = mount("/", { enabled: true, palette: false });
+
+    expect(mounted.handle().paletteRow("open:chats:chat-1")).toBeNull();
+  });
+
+  it("is none for an item that only opens a picker or cannot be used, though the palette lists it", () => {
+    taskWithWorkingAgent();
+    const mounted = mount("/", { enabled: true, palette: true });
+    const { composedFor, ctx } = mounted.published();
+    const usable = plainItem("action:usable", {});
+    mounted.handle().setPaletteItems(
+      {
+        ...NO_PALETTE_ITEMS,
+        commands: [
+          usable,
+          plainItem("action:picker", {
+            subpage: { id: "picker", title: "Pick", useItems: () => [] },
+          }),
+          plainItem("action:off", { disabled: true }),
+        ],
+      },
+      composedFor,
+      ctx,
+    );
+
+    expect(mounted.handle().paletteRow("action:usable")?.item).toBe(usable);
+    expect(mounted.handle().paletteRow("action:picker")).toBeNull();
+    expect(mounted.handle().paletteRow("action:off")).toBeNull();
+  });
+});
+
+describe("the chat session behind an action", () => {
+  it("is the chat in the active tile, by its id or for whichever is shown", () => {
+    taskWithWorkingAgent();
+    const mounted = mount("/", { enabled: true, palette: false });
+    const store = chatSession().store;
+
+    const byId = mounted.handle().agentSession("chat-1");
+    const shown = mounted.handle().agentSession(null);
+
+    expect(byId).toMatchObject({
+      chatId: "chat-1",
+      epicId: EPIC_ID,
+      hostId: HOST_ID,
+      title: "Main agent",
+    });
+    expect(byId?.handle.store).toBe(store);
+    expect(shown?.chatId).toBe("chat-1");
+  });
+
+  it("is none for another chat's id", () => {
+    taskWithWorkingAgent();
+    const mounted = mount("/", { enabled: true, palette: false });
+
+    expect(mounted.handle().agentSession("chat-elsewhere")).toBeNull();
+  });
+
+  it("is none once the active tile is not a chat", () => {
+    const task = taskWithWorkingAgent();
+    useTileFindStore.getState().resetForTests();
+    activateTile(task, SPEC);
+    const mounted = mount("/", { enabled: true, palette: false });
+
+    expect(mounted.handle().agentSession(null)).toBeNull();
+    expect(mounted.handle().agentSession("chat-1")).toBeNull();
   });
 });

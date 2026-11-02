@@ -15,6 +15,11 @@ import { THEME_SUBPAGE_ITEMS } from "@/lib/commands/sources/theme.source";
 import type { CommandContext } from "@/lib/commands/types";
 import { getChatSessionRegistry } from "@/lib/registries/chat-session-registry";
 import { SETTINGS_SECTIONS } from "@/lib/settings-sections";
+import type {
+  PageActReads,
+  VoiceAgentSession,
+  VoicePaletteRow,
+} from "@/lib/voice/page-acts";
 import {
   approvalSummary,
   composeVoiceView,
@@ -44,14 +49,15 @@ import {
 import { useTileFindStore } from "@/stores/tile-find";
 import { useVoiceSessionStore } from "@/stores/voice/voice-session-store";
 
-/** The view the router is shown, read when a route is made. */
-export interface VoiceViewHandle {
+/** The view the router is shown, read when a route is made and when it runs. */
+export interface VoiceViewHandle extends PageActReads {
   /** The snapshot from what the app holds now. */
   readonly current: () => VoiceView;
   /** What {@link VoiceViewPaletteItems} hands over, and the context it composed them for. */
   readonly setPaletteItems: (
     items: VoicePaletteItems,
     composedFor: string | null,
+    ctx: CommandContext | null,
   ) => void;
 }
 
@@ -140,26 +146,42 @@ const NO_AGENT: AgentRead = {
   approvals: [],
 };
 
-/** The chat in the task's active tile and what it is doing, peeked, never opened. */
-function readAgent(
+/** The chat session in the task's active tile, peeked, never opened. */
+function readAgentSession(
   tabId: string | null,
   owner: ActiveTileOwner | null,
-): AgentRead {
+): VoiceAgentSession | null {
   if (tabId === null || owner === null || owner.viewTabId !== tabId) {
-    return NO_AGENT;
+    return null;
   }
   const ref =
     useEpicCanvasStore.getState().canvasByTabId[tabId]?.tilesByInstanceId[
       owner.tileInstanceId
     ];
-  if (ref?.type !== "chat") return NO_AGENT;
+  if (ref?.type !== "chat") return null;
   const handle = getChatSessionRegistry().peek(
     owner.epicId,
     ref.id,
     ref.hostId,
   );
-  if (handle === null) return NO_AGENT;
-  const chat = handle.store.getState();
+  if (handle === null) return null;
+  return {
+    handle,
+    chatId: ref.id,
+    epicId: owner.epicId,
+    hostId: ref.hostId,
+    title: ref.name,
+  };
+}
+
+/** What the chat in the task's active tile is doing. */
+function readAgent(
+  tabId: string | null,
+  owner: ActiveTileOwner | null,
+): AgentRead {
+  const session = readAgentSession(tabId, owner);
+  if (session === null) return NO_AGENT;
+  const chat = session.handle.store.getState();
   const approvals = humanActionableApprovals(chat.pendingApprovals).map(
     (approval) => ({
       id: approval.approvalId,
@@ -175,8 +197,8 @@ function readAgent(
   );
   return {
     agent: {
-      chatId: ref.id,
-      title: ref.name,
+      chatId: session.chatId,
+      title: session.title,
       state: waiting
         ? "waiting"
         : activityStateOf(turnStatus, chatActivityIndicator(chat)),
@@ -254,12 +276,31 @@ function livePaletteContextKey(pathname: string): string {
 interface PublishedPalette {
   readonly items: VoicePaletteItems;
   readonly composedFor: string | null;
+  readonly ctx: CommandContext | null;
 }
 
 const NO_PALETTE: PublishedPalette = {
   items: NO_PALETTE_ITEMS,
   composedFor: null,
+  ctx: null,
 };
+
+/** The item behind a row, while the palette still offers it as something to run. */
+function offeredItem(
+  items: VoicePaletteItems,
+  action: string,
+): VoicePaletteRow["item"] | null {
+  const item = [
+    ...items.tiles,
+    ...items.sections,
+    ...items.tasks,
+    ...items.themes,
+    ...items.commands,
+  ].find((candidate) => candidate.id === action);
+  return item === undefined || item.subpage !== null || item.disabled === true
+    ? null
+    : item;
+}
 
 /**
  * The page the voice router sees (Tracy Bots voice, VT9), beside its
@@ -332,15 +373,45 @@ export function useVoiceView(enabled: boolean): VoiceViewHandle {
     );
   }, [router]);
   const setPaletteItems = useCallback(
-    (items: VoicePaletteItems, composedFor: string | null): void => {
-      paletteRef.current = { items, composedFor };
+    (
+      items: VoicePaletteItems,
+      composedFor: string | null,
+      ctx: CommandContext | null,
+    ): void => {
+      paletteRef.current = { items, composedFor, ctx };
     },
     [],
   );
-  return useMemo(
-    () => ({ current, setPaletteItems }),
-    [current, setPaletteItems],
+  const paletteRow = useCallback(
+    (action: string): VoicePaletteRow | null => {
+      const { items, composedFor, ctx } = paletteRef.current;
+      if (
+        ctx === null ||
+        composedFor !== livePaletteContextKey(router.history.location.pathname)
+      ) {
+        return null;
+      }
+      const item = offeredItem(items, action);
+      return item === null ? null : { item, ctx };
+    },
+    [router],
   );
+  return useMemo(
+    () => ({ current, setPaletteItems, agentSession, paletteRow }),
+    [current, setPaletteItems, paletteRow],
+  );
+}
+
+/** The chat on the page in front; with an id, only while it is that chat. */
+function agentSession(chatId: string | null): VoiceAgentSession | null {
+  const focused = selectHostFocusedRef(useTabsStore.getState());
+  const session = readAgentSession(
+    focusedTaskTabId(focused),
+    getActiveTileOwner(),
+  );
+  return session === null || (chatId !== null && session.chatId !== chatId)
+    ? null
+    : session;
 }
 
 /**
@@ -387,10 +458,7 @@ function useVoiceCommandContext(): {
  * idle voice.
  */
 export function VoiceViewPaletteItems(props: {
-  readonly onItems: (
-    items: VoicePaletteItems,
-    composedFor: string | null,
-  ) => void;
+  readonly onItems: VoiceViewHandle["setPaletteItems"];
 }): null {
   const { onItems } = props;
   const { ctx, composedFor } = useVoiceCommandContext();
@@ -415,17 +483,19 @@ export function VoiceViewPaletteItems(props: {
         commands: [...navItems, ...actionItems],
       },
       composedFor,
+      ctx,
     );
   }, [
     actionItems,
     agentItems,
     artifactItems,
     composedFor,
+    ctx,
     navItems,
     onItems,
     sectionItems,
     taskItems,
   ]);
-  useEffect(() => () => onItems(NO_PALETTE_ITEMS, null), [onItems]);
+  useEffect(() => () => onItems(NO_PALETTE_ITEMS, null, null), [onItems]);
   return null;
 }

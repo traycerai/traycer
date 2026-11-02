@@ -1,6 +1,9 @@
 import type { BotConversationSendResponse } from "@traycer/protocol/host/bot/conversation-schemas";
 import type { StoreApi } from "zustand";
-import { executeDeferredVerb } from "@/lib/voice/deferred-verbs";
+import {
+  executeDeferredVerb,
+  type VerbOutcome,
+} from "@/lib/voice/deferred-verbs";
 import { noteVoiceQueueSwitch } from "@/lib/voice/queue-verbs";
 import type { BoundTarget } from "@/lib/voice/directory";
 import type {
@@ -8,7 +11,12 @@ import type {
   RouteRefusal,
   RoutedDecision,
 } from "@/lib/voice/router";
-import type { VoiceViewAgent } from "@/lib/voice/view";
+import {
+  readBackQuestion,
+  type VoiceView,
+  type VoiceViewAgent,
+  type VoiceViewRow,
+} from "@/lib/voice/view";
 import {
   joinSegments,
   type CardKey,
@@ -66,6 +74,12 @@ import {
  * cannot say anything about them, and the next request posts as usual. An
  * action already in flight lands where it was sent, and its acceptance says
  * so without reopening the old rail.
+ *
+ * A page action (VT9b) is bound to the view it was offered in, as a post is to
+ * the selection: its generation is compared with the view's when it runs, and
+ * when the page moved it is dropped and its words are interrupted the same way.
+ * It goes through the same one confirmation as a post when its row or the
+ * router's doubt asks for one. It moves no focus and posts to no bot.
  */
 
 export interface SayLoopDeps {
@@ -136,6 +150,14 @@ export interface SayLoopDeps {
    * a snapshot before the acceptance came back).
    */
   readonly onAccepted: (request: AcceptedRequest) => void;
+  /**
+   * The page in front as it is now. Its generation is the fence an act is
+   * checked against: read here and not from the store, whose counter can lag an
+   * owner change by a microtask.
+   */
+  readonly view: () => VoiceView;
+  /** Runs one row of the view through its surface's own path; always settles. */
+  readonly act: (row: VoiceViewRow, text: string) => Promise<VerbOutcome>;
 }
 
 /** What the router is given: the reserved words, segment by segment, as said. */
@@ -271,11 +293,25 @@ interface RoutingEntry {
   readonly card: CardKey | null;
 }
 
-/** A routed post held for the person's yes. */
+type ActDecision = Extract<RoutedDecision, { readonly kind: "act" }>;
+
+/** What a yes carries out: a post to its bound target, or an act on the page. */
+type ConfirmSubject =
+  | {
+      readonly kind: "post";
+      readonly target: BoundTarget;
+      readonly text: string;
+    }
+  | {
+      readonly kind: "act";
+      readonly decision: ActDecision;
+      readonly text: string;
+    };
+
+/** A routed decision held for the person's yes. */
 interface Confirming {
   readonly entry: RoutingEntry;
-  readonly target: BoundTarget;
-  readonly text: string;
+  readonly subject: ConfirmSubject;
   /** The question was confirmed spoken; only then is a boundary its answer. */
   heard: boolean;
   /**
@@ -299,6 +335,9 @@ export const CONFIRM_ANSWER_WINDOW_MS = 15_000;
 export const MOVED_ASK_TEXT =
   "You moved while you were talking, so I did not post that. When you are ready, say the whole request again.";
 
+export const PAGE_CHANGED_ASK_TEXT =
+  "The page changed, so I did not do that. When you are ready, say the whole request again.";
+
 /** Why a routed request is refused by the loop, beyond the route's own refusals. */
 type LoopRefusal =
   | RouteRefusal
@@ -308,6 +347,8 @@ type LoopRefusal =
   | "moved-on"
   /** Another post is already waiting for the person's yes or no. */
   | "confirm-busy"
+  /** A page action needs a yes while another decision already waits for one. */
+  | "act-confirm-busy"
   /** The tab navigation to the destination was refused or undone. */
   | "move-failed"
   /** A request to the page in front that the voice cannot carry out yet. */
@@ -331,14 +372,21 @@ const REFUSAL_TEXT: Record<LoopRefusal, string> = {
     "Nothing changed: the move to that bot or thread did not happen. The person can say it again.",
   "confirm-busy":
     "Nothing was posted: an earlier post is still waiting for the person's yes or no. The person can say this one again after answering.",
+  "act-confirm-busy":
+    "Nothing was done: an earlier request is still waiting for the person's yes or no. The person can say this one again after answering.",
   "not-here-yet": "I can't do that here yet.",
 };
 
-const DECLINED_TEXT = "Okay, I did not post it.";
+const DECLINED_TEXT: Record<ConfirmSubject["kind"], string> = {
+  post: "Okay, I did not post it.",
+  act: "Okay, I did not do that.",
+};
 const NO_CARD_TEXT =
   "Nothing was sent: no question or approval is waiting for an answer. The person can open one first.";
-const UNANSWERED_TEXT =
-  "Nothing was posted: no yes came for it. The person can say it again.";
+const UNANSWERED_TEXT: Record<ConfirmSubject["kind"], string> = {
+  post: "Nothing was posted: no yes came for it. The person can say it again.",
+  act: "Nothing was done: no yes came for it. The person can say it again.",
+};
 
 /** The destination as the voice names it: a channel, or a thread by its post. */
 function placeName(target: BoundTarget): string {
@@ -609,7 +657,7 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
    * nothing.
    */
   const navigating = new Map<string, RoutingEntry>();
-  /** The routed post waiting for the person's yes; mirrored by the store's `pendingAction`. */
+  /** The routed decision waiting for the person's yes; mirrored by the store's `pendingAction`. */
   let confirming: Confirming | null = null;
   /** The session is over; nothing scheduled by this loop acts any more. */
   let disposed = false;
@@ -924,6 +972,188 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
     }
   }
 
+  /**
+   * Interrupts the open words: they are held, never acted on, and the voice
+   * asks for the whole request again. Until the person has heard that, every
+   * boundary adds its words to the held ones. During an interruption already
+   * pending they join it, and the ask already out stands.
+   */
+  function interruptOpenWords(
+    askText: string,
+    askDelegationId: string | null,
+  ): void {
+    const state = store.getState();
+    const interrupted = state.pendingAction;
+    if (interrupted?.kind === "interrupted") {
+      const more = state.dropOpenSpan();
+      if (more !== null) {
+        state.setPendingAction({
+          ...interrupted,
+          text: `${interrupted.text} ${more}`,
+        });
+      }
+      return;
+    }
+    const held = state.dropOpenSpan();
+    if (held === null) return;
+    const sessionToken = state.sessionToken;
+    // The open delegation, if any, belongs to an action in flight; the
+    // held words had none of their own yet.
+    state.setPendingAction({
+      kind: "interrupted",
+      text: held,
+      delegationId: inFlight.size === 0 ? state.pendingDelegationId : null,
+      selectionGeneration: state.selectionGeneration,
+      askState: "asking",
+    });
+    if (inFlight.size === 0) state.setPendingDelegation(null);
+    deps.ask(askText, askDelegationId, {
+      onDelivered: () => {
+        const now = store.getState();
+        if (now.sessionToken !== sessionToken) return;
+        const pending = now.pendingAction;
+        if (pending?.kind !== "interrupted" || pending.askState === "heard") {
+          return;
+        }
+        now.setPendingAction({ ...pending, askState: "heard" });
+      },
+      onGivenUp: () => {
+        // The voice could not ask: the interruption resolves itself and
+        // the held words go. An utterance already under way (words open
+        // with no boundary yet) is still the interrupted one, and closes
+        // the interruption at its boundary without posting; a request
+        // begun after this is a fresh one.
+        const now = store.getState();
+        if (now.sessionToken !== sessionToken) return;
+        const pending = now.pendingAction;
+        if (pending?.kind !== "interrupted") return;
+        if (pending.askState === "heard") return;
+        if (now.openSpan().length > 0) {
+          now.setPendingAction({ ...pending, askState: "closing" });
+        } else {
+          now.setPendingAction(null);
+        }
+      },
+    });
+  }
+
+  /** The page moved under an act: it is dropped and its words handed back. */
+  function dropForMovedPage(entry: RoutingEntry): void {
+    store.getState().releaseReservation(entry.seqs);
+    interruptOpenWords(PAGE_CHANGED_ASK_TEXT, delegationOf(entry));
+    settleDelegation(entry.delegationId);
+  }
+
+  /**
+   * Runs an act on the page it was offered in. The words are spent before it
+   * runs, and only a refusal is said: the engine's own acknowledgement is the
+   * only acknowledgement of one that ran.
+   */
+  async function runAct(
+    entry: RoutingEntry,
+    decision: ActDecision,
+    text: string,
+  ): Promise<void> {
+    if (deps.view().generation !== decision.generation) {
+      dropForMovedPage(entry);
+      return;
+    }
+    store.getState().consumeReservation(entry.seqs);
+    settleDelegation(entry.delegationId);
+    const outcome = await deps.act(decision.row, text);
+    if (outcome.kind !== "refused") return;
+    if (store.getState().sessionToken !== entry.sessionToken) return;
+    deps.notify(outcome.say, delegationOf(entry));
+  }
+
+  /** An act the router chose: at once, or read back first when it asks for that. */
+  async function routeAct(
+    entry: RoutingEntry,
+    decision: ActDecision,
+  ): Promise<void> {
+    const text = joinSegments(
+      entry.segments.slice(decision.span.from, decision.span.to + 1),
+    );
+    if (decision.row.takesWords && text.length === 0) {
+      refuse(entry, "invalid-span");
+      return;
+    }
+    if (!decision.confirm) {
+      await runAct(entry, decision, text);
+      return;
+    }
+    // Not a question about a page the person has already left.
+    const view = deps.view();
+    if (view.generation !== decision.generation) {
+      dropForMovedPage(entry);
+      return;
+    }
+    if (confirming !== null) {
+      refuse(entry, "act-confirm-busy");
+      return;
+    }
+    holdForYes(
+      entry,
+      { kind: "act", decision, text },
+      readBackQuestion(decision.row, view.page),
+    );
+  }
+
+  /** Reads the question out and holds the decision for the person's yes. */
+  function holdForYes(
+    entry: RoutingEntry,
+    subject: ConfirmSubject,
+    question: string,
+  ): void {
+    const held: Confirming = {
+      entry,
+      subject,
+      heard: false,
+      heardAfterSeq: null,
+      cancelWait: () => undefined,
+      withdrawQuestion: () => undefined,
+    };
+    confirming = held;
+    store.getState().setPendingAction({
+      kind: "confirming",
+      target: subject.kind === "post" ? subject.target.tuple : null,
+      text: subject.text,
+      delegationId: entry.delegationId,
+      selectionGeneration: entry.selectionGeneration,
+      askState: "asking",
+    });
+    held.withdrawQuestion = deps.ask(question, delegationOf(entry), {
+      onDelivered: () => {
+        if (confirming !== held || held.heard) return;
+        held.heard = true;
+        held.heardAfterSeq =
+          store.getState().segments.at(-1)?.seq ?? Number.NEGATIVE_INFINITY;
+        held.cancelWait = deps.schedule(() => {
+          if (
+            disposed ||
+            confirming !== held ||
+            store.getState().sessionToken !== held.entry.sessionToken
+          ) {
+            return;
+          }
+          spendLateAnswer();
+          dropConfirmation(held);
+          deps.notify(UNANSWERED_TEXT[subject.kind], delegationOf(held.entry));
+        }, CONFIRM_ANSWER_WINDOW_MS);
+        const pending = store.getState().pendingAction;
+        if (pending?.kind === "confirming") {
+          store.getState().setPendingAction({ ...pending, askState: "heard" });
+        }
+      },
+      // The person never heard the question, so no answer is coming: the
+      // decision is dropped, and words said since stand on their own.
+      onGivenUp: () => {
+        if (confirming !== held) return;
+        dropConfirmation(held);
+      },
+    });
+  }
+
   /** Carries out one routed decision for the words `entry` reserved. */
   async function execute(
     entry: RoutingEntry,
@@ -953,6 +1183,8 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
         answerRouted(entry, decision);
         return;
       case "act":
+        await routeAct(entry, decision);
+        return;
       case "missing":
         refuse(entry, "not-here-yet");
         return;
@@ -992,60 +1224,10 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
           refuse(entry, "confirm-busy");
           return;
         }
-        const held: Confirming = {
+        holdForYes(
           entry,
-          target: decision.target,
-          text,
-          heard: false,
-          heardAfterSeq: null,
-          cancelWait: () => undefined,
-          withdrawQuestion: () => undefined,
-        };
-        confirming = held;
-        store.getState().setPendingAction({
-          kind: "confirming",
-          target: decision.target.tuple,
-          text,
-          delegationId: entry.delegationId,
-          selectionGeneration: entry.selectionGeneration,
-          askState: "asking",
-        });
-        held.withdrawQuestion = deps.ask(
+          { kind: "post", target: decision.target, text },
           confirmQuestion(decision.target, decision.confirm === "uncertain"),
-          delegationOf(entry),
-          {
-            onDelivered: () => {
-              if (confirming !== held || held.heard) return;
-              held.heard = true;
-              held.heardAfterSeq =
-                store.getState().segments.at(-1)?.seq ??
-                Number.NEGATIVE_INFINITY;
-              held.cancelWait = deps.schedule(() => {
-                if (
-                  disposed ||
-                  confirming !== held ||
-                  store.getState().sessionToken !== held.entry.sessionToken
-                ) {
-                  return;
-                }
-                spendLateAnswer();
-                dropConfirmation(held);
-                deps.notify(UNANSWERED_TEXT, delegationOf(held.entry));
-              }, CONFIRM_ANSWER_WINDOW_MS);
-              const pending = store.getState().pendingAction;
-              if (pending?.kind === "confirming") {
-                store
-                  .getState()
-                  .setPendingAction({ ...pending, askState: "heard" });
-              }
-            },
-            // The person never heard the question, so no answer is coming:
-            // the post is dropped, and words said since stand on their own.
-            onGivenUp: () => {
-              if (confirming !== held) return;
-              dropConfirmation(held);
-            },
-          },
         );
         return;
       }
@@ -1181,7 +1363,7 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
     if (verdict === "not-an-answer") {
       state.releaseReservation(answer.seqs);
       dropConfirmation(held);
-      deps.notify(DECLINED_TEXT, delegationOf(held.entry));
+      deps.notify(DECLINED_TEXT[held.subject.kind], delegationOf(held.entry));
       return "route";
     }
     const heardAfter = held.heardAfterSeq;
@@ -1201,12 +1383,17 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
       return "handled";
     }
     if (verdict === "yes") {
-      await postRouted(held.entry, held.target, held.text);
+      const { subject } = held;
+      if (subject.kind === "post") {
+        await postRouted(held.entry, subject.target, subject.text);
+      } else {
+        await runAct(held.entry, subject.decision, subject.text);
+      }
       return "handled";
     }
     state.consumeReservation(held.entry.seqs);
     settleDelegation(held.entry.delegationId);
-    deps.notify(DECLINED_TEXT, delegationOf(held.entry));
+    deps.notify(DECLINED_TEXT[held.subject.kind], delegationOf(held.entry));
     return "handled";
   }
 
@@ -1395,60 +1582,7 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
           state.releaseReservation(action.seqs);
         }
       }
-      // A move during an interruption already pending adds nothing: the
-      // words are held and the ask is out.
-      const interrupted = state.pendingAction;
-      if (interrupted?.kind === "interrupted") {
-        const more = state.dropOpenSpan();
-        if (more !== null) {
-          state.setPendingAction({
-            ...interrupted,
-            text: `${interrupted.text} ${more}`,
-          });
-        }
-        return;
-      }
-      const held = state.dropOpenSpan();
-      if (held === null) return;
-      const sessionToken = state.sessionToken;
-      // The open delegation, if any, belongs to an action in flight; the
-      // held words had none of their own yet.
-      state.setPendingAction({
-        kind: "interrupted",
-        text: held,
-        delegationId: inFlight.size === 0 ? state.pendingDelegationId : null,
-        selectionGeneration: state.selectionGeneration,
-        askState: "asking",
-      });
-      if (inFlight.size === 0) state.setPendingDelegation(null);
-      deps.ask(MOVED_ASK_TEXT, null, {
-        onDelivered: () => {
-          const now = store.getState();
-          if (now.sessionToken !== sessionToken) return;
-          const pending = now.pendingAction;
-          if (pending?.kind !== "interrupted" || pending.askState === "heard") {
-            return;
-          }
-          now.setPendingAction({ ...pending, askState: "heard" });
-        },
-        onGivenUp: () => {
-          // The voice could not ask: the interruption resolves itself and
-          // the held words go. An utterance already under way (words open
-          // with no boundary yet) is still the interrupted one, and closes
-          // the interruption at its boundary without posting; a request
-          // begun after this is a fresh one.
-          const now = store.getState();
-          if (now.sessionToken !== sessionToken) return;
-          const pending = now.pendingAction;
-          if (pending?.kind !== "interrupted") return;
-          if (pending.askState === "heard") return;
-          if (now.openSpan().length > 0) {
-            now.setPendingAction({ ...pending, askState: "closing" });
-          } else {
-            now.setPendingAction(null);
-          }
-        },
-      });
+      interruptOpenWords(MOVED_ASK_TEXT, null);
     },
 
     placementFor(place) {

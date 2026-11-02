@@ -27,6 +27,7 @@ import { createSayLoop } from "../say-loop";
 import {
   composeVoiceView,
   NO_PALETTE_ITEMS,
+  readBackQuestion,
   type VoicePage,
   type VoicePaletteItems,
   type VoiceView,
@@ -1491,6 +1492,8 @@ describe("the say loop with a page action or a question about the agent", () => 
       openThread: () => undefined,
       botTitle: (botId) => botId,
       onAccepted: () => undefined,
+      view: () => view,
+      act: () => Promise.resolve({ kind: "executed" }),
     });
     const store = useVoiceSessionStore.getState();
     store.appendInputSegment("Close this", 0);
@@ -1499,23 +1502,27 @@ describe("the say loop with a page action or a question about the agent", () => 
     return { sends, notices, asks };
   }
 
-  it.each([
-    {
-      name: "an act",
-      answer: route("act", { actionId: "action:tab.close" }, WHOLE, false),
-    },
-    { name: "a missing", answer: route("missing", {}, WHOLE, false) },
-  ])(
-    "says $name cannot be done here yet, spends the words and posts nothing",
-    async ({ answer }) => {
-      const outcome = await heard(answer, TASK_VIEW);
+  it("says a request nothing on the page serves cannot be done here yet, spends the words and posts nothing", async () => {
+    const outcome = await heard(route("missing", {}, WHOLE, false), TASK_VIEW);
 
-      expect(outcome.notices).toEqual(["I can't do that here yet."]);
-      expect(outcome.sends).toEqual([]);
-      expect(outcome.asks).toEqual([]);
-      expect(useVoiceSessionStore.getState().segments).toEqual([]);
-    },
-  );
+    expect(outcome.notices).toEqual(["I can't do that here yet."]);
+    expect(outcome.sends).toEqual([]);
+    expect(outcome.asks).toEqual([]);
+    expect(useVoiceSessionStore.getState().segments).toEqual([]);
+  });
+
+  it("reads an act that cannot be undone back before it runs, and posts nothing", async () => {
+    const outcome = await heard(
+      route("act", { actionId: "action:tab.close" }, WHOLE, false),
+      TASK_VIEW,
+    );
+
+    expect(outcome.asks).toEqual([
+      "Close this tab: Main agent in Tracy Bots. Yes?",
+    ]);
+    expect(outcome.notices).toEqual([]);
+    expect(outcome.sends).toEqual([]);
+  });
 
   it.each([
     { state: "working", line: "Main agent is working." },
@@ -1788,5 +1795,93 @@ describe("composeVoiceView", () => {
       "Settings: Diagnostics (App)",
       "Settings: Voice",
     ]);
+  });
+});
+
+describe("readBackQuestion", () => {
+  const CLOSING_COMMANDS: VoicePaletteItems = {
+    ...NO_PALETTE_ITEMS,
+    commands: [
+      commandItem("tab.close", "Close this tab"),
+      commandItem("epic.close", "Close task"),
+    ],
+  };
+
+  /** The question read before the page's row `action` runs, on `page`. */
+  function questionFor(page: VoicePage, action: string): string {
+    const view = compose({
+      page,
+      agent: WORKING_AGENT,
+      agentTurnRunning: true,
+      approvals: [{ id: "ap_1", summary: "Run bun install" }],
+      palette: CLOSING_COMMANDS,
+    });
+    return readBackQuestion(rowOf(view, action), view.page);
+  }
+
+  const TASK: VoicePage = {
+    kind: "task",
+    title: "Tracy Bots",
+    tile: "Main agent",
+  };
+
+  it.each([
+    {
+      name: "approving what the agent asks, in the task",
+      action: "approval.approve:ap_1",
+      question: "Approve: Run bun install in Tracy Bots. Yes?",
+    },
+    {
+      name: "declining it",
+      action: "approval.decline:ap_1",
+      question: "Decline: Run bun install in Tracy Bots. Yes?",
+    },
+    {
+      name: "stopping the agent",
+      action: "agent.stop:chat_1",
+      question: "Stop the agent's turn (Main agent) in Tracy Bots. Yes?",
+    },
+    {
+      name: "closing the tab, naming the tile and the task",
+      action: "action:tab.close",
+      question: "Close this tab: Main agent in Tracy Bots. Yes?",
+    },
+    {
+      name: "closing the task, naming the task",
+      action: "action:epic.close",
+      question: "Close task: Tracy Bots. Yes?",
+    },
+  ])("reads $name", ({ action, question }) => {
+    expect(questionFor(TASK, action)).toBe(question);
+  });
+
+  it("names only the task for a tab close while an overlay holds the keys and no tile is active", () => {
+    expect(questionFor({ ...TASK, tile: null }, "action:tab.close")).toBe(
+      "Close this tab in Tracy Bots. Yes?",
+    );
+  });
+
+  it("names nothing for a task whose title is empty", () => {
+    expect(questionFor({ ...TASK, title: "" }, "action:tab.close")).toBe(
+      "Close this tab. Yes?",
+    );
+  });
+
+  it("reads the close of the task as closing Settings when that is the page in front", () => {
+    expect(
+      questionFor({ kind: "settings", section: null }, "action:epic.close"),
+    ).toBe("Close task: Settings. Yes?");
+  });
+
+  it("reads a close of the task with no name on a page that has none", () => {
+    expect(questionFor({ kind: "notifications" }, "action:epic.close")).toBe(
+      "Close task. Yes?",
+    );
+  });
+
+  it("does not name the page for a tab close away from a task", () => {
+    expect(
+      questionFor({ kind: "settings", section: null }, "action:tab.close"),
+    ).toBe("Close this tab. Yes?");
   });
 });

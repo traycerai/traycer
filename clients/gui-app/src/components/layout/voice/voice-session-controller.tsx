@@ -73,6 +73,7 @@ import {
   type ReplyWatchMemory,
 } from "@/lib/voice/focused-replies";
 import { createBrowserGptLiveEngine } from "@/lib/voice/gpt-live-engine";
+import { executePageAct } from "@/lib/voice/page-acts";
 import {
   parseRouterResponse,
   resolveRoute,
@@ -434,8 +435,10 @@ export function VoiceSessionController(): ReactNode {
     () => Promise.resolve({ kind: "refused", reason: "unavailable" }),
   );
   const recheckRef = useRef(directory.current);
+  const viewRef = useRef(view);
   useEffect(() => {
     recheckRef.current = directory.current;
+    viewRef.current = view;
     decideRef.current = async (request) => {
       let snapshot = directory.current();
       const viewSnapshot = view.current();
@@ -598,6 +601,9 @@ export function VoiceSessionController(): ReactNode {
         }
       },
       control: (verb) => controlRef.current(verb),
+      view: () => viewRef.current.current(),
+      act: (row, text) =>
+        executePageAct({ row, text, reads: viewRef.current, queryClient }),
       schedule: (fn, ms) => {
         const handle = window.setTimeout(fn, ms);
         return () => window.clearTimeout(handle);
@@ -613,7 +619,7 @@ export function VoiceSessionController(): ReactNode {
     });
     sayLoopRef.current = created;
     return created;
-  }, [ensureSpeech]);
+  }, [ensureSpeech, queryClient]);
 
   // A post the voice navigated for waits for the bot's channel: once it is
   // known, the loop sends what waits.

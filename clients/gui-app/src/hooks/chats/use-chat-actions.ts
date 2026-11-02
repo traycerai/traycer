@@ -141,194 +141,191 @@ function tracked<Result>(
   return result;
 }
 
-export function useChatActions(handle: ChatSessionStoreHandle): ChatActions {
-  return useMemo<ChatActions>(
-    () => ({
-      sendMessage: (input) =>
-        tracked(handle.store.getState().sendMessage(input), () => {
-          Analytics.getInstance().track(AnalyticsEvent.ChatMessageSent, {
-            harness: input.settings.harnessId,
-          });
-        }),
-      deleteMessageSuffix: (fromMessageId) =>
-        tracked(
-          handle.store.getState().deleteMessageSuffix(fromMessageId),
-          () => {
-            Analytics.getInstance().track(
-              AnalyticsEvent.ChatMessageSuffixDeleted,
-              null,
-            );
-          },
-        ),
-      editUserMessage: (input) =>
-        tracked(handle.store.getState().editUserMessage(input), () => {
-          Analytics.getInstance().track(AnalyticsEvent.ChatMessageEdited, null);
-        }),
-      revertFileChanges: (fromMessageId, filePaths, revertArtifacts) =>
-        tracked(
-          handle.store
-            .getState()
-            .revertFileChanges(fromMessageId, filePaths, revertArtifacts),
-          () => {
-            Analytics.getInstance().track(AnalyticsEvent.FileChangesReverted, {
-              file_count: filePaths === null ? 0 : filePaths.length,
-              revert_artifacts: revertArtifacts,
-            });
-          },
-        ),
-      stopTurn: () =>
-        tracked(handle.store.getState().stopTurn(), () => {
-          Analytics.getInstance().track(AnalyticsEvent.ChatStopped, {
-            scope: "current",
-          });
-        }),
-      stopBackgroundItem: (taskId) =>
-        tracked(handle.store.getState().stopBackgroundItem(taskId), () => {
+/**
+ * The actions for a caller outside React, which has a handle and no render to
+ * memoise in: the voice's executors, at the moment they run.
+ */
+export function chatActionsFor(
+  handle: Pick<ChatSessionStoreHandle, "store">,
+): ChatActions {
+  return {
+    sendMessage: (input) =>
+      tracked(handle.store.getState().sendMessage(input), () => {
+        Analytics.getInstance().track(AnalyticsEvent.ChatMessageSent, {
+          harness: input.settings.harnessId,
+        });
+      }),
+    deleteMessageSuffix: (fromMessageId) =>
+      tracked(
+        handle.store.getState().deleteMessageSuffix(fromMessageId),
+        () => {
           Analytics.getInstance().track(
-            AnalyticsEvent.ChatBackgroundItemStopped,
-            { scope: "one" },
-          );
-        }),
-      stopAllBackgroundItems: () =>
-        tracked(handle.store.getState().stopAllBackgroundItems(), () => {
-          Analytics.getInstance().track(
-            AnalyticsEvent.ChatBackgroundItemStopped,
-            { scope: "all" },
-          );
-        }),
-      stopBackgroundSession: () =>
-        tracked(handle.store.getState().stopBackgroundSession(), () => {
-          Analytics.getInstance().track(
-            AnalyticsEvent.ChatBackgroundItemStopped,
-            { scope: "session" },
-          );
-        }),
-      pauseQueue: () =>
-        tracked(handle.store.getState().pauseQueue(), () => {
-          Analytics.getInstance().track(AnalyticsEvent.ChatQueuePaused, null);
-        }),
-      resumeQueue: () =>
-        tracked(handle.store.getState().resumeQueue(), () => {
-          Analytics.getInstance().track(AnalyticsEvent.ChatQueueResumed, null);
-        }),
-      queueEdit: (queueItemId, content) =>
-        tracked(handle.store.getState().queueEdit(queueItemId, content), () => {
-          Analytics.getInstance().track(
-            AnalyticsEvent.ChatQueueItemEdited,
+            AnalyticsEvent.ChatMessageSuffixDeleted,
             null,
           );
-        }),
-      queueSettingsUpdate: (queueItemId, settings) =>
-        handle.store.getState().queueSettingsUpdate(queueItemId, settings),
-      submitQueueEdit: (input) =>
-        tracked(handle.store.getState().submitQueueEdit(input), () => {
-          Analytics.getInstance().track(
-            AnalyticsEvent.ChatQueueItemEdited,
-            null,
-          );
-          // The same event a row's own steer arrow records: save-and-steer is
-          // that steer with the edit in front of it.
-          if (input.intent === "steer") {
-            Analytics.getInstance().track(AnalyticsEvent.ChatQueueItemSteered, {
-              settings_changed: true,
-            });
-          }
-        }),
-      checkSendDelivery: () => handle.store.getState().checkSendDelivery(),
-      restampQueuedItemSettings: (settings, excludeQueueItemId) =>
+        },
+      ),
+    editUserMessage: (input) =>
+      tracked(handle.store.getState().editUserMessage(input), () => {
+        Analytics.getInstance().track(AnalyticsEvent.ChatMessageEdited, null);
+      }),
+    revertFileChanges: (fromMessageId, filePaths, revertArtifacts) =>
+      tracked(
         handle.store
           .getState()
-          .restampQueuedItemSettings(settings, excludeQueueItemId),
-      updateActivePermissionMode: (permissionMode) =>
-        handle.store.getState().updateActivePermissionMode(permissionMode),
-      updateActiveProfile: (harnessId, profileId) =>
-        handle.store.getState().updateActiveProfile(harnessId, profileId),
-      queueCancel: (queueItemId) =>
-        tracked(handle.store.getState().queueCancel(queueItemId), () => {
+          .revertFileChanges(fromMessageId, filePaths, revertArtifacts),
+        () => {
+          Analytics.getInstance().track(AnalyticsEvent.FileChangesReverted, {
+            file_count: filePaths === null ? 0 : filePaths.length,
+            revert_artifacts: revertArtifacts,
+          });
+        },
+      ),
+    stopTurn: () =>
+      tracked(handle.store.getState().stopTurn(), () => {
+        Analytics.getInstance().track(AnalyticsEvent.ChatStopped, {
+          scope: "current",
+        });
+      }),
+    stopBackgroundItem: (taskId) =>
+      tracked(handle.store.getState().stopBackgroundItem(taskId), () => {
+        Analytics.getInstance().track(
+          AnalyticsEvent.ChatBackgroundItemStopped,
+          { scope: "one" },
+        );
+      }),
+    stopAllBackgroundItems: () =>
+      tracked(handle.store.getState().stopAllBackgroundItems(), () => {
+        Analytics.getInstance().track(
+          AnalyticsEvent.ChatBackgroundItemStopped,
+          { scope: "all" },
+        );
+      }),
+    stopBackgroundSession: () =>
+      tracked(handle.store.getState().stopBackgroundSession(), () => {
+        Analytics.getInstance().track(
+          AnalyticsEvent.ChatBackgroundItemStopped,
+          { scope: "session" },
+        );
+      }),
+    pauseQueue: () =>
+      tracked(handle.store.getState().pauseQueue(), () => {
+        Analytics.getInstance().track(AnalyticsEvent.ChatQueuePaused, null);
+      }),
+    resumeQueue: () =>
+      tracked(handle.store.getState().resumeQueue(), () => {
+        Analytics.getInstance().track(AnalyticsEvent.ChatQueueResumed, null);
+      }),
+    queueEdit: (queueItemId, content) =>
+      tracked(handle.store.getState().queueEdit(queueItemId, content), () => {
+        Analytics.getInstance().track(AnalyticsEvent.ChatQueueItemEdited, null);
+      }),
+    queueSettingsUpdate: (queueItemId, settings) =>
+      handle.store.getState().queueSettingsUpdate(queueItemId, settings),
+    submitQueueEdit: (input) =>
+      tracked(handle.store.getState().submitQueueEdit(input), () => {
+        Analytics.getInstance().track(AnalyticsEvent.ChatQueueItemEdited, null);
+        // The same event a row's own steer arrow records: save-and-steer is
+        // that steer with the edit in front of it.
+        if (input.intent === "steer") {
+          Analytics.getInstance().track(AnalyticsEvent.ChatQueueItemSteered, {
+            settings_changed: true,
+          });
+        }
+      }),
+    checkSendDelivery: () => handle.store.getState().checkSendDelivery(),
+    restampQueuedItemSettings: (settings, excludeQueueItemId) =>
+      handle.store
+        .getState()
+        .restampQueuedItemSettings(settings, excludeQueueItemId),
+    updateActivePermissionMode: (permissionMode) =>
+      handle.store.getState().updateActivePermissionMode(permissionMode),
+    updateActiveProfile: (harnessId, profileId) =>
+      handle.store.getState().updateActiveProfile(harnessId, profileId),
+    queueCancel: (queueItemId) =>
+      tracked(handle.store.getState().queueCancel(queueItemId), () => {
+        Analytics.getInstance().track(
+          AnalyticsEvent.ChatQueueItemCancelled,
+          null,
+        );
+      }),
+    queueReorder: (queueItemId, beforeQueueItemId) =>
+      tracked(
+        handle.store.getState().queueReorder(queueItemId, beforeQueueItemId),
+        () => {
           Analytics.getInstance().track(
-            AnalyticsEvent.ChatQueueItemCancelled,
+            AnalyticsEvent.ChatQueueItemReordered,
             null,
           );
-        }),
-      queueReorder: (queueItemId, beforeQueueItemId) =>
-        tracked(
-          handle.store.getState().queueReorder(queueItemId, beforeQueueItemId),
-          () => {
-            Analytics.getInstance().track(
-              AnalyticsEvent.ChatQueueItemReordered,
-              null,
-            );
-          },
-        ),
-      queueSteerNow: (queueItemId, newSettings, restartConfirmed, origin) =>
-        tracked(
-          handle.store
-            .getState()
-            .queueSteerNow(queueItemId, newSettings, restartConfirmed, origin),
-          () => {
-            Analytics.getInstance().track(AnalyticsEvent.ChatQueueItemSteered, {
-              settings_changed: newSettings !== null,
-            });
-          },
-        ),
-      queueAbortSteer: (queueItemId) =>
-        handle.store.getState().queueAbortSteer(queueItemId),
-      approvalDecision: (approvalId, decision) =>
-        tracked(
-          handle.store.getState().approvalDecision(approvalId, decision),
-          () => {
-            Analytics.getInstance().track(AnalyticsEvent.ApprovalDecided, {
-              decision: decision.approved ? "approved" : "denied",
-            });
-          },
-        ),
-      fileEditApprovalDecision: (approvalId, decision) =>
-        tracked(
-          handle.store
-            .getState()
-            .fileEditApprovalDecision(approvalId, decision),
-          () => {
-            Analytics.getInstance().track(
-              AnalyticsEvent.FileEditApprovalDecided,
-              { decision: decision.approved ? "approved" : "denied" },
-            );
-          },
-        ),
-      restoreCheckpoint: (checkpointId, revertArtifacts) =>
-        tracked(
-          handle.store
-            .getState()
-            .restoreCheckpoint(checkpointId, revertArtifacts),
-          () => {
-            Analytics.getInstance().track(AnalyticsEvent.CheckpointRestored, {
-              revert_artifacts: revertArtifacts,
-            });
-          },
-        ),
-      interviewAnswer: (blockId, answers) =>
-        tracked(
-          handle.store.getState().interviewAnswer(blockId, answers),
-          () => {
-            Analytics.getInstance().track(AnalyticsEvent.InterviewAnswered, {
-              answer_count: answers.length,
-            });
-          },
-        ),
-      interviewSkip: (blockId, reason, draftAnswers) =>
-        handle.store.getState().interviewSkip(blockId, reason, draftAnswers),
-      interviewDeliveryRetry: (identity) =>
-        handle.store.getState().interviewDeliveryRetry(identity),
-      ackFailedSendRestoration: (clientActionId) =>
-        handle.store.getState().ackFailedSendRestoration(clientActionId),
-      ackAcceptedAction: (clientActionId) =>
-        handle.store.getState().ackAcceptedAction(clientActionId),
-      takeSetupFailedRestoration: (messageId) =>
-        handle.store.getState().takeSetupFailedRestoration(messageId),
-      messageDeliveryRestored: (input) =>
-        handle.store.getState().messageDeliveryRestored(input),
-    }),
-    [handle.store],
-  );
+        },
+      ),
+    queueSteerNow: (queueItemId, newSettings, restartConfirmed, origin) =>
+      tracked(
+        handle.store
+          .getState()
+          .queueSteerNow(queueItemId, newSettings, restartConfirmed, origin),
+        () => {
+          Analytics.getInstance().track(AnalyticsEvent.ChatQueueItemSteered, {
+            settings_changed: newSettings !== null,
+          });
+        },
+      ),
+    queueAbortSteer: (queueItemId) =>
+      handle.store.getState().queueAbortSteer(queueItemId),
+    approvalDecision: (approvalId, decision) =>
+      tracked(
+        handle.store.getState().approvalDecision(approvalId, decision),
+        () => {
+          Analytics.getInstance().track(AnalyticsEvent.ApprovalDecided, {
+            decision: decision.approved ? "approved" : "denied",
+          });
+        },
+      ),
+    fileEditApprovalDecision: (approvalId, decision) =>
+      tracked(
+        handle.store.getState().fileEditApprovalDecision(approvalId, decision),
+        () => {
+          Analytics.getInstance().track(
+            AnalyticsEvent.FileEditApprovalDecided,
+            { decision: decision.approved ? "approved" : "denied" },
+          );
+        },
+      ),
+    restoreCheckpoint: (checkpointId, revertArtifacts) =>
+      tracked(
+        handle.store
+          .getState()
+          .restoreCheckpoint(checkpointId, revertArtifacts),
+        () => {
+          Analytics.getInstance().track(AnalyticsEvent.CheckpointRestored, {
+            revert_artifacts: revertArtifacts,
+          });
+        },
+      ),
+    interviewAnswer: (blockId, answers) =>
+      tracked(handle.store.getState().interviewAnswer(blockId, answers), () => {
+        Analytics.getInstance().track(AnalyticsEvent.InterviewAnswered, {
+          answer_count: answers.length,
+        });
+      }),
+    interviewSkip: (blockId, reason, draftAnswers) =>
+      handle.store.getState().interviewSkip(blockId, reason, draftAnswers),
+    interviewDeliveryRetry: (identity) =>
+      handle.store.getState().interviewDeliveryRetry(identity),
+    ackFailedSendRestoration: (clientActionId) =>
+      handle.store.getState().ackFailedSendRestoration(clientActionId),
+    ackAcceptedAction: (clientActionId) =>
+      handle.store.getState().ackAcceptedAction(clientActionId),
+    takeSetupFailedRestoration: (messageId) =>
+      handle.store.getState().takeSetupFailedRestoration(messageId),
+    messageDeliveryRestored: (input) =>
+      handle.store.getState().messageDeliveryRestored(input),
+  };
+}
+
+export function useChatActions(handle: ChatSessionStoreHandle): ChatActions {
+  const { store } = handle;
+  return useMemo<ChatActions>(() => chatActionsFor({ store }), [store]);
 }
 
 // Re-exported for consumers that need to know the active-turn shape.

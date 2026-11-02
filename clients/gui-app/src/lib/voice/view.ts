@@ -249,6 +249,43 @@ function composeRows(sources: VoiceViewSources): ReadonlyArray<VoiceViewRow> {
   ].slice(0, MAX_VIEW_ROWS);
 }
 
+/** The page as the voice names it when it reads a closing row back. */
+function pageName(page: VoicePage): string | null {
+  switch (page.kind) {
+    case "task":
+      return page.title.length > 0 ? page.title : null;
+    case "tracy":
+      return "Tracy";
+    case "history":
+      return "History";
+    case "settings":
+      return "Settings";
+    // The view calls a draft's landing composer Home too, and Notifications is
+    // a popover over a page: neither names what the row would close.
+    case "home":
+    case "notifications":
+      return null;
+  }
+}
+
+/** What a read-back adds to the row's label: what the row acts on, where. */
+function readBackTarget(row: VoiceViewRow, page: VoicePage): string {
+  const name = pageName(page);
+  if (row.action === "action:epic.close") {
+    return name === null ? "" : `: ${name}`;
+  }
+  if (page.kind !== "task" || name === null) return "";
+  if (row.action === "action:tab.close" && page.tile !== null) {
+    return `: ${page.tile} in ${name}`;
+  }
+  return ` in ${name}`;
+}
+
+/** The question before a row that costs or cannot be undone runs. */
+export function readBackQuestion(row: VoiceViewRow, page: VoicePage): string {
+  return `${row.label}${readBackTarget(row, page)}. Yes?`;
+}
+
 export function composeVoiceView(sources: VoiceViewSources): VoiceView {
   return {
     page: sources.page,

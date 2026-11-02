@@ -155,15 +155,17 @@ export interface VoiceTargetTuple {
 }
 
 /**
- * A routed post the voice confirms before sending: the router was unsure of
- * the destination, or it is a team's channel other than the focus. The words
- * stay the action's; the person's next answer is consumed by it (yes posts
- * them, anything else drops them) and is never posted itself.
+ * A routed decision the voice confirms before carrying it out: a post whose
+ * destination the router was unsure of or that is a team's channel other than
+ * the focus, or a page action that costs or cannot be undone. The words stay
+ * the action's; the person's next answer is consumed by it (yes carries it
+ * out, anything else drops it) and is never posted itself.
  */
 export interface ConfirmingAction {
   readonly kind: "confirming";
-  readonly target: VoiceTargetTuple;
-  /** The words that post on a yes, verbatim. */
+  /** Where a post goes; `null` for a page action, which goes to no bot. */
+  readonly target: VoiceTargetTuple | null;
+  /** The words a yes passes on, verbatim; empty for an action that takes none. */
   readonly text: string;
   /** The delegation of the request being confirmed. */
   readonly delegationId: string;

@@ -36,13 +36,14 @@ import type { VoiceEngineEvents } from "@/lib/voice/engine";
 import type { ReplyRow } from "@/lib/voice/focused-replies";
 import type { HydrationRow } from "@/lib/voice/queue-sources";
 import { runVoiceQueueVerb } from "@/lib/voice/queue-verbs";
-import { MOVED_ASK_TEXT } from "@/lib/voice/say-loop";
+import { MOVED_ASK_TEXT, PAGE_CHANGED_ASK_TEXT } from "@/lib/voice/say-loop";
 import { voiceMutationKeys } from "@/lib/query-keys";
 import { useBotOpenThreadStore } from "@/stores/bots/bot-open-thread-store";
 import { useBotTabLandingStore } from "@/stores/bots/bot-tab-landing-store";
 import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { TRACY_TAB_REF } from "@/stores/tabs/kinds/tracy";
+import type { TabRef } from "@/stores/tabs/types";
 import { useTabsStore } from "@/stores/tabs/store";
 import {
   useVoiceSessionStore,
@@ -759,6 +760,8 @@ vi.mock("@tanstack/react-router", async (importOriginal) => ({
   useNavigate: () => fake.navigate,
 }));
 
+const HISTORY_TAB_REF: TabRef = { kind: "history", id: "history" };
+
 const initialVoice = useVoiceSessionStore.getState();
 const initialRail = useBotOpenThreadStore.getState();
 const initialTabs = useTabsStore.getState();
@@ -914,14 +917,16 @@ const ACCEPTED = {
 
 let queryClient = new QueryClient();
 
-/** The palette's router seam, which the voice's page actions are listed through; none of them runs here. */
+const navigateToEpicList = vi.fn<() => void>();
+
+/** The palette's router seam, which the voice's page actions are listed through and run by. */
 const KEYBINDING_ROUTER: KeybindingRouter = {
   getPathname: () => "/",
   navigateHome: () => undefined,
   navigateSettings: () => undefined,
   navigateToEpic: () => undefined,
   navigateToEpicTab: () => undefined,
-  navigateToEpicList: () => undefined,
+  navigateToEpicList,
   navigateSettingsSection: () => undefined,
   navigateToTabIntent: () => undefined,
   goBack: () => undefined,
@@ -989,6 +994,7 @@ beforeEach(() => {
   fake.mintAnswers.length = 0;
   fake.navigateOutcome = () => Promise.resolve();
   fake.navigate.mockClear();
+  navigateToEpicList.mockClear();
   fake.conversationLists.answer("bot-1", true);
   fake.conversationLists.answer("bot-2", true);
   fake.tabActivation = "switches";
@@ -4222,7 +4228,7 @@ describe("the page in front", () => {
     expect(text.indexOf("</view>")).toBeLessThan(text.indexOf("<utterance>"));
   });
 
-  it("answers a request for one of its actions that the voice cannot do here yet, and posts nothing", async () => {
+  it("runs one of its actions that needs no yes through the page's own path, and says and posts nothing", async () => {
     const bodies: string[] = [];
     await bringLive();
     focusOn(CHANNEL_FOCUS);
@@ -4240,11 +4246,40 @@ describe("the page in front", () => {
     expect(requestText(bodies[0] ?? "")).toContain(
       '{"action":"action:app.history.open"',
     );
+    expect(navigateToEpicList).toHaveBeenCalledTimes(1);
+    expect(fake.engines[0]?.appendCommentary).not.toHaveBeenCalled();
+    expect(fake.sendMock).not.toHaveBeenCalled();
+    expect(useVoiceSessionStore.getState().segments).toEqual([]);
+  });
+
+  it("drops the action, reading the page when it is about to run, if the page moved while the router was answering", async () => {
+    await bringLive();
+    focusOn(CHANNEL_FOCUS);
+    fake.routeAnswer = () => {
+      // The person changes tab after the router was shown the page.
+      act(() => {
+        useTabsStore.setState({
+          items: [{ kind: "tab", id: "item-history", ref: HISTORY_TAB_REF }],
+          activeItemId: "item-history",
+        });
+      });
+      return actAnswer("action:app.history.open");
+    };
+
+    await say("Open the history.", "d1");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(4_000);
+    });
+
+    expect(navigateToEpicList).not.toHaveBeenCalled();
     expect(fake.engines[0]?.appendCommentary).toHaveBeenCalledWith(
-      expect.stringContaining("I can't do that here yet."),
+      PAGE_CHANGED_ASK_TEXT,
       "d1",
     );
     expect(fake.sendMock).not.toHaveBeenCalled();
-    expect(useVoiceSessionStore.getState().segments).toEqual([]);
+    expect(useVoiceSessionStore.getState().pendingAction).toMatchObject({
+      kind: "interrupted",
+      text: "Open the history.",
+    });
   });
 });

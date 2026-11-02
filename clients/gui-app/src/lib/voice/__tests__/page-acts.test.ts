@@ -1,0 +1,966 @@
+import { QueryClient } from "@tanstack/react-query";
+import type {
+  ChatActiveTurn,
+  ChatApprovalState,
+  ChatFileEditApprovalState,
+  ChatRunSettings,
+  ChatSubscribeClientFrame,
+} from "@traycer/protocol/host/agent/gui/subscribe";
+import {
+  chatApprovalStateSchema,
+  chatFileEditApprovalStateSchema,
+} from "@traycer/protocol/host/agent/gui/subscribe";
+import type { HostRpcRegistry } from "@traycer/protocol/host/index";
+import type {
+  WorktreeBinding,
+  WorktreeIntent,
+} from "@traycer/protocol/host/worktree-schemas";
+import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport/chat-stream-client";
+import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { extractPlainTextFromComposerJSONContent } from "@/lib/composer/tiptap-json-content";
+import type { CommandContext, CommandItem } from "@/lib/commands/types";
+import type { ActionId } from "@/lib/keybindings/actions";
+import type { KeybindingRouter } from "@/lib/keybindings/dispatch";
+import { queryKeys } from "@/lib/query-keys";
+import {
+  ACT_FAILED_NOTICE,
+  AGENT_GONE_NOTICE,
+  AGENT_NOT_READY_NOTICE,
+  AGENT_NO_ACCESS_NOTICE,
+  AGENT_NO_WORKSPACE_NOTICE,
+  AGENT_STOPPING_NOTICE,
+  AGENT_WAITING_NOTICE,
+  AGENT_WORKSPACE_CHANGE_NOTICE,
+  ALREADY_DECIDED_NOTICE,
+  DECISION_IN_FLIGHT_NOTICE,
+  NOT_DELIVERED_NOTICE,
+  ROW_GONE_NOTICE,
+  TURN_ENDED_NOTICE,
+  executePageAct,
+  type PageActReads,
+  type VoicePaletteRow,
+} from "@/lib/voice/page-acts";
+import type { VoiceViewRow } from "@/lib/voice/view";
+import { useAuthStore } from "@/stores/auth/auth-store";
+import {
+  createChatSessionStore,
+  type ChatSessionStoreHandle,
+} from "@/stores/chats/chat-session-store";
+import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
+import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
+import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import type { EpicNodeRef } from "@/stores/epics/canvas/types";
+import { findPaneById } from "@/stores/epics/canvas/tile-tree";
+import { useSettingsStore } from "@/stores/settings/settings-store";
+import {
+  useWorktreeIntentStagingStore,
+  type WorktreeStagingKey,
+} from "@/stores/worktree/worktree-intent-staging-store";
+
+/**
+ * The executors of the page's actions, run through the real consumers: a real
+ * chat session store (only its stream client, the wire, is faked, so the frames
+ * the store sends are what is asserted), the real auth, settings, staging and
+ * canvas stores, a real query client for the epic's folder listing, the real
+ * `runCommandItem` and the real `dispatchAction` behind a registry row. Nothing
+ * in `page-acts.ts` is replaced.
+ */
+
+const HOST_ID = "host-a";
+const EPIC_ID = "epic-voice";
+const CHAT_ID = "chat-voice";
+const USER_ID = "user-me";
+const TITLE = "Main agent";
+
+const SETTINGS: ChatRunSettings = {
+  ultracode: false,
+  harnessId: "claude",
+  model: "model-a",
+  permissionMode: "supervised",
+  reasoningEffort: null,
+  serviceTier: null,
+  agentMode: "regular",
+  profileId: null,
+};
+
+const ACTIVE_TURN: ChatActiveTurn = {
+  turnId: "turn-1",
+  status: "running",
+  harnessId: "claude",
+  model: "model-a",
+  reasoningEffort: null,
+  serviceTier: null,
+  agentMode: "regular",
+  profileId: null,
+  userMessageId: null,
+  startedAt: 1,
+  updatedAt: 1,
+  sameTurnSteeringSupported: true,
+};
+
+/** A chat bound to one folder, run in place. */
+const BOUND: WorktreeBinding = {
+  entries: [
+    {
+      workspacePath: "/repo",
+      mode: "local",
+      repoIdentifier: null,
+      worktreePath: null,
+      branch: null,
+      isPrimary: true,
+      isImported: false,
+      setupState: "not_required",
+      setupTerminalSessionId: null,
+      setupExitCode: null,
+      setupFailedAt: null,
+      createdAt: 1,
+    },
+  ],
+};
+
+/** A chat that runs in a worktree of its folder. */
+const BOUND_TO_WORKTREE: WorktreeBinding = {
+  entries: [
+    { ...BOUND.entries[0], mode: "worktree", worktreePath: "/repo-wt" },
+  ],
+};
+
+const STAGING_KEY: WorktreeStagingKey = {
+  surface: "owner",
+  hostId: HOST_ID,
+  epicId: EPIC_ID,
+  ownerKind: "chat",
+  ownerId: CHAT_ID,
+};
+
+/** A pick of a new worktree for the folder: a send would commit it as a rebind. */
+const NEW_WORKTREE: WorktreeIntent = {
+  entries: [
+    {
+      kind: "worktree",
+      scripts: null,
+      workspacePath: "/repo",
+      repoIdentifier: null,
+      isPrimary: true,
+      branch: {
+        type: "new",
+        name: "feat-voice",
+        source: "main",
+        carryUncommittedChanges: false,
+      },
+    },
+  ],
+};
+
+function approval(overrides: Partial<ChatApprovalState>): ChatApprovalState {
+  return chatApprovalStateSchema.parse({
+    approvalId: "ap-1",
+    toolName: "bash",
+    description: "Run bun install",
+    input: null,
+    requestedAt: 1,
+    kind: "tool",
+    planId: null,
+    actions: [],
+    reason: null,
+    reviewing: null,
+    ...overrides,
+  });
+}
+
+function fileEditApproval(): ChatFileEditApprovalState {
+  return chatFileEditApprovalStateSchema.parse({
+    approvalId: "fe-1",
+    toolName: "edit",
+    description: "Edit a file",
+    paths: ["/repo/a.ts"],
+    operation: "edit",
+    input: null,
+    requestedAt: 1,
+  });
+}
+
+interface SnapshotShape {
+  readonly running: boolean;
+  readonly settings: ChatRunSettings | null;
+  readonly binding: WorktreeBinding | null;
+  readonly missingWorktreePaths: ReadonlyArray<string>;
+  readonly approvals: ReadonlyArray<ChatApprovalState>;
+  readonly fileEditApprovals: ReadonlyArray<ChatFileEditApprovalState>;
+  readonly canAct: boolean;
+}
+
+const READY_TO_SEND: SnapshotShape = {
+  running: false,
+  settings: SETTINGS,
+  binding: BOUND,
+  missingWorktreePaths: [],
+  approvals: [],
+  fileEditApprovals: [],
+  canAct: true,
+};
+
+interface Session {
+  readonly handle: ChatSessionStoreHandle;
+  readonly sent: ChatSubscribeClientFrame[];
+  readonly callbacks: ChatStreamCallbacks;
+}
+
+/**
+ * A real chat session store whose stream client records what the store puts on
+ * the wire, opened onto a snapshot of `shape`.
+ */
+function openSession(shape: SnapshotShape): Session {
+  const sent: ChatSubscribeClientFrame[] = [];
+  const wire: { callbacks: ChatStreamCallbacks | null } = { callbacks: null };
+  const handle = createChatSessionStore({
+    environment: CHAT_STORE_TEST_ENVIRONMENT,
+    hostId: HOST_ID,
+    epicId: EPIC_ID,
+    chatId: CHAT_ID,
+    userId: USER_ID,
+    onAuthError: null,
+    onProviderAuthError: null,
+    wakeTransport: null,
+    streamFlushCoordinator: IMMEDIATE_STREAM_FLUSH_COORDINATOR,
+    streamClientFactory: (_epicId, _chatId, callbacks) => {
+      wire.callbacks = callbacks;
+      return {
+        sendAction: (frame) => {
+          sent.push(frame);
+        },
+        sameTurnSteeringProtocolSupported: () => true,
+        draftBlobBridgeSupported: () => true,
+        requestTranscriptRange: () => undefined,
+        requestResnapshot: () => undefined,
+        close: () => undefined,
+      };
+    },
+  });
+  const { callbacks } = wire;
+  if (callbacks === null) throw new Error("the store never opened its stream");
+  callbacks.onConnectionStatus("open", null, null, null);
+  callbacks.onSnapshot({
+    kind: "snapshot",
+    hasBinaryPayload: false,
+    epicId: EPIC_ID,
+    chatId: CHAT_ID,
+    snapshot: {
+      chat: {
+        id: CHAT_ID,
+        parentId: null,
+        userId: USER_ID,
+        hostId: HOST_ID,
+        title: TITLE,
+        createdAt: 1,
+        updatedAt: 1,
+        isTitleEditedByUser: false,
+        settings: shape.settings,
+        activeSessionChain: null,
+        claudePendingWakes: [],
+        messages: [],
+        events: [],
+        archivedAt: null,
+        pinnedUserProviderHandle: null,
+        lastDeliveredRolesDigest: null,
+      },
+      access: { role: "owner", ownerUserId: USER_ID, canAct: shape.canAct },
+      queue: { status: "idle", items: [] },
+      runStatus: shape.running ? "running" : "idle",
+      activeTurn: shape.running ? ACTIVE_TURN : null,
+      pendingApprovals: [...shape.approvals],
+      pendingInterviews: [],
+      worktreeBinding: shape.binding,
+      missingWorktreePaths: [...shape.missingWorktreePaths],
+      pendingFileEditApprovals: [...shape.fileEditApprovals],
+      accumulatedFileChanges: [],
+      managedCommands: [],
+      heldUpdates: [],
+      portForwards: [],
+    },
+  });
+  return { handle, sent, callbacks };
+}
+
+function sendFrames(session: Session) {
+  return session.sent.flatMap((frame) =>
+    frame.kind === "send" ? [frame] : [],
+  );
+}
+
+function stopFrames(session: Session) {
+  return session.sent.flatMap((frame) =>
+    frame.kind === "stop" ? [frame] : [],
+  );
+}
+
+function decisionFrames(session: Session) {
+  return session.sent.flatMap((frame) =>
+    frame.kind === "approvalDecision" ? [frame] : [],
+  );
+}
+
+const KEYBINDING_ROUTER: KeybindingRouter = {
+  getPathname: () => "/",
+  navigateHome: () => undefined,
+  navigateSettings: () => undefined,
+  navigateToEpic: () => undefined,
+  navigateToEpicTab: () => undefined,
+  navigateToEpicList: () => undefined,
+  navigateSettingsSection: () => undefined,
+  navigateToTabIntent: () => undefined,
+  goBack: () => undefined,
+  goForward: () => undefined,
+  isHistoryNavAvailable: () => false,
+  canGoBack: () => false,
+  canGoForward: () => false,
+};
+
+function context(overrides: Partial<CommandContext>): CommandContext {
+  return {
+    pathname: "/",
+    router: KEYBINDING_ROUTER,
+    activeTabId: null,
+    activeEpicId: null,
+    focusedComposerKind: null,
+    targetGroupId: null,
+    ...overrides,
+  };
+}
+
+function commandItem(
+  id: string,
+  run: CommandItem["run"],
+  actionId: ActionId | null,
+): CommandItem {
+  return {
+    id,
+    label: id,
+    description: null,
+    keywords: [],
+    group: "actions",
+    scope: "actions",
+    shortcut: null,
+    actionId,
+    run,
+    subpage: null,
+  };
+}
+
+function rowFor(action: string): VoiceViewRow {
+  return { action, label: action, takesWords: false, confirm: false };
+}
+
+/** What the page offers: the chat in front, and the palette rows by their ids. */
+function readsOver(
+  session: Session | null,
+  rows: ReadonlyArray<VoicePaletteRow>,
+): PageActReads {
+  return {
+    agentSession: (chatId) =>
+      session === null || (chatId !== null && chatId !== CHAT_ID)
+        ? null
+        : {
+            handle: session.handle,
+            chatId: CHAT_ID,
+            epicId: EPIC_ID,
+            hostId: HOST_ID,
+            title: TITLE,
+          },
+    paletteRow: (action) => rows.find((row) => row.item.id === action) ?? null,
+  };
+}
+
+let queryClient = new QueryClient();
+
+function run(action: string, text: string, reads: PageActReads) {
+  return executePageAct({ row: rowFor(action), text, reads, queryClient });
+}
+
+function tell(session: Session, text: string) {
+  return run(`agent.tell:${CHAT_ID}`, text, readsOver(session, []));
+}
+
+function refusedWith(say: string) {
+  return { kind: "refused", say };
+}
+
+const initialSettings = useSettingsStore.getInitialState();
+const initialAuth = useAuthStore.getInitialState();
+
+beforeEach(() => {
+  queryClient = new QueryClient();
+  window.localStorage.clear();
+  useAuthStore.setState({
+    status: "signed-in",
+    profile: { userId: USER_ID, userName: "Me", email: "me@example.com" },
+    contextMetadata: { userId: USER_ID, username: "me" },
+  });
+  useSettingsStore.setState(initialSettings, true);
+  useWorktreeIntentStagingStore.getState().resetForTests();
+  useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+});
+
+afterEach(() => {
+  useAuthStore.setState(initialAuth, true);
+  useWorktreeIntentStagingStore.getState().resetForTests();
+});
+
+describe("telling the agent", () => {
+  it("steers a running turn", async () => {
+    const session = openSession({ ...READY_TO_SEND, running: true });
+
+    const outcome = await tell(session, "use the other branch");
+
+    expect(outcome).toEqual({ kind: "executed" });
+    expect(sendFrames(session)).toHaveLength(1);
+    expect(sendFrames(session).at(0)?.deliveryPolicy).toBe("after_safe_point");
+  });
+
+  it("reads the turn when it runs, not when the reads were built", async () => {
+    const session = openSession({ ...READY_TO_SEND, running: true });
+    const reads = readsOver(session, []);
+
+    session.handle.store.setState({ runStatus: "idle", activeTurn: null });
+    await run(`agent.tell:${CHAT_ID}`, "and then", reads);
+
+    expect(sendFrames(session).at(0)?.deliveryPolicy).toBe("auto");
+  });
+
+  it.each([
+    {
+      name: "the person turned steering off",
+      arrange: () => {
+        useSettingsStore.setState({ steerOnModEnterEnabled: false });
+      },
+    },
+    {
+      name: "the host's protocol cannot steer",
+      arrange: (session: Session) => {
+        session.handle.store.setState({ steerProtocolSupported: false });
+      },
+    },
+  ])("queues behind a running turn when $name", async ({ arrange }) => {
+    const session = openSession({ ...READY_TO_SEND, running: true });
+    arrange(session);
+
+    await tell(session, "after that");
+
+    expect(sendFrames(session).at(0)?.deliveryPolicy).toBe("auto");
+  });
+
+  it.each([
+    { name: "model", settings: { ...SETTINGS, model: "model-b" } },
+    { name: "harness", settings: { ...SETTINGS, harnessId: "codex" } },
+  ] as const)(
+    "queues instead of restarting the turn when the composer's $name differs from it",
+    async ({ settings }) => {
+      const session = openSession({ ...READY_TO_SEND, running: true });
+      session.handle.store.setState({ currentComposerSettings: settings });
+
+      await tell(session, "switch to this one");
+
+      expect(sendFrames(session).at(0)?.deliveryPolicy).toBe("auto");
+      expect(sendFrames(session).at(0)?.settings).toEqual(settings);
+    },
+  );
+
+  it("sends the span as the message, from the signed-in person, with no attachments", async () => {
+    const session = openSession(READY_TO_SEND);
+
+    await tell(session, "please run the tests");
+
+    const frame = sendFrames(session).at(0);
+    expect(
+      frame === undefined
+        ? null
+        : extractPlainTextFromComposerJSONContent(frame.content),
+    ).toBe("please run the tests");
+    expect(frame?.sender).toEqual({ type: "user", userId: USER_ID });
+    expect(frame?.browserAnnotations).toEqual([]);
+  });
+
+  it("is told the agent is gone when the chat in front is another one", async () => {
+    const session = openSession(READY_TO_SEND);
+
+    const outcome = await run(
+      "agent.tell:chat-elsewhere",
+      "hello",
+      readsOver(session, []),
+    );
+
+    expect(outcome).toEqual(refusedWith(AGENT_GONE_NOTICE));
+    expect(sendFrames(session)).toEqual([]);
+  });
+});
+
+describe("what stops a message to the agent", () => {
+  /** Each is the composer's own blocker, said as a refusal; nothing is sent. */
+  const BLOCKERS: ReadonlyArray<{
+    readonly name: string;
+    readonly say: string;
+    readonly open: () => Session;
+    readonly arrange: ((session: Session) => void) | null;
+  }> = [
+    {
+      name: "an approval a person can answer",
+      say: AGENT_WAITING_NOTICE,
+      open: () =>
+        openSession({
+          ...READY_TO_SEND,
+          running: true,
+          approvals: [approval({})],
+        }),
+      arrange: null,
+    },
+    {
+      name: "a file edit waiting on an approval",
+      say: AGENT_WAITING_NOTICE,
+      open: () =>
+        openSession({
+          ...READY_TO_SEND,
+          running: true,
+          fileEditApprovals: [fileEditApproval()],
+        }),
+      arrange: null,
+    },
+    {
+      name: "a turn that is stopping",
+      say: AGENT_STOPPING_NOTICE,
+      open: () => openSession({ ...READY_TO_SEND, running: true }),
+      arrange: (session) => {
+        session.handle.store.setState({ runStatus: "stopping" });
+      },
+    },
+    {
+      name: "a stop that has gone out",
+      say: AGENT_STOPPING_NOTICE,
+      open: () => openSession({ ...READY_TO_SEND, running: true }),
+      arrange: (session) => {
+        session.handle.store.getState().stopTurn();
+      },
+    },
+    {
+      name: "a person with no access to act",
+      say: AGENT_NO_ACCESS_NOTICE,
+      open: () => openSession({ ...READY_TO_SEND, canAct: false }),
+      arrange: null,
+    },
+    {
+      name: "a closed connection",
+      say: AGENT_NO_ACCESS_NOTICE,
+      open: () => openSession(READY_TO_SEND),
+      arrange: (session) => {
+        session.callbacks.onConnectionStatus("closed", null, null, null);
+      },
+    },
+    {
+      name: "a bound folder missing on disk",
+      say: AGENT_NO_WORKSPACE_NOTICE,
+      open: () =>
+        openSession({ ...READY_TO_SEND, missingWorktreePaths: ["/repo"] }),
+      arrange: null,
+    },
+    {
+      name: "a chat bound to no folder whose epic listing has not loaded",
+      say: AGENT_NO_WORKSPACE_NOTICE,
+      open: () => openSession({ ...READY_TO_SEND, binding: null }),
+      arrange: null,
+    },
+    {
+      name: "a new worktree staged for the folder",
+      say: AGENT_WORKSPACE_CHANGE_NOTICE,
+      open: () => openSession(READY_TO_SEND),
+      arrange: () => {
+        useWorktreeIntentStagingStore
+          .getState()
+          .setIntent(STAGING_KEY, NEW_WORKTREE);
+      },
+    },
+    {
+      name: "a chat with no settings",
+      say: AGENT_NOT_READY_NOTICE,
+      open: () => openSession({ ...READY_TO_SEND, settings: null }),
+      arrange: null,
+    },
+  ];
+
+  it.each(BLOCKERS)("refuses for $name and sends nothing", async (blocker) => {
+    const session = blocker.open();
+    blocker.arrange?.(session);
+
+    const outcome = await tell(session, "hello");
+
+    expect(outcome).toEqual(refusedWith(blocker.say));
+    expect(sendFrames(session)).toEqual([]);
+  });
+
+  it("refuses when the person is signed out, though the chat itself can act", async () => {
+    const session = openSession(READY_TO_SEND);
+    useAuthStore.setState({ profile: null });
+
+    const outcome = await tell(session, "hello");
+
+    expect(outcome).toEqual(refusedWith(AGENT_NO_ACCESS_NOTICE));
+    expect(sendFrames(session)).toEqual([]);
+  });
+
+  it("sends to a chat bound to no folder once the epic's one-folder listing is in the cache", async () => {
+    const session = openSession({ ...READY_TO_SEND, binding: null });
+    const listing: ResponseOfMethod<
+      HostRpcRegistry,
+      "worktree.listBindingsForEpic"
+    > = {
+      rows: [
+        {
+          hostId: HOST_ID,
+          runningDir: "/repo",
+          workspacePath: "/repo",
+          worktreePath: null,
+          mode: "local",
+          isGitRepo: true,
+          repoIdentifier: null,
+          branch: null,
+          isPrimary: true,
+          isImported: false,
+          setupState: "not_required",
+          disabledReason: null,
+          sources: [],
+          isGitResolvePending: false,
+        },
+      ],
+      folderlessCwd: null,
+    };
+    queryClient.setQueryData(
+      queryKeys.hostMethod<HostRpcRegistry, "worktree.listBindingsForEpic">(
+        HOST_ID,
+        "worktree.listBindingsForEpic",
+        { epicId: EPIC_ID },
+      ),
+      listing,
+    );
+
+    const outcome = await tell(session, "hello");
+
+    expect(outcome).toEqual({ kind: "executed" });
+    expect(sendFrames(session)).toHaveLength(1);
+  });
+
+  it("is not stopped by an approval a judge is still deciding", async () => {
+    const session = openSession({
+      ...READY_TO_SEND,
+      running: true,
+      approvals: [approval({ reviewing: "checking" })],
+    });
+
+    const outcome = await tell(session, "hello");
+
+    expect(outcome).toEqual({ kind: "executed" });
+    expect(sendFrames(session)).toHaveLength(1);
+  });
+
+  it("says it did not reach the agent when the store declines to send", async () => {
+    // A staged pick of the folder's current worktree, whose folder cannot be
+    // resolved: no rebind to disclose, and the store refuses the send.
+    const session = openSession({
+      ...READY_TO_SEND,
+      binding: BOUND_TO_WORKTREE,
+    });
+    const staging = useWorktreeIntentStagingStore.getState();
+    staging.setIntent(STAGING_KEY, {
+      entries: [
+        {
+          kind: "import",
+          workspacePath: "/repo",
+          repoIdentifier: null,
+          isPrimary: true,
+          worktreePath: "/repo-wt",
+        },
+      ],
+    });
+    staging.setSuspendedWorkspacePaths(STAGING_KEY, ["/repo"]);
+
+    const outcome = await tell(session, "hello");
+
+    expect(outcome).toEqual(refusedWith(NOT_DELIVERED_NOTICE));
+    expect(sendFrames(session)).toEqual([]);
+  });
+});
+
+describe("stopping the agent", () => {
+  it("stops a running turn", async () => {
+    const session = openSession({ ...READY_TO_SEND, running: true });
+
+    const outcome = await run(
+      `agent.stop:${CHAT_ID}`,
+      "",
+      readsOver(session, []),
+    );
+
+    expect(outcome).toEqual({ kind: "executed" });
+    expect(stopFrames(session)).toHaveLength(1);
+  });
+
+  it("says the turn already ended, and does not stop", async () => {
+    const session = openSession(READY_TO_SEND);
+
+    const outcome = await run(
+      `agent.stop:${CHAT_ID}`,
+      "",
+      readsOver(session, []),
+    );
+
+    expect(outcome).toEqual(refusedWith(TURN_ENDED_NOTICE));
+    expect(stopFrames(session)).toEqual([]);
+  });
+
+  it("does not stop a turn that is already stopping a second time", async () => {
+    const session = openSession({ ...READY_TO_SEND, running: true });
+    session.handle.store.getState().stopTurn();
+
+    const outcome = await run(
+      `agent.stop:${CHAT_ID}`,
+      "",
+      readsOver(session, []),
+    );
+
+    expect(outcome).toEqual(refusedWith(AGENT_STOPPING_NOTICE));
+    expect(stopFrames(session)).toHaveLength(1);
+  });
+
+  it("says it did not reach the agent while the connection is down", async () => {
+    const session = openSession({ ...READY_TO_SEND, running: true });
+    session.callbacks.onConnectionStatus("reconnecting", null, null, null);
+
+    const outcome = await run(
+      `agent.stop:${CHAT_ID}`,
+      "",
+      readsOver(session, []),
+    );
+
+    expect(outcome).toEqual(refusedWith(NOT_DELIVERED_NOTICE));
+    expect(stopFrames(session)).toEqual([]);
+  });
+});
+
+describe("deciding an approval", () => {
+  function waitingOn(...approvals: ChatApprovalState[]): Session {
+    return openSession({ ...READY_TO_SEND, running: true, approvals });
+  }
+
+  it.each([
+    { verb: "approve", approved: true },
+    { verb: "decline", approved: false },
+  ])(
+    "$verb sends the decision for that approval",
+    async ({ verb, approved }) => {
+      const session = waitingOn(approval({}), approval({ approvalId: "ap-2" }));
+
+      const outcome = await run(
+        `approval.${verb}:ap-2`,
+        "",
+        readsOver(session, []),
+      );
+
+      expect(outcome).toEqual({ kind: "executed" });
+      expect(decisionFrames(session)).toHaveLength(1);
+      expect(decisionFrames(session).at(0)).toMatchObject({
+        approvalId: "ap-2",
+        decision: { approved },
+      });
+    },
+  );
+
+  it.each([
+    { name: "gone from the list", approvals: [] },
+    {
+      name: "moved under a judge",
+      approvals: [approval({ reviewing: "checking" })],
+    },
+  ])(
+    "says it was already decided when the approval is $name, and decides nothing",
+    async ({ approvals }) => {
+      const session = waitingOn(...approvals);
+
+      const outcome = await run(
+        "approval.approve:ap-1",
+        "",
+        readsOver(session, []),
+      );
+
+      expect(outcome).toEqual(refusedWith(ALREADY_DECIDED_NOTICE));
+      expect(decisionFrames(session)).toEqual([]);
+    },
+  );
+
+  it("waits for a decision that is still going through rather than sending a second", async () => {
+    const session = waitingOn(approval({}), approval({ approvalId: "ap-2" }));
+    session.handle.store
+      .getState()
+      .approvalDecision("ap-2", { approved: true });
+
+    const outcome = await run(
+      "approval.decline:ap-1",
+      "",
+      readsOver(session, []),
+    );
+
+    expect(outcome).toEqual(refusedWith(DECISION_IN_FLIGHT_NOTICE));
+    expect(decisionFrames(session)).toHaveLength(1);
+  });
+
+  it("says it did not reach the agent while the connection is down", async () => {
+    const session = waitingOn(approval({}));
+    session.callbacks.onConnectionStatus("reconnecting", null, null, null);
+
+    const outcome = await run(
+      "approval.approve:ap-1",
+      "",
+      readsOver(session, []),
+    );
+
+    expect(outcome).toEqual(refusedWith(NOT_DELIVERED_NOTICE));
+    expect(decisionFrames(session)).toEqual([]);
+  });
+});
+
+describe("a row of the palette", () => {
+  it("runs through the palette's own runner with the context it was composed for", async () => {
+    const itemRun = vi.fn<CommandItem["run"]>();
+    const ctx = context({ pathname: "/composed-for" });
+    const item = commandItem("nav:somewhere", itemRun, null);
+
+    const outcome = await run(item.id, "", readsOver(null, [{ item, ctx }]));
+
+    expect(outcome).toEqual({ kind: "executed" });
+    expect(itemRun).toHaveBeenCalledTimes(1);
+    expect(itemRun.mock.calls.at(0)?.[0]).toBe(ctx);
+  });
+
+  it("goes through the action dispatcher when the row names an action", async () => {
+    const itemRun = vi.fn<CommandItem["run"]>();
+    const navigateToEpicList = vi.fn<() => void>();
+    const ctx = context({
+      router: { ...KEYBINDING_ROUTER, navigateToEpicList },
+    });
+    const item = commandItem(
+      "action:app.history.open",
+      itemRun,
+      "app.history.open",
+    );
+
+    const outcome = await run(item.id, "", readsOver(null, [{ item, ctx }]));
+
+    expect(outcome).toEqual({ kind: "executed" });
+    expect(navigateToEpicList).toHaveBeenCalledTimes(1);
+    expect(itemRun).not.toHaveBeenCalled();
+  });
+
+  it("says it is not available when the page no longer offers the row", async () => {
+    const outcome = await run(
+      "action:app.history.open",
+      "",
+      readsOver(null, []),
+    );
+
+    expect(outcome).toEqual(refusedWith(ROW_GONE_NOTICE));
+  });
+
+  it("settles as a refusal when the row's own run throws", async () => {
+    const item = commandItem(
+      "nav:broken",
+      () => {
+        throw new Error("the row failed");
+      },
+      null,
+    );
+
+    const outcome = await run(
+      item.id,
+      "",
+      readsOver(null, [{ item, ctx: context({}) }]),
+    );
+
+    expect(outcome).toEqual(refusedWith(ACT_FAILED_NOTICE));
+  });
+
+  describe("that opens a tile", () => {
+    const CHAT_TILE: EpicNodeRef = {
+      id: CHAT_ID,
+      instanceId: "inst-chat",
+      type: "chat",
+      name: TITLE,
+      hostId: HOST_ID,
+    };
+    const SPEC_TILE: EpicNodeRef = {
+      id: "spec-1",
+      instanceId: "inst-spec",
+      type: "spec",
+      name: "Plan",
+      hostId: HOST_ID,
+    };
+
+    /** A task whose canvas holds a spec, the chat when asked, and the spec on top. */
+    function taskCanvas(withChat: boolean) {
+      const canvas = useEpicCanvasStore.getState();
+      const tabId = canvas.openEpicTab(EPIC_ID, "Task");
+      if (withChat) canvas.openTileInTab(tabId, CHAT_TILE);
+      canvas.openTileInTab(tabId, SPEC_TILE);
+      const state = useEpicCanvasStore.getState().canvasByTabId[tabId];
+      if (state === undefined || state.activePaneId === null) {
+        throw new Error("the canvas never opened a pane");
+      }
+      return { tabId, paneId: state.activePaneId };
+    }
+
+    function canvasOf(tabId: string) {
+      const state = useEpicCanvasStore.getState().canvasByTabId[tabId];
+      if (state === undefined) throw new Error("the canvas is gone");
+      return state;
+    }
+
+    it("switches to the instance the task already has, and opens no second view", async () => {
+      const { tabId, paneId } = taskCanvas(true);
+      const itemRun = vi.fn<CommandItem["run"]>();
+      const item = commandItem(`open:chats:${CHAT_ID}`, itemRun, null);
+      const ctx = context({
+        activeTabId: tabId,
+        activeEpicId: EPIC_ID,
+        targetGroupId: paneId,
+      });
+      expect(findPaneById(canvasOf(tabId).root, paneId)?.activeTabId).toBe(
+        SPEC_TILE.instanceId,
+      );
+
+      const outcome = await run(item.id, "", readsOver(null, [{ item, ctx }]));
+
+      expect(outcome).toEqual({ kind: "executed" });
+      expect(Object.keys(canvasOf(tabId).tilesByInstanceId).sort()).toEqual([
+        CHAT_TILE.instanceId,
+        SPEC_TILE.instanceId,
+      ]);
+      expect(findPaneById(canvasOf(tabId).root, paneId)?.activeTabId).toBe(
+        CHAT_TILE.instanceId,
+      );
+      expect(itemRun).not.toHaveBeenCalled();
+    });
+
+    it("runs the opener when the task has not got the tile open", async () => {
+      const { tabId, paneId } = taskCanvas(false);
+      const itemRun = vi.fn<CommandItem["run"]>();
+      const item = commandItem(`open:chats:${CHAT_ID}`, itemRun, null);
+      const ctx = context({
+        activeTabId: tabId,
+        activeEpicId: EPIC_ID,
+        targetGroupId: paneId,
+      });
+
+      const outcome = await run(item.id, "", readsOver(null, [{ item, ctx }]));
+
+      expect(outcome).toEqual({ kind: "executed" });
+      expect(itemRun).toHaveBeenCalledTimes(1);
+      expect(itemRun.mock.calls.at(0)?.[0]).toBe(ctx);
+    });
+  });
+});

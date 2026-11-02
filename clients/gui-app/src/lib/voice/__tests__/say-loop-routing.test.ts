@@ -223,6 +223,8 @@ function build(wiring: Wiring, directory: VoiceDirectory) {
     openThread: () => undefined,
     botTitle: (botId) => botId,
     onAccepted: () => undefined,
+    view: () => EMPTY_VIEW,
+    act: () => Promise.resolve({ kind: "executed" }),
   });
   return {
     loop,

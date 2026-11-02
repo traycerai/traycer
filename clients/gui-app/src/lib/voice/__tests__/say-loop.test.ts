@@ -6,6 +6,7 @@ import {
 } from "@/stores/voice/voice-session-store";
 import { requestIdAnsweredIn, type ReplyRow } from "../focused-replies";
 import type { RoutedDecision } from "../router";
+import { EMPTY_VIEW } from "./fixtures/empty-view";
 import {
   MOVED_ASK_TEXT,
   createSayLoop,
@@ -104,6 +105,8 @@ function harness(): Harness {
     openThread: (_focus, answer) => opened.push(answer),
     botTitle: () => "Tracy",
     onAccepted: (request) => accepted.push(request),
+    view: () => EMPTY_VIEW,
+    act: () => Promise.resolve({ kind: "executed" }),
     decide: (request) => {
       const focus = useVoiceSessionStore.getState().focus ?? FOCUS;
       const decision: RoutedDecision = {
