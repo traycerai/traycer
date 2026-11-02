@@ -387,13 +387,14 @@ describe("a job that narrows a push run compares against the last green push", (
     }
   }
 
-  it("finds the three jobs that narrow today", () => {
+  it("finds the four jobs that narrow today", () => {
     expect(
       narrowing.map(({ file, jobId }) => `${file}/${jobId}`).sort(),
     ).toEqual([
       "browser-regressions.yml/changes",
       "formal-regressions.yml/changes",
       "pre-commit.yml/workspace-checks",
+      "test.yml/macos-packaging-changes",
     ]);
   });
 
