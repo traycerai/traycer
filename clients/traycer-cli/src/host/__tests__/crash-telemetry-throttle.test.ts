@@ -1,5 +1,6 @@
 import { describe, expect, it, vi, type Mock } from "vitest";
 import type { Environment } from "../../runner/environment";
+import { NO_REPORT_MEMORY } from "../crash-diagnostics";
 import {
   buildHostCrashEvent,
   HOST_CRASH_REPORTS_BEFORE_THROTTLE,
@@ -32,7 +33,7 @@ function sampleTelemetry(
     stopRequested: false,
     stderrEmpty: false,
     stderrFatal: "other",
-    reportMemory: { heapLimitBytes: null, heapUsedBytes: null, rssBytes: null },
+    reportMemory: NO_REPORT_MEMORY,
     ...overrides,
   };
 }
