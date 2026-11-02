@@ -90,6 +90,7 @@ vi.mock("@/hooks/host/use-host-supports-method", async (importOriginal) => ({
 }));
 vi.mock("@/components/epic-tabs/pane-visibility-context", () => ({
   usePaneVisible: () => true,
+  usePaneFocused: () => true,
 }));
 vi.mock("@/hooks/bots/use-bot-conversation-list-query", () => ({
   useBotConversationListQuery: () => ({

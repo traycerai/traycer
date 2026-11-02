@@ -8,7 +8,7 @@ import {
  * The guest-focused input policy arrives from the renderer, which may be newer
  * than this build. One unrecognized row must cost that row and nothing else -
  * dropping the array would leave every reserved chord unclaimed, so Cmd+W
- * would silently go back to closing the app's task tab.
+ * would silently reach the page instead of the browser tab.
  */
 describe("parseReservedChords", () => {
   it("keeps the rows it understands when one is from a newer renderer", () => {

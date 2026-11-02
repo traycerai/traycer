@@ -17,7 +17,6 @@ import {
   computerSubLine,
   THIS_COMPUTER,
 } from "@/lib/sandboxes/sandbox-strings";
-import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 import type {
   FleetUpdateView,
   FleetUpdateViewKind,
@@ -463,13 +462,10 @@ function retainedBadgeWord(kind: FleetUpdateViewKind): string | null {
  * What a host is called on the chip and its row. The composer and in-task
  * pickers call the machine this app runs on `This computer`, its own name
  * moving to the row's sub-line, so it reads beside the sandbox rows; every
- * other list names it, and so does a build without sandboxes
- * (`unreleased-features.ts`).
+ * other list names it.
  */
 export function hostRowTitle(host: HostScopeOption, composer: boolean): string {
-  return composer && host.isLocalMachine && UNRELEASED_FEATURES_ENABLED
-    ? THIS_COMPUTER
-    : host.name;
+  return composer && host.isLocalMachine ? THIS_COMPUTER : host.name;
 }
 
 /**

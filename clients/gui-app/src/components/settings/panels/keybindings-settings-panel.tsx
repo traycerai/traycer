@@ -56,8 +56,8 @@ export function KeybindingsSettingsPanel() {
   // row for a surface this build has not got - the same reason the command
   // palette omits it. `app.tabs.vertical.collapse` likewise, while this
   // window has no strip whose collapse can do anything.
-  // An action this app cannot run (Talk, while the voice layer is
-  // unreleased) has no row either.
+  // An action this app cannot run (a desktop-only one on the mobile app) has
+  // no row either.
   const primaryActionIds = ACTION_IDS.filter(
     (id) =>
       !SUB_LEADER_ACTION_SET.has(id) &&

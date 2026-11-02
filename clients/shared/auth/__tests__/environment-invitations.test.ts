@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   acceptEnvironmentInvitation,
   fetchEnvironmentInvitations,
@@ -166,5 +166,74 @@ describe("environment invitation authn requests", () => {
 
     await expect(pending).rejects.toMatchObject({ name: "AbortError" });
     expect(observedSignals[0]?.aborted).toBe(true);
+  });
+});
+
+describe("environment invitation acceptance on a fetch that ignores its signal", () => {
+  // The literal 15 s `requestInvitations` passes to `composeRequestAbort`.
+  const REQUEST_TIMEOUT_MS = 15_000;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("rejects at the deadline with a timeout when the request never completes", async () => {
+    // Like CapacitorHttp's patched fetch: the signal is dropped, so only the
+    // deadline can settle the request.
+    vi.spyOn(globalThis, "fetch").mockImplementation(
+      () => new Promise<Response>(() => undefined),
+    );
+    let settled = false;
+
+    const pending = acceptEnvironmentInvitation(
+      AUTHN_BASE_URL,
+      BEARER,
+      "env-beta",
+    );
+    const rejection = expect(pending).rejects.toMatchObject({
+      name: "TimeoutError",
+    });
+    void pending.catch(() => {
+      settled = true;
+    });
+
+    await vi.advanceTimersByTimeAsync(REQUEST_TIMEOUT_MS - 1);
+    expect(settled).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(settled).toBe(true);
+    await rejection;
+  });
+
+  it("rejects at the deadline as unconfirmed when a 200 body never arrives", async () => {
+    const response = new Response(null, { status: 200 });
+    const json = vi
+      .spyOn(response, "json")
+      .mockImplementation(() => new Promise<unknown>(() => undefined));
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(response);
+    let settled = false;
+
+    const pending = acceptEnvironmentInvitation(
+      AUTHN_BASE_URL,
+      BEARER,
+      "env-beta",
+    );
+    const rejection = expect(pending).rejects.toThrow(
+      "Couldn't confirm this invitation. Check your teams and try again.",
+    );
+    void pending.catch(() => {
+      settled = true;
+    });
+
+    await vi.advanceTimersByTimeAsync(REQUEST_TIMEOUT_MS - 1);
+    expect(json).toHaveBeenCalledTimes(1);
+    expect(settled).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(settled).toBe(true);
+    await rejection;
   });
 });

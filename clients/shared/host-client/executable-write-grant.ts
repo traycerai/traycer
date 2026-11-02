@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { composeRequestAbort } from "../auth/request-abort";
+import { composeRequestAbort, untilAborted } from "../auth/request-abort";
 import { PATH_ID_PATTERN } from "./path-id";
 
 /**
@@ -82,23 +82,26 @@ async function call(
     EXECUTABLE_WRITE_GRANT_FETCH_TIMEOUT_MS,
   );
   try {
-    const response = await fetch(url, {
-      method,
-      headers:
-        body === null
-          ? {
-              Authorization: `Bearer ${bearerToken}`,
-              Accept: "application/json",
-            }
-          : {
-              Authorization: `Bearer ${bearerToken}`,
-              Accept: "application/json",
-              "Content-Type": "application/json",
-            },
-      body,
-      signal: abort.signal,
-    });
-    const text = await response.text();
+    const response = await untilAborted(
+      fetch(url, {
+        method,
+        headers:
+          body === null
+            ? {
+                Authorization: `Bearer ${bearerToken}`,
+                Accept: "application/json",
+              }
+            : {
+                Authorization: `Bearer ${bearerToken}`,
+                Accept: "application/json",
+                "Content-Type": "application/json",
+              },
+        body,
+        signal: abort.signal,
+      }),
+      abort.signal,
+    );
+    const text = await untilAborted(response.text(), abort.signal);
     return {
       kind: "response",
       status: response.status,

@@ -39,6 +39,7 @@ CONSTANTS
     HasWheel,           \* desktop: wheel and scrollbar drag
     TouchInput,         \* phone: finger pan, lift, momentum
     TouchMoveDelivered, \* FALSE: a native pan withholds touchmove (not iOS 27)
+    TouchMoveFirstOnly, \* TRUE: only a contact's first movement delivers touchmove
     HasScrollEnd,       \* FALSE: no `scrollend` event (WebKit)
     DeferUnderFinger,   \* TRUE: a scrollTop write while a finger is down lands
                         \*   after the lift (not iOS 27: it applies at once)
@@ -236,6 +237,15 @@ TrMom(x, t) ==
     IF "momhybrid" \in Fixes /\ x.mom.on
     THEN [x.mom EXCEPT !.base = @ + t - Clamp(x, x.s)] ELSE x.mom
 
+\* Fixed ("momdir"): the lowest the view has rested since a contact's last
+\* delivered away touchmove, carried by every announced write as momentum is.
+\* A lift still on it threw nothing at the end, and records no momentum.
+TrAwayFloor(x, t) ==
+    IF x.awayFloor = -1 THEN -1 ELSE x.awayFloor + t - Clamp(x, x.s)
+NoteAwayFloor(x) ==
+    IF "momdir" \in Fixes /\ x.awayFloor # -1
+    THEN [x EXCEPT !.awayFloor = Min(x.awayFloor, x.s)] ELSE x
+
 \* #3085: remembered geometry is translated knowledge, not a snap to live.
 ViewAt(x) == [on |-> TRUE, s |-> x.s, h |-> H(x) + x.pad, v |-> x.V]
 ViewAfterMove(x, t, range) ==
@@ -254,14 +264,15 @@ ViewRead(x) ==
          IN [x EXCEPT !.lastView = ViewAt(x), !.viewCredit = @ + d,
                       !.armed = a,
                       !.depAt = IF absorbs /\ @ # -1 THEN @ + d ELSE @,
-                      !.mom.base = IF absorbs /\ x.mom.on THEN @ + d ELSE @]
+                      !.mom.base = IF absorbs /\ x.mom.on THEN @ + d ELSE @,
+                      !.awayFloor = IF absorbs /\ @ # -1 THEN @ + d ELSE @]
 
 \* A scroll the list makes (an MVCP adjust): it cancels a native smooth
 \* scroll, and the browser reports it.
 Adjust(x, t) ==
     IF t = x.s THEN x
     ELSE ListSaw([x EXCEPT !.s = t, !.dirty = TRUE, !.smooth = -1, !.send = HasScrollEnd,
-                           !.depAt = Tr(x, t), !.armed = TrArm(x, t), !.mom = TrMom(x, t), !.lastView = ViewAfterMove(x, t, FALSE)], t)
+                           !.depAt = Tr(x, t), !.armed = TrArm(x, t), !.mom = TrMom(x, t), !.awayFloor = TrAwayFloor(x, t), !.lastView = ViewAfterMove(x, t, FALSE)], t)
 
 (***************************************************************************)
 (* Estimates. A row the list has never measured is laid out at a cached    *)
@@ -380,7 +391,7 @@ Write(x, t) ==
     THEN [x EXCEPT !.touchWriteMayLand = @ \/ (x.armed.src = "touch" /\ t # x.s)]
     ELSE IF t = x.s THEN [x EXCEPT !.smooth = -1]
     ELSE [x EXCEPT !.s = t, !.dirty = TRUE, !.smooth = -1, !.send = HasScrollEnd,
-                   !.depAt = Tr(x, t), !.armed = Carry(x, t), !.mom = TrMom(x, t), !.lastView = ViewAfterMove(x, t, FALSE)]
+                   !.depAt = Tr(x, t), !.armed = Carry(x, t), !.mom = TrMom(x, t), !.awayFloor = TrAwayFloor(x, t), !.lastView = ViewAfterMove(x, t, FALSE)]
 
 (***************************************************************************)
 (* Promises. A LegendList command's promise is named by its token. It      *)
@@ -874,8 +885,16 @@ ReportAfterLiftLanding(x) ==
                    !.depAt = IF @ # -1 THEN x.s ELSE @,
                    !.mom.base = IF "momhybrid" \in Fixes /\ x.mom.on THEN x.s ELSE @]
 
+\* Fixed ("momaway"): momentum only travels toward the end, so an observation
+\* of credited away travel off the strict bottom retires it.
+RetireAwayMomentum(x) ==
+    IF "momaway" \notin Fixes \/ ~x.mom.on THEN x
+    ELSE IF ReadLedger(x) # -1
+            /\ w.s < Min(ReadLedger(x), MaxS(x)) /\ ~AtBottom(x)
+         THEN [x EXCEPT !.mom = NoMom] ELSE x
+
 ObserveLiveGeometry(x0) ==
-    LET reported == ReportAfterLiftLanding([ViewRead(x0) EXCEPT !.depAhead = FALSE, !.depWheel = FALSE]) IN
+    LET reported == ReportAfterLiftLanding([NoteAwayFloor(RetireAwayMomentum(ViewRead(x0))) EXCEPT !.depAhead = FALSE, !.depWheel = FALSE]) IN
     IF ~reported.mounted \/ ~Measurable(reported) THEN reported
     \* #3062's report returns before press/momentum reconciliation when the
     \* streaming end met the held reader. The report still ends its await.
@@ -931,7 +950,7 @@ ObsArm(x) ==
 
 FollowEndIfPermitted(x0) ==
     IF ~x0.mounted \/ ~Measurable(x0) THEN x0
-    ELSE LET read == ViewRead(x0)
+    ELSE LET read == NoteAwayFloor(RetireAwayMomentum(ViewRead(x0)))
              arrived == MomArrived(read)
              x == NotePressView(ObsArm(MomNoted(read)))
              rc == ReadCandidate(NoteOwed(x))
@@ -1000,7 +1019,9 @@ ClearTouch(x) ==
                    THEN ObserveLiveGeometry(x) ELSE x
              x2 == FollowEndIfPermitted([x1 EXCEPT !.armed = NoArm])
          \* Fixed ("fling"): momentum may carry the reader on from here.
-         IN IF "fling" \in Fixes /\ Measurable(x2)
+         IN IF "momdir" \in Fixes /\ x2.awayFloor # -1 /\ x2.s <= x2.awayFloor
+            THEN [x2 EXCEPT !.mom = NoMom]
+            ELSE IF "fling" \in Fixes /\ Measurable(x2)
                /\ ~CorrSuppressed(x2) /\ ~ReattachSuppressed(x2) THEN [x2 EXCEPT !.mom = MomAt(x2)] ELSE [x2 EXCEPT !.mom = NoMom]
 
 \* completePointerPreflight (pointerup / pointercancel on the scroll node)
@@ -1203,7 +1224,7 @@ MountState(store, reg, lo, hi, real, rowsVer, tok) ==
             mounted |-> TRUE, lo |-> lo, hi |-> hi, real |-> real,
             sz |-> [i \in Rows |-> EST], s |-> 0, V |-> VH, visible |-> TRUE,
             dirty |-> FALSE, send |-> FALSE, smooth |-> -1, finger |-> FALSE,
-            silent |-> FALSE, panDir |-> 0, inputMove |-> "none", flingDir |-> 0,
+            silent |-> FALSE, panDir |-> 0, inputMove |-> "none", flingDir |-> 0, awayFloor |-> -1,
             dragging |-> FALSE, pressDown |-> FALSE, keyNoMove |-> FALSE,
             ro |-> TRUE, settling |-> FALSE, structUnsettled |-> FALSE,
             tok |-> tok, cmd |-> NoCmd,
@@ -1417,7 +1438,7 @@ PrependRow ==
            x2 == IF Measurable(x1)
                  THEN [x1 EXCEPT !.s = @ + x1.sz[w.lo - 1], !.depAt = Tr(x1, x1.s + x1.sz[w.lo - 1]),
                                  !.armed = TrArm(x1, x1.s + x1.sz[w.lo - 1]),
-                                 !.mom = TrMom(x1, x1.s + x1.sz[w.lo - 1]),
+                                 !.mom = TrMom(x1, x1.s + x1.sz[w.lo - 1]), !.awayFloor = TrAwayFloor(x1, x1.s + x1.sz[w.lo - 1]),
                                  !.lastView = ViewAfterMove(x1, x1.s + x1.sz[w.lo - 1], FALSE)]
                  ELSE x1
        IN w' = FollowEndIfPermitted(ReEstimate(x2, DataPass))
@@ -1449,7 +1470,7 @@ Measure(i) ==
                                  !.depAt = Tr(x1, t),
                                  !.armed = IF x1.armed.src = "touch" THEN TrArm(x1, want)
                                            ELSE Carry(x1, t),
-                                 !.mom = TrMom(x1, t), !.lastView = ViewAfterMove(x1, t, FALSE)]
+                                 !.mom = TrMom(x1, t), !.awayFloor = TrAwayFloor(x1, t), !.lastView = ViewAfterMove(x1, t, FALSE)]
            x3 == IF defer THEN [x2 EXCEPT !.pend = @ + d] ELSE ListSaw(x2, t)
            xf == FollowEndIfPermitted(ReEstimate(x3, SizePass))
        IN /\ w' = xf
@@ -1556,6 +1577,7 @@ PadCycle ==
                             !.depAt = IF "padannounce" \in Fixes THEN Tr(w, t) ELSE @,
                             !.armed = IF "padannounce" \in Fixes THEN RangeArm(w, t) ELSE @,
                             !.mom = IF "padannounce" \in Fixes THEN TrMom(w, t) ELSE @,
+                            !.awayFloor = IF "padannounce" \in Fixes THEN TrAwayFloor(w, t) ELSE @,
                             !.lastView = IF "padannounce" \in Fixes THEN ViewAfterMove(w, t, TRUE) ELSE @]
     /\ Spend("cycle") /\ last' = "PadCycle"
     /\ UNCHANGED <<intent, flags>>
@@ -1568,6 +1590,7 @@ PadReset ==
                  ELSE [x1 EXCEPT !.s = t, !.dirty = TRUE, !.smooth = -1, !.send = HasScrollEnd,
                                  !.depAt = Tr(IF "padannounce" \in Fixes THEN w ELSE x1, t), !.armed = RangeArm(IF "padannounce" \in Fixes THEN w ELSE x1, t),
                                  !.mom = IF "padannounce" \in Fixes THEN TrMom(w, t) ELSE @,
+                            !.awayFloor = IF "padannounce" \in Fixes THEN TrAwayFloor(w, t) ELSE @,
                             !.lastView = IF "padannounce" \in Fixes THEN ViewAfterMove(w, t, TRUE) ELSE @]
        IN /\ w' = x2
           \* A reader inside the pad has nowhere to stay once it goes: the
@@ -1700,7 +1723,7 @@ SmoothStep ==
     /\ LET t == Clamp(w, w.smooth)
            s1 == IF t > w.s THEN w.s + 1 ELSE IF t < w.s THEN w.s - 1 ELSE w.s
            done == s1 = t
-       IN w' = [w EXCEPT !.s = s1, !.depAt = Tr(w, s1), !.armed = Carry(w, s1), !.mom = TrMom(w, s1), !.lastView = ViewAfterMove(w, s1, FALSE),
+       IN w' = [w EXCEPT !.s = s1, !.depAt = Tr(w, s1), !.armed = Carry(w, s1), !.mom = TrMom(w, s1), !.awayFloor = TrAwayFloor(w, s1), !.lastView = ViewAfterMove(w, s1, FALSE),
                          !.dirty = (s1 # w.s) \/ @,
                          !.smooth = IF done THEN -1 ELSE w.smooth,
                          !.send = IF done THEN HasScrollEnd ELSE @]
@@ -1979,7 +2002,7 @@ TouchStart ==
     /\ TouchInput /\ Reading(w) /\ Can("touch") /\ ~w.finger /\ w.flingDir = 0
     /\ LET x1 == TranscriptPointerDown(w, FALSE)
            x2 == CancelCorr([x1 EXCEPT !.rgen = @ + 1])
-           x3 == [x2 EXCEPT !.cand = NoCand, !.mom = NoMom, !.headedEnd = NoHeadedEnd, !.armed = TouchArm(x2.s)]
+           x3 == [x2 EXCEPT !.cand = NoCand, !.mom = NoMom, !.headedEnd = NoHeadedEnd, !.armed = TouchArm(x2.s), !.awayFloor = -1]
        IN w' = [SupersedeEnd(x3, x3.s) EXCEPT !.finger = TRUE, !.silent = FALSE, !.panDir = 0]
     \* A seen contact takes control at this geometry, superseding any
     \* preceding fling arrival that no observation has reconciled yet.
@@ -1998,14 +2021,21 @@ TouchOnFling ==
     /\ UNCHANGED flags
 
 \* The native pan moves the view; a delivered touchmove publishes first.
+\* TouchMoveFirstOnly: only a contact's first movement delivers a touchmove,
+\* the platform's guarantee. Reversals and later moves report only as scrolls.
+TouchMoveReported == TouchMoveDelivered /\ (~TouchMoveFirstOnly \/ w.panDir = 0)
+
 FingerMove(dir) ==
     /\ w.finger /\ Reading(w)
     \* A pan that moves the view fires a scroll event every frame, and the
     \* browser applies a frame's net movement: no reversal with the last move
     \* still unreported.
     /\ w.dirty /\ w.panDir # 0 => w.panDir = IF dir = "toward-end" THEN 1 ELSE -1
-    /\ LET x1 == IF TouchMoveDelivered /\ ~w.silent
-                 THEN NoteReaderGesture(w, dir, TRUE, TRUE) ELSE w
+    /\ LET observed == IF "momdir" \in Fixes /\ TouchMoveReported /\ ~w.silent
+                        THEN [w EXCEPT !.awayFloor = IF dir = "away-from-end" THEN w.s ELSE -1]
+                        ELSE w
+           x1 == IF TouchMoveReported /\ ~w.silent
+                 THEN NoteReaderGesture(observed, dir, TRUE, TRUE) ELSE observed
            t == Clamp(x1, IF dir = "toward-end" THEN x1.s + 1 ELSE x1.s - 1)
            x2 == [x1 EXCEPT !.s = t, !.dirty = TRUE, !.smooth = -1, !.inputMove = "finger",
                              !.panDir = IF dir = "toward-end" THEN 1 ELSE -1]
@@ -2026,6 +2056,7 @@ TouchEnd(fling) ==
     /\ LET lifted == [w EXCEPT !.finger = FALSE]
            x1 == IF w.silent THEN lifted ELSE ClearTouch(lifted)
            x2 == [x1 EXCEPT !.finger = FALSE, !.silent = FALSE,
+                            !.awayFloor = IF ~w.silent THEN -1 ELSE @,
                             !.liftLanding = IF ~w.silent /\ x1.touchWriteMayLand THEN TRUE ELSE @,
                             !.touchWriteMayLand = IF ~w.silent THEN FALSE ELSE @]
            x3 == x2
@@ -2288,6 +2319,7 @@ Spec == Init /\ [][Next]_vars
 (* Invariants. Each is a symptom a reader would report.                    *)
 (***************************************************************************)
 TypeOK ==
+    /\ w.awayFloor \in Int
     /\ w.s >= 0
     /\ missedFollow \in {"none", "unread-tail"}
     /\ w.depWheel \in BOOLEAN

@@ -26,10 +26,8 @@ import {
 } from "@/components/settings/settings-master-detail";
 import {
   SETTINGS_AREA_BODY_PROPS,
-  settingsAreaPanelProps,
   useSettingsAnchorArea,
   useSettingsAreaStartsAtTop,
-  useSettingsGuideArea,
 } from "@/components/settings/settings-master-detail-area";
 import { settingsRailRowClassName } from "@/components/settings/settings-rail-row";
 import { StartPageSettingsSection } from "@/components/settings/start-page-settings-section";
@@ -199,7 +197,6 @@ export function AppearanceSettingsPanel() {
   const rootRef = useRef<HTMLDivElement | null>(null);
 
   useSettingsAnchorArea("appearance", appearanceAreaForAnchor, setArea);
-  useSettingsGuideArea("appearance", rootRef, appearanceAreaForId, setArea);
   useSettingsAreaStartsAtTop(rootRef, area);
 
   return (
@@ -264,7 +261,6 @@ export function AppearanceSettingsPanel() {
               value={entry.id}
               forceMount
               hidden={area !== entry.id}
-              {...settingsAreaPanelProps(entry.id)}
               // Named by its area rather than by the rail's trigger, which a
               // phone does not draw.
               aria-labelledby={undefined}

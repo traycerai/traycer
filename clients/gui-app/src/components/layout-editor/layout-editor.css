@@ -340,10 +340,6 @@
    whole life of the app - which outside a session was the only runtime effect
    this whole marker set had, and it changed how the send and stop buttons
    fade in ordinary use. */
-/* `data-layout-lit` is the guide's lit MOMENT (L-50): the same dim with no
-   session behind it, so the last step of the "Appearance and layout" guide can
-   show what customizing looks like without entering. It joins the dim rules and
-   nothing else - no hover outline, no ring, no firewall. */
 /* `data-layout-passive-members` is the one marker that dims its CHILDREN
    instead of itself, and the tab strip's scroller is the one box that needs it:
    it holds both the task tabs and the tab that says which one is being
@@ -353,11 +349,7 @@
    CONTAINS the session marker stays lit; every other member dims exactly as a
    leaf marker would. */
 [data-layout-editing="1"] [data-layout-passive],
-[data-layout-lit="1"] [data-layout-passive],
 [data-layout-editing="1"]
-  [data-layout-passive-members]
-  > :not(:has([data-layout-session-tab])),
-[data-layout-lit="1"]
   [data-layout-passive-members]
   > :not(:has([data-layout-session-tab])) {
   opacity: 0.45;
@@ -405,8 +397,7 @@
    list that keeps STREAMING under the editor (L-17), and a `filter` on it is a
    continuously repainting filtered layer the size of the window; the small
    leaves around it keep the desaturation that carries the signal. */
-[data-layout-editing="1"] [data-layout-passive="opacity-only"],
-[data-layout-lit="1"] [data-layout-passive="opacity-only"] {
+[data-layout-editing="1"] [data-layout-passive="opacity-only"] {
   filter: none;
 }
 
@@ -761,11 +752,7 @@
   }
 
   [data-layout-editing="1"] [data-layout-passive],
-  [data-layout-lit="1"] [data-layout-passive],
   [data-layout-editing="1"]
-    [data-layout-passive-members]
-    > :not(:has([data-layout-session-tab])),
-  [data-layout-lit="1"]
     [data-layout-passive-members]
     > :not(:has([data-layout-session-tab])) {
     filter: none;
@@ -799,12 +786,8 @@
 }
 
 :root[data-reduce-panel-motion] [data-layout-editing="1"] [data-layout-passive],
-:root[data-reduce-panel-motion][data-layout-lit="1"] [data-layout-passive],
 :root[data-reduce-panel-motion]
   [data-layout-editing="1"]
-  [data-layout-passive-members]
-  > :not(:has([data-layout-session-tab])),
-:root[data-reduce-panel-motion][data-layout-lit="1"]
   [data-layout-passive-members]
   > :not(:has([data-layout-session-tab])) {
   filter: none;
@@ -929,11 +912,7 @@
 
 @media (forced-colors: active) {
   [data-layout-editing="1"] [data-layout-passive],
-  [data-layout-lit="1"] [data-layout-passive],
   [data-layout-editing="1"]
-    [data-layout-passive-members]
-    > :not(:has([data-layout-session-tab])),
-  [data-layout-lit="1"]
     [data-layout-passive-members]
     > :not(:has([data-layout-session-tab])),
   [data-layout-editing="1"] [data-layout-region][data-ghost="1"],

@@ -1,5 +1,4 @@
 import { RunnerHostEvent } from "../../ipc-contracts/ipc-channels";
-import { UNRELEASED_FEATURES_ENABLED } from "../../unreleased-features";
 import type { RegisteredHostsPush } from "../../ipc-contracts/host-types";
 import type { DesktopHostFleetSource } from "../selection/desktop-selection-ports";
 
@@ -98,11 +97,6 @@ export function registerRegisteredHostsBroadcast(
   fleet: DesktopHostFleetSource,
 ): void {
   const timer = setInterval(() => {
-    // The build that ships without team hosts skips the tick while the local
-    // host is pushing the registry (`local-host-inventory-subscription.ts`),
-    // as the release before them did: with no team scope to read, the push is
-    // the whole registry and this would be a second read of it.
-    if (!UNRELEASED_FEATURES_ENABLED && fleet.isPushActive()) return;
     // NOT skipped while the local host is pushing the registry to this process
     // (`local-host-inventory-subscription.ts`). The push cannot stand in for
     // this read: the host reads with its device credential, which authn scopes

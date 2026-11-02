@@ -10,16 +10,12 @@ import type { ProviderPackPreparing } from "@/components/providers/provider-pack
 import type { GuiHarnessCatalogEntry } from "@/hooks/harnesses/use-gui-harness-catalog";
 
 /**
- * The picker's Ultracode row through the real panel body, with the global
- * unreleased switch off as in the production build: the row appears whenever
- * the panel is given its config, and nowhere else. It sits in the model-list
- * column after the list and before the effort footer, and its switch reports
- * the new request. Nothing reads a build constant to decide that.
+ * The picker's Ultracode row through the real panel body: the row appears
+ * whenever the panel is given its config, and nowhere else. It sits in the
+ * model-list column after the list and before the effort footer, and its
+ * switch reports the new request.
  */
 
-vi.mock("@/unreleased-features", () => ({
-  UNRELEASED_FEATURES_ENABLED: false,
-}));
 vi.mock(
   "@traycer-clients/shared/host-client/host-connection-registry",
   async (importOriginal) => ({

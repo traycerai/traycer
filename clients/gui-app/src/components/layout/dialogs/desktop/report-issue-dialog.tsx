@@ -71,7 +71,6 @@ import type {
   DesktopSupportSnapshot,
 } from "@/lib/windows/types";
 import { useOpenLink } from "@/lib/links/open-link";
-import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import type { FileRouteTypes } from "@/routeTree.gen";
 import type { DesktopSupportDialogProps } from "./types";
@@ -145,11 +144,7 @@ const ROUTE_TEMPLATE_LABELS: Readonly<
   "/settings/members": "Settings - Members",
   "/settings/secrets": "Settings - Secrets",
   "/settings/service": "Settings - Service",
-  // The page is called `Shell` in a build without environments; this label
-  // follows it, so a report names the page the reader saw.
-  "/settings/shell": UNRELEASED_FEATURES_ENABLED
-    ? "Settings - Variables & shells"
-    : "Settings - Shell",
+  "/settings/shell": "Settings - Variables & shells",
   "/settings/usage": "Settings - Usage",
   "/settings/credits": "Settings - Credits",
   "/settings/worktrees": "Settings - Worktrees",

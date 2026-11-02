@@ -1,4 +1,4 @@
-import { composeRequestAbort } from "../auth/request-abort";
+import { composeRequestAbort, untilAborted } from "../auth/request-abort";
 
 /**
  * The raw call behind the voice router: one model request through
@@ -63,21 +63,24 @@ export async function voiceRouteViaHttp(
   let status: number;
   let text: string;
   try {
-    const response = await fetch(routerUrl(serverBaseUrl), {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${bearerToken}`,
-        Accept: "application/json",
-        "Content-Type": "application/json",
-        ...(proxyToken === null
-          ? {}
-          : { "Proxy-Authorization": `Bearer ${proxyToken}` }),
-      },
-      body: requestBody,
-      signal: abort.signal,
-    });
+    const response = await untilAborted(
+      fetch(routerUrl(serverBaseUrl), {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${bearerToken}`,
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          ...(proxyToken === null
+            ? {}
+            : { "Proxy-Authorization": `Bearer ${proxyToken}` }),
+        },
+        body: requestBody,
+        signal: abort.signal,
+      }),
+      abort.signal,
+    );
     status = response.status;
-    text = await response.text();
+    text = await untilAborted(response.text(), abort.signal);
   } catch {
     return {
       kind: "network-error",

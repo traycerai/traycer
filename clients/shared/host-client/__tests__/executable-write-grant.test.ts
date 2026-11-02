@@ -1,5 +1,8 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { mintExecutableWriteGrantViaHttp } from "../executable-write-grant";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  EXECUTABLE_WRITE_GRANT_FETCH_TIMEOUT_MS,
+  mintExecutableWriteGrantViaHttp,
+} from "../executable-write-grant";
 
 const AUTHN = "https://authn.example.invalid";
 const TOKEN = "bearer-token-1";
@@ -261,5 +264,76 @@ describe("mintExecutableWriteGrantViaHttp", () => {
       kind: "network-error",
       detail: "the request never completed (Error)",
     });
+  });
+});
+
+describe("mintExecutableWriteGrantViaHttp on a fetch that ignores its signal", () => {
+  const TIMED_OUT = {
+    kind: "network-error",
+    detail: "the request never completed (TimeoutError)",
+  };
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** The environment lookup answers; the mint is the call under test. */
+  function stubMintAfterEnvironment(mint: Promise<Response>): void {
+    const fetchMock = vi.fn<typeof fetch>();
+    fetchMock.mockResolvedValueOnce(
+      new Response(ME_OK.body, { status: ME_OK.status }),
+    );
+    fetchMock.mockReturnValueOnce(mint);
+    vi.stubGlobal("fetch", fetchMock);
+  }
+
+  it("settles the mint at the deadline as a network error when the request never completes", async () => {
+    // Like CapacitorHttp's patched fetch: the signal is dropped, so only the
+    // deadline can settle the request.
+    stubMintAfterEnvironment(new Promise<Response>(() => undefined));
+    let settled = false;
+
+    const pending = mintExecutableWriteGrantViaHttp(AUTHN, TOKEN, HOST_ID);
+    void pending.then(() => {
+      settled = true;
+    });
+    await vi.advanceTimersByTimeAsync(0);
+
+    await vi.advanceTimersByTimeAsync(
+      EXECUTABLE_WRITE_GRANT_FETCH_TIMEOUT_MS - 1,
+    );
+    expect(settled).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(settled).toBe(true);
+    expect(await pending).toEqual(TIMED_OUT);
+  });
+
+  it("settles the mint at the deadline as a network error when a 200 body never arrives", async () => {
+    const response = new Response(null, { status: 200 });
+    const text = vi
+      .spyOn(response, "text")
+      .mockImplementation(() => new Promise<string>(() => undefined));
+    stubMintAfterEnvironment(Promise.resolve(response));
+    let settled = false;
+
+    const pending = mintExecutableWriteGrantViaHttp(AUTHN, TOKEN, HOST_ID);
+    void pending.then(() => {
+      settled = true;
+    });
+    await vi.advanceTimersByTimeAsync(0);
+
+    await vi.advanceTimersByTimeAsync(
+      EXECUTABLE_WRITE_GRANT_FETCH_TIMEOUT_MS - 1,
+    );
+    expect(text).toHaveBeenCalledTimes(1);
+    expect(settled).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(settled).toBe(true);
+    expect(await pending).toEqual(TIMED_OUT);
   });
 });

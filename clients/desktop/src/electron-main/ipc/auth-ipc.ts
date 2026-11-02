@@ -87,7 +87,6 @@ import {
 } from "./ipc-parsers";
 import type { RunnerIpcBridge } from "./runner-ipc-bridge";
 import { registerLocalAuthSessionRestore } from "./local-auth-session";
-import { UNRELEASED_FEATURES_ENABLED } from "../../unreleased-features";
 
 const STEP_UP_EXPIRY_SKEW_MS = 5_000;
 
@@ -154,9 +153,7 @@ function signedInUserId(snapshot: DesktopAuthSessionSnapshot): string | null {
 /**
  * The sandbox control plane, the team environment, the secret decisions and
  * the executable-write grant: the IPC the gui-app's sandbox, environment and
- * bot surfaces call. Registered only by a build with those features
- * (`unreleased-features.ts`); without them a stray call rejects as an
- * unhandled channel instead of reaching traycer-server or authn.
+ * bot surfaces call.
  */
 function registerSandboxControlPlaneIpc(bridge: RunnerIpcBridge): void {
   // The sandbox control plane. traycer-server's base URL is read from the
@@ -674,7 +671,7 @@ export function registerAuthIpc(bridge: RunnerIpcBridge): void {
     },
   );
 
-  if (UNRELEASED_FEATURES_ENABLED) registerSandboxControlPlaneIpc(bridge);
+  registerSandboxControlPlaneIpc(bridge);
 
   // Fan the owned-watcher change events out to every window (source lands in §4;
   // a live registration that never fires until then). Torn down on dispose,

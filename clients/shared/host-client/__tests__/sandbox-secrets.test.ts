@@ -1,4 +1,12 @@
-import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type Mock,
+} from "vitest";
 import {
   SANDBOX_SECRETS_FETCH_TIMEOUT_MS,
   decideSecretRequestViaHttp,
@@ -1140,5 +1148,78 @@ describe("fetchEnvironmentProvidersViaHttp", () => {
       ).resolves.toEqual(INVALID_ID_RESULT);
     }
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("decideSecretRequestViaHttp on a fetch that ignores its signal", () => {
+  const TIMED_OUT = {
+    kind: "network-error",
+    detail: "the request never completed (TimeoutError)",
+  };
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("settles at the deadline as a network error when the request never completes", async () => {
+    // Like CapacitorHttp's patched fetch: the signal is dropped, so only the
+    // deadline can settle the request.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(() => new Promise<Response>(() => undefined)),
+    );
+    let settled = false;
+
+    const pending = decideSecretRequestViaHttp(
+      BASE,
+      BEARER,
+      ENV_ID,
+      REQUEST_ID,
+      "approve",
+    );
+    void pending.then(() => {
+      settled = true;
+    });
+
+    await vi.advanceTimersByTimeAsync(SANDBOX_SECRETS_FETCH_TIMEOUT_MS - 1);
+    expect(settled).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(settled).toBe(true);
+    expect(await pending).toEqual(TIMED_OUT);
+  });
+
+  it("settles at the deadline as a network error when a 200 body never arrives", async () => {
+    const response = new Response(null, { status: 200 });
+    const text = vi
+      .spyOn(response, "text")
+      .mockImplementation(() => new Promise<string>(() => undefined));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async () => response),
+    );
+    let settled = false;
+
+    const pending = decideSecretRequestViaHttp(
+      BASE,
+      BEARER,
+      ENV_ID,
+      REQUEST_ID,
+      "approve",
+    );
+    void pending.then(() => {
+      settled = true;
+    });
+
+    await vi.advanceTimersByTimeAsync(SANDBOX_SECRETS_FETCH_TIMEOUT_MS - 1);
+    expect(text).toHaveBeenCalledTimes(1);
+    expect(settled).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(settled).toBe(true);
+    expect(await pending).toEqual(TIMED_OUT);
   });
 });

@@ -59,7 +59,6 @@ import {
   splitNewRows,
   type HostSwitcherNewRow,
 } from "@/components/settings/host-scope/host-switcher-new-rows";
-import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 import {
   IN_THIS_TASK_LABEL,
   MANAGE_SANDBOXES_IN_SETTINGS,
@@ -751,16 +750,12 @@ function HostSwitcherEmptyList(props: {
   );
 }
 
-/**
- * The list's ending: the caller's action, or the composer's Manage row. A
- * build without sandboxes (`unreleased-features.ts`) has no Sandboxes page
- * for that row to open, so the composer's list ends with its hosts.
- */
+/** The list's ending: the caller's action, or the composer's Manage row. */
 function hostSwitcherTrailingAction(
   action: HostSwitcherAction | null,
   composer: HostSwitcherComposerMode | null,
 ): (HostSwitcherActionPresentation & { readonly onSelect: () => void }) | null {
-  if (composer !== null && UNRELEASED_FEATURES_ENABLED) {
+  if (composer !== null) {
     return {
       label: MANAGE_SANDBOXES_IN_SETTINGS,
       icon: Settings,

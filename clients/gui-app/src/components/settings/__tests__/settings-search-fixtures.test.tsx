@@ -147,8 +147,8 @@ vi.mock(
   }),
 );
 
-// General's replay button and Sounds' host link navigate; nothing here clicks
-// them, but both hooks need a router to be CALLED.
+// Sounds' host link navigates; nothing here clicks it, but its hook needs a
+// router to be CALLED.
 vi.mock("@tanstack/react-router", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@tanstack/react-router")>()),
   useNavigate: () => vi.fn(),

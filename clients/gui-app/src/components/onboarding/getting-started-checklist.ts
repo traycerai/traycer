@@ -27,7 +27,6 @@ import {
   useThisComputersMove,
   type ThisComputersMove,
 } from "@/components/settings/move/use-this-computers-move";
-import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 
 const CARDS = [
   {
@@ -176,14 +175,6 @@ function gettingStartedEntries(
 
 /**
  * Every fact the first steps are judged on.
- *
- * None of these reads carries an `UNRELEASED_FEATURES_ENABLED` gate of its
- * own, and none needs one: both surfaces that call this choose between this
- * checklist and the 1.5.1 guides on that flag
- * (`home-getting-started-section.tsx`, `getting-started-settings-panel.tsx`),
- * so a build without environments never renders a caller. The toast in
- * `first-task-guide.tsx` gates the same move read because ITS tree is mounted
- * either way.
  */
 export function useGettingStartedFacts(): GettingStartedFacts {
   const client = useOptionalHostClient();
@@ -230,18 +221,10 @@ export function useGettingStartedFacts(): GettingStartedFacts {
   };
 }
 
-function useFirstStepsAreComplete(): boolean {
+/** Whether the Guide group has nothing left to show (E4). */
+export function useGettingStartedGuideIsComplete(): boolean {
   return gettingStartedGuideIsComplete(useGettingStartedFacts());
 }
-
-/**
- * Whether the Guide group has nothing left to show (E4). A build without
- * environments (`unreleased-features.ts`) shows the 1.5.1 guides
- * (`getting-started-guides-checklist.ts`), which never hide the group, and
- * reads none of the first steps' facts.
- */
-export const useGettingStartedGuideIsComplete: () => boolean =
-  UNRELEASED_FEATURES_ENABLED ? useFirstStepsAreComplete : () => false;
 
 /**
  * The checklist as every surface reads it: one entry per visible card, plus

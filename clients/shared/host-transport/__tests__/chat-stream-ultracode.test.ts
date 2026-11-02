@@ -16,18 +16,12 @@ import type {
   StreamFrameEnvelope,
 } from "../i-stream-session";
 
-// The global unreleased-features switch stays off, as in the production build.
-// Ultracode must not read it: the request travels on the negotiated line alone.
-vi.mock("../../unreleased-features", () => ({
-  UNRELEASED_FEATURES_ENABLED: false,
-}));
-
 /**
  * The shared client carries the supplied Ultracode request on every settings
- * mutation when the negotiated line is 1.41 or later, with the global
- * unreleased switch off, and drops the key on older lines so they look exactly
- * like the release before the feature. Only the property's presence and value
- * are compared, never the frame or its environment.
+ * mutation when the negotiated line is 1.41 or later, and drops the key on
+ * older lines so they look exactly like the release before the feature. Only
+ * the property's presence and value are compared, never the frame or its
+ * environment.
  */
 
 const LATEST: SchemaVersion = { major: 1, minor: 41 };
@@ -215,7 +209,7 @@ function sentSettings(session: StubStreamSession): Record<string, unknown> {
   return settings;
 }
 
-describe("ChatStreamClient.sendAction with the global unreleased switch off", () => {
+describe("ChatStreamClient.sendAction", () => {
   describe.each(MUTATIONS)("%s", (kind) => {
     it.each([false, true])(
       "carries a supplied %s request on the latest line and keeps the rest of the tuple",

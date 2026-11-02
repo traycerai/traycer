@@ -1105,8 +1105,9 @@ function NotificationsSessionBody(
   //
   // Local mode learns "the user is looking at X" from host presence frames,
   // and neither local stream is opened in cloud mode. But those frames are
-  // built from state this renderer already owns: the canvas store plus
-  // document focus. `readFocusedHostNotificationPresence` is literally
+  // built from state this renderer already owns: the presented bot
+  // conversation, the canvas store and document focus.
+  // `readFocusedHostNotificationPresence` is literally
   // the function the outgoing frame is composed from, and
   // `subscribeHostNotificationPresence` already watches exactly the inputs
   // that can change it. Reading it directly is the same signal one hop

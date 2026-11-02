@@ -1158,6 +1158,46 @@ describe("useChatTimelineFollowLatch", () => {
       return { node, listRef, onFollowIntentChange };
     }
 
+    // Variant of `liftedOnAnEndClampedToThem` whose finger's last delivered
+    // movement is toward the end rather than away: a fling carries the
+    // finger's last movement, so a following toward fling needs a toward
+    // last movement for the lift to record one. The clamp lands 2px short
+    // of the reader (952 vs 950) rather than exactly on them, so a toward
+    // gesture already at the strict bottom cannot itself resolve the
+    // arrival (`reconcileStrictBottom`'s own "reader asked for the end and
+    // got it" path) - the growth afterwards is what the test means to
+    // exercise.
+    function liftedNearAnEndClampedToThemAfterATowardMove() {
+      const node = shim.makeNode({
+        scrollTop: 1000,
+        scrollHeight: 1500,
+        clientHeight: 500,
+      });
+      const listRef = makeFakeListRef(node);
+      const onFollowIntentChange = vi.fn<(isFollowing: boolean) => void>();
+      renderHook(() =>
+        useChatTimelineFollowLatch(listRef, true, true, {
+          ...DEFAULT_FOLLOW_LATCH_OPTIONS,
+          onFollowIntentChange,
+        }),
+      );
+      fireNativeScroll(node);
+      fireTouch(node, "touchstart", 300);
+      fireTouch(node, "touchmove", 400); // delivered away
+      shim.setGeometry(node, { scrollTop: 950 });
+      fireNativeScroll(node);
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+      shim.setGeometry(node, { scrollHeight: 1452 });
+      fireNativeScroll(node);
+      fireTouch(node, "touchmove", 350); // delivered toward: the last move
+      fireTouch(node, "touchend", 350);
+      flushAnimationFrame();
+      flushAnimationFrame();
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+      listRef.scrollToEnd.mockClear();
+      return { node, listRef, onFollowIntentChange };
+    }
+
     it("does not follow a reader who lifted on an end clamped to them when the tail grows back", () => {
       const { node, listRef, onFollowIntentChange } =
         liftedOnAnEndClampedToThem();
@@ -1184,17 +1224,17 @@ describe("useChatTimelineFollowLatch", () => {
 
     it("control: a reader who lifted on an end clamped to them follows the end a row growing in view moves away", () => {
       const { node, listRef, onFollowIntentChange } =
-        liftedOnAnEndClampedToThem();
+        liftedNearAnEndClampedToThemAfterATowardMove();
 
       // A row already on screen grows by 40: the end moves 40 down while
       // the view stands still, and the list writes nothing.
       listRef.setLastRowTop(FAKE_LAST_ROW_TOP_PX + 40);
-      shim.setGeometry(node, { scrollHeight: 1490 });
+      shim.setGeometry(node, { scrollHeight: 1492 });
       fireResizeObservers();
       // The momentum carries them the 40 to it, with the tail growing past
       // that before the report, so only their own travel can follow them.
-      shim.setGeometry(node, { scrollTop: 990 });
-      shim.setGeometry(node, { scrollHeight: 1540 });
+      shim.setGeometry(node, { scrollTop: 992 });
+      shim.setGeometry(node, { scrollHeight: 1542 });
       fireResizeObservers();
       fireNativeScroll(node);
 
@@ -1320,6 +1360,356 @@ describe("useChatTimelineFollowLatch", () => {
       // the view reached the end it was headed for without the report ever
       // seeing the strict bottom.
       shim.setGeometry(node, { scrollTop: 999, scrollHeight: 1540 });
+      fireNativeScroll(node);
+
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(true);
+      expect(listRef.scrollToEnd).toHaveBeenCalled();
+    });
+  });
+
+  // A lift whose finger's last delivered `touchmove` went away records no
+  // momentum: on iOS a contact landing on a fling delivers no touch event
+  // for the rest of its travel, so nothing else says where it is heading,
+  // and a later arrival on the end that lift would have recorded could only
+  // be that contact's own pan. `touchAwayFloorRef` is the lowest the view
+  // has rested since that `touchmove`, carried through every observation
+  // and announced write; the view rising off it with no `touchmove` is the
+  // one reversal the rule still has to recognise.
+  describe("a lifted finger's away floor", () => {
+    it("records no momentum for an away lift, so a row's growth later reaching the lift's target must not follow", () => {
+      const node = shim.makeNode({
+        scrollTop: 1000,
+        scrollHeight: 1500,
+        clientHeight: 500,
+      });
+      const listRef = makeFakeListRef(node);
+      const onFollowIntentChange = vi.fn<(isFollowing: boolean) => void>();
+      renderHook(() =>
+        useChatTimelineFollowLatch(listRef, true, true, {
+          ...DEFAULT_FOLLOW_LATCH_OPTIONS,
+          onFollowIntentChange,
+        }),
+      );
+      fireNativeScroll(node);
+      fireTouch(node, "touchstart", 300);
+      fireTouch(node, "touchmove", 400); // delivered away
+      shim.setGeometry(node, { scrollTop: 950 });
+      fireNativeScroll(node); // the drop's own report
+      fireTouch(node, "touchend", 400); // lift; last touchmove was away
+      flushAnimationFrame();
+      flushAnimationFrame();
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+      listRef.scrollToEnd.mockClear();
+
+      // A row measurement grows the end by 40; the view stands still.
+      listRef.setLastRowTop(FAKE_LAST_ROW_TOP_PX + 40);
+      shim.setGeometry(node, { scrollHeight: 1540 });
+      fireResizeObservers();
+
+      // With no touch event, the view moves onto the end recorded at the
+      // lift (1500, shifted 40 by the row's growth = 1040), while a further
+      // chunk grows the tail past it - still short of the new strict bottom
+      // (1600 - 500 = 1100) - before the one native scroll report that
+      // delivers it.
+      shim.setGeometry(node, { scrollTop: 1040 });
+      shim.setGeometry(node, { scrollHeight: 1600 });
+      fireResizeObservers();
+      fireNativeScroll(node);
+
+      expect(onFollowIntentChange).not.toHaveBeenCalledWith(true);
+      expect(listRef.scrollToEnd).not.toHaveBeenCalled();
+    });
+
+    it("control: a toward lift still arrives at the growth-shifted target", () => {
+      const node = shim.makeNode({
+        scrollTop: 1000,
+        scrollHeight: 1500,
+        clientHeight: 500,
+      });
+      const listRef = makeFakeListRef(node);
+      const onFollowIntentChange = vi.fn<(isFollowing: boolean) => void>();
+      renderHook(() =>
+        useChatTimelineFollowLatch(listRef, true, true, {
+          ...DEFAULT_FOLLOW_LATCH_OPTIONS,
+          onFollowIntentChange,
+        }),
+      );
+      fireNativeScroll(node);
+      fireTouch(node, "touchstart", 300);
+      fireTouch(node, "touchmove", 400); // delivered away
+      shim.setGeometry(node, { scrollTop: 950 });
+      fireNativeScroll(node);
+      // The finger's last delivered movement is toward the end: the floor
+      // clears, and the lift records momentum normally.
+      fireTouch(node, "touchmove", 350);
+      fireTouch(node, "touchend", 350);
+      flushAnimationFrame();
+      flushAnimationFrame();
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+      listRef.scrollToEnd.mockClear();
+
+      listRef.setLastRowTop(FAKE_LAST_ROW_TOP_PX + 40);
+      shim.setGeometry(node, { scrollHeight: 1540 });
+      fireResizeObservers();
+
+      shim.setGeometry(node, { scrollTop: 1040 });
+      shim.setGeometry(node, { scrollHeight: 1600 });
+      fireResizeObservers();
+      fireNativeScroll(node);
+
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(true);
+      expect(listRef.scrollToEnd).toHaveBeenCalled();
+    });
+
+    it("keeps the record through an unannounced rise with no touchmove, a reversal the floor does not see", () => {
+      const node = shim.makeNode({
+        scrollTop: 1000,
+        scrollHeight: 1500,
+        clientHeight: 500,
+      });
+      const listRef = makeFakeListRef(node);
+      const onFollowIntentChange = vi.fn<(isFollowing: boolean) => void>();
+      renderHook(() =>
+        useChatTimelineFollowLatch(listRef, true, true, {
+          ...DEFAULT_FOLLOW_LATCH_OPTIONS,
+          onFollowIntentChange,
+        }),
+      );
+      fireNativeScroll(node);
+      fireTouch(node, "touchstart", 300);
+      fireTouch(node, "touchmove", 400); // delivered away
+      shim.setGeometry(node, { scrollTop: 950 });
+      fireNativeScroll(node); // report; the floor lowers to 950
+
+      // The view rises toward the end with no touchmove: a reversal the
+      // contact never announced.
+      shim.setGeometry(node, { scrollTop: 990 });
+      fireNativeScroll(node);
+
+      fireTouch(node, "touchend", 400); // lift; last touchmove was still away
+      flushAnimationFrame();
+      flushAnimationFrame();
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+      listRef.scrollToEnd.mockClear();
+
+      listRef.setLastRowTop(FAKE_LAST_ROW_TOP_PX + 40);
+      shim.setGeometry(node, { scrollHeight: 1540 });
+      fireResizeObservers();
+
+      shim.setGeometry(node, { scrollTop: 1040 });
+      shim.setGeometry(node, { scrollHeight: 1600 });
+      fireResizeObservers();
+      fireNativeScroll(node);
+
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(true);
+      expect(listRef.scrollToEnd).toHaveBeenCalled();
+    });
+
+    it("an away observation off the strict bottom retires a toward lift's record before arrival is read", () => {
+      const node = shim.makeNode({
+        scrollTop: 700,
+        scrollHeight: 1500,
+        clientHeight: 500,
+      });
+      const listRef = makeFakeListRef(node);
+      const onFollowIntentChange = vi.fn<(isFollowing: boolean) => void>();
+      renderHook(() =>
+        useChatTimelineFollowLatch(listRef, true, true, {
+          ...DEFAULT_FOLLOW_LATCH_OPTIONS,
+          onFollowIntentChange,
+        }),
+      );
+      fireNativeScroll(node);
+      fireTouch(node, "touchstart", 400);
+      fireTouch(node, "touchmove", 300); // delivered toward
+      shim.setGeometry(node, { scrollTop: 850 });
+      fireNativeScroll(node);
+      fireTouch(node, "touchend", 300); // lift; toward - records momentum
+      flushAnimationFrame();
+      flushAnimationFrame();
+      listRef.scrollToEnd.mockClear();
+
+      // With no touch event, a report shows the view lower than the last
+      // one and off the strict bottom: the reader's own travel away from
+      // the end, which retires the record before arrival can be read.
+      shim.setGeometry(node, { scrollTop: 700 });
+      fireNativeScroll(node);
+
+      listRef.setLastRowTop(FAKE_LAST_ROW_TOP_PX + 40);
+      shim.setGeometry(node, { scrollHeight: 1540 });
+      fireResizeObservers();
+
+      // A report at the recorded end (short of the new strict bottom:
+      // 1600 - 500 = 1100).
+      shim.setGeometry(node, { scrollTop: 1040 });
+      shim.setGeometry(node, { scrollHeight: 1600 });
+      fireResizeObservers();
+      fireNativeScroll(node);
+
+      expect(onFollowIntentChange).not.toHaveBeenCalledWith(true);
+      expect(listRef.scrollToEnd).not.toHaveBeenCalled();
+    });
+
+    it("control: a clamp dropping the end onto the view is not away travel, so a toward lift's record survives it", () => {
+      const node = shim.makeNode({
+        scrollTop: 1000,
+        scrollHeight: 1500,
+        clientHeight: 500,
+      });
+      const listRef = makeFakeListRef(node);
+      const onFollowIntentChange = vi.fn<(isFollowing: boolean) => void>();
+      const holds = { reattach: false };
+      renderHook(() =>
+        useChatTimelineFollowLatch(listRef, true, true, {
+          ...DEFAULT_FOLLOW_LATCH_OPTIONS,
+          onFollowIntentChange,
+          isReattachSuppressed: () => holds.reattach,
+        }),
+      );
+      fireNativeScroll(node);
+      fireTouch(node, "touchstart", 300);
+      fireTouch(node, "touchmove", 400); // delivered away
+      shim.setGeometry(node, { scrollTop: 950 });
+      fireNativeScroll(node);
+      // The finger's last delivered movement is toward the end.
+      fireTouch(node, "touchmove", 350);
+      fireTouch(node, "touchend", 350);
+      flushAnimationFrame();
+      flushAnimationFrame();
+      listRef.scrollToEnd.mockClear();
+
+      // A clamp drops the end onto the view exactly: an offset lowered onto
+      // the strict bottom, which is the end dropping under the view, not
+      // the reader's own travel away from it. Reattachment is held off so
+      // this landing cannot itself grant follow - isolating what the
+      // momentum record survives on.
+      holds.reattach = true;
+      shim.setGeometry(node, { scrollHeight: 800, scrollTop: 300 });
+      fireNativeScroll(node);
+      expect(onFollowIntentChange).not.toHaveBeenCalledWith(true);
+      holds.reattach = false;
+
+      // Content regrows past the original end, unobserved; the clamp's own
+      // offset is not moved by it.
+      shim.setGeometry(node, { scrollHeight: 1540 });
+      fireResizeObservers();
+
+      // Momentum travels to the recorded end (1500), still short of the new
+      // strict bottom (1540 - 500 = 1040).
+      shim.setGeometry(node, { scrollTop: 1000 });
+      fireNativeScroll(node);
+
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(true);
+      expect(listRef.scrollToEnd).toHaveBeenCalled();
+    });
+
+    it("an announced write carries the away floor, so a write-only lift still reads as away", () => {
+      const node = shim.makeNode({
+        scrollTop: 1000,
+        scrollHeight: 1500,
+        clientHeight: 500,
+      });
+      const listRef = makeFakeListRef(node);
+      const onFollowIntentChange = vi.fn<(isFollowing: boolean) => void>();
+      renderHook(() =>
+        useChatTimelineFollowLatch(listRef, true, true, {
+          ...DEFAULT_FOLLOW_LATCH_OPTIONS,
+          onFollowIntentChange,
+        }),
+      );
+      fireNativeScroll(node);
+      fireTouch(node, "touchstart", 300);
+      fireTouch(node, "touchmove", 400); // delivered away
+      shim.setGeometry(node, { scrollTop: 950 });
+      fireNativeScroll(node); // report; the floor lowers to 950
+
+      // Rows above remeasure and the list moves the view - and the floor -
+      // up with them, 40px, with no finger movement.
+      listRef.setLastRowTop(FAKE_LAST_ROW_TOP_PX + 40);
+      fireListAdjust(node, { scrollTop: 990, scrollHeight: 1540 });
+      fireResizeObservers();
+
+      fireTouch(node, "touchend", 400); // lift; no touchmove since the write
+      flushAnimationFrame();
+      flushAnimationFrame();
+      listRef.scrollToEnd.mockClear();
+
+      // Further growth, short of the new strict bottom, at what an
+      // uncarried floor's wrongly-recorded momentum would read as arrival.
+      listRef.setLastRowTop(FAKE_LAST_ROW_TOP_PX + 70);
+      shim.setGeometry(node, { scrollHeight: 1570 });
+      fireResizeObservers();
+      shim.setGeometry(node, { scrollTop: 1070 });
+      shim.setGeometry(node, { scrollHeight: 1620 });
+      fireResizeObservers();
+      fireNativeScroll(node);
+
+      expect(onFollowIntentChange).not.toHaveBeenCalledWith(true);
+      expect(listRef.scrollToEnd).not.toHaveBeenCalled();
+    });
+
+    it("a viewport-growth clamp carries the floor below a reversal only the clamp observed, so the lift's record survives it", () => {
+      const node = shim.makeNode({
+        scrollTop: 1000,
+        scrollHeight: 1500,
+        clientHeight: 500,
+      });
+      const listRef = makeFakeListRef(node);
+      const onFollowIntentChange = vi.fn<(isFollowing: boolean) => void>();
+      renderHook(() =>
+        useChatTimelineFollowLatch(listRef, true, true, {
+          ...DEFAULT_FOLLOW_LATCH_OPTIONS,
+          onFollowIntentChange,
+        }),
+      );
+      fireNativeScroll(node);
+      fireTouch(node, "touchstart", 300);
+      fireTouch(node, "touchmove", 400); // delivered away
+      shim.setGeometry(node, { scrollTop: 900 });
+      fireNativeScroll(node); // report; the floor lowers to 900
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+
+      // A rise with no touchmove: the floor, unmoved by it, now sits below
+      // the view.
+      shim.setGeometry(node, { scrollTop: 950 });
+      fireNativeScroll(node);
+
+      // The viewport grows and the browser clamps the view down with it,
+      // with no finger movement, read against the floor's own reference
+      // geometry (950): clamped = min(950, 1500 - 650) = 850, a -100 delta.
+      // The carry puts the floor at 800; `noteObservedTravel`'s own
+      // Math.min against the clamp's resting 850 then leaves it at 800,
+      // not 850 - the one case where the carry and that Math.min disagree.
+      shim.setGeometry(node, {
+        clientHeight: 650,
+        scrollHeight: 1700,
+        scrollTop: 850,
+      });
+      fireNativeScroll(node);
+
+      // The lift's resting offset (850) is not within epsilon of the
+      // carried floor (800): the reversal this clamp observed still reads,
+      // so the lift is not "away" and records momentum normally. Without
+      // the carry, the floor would read 850 here - exactly the lift's
+      // offset - and the lift would read as away, recording nothing.
+      fireTouch(node, "touchend", 400);
+      flushAnimationFrame();
+      flushAnimationFrame();
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+      listRef.scrollToEnd.mockClear();
+
+      // A row already on screen grows by 40, the view standing still.
+      listRef.setLastRowTop(FAKE_LAST_ROW_TOP_PX + 40);
+      shim.setGeometry(node, { scrollHeight: 1740 });
+      fireResizeObservers();
+      // The momentum carries them the 40 to it (1700 + 40 - 650 = 1090),
+      // with the tail growing past that before the report, so only their
+      // own travel can follow them. Short of the new strict bottom
+      // (1800 - 650 = 1150), so ordinary strict-bottom reconciliation
+      // cannot answer this - only the surviving momentum record can.
+      shim.setGeometry(node, { scrollTop: 1090 });
+      shim.setGeometry(node, { scrollHeight: 1800 });
+      fireResizeObservers();
       fireNativeScroll(node);
 
       expect(onFollowIntentChange).toHaveBeenLastCalledWith(true);

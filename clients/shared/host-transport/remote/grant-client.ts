@@ -10,7 +10,7 @@ import type {
   AttachGrantProvider,
   AttachGrantProvision,
 } from "@traycer/protocol/host-transport/remote/grant";
-import { composeRequestAbort } from "../../auth/request-abort";
+import { composeRequestAbort, untilAborted } from "../../auth/request-abort";
 import { SANDBOX_FROZEN_MESSAGE } from "../../host-client/sandbox-control";
 
 export type {
@@ -118,11 +118,14 @@ const BODY_READ_CAP_BYTES = 64 * 1024;
  * `response.text()` is used only when the response exposes no stream at all (a
  * body-less response) — there is nothing to bound in that case.
  */
-async function readBodyText(response: Response): Promise<string> {
+async function readBodyText(
+  response: Response,
+  signal: AbortSignal,
+): Promise<string> {
   const body = response.body;
   if (body === null || body === undefined) {
     try {
-      return await response.text();
+      return await untilAborted(response.text(), signal);
     } catch {
       return "";
     }
@@ -133,7 +136,7 @@ async function readBodyText(response: Response): Promise<string> {
   let bytesRead = 0;
   try {
     while (bytesRead < BODY_READ_CAP_BYTES) {
-      const chunk = await reader.read();
+      const chunk = await untilAborted(reader.read(), signal);
       if (chunk.done) {
         break;
       }
@@ -274,16 +277,19 @@ async function mintAttachGrantWithSignal(
 ): Promise<AttachGrantResult> {
   let response: Response;
   try {
-    response = await fetch(attachGrantUrl(authnBaseUrl, hostId), {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${bearerToken}`,
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
-      body: JSON.stringify({ role: "client" }),
+    response = await untilAborted(
+      fetch(attachGrantUrl(authnBaseUrl, hostId), {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${bearerToken}`,
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body: JSON.stringify({ role: "client" }),
+        signal,
+      }),
       signal,
-    });
+    );
   } catch (error) {
     const failure = describeFetchFailure(error);
     return {
@@ -294,7 +300,7 @@ async function mintAttachGrantWithSignal(
   }
 
   if (response.status === 401 || response.status === 403) {
-    const bodyText = await readBodyText(response);
+    const bodyText = await readBodyText(response, signal);
     return {
       kind: "unauthorized",
       detail: `authn rejected the mint with HTTP ${response.status}`,
@@ -302,7 +308,7 @@ async function mintAttachGrantWithSignal(
     };
   }
   if (response.status === 402) {
-    const bodyText = await readBodyText(response);
+    const bodyText = await readBodyText(response, signal);
     if (isSandboxFrozenRefusal(bodyText)) {
       return {
         kind: "sandbox-frozen",
@@ -317,7 +323,7 @@ async function mintAttachGrantWithSignal(
     };
   }
   if (response.status < 200 || response.status >= 300) {
-    const bodyText = await readBodyText(response);
+    const bodyText = await readBodyText(response, signal);
     return {
       kind: "network-error",
       detail: `authn answered HTTP ${response.status}`,
@@ -328,7 +334,7 @@ async function mintAttachGrantWithSignal(
   // NOTE: no body snippet from here down — a 2xx body carries the grant.
   let body: unknown;
   try {
-    body = await response.json();
+    body = await untilAborted(response.json(), signal);
   } catch {
     return {
       kind: "network-error",

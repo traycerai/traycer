@@ -85,6 +85,9 @@ import type {
 } from "@traycer/protocol/host/bot/conversation-schemas";
 import type { TabNavigationIntent } from "@/lib/tab-navigation/intents";
 import type { BotChannelLanding } from "@/components/bots/bot-channel-view";
+import { readFocusedHostNotificationPresence } from "@/lib/notifications/notification-presence";
+import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { makeOpenableNodeRef } from "@/stores/epics/canvas/types";
 import type { BotOpenSession } from "@/components/bots/bot-session-view";
 import type {
   BotOpenMemory,
@@ -2626,6 +2629,39 @@ describe("<BotTabSurface /> main bot", () => {
     const header = screen.getByTestId("bot-tab-title").closest("header");
     if (header === null) throw new Error("expected the channel header");
     expect(within(header).queryByRole("img", { name: "Main bot" })).toBeNull();
+  });
+});
+
+describe("<BotTabSurface /> focused notification presence", () => {
+  afterEach(() => {
+    useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    vi.restoreAllMocks();
+  });
+
+  it("stands for no entity while in front of a retained task chat, and leaves the chat focused once closed", () => {
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    const tabId = useEpicCanvasStore
+      .getState()
+      .openEpicTab("epic-behind", "Epic");
+    useEpicCanvasStore.getState().openTileInTab(
+      tabId,
+      makeOpenableNodeRef({
+        id: "chat-behind",
+        instanceId: "chat-behind-instance",
+        type: "chat",
+        name: "Chat",
+        hostId: TAB_HOST,
+      }),
+    );
+
+    const view = render(surface());
+    expect(readFocusedHostNotificationPresence()).toBeNull();
+
+    view.unmount();
+    expect(readFocusedHostNotificationPresence()?.entity).toEqual({
+      epicId: "epic-behind",
+      chatId: "chat-behind",
+    });
   });
 });
 

@@ -364,7 +364,7 @@ export class BrowserViewEntryFactory {
     // The guest seam runs BEFORE the macOS app-menu accelerator and is the
     // only place in the chain that knows a browser tile has focus, so the
     // whole focus-scoped input policy is decided here. `preventDefault` is
-    // what stops a menu equivalent (Cmd+W's "Close Tab") from also firing.
+    // what stops a menu equivalent on the same key from also firing.
     // The guest's OWN window decides the policy: each renderer registers a
     // table derived from its own surface state, and this seam is the only
     // place that knows which window's guest has focus.

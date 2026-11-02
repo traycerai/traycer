@@ -103,7 +103,6 @@ import {
 } from "@/stores/sandboxes/sandboxes-page-store";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
 import type { OpenEpicState } from "@/stores/epics/open-epic/store";
-import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 
 /**
  * What an in-task picker knows about its task: the hosts it already uses,
@@ -255,10 +254,7 @@ export function useSandboxStaging(input: {
   const { forkOnNew } = input;
   const { memoryHostId } = input;
   const chooseAnotherHostLabel = useStageFallbackHostLine(memoryHostId);
-  // No surface stages in a build without sandboxes
-  // (`unreleased-features.ts`): the hook answers `null` for every caller, so
-  // each picker draws the plain `Host` group and its own search threshold.
-  const surface = UNRELEASED_FEATURES_ENABLED ? input.surface : null;
+  const { surface } = input;
   const surfaceKey = surface === null ? "" : surface.surfaceKey;
   const task = surface === null ? null : surface.task;
   const viewerUserId = useCloudChatViewerId();
@@ -485,8 +481,7 @@ export function useSandboxStaging(input: {
         if (summary === null || !summary.burst) return null;
         return hostConfigurationLabel(host);
       },
-      // No New sandbox row in a build without sandboxes.
-      newRows: UNRELEASED_FEATURES_ENABLED ? rows.map(newRowPresentation) : [],
+      newRows: rows.map(newRowPresentation),
       rememberedConfigurationKey:
         memoryHostId === null
           ? null

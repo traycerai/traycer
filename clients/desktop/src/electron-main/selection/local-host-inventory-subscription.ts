@@ -22,10 +22,8 @@
  * `onPushActiveChanged` says whether the push is currently covering the
  * personal rows. It used to stand the poll down, which froze every team row
  * while the push was healthy; the poll now runs regardless, and coverage is a
- * diagnostic. (The build that ships without team hosts has no such scope to
- * freeze, so there coverage still stands the poll down, as the release before
- * them did - see `registered-hosts-broadcast.ts`.) It reads `false` for every
- * way the push can be less than healthy:
+ * diagnostic. It reads `false` for every way the push can be less than
+ * healthy:
  *
  *  - a host that predates the method never advertises it, support reads
  *    `unsupported`, and no session is opened at all;
@@ -42,9 +40,7 @@
  *  - a host that negotiated only @1.0 of the method (it predates sandboxes)
  *    sends the personal hosts alone, every sandbox row stripped. That is not
  *    the personal registry, so its snapshots are neither adopted nor counted
- *    as coverage. In the build that ships without sandboxes there is no such
- *    row to strip, so a @1.0 snapshot IS the personal registry and is adopted
- *    and counted like any other.
+ *    as coverage.
  *
  * Nothing here retries on its own beyond the transport's own reconnect ladder
  * - the poll is the retry.
@@ -88,7 +84,6 @@ import {
 } from "@traycer-clients/shared/host-transport/transport-config";
 import { createWhatwgStreamWebSocketFactory } from "@traycer-clients/shared/host-transport/whatwg-stream-ws-factory";
 import { WsStreamClient } from "@traycer-clients/shared/host-transport/ws-stream-client";
-import { UNRELEASED_FEATURES_ENABLED } from "../../unreleased-features";
 
 const streamWebSocketFactory = createWhatwgStreamWebSocketFactory();
 
@@ -261,11 +256,7 @@ export function startLocalHostInventorySubscription(
           // time one arrived, until the next poll restored them. Such a
           // snapshot covers nothing here: it is not forwarded, and the poll
           // keeps reading the whole registry.
-          //
-          // The build that ships without sandboxes adopts it: it has no
-          // sandbox row to lose, so a @1.0 snapshot is the whole personal
-          // registry, as it was in the release before them.
-          if (UNRELEASED_FEATURES_ENABLED && !snapshot.includesSandboxRows) {
+          if (!snapshot.includesSandboxRows) {
             snapshotCoversSubscription = false;
             setPushActive(false);
             return;

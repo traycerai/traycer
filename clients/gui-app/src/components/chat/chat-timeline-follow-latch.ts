@@ -1439,6 +1439,12 @@ export function useChatTimelineFollowLatch(
   // momentum after the lift is the reader's own motion, with no touch event
   // to say where it is heading.
   const readerMomentumEndRef = useRef<ReaderMomentumEnd | null>(null);
+  // Under a finger whose last delivered `touchmove` went away from the end:
+  // the lowest the view has rested since that `touchmove`, carried with every
+  // announced write. Null when the contact's last movement is not known to be
+  // away. A reversal may deliver no `touchmove`, so it is the view rising off
+  // this floor that says the finger turned back (`noteReaderLift`).
+  const touchAwayFloorRef = useRef<number | null>(null);
   // Where the view would be had only the app, the list and the browser moved
   // it since the latest scroll report, or read of it. A finger landing on a
   // fling gives iOS no touch event for its whole contact, so its pan shows
@@ -1749,6 +1755,10 @@ export function useChatTimelineFollowLatch(
           ...momentum,
           liftScrollTop: momentum.liftScrollTop + delta,
         };
+      }
+      const awayFloor = touchAwayFloorRef.current;
+      if (awayFloor !== null) {
+        touchAwayFloorRef.current = awayFloor + delta;
       }
       const expected = expectedScrollTopRef.current;
       if (expected !== null) {
@@ -2160,6 +2170,10 @@ export function useChatTimelineFollowLatch(
         liftScrollTop: momentum.liftScrollTop + delta,
       };
     }
+    const awayFloor = touchAwayFloorRef.current;
+    if (awayFloor !== null) {
+      touchAwayFloorRef.current = awayFloor + delta;
+    }
     // The geometry a later clamp is recognised against moves by what this write
     // moved the view, whichever kind of write it was. It is not where the view
     // IS - it is where the view would be from everything this latch knows
@@ -2348,13 +2362,46 @@ export function useChatTimelineFollowLatch(
     [isCorrectionSuppressed, isReattachSuppressed, listRef],
   );
 
+  // What an observation owes the momentum and the finger, read before it asks
+  // whether momentum arrived. Momentum travels only toward the end, so the
+  // reader's own travel away from it is not that momentum: it is an away
+  // fling, which never arrives, or a contact on the fling that delivered no
+  // touch event, whose later stop must not read as the fling's arrival. An
+  // offset lowered onto the strict bottom is the end dropping under the view,
+  // and says nothing about either.
+  const noteObservedTravel = useCallback(
+    (geometry: ChatTimelineScrollGeometry, movedAway: boolean): void => {
+      const awayFloor = touchAwayFloorRef.current;
+      if (awayFloor !== null) {
+        touchAwayFloorRef.current = Math.min(
+          awayFloor,
+          restingScrollTop(geometry),
+        );
+      }
+      if (movedAway && !isChatTimelineAtStrictBottom(geometry)) {
+        readerMomentumEndRef.current = null;
+      }
+    },
+    [],
+  );
+
   // The end a lifted finger's momentum heads for: the one the lift sees,
   // unless a recovering or restoring transcript holds it (`noteReaderMomentum`).
+  // A finger whose last movement went away throws nothing at the end: any later
+  // arrival on this record could only be a contact no touch event announced.
   const noteReaderLift = useCallback((): void => {
     const node = listRef.current?.getScrollableNode();
     const geometry = node ? readScrollGeometry(node) : null;
+    const awayFloor = touchAwayFloorRef.current;
+    touchAwayFloorRef.current = null;
+    const liftedAway =
+      geometry !== null &&
+      awayFloor !== null &&
+      restingScrollTop(geometry) <=
+        awayFloor + CHAT_TIMELINE_STRICT_BOTTOM_EPSILON_PX;
     readerMomentumEndRef.current =
       geometry !== null &&
+      !liftedAway &&
       isChatTimelineGeometryMeasurable(geometry) &&
       isReattachSuppressed?.() !== true &&
       isCorrectionSuppressed?.() !== true
@@ -2452,6 +2499,7 @@ export function useChatTimelineFollowLatch(
     noteViewportGrowthClamp(geometry);
     noteReportAfterLiftLanding(geometry);
     const movedAway = noteReportMovement(geometry);
+    noteObservedTravel(geometry, movedAway);
     if (noteReportAfterDeparture(geometry)) return;
     // Before the strict bottom reconciles or the arm decides: a press's drag
     // to the end is a step of its own, and the end it reaches is not where
@@ -2497,6 +2545,7 @@ export function useChatTimelineFollowLatch(
     isCorrectionSuppressed,
     listRef,
     noteFreeReportAway,
+    noteObservedTravel,
     noteReaderMomentum,
     noteReportAfterDeparture,
     noteReportAfterLiftLanding,
@@ -2629,6 +2678,7 @@ export function useChatTimelineFollowLatch(
     // before this read can charge it to the reader.
     noteViewportGrowthClamp(geometry);
     const movedAway = noteViewRead(geometry);
+    noteObservedTravel(geometry, movedAway);
     // A press's step, or the clamp of an end that dropped under it, can be
     // what this read sees before any report of it arrives: the view it finds
     // is where the press now stands, whichever observed it first.
@@ -2683,6 +2733,7 @@ export function useChatTimelineFollowLatch(
     isCorrectionSuppressed,
     listRef,
     noteOwedDeparture,
+    noteObservedTravel,
     noteReaderMomentum,
     notePressView,
     noteViewRead,
@@ -2846,6 +2897,7 @@ export function useChatTimelineFollowLatch(
     };
     const handleTouchStart = (event: TouchEvent): void => {
       lastTouchClientYRef.current = event.touches.item(0)?.clientY ?? null;
+      touchAwayFloorRef.current = null;
       const liveNode = listRef.current?.getScrollableNode();
       const geometry = liveNode ? readScrollGeometry(liveNode) : null;
       if (geometry === null || !isChatTimelineGeometryMeasurable(geometry)) {
@@ -2871,6 +2923,16 @@ export function useChatTimelineFollowLatch(
       if (clientY === undefined || previousClientY === null) return;
       lastTouchClientYRef.current = clientY;
       if (clientY === previousClientY) return;
+      const liveNode = listRef.current?.getScrollableNode();
+      const liveGeometry = liveNode ? readScrollGeometry(liveNode) : null;
+      // This frame's scroll has not applied yet: the view is where the finger
+      // leaves from.
+      touchAwayFloorRef.current =
+        clientY > previousClientY &&
+        liveGeometry !== null &&
+        isChatTimelineGeometryMeasurable(liveGeometry)
+          ? restingScrollTop(liveGeometry)
+          : null;
       noteReaderGesture({
         direction: clientY < previousClientY ? "toward-end" : "away-from-end",
         freezeInFlightScroll: true,
@@ -2891,7 +2953,10 @@ export function useChatTimelineFollowLatch(
         expectedScrollTopRef.current = restingScrollTop(liveGeometry);
       }
       const armedDeparture = armedReaderDepartureRef.current;
-      if (armedDeparture?.source !== "touch") return;
+      if (armedDeparture?.source !== "touch") {
+        touchAwayFloorRef.current = null;
+        return;
+      }
       if (
         permissionRef.current &&
         liveGeometry !== null &&

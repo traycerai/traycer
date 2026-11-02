@@ -2885,10 +2885,8 @@ export default tseslint.config(
             "onboarding-*", // a <style> element inside onboarding-page.tsx
             "diorama-*", // src/components/onboarding/onboarding-diorama.css
             "session-import-*", // src/components/onboarding/onboarding-import.css
-            // src/components/settings/panels/getting-started-settings.css -
-            // a <progress>, whose fill and track are pseudo-elements, and a
+            // src/components/settings/panels/getting-started-settings.css - a
             // card whose `scroll-margin-top` lives behind a media query.
-            "settings-setup-meter",
             "settings-setup-card",
 
             // Class names owned by a library, not by us.

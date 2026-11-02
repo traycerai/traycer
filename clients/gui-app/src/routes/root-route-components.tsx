@@ -21,8 +21,6 @@ import { PreventSleepController } from "@/components/layout/bridges/prevent-slee
 import { NotificationEmissionController } from "@/components/layout/bridges/notification-emission-controller";
 import { NotificationFocusBridge } from "@/components/layout/bridges/notification-focus-bridge";
 import { SystemTabModalHost } from "@/components/layout/dialogs/system-tab-modal-host";
-import { ProfileSyncModalHost } from "@/components/settings/panels/profile-sync/profile-sync-modal-host";
-import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 import { SweepReviewDialogHost } from "@/components/epics/sweep-review-dialog-host";
 import { ChatSearchDialogHost } from "@/components/chat-search/chat-search-dialog-host";
 import { NotificationsMobileSheet } from "@/components/notifications/notifications-mobile-sheet";
@@ -162,9 +160,7 @@ export function RootComponent() {
             <TrayOpenEpicBridge />
             <NotificationFocusBridge />
             <EpicAccessCoordinator />
-            {/* No team hosts to close, and no "no longer a member" toast, in
-                a build without them (`unreleased-features.ts`). */}
-            {UNRELEASED_FEATURES_ENABLED ? <TeamRemovalTileCloser /> : null}
+            <TeamRemovalTileCloser />
             <ProviderProfileAddFlowHost />
           </HostScopeReady>
           <RootSurface
@@ -177,20 +173,11 @@ export function RootComponent() {
               <SystemTabModalHost />
               <ChatSearchDialogHost />
               <SweepReviewDialogHost />
-              {/* The Sync profiles dialog of a build without environments
-                  (`unreleased-features.ts`). Here rather than in Settings:
-                  Providers settings drops its body while a deep link moves
-                  its host scope, which is the navigation "Sign in on
-                  <source>" makes; and not behind the default-host scope,
-                  because it reads only the source host it captured. */}
-              {UNRELEASED_FEATURES_ENABLED ? null : <ProfileSyncModalHost />}
               {/* The retrospective and move sheets. Here rather than in
                   Settings: the retrospective sheet opens by itself once on
                   the first launch after the update, whatever the window
-                  shows, and the Start toast opens it too. Neither sheet
-                  exists in a build without environments
-                  (`unreleased-features.ts`). */}
-              {UNRELEASED_FEATURES_ENABLED ? <EnvironmentSheetsHost /> : null}
+                  shows, and the Start toast opens it too. */}
+              <EnvironmentSheetsHost />
               {/* Mobile-only full-screen notifications surface (renders null on
                 desktop, where the header bell + popover are used instead). */}
               <NotificationsMobileSheet />
@@ -264,7 +251,7 @@ function StandaloneBody(props: {
   readonly showOnboarding: boolean;
   readonly admissionRefusal: ShellAdmissionRefusal | null;
 }) {
-  if (props.showOnboarding) return <OnboardingPage replay={false} />;
+  if (props.showOnboarding) return <OnboardingPage />;
   if (props.admissionRefusal !== null) {
     return <AuthLandingPage refusal={props.admissionRefusal} />;
   }

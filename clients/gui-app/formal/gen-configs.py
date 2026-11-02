@@ -8,7 +8,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 BASE = dict(
     Keys=0,
     R=3, VH=2, EST=2, Heights='"mixed"', MaxH=3, NAVOFF=0,
-    HasWheel="TRUE", TouchInput="FALSE", TouchMoveDelivered="FALSE",
+    HasWheel="TRUE", TouchInput="FALSE", TouchMoveDelivered="FALSE", TouchMoveFirstOnly="FALSE",
     HasScrollEnd="TRUE", DeferUnderFinger="FALSE", HideKinds='{"intact", "collapse"}',
     StartLo=1, StartMode='"fresh"', Foreground="TRUE", NoOpPicks="TRUE",
     Fixes="{}", REST=4, DataAnchored="TRUE", InitialEnd="FALSE", DeferAdjust="FALSE",
@@ -184,7 +184,7 @@ SHIPPED = ["nav", "toward", "restore", "pill", "cancel", "paint", "supersede", "
            "keep", "padend", "turnguard", "ledger", "ledgermaint", "translate", "followguard",
            "liftledger", "obsarm", "momstill", "freeland", "freelanddep", "armcarry", "restspend",
            "deprebase", "heldgap", "pressland", "pressstep", "padannounce", "idlehold", "momhybrid", "tailblock", "unreadsize", "restoreanswer", "viewcarry", "oweddep",
-           "keyanswer", "presskey", "pressqueue"]
+           "keyanswer", "presskey", "pressqueue", "momdir", "momaway"]
 FIXED = "{" + ", ".join(f'"{f}"' for f in SHIPPED) + "}"
 
 # Configs also run with one shipped fix taken out (`_fixed_no<fix>`;
@@ -306,4 +306,16 @@ for lane in ("before", "after"):
           dict(BASE, **overrides, Keys=1, Fixes=variant_fixes(variant)), "ReplaySpec", True,
           ["I_NamedPreconditions", "I_PKConsumerEndpointNotReached"])
     names.append(name)
+
+# The silent-contact record: one reader history, with and without the pair,
+# under each touchmove delivery the platform allows.
+doc, overrides = CONFIGS["phone_read"]
+for delivery, first_only in (("", "FALSE"), ("first_", "TRUE")):
+    for lane in ("before", "after"):
+        name = f"MomentumPair_{delivery}{lane}"
+        fixes = variant_fixes("nomomdir_nomomaway") if lane == "before" else FIXED
+        write(name, f"An away lift, a silent contact, a pan onto its old end; {lane} consumer control.",
+              dict(BASE, **overrides, TouchMoveFirstOnly=first_only, Fixes=fixes), "ReplaySpec", True,
+              ["I_NamedPreconditions", "I_MomentumPairEndpointNotReached"])
+        names.append(name)
 print(" ".join(f"ChatScroll_{n}" for n in names))
