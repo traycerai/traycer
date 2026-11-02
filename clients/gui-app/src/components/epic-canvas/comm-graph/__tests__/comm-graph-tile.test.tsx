@@ -2536,7 +2536,7 @@ describe("CommGraphTile", () => {
    * its cap" are not observable from a tile in this environment, and are
    * pinned where they are observable instead (`office-static-layer.test.ts`
    * for the layer's own budget and release, `views/__tests__/
-   * office-plan-perf.test.ts` for the sprite working set). What survives the
+   * office-plan-perf.measure.ts` for the sprite working set). What survives the
    * missing context is the scene: it is built and synced by an effect that
    * needs no context at all, so how many scenes a tile has, and which of them
    * are still live, is exactly answerable - and it is the half of the rule

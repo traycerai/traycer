@@ -320,7 +320,8 @@ function restoreGlobalState(): void {
   }
 }
 
-afterAll(() => {
+/** Everything one file leaves that the next must not see, in dependency order. */
+export function resetTestFileState(): void {
   vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
@@ -339,4 +340,6 @@ afterAll(() => {
   restoreGlobalState();
   resetDocument();
   baseline.focusedInThisFile = false;
-});
+}
+
+afterAll(resetTestFileState);

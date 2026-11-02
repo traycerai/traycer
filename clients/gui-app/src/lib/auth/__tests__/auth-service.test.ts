@@ -499,6 +499,19 @@ function expectedStored(token: string, refreshToken: string) {
   };
 }
 
+/**
+ * Starts the service and lets its startup validation's whole retry budget
+ * elapse on the fake clock, so an unreachable authn settles without real time.
+ * Needs `vi.useFakeTimers()` first.
+ */
+async function startWithRetriesElapsed(service: AuthService): Promise<void> {
+  const start = service.start();
+  for (let retry = 1; retry < AUTH_FETCH_MAX_ATTEMPTS; retry += 1) {
+    await vi.advanceTimersByTimeAsync(authRetryDelayMs(retry));
+  }
+  await start;
+}
+
 describe("AuthService", () => {
   let restoreFetch: () => void = () => undefined;
 
@@ -711,6 +724,7 @@ describe("AuthService", () => {
   });
 
   it("refuses all three link-login calls from an unverified session WITHOUT reaching the runner host", async () => {
+    vi.useFakeTimers();
     // These three arrived with OSS `main`, where `this.currentBearer !== null`
     // WAS a correct verdict check: on main a present bearer is a confirmed one,
     // because no state existed in which a bearer is present and unconfirmed.
@@ -735,7 +749,7 @@ describe("AuthService", () => {
       Promise.reject(new Error("authn unreachable")),
     );
 
-    await service.start();
+    await startWithRetriesElapsed(service);
     expect(useAuthStore.getState().status).toBe("unverified");
     // Non-vacuity: the session really does hold a bearer, so a non-null check
     // would have passed and these refusals are not "there was nothing to send".
@@ -771,6 +785,7 @@ describe("AuthService", () => {
   });
 
   it("does not spend the repair refresh rotation when fetchUserSessions is read from an unverified (no-verdict) session", async () => {
+    vi.useFakeTimers();
     // `unverified` holds a REAL bearer read off disk - the whole point of
     // the local-admission ticket - so `captureLiveSessionAuthority()` (and
     // `isLiveSessionAuthority`) return non-null/true here exactly as they do
@@ -798,7 +813,7 @@ describe("AuthService", () => {
       Promise.reject(new Error("authn unreachable")),
     );
 
-    await service.start();
+    await startWithRetriesElapsed(service);
     expect(useAuthStore.getState().status).toBe("unverified");
 
     restoreFetch();

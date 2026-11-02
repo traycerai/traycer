@@ -505,27 +505,9 @@ export async function advanceLegendListFrames(
  * frames in jsdom. That window also crosses the installed library's 100ms
  * non-animated `finishScrollTo` deadline and the synthetic `scrollend` fired
  * on frame 10. Virtual time makes the contract deterministic without replacing
- * LegendList or sleeping on the runner's wall clock.
+ * LegendList or sleeping on the runner's wall clock. Needs
+ * `installLegendListTestClock` in the test.
  */
 export async function settleLegendList(): Promise<void> {
-  // The base branch's split ChatMessages suites install the virtual browser
-  // clock above. This branch replaces those suites with one consolidated
-  // integration suite whose race coverage intentionally keeps the real
-  // scheduler. Preserve both contracts: virtualize callers that opt in, and
-  // retain the prior browser-like settle for callers that do not.
-  if (!legendListTestClockInstalled) {
-    await act(async () => {
-      for (let frame = 0; frame < 12; frame += 1) {
-        await new Promise<void>((resolve) => {
-          requestAnimationFrame(() => resolve());
-        });
-      }
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 80);
-      });
-    });
-    return;
-  }
-
   await advanceLegendListFrames(12);
 }

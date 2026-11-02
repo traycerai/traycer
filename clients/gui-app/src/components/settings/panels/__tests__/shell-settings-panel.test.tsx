@@ -92,6 +92,7 @@ import type { HostRpcRegistry } from "@/lib/host";
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   resetNegotiatedManifests();
   scopeOverrides.current = {};
   hostBindingMock.current = null;
@@ -381,8 +382,6 @@ describe("<ShellSettingsPanel /> hierarchy", () => {
   });
 
   it("announces transient saving/saved feedback beside the changed control", async () => {
-    // Real timers only: waitFor + fake timers race easily, and the deferred
-    // CLI mutation already gives a stable pending window.
     // Gate holds the mutation in pending; setFinished resolves only after the
     // full shellConfigSet (gate + originalSet) completes — not merely after
     // the gate opens.
@@ -449,35 +448,35 @@ describe("<ShellSettingsPanel /> hierarchy", () => {
     expect(screen.queryByText(/^Saved$/)).toBeNull();
     expect(screen.queryByText(/^Saving…$/)).toBeNull();
 
+    // Installed before the save completes: the "saved" flash's timer is armed
+    // by that completion, so it must already be a fake one.
+    vi.useFakeTimers();
     await act(async () => {
       releaseGate?.();
       await setFinished;
+      await vi.advanceTimersByTimeAsync(0);
     });
 
     // Re-query the second group-root status so remounts are distinguished
     // from sync races on the captured reference.
-    await waitFor(() => {
-      expect(
-        screen.queryByTestId("settings-shell-flags-saving-spinner"),
-      ).toBeNull();
-      const liveStatus = within(
-        screen.getByTestId("terminal-shell-settings"),
-      ).getAllByRole("status")[1];
-      expect(liveStatus.textContent).toBe("Startup flags saved");
-      expect(liveStatus).toBe(flagsStatus);
-    });
+    expect(
+      screen.queryByTestId("settings-shell-flags-saving-spinner"),
+    ).toBeNull();
+    const savedStatus = within(
+      screen.getByTestId("terminal-shell-settings"),
+    ).getAllByRole("status")[1];
+    expect(savedStatus.textContent).toBe("Startup flags saved");
+    expect(savedStatus).toBe(flagsStatus);
 
-    await waitFor(
-      () => {
-        const liveStatus = within(
-          screen.getByTestId("terminal-shell-settings"),
-        ).getAllByRole("status")[1];
-        expect(liveStatus.textContent).toBe("");
-        expect(liveStatus).toBe(flagsStatus);
-        expect(statusTexts().every((text) => text === "")).toBe(true);
-      },
-      { timeout: SAVED_FLASH_MS + 1000 },
-    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(SAVED_FLASH_MS);
+    });
+    const clearedStatus = within(
+      screen.getByTestId("terminal-shell-settings"),
+    ).getAllByRole("status")[1];
+    expect(clearedStatus.textContent).toBe("");
+    expect(clearedStatus).toBe(flagsStatus);
+    expect(statusTexts().every((text) => text === "")).toBe(true);
   });
 });
 

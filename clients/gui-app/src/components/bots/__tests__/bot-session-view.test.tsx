@@ -86,6 +86,7 @@ import {
   sessionPrompt,
 } from "@/components/bots/__tests__/bot-turn-test-support";
 import {
+  installLegendListTestClock,
   installLegendListViewportMetrics,
   settleLegendList,
 } from "@/components/chat/__tests__/legend-list-test-environment";
@@ -386,6 +387,7 @@ function sendCards(): HTMLElement[] {
 }
 
 beforeEach(() => {
+  installLegendListTestClock();
   vi.clearAllMocks();
   mocks.sessionReads = [];
   installLegendListViewportMetrics();
@@ -420,7 +422,7 @@ describe("a bot's trunk session, read whole", () => {
   });
 
   it("draws the bot's reply as a send naming the channel, with its choices as they read and a link to the post it answered", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     mountTrunk(null);
     await settleLegendList();
 
@@ -445,7 +447,7 @@ describe("a bot's trunk session, read whole", () => {
   });
 
   it("draws the bot's question as it asked it, claiming no state, with nothing to press but Open in the channel, which shows the channel at the post it follows", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     mountTrunk(null);
     await settleLegendList();
 
@@ -474,7 +476,7 @@ describe("a bot's trunk session, read whole", () => {
   });
 
   it("offers no box to write in, says the bot is spoken to in its channel and links there, and goes back from its header", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     mountTrunk(null);
     await settleLegendList();
 
@@ -493,7 +495,7 @@ describe("a bot's trunk session, read whole", () => {
   });
 
   it("finds text in the check-in turn's activity and in what the bot posted, as the agent chat's find does", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     mountTrunk(null);
     await settleLegendList();
 
@@ -549,7 +551,7 @@ describe("a bot's trunk session, read whole", () => {
   });
 
   it("names an agent's question the bot pointed at, with nothing to press but the link to the post it follows", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     mocks.sessions[TRUNK_ID] = scriptedSession(TRUNK_ID, [
       checkinPrompt(),
       botTurn({
@@ -616,7 +618,7 @@ describe("a bot's trunk session, read whole", () => {
   });
 
   it("renders a reply's Markdown as the channel does, and finds its link and its choices as they read", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     mountOneSend(
       sendCall({
         blockId: "send-markdown",
@@ -653,7 +655,7 @@ describe("a bot's trunk session, read whole", () => {
   });
 
   it("finds a reply's next-steps prose as the card paints it", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     mountOneSend(
       sendCall({
         blockId: "send-next-steps",
@@ -686,7 +688,7 @@ describe("a bot's trunk session, read whole", () => {
 
 describe("a thread's session, read whole", () => {
   it("names the thread its reply went to by the thread's post, and links to the thread", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     mocks.sessions[THREAD_SESSION_ID] = scriptedSession(THREAD_SESSION_ID, [
       sessionPrompt("prompt-thread", 1_000),
       botTurn({
@@ -856,7 +858,7 @@ describe("a send stamped with the post it wrote", () => {
   }
 
   it("shows a question a member answered in the channel as answered by them, with nothing to press but the link to the post, which Find matches", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     mountStampedAsk(
       [
         {
@@ -899,7 +901,7 @@ describe("a send stamped with the post it wrote", () => {
   });
 
   it("finds a question as the channel settles it while Find is open, with no new search", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     mountStampedAsk([null], TEAMMATE);
     await settleLegendList();
 
@@ -932,7 +934,7 @@ describe("a send stamped with the post it wrote", () => {
   });
 
   it("finds a question the bot settled by the bot's name as it reads now, once the bot is renamed while Find is open", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     const session = mountStampedAsk(
       [{ answer: "Keep it", skipped: false, by: { kind: "bot" }, at: 6_000 }],
       TEAMMATE,
@@ -1011,7 +1013,7 @@ describe("a send stamped with the post it wrote", () => {
   });
 
   it("links a reply to the post it wrote, not the post it follows", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     mountOneSend({
       ...sendCall({
         blockId: "send-stamped-reply",
@@ -1041,7 +1043,7 @@ describe("a send stamped with the post it wrote", () => {
   });
 
   it("links a thread's reply to its thread, opened on the post it wrote", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     mocks.sessions[THREAD_SESSION_ID] = scriptedSession(THREAD_SESSION_ID, [
       sessionPrompt("prompt-thread", 1_000),
       botTurn({
@@ -1275,7 +1277,7 @@ describe("a send posted in Slack", () => {
   });
 
   it("draws a send with no slack key, as persisted before the member, as a Traycer post with its link", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     mountOneSend(
       withoutSlackKey({
         ...sendCall({
@@ -1305,7 +1307,7 @@ describe("a send posted in Slack", () => {
   });
 
   it("finds the place a send went and the text it posted, as the card paints them", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     mountSlackThread(slackReply());
     await settleLegendList();
 
