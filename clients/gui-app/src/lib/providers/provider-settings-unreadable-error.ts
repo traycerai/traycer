@@ -21,7 +21,7 @@
 export const PROVIDER_SETTINGS_UNREADABLE_MESSAGE_PREFIX =
   "Provider settings could not be read";
 
-/** What the panel shows instead of "the host may need to be updated" - the host is fine, the file is not. */
+/** What the panel shows instead of the generic load-failure card - the host is fine, the file is not. */
 export const PROVIDER_SETTINGS_UNREADABLE_COPY =
   "Provider settings could not be read on this host. Retry.";
 
