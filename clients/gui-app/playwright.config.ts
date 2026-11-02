@@ -28,6 +28,9 @@ const PORT = Number(process.env.BROWSER_TESTS_PORT ?? "4178");
 const BASE_URL = `http://127.0.0.1:${String(PORT)}`;
 const isCi = process.env.CI !== undefined;
 const chromeBin = process.env.CHROME_BIN;
+// CI serves the fixture pages bundled (`build` in the Vite config says why);
+// a local run keeps the dev server, so an edit needs no rebuild.
+const bundled = process.env.BROWSER_TESTS_BUNDLE !== undefined;
 
 /** Vite's CLI, run under Node exactly as the app's own dev server is. */
 function viteBin(): string {
@@ -37,6 +40,15 @@ function viteBin(): string {
     readonly bin: Readonly<Record<string, string>>;
   };
   return path.resolve(path.dirname(manifestPath), manifest.bin.vite);
+}
+
+function serverCommand(): string {
+  const vite = `node ${JSON.stringify(viteBin())}`;
+  const config = "--config vite.browser-tests.config.ts";
+  const listen = `--host 127.0.0.1 --port ${String(PORT)} --strictPort`;
+  return bundled
+    ? `${vite} build ${config} --mode development --logLevel warn && ${vite} preview ${config} --mode development ${listen}`
+    : `${vite} ${config} ${listen}`;
 }
 
 export default defineConfig({
@@ -54,8 +66,15 @@ export default defineConfig({
   workers: 2,
   timeout: 180_000,
   expect: { timeout: 10_000 },
+  // The JSON report is what the per-test budget and the shard timings read
+  // (`scripts/browser-test-budget.mjs`, `scripts/browser-test-timings.mjs`).
   reporter: isCi
-    ? [["github"], ["list"], ["html", { open: "never" }]]
+    ? [
+        ["github"],
+        ["list"],
+        ["html", { open: "never" }],
+        ["json", { outputFile: "test-results.json" }],
+      ]
     : [["list"]],
   use: {
     baseURL: BASE_URL,
@@ -70,9 +89,12 @@ export default defineConfig({
     trace: "retain-on-failure",
   },
   webServer: {
-    command: `node ${JSON.stringify(viteBin())} --config vite.browser-tests.config.ts --host 127.0.0.1 --port ${String(PORT)} --strictPort`,
+    command: serverCommand(),
     cwd: GUI_APP_ROOT,
-    env: { BROWSER_TESTS_PORT: String(PORT) },
+    env: {
+      BROWSER_TESTS_PORT: String(PORT),
+      ...(bundled ? { NODE_ENV: "development" } : {}),
+    },
     url: `${BASE_URL}/src/__tests__/browser/quit-intercept-cancel.html`,
     reuseExistingServer: !isCi,
     timeout: 120_000,

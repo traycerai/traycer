@@ -1,10 +1,12 @@
-import { mergeConfig } from "vite";
+import { readdirSync, readFileSync } from "node:fs";
+import path from "node:path";
+import { mergeConfig, type Plugin } from "vite";
 
 import base from "./vitest.config.ts";
 import { sandboxAssets } from "./vite/sandbox-assets.ts";
 
 /**
- * The Vite config the browser tests' shared dev server runs with
+ * The Vite config the browser tests' shared server runs with
  * (`playwright.config.ts`, `webServer`). It is the app's own config - which
  * also compiles Tailwind for the fixture pages, see the note on
  * `tailwindcss()` there - plus what a long-lived test server needs:
@@ -24,15 +26,96 @@ import { sandboxAssets } from "./vite/sandbox-assets.ts";
  * - `cacheDir` is per server port, so two servers running at once (two
  *   worktrees, or `BROWSER_TESTS_PORT`) never rewrite one optimised-deps
  *   cache under each other.
+ *
+ * `build` is the same pages bundled, which CI serves with `vite preview`
+ * (`BROWSER_TESTS_BUNDLE` in `playwright.config.ts`). A fixture on the dev
+ * server fetches up to 3,500 modules and 150 MB in every test's fresh context;
+ * bundled it fetches a few chunks. `NODE_ENV=development` on the build keeps
+ * the React and the `import.meta.env` the dev server gives them.
  */
 const port = process.env.BROWSER_TESTS_PORT ?? "4178";
+const GUI_APP_ROOT = import.meta.dirname;
+const FIXTURE_DIR = "src/__tests__/browser";
+
+function filesUnder(directory: string): string[] {
+  return readdirSync(directory, { recursive: true, encoding: "utf8" }).map(
+    (name) => path.join(directory, name),
+  );
+}
+
+/**
+ * Every module a spec imports at runtime, `import("/src/...")` inside a page.
+ * Each stays an entry at its own path, so that import keeps resolving, and
+ * shares the page's module instance through the common chunks.
+ */
+function modulesSpecsImport(): string[] {
+  const specs = filesUnder(path.join(GUI_APP_ROOT, "browser-tests")).filter(
+    (file) => file.endsWith(".ts"),
+  );
+  const modules = new Set<string>();
+  for (const spec of specs) {
+    const source = readFileSync(spec, "utf8");
+    for (const match of source.matchAll(/import\(\s*["'`]\/(src\/[^"'`]+)/g)) {
+      modules.add(match[1]);
+    }
+  }
+  return [...modules];
+}
+
+/** `vite preview` would serve those `.ts` entries as MPEG transport streams. */
+function typescriptEntriesAreJavascript(): Plugin {
+  return {
+    name: "traycer:browser-tests-typescript-entries-are-javascript",
+    configurePreviewServer(server) {
+      server.middlewares.use((req, res, next) => {
+        if (req.url?.split("?")[0].endsWith(".ts") === true) {
+          res.setHeader("Content-Type", "text/javascript");
+        }
+        next();
+      });
+    },
+  };
+}
+
+const specModules = modulesSpecsImport();
+const fixturePages = readdirSync(path.join(GUI_APP_ROOT, FIXTURE_DIR))
+  .filter((name) => name.endsWith(".html"))
+  .map((name) => path.join(FIXTURE_DIR, name));
 
 export default mergeConfig(base, {
-  plugins: [sandboxAssets()],
+  plugins: [sandboxAssets(), typescriptEntriesAreJavascript()],
   cacheDir: `node_modules/.vite/browser-tests-${port}`,
   optimizeDeps: { entries: ["src/__tests__/browser/*.html"] },
   server: {
     watch: null,
     warmup: { clientFiles: ["./src/__tests__/browser/*.tsx"] },
+  },
+  build: {
+    // Per server port like `cacheDir`, and ignored with `node_modules`.
+    outDir: `node_modules/.vite/browser-tests-${port}-dist`,
+    emptyOutDir: true,
+    minify: false,
+    sourcemap: false,
+    reportCompressedSize: false,
+    chunkSizeWarningLimit: Number.MAX_SAFE_INTEGER,
+    rollupOptions: {
+      input: [...fixturePages, ...specModules],
+      preserveEntrySignatures: "strict",
+      output: {
+        entryFileNames: (chunk: {
+          readonly facadeModuleId: string | null;
+        }): string => {
+          const id = chunk.facadeModuleId;
+          if (id === null) return "assets/[name]-[hash].js";
+          const relative = path
+            .relative(GUI_APP_ROOT, id)
+            .split(path.sep)
+            .join("/");
+          return specModules.includes(relative)
+            ? relative
+            : "assets/[name]-[hash].js";
+        },
+      },
+    },
   },
 });

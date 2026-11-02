@@ -171,7 +171,25 @@ jobs:
         working-directory: clients/gui-app
         env:
           SHARD: ${{ matrix.shard }}/${{ strategy.job-total }}
-        run: bun run test:browser --shard="$SHARD"
+          # Serve the fixture pages bundled: `vite.browser-tests.config.ts`.
+          BROWSER_TESTS_BUNDLE: "1"
+        # Whole files, cut by measured time (the script says why), not `--shard`.
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(node scripts/browser-test-shard-plan.mjs "$SHARD")
+          bun run test:browser "${files[@]}"
+      - name: Every test is within the per-test budget
+        working-directory: clients/gui-app
+        run: node scripts/browser-test-budget.mjs test-results.json
+      # Whatever the result: the timings refresh reads these, and a red run's
+      # times say what a budget failure or a timeout was waiting on.
+      - name: Upload the JSON report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: browser-results-${{ matrix.shard }}
+          path: clients/gui-app/test-results.json
+          retention-days: 14
       # The HTML report carries a trace of every failed attempt: open it with
       # `bunx playwright show-report <dir>` after downloading.
       - name: Upload the Playwright report
