@@ -395,9 +395,8 @@ jobs:
         run: bunx vitest run src/upgrade/__tests__/finalize-helper-launch.win32.test.ts
 
   # Decides whether the macOS job below has anything to test. It is the
-  # slowest job in this workflow by minutes (a real electron-builder pack on
-  # top of the desktop suite), and most pull requests change nothing it
-  # covers.
+  # slowest job in this workflow by minutes (a real electron-builder pack), and
+  # most merges change nothing it covers.
   macos-packaging-changes:
     name: test (desktop darwin + packaging) changes
     # A team PR into `main`, `integration/*` or `land/*` skips this job: the
@@ -410,6 +409,10 @@ jobs:
       || github.event.pull_request.user.type == 'Bot'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
+    # `actions: read` lets the push step below list this workflow's earlier runs.
+    permissions:
+      contents: read
+      actions: read
     outputs:
       run: ${{ steps.filter.outputs.run }}
     steps:
@@ -417,46 +420,77 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      # What the macOS job covers that no Linux job does: the desktop
-      # workspace's darwin-gated blocks and its real pack. So the list is that
-      # workspace, the packages its tests and its packaging scripts read
-      # (`@traycer-clients/shared`, `@traycer/protocol`, the CLI sources the
-      # label and path parity tests import, `clients/scripts/` for the
-      # release-target stamp), the dependency set and its patches
-      # (`app-builder-lib`), the Nx config that defines the `test` target, and
-      # this workflow. A package is listed whole, never by subdirectory or by
-      # file type: the pack copies a README out of `clients/desktop/`, so not
-      # even Markdown there is free. `--no-renames` reports a moved file at
-      # both its old path and its new one, so a file moved out of a listed
-      # package still counts.
+      # A push run is compared with the last push this workflow PASSED on, not
+      # with the push before it. A team PR is not tested before it merges, so a
+      # red merge would otherwise be forgotten by the next one: A breaks the
+      # pack, B changes a doc, B's range is only the doc, and the skipped job on
+      # B is green. From the last green push, B's range still holds A's change
+      # and the pack runs again.
+      - name: Find the last green push to compare against
+        id: base
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BEFORE: ${{ github.event.before }}
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          base="$(scripts/ci-last-green-sha.sh test.yml "$BRANCH" "$BEFORE")"
+          echo "sha=${base}" >> "$GITHUB_OUTPUT"
+      # What the macOS job covers that no Linux job does: the real pack and the
+      # darwin-only test files it names. So the list is the desktop workspace
+      # (`clients/desktop/`, which holds the electron-builder config, its hook
+      # and every script the pack runs; the pack copies a README out of it, so
+      # not even Markdown there is free), the release-target stamp those
+      # scripts read (`clients/scripts/`), `@traycer-clients/shared` and the
+      # parts of `@traycer/protocol` the darwin-only files import, the Electron
+      # and electron-builder pins and everything else that can move them
+      # (`package.json`, `bun.lock`), the one patch in the pack's own toolchain
+      # (`app-builder-lib`), and this workflow.
+      # `clients/desktop/scripts/__tests__/macos-ci-job.test.ts` holds the
+      # imports to this list. `--no-renames` reports a moved file at both its old path and its
+      # new one, so a file moved out of a listed path still counts.
       #
-      # `clients/gui-app/` is deliberately absent. The pack builds the
-      # renderer from it, and the only thing this job asserts about the
-      # renderer is that the build succeeds; the `build` lane of
-      # `pre-commit.yml` builds the desktop app on Linux whenever gui-app
-      # changes, so a renderer that no longer builds is caught there. The rest
-      # of what it asserts (the bundled CLI's arch, mode and version file, the
-      # helper app and its plists) the renderer does not feed. The desktop
-      # tests that read gui-app sources run in the Linux matrix above.
+      # The rest of `protocol/`, `clients/gui-app/` and the other patches are
+      # deliberately absent. The pack bundles them, and the only thing this job
+      # asserts about them is that the bundle builds; the `build` lane of
+      # `pre-commit.yml` builds the desktop app on Linux whenever one of them
+      # changes, so a bundle that no longer builds is caught there. The rest of
+      # what it asserts (the bundled CLI's arch, mode and version file, the
+      # helper app and its plists) they do not feed.
       #
-      # Only a pull request can skip: a push to `main` bypasses the filter.
+      # A push with no usable base (a new branch) and a manual run always run
+      # the job.
       - name: Does this change touch what the macOS job covers?
         id: filter
         env:
           EVENT: ${{ github.event_name }}
           PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PUSH_BASE: ${{ steps.base.outputs.sha }}
         run: |
           set -euo pipefail
-          if [ "$EVENT" != "pull_request" ]; then
-            echo "run=true" >> "$GITHUB_OUTPUT"
-            echo "A $EVENT run always runs the macOS job."
-            exit 0
-          fi
-          relevant=$(git diff --name-only --no-renames "$PR_BASE...HEAD" | awk '
-            /^clients\/desktop\// || /^clients\/shared\// ||
-            /^clients\/traycer-cli\// || /^clients\/scripts\// ||
-            /^protocol\// || /^patches\// || /^package\.json$/ ||
-            /^bun\.lock$/ || /^nx\.json$/ ||
+          case "$EVENT" in
+            pull_request) range="$PR_BASE...HEAD" ;;
+            push)
+              if [ -z "$PUSH_BASE" ] || ! git cat-file -e "$PUSH_BASE^{commit}" 2>/dev/null; then
+                echo "run=true" >> "$GITHUB_OUTPUT"
+                echo "No earlier commit to diff against: running the macOS job."
+                exit 0
+              fi
+              range="$PUSH_BASE..HEAD" ;;
+            *)
+              echo "run=true" >> "$GITHUB_OUTPUT"
+              echo "A $EVENT run always runs the macOS job."
+              exit 0 ;;
+          esac
+          relevant=$(git diff --name-only --no-renames "$range" | awk '
+            /^clients\/desktop\// || /^clients\/scripts\// ||
+            /^clients\/shared\// ||
+            /^protocol\/src\/(auth|config|framework)\// ||
+            /^protocol\/src\/host\/(browser\/|lifecycle|resource-scope|version-order)/ ||
+            /^protocol\/utils\/text\// ||
+            /^patches\/app-builder-lib@/ ||
+            /^package\.json$/ || /^bun\.lock$/ ||
             /^\.github\/workflows\/test\.yml$/ { print }
           ')
           if [ -n "$relevant" ]; then
@@ -467,15 +501,19 @@ jobs:
             echo "Nothing the macOS job covers changed: skipping it."
           fi
 
-  # macOS job: the desktop workspace's packaging/signing-adjacent assertions
-  # (prepack unit suite + the real electron-builder pack in test:packaging)
-  # are `skipIf(platform !== "darwin")`-gated and silently skip on the ubuntu
-  # matrix above. Without this job the release-critical helper/plist
-  # injection (BundleProgram relativity, NumberOfFiles=8192, relocation,
-  # real-pack wiring) has no CI coverage at all. The full desktop unit suite
-  # runs here too so darwin-only regressions surface; every launchctl-adjacent
-  # test in it forces `process.platform` OFF darwin internally, so nothing in
-  # this job can touch the runner's real launchd/BTM state.
+  # macOS job: the real electron-builder pack, plus the desktop test files only
+  # macOS can run (`skipIf(platform !== "darwin")` blocks that spawn the real
+  # `codesign` and `plutil`, and files that reach production's darwin branches
+  # without forcing `process.platform`). Without this job the release-critical
+  # helper/plist injection (BundleProgram relativity, NumberOfFiles=8192,
+  # relocation, real-pack wiring) has no CI coverage at all. The rest of the
+  # desktop suite runs on Linux, in the `test` matrix above. Every
+  # launchctl-adjacent test forces `process.platform` OFF darwin internally, so
+  # nothing in this job can touch the runner's real launchd/BTM state.
+  #
+  # The Electron zips the pack downloads are the one cache here: 235 MB restores
+  # in 2 s. Bun's package cache is not: its 885 MB took 138 s to restore, and
+  # the install it replaces takes under 30 s uncached.
   #
   # It runs when `macos-packaging-changes` says the change touches what it
   # covers. It is not a required check, so a skipped run holds no pull
@@ -507,32 +545,33 @@ jobs:
         with:
           package-manager-cache: false
           node-version: "24.20.0"
-      - name: Cache bun global install cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: ~/.bun/install/cache
-          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
-          restore-keys: |
-            bun-${{ runner.os }}-
-      # Same Nx computation cache as the `test` job. The runner.os in the key is
-      # load-bearing here: the desktop suite runs darwin-gated blocks that are
-      # skipped on Linux, so a Linux-computed result must never replay on macOS
-      # (and vice versa) — scoping the cache by OS keeps the two separate.
-      - name: Cache Nx computation cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: .nx/cache
-          key: nx-${{ runner.os }}-@traycer-clients/desktop-${{ github.sha }}
-          restore-keys: |
-            nx-${{ runner.os }}-@traycer-clients/desktop-
       - run: bun install --frozen-lockfile
-      # `--outputStyle=stream` for the same reason as the `test` job above:
-      # Nx's default replay is capped, and this job's only failure log to date
-      # cut off mid-replay before Vitest printed the `×` lines - the failing
-      # test was unrecoverable from CI. It replaces `--tui=false` (the two are
-      # mutually exclusive; `stream` is already a non-TUI style).
-      - name: Desktop unit tests (darwin-gated blocks included)
-        run: bunx nx run-many --target=test --projects="@traycer-clients/desktop" --outputStyle=stream
+      - name: Read the installed Electron version
+        id: electron
+        working-directory: clients/desktop
+        run: echo "version=$(node -p "require('electron/package.json').version")" >> "$GITHUB_OUTPUT"
+      - name: Cache the Electron downloads
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ~/Library/Caches/electron
+          key: electron-${{ runner.os }}-${{ steps.electron.outputs.version }}
+      # Every file the suite marks darwin-only, and the files that reach a
+      # production branch macOS takes and Linux does not without forcing
+      # `process.platform`: the shortcut, window and preload branches, and the
+      # real `ps` the credentials lock and the host's process identity read.
+      # `clients/desktop/scripts/__tests__/macos-ci-job.test.ts` requires every
+      # darwin-gated file to be named here.
+      - name: Desktop darwin-only test files
+        working-directory: clients/desktop
+        run: >-
+          bunx vitest run
+          scripts/prepack/__tests__/inject-host-launch-agent.test.ts
+          src/electron-main/app/__tests__/shortcuts.test.ts
+          src/electron-main/auth/__tests__/file-token-store.test.ts
+          src/electron-main/host/__tests__/host-state-busy-verdict.test.ts
+          src/electron-main/windows/__tests__/window-factory.test.ts
+          src/electron-main/windows/__tests__/window-zoom.test.ts
+          src/electron-preload/__tests__/preload-bridge.test.ts
       # the shared exec-sync-stderr off-Linux case never ran in CI
       # (shared tests are Linux-only; this job is the macOS lane).
       - name: Shared exec-sync stderr (darwin-gated blocks)
