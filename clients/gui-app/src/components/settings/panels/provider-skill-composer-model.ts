@@ -176,7 +176,9 @@ export function skillAudiences(args: {
     ? ["provider"]
     : [];
   if (args.hostRunsEnvironments === false) return ["shared", ...provider];
-  return args.environmentAvailable && args.effectiveScope === "global"
+  return args.hostRunsEnvironments === true &&
+    args.environmentAvailable &&
+    args.effectiveScope === "global"
     ? [...provider, "environment"]
     : provider;
 }

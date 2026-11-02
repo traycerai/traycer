@@ -45,11 +45,15 @@ export function useSkillEnvironmentRoute(): SkillEnvironmentRoute {
   const hostId = useRequesterHostId(hostClient);
   const bindingReadable =
     useHostMethodSupport(hostId, "environment.host.read") === true;
-  const environment = useEnvironmentHostReadQuery(
+  const bindingUsable = hostRunsEnvironments === true && bindingReadable;
+  const binding = useEnvironmentHostReadQuery(
     hostClient,
     hostId,
-    hostRunsEnvironments === true && bindingReadable,
-  ).data?.environment;
+    bindingUsable,
+  );
+  // A disabled read still answers from the cache, which the host picker primes
+  // for a host this client has not negotiated with.
+  const environment = bindingUsable ? binding.data?.environment : undefined;
   const served: ServedSkillEnvironment | null =
     environment === undefined
       ? null

@@ -43,7 +43,8 @@ vi.mock("@/hooks/bots/use-environment-host-read-query", () => ({
     enabled: boolean,
   ) => {
     route.bindingEnabled.push(enabled);
-    return { data: enabled ? route.binding : undefined };
+    // A disabled read still answers from a primed cache.
+    return { data: route.binding };
   },
 }));
 vi.mock("@/hooks/environment/team/use-skills-upload-mutation", () => ({
@@ -96,7 +97,7 @@ describe("useSkillEnvironmentRoute", () => {
     expect(result.current.served).toBeNull();
   });
 
-  it("reads a host whose manifest has not arrived as neither, and does not ask it what it serves", () => {
+  it("reads a host whose manifest has not arrived as neither, and has nowhere to write despite a cached binding", async () => {
     route.statusVersion = null;
 
     const { result } = renderHook(() => useSkillEnvironmentRoute());
@@ -104,6 +105,8 @@ describe("useSkillEnvironmentRoute", () => {
     expect(result.current.hostRunsEnvironments).toBeNull();
     expect(route.bindingEnabled).toEqual([false]);
     expect(result.current.served).toBeNull();
+    await expect(result.current.write(SKILL)).resolves.toMatch(/Couldn't add/);
+    expect(route.uploads).toEqual([]);
   });
 
   it("does not ask a host without the binding read what it serves", () => {

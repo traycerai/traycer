@@ -689,6 +689,17 @@ describe("skillAudiences", () => {
     },
   );
 
+  it("offers no environment to a host not yet known, even with one cached", () => {
+    expect(
+      offered({
+        hostRunsEnvironments: null,
+        environmentAvailable: true,
+        canProviderScope: true,
+        effectiveScope: "global",
+      }),
+    ).toEqual(["provider"]);
+  });
+
   it("offers no environment at project scope or before it is known", () => {
     expect(
       offered({
