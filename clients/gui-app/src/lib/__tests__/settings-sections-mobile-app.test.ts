@@ -18,11 +18,18 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { setMobileApp } from "@/lib/mobile-app";
 import {
-  RETIRED_SETTINGS_SECTION_IDS,
   SETTINGS_SECTIONS,
   isSettingsSectionVisible,
   visibleSettingsSections,
+  type SettingsSectionId,
 } from "@/lib/settings-sections";
+
+/** Sections no build offers, whose ids still resolve remembered paths. */
+const RETIRED: ReadonlyArray<SettingsSectionId> = [
+  "machine-setup",
+  "agent-definitions",
+  "browser-agent-access",
+];
 
 afterEach(() => {
   setMobileApp(false);
@@ -34,8 +41,7 @@ describe("visibleSettingsSections", () => {
     const ids = visibleSettingsSections().map((section) => section.id);
     expect(ids).toEqual(
       SETTINGS_SECTIONS.map((section) => section.id).filter(
-        (id) =>
-          id !== "delete-account" && !RETIRED_SETTINGS_SECTION_IDS.has(id),
+        (id) => id !== "delete-account" && !RETIRED.includes(id),
       ),
     );
     expect(isSettingsSectionVisible("keybindings")).toBe(true);
@@ -87,9 +93,7 @@ describe("visibleSettingsSections", () => {
     const ids = visibleSettingsSections().map((section) => section.id);
     const expected = SETTINGS_SECTIONS.map((section) => section.id).filter(
       (id) =>
-        id !== "keybindings" &&
-        id !== "link-phone" &&
-        !RETIRED_SETTINGS_SECTION_IDS.has(id),
+        id !== "keybindings" && id !== "link-phone" && !RETIRED.includes(id),
     );
     expect(ids).toEqual(expected);
   });
@@ -103,16 +107,16 @@ describe("visibleSettingsSections", () => {
     expect(ids).toContain("delete-account");
   });
 
-  it("keeps Machine setup out of navigation on every build while its id still resolves", () => {
-    expect(RETIRED_SETTINGS_SECTION_IDS.has("machine-setup")).toBe(true);
-    for (const mobile of [false, true]) {
-      setMobileApp(mobile);
-      const ids = visibleSettingsSections().map((section) => section.id);
-      expect(ids).not.toContain("machine-setup");
-      expect(isSettingsSectionVisible("machine-setup")).toBe(false);
-    }
-    expect(SETTINGS_SECTIONS.map((section) => section.id)).toContain(
-      "machine-setup",
-    );
-  });
+  it.each(RETIRED)(
+    "keeps %s out of navigation on every build while its id still resolves",
+    (retired) => {
+      for (const mobile of [false, true]) {
+        setMobileApp(mobile);
+        const ids = visibleSettingsSections().map((section) => section.id);
+        expect(ids).not.toContain(retired);
+        expect(isSettingsSectionVisible(retired)).toBe(false);
+      }
+      expect(SETTINGS_SECTIONS.map((section) => section.id)).toContain(retired);
+    },
+  );
 });

@@ -15,7 +15,6 @@ import { Badge } from "@/components/ui/badge";
 import { PERMISSIONS } from "@/components/settings/panels/permissions-settings.definitions";
 import { trackSettingChanged } from "@/lib/analytics";
 import { useSettingsStore } from "@/stores/settings/settings-store";
-import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 
 /**
  * The page's one app-scoped region: the mode a new conversation starts in, and
@@ -23,8 +22,7 @@ import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
  *
  * Deliberately NOT behind `HostScopeGate`. The default mode is one preference
  * for this app, not per machine, so it works with no host in scope at all.
- * Its control is captioned "This app only"; without environments the row
- * carries the older "All machines" badge and the note under the tab bar.
+ * Its control is captioned "This app only".
  */
 export function ModesTab(): ReactNode {
   const defaultPermission = useSettingsStore((s) => s.defaultPermission);
@@ -64,13 +62,6 @@ export function ModesTab(): ReactNode {
   );
   return (
     <div className="flex flex-col gap-5">
-      {/* Without environments the picker above the tabs is the machine picker
-          of before, so the note that it changes nothing here is true again. */}
-      {UNRELEASED_FEATURES_ENABLED ? null : (
-        <p className="px-1 text-ui-xs text-muted-foreground">
-          The machine picker above doesn&apos;t change anything on this tab.
-        </p>
-      )}
       <SettingsGroup
         group={PERMISSIONS.definitions.startingMode}
         showTitle={false}
@@ -80,29 +71,16 @@ export function ModesTab(): ReactNode {
       >
         <SettingsRow
           row={PERMISSIONS.definitions.defaultPermission}
-          // The badge said the default reached every machine; the caption
-          // replaced it once a configuration could hold one per host.
-          labelStatus={
-            UNRELEASED_FEATURES_ENABLED ? null : (
-              <Badge variant="muted" size="xs">
-                All machines
-              </Badge>
-            )
-          }
           control={
-            UNRELEASED_FEATURES_ENABLED ? (
-              <div className="flex flex-col items-end gap-1">
-                {picker}
-                <span
-                  className="text-ui-xs text-muted-foreground"
-                  data-testid="permissions-default-permission-scope"
-                >
-                  This app only
-                </span>
-              </div>
-            ) : (
-              picker
-            )
+            <div className="flex flex-col items-end gap-1">
+              {picker}
+              <span
+                className="text-ui-xs text-muted-foreground"
+                data-testid="permissions-default-permission-scope"
+              >
+                This app only
+              </span>
+            </div>
           }
         />
       </SettingsGroup>

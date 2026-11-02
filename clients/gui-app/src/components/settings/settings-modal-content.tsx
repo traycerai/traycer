@@ -1,18 +1,14 @@
-import { useRef, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import { ArtifactProofRoute } from "@/routes/settings-dev-artifact-proof-route-components";
 import { CanvasProofRoute } from "@/routes/settings-dev-canvas-proof-route-components";
 import { GettingStartedSettingsPanel } from "./panels/getting-started-settings-panel";
-import { SettingsSetupGuide } from "./settings-setup-guide";
 import { SettingsDensityContext } from "@/providers/settings-density-context";
 import { SettingsSidebar } from "@/components/settings/settings-sidebar";
 import {
   isSettingsSectionVisible,
   RETIRED_SECTION_REPLACEMENTS,
-  RETIRED_SETTINGS_SECTION_IDS,
-  UNRELEASED_SETTINGS_SECTION_IDS,
   type SettingsSectionId,
 } from "@/lib/settings-sections";
-import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 import { BrowserSettingsPanel } from "@/components/settings/panels/browser-settings-panel";
 import { SecretsSettingsPanel } from "@/components/settings/panels/secrets-settings-panel";
 import { GeneralSettingsPanel } from "@/components/settings/panels/general-settings-panel";
@@ -140,43 +136,19 @@ const SETTINGS_PANELS = {
   members: MembersSettingsPanel,
 } satisfies Record<SettingsSectionId, () => ReactNode>;
 
-/**
- * The section a panel is drawn for. A build without the unreleased features
- * (`unreleased-features.ts`) never draws a page it does not offer, however the
- * id arrived (a routed tab restored from a path an earlier build remembered):
- * it draws that page's replacement, else General, as the modal does. Only the
- * pages that build hides; a dev-only page still reaches its own 404 panel.
- */
-function drawnSection(section: SettingsSectionId): SettingsSectionId {
-  if (
-    UNRELEASED_FEATURES_ENABLED ||
-    !(
-      UNRELEASED_SETTINGS_SECTION_IDS.has(section) ||
-      RETIRED_SETTINGS_SECTION_IDS.has(section)
-    )
-  ) {
-    return section;
-  }
-  return RETIRED_SECTION_REPLACEMENTS[section] ?? "general";
-}
-
 export function SettingsPanelForSection(props: {
   readonly section: SettingsSectionId;
 }): ReactNode {
-  const section = drawnSection(props.section);
+  const { section } = props;
   // The one mount point for the settings-search reveal watcher, and the reason
   // it sits here rather than in either surface: both the modal and the routed
   // tab render their panel THROUGH this function, so one watcher covers both
   // and there is no arrangement of surfaces that gets two of them.
   useSettingsAnchorReveal(section);
-  const rootRef = useRef<HTMLDivElement>(null);
   const Panel = SETTINGS_PANELS[section];
   return (
-    <div ref={rootRef} className="contents">
-      <PersonalPageFrame section={section}>
-        <Panel />
-      </PersonalPageFrame>
-      <SettingsSetupGuide section={section} rootRef={rootRef} />
-    </div>
+    <PersonalPageFrame section={section}>
+      <Panel />
+    </PersonalPageFrame>
   );
 }

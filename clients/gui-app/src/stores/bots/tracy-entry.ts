@@ -8,7 +8,6 @@ import {
   registerTabStructuralLockPredicate,
 } from "@/stores/tabs/tab-structural-lock";
 import type { TabRef } from "@/stores/tabs/types";
-import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 
 /**
  * The fixed Tracy entry (decision 150): the Tracy surface's tab, held
@@ -19,12 +18,9 @@ import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
  * The entry's ref is locked for structure and close while it is pinned, so
  * no gesture moves, pairs, groups or closes it. Turning the setting off
  * releases the lock and leaves the surface open as an ordinary, closable tab.
- * A build without bots (`unreleased-features.ts`) pins nothing, so a surface
- * a previous build restored is an ordinary tab there too.
  */
 function isTracyEntryPinned(): boolean {
   return (
-    UNRELEASED_FEATURES_ENABLED &&
     useSettingsStore.getState().showTracy &&
     useTracySurfaceStore.getState().open
   );
@@ -63,7 +59,7 @@ export function layoutIndexOfStripPosition(
 export function useTracyEntryItemId(): string | null {
   const open = useTracySurfaceStore((state) => state.open);
   const showTracy = useSettingsStore((state) => state.showTracy);
-  const pinned = UNRELEASED_FEATURES_ENABLED && showTracy && open;
+  const pinned = showTracy && open;
   return useTabsStore(
     (state) =>
       state.items.find((item) => isTracyEntryItem(item, pinned))?.id ?? null,

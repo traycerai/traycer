@@ -133,8 +133,6 @@ import {
 } from "@/lib/analytics";
 import { projectShareableTeams } from "@/hooks/epic/use-epic-shareable-teams";
 import { onWakeReconnect } from "@/lib/host/wake-reconnect";
-import { SANDBOXES_NOT_IN_THIS_BUILD } from "@/lib/sandboxes/sandbox-strings";
-import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 import { appLogger, describeLogError } from "@/lib/logger";
 import {
   recordAuthServerTime,
@@ -3143,12 +3141,7 @@ export class AuthService {
 
   /** `IRunnerHost.sandboxControlUnavailableReason`, for a caller to say why. */
   sandboxControlUnavailableReason(): string | null {
-    const reason = this.runnerHost.sandboxControlUnavailableReason;
-    // A build without sandboxes (`unreleased-features.ts`) sends no sandbox
-    // call at all, whatever the runner host could reach.
-    return UNRELEASED_FEATURES_ENABLED
-      ? reason
-      : (reason ?? SANDBOXES_NOT_IN_THIS_BUILD);
+    return this.runnerHost.sandboxControlUnavailableReason;
   }
 
   /**

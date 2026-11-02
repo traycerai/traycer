@@ -4,11 +4,6 @@ import { Route as OnboardingRoute } from "@/routes/onboarding";
 import { Route as IndexRoute } from "@/routes/index";
 import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
 
-type OnboardingBeforeLoadFn = (args: {
-  context: { getAuthSnapshot: () => { status: string } };
-  search: { replay: boolean };
-}) => void;
-
 type AuthBeforeLoadFn = (args: {
   context: { getAuthSnapshot: () => { status: string } };
 }) => void;
@@ -17,22 +12,6 @@ type AuthBeforeLoadFn = (args: {
  * Calls a beforeLoad function, captures any thrown redirect, and returns it.
  * Returns null when the function completes without throwing.
  */
-function callOnboardingBeforeLoad(
-  fn: OnboardingBeforeLoadFn,
-  status: string,
-  replay: boolean,
-): unknown {
-  try {
-    fn({
-      context: { getAuthSnapshot: () => ({ status }) },
-      search: { replay },
-    });
-    return null;
-  } catch (err) {
-    return err;
-  }
-}
-
 function callAuthBeforeLoad(fn: AuthBeforeLoadFn, status: string): unknown {
   try {
     fn({ context: { getAuthSnapshot: () => ({ status }) } });
@@ -63,11 +42,7 @@ describe("/onboarding route — beforeLoad guard", () => {
     const beforeLoad = OnboardingRoute.options.beforeLoad;
     expect(beforeLoad).toBeTypeOf("function");
     assertRedirectTo(
-      callOnboardingBeforeLoad(
-        beforeLoad as OnboardingBeforeLoadFn,
-        "signed-out",
-        false,
-      ),
+      callAuthBeforeLoad(beforeLoad as AuthBeforeLoadFn, "signed-out"),
       "/",
     );
   });
@@ -78,38 +53,16 @@ describe("/onboarding route — beforeLoad guard", () => {
     const beforeLoad = OnboardingRoute.options.beforeLoad;
     expect(beforeLoad).toBeTypeOf("function");
     assertRedirectTo(
-      callOnboardingBeforeLoad(
-        beforeLoad as OnboardingBeforeLoadFn,
-        "signed-in",
-        false,
-      ),
+      callAuthBeforeLoad(beforeLoad as AuthBeforeLoadFn, "signed-in"),
       "/",
     );
-  });
-
-  it("allows a signed-in user who already completed the tour to replay it", () => {
-    useOnboardingStore.setState({ completedAt: Date.now() });
-
-    const beforeLoad = OnboardingRoute.options.beforeLoad;
-    expect(beforeLoad).toBeTypeOf("function");
-    expect(
-      callOnboardingBeforeLoad(
-        beforeLoad as OnboardingBeforeLoadFn,
-        "signed-in",
-        true,
-      ),
-    ).toBeNull();
   });
 
   it("does not redirect a signed-in first-launch user (completedAt is null)", () => {
     const beforeLoad = OnboardingRoute.options.beforeLoad;
     expect(beforeLoad).toBeTypeOf("function");
     expect(
-      callOnboardingBeforeLoad(
-        beforeLoad as OnboardingBeforeLoadFn,
-        "signed-in",
-        false,
-      ),
+      callAuthBeforeLoad(beforeLoad as AuthBeforeLoadFn, "signed-in"),
     ).toBeNull();
   });
 });

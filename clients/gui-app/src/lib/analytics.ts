@@ -704,7 +704,7 @@ export interface AnalyticsEventProperties {
   };
   readonly [AnalyticsEvent.HostUpdateSnoozed]: SourceProperties;
   readonly [AnalyticsEvent.OnboardingStarted]: {
-    readonly mode: "first_run" | "replay";
+    readonly mode: "first_run";
   };
   readonly [AnalyticsEvent.OnboardingNavigated]: {
     readonly direction: "back" | "continue";
@@ -2169,7 +2169,7 @@ const EVENT_EXACT_PROPERTY_VALUES = new Map<string, ReadonlySet<string>>([
   ...eventValueEntries(
     [AnalyticsEvent.OnboardingStarted],
     "mode",
-    new Set(["first_run", "replay"]),
+    new Set(["first_run"]),
   ),
   ...eventValueEntries(
     [

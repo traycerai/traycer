@@ -1,6 +1,5 @@
-import { createFileRoute, redirect } from "@tanstack/react-router";
+import { createFileRoute } from "@tanstack/react-router";
 import { requireSignedIn } from "@/lib/router-auth";
-import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 
 /**
  * The Tracy surface with no channel selected (decision 150): the pane says
@@ -9,10 +8,6 @@ import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
  */
 export const Route = createFileRoute("/bot/")({
   beforeLoad: ({ context }) => {
-    // Not a page of a build without bots: a deep link lands on Home.
-    if (!UNRELEASED_FEATURES_ENABLED) {
-      redirect({ throw: true, to: "/", replace: true });
-    }
     requireSignedIn(context);
   },
   component: () => null,

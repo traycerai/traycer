@@ -1,19 +1,11 @@
-import {
-  alwaysAvailable,
-  neverOffered,
-} from "@/lib/settings/settings-availability";
+import { alwaysAvailable } from "@/lib/settings/settings-availability";
 import { defineSettingsSection } from "@/lib/settings-search/settings-definitions";
-import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 
 export const BROWSER = defineSettingsSection("browser", {
   page: {
     availableWhen: alwaysAvailable,
     label: "Browser",
-    // Agent access is a row here in a build without environments
-    // (`unreleased-features.ts`), as before them.
-    description: UNRELEASED_FEATURES_ENABLED
-      ? "Search, tab placement, and saved website sessions."
-      : "Search, agent access, tab placement, and saved website sessions.",
+    description: "Search, tab placement, and saved website sessions.",
     keywords: [
       "cookies",
       "logins",
@@ -72,22 +64,6 @@ export const BROWSER = defineSettingsSection("browser", {
     breadcrumb: null,
     availableWhen: alwaysAvailable,
     keywords: ["agent", "popup", "browser", "surface"],
-  },
-  // The host-wide agent access switch, a row here only in a build without
-  // environments (`unreleased-features.ts`); with them it is Permissions >
-  // Browser. Gated on the HOST: the row renders once the active host
-  // advertises `config.browser.get` and `config.browser.set`, so it folds into
-  // the page. Its description names the active host, so the rendered sentence
-  // is a `status` and this static copy is what search reads.
-  agentBrowserAccess: {
-    kind: "row",
-    group: "agents",
-    search: { contributesTo: "page" },
-    label: "Let agents use the in-app browser",
-    description:
-      "Agents get Traycer's browser as a tool and are told to use it for web pages. Turn off to let them use their own browser tooling.",
-    availableWhen: UNRELEASED_FEATURES_ENABLED ? neverOffered : alwaysAvailable,
-    keywords: ["agent", "browser", "playwright", "mcp"],
   },
   // Not beside "Open browser tabs": the answer is whether the tile appears at
   // all, not where it lands, and next to the placement row it read as an

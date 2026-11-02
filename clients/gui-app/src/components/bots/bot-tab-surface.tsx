@@ -28,7 +28,6 @@ import type {
   MobileLevel2Form,
   MobileTileCount,
 } from "@/lib/layout/mobile-layout-form";
-import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { usePaneVisible } from "@/components/epic-tabs/pane-visibility-context";
@@ -1752,7 +1751,7 @@ function BotChannelHeader(props: {
         {props.isMain ? (
           <MainBotBadge testId="bot-tab-main" tone="muted" />
         ) : null}
-        {UNRELEASED_FEATURES_ENABLED && phoneLayout ? (
+        {phoneLayout ? (
           <>
             {/* Takes the free space, so Talk sits beside the ⋮. */}
             <span className="min-w-0 flex-1" />

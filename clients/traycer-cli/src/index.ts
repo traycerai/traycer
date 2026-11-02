@@ -189,7 +189,6 @@ import {
   writeStderr,
   writeStdout,
 } from "./runner/std-write";
-import { UNRELEASED_FEATURES_ENABLED } from "./unreleased-features";
 
 // Helper: register a runner-aware action handler. The runner owns
 // process termination, so anything composed via `withRunner` participates in
@@ -924,8 +923,7 @@ function registerCommands(program: Command, agentRolesEnabled: boolean): void {
   registerWorktreeCommands(program);
   registerTaskCommands(program);
   registerAgentCommands(program, agentRolesEnabled);
-  // `traycer bot`: not a command of a build without bots.
-  if (UNRELEASED_FEATURES_ENABLED) registerBotCommands(program);
+  registerBotCommands(program);
   registerMonitorCommand(program);
 }
 

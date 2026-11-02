@@ -49,7 +49,6 @@ import { useRegionShown } from "@/lib/layout-overrides";
 import { openTracyEntry } from "@/lib/bots/open-bot-channel";
 import { useConnectableHostIds } from "@/hooks/host/use-connectable-host-ids";
 import { useTracyEntryItemId } from "@/stores/bots/tracy-entry";
-import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 import { useTracyEntrySignals } from "@/components/layout/tabs/use-tracy-entry-signals";
 import {
   TRACY_ENTRY_LABEL,
@@ -257,9 +256,7 @@ export function MobileNavDrawer(): ReactNode {
             <span className="flex-1 text-left">Home</span>
           </Button>
         ) : null}
-        {UNRELEASED_FEATURES_ENABLED ? (
-          <MobileNavTracyRow onOpened={close} />
-        ) : null}
+        <MobileNavTracyRow onOpened={close} />
         <Button
           type="button"
           variant="default"

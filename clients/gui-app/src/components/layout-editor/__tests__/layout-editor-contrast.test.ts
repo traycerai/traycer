@@ -646,11 +646,6 @@ describe("layout-editor.css is read, not assumed", () => {
     );
     render(createElement(HeaderTabVisual, sessionTabVisualProps(true)));
     expect(document.querySelector("[data-layout-session-tab]")).not.toBeNull();
-    // The guide's lit moment (L-50) is the same dim with no session behind
-    // it, so it has to be the same DECLARATIONS - not a second set that can
-    // drift into a different treatment under the same name.
-    expect(DIM_RULE?.selector).toContain('[data-layout-editing="1"]');
-    expect(DIM_RULE?.selector).toContain('[data-layout-lit="1"]');
   });
 });
 

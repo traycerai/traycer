@@ -9,7 +9,6 @@ import { AgentDefinitionsTab } from "@/components/settings/panels/agent-definiti
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { AgentSelectionGuideSection } from "./agent-selection-guide-section";
-import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 
 type AgentsTab = "guide" | "definitions";
 const AGENTS_TABS: ReadonlyArray<AgentsTab> = ["guide", "definitions"];
@@ -24,11 +23,6 @@ const AGENTS_TAB_LABELS: Readonly<Record<AgentsTab, string>> = {
 const AGENTS_GUIDE_CAPTION =
   "The guide agents read when they pick a coding agent, model and effort for work they hand off.";
 
-// The page's own header before environments: the page was the guide alone.
-const AGENTS_PAGE_DESCRIPTION = UNRELEASED_FEATURES_ENABLED
-  ? AGENT_SELECTION.page.description
-  : "How Traycer picks a coding agent, model, and reasoning effort when it spawns child agents. This does not manage the agents inside a Task.";
-
 function isAgentsTab(value: string): value is AgentsTab {
   return AGENTS_TABS.some((tab) => tab === value);
 }
@@ -41,24 +35,10 @@ function isAgentsTab(value: string): value is AgentsTab {
  */
 export function AgentsSettingsPanel(): ReactNode {
   const [tab, setTab] = useState<AgentsTab>("guide");
-  // Definitions are a configuration's files (environments): a build without
-  // them (`unreleased-features.ts`) has the guide alone, drawn as the page
-  // with no tab strip and no caption, as before them.
-  if (!UNRELEASED_FEATURES_ENABLED) {
-    return (
-      <SettingsPanelShell
-        title={AGENT_SELECTION.page.label}
-        description={AGENTS_PAGE_DESCRIPTION}
-        fillHeight
-      >
-        <AgentSelectionGuideSection />
-      </SettingsPanelShell>
-    );
-  }
   return (
     <SettingsPanelShell
       title={AGENT_SELECTION.page.label}
-      description={AGENTS_PAGE_DESCRIPTION}
+      description={AGENT_SELECTION.page.description}
       fillHeight
     >
       <Tabs

@@ -49,7 +49,6 @@ import type {
   AuthServerTimeObservation,
 } from "./auth-validation-types";
 import { composeRequestAbort } from "./request-abort";
-import { UNRELEASED_FEATURES_ENABLED } from "../unreleased-features";
 
 export type {
   AuthIdentityValidationResult,
@@ -116,16 +115,8 @@ type AuthenticatedUserResponseMajor =
 export const SUPPORTED_USER_RECORD_MAJORS: readonly AuthenticatedUserResponseMajor[] =
   [1, 2, 3];
 
-/**
- * What this build ASKS for. A build without environments
- * (`unreleased-features.ts`) asks for the majors the release before them
- * asked for, so authn answers it the envelope that release read.
- */
-const ADVERTISED_USER_RECORD_MAJORS = (
-  UNRELEASED_FEATURES_ENABLED
-    ? SUPPORTED_USER_RECORD_MAJORS
-    : SUPPORTED_USER_RECORD_MAJORS.filter((major) => major !== 3)
-).join(",");
+/** What this build ASKS for. */
+const ADVERTISED_USER_RECORD_MAJORS = SUPPORTED_USER_RECORD_MAJORS.join(",");
 
 const SUPPORTED_MAJOR_BY_NUMBER: ReadonlyMap<
   number,
@@ -564,14 +555,7 @@ async function fetchUserRouteOnce(
           ? {
               [USER_RECORD_MAJORS_REQUEST_HEADER]:
                 ADVERTISED_USER_RECORD_MAJORS,
-              // The invitation header came with environments; a build
-              // without them sends what the release before them sent.
-              ...(UNRELEASED_FEATURES_ENABLED
-                ? {
-                    [INVITE_ACCEPTANCE_REQUEST_HEADER]:
-                      EXPLICIT_INVITE_ACCEPTANCE,
-                  }
-                : {}),
+              [INVITE_ACCEPTANCE_REQUEST_HEADER]: EXPLICIT_INVITE_ACCEPTANCE,
             }
           : {}),
       },

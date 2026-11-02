@@ -1,6 +1,5 @@
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import type { EnvironmentStatusResponse } from "@traycer/protocol/host/environment-schemas";
-import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 
 /** The configuration a host runs, from its `environment.status`; `null` for none. */
 export type ProviderKeyPrincipal = EnvironmentStatusResponse["principal"];
@@ -49,11 +48,6 @@ export function deviceKeyCustodyLine(
   envVar: string,
   runsPersonal: boolean,
 ): string {
-  // The line from before environments in a build without them
-  // (`unreleased-features.ts`).
-  if (!UNRELEASED_FEATURES_ENABLED) {
-    return `Stored encrypted on this device. Falls back to ${envVar} from your shell when unset.`;
-  }
   const elsewhere = runsPersonal
     ? " Other computers and sandboxes running Personal don't get this key."
     : "";
@@ -70,11 +64,6 @@ export function deviceProfileKeyCustodyLine(
   hostName: string,
   runsPersonal: boolean,
 ): string {
-  // The line from before environments in a build without them
-  // (`unreleased-features.ts`).
-  if (!UNRELEASED_FEATURES_ENABLED) {
-    return "Stored encrypted on this device and used only by this profile. The key is never shown again after you save it.";
-  }
   const elsewhere = runsPersonal
     ? " The profile follows you, but this key doesn't: on other computers and sandboxes running Personal, the profile has no key."
     : "";
