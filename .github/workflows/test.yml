@@ -59,7 +59,10 @@ jobs:
         include:
           - project: "@traycer/protocol"
             name: "test (@traycer/protocol)"
-            test_args: ""
+            # Naming a reporter replaces vitest's defaults on CI, so the two it
+            # would have chosen stay named. The report is what the budget step
+            # below reads, and the target's `outputs` restore it on a cache hit.
+            test_args: "-- --reporter=default --reporter=github-actions --reporter=junit --outputFile.junit=test-results/junit.xml"
             cache_key: "@traycer/protocol"
           - project: "@traycer/html-source"
             name: "test (@traycer/html-source)"
@@ -235,6 +238,12 @@ jobs:
         env:
           TEST_EVIDENCE_ARGS: ${{ matrix.project == 'traycer-clients-gui-app' && format('--logHeapUsage --reporter=default --reporter=github-actions --reporter=junit --outputFile.junit={0}/test-junit.xml', github.workspace) || '' }}
         run: bunx nx run-many --target=test --projects="${{ matrix.project }}" --outputStyle=stream ${{ matrix.test_args }} $TEST_EVIDENCE_ARGS 2>&1 | tee test-output.log
+      # Fails on a protocol test file whose hooks and tests took over 10 s that
+      # `protocol/test-budget-allowlist.json` does not name with a reason, after
+      # running it once more alone (`protocol/scripts/test-budget.ts`).
+      - name: Test file budget
+        if: matrix.project == '@traycer/protocol'
+        run: bun protocol/scripts/test-budget.ts protocol/test-results/junit.xml
       # A killed fork leaves the file it was running unfinished, and gui-app's
       # `dangerouslyIgnoreUnhandledErrors` still lets vitest exit 0, so the shard
       # would report green with those tests unrun. None of 740 green jobs on

@@ -196,14 +196,34 @@ const MINORS = Object.keys(chatSubscribeLine.versions)
   .map(Number)
   .sort((a, b) => a - b);
 
+// A schema's JSON Schema cannot change during a run, and each of the line's
+// minors has about forty tests reading the same two frames: building it per read
+// was 42 s of a CI run. Callers only read what this returns.
+const canonicalSchemas = new Map<z.ZodType, readonly [unknown, unknown]>();
+
+function canonicalSchemaBothWays(
+  schema: z.ZodType,
+): readonly [unknown, unknown] {
+  const cached = canonicalSchemas.get(schema);
+  if (cached !== undefined) return cached;
+  const built = [
+    toCanonicalJsonSchema(schema, { io: "input", unrepresentable: "any" }),
+    toCanonicalJsonSchema(schema, { io: "output", unrepresentable: "any" }),
+  ] as const;
+  canonicalSchemas.set(schema, built);
+  return built;
+}
+
+const schemaTexts = new Map<z.ZodType, string>();
+
 function schemaText(schema: z.ZodType): string {
-  return (["input", "output"] as const)
-    .map((io) =>
-      JSON.stringify(
-        toCanonicalJsonSchema(schema, { io, unrepresentable: "any" }),
-      ),
-    )
+  const cached = schemaTexts.get(schema);
+  if (cached !== undefined) return cached;
+  const text = canonicalSchemaBothWays(schema)
+    .map((json) => JSON.stringify(json))
     .join("\n");
+  schemaTexts.set(schema, text);
+  return text;
 }
 
 // Enum members are derived from the live enums by the rule that names them,
@@ -286,9 +306,7 @@ function shellShapes(schema: z.ZodType): {
     }
     for (const value of Object.values(record)) visit(value);
   };
-  for (const io of ["input", "output"] as const) {
-    visit(toCanonicalJsonSchema(schema, { io, unrepresentable: "any" }));
-  }
+  for (const json of canonicalSchemaBothWays(schema)) visit(json);
   return tally;
 }
 
@@ -320,8 +338,8 @@ function toolCallArtifactStampPresent(schema: z.ZodType): boolean {
     }
     for (const value of Object.values(record)) visit(value);
   };
-  for (const io of ["input", "output"] as const) {
-    visit(toCanonicalJsonSchema(schema, { io, unrepresentable: "any" }));
+  for (const json of canonicalSchemaBothWays(schema)) {
+    visit(json);
     if (found) return true;
   }
   return found;
@@ -367,9 +385,7 @@ function artifactOperationKinds(schema: z.ZodType): string[] {
     }
     for (const value of Object.values(record)) visit(value);
   };
-  for (const io of ["input", "output"] as const) {
-    visit(toCanonicalJsonSchema(schema, { io, unrepresentable: "any" }));
-  }
+  for (const json of canonicalSchemaBothWays(schema)) visit(json);
   return [...kinds];
 }
 
@@ -384,12 +400,8 @@ const unionArmsSchema = z.object({
 const literalSchema = z.object({ const: z.string() });
 
 function actionAckPropertyNames(serverFrameSchema: z.ZodType): string[] {
-  const json = unionArmsSchema.parse(
-    toCanonicalJsonSchema(serverFrameSchema, {
-      io: "output",
-      unrepresentable: "any",
-    }),
-  );
+  const [, output] = canonicalSchemaBothWays(serverFrameSchema);
+  const json = unionArmsSchema.parse(output);
   const arms = json.oneOf ?? json.anyOf ?? [];
   const [ack, ...extra] = arms.filter(
     (arm) =>
