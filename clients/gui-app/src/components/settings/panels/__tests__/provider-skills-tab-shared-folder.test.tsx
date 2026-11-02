@@ -220,6 +220,16 @@ describe("a shared folder's skill on a host that runs environments", () => {
     ).toBeNull();
   });
 
+  it("names no destination in the reason at project scope, where there is no promote", () => {
+    shared.scope = "project";
+
+    render(<ProviderSkillsTab state={state()} />);
+
+    const dialog = within(openRow("Open hand-placed (Shared)"));
+    expect(dialog.getByText(/whatever put it there\.$/)).toBeDefined();
+    expect(dialog.queryByText(/or add it to/)).toBeNull();
+  });
+
   it("offers no edit, update or remove, and says what to do instead", () => {
     render(<ProviderSkillsTab state={state()} />);
 

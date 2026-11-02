@@ -16,6 +16,11 @@ const route = vi.hoisted(() => ({
       }
     | undefined,
   uploads: [] as Array<{ environmentId: string; name: string }>,
+  listAsked: [] as string[],
+  listAnswer: { outcome: "listed", skills: [] } as
+    | { outcome: "listed"; skills: Array<{ name: string }> }
+    | { outcome: "not_served" }
+    | Error,
   uploadAnswer: { outcome: "saved", reason: null } as {
     outcome: string;
     reason: string | null;
@@ -46,6 +51,22 @@ vi.mock("@/hooks/bots/use-environment-host-read-query", () => ({
     // A disabled read still answers from a primed cache.
     return { data: route.binding };
   },
+}));
+vi.mock("@/hooks/chats/use-cloud-chat-queries", () => ({
+  useCloudChatViewerId: () => "viewer",
+}));
+vi.mock("@/hooks/environment/team/use-configuration-read-client", () => ({
+  useConfigurationReadClient: () => null,
+}));
+vi.mock("@/hooks/host/use-host-query", () => ({
+  useHostQuery: (args: { params: { environmentId: string } }) => ({
+    refetch: () => {
+      route.listAsked.push(args.params.environmentId);
+      return route.listAnswer instanceof Error
+        ? Promise.reject(route.listAnswer)
+        : Promise.resolve({ data: route.listAnswer });
+    },
+  }),
 }));
 vi.mock("@/hooks/environment/team/use-skills-upload-mutation", () => ({
   useConfigurationSkillsUploadMutation: () => ({
@@ -83,6 +104,8 @@ beforeEach(() => {
   route.bindingEnabled = [];
   route.binding = PERSONAL_BINDING;
   route.uploads = [];
+  route.listAsked = [];
+  route.listAnswer = { outcome: "listed", skills: [] };
   route.uploadAnswer = { outcome: "saved", reason: null };
 });
 
@@ -157,6 +180,35 @@ describe("useSkillEnvironmentRoute", () => {
     await expect(result.current.write(SKILL)).resolves.toMatch(/Couldn't add/);
     expect(route.uploads).toEqual([]);
   });
+
+  it("refuses a name the environment it writes to already holds, and uploads nothing", async () => {
+    route.binding = TEAM_BINDING;
+    route.listAnswer = { outcome: "listed", skills: [{ name: "review-pr" }] };
+
+    const { result } = renderHook(() => useSkillEnvironmentRoute());
+
+    await expect(result.current.write(SKILL)).resolves.toBe(
+      'A skill named "review-pr" already exists in Acme.',
+    );
+    expect(route.listAsked).toEqual(["env_acme"]);
+    expect(route.uploads).toEqual([]);
+  });
+
+  it.each([
+    [{ outcome: "not_served" as const }, /isn't running Acme/],
+    [new Error("list failed"), /Couldn't add/],
+  ])(
+    "uploads nothing when the names can't be read: %s",
+    async (answer, words) => {
+      route.binding = TEAM_BINDING;
+      route.listAnswer = answer;
+
+      const { result } = renderHook(() => useSkillEnvironmentRoute());
+
+      await expect(result.current.write(SKILL)).resolves.toMatch(words);
+      expect(route.uploads).toEqual([]);
+    },
+  );
 
   it.each([
     [{ outcome: "not_served", reason: null }, /isn't running Acme/],

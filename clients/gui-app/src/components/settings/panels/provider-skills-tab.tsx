@@ -507,7 +507,9 @@ function ProviderSkillsTabBody({
                       environment.hostRunsEnvironments === null
                         ? HOST_NOT_KNOWN_REASON
                         : sharedFolderReadOnlyReason(
-                            environment.served?.name ?? null,
+                            effectiveScope === "global"
+                              ? (environment.served?.name ?? null)
+                              : null,
                           ),
                   }
                 : skillRemovability({
