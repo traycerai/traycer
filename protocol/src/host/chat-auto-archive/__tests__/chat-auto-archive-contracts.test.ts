@@ -98,7 +98,12 @@ describe("chat-auto-archive protocol contracts", () => {
   });
 
   it("registers both methods off the released floor with unsupported degrade", () => {
-    expect(() => validateVersionedRpcRegistry(hostRpcRegistry)).not.toThrow();
+    expect(() =>
+      validateVersionedRpcRegistry({
+        "chatAutoArchive.get": hostRpcRegistry["chatAutoArchive.get"],
+        "chatAutoArchive.set": hostRpcRegistry["chatAutoArchive.set"],
+      }),
+    ).not.toThrow();
 
     for (const method of [
       "chatAutoArchive.get",

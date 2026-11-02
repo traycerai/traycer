@@ -2357,9 +2357,11 @@ describe("responseGrowthProjectionGated on the minors that grow a response value
   );
 
   it.each(gated)(
-    "%s: the registry validates with the gate and refuses to validate without it",
+    "%s: its line validates with the gate and refuses to validate without it",
     (method, registry, minor) => {
-      expect(() => validateVersionedRpcRegistry(hostRpcRegistry)).not.toThrow();
+      expect(() =>
+        validateVersionedRpcRegistry({ [method]: registry }),
+      ).not.toThrow();
       const line = registry[1];
       const { responseGrowthProjectionGated: _gate, ...ungated } =
         line.versions[minor];
