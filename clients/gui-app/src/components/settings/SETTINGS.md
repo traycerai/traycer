@@ -605,7 +605,7 @@ to join.
   browser tile only views a host's browser and carries none of the user's
   sign-ins, so "In Traycer" vs "In default browser" would decide nothing. The
   modifier legend under the page goes with it. Tile placement stays.
-- **Layout rows the desktop layout alone draws** - the Tabs card's Placement, Tab overflow and Side tab view, the Sidebar's Side and Readings on agent rows, Chat's Reading width and Wide column width, a reading's Location, Model's Style and the Minimap (`isDesktopLayoutRowAvailable = !mobileApp`).
+- **Layout rows the desktop layout alone draws** - the Tabs card's Placement, Tab overflow and Side tab view, the Sidebar's Side, Collapsed in new tasks and Readings on agent rows, Chat's Reading width and Wide column width, a reading's Location, Model's Style and the Minimap (`isDesktopLayoutRowAvailable = !mobileApp`).
   The installed mobile app is the phone layout at every width, so nothing can make them apply there.
   A narrow BROWSER tab keeps them, live, with the note "Applies on wider windows." (the Minimap's: "Shows on wider windows with a mouse."), because widening the window is the way back - the layout form's shell rule (Layout, below).
 - **The exception: Layout's "Status bar on small screens" ROW is keyed on the phone LAYOUT, not the build** (`isMobileFooterRowAvailable = phoneLayout`, L-51, U1).
@@ -2075,7 +2075,7 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
     `Side tab view` picks between two pictures of the strip drawn from the real rows and the sample agents, one with the open task's live agents under its tab and one without.
     It is disabled while the tabs are at the top - "Set Placement to Left or Right to use this.", which the canvas chip says too - and `Tab overflow` is disabled while they sit at a side - "Set Placement to Top to use this."; each stored value is kept.
     In the editor its canvas part is the live agents list under the sample tab: hovering or pressing the row lights or rings that list (ghosted while the value is Tabs only), a press on the list selects the row, and with no room for the list the canvas chip on the strip says why.
-    The Sidebar card opens with **`Side`** (`arrangement.sidebarSide`: Left or Right) and ends with **`Readings on agent rows`**.
+    The Sidebar card opens with **`Side`** (`arrangement.sidebarSide`: Left or Right), then **`Collapsed in new tasks`** (`arrangement.sidebarStartCollapsed`, off by default: what a task tab with no collapse record of its own opens with; a tab the user has collapsed or expanded keeps its own `mainCollapsedByTabId` entry, so the switch never moves a tab already arranged), and ends with **`Readings on agent rows`**.
     Chat opens with **`Reading width`** and, under it, **`Wide column width`**, which stays in place while Comfortable, disabled with "Set Reading width to Wide to use this." (C5); the column is never wider than the pane it is in.
     Composer opens with **`Toolbar style`** (`model.toolbarStyle`, Flat or Bordered, drawn as the real buttons): it styles every toolbar button, so it is an area row rather than a detail of the Model region it is stored on (C3).
     Usage and resources opens with **`Status bar on small screens`** where the phone layout is drawn (see Responsive Behavior).

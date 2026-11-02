@@ -1107,6 +1107,9 @@ export function CanvasArtifactEditor({
             aria-label="Canvas"
             className="relative flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden bg-canvas text-foreground outline-none"
             onPointerDownCapture={(event) => {
+              // A relayed board press dismisses overlays without taking the
+              // iframe's focus away from its keyboard navigation.
+              if (event.target instanceof HTMLIFrameElement) return;
               if (!isCanvasTextInput(event.target, event.currentTarget))
                 event.currentTarget.focus({ preventScroll: true });
             }}

@@ -1,3 +1,4 @@
+import { MIX_TUNING } from "./mix-tuning";
 import type { StemDecoder } from "./stems";
 
 /** A sample scheduled or sounding. */
@@ -26,12 +27,8 @@ export interface SoundtrackOutput {
 // A voice outlives its fade by this much, so the stop never clips the ramp.
 const STOP_AFTER_FADE_SECONDS = 0.01;
 
-function rampParam(
-  param: AudioParam,
-  now: number,
-  target: number,
-  seconds: number,
-): void {
+/** Stops the param where it is, for a new ramp to start from. */
+function holdParam(param: AudioParam, now: number): void {
   const value = param.value;
   // Cancelling a ramp under way can let one sample through at whatever came
   // before that ramp: a click. Holding leaves no gap, but adds no event when no
@@ -43,6 +40,15 @@ function rampParam(
     param.cancelScheduledValues(now);
   }
   param.setValueAtTime(value, now);
+}
+
+function rampParam(
+  param: AudioParam,
+  now: number,
+  target: number,
+  seconds: number,
+): void {
+  holdParam(param, now);
   param.linearRampToValueAtTime(target, now + seconds);
 }
 
@@ -130,5 +136,40 @@ export class WebAudioOutput implements SoundtrackOutput, StemDecoder {
 
   decode(bytes: ArrayBuffer): Promise<AudioBuffer> {
     return this.context.decodeAudioData(bytes);
+  }
+}
+
+/** A low-pass in front of `destination`, wide open until it is dimmed. */
+export class WebAudioDimFilter {
+  /** Where the mix goes in. */
+  readonly input: AudioNode;
+  private readonly context: BaseAudioContext;
+  private readonly filter: BiquadFilterNode;
+  private dimmed = false;
+
+  constructor(context: BaseAudioContext, destination: AudioNode) {
+    const { openHz, q } = MIX_TUNING.dim;
+    this.context = context;
+    this.filter = context.createBiquadFilter();
+    this.filter.type = "lowpass";
+    this.filter.frequency.value = openHz;
+    this.filter.Q.value = q;
+    this.filter.connect(destination);
+    this.input = this.filter;
+  }
+
+  /** A plan restates this every few seconds; only a change moves the filter. */
+  setDimmed(dimmed: boolean): void {
+    if (dimmed === this.dimmed) return;
+    this.dimmed = dimmed;
+    const { openHz, dimmedHz, rampSeconds } = MIX_TUNING.dim;
+    const now = this.context.currentTime;
+    holdParam(this.filter.frequency, now);
+    // Pitch is heard in ratios, so a straight line in Hz would seem to drop at
+    // once and then hang.
+    this.filter.frequency.exponentialRampToValueAtTime(
+      dimmed ? dimmedHz : openHz,
+      now + rampSeconds,
+    );
   }
 }

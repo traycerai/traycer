@@ -53,6 +53,25 @@ interface Rendered {
   readonly readings: readonly number[];
 }
 
+interface DimRequest {
+  readonly seconds: number;
+  readonly toneHz: number;
+  readonly amplitude: number;
+  readonly steps: readonly { readonly at: number; readonly dimmed: boolean }[];
+  readonly windows: readonly { readonly from: number; readonly to: number }[];
+}
+
+interface DimRendered {
+  readonly peaks: readonly number[];
+  readonly rms: readonly number[];
+}
+
+function renderDim(page: Page, request: DimRequest): Promise<DimRendered> {
+  return page.evaluate<DimRendered>(
+    `window.__soundtrackOutputProbe.renderDim(${JSON.stringify(request)})`,
+  );
+}
+
 function render(page: Page, request: RenderRequest): Promise<Rendered> {
   return page.evaluate<Rendered>(
     `window.__soundtrackOutputProbe.render(${JSON.stringify(request)})`,
@@ -210,5 +229,64 @@ test("a cut inside a voice's 10 ms fade-in goes down from where it had reached",
     // It never rises past the cut, so the fade-in was really turned round.
     expect(peak, label).toBeCloseTo(reached, 1);
     expect(readings, label).toEqual([0]);
+  }
+});
+
+// A tone far above the dimmed cutoff (900 Hz), so the low-pass has to take it.
+const TONE_HZ = 6000;
+
+test("the dim filter takes a tone above its cutoff down once dimmed, and back once undimmed", async ({
+  page,
+}) => {
+  // Dimmed at 0.5 s, its 1.2 s ramp over by 1.7 s; undimmed at 2.5 s, over by 3.7 s.
+  const { rms } = await renderDim(page, {
+    seconds: 4.2,
+    toneHz: TONE_HZ,
+    amplitude: 0.5,
+    steps: [
+      { at: 0.5, dimmed: true },
+      { at: 2.5, dimmed: false },
+    ],
+    windows: [
+      { from: 0.2, to: 0.4 },
+      { from: 2.2, to: 2.4 },
+      { from: 4, to: 4.2 },
+    ],
+  });
+  const [open, dimmed, reopened] = rms;
+  // Open, the tone passes: without a filter in the way its RMS is amplitude / sqrt 2.
+  expect(open).toBeGreaterThan(0.2);
+  expect(dimmed).toBeLessThan(open * 0.1);
+  expect(reopened).toBeCloseTo(open, 2);
+});
+
+test("a dim ramp turned round goes on from where the cutoff had got to", async ({
+  page,
+}) => {
+  // The cutoff falls from 20 kHz for 0.6 s, to about 4 kHz, where this tone is
+  // still heard at a fraction of its open level. A turn that fell back to the
+  // open cutoff would bring it up to a multiple of that within a quantum.
+  const dimAt = 0.3;
+  const turnFrom = 0.9;
+  for (let quanta = 0; quanta < 8; quanta += 1) {
+    const turnAt = turnFrom + quanta * QUANTUM_SECONDS;
+    const { peaks } = await renderDim(page, {
+      seconds: 1.5,
+      toneHz: TONE_HZ,
+      amplitude: 0.5,
+      steps: [
+        { at: dimAt, dimmed: true },
+        { at: turnAt, dimmed: false },
+      ],
+      windows: [
+        { from: turnAt - 0.004, to: turnAt },
+        { from: turnAt + 0.004, to: turnAt + 0.024 },
+      ],
+    });
+    const [beforeTurn, afterTurn] = peaks;
+    const label = `turned after ${String(quanta)} quanta`;
+    // It was well under the open level, so the ratio below is a turn and not a flat line.
+    expect(beforeTurn, label).toBeLessThan(0.3);
+    expect(afterTurn / beforeTurn, label).toBeLessThan(1.3);
   }
 });

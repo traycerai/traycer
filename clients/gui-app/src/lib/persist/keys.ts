@@ -94,6 +94,11 @@ export const githubMentionFiltersKey = (identity: string | null): string =>
 export const lastLocalHostIdKey = (): string =>
   persistKey("last-local-host-id");
 
+// The installed mobile app's window identity (browser-tab-identity.ts).
+// Identity-free like the key above: it names the device, not who is signed in,
+// the way a desktop window's bridge id does.
+export const mobileWindowIdKey = (): string => persistKey("mobile-window");
+
 export const appLocalNotificationsKey = (userId: string | null): string =>
   scopedPersistKey("app-local-notifications", scopeBucket(userId));
 
@@ -512,6 +517,8 @@ export const PERSIST_STORES = [
   { camelName: "lastRoute", leaf: "last-route", kind: "static" },
   // This machine's own local host id (host-directory-service.ts).
   { camelName: "lastLocalHostId", leaf: "last-local-host-id", kind: "static" },
+  // The installed mobile app's per-install window id (browser-tab-identity.ts).
+  { camelName: "mobileWindow", leaf: "mobile-window", kind: "static" },
   // `consumed-initial-route:<windowId>:<route>` — sessionStorage guard.
   {
     camelName: "consumedInitialRoute",
