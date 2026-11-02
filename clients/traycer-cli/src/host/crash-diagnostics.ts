@@ -627,20 +627,92 @@ export async function pruneCrashReports(
 }
 
 /**
- * The three numbers a heap-exhaustion report states, in bytes: the V8 heap
- * limit, the heap in use and the resident set. A value the report does not
- * carry, or carries as anything but a non-negative whole number, is `null`.
+ * The V8 heap spaces a diagnostic report's `javascriptHeap.heapSpaces` names
+ * on the Node the host runs (24.x). A closed set: a space the report names
+ * outside it is not read, so nothing a report carries can add a key to the
+ * crash event.
+ */
+export const HEAP_SPACE_NAMES = [
+  "read_only_space",
+  "new_space",
+  "old_space",
+  "code_space",
+  "shared_space",
+  "trusted_space",
+  "shared_trusted_space",
+  "new_large_object_space",
+  "large_object_space",
+  "code_large_object_space",
+  "shared_large_object_space",
+  "shared_trusted_large_object_space",
+  "trusted_large_object_space",
+] as const;
+
+export type HeapSpaceName = (typeof HEAP_SPACE_NAMES)[number];
+
+/** Bytes in use per heap space; `null` for a space the report did not state. */
+export type HeapSpaceUsedBytes = Readonly<Record<HeapSpaceName, number | null>>;
+
+/**
+ * The spaces the one-line digest names, by the short label it uses: the three
+ * that tell a growth in retained objects (old), in big buffers and strings
+ * (large-object) and in short-lived allocation (new) apart. Every space still
+ * reaches the crash event; the line stays short.
+ */
+const DIGEST_HEAP_SPACES: ReadonlyArray<
+  readonly [label: string, space: HeapSpaceName]
+> = [
+  ["oldSpaceUsedBytes", "old_space"],
+  ["largeObjectSpaceUsedBytes", "large_object_space"],
+  ["newSpaceUsedBytes", "new_space"],
+];
+
+/**
+ * The numbers a heap-exhaustion report states, in bytes: the V8 heap limit,
+ * the heap in use, the resident set, and the heap in use split by space - the
+ * split is what says what grew. A value the report does not carry, or carries
+ * as anything but a non-negative whole number, is `null`.
  */
 export interface CrashReportMemory {
   readonly heapLimitBytes: number | null;
   readonly heapUsedBytes: number | null;
   readonly rssBytes: number | null;
+  readonly heapSpaceUsedBytes: HeapSpaceUsedBytes;
 }
 
-const NO_REPORT_MEMORY: CrashReportMemory = {
+function heapSpaceUsedBytesFrom(
+  read: (space: HeapSpaceName) => number | null,
+): HeapSpaceUsedBytes {
+  // Spelled out rather than built in a loop, so the compiler checks that every
+  // name in the closed set has a value and no other key does.
+  return {
+    read_only_space: read("read_only_space"),
+    new_space: read("new_space"),
+    old_space: read("old_space"),
+    code_space: read("code_space"),
+    shared_space: read("shared_space"),
+    trusted_space: read("trusted_space"),
+    shared_trusted_space: read("shared_trusted_space"),
+    new_large_object_space: read("new_large_object_space"),
+    large_object_space: read("large_object_space"),
+    code_large_object_space: read("code_large_object_space"),
+    shared_large_object_space: read("shared_large_object_space"),
+    shared_trusted_large_object_space: read(
+      "shared_trusted_large_object_space",
+    ),
+    trusted_large_object_space: read("trusted_large_object_space"),
+  };
+}
+
+/** Every space `null`: no report, or a report with no `heapSpaces`. */
+export const NO_HEAP_SPACE_USED_BYTES: HeapSpaceUsedBytes =
+  heapSpaceUsedBytesFrom(() => null);
+
+export const NO_REPORT_MEMORY: CrashReportMemory = {
   heapLimitBytes: null,
   heapUsedBytes: null,
   rssBytes: null,
+  heapSpaceUsedBytes: NO_HEAP_SPACE_USED_BYTES,
 };
 
 export interface CrashReportMatch {
@@ -741,6 +813,7 @@ async function summarizeReport(path: string): Promise<ReportReading> {
     const message = asString(stackRecord?.["message"]);
     const heap = asRecord(parsed?.["javascriptHeap"]);
     const usage = asRecord(parsed?.["resourceUsage"]);
+    const spaces = asRecord(heap?.["heapSpaces"]);
     const memory: CrashReportMemory = {
       heapLimitBytes: asByteCount(heap?.["memoryLimit"]),
       heapUsedBytes: asByteCount(heap?.["usedMemory"]),
@@ -748,6 +821,10 @@ async function summarizeReport(path: string): Promise<ReportReading> {
       // only when the report has no current reading.
       rssBytes:
         asResidentBytes(usage?.["rss"]) ?? asResidentBytes(usage?.["maxRss"]),
+      // `used` per space, as Node writes it (`heapSpaces.old_space.used`).
+      heapSpaceUsedBytes: heapSpaceUsedBytesFrom((space) =>
+        asByteCount(asRecord(spaces?.[space])?.["used"]),
+      ),
     };
     const parts: string[] = [];
     if (event !== null) parts.push(`event=${event}`);
@@ -761,6 +838,10 @@ async function summarizeReport(path: string): Promise<ReportReading> {
       parts.push(`heapUsedBytes=${memory.heapUsedBytes}`);
     }
     if (memory.rssBytes !== null) parts.push(`rssBytes=${memory.rssBytes}`);
+    for (const [label, space] of DIGEST_HEAP_SPACES) {
+      const used = memory.heapSpaceUsedBytes[space];
+      if (used !== null) parts.push(`${label}=${used}`);
+    }
     if (message !== null) parts.push(`js=${message}`);
     if (parts.length === 0) {
       return { summary: null, memory };
