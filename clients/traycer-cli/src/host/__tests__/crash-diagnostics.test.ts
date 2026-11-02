@@ -58,6 +58,8 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 
 const {
   CRASH_REPORT_SPAWN_SLACK_MS,
+  NO_HEAP_SPACE_USED_BYTES,
+  NO_REPORT_MEMORY,
   REPORT_SUMMARY_MAX_CHARS,
   STDERR_FATAL_WINDOW_MAX_BYTES,
   STDERR_MARKER_MAX_CHARS,
@@ -680,6 +682,7 @@ describe("findCrashReportSince", () => {
         heapLimitBytes: 4831838208,
         heapUsedBytes: 4100000000,
         rssBytes: 4750000000,
+        heapSpaceUsedBytes: NO_HEAP_SPACE_USED_BYTES,
       });
       expect(match?.summary).toContain("heapLimitBytes=4831838208");
       expect(match?.summary).toContain("heapUsedBytes=4100000000");
@@ -704,6 +707,7 @@ describe("findCrashReportSince", () => {
         heapLimitBytes: null,
         heapUsedBytes: null,
         rssBytes: null,
+        heapSpaceUsedBytes: NO_HEAP_SPACE_USED_BYTES,
       });
       expect(match?.summary).not.toContain("heapLimitBytes");
       expect(match?.summary).not.toContain("rssBytes");
@@ -721,6 +725,7 @@ describe("findCrashReportSince", () => {
         heapLimitBytes: 4345298944,
         heapUsedBytes: 4816432,
         rssBytes: 35766272,
+        heapSpaceUsedBytes: NO_HEAP_SPACE_USED_BYTES,
       });
       expect(match?.summary).toContain("rssBytes=35766272");
     });
@@ -775,11 +780,80 @@ describe("findCrashReportSince", () => {
       await writeFile(path, "{not json", "utf8");
       await utimes(path, new Date(sinceMs + 500), new Date(sinceMs + 500));
       const match = await findCrashReportSince(dir, sinceMs, EMPTY_EXCLUDE);
-      expect(match?.memory).toEqual({
-        heapLimitBytes: null,
-        heapUsedBytes: null,
-        rssBytes: null,
+      expect(match?.memory).toEqual(NO_REPORT_MEMORY);
+    });
+
+    it("reads each heap space's used bytes into the match and names three in the digest", async () => {
+      const match = await matchFor({
+        header: { event: "Allocation failed", trigger: "FatalError" },
+        javascriptHeap: {
+          heapSpaces: {
+            old_space: { used: 3000 },
+            large_object_space: { used: 200 },
+            new_space: { used: 10 },
+            code_space: { used: 5 },
+          },
+        },
       });
+      expect(match?.memory.heapSpaceUsedBytes).toEqual({
+        ...NO_HEAP_SPACE_USED_BYTES,
+        old_space: 3000,
+        large_object_space: 200,
+        new_space: 10,
+        code_space: 5,
+      });
+      expect(match?.summary).toContain("oldSpaceUsedBytes=3000");
+      expect(match?.summary).toContain("largeObjectSpaceUsedBytes=200");
+      expect(match?.summary).toContain("newSpaceUsedBytes=10");
+      expect(match?.summary).not.toContain("code_space");
+    });
+
+    it("nulls a space whose used is negative, fractional or a string, and keeps the rest", async () => {
+      const match = await matchFor({
+        header: { event: "Allocation failed", trigger: "FatalError" },
+        javascriptHeap: {
+          heapSpaces: {
+            old_space: { used: -1 },
+            new_space: { used: 1.5 },
+            code_space: { used: "7x" },
+            large_object_space: { used: 42 },
+          },
+        },
+      });
+      expect(match?.memory.heapSpaceUsedBytes).toEqual({
+        ...NO_HEAP_SPACE_USED_BYTES,
+        large_object_space: 42,
+      });
+      expect(match?.summary).not.toContain("oldSpaceUsedBytes");
+      expect(match?.summary).not.toContain("newSpaceUsedBytes");
+    });
+
+    it("never reads a space name outside the closed set", async () => {
+      const match = await matchFor({
+        header: { event: "Allocation failed", trigger: "FatalError" },
+        javascriptHeap: {
+          heapSpaces: {
+            evil_space: { used: 999 },
+            old_space: { used: 1 },
+          },
+        },
+      });
+      expect(match?.memory.heapSpaceUsedBytes).toEqual({
+        ...NO_HEAP_SPACE_USED_BYTES,
+        old_space: 1,
+      });
+      expect(JSON.stringify(match?.memory)).not.toContain("evil_space");
+      expect(match?.summary).not.toContain("evil_space");
+    });
+
+    it("has every space null when the report has no heapSpaces", async () => {
+      const match = await matchFor({
+        header: { event: "Allocation failed", trigger: "FatalError" },
+        javascriptHeap: { memoryLimit: 10, usedMemory: 9 },
+      });
+      expect(match?.memory.heapSpaceUsedBytes).toEqual(
+        NO_HEAP_SPACE_USED_BYTES,
+      );
     });
   });
 
@@ -810,7 +884,7 @@ describe("findCrashReportSince", () => {
       filename: "broken.json",
       summary: null,
       heapOutOfMemory: false,
-      memory: { heapLimitBytes: null, heapUsedBytes: null, rssBytes: null },
+      memory: NO_REPORT_MEMORY,
     });
   });
 

@@ -1,9 +1,17 @@
 ---
-title: "Export"
-description: "Save artifacts as Markdown or PDF files, one at a time or several in a ZIP."
+title: "Export and download"
+description: "Export Markdown documents, download HTML pages as ZIPs, and save file artifacts."
 ---
 
-Export saves artifacts outside Traycer, as Markdown or PDF. Anyone with access to the Task can export, including Viewers.
+The available format depends on the artifact:
+
+| Artifact | Save outside Traycer |
+| --- | --- |
+| Spec, ticket, story, review | **Export as Markdown** or **Export as PDF** from the row menu. |
+| HTML | **Download ZIP** in the open page, including supporting files and the selected version. |
+| File | **Download** in the open preview, preserving the original file format. |
+
+Anyone with access to the Task can export documents, including Viewers. The Markdown/PDF export steps below apply only to specs, tickets, stories, and reviews.
 
 ## Export One Artifact
 
@@ -32,7 +40,7 @@ ZIP export needs at least two selected artifacts. For a single artifact, use the
 
 ## What Gets Exported
 
-Each file holds the artifact's body at the moment you export it.
+Each Markdown or PDF export holds the document's body at the moment you export it.
 
 In a PDF, [diagrams](/panels/artifacts/diagrams) and [wireframes](/panels/artifacts/wireframes) appear as their source, labeled "Mermaid source" and "UI preview source", rather than as rendered images.
 
@@ -40,5 +48,5 @@ Comment threads are not included.
 
 ## Related
 
-- [Artifacts on Disk](/panels/artifacts#artifacts-on-disk): Editors and Owners already have every artifact as a Markdown file on their host.
+- [Artifacts on Disk](/panels/artifacts#artifacts-on-disk): the file format depends on the artifact type.
 - [Version history and recovery](/panels/artifacts/version-history)

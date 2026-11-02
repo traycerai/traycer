@@ -47,6 +47,7 @@ import {
   describeFatalSignal,
   findCrashReportSince,
   isWindowsSessionEndExit,
+  NO_REPORT_MEMORY,
   prepareCrashReportsDir,
   StderrCaptureBuffer,
 } from "../host/crash-diagnostics";
@@ -4684,9 +4685,7 @@ async function settlePendingCrashTelemetry(): Promise<void> {
 
 /** The report's memory numbers, every field `null` when there was no report. */
 function crashReportMemory(report: CrashReportMatch | null): CrashReportMemory {
-  return report === null
-    ? { heapLimitBytes: null, heapUsedBytes: null, rssBytes: null }
-    : report.memory;
+  return report === null ? NO_REPORT_MEMORY : report.memory;
 }
 
 /**

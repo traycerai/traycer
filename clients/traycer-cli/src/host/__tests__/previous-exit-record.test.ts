@@ -4,17 +4,11 @@ import { parseHostPreviousExit } from "@traycer/protocol/config/host-previous-ex
 import { afterAll, describe, expect, it, vi } from "vitest";
 import type { Environment } from "../../runner/environment";
 import {
+  NO_REPORT_MEMORY,
   STDERR_FATAL_KINDS,
   type CrashReportMatch,
   type StderrFatalKind,
 } from "../crash-diagnostics";
-
-// No report numbers: what a report that states none reads as.
-const NO_MEMORY = {
-  heapLimitBytes: null,
-  heapUsedBytes: null,
-  rssBytes: null,
-} as const;
 
 // Point `store/paths` at a directory of this file's own so the record is never
 // written under a real home.
@@ -48,7 +42,7 @@ function report(overrides: Partial<CrashReportMatch>): CrashReportMatch {
   return {
     filename: "report.json",
     summary: null,
-    memory: NO_MEMORY,
+    memory: NO_REPORT_MEMORY,
     heapOutOfMemory: false,
     ...overrides,
   };
@@ -91,7 +85,7 @@ describe("buildPreviousExit", () => {
       signal: "SIGABRT",
       report: report({
         memory: {
-          ...NO_MEMORY,
+          ...NO_REPORT_MEMORY,
           heapLimitBytes: 4831838208,
           heapUsedBytes: 4100000000,
         },
