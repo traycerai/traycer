@@ -283,8 +283,7 @@ function BotSlackRegistered(props: { readonly app: SlackAppView }): ReactNode {
         {registeredStatusLine(app)}
       </p>
       <p className="text-ui-xs text-muted-foreground">
-        In Slack, retry the request URL under Event Subscriptions, then install
-        the app.
+        {registeredNextStepLine(app)}
       </p>
       <BotSlackInstall app={app} label="Install to workspace" />
       <BotSlackRegisterForm botId={app.botId} />
@@ -298,6 +297,16 @@ function registeredStatusLine(app: SlackAppView): string {
   return app.teamName === null
     ? "Not installed in a workspace."
     : `Not installed in ${app.teamName}.`;
+}
+
+/**
+ * Slack takes an uninstalled app's bot out of every channel, so installing
+ * again does not bring it back to them.
+ */
+function registeredNextStepLine(app: SlackAppView): string {
+  return app.installState === "uninstalled"
+    ? "Install to workspace, then add the app to its channels again in Slack."
+    : "In Slack, retry the request URL under Event Subscriptions, then install the app.";
 }
 
 function BotSlackConnected(props: { readonly app: SlackAppView }): ReactNode {

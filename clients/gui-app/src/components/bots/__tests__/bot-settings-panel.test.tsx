@@ -1321,6 +1321,16 @@ describe("<BotChannelSettingsPanel /> Slack", () => {
     expect(
       (await screen.findByTestId("bot-settings-slack-status")).textContent,
     ).toBe("Registered, not installed.");
+    expect(
+      within(slackGroup()).getByText(
+        "In Slack, retry the request URL under Event Subscriptions, then install the app.",
+      ),
+    ).toBeTruthy();
+    expect(
+      within(slackGroup()).queryByText(
+        "Install to workspace, then add the app to its channels again in Slack.",
+      ),
+    ).toBeNull();
     // The same group element: the panel moved on without a remount.
     expect(slackGroup()).toBe(group);
     for (const label of [
@@ -1381,6 +1391,16 @@ describe("<BotChannelSettingsPanel /> Slack", () => {
     expect(
       (await screen.findByTestId("bot-settings-slack-status")).textContent,
     ).toBe("Not installed in Mock workspace.");
+    expect(
+      within(slackGroup()).getByText(
+        "Install to workspace, then add the app to its channels again in Slack.",
+      ),
+    ).toBeTruthy();
+    expect(
+      within(slackGroup()).queryByText(
+        "In Slack, retry the request URL under Event Subscriptions, then install the app.",
+      ),
+    ).toBeNull();
     expect(
       within(slackGroup()).getByRole("button", {
         name: "Install to workspace",
