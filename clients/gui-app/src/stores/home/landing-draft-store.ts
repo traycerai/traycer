@@ -215,6 +215,14 @@ interface LandingDraftStoreState {
    */
   createDraftWithId: (id: string, settings: ChatRunSettings | null) => string;
   /**
+   * Give an unseeded draft (`isUnseededLandingDraft`) what `createDraftWithId`
+   * would have given it had `hostId` been resolved at mint: that host's
+   * last-run settings and folder bucket. True when it wrote. A host that
+   * remembers nothing writes nothing, so the draft stays unseeded and nothing
+   * is published for it.
+   */
+  seedUnseededDraft: (id: string, hostId: string | null) => boolean;
+  /**
    * Mint `nextId` as a fresh, unadopted draft carrying `sourceId`'s content,
    * caret, settings, mode and workspace, with `supersedes` naming the
    * source. The fork rule for a foreign row: the copy adopts and publishes
@@ -636,6 +644,19 @@ export function isLandingDraftEmpty(draft: LandingDraftTab): boolean {
 }
 
 /**
+ * A draft that holds nothing anyone chose: no content, no settings, no folders.
+ * It was minted before its placement host resolved, so seeding it from that
+ * host's memory loses nothing.
+ */
+export function isUnseededLandingDraft(draft: LandingDraftTab): boolean {
+  return (
+    isLandingDraftEmpty(draft) &&
+    draft.settings === null &&
+    draft.workspace.folders.length === 0
+  );
+}
+
+/**
  * Newest OPEN landing draft, for the installed mobile app's single stable
  * composer: an id-less "new draft" activation reuses this instead of minting
  * (see `createDraft`). `null` when no open draft exists. A closed draft is
@@ -712,6 +733,29 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
           activeDraftId: next.id,
         }));
         return next.id;
+      },
+
+      seedUnseededDraft: (id, hostId) => {
+        if (hostId === null) return false;
+        const draft = get().drafts.find((d) => d.id === id);
+        if (draft === undefined || !isUnseededLandingDraft(draft)) return false;
+        const settings = copyChatRunSettings(
+          useComposerRunSettingsStore.getState().getGlobalRunSettings(hostId),
+        );
+        const workspace = readLandingDraftWorkspaceSnapshotForHost(hostId);
+        if (settings === null && workspace.folders.length === 0) return false;
+        // `generation` from the row as read above: the workspace update bumps
+        // it only when the folders moved, and this is one edit either way.
+        set((state) => ({
+          drafts: updateDraftWorkspace(state, id, () => workspace).drafts.map(
+            (d) =>
+              d.id === id
+                ? { ...d, settings, generation: draft.generation + 1 }
+                : d,
+          ),
+        }));
+        notifyDraftLocalEdit(id);
+        return true;
       },
 
       forkDraft: (sourceId, nextId) => {
@@ -1376,6 +1420,9 @@ function normalizeChatRunSettings(
     reasoningEffort: settings.reasoningEffort,
     serviceTier: settings.serviceTier,
     agentMode: settings.agentMode,
+    // `??` guards a pre-profile persisted blob (the field is missing, not
+    // `null`, on an old serialized `ChatRunSettings`).
+    profileId: settings.profileId ?? null,
   };
 }
 

@@ -147,3 +147,50 @@ describe("the browser composer pin is per tab", () => {
     expect(result.current).not.toContain("tab-should-be-ignored");
   });
 });
+
+describe("the installed app's composer pin outlives the process", () => {
+  /**
+   * The real identity, because how it survives a cold start is the claim under
+   * test; this file's mock only hands its answer to the hook. The flag is loaded
+   * beside it because the desktop case above resets the module registry, and a
+   * statically imported `setMobileApp` would set a different module's flag.
+   */
+  async function loadRealIdentityAndFlag(): Promise<{
+    readonly realIdentity: typeof import("@/lib/browser-tab-identity");
+    readonly setMobileApp: (value: boolean) => void;
+  }> {
+    const realIdentity = await vi.importActual<
+      typeof import("@/lib/browser-tab-identity")
+    >("@/lib/browser-tab-identity");
+    const { setMobileApp } = await import("@/lib/mobile-app");
+    return { realIdentity, setMobileApp };
+  }
+
+  afterEach(async () => {
+    const { realIdentity, setMobileApp } = await loadRealIdentityAndFlag();
+    setMobileApp(false);
+    realIdentity.resetBrowserTabIdentityForTesting();
+    window.localStorage.removeItem("traycer-gui-app:mobile-window");
+    window.sessionStorage.clear();
+  });
+
+  it("keeps the key and the pin across a force-quit", async () => {
+    const { realIdentity, setMobileApp } = await loadRealIdentityAndFlag();
+    setMobileApp(true);
+    realIdentity.resetBrowserTabIdentityForTesting();
+    const keyBeforeQuit = keyForTab(realIdentity.browserTabId());
+    useSurfaceHostSelectionStore
+      .getState()
+      .setSelection(keyBeforeQuit, "host-pinned-on-phone");
+
+    // A force-quit drops sessionStorage and the module's cached id.
+    window.sessionStorage.clear();
+    realIdentity.resetBrowserTabIdentityForTesting();
+    const keyAfterRelaunch = keyForTab(realIdentity.browserTabId());
+
+    expect(keyAfterRelaunch).toBe(keyBeforeQuit);
+    expect(
+      useSurfaceHostSelectionStore.getState().selections[keyAfterRelaunch],
+    ).toBe("host-pinned-on-phone");
+  });
+});

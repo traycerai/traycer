@@ -362,6 +362,19 @@ export function LandingComposer(props: LandingComposerProps) {
       landingEditMark.closed !== seen.closed;
     if (substantive) authority.noteEdit();
   }, [authority, landingEditMark]);
+  // A draft minted before its host resolved holds nothing, and would hold
+  // nothing for life: the draft outranks the host's memory from mint on. This
+  // is the effect keyed by `resolvedHostId` that the host picker warns against,
+  // and it is safe here because the store refuses any draft with content,
+  // settings or folders, so it cannot overwrite a draft or follow a failover,
+  // and a seeded draft is not seeded twice. The write counts as an edit above,
+  // so a row this host does not own forks.
+  const seedUnseededDraft = useLandingDraftStore(
+    (state) => state.seedUnseededDraft,
+  );
+  useEffect(() => {
+    if (draftId !== null) seedUnseededDraft(draftId, resolvedHostId);
+  }, [draftId, resolvedHostId, seedUnseededDraft]);
   const handleToolbarSettingsChange = useCallback(
     (settings: ChatRunSettings) => {
       setGlobalRunSettings(activeHostId, settings, Date.now());
