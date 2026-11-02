@@ -6140,6 +6140,7 @@ describe("a send whose sandbox left awake on its own after the create timed out"
     answerHost(SANDBOX_HOST, CODEX_READY);
     mount();
     await screen.findByTestId("sandbox-setup-line");
+    await settleAsyncWork();
     expect(document.body.textContent).toContain("compute is charged");
   }
 
@@ -6258,9 +6259,6 @@ describe("a send whose sandbox left awake on its own after the create timed out"
   });
 
   it("falls back to the receipt's sentence when the sandbox is absent from the list and the task names no end", async () => {
-    // On the real clock: this outcome did not settle under the fake one, however
-    // far it was advanced.
-    restoreLegendListTestClock();
     await mountTimedOut();
 
     answerSandboxRows([], FRESH + 1);
@@ -6276,9 +6274,6 @@ describe("a send whose sandbox left awake on its own after the create timed out"
   });
 
   it("falls back to the receipt's sentence when the task names the sandbox but the list lacks its row", async () => {
-    // On the real clock: this outcome did not settle under the fake one, however
-    // far it was advanced.
-    restoreLegendListTestClock();
     mocks.taskHosts = [
       {
         hostId: SANDBOX_HOST,
@@ -10633,8 +10628,8 @@ describe("an owner that takes up each kind of retry request", () => {
   }
 
   it("runs a wake Retry as one wake of the same sandbox, acknowledges it and settles to one delivery", async () => {
-    // On the real clock: this outcome did not settle under the fake one, however
-    // far it was advanced.
+    // On the real clock: under the fake one this retry is never acknowledged,
+    // however far it is advanced. It waits on the store's outcome, not on time.
     restoreLegendListTestClock();
     seed({ ...SEEDED, phase: "creating", created: true });
     useStagedSandboxStore.getState().report(SURFACE, {
@@ -10665,8 +10660,8 @@ describe("an owner that takes up each kind of retry request", () => {
   });
 
   it("takes a refusal Retry as the readiness plan, acknowledges it and creates no other sandbox", async () => {
-    // On the real clock: this outcome did not settle under the fake one, however
-    // far it was advanced.
+    // On the real clock: under the fake one this retry is never acknowledged,
+    // however far it is advanced. It waits on the store's outcome, not on time.
     restoreLegendListTestClock();
     seed(SEEDED);
     useStagedSandboxStore.getState().report(SURFACE, {

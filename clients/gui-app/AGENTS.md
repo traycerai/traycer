@@ -431,6 +431,8 @@ allow for:
   `vitest.config.ts`, as `sonner`'s toast queue does.
 - `customElements.define` outlives the file, so a fixture creating a defined tag
   may get the real element, shadow root included.
+- ProseMirror's `preventScroll` probe is settled once per worker. Every file
+  sees "supported" because `test-browser-apis.ts` makes `focus` read its options.
 
 A claim jsdom cannot decide - real layout, painted pixels, real input
 dispatch - is a Playwright spec in `browser-tests/` against a fixture page in
