@@ -179,7 +179,9 @@ Messages waiting to run stay held after a failed turn, and the [Message Queue](/
 If routing tries every step in your plan and none of them works, the failed turn's error becomes a single card. It shows what happened and a numbered list of what Traycer tried, such as "Switched to Sonnet 5 · Work" or "Waited until 3:00 PM for Personal", or "Nothing could be tried" when no step could run. The card offers the same **Retry**, **Switch to…** and **Wait until** buttons. Its gear opens Model routing settings, and its report button files a bug report with the full routing details.
 
 <Note>
-  Turning **Route automatically** off stops new switches and waits only. Chats
-  already switching or waiting carry on; stop them from the card in the chat.
-  Your coding agent's own retries are separate and aren't affected.
+  Turning **Route automatically** off stops new switches and waits for chats
+  following device routing. A chat set to **Wait it out here** can still wait
+  for a usage-limit reset and retry on its current account. Chats already
+  switching or waiting carry on; stop them from the card in the chat. Your
+  coding agent's own retries are separate and aren't affected.
 </Note>
