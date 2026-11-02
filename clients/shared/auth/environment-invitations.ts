@@ -5,7 +5,7 @@ import {
   type EnvironmentInvitationsAcceptResponse,
   type EnvironmentInvitationsListResponse,
 } from "@traycer/protocol/host/environment/contracts";
-import { composeRequestAbort } from "./request-abort";
+import { composeRequestAbort, untilAborted } from "./request-abort";
 
 /** The same account routes the host and pool forward, for older serving tiers. */
 const INVITATIONS_PATH = "api/v3/environments/me/invitations";
@@ -20,24 +20,28 @@ async function requestInvitations<T>(
   const abort = composeRequestAbort(signal, 15_000);
   try {
     const base = authnBaseUrl.endsWith("/") ? authnBaseUrl : `${authnBaseUrl}/`;
-    const response = await fetch(
-      new URL(
-        environmentId === null
-          ? INVITATIONS_PATH
-          : `${INVITATIONS_PATH}/accept`,
-        base,
-      ),
-      {
-        method: environmentId === null ? "GET" : "POST",
-        headers: {
-          Authorization: `Bearer ${bearerToken}`,
-          Accept: "application/json",
-          "Content-Type": "application/json",
-          "x-traycer-invite-acceptance": "explicit",
+    const response = await untilAborted(
+      fetch(
+        new URL(
+          environmentId === null
+            ? INVITATIONS_PATH
+            : `${INVITATIONS_PATH}/accept`,
+          base,
+        ),
+        {
+          method: environmentId === null ? "GET" : "POST",
+          headers: {
+            Authorization: `Bearer ${bearerToken}`,
+            Accept: "application/json",
+            "Content-Type": "application/json",
+            "x-traycer-invite-acceptance": "explicit",
+          },
+          body:
+            environmentId === null ? null : JSON.stringify({ environmentId }),
+          signal: abort.signal,
         },
-        body: environmentId === null ? null : JSON.stringify({ environmentId }),
-        signal: abort.signal,
-      },
+      ),
+      abort.signal,
     );
     const accepting = environmentId !== null;
     if (response.status === 401 || response.status === 403) {
@@ -54,7 +58,10 @@ async function requestInvitations<T>(
           : "Couldn't reach team invitations. Try again.",
       );
     }
-    const body: unknown = await response.json().catch(() => null);
+    const body: unknown = await untilAborted(
+      response.json(),
+      abort.signal,
+    ).catch(() => null);
     const parsed = schema.safeParse(body);
     if (!parsed.success) {
       throw new Error(

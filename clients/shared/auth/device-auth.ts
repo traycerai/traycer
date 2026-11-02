@@ -21,6 +21,7 @@
 import { readRotatedTokens } from "./auth-validation";
 import {
   composeRequestAbort,
+  untilAborted,
   type ComposedRequestAbort,
 } from "./request-abort";
 
@@ -252,18 +253,21 @@ export async function startDeviceAuthorization(
   const request = buildRequestSignal(options);
   let response: Response;
   try {
-    response = await fetch(deviceApiUrl(authnBaseUrl, "authorize"), {
-      method: "POST",
-      headers: {
-        Accept: "application/json",
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        client_id: params.clientId,
-        host_label: params.hostLabel,
+    response = await untilAborted(
+      fetch(deviceApiUrl(authnBaseUrl, "authorize"), {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          client_id: params.clientId,
+          host_label: params.hostLabel,
+        }),
+        signal: request.signal,
       }),
-      signal: request.signal,
-    });
+      request.signal,
+    );
   } catch (error: unknown) {
     // A caller abort or per-request timeout surfaces here too; both collapse
     // into the retryable `network-error` variant - the caller decides whether
@@ -305,15 +309,18 @@ export async function pollDeviceToken(
   const request = buildRequestSignal(options);
   let response: Response;
   try {
-    response = await fetch(deviceApiUrl(authnBaseUrl, "token"), {
-      method: "POST",
-      headers: {
-        Accept: "application/json",
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ device_code: deviceCode, client_id: clientId }),
-      signal: request.signal,
-    });
+    response = await untilAborted(
+      fetch(deviceApiUrl(authnBaseUrl, "token"), {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ device_code: deviceCode, client_id: clientId }),
+        signal: request.signal,
+      }),
+      request.signal,
+    );
   } catch (error: unknown) {
     // Caller abort (superseded attempt / CLI expiry) and per-request timeout
     // both land here and map to the retryable `network-error`, so a stalled
@@ -328,7 +335,7 @@ export async function pollDeviceToken(
   }
 
   if (response.status === 200) {
-    const tokens = await readRotatedTokens(response);
+    const tokens = await readRotatedTokens(response, request.signal);
     // A 200 whose body fails validation OR whose read aborts/times out is
     // treated as transient: the loop re-polls (and, since the server consumed
     // the code on mint, will then see a terminal `invalid`). This never silently

@@ -247,3 +247,57 @@ describe("a response whose body stalls after its headers", () => {
     expect(await result).toEqual({ kind: "network-error" });
   });
 });
+
+describe("a claim on a fetch that ignores its signal", () => {
+  // CREDIT_OFFERS_FETCH_TIMEOUT_MS
+  const CLAIM_TIMEOUT_MS = 10_000;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("settles at the deadline as a network error when the request never completes", async () => {
+    // Like CapacitorHttp's patched fetch: the signal is dropped, so only the
+    // deadline can settle the request.
+    fetchMock.mockImplementation(() => new Promise<Response>(() => undefined));
+    let settled = false;
+
+    const pending = claimCreditOfferViaHttp(AUTHN_BASE_URL, BEARER, CARD.id);
+    void pending.then(() => {
+      settled = true;
+    });
+
+    await vi.advanceTimersByTimeAsync(CLAIM_TIMEOUT_MS - 1);
+    expect(settled).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(settled).toBe(true);
+    expect(await pending).toEqual({ kind: "network-error" });
+  });
+
+  it("settles at the deadline with the claim taken and no card when a 200 body never arrives", async () => {
+    const response = new Response(null, { status: 200 });
+    const json = vi
+      .spyOn(response, "json")
+      .mockImplementation(() => new Promise<unknown>(() => undefined));
+    fetchMock.mockResolvedValue(response);
+    let settled = false;
+
+    const pending = claimCreditOfferViaHttp(AUTHN_BASE_URL, BEARER, CARD.id);
+    void pending.then(() => {
+      settled = true;
+    });
+
+    await vi.advanceTimersByTimeAsync(CLAIM_TIMEOUT_MS - 1);
+    expect(json).toHaveBeenCalledTimes(1);
+    expect(settled).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(settled).toBe(true);
+    expect(await pending).toEqual({ kind: "ok", offer: null });
+  });
+});

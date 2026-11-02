@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { composeRequestAbort } from "../auth/request-abort";
+import { composeRequestAbort, untilAborted } from "../auth/request-abort";
 
 /**
  * The raw calls to traycer-server's voice session routes with the user
@@ -158,20 +158,23 @@ async function call(
 ): Promise<RawResult> {
   const abort = composeRequestAbort(null, timeoutMs);
   try {
-    const response = await fetch(url, {
-      method: body === null ? "GET" : "POST",
-      headers: {
-        Authorization: `Bearer ${bearerToken}`,
-        Accept: "application/json",
-        ...(body === null ? {} : { "Content-Type": "application/json" }),
-        ...(proxyToken === null
-          ? {}
-          : { "Proxy-Authorization": `Bearer ${proxyToken}` }),
-      },
-      body,
-      signal: abort.signal,
-    });
-    const text = await response.text();
+    const response = await untilAborted(
+      fetch(url, {
+        method: body === null ? "GET" : "POST",
+        headers: {
+          Authorization: `Bearer ${bearerToken}`,
+          Accept: "application/json",
+          ...(body === null ? {} : { "Content-Type": "application/json" }),
+          ...(proxyToken === null
+            ? {}
+            : { "Proxy-Authorization": `Bearer ${proxyToken}` }),
+        },
+        body,
+        signal: abort.signal,
+      }),
+      abort.signal,
+    );
+    const text = await untilAborted(response.text(), abort.signal);
     let parsed: unknown = null;
     if (text.trim().length > 0) {
       try {

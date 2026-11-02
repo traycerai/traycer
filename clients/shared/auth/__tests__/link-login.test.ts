@@ -4,7 +4,7 @@
  * malformed codes must all come back `null` rather than being sent to the
  * claim endpoint.
  */
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildLinkLoginQrPayload,
   claimantDeviceLabel,
@@ -375,6 +375,47 @@ describe("match code on the wire", () => {
     expect(claimant).not.toBeNull();
     expect(Object.hasOwn(claimant ?? {}, "matchCode")).toBe(true);
     expect(claimant?.matchCode).toBeNull();
+  });
+});
+
+describe("a link-login request on a fetch that ignores its signal", () => {
+  // LINK_LOGIN_FETCH_TIMEOUT_MS
+  const LINK_LOGIN_TIMEOUT_MS = 10_000;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it("settles at the deadline as a network error when the request never completes", async () => {
+    // Like CapacitorHttp's patched fetch: the signal is dropped, so only the
+    // deadline can settle the request.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(() => new Promise<Response>(() => undefined)),
+    );
+    let settled = false;
+
+    const pending = linkLoginStatusViaHttp(
+      "https://authn.example.test",
+      "bearer",
+      NORMALIZED,
+      null,
+    );
+    void pending.then(() => {
+      settled = true;
+    });
+
+    await vi.advanceTimersByTimeAsync(LINK_LOGIN_TIMEOUT_MS - 1);
+    expect(settled).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(settled).toBe(true);
+    expect(await pending).toEqual({ kind: "network-error" });
   });
 });
 

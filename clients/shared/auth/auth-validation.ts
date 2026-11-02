@@ -48,7 +48,7 @@ import type {
   AuthIdentityValidationResult,
   AuthServerTimeObservation,
 } from "./auth-validation-types";
-import { composeRequestAbort } from "./request-abort";
+import { composeRequestAbort, untilAborted } from "./request-abort";
 
 export type {
   AuthIdentityValidationResult,
@@ -687,10 +687,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * `statusCode` is checked against the status actually answered so a cached or
  * replayed envelope for some other status cannot pass as this one.
  */
-async function isAuthnRefusal(response: Response): Promise<boolean> {
+async function isAuthnRefusal(
+  response: Response,
+  signal: AbortSignal,
+): Promise<boolean> {
   let payload: unknown;
   try {
-    payload = await response.json();
+    payload = await untilAborted(response.json(), signal);
   } catch {
     return false;
   }
@@ -727,10 +730,11 @@ async function isAuthnRefusal(response: Response): Promise<boolean> {
  */
 async function readRefreshRejectionScope(
   response: Response,
+  signal: AbortSignal,
 ): Promise<"user-epoch" | null> {
   let payload: unknown;
   try {
-    payload = await response.json();
+    payload = await untilAborted(response.json(), signal);
   } catch {
     return null;
   }
@@ -761,19 +765,22 @@ async function refreshAuthTokenOnceViaHttp(
 ): Promise<AuthTokenRefreshResult> {
   let response: Response;
   try {
-    response = await fetch(authnApiUrl(authnBaseUrl, "api/v3/auth/refresh"), {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        Accept: "application/json",
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        refreshToken,
-        ...(clientKind === null ? {} : { clientKind }),
+    response = await untilAborted(
+      fetch(authnApiUrl(authnBaseUrl, "api/v3/auth/refresh"), {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          refreshToken,
+          ...(clientKind === null ? {} : { clientKind }),
+        }),
+        signal,
       }),
       signal,
-    });
+    );
   } catch {
     return { kind: "network-error" };
   }
@@ -812,7 +819,7 @@ async function refreshAuthTokenOnceViaHttp(
   // `isAuthnRefusal`. Without authn's own answer behind it a 403/404 is an
   // outage, which holds and keeps recovering like every other one.
   if (response.status === 403 || response.status === 404) {
-    return (await isAuthnRefusal(response))
+    return (await isAuthnRefusal(response, signal))
       ? { kind: "rejected", rejection: { kind: "account" } }
       : { kind: "network-error" };
   }
@@ -822,7 +829,7 @@ async function refreshAuthTokenOnceViaHttp(
       kind: "rejected",
       rejection: {
         kind: "credential",
-        revocation: await readRefreshRejectionScope(response),
+        revocation: await readRefreshRejectionScope(response, signal),
       },
     };
   }
@@ -831,7 +838,7 @@ async function refreshAuthTokenOnceViaHttp(
     return { kind: "network-error" };
   }
 
-  const rotated = await readRotatedTokens(response);
+  const rotated = await readRotatedTokens(response, signal);
   if (rotated.kind === "transient") {
     return { kind: "network-error" };
   }
@@ -932,7 +939,7 @@ async function exchangeCodeForTokensWithSignal(
     return { kind: "network-error" };
   }
 
-  const tokens = await readRotatedTokens(response);
+  const tokens = await readRotatedTokens(response, signal);
   if (tokens.kind === "transient") {
     return { kind: "network-error" };
   }
@@ -984,10 +991,11 @@ export type RotatedTokensOutcome =
  */
 export async function readRotatedTokens(
   response: Response,
+  signal: AbortSignal,
 ): Promise<RotatedTokensOutcome> {
   let body: unknown;
   try {
-    body = await response.json();
+    body = await untilAborted(response.json(), signal);
   } catch (error) {
     if (isAbortOrTimeout(error)) return { kind: "transient" };
     return {
