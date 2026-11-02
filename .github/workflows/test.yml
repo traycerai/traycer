@@ -190,19 +190,6 @@ jobs:
           key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
           restore-keys: |
             bun-${{ runner.os }}-
-      # Restore the Nx computation cache so a project whose inputs (own files +
-      # dependency source, see `test` inputs in nx.json) are unchanged replays a
-      # cached result in seconds instead of re-running the full suite. Keyed per
-      # matrix project so the legs don't clobber each other; the SHA suffix makes
-      # every run save the freshest cache while restore-keys pull the latest
-      # same-project cache (populated by pushes to main, readable by PRs).
-      - name: Cache Nx computation cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: .nx/cache
-          key: nx-${{ runner.os }}-${{ matrix.cache_key }}-${{ github.sha }}
-          restore-keys: |
-            nx-${{ runner.os }}-${{ matrix.cache_key }}-
       - run: bun install --frozen-lockfile
       # The host-v1.1.5 oracle in `provider-native-schemas.test.ts` regenerates
       # the checked-in fixture straight from the tag and deep-equals the two.
@@ -569,17 +556,6 @@ jobs:
           key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
           restore-keys: |
             bun-${{ runner.os }}-
-      # Same Nx computation cache as the `test` job. The runner.os in the key is
-      # load-bearing here: the desktop suite runs darwin-gated blocks that are
-      # skipped on Linux, so a Linux-computed result must never replay on macOS
-      # (and vice versa) — scoping the cache by OS keeps the two separate.
-      - name: Cache Nx computation cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: .nx/cache
-          key: nx-${{ runner.os }}-@traycer-clients/desktop-${{ github.sha }}
-          restore-keys: |
-            nx-${{ runner.os }}-@traycer-clients/desktop-
       - run: bun install --frozen-lockfile
       # `--outputStyle=stream` for the same reason as the `test` job above:
       # Nx's default replay is capped, and this job's only failure log to date
