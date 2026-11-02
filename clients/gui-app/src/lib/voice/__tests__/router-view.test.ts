@@ -1845,7 +1845,10 @@ describe("the say loop's report of a request the page could not serve", () => {
       await spoken.hear(answer);
 
       expect(captureMessage).toHaveBeenCalledTimes(1);
-      expect(captureMessage).toHaveBeenCalledWith("voice.route.miss", {
+      expect(captureMessage.mock.calls[0]?.[0]).toMatch(
+        /^voice\.route\.miss task missing #\d+$/,
+      );
+      expect(captureMessage.mock.calls[0]?.[1]).toEqual({
         level: "info",
         tags: {
           viewKind: "task",
@@ -1883,7 +1886,10 @@ describe("the say loop's report of a request the page could not serve", () => {
       await spoken.hear(answer);
 
       expect(captureMessage).toHaveBeenCalledTimes(1);
-      expect(captureMessage).toHaveBeenCalledWith("voice.route.miss", {
+      expect(captureMessage.mock.calls[0]?.[0]).toMatch(
+        /^voice\.route\.miss task refused #\d+$/,
+      );
+      expect(captureMessage.mock.calls[0]?.[1]).toEqual({
         level: "info",
         tags: {
           viewKind: "task",

@@ -467,7 +467,9 @@ describe("VoiceSessionStrip", () => {
 
       const filed = filedMisses(captureMessage.mock.calls);
       expect(filed).toHaveLength(1);
-      expect(filed[0]?.message).toBe("voice.route.miss");
+      expect(filed[0]?.message).toMatch(
+        /^voice\.route\.miss task not-meant #\d+$/,
+      );
       expect(filed[0]?.options.tags).toMatchObject({
         viewKind: "task",
         missKind: "not-meant",

@@ -23,6 +23,14 @@ export type VoiceMissKind =
  */
 export type VoiceMissCause = "missing" | "unknown-action" | "chosen-act";
 
+/**
+ * How many misses this window has filed. Each event's message carries it, so
+ * no two in a row read alike to the client's duplicate filter, which compares
+ * the message and the stack and would drop a repeat; the fingerprint, which
+ * groups them into one issue, stays the same for every miss of a kind on a page.
+ */
+let filedMisses = 0;
+
 /** What the router was shown and what it answered, for one utterance. */
 export interface RouteSeen {
   /** The router's answer as it gave it; only its ids leave the app. */
@@ -122,22 +130,26 @@ export function reportVoiceMiss(
   if (!isInitialized()) return;
   const text = spanText(seen);
   const spanDropped = spanDroppedFor(cause, seen);
-  captureMessage("voice.route.miss", {
-    level: "info",
-    tags: {
-      viewKind: seen.viewKind,
-      missKind,
-      routerAction: seen.route.action,
-      uncertain: seen.route.uncertain ? "true" : "false",
-      spanDropped,
+  filedMisses += 1;
+  captureMessage(
+    `voice.route.miss ${seen.viewKind} ${missKind} #${filedMisses}`,
+    {
+      level: "info",
+      tags: {
+        viewKind: seen.viewKind,
+        missKind,
+        routerAction: seen.route.action,
+        uncertain: seen.route.uncertain ? "true" : "false",
+        spanDropped,
+      },
+      fingerprint: ["voice.route.miss", seen.viewKind, missKind],
+      extra: {
+        ...counts,
+        rows: seen.rowIds,
+        route: routeIds(seen.route),
+        span: spanDropped === "none" ? text : null,
+        spanWords: wordCount(text),
+      },
     },
-    fingerprint: ["voice.route.miss", seen.viewKind, missKind],
-    extra: {
-      ...counts,
-      rows: seen.rowIds,
-      route: routeIds(seen.route),
-      span: spanDropped === "none" ? text : null,
-      spanWords: wordCount(text),
-    },
-  });
+  );
 }

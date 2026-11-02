@@ -1,3 +1,4 @@
+import type { Event, StackFrame } from "@sentry/browser";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import {
@@ -6,7 +7,12 @@ import {
   type VoiceMissCause,
 } from "../miss-report";
 import type { RouterResult } from "../router";
-import { onlyMiss, scrubbedMisses } from "./fixtures/filed-misses";
+import {
+  filedMisses,
+  onlyMiss,
+  scrubbedMisses,
+  type FiledMiss,
+} from "./fixtures/filed-misses";
 
 const captureMessage = vi.hoisted(() => vi.fn());
 const isInitialized = vi.hoisted(() => vi.fn(() => true));
@@ -70,7 +76,10 @@ describe("reportVoiceMiss", () => {
     reportVoiceMiss("missing", "missing", seenOf(route, NO_WORDS), null);
 
     expect(captureMessage).toHaveBeenCalledTimes(1);
-    expect(captureMessage).toHaveBeenCalledWith("voice.route.miss", {
+    expect(captureMessage.mock.calls[0]?.[0]).toMatch(
+      /^voice\.route\.miss task missing #\d+$/,
+    );
+    expect(captureMessage.mock.calls[0]?.[1]).toEqual({
       level: "info",
       tags: {
         viewKind: "task",
@@ -297,6 +306,92 @@ describe("reportVoiceMiss", () => {
         span: "Close this tab please",
         spanWords: 4,
       });
+    });
+  });
+
+  describe("against the client's duplicate filter", () => {
+    /** One stack for both events: the same call site files every miss. */
+    const SAME_FRAMES: StackFrame[] = [
+      {
+        filename: "app:///assets/say-loop.js",
+        function: "reportMiss",
+        lineno: 1180,
+        colno: 7,
+      },
+    ];
+
+    /** The event the browser SDK builds for a message with `attachStacktrace` on. */
+    function browserEvent(miss: FiledMiss, message: string): Event {
+      return {
+        message,
+        level: "info",
+        tags: miss.options.tags,
+        extra: miss.options.extra,
+        fingerprint: miss.options.fingerprint,
+        exception: {
+          values: [{ value: message, stacktrace: { frames: SAME_FRAMES } }],
+        },
+      };
+    }
+
+    /** Whether a fresh filter lets `second` through after `first`. */
+    async function secondSurvives(first: Event, second: Event) {
+      const { BrowserClient, dedupeIntegration } =
+        await vi.importActual<typeof import("@sentry/browser")>(
+          "@sentry/browser",
+        );
+      const client = new BrowserClient({
+        integrations: [],
+        stackParser: () => [],
+        transport: () => ({
+          send: () => Promise.resolve({}),
+          flush: () => Promise.resolve(true),
+        }),
+      });
+      const filter = dedupeIntegration();
+      await filter.processEvent?.(first, {}, client);
+      return (await filter.processEvent?.(second, {}, client)) !== null;
+    }
+
+    function fileTwoAlike(): readonly [FiledMiss, FiledMiss] {
+      const seen = seenOf(routeOf({}, {}), NO_WORDS);
+      reportVoiceMiss("missing", "missing", seen, null);
+      reportVoiceMiss("missing", "missing", seen, null);
+      const [first, second] = filedMisses(captureMessage.mock.calls);
+      return [first, second];
+    }
+
+    it("lets the second of two alike misses through, grouped as one issue", async () => {
+      const [first, second] = fileTwoAlike();
+
+      expect(first.message).toMatch(/^voice\.route\.miss task missing #\d+$/);
+      expect(second.message).toMatch(/^voice\.route\.miss task missing #\d+$/);
+      expect(second.message).not.toBe(first.message);
+      expect(first.options.fingerprint).toEqual([
+        "voice.route.miss",
+        "task",
+        "missing",
+      ]);
+      expect(second.options.fingerprint).toEqual(first.options.fingerprint);
+      expect(
+        await secondSurvives(
+          browserEvent(first, first.message),
+          browserEvent(second, second.message),
+        ),
+      ).toBe(true);
+    });
+
+    it("would drop the second if the messages did not differ", async () => {
+      const [first, second] = fileTwoAlike();
+      const bare = (miss: FiledMiss) => miss.message.replace(/ #\d+$/, "");
+
+      expect(bare(first)).toBe(bare(second));
+      expect(
+        await secondSurvives(
+          browserEvent(first, bare(first)),
+          browserEvent(second, bare(second)),
+        ),
+      ).toBe(false);
     });
   });
 
