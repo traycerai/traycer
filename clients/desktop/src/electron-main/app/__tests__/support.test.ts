@@ -690,3 +690,99 @@ describe("DesktopSupportService browser diagnostics existence handling (ticket 0
     });
   });
 });
+
+/**
+ * The 500-line tail of `host.log` can start after the stall a report is
+ * about; the attachment then also carries the earlier evidence records
+ * (`support-host-log-evidence.ts`).
+ */
+describe("DesktopSupportService host log attachment: earlier evidence", () => {
+  function localHeader(atMs: number, level: string): string {
+    const d = new Date(atMs);
+    const two = (n: number): string => String(n).padStart(2, "0");
+    return (
+      `[${String(d.getFullYear())}-${two(d.getMonth() + 1)}-${two(d.getDate())} ` +
+      `${two(d.getHours())}:${two(d.getMinutes())}:${two(d.getSeconds())}.` +
+      `${String(d.getMilliseconds()).padStart(3, "0")}] [${level}] `
+    );
+  }
+
+  async function hostLogAttachment(
+    hostLogLines: readonly string[],
+  ): Promise<{ lines: readonly string[]; text: string }> {
+    let attachment: { lines: readonly string[]; text: string } = {
+      lines: [],
+      text: "",
+    };
+    await withPidMetadataFile(undefined, async (hostLayout) => {
+      await writeFile(
+        hostLayout.logFile,
+        hostLogLines.join("\n") + "\n",
+        "utf8",
+      );
+      const service = buildService(hostLayout);
+      await service.freezeEvidence(KEY, null);
+      const result = await service.readFrozenLogTail(KEY, "host");
+      attachment = { lines: result.lines, text: result.lines.join("\n") };
+    });
+    return attachment;
+  }
+
+  /** `count` routine INFO lines of about 900 bytes, the last one a minute old. */
+  function routineLines(count: number, nowMs: number, tag: string): string[] {
+    return Array.from(
+      { length: count },
+      (_, index) =>
+        `${localHeader(nowMs - 60_000 + index, "INFO")}${tag} ${String(index)} ${"p".repeat(900)}`,
+    );
+  }
+
+  it("keeps a recent stall WARN that the line tail begins after, inside the marked section, within the byte cap", async () => {
+    const nowMs = Date.now();
+    const stall = [
+      `${localHeader(nowMs - 120_000, "WARN")}host event loop stall detected {`,
+      "  maxDelayMs: 47043,",
+      "  pid: 4242",
+      "}",
+    ];
+    const routine = routineLines(10_000, nowMs, "routine");
+    // Line 2,000 of the file: the stall record replaces four routine lines.
+    const fileLines = [
+      ...routine.slice(0, 1_996),
+      ...stall,
+      ...routine.slice(2_000),
+    ];
+
+    const { lines, text } = await hostLogAttachment(fileLines);
+
+    const sectionStart = lines.findIndex((line) =>
+      line.startsWith("--- earlier host.log records"),
+    );
+    expect(sectionStart).toBeGreaterThan(0);
+    // The tail is still the last lines of the file, ahead of the section.
+    expect(lines[sectionStart - 1]).toBe(fileLines[fileLines.length - 1]);
+    // The stall record, continuation lines included, sits inside the section.
+    expect(lines.slice(sectionStart)).toEqual(expect.arrayContaining(stall));
+    expect(lines[lines.length - 1]).toBe(
+      "--- end of earlier host.log records ---",
+    );
+    // The tail alone does not reach the stall.
+    expect(lines.slice(0, sectionStart)).not.toContain(stall[0]);
+    expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(
+      REPORT_LOG_TAIL_MAX_BYTES,
+    );
+  });
+
+  it("scrubs a secret inside an earlier WARN record", async () => {
+    const nowMs = Date.now();
+    const fileLines = [
+      `${localHeader(nowMs - 120_000, "WARN")}auth refresh failed Bearer abc123.def456-ghi`,
+      ...routineLines(600, nowMs, "routine"),
+    ];
+
+    const { text } = await hostLogAttachment(fileLines);
+
+    expect(text).toContain("auth refresh failed Bearer <redacted>");
+    expect(text).not.toContain("abc123.def456-ghi");
+  });
+});

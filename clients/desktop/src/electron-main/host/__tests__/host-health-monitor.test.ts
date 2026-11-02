@@ -1764,6 +1764,85 @@ describe("startHostHealthMonitor", () => {
     monitor.dispose();
   });
 
+  it("logs once, with the hold count, when a host held busy answers again", async () => {
+    vi.mocked(log.info).mockClear();
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+    publishThroughPidJson(() => SNAPSHOT, PUBLISHED_IDENTITY);
+    const probe = vi.fn(async () => false);
+    const readLiveness = vi.fn(ALIVE);
+    const monitor = startHostHealthMonitor({
+      host: fakeHost({ reloadSnapshotFromDisk: vi.fn(async () => null) }),
+      intervalMs: INTERVAL_MS,
+      probe,
+      readMetadata: vi.fn(async () => SNAPSHOT),
+      respawn: vi.fn(async () => {}),
+      automaticRecoverySuspended: () => false,
+      governor: createHostRecoveryGovernor({ readLiveness, now: undefined }),
+      readLiveness,
+      readLiveSupervisorPid: () => Promise.resolve(null),
+      onHostUnresponsive: () => undefined,
+    });
+    try {
+      await ticks(10);
+      probe.mockImplementation(async () => true);
+      await ticks(3);
+
+      const answered = vi
+        .mocked(log.info)
+        .mock.calls.filter(
+          ([message]) => message === "[host-health] busy host answered again",
+        );
+      expect(answered).toHaveLength(1);
+      expect(answered[0]?.[1]).toEqual({
+        pid: SNAPSHOT.pid,
+        busyHolds: 5,
+        unreachableForMs: 10 * INTERVAL_MS,
+      });
+    } finally {
+      killSpy.mockRestore();
+      monitor.dispose();
+    }
+  });
+
+  it("does not log the answered-again line for a host that died instead", async () => {
+    vi.mocked(log.info).mockClear();
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+    publishThroughPidJson(() => SNAPSHOT, PUBLISHED_IDENTITY);
+    let liveness: HostProcessLiveness = "alive";
+    const readLiveness = vi.fn((): Promise<HostProcessLiveness> =>
+      Promise.resolve(liveness),
+    );
+    const monitor = startHostHealthMonitor({
+      host: fakeHost({ reloadSnapshotFromDisk: vi.fn(async () => null) }),
+      intervalMs: INTERVAL_MS,
+      probe: vi.fn(async () => false),
+      readMetadata: vi.fn(async () => SNAPSHOT),
+      respawn: vi.fn(async () => {}),
+      automaticRecoverySuspended: () => false,
+      governor: createHostRecoveryGovernor({ readLiveness, now: undefined }),
+      readLiveness,
+      readLiveSupervisorPid: () => Promise.resolve(null),
+      onHostUnresponsive: () => undefined,
+    });
+    try {
+      await ticks(10);
+      expect(vi.mocked(log.info)).toHaveBeenCalledWith(
+        expect.stringContaining("busy, holding the snapshot"),
+        expect.anything(),
+      );
+      liveness = "dead";
+      await ticks(10);
+
+      const messages = vi
+        .mocked(log.info)
+        .mock.calls.map(([message]) => message);
+      expect(messages).not.toContain("[host-health] busy host answered again");
+    } finally {
+      killSpy.mockRestore();
+      monitor.dispose();
+    }
+  });
+
   it("hands a successful probe back to the lifecycle so a busy verdict can recover", async () => {
     // The recovery half of int #48. Probes against the wedged host succeeded
     // continuously for two hours on 2026-08-11 while the renderer was still
