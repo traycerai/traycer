@@ -29,6 +29,7 @@ import {
   SIDE_SPLIT_HALF_FOCUSED_CLASS,
   SIDE_SPLIT_HALF_REST_CLASS,
   SIDE_SPLIT_PREVIEW_TILE_CLASS,
+  SIDE_STRIP_GROUND_FILL_CLASS,
   SIDE_STRIP_NAV_TILE_COUNT_CLASS,
   SIDE_TAB_ACTIVE_CLASS,
   SIDE_TAB_DROP_LINE_SEAT_CLASS,
@@ -482,20 +483,26 @@ function SideTabAccent(props: {
 function CornerBadge(props: { readonly badge: SideTabRowProps["badge"] }) {
   if (props.badge === null) return null;
   if (typeof props.badge !== "string") {
+    // The pill's tint is translucent: seated on the strip's ground, the glyph
+    // under the corner never shows through it.
     return (
-      <Badge
-        variant="destructive"
-        size="xs"
-        aria-hidden
-        data-testid="side-tab-rail-count"
+      <span
         className={cn(
-          SIDE_STRIP_NAV_TILE_COUNT_CLASS,
           SIDE_TAB_RAIL_BADGE_POSITION_CLASS,
-          "pointer-events-none tabular-nums",
+          SIDE_STRIP_GROUND_FILL_CLASS,
+          "pointer-events-none flex rounded-md",
         )}
       >
-        {formatUnreadCount(props.badge.count)}
-      </Badge>
+        <Badge
+          variant="destructive"
+          size="xs"
+          aria-hidden
+          data-testid="side-tab-rail-count"
+          className={cn(SIDE_STRIP_NAV_TILE_COUNT_CLASS, "static tabular-nums")}
+        >
+          {formatUnreadCount(props.badge.count)}
+        </Badge>
+      </span>
     );
   }
   return (
