@@ -10,9 +10,11 @@ import {
   matchesChatOwnershipFilter,
   useLeftPanelStore,
   useChatArchiveVisibility,
+  useMainPanelCollapsed,
   type ArtifactFilter,
   type ChatFilter,
 } from "../left-panel-store";
+import { writeArrangementField } from "@/lib/layout/arrangement-gestures";
 import type {
   LeftPanelId,
   PanelVisibilityOverrideById,
@@ -296,10 +298,39 @@ describe("useLeftPanelStore", () => {
 
     expect(useLeftPanelStore.getState().isMainCollapsed("tab-a")).toBe(true);
 
+    // Expanding is a decision too, kept so the layout's "Collapsed in new
+    // tasks" fallback cannot fold this tab back after a refresh.
     useLeftPanelStore.getState().setMainCollapsed("tab-a", false);
-    expect(readPersistedLeftPanelState().state.mainCollapsedByTabId).toEqual(
-      {},
-    );
+    expect(readPersistedLeftPanelState().state.mainCollapsedByTabId).toEqual({
+      "tab-a": false,
+    });
+  });
+
+  it("opens a tab with no collapse record of its own as the layout's Collapsed in new tasks says", () => {
+    const { result } = renderHook(() => useMainPanelCollapsed("tab-a"));
+    expect(useLeftPanelStore.getState().isMainCollapsed("tab-a")).toBe(false);
+    expect(result.current).toBe(false);
+
+    act(() => {
+      writeArrangementField("sidebarStartCollapsed", true);
+    });
+
+    expect(useLeftPanelStore.getState().isMainCollapsed("tab-a")).toBe(true);
+    expect(result.current).toBe(true);
+
+    // A tab the user expanded keeps that, whatever the fallback says; a tab
+    // never touched keeps following it.
+    act(() => {
+      useLeftPanelStore.getState().toggleMainCollapsed("tab-a");
+    });
+    expect(result.current).toBe(false);
+    expect(useLeftPanelStore.getState().isMainCollapsed("tab-b")).toBe(true);
+
+    act(() => {
+      writeArrangementField("sidebarStartCollapsed", false);
+    });
+    expect(result.current).toBe(false);
+    expect(useLeftPanelStore.getState().isMainCollapsed("tab-b")).toBe(false);
   });
 
   it("restores a persisted sidebar width", async () => {
