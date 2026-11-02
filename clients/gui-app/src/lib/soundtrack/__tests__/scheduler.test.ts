@@ -544,6 +544,101 @@ describe("TrackScheduler", () => {
       expect(next.variant).not.toBe(heard.variant);
     });
 
+    it("does not let a pending play separate a confirmed start from its own variant", () => {
+      const track = twoSublayerTrack(
+        0.1,
+        2,
+        singleSample([0, 0], [0, 0]),
+        [0.1, 0.1],
+      );
+      const scheduler = schedulerWith(track, scripted([], 0));
+      const [first, second] = scheduler.advance(0.55);
+      expect([first.variant, first.startAt]).toEqual([1, 0]);
+      expect([second.variant, second.startAt]).toEqual([2, 0.1]);
+      expect(scheduler.confirm(first, 0.1, 0)).toBe(0);
+
+      // Variant 1 would follow itself if the pending variant 2 never plays, and
+      // variant 2 would double it if it does.
+      expect(scheduler.advance(0.55)).toEqual([]);
+
+      scheduler.skip(second);
+      const next = scheduler.advance(0.55);
+      expect(next.map(({ variant }) => variant)).toEqual([2]);
+    });
+
+    describe("when the only play between two of one variant has not reported", () => {
+      function reserveThree(): {
+        readonly scheduler: TrackScheduler;
+        readonly first: ScheduledPlay;
+        readonly middle: ScheduledPlay;
+        readonly last: ScheduledPlay;
+      } {
+        const track = buildTrack({
+          lengthSeconds: 60,
+          alignmentSeconds: 0.1,
+          layers: [layer(2, 3, [0, 0])],
+          properties: [singleSample([0, 0.2], [0, 0])],
+          enabledCount: [1, 1],
+        });
+        // Start pauses of 0, 0.1 and just under 0.2.
+        const scheduler = schedulerWith(
+          track,
+          scripted([0, 0, 0, 0, 0, 0.5, 0, 0, 0.999, 0], 0),
+        );
+        const [first, middle, last] = scheduler.advance(0.55);
+        expect([first.variant, middle.variant, last.variant]).toEqual([
+          1, 2, 1,
+        ]);
+        return { scheduler, first, middle, last };
+      }
+
+      it("refuses the second, so moving the play between them leaves them apart", () => {
+        const { scheduler, first, middle, last } = reserveThree();
+        expect(scheduler.confirm(first, 10, 0)).toBe(0);
+        expect(scheduler.confirm(last, 10, 0)).toBeNull();
+        expect(scheduler.confirm(middle, 10, 0.25)).toBeCloseTo(0.3, 9);
+      });
+
+      it("refuses the second, so skipping the play between them leaves them apart", () => {
+        const { scheduler, first, middle, last } = reserveThree();
+        expect(scheduler.confirm(first, 10, 0)).toBe(0);
+        expect(scheduler.confirm(last, 10, 0)).toBeNull();
+        scheduler.skip(middle);
+
+        const next = scheduler
+          .advance(0.55)
+          .toSorted((a, b) => a.startAt - b.startAt);
+        expect(next[0].variant).not.toBe(first.variant);
+      });
+    });
+
+    it("gives every sublayer its turn when they collide on every tick", () => {
+      const track = buildTrack({
+        lengthSeconds: 60,
+        alignmentSeconds: 1,
+        layers: [layer(2, 3, [0, 0])],
+        properties: [singleSample([0, 0], [0, 0])],
+        enabledCount: [1, 1],
+      });
+      const scheduler = schedulerWith(track, scripted([], 0));
+      const counts = [0, 0, 0];
+      // As the player runs it: a 120 ms timer, a 600 ms lookahead, and each
+      // report answered at once with another look ahead.
+      for (let timer = 0; timer < 500; timer += 1) {
+        const now = timer * 0.12;
+        const queue = [...scheduler.advance(now + 0.6)];
+        for (const play of queue) {
+          if (scheduler.confirm(play, 0.2, now) !== null) {
+            counts[play.sublayerIndex] += 1;
+          }
+          queue.push(...scheduler.advance(now + 0.6));
+        }
+      }
+      // Two start on the first tick only. After it, a second start on a tick
+      // would sit beside a confirmed one of its variant while the first is pending.
+      expect(counts).toEqual([21, 20, 20]);
+    });
+
     it("reads the nearest start after a sample, not the furthest", () => {
       const track = buildTrack({
         lengthSeconds: 100,

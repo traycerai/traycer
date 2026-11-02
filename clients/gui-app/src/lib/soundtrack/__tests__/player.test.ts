@@ -1002,6 +1002,50 @@ describe("TrackPlayer scheduling inside one lookahead window", () => {
     }
   });
 
+  it("does not let a play still decoding separate two samples of one variant", async () => {
+    const output = new FakeOutput();
+    const slow = Promise.withResolvers<AudioBuffer>();
+    const track: VariableTrack = {
+      ...twoVariantTrack(0.1, 3, 0, 1),
+      layers: [
+        {
+          name: "A",
+          variants: 2,
+          sublayers: 3,
+          sublayerStartingOffset: [0.1, 0.2],
+        },
+      ],
+    };
+    // Draw 9 is the third sublayer's offset, so the three fall on 0, 0.1 and 0.2.
+    let drawn = 0;
+    const random = (): number => {
+      drawn += 1;
+      return drawn === 9 ? 0.999 : 0;
+    };
+    // Variant 1 is 10 s long and variant 2 is 20 s, which tells them apart below.
+    const player = makePlayerWithRandom(
+      output,
+      {
+        load: (_track, _layer, variant) =>
+          variant === 2
+            ? slow.promise
+            : Promise.resolve(makeAudioBuffer(10, 10)),
+      },
+      track,
+      random,
+    );
+    player.start(0, 0.01);
+    await vi.advanceTimersByTimeAsync(300);
+    slow.resolve(makeAudioBuffer(20, 10));
+    await vi.advanceTimersByTimeAsync(1000);
+
+    const heard = output
+      .allPlays()
+      .toSorted((a, b) => a.when - b.when)
+      .map((play) => play.duration);
+    expect(heard).toEqual([10, 20, 10]);
+  });
+
   it("drops a decode from before a restart, and plays the one after it", async () => {
     const output = new FakeOutput();
     const old = Promise.withResolvers<AudioBuffer>();

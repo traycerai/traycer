@@ -136,9 +136,9 @@ export class TrackScheduler {
   private pauseMultiplier: number;
   private cursors: SublayerCursor[] = [];
   /**
-   * Per layer, the starts confirmed so far. Rule 2 is about what is heard, so a
-   * draw counts only while its play is pending, and not once it is skipped or
-   * moved: a sample's neighbours are read here, at the time they matter.
+   * Per layer, the starts confirmed so far, in which no variant is ever beside
+   * itself. Rule 2 is about what is heard, and a pending play may yet move or be
+   * skipped, so it never separates two of these.
    */
   private confirmedByLayer: LayerStart[][] = [];
 
@@ -262,9 +262,10 @@ export class TrackScheduler {
    * `notBeforeTrackTime` passed its tick: the same variant then takes the next
    * tick rather than being dropped, so that a slow first decode does not spend
    * the rest of the pool on samples that all arrive late too. Answers null if
-   * it must not start: past the track's end, forgotten by `restartAt`, or now
-   * beside the same variant because the order changed while it waited. In that
-   * last case the sublayer draws again on the next tick.
+   * it must not start: past the track's end, forgotten by `restartAt`, or beside
+   * a confirmed start of the same variant, as it can be when it moved or when
+   * the play between them has not reported. In that last case the sublayer draws
+   * again on the next tick.
    */
   confirm(
     play: ScheduledPlay,
@@ -283,7 +284,7 @@ export class TrackScheduler {
     }
     if (
       cursor.layer.variants > 1 &&
-      neighbourVariants(this.startsOfLayer(play.layerIndex), startAt).has(
+      neighbourVariants(this.confirmedByLayer[play.layerIndex], startAt).has(
         play.variant,
       )
     ) {
@@ -360,14 +361,17 @@ export class TrackScheduler {
    * Never a variant beside the same one, in the order the layer's samples are
    * heard, nor where there are enough variants the sublayer's own last: the
    * first is the rule, and the second keeps a sublayer from repeating itself
-   * around its neighbour. Answers null if no variant can start on this tick.
+   * around its neighbour. The starts confirmed either side count with no regard
+   * for a pending play between them, which separates nothing; pending plays count
+   * too, so that they do not clash when they report. Answers null if no variant
+   * can start on this tick.
    */
   private pickVariant(cursor: SublayerCursor, startAt: number): number | null {
     if (cursor.layer.variants === 1) return 1;
-    const taken = neighbourVariants(
-      this.startsOfLayer(cursor.layerIndex),
-      startAt,
-    );
+    const taken = new Set([
+      ...neighbourVariants(this.confirmedByLayer[cursor.layerIndex], startAt),
+      ...neighbourVariants(this.startsOfLayer(cursor.layerIndex), startAt),
+    ]);
     const others = Array.from(
       { length: cursor.layer.variants },
       (_, index) => index + 1,
@@ -383,6 +387,13 @@ export class TrackScheduler {
     startAt: number,
     durationSeconds: number,
   ): void {
+    // It has had its turn, so any still waiting decide ahead of it. In a fixed
+    // order, the first sublayers could take every variant on every tick and a
+    // later one would never play.
+    this.cursors = [
+      ...this.cursors.filter((other) => other !== cursor),
+      cursor,
+    ];
     const { properties } = cursor;
     cursor.samplesLeftInSequence -= 1;
     let pause = properties.pauseBetweenSamples;
