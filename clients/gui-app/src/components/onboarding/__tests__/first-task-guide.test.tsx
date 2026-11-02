@@ -393,6 +393,47 @@ describe("FirstTaskLandingGuide getting-started toast", () => {
     });
   });
 
+  it.each([
+    { shortLandscape: true, duration: 8000 },
+    { shortLandscape: false, duration: Infinity },
+  ])(
+    "gives the move invitation a duration of $duration when short landscape is $shortLandscape",
+    async ({ shortLandscape, duration }) => {
+      vi.stubGlobal(
+        "matchMedia",
+        (
+          query: string,
+        ): Pick<
+          MediaQueryList,
+          "matches" | "addEventListener" | "removeEventListener"
+        > => ({
+          matches: query.includes("orientation: landscape") && shortLandscape,
+          addEventListener: () => undefined,
+          removeEventListener: () => undefined,
+        }),
+      );
+      try {
+        computerWithStatus(
+          environmentStatusFixture({
+            planes: { records: "local", broker: "local", room: "local" },
+            consent: null,
+            pendingUploads: [],
+          }),
+        );
+        renderGuide();
+
+        await waitFor(() =>
+          expect(toastState).toHaveBeenCalledWith(
+            "This computer's settings aren't in Personal.",
+            expect.objectContaining({ duration }),
+          ),
+        );
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    },
+  );
+
   it("keeps the setup reminder once this computer's settings are in Personal", async () => {
     computerWithStatus(environmentStatusFixture({}));
     renderGuide();

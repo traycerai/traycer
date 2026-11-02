@@ -18,6 +18,8 @@
    `syncDocumentWindowControlsOverlayClass`). Mac fullscreen autohide
    and browser shells both leave this class off. */
 @custom-variant wco (&:is(.wco, .wco *));
+/* A phone on its side: too short for what stacks comfortably upright. */
+@custom-variant short-landscape (@media (max-height: 560px) and (orientation: landscape));
 @plugin "tailwindcss-animate";
 @plugin "@tailwindcss/typography";
 
@@ -905,6 +907,11 @@
     background-color: var(--color-zinc-950);
   }
 
+  /* The menu covers the screen's edge, and a toast is about what is under it. */
+  html[data-mobile-menu-open] [data-sonner-toaster] {
+    visibility: hidden;
+  }
+
   ::selection {
     background: color-mix(in oklch, var(--primary) 35%, transparent);
   }
@@ -923,6 +930,15 @@
       animation-duration: 0.01ms !important;
       animation-iteration-count: 1 !important;
       scroll-behavior: auto !important;
+      transition-duration: 0s !important;
+    }
+
+    /* `transition-property` starts as `all`, so a duration on every element
+       would make each change of `top` on a virtualized row a transition of its
+       own, and Android's "Remove animations" then leaves old rows drawn over
+       the new ones. Only what declares a transition keeps a duration, for the
+       `transitionend` it may be waiting on. */
+    [class*="transition"] {
       transition-duration: 0.01ms !important;
     }
   }

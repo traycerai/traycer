@@ -1,4 +1,3 @@
-import { MobileStripFormScope } from "@/components/layout/tabs/mobile-strip-form-scope";
 import { setMobileApp, setPhoneLayoutOnly } from "@/lib/mobile-app";
 import {
   act,
@@ -463,37 +462,27 @@ describe("KeybindingsSettingsPanel - Global shortcuts (T2)", () => {
 
 describe("the collapse row in the installed app", () => {
   afterEach(() => {
-    document.getElementById("root")?.remove();
     setMobileApp(false);
     setPhoneLayoutOnly(false);
   });
 
-  it("shows only where the expanded strip fits, read from the window's scope", () => {
+  it("is omitted in the installed app, whose navigation is the drawer, over a stored side placement", () => {
+    useLayoutStore.getState().setArrangement({
+      ...useLayoutStore.getState().arrangement,
+      tabStripPlacement: "left",
+    });
     setMobileApp(true);
     setPhoneLayoutOnly(true);
-    const rowAt = (width: number): HTMLElement | null => {
-      document.getElementById("root")?.remove();
-      const root = document.createElement("div");
-      root.id = "root";
-      root.getBoundingClientRect = () => new DOMRect(0, 0, width, 402);
-      document.body.append(root);
-      const queryClient = new QueryClient({
-        defaultOptions: { queries: { retry: false, gcTime: 0 } },
-      });
-      const view = render(
-        <MobileStripFormScope>
-          <QueryClientProvider client={queryClient}>
-            <KeybindingsSettingsPanel />
-          </QueryClientProvider>
-        </MobileStripFormScope>,
-      );
-      const row = screen.queryByText("Collapse vertical tabs");
-      view.unmount();
-      return row;
-    };
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <KeybindingsSettingsPanel />
+      </QueryClientProvider>,
+    );
 
-    expect(rowAt(750)).toBeNull();
-    expect(rowAt(1210)).not.toBeNull();
+    expect(screen.queryByText("Collapse vertical tabs")).toBeNull();
   });
 });
 

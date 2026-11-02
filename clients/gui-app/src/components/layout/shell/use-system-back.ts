@@ -15,10 +15,11 @@ import { useMobileNavStore } from "@/stores/layout/mobile-nav-store";
  * means in this app, in the order the platform's users expect and one answer
  * per press:
  *
- * 1. An open navigation drawer closes.
- * 2. A modal layer covering the app is asked to dismiss - through the same
- *    Escape its own primitive already answers, so nothing has to be enumerated
- *    and a surface that refuses Escape (a required dialog) keeps refusing.
+ * 1. An open navigation drawer closes, and so does a composer pulled open.
+ * 2. A modal layer covering the app, an open popover, or the guide's coachmark
+ *    is asked to dismiss - through the same Escape its own primitive already
+ *    answers, so nothing has to be enumerated and a surface that refuses Escape
+ *    (a required dialog) keeps refusing.
  * 3. Otherwise the app's history steps back through the SAME `goBack` the
  *    edge swipe and the desktop arrows call. One implementation of "go back".
  * 4. With nothing behind, the shell is asked to step out of the way.
@@ -40,7 +41,14 @@ export function useSystemBack(): void {
         nav.setOpen(false);
         return;
       }
-      if (modalLayerCoversApp()) {
+      const composerSheetToggle = document.querySelector<HTMLButtonElement>(
+        "[data-composer-expanded] > button[aria-expanded='true']",
+      );
+      if (composerSheetToggle !== null) {
+        composerSheetToggle.click();
+        return;
+      }
+      if (modalLayerCoversApp() || anchoredLayerOpen() || coachmarkShown()) {
         dismissCoveringLayer();
         return;
       }
@@ -54,6 +62,32 @@ export function useSystemBack(): void {
       subscription.dispose();
     };
   }, [router, runnerHost]);
+}
+
+/**
+ * A non-modal popover leaves the app under it live, so it claims no modal
+ * layer, yet a back press with one open has to close it, not leave the screen.
+ * Its dismissable layer answers the same Escape.
+ */
+function anchoredLayerOpen(): boolean {
+  return (
+    document.querySelector(
+      "[data-radix-popper-content-wrapper] [data-state='open']:not([role='tooltip'])",
+    ) !== null
+  );
+}
+
+/**
+ * The guide's card dims the app but claims no layer, so the app under it stays
+ * reachable. A back press with it up leaves the guide, as its Escape does; one
+ * already animating out has answered and does not take the press.
+ */
+function coachmarkShown(): boolean {
+  return (
+    document.querySelector(
+      ".first-task-coachmark-floater[data-state='entered']",
+    ) !== null
+  );
 }
 
 /**

@@ -31,7 +31,6 @@ import {
   type ActionId,
   type ActionMeta,
 } from "@/lib/keybindings/actions";
-import { useSideStripCollapseOffered } from "@/components/layout/tabs/mobile-strip-form-context";
 import { useTabStripPlacement } from "@/components/layout/tabs/use-tab-strip-placement";
 import { isMobileApp } from "@/lib/mobile-app";
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
@@ -51,8 +50,7 @@ export const actionsSource: ReactCommandSource = {
     );
     const homeTabEnabled = isHomeTabEnabled();
     const placement = useTabStripPlacement();
-    const collapseOffered = useSideStripCollapseOffered();
-    const stripCollapsible = placement !== "top" && collapseOffered;
+    const stripCollapsible = placement !== "top";
     const canTalk = useVoiceSessionStore(
       (state) => talkToggleAction(state) !== null,
     );

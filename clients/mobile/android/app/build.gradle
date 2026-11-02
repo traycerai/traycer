@@ -18,8 +18,9 @@ android {
     }
     buildTypes {
         release {
-            minifyEnabled false
-            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            minifyEnabled true
+            shrinkResources true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
     }
 }
@@ -37,6 +38,9 @@ dependencies {
     implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
     // Custom Tabs, for the in-app sign-in sheet (AuthSessionPlugin.java).
     implementation "androidx.browser:browser:$androidxBrowserVersion"
+    // The barcode plugin uses ionbarcode's @aar artifact, which omits its
+    // transitive Gson dependency. Its model annotations must resolve in R8.
+    implementation 'com.google.code.gson:gson:2.15.0'
     implementation project(':capacitor-android')
     testImplementation "junit:junit:$junitVersion"
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"

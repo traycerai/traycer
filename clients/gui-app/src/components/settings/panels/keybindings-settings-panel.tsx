@@ -15,7 +15,6 @@ import { formatModifierChordForDisplay } from "@/lib/keybindings/chord";
 import { findConflict } from "@/lib/keybindings/conflicts";
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
 import { useRegionShown } from "@/lib/layout-overrides";
-import { useSideStripCollapseOffered } from "@/components/layout/tabs/mobile-strip-form-context";
 import { useTabStripPlacement } from "@/components/layout/tabs/use-tab-strip-placement";
 import { Kbd } from "@/components/ui/kbd";
 import { useSummonHotkey } from "@/hooks/runner/use-summon-hotkey";
@@ -49,8 +48,7 @@ export function KeybindingsSettingsPanel() {
 
   const homeTabEnabled = useRegionShown("homeTab");
   const placement = useTabStripPlacement();
-  const collapseOffered = useSideStripCollapseOffered();
-  const stripCollapsible = placement !== "top" && collapseOffered;
+  const stripCollapsible = placement !== "top";
   // A row here is a promise that the chord does something. `app.home.open`
   // dispatches to nothing while the Home tab is off, so it would be a bindable
   // row for a surface this build has not got - the same reason the command

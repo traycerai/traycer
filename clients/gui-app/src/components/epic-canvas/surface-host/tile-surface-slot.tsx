@@ -37,7 +37,6 @@ import {
 import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
 import { usePaneActivationFocusIntent } from "@/components/epic-canvas/pane-activation";
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
-import { MobileTileOpenTargetContext } from "@/lib/canvas/tile-open/mobile-tile-open-target-context";
 
 export interface TileSurfaceSlotProps {
   readonly node: EpicCanvasTileRef;
@@ -59,7 +58,6 @@ export function TileSurfaceSlot(props: TileSurfaceSlotProps): ReactNode {
   const paneActivationFocusIntent = usePaneActivationFocusIntent();
   const openEpicHandle = useMaybeOpenEpicHandle();
   const hostClient = useEpicSessionHostClient();
-  const mobileOpenTarget = use(MobileTileOpenTargetContext);
 
   useLayoutEffect(() => {
     if (slotElement === null) return;
@@ -82,7 +80,6 @@ export function TileSurfaceSlot(props: TileSurfaceSlotProps): ReactNode {
         geometryAnchorElement: slotElement,
         panePortalContainer,
         isPaneFocusedNow,
-        mobileOpenTarget,
       },
     });
   }, [
@@ -103,7 +100,6 @@ export function TileSurfaceSlot(props: TileSurfaceSlotProps): ReactNode {
     paneActivationFocusIntent,
     panePortalContainer,
     isPaneFocusedNow,
-    mobileOpenTarget,
   ]);
 
   // The publish above is the ONLY writer of this record's

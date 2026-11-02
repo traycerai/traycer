@@ -14,6 +14,7 @@ import {
   onboardingCompletedCount,
   onboardingGuideCount,
 } from "@/stores/onboarding/onboarding-store";
+import { readShortLandscape } from "@/hooks/ui/use-short-landscape";
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 import { useSessionImportRunStore } from "@/stores/session-import/session-import-run-store";
 import { useFirstTaskGuideStore } from "@/stores/onboarding/first-task-guide-store";
@@ -41,6 +42,8 @@ export function FirstTaskImportBridge() {
   }, []);
   return null;
 }
+
+const SHORT_LANDSCAPE_REMINDER_MS = 8000;
 
 const LandingGuide = lazy(() =>
   import("./first-task-landing-guide").then((module) => ({
@@ -163,7 +166,9 @@ function StartToast(props: {
       description: (
         <span className="text-pretty">Move them to use them everywhere</span>
       ),
-      duration: Infinity,
+      // A phone on its side has no room to spare for a card that waits: it says
+      // its line and leaves, and the reminder comes back on the next launch.
+      duration: readShortLandscape() ? SHORT_LANDSCAPE_REMINDER_MS : Infinity,
       closeButton: true,
       onDismiss: () => {
         if (!identityIsCurrent()) return;
