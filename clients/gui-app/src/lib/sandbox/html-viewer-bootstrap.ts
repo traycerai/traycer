@@ -32,13 +32,15 @@ function htmlViewerBootstrap(): void {
       overlay?.removeAttribute("data-active");
     }, 1000);
   };
-  // The vertical track starts below the root's top padding, which holds the
-  // space the page keeps for the app's controls, so the thumb is never under
-  // them at the top of the page.
+  // The vertical track starts below the space the page keeps for the app's
+  // controls (the page bootstrap's own variable, not any padding the page
+  // gives its root), so the thumb is never under them at the top.
   const trackStart = (isVertical: boolean): number =>
     isVertical
       ? Number.parseFloat(
-          window.getComputedStyle(document.documentElement).paddingTop,
+          window
+            .getComputedStyle(document.documentElement)
+            .getPropertyValue("--traycer-page-inset-top"),
         ) || 0
       : 0;
   const updateScrollbars = (): void => {

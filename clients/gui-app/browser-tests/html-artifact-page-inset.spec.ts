@@ -81,9 +81,16 @@ async function serveArtifactFromPage(page: Page): Promise<void> {
   );
 }
 
-async function open(page: Page): Promise<void> {
+async function open(
+  page: Page,
+  layout: "document" | "full-height",
+): Promise<void> {
   await serveArtifactFromPage(page);
-  await page.goto(fixture("html-artifact-page-inset"));
+  await page.goto(
+    layout === "document"
+      ? fixture("html-artifact-page-inset")
+      : `${fixture("html-artifact-page-inset")}?layout=full-height`,
+  );
   // The positive events: the page is drawn and the chip floats over it.
   await expect(pageTitle(page)).toBeVisible();
   await expect(controlsChip(page)).toBeVisible();
@@ -104,7 +111,7 @@ async function chipBottomInPage(page: Page): Promise<number> {
 }
 
 test("the page title opens below the controls chip", async ({ page }) => {
-  await open(page);
+  await open(page, "document");
 
   // The premise: the title is wide enough to run under the chip, so a missing
   // inset would put it there.
@@ -123,7 +130,7 @@ test("the page title opens below the controls chip", async ({ page }) => {
 test("the room for the controls is padding on the page root that outlasts the page's own reset", async ({
   page,
 }) => {
-  await open(page);
+  await open(page, "document");
   const frameBox = await boxOf(frameElement(page));
   const chipBottomInFrame = (await chipBottomInPage(page)) - frameBox.y;
 
@@ -142,7 +149,7 @@ test("the room for the controls is padding on the page root that outlasts the pa
 test("scrolling the page carries the title past the controls chip", async ({
   page,
 }) => {
-  await open(page);
+  await open(page, "document");
   const chipBottom = await chipBottomInPage(page);
   await expect
     .poll(() => titleTopInPage(page))
@@ -164,4 +171,24 @@ test("scrolling the page carries the title past the controls chip", async ({
 
   const frameBox = await boxOf(frameElement(page));
   expect(frameBox.y + scrolled.after).toBeLessThan(chipBottom);
+});
+
+test("a page that fills the window keeps its bottom edge in view, under the room for the controls", async ({
+  page,
+}) => {
+  await open(page, "full-height");
+  const frameBox = await boxOf(frameElement(page));
+  const chipBottom = await chipBottomInPage(page);
+
+  // The title still opens below the chip.
+  await expect
+    .poll(() => titleTopInPage(page))
+    .toBeGreaterThanOrEqual(chipBottom);
+  // And the footer on the page's bottom edge is still inside the frame: the
+  // room is taken out of the page's height, not added below it, where a page
+  // that does not scroll could never reach it.
+  const footerBottomInFrame = await pageFrame(page)
+    .locator("#footer")
+    .evaluate((footer) => footer.getBoundingClientRect().bottom);
+  expect(footerBottomInFrame).toBeLessThanOrEqual(frameBox.height);
 });
