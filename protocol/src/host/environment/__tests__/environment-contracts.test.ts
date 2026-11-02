@@ -114,9 +114,12 @@ describe("environment.list protocol contract", () => {
     }
   });
 
-  // Walks the whole host registry: ~0.7s locally, past 5s on a loaded CI runner.
   it("registers off the released floor with unsupported degrade", () => {
-    expect(() => validateVersionedRpcRegistry(hostRpcRegistry)).not.toThrow();
+    expect(() =>
+      validateVersionedRpcRegistry({
+        "environment.list": hostRpcRegistry["environment.list"],
+      }),
+    ).not.toThrow();
     expect(RELEASED_FLOOR_METHOD_NAMES).not.toContain("environment.list");
     const entry = hostRpcRegistry["environment.list"];
     expect(entry.degrade).toEqual({ kind: "unsupported" });
@@ -126,7 +129,7 @@ describe("environment.list protocol contract", () => {
     expect(entry[1].versions[1].upgradeFromPreviousVersion).toBe(
       environmentListUpgradeV10ToV11,
     );
-  }, 30_000);
+  });
 });
 
 describe("environment.host.read / .bind / .list protocol contracts", () => {

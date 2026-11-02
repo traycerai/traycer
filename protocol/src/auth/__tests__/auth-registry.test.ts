@@ -11,9 +11,8 @@ import { authRecordRegistry } from "@traycer/protocol/auth/registry";
  * `bun run --cwd traycer compile` and `bun run compile` still pass. Merely
  * importing the registry already exercises that guarantee; this file pins
  * it with an explicit assertion, mirroring
- * `framework/__tests__/seeded-registries.test.ts` (which covers the host RPC
- * registry, the common record registry and the persistence record
- * registry, but not this one).
+ * `framework/__tests__/seeded-registries.test.ts` (which covers the common
+ * record registry and the persistence record registry, but not this one).
  */
 describe("authRecordRegistry", () => {
   it("validates at import (does not throw)", () => {
