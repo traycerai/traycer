@@ -9,7 +9,6 @@ import {
   ONBOARDING_PERSIST_VERSION,
   useOnboardingStore,
 } from "@/stores/onboarding/onboarding-store";
-import { setupGuideLength } from "@/stores/onboarding/setup-guides";
 
 const PERSIST_KEY = persistKey(STORE_KEYS.onboarding);
 /** The desktop, where every guide is on offer. */
@@ -92,14 +91,6 @@ describe("useOnboardingStore", () => {
     expect(
       onboardingCompletedCount(useOnboardingStore.getState(), DESKTOP),
     ).toBe(onboardingGuideCount(DESKTOP));
-  });
-
-  it("completes the guide its event declares", () => {
-    useOnboardingStore.getState().notifySetupEvent("browser-logins-imported");
-
-    expect(useOnboardingStore.getState().setupProgress.cookies).toBe(
-      setupGuideLength("cookies"),
-    );
   });
 
   it("complete marks the tour done with a timestamp", () => {

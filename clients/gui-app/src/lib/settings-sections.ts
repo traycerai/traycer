@@ -534,8 +534,11 @@ export const DEV_ONLY_SETTINGS_SECTION_IDS: ReadonlySet<SettingsSectionId> =
  * definitions became the Agents page's Definitions tab and Browser agent
  * access the Browser tab of Permissions.
  */
-export const RETIRED_SETTINGS_SECTION_IDS: ReadonlySet<SettingsSectionId> =
-  new Set(["machine-setup", "agent-definitions", "browser-agent-access"]);
+const RETIRED_SETTINGS_SECTION_IDS: ReadonlySet<SettingsSectionId> = new Set([
+  "machine-setup",
+  "agent-definitions",
+  "browser-agent-access",
+]);
 
 /**
  * The page that now holds a retired section, where one does: a remembered

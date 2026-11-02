@@ -18,8 +18,7 @@ import { cn } from "@/lib/utils";
 import { useRequesterHostId } from "@/hooks/host/use-requester-host-id";
 
 /**
- * The checklist's "Set up Personal" group, under the cards on Settings ▸
- * Getting started and on Home: three optional steps, each opening its page
+ * The "Set up Personal" group: three optional steps, each opening its page
  * and checked off by what the person's settings already hold, read through
  * the window's own host, so a step done in the dashboard is checked here too.
  */

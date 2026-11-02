@@ -124,10 +124,10 @@ keep their own keys.
 Escape closes the guide and returns focus to its target, and it works from anywhere on the surface rather than only from the card or its target - unless a picker, menu or dialog is open, which answers its own Escape first.
 
 `onboarding-store` also keeps local setup progress, which the sidebar's progress ring and the start page's reminder count: -1 means not started, and a guide's length in `stores/onboarding/setup-guides.ts` means complete.
-That file is React-free and holds only what the stored format and those counts need: each guide's length, the event that completes it, and whether this shell can offer it.
+That file is React-free and holds only what the stored format and those counts need: each guide's length and whether this shell can offer it.
 A guide gated out (`requiresBrowserView` on a build with no browser bridge) drops out of the numerator and the denominator alike.
 
-The import mutation reports `browser-logins-imported` through `notifySetupEvent` only when cookies were successfully imported, so cancelled, blocked, and empty imports leave that guide unfinished, and the hook names no guide.
+The import mutation completes the `cookies` guide only when cookies were successfully imported, so cancelled, blocked, and empty imports leave it unfinished.
 Import is offered only when the desktop browser bridge and host binding are present.
 
 The store is persisted at version 2.
@@ -135,10 +135,9 @@ The migration settles a checklist nobody has touched for anyone who finished the
 Someone part-way through a guide keeps their progress, and a user who has not finished the tour is left alone.
 
 **Set up Personal** (`components/onboarding/set-up-personal-group.tsx`, its
-rules in `set-up-personal.ts`) sits
-under the cards on this page and on Home. It is not a guide and not part
-of the "n of m complete" count: three optional steps, each a sentence about
-what it does for the person and an Open button to its page - link a plan or
+rules in `set-up-personal.ts`) is not drawn on any page. It is three optional
+steps, each a sentence about what it does for the person and an Open button to
+its page - link a plan or
 add an API key (Providers), add a secret your agents will need (Secrets),
 choose how agents are picked (Agent selection) - under "Optional. An agent can
 run as soon as one provider is set up." with its own "n of 3 done". Each step

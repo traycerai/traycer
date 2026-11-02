@@ -4,10 +4,8 @@ import { createJSONStorage, persist } from "zustand/middleware";
 import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
 import {
   availableSetupGuideIds,
-  setupGuideCompletedBy,
   setupGuideLength,
   SETUP_GUIDE_IDS,
-  type SetupGuideEvent,
   type SetupGuideId,
   type SetupGuideShell,
 } from "@/stores/onboarding/setup-guides";
@@ -58,7 +56,6 @@ interface OnboardingState {
    * guide the table says cares is completed; a call site names the event,
    * never a guide.
    */
-  readonly notifySetupEvent: (event: SetupGuideEvent) => void;
   readonly completedAt: number | null;
   readonly step: number;
   /** Next step, or complete the tour if already on the last one. */
@@ -183,10 +180,6 @@ export const useOnboardingStore = create<OnboardingState>()(
             [id]: setupGuideLength(id),
           },
         }),
-      notifySetupEvent: (event) => {
-        const completed = setupGuideCompletedBy(event);
-        if (completed !== null) get().completeSetup(completed);
-      },
       completedAt: null,
       step: 0,
       advance: (stepCount) => {

@@ -71,7 +71,6 @@ export function ModesTab(): ReactNode {
       >
         <SettingsRow
           row={PERMISSIONS.definitions.defaultPermission}
-          labelStatus={null}
           control={
             <div className="flex flex-col items-end gap-1">
               {picker}
