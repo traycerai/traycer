@@ -438,7 +438,9 @@ function bindSingleFile(source: ts.SourceFile): ts.TypeChecker {
  * in its own text: rename an import, bind a value to a name in any scope and
  * order, destructure it, wrap it in a cast, spread it, `Object.assign` it, or
  * read it off a namespace. A value that reaches a validator through a function
- * parameter or another module is out of its sight.
+ * parameter or another module is out of its sight. A destructured property is
+ * judged by its name, so a local object holding a subset under a registry's name
+ * reads as whole: a false alarm, and a rename clears it.
  */
 function wholeHostRegistryValidationLines(
   fileName: string,
@@ -476,6 +478,13 @@ function wholeHostRegistryValidationLines(
       return (declaration.propertyName ?? declaration.name).text;
     }
     if (ts.isBindingElement(declaration)) {
+      if (declaration.dotDotDotToken !== undefined) {
+        const owner = declaration.parent.parent;
+        return ts.isVariableDeclaration(owner) &&
+          owner.initializer !== undefined
+          ? originName(owner.initializer, new Set([...seen, symbol]))
+          : null;
+      }
       const bound = declaration.propertyName ?? declaration.name;
       return ts.isIdentifier(bound) ? bound.text : null;
     }
@@ -652,6 +661,11 @@ describe("the one whole-registry validation", () => {
     [
       "a destructured registry",
       "const { hostRpcRegistry: r } = mod; validateVersionedRpcRegistry(r);",
+      1,
+    ],
+    [
+      "a rest copy of the registry",
+      "const { ...registry } = hostRpcRegistry; validateVersionedRpcRegistry(registry);",
       1,
     ],
     [
