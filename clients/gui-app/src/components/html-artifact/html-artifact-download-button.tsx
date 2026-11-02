@@ -6,8 +6,10 @@ import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { useFileSaveHost } from "@/hooks/files/use-file-save-host";
 import { useHtmlArtifactDownload } from "@/hooks/files/use-html-artifact-download-mutation";
+import { useIsMutatingOf } from "@/hooks/use-mutation-state-of";
 import { useCoarsePointer } from "@/hooks/ui/use-coarse-pointer";
 import { canDownloadToDevice } from "@/lib/files/save-blob-to-disk";
+import { epicMutationKeys } from "@/lib/query-keys";
 
 interface HtmlArtifactDownloadProps {
   readonly source: Extract<SandboxSource, { kind: "artifact" }>;
@@ -29,6 +31,16 @@ function useHtmlArtifactDownloadAction(
     props.hostId,
     props.source.artifactId,
   );
+  // Read from the mutation cache, not this observer: a menu row unmounts when
+  // its menu closes, and the row a reopened menu mounts must still show the
+  // ZIP being built rather than offer a second one.
+  const building =
+    useIsMutatingOf({
+      mutationKey: epicMutationKeys.downloadHtmlArtifact(
+        props.hostId,
+        props.source.artifactId,
+      ),
+    }) > 0;
   const fileSave = useFileSaveHost();
   const available = canDownloadToDevice(fileSave);
   return {
@@ -36,7 +48,7 @@ function useHtmlArtifactDownloadAction(
     label: available
       ? "Download ZIP"
       : "Downloads are unavailable on this device",
-    pending: download.isPending,
+    pending: building,
     start: () => download.mutate({ source: props.source, title: props.title }),
   };
 }
@@ -87,7 +99,11 @@ export function HtmlArtifactDownloadMenuItem(props: HtmlArtifactDownloadProps) {
     <DropdownMenuItem
       aria-busy={action.pending}
       disabled={!action.available || action.pending}
-      onSelect={action.start}
+      onSelect={(event) => {
+        // The menu stays open, so the row's spinner shows the ZIP building.
+        event.preventDefault();
+        action.start();
+      }}
     >
       <DownloadGlyph pending={action.pending} />
       {action.label}

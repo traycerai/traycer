@@ -127,6 +127,15 @@ describe("an artifact page's room for the app's floating controls", () => {
     expect(pageRoot(window).style.paddingTop).toBe("44px");
   });
 
+  it("leaves the page's own padding on its root through a theme change with no room in it", () => {
+    const window = startPage({ artifactPage: "found", inset: null });
+    pageRoot(window).style.paddingTop = "12px";
+
+    themeChanged(window, null);
+
+    expect(pageRoot(window).style.paddingTop).toBe("12px");
+  });
+
   it("never pads a document that is not an artifact page, at boot or later", () => {
     const window = startPage({ artifactPage: null, inset: "44px" });
     expect(pageRoot(window).style.paddingTop).toBe("");

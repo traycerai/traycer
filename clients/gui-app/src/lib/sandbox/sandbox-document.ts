@@ -118,11 +118,19 @@ function bootstrapMain(config: BootstrapConfig): void {
   // space is padding on the page's own root, so it scrolls away with the page,
   // and it is inline so a page's own reset of `html` cannot take it back.
   // A page the app has no controls over keeps its root untouched.
+  // Only padding this applied is ever taken off: a page's own inline padding
+  // on its root survives a theme change that carries no inset.
+  let insetApplied = false;
   const applyPageInset = (inset: string): void => {
     if (config.artifactPage === null) return;
     const root = document.documentElement;
-    if (inset === "") root.style.removeProperty("padding-top");
-    else root.style.paddingTop = inset;
+    if (inset !== "") {
+      root.style.paddingTop = inset;
+      insetApplied = true;
+    } else if (insetApplied) {
+      root.style.removeProperty("padding-top");
+      insetApplied = false;
+    }
   };
   applyPageInset(config.pageInset);
 
