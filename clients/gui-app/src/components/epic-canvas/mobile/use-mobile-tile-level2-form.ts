@@ -17,7 +17,7 @@ const ONE_TILE_OVER_THE_BAR: InstalledAppTileForm = {
   tiles: 1,
 };
 
-export interface MobileTileReading extends InstalledAppTileForm {
+interface MobileTileReading extends InstalledAppTileForm {
   readonly primary: MobileTileSelection | null;
   /** The second tile the person has open, whether or not it fits right now. */
   readonly secondary: MobileTileSelection | null;

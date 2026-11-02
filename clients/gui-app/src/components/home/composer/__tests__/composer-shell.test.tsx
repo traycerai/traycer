@@ -10,6 +10,27 @@ import type { FileTransferDragOverlayVariant } from "@/lib/files/file-transfer-p
 
 afterEach(cleanup);
 
+// jsdom does not implement `setPointerCapture`, and the grabber calls it on
+// every press. Stub it per test and restore the exact original descriptor.
+const originalSetPointerCapture = Object.getOwnPropertyDescriptor(
+  HTMLElement.prototype,
+  "setPointerCapture",
+);
+beforeEach(() => {
+  HTMLElement.prototype.setPointerCapture = vi.fn();
+});
+afterEach(() => {
+  if (originalSetPointerCapture === undefined) {
+    Reflect.deleteProperty(HTMLElement.prototype, "setPointerCapture");
+  } else {
+    Object.defineProperty(
+      HTMLElement.prototype,
+      "setPointerCapture",
+      originalSetPointerCapture,
+    );
+  }
+});
+
 // The layout signal, faked per test. Real module spread back in so everything
 // else it exports keeps working. Mirrors the mocking approach used in
 // chat-tile-lower-surfaces-agent-stop-host-routing.test.tsx.
@@ -193,11 +214,6 @@ function renderShellWithEditor(
 }
 
 describe("ComposerShell phone expansion", () => {
-  // jsdom does not implement `setPointerCapture`, and the grabber calls it on
-  // every press.
-  beforeEach(() => {
-    HTMLElement.prototype.setPointerCapture = vi.fn();
-  });
   afterEach(() => {
     viewportMock.phone = false;
   });
@@ -456,7 +472,6 @@ describe("ComposerShell focus layout", () => {
   describe("the pull zone over the draft's side of the row", () => {
     beforeEach(() => {
       viewportMock.phone = true;
-      HTMLElement.prototype.setPointerCapture = vi.fn();
     });
 
     /** The row with its owner's state, so opening the sheet re-renders it. */
@@ -517,7 +532,6 @@ describe("ComposerShell focus layout", () => {
   it("keeps a sheet pulled open as the sheet, with the full toolbar", () => {
     // Only a phone draws the sheet.
     viewportMock.phone = true;
-    HTMLElement.prototype.setPointerCapture = vi.fn();
     renderUnder(true, true);
     expect(shell().hasAttribute("data-composer-expanded")).toBe(true);
     expect(shell().hasAttribute("data-composer-focus-row")).toBe(false);
