@@ -573,7 +573,8 @@ function wholeHostRegistryValidationLines(
   // One entry of the list, or its registry: every entry can be a host
   // registry, so validating any one of them is a whole walk. An entry is read
   // by index, by `find` or `at`, by array destructuring, by `for…of`, or as a
-  // callback's first parameter on a method of the list.
+  // callback's first parameter on a method of the list; its registry is read
+  // as `.registry` or by destructuring `registry` from any of those.
   const isListEntry = (
     expression: ts.Expression,
     seen: ReadonlySet<ts.Symbol>,
@@ -599,6 +600,43 @@ function wholeHostRegistryValidationLines(
       return false;
     }
     const next = new Set([...seen, symbol]);
+    if (ts.isBindingElement(declaration)) {
+      const pattern = declaration.parent;
+      const owner = pattern.parent;
+      if (ts.isArrayBindingPattern(pattern)) {
+        // `const [first] = STATIC_REGISTRIES`
+        return (
+          declaration.dotDotDotToken === undefined &&
+          ts.isVariableDeclaration(owner) &&
+          owner.initializer !== undefined &&
+          isList(owner.initializer, next)
+        );
+      }
+      // `const { registry } = entry`, `for (const { registry } of list)`,
+      // `({ registry }) => …`, or `const { ...copy } = entry`.
+      const bound = declaration.propertyName ?? declaration.name;
+      const takesEntryOrRegistry =
+        declaration.dotDotDotToken !== undefined ||
+        (ts.isIdentifier(bound) && bound.text === "registry");
+      return (
+        takesEntryOrRegistry &&
+        (ts.isParameter(owner) || ts.isVariableDeclaration(owner)) &&
+        bindsEntry(owner, next)
+      );
+    }
+    return (
+      (ts.isParameter(declaration) || ts.isVariableDeclaration(declaration)) &&
+      bindsEntry(declaration, next)
+    );
+  };
+
+  // Whether a parameter or variable receives one entry of the list: the first
+  // parameter of a callback on a method of the list, a `for…of` variable over
+  // the list, or a variable initialised with an entry.
+  const bindsEntry = (
+    declaration: ts.ParameterDeclaration | ts.VariableDeclaration,
+    seen: ReadonlySet<ts.Symbol>,
+  ): boolean => {
     if (ts.isParameter(declaration)) {
       const callback = declaration.parent;
       return (
@@ -607,26 +645,13 @@ function wholeHostRegistryValidationLines(
         isListMethodCall(callback.parent)
       );
     }
-    if (
-      ts.isBindingElement(declaration) &&
-      ts.isArrayBindingPattern(declaration.parent)
-    ) {
-      const owner = declaration.parent.parent;
-      return (
-        declaration.dotDotDotToken === undefined &&
-        ts.isVariableDeclaration(owner) &&
-        owner.initializer !== undefined &&
-        isList(owner.initializer, next)
-      );
-    }
-    if (!ts.isVariableDeclaration(declaration)) return false;
     const statement = declaration.parent.parent;
     if (ts.isForOfStatement(statement)) {
-      return isList(statement.expression, next);
+      return isList(statement.expression, seen);
     }
     return (
       declaration.initializer !== undefined &&
-      isListEntry(declaration.initializer, next)
+      isListEntry(declaration.initializer, seen)
     );
   };
 
@@ -814,6 +839,31 @@ describe("the one whole-registry validation", () => {
       "an entry's registry, looping over a copy of the list",
       "for (const entry of [...STATIC_REGISTRIES]) validateVersionedRpcRegistry(entry.registry);",
       1,
+    ],
+    [
+      "an entry's registry destructured in a loop",
+      'for (const entry of STATIC_REGISTRIES) { if (entry.kind === "unary-rpc") { const { registry } = entry; validateVersionedRpcRegistry(registry); } }',
+      1,
+    ],
+    [
+      "a registry destructured by the loop",
+      'for (const { kind, registry } of STATIC_REGISTRIES) { if (kind === "unary-rpc") validateVersionedRpcRegistry(registry); }',
+      1,
+    ],
+    [
+      "a registry destructured by a callback",
+      "STATIC_REGISTRIES.forEach(({ registry }) => validateVersionedRpcRegistry(registry));",
+      1,
+    ],
+    [
+      "a rest copy of an entry",
+      "const { ...copy } = STATIC_REGISTRIES[0]; validateStaticRegistry(copy);",
+      1,
+    ],
+    [
+      "a registry destructured from a test's own entry",
+      "const { registry } = planted; validateVersionedRpcRegistry(registry);",
+      0,
     ],
     [
       "a callback on the list that validates nothing",
