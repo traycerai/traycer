@@ -212,14 +212,28 @@ function HeaderCentreZone(props: {
       const middle = headerBox.left + headerBox.width / 2;
       const zoneStart = middle - zone.getBoundingClientRect().width / 2;
       const tabsEnd = tabStripBox.getBoundingClientRect().right;
-      gap.style.flexBasis = `${Math.max(0, Math.round(zoneStart - tabsEnd))}px`;
+      const basis = `${Math.max(0, Math.round(zoneStart - tabsEnd))}px`;
+      if (gap.style.flexBasis !== basis) gap.style.flexBasis = basis;
     };
     place();
-    const observer = new ResizeObserver(place);
+    // The write moves what is observed, so it waits for the next frame: made
+    // inside the callback it would resize observed boxes in the same delivery,
+    // and the browser reports the loop as an error.
+    let frame: number | null = null;
+    const observer = new ResizeObserver(() => {
+      if (frame !== null) return;
+      frame = requestAnimationFrame(() => {
+        frame = null;
+        place();
+      });
+    });
     observer.observe(header);
     observer.observe(zone);
     observer.observe(tabStripBox);
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+      if (frame !== null) cancelAnimationFrame(frame);
+    };
   }, [tabStripBoxRef]);
   return (
     <>

@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Captions, Mic, MicOff } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import { Button } from "@/components/ui/button";
@@ -39,6 +39,9 @@ export function VoiceSessionStrip(): ReactNode {
   );
   const setCaptions = useVoiceSessionStore((s) => s.setCaptions);
 
+  const [focusLine, setFocusLine] = useState<HTMLElement | null>(null);
+  const focusLineShown = useHasWidth(focusLine);
+
   if (state.phase === "idle") return <VoiceOutcomeLine surface="row" />;
 
   const driver = state.driver;
@@ -74,12 +77,14 @@ export function VoiceSessionStrip(): ReactNode {
               state.muted,
               state.pausedForDictation,
             )}
-            focus={state.focus}
+            focus={focusLineShown ? null : state.focus}
           />
           <ResumeAfterDictation />
         </div>
         <div className="flex min-w-0 items-center gap-3 overflow-hidden not-empty:pl-3">
-          {state.focus === null ? null : <FocusLine focus={state.focus} />}
+          {state.focus === null ? null : (
+            <FocusLine focus={state.focus} lineNode={setFocusLine} />
+          )}
         </div>
         <div className="grid items-center not-empty:pl-3">
           <VoiceWaitingControl />
@@ -188,6 +193,20 @@ function stateLabel(
   return muted ? "Muted" : "Listening";
 }
 
+/** Whether the element takes any width. Only a state read, so it moves no layout. */
+function useHasWidth(element: HTMLElement | null): boolean {
+  const [hasWidth, setHasWidth] = useState(false);
+  useEffect(() => {
+    if (element === null) return undefined;
+    const observer = new ResizeObserver(() => {
+      setHasWidth(element.getBoundingClientRect().width > 0);
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [element]);
+  return element !== null && hasWidth;
+}
+
 function destinationLine(
   environmentLabel: string | null,
   botTitle: string,
@@ -199,8 +218,8 @@ function destinationLine(
 }
 
 /**
- * The state word, whose tooltip names the destination: the focus line is the
- * first thing the top row takes away, and this is where it stays reachable.
+ * The state word. `focus` is the destination while the focus line is hidden, the
+ * first thing the top row takes away: its tooltip then keeps it reachable.
  */
 function StateWord(props: {
   readonly word: string;
@@ -242,8 +261,11 @@ function DestinationTooltip(props: {
  * Where the next post goes: environment › bot › thread, with Change, which
  * opens the bot's tab so the person can pick another channel or thread.
  */
-function FocusLine(props: { readonly focus: VoiceFocus }): ReactNode {
-  const { focus } = props;
+function FocusLine(props: {
+  readonly focus: VoiceFocus;
+  readonly lineNode: (node: HTMLElement | null) => void;
+}): ReactNode {
+  const { focus, lineNode } = props;
   const openBotChannel = useOpenBotChannel();
   const { environmentLabel, botTitle, threadLabel } = useVoiceFocusLabel(focus);
   // The first thing the strip gives up when the top row is short of room, so
@@ -257,6 +279,7 @@ function FocusLine(props: { readonly focus: VoiceFocus }): ReactNode {
       align={undefined}
     >
       <span
+        ref={lineNode}
         data-testid="voice-strip-focus"
         className="flex min-w-0 items-center gap-1 truncate"
       >

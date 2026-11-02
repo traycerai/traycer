@@ -348,16 +348,28 @@ describe("the header's centre zone for Talk", () => {
     ).mockReturnValue(new DOMRect(0, 0, 100, 40));
     const tabsRect = vi.spyOn(tabsBox(), "getBoundingClientRect");
     const gap = screen.getByTestId("app-header-centre-gap");
+    const frames: FrameRequestCallback[] = [];
+    vi.stubGlobal("requestAnimationFrame", (run: FrameRequestCallback) => {
+      frames.push(run);
+      return frames.length;
+    });
     const reportResize = (): void => {
       act(() => {
         for (const observer of resizeObservers) observer.report();
       });
+      // Nothing moves inside the observer's delivery: the write waits a frame,
+      // and a second report before it runs asks for no second one.
+      expect(frames).toHaveLength(1);
+      expect(gap.style.flexBasis).not.toBe(expected);
+      frames.splice(0).forEach((run) => run(0));
     };
 
+    let expected = "250px";
     tabsRect.mockReturnValue(new DOMRect(0, 0, 200, 40));
     reportResize();
     expect(gap.style.flexBasis).toBe("250px");
 
+    expected = "0px";
     tabsRect.mockReturnValue(new DOMRect(0, 0, 700, 40));
     reportResize();
     expect(gap.style.flexBasis).toBe("0px");

@@ -1,9 +1,10 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
-import { fixture } from "./support/fixtures.ts";
+import { fixture, nextFrames } from "./support/fixtures.ts";
 
 declare global {
   interface Window {
+    __voiceTopRowErrors?: string[];
     __voiceTopRowProbe?: {
       readonly fillTabs: (width: number) => void;
       readonly offerVoice: () => void;
@@ -22,6 +23,12 @@ const talk = (page: Page): Locator =>
   page.getByRole("button", { name: "Talk" });
 
 async function open(page: Page, query: string): Promise<void> {
+  await page.addInitScript(() => {
+    window.__voiceTopRowErrors = [];
+    window.addEventListener("error", (event) => {
+      window.__voiceTopRowErrors?.push(event.message);
+    });
+  });
   await page.goto(`${fixture("voice-top-row")}?${query}`);
   await page.waitForFunction(() => window.__voiceTopRowProbe !== undefined);
   await page.locator("main").waitFor();
@@ -76,7 +83,7 @@ test("long tabs push Talk right and give up only the room it needs", async ({
   await expect
     .poll(async () => (await talk(page).boundingBox())?.x ?? 0)
     .toBeGreaterThan(900);
-  expect((await tabs.boundingBox())?.width).toBe(900);
+  await expect.poll(async () => (await boxOf(tabs)).width).toBe(900);
   const header = await page.getByTestId("app-header").boundingBox();
   const zone = await page.getByTestId("app-header-centre-zone").boundingBox();
   expect((zone?.x ?? 0) + (zone?.width ?? 0)).toBeLessThanOrEqual(
@@ -192,6 +199,12 @@ for (const width of [1400, 1100, 900, 800, 768]) {
     );
     expect(rightOf(actions)).toBeLessThanOrEqual(width);
     expect(actions.x).toBeGreaterThanOrEqual(rightOf(zone));
+    await nextFrames(page, 3);
+    expect(await page.evaluate(() => window.__voiceTopRowErrors)).toEqual([]);
+    // The focus line is gone, so the state word's tooltip names the destination.
+    await expect(page.getByTestId("voice-strip-state")).toHaveAttribute(
+      "data-state",
+    );
   });
 }
 
@@ -202,10 +215,16 @@ test("with room to spare Waiting keeps its name", async ({ page }) => {
   const name = await boxOf(page.getByTestId("voice-strip-waiting-name"));
   expect(name.y).toBe(nameBox.y);
   expect(rightOf(name)).toBeLessThanOrEqual(rightOf(nameBox));
-  // The whole focus line fits, so nothing is held back with room to spare.
-  const zone = await boxOf(page.getByTestId("app-header-centre-zone"));
-  expect(zone.x + zone.width / 2).toBeCloseTo(
-    await middleOf(page.locator("main")),
-    0,
+  // The whole strip fits, and it is centred once the gap has settled.
+  const main = await middleOf(page.locator("main"));
+  await expect
+    .poll(async () => {
+      const zone = await boxOf(page.getByTestId("app-header-centre-zone"));
+      return Math.abs(zone.x + zone.width / 2 - main);
+    })
+    .toBeLessThan(1);
+  // The focus line shows the destination, so the state word is no tooltip trigger.
+  await expect(page.getByTestId("voice-strip-state")).not.toHaveAttribute(
+    "data-state",
   );
 });
