@@ -1,6 +1,7 @@
 import { HostMethodVersionUnsatisfiedError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { useCallback, useMemo, useState, type ReactNode } from "react";
 import {
+  AddToPersonalButton,
   PersonalEntryMark,
   type PersonalMarkTarget,
 } from "@/components/settings/personal/personal-entry-mark";
@@ -47,9 +48,12 @@ import { fileContentRevision } from "@/lib/workspace/file-content-revision";
 import { ProviderSkillComposerDialog } from "./provider-skill-composer-dialog";
 import {
   isExternalDriftError,
+  isSharedFolderSkill,
   isSkillUpdateNoOp,
   providerRootFromSkills,
+  SHARED_FOLDER_READ_ONLY_REASON,
   skillActionAdvertised,
+  skillAudiences,
   skillAuthoring,
   skillIsEditable,
   skillOriginDisplay,
@@ -76,11 +80,14 @@ import {
 } from "./provider-list-search";
 import { McpScopePicker } from "./provider-mcp-scope-picker";
 import { useProviderNativeScope } from "./use-provider-native-scope";
+import { useSkillEnvironmentRoute } from "./use-skill-environment-route";
 
 import {
   useConfigurationSource,
   useCanEditConfiguration,
 } from "@/components/settings/environment/configuration-source";
+import { ConfigurationSourceBoundary } from "@/components/settings/environment/configuration-source-boundary";
+import { EnvironmentSkillImportDialog } from "@/components/settings/environment/environment-skill-import-dialog";
 import { useConfigurationName } from "@/components/settings/environment/team-pick-label";
 
 const EMPTY_SKILLS: readonly ProviderSkill[] = [];
@@ -224,16 +231,6 @@ function ProviderSkillsTabBody({
   const canEditHere = allowed.edit;
   const canUpdateHere = allowed.update;
   // Hoisted: eslint rewrites `a && b` in JSX attrs to `a ? b : null`.
-  const {
-    personal: openSkillPersonal,
-    editable: openSkillEditable,
-    updatable: openSkillUpdatable,
-  } = useOpenSkillActions(
-    openSkill,
-    canEditHere,
-    canUpdateHere,
-    effectiveScope,
-  );
   const globalOnly = !multiScope && effectiveScope === "global";
   // Hoisted: eslint rewrites `a && b` in JSX attrs to `a ? b : null`, widening
   // boolean props to `boolean | null`.
@@ -245,11 +242,33 @@ function ProviderSkillsTabBody({
   // render (`?? []` on an optional query result), so a `useMemo` keyed on it
   // would recompute every time anyway while implying it does not.
   const providerRoot = providerRootFromSkills(skills);
-  const canProviderScope = skillProviderScopeVisible({
+  const environment = useSkillEnvironmentRoute();
+  const audiences = skillAudiences({
+    hostRunsEnvironments: environment.hostRunsEnvironments,
+    environmentAvailable: environment.available,
+    canProviderScope: skillProviderScopeVisible({
+      effectiveScope,
+      createScopes: caps.actionScopes.create,
+      importScopes: caps.actionScopes.import,
+    }),
     effectiveScope,
-    createScopes: caps.actionScopes.create,
-    importScopes: caps.actionScopes.import,
   });
+  const {
+    personal: openSkillPersonal,
+    editable: openSkillEditable,
+    updatable: openSkillUpdatable,
+    readOnly: openSkillReadOnly,
+  } = useOpenSkillActions({
+    openSkill,
+    canEditHere,
+    canUpdateHere,
+    scope: effectiveScope,
+    hostRunsEnvironments: environment.hostRunsEnvironments,
+  });
+  // The source a composer handed to the environment's import.
+  const [environmentImport, setEnvironmentImport] = useState<string | null>(
+    null,
+  );
 
   const handleBrowse = useCallback(() => {
     void browseForWorkspace()
@@ -437,25 +456,50 @@ function ProviderSkillsTabBody({
             authoring={authoring}
             listScope={effectiveScope}
             providerRoot={providerRoot}
-            canProviderScope={canProviderScope}
-            pending={composerPending}
+            audiences={audiences}
+            pending={composerPending || environment.writing}
             onMutate={onComposerMutate}
+            onEnvironmentWrite={environment.write}
+            onEnvironmentImport={(from) => {
+              setComposerOpen(false);
+              setEnvironmentImport(from);
+            }}
             onClose={() => {
               setComposerOpen(false);
             }}
           />
         ) : null}
 
+        {environmentImport === null ? null : (
+          <ConfigurationSourceBoundary
+            target={{ kind: "personal" }}
+            section={null}
+          >
+            <EnvironmentSkillImportDialog
+              hostClient={environment.hostClient}
+              searchable={false}
+              initialSource={environmentImport}
+              onClose={() => {
+                setEnvironmentImport(null);
+              }}
+            />
+          </ConfigurationSourceBoundary>
+        )}
+
         {openSkill === null ? null : (
           <ProviderSkillDetailDialog
             skill={openSkill}
             sourceLabel={skillSourceLabel(openSkill.source, providerLabel)}
-            removal={skillRemovability({
-              removeScopes: allowed.removeScopes,
-              source: openSkill.source,
-              effectiveScope,
-              conflict: openSkill.conflict === true,
-            })}
+            removal={
+              openSkillReadOnly
+                ? { kind: "blocked", reason: SHARED_FOLDER_READ_ONLY_REASON }
+                : skillRemovability({
+                    removeScopes: allowed.removeScopes,
+                    source: openSkill.source,
+                    effectiveScope,
+                    conflict: openSkill.conflict === true,
+                  })
+            }
             removePending={removePending}
             removeDisabled={isMutating}
             actionError={detailError}
@@ -522,9 +566,9 @@ function ProviderSkillsTabBody({
     <div className="flex flex-col gap-3">
       {/*
         Global/project is WHERE the skill files live (host vs workspace). The
-        composer's "Available to" control is a different axis — shared
-        (~/.agents/skills) vs this provider's own folder — and must not look
-        like a second scope picker.
+        composer's "Available to" control is a different axis — this provider's
+        own folder vs the environment — and must not look like a second scope
+        picker.
       */}
       <div
         className={cn(
@@ -588,6 +632,7 @@ function ProviderSkillsTabBody({
 
       <SkillsListBody
         markTarget={{ entryKind: "skills", providerId, scope: effectiveScope }}
+        sharedFolderReadOnly={environment.hostRunsEnvironments}
         providerLabel={providerLabel}
         projectNeedsWorkspace={projectNeedsWorkspace}
         workspacesLoading={workspacesLoading}
@@ -862,6 +907,7 @@ function SkillUpdateConfirm({
 
 function SkillsListBody({
   markTarget,
+  sharedFolderReadOnly,
   providerLabel,
   projectNeedsWorkspace,
   workspacesLoading,
@@ -879,6 +925,8 @@ function SkillsListBody({
   onOpenSkill,
 }: {
   readonly markTarget: PersonalMarkTarget;
+  /** The host only reads a shared folder's skills: they offer the promote. */
+  readonly sharedFolderReadOnly: boolean;
   readonly providerLabel: string;
   readonly projectNeedsWorkspace: boolean;
   readonly workspacesLoading: boolean;
@@ -963,6 +1011,7 @@ function SkillsListBody({
           skill={skill}
           providerLabel={providerLabel}
           markTarget={markTarget}
+          sharedFolderReadOnly={sharedFolderReadOnly}
           onOpen={() => {
             onOpenSkill(skill);
           }}
@@ -1048,15 +1097,24 @@ description: Reviews a   # what the agent matches on
  * settings is changed in the dashboard: the host forwards only Remove for it,
  * so edit and update are held off.
  */
-function useOpenSkillActions(
-  openSkill: ProviderSkill | null,
-  canEditHere: boolean,
-  canUpdateHere: boolean,
-  scope: ProviderNativeScope,
-): {
+function useOpenSkillActions({
+  openSkill,
+  canEditHere,
+  canUpdateHere,
+  scope,
+  hostRunsEnvironments,
+}: {
+  readonly openSkill: ProviderSkill | null;
+  readonly canEditHere: boolean;
+  readonly canUpdateHere: boolean;
+  readonly scope: ProviderNativeScope;
+  readonly hostRunsEnvironments: boolean;
+}): {
   readonly personal: boolean;
   readonly editable: boolean;
   readonly updatable: boolean;
+  /** A shared folder's skill, which such a host only reads. */
+  readonly readOnly: boolean;
 } {
   const personal = usePersonalEntryApplied(
     "skills",
@@ -1064,13 +1122,22 @@ function useOpenSkillActions(
     scope,
   );
   if (openSkill === null) {
-    return { personal, editable: false, updatable: false };
+    return { personal, editable: false, updatable: false, readOnly: false };
   }
+  // An item this host once installed there is the person's to remove still,
+  // which is how its row drains.
+  const readOnly =
+    hostRunsEnvironments && !personal && isSharedFolderSkill(openSkill);
   return {
     personal,
-    editable: canEditHere && !personal && skillIsEditable(openSkill),
+    editable:
+      canEditHere && !personal && !readOnly && skillIsEditable(openSkill),
     updatable:
-      canUpdateHere && !personal && skillOriginDisplay(openSkill) !== null,
+      canUpdateHere &&
+      !personal &&
+      !readOnly &&
+      skillOriginDisplay(openSkill) !== null,
+    readOnly,
   };
 }
 
@@ -1086,12 +1153,14 @@ function SkillRow({
   skill,
   providerLabel,
   markTarget,
+  sharedFolderReadOnly,
   onOpen,
 }: {
   readonly skill: ProviderSkill;
   readonly providerLabel: string;
   /** Where the row's Personal mark reads from (`PersonalEntryMark`). */
   readonly markTarget: PersonalMarkTarget;
+  readonly sharedFolderReadOnly: boolean;
   readonly onOpen: () => void;
 }): ReactNode {
   return (
@@ -1157,10 +1226,46 @@ function SkillRow({
       {/* Beside the row, not inside it: the mark can hold its own button. A
           built-in reads "Built-in" alone: it is the environment's or the
           tool's, never one computer's. */}
-      {skill.source === "managed" ? null : (
-        <PersonalEntryMark target={markTarget} name={skill.name} />
-      )}
+      <SkillRowAction
+        skill={skill}
+        markTarget={markTarget}
+        sharedFolderReadOnly={sharedFolderReadOnly}
+      />
     </li>
+  );
+}
+
+/**
+ * What sits beside a row: the promote for a shared folder's skill, which the
+ * host only reads (at global scope, the one a promote takes), else the Personal
+ * mark.
+ */
+function SkillRowAction({
+  skill,
+  markTarget,
+  sharedFolderReadOnly,
+}: {
+  readonly skill: ProviderSkill;
+  readonly markTarget: PersonalMarkTarget;
+  readonly sharedFolderReadOnly: boolean;
+}): ReactNode {
+  const personal = usePersonalEntryApplied(
+    "skills",
+    skill.name,
+    markTarget.scope,
+  );
+  if (skill.source === "managed") return null;
+  if (personal || !sharedFolderReadOnly || !isSharedFolderSkill(skill)) {
+    return <PersonalEntryMark target={markTarget} name={skill.name} />;
+  }
+  if (markTarget.scope !== "global") return null;
+  return (
+    <AddToPersonalButton
+      entryKind="skills"
+      providerId={markTarget.providerId}
+      name={skill.name}
+      label="Promote to the environment"
+    />
   );
 }
 

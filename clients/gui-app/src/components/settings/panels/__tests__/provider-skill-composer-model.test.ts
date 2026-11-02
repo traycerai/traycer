@@ -15,6 +15,8 @@ import {
   providerRootFromSkills,
   skillActionAdvertised,
   skillAuthoring,
+  isSharedFolderSkill,
+  skillAudiences,
   skillDestination,
   skillEditPrefill,
   skillFilePath,
@@ -640,11 +642,94 @@ describe("composerErrorMessage", () => {
   });
 });
 
+describe("skillAudiences", () => {
+  const offered = (args: {
+    readonly hostRunsEnvironments: boolean;
+    readonly environmentAvailable: boolean;
+    readonly canProviderScope: boolean;
+    readonly effectiveScope: ProviderNativeScope;
+  }) => skillAudiences(args);
+
+  it("keeps a host without environments on the choice it always had", () => {
+    expect(
+      offered({
+        hostRunsEnvironments: false,
+        environmentAvailable: false,
+        canProviderScope: true,
+        effectiveScope: "global",
+      }),
+    ).toEqual(["shared", "provider"]);
+  });
+
+  it("offers a host that runs environments the provider's folder first, then the environment, and never the shared folder", () => {
+    expect(
+      offered({
+        hostRunsEnvironments: true,
+        environmentAvailable: true,
+        canProviderScope: true,
+        effectiveScope: "global",
+      }),
+    ).toEqual(["provider", "environment"]);
+  });
+
+  it("offers no environment at project scope or before it is known", () => {
+    expect(
+      offered({
+        hostRunsEnvironments: true,
+        environmentAvailable: true,
+        canProviderScope: true,
+        effectiveScope: "project",
+      }),
+    ).toEqual(["provider"]);
+    expect(
+      offered({
+        hostRunsEnvironments: true,
+        environmentAvailable: false,
+        canProviderScope: true,
+        effectiveScope: "global",
+      }),
+    ).toEqual(["provider"]);
+  });
+});
+
+describe("isSharedFolderSkill", () => {
+  const row = (
+    path: string,
+    source: ProviderSkill["source"],
+  ): ProviderSkill => ({
+    name: "x",
+    description: null,
+    path,
+    source,
+    origin: null,
+  });
+
+  it.each([
+    "/Users/dev/.agents/skills/x",
+    "/repo/.agents/skills/x",
+    "C:\\Users\\dev\\.agents\\skills\\x",
+  ])("is a shared row directly in %s's folder", (path) => {
+    expect(isSharedFolderSkill(row(path, "shared"))).toBe(true);
+  });
+
+  it("is not an uncaptured folder under the served root, which also lists as shared", () => {
+    expect(
+      isSharedFolderSkill(row("/home/.traycer/layout/skills/x", "shared")),
+    ).toBe(false);
+  });
+
+  it("is not a provider's own row", () => {
+    expect(isSharedFolderSkill(row("/repo/.agents/skills/x", "provider"))).toBe(
+      false,
+    );
+  });
+});
+
 describe("skillDestination", () => {
   it("points shared writes at the fixed cross-provider root", () => {
     expect(
       skillDestination({
-        providerScoped: false,
+        audience: "shared",
         providerLabel: "Codex",
         providerRoot: "/Users/dev/.codex/skills",
       }),
@@ -654,17 +739,27 @@ describe("skillDestination", () => {
   it("points provider-scoped writes at a known provider root", () => {
     expect(
       skillDestination({
-        providerScoped: true,
+        audience: "provider",
         providerLabel: "Codex",
         providerRoot: "/Users/dev/.codex/skills",
       }),
     ).toEqual({ display: "/Users/dev/.codex/skills", exact: true });
   });
 
+  it("names the environment rather than a path for an environment write", () => {
+    expect(
+      skillDestination({
+        audience: "environment",
+        providerLabel: "Codex",
+        providerRoot: "/Users/dev/.codex/skills",
+      }),
+    ).toEqual({ display: "the environment", exact: false });
+  });
+
   it("falls back to honest prose when the provider root is not yet known", () => {
     expect(
       skillDestination({
-        providerScoped: true,
+        audience: "provider",
         providerLabel: "Codex",
         providerRoot: null,
       }),
@@ -678,7 +773,7 @@ describe("skillDestination", () => {
 describe("skillFilePath", () => {
   it("appends name and SKILL.md onto an exact destination", () => {
     const destination = skillDestination({
-      providerScoped: false,
+      audience: "shared",
       providerLabel: "Codex",
       providerRoot: null,
     });
@@ -689,7 +784,7 @@ describe("skillFilePath", () => {
 
   it("returns the destination unchanged when the name is still empty", () => {
     const destination = skillDestination({
-      providerScoped: false,
+      audience: "shared",
       providerLabel: "Codex",
       providerRoot: null,
     });
@@ -700,7 +795,7 @@ describe("skillFilePath", () => {
 
   it("returns the prose unchanged, rather than appending a name to it, when the destination is inexact", () => {
     const destination = skillDestination({
-      providerScoped: true,
+      audience: "provider",
       providerLabel: "Codex",
       providerRoot: null,
     });

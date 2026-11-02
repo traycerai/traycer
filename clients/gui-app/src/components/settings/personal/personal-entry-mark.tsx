@@ -64,6 +64,7 @@ export function PersonalEntryMark(props: {
         entryKind={props.target.entryKind}
         providerId={props.target.providerId}
         name={props.name}
+        label="Add to Personal"
       />
     </span>
   );
@@ -74,10 +75,11 @@ export function PersonalEntryMark(props: {
  * (`PROMOTE_TO_PERSONAL_REQUIRED_HOST_VERSION`, nativeMutate 1.3). A host on
  * 1.2 or older refuses it.
  */
-function AddToPersonalButton(props: {
+export function AddToPersonalButton(props: {
   readonly entryKind: "mcp" | "skills";
   readonly providerId: ProviderId;
   readonly name: string;
+  readonly label: string;
 }): ReactNode {
   const version = useHostNegotiatedMethodVersion(
     useHostClient(),
@@ -130,7 +132,7 @@ function AddToPersonalButton(props: {
           );
         }}
       >
-        Add to Personal
+        {props.label}
         {promote.isPending ? (
           <AgentSpinningDots
             className={undefined}

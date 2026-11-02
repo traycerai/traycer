@@ -3546,6 +3546,23 @@ window`, recorded in the type as `coverage.browsersAreMountedOnly` -
         must not touch the create/import draft fields; failure closes only the
         confirmation and renders inside the skill dialog, since the tab's own
         error banner sits behind it and would be invisible.
+    - **The shared folder is read, not written, on a host that runs
+      environments.** The capability's scopes are `global`/`project` and carry no
+      shared destination, so `useSkillEnvironmentRoute` tells the two kinds of host
+      apart by `environment.status`, which a build without environments never
+      answers. That host writes to `~/.agents/skills` as it always did: the
+      composer offers "Every provider", and a shared row keeps Edit and Remove. A
+      host that answers refuses those writes (`unsupported_scope` for a
+      create or import, `unsupported_action` for an edit, update or remove),
+      so the composer offers "<provider> only" and "This environment", and a
+      row directly in a `.agents/skills` folder (`isSharedFolderSkill`) keeps its
+      Shared badge with "Promote to the environment" (global scope, the one
+      `promoteToPersonal` takes) in place of Edit and Remove. A folder under the
+      served root the room has not captured also lists as `shared` and is not
+      that row: it stays editable. "This environment" is the person's own
+      environment: a written skill goes up as the archive
+      `environment.configuration.skills.upload` takes (`provider-skill-archive.ts`),
+      an import hands its source to `EnvironmentSkillImportDialog`.
   - **Model Providers is the visual layer of `opencode auth login`**
     (`provider-model-providers-tab.tsx` +
     `provider-model-provider-connect-dialog.tsx`): the UPSTREAM LLM credentials

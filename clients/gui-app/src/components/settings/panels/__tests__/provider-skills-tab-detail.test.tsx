@@ -27,6 +27,18 @@ type SkillsListMutateResult = {
   readonly skills: readonly ProviderSkill[];
 };
 
+// A host from before environments: `use-skill-environment-route.test.tsx` has
+// the other kind.
+vi.mock("../use-skill-environment-route", () => ({
+  useSkillEnvironmentRoute: () => ({
+    hostRunsEnvironments: false,
+    available: false,
+    hostClient: null,
+    writing: false,
+    write: () => Promise.resolve(null),
+  }),
+}));
+
 const skillMocks = vi.hoisted(() => ({
   skills: [] as ProviderSkill[],
   removeScopes: [] as string[],
