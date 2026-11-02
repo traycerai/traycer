@@ -1,5 +1,7 @@
 import type {
   BrowserViewBridge,
+  BrowserViewGuestDrawHoldReleased,
+  BrowserViewGuestDrawHoldRequested,
   BrowserViewGuestMountRequested,
   BrowserViewGuestReleaseRequested,
   BrowserViewGuestViewportRequested,
@@ -73,20 +75,39 @@ export function browserGuestCssClipSizeAnchorName(
 const BLANK_GUEST_SRC = "about:blank";
 const PARKED_VIEWPORT_WIDTH_PX = 1280;
 const PARKED_VIEWPORT_HEIGHT_PX = 800;
+// An unshown guest with no read in flight: outside the viewport and at zero
+// opacity, so the compositor neither draws it nor runs its animation frames.
+// A parked page with a spinner or an animation loop then costs no CPU; drawn,
+// each one cost a few percent of a core for as long as it stayed open. The
+// page still lays out, so it takes a viewport resize while parked.
+const PARKED_OFFSET_PX = 10_000;
+const PARKED_CSS_TEXT = [
+  "position: fixed",
+  `inset-inline-start: -${PARKED_OFFSET_PX}px`,
+  "inset-block-start: 0",
+  `width: ${PARKED_VIEWPORT_WIDTH_PX}px`,
+  `height: ${PARKED_VIEWPORT_HEIGHT_PX}px`,
+  "opacity: 0",
+  "pointer-events: none",
+  "display: block",
+].join(";");
 // Keeps the largest guest the protocol permits (BROWSER_VIEWPORT_MAX_EDGE,
 // 8192) inside the smallest viewport the app can have: a 960 x 600 window at
 // 300 % zoom is 320 x 200 CSS px, and 8192 x 0.02 = 164. A guest that extends
 // well past the window is captured cropped. A transform changes neither the
 // captured resolution nor the layout sizes `retainedSize` reads.
-const PARKED_SCALE = 0.02;
-const PARKED_CSS_TEXT = [
+const DRAW_HELD_SCALE = 0.02;
+// An unshown guest main is reading (a screenshot, a PiP frame): a capture
+// completes only on a drawn frame, and filter:opacity(0) is drawn and shows
+// nothing.
+const DRAW_HELD_CSS_TEXT = [
   "position: fixed",
   "inset-inline-start: 0",
   "inset-block-start: 0",
   `width: ${PARKED_VIEWPORT_WIDTH_PX}px`,
   `height: ${PARKED_VIEWPORT_HEIGHT_PX}px`,
   "transform-origin: top left",
-  `transform: scale(${PARKED_SCALE})`,
+  `transform: scale(${DRAW_HELD_SCALE})`,
   "filter: opacity(0)",
   "pointer-events: none",
   "display: block",
@@ -114,6 +135,8 @@ interface GuestRecord {
     observer: ResizeObserver | null;
   } | null;
   retainedSize: { readonly width: number; readonly height: number } | null;
+  /** Main's read in flight on this guest; while set, an unshown guest draws. */
+  drawHoldId: string | null;
   readonly sizeObserver: ResizeObserver;
   readonly detachPressRelay: () => void;
 }
@@ -215,6 +238,18 @@ export function startPersistentBrowserGuestHost(
   document.body.appendChild(hostElement);
   const mountSub = bridge.onGuestMountRequested(handleMount);
   const releaseSub = bridge.onGuestReleaseRequested(handleRelease);
+  const drawHoldSub = bridge.onGuestDrawHoldRequested((request) => {
+    void holdGuestDrawn(request)
+      .then((applied) =>
+        bridge.reportGuestDrawHoldApplied({
+          holdId: request.holdId,
+          registrationId: request.registrationId,
+          applied,
+        }),
+      )
+      .catch(() => undefined);
+  });
+  const drawReleaseSub = bridge.onGuestDrawHoldReleased(handleDrawHoldReleased);
   const viewportSub = bridge.onGuestViewportRequested((request) => {
     void applyViewportRequest(request)
       .then((applied) =>
@@ -235,6 +270,8 @@ export function startPersistentBrowserGuestHost(
     onActivate = null;
     mountSub.dispose();
     releaseSub.dispose();
+    drawHoldSub.dispose();
+    drawReleaseSub.dispose();
     viewportSub.dispose();
     for (const registrationId of [...guests.keys()]) {
       removeGuest(registrationId);
@@ -302,6 +339,7 @@ function handleMount(request: BrowserViewGuestMountRequested): void {
     viewportAcknowledged: false,
     pendingViewport: null,
     retainedSize: null,
+    drawHoldId: null,
     // The size a hidden guest keeps is read while it is laid out in its tile.
     // By the time a hide reaches this host the tile has already left layout,
     // so a read then finds no anchor and measures the bare 300x150 webview.
@@ -342,6 +380,40 @@ function handleMount(request: BrowserViewGuestMountRequested): void {
 
 function handleRelease(request: BrowserViewGuestReleaseRequested): void {
   removeGuest(request.registrationId);
+}
+
+/** Resolves once the held guest has been drawn; false for an unknown guest. */
+function holdGuestDrawn(
+  request: BrowserViewGuestDrawHoldRequested,
+): Promise<boolean> {
+  const guest = guests.get(request.registrationId);
+  if (guest === undefined) return Promise.resolve(false);
+  guest.drawHoldId = request.holdId;
+  reapplyUnshownPresentation(guest);
+  // The first frame commits the drawn posture; the second has drawn it.
+  return new Promise<boolean>((resolve) => {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        resolve(guests.get(request.registrationId) === guest);
+      });
+    });
+  });
+}
+
+function handleDrawHoldReleased(
+  request: BrowserViewGuestDrawHoldReleased,
+): void {
+  const guest = guests.get(request.registrationId);
+  if (guest === undefined || guest.drawHoldId !== request.holdId) return;
+  guest.drawHoldId = null;
+  reapplyUnshownPresentation(guest);
+}
+
+/** A shown guest is drawn anyway, and its frame owns its own layout timing. */
+function reapplyUnshownPresentation(guest: GuestRecord): void {
+  const placement = placements.get(guest.registrationId)?.placement ?? null;
+  if (placement !== null && placement.presented) return;
+  applyGuestPresentation(guest, placement);
 }
 
 function applyViewportRequest(
@@ -494,8 +566,7 @@ function applyGuestPresentation(
   } else {
     delete guest.sheetClipper.dataset.browserGuestSheet;
   }
-  // A parked guest sits at the window's origin, outside any stage, and is
-  // captured only while the compositor draws it: no stage clip applies.
+  // A parked or draw-held guest sits outside any stage: no stage clip applies.
   guest.clipper.style.clipPath = nextPresented ? "inset(0)" : "none";
   if (
     guest.wrapper.getAttribute(BROWSER_GUEST_STATE_ATTRIBUTE) === "presented" &&
@@ -515,15 +586,13 @@ function applyGuestPresentation(
   }
   // A guest is captured (CDP and PiP) only while the compositor draws it.
   // Independently composited <webview> can leak under visibility:hidden, and
-  // display:none stops it compositing altogether. opacity:0 and a box outside
-  // the viewport each stop the draw too, so a capture of such a guest never
-  // completes. filter:opacity(0) is drawn and shows nothing, and the scale
-  // keeps the whole guest inside the window. Retained and unbound share that
-  // posture - only the state attribute differs.
+  // display:none stops it compositing altogether, so neither is used. Parked
+  // is not drawn; a read in flight holds it drawn. Retained and unbound share
+  // each posture - only the state attribute differs.
   applyGuestPosture(
     guest.wrapper,
     placement === null ? "unbound" : "retained",
-    PARKED_CSS_TEXT,
+    guest.drawHoldId === null ? PARKED_CSS_TEXT : DRAW_HELD_CSS_TEXT,
     null,
   );
   applyGuestViewport(guest, null);
