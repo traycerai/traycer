@@ -1,9 +1,10 @@
 /**
  * The hook that publishes `MixSignals`, through the REAL notification stores,
- * the real agent-activity plane, the real `useBotActivity` over a stub
- * `bot.subscribe` session, and a real router over a memory history. Only the
- * host lookups the notification feed needs are scripted, as in the merged
- * notification projection suite.
+ * the real agent-activity plane and a real router over a memory history. Beside
+ * it runs the real `useBotActivity` over a stub `bot.subscribe` session, as the
+ * Tracy entry runs it in the app, so a bot's own stream is live next to the
+ * plane. Only the host lookups the notification feed needs are scripted, as in
+ * the merged notification projection suite.
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, render } from "@testing-library/react";
@@ -14,6 +15,7 @@ import {
   createRouter,
   RouterProvider,
 } from "@tanstack/react-router";
+import { useEffect } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   HostNotificationEntry,
@@ -30,6 +32,7 @@ import {
   StubHostStreamClient,
   StubSession,
 } from "@/hooks/bots/__tests__/bot-subscribe-stub-stream";
+import { useBotActivity } from "@/hooks/bots/use-bot-activity";
 import { __resetBotSubscriptionsForTesting } from "@/hooks/bots/use-bot-subscription";
 import type { MixSignals } from "@/lib/soundtrack/signals";
 import { systemTabOverlaySearchSchema } from "@/lib/system-tab-overlay-search";
@@ -176,8 +179,17 @@ function lastPublished(): MixSignals {
   return last[0];
 }
 
+const botReadings = vi.fn<(activity: BotActivity | null) => void>();
+
 function Probe() {
   useMixSignalsFeed(publish);
+  const botId = useTracySurfaceStore((state) =>
+    state.open ? state.botId : null,
+  );
+  const activity = useBotActivity(botId);
+  useEffect(() => {
+    botReadings(activity);
+  }, [activity]);
   return null;
 }
 
@@ -220,11 +232,6 @@ const REPLYING: BotSessionActivity = {
   step: null,
   requestId: null,
   reason: null,
-};
-const IDLE: BotSessionActivity = {
-  ...REPLYING,
-  state: "idle",
-  startedAt: null,
 };
 
 let botStream = new StubSession();
@@ -271,6 +278,7 @@ beforeEach(() => {
     now: NOW,
   });
   publish.mockReset();
+  botReadings.mockReset();
   __resetHostNotificationsStoreForTests();
   __resetAppLocalNotificationsStoreForTests();
   __resetNotificationsStoreForTests();
@@ -360,20 +368,39 @@ describe("useMixSignalsFeed", () => {
     expect(lastPublished().view).toBe("task");
   });
 
-  it("adds the Tracy bot's replying sessions to the working count", async () => {
-    useTracySurfaceStore.getState().openSurface(BOT_HOST_ID);
-    useTracySurfaceStore.getState().selectChannel(BOT_ID);
-    await mountAt("/");
-    setTurns("host-a", { "epic-1": ["agent-1"] });
-    expect(lastPublished().working).toBe(1);
+  // Two turns in each case: with a session counted twice, the working count
+  // reads 3, the cap, and not 2.
+  it.each<{
+    readonly name: string;
+    readonly planeTurns: readonly string[];
+    readonly stream: BotActivity;
+  }>([
+    {
+      name: "a bot's trunk and thread",
+      planeTurns: ["trunk-chat", "thread-chat"],
+      stream: { trunk: REPLYING, threads: { "thread-1": REPLYING } },
+    },
+    {
+      name: "a bot's trunk beside a separate agent under its epic",
+      planeTurns: ["trunk-chat", "agent-under-bot"],
+      stream: { trunk: REPLYING, threads: {} },
+    },
+  ])(
+    "counts $name once, with the bot's stream reporting the same turns and its channel opened",
+    async ({ planeTurns, stream }) => {
+      await mountAt("/");
+      setTurns("host-a", { [BOT_ID]: planeTurns });
+      expect(lastPublished().working).toBe(2);
 
-    emitBotActivity({
-      trunk: REPLYING,
-      threads: { "thread-1": REPLYING, "thread-2": IDLE },
-    });
-    expect(lastPublished().working).toBe(3);
+      act(() => {
+        useTracySurfaceStore.getState().openSurface(BOT_HOST_ID);
+        useTracySurfaceStore.getState().selectChannel(BOT_ID);
+      });
+      emitBotActivity(stream);
 
-    emitBotActivity({ trunk: IDLE, threads: {} });
-    expect(lastPublished().working).toBe(1);
-  });
+      // The stream's frame did land, so the count below has heard both sources.
+      expect(botReadings).toHaveBeenLastCalledWith(stream);
+      expect(lastPublished().working).toBe(2);
+    },
+  );
 });

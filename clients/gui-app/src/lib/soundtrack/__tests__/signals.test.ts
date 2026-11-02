@@ -1,11 +1,9 @@
 import { describe, expect, it } from "vitest";
-import type { BotActivity } from "@traycer/protocol/host/bot/schemas";
 import type { EpicAgentActivity } from "@/lib/agent-activity";
 import type { MergedNotificationRow } from "@/stores/notifications/merged-notifications";
 import { MIX_TUNING } from "../mix-tuning";
 import {
   agentTurnsInFlight,
-  botTurnsInFlight,
   feedSignalsOfRows,
   nextDoneExpiry,
   soundtrackViewOfLocation,
@@ -136,34 +134,5 @@ describe("agentTurnsInFlight", () => {
       ],
     ]);
     expect(agentTurnsInFlight(byHost)).toBe(3);
-  });
-});
-
-describe("botTurnsInFlight", () => {
-  const session = (state: "idle" | "replying" | "parked" | "failed") => ({
-    state,
-    startedAt: null,
-    step: null,
-    requestId: null,
-    reason: null,
-  });
-
-  it("counts the trunk and every thread that is replying, and no other state", () => {
-    const activity: BotActivity = {
-      trunk: session("replying"),
-      threads: {
-        a: session("replying"),
-        b: session("idle"),
-        c: session("failed"),
-        d: session("parked"),
-        e: session("replying"),
-      },
-    };
-    expect(botTurnsInFlight(activity)).toBe(3);
-  });
-
-  it("is zero with no reading, or a trunk no host has written", () => {
-    expect(botTurnsInFlight(null)).toBe(0);
-    expect(botTurnsInFlight({ trunk: null, threads: {} })).toBe(0);
   });
 });

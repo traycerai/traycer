@@ -1,10 +1,8 @@
 import { useEffect } from "react";
 import { useRouterState } from "@tanstack/react-router";
-import { useBotActivity } from "@/hooks/bots/use-bot-activity";
 import { MIX_TUNING } from "@/lib/soundtrack/mix-tuning";
 import {
   agentTurnsInFlight,
-  botTurnsInFlight,
   feedSignalsOfRows,
   nextDoneExpiry,
   soundtrackViewOfLocation,
@@ -12,18 +10,18 @@ import {
 } from "@/lib/soundtrack/signals";
 import { parseSystemTabOverlayView } from "@/lib/system-tab-overlay-search";
 import { useAgentActivityStore } from "@/stores/agent-activity-store";
-import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
 import { useMergedNotificationRows } from "@/stores/notifications/merged-notifications";
 
 /**
  * Publishes what the app is doing as `MixSignals`, whenever any of it changes:
  * the route's kind, the feed, and the agents with a turn in flight. A `done`
  * row ageing out is a change too, with nothing having been written anywhere, so
- * the next one to go schedules a read of its own. Identifiers are read here to
- * find the activity, and none of them reaches a signal.
+ * the next one to go schedules a read of its own.
  *
- * The bot's turns are read for the Tracy surface's channel alone, the one bot
- * this window already holds a subscription for.
+ * The activity plane is the one authority on turns. A bot's trunk and thread
+ * chats are in it under the bot's epic, so adding what the bot's own stream
+ * says would count them twice, and would move the mix when the person opens a
+ * channel with no new work started.
  */
 export function useMixSignalsFeed(
   publish: (signals: MixSignals) => void,
@@ -36,16 +34,11 @@ export function useMixSignalsFeed(
       ),
   });
   const rows = useMergedNotificationRows();
-  const agentTurns = useAgentActivityStore((state) =>
-    agentTurnsInFlight(state.byHost),
-  );
-  const botId = useTracySurfaceStore((state) =>
-    state.open ? state.botId : null,
-  );
-  const botTurns = botTurnsInFlight(useBotActivity(botId));
-  const working = Math.min(
-    agentTurns + botTurns,
-    MIX_TUNING.intensity.working.cap,
+  const working = useAgentActivityStore((state) =>
+    Math.min(
+      agentTurnsInFlight(state.byHost),
+      MIX_TUNING.intensity.working.cap,
+    ),
   );
 
   useEffect(() => {

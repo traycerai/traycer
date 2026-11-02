@@ -1,4 +1,3 @@
-import type { BotActivity } from "@traycer/protocol/host/bot/schemas";
 import { classifyNotificationLifecycle } from "@/lib/notifications/notification-lifecycle";
 import { isTracyPath, readActiveEpicIdFromPath } from "@/lib/routes";
 import type { EpicAgentActivity } from "@/lib/agent-activity";
@@ -93,7 +92,10 @@ export function nextDoneExpiry(
   return soonest;
 }
 
-/** Distinct agents with a turn in flight, across every epic of every host. */
+/**
+ * Distinct agents with a turn in flight, across every epic of every host. A
+ * bot's chats are among them, under the bot's epic.
+ */
 export function agentTurnsInFlight(
   byHost: ReadonlyMap<
     string,
@@ -107,13 +109,6 @@ export function agentTurnsInFlight(
     }
   }
   return agentIds.size;
-}
-
-/** The bot's trunk and threads with a turn running. */
-export function botTurnsInFlight(activity: BotActivity | null): number {
-  if (activity === null) return 0;
-  const sessions = [activity.trunk, ...Object.values(activity.threads)];
-  return sessions.filter((session) => session?.state === "replying").length;
 }
 
 export function sameMixSignals(left: MixSignals, right: MixSignals): boolean {
