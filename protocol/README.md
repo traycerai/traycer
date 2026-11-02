@@ -42,6 +42,21 @@ rewrites `tsconfig.build.json`'s extensionless relative specifiers (e.g.
 the published package works for both bundler consumers (host via esbuild, OSS
 clients via Vite/esbuild) and any future unbundled raw-Node-ESM consumer.
 
+## Test time
+
+A test file over 10 s on the merge run fails the `test (@traycer/protocol)` leg
+unless `test-budget-allowlist.json` names it with a reason
+(`scripts/test-budget.ts`).
+
+- A wait is a fake-clock advance or an awaited event, never real time.
+- A fuzz or parity sweep is sized by case count. The push run takes enough cases
+  to catch a regression, and `HOST_MEASUREMENT_FULL=1` runs the rest in the
+  nightly `measurements.yml`.
+- A whole host registry is validated once, in
+  `scripts/compat/__tests__/static-registries.test.ts`. A test validates the lines
+  it claims, as `{ [method]: hostRpcRegistry[method] }`; the tripwire beside that
+  file fails on a new whole-registry call.
+
 ## Three version systems — keep them separate
 
 This package participates in **three independent versioning schemes**. They are not

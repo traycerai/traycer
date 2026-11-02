@@ -12,6 +12,7 @@ import {
   foldTranscriptRows,
   projectTranscriptRows,
   turnKeysWithLaterOverlappingChanges,
+  type TranscriptRowProjectionInput,
 } from "@traycer/protocol/persistence/chat-transcript/row-projection";
 import {
   checkpointChangePaths,
@@ -547,29 +548,58 @@ function notificationAnchorEvent(ts: number): ChatEvent {
 // Parity assertions
 // ---------------------------------------------------------------------------
 
-function roundtrip<T>(value: T): T {
-  return JSON.parse(JSON.stringify(value)) as T;
+/**
+ * What a chat should project to, as JSON. Every op compares whole histories, and
+ * a deep `toEqual` of them was a quarter of this file's time, so equal JSON
+ * answers first; a difference, including one only of key order, still gets
+ * `toEqual`'s verdict and its diff.
+ */
+interface FreshProjections {
+  readonly oracleRows: string;
+  readonly projectedRows: string;
+  readonly freshSkeleton: string;
+}
+
+function freshProjections(
+  input: TranscriptRowProjectionInput,
+): FreshProjections {
+  return {
+    oracleRows: JSON.stringify(legacyProjectTranscriptRows(input)),
+    projectedRows: JSON.stringify(projectTranscriptRows(input)),
+    freshSkeleton: JSON.stringify(
+      buildRowSkeleton(input, transcriptPreviewProjection, null),
+    ),
+  };
+}
+
+function expectSameJson(actual: string, expected: string, label: string): void {
+  if (actual === expected) return;
+  expect(JSON.parse(actual), label).toEqual(JSON.parse(expected));
 }
 
 function assertRowParity(store: RowFoldStore, label: string): void {
-  const input = store.projectionInput();
+  assertRowParityWith(store, label, freshProjections(store.projectionInput()));
+}
 
-  const storeRows = roundtrip(store.rowsSorted());
-  const oracleRows = roundtrip(legacyProjectTranscriptRows(input));
-  expect(storeRows, `${label}: rows vs legacy oracle`).toEqual(oracleRows);
-
-  const projectedRows = roundtrip(projectTranscriptRows(input));
-  expect(
-    projectedRows,
-    `${label}: projectTranscriptRows vs legacy oracle`,
-  ).toEqual(oracleRows);
-
-  const storeSkeleton = roundtrip(store.skeletonSorted());
-  const freshSkeleton = roundtrip(
-    buildRowSkeleton(input, transcriptPreviewProjection, null),
+function assertRowParityWith(
+  store: RowFoldStore,
+  label: string,
+  { oracleRows, projectedRows, freshSkeleton }: FreshProjections,
+): void {
+  expectSameJson(
+    JSON.stringify(store.rowsSorted()),
+    oracleRows,
+    `${label}: rows vs legacy oracle`,
   );
-  expect(storeSkeleton, `${label}: skeleton vs buildRowSkeleton`).toEqual(
+  expectSameJson(
+    projectedRows,
+    oracleRows,
+    `${label}: projectTranscriptRows vs legacy oracle`,
+  );
+  expectSameJson(
+    JSON.stringify(store.skeletonSorted()),
     freshSkeleton,
+    `${label}: skeleton vs buildRowSkeleton`,
   );
 
   const orders = store.allOrders();
@@ -1405,14 +1435,15 @@ function assertCheckpointLoadMechanism(
 }
 
 describe("P1/P2: checkpoint-heavy fuzz", () => {
-  const SEEDS = 8;
+  // Every push runs five seeds; the nightly `measurements.yml` runs all eight.
+  const SEEDS = process.env.HOST_MEASUREMENT_FULL === "1" ? 8 : 5;
   /**
    * Every op checks the whole history against the oracle, so a seed's cost
    * grows with the square of this: 100 ops took 100 ms locally, 250 took 380
    * and 500 took 1,445. At 180, with {@link CHECKPOINT_HEAVY_OP_SHARE}, a seed
-   * takes about 0.2 s locally, still draws every op kind the family enables,
-   * and the eight seeds together carry more checkpoint ops and supersedes than
-   * 500 ops did without the share. Measure on CI before raising it.
+   * takes about 0.2 s locally and still draws every op kind the family enables,
+   * and five seeds carry a mix of checkpoint ops and supersedes the coverage
+   * test below holds to. Measure on CI before raising it.
    */
   const OPS = 180;
   const totals = newCheckpointFuzzStats();
@@ -3648,11 +3679,51 @@ function mixedScenarioSteps(): readonly MixedScenarioStep[] {
   return steps;
 }
 
+// One copy of the scenario for the whole sweep, because its block ids come from
+// `freshId`: every cut then reaches the same chat at the same step.
+const MIXED_STEPS = mixedScenarioSteps();
+
 /** Every cut point of the scenario: steps 1..cut in one build, the rest in the other. */
 const MIXED_CUT_POINTS: readonly number[] = Array.from(
-  { length: mixedScenarioSteps().length - 1 },
+  { length: MIXED_STEPS.length - 1 },
   (_, index) => index + 1,
 );
+
+/**
+ * The fresh projections, once per chat state. They are pure functions of the
+ * chat and not of which build folded it, and the sweep reaches the same few
+ * dozen states from over a hundred cuts. Every store's own rows, skeleton and
+ * order keys are still read and compared at every step.
+ */
+const mixedFreshProjections = new Map<string, FreshProjections>();
+
+function assertMixedRowParity(store: RowFoldStore, label: string): void {
+  const input = store.projectionInput();
+  const key = JSON.stringify(input);
+  let projections = mixedFreshProjections.get(key);
+  if (projections === undefined) {
+    projections = freshProjections(input);
+    mixedFreshProjections.set(key, projections);
+  }
+  assertRowParityWith(store, label, projections);
+}
+
+/**
+ * The steps before a cut, in one build. They are unchecked because their parity
+ * is what "(a) and (b) every step in one build" prove with the same inputs; what
+ * each cut adds is the steps after the hand-over.
+ */
+function applyPrefixUnchecked(
+  store: RowFoldStore,
+  build: RowFoldBuild,
+  steps: readonly MixedScenarioStep[],
+  cut: number,
+): void {
+  for (const step of steps.slice(0, cut)) {
+    const result = store.applyWith(build, step.change);
+    expect(result.continued, `prefix: ${step.label}`).toBe(true);
+  }
+}
 
 function applyStepRange(
   store: RowFoldStore,
@@ -3669,7 +3740,7 @@ function applyStepRange(
     const label = `${context}: ${step.label} (step ${String(index + 1)}, build ${build.name})`;
     const result = store.applyWith(build, step.change);
     expect(result.continued, label).toBe(true);
-    assertRowParity(store, label);
+    assertMixedRowParity(store, label);
   }
 }
 
@@ -3704,7 +3775,7 @@ describe("i. mixed builds: a fold state the other build wrote", () => {
   // One test per cut point: each checks every later step against the oracle,
   // and the whole sweep is more than vitest's 5 s timeout on a CI runner.
   it("the cut points hand the v1.4.1 reader a capped list", () => {
-    const steps = mixedScenarioSteps();
+    const steps = MIXED_STEPS;
     const currentLengths = spanKeysBeforeLengths(CURRENT_ROW_FOLD_BUILD, steps);
     const v141Lengths = spanKeysBeforeLengths(V1_4_1_ROW_FOLD_BUILD, steps);
     const capped = currentLengths.flatMap((length, index) => {
@@ -3719,19 +3790,27 @@ describe("i. mixed builds: a fold state the other build wrote", () => {
     ).toBeGreaterThan(0);
   });
 
+  it.each([
+    ["this build", CURRENT_ROW_FOLD_BUILD],
+    ["the v1.4.1 build", V1_4_1_ROW_FOLD_BUILD],
+  ] as const)("(a) and (b) every step in one build: %s", (_name, build) => {
+    const store = new RowFoldStore("chat-mixed-cut");
+    applyStepRange(
+      store,
+      build,
+      MIXED_STEPS,
+      0,
+      MIXED_STEPS.length,
+      "one build",
+    );
+  });
+
   it.each(MIXED_CUT_POINTS)(
     "(a) cut %i: a state this build wrote, continued by the v1.4.1 reader",
     (cut) => {
-      const steps = mixedScenarioSteps();
-      const store = new RowFoldStore(`chat-mixed-a-${String(cut)}`);
-      applyStepRange(
-        store,
-        CURRENT_ROW_FOLD_BUILD,
-        steps,
-        0,
-        cut,
-        `cut=${String(cut)}`,
-      );
+      const steps = MIXED_STEPS;
+      const store = new RowFoldStore("chat-mixed-cut");
+      applyPrefixUnchecked(store, CURRENT_ROW_FOLD_BUILD, steps, cut);
       applyStepRange(
         store,
         V1_4_1_ROW_FOLD_BUILD,
@@ -3746,16 +3825,9 @@ describe("i. mixed builds: a fold state the other build wrote", () => {
   it.each(MIXED_CUT_POINTS)(
     "(b) cut %i: a state the v1.4.1 build wrote, continued by this build",
     (cut) => {
-      const steps = mixedScenarioSteps();
-      const store = new RowFoldStore(`chat-mixed-b-${String(cut)}`);
-      applyStepRange(
-        store,
-        V1_4_1_ROW_FOLD_BUILD,
-        steps,
-        0,
-        cut,
-        `cut=${String(cut)}`,
-      );
+      const steps = MIXED_STEPS;
+      const store = new RowFoldStore("chat-mixed-cut");
+      applyPrefixUnchecked(store, V1_4_1_ROW_FOLD_BUILD, steps, cut);
       applyStepRange(
         store,
         CURRENT_ROW_FOLD_BUILD,
@@ -3768,7 +3840,7 @@ describe("i. mixed builds: a fold state the other build wrote", () => {
   );
 
   it("(c) new, old, new over one chat", () => {
-    const steps = mixedScenarioSteps();
+    const steps = MIXED_STEPS;
     const alternating = new RowFoldStore("chat-mixed-c-alternating");
     const newOnly = new RowFoldStore("chat-mixed-c-new-only");
     const oldOnly = new RowFoldStore("chat-mixed-c-old-only");

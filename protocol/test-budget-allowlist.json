@@ -1,0 +1,3 @@
+{
+  "src/framework/__tests__/lazy-schema-standin-ops-scan.test.ts": "Parses every production source file in the repository with the TypeScript compiler, and that scan is the file's claim: 7 to 12 s on the runner."
+}

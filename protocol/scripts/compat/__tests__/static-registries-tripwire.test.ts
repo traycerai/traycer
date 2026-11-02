@@ -389,6 +389,114 @@ function sortedSiteKeys(
     .sort();
 }
 
+const HOST_REGISTRY_NAMES = new Set([
+  "hostRpcRegistry",
+  "hostStreamRpcRegistry",
+]);
+const HOST_REGISTRY_VALIDATORS = new Set([
+  "validateVersionedRpcRegistry",
+  "validateVersionedStreamRpcRegistry",
+]);
+
+function isHostRegistryName(node: ts.Expression): boolean {
+  return ts.isIdentifier(node) && HOST_REGISTRY_NAMES.has(node.text);
+}
+
+/** The lines of `text` that hand a validator a whole host registry, or a copy of one. */
+function wholeHostRegistryValidationLines(
+  fileName: string,
+  text: string,
+): number[] {
+  const source = ts.createSourceFile(fileName, text, ts.ScriptTarget.Latest);
+  const lines: number[] = [];
+  const visit = (node: ts.Node): void => {
+    if (ts.isCallExpression(node)) {
+      const name = calleeName(node);
+      const argument = node.arguments[0];
+      if (
+        name !== null &&
+        HOST_REGISTRY_VALIDATORS.has(name) &&
+        argument !== undefined &&
+        (isHostRegistryName(argument) ||
+          (ts.isObjectLiteralExpression(argument) &&
+            argument.properties.some(
+              (property) =>
+                ts.isSpreadAssignment(property) &&
+                isHostRegistryName(property.expression),
+            )))
+      ) {
+        lines.push(
+          source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1,
+        );
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  return lines;
+}
+
+describe("the one whole-registry validation", () => {
+  // A walk of a host registry costs about a second of CPU per call, under the
+  // file budget, so the budget would not see a new one. `static-registries.test.ts`
+  // holds the one walk, through `STATIC_REGISTRIES`; a test validates the lines
+  // it claims, as `{ [method]: hostRpcRegistry[method] }`.
+  it("no test file validates a whole host registry", () => {
+    const listing = execFileSync(
+      "git",
+      [
+        "ls-files",
+        "-z",
+        "--cached",
+        "--others",
+        "--exclude-standard",
+        "--",
+        "*.test.ts",
+      ],
+      { cwd: PROTOCOL_ROOT, encoding: "utf8" },
+    );
+    const found: string[] = [];
+    for (const relative of listing.split("\0")) {
+      const full = path.join(PROTOCOL_ROOT, relative);
+      if (relative.length === 0 || !existsSync(full)) continue;
+      const text = readFileSync(full, "utf8");
+      if (!text.includes("validateVersioned")) continue;
+      for (const line of wholeHostRegistryValidationLines(relative, text)) {
+        found.push(`${relative}:${String(line)}`);
+      }
+    }
+    expect(found).toEqual([]);
+  });
+
+  it.each([
+    ["the unary registry", "validateVersionedRpcRegistry(hostRpcRegistry);", 1],
+    [
+      "the stream registry inside an assertion",
+      "expect(() => validateVersionedStreamRpcRegistry(hostStreamRpcRegistry)).not.toThrow();",
+      1,
+    ],
+    [
+      "a copy of the registry",
+      'validateVersionedRpcRegistry({ ...hostRpcRegistry, "a.b": line });',
+      1,
+    ],
+    [
+      "the lines a test claims",
+      'validateVersionedRpcRegistry({ "a.b": hostRpcRegistry["a.b"] });',
+      0,
+    ],
+    [
+      "a registry of the test's own",
+      "validateVersionedRpcRegistry(registry);",
+      0,
+    ],
+  ] as const)("counts %s", (_name, text, count) => {
+    expect(wholeHostRegistryValidationLines("t.test.ts", text)).toHaveLength(
+      count,
+    );
+  });
+});
+
 describe("static registry tripwire", () => {
   it("finds a factory CallExpression and ignores the name in a comment", () => {
     expect(

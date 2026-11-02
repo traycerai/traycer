@@ -225,6 +225,9 @@
   "nx": {
     "targets": {
       "test": {
+        "outputs": [
+          "{projectRoot}/test-results/junit.xml"
+        ],
         "inputs": [
           "default",
           "^production",
