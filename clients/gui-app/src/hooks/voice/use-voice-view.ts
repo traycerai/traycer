@@ -41,8 +41,11 @@ import { useVoiceSessionStore } from "@/stores/voice/voice-session-store";
 export interface VoiceViewHandle {
   /** The snapshot from what the app holds now. */
   readonly current: () => VoiceView;
-  /** What {@link VoiceViewPaletteItems} hands over; the view reads the latest. */
-  readonly setPaletteItems: (items: VoicePaletteItems) => void;
+  /** What {@link VoiceViewPaletteItems} hands over, and the context it composed them for. */
+  readonly setPaletteItems: (
+    items: VoicePaletteItems,
+    composedFor: string | null,
+  ) => void;
 }
 
 /** The focused ref's task tab, unless a phase migration holds it: no task is shown then. */
@@ -188,57 +191,131 @@ function readVoiceView(
   });
 }
 
-/** Which page is in front, to tell a move of the view from every other store change. */
-function viewKeyOf(pathname: string): string {
+/** Which page is in front, to tell a move of the page from every other store change. */
+function pageKeyOf(pathname: string): string {
   const focused = selectHostFocusedRef(useTabsStore.getState());
   const section =
     focused?.kind === "settings" ? settingsSectionIdOf(pathname) : null;
+  return JSON.stringify([focused?.kind ?? null, focused?.id ?? null, section]);
+}
+
+function ownerKeyOf(): string | null {
+  return getActiveTileOwner()?.tileInstanceId ?? null;
+}
+
+/**
+ * What a palette composition depends on, so rows are never paired with a page
+ * they were not composed for. Reads the same facts as
+ * {@link useVoiceCommandContext}, there through subscriptions.
+ */
+function paletteContextKey(
+  pathname: string,
+  focused: TabRef | null,
+  paneId: string | null,
+): string {
   return JSON.stringify([
+    pathname,
     focused?.kind ?? null,
     focused?.id ?? null,
-    getActiveTileOwner()?.tileInstanceId ?? null,
-    section,
+    paneId,
   ]);
 }
+
+function livePaletteContextKey(pathname: string): string {
+  const focused = selectHostFocusedRef(useTabsStore.getState());
+  const tabId = focused?.kind === "epic" ? focused.id : null;
+  const canvas = useEpicCanvasStore.getState();
+  const paneId =
+    tabId === null ? null : (canvas.canvasByTabId[tabId]?.activePaneId ?? null);
+  return paletteContextKey(pathname, focused, paneId);
+}
+
+interface PublishedPalette {
+  readonly items: VoicePaletteItems;
+  readonly composedFor: string | null;
+}
+
+const NO_PALETTE: PublishedPalette = {
+  items: NO_PALETTE_ITEMS,
+  composedFor: null,
+};
 
 /**
  * The page the voice router sees (Tracy Bots voice, VT9), beside its
  * directory (`useVoiceDirectory`). Composed on demand, never on render, from
  * the tabs store, the route, the active tile owner and its chat session, with
- * the palette's rows from {@link VoiceViewPaletteItems}. While a session runs
- * it also moves the store's `viewGeneration` with the page in front.
+ * the palette's rows from {@link VoiceViewPaletteItems}. While the palette has
+ * not yet composed for the page in front, the view offers no registry rows.
+ *
+ * While a session runs it also moves the store's `viewGeneration` with the
+ * page in front. The owner is compared once its store has settled: a tile
+ * replacing its find adapter gives up its target and registers again within
+ * one tick, and is the same owner before and after.
  */
 export function useVoiceView(enabled: boolean): VoiceViewHandle {
   const router = useRouter();
-  const paletteRef = useRef<VoicePaletteItems>(NO_PALETTE_ITEMS);
+  const paletteRef = useRef<PublishedPalette>(NO_PALETTE);
+  const settleOwnerRef = useRef<() => void>(() => undefined);
 
   useEffect(() => {
     if (!enabled) return undefined;
-    let last = viewKeyOf(router.history.location.pathname);
-    const check = (): void => {
-      const next = viewKeyOf(router.history.location.pathname);
-      if (next === last) return;
-      last = next;
+    const viewChanged = (): void => {
       useVoiceSessionStore.getState().viewChanged();
     };
+    let page = pageKeyOf(router.history.location.pathname);
+    const checkPage = (): void => {
+      const next = pageKeyOf(router.history.location.pathname);
+      if (next === page) return;
+      page = next;
+      viewChanged();
+    };
+    let owner = ownerKeyOf();
+    const settleOwner = (): void => {
+      const next = ownerKeyOf();
+      if (next === owner) return;
+      owner = next;
+      viewChanged();
+    };
+    let ownerCheckQueued = false;
+    let disposed = false;
+    const queueOwnerCheck = (): void => {
+      if (ownerCheckQueued) return;
+      ownerCheckQueued = true;
+      queueMicrotask(() => {
+        ownerCheckQueued = false;
+        if (!disposed) settleOwner();
+      });
+    };
+    settleOwnerRef.current = settleOwner;
     const unsubscribers = [
-      useTabsStore.subscribe(check),
-      useTileFindStore.subscribe(check),
-      router.history.subscribe(check),
+      useTabsStore.subscribe(checkPage),
+      useTileFindStore.subscribe(queueOwnerCheck),
+      router.history.subscribe(checkPage),
     ];
     return () => {
+      disposed = true;
+      settleOwnerRef.current = () => undefined;
       for (const unsubscribe of unsubscribers) unsubscribe();
     };
   }, [enabled, router]);
 
-  const current = useCallback(
-    (): VoiceView =>
-      readVoiceView(router.history.location.pathname, paletteRef.current),
-    [router],
+  const current = useCallback((): VoiceView => {
+    settleOwnerRef.current();
+    const pathname = router.history.location.pathname;
+    const palette = paletteRef.current;
+    return readVoiceView(
+      pathname,
+      palette.composedFor === livePaletteContextKey(pathname)
+        ? palette.items
+        : NO_PALETTE_ITEMS,
+    );
+  }, [router]);
+  const setPaletteItems = useCallback(
+    (items: VoicePaletteItems, composedFor: string | null): void => {
+      paletteRef.current = { items, composedFor };
+    },
+    [],
   );
-  const setPaletteItems = useCallback((items: VoicePaletteItems): void => {
-    paletteRef.current = items;
-  }, []);
   return useMemo(
     () => ({ current, setPaletteItems }),
     [current, setPaletteItems],
@@ -251,7 +328,10 @@ export function useVoiceView(enabled: boolean): VoiceViewHandle {
  * active tab behind Home and Settings), and its focused pane as the group
  * the opener's rows open into.
  */
-function useVoiceCommandContext(): CommandContext {
+function useVoiceCommandContext(): {
+  readonly ctx: CommandContext;
+  readonly composedFor: string;
+} {
   const router = useCommandPaletteRouter();
   const pathname = useRouterPathname(useRouter());
   const focused = useTabsStore(selectHostFocusedRef);
@@ -264,7 +344,7 @@ function useVoiceCommandContext(): CommandContext {
       ? null
       : (state.canvasByTabId[focusedTabId]?.activePaneId ?? null),
   );
-  return useMemo(() => {
+  const ctx = useMemo(() => {
     const inTask = tab !== null && tab.surfaceMode?.kind !== "phase-migration";
     return {
       pathname,
@@ -275,6 +355,7 @@ function useVoiceCommandContext(): CommandContext {
       targetGroupId: inTask ? paneId : null,
     };
   }, [paneId, pathname, router, tab]);
+  return { ctx, composedFor: paletteContextKey(pathname, focused, paneId) };
 }
 
 /**
@@ -285,10 +366,13 @@ function useVoiceCommandContext(): CommandContext {
  * idle voice.
  */
 export function VoiceViewPaletteItems(props: {
-  readonly onItems: (items: VoicePaletteItems) => void;
+  readonly onItems: (
+    items: VoicePaletteItems,
+    composedFor: string | null,
+  ) => void;
 }): null {
   const { onItems } = props;
-  const ctx = useVoiceCommandContext();
+  const { ctx, composedFor } = useVoiceCommandContext();
   const actionItems = actionsSource.useItems(ctx);
   const navItems = navigationSource.useItems(ctx);
   const sectionItems = SETTINGS_SUBPAGE.useItems(ctx);
@@ -297,26 +381,30 @@ export function VoiceViewPaletteItems(props: {
   const artifactItems = useArtifactsOpenerItems(ctx);
 
   useEffect(() => {
-    onItems({
-      // The opener's creation leaves are not tiles of the task.
-      tiles: [
-        ...agentItems.filter((item) => item.agentTreeRow !== undefined),
-        ...artifactItems,
-      ],
-      sections: sectionItems,
-      tasks: taskItems,
-      themes: THEME_SUBPAGE_ITEMS,
-      commands: [...navItems, ...actionItems],
-    });
+    onItems(
+      {
+        // The opener's creation leaves are not tiles of the task.
+        tiles: [
+          ...agentItems.filter((item) => item.agentTreeRow !== undefined),
+          ...artifactItems,
+        ],
+        sections: sectionItems,
+        tasks: taskItems,
+        themes: THEME_SUBPAGE_ITEMS,
+        commands: [...navItems, ...actionItems],
+      },
+      composedFor,
+    );
   }, [
     actionItems,
     agentItems,
     artifactItems,
+    composedFor,
     navItems,
     onItems,
     sectionItems,
     taskItems,
   ]);
-  useEffect(() => () => onItems(NO_PALETTE_ITEMS), [onItems]);
+  useEffect(() => () => onItems(NO_PALETTE_ITEMS, null), [onItems]);
   return null;
 }

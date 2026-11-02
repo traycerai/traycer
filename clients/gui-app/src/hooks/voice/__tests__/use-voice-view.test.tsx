@@ -15,6 +15,8 @@ import {
   type ChatApprovalState,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import { CommandPaletteRouterContext } from "@/components/command-palette/command-palette-context";
+import { useRegisterTileFindAdapter } from "@/components/epic-canvas/tile-find/tile-find-adapter-context";
+import { TileFindScope } from "@/components/epic-canvas/tile-find/tile-find-scope";
 import {
   useVoiceView,
   VoiceViewPaletteItems,
@@ -48,6 +50,7 @@ import type { TabRef } from "@/stores/tabs/types";
 import {
   createUnavailableTileFindAdapter,
   useTileFindStore,
+  type TileFindAdapter,
 } from "@/stores/tile-find";
 import { useVoiceSessionStore } from "@/stores/voice/voice-session-store";
 
@@ -598,15 +601,36 @@ describe("the view's generation", () => {
     expect(generation()).toBe(before + 2);
   });
 
-  it("moves once per change of the active tile's owner", () => {
+  it("moves once per change of the active tile's owner, once the tile-find store has settled", async () => {
     const task = taskWithWorkingAgent();
     mount("/", { enabled: true, palette: false });
     const before = generation();
 
-    act(() => {
+    await act(() => {
       activateTile(task, SPEC);
+      return Promise.resolve();
     });
 
+    expect(generation()).toBe(before + 1);
+  });
+
+  it("hands a route made in the same tick the moved generation, and moves it once", async () => {
+    const task = taskWithWorkingAgent();
+    const mounted = mount("/", { enabled: true, palette: false });
+    const before = generation();
+    const seen: Array<{ view: VoiceView; generation: number }> = [];
+
+    await act(() => {
+      activateTile(task, SPEC);
+      const view = mounted.handle().current();
+      seen.push({ view, generation: generation() });
+      return Promise.resolve();
+    });
+
+    expect(seen.at(0)?.view.page).toMatchObject({ kind: "task", tile: "Plan" });
+    expect(seen.at(0)?.view.generation).toBe(before + 1);
+    expect(seen.at(0)?.generation).toBe(before + 1);
+    // The microtask that follows finds the owner already counted.
     expect(generation()).toBe(before + 1);
   });
 
@@ -646,22 +670,19 @@ describe("the view's generation", () => {
     expect(generation()).toBe(before);
   });
 
-  it("does not move for a change in the tile-find store that leaves the owner as it is", () => {
+  it("does not move for a write to the tile-find store that leaves the owner as it is", async () => {
     taskWithWorkingAgent();
     mount("/", { enabled: true, palette: false });
     const before = generation();
 
-    act(() => {
+    await act(() => {
       useTileFindStore.getState().setQuery(AGENT.instanceId, "needle");
-    });
-    const owner = useTileFindStore.getState().activeOwner;
-    act(() => {
-      useTileFindStore.setState({
-        activeOwner: owner === null ? null : { ...owner },
-      });
+      return Promise.resolve();
     });
 
-    expect(owner?.tileInstanceId).toBe(AGENT.instanceId);
+    expect(useTileFindStore.getState().activeOwner?.tileInstanceId).toBe(
+      AGENT.instanceId,
+    );
     expect(generation()).toBe(before);
   });
 
@@ -679,6 +700,152 @@ describe("the view's generation", () => {
     act(() => {
       useTabsStore.setState(stripOf([task.ref, HISTORY_TAB], task.ref));
     });
+    expect(generation()).toBe(before + 1);
+  });
+});
+
+describe("a tile's find registration", () => {
+  function Adapter(props: { adapter: TileFindAdapter }): null {
+    useRegisterTileFindAdapter(props.adapter);
+    return null;
+  }
+
+  function Scope(props: {
+    tile: EpicNodeRef;
+    task: TaskTab;
+    adapter: TileFindAdapter;
+  }): ReactNode {
+    return (
+      <TileFindScope
+        node={props.tile}
+        viewTabId={props.task.tabId}
+        tileId={`${props.tile.instanceId}-pane`}
+        epicId={EPIC_ID}
+        isActive
+      >
+        <Adapter adapter={props.adapter} />
+      </TileFindScope>
+    );
+  }
+
+  function adapterFor(tile: EpicNodeRef): TileFindAdapter {
+    return createUnavailableTileFindAdapter({
+      tileInstanceId: tile.instanceId,
+      tileKind: tile.type === "chat" ? "chat" : "spec",
+      message: null,
+    });
+  }
+
+  function ownerId(): string | null {
+    return useTileFindStore.getState().activeOwner?.tileInstanceId ?? null;
+  }
+
+  /** A task in front, the hook running, and the agent's tile mounted under its real find scope. */
+  async function mountedScope() {
+    const task = openTaskTab();
+    useTabsStore.setState(stripOf([task.ref], task.ref));
+    const mounted = mount("/", { enabled: true, palette: false });
+    const agentScope = render(
+      <Scope tile={AGENT} task={task} adapter={adapterFor(AGENT)} />,
+    );
+    await act(() => Promise.resolve());
+    return { task, mounted, agentScope };
+  }
+
+  it("keeps the generation when the tile replaces its adapter, as a diff refresh does", async () => {
+    const { task, agentScope } = await mountedScope();
+    expect(ownerId()).toBe(AGENT.instanceId);
+    const before = generation();
+
+    await act(() => {
+      agentScope.rerender(
+        <Scope tile={AGENT} task={task} adapter={adapterFor(AGENT)} />,
+      );
+      return Promise.resolve();
+    });
+
+    expect(ownerId()).toBe(AGENT.instanceId);
+    expect(generation()).toBe(before);
+  });
+
+  it("moves the generation for each change of owner across ticks, A to B and back to A", async () => {
+    const { task, agentScope } = await mountedScope();
+    const before = generation();
+
+    await act(() => {
+      render(<Scope tile={SPEC} task={task} adapter={adapterFor(SPEC)} />);
+      return Promise.resolve();
+    });
+    expect(ownerId()).toBe(SPEC.instanceId);
+    expect(generation()).toBe(before + 1);
+
+    await act(() => {
+      agentScope.rerender(
+        <Scope tile={AGENT} task={task} adapter={adapterFor(AGENT)} />,
+      );
+      return Promise.resolve();
+    });
+    expect(ownerId()).toBe(AGENT.instanceId);
+    expect(generation()).toBe(before + 2);
+  });
+});
+
+describe("rows composed for a page that has since changed", () => {
+  it("are not offered after the focused tab changes and before the palette publishes again, and the generation is the new page's", () => {
+    const task = taskWithWorkingAgent();
+    const mounted = mount("/", { enabled: true, palette: true });
+    const before = generation();
+    expect(actionsOf(mounted.handle().current())).toContain(
+      "open:chats:chat-1",
+    );
+    const seen: VoiceView[] = [];
+
+    act(() => {
+      useTabsStore.setState(stripOf([task.ref, HISTORY_TAB], HISTORY_TAB));
+      // Before React has re-rendered the palette for History.
+      seen.push(mounted.handle().current());
+    });
+
+    expect(seen.at(0)).toMatchObject({
+      page: { kind: "history" },
+      agent: null,
+      rows: [],
+      generation: before + 1,
+    });
+
+    const republished = mounted.handle().current();
+    expect(actionsOf(republished)).toContain("action:app.history.open");
+    expect(
+      actionsOf(republished).filter((id) => id.startsWith("open:chats:")),
+    ).toEqual([]);
+    expect(republished.generation).toBe(before + 1);
+    expect(generation()).toBe(before + 1);
+  });
+
+  it("are not offered after the Settings section changes and before the palette publishes again", async () => {
+    const task = openTaskTab();
+    useTabsStore.setState(stripOf([task.ref, SETTINGS_TAB], SETTINGS_TAB));
+    const mounted = mount("/settings/appearance", {
+      enabled: true,
+      palette: true,
+    });
+    const before = generation();
+    expect(actionsOf(mounted.handle().current())).toContain(
+      "nav:settings/keybindings",
+    );
+    const seen: VoiceView[] = [];
+
+    await act(() => {
+      mounted.router.history.push("/settings/keybindings");
+      seen.push(mounted.handle().current());
+      return Promise.resolve();
+    });
+
+    expect(seen.at(0)?.rows).toEqual([]);
+    expect(seen.at(0)?.page).toMatchObject({ kind: "settings" });
+    const republished = mounted.handle().current();
+    expect(actionsOf(republished)).toContain("nav:settings/appearance");
+    expect(actionsOf(republished)).not.toContain("nav:settings/keybindings");
     expect(generation()).toBe(before + 1);
   });
 });

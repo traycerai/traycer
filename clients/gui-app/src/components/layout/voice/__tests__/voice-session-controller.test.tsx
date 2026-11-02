@@ -1,4 +1,11 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  RouterContextProvider,
+  createMemoryHistory,
+  createRootRoute,
+  createRoute,
+  createRouter,
+} from "@tanstack/react-router";
 import { act, cleanup, render } from "@testing-library/react";
 import type { BotQuestionSettlement } from "@traycer/protocol/persistence/epic/messages";
 import type { OpenTextBlock } from "@traycer/protocol/persistence/epic/open-harness-records";
@@ -11,6 +18,7 @@ import {
   vi,
   type Mock,
 } from "vitest";
+import { z } from "zod";
 import { create, type StoreApi } from "zustand";
 import type {
   BotActivity,
@@ -21,6 +29,8 @@ import type { BotSubscriptionResult } from "@/hooks/bots/use-bot-subscription";
 import type { StreamFrameEnvelope } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type { SystemSuspendCause } from "@traycer-clients/shared/platform/runner-host";
 import type { StreamMethodSupport } from "@traycer-clients/shared/host-transport/ws-stream-client";
+import { CommandPaletteRouterContext } from "@/components/command-palette/command-palette-context";
+import type { KeybindingRouter } from "@/lib/keybindings/dispatch";
 import { MockWsStreamClient } from "@/components/epic-canvas/pr/__tests__/pr-stream-test-fixtures";
 import type { VoiceEngineEvents } from "@/lib/voice/engine";
 import type { ReplyRow } from "@/lib/voice/focused-replies";
@@ -326,6 +336,8 @@ const fake = vi.hoisted(() => {
                   botId,
                   threadId,
                   itemId: null,
+                  actionId: null,
+                  agentId: null,
                 },
                 span: { fromSegment: 0, toSegment: segments - 1 },
                 uncertain,
@@ -416,6 +428,8 @@ const fake = vi.hoisted(() => {
 });
 
 vi.mock("@/providers/use-runner-host", () => ({
+  // The page's actions are listed for a window with no native shell of its own.
+  useRunnerHostOrNull: () => null,
   useRunnerHost: () => ({
     requestMicrophoneAccess: () => fake.micAccess.promise,
     onSystemSuspended: (handler: (cause: SystemSuspendCause) => void) => {
@@ -644,6 +658,10 @@ vi.mock(
     useUsageSummaryForClient: () => ({ data: undefined, isError: false }),
   }),
 );
+// The task history a host serves, which the page's task rows read.
+vi.mock("@/hooks/home/use-history-query", () => ({
+  useHistoryQuery: () => ({ data: undefined }),
+}));
 vi.mock("@/hooks/voice/use-voice-availability-query", () => ({
   useVoiceAvailabilityQuery: () => ({ data: true }),
 }));
@@ -889,11 +907,46 @@ const ACCEPTED = {
 
 let queryClient = new QueryClient();
 
+/** The palette's router seam, which the voice's page actions are listed through; none of them runs here. */
+const KEYBINDING_ROUTER: KeybindingRouter = {
+  getPathname: () => "/",
+  navigateHome: () => undefined,
+  navigateSettings: () => undefined,
+  navigateToEpic: () => undefined,
+  navigateToEpicTab: () => undefined,
+  navigateToEpicList: () => undefined,
+  navigateSettingsSection: () => undefined,
+  navigateToTabIntent: () => undefined,
+  goBack: () => undefined,
+  goForward: () => undefined,
+  isHistoryNavAvailable: () => false,
+  canGoBack: () => false,
+  canGoForward: () => false,
+};
+
+/** A router over a memory history, as the app mounts the controller under one. */
+function makeRouter() {
+  const rootRoute = createRootRoute();
+  const anyRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: "$",
+    component: () => null,
+  });
+  return createRouter({
+    routeTree: rootRoute.addChildren([anyRoute]),
+    history: createMemoryHistory({ initialEntries: ["/"] }),
+  });
+}
+
 function renderController(): void {
   queryClient = new QueryClient();
   render(
     <QueryClientProvider client={queryClient}>
-      <VoiceSessionController />
+      <RouterContextProvider router={makeRouter()}>
+        <CommandPaletteRouterContext.Provider value={KEYBINDING_ROUTER}>
+          <VoiceSessionController />
+        </CommandPaletteRouterContext.Provider>
+      </RouterContextProvider>
     </QueryClientProvider>,
   );
 }
@@ -3395,6 +3448,8 @@ describe("a rail put back against a newer navigation", () => {
                   botId,
                   threadId: null,
                   itemId: null,
+                  actionId: null,
+                  agentId: null,
                 },
                 span: { fromSegment: 0, toSegment: 0 },
                 uncertain: false,
@@ -3973,5 +4028,94 @@ describe("two statuses asked inside the wait", () => {
       expect.stringContaining("Release bot"),
       "d-2",
     );
+  });
+});
+
+describe("the page in front", () => {
+  /** The answer the router gives, whatever was asked: one page action, as the model would copy it. */
+  function actAnswer(actionId: string): unknown {
+    return {
+      output: [
+        {
+          type: "message",
+          content: [
+            {
+              type: "output_text",
+              text: JSON.stringify({
+                action: "act",
+                target: {
+                  environmentId: null,
+                  botId: null,
+                  threadId: null,
+                  itemId: null,
+                  actionId,
+                  agentId: null,
+                },
+                span: { fromSegment: 0, toSegment: 0 },
+                uncertain: false,
+                question: null,
+                control: null,
+                choice: null,
+              }),
+            },
+          ],
+        },
+      ],
+    };
+  }
+
+  /** The text the router is given after its directory: the focus, the view, the words. */
+  function requestText(body: string): string {
+    const parsed = z
+      .object({
+        input: z.array(
+          z.object({ content: z.array(z.object({ text: z.string() })) }),
+        ),
+      })
+      .parse(JSON.parse(body));
+    return parsed.input.at(0)?.content.at(1)?.text ?? "";
+  }
+
+  it("is shown to the router after the focus and ahead of the words", async () => {
+    const bodies: string[] = [];
+    await bringLive();
+    focusOn(CHANNEL_FOCUS);
+    fake.routeAnswer = (body) => {
+      bodies.push(body);
+      return fake.routeToFocus(body);
+    };
+
+    await say("Merge it.", "d1");
+
+    expect(bodies).toHaveLength(1);
+    const text = requestText(bodies[0] ?? "");
+    expect(text).toContain('</focus>\n<view>\n{"view":');
+    expect(text.indexOf("</view>")).toBeLessThan(text.indexOf("<utterance>"));
+  });
+
+  it("answers a request for one of its actions that the voice cannot do here yet, and posts nothing", async () => {
+    const bodies: string[] = [];
+    await bringLive();
+    focusOn(CHANNEL_FOCUS);
+    fake.routeAnswer = (body) => {
+      bodies.push(body);
+      return actAnswer("action:app.history.open");
+    };
+
+    await say("Open the history.", "d1");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(4_000);
+    });
+
+    // The router was offered the action it chose.
+    expect(requestText(bodies[0] ?? "")).toContain(
+      '{"action":"action:app.history.open"',
+    );
+    expect(fake.engines[0]?.appendCommentary).toHaveBeenCalledWith(
+      expect.stringContaining("I can't do that here yet."),
+      "d1",
+    );
+    expect(fake.sendMock).not.toHaveBeenCalled();
+    expect(useVoiceSessionStore.getState().segments).toEqual([]);
   });
 });
