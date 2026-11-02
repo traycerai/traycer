@@ -867,10 +867,18 @@ describe("autonomousResumeBlockSchema wakeup persistence compat", () => {
     // "Transforms cannot be represented in JSON Schema" the moment any
     // `chat.subscribe` contract (which embeds `chatSchema`, which embeds this
     // block) gets its fields JSON-schema-serialized. Construction is
-    // structural-only, so the guard is the explicit full validator.
-    expect(Object.keys(hostStreamRpcRegistry)).toContain("chat.subscribe");
+    // structural-only, so the guard is the explicit full validator over the
+    // line's head: one contract serializes the block, the whole line repeats it.
+    const line = hostStreamRpcRegistry["chat.subscribe"][1];
     expect(() =>
-      validateVersionedStreamRpcRegistry(hostStreamRpcRegistry),
+      validateVersionedStreamRpcRegistry({
+        "chat.subscribe": {
+          1: {
+            ...line,
+            versions: { [line.latestMinor]: line.versions[line.latestMinor] },
+          },
+        },
+      }),
     ).not.toThrow();
     expect(() => toCanonicalJsonSchema(contentBlockSchema, {})).not.toThrow();
     expect(() =>

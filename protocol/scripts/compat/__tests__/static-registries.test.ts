@@ -49,13 +49,16 @@ function required<T>(value: T | undefined, label: string): T {
   return value;
 }
 
-function replaceNamedRegistry(
-  name: string,
-  replacement: StaticRegistry,
-): StaticRegistry[] {
-  return STATIC_REGISTRIES.map((entry) =>
-    entry.name === name ? replacement : entry,
-  );
+// A planted registry among passing neighbours. The record registries are the
+// neighbours because they validate in milliseconds; a walk of the two host
+// registries belongs to the one test below.
+function plantedAmongRecords(planted: StaticRegistry): StaticRegistry[] {
+  return [
+    planted,
+    ...STATIC_REGISTRIES.filter(
+      (entry) => entry.kind === "record" && entry.name !== planted.name,
+    ),
+  ];
 }
 
 function plantedUnaryRegistry(): UncheckedVersionedRpcRegistry {
@@ -97,10 +100,7 @@ function plantedUnaryRegistry(): UncheckedVersionedRpcRegistry {
       },
     },
   };
-  return {
-    ...hostRpcRegistry,
-    "config.shell.listDetected": plantedMethod,
-  };
+  return { "config.shell.listDetected": plantedMethod };
 }
 
 function plantedStreamRegistry(): UncheckedVersionedStreamRpcRegistry {
@@ -133,10 +133,7 @@ function plantedStreamRegistry(): UncheckedVersionedStreamRpcRegistry {
       },
     },
   };
-  return {
-    ...hostStreamRpcRegistry,
-    "epic.subscribe": plantedMethod,
-  };
+  return { "epic.subscribe": plantedMethod };
 }
 
 function plantedRecordRegistry(): UncheckedVersionedRecordRegistry {
@@ -204,9 +201,10 @@ function plantedRecordEntry(): StaticRegistry {
   };
 }
 
-// Every test here walks whole registries, 0.5-1.7s locally and past the 5s
-// default on a loaded CI runner, so each names a 30s timeout.
 describe("STATIC_REGISTRIES CI check", () => {
+  // The one whole-registry validation in this package; the host registries
+  // alone take about a second of CPU. A contract test elsewhere validates only
+  // the lines it claims, and the planted tests below plant in a small registry.
   it("names exactly the six static registries and they all pass full validation", () => {
     expect(STATIC_REGISTRIES.map((entry) => entry.name)).toEqual([
       ...STATIC_REGISTRY_NAMES,
@@ -220,17 +218,7 @@ describe("STATIC_REGISTRIES CI check", () => {
       "record",
     ]);
     expect(findStaticRegistryFailures(STATIC_REGISTRIES)).toEqual([]);
-  }, 30_000);
-
-  it("validateStaticRegistry succeeds on the live host unary entry (positive control)", () => {
-    const hostUnary = STATIC_REGISTRIES.find(
-      (entry) => entry.name === "hostRpcRegistry",
-    );
-    expect(hostUnary).toBeDefined();
-    expect(() =>
-      validateStaticRegistry(required(hostUnary, "hostRpcRegistry missing")),
-    ).not.toThrow();
-  }, 30_000);
+  });
 });
 
 describe("planted non-additive change, one per kind", () => {
@@ -243,13 +231,13 @@ describe("planted non-additive change, one per kind", () => {
     expect(() => validateVersionedRpcRegistry(planted)).toThrow(/wslHealth/);
 
     const failures = findStaticRegistryFailures(
-      replaceNamedRegistry("hostRpcRegistry", plantedUnaryEntry()),
+      plantedAmongRecords(plantedUnaryEntry()),
     );
     expect(failures).toHaveLength(1);
     expect(failures[0]?.name).toBe("hostRpcRegistry");
     expect(failures[0]?.sourceFile).toBe("src/host/registry.ts");
     expect(failures[0]?.message).toMatch(/wslHealth/);
-  }, 30_000);
+  });
 
   it("stream: swapping epic.subscribe 1.0/1.1 sub-schemas fails full validation and not construction", () => {
     const planted = plantedStreamRegistry();
@@ -259,13 +247,13 @@ describe("planted non-additive change, one per kind", () => {
     );
 
     const failures = findStaticRegistryFailures(
-      replaceNamedRegistry("hostStreamRpcRegistry", plantedStreamEntry()),
+      plantedAmongRecords(plantedStreamEntry()),
     );
     expect(failures).toHaveLength(1);
     expect(failures[0]?.name).toBe("hostStreamRpcRegistry");
     expect(failures[0]?.sourceFile).toBe("src/host/registry.ts");
     expect(failures[0]?.message).toMatch(/dirtySnapshot\.kind/);
-  }, 30_000);
+  });
 
   it("record: a synthetic room-metadata 1.1 that drops a 1.0 field fails full validation and not construction", () => {
     const planted = plantedRecordRegistry();
@@ -278,19 +266,18 @@ describe("planted non-additive change, one per kind", () => {
     );
 
     const failures = findStaticRegistryFailures(
-      replaceNamedRegistry("persistenceRecordRegistry", plantedRecordEntry()),
+      plantedAmongRecords(plantedRecordEntry()),
     );
     expect(failures).toHaveLength(1);
     expect(failures[0]?.name).toBe("persistenceRecordRegistry");
     expect(failures[0]?.sourceFile).toBe("src/persistence/registry.ts");
     expect(failures[0]?.message).toMatch(/drops field/);
-  }, 30_000);
+  });
 });
 
 describe("floor-aware degrade check via validateStaticRegistry", () => {
   it("fails when a non-floor method's degrade is removed", () => {
     const planted: UncheckedVersionedRpcRegistry = {
-      ...hostRpcRegistry,
       "config.shell.listDetected": {
         1: hostRpcRegistry["config.shell.listDetected"][1],
       },
@@ -308,5 +295,5 @@ describe("floor-aware degrade check via validateStaticRegistry", () => {
     expect(() => validateStaticRegistry(entry)).toThrow(
       /Non-floor method 'config\.shell\.listDetected' must declare a degrade strategy/,
     );
-  }, 30_000);
+  });
 });
