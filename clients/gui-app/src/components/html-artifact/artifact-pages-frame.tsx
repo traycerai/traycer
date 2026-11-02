@@ -5,6 +5,7 @@ import {
   ZoomLevelField,
 } from "@/components/epic-canvas/zoom-controls/zoom-controls";
 import { useCoarsePointer } from "@/hooks/ui/use-coarse-pointer";
+import { useIsNarrowWindow } from "@/hooks/ui/use-narrow-window";
 import {
   SandboxFrame,
   type SandboxPageNavigation,
@@ -60,6 +61,9 @@ function useControlsInset(
     ? ESTIMATED_CONTROLS_BOTTOM_PX.coarse
     : ESTIMATED_CONTROLS_BOTTOM_PX.fine;
   const [measured, setMeasured] = useState<number | null>(null);
+  // A narrow window lays the chip out in flow above the frame (its `max-md`
+  // classes), where it covers nothing and takes no room.
+  const chipInFlow = useIsNarrowWindow();
   useLayoutEffect(() => {
     if (!active || controls === null) return;
     // An observer reports once as it starts, so this also takes the first
@@ -70,7 +74,7 @@ function useControlsInset(
     observer.observe(controls);
     return () => observer.disconnect();
   }, [controls, active]);
-  if (!active) return 0;
+  if (!active || chipInFlow) return 0;
   return measured ?? estimate;
 }
 
@@ -132,7 +136,9 @@ function ArtifactPageControls(props: {
   return (
     <div
       ref={onElement}
-      className="pointer-events-none absolute top-2 right-2 z-30 flex max-w-[calc(100%-1rem)] items-start"
+      // On a narrow window the chip sits in flow above the frame instead
+      // (`useControlsInset` keeps no room for it there).
+      className="pointer-events-none absolute top-2 right-2 z-30 flex max-w-[calc(100%-1rem)] items-start max-md:static max-md:max-w-full max-md:shrink-0 max-md:justify-end max-md:p-1"
     >
       <div
         role="toolbar"

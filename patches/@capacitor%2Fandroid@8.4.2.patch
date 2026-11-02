@@ -244,3 +244,73 @@ index 6ba4605..bf089ba 100644
          this.cookieManager = new CapacitorCookieManager(null, java.net.CookiePolicy.ACCEPT_ALL, this.bridge);
          this.cookieManager.removeSessionCookies();
          CookieHandler.setDefault(this.cookieManager);
+diff --git a/capacitor/src/main/java/com/getcapacitor/plugin/SystemBars.java b/capacitor/src/main/java/com/getcapacitor/plugin/SystemBars.java
+--- a/capacitor/src/main/java/com/getcapacitor/plugin/SystemBars.java
++++ b/capacitor/src/main/java/com/getcapacitor/plugin/SystemBars.java
+@@ -175,14 +175,9 @@
+
+     private void initSafeAreaCSSVariables() {
+         if (INSETS_HANDLING_CSS.equals(insetsHandling)) {
+-            WindowInsetsCompat insets;
+-
+-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM) {
+-                View v = (View) this.getBridge().getWebView().getParent();
+-                insets = ViewCompat.getRootWindowInsets(v);
+-            } else {
+-                insets = WindowInsetsCompat.CONSUMED;
+-            }
++            // Traycer enables edge-to-edge on older Android versions too.
++            View v = (View) this.getBridge().getWebView().getParent();
++            WindowInsetsCompat insets = ViewCompat.getRootWindowInsets(v);
+
+             if (insets != null) {
+                 Insets safeAreaInsets = calcSafeAreaInsets(insets);
+@@ -223,15 +218,14 @@
+                     .build();
+             }
+
+-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM) {
+-                // We need to correct for a possible shown IME
+-                v.setPadding(
+-                    systemBarsInsets.left,
+-                    systemBarsInsets.top,
+-                    systemBarsInsets.right,
+-                    keyboardVisible ? imeInsets.bottom : systemBarsInsets.bottom
+-                );
+-            }
++            // Older WebViews need native padding on every Android version,
++            // because the app explicitly enables edge-to-edge before Android 15.
++            v.setPadding(
++                systemBarsInsets.left,
++                systemBarsInsets.top,
++                systemBarsInsets.right,
++                keyboardVisible ? imeInsets.bottom : systemBarsInsets.bottom
++            );
+
+             // Returning `WindowInsetsCompat.CONSUMED` breaks recalculation of safe area insets
+             // So we have to explicitly set insets to `0`
+@@ -280,20 +274,19 @@
+     }
+
+     private void setStyle(String style, String bar) {
+-        if (style.equals(STYLE_DEFAULT)) {
+-            style = getStyleForTheme();
+-        }
++        // Keep the requested style so DEFAULT follows later theme changes.
++        String resolvedStyle = style.equals(STYLE_DEFAULT) ? getStyleForTheme() : style;
+
+         Window window = getActivity().getWindow();
+         WindowInsetsControllerCompat windowInsetsControllerCompat = WindowCompat.getInsetsController(window, window.getDecorView());
+         if (bar.isEmpty() || bar.equals(BAR_STATUS_BAR)) {
+             currentStatusBarStyle = style;
+-            windowInsetsControllerCompat.setAppearanceLightStatusBars(!style.equals(STYLE_DARK));
++            windowInsetsControllerCompat.setAppearanceLightStatusBars(!resolvedStyle.equals(STYLE_DARK));
+         }
+
+         if (bar.isEmpty() || bar.equals(BAR_GESTURE_BAR)) {
+             currentGestureBarStyle = style;
+-            windowInsetsControllerCompat.setAppearanceLightNavigationBars(!style.equals(STYLE_DARK));
++            windowInsetsControllerCompat.setAppearanceLightNavigationBars(!resolvedStyle.equals(STYLE_DARK));
+         }
+
+         getActivity().getWindow().getDecorView().setBackgroundColor(getThemeColor(getContext(), android.R.attr.windowBackground));

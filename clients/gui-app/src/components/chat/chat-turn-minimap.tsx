@@ -398,7 +398,7 @@ export function ChatTurnMinimapView({
 
   return (
     <div
-      className="pointer-events-none absolute inset-x-0 top-0 z-40 hidden [container-type:size] [@media(pointer:fine)]:block"
+      className="pointer-events-none absolute inset-x-0 top-0 z-40 hidden [container-type:size] pointer-fine:block"
       data-side={side}
       data-testid="chat-turn-minimap"
       style={{ bottom: safeBottomInset }}

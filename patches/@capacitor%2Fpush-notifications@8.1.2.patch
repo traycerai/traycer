@@ -1,0 +1,44 @@
+diff --git a/android/src/main/java/com/capacitorjs/plugins/pushnotifications/PushNotificationsPlugin.java b/android/src/main/java/com/capacitorjs/plugins/pushnotifications/PushNotificationsPlugin.java
+--- a/android/src/main/java/com/capacitorjs/plugins/pushnotifications/PushNotificationsPlugin.java
++++ b/android/src/main/java/com/capacitorjs/plugins/pushnotifications/PushNotificationsPlugin.java
+@@ -100,9 +100,11 @@
+
+     @PluginMethod
+     public void register(PluginCall call) {
+-        FirebaseMessaging.getInstance().setAutoInitEnabled(true);
+-        FirebaseMessaging.getInstance()
+-            .getToken()
++        FirebaseMessaging messaging = getFirebaseMessagingOrReject(call);
++        if (messaging == null) return;
++
++        messaging.setAutoInitEnabled(true);
++        messaging.getToken()
+             .addOnCompleteListener((task) -> {
+                 if (!task.isSuccessful()) {
+                     sendError(task.getException().getLocalizedMessage());
+@@ -115,9 +117,23 @@
+
+     @PluginMethod
+     public void unregister(PluginCall call) {
+-        FirebaseMessaging.getInstance().setAutoInitEnabled(false);
+-        FirebaseMessaging.getInstance().deleteToken();
++        FirebaseMessaging messaging = getFirebaseMessagingOrReject(call);
++        if (messaging == null) return;
++
++        messaging.setAutoInitEnabled(false);
++        messaging.deleteToken();
+         call.resolve();
++    }
++
++    // Firebase configuration is optional for local builds. Reject on the
++    // bridge instead of throwing through its reflective plugin invocation.
++    private FirebaseMessaging getFirebaseMessagingOrReject(PluginCall call) {
++        try {
++            return FirebaseMessaging.getInstance();
++        } catch (IllegalStateException error) {
++            call.reject("Push notifications are not configured for this build", error);
++            return null;
++        }
+     }
+
+     @PluginMethod

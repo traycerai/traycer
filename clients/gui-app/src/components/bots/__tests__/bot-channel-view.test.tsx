@@ -5,7 +5,6 @@
  * the channel PASSES them is what is asserted: the thread line it draws under
  * each post, the chat the thread panel reads, and where each box writes.
  */
-import type { MobileTileCount } from "@/lib/layout/mobile-layout-form";
 import type { ComponentProps, ReactNode } from "react";
 import { act, cleanup, render, screen, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -508,9 +507,6 @@ function PresentedConversation(props: {
 /** Where the next mount lands the channel; `null` for where it opens. */
 let mountLanding: BotChannelLanding | null = null;
 
-/** How many tiles the next mount is told the installed app shows; `null` off it. */
-let mountTiles: MobileTileCount | null = null;
-
 function mount(options: MountOptions): {
   readonly onOpenThread: Mock<(open: BotOpenThread | null) => void>;
   readonly onOpenActivity: Mock<() => void>;
@@ -527,7 +523,6 @@ function mount(options: MountOptions): {
       <TooltipProvider>
         <ChatExpansionTestProviders tileInstanceId="tile-1">
           <BotChannelView
-            tiles={mountTiles}
             botId={BOT_ID}
             hostId={HOST_ID}
             boundHostId={mocks.state.binding.hostId}
@@ -585,7 +580,6 @@ function lastThreadListCall(): ThreadListCall {
 beforeEach(() => {
   vi.clearAllMocks();
   mountLanding = null;
-  mountTiles = null;
   mocks.threadListCalls.length = 0;
   mocks.state.paneVisible = true;
   mocks.state.threadListSupported = true;
@@ -626,7 +620,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("<BotChannelView tiles={null} /> channel", () => {
+describe("<BotChannelView /> channel", () => {
   it("posts at the channel's top level on the conversation the bot record names", () => {
     mount({ openThreadPostId: null });
 
@@ -1444,7 +1438,7 @@ describe("<BotChannelView tiles={null} /> channel", () => {
   });
 });
 
-describe("<BotChannelView tiles={null} /> focused notification presence", () => {
+describe("<BotChannelView /> focused notification presence", () => {
   const CHANNEL_ENTITY = { epicId: BOT_ID, chatId: "conversation-channel" };
 
   it("publishes the channel while it is shown, and withdraws it on unmount", () => {
@@ -1523,7 +1517,7 @@ describe("<BotChannelView tiles={null} /> focused notification presence", () => 
   });
 });
 
-describe("<BotChannelView tiles={null} /> read cursor", () => {
+describe("<BotChannelView /> read cursor", () => {
   const OLD_ROW = { messageId: "row-old", seq: 1_000 };
   const NEW_ROW = { messageId: "row-new", seq: 2_000 };
 
@@ -1699,7 +1693,7 @@ describe("<BotChannelView tiles={null} /> read cursor", () => {
   });
 });
 
-describe("<BotChannelView tiles={null} /> presence beside an open thread", () => {
+describe("<BotChannelView /> presence beside an open thread", () => {
   /** The `ResizeObserver`s the view made, to report a size for the channel's section. */
   const observers: FakeResizeObserver[] = [];
 
@@ -1767,7 +1761,7 @@ describe("<BotChannelView tiles={null} /> presence beside an open thread", () =>
   });
 });
 
-describe("<BotChannelView /> open thread by the tiles the installed app shows", () => {
+describe("<BotChannelView /> open thread in the installed app", () => {
   beforeEach(() => {
     mocks.state.threads = [
       thread("thread-a", "post-a", {
@@ -1781,24 +1775,16 @@ describe("<BotChannelView /> open thread by the tiles the installed app shows", 
     mocks.postIds = ["post-a"];
   });
 
+  afterEach(() => {
+    setPhoneLayoutOnly(false);
+  });
+
   function classesOf(testId: string): ReadonlyArray<string> {
     return screen.getByTestId(testId).className.split(/\s+/);
   }
 
-  it("draws the messages and the thread side by side at two tiles, with no handle to drag", () => {
-    mountTiles = 2;
-    mount({ openThreadPostId: "post-a" });
-
-    expect(screen.getByTestId("bot-thread-pane")).toBeTruthy();
-    expect(classesOf("bot-channel")).not.toContain("hidden");
-    expect(classesOf("bot-thread-pane-resize-handle")).toContain("hidden");
-    expect(classesOf("bot-thread-pane-resize-handle")).not.toContain(
-      "@3xl:block",
-    );
-  });
-
-  it("lets the thread replace the messages at one tile, which stay mounted underneath", () => {
-    mountTiles = 1;
+  it("lets the thread replace the messages, which stay mounted underneath", () => {
+    setPhoneLayoutOnly(true);
     mount({ openThreadPostId: "post-a" });
 
     expect(screen.getByTestId("bot-thread-pane")).toBeTruthy();
@@ -1809,7 +1795,6 @@ describe("<BotChannelView /> open thread by the tiles the installed app shows", 
   });
 
   it("keeps the container-decided classes off the installed app", () => {
-    mountTiles = null;
     mount({ openThreadPostId: "post-a" });
 
     expect(classesOf("bot-channel")).toContain("@3xl:flex");
@@ -1830,7 +1815,6 @@ describe("<BotChannelView /> boxes on a short viewport under the keyboard", () =
     ];
     mocks.postIds = ["post-a"];
     mocks.state.realComposer = true;
-    mountTiles = 2;
     setPhoneLayoutOnly(true);
     holdScreenLandscape();
     raiseNativeKeyboard(IPHONE_17);
@@ -1868,7 +1852,7 @@ describe("<BotChannelView /> boxes on a short viewport under the keyboard", () =
   });
 });
 
-describe("<BotChannelView tiles={null} /> open thread", () => {
+describe("<BotChannelView /> open thread", () => {
   beforeEach(() => {
     mocks.state.threads = [
       thread("thread-a", "post-a", {
@@ -2098,7 +2082,7 @@ describe("<BotChannelView tiles={null} /> open thread", () => {
   });
 });
 
-describe("<BotChannelView tiles={null} /> thread list unavailable", () => {
+describe("<BotChannelView /> thread list unavailable", () => {
   it("offers no thread on a host without the thread list", () => {
     mocks.state.threadListSupported = false;
     mocks.state.threadListAnswered = false;
@@ -2135,7 +2119,7 @@ describe("<BotChannelView tiles={null} /> thread list unavailable", () => {
   });
 });
 
-describe("<BotChannelView tiles={null} /> a post whose answer lands in a thread", () => {
+describe("<BotChannelView /> a post whose answer lands in a thread", () => {
   const POSTED: BotOpenThread = {
     anchorMessageId: "post-new",
     announcement: false,

@@ -27,7 +27,6 @@ import { ChatBotAppPost } from "@/components/chat/chat-bot-message";
 import type { TeamSetup } from "@/hooks/bots/use-team-setups";
 import type { BotOnboardingArrival } from "@traycer/protocol/host/bot/onboarding-schemas";
 import type { TeamSetupHistory } from "@/hooks/bots/use-team-setup-history";
-import type { MobileLevel2Form } from "@/lib/layout/mobile-layout-form";
 import { useSandboxCatalogue } from "@/hooks/sandboxes/use-sandbox-catalogue-query";
 import {
   SandboxCreateError,
@@ -62,12 +61,10 @@ export function TeamSetupChannel(props: {
   readonly client: HostClient<HostRpcRegistry> | null;
   /** The surface's host, whose bots the title's picker lists. */
   readonly hostId: string;
-  /** The surface's level-2 form, which the title follows. */
-  readonly level2: MobileLevel2Form | null;
   /** The surface's Threads, a row of the title's picker as of its column. */
   readonly threadsView: BotThreadsViewState;
 }): ReactNode {
-  const { setup, hostId, level2, threadsView } = props;
+  const { setup, hostId, threadsView } = props;
   // Re-read on the shared on-screen cadence while the person can see the
   // setup and it still needs a host. The team's host creating the bot rings
   // the team's room, which reaches this channel's bot list only while this
@@ -110,7 +107,6 @@ export function TeamSetupChannel(props: {
         <header className="flex shrink-0 items-center gap-2 px-4 pt-3 pb-2">
           <BotAvatar size="sm" />
           <BotChannelTitle
-            level2={level2}
             title={setup.title}
             activeBotId={setup.botId}
             hostId={hostId}

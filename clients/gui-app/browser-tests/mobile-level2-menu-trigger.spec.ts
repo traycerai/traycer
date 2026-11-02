@@ -2,16 +2,11 @@ import { expect, test, type Locator } from "@playwright/test";
 
 import { fixture } from "./support/fixtures.ts";
 
-// A long name in the level-2 menu trigger truncates inside the trigger. The
+// A long name in the bots picker trigger truncates inside the trigger. The
 // trigger is a Button, whose own `shrink-0` left it at its intrinsic width, so
 // the row's other controls were pushed off screen. Whether a flex item shrinks
-// is layout, which jsdom does not compute: this renders the production bar and
-// the production bot title with a very long name in a narrow container.
-
-const ROW = '[data-testid="mobile-tile-pane-header"]';
-const TRIGGER = '[data-testid="mobile-tile-menu-trigger"]';
-const TITLE = '[data-testid="mobile-current-tile-title"]';
-const MINIMAP = '[data-testid="content-minimap-button"]';
+// is layout, which jsdom does not compute: this renders the production bot
+// title with a very long name in a narrow container.
 
 interface Box {
   readonly x: number;
@@ -32,35 +27,10 @@ function right(b: Box): number {
 
 test.use({ viewport: { width: 1000, height: 400 } });
 
-for (const width of [620, 444]) {
-  test(`a long tile name truncates in the trigger and leaves the minimap button inside the row at ${String(width)} wide`, async ({
-    page,
-  }) => {
-    await page.goto(
-      `${fixture("mobile-level2-menu-trigger")}?width=${String(width)}`,
-    );
-    await expect(page.locator(MINIMAP)).toBeVisible();
-
-    const row = await box(page.locator(ROW));
-    const trigger = await box(page.locator(TRIGGER));
-    const minimap = await box(page.locator(MINIMAP));
-    expect(right(trigger)).toBeLessThanOrEqual(right(row));
-    expect(minimap.x).toBeGreaterThanOrEqual(row.x);
-    expect(right(minimap)).toBeLessThanOrEqual(right(row));
-    expect(right(trigger)).toBeLessThanOrEqual(minimap.x);
-    const truncated = await page
-      .locator(TITLE)
-      .evaluate((el) => el.scrollWidth > el.clientWidth);
-    expect(truncated).toBe(true);
-  });
-}
-
 test("a long bot name truncates in the picker and leaves its chevron and the settings button after it inside the row", async ({
   page,
 }) => {
-  await page.goto(
-    `${fixture("mobile-level2-menu-trigger")}?surface=bot&width=444`,
-  );
+  await page.goto(`${fixture("mobile-level2-menu-trigger")}?width=444`);
   const trigger = page.getByTestId("bot-channel-picker-trigger");
   await expect(trigger).toBeVisible();
 

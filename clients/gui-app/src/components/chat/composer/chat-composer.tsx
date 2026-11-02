@@ -77,7 +77,10 @@ import { chatTileCatalogActivity } from "@/components/epic-canvas/renderers/chat
 import type { ChatSendRestore } from "@/stores/chats/chat-session-store";
 import type { Attachment } from "@/lib/composer/types";
 import { ComposerFocusLayoutContext } from "@/components/home/composer/composer-focus-layout-context";
-import { KEYBOARD_FOCUS_OWNER_PROPS } from "@/hooks/ui/use-keyboard-focus-layout";
+import {
+  KEYBOARD_FOCUS_OWNER_PROPS,
+  useShortKeyboardViewport,
+} from "@/hooks/ui/use-keyboard-focus-layout";
 import { cn } from "@/lib/utils";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
@@ -505,6 +508,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
   } = props;
   const readingWidth = useReadingWidthStyle();
   const focusLayout = use(ComposerFocusLayoutContext);
+  const shortKeyboard = useShortKeyboardViewport();
   const frame = composerFrame(focusLayout, topSpacing);
   const runnerHost = useRunnerHost();
   const hostClient = useTabHostClient();
@@ -1177,7 +1181,10 @@ function ChatComposerImpl(props: ChatComposerProps) {
                 />
               </ComposerAttachmentDropZone>
               {workspaceControls !== null ? (
-                <div hidden={focusLayout} className="contents">
+                <div
+                  hidden={focusLayout ? shortKeyboard : false}
+                  className="contents"
+                >
                   <ComposerWorkspaceRow workspaceControls={workspaceControls} />
                 </div>
               ) : null}

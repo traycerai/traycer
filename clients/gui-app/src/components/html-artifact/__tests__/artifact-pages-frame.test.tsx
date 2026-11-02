@@ -408,4 +408,15 @@ describe("the room a filling page keeps for the controls", () => {
 
     expect(frameProps().pageInsetTop).toBe(0);
   });
+
+  // A narrow window lays the chip out in flow above the frame (its `max-md`
+  // classes), so it covers nothing there.
+  it("is none on a narrow window, where the chip sits above the page", () => {
+    vi.stubGlobal("innerWidth", 480);
+    layOutControlsChip();
+
+    renderPages({ pageZoom: true });
+
+    expect(frameProps().pageInsetTop).toBe(0);
+  });
 });
