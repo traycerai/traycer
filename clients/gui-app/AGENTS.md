@@ -412,7 +412,8 @@ Testing Library role queries.
 A test waits on a fake clock or on an event the code emits, never on real time;
 a negative assertion is a fake-clock advance past its budget. A suite that
 mounts the real chat list uses `installLegendListTestClock`. A test file over
-10 s fails CI unless `test-budget-allowlist.json` names it with a reason. A time
+10 s on its shard runs once more alone, and over 10 s again fails CI unless
+`test-budget-allowlist.json` names it with a reason. A time
 or size budget too long for that goes in a `*.measure.ts` file, which
 `measurements.yml` runs nightly.
 

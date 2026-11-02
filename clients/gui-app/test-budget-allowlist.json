@@ -1,0 +1,18 @@
+{
+  "src/components/layout-editor/__tests__/layout-settings-effect-sweep.test.tsx": "a sweep that renders the app column once per layout setting and compares its HTML; on a fake clock already, the time is the renders",
+  "src/components/epic-canvas/__tests__/chat-tile.test.tsx": "125 cases, each mounting a full chat tile with its transcript and composer",
+  "src/components/settings/panels/__tests__/layout-settings-panel.test.tsx": "53 cases on the full Layout settings page, each mounting every section of it",
+  "src/components/epic-canvas/surface-host/__tests__/stable-tile-surface-host-permanent-lifecycle-matrix.test.tsx": "a matrix over the real chat tile, chat list and canvas chain through every hosted-surface lifecycle step; on a fake clock already",
+  "src/components/chat/__tests__/chat-message-read-aloud.test.tsx": "one case renders a 20,000-tag reply to hold the spoken-text size bound",
+  "src/components/resources/__tests__/resource-monitor-popover.test.tsx": "126 cases, each mounting the popover with its owner tabs and canvas",
+  "src/editor-core/__tests__/list-item-marked-differential.test.ts": "a differential against marked over a generated corpus of 7,395 list items per marker",
+  "src/components/settings/panels/__tests__/worktrees-settings-panel.test.tsx": "144 cases, 50 renders of the full Worktrees settings panel",
+  "src/components/epics/__tests__/epics-list-panel.test.tsx": "142 cases on the full task history list",
+  "src/components/chat/__tests__/chat-messages.test.tsx": "181 cases on the virtual transcript list; on a fake clock already, the time is its renders",
+  "src/components/settings/panels/__tests__/providers-settings-panel.test.tsx": "142 cases, 132 renders of the full Providers settings panel",
+  "src/__tests__/optional-method-mutation-gate-lint.test.ts": "parses every source file under src with the TypeScript compiler to find ungated optional-method calls",
+  "src/components/settings/panels/__tests__/fallback-settings-panel.test.tsx": "80 cases on the full Fallback panel with its real reducer",
+  "src/components/home/__tests__/harness-model-picker.test.tsx": "121 cases on the full harness and model picker",
+  "src/components/settings/environment/__tests__/environment-skills.test.tsx": "63 cases, 66 renders of the environment Skills page",
+  "src/lib/comm-graph/office/__tests__/office-scene.test.ts": "253 cases, each laying out and painting a whole office floor"
+}
