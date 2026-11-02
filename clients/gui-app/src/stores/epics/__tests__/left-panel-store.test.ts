@@ -304,6 +304,20 @@ describe("useLeftPanelStore", () => {
     expect(readPersistedLeftPanelState().state.mainCollapsedByTabId).toEqual({
       "tab-a": false,
     });
+
+    // And that record survives a refresh with the fallback on: the tab the
+    // user expanded comes back expanded while an untouched one collapses.
+    act(() => {
+      writeArrangementField("sidebarStartCollapsed", true);
+    });
+    const persistedAfterExpand =
+      window.localStorage.getItem(PERSIST_KEY) ?? "{}";
+    useLeftPanelStore.setState({ mainCollapsedByTabId: {} });
+    window.localStorage.setItem(PERSIST_KEY, persistedAfterExpand);
+    await useLeftPanelStore.persist.rehydrate();
+
+    expect(useLeftPanelStore.getState().isMainCollapsed("tab-a")).toBe(false);
+    expect(useLeftPanelStore.getState().isMainCollapsed("tab-b")).toBe(true);
   });
 
   it("copies the collapse RECORD to a derived tab, even when it equals the Collapsed in new tasks fallback", () => {
