@@ -20,6 +20,7 @@ import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/ho
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { extractPlainTextFromComposerJSONContent } from "@/lib/composer/tiptap-json-content";
 import type { CommandContext, CommandItem } from "@/lib/commands/types";
+import { composeVoiceDirectory } from "@/lib/voice/directory";
 import type { ActionId } from "@/lib/keybindings/actions";
 import type { KeybindingRouter } from "@/lib/keybindings/dispatch";
 import { queryKeys } from "@/lib/query-keys";
@@ -41,7 +42,18 @@ import {
   type PageActReads,
   type VoicePaletteRow,
 } from "@/lib/voice/page-acts";
-import type { VoiceViewRow } from "@/lib/voice/view";
+import { resolveRoute, type RouterResult } from "@/lib/voice/router";
+import {
+  createSayLoop,
+  type AskOutcome,
+  type SayLoop,
+} from "@/lib/voice/say-loop";
+import {
+  composeVoiceView,
+  NO_PALETTE_ITEMS,
+  type VoiceView,
+  type VoiceViewRow,
+} from "@/lib/voice/view";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   createChatSessionStore,
@@ -53,6 +65,10 @@ import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import type { EpicNodeRef } from "@/stores/epics/canvas/types";
 import { findPaneById } from "@/stores/epics/canvas/tile-tree";
 import { useSettingsStore } from "@/stores/settings/settings-store";
+import {
+  useVoiceSessionStore,
+  type VoiceFocus,
+} from "@/stores/voice/voice-session-store";
 import {
   useWorktreeIntentStagingStore,
   type WorktreeStagingKey,
@@ -98,6 +114,9 @@ const ACTIVE_TURN: ChatActiveTurn = {
   updatedAt: 1,
   sameTurnSteeringSupported: true,
 };
+
+/** The turn that starts after {@link ACTIVE_TURN} ended. */
+const TURN_B: ChatActiveTurn = { ...ACTIVE_TURN, turnId: "turn-2" };
 
 /** A chat bound to one folder, run in place. */
 const BOUND: WorktreeBinding = {
@@ -283,6 +302,19 @@ function openSession(shape: SnapshotShape): Session {
   return { handle, sent, callbacks };
 }
 
+/** The host reports the chat's turn: `turn` is running, or none is. */
+function moveToTurn(session: Session, turn: ChatActiveTurn | null): void {
+  session.callbacks.onTurnStateChanged({
+    kind: "turnStateChanged",
+    hasBinaryPayload: false,
+    epicId: EPIC_ID,
+    chatId: CHAT_ID,
+    runStatus: turn === null ? "idle" : "running",
+    activeTurn: turn,
+    turnInProgress: turn !== null,
+  });
+}
+
 function sendFrames(session: Session) {
   return session.sent.flatMap((frame) =>
     frame.kind === "send" ? [frame] : [],
@@ -375,7 +407,24 @@ function readsOver(
 let queryClient = new QueryClient();
 
 function run(action: string, text: string, reads: PageActReads) {
-  return executePageAct({ row: rowFor(action), text, reads, queryClient });
+  return executePageAct({
+    row: rowFor(action),
+    text,
+    turnId: null,
+    reads,
+    queryClient,
+  });
+}
+
+/** The stop row, as a route made while `routedTurnId` was the agent's turn. */
+function stop(session: Session, routedTurnId: string | null) {
+  return executePageAct({
+    row: rowFor(`agent.stop:${CHAT_ID}`),
+    text: "",
+    turnId: routedTurnId,
+    reads: readsOver(session, []),
+    queryClient,
+  });
 }
 
 function tell(session: Session, text: string) {
@@ -689,14 +738,19 @@ describe("what stops a message to the agent", () => {
 });
 
 describe("stopping the agent", () => {
-  it("stops a running turn", async () => {
+  it("stops the running turn it was asked of", async () => {
     const session = openSession({ ...READY_TO_SEND, running: true });
 
-    const outcome = await run(
-      `agent.stop:${CHAT_ID}`,
-      "",
-      readsOver(session, []),
-    );
+    const outcome = await stop(session, ACTIVE_TURN.turnId);
+
+    expect(outcome).toEqual({ kind: "executed" });
+    expect(stopFrames(session)).toHaveLength(1);
+  });
+
+  it("stops the running turn when none was on the wire at the route", async () => {
+    const session = openSession({ ...READY_TO_SEND, running: true });
+
+    const outcome = await stop(session, null);
 
     expect(outcome).toEqual({ kind: "executed" });
     expect(stopFrames(session)).toHaveLength(1);
@@ -705,11 +759,17 @@ describe("stopping the agent", () => {
   it("says the turn already ended, and does not stop", async () => {
     const session = openSession(READY_TO_SEND);
 
-    const outcome = await run(
-      `agent.stop:${CHAT_ID}`,
-      "",
-      readsOver(session, []),
-    );
+    const outcome = await stop(session, ACTIVE_TURN.turnId);
+
+    expect(outcome).toEqual(refusedWith(TURN_ENDED_NOTICE));
+    expect(stopFrames(session)).toEqual([]);
+  });
+
+  it("says the turn ended when the one running is another, and does not stop it", async () => {
+    const session = openSession({ ...READY_TO_SEND, running: true });
+    moveToTurn(session, TURN_B);
+
+    const outcome = await stop(session, ACTIVE_TURN.turnId);
 
     expect(outcome).toEqual(refusedWith(TURN_ENDED_NOTICE));
     expect(stopFrames(session)).toEqual([]);
@@ -719,11 +779,7 @@ describe("stopping the agent", () => {
     const session = openSession({ ...READY_TO_SEND, running: true });
     session.handle.store.getState().stopTurn();
 
-    const outcome = await run(
-      `agent.stop:${CHAT_ID}`,
-      "",
-      readsOver(session, []),
-    );
+    const outcome = await stop(session, ACTIVE_TURN.turnId);
 
     expect(outcome).toEqual(refusedWith(AGENT_STOPPING_NOTICE));
     expect(stopFrames(session)).toHaveLength(1);
@@ -733,14 +789,168 @@ describe("stopping the agent", () => {
     const session = openSession({ ...READY_TO_SEND, running: true });
     session.callbacks.onConnectionStatus("reconnecting", null, null, null);
 
-    const outcome = await run(
-      `agent.stop:${CHAT_ID}`,
-      "",
-      readsOver(session, []),
-    );
+    const outcome = await stop(session, ACTIVE_TURN.turnId);
 
     expect(outcome).toEqual(refusedWith(NOT_DELIVERED_NOTICE));
     expect(stopFrames(session)).toEqual([]);
+  });
+});
+
+/**
+ * A spoken "stop the agent", from the request to the yes, through the real say
+ * loop and the real page act: the read-back can outlast the turn it was asked of.
+ */
+describe("a spoken stop that waits for its yes", () => {
+  const FOCUS: VoiceFocus = {
+    botId: "bot_tracy",
+    hostId: HOST_ID,
+    threadId: null,
+    anchorMessageId: null,
+    anchorThread: null,
+  };
+  const initialVoice = useVoiceSessionStore.getInitialState();
+
+  beforeEach(() => {
+    useVoiceSessionStore.setState(initialVoice, true);
+    useVoiceSessionStore.getState().setFocus(FOCUS);
+  });
+
+  afterEach(() => {
+    useVoiceSessionStore.setState(initialVoice, true);
+  });
+
+  const STOP_ACTION = `agent.stop:${CHAT_ID}`;
+
+  /** The page in front while turn-1 runs. */
+  const VIEW: VoiceView = composeVoiceView({
+    page: { kind: "task", title: "Tracy Bots", tile: TITLE },
+    agent: {
+      chatId: CHAT_ID,
+      title: TITLE,
+      state: "working",
+      waitingOn: null,
+      turnId: ACTIVE_TURN.turnId,
+    },
+    agentTurnRunning: true,
+    approvals: [],
+    palette: NO_PALETTE_ITEMS,
+    generation: 1,
+  });
+
+  const DIRECTORY = composeVoiceDirectory({
+    environments: [],
+    bots: [],
+    threadsByBot: new Map(),
+    followedThreads: new Set(),
+    viewerUserId: USER_ID,
+    focus: FOCUS,
+    queue: [],
+    hostOf: () => null,
+    heldPostText: () => null,
+  });
+
+  /** What the model chose for the stop row, over the one segment said. */
+  const STOP_ROUTE: RouterResult = {
+    action: "act",
+    target: {
+      environmentId: null,
+      botId: null,
+      threadId: null,
+      itemId: null,
+      actionId: STOP_ACTION,
+      agentId: null,
+    },
+    span: { fromSegment: 0, toSegment: 0 },
+    uncertain: false,
+    question: null,
+    control: null,
+    choice: null,
+  };
+
+  interface SpokenStop {
+    readonly loop: SayLoop;
+    readonly notices: Array<{ text: string; delegationId: string | null }>;
+    readonly asks: AskOutcome[];
+  }
+
+  function buildLoop(session: Session): SpokenStop {
+    const notices: SpokenStop["notices"] = [];
+    const asks: AskOutcome[] = [];
+    const loop = createSayLoop({
+      store: useVoiceSessionStore,
+      send: () => {
+        throw new Error("a stop posts nothing");
+      },
+      notify: (text, delegationId) => {
+        notices.push({ text, delegationId });
+      },
+      ask: (_text, _delegationId, outcome) => {
+        asks.push(outcome);
+        return () => undefined;
+      },
+      decide: (request) =>
+        Promise.resolve(
+          resolveRoute(STOP_ROUTE, DIRECTORY, VIEW, request.segments.length),
+        ),
+      recheck: () => true,
+      navigate: () => Promise.resolve(true),
+      think: () => undefined,
+      control: () => undefined,
+      canSend: () => true,
+      schedule: () => () => undefined,
+      openThread: () => undefined,
+      botTitle: (botId) => botId,
+      onAccepted: () => undefined,
+      view: () => VIEW,
+      act: (row, text, turnId) =>
+        executePageAct({
+          row,
+          text,
+          turnId,
+          reads: readsOver(session, []),
+          queryClient,
+        }),
+    });
+    return { loop, notices, asks };
+  }
+
+  /** Says the request and lets the question be heard. */
+  async function askToStop(h: SpokenStop) {
+    useVoiceSessionStore.getState().appendInputSegment("stop the agent", 0);
+    await h.loop.onDelegationCreated("d-1");
+    h.asks[0]?.onDelivered();
+  }
+
+  async function sayYes(h: SpokenStop) {
+    useVoiceSessionStore.getState().appendInputSegment("yes", 400);
+    await h.loop.onDelegationCreated("d-2");
+  }
+
+  it("stops the turn it asked about on a yes", async () => {
+    const session = openSession({ ...READY_TO_SEND, running: true });
+    const h = buildLoop(session);
+    await askToStop(h);
+    expect(h.asks).toHaveLength(1);
+
+    await sayYes(h);
+
+    expect(stopFrames(session)).toMatchObject([{ turnId: "turn-1" }]);
+    expect(h.notices).toEqual([]);
+  });
+
+  it("does not stop the next turn when the one it asked about ended while the question waited", async () => {
+    const session = openSession({ ...READY_TO_SEND, running: true });
+    const h = buildLoop(session);
+    await askToStop(h);
+    moveToTurn(session, null);
+    moveToTurn(session, TURN_B);
+
+    await sayYes(h);
+
+    expect(stopFrames(session)).toEqual([]);
+    expect(h.notices).toEqual([
+      { text: TURN_ENDED_NOTICE, delegationId: "d-1" },
+    ]);
   });
 });
 

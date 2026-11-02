@@ -265,7 +265,17 @@ function tellAgent(
   return EXECUTED;
 }
 
-function stopAgent(chatId: string, reads: PageActReads): VerbOutcome {
+/**
+ * A stop acts on the turn it was asked of. The read-back can outlast that turn,
+ * and a yes must not stop the next one, which nobody asked to stop. With no turn
+ * on the wire when it was routed (a send had not started one yet) there is
+ * nothing to compare, and a running turn is the one that send started.
+ */
+function stopAgent(
+  chatId: string,
+  routedTurnId: string | null,
+  reads: PageActReads,
+): VerbOutcome {
   const session = reads.agentSession(chatId);
   if (session === null) return refused(AGENT_GONE_NOTICE);
   const chat = session.handle.store.getState();
@@ -273,7 +283,12 @@ function stopAgent(chatId: string, reads: PageActReads): VerbOutcome {
   if (stopRequested(chat) || status === "stopping") {
     return refused(AGENT_STOPPING_NOTICE);
   }
-  if (status !== "running") return refused(TURN_ENDED_NOTICE);
+  if (
+    status !== "running" ||
+    (routedTurnId !== null && chat.activeTurn?.turnId !== routedTurnId)
+  ) {
+    return refused(TURN_ENDED_NOTICE);
+  }
   return chatActionsFor(session.handle).stopTurn() === null
     ? refused(NOT_DELIVERED_NOTICE)
     : EXECUTED;
@@ -358,17 +373,24 @@ function idAfter(action: string, kind: string): string | null {
   return action.startsWith(`${kind}:`) ? action.slice(kind.length + 1) : null;
 }
 
-function runRow(
-  row: VoiceViewRow,
-  text: string,
-  reads: PageActReads,
-  queryClient: QueryClient,
-): VerbOutcome | Promise<VerbOutcome> {
+/** One row to run, as the say loop hands it over. */
+interface PageActInput {
+  readonly row: VoiceViewRow;
+  /** The span of the person's words; what a row that takes words passes on. */
+  readonly text: string;
+  /** The agent's turn as the route saw it. */
+  readonly turnId: string | null;
+  readonly reads: PageActReads;
+  readonly queryClient: QueryClient;
+}
+
+function runRow(input: PageActInput): VerbOutcome | Promise<VerbOutcome> {
+  const { row, text, turnId, reads, queryClient } = input;
   const { action } = row;
   const tell = idAfter(action, "agent.tell");
   if (tell !== null) return tellAgent(tell, text, reads, queryClient);
   const stop = idAfter(action, "agent.stop");
-  if (stop !== null) return stopAgent(stop, reads);
+  if (stop !== null) return stopAgent(stop, turnId, reads);
   const approve = idAfter(action, "approval.approve");
   if (approve !== null) return decideApproval(approve, true, reads);
   const decline = idAfter(action, "approval.decline");
@@ -380,15 +402,11 @@ function runRow(
  * Runs one row of the view. Always settles: a surface path that throws is said
  * as a refusal, never left as an unhandled rejection of the boundary.
  */
-export async function executePageAct(input: {
-  readonly row: VoiceViewRow;
-  /** The span of the person's words; what a row that takes words passes on. */
-  readonly text: string;
-  readonly reads: PageActReads;
-  readonly queryClient: QueryClient;
-}): Promise<VerbOutcome> {
+export async function executePageAct(
+  input: PageActInput,
+): Promise<VerbOutcome> {
   try {
-    return await runRow(input.row, input.text, input.reads, input.queryClient);
+    return await runRow(input);
   } catch (error) {
     appLogger.warn("[voice] page act failed", {
       error: error instanceof Error ? error.message : "unknown",

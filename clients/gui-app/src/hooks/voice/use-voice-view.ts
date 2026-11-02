@@ -203,6 +203,7 @@ function readAgent(
         ? "waiting"
         : activityStateOf(turnStatus, chatActivityIndicator(chat)),
       waitingOn: waiting ? "approval" : null,
+      turnId: chat.activeTurn?.turnId ?? null,
     },
     turnRunning: turnStatus === "running",
     approvals,

@@ -14,6 +14,7 @@ import {
   backgroundItemSchema,
   chatApprovalStateSchema,
   type BackgroundItem,
+  type ChatActiveTurn,
   type ChatApprovalState,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import { CommandPaletteRouterContext } from "@/components/command-palette/command-palette-context";
@@ -130,6 +131,23 @@ function approval(overrides: Partial<ChatApprovalState>): ChatApprovalState {
     reviewing: null,
     ...overrides,
   });
+}
+
+function activeTurn(turnId: string): ChatActiveTurn {
+  return {
+    turnId,
+    status: "running",
+    harnessId: "claude",
+    model: "model-a",
+    reasoningEffort: null,
+    serviceTier: null,
+    agentMode: "regular",
+    profileId: null,
+    userMessageId: null,
+    startedAt: 1,
+    updatedAt: 1,
+    sameTurnSteeringSupported: true,
+  };
 }
 
 function chatProjection(node: EpicNodeRef): ChatProjection {
@@ -379,6 +397,7 @@ describe("the view of a task with a working agent", () => {
       title: "Main agent",
       state: "working",
       waitingOn: null,
+      turnId: null,
     });
     expect(actionsOf(view)).toEqual(
       expect.arrayContaining([
@@ -395,6 +414,21 @@ describe("the view of a task with a working agent", () => {
         confirm: false,
       },
     );
+  });
+
+  it("names the turn on the wire, and none once the chat has none", () => {
+    taskWithWorkingAgent();
+    const mounted = mount("/", { enabled: true, palette: true });
+
+    act(() => {
+      chatSession().store.setState({ activeTurn: activeTurn("turn-1") });
+    });
+    expect(mounted.handle().current().agent?.turnId).toBe("turn-1");
+
+    act(() => {
+      chatSession().store.setState({ activeTurn: null });
+    });
+    expect(mounted.handle().current().agent?.turnId).toBeNull();
   });
 
   it("is bound to the generation the store holds", () => {

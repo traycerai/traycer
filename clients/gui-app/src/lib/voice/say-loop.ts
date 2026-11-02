@@ -156,8 +156,15 @@ export interface SayLoopDeps {
    * owner change by a microtask.
    */
   readonly view: () => VoiceView;
-  /** Runs one row of the view through its surface's own path; always settles. */
-  readonly act: (row: VoiceViewRow, text: string) => Promise<VerbOutcome>;
+  /**
+   * Runs one row of the view through its surface's own path, with the agent's
+   * turn as the route saw it; always settles.
+   */
+  readonly act: (
+    row: VoiceViewRow,
+    text: string,
+    turnId: string | null,
+  ) => Promise<VerbOutcome>;
 }
 
 /** What the router is given: the reserved words, segment by segment, as said. */
@@ -1060,7 +1067,7 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
     }
     store.getState().consumeReservation(entry.seqs);
     settleDelegation(entry.delegationId);
-    const outcome = await deps.act(decision.row, text);
+    const outcome = await deps.act(decision.row, text, decision.turnId);
     if (outcome.kind !== "refused") return;
     if (store.getState().sessionToken !== entry.sessionToken) return;
     deps.notify(outcome.say, delegationOf(entry));

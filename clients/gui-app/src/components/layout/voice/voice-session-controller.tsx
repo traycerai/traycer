@@ -602,8 +602,14 @@ export function VoiceSessionController(): ReactNode {
       },
       control: (verb) => controlRef.current(verb),
       view: () => viewRef.current.current(),
-      act: (row, text) =>
-        executePageAct({ row, text, reads: viewRef.current, queryClient }),
+      act: (row, text, turnId) =>
+        executePageAct({
+          row,
+          text,
+          turnId,
+          reads: viewRef.current,
+          queryClient,
+        }),
       schedule: (fn, ms) => {
         const handle = window.setTimeout(fn, ms);
         return () => window.clearTimeout(handle);

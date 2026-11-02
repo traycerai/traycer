@@ -160,6 +160,8 @@ function build() {
   /** What each question said and the request it was asked under, by its index in `asks`. */
   const askLog: Array<{ text: string; delegationId: string | null }> = [];
   const acts: Array<{ row: VoiceViewRow; text: string }> = [];
+  /** The turn each act was handed, in the order the acts ran. */
+  const actTurns: Array<string | null> = [];
   const actGates: Array<(outcome: VerbOutcome) => void> = [];
   /** The questions withdrawn, by their index in `asks`. */
   const withdrawn: number[] = [];
@@ -246,8 +248,9 @@ function build() {
     botTitle: (botId) => botId,
     onAccepted: () => undefined,
     view: () => wiring.live,
-    act: (row, text) => {
+    act: (row, text, turnId) => {
       acts.push({ row, text });
+      actTurns.push(turnId);
       if (!holdActs) return Promise.resolve(wiring.actOutcome);
       return new Promise<VerbOutcome>((resolve) => {
         actGates.push(resolve);
@@ -262,6 +265,7 @@ function build() {
     asks,
     askLog,
     acts,
+    actTurns,
     actGates,
     holdActs: () => {
       holdActs = true;
@@ -642,6 +646,7 @@ const TASK_PAGE: VoiceView = composeVoiceView({
     title: "Main agent",
     state: "idle",
     waitingOn: null,
+    turnId: null,
   },
   agentTurnRunning: false,
   approvals: [],
@@ -654,6 +659,24 @@ const TASK_PAGE: VoiceView = composeVoiceView({
   },
   generation: PAGE_GENERATION,
 });
+
+/** The same task with the agent running the turn `turnId`. */
+function runningPage(turnId: string): VoiceView {
+  return composeVoiceView({
+    page: { kind: "task", title: "Tracy Bots", tile: "Main agent" },
+    agent: {
+      chatId: "chat_1",
+      title: "Main agent",
+      state: "working",
+      waitingOn: null,
+      turnId,
+    },
+    agentTurnRunning: true,
+    approvals: [],
+    palette: NO_PALETTE_ITEMS,
+    generation: PAGE_GENERATION,
+  });
+}
 
 /** The page after the person moved on: the same rows under the next generation. */
 const MOVED_PAGE: VoiceView = { ...TASK_PAGE, generation: PAGE_GENERATION + 1 };
@@ -721,6 +744,24 @@ describe("a page action that needs a yes", () => {
     expect(useVoiceSessionStore.getState().focus).toEqual(FOCUS_TRACY);
     expect(useVoiceSessionStore.getState().pendingAction).toBeNull();
     expect(useVoiceSessionStore.getState().segments).toEqual([]);
+  });
+
+  it("hands the act the turn of the view the route was made against, though the page now shows another turn under the same generation", async () => {
+    const h = build();
+    h.wiring.routed = runningPage("turn-1");
+    h.wiring.live = runningPage("turn-2");
+    h.answers.push(() =>
+      Promise.resolve(actRoute("agent.stop:chat_1", 1, false)),
+    );
+    speak("stop it");
+    await h.loop.onDelegationCreated("d-1");
+    h.asks[0]?.onDelivered();
+
+    speak("yes");
+    await h.loop.onDelegationCreated("d-2");
+
+    expect(h.acts.map((act) => act.row.action)).toEqual(["agent.stop:chat_1"]);
+    expect(h.actTurns).toEqual(["turn-1"]);
   });
 
   it("passes the words of its span on to a row that takes them, after a yes", async () => {

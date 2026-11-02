@@ -340,6 +340,7 @@ function probeViewOf(name: ProbeViewName): VoiceView {
         title: line.title,
         state: line.state,
         waitingOn: line.waitingOn ?? null,
+        turnId: null,
       };
     } else if ("approval" in line) {
       approvals.push({ id: line.approval, summary: line.summary });
@@ -433,6 +434,7 @@ function act(
     row: rowOf(view, paletteIdOf(probeId)),
     span: { from, to },
     generation: GENERATION,
+    turnId: null,
     confirm,
   });
 }
@@ -734,6 +736,7 @@ function round2ViewOf(name: Round2Name): VoiceView {
         title: line.title,
         state: line.state,
         waitingOn: line.waitingOn ?? null,
+        turnId: null,
       };
     } else if ("approval" in line) {
       approvals.push({ id: line.approval, summary: line.summary });
@@ -1026,6 +1029,7 @@ const SAMPLE_VIEW: VoiceView = {
     title: "Main agent",
     state: "waiting",
     waitingOn: "approval",
+    turnId: null,
   },
   approvals: [{ id: "ap_1", summary: "Run bun install" }],
   rows: [
@@ -1083,6 +1087,7 @@ describe("renderView", () => {
         title: "Main agent",
         state: "working",
         waitingOn: null,
+        turnId: null,
       },
     };
 
@@ -1091,6 +1096,24 @@ describe("renderView", () => {
       title: "Main agent",
       state: "working",
     });
+  });
+
+  it("renders a view the same whatever turn its agent is on, and never shows the model the turn's id", () => {
+    const onTurn: VoiceView = {
+      ...SAMPLE_VIEW,
+      agent: {
+        chatId: "chat_1",
+        title: "Main agent",
+        state: "waiting",
+        waitingOn: "approval",
+        turnId: "turn-7f3a",
+      },
+    };
+
+    const rendered = renderView(onTurn);
+
+    expect(rendered).not.toContain("turn-7f3a");
+    expect(rendered).toBe(renderView(SAMPLE_VIEW));
   });
 
   it("keeps a title, an approval's text and a label that try to close the fence escaped inside their own lines", () => {
@@ -1187,6 +1210,7 @@ const TASK_VIEW = composeVoiceView({
     title: "Main agent",
     state: "working",
     waitingOn: null,
+    turnId: null,
   },
   agentTurnRunning: true,
   approvals: [],
@@ -1229,6 +1253,45 @@ function route(
 const WHOLE = { from: 0, to: 1 };
 
 describe("resolveRoute against the view", () => {
+  it("carries the turn of the view's agent on an act, and none on a page without an agent", () => {
+    const onTurn = composeVoiceView({
+      page: { kind: "task", title: "Tracy Bots", tile: "Main agent" },
+      agent: {
+        chatId: "chat_1",
+        title: "Main agent",
+        state: "working",
+        waitingOn: null,
+        turnId: "turn-7",
+      },
+      agentTurnRunning: true,
+      approvals: [],
+      palette: NO_PALETTE_ITEMS,
+      generation: 5,
+    });
+    const noAgent = compose({
+      palette: {
+        ...NO_PALETTE_ITEMS,
+        commands: [commandItem("tab.next", "Next tab")],
+      },
+    });
+    const resolve = (view: VoiceView, actionId: string): RoutedDecision =>
+      resolveRoute(
+        route("act", { actionId }, WHOLE, false),
+        DIRECTORY,
+        view,
+        2,
+      );
+
+    expect(resolve(onTurn, "agent.stop:chat_1")).toMatchObject({
+      kind: "act",
+      turnId: "turn-7",
+    });
+    expect(resolve(noAgent, "action:tab.next")).toMatchObject({
+      kind: "act",
+      turnId: null,
+    });
+  });
+
   it("refuses an act whose id the view does not offer", () => {
     expect(
       resolveRoute(
@@ -1385,6 +1448,7 @@ describe("resolveRoute naming a row by what follows its last colon", () => {
       title: "Main agent",
       state: "working",
       waitingOn: null,
+      turnId: null,
     },
     agentTurnRunning: true,
     approvals: [],
@@ -1429,6 +1493,7 @@ describe("resolveRoute naming a row by what follows its last colon", () => {
       row: rowOf(TASK_VIEW, "action:tab.close"),
       span: WHOLE,
       generation: 5,
+      turnId: null,
       confirm: true,
     });
   });
@@ -1540,6 +1605,7 @@ describe("the say loop with a page action or a question about the agent", () => 
           title: "Main agent",
           state,
           waitingOn: null,
+          turnId: null,
         },
         agentTurnRunning: false,
         approvals: [],
@@ -1594,6 +1660,7 @@ const WORKING_AGENT: VoiceViewAgent = {
   title: "Main agent",
   state: "working",
   waitingOn: null,
+  turnId: null,
 };
 
 describe("composeVoiceView", () => {

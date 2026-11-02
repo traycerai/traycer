@@ -30,6 +30,8 @@ export interface VoiceViewAgent {
   /** `background`: its turn is over, and work it started is still running. */
   readonly state: "working" | "waiting" | "background" | "idle";
   readonly waitingOn: "approval" | null;
+  /** The turn on the wire now; `null` while none is, or a send has not started one yet. */
+  readonly turnId: string | null;
 }
 
 export interface VoiceViewApproval {

@@ -7,6 +7,11 @@ import {
   createRouter,
 } from "@tanstack/react-router";
 import { act, cleanup, render } from "@testing-library/react";
+import type {
+  ChatActiveTurn,
+  ChatRunSettings,
+  ChatSubscribeClientFrame,
+} from "@traycer/protocol/host/agent/gui/subscribe";
 import type { BotQuestionSettlement } from "@traycer/protocol/persistence/epic/messages";
 import type { OpenTextBlock } from "@traycer/protocol/persistence/epic/open-harness-records";
 import {
@@ -26,6 +31,7 @@ import type {
   BotRecord,
 } from "@traycer/protocol/host/bot/schemas";
 import type { BotSubscriptionResult } from "@/hooks/bots/use-bot-subscription";
+import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport/chat-stream-client";
 import type { StreamFrameEnvelope } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type { SystemSuspendCause } from "@traycer-clients/shared/platform/runner-host";
 import type { StreamMethodSupport } from "@traycer-clients/shared/host-transport/ws-stream-client";
@@ -35,9 +41,24 @@ import { MockWsStreamClient } from "@/components/epic-canvas/pr/__tests__/pr-str
 import type { VoiceEngineEvents } from "@/lib/voice/engine";
 import type { ReplyRow } from "@/lib/voice/focused-replies";
 import type { HydrationRow } from "@/lib/voice/queue-sources";
+import {
+  __getChatSessionRegistryForTests,
+  disposeAllChatSessions,
+} from "@/lib/registries/chat-session-registry";
+import { TURN_ENDED_NOTICE } from "@/lib/voice/page-acts";
 import { runVoiceQueueVerb } from "@/lib/voice/queue-verbs";
 import { MOVED_ASK_TEXT, PAGE_CHANGED_ASK_TEXT } from "@/lib/voice/say-loop";
 import { voiceMutationKeys } from "@/lib/query-keys";
+import { createChatSessionStore } from "@/stores/chats/chat-session-store";
+import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
+import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
+import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import type { EpicNodeRef } from "@/stores/epics/canvas/types";
+import { tabItemId } from "@/stores/tabs/layout";
+import {
+  createUnavailableTileFindAdapter,
+  useTileFindStore,
+} from "@/stores/tile-find";
 import { useBotOpenThreadStore } from "@/stores/bots/bot-open-thread-store";
 import { useBotTabLandingStore } from "@/stores/bots/bot-tab-landing-store";
 import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
@@ -4280,6 +4301,216 @@ describe("the page in front", () => {
     expect(useVoiceSessionStore.getState().pendingAction).toMatchObject({
       kind: "interrupted",
       text: "Open the history.",
+    });
+  });
+
+  describe("a spoken stop that waits for its yes", () => {
+    const EPIC_ID = "epic-voice";
+    const AGENT_ID = "agent-chat";
+    const HOST_ID = "host-a";
+    const USER_ID = "user-me";
+    const AGENT_TILE: EpicNodeRef = {
+      id: AGENT_ID,
+      instanceId: "inst-agent",
+      type: "chat",
+      name: "Main agent",
+      hostId: HOST_ID,
+    };
+    const SETTINGS: ChatRunSettings = {
+      ultracode: false,
+      harnessId: "claude",
+      model: "model-a",
+      permissionMode: "supervised",
+      reasoningEffort: null,
+      serviceTier: null,
+      agentMode: "regular",
+      profileId: null,
+    };
+
+    function turn(turnId: string): ChatActiveTurn {
+      return {
+        turnId,
+        status: "running",
+        harnessId: "claude",
+        model: "model-a",
+        reasoningEffort: null,
+        serviceTier: null,
+        agentMode: "regular",
+        profileId: null,
+        userMessageId: null,
+        startedAt: 1,
+        updatedAt: 1,
+        sameTurnSteeringSupported: true,
+      };
+    }
+
+    let releaseTile: () => void = () => undefined;
+
+    afterEach(() => {
+      releaseTile();
+      releaseTile = () => undefined;
+      useTileFindStore.getState().resetForTests();
+      useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+      disposeAllChatSessions();
+    });
+
+    /**
+     * A task in front whose active tile is a chat running `turn-1`, in the real
+     * canvas, tile-find and chat session registry; only the stream client, the
+     * wire, is faked.
+     */
+    function seedRunningAgent(): {
+      readonly sent: ChatSubscribeClientFrame[];
+      readonly callbacks: ChatStreamCallbacks;
+    } {
+      const sent: ChatSubscribeClientFrame[] = [];
+      const wire: { callbacks: ChatStreamCallbacks | null } = {
+        callbacks: null,
+      };
+      __getChatSessionRegistryForTests().acquire(
+        {
+          epicId: EPIC_ID,
+          chatId: AGENT_ID,
+          hostId: HOST_ID,
+          scopeKey: "voice-controller-test",
+        },
+        () =>
+          createChatSessionStore({
+            environment: CHAT_STORE_TEST_ENVIRONMENT,
+            hostId: HOST_ID,
+            epicId: EPIC_ID,
+            chatId: AGENT_ID,
+            userId: USER_ID,
+            onAuthError: null,
+            onProviderAuthError: null,
+            wakeTransport: null,
+            streamFlushCoordinator: IMMEDIATE_STREAM_FLUSH_COORDINATOR,
+            streamClientFactory: (_epicId, _chatId, callbacks) => {
+              wire.callbacks = callbacks;
+              return {
+                sendAction: (frame) => {
+                  sent.push(frame);
+                },
+                sameTurnSteeringProtocolSupported: () => true,
+                draftBlobBridgeSupported: () => true,
+                requestTranscriptRange: () => undefined,
+                requestResnapshot: () => undefined,
+                close: () => undefined,
+              };
+            },
+          }),
+      );
+      const { callbacks } = wire;
+      if (callbacks === null) throw new Error("the store never opened");
+      callbacks.onConnectionStatus("open", null, null, null);
+      callbacks.onSnapshot({
+        kind: "snapshot",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: AGENT_ID,
+        snapshot: {
+          chat: {
+            id: AGENT_ID,
+            parentId: null,
+            userId: USER_ID,
+            hostId: HOST_ID,
+            title: AGENT_TILE.name,
+            createdAt: 1,
+            updatedAt: 1,
+            isTitleEditedByUser: false,
+            settings: SETTINGS,
+            activeSessionChain: null,
+            claudePendingWakes: [],
+            messages: [],
+            events: [],
+            archivedAt: null,
+            pinnedUserProviderHandle: null,
+            lastDeliveredRolesDigest: null,
+          },
+          access: { role: "owner", ownerUserId: USER_ID, canAct: true },
+          queue: { status: "idle", items: [] },
+          runStatus: "running",
+          activeTurn: turn("turn-1"),
+          pendingApprovals: [],
+          pendingInterviews: [],
+          worktreeBinding: null,
+          missingWorktreePaths: [],
+          pendingFileEditApprovals: [],
+          accumulatedFileChanges: [],
+          managedCommands: [],
+          heldUpdates: [],
+          portForwards: [],
+        },
+      });
+
+      const canvas = useEpicCanvasStore.getState();
+      const tabId = canvas.openEpicTab(EPIC_ID, "Tracy Bots");
+      canvas.openTileInTab(tabId, AGENT_TILE);
+      const ref: TabRef = { kind: "epic", id: tabId };
+      act(() => {
+        useTabsStore.setState({
+          version: 2,
+          items: [{ kind: "tab", id: tabItemId(ref), ref }],
+          activeItemId: tabItemId(ref),
+          stripOrder: [ref],
+          systemTabs: { history: null, settings: null },
+        });
+        releaseTile = useTileFindStore.getState().registerTarget({
+          tileInstanceId: AGENT_TILE.instanceId,
+          contentId: `${AGENT_TILE.instanceId}-content`,
+          viewTabId: tabId,
+          tileId: `${AGENT_TILE.instanceId}-pane`,
+          epicId: EPIC_ID,
+          tileKind: "chat",
+          isEligible: true,
+          adapter: createUnavailableTileFindAdapter({
+            tileInstanceId: AGENT_TILE.instanceId,
+            tileKind: "chat",
+            message: null,
+          }),
+        });
+      });
+      return { sent, callbacks };
+    }
+
+    it("does not stop the next turn when the one it asked about ended while the question waited, and says so", async () => {
+      await bringLive();
+      focusOn(CHANNEL_FOCUS);
+      const wire = seedRunningAgent();
+      fake.routeAnswer = () => actAnswer(`agent.stop:${AGENT_ID}`);
+      const spoken = fake.engines[0]?.appendCommentary;
+
+      await say("Stop the agent.", "d1");
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(6_000);
+      });
+      const question = spoken.mock.calls.find(([text]) =>
+        text.endsWith("Yes?"),
+      );
+      if (question === undefined) throw new Error("the stop was never asked");
+      act(() => eventsOf(0).onOutputTranscriptDelta(question[0]));
+      await settle();
+
+      act(() => {
+        for (const next of [null, turn("turn-2")]) {
+          wire.callbacks.onTurnStateChanged({
+            kind: "turnStateChanged",
+            hasBinaryPayload: false,
+            epicId: EPIC_ID,
+            chatId: AGENT_ID,
+            runStatus: next === null ? "idle" : "running",
+            activeTurn: next,
+            turnInProgress: next !== null,
+          });
+        }
+      });
+      await say("yes", "d2");
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(6_000);
+      });
+
+      expect(wire.sent.filter((frame) => frame.kind === "stop")).toEqual([]);
+      expect(spoken).toHaveBeenCalledWith(TURN_ENDED_NOTICE, "d1");
     });
   });
 });

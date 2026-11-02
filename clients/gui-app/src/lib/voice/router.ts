@@ -453,6 +453,8 @@ export type RoutedDecision =
       readonly row: VoiceViewRow;
       readonly span: SpanPick;
       readonly generation: number;
+      /** The agent's turn in that view: what a stop was asked of. */
+      readonly turnId: string | null;
       /** Read back first: the row asks for it, or the words are a guess at who hears them. */
       readonly confirm: boolean;
     }
@@ -617,6 +619,7 @@ function resolveAct(
     row,
     span,
     generation: view.generation,
+    turnId: view.agent?.turnId ?? null,
     confirm: row.confirm || (result.uncertain && row.takesWords),
   };
 }
