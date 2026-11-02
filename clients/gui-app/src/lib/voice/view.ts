@@ -27,7 +27,8 @@ export type VoicePage =
 export interface VoiceViewAgent {
   readonly chatId: string;
   readonly title: string;
-  readonly state: "working" | "waiting" | "idle";
+  /** `background`: its turn is over, and work it started is still running. */
+  readonly state: "working" | "waiting" | "background" | "idle";
   readonly waitingOn: "approval" | null;
 }
 

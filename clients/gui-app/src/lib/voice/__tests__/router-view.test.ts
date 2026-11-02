@@ -1449,7 +1449,10 @@ describe("the say loop with a page action or a question about the agent", () => 
   });
 
   /** Says the words, has the model answer `answer`, and returns what the loop did. */
-  async function heard(answer: RouterResult): Promise<{
+  async function heard(
+    answer: RouterResult,
+    view: VoiceView,
+  ): Promise<{
     readonly sends: string[];
     readonly notices: string[];
     readonly asks: string[];
@@ -1475,7 +1478,7 @@ describe("the say loop with a page action or a question about the agent", () => 
           resolveRoute(
             parseRouterResponse(responsesBody(answer)),
             DIRECTORY,
-            TASK_VIEW,
+            view,
             request.segments.length,
           ),
         ),
@@ -1505,7 +1508,7 @@ describe("the say loop with a page action or a question about the agent", () => 
   ])(
     "says $name cannot be done here yet, spends the words and posts nothing",
     async ({ answer }) => {
-      const outcome = await heard(answer);
+      const outcome = await heard(answer, TASK_VIEW);
 
       expect(outcome.notices).toEqual(["I can't do that here yet."]);
       expect(outcome.sends).toEqual([]);
@@ -1514,19 +1517,44 @@ describe("the say loop with a page action or a question about the agent", () => 
     },
   );
 
-  it("says what the agent is doing and posts nothing", async () => {
-    const outcome = await heard(
-      route("status", { agentId: "chat_1" }, WHOLE, false),
-    );
+  it.each([
+    { state: "working", line: "Main agent is working." },
+    {
+      state: "background",
+      line: "Main agent has finished its turn, with work still running in the background.",
+    },
+  ] as const)(
+    "says what the agent is doing when it is $state and posts nothing",
+    async ({ state, line }) => {
+      const view = composeVoiceView({
+        page: { kind: "task", title: "Tracy Bots", tile: "Main agent" },
+        agent: {
+          chatId: "chat_1",
+          title: "Main agent",
+          state,
+          waitingOn: null,
+        },
+        agentTurnRunning: false,
+        approvals: [],
+        palette: NO_PALETTE_ITEMS,
+        generation: 5,
+      });
 
-    expect(outcome.notices).toEqual(["Main agent is working."]);
-    expect(outcome.sends).toEqual([]);
-    expect(useVoiceSessionStore.getState().segments).toEqual([]);
-  });
+      const outcome = await heard(
+        route("status", { agentId: "chat_1" }, WHOLE, false),
+        view,
+      );
+
+      expect(outcome.notices).toEqual([line]);
+      expect(outcome.sends).toEqual([]);
+      expect(useVoiceSessionStore.getState().segments).toEqual([]);
+    },
+  );
 
   it("refuses an action the page does not offer without naming a model, a vendor or how it was chosen", async () => {
     const outcome = await heard(
       route("act", { actionId: "action:tab.reopen" }, WHOLE, false),
+      TASK_VIEW,
     );
 
     expect(outcome.notices).toHaveLength(1);

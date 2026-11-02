@@ -362,6 +362,8 @@ function agentStatusLine(agent: VoiceViewAgent): string {
       return `${agent.title} is working.`;
     case "waiting":
       return `${agent.title} is waiting on an approval.`;
+    case "background":
+      return `${agent.title} has finished its turn, with work still running in the background.`;
     case "idle":
       return `${agent.title} is idle.`;
   }

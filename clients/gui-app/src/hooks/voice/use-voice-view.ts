@@ -34,6 +34,13 @@ import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useTabsStore } from "@/stores/tabs";
 import { selectHostFocusedRef } from "@/stores/tabs/selectors";
 import type { TabRef } from "@/stores/tabs/types";
+import {
+  chatActivityIndicator,
+  composerTurnStatus,
+  resolvedTurnStatus,
+  type ChatActivityIndicator,
+  type ComposerTurnStatus,
+} from "@/stores/chats/chat-run-activity";
 import { useTileFindStore } from "@/stores/tile-find";
 import { useVoiceSessionStore } from "@/stores/voice/voice-session-store";
 
@@ -160,18 +167,32 @@ function readAgent(
     }),
   );
   const waiting = approvals.length > 0;
-  const state: VoiceViewAgent["state"] =
-    chat.runStatus === "idle" ? "idle" : "working";
+  // Not the raw `runStatus`: work left running after a turn ended keeps it
+  // `running` with no turn to stop.
+  const turnStatus = resolvedTurnStatus(
+    chat,
+    composerTurnStatus(chat.runStatus),
+  );
   return {
     agent: {
       chatId: ref.id,
       title: ref.name,
-      state: waiting ? "waiting" : state,
+      state: waiting
+        ? "waiting"
+        : activityStateOf(turnStatus, chatActivityIndicator(chat)),
       waitingOn: waiting ? "approval" : null,
     },
-    turnRunning: chat.runStatus === "running",
+    turnRunning: turnStatus === "running",
     approvals,
   };
+}
+
+function activityStateOf(
+  turnStatus: ComposerTurnStatus,
+  indicator: ChatActivityIndicator,
+): VoiceViewAgent["state"] {
+  if (turnStatus !== null) return "working";
+  return indicator === null ? "idle" : "background";
 }
 
 function readVoiceView(

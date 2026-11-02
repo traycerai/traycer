@@ -11,7 +11,9 @@ import { act, cleanup, render } from "@testing-library/react";
 import { useEffect, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  backgroundItemSchema,
   chatApprovalStateSchema,
+  type BackgroundItem,
   type ChatApprovalState,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import { CommandPaletteRouterContext } from "@/components/command-palette/command-palette-context";
@@ -338,7 +340,7 @@ function taskWithWorkingAgent(): TaskTab {
   const task = openTaskTab();
   openEpicSession();
   const session = chatSession();
-  session.store.setState({ runStatus: "running" });
+  session.store.setState({ runStatus: "running", turnInProgress: true });
   useTabsStore.setState(stripOf([task.ref], task.ref));
   activateTile(task, AGENT);
   return task;
@@ -847,5 +849,98 @@ describe("rows composed for a page that has since changed", () => {
     expect(actionsOf(republished)).toContain("nav:settings/appearance");
     expect(actionsOf(republished)).not.toContain("nav:settings/keybindings");
     expect(generation()).toBe(before + 1);
+  });
+});
+
+describe("how the agent's turn is read", () => {
+  function backgroundItem(kind: BackgroundItem["kind"]): BackgroundItem {
+    return backgroundItemSchema.parse({
+      taskId: `bg-${kind}`,
+      title: `a ${kind}`,
+      blockId: "block-1",
+      parentTaskId: null,
+      kind,
+      scheduledFor: null,
+      individualStopUnavailable: null,
+    });
+  }
+
+  it.each([
+    { name: "a command", kind: "command" },
+    { name: "a monitor", kind: "monitor" },
+    // The activity indicator reads this one as the agent's own work, which is
+    // why the view reads the turn first: there is still no turn to stop.
+    { name: "a subagent", kind: "subagent" },
+  ] as const)(
+    "shows the agent in the background, with nothing to stop, once its turn is over and $name still runs",
+    ({ kind }) => {
+      taskWithWorkingAgent();
+      chatSession().store.setState({
+        runStatus: "running",
+        turnInProgress: false,
+        backgroundItems: [backgroundItem(kind)],
+      });
+      const mounted = mount("/", { enabled: true, palette: true });
+
+      const view = mounted.handle().current();
+
+      expect(view.agent).toMatchObject({
+        state: "background",
+        waitingOn: null,
+      });
+      expect(actionsOf(view)).toContain("agent.tell:chat-1");
+      expect(actionsOf(view)).not.toContain("agent.stop:chat-1");
+    },
+  );
+
+  it.each([
+    {
+      name: "a running turn",
+      state: { runStatus: "running", turnInProgress: true },
+      agent: "working",
+      stoppable: true,
+    },
+    {
+      name: "a turn being stopped",
+      state: { runStatus: "stopping", turnInProgress: true },
+      agent: "working",
+      stoppable: false,
+    },
+    {
+      name: "nothing running",
+      state: { runStatus: "idle" },
+      agent: "idle",
+      stoppable: false,
+    },
+  ] as const)(
+    "reads $name as $agent, and offers to stop it: $stoppable",
+    ({ state, agent, stoppable }) => {
+      taskWithWorkingAgent();
+      chatSession().store.setState(state);
+      const mounted = mount("/", { enabled: true, palette: true });
+
+      const view = mounted.handle().current();
+
+      expect(view.agent?.state).toBe(agent);
+      expect(actionsOf(view).includes("agent.stop:chat-1")).toBe(stoppable);
+    },
+  );
+
+  it("shows the agent waiting on an approval, with nothing to stop, though the host still calls the run running", () => {
+    taskWithWorkingAgent();
+    chatSession().store.setState({
+      runStatus: "running",
+      turnInProgress: false,
+      pendingApprovals: [approval({})],
+    });
+    const mounted = mount("/", { enabled: true, palette: true });
+
+    const view = mounted.handle().current();
+
+    expect(view.agent).toMatchObject({
+      state: "waiting",
+      waitingOn: "approval",
+    });
+    expect(actionsOf(view)).not.toContain("agent.stop:chat-1");
   });
 });
