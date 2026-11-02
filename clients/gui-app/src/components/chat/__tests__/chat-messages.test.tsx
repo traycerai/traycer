@@ -7414,6 +7414,214 @@ describe("ChatMessages scroll policy", () => {
       });
     });
 
+    it("follows the latest when every slice of the split turn is drawn and none names the saved segment", async () => {
+      // The text streaming at the save moved behind the steer and now starts
+      // a slice instead of cutting one. With every slice hydrated the part is
+      // gone, not cold: nothing to wait for, and no row to guess at.
+      const turnIndex = 11;
+      const turnRowId = "assistant:turn-steered-mid-text";
+      const laterTextId = "text-later";
+      const messages = makeCompletedTranscript(40);
+      const afterSteer: ChatMessageModel[] = [
+        ...messages.slice(0, turnIndex),
+        {
+          ...messages[turnIndex],
+          id: `${turnRowId}:part:0`,
+          role: "assistant",
+          segments: [assistantTextSegment("text-first", "Before the steer.")],
+        },
+        {
+          ...makeMessageAt(0, "user", 5_000),
+          id: "steer:queue-item-1",
+          content: "queued while the turn ran",
+        },
+        {
+          ...makeMessageAt(0, "assistant", 5_001),
+          id: `${turnRowId}:part:1`,
+          completedAt: 5_100,
+          segments: [
+            assistantTextSegment(laterTextId, "Resumed behind the steer."),
+            assistantTextSegment("text-after", "And went on."),
+          ],
+        },
+        ...messages.slice(turnIndex + 1),
+      ];
+      const instanceId = `steer-split-lost-${Math.random().toString(36).slice(2)}`;
+      const identity = makeTestIdentity(instanceId, "epic-1", "task-1");
+      saveChatTabState({
+        identity,
+        mode: "free-scrolling",
+        anchorMessageId: `${turnRowId}#${laterTextId}`,
+        anchorRowKey: turnRowId,
+        anchorIndex: turnIndex + 1,
+        offset: 24,
+      });
+      const expandedRowCount = afterSteer.length + 1;
+      setLegendListScrollContainerScrollHeightOverride(
+        LEGEND_LIST_HEADER_PX + expandedRowCount * TICKET_13_ROW_HEIGHT_PX + 40,
+      );
+      tileLiveness.live = true;
+      const view = renderChatMessages({
+        messages: afterSteer,
+        instanceId,
+        epicId: "epic-1",
+        taskId: "task-1",
+      });
+      await settleLegendList();
+      await settleLegendList();
+
+      expect(getScrollNode().dataset.scrollMode).toBe("following-end");
+      expect(getScrollNode().scrollTop).toBe(maxScrollTopFor(getScrollNode()));
+
+      view.unmount();
+      expect(peekSavedChatTabState(identity)).toMatchObject({
+        mode: "following-end",
+        anchorMessageId: null,
+      });
+    });
+
+    it("waits on the cold slices of a split turn, then reopens at the saved part once they hydrate", async () => {
+      // On the windowed line the slices may still be placeholders when the
+      // tile mounts. A slice not drawn yet is no evidence the segment is gone:
+      // the mount lands on the first slice, asks the host for the slices, and
+      // replays the exact part once a drawn slice names it.
+      const rowCount = 60;
+      const firstSliceOrdinal = 20;
+      const turnRowId = "assistant:turn-cold-split";
+      const laterTextId = "text-later";
+      const firstSliceRowId = `${turnRowId}:part:0`;
+      const steerRowId = "steer:queue-item-1";
+      const secondSliceRowId = `${turnRowId}:part:1`;
+      const savedOffset = 24;
+      const turnRowIds: Record<number, string> = {
+        [firstSliceOrdinal]: firstSliceRowId,
+        [firstSliceOrdinal + 1]: steerRowId,
+        [firstSliceOrdinal + 2]: secondSliceRowId,
+      };
+      const skeleton = Array.from({ length: rowCount }, (_unused, ordinal) => {
+        const role: "user" | "assistant" =
+          ordinal === firstSliceOrdinal + 1 ? "user" : "assistant";
+        return {
+          rowId: turnRowIds[ordinal] ?? `row-${ordinal}`,
+          createdAt: ordinal,
+          role,
+          byteLength: 80,
+          bodyDigest: `digest-${ordinal}`,
+        };
+      });
+      const coldWindow: TranscriptWindow = {
+        ...emptyTranscriptWindow(),
+        epoch: 1,
+        rowCount,
+        skeleton,
+        skeletonRevision: 2,
+        skeletonComplete: true,
+        skeletonStreamCoveredThrough: rowCount,
+        indexRevision: 2,
+        indexRevisionRebuilding: false,
+      };
+      const hydratedWindow: TranscriptWindow = {
+        ...coldWindow,
+        spans: [
+          {
+            fromOrdinal: firstSliceOrdinal,
+            rowIds: [firstSliceRowId, steerRowId, secondSliceRowId],
+            rowContext: {},
+            messageIds: [],
+            eventIds: [],
+            contextBytes: 0,
+          },
+        ],
+      };
+      const hydratedTurn: ChatMessageModel[] = [
+        {
+          ...makeMessageAt(0, "assistant", 1_000),
+          id: firstSliceRowId,
+          completedAt: 1_100,
+          segments: [
+            assistantTextSegment("text-first", "First block of the turn."),
+            assistantTextSegment(laterTextId, "Later block the reader was on."),
+          ],
+        },
+        {
+          ...makeMessageAt(0, "user", 1_150),
+          id: steerRowId,
+          content: "queued while the turn ran",
+        },
+        {
+          ...makeMessageAt(0, "assistant", 1_160),
+          id: secondSliceRowId,
+          completedAt: 1_200,
+          segments: [
+            assistantTextSegment("text-after-steer", "Picked the steer up."),
+          ],
+        },
+      ];
+      const instanceId = `steer-split-cold-${Math.random().toString(36).slice(2)}`;
+      const identity = makeTestIdentity(instanceId, "epic-1", "task-1");
+      saveChatTabState({
+        identity,
+        mode: "free-scrolling",
+        anchorMessageId: `${turnRowId}#${laterTextId}`,
+        anchorRowKey: turnRowId,
+        anchorIndex: firstSliceOrdinal + 1,
+        offset: savedOffset,
+      });
+      const ranges: Array<OrdinalRange | null> = [];
+      setLegendListScrollContainerScrollHeightOverride(
+        LEGEND_LIST_HEADER_PX + rowCount * TICKET_13_ROW_HEIGHT_PX + 40,
+      );
+      tileLiveness.live = true;
+      const view = renderChatMessages({
+        messages: [],
+        instanceId,
+        epicId: "epic-1",
+        taskId: "task-1",
+        transcriptWindow: coldWindow,
+        onVisibleOrdinalRangeChange: (range) => ranges.push(range),
+      });
+      // The slices are asked for as a unit, and the reader waits on the first
+      // one rather than at the top of the chat.
+      await waitFor(() => {
+        expect(ranges).toContainEqual({
+          fromOrdinal: firstSliceOrdinal,
+          toOrdinal: firstSliceOrdinal + 3,
+        });
+      });
+      await settleLegendList();
+      expect(getScrollNode().scrollTop).toBeGreaterThan(0);
+      expect(
+        screen
+          .getAllByTestId("chat-transcript-placeholder-row")
+          .some(
+            (placeholder) =>
+              placeholder.getAttribute("data-ordinal") ===
+              String(firstSliceOrdinal),
+          ),
+      ).toBe(true);
+
+      view.rerenderWith({
+        messages: hydratedTurn,
+        transcriptWindow: hydratedWindow,
+      });
+      const resolvedPartKey = `${firstSliceRowId}#${laterTextId}`;
+      await waitFor(() => {
+        expect(
+          document.querySelector<HTMLElement>(
+            `[data-row-key="${resolvedPartKey}"]`,
+          ),
+        ).not.toBeNull();
+        expect(
+          Math.abs(
+            viewportOffsetForKey(resolvedPartKey) -
+              (savedOffset - LEGEND_LIST_HEADER_PX),
+          ),
+        ).toBeLessThanOrEqual(1);
+      });
+      expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+      view.unmount();
+    });
+
     it("failed hydration landing retains the coordinate for a later messages-change retry", async () => {
       // The late-hydration catch-up must not
       // clear the pending id / session fallback before a validated landing.

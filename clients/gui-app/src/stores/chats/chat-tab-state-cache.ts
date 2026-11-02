@@ -9,6 +9,7 @@ import {
   saveReadingPositionContentFallback,
 } from "@/lib/reading-position/service";
 import { readingPositionIdentityForChat } from "@/lib/reading-position/chat-identity";
+import { isUnplacedRowKey } from "@/stores/chats/transcript-list-rows";
 
 export type ChatTabScrollMode = "following-end" | "free-scrolling";
 
@@ -169,9 +170,8 @@ function turnWasSplit(owner: string, rowKeys: ReadonlyArray<string>): boolean {
 
 /**
  * Whether a steer split the turn `saved` is anchored in since the position was
- * saved. The row the anchor names is then gone for good, not cold: nothing is
- * left for a hydration restore to wait for, and `restoreChatTabState` has
- * already answered against the renamed slices.
+ * saved. The row id the anchor names is then gone for good: no hydration brings
+ * it back, and only the renamed slices can answer for the position.
  */
 export function savedAnchorTurnWasSplit(
   saved: SavedChatTabScrollState,
@@ -190,10 +190,13 @@ export function savedAnchorTurnWasSplit(
  * turn's own key is now its first slice, which starts where the turn started;
  * a part key hangs off the id of the text segment it cuts at
  * (`assistantTurnPartKey`), which the split keeps, so the slice part cutting
- * at that segment is the same pixel position. A segment no slice cuts at -
- * the first text after an earlier steer starts its slice instead of cutting
- * it - leaves no row to name, and the reader follows the latest rather than
- * being placed by a guess.
+ * at that segment is the same pixel position.
+ *
+ * Part keys exist only on drawn rows, so a part no key names is either behind
+ * a slice still cold or gone - the text streaming at the save moved behind
+ * the steer and now starts a slice instead of cutting one. Keys alone cannot
+ * tell the two apart: the answer is the pending shape, and
+ * `restoreSplitTurnAnchorForMount` decides from the rows.
  */
 function restoreAcrossSteerSplit(
   anchor: string,
@@ -213,7 +216,14 @@ function restoreAcrossSteerSplit(
     );
   }
   const index = resolved === null ? -1 : rowKeys.indexOf(resolved);
-  if (resolved === null || index === -1) return DEFAULT_CHAT_TAB_SCROLL_STATE;
+  if (resolved === null || index === -1) {
+    return {
+      mode: saved.mode,
+      anchorMessageId: null,
+      anchorIndex: null,
+      offset: 0,
+    };
+  }
   const cut = resolved.indexOf("#", prefix.length);
   return {
     mode: saved.mode,
@@ -221,6 +231,78 @@ function restoreAcrossSteerSplit(
     ...(cut === -1 ? {} : { anchorRowKey: resolved.slice(0, cut) }),
     anchorIndex: index,
     offset: saved.offset,
+  };
+}
+
+/** What `restoreSplitTurnAnchorForMount` reads off a list row; a
+ *  `TranscriptListRow` satisfies it. */
+export interface ChatTabRestoreRow {
+  readonly key: string;
+  readonly kind: "hydrated" | "placeholder";
+  readonly ordinal: number | null;
+}
+
+export interface SplitTurnMountRestore {
+  readonly state: SavedChatTabScrollState;
+  /**
+   * The split is answered for good - the saved part was found, or every slice
+   * is drawn and the segment is gone - so nothing is left for the hydration
+   * catch-up. `false` while a slice is still cold and may bring the part.
+   */
+  readonly settled: boolean;
+  /** The turn's slice rows not drawn yet, in list order: what the catch-up
+   *  asks the host for while it waits. */
+  readonly coldSlices: readonly ChatTabRestoreRow[];
+}
+
+/**
+ * Refines `restored`, `restoreChatTabState`'s answer for `saved`, where a steer
+ * split the anchored turn (`savedAnchorTurnWasSplit`) and no row names the
+ * saved part. A slice still cold - a placeholder, or an unplaced row the
+ * skeleton has not described yet - can still bring it: the reader is placed
+ * on the first slice meanwhile, where the turn started, and the saved
+ * coordinate stays pending. Once every slice is drawn and no part names the
+ * segment, it is gone, and the reader follows the latest rather than being
+ * placed by a guess.
+ */
+export function restoreSplitTurnAnchorForMount(
+  saved: SavedChatTabScrollState,
+  restored: SavedChatTabScrollState,
+  rows: ReadonlyArray<ChatTabRestoreRow>,
+): SplitTurnMountRestore {
+  if (restored.anchorMessageId !== null) {
+    return { state: restored, settled: true, coldSlices: [] };
+  }
+  const owner = savedChatTabAnchorRowKey(
+    saved,
+    rows.map((row) => row.key),
+  );
+  const prefix = owner === null ? null : sliceRowKeyPrefix(owner);
+  const isSlice = (row: ChatTabRestoreRow): boolean =>
+    prefix !== null && row.key.startsWith(prefix);
+  const coldSlices = rows.filter(
+    (row) => isSlice(row) && row.kind === "placeholder",
+  );
+  const firstSliceIndex = rows.findIndex(isSlice);
+  if (
+    firstSliceIndex === -1 ||
+    (coldSlices.length === 0 && !rows.some((row) => isUnplacedRowKey(row.key)))
+  ) {
+    return {
+      state: DEFAULT_CHAT_TAB_SCROLL_STATE,
+      settled: true,
+      coldSlices: [],
+    };
+  }
+  return {
+    state: {
+      mode: saved.mode,
+      anchorMessageId: rows[firstSliceIndex].key,
+      anchorIndex: firstSliceIndex,
+      offset: 0,
+    },
+    settled: false,
+    coldSlices,
   };
 }
 

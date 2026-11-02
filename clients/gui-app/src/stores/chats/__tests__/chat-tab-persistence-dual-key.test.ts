@@ -213,13 +213,6 @@ describe("ticket 15 dual-key scroll cache", () => {
       `${turn}:part:1`,
       "row-after",
     ];
-    const followingLatest = {
-      mode: "following-end",
-      anchorMessageId: null,
-      anchorIndex: null,
-      offset: 0,
-    };
-
     it("lands a part anchor on the slice part cutting at its segment, offset kept", () => {
       const id = chatIdIdentity("split-part-anchor");
       saveChatTabState({
@@ -258,10 +251,11 @@ describe("ticket 15 dual-key scroll cache", () => {
       });
     });
 
-    it("follows the latest when no slice cuts at the saved segment", () => {
-      // The text that was streaming at the save moved behind the steer and
-      // now starts a slice instead of cutting one: no row names it.
-      const id = chatIdIdentity("split-lost-segment");
+    it("leaves a part no slice names yet in the pending shape", () => {
+      // Part keys exist only on drawn rows: the part is behind a cold slice
+      // or gone, which keys alone cannot tell apart. The mount decides from
+      // the rows (chat-messages.test.tsx covers both outcomes).
+      const id = chatIdIdentity("split-unnamed-segment");
       saveChatTabState({
         identity: id,
         mode: "free-scrolling",
@@ -270,10 +264,14 @@ describe("ticket 15 dual-key scroll cache", () => {
         anchorIndex: 3,
         offset: 40,
       });
-      expect(restoreChatTabState(id, splitRowKeys)).toEqual(followingLatest);
-      expect(restoreChatTabStateForMount(id, splitRowKeys)).toEqual(
-        followingLatest,
-      );
+      const pending = {
+        mode: "free-scrolling",
+        anchorMessageId: null,
+        anchorIndex: null,
+        offset: 0,
+      };
+      expect(restoreChatTabState(id, splitRowKeys)).toEqual(pending);
+      expect(restoreChatTabStateForMount(id, splitRowKeys)).toEqual(pending);
     });
   });
 
