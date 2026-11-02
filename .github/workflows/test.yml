@@ -247,21 +247,28 @@ jobs:
         if: matrix.project == 'traycer-clients-gui-app'
         shell: python3 {0}
         run: |
+          import glob
           import sys
           import xml.etree.ElementTree as ET
 
-          try:
-              report = ET.parse("test-junit.xml").getroot()
-          except (OSError, ET.ParseError) as error:
-              print(f"::error::No readable JUnit report ({error}), so this green run proves nothing.")
-              sys.exit(1)
-          deaths = [
-              (error.text or "").strip()
-              for suite in report.iter("testsuite")
-              if suite.get("name") == "vitest unhandled errors"
-              for error in suite.iter("error")
-              if "Worker exited unexpectedly" in (error.text or "")
-          ]
+          # Shard 1 also runs the react-compiler files, each in its own vitest
+          # process with its own report beside the main one
+          # (`clients/gui-app/scripts/run-tests.ts`).
+          paths = sorted(set(["test-junit.xml"] + glob.glob("test-junit-*.xml")))
+          deaths = []
+          for path in paths:
+              try:
+                  report = ET.parse(path).getroot()
+              except (OSError, ET.ParseError) as error:
+                  print(f"::error::No readable JUnit report at {path} ({error}), so this green run proves nothing.")
+                  sys.exit(1)
+              deaths += [
+                  f"{path}: {(error.text or '').strip()}"
+                  for suite in report.iter("testsuite")
+                  if suite.get("name") == "vitest unhandled errors"
+                  for error in suite.iter("error")
+                  if "Worker exited unexpectedly" in (error.text or "")
+              ]
           for death in deaths:
               print(death)
           if deaths:
@@ -277,7 +284,7 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: junit-${{ matrix.cache_key }}
-          path: test-junit.xml
+          path: test-junit*.xml
           if-no-files-found: ignore
       # Says first whether a process died, because this step runs on every red
       # job and most are plain assertion failures: of 220 failed jobs on `main`
