@@ -32,6 +32,13 @@ function htmlViewerBootstrap(): void {
       overlay?.removeAttribute("data-active");
     }, 1000);
   };
+  // The vertical track starts below the space the page keeps for the app's
+  // controls (inline padding the page bootstrap sets), so the thumb is never
+  // under them at the top of the page.
+  const trackStart = (isVertical: boolean): number =>
+    isVertical
+      ? Number.parseFloat(document.documentElement.style.paddingTop) || 0
+      : 0;
   const updateScrollbars = (): void => {
     pendingFrame = 0;
     const root = document.scrollingElement;
@@ -43,12 +50,14 @@ function htmlViewerBootstrap(): void {
       const viewport = isVertical ? window.innerHeight : window.innerWidth;
       const extent = isVertical ? root.scrollHeight : root.scrollWidth;
       const position = isVertical ? root.scrollTop : root.scrollLeft;
-      const track = Math.max(0, viewport - 12);
+      const start = trackStart(isVertical);
+      const track = Math.max(0, viewport - 12 - start);
       const length = Math.min(track, Math.max(28, (viewport / extent) * track));
       const offset =
-        extent <= viewport
+        start +
+        (extent <= viewport
           ? 0
-          : (position / (extent - viewport)) * (track - length);
+          : (position / (extent - viewport)) * (track - length));
       button.hidden = extent <= viewport + 1;
       button.style[isVertical ? "height" : "width"] = `${length}px`;
       button.style.transform = isVertical
@@ -240,7 +249,8 @@ function htmlViewerBootstrap(): void {
             (isVertical ? event.clientY : event.clientX) - start.coordinate;
           const position =
             start.scroll +
-            (delta * (extent - viewport)) / Math.max(1, viewport - 12 - length);
+            (delta * (extent - viewport)) /
+              Math.max(1, viewport - 12 - trackStart(isVertical) - length);
           window.scrollTo(
             isVertical
               ? { top: position, behavior: "instant" }

@@ -56,7 +56,11 @@ import {
   sandboxLoaderUrl,
   type SandboxPermission,
 } from "@/lib/sandbox/sandbox-url";
-import { sandboxTheme, type SandboxTheme } from "@/lib/sandbox/theme-map";
+import {
+  PAGE_INSET_TOP_VARIABLE,
+  sandboxTheme,
+  type SandboxTheme,
+} from "@/lib/sandbox/theme-map";
 import { resolveDesktopPlatform } from "@/lib/windows/desktop-capabilities";
 import { cn } from "@/lib/utils";
 import { useGuestFramePressRelay } from "@/hooks/ui/use-guest-frame-press-relay";
@@ -247,6 +251,13 @@ export interface SandboxFrameProps {
    * retained document was served from.
    */
   readonly remountKey?: string;
+  /**
+   * Space in px an artifact page opens with above its content, for controls
+   * floating over the frame's top edge. It is padding on the page's own
+   * root, so it scrolls away with the page instead of hiding what is under
+   * the controls; a change reaches the live page without a reload.
+   */
+  readonly pageInsetTop?: number;
   readonly ref: Ref<HTMLIFrameElement> | null;
 }
 
@@ -288,6 +299,25 @@ function scrollContainerOf(element: Element): Element | null {
     node = node.parentElement;
   }
   return element.ownerDocument.scrollingElement;
+}
+
+/**
+ * `SandboxFrameProps.pageInsetTop`, carried as a theme variable: that puts it
+ * in the first document, and every later change reaches the live page the
+ * way a theme change does, without a reload.
+ */
+function withPageInset(
+  theme: SandboxTheme,
+  insetPx: number | undefined,
+): SandboxTheme {
+  if (insetPx === undefined || insetPx <= 0) return theme;
+  return {
+    ...theme,
+    variables: {
+      ...theme.variables,
+      [PAGE_INSET_TOP_VARIABLE]: `${insetPx}px`,
+    },
+  };
 }
 
 function hostContextFor(
@@ -423,14 +453,18 @@ export function SandboxFrame(props: SandboxFrameProps) {
   }, [artifact, artifactPolicySource, kind, networkPolicy, appCsp]);
   const csp = policy.csp;
 
+  const pageInsetTop = artifact ? props.pageInsetTop : undefined;
   const theme = useMemo(() => {
     // The values arrive through the cascade `getComputedStyle` reads, which
     // `theme-applier.ts` has already updated when the revision moves.
     themeRevision;
-    return sandboxTheme(artifact ? "page" : kind, resolvedTheme, (token) =>
-      readCssVar(document, token),
+    return withPageInset(
+      sandboxTheme(artifact ? "page" : kind, resolvedTheme, (token) =>
+        readCssVar(document, token),
+      ),
+      pageInsetTop,
     );
-  }, [artifact, kind, resolvedTheme, themeRevision]);
+  }, [artifact, kind, resolvedTheme, themeRevision, pageInsetTop]);
 
   const forwardedShortcuts = useMemo(
     () => sandboxForwardedShortcuts(bindings, isMac()),

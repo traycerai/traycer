@@ -1,6 +1,7 @@
 // Shared by the app and the standalone loader bundle. Keep runtime imports
 // limited to assets: the loader must not pull in app code.
 import FIGTREE_FONT_URL from "@fontsource-variable/figtree/files/figtree-latin-wght-normal.woff2?inline";
+import { PAGE_INSET_TOP_VARIABLE } from "./theme-map";
 
 const INITIAL_DOCTYPE = /^\s*<!doctype(?:\s+[^>]*)?>/i;
 
@@ -53,6 +54,8 @@ interface BootstrapConfig {
   readonly applyTheme: boolean;
   readonly artifactPage: ArtifactPageRole;
   readonly artifactRootPath: string | null;
+  /** The page's starting `--traycer-page-inset-top`, or `""` for none. */
+  readonly pageInset: string;
 }
 
 /**
@@ -111,6 +114,18 @@ function bootstrapMain(config: BootstrapConfig): void {
     notify("ui/notifications/size-changed", { width, height });
   };
 
+  // An artifact page in a tile opens below the app's floating controls. The
+  // space is padding on the page's own root, so it scrolls away with the page,
+  // and it is inline so a page's own reset of `html` cannot take it back.
+  // A page the app has no controls over keeps its root untouched.
+  const applyPageInset = (inset: string): void => {
+    if (config.artifactPage === null) return;
+    const root = document.documentElement;
+    if (inset === "") root.style.removeProperty("padding-top");
+    else root.style.paddingTop = inset;
+  };
+  applyPageInset(config.pageInset);
+
   // A later theme change restyles the page without a reload: the same
   // variables the first paint took from the loader, applied to :root.
   const applyHostContext = (context: Record<string, unknown>): void => {
@@ -132,6 +147,13 @@ function bootstrapMain(config: BootstrapConfig): void {
         root.style.setProperty(name, value);
       }
     }
+    // The app drops the variable once its controls need no room, so its
+    // absence from a full set of variables is what clears the space.
+    const inset = styles.variables["--traycer-page-inset-top"];
+    if (typeof inset !== "string") {
+      root.style.removeProperty("--traycer-page-inset-top");
+    }
+    applyPageInset(typeof inset === "string" ? inset : "");
     const background = styles.variables["--color-background-primary"];
     if (config.paintBackground && typeof background === "string") {
       root.style.background = background;
@@ -805,6 +827,10 @@ export const buildDocument = (resource: LoaderResource): string => {
     applyTheme: resource.theme.appliesToRoot,
     artifactPage: resource.artifactPage,
     artifactRootPath: resource.artifactRootPath ?? null,
+    pageInset:
+      resource.theme.variables.find(
+        ([name]) => name === PAGE_INSET_TOP_VARIABLE,
+      )?.[1] ?? "",
   };
   return (
     "<!doctype html>" +

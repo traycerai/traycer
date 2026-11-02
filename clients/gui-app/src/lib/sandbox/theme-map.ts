@@ -1,6 +1,13 @@
 import type { ResolvedTheme } from "@/lib/theme-applier";
 
 /**
+ * The space an artifact page keeps free at its top for the app's floating
+ * controls (`SandboxFrameProps.pageInsetTop`). The page bootstraps spell the
+ * name out themselves, since they are serialized without their module.
+ */
+export const PAGE_INSET_TOP_VARIABLE = "--traycer-page-inset-top";
+
+/**
  * Our theme, spoken in the MCP Apps standard variable names, so an agent page,
  * a wireframe and an MCP App all style themselves the same way. The frame
  * cannot read the app's cascade, so the values are resolved here and written

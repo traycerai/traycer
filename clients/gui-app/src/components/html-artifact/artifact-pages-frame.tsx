@@ -1,5 +1,5 @@
-import { useRef, useState, type ReactNode } from "react";
-import { ArrowLeft, House, Minus, Plus } from "lucide-react";
+import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { ArrowLeft, House, Minus, MoreHorizontal, Plus } from "lucide-react";
 import { ActualSizeGlyph } from "@/components/epic-canvas/zoom-controls/zoom-controls";
 import { useCoarsePointer } from "@/hooks/ui/use-coarse-pointer";
 import {
@@ -8,7 +8,16 @@ import {
   type SandboxSource,
 } from "@/components/sandbox/sandbox-frame";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Separator } from "@/components/ui/separator";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import type { ArtifactManifest } from "@/lib/sandbox/artifact-serving";
 import type {
   SandboxBridgeHost,
   SandboxSize,
@@ -19,6 +28,190 @@ import { cn } from "@/lib/utils";
 
 const NO_PERMISSIONS = [] as const;
 const noop = (): void => undefined;
+
+/**
+ * The controls' bottom edge before they have been measured: the top offset
+ * plus one row of controls at the pointer's size, so a page usually opens
+ * clear of them in its first paint rather than moving once they measure.
+ */
+const ESTIMATED_CONTROLS_BOTTOM_PX = { fine: 44, coarse: 62 } as const;
+
+/** How many pages the artifact has, counting only what a link can open. */
+function htmlPageCount(manifest: ArtifactManifest): number {
+  return Object.keys(manifest.files).filter((path) => /\.html?$/i.test(path))
+    .length;
+}
+
+/**
+ * The space a filling page keeps above its content for the controls floating
+ * over its top edge: their bottom edge, measured, so a row of controls that
+ * wraps on a narrow tile still clears the page. A page in the chat keeps
+ * none, since its controls only come up on hover.
+ */
+function useControlsInset(
+  controls: HTMLDivElement | null,
+  active: boolean,
+  coarsePointer: boolean,
+): number {
+  const estimate = coarsePointer
+    ? ESTIMATED_CONTROLS_BOTTOM_PX.coarse
+    : ESTIMATED_CONTROLS_BOTTOM_PX.fine;
+  const [measured, setMeasured] = useState<number | null>(null);
+  useLayoutEffect(() => {
+    if (!active || controls === null) return;
+    // An observer reports once as it starts, so this also takes the first
+    // measurement, before the page's first paint.
+    const observer = new ResizeObserver(() =>
+      setMeasured(Math.ceil(controls.offsetTop + controls.offsetHeight)),
+    );
+    observer.observe(controls);
+    return () => observer.disconnect();
+  }, [controls, active]);
+  if (!active) return 0;
+  return measured ?? estimate;
+}
+
+/** Back and Home's state, or `null` where there is no other page to be on. */
+interface PageNavigationState {
+  readonly canGoBack: boolean;
+  readonly canGoHome: boolean;
+}
+
+/**
+ * Back and Home only mean something where there is another page to be on,
+ * and on such an artifact they are there from the first page rather than
+ * appearing after the first link.
+ */
+function pageNavigationFor(
+  manifest: ArtifactManifest,
+  history: PageHistory,
+): PageNavigationState | null {
+  const awayFromEntry = history.currentPath !== history.entryPath;
+  const canGoBack = history.backStack.length > 0;
+  if (!awayFromEntry && !canGoBack && htmlPageCount(manifest) <= 1) return null;
+  // A link to a page the folder lacks leaves the reader on the page that had
+  // it, and Home is the way out. An unreachable page is not: Home would read
+  // the same failed page again, which is what its own Retry is for.
+  return { canGoBack, canGoHome: awayFromEntry || history.missing };
+}
+
+/**
+ * The page's controls, floating over its top-right corner in the same shell
+ * as a markdown artifact's version-history button.
+ */
+function ArtifactPageControls(props: {
+  /** Hands over the chip's element, for measuring the room it takes. */
+  readonly onElement: (element: HTMLDivElement | null) => void;
+  /** In the chat the page is a row among others, so its controls come up on hover like every other row's, and stay on touch. */
+  readonly revealOnHover: boolean;
+  readonly controlSize: "icon-touch" | "icon-sm";
+  readonly pages: PageNavigationState | null;
+  readonly onBack: () => void;
+  readonly onHome: () => void;
+  /** The zoom cluster, or `null` for a page that does not zoom. */
+  readonly zoom: { readonly ready: boolean; readonly scale: number } | null;
+  readonly onScale: (scale: number) => void;
+  readonly toolbarControls: ReactNode;
+  readonly menuItems: ReactNode;
+}) {
+  const {
+    onElement,
+    revealOnHover,
+    controlSize,
+    pages,
+    onBack,
+    onHome,
+    zoom,
+    onScale,
+    toolbarControls,
+    menuItems,
+  } = props;
+  return (
+    <div
+      ref={onElement}
+      className="pointer-events-none absolute top-2 right-2 z-30 flex max-w-[calc(100%-1rem)] items-start"
+    >
+      <div
+        role="toolbar"
+        aria-label="HTML artifact controls"
+        className={cn(
+          "pointer-events-auto flex flex-wrap items-center justify-end gap-0.5 rounded-md border border-border/60 bg-canvas p-0.5 shadow-sm",
+          revealOnHover &&
+            "pointer-events-none opacity-0 transition-opacity group-focus-within/artifact-page:pointer-events-auto group-focus-within/artifact-page:opacity-100 group-hover/artifact-page:pointer-events-auto group-hover/artifact-page:opacity-100 motion-reduce:transition-none pointer-coarse:pointer-events-auto pointer-coarse:opacity-100",
+        )}
+      >
+        {pages === null ? null : (
+          <>
+            <TooltipWrapper
+              label="Back"
+              side="top"
+              sideOffset={undefined}
+              align={undefined}
+            >
+              <span className="inline-flex">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size={controlSize}
+                  aria-label="Back"
+                  disabled={!pages.canGoBack}
+                  onClick={onBack}
+                >
+                  <ArrowLeft className="size-4" />
+                </Button>
+              </span>
+            </TooltipWrapper>
+            <TooltipWrapper
+              label="Home"
+              side="top"
+              sideOffset={undefined}
+              align={undefined}
+            >
+              <span className="inline-flex">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size={controlSize}
+                  aria-label="Home"
+                  disabled={!pages.canGoHome}
+                  onClick={onHome}
+                >
+                  <House className="size-4" />
+                </Button>
+              </span>
+            </TooltipWrapper>
+            <Separator orientation="vertical" className="mx-0.5 h-4" />
+          </>
+        )}
+        {zoom === null ? null : (
+          <HtmlPageZoomControls
+            ready={zoom.ready}
+            scale={zoom.scale}
+            onScale={onScale}
+            controlSize={controlSize}
+          />
+        )}
+        {toolbarControls}
+        {zoom === null && menuItems === undefined ? null : (
+          <HtmlPageMoreActions
+            controlSize={controlSize}
+            actualSize={
+              zoom === null
+                ? null
+                : {
+                    // As the readout shows it: steps of 1.2 rarely land on 1.
+                    disabled:
+                      !zoom.ready || Math.round(zoom.scale * 100) === 100,
+                    onSelect: () => onScale(1),
+                  }
+            }
+            menuItems={menuItems}
+          />
+        )}
+      </div>
+    </div>
+  );
+}
 
 interface PageHistory {
   readonly entryPath: string;
@@ -83,7 +276,10 @@ export function ArtifactPagesFrame(props: {
   readonly sourceEquivalent:
     | ((previous: SandboxSource, next: SandboxSource) => boolean)
     | undefined;
+  /** Controls shown in the floating chip, after zoom. */
   readonly toolbarControls?: ReactNode;
+  /** Rows for the chip's "More actions" menu, after Actual size. */
+  readonly menuItems?: ReactNode;
 }) {
   const {
     source,
@@ -101,6 +297,9 @@ export function ArtifactPagesFrame(props: {
   } = props;
   const entryPath = source.entryPath === "" ? "index.html" : source.entryPath;
   const bridgeRef = useRef<SandboxBridgeHost | null>(null);
+  const [controlsElement, setControlsElement] = useState<HTMLDivElement | null>(
+    null,
+  );
   const scaleRef = useRef(1);
   const [scale, setScale] = useState(1);
   const [ready, setReady] = useState(false);
@@ -115,7 +314,7 @@ export function ArtifactPagesFrame(props: {
     current = freshHistory(entryPath);
     setHistory(current);
   }
-  const { currentPath, backStack } = current;
+  const { currentPath } = current;
 
   const pageNavigation: SandboxPageNavigation = {
     path: currentPath,
@@ -186,68 +385,42 @@ export function ArtifactPagesFrame(props: {
 
   const standIn = pageStandIn(current, { goHome, readAgain });
   const fills = height === null;
-  const zooms = fills && pageZoom;
-  const navigated = currentPath !== entryPath || backStack.length > 0;
+  const pages = pageNavigationFor(source.manifest, current);
+  const zoom = fills && pageZoom ? { ready, scale } : null;
+  const hasControls =
+    pages !== null ||
+    zoom !== null ||
+    props.toolbarControls !== undefined ||
+    props.menuItems !== undefined;
+  const pageInsetTop = useControlsInset(
+    controlsElement,
+    fills && hasControls,
+    coarsePointer,
+  );
   return (
-    <div className={cn("relative flex w-full flex-col", fills && "h-full")}>
-      {zooms || navigated || props.toolbarControls ? (
-        <div className="pointer-events-none absolute top-2 right-2 z-30 flex max-w-[calc(100%-1rem)] items-start">
-          <div
-            role="toolbar"
-            aria-label="HTML artifact controls"
-            className="pointer-events-auto flex flex-wrap items-center justify-end gap-1 rounded-md border border-border/60 bg-canvas p-0.5 shadow-sm"
-          >
-            {navigated ? (
-              <>
-                <TooltipWrapper
-                  label="Back"
-                  side="top"
-                  sideOffset={undefined}
-                  align={undefined}
-                >
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size={controlSize}
-                    aria-label="Back"
-                    disabled={backStack.length === 0}
-                    onClick={goBack}
-                  >
-                    <ArrowLeft className="size-4" />
-                  </Button>
-                </TooltipWrapper>
-                <TooltipWrapper
-                  label="Home"
-                  side="top"
-                  sideOffset={undefined}
-                  align={undefined}
-                >
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size={controlSize}
-                    aria-label="Home"
-                    onClick={goHome}
-                  >
-                    <House className="size-4" />
-                  </Button>
-                </TooltipWrapper>
-              </>
-            ) : null}
-            {zooms ? (
-              <HtmlPageZoomControls
-                ready={ready}
-                scale={scale}
-                onScale={changeScale}
-                controlSize={controlSize}
-              />
-            ) : null}
-            {props.toolbarControls}
-          </div>
-        </div>
+    <div
+      className={cn(
+        "group/artifact-page relative flex w-full flex-col",
+        fills && "h-full",
+      )}
+    >
+      {hasControls ? (
+        <ArtifactPageControls
+          onElement={setControlsElement}
+          revealOnHover={!fills}
+          controlSize={controlSize}
+          pages={pages}
+          onBack={goBack}
+          onHome={goHome}
+          zoom={zoom}
+          onScale={changeScale}
+          toolbarControls={props.toolbarControls}
+          menuItems={props.menuItems}
+        />
       ) : null}
       <div className={cn("relative w-full", fills && "min-h-0 flex-1")}>
         <SandboxFrame
+          pageInsetTop={pageInsetTop}
           source={source}
           kind="page"
           title={title}
@@ -391,23 +564,56 @@ function HtmlPageZoomControls(props: {
           <Plus className="size-3.5" />
         </Button>
       </TooltipWrapper>
+    </>
+  );
+}
+
+/**
+ * What the chip keeps one click away: Actual size, which a page rarely needs
+ * once zoomed by pinch or the buttons, and the caller's own rows (Download).
+ */
+function HtmlPageMoreActions(props: {
+  readonly controlSize: "icon-touch" | "icon-sm";
+  readonly actualSize: {
+    readonly disabled: boolean;
+    readonly onSelect: () => void;
+  } | null;
+  readonly menuItems: ReactNode;
+}) {
+  return (
+    <DropdownMenu modal={false}>
       <TooltipWrapper
-        label="Actual size"
-        side="bottom"
+        label="More actions"
+        side="top"
         sideOffset={undefined}
         align={undefined}
       >
-        <Button
-          type="button"
-          variant="muted"
-          size={controlSize}
-          aria-label="Actual size"
-          disabled={!ready}
-          onClick={() => onScale(1)}
-        >
-          <ActualSizeGlyph />
-        </Button>
+        <DropdownMenuTrigger asChild>
+          <Button
+            type="button"
+            variant="ghost"
+            size={props.controlSize}
+            aria-label="More actions"
+          >
+            <MoreHorizontal className="size-4" />
+          </Button>
+        </DropdownMenuTrigger>
       </TooltipWrapper>
-    </>
+      <DropdownMenuContent align="end">
+        {props.actualSize === null ? null : (
+          <DropdownMenuItem
+            disabled={props.actualSize.disabled}
+            onSelect={props.actualSize.onSelect}
+          >
+            <ActualSizeGlyph />
+            Actual size
+          </DropdownMenuItem>
+        )}
+        {props.actualSize !== null && props.menuItems !== undefined ? (
+          <DropdownMenuSeparator />
+        ) : null}
+        {props.menuItems}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
