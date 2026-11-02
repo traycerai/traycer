@@ -41,8 +41,15 @@ function fakeMatchMedia(
   "matches" | "addEventListener" | "removeEventListener"
 > {
   const limit = /^\(max-width: (\d+)px\)$/.exec(query)?.[1];
+  const orientation = /^\(orientation: (landscape|portrait)\)$/.exec(
+    query,
+  )?.[1];
+  const landscape = viewport.width >= viewport.height;
   return {
-    matches: viewport.width <= Number(limit),
+    matches:
+      orientation === undefined
+        ? viewport.width <= Number(limit)
+        : (orientation === "landscape") === landscape,
     addEventListener: () => {},
     removeEventListener: () => {},
   };
@@ -228,15 +235,26 @@ describe("useMobileLayoutForm", () => {
     expect(renderedForm()).toEqual(RAIL_AND_MENU);
   });
 
-  it("falls back to the screen's dimensions without screen.orientation", () => {
+  // iOS before 16.4: no `screen.orientation`, and `screen` stays
+  // portrait-ordered on its side, so only the viewport's shape can tell.
+  it("falls back to the viewport's shape without screen.orientation, not the screen's dimensions", () => {
     setScreenWithoutOrientation(450, 800);
     setViewport(450, 800, { left: 0, right: 0 });
     render(<Probe openTiles={1} />);
     expect(renderedForm()).toEqual(PHONE_PORTRAIT);
 
-    setScreenWithoutOrientation(800, 450);
     setViewport(450, 400, { left: 0, right: 0 });
     expect(renderedForm()).toEqual(RAIL_AND_MENU);
+  });
+
+  it("shows two tiles on a side-turned tablet without screen.orientation", () => {
+    setScreenWithoutOrientation(834, 1194);
+    setViewport(1194, 834, { left: 0, right: 0 });
+    render(<Probe openTiles={2} />);
+    expect(renderedForm()).toMatchObject({ tiles: 2 });
+
+    setViewport(834, 1194, { left: 0, right: 0 });
+    expect(renderedForm()).toMatchObject({ tiles: 1 });
   });
 
   it("re-answers when the person's strip choice changes", () => {

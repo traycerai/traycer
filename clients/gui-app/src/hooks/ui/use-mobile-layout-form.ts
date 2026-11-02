@@ -47,13 +47,15 @@ export function subscribeToPhonePortrait(onChange: () => void): () => void {
  * landscape while the person types, moving the navigation under them.
  *
  * iOS before 16.4 has no `screen.orientation`, and its `screen` keeps its
- * portrait dimensions in every orientation. That reads as portrait throughout,
- * which the width half corrects: no phone there is under the limit on its side.
+ * portrait dimensions in every orientation, so the dimensions would read
+ * portrait throughout and never show a second tile. There the viewport's
+ * shape is the read: iOS overlays its keyboard rather than resizing the
+ * viewport, so the shape is the device's, and Android never reaches this line.
  */
 export function readScreenPortrait(): boolean {
   const orientation = readScreenOrientation();
   if (orientation !== null) return orientation.type.startsWith("portrait");
-  return window.screen.width < window.screen.height;
+  return !window.matchMedia("(orientation: landscape)").matches;
 }
 
 /** The width reads the query for the reason `use-narrow-window.ts` records: `innerWidth` settles late. */

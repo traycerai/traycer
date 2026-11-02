@@ -255,6 +255,8 @@ class MockResizeObserver implements ResizeObserver {
 
 /** `(max-width: 767px)` / `(min-width: 768px)`, integers or decimals. */
 const PREFIXED_WIDTH_QUERY = /^\(\s*(max|min)-width:\s*(\d+(?:\.\d+)?)px\s*\)$/;
+/** `(orientation: landscape)` / `(orientation: portrait)`, from the viewport's shape. */
+const ORIENTATION_QUERY = /^\(\s*orientation:\s*(landscape|portrait)\s*\)$/;
 /** Media Queries Level 4 range syntax: `(width < 768px)`, `(width >= 768px)`. */
 const RANGE_WIDTH_QUERY = /^\(\s*width\s*(<=|>=|<|>)\s*(\d+(?:\.\d+)?)px\s*\)$/;
 
@@ -263,11 +265,16 @@ const RANGE_WIDTH_QUERY = /^\(\s*width\s*(<=|>=|<|>)\s*(\d+(?:\.\d+)?)px\s*\)$/;
  *
  * Both spellings, because the app uses both: Tailwind compiles its responsive
  * variants to range syntax, while plenty of hand-written `@media` blocks are
- * still prefixed. Anything that is not a bare width query - `prefers-*`,
- * `hover`, `orientation`, a compound query - is answered `false`, the same
- * flat answer this shim has always given.
+ * still prefixed. `(orientation: …)` is answered from the viewport's shape.
+ * Anything else - `prefers-*`, `hover`, a compound query - is answered
+ * `false`, the same flat answer this shim has always given.
  */
 function matchesWidthQuery(query: string): boolean {
+  const orientation = ORIENTATION_QUERY.exec(query);
+  if (orientation !== null) {
+    const landscape = window.innerWidth >= window.innerHeight;
+    return orientation[1] === "landscape" ? landscape : !landscape;
+  }
   const range = RANGE_WIDTH_QUERY.exec(query);
   if (range !== null) {
     const bound = Number(range[2]);
