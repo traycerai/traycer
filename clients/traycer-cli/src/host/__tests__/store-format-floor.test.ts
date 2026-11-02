@@ -1838,7 +1838,9 @@ describe("the task store floor", () => {
       // is above. A case whose target is NEWER than this has to name its own
       // installed build, or the move is an upgrade: `storeFloorApplicability`
       // sends every upgrade straight out, and nothing the case puts on disk
-      // is ever read.
+      // is ever read. The newest-era cases assert the absence of the "not
+      // consulted" line an upgrade would log, so this cannot go wrong
+      // silently again.
       installedVersion: "1.5.0",
       installedStoreFormats: { chatDb: 20 },
       provenance: NO_PROVENANCE,
@@ -2006,6 +2008,14 @@ describe("the task store floor", () => {
     expect(
       logger.calls.some((call) => call.message === TASK_FLOOR_STOPPED_ASIDE),
     ).toBe(false);
+    // The specific line, not merely a resolved promise: an upgrade would log
+    // "not consulted" instead, and this case would pass without the floor
+    // ever looking at the store it set up.
+    expect(
+      logger.calls.some(
+        (call) => call.message === "Host store-format floor not consulted",
+      ),
+    ).toBe(false);
   });
 
   it("consent passes the task-only refusal and logs it at WARN", async () => {
@@ -2117,7 +2127,12 @@ describe("the task store floor", () => {
     ).toBe(false);
   });
 
-  it("caps an on-disk 6: 1.5.3 passes, 1.4.2 still refuses naming 6", async () => {
+  // Not the cap: a newest-era target never reaches `taskStoreFloorBlock`, so
+  // nothing here can tell `min(onDisk, NEWEST)` from `onDisk`. The protocol's
+  // own suite owns that. What this covers is the pair the CLI decides - a
+  // newest-era target opens no store however high the stamp, and a target the
+  // table proves too old refuses naming the stamp UNCAPPED.
+  it("opens no task store over a stamp above the table, and names that stamp uncapped when it refuses", async () => {
     await writeTaskStoreDb(6, false);
     const logger = fakeLogger();
 
@@ -2129,6 +2144,15 @@ describe("the task store floor", () => {
         }),
       ),
     ).resolves.toBeUndefined();
+
+    // The specific line, not merely a resolved promise: an upgrade would log
+    // "not consulted" instead, and this case would pass without the floor
+    // ever looking at the store it set up.
+    expect(
+      logger.calls.some(
+        (call) => call.message === "Host store-format floor not consulted",
+      ),
+    ).toBe(false);
 
     const err = await refusalOf(rollbackInput(logger, {}));
     expect(err.details?.onDiskTaskStore).toBe(6);

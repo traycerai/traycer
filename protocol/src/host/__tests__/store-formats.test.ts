@@ -616,27 +616,20 @@ describe("taskStoreFloorBlock", () => {
   /**
    * The format-5 row, through the floor: a release inside the format-4 era
    * is blocked by a format-5 disk, which is the whole reason the row exists
-   * - a 1.5.0 host does not read the positioned byte storage tables and
-   * would fold past the durable holds they carry.
+   * - such a host does not read the positioned byte storage tables and would
+   * fold past the durable holds they carry. 1.5.2 is the last release in
+   * that era and the one a rollback from the 1.5.3 line actually lands on.
    */
   it("blocks a format-4 era target over a format-5 store", () => {
     expect(taskStoreFloorBlock("1.5.0", 5)).toEqual({
       targetReads: 4,
       onDisk: 5,
     });
-    expect(taskStoreFloorBlock("1.5.3-rc.1", 5)).toBeNull();
-  });
-
-  /**
-   * 1.5.2 was cut from a development without format 5, so a downgrade from
-   * the 1.5.3 line onto it must refuse: passing would hand a format-5 store
-   * to a host that folds past its durable holds.
-   */
-  it("blocks a downgrade to 1.5.2 over a format-5 store", () => {
     expect(taskStoreFloorBlock("1.5.2", 5)).toEqual({
       targetReads: 4,
       onDisk: 5,
     });
+    expect(taskStoreFloorBlock("1.5.3-rc.1", 5)).toBeNull();
   });
 
   it("types the newest format as the table's last row", () => {

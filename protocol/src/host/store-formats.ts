@@ -530,10 +530,11 @@ export function decideStoreFormatFloor(
  * install:
  *
  * 1. Only a canonical stable or release-candidate target is judged
- *    ({@link taskStoreFormatReadBy}). A staging-train build is numbered
- *    `1.4.3-staging.N` until 1.5.0 is out: it sorts below `1.5.0-rc.1` and
- *    writes format 4, and a staging desktop installs its bundled host through
- *    a path that always evaluates the floor and never passes consent.
+ *    ({@link taskStoreFormatReadBy}). A staging-train build carries a
+ *    `-staging.N` prerelease, which `isCanonicalReleaseVersion` rejects
+ *    whatever its core version, and a staging desktop installs its bundled
+ *    host through a path that always evaluates the floor and never passes
+ *    consent.
  * 2. The chat floor speaks first and keeps its verdict. One consent covers
  *    both stores, so the task store refuses on its own only where the chat
  *    floor cleared, and adds a sentence where the chat floor refused.
