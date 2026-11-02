@@ -130,8 +130,14 @@ interface UseChatComposerSubmitArgs {
   readonly workspaceBlocked: boolean;
   readonly imagesUnsupported: boolean;
   readonly attachmentPreparationPending: boolean;
+  /**
+   * Takes the submitted draft. `true` means it was sent and the composer
+   * clears; `false` keeps the text (a refusal). A promise means the tile is
+   * asking the person first - the "Send in the new folder?" dialog - and
+   * settles the same way once they answer: the draft stays put until then.
+   */
   readonly onSubmitMessage:
-    | ((input: ChatComposerSubmitInput) => boolean)
+    | ((input: ChatComposerSubmitInput) => boolean | Promise<boolean>)
     | null;
   /**
    * Handles a prompt that leads with `/btw` / `/side`
@@ -406,8 +412,19 @@ export function useChatComposerSubmit(
               settings: input.settings,
             }),
             true);
-      if (!accepted) return false;
-      clearAcceptedDraft();
+      if (accepted === false) return false;
+      if (accepted === true) {
+        clearAcceptedDraft();
+        return true;
+      }
+      // Deferred behind the tile's consent dialog. The text stays in place
+      // while it is open, exactly as a refusal leaves it; a confirmed send
+      // then clears it as an immediate accept would, and a dismissed one
+      // keeps it. Without this the confirmed send left its text behind as a
+      // second copy of the queued message.
+      void accepted.then((confirmed) => {
+        if (confirmed) clearAcceptedDraft();
+      });
       return true;
     },
     [appendMessage, clearAcceptedDraft, onSubmitMessage, taskId],
