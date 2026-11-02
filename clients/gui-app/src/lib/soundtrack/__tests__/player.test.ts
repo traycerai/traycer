@@ -1016,11 +1016,12 @@ describe("TrackPlayer scheduling inside one lookahead window", () => {
         },
       ],
     };
-    // Draw 9 is the third sublayer's offset, so the three fall on 0, 0.1 and 0.2.
+    // Starting restarts the scheduler, which draws every sublayer again. Draw 17
+    // is the third one's offset that time, so they fall on 0, 0.1 and 0.2.
     let drawn = 0;
     const random = (): number => {
       drawn += 1;
-      return drawn === 9 ? 0.999 : 0;
+      return drawn === 17 ? 0.999 : 0;
     };
     // Variant 1 is 10 s long and variant 2 is 20 s, which tells them apart below.
     const player = makePlayerWithRandom(

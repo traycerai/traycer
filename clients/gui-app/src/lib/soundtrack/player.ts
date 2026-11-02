@@ -269,10 +269,12 @@ export class TrackPlayer {
   }
 
   /**
-   * Each play waits for its own audio, so a slow decode holds back only its
-   * sublayer. A run that ended meanwhile drops what arrives for it. A report
-   * frees the sublayer, so it looks ahead again at once: on a fine grid its next
-   * sample may fall inside this window, and waiting for the timer would miss it.
+   * Each play waits for its own audio, so a slow decode holds back its sublayer,
+   * and on a layer of two variants the layer's other sublayers too: a pending
+   * play can leave them nothing to draw until it reports. A run that ended
+   * meanwhile drops what arrives for it. A report frees the sublayer, so it looks
+   * ahead again at once: on a fine grid its next sample may fall inside this
+   * window, and waiting for the timer would miss it.
    */
   private async place(phase: PlayingPhase, play: ScheduledPlay): Promise<void> {
     const layer = this.track.layers[play.layerIndex];

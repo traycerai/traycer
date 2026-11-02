@@ -59,10 +59,6 @@ function render(page: Page, request: RenderRequest): Promise<Rendered> {
   );
 }
 
-function cutVoice(at: number, seconds: number): Step {
-  return { kind: "cut", at, voice: 0, seconds };
-}
-
 test.beforeEach(async ({ page }) => {
   await page.goto(fixture("soundtrack-output"));
   await page.waitForFunction("window.__soundtrackOutputProbe !== undefined");
@@ -82,7 +78,7 @@ test("a voice cut before its start renders silence", async ({ page }) => {
   });
   expect(uncut.peak).toBe(1);
 
-  // The start falls inside the cut's fade, then just past it, then on the cut.
+  // The start falls inside a long cut's fade, then a short one's, then on the cut.
   for (const { when, seconds } of [
     { when: 1.3, seconds: 0.4 },
     { when: 1.005, seconds: 0.01 },
@@ -91,7 +87,7 @@ test("a voice cut before its start renders silence", async ({ page }) => {
     const cut = await render(page, {
       ...request,
       voices: [{ when, fadeInSeconds: 0.01 }],
-      steps: [cutVoice(1, seconds)],
+      steps: [{ kind: "cut", at: 1, voice: 0, seconds }],
     });
     expect(cut.peak, `starting at ${String(when)}`).toBe(0);
   }
@@ -107,7 +103,7 @@ test("cutting a voice before its start leaves a voice on the same gain sounding"
       { when: 1.3, fadeInSeconds: 0.01 },
       { when: 0.2, fadeInSeconds: 0.01 },
     ],
-    steps: [cutVoice(1, 0.4)],
+    steps: [{ kind: "cut", at: 1, voice: 0, seconds: 0.4 }],
     stepsFrom: 0,
     readAt: [1.5],
   });
@@ -125,27 +121,27 @@ for (const { direction, from, to } of [
   }) => {
     // Which cut frames click depends on rounding, so it sweeps a run of them.
     const rampStart = 20 * QUANTUM_SECONDS;
+    const rampSeconds = 0.25;
     for (let quanta = 1; quanta <= 60; quanta += 1) {
+      const turnAt = rampStart + quanta * QUANTUM_SECONDS;
+      const beforeTurn = turnAt - 1 / SAMPLE_RATE;
       const { biggestStep, readings } = await render(page, {
         seconds: 0.6,
         busGain: from,
         voices: [{ when: 0, fadeInSeconds: 0.001 }],
         steps: [
-          { kind: "ramp", at: rampStart, target: to, seconds: 0.25 },
-          {
-            kind: "ramp",
-            at: rampStart + quanta * QUANTUM_SECONDS,
-            target: from,
-            seconds: 0.2,
-          },
+          { kind: "ramp", at: rampStart, target: to, seconds: rampSeconds },
+          { kind: "ramp", at: turnAt, target: from, seconds: 0.2 },
         ],
         stepsFrom: rampStart,
-        readAt: [0.59],
+        readAt: [beforeTurn, 0.59],
       });
-      expect(biggestStep, `turned after ${String(quanta)} quanta`).toBeLessThan(
-        SLOW_RAMP_STEP,
-      );
-      expect(readings).toEqual([from]);
+      const label = `turned after ${String(quanta)} quanta`;
+      expect(biggestStep, label).toBeLessThan(SLOW_RAMP_STEP);
+      // It had got this far, so the smoothness above is a turn and not a flat line.
+      const progress = (beforeTurn - rampStart) / rampSeconds;
+      expect(readings[0], label).toBeCloseTo(from + (to - from) * progress, 3);
+      expect(readings[1], label).toBe(from);
     }
   });
 }
@@ -176,7 +172,7 @@ test("a 10 ms cut takes a sounding voice to nothing from the moment of the cut",
     seconds: 1.5,
     busGain: 1,
     voices: [{ when: 0.5, fadeInSeconds: 0.01 }],
-    steps: [cutVoice(cutAt, 0.01)],
+    steps: [{ kind: "cut", at: cutAt, voice: 0, seconds: 0.01 }],
     stepsFrom: 0,
     readAt: [cutAt - 0.001, cutAt + 0.005, cutAt + 0.011],
   });
@@ -196,7 +192,14 @@ test("a cut inside a voice's 10 ms fade-in goes down from where it had reached",
       seconds: 1.5,
       busGain: 1,
       voices: [{ when, fadeInSeconds: 0.01 }],
-      steps: [cutVoice(when + quanta * QUANTUM_SECONDS, 0.01)],
+      steps: [
+        {
+          kind: "cut",
+          at: when + quanta * QUANTUM_SECONDS,
+          voice: 0,
+          seconds: 0.01,
+        },
+      ],
       stepsFrom: 0,
       readAt: [when + 0.03],
     });
