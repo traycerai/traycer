@@ -35,7 +35,6 @@ import {
   openTileWithNavigation,
 } from "@/lib/canvas/tile-open/open-tile";
 import { hasRestoredTabs } from "@/lib/has-restored-tabs";
-import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
 import { activeHostIdOrNull } from "@/lib/host/runtime";
 import {
   resolveTabIdForEpic,
@@ -2033,11 +2032,9 @@ export class TabNavigationController {
     this.activateExternalTarget({
       kind: "draft",
       draftId: newestLandingDraftId(),
-      // Same seed as `/draft/new`: the landing composer opens on the app-wide
-      // active host, so it inherits that host's last-run bucket.
-      settings: useComposerRunSettingsStore
-        .getState()
-        .getGlobalRunSettings(activeHostIdOrNull()),
+      // Same as `/draft/new`: a minted draft reads its settings from the
+      // composer's placement, the host its folders come from.
+      settings: null,
       create: true,
     });
   }
@@ -2053,11 +2050,10 @@ export class TabNavigationController {
     const activation = this.activateExternalTarget({
       kind: "draft",
       draftId: null,
-      // The draft opens on the landing surface (app-wide active host), so
-      // seed it from that host's last-run bucket.
-      settings: useComposerRunSettingsStore
-        .getState()
-        .getGlobalRunSettings(activeHostIdOrNull()),
+      // A minted draft reads its settings from the composer's placement, the
+      // host its folders come from, which a pinned surface may not share with
+      // the app-wide host.
+      settings: null,
       create: true,
     });
     if (activation === null || activation.ref.kind !== "draft") {

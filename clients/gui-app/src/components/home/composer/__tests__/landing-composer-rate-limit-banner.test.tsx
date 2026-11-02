@@ -148,6 +148,7 @@ vi.mock("@/stores/home/landing-draft-store", () => {
     drafts: [],
     setDraftComposerMode: vi.fn(),
     setDraftSettings: vi.fn(),
+    seedUnseededDraft: vi.fn(() => false),
   };
   // A store API, not just a selector hook: the landing composer also reads
   // it through `useStoreWithEqualityFn` (its returned sandbox).
