@@ -14,9 +14,11 @@ import { GIT_OUTPUT_MAX_BUFFER_BYTES } from "../git-output-limit.cjs";
 // names `maxBuffer: GIT_OUTPUT_MAX_BUFFER_BYTES`, unless its arguments are a
 // fixed git command that prints no listing. A call whose subcommand is not a
 // literal (a `git(args)` helper) is held too, since a caller can pass it one.
-// The rule sees calls whose command is the literal `git`, or a command string
-// or template that starts with it; a helper that takes the command itself as a
-// parameter is outside it. A `stdio` that sends stdout away exempts only the
+// The rule sees calls, through a runner or any alias of one, whose command is
+// the literal `git`, or a command string or template that starts with it; a
+// word it cannot read for certain (a substitution, a quote) counts as not a
+// literal. A helper that takes the command itself as a parameter is outside
+// it. A `stdio` that sends stdout away exempts only the
 // sync runners: `exec` and `execFile` buffer stdout whatever it says.
 
 const REPO_ROOT = fileURLToPath(new URL("../..", import.meta.url));
@@ -88,17 +90,21 @@ function argumentWords(argumentList) {
 }
 
 /**
- * A command string's words. A template contributes its fixed head, whose last
- * word is not a literal when a substitution continues it, and then whatever
- * the substitutions make of the rest.
+ * A command string's words. A word with a shell quote or escape is not a
+ * literal: the shell may join it with its neighbours. A template contributes
+ * its fixed head, whose last word is not a literal when a substitution
+ * continues it, and then whatever the substitutions make of the rest.
  */
 function commandWords(command) {
-  if (ts.isStringLiteralLike(command)) {
-    return command.text.split(/\s+/u).filter((word) => word !== "");
-  }
+  const shellWords = (text) =>
+    text
+      .split(/\s+/u)
+      .filter((word) => word !== "")
+      .map((word) => (/["'\\]/u.test(word) ? null : word));
+  if (ts.isStringLiteralLike(command)) return shellWords(command.text);
   if (!ts.isTemplateExpression(command)) return [];
   const head = command.head.text;
-  const words = head.split(/\s+/u).filter((word) => word !== "");
+  const words = shellWords(head);
   if (!/\s$/u.test(head)) words[words.length - 1] = null;
   return [...words, null];
 }
@@ -147,19 +153,42 @@ function namesTheConstant(options) {
   );
 }
 
-/** The names `file` runs a child process through, each to its runner: the runners and their promisified bindings. */
+/**
+ * The names `file` runs a child process through, each to its runner: the
+ * runners themselves, their aliases (`import { execSync as run }`,
+ * `const { execSync: run } = require(...)`, `const run = execSync`), and
+ * promisified bindings of any of them.
+ */
 function runnerNames(sourceFile) {
   const names = new Map([...RUNNERS].map((runner) => [runner, runner]));
+  const alias = (local, original) => {
+    const runner = original === undefined ? undefined : names.get(original);
+    if (runner !== undefined) names.set(local, runner);
+  };
   const visit = (node) => {
-    if (
+    if (ts.isImportSpecifier(node)) {
+      alias(node.name.text, (node.propertyName ?? node.name).text);
+    } else if (
+      ts.isBindingElement(node) &&
+      ts.isIdentifier(node.name) &&
+      ts.isObjectBindingPattern(node.parent)
+    ) {
+      const original = node.propertyName ?? node.name;
+      if (ts.isIdentifier(original)) alias(node.name.text, original.text);
+    } else if (
       ts.isVariableDeclaration(node) &&
       ts.isIdentifier(node.name) &&
-      node.initializer !== undefined &&
-      ts.isCallExpression(node.initializer) &&
-      /(^|\.)promisify$/u.test(node.initializer.expression.getText())
+      node.initializer !== undefined
     ) {
-      const runner = calleeName(node.initializer.arguments[0]);
-      if (RUNNERS.has(runner)) names.set(node.name.text, runner);
+      const initializer = node.initializer;
+      if (ts.isIdentifier(initializer)) {
+        alias(node.name.text, initializer.text);
+      } else if (
+        ts.isCallExpression(initializer) &&
+        /(^|\.)promisify$/u.test(initializer.expression.getText())
+      ) {
+        alias(node.name.text, calleeName(initializer.arguments[0]));
+      }
     }
     ts.forEachChild(node, visit);
   };
@@ -321,6 +350,26 @@ describe("git calls that keep their output", () => {
       "a promisified exec, which buffers stdout whatever stdio says",
       'const run = promisify(exec);\nawait run("git log", { stdio: "ignore" });',
       [2],
+    ],
+    [
+      "a command string whose quoted option value holds a space",
+      "execSync(\"git -C 'my repo' ls-files\", { cwd });",
+      [1],
+    ],
+    [
+      "an imported alias of a runner",
+      'import { execSync as run } from "node:child_process";\nrun("git log", { cwd });',
+      [2],
+    ],
+    [
+      "a destructured alias of a runner",
+      'const { execFileSync: runSync } = require("node:child_process");\nrunSync("git", ["log"]);',
+      [2],
+    ],
+    [
+      "a promisified alias, which buffers stdout whatever stdio says",
+      'import { execFile as execFileCb } from "node:child_process";\nconst run = promisify(execFileCb);\nawait run("git", ["log"], { stdio: "ignore" });',
+      [3],
     ],
     [
       "a shorthand maxBuffer, which names some other binding",
