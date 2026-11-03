@@ -225,7 +225,7 @@ describe("sandboxDetailsEntry", () => {
   // name the same day. The sibling pin on `sandboxWithdrawalLine` covers the
   // card's sentence; this one covers the Details row, which is a second call
   // site of the same formatter and could regress on its own.
-  it('gives a withdrawn row no Resting row, an Idle row, and a Destroyed-on row naming the announced day with no "unless used"', () => {
+  it('gives an unfrozen withdrawn row no Resting row, an Idle row, and a Destroyed-on row naming the announced day with no "unless used"', () => {
     vi.stubEnv("TZ", "America/Los_Angeles");
     // The pin itself has to take, or the case proves nothing.
     expect(Intl.DateTimeFormat().resolvedOptions().timeZone).toBe(
