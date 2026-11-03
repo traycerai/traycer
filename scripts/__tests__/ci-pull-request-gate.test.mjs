@@ -8,7 +8,7 @@
 // against the last GREEN push (scripts/ci-last-green-sha.sh), and trunk-red
 // watches every push workflow.
 
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -542,41 +542,53 @@ describe("a job that narrows a push run compares against the last green push", (
     const { workspaces } = JSON.parse(
       readFileSync(join(REPO_ROOT, "package.json"), "utf8"),
     );
-    const projects = workspaces.flatMap((pattern) =>
-      pattern.endsWith("/*")
-        ? readdirSync(join(REPO_ROOT, pattern.slice(0, -2)), {
-            withFileTypes: true,
-          })
-            .filter((entry) => entry.isDirectory())
-            .map((entry) => `${pattern.slice(0, -2)}/${entry.name}`)
-        : [pattern],
-    );
+    // A `dir/*` workspace pattern names every directory under `dir` that holds
+    // a manifest; any other glob would need a matcher this test does not have.
+    const projects = workspaces.flatMap((pattern) => {
+      if (!pattern.endsWith("/*")) {
+        expect(pattern, "workspace pattern").not.toMatch(/[*?[{]/);
+        return [pattern];
+      }
+      const parent = pattern.slice(0, -2);
+      return readdirSync(join(REPO_ROOT, parent), { withFileTypes: true })
+        .filter((entry) => entry.isDirectory())
+        .map((entry) => `${parent}/${entry.name}`)
+        .filter((dir) => existsSync(join(REPO_ROOT, dir, "package.json")));
+    });
     const cached = [];
     for (const project of projects) {
-      let manifest;
-      try {
-        manifest = readFileSync(
-          join(REPO_ROOT, project, "package.json"),
-          "utf8",
-        );
-      } catch {
-        continue;
-      }
-      const script = JSON.parse(manifest).scripts?.["lint:files"] ?? "";
-      // gui-app runs its linters from a script, which `lint:files` names.
-      const runner = /^bun (scripts\/\S+\.mjs)$/.exec(script);
-      const command = runner
-        ? readFileSync(join(REPO_ROOT, project, runner[1]), "utf8")
-        : script;
-      if (!/eslint/.test(command) || !/["\s]--cache["\s]/.test(command)) {
+      const manifest = JSON.parse(
+        readFileSync(join(REPO_ROOT, project, "package.json"), "utf8"),
+      );
+      const script = manifest.scripts?.["lint:files"] ?? "";
+      // A project that runs its linters from a script (gui-app's
+      // `scripts/lint-files.mjs`) passes the flags there, so the command
+      // includes every file of the project the script names.
+      const command = [
+        script,
+        ...script
+          .split(/\s+/)
+          .filter((token) => /\.[cm]?[jt]s$/.test(token))
+          .map((token) => join(REPO_ROOT, project, token))
+          .filter((path) => existsSync(path))
+          .map((path) => readFileSync(path, "utf8")),
+      ].join("\n");
+      if (
+        !/eslint/.test(command) ||
+        !/(?:^|["'\s])--cache(?=$|["'\s])/m.test(command)
+      ) {
         continue;
       }
       cached.push(project);
-      expect(command, project).toMatch(/--cache-strategy["',\s]+content/);
+      expect(command, project).toMatch(/--cache-strategy(?:["',\s]+|=)content/);
       expect(lint, project).toContain(`${project}/.eslintcache`);
     }
     expect(cached).toEqual(
-      expect.arrayContaining(["protocol", "clients/gui-app"]),
+      expect.arrayContaining([
+        "protocol",
+        "clients/gui-app",
+        "packages/html-source",
+      ]),
     );
   });
 
