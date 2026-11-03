@@ -58,9 +58,9 @@ export default defineConfig({
   // out with `mode: "default"`, so it boots once (browser-tests/README.md).
   fullyParallel: true,
   forbidOnly: isCi,
-  // One retry on CI absorbs a runner hiccup; the report still marks such a
-  // test "flaky", so a real intermittent failure stays visible.
-  retries: isCi ? 1 : 0,
+  // No retry: a test passes on its first attempt, and one that needs a second
+  // is a defect at its cause, never absorbed by a re-run.
+  retries: 0,
   // A page's rendering is most of a 4 vCPU runner's work. Measured on one commit
   // in November 2026, test time / slowest shard: two workers 3,555 s / 4.8 min,
   // three 4,070 s / 3.7 min, four 5,593 s / 4.2 min. Three needed a retry in two
@@ -85,13 +85,13 @@ export default defineConfig({
       : { launchOptions: { executablePath: chromeBin } }),
     headless: true,
     // A heavy fixture's load takes seconds. One that never fires its load
-    // event (the old CDP drivers saw this on CI runners) fails here and is
-    // retried, rather than spending the whole test timeout.
+    // event (the old CDP drivers saw this on CI runners) fails here, rather
+    // than spending the whole test timeout.
     navigationTimeout: 60_000,
-    // A trace records every action of every test, about a tenth of the run's
-    // time. CI retries once, so a red test's retry carries one; the workflow
-    // uploads the report only for a red shard, so a flake's was never read.
-    trace: isCi ? "on-first-retry" : "retain-on-failure",
+    // Every test records a trace and a red one keeps it: with no retry, the
+    // failing attempt is the only one there is. The workflow uploads the
+    // report for a red shard.
+    trace: "retain-on-failure",
   },
   webServer: {
     command: serverCommand(),

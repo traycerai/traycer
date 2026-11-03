@@ -476,15 +476,16 @@ async function attempt(
   }
   await untilGestureArrives(page);
 
-  const facts = await windowFacts(page);
+  // The log is read once the pump is over: the first-paint write comes a few
+  // frames after the remount, so a log read as the gesture arrives may not
+  // hold it yet, and would call a gesture ahead of it a miss.
   await pumpFinished(page);
+  const facts = await windowFacts(page);
+  await settle(page, 12);
   if (!inWindow(facts, placement)) {
-    await settle(page, 12);
     return { hit: false, problems: [], note: noteOf(facts) };
   }
   const gestureAt = facts.gestureAt ?? 0;
-  await nextFrames(page, 30);
-  await settle(page, 12);
   const overwrites =
     placement === "after-dispatch"
       ? (await windowFacts(page)).writes.filter(

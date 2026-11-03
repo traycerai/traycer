@@ -205,7 +205,7 @@ jobs:
           name: browser-results-${{ matrix.shard }}
           path: clients/gui-app/test-results.json
           retention-days: 14
-      # The HTML report carries a trace of each red test's retry: open it with
+      # The HTML report carries a trace of each red test: open it with
       # `bunx playwright show-report <dir>` after downloading.
       - name: Upload the Playwright report
         if: failure()

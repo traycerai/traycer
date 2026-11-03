@@ -18,11 +18,13 @@ CI runs them in `.github/workflows/browser-regressions.yml`, sharded across
 parallel jobs, on every PR and push that touches what they depend on (the
 workflow's `changes` job lists it). Its `browser regressions` job is a
 required check on `main`, so a red shard blocks a merge. A failed shard
-uploads the Playwright report, with a trace for each failed test.
+uploads the Playwright report, with a trace for each failed test. There is
+no retry: a test passes on its first attempt, and one that fails and then
+passes on a re-run is a defect to fix at its cause.
 
 CI serves the fixture pages bundled (`vite build` and `vite preview`), where a
 local run uses the dev server; it also runs two workers per shard, writes a
-JSON report and traces only a retry. On the dev server a heavy fixture fetches thousands of modules in every test's
+JSON report. On the dev server a heavy fixture fetches thousands of modules in every test's
 fresh context; bundled, the same load takes about a third of the time.
 `BROWSER_TESTS_BUNDLE=1 bun run test:browser <file>` runs a spec the way CI
 does, and is the first thing to try when a spec is red on CI and green locally.

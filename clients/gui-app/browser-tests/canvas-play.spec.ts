@@ -138,7 +138,10 @@ test.describe("fullscreen steps through the reading order", () => {
 
     // Click into the running board so its document owns the keyboard, then
     // step from there. By coordinates: the fullscreen frame is scaled, and
-    // the claim is that a real press inside it reaches the app.
+    // the claim is that a real press inside it reaches the app. The boards are
+    // out-of-process frames, and the browser routes a click by the last frame
+    // painted: until the step is painted, B's frame still owns this point.
+    await nextFrames(page, 2);
     const frame = await page.locator('iframe[title="A"]').boundingBox();
     if (frame === null) throw new Error("the fullscreen board has no box");
     await page.mouse.click(
