@@ -32,7 +32,7 @@ import {
 } from "./lazy-schema-thunk-rules-scanner";
 
 /**
- * AST scan of every `lazySchema` call in protocol/src and clients/. The
+ * AST scan of every file in protocol/src and clients/ that names `lazySchema`. The
  * scanner is `lazy-schema-thunk-rules-scanner.ts`, shared with the host twin
  * (`traycer-host/src/__tests__/lazy-schema-thunk-rules-scan.test.ts`); every
  * planted control lives here, once.
@@ -1011,27 +1011,43 @@ describe("lazySchema thunk rules scan", () => {
     );
   });
 
-  it("reaches a generic call and a spaced call", () => {
+  it("reaches a generic call, a spaced call, an optional call, and a comment before the parenthesis", () => {
     const genericAbs = path.join(PLANTED_DIR, "marker-generic.ts");
     const spacedAbs = path.join(PLANTED_DIR, "marker-spaced.ts");
+    const optionalAbs = path.join(PLANTED_DIR, "marker-optional.ts");
+    const commentAbs = path.join(PLANTED_DIR, "marker-comment.ts");
     const generic = `const list: string[] = [];
 export const genericCall = lazySchema<{ readonly _zod: object }>(() => { list.push("g"); return 1; });
 `;
     const spaced = `const list: string[] = [];
 export const spacedCall = lazySchema (() => { list.push("s"); return 1; });
 `;
+    const optional = `const list: string[] = [];
+export const optionalCall = lazySchema?.(() => { list.push("o"); return 1; });
+`;
+    const commented = `const list: string[] = [];
+export const commentCall = lazySchema/* why */(() => { list.push("c"); return 1; });
+`;
     const result = scanOverlay(
-      [genericAbs, spacedAbs],
+      [genericAbs, spacedAbs, optionalAbs, commentAbs],
       new Map([
         [genericAbs, generic],
         [spacedAbs, spaced],
+        [optionalAbs, optional],
+        [commentAbs, commented],
       ]),
     );
-    expect(result.thunkCount).toBe(2);
+    expect(result.thunkCount).toBe(4);
     expect(hitsOf(result, "R5", "genericCall").map((hit) => hit.kind)).toEqual([
       "S4 mutator",
     ]);
     expect(hitsOf(result, "R5", "spacedCall").map((hit) => hit.kind)).toEqual([
+      "S4 mutator",
+    ]);
+    expect(hitsOf(result, "R5", "optionalCall").map((hit) => hit.kind)).toEqual(
+      ["S4 mutator"],
+    );
+    expect(hitsOf(result, "R5", "commentCall").map((hit) => hit.kind)).toEqual([
       "S4 mutator",
     ]);
   });

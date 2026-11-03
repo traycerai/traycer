@@ -10,8 +10,7 @@ import ts from "typescript";
  * both scans. Every root and prefix is a parameter of `scanThunkRules` and
  * `gitListedFiles`; nothing here names a repo.
  *
- * It parses every `lazySchema` call, including `lazySchema<T>(` and
- * `lazySchema (`, and reports:
+ * It parses a file whose text names `lazySchema` and reports every call:
  *
  * R1 outermost `.describe(`/`.meta(`/`.register(` of a returned expression
  * R2 outermost `z.instanceof(`
@@ -36,6 +35,11 @@ import ts from "typescript";
  */
 
 export const UNANALYSED_KIND = "U unanalysed";
+
+/** A file that names `lazySchema` may hold a call. The walk decides which. */
+export function mentionsLazySchema(text: string): boolean {
+  return text.includes("lazySchema");
+}
 
 const SKIP_DIR_NAMES = new Set([
   "node_modules",
@@ -2540,12 +2544,12 @@ export function scanThunkRules(input: ScanInput): ThunkScanResult {
   const thunkFns: ThunkFn[] = [];
   let thunkCount = 0;
   for (const abs of input.files) {
-    // A call may carry a type argument (`lazySchema<T>(`) or a space
-    // before `(`. A file that only imports the name has neither, so it
-    // is skipped here. Import resolution still calls load for a helper
-    // that does not contain the marker.
+    // The walk counts a call, including a type argument, a space, `?.`,
+    // or a comment before `(`. Naming `lazySchema` is enough to parse.
+    // Import resolution still calls load for a helper that does not
+    // name it.
     const markerText = readText(abs);
-    if (markerText === undefined || !/\blazySchema\s*(<|\()/.test(markerText)) {
+    if (markerText === undefined || !mentionsLazySchema(markerText)) {
       continue;
     }
     const sf = remember(abs, markerText);

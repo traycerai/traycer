@@ -1,3 +1,4 @@
+import { cpuUsage } from "node:process";
 import { beforeAll, describe, expect, it } from "vitest";
 
 import {
@@ -3322,6 +3323,13 @@ describe("performance on large documents", () => {
     return { value, elapsedMs: performance.now() - startedAt };
   }
 
+  function cpuTimed<T>(operation: () => T): { value: T; elapsedMs: number } {
+    const started = cpuUsage();
+    const value = operation();
+    const spent = cpuUsage(started);
+    return { value, elapsedMs: (spent.user + spent.system) / 1000 };
+  }
+
   function exerciseEveryOperation(text: string): void {
     const lastRow = text.lastIndexOf(`<div class="row"`);
     const locator: ElementLocator = {
@@ -3395,9 +3403,9 @@ describe("performance on large documents", () => {
     // buildDocument stops on the first row past the requested length, so
     // the documents stay near a four-to-one ratio. The bound is three
     // times that ratio (about twelve). Quadratic growth is the square
-    // (about sixteen). The minimum of two samples drops a stall that
-    // hits one sample. These lengths keep that pair inside the default
-    // test timeout.
+    // (about sixteen). Samples are process CPU time, so a wait while
+    // the machine is busy is not part of the ratio. The minimum of two
+    // samples drops a stall that hits one sample.
     expect(sizeRatio).toBeGreaterThan(3);
     expect(sizeRatio).toBeLessThan(5);
 
@@ -3416,8 +3424,8 @@ describe("performance on large documents", () => {
       let smallMs = Number.POSITIVE_INFINITY;
       let bigMs = Number.POSITIVE_INFINITY;
       for (let attempt = 0; attempt < 2; attempt++) {
-        const small = timed(() => edit(smaller, smallerRow));
-        const big = timed(() => edit(bigger, biggerRow));
+        const small = cpuTimed(() => edit(smaller, smallerRow));
+        const big = cpuTimed(() => edit(bigger, biggerRow));
         expect(small.value.ok).toBe(true);
         expect(big.value.ok).toBe(true);
         smallMs = Math.min(smallMs, small.elapsedMs);
