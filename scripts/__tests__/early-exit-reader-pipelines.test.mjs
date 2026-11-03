@@ -94,6 +94,13 @@ const LOOPS = new Set(["for", "select", "until", "while"]);
 const CONDITIONS = new Set(["elif", "if", "until", "while"]);
 // A redirection operator standing alone; its target is the next word.
 const REDIRECT_OPERATOR = /^\d*(?:[<>]|>>|>\||<>|&>>?|[<>]&)$/;
+// File operands that name the reader's own standard input.
+const STANDARD_INPUT = new Set([
+  "-",
+  "/dev/stdin",
+  "/dev/fd/0",
+  "/proc/self/fd/0",
+]);
 // The readers' long options that take the next argument as their value.
 const LONG_WITH_VALUE = new Set([
   "--after-context",
@@ -103,6 +110,8 @@ const LONG_WITH_VALUE = new Set([
   "--field-separator",
   "--line-length",
   "--lines",
+  "--max-count",
+  "--max-depth",
   "--source",
   "--before-context",
   "--binary-files",
@@ -173,14 +182,19 @@ function pipelinesOf(source) {
     // Open groups and compound commands, innermost last: the word that
     // closes each, and the piped stage whose input its commands read.
     const groups = input === null ? [] : [{ ...input, closer: null }];
-    const inherited = () => groups.at(-1) ?? { input: null, loop: false };
+    const inherited = () => groups.at(-1) ?? { input: null, loop: null };
+    // `loop` is the innermost loop open, which a `break`, `exit` or `return`
+    // in its body marks as one that may stop reading early.
     function openGroup(opener, stage) {
       const outer = inherited();
-      groups.push({
+      const group = {
         closer: GROUP_CLOSERS.get(opener) ?? ")",
         input: stage ?? outer.input,
-        loop: stage === null ? outer.loop : LOOPS.has(opener),
-      });
+        loop: outer.loop,
+      };
+      if (LOOPS.has(opener)) group.loop = { kind: opener, stops: false };
+      if (stage !== null) stage.loop = group.loop;
+      groups.push(group);
     }
     function closeGroup(closer) {
       const at = groups.findLastIndex((group) => group.closer === closer);
@@ -268,12 +282,15 @@ function pipelinesOf(source) {
       if (pipeline === null) {
         // A pipeline inside a group fed by a pipe reads that pipe first.
         const { input: groupInput, loop } = inherited();
+        if (["break", "exit", "return"].includes(current.words[0]) && loop) {
+          loop.stops = true;
+        }
         pipeline = {
           commands: [],
           discarded: false,
           tested: listTested || openConditions > 0,
           groupInput,
-          inLoop: loop,
+          loop,
         };
       }
       pipeline.commands.push(current);
@@ -715,7 +732,8 @@ const AWKS = new Set(["awk", "gawk", "mawk", "nawk"]);
  * with each wrapper's own options and their values (`sudo -u user`,
  * `env X=1`, `timeout 5`).
  */
-function commandOf(words) {
+function commandOf(stageWords) {
+  let words = stageWords;
   let at = 0;
   for (;;) {
     while (at < words.length && ASSIGNMENT.test(words[at])) at += 1;
@@ -724,11 +742,27 @@ function commandOf(words) {
     if (valued === undefined) break;
     at += 1;
     while (at < words.length && /^-./.test(words[at])) {
-      if (words[at] === "--") {
+      const option = words[at];
+      // `env -S 'head -n 1'` runs the words of its string.
+      const split =
+        wrapper === "env"
+          ? /^(?:-S|--split-string)(=?)(.*)$/s.exec(option)
+          : null;
+      if (split !== null) {
+        const attached = split[1] === "=" || split[2] !== "";
+        const command = attached ? split[2] : (words[at + 1] ?? "");
+        words = [
+          ...command.trim().split(/\s+/),
+          ...words.slice(at + (attached ? 1 : 2)),
+        ];
+        at = 0;
+        break;
+      }
+      if (option === "--") {
         at += 1;
         break;
       }
-      at += valued.includes(words[at]) ? 2 : 1;
+      at += valued.includes(option) ? 2 : 1;
     }
     if (wrapper === "timeout") at += 1;
   }
@@ -779,7 +813,7 @@ function readsStandardInput(stage) {
   const files = (
     name === "head" || programGiven ? operands : operands.slice(1)
   ).filter((operand) => !(AWKS.has(name) && ASSIGNMENT.test(operand)));
-  return files.length === 0 || files.includes("-");
+  return files.length === 0 || files.some((file) => STANDARD_INPUT.has(file));
 }
 
 /** The reader a pipeline stage is, when it stops before its input ends. */
@@ -855,6 +889,18 @@ function earlyExitReaderOf(stage) {
 }
 
 /**
+ * Whether a loop reads its input to the end: a `while` or `until` loop with no
+ * `break`, `exit` or `return` in its body. A `for` loop reads no line itself.
+ */
+function drains(loop) {
+  return (
+    loop !== null &&
+    (loop.kind === "while" || loop.kind === "until") &&
+    !loop.stops
+  );
+}
+
+/**
  * Each pipeline whose status someone reads and whose input reaches an
  * early-exit reader through a pipe, as `line: reader after producer`, plus
  * what the scan could not read.
@@ -871,16 +917,25 @@ function findingsIn(source) {
       pipeline.groupInput &&
       (first.compound || readsStandardInput(first)) &&
       earlyExitReaderOf(first);
-    if (!reader || (reader === "read" && pipeline.inLoop)) continue;
+    if (!reader || (reader === "read" && drains(pipeline.loop))) continue;
     if (!groupReaders.has(pipeline.groupInput)) {
       groupReaders.set(pipeline.groupInput, { line: first.line, reader });
     }
   }
+  const ownReader = (stage) => {
+    // A loop that may stop early reads its `while read` condition's line and
+    // closes the pipe.
+    if (stage.compound && stage.loop && !drains(stage.loop)) {
+      const condition = { words: stage.words.slice(1), compound: false };
+      if (readsStandardInput(condition)) return earlyExitReaderOf(condition);
+    }
+    return earlyExitReaderOf(stage);
+  };
   const readerOf = (stage) =>
     groupReaders.get(stage) ??
-    (earlyExitReaderOf(stage) === null
+    (ownReader(stage) === null
       ? null
-      : { line: stage.line, reader: earlyExitReaderOf(stage) });
+      : { line: stage.line, reader: ownReader(stage) });
   for (const pipeline of pipelines) {
     if (pipeline.discarded) continue;
     const at = pipeline.commands.findIndex(
@@ -1119,6 +1174,20 @@ describe("an early-exit reader never reads a streaming producer through a pipe u
     [
       "a loop body reader on standard input",
       "seq 10 | while read -r x; do grep -q y; done",
+    ],
+    ["a reader in env's split string", "seq 10 | env -S 'head -n 1'"],
+    [
+      "a grep with a separate --max-count value in a group",
+      "seq 10 | { :; grep --max-count 1 '^1$'; }",
+    ],
+    [
+      "a while read loop that breaks",
+      "seq 10 | while read -r x; do break; done",
+    ],
+    ["a read in a for loop", "seq 10 | for x in a; do read -r line; done"],
+    [
+      "a group reader naming /dev/stdin",
+      "seq 10 | { :; head -n 1 /dev/stdin; }",
     ],
     [
       "a pipeline after a test with a bracket pattern",
