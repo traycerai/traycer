@@ -64,6 +64,9 @@ const isHookStep = (step) =>
   String(step.uses ?? "").startsWith("pre-commit/action@");
 const hookJob = jobs.find((job) => job.steps.some(isHookStep));
 const hookStep = hookJob.steps.find(isHookStep);
+// The required check: it passes only when every job it needs passed, so a job
+// it does not need can fail unseen.
+const required = workflow.jobs["pre-commit"].needs;
 const skipped = new Set(
   String(hookStep.env?.SKIP ?? "")
     .split(",")
@@ -119,6 +122,7 @@ describe("every pre-commit hook runs in a pre-commit.yml job that can execute it
     expect(hookStep.if).toBeUndefined();
     expect(hookStep["continue-on-error"]).toBeUndefined();
     expect(hookJob.continueOnError).toBeUndefined();
+    expect(required).toContain(hookJob.id);
     expect(normalize(hookStep.with?.extra_args ?? "--all-files")).toBe(
       "--all-files",
     );
@@ -147,6 +151,7 @@ describe("every pre-commit hook runs in a pre-commit.yml job that can execute it
         // Its failure fails the job.
         expect(runner.step["continue-on-error"]).toBeUndefined();
         expect(runner.job.continueOnError).toBeUndefined();
+        expect(required).toContain(runner.job.id);
         expect(runner.step.shell ?? runner.job.shell).toBeUndefined();
       });
 
