@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
 import { installCrossWindowRehydrate } from "@/lib/persist/cross-window-rehydrate";
+import { appLogger, describeLogError } from "@/lib/logger";
 
 const VERIFIED_PROFILE_CACHE_KEY = persistKey(STORE_KEYS.verifiedProfileCache);
 
@@ -18,23 +19,43 @@ interface VerifiedProfileCacheState {
 }
 
 /**
+ * Runs a write whose persisting may throw (a full or refused `localStorage`).
+ * The memory copy has already moved by then, and the callers are auth
+ * transitions that a lost picture must never interrupt, so it stops here.
+ */
+function bestEffort(write: () => void): void {
+  try {
+    write();
+  } catch (error: unknown) {
+    appLogger.warn("[auth] verified profile cache write failed", {
+      error: describeLogError(error),
+    });
+  }
+}
+
+/**
  * The picture and name a restored session cannot get from the credentials
  * file, which the CLI writes too and whose shape this app cannot widen.
  * Written on each verification; an account's entry leaves with the account.
+ * Neither write throws.
  */
 export const useVerifiedProfileCacheStore = create<VerifiedProfileCacheState>()(
   persist(
     (set) => ({
       profilesByUserId: {},
       remember: (userId, profile) => {
-        set((state) => ({
-          profilesByUserId: { ...state.profilesByUserId, [userId]: profile },
-        }));
+        bestEffort(() => {
+          set((state) => ({
+            profilesByUserId: { ...state.profilesByUserId, [userId]: profile },
+          }));
+        });
       },
       forget: (userId) => {
-        set((state) => {
-          const { [userId]: _forgotten, ...rest } = state.profilesByUserId;
-          return { profilesByUserId: rest };
+        bestEffort(() => {
+          set((state) => {
+            const { [userId]: _forgotten, ...rest } = state.profilesByUserId;
+            return { profilesByUserId: rest };
+          });
         });
       },
     }),

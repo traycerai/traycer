@@ -1,5 +1,7 @@
+import { createRef, type RefObject } from "react";
 import {
   cleanup,
+  fireEvent,
   render,
   screen,
   waitFor,
@@ -7,7 +9,10 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stubImmediateImage } from "@/__tests__/immediate-avatar-image";
-import { MentionSuggestionList } from "@/components/comments/collaborator-mention-suggestion";
+import {
+  MentionSuggestionList,
+  type MentionSuggestionListHandle,
+} from "@/components/comments/collaborator-mention-suggestion";
 import {
   collaboratorEntry,
   collaboratorsResponse,
@@ -32,8 +37,11 @@ function option(name: string): HTMLElement {
   return screen.getByRole("option", { name: new RegExp(name) });
 }
 
-describe("<MentionSuggestionList /> candidate pictures", () => {
-  it("draws the picture of a candidate in the cached collaborators list and initials for one that is not", async () => {
+describe("<MentionSuggestionList /> candidates", () => {
+  function renderCandidates(
+    command: (attrs: { id: string; label: string }) => void,
+    ref: RefObject<MentionSuggestionListHandle | null>,
+  ) {
     harness.publishCollaborators(
       collaboratorsResponse([
         collaboratorEntry("user-2", {
@@ -42,19 +50,23 @@ describe("<MentionSuggestionList /> candidate pictures", () => {
         }),
       ]),
     );
-
     render(
       harness.wrap(
         <MentionSuggestionList
+          ref={ref}
           items={[
-            { userId: "user-2", displayName: "Grace Hopper", email: "" },
+            { userId: "user-2", displayName: "grace-candidate", email: "" },
             { userId: "user-3", displayName: "Alan Turing", email: "" },
           ]}
-          command={vi.fn()}
+          command={command}
           getReferenceClientRect={null}
         />,
       ),
     );
+  }
+
+  it("draws the resolved picture and name, and the candidate's own for a person it does not know", async () => {
+    renderCandidates(vi.fn(), createRef());
 
     const known = within(option("Grace Hopper")).getByTestId("person-avatar");
     await waitFor(() => {
@@ -62,8 +74,46 @@ describe("<MentionSuggestionList /> candidate pictures", () => {
         "https://example.com/grace.png",
       );
     });
+    expect(screen.queryByText("grace-candidate")).toBeNull();
     const unknown = within(option("Alan Turing")).getByTestId("person-avatar");
     expect(unknown.textContent).toBe("AT");
     expect(unknown.querySelector("img")).toBeNull();
+  });
+
+  it("inserts the resolved name when picked with the pointer", () => {
+    const command = vi.fn();
+    renderCandidates(command, createRef());
+
+    fireEvent.mouseDown(option("Grace Hopper"));
+
+    expect(command).toHaveBeenCalledWith({
+      id: "user-2",
+      label: "Grace Hopper",
+    });
+  });
+
+  it("inserts the resolved name when picked with Enter", () => {
+    const command = vi.fn();
+    const ref = createRef<MentionSuggestionListHandle>();
+    renderCandidates(command, ref);
+
+    ref.current?.onKeyDown(new KeyboardEvent("keydown", { key: "Enter" }));
+
+    expect(command).toHaveBeenCalledWith({
+      id: "user-2",
+      label: "Grace Hopper",
+    });
+  });
+
+  it("inserts the candidate's own name for a person it does not know", () => {
+    const command = vi.fn();
+    renderCandidates(command, createRef());
+
+    fireEvent.mouseDown(option("Alan Turing"));
+
+    expect(command).toHaveBeenCalledWith({
+      id: "user-3",
+      label: "Alan Turing",
+    });
   });
 });

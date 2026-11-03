@@ -1,6 +1,7 @@
 /**
- * A bell row about a member's post in a bot's conversation draws that member
- * where other rows draw the bot or a glyph. The real `NotificationRow` under
+ * A bell row about a member's post in a bot's conversation draws that member,
+ * or its kind glyph when we do not know them; the bot's picture is for the
+ * bot's own rows. The real `NotificationRow` under
  * the real `NotificationBotsProvider` and the real loaded-members read over a
  * mock messenger; the merged row and the host's `bot.list` answer are the
  * boundaries.
@@ -286,7 +287,7 @@ describe("<NotificationRow /> about a member's post", () => {
     expect(within(entry).queryByTestId("person-avatar")).toBeNull();
   });
 
-  it("keeps the bot's picture when the author is not among the cached members", () => {
+  it("keeps the kind glyph, not the bot, when the author is not among the cached members", () => {
     cacheMembers(
       membersPage({
         userId: "user-2",
@@ -297,32 +298,26 @@ describe("<NotificationRow /> about a member's post", () => {
 
     const entry = renderRow(conversationRow(BOT_ID, "user-9"));
 
-    expect(within(entry).getByTestId("bot-avatar")).toBeTruthy();
-    expect(within(entry).queryByTestId("person-avatar")).toBeNull();
-  });
-
-  it("keeps the kind glyph for an unknown author on a bot the list does not know", () => {
-    const entry = renderRow(conversationRow("bot_unlisted", "user-9"));
-
     expect(within(entry).queryByTestId("bot-avatar")).toBeNull();
     expect(within(entry).queryByTestId("person-avatar")).toBeNull();
+    expect(entry.querySelector("svg.lucide")).not.toBeNull();
   });
 
-  it("keeps the bot's picture for a member known by id alone, never initials from the id", () => {
+  it("keeps the kind glyph for a member known by id alone, never initials from the id", () => {
     cacheMembers(
       membersPage({ userId: "user-2", displayName: null, avatarUrl: null }),
     );
 
     const entry = renderRow(conversationRow(BOT_ID, "user-2"));
 
-    expect(within(entry).getByTestId("bot-avatar")).toBeTruthy();
     expect(within(entry).queryByTestId("person-avatar")).toBeNull();
+    expect(within(entry).queryByTestId("bot-avatar")).toBeNull();
+    expect(entry.querySelector("svg.lucide")).not.toBeNull();
   });
 
   it("asks the host for no members when none are cached", () => {
-    const entry = renderRow(conversationRow(BOT_ID, "user-2"));
+    renderRow(conversationRow(BOT_ID, "user-2"));
 
-    expect(within(entry).getByTestId("bot-avatar")).toBeTruthy();
     expect(queryClient.isFetching()).toBe(0);
     expect(memberRequests).toBe(0);
   });

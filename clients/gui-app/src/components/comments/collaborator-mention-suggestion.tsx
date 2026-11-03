@@ -8,7 +8,6 @@ import {
   useLayoutEffect,
   useRef,
   useState,
-  type ReactElement,
   type Ref,
 } from "react";
 import { createPortal } from "react-dom";
@@ -21,7 +20,7 @@ import {
 } from "@floating-ui/dom";
 import type { MentionCollaborator } from "@/hooks/comments/use-mention-collaborators";
 import { PersonAvatar } from "@/components/bots/bot-avatars";
-import { usePersonIdentity } from "@/hooks/identity/use-person-identity";
+import { usePersonIdentityResolver } from "@/hooks/identity/use-person-identity";
 import { usePanePortalContainer } from "@/components/epic-tabs/pane-visibility-context";
 import { listNavigationKey } from "@/lib/keybindings/list-navigation-key";
 import { cn } from "@/lib/utils";
@@ -82,6 +81,7 @@ function MentionSuggestionListContent({
   ref,
 }: MentionSuggestionListProps) {
   const [selectedIndex, setSelectedIndex] = useState(0);
+  const resolveIdentity = usePersonIdentityResolver();
   const floatingRef = useRef<HTMLDivElement | null>(null);
   const itemRefs = useRef<Array<HTMLButtonElement | null>>([]);
   // Render into the pane's portal host (not `document.body`), so a mention
@@ -111,13 +111,17 @@ function MentionSuggestionListContent({
         }
         if (event.key === "Enter") {
           const choice = items[selectedIndex] ?? items[0];
-          command({ id: choice.userId, label: choice.displayName });
+          command({
+            id: choice.userId,
+            label:
+              resolveIdentity(choice.userId)?.displayName ?? choice.displayName,
+          });
           return true;
         }
         return false;
       },
     }),
-    [items, selectedIndex, command],
+    [items, selectedIndex, command, resolveIdentity],
   );
 
   useLayoutEffect(() => {
@@ -174,6 +178,8 @@ function MentionSuggestionListContent({
       ) : (
         items.map((item, index) => {
           const isSelected = index === selectedIndex;
+          const identity = resolveIdentity(item.userId);
+          const name = identity?.displayName ?? item.displayName;
           return (
             <button
               key={item.userId}
@@ -201,15 +207,20 @@ function MentionSuggestionListContent({
               onMouseEnter={() => setSelectedIndex(index)}
               onMouseDown={(event) => {
                 event.preventDefault();
-                command({ id: item.userId, label: item.displayName });
+                command({ id: item.userId, label: name });
               }}
             >
-              <MentionCandidateAvatar item={item} />
+              <PersonAvatar
+                userId={item.userId}
+                name={name}
+                avatarUrl={identity?.avatarUrl ?? null}
+                size="sm"
+              />
               <div className="flex min-w-0 flex-1 flex-col">
                 <span className="truncate text-ui-sm leading-tight">
-                  {item.displayName}
+                  {name}
                 </span>
-                {item.email.length > 0 && item.email !== item.displayName ? (
+                {item.email.length > 0 && item.email !== name ? (
                   <span className="truncate text-ui-xs text-muted-foreground">
                     {item.email}
                   </span>
@@ -221,21 +232,6 @@ function MentionSuggestionListContent({
       )}
     </div>,
     portalContainer ?? document.body,
-  );
-}
-
-function MentionCandidateAvatar(props: {
-  readonly item: MentionCollaborator;
-}): ReactElement {
-  const { item } = props;
-  const identity = usePersonIdentity(item.userId);
-  return (
-    <PersonAvatar
-      userId={item.userId}
-      name={identity?.displayName ?? item.displayName}
-      avatarUrl={identity?.avatarUrl ?? null}
-      size="sm"
-    />
   );
 }
 

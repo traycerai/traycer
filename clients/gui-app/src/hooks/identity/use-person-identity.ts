@@ -1,4 +1,4 @@
-import { createContext, use, useMemo } from "react";
+import { createContext, use, useCallback, useMemo } from "react";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
 import {
@@ -31,13 +31,20 @@ export const PersonMembersContext = createContext<BotMemberResolver>(
  * See {@link resolvePersonIdentity} for the order.
  */
 export function usePersonIdentity(userId: string): PersonIdentity | null {
+  return usePersonIdentityResolver()(userId);
+}
+
+/** {@link usePersonIdentity} for a surface that names several people. */
+export function usePersonIdentityResolver(): (
+  userId: string,
+) => PersonIdentity | null {
   const viewer = useAuthStore((state) => state.profile);
   const collaborators = useLoadedTaskCollaborators();
   const resolveMember = use(PersonMembersContext);
-  return useMemo(
-    () =>
+  return useCallback(
+    (userId) =>
       resolvePersonIdentity({ viewer, collaborators, resolveMember }, userId),
-    [viewer, collaborators, resolveMember, userId],
+    [viewer, collaborators, resolveMember],
   );
 }
 

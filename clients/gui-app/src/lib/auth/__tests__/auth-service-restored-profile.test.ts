@@ -17,6 +17,7 @@ import {
  * keeps that cache current with each verdict.
  */
 
+const CACHE_KEY = "traycer-gui-app:verified-profile-cache";
 const NEGOTIATED_URL = "http://localhost:5005/api/v3/user/negotiated";
 const OLD_PICTURE = "https://example.com/old.png";
 const NEW_PICTURE = "https://example.com/new.png";
@@ -143,6 +144,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   while (trackedServices.length > 0) trackedServices.pop()?.dispose();
   useAuthStore.getState().setSignedOut();
   useVerifiedProfileCacheStore.setState({ profilesByUserId: {} });
@@ -284,6 +286,46 @@ describe("AuthService restored session profile", () => {
 
       expect(readVerifiedProfile("user-1")).toBeNull();
       expect(readVerifiedProfile("user-2")?.avatarUrl).toBe(OLD_PICTURE);
+    });
+  });
+
+  describe("when the cache cannot be written", () => {
+    function refuseCacheWrites(): void {
+      const write = localStorage.setItem.bind(localStorage);
+      vi.spyOn(Storage.prototype, "setItem").mockImplementation(
+        (key, value) => {
+          if (key === CACHE_KEY) {
+            throw new DOMException("quota exceeded", "QuotaExceededError");
+          }
+          write(key, value);
+        },
+      );
+    }
+
+    it("still applies a verified session", async () => {
+      const { service, host } = makeService();
+      refuseCacheWrites();
+      authn.answer = { name: "Verified Name", avatarUrl: NEW_PICTURE };
+      await storeCredentials(host, "user-1", "File Name");
+
+      await start(service);
+
+      expect(useAuthStore.getState().status).toBe("signed-in");
+      expect(useAuthStore.getState().profile?.avatarUrl).toBe(NEW_PICTURE);
+    });
+
+    it("still finishes a sign-out", async () => {
+      const { service, host } = makeService();
+      authn.answer = { name: "Verified Name", avatarUrl: NEW_PICTURE };
+      await storeCredentials(host, "user-1", "File Name");
+      await start(service);
+      refuseCacheWrites();
+
+      await service.signOut();
+
+      expect(useAuthStore.getState().status).toBe("signed-out");
+      expect(await host.tokenStore.get()).toBeNull();
+      expect(readVerifiedProfile("user-1")).toBeNull();
     });
   });
 });

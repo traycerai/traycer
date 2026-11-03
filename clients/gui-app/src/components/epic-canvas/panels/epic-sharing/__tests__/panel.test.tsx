@@ -15,6 +15,7 @@ import type {
   EpicTeamCollaboratorView,
 } from "@/hooks/epics/use-epic-collaborators-query";
 import type { PermissionRole } from "@/lib/epic-collaborator-roles";
+import { stubImmediateImage } from "@/__tests__/immediate-avatar-image";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
@@ -372,9 +373,37 @@ describe("<SharingPanel />", () => {
 
   afterEach(() => {
     cleanup();
+    vi.unstubAllGlobals();
     // Zustand stores are module scope, so an auth status staged here outlives
     // this file inside the same worker.
     useAuthStore.setState({ status: "signed-out" });
+  });
+
+  it("draws each person with the app's one person avatar", async () => {
+    stubImmediateImage();
+    const pictured = {
+      ...DIRECT_EDITOR,
+      avatarUrl: "https://example.com/editor.png",
+    };
+    testState.collaborators = {
+      directUsers: [DIRECT_USER, pictured],
+      ownerTeam: null,
+      teams: [],
+      flatRows: [DIRECT_USER, pictured],
+    };
+
+    renderSharingPanel();
+
+    const [initialsRow, pictureRow] = screen.getAllByTestId("epic-sharing-row");
+    expect(within(initialsRow).getByTestId("person-avatar").textContent).toBe(
+      "AS",
+    );
+    const avatar = within(pictureRow).getByTestId("person-avatar");
+    await waitFor(() => {
+      expect(avatar.querySelector("img")?.getAttribute("src")).toBe(
+        "https://example.com/editor.png",
+      );
+    });
   });
 
   it("queues email and GitHub chips with the batch invite label", async () => {

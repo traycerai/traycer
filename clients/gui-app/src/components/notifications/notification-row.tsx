@@ -283,16 +283,17 @@ function NotificationRowPicture(props: {
   readonly fallback: ReactNode;
 }): ReactNode {
   const { row, fallback } = props;
-  const unattributed = (
-    <NotificationRowBotAvatar payload={row.payload} fallback={fallback} />
-  );
   const authorUserId = row.botAuthorUserId ?? null;
-  if (authorUserId === null) return unattributed;
+  if (authorUserId === null) {
+    return (
+      <NotificationRowBotAvatar payload={row.payload} fallback={fallback} />
+    );
+  }
   return (
     <NotificationRowAuthorAvatar
       authorUserId={authorUserId}
       payload={row.payload}
-      fallback={unattributed}
+      fallback={fallback}
     />
   );
 }

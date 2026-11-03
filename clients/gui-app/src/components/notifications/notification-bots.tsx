@@ -93,9 +93,8 @@ export function NotificationRowBotAvatar(props: {
 }
 
 /**
- * A row's picture: the member who wrote it when the row is a member's post in
- * a bot's conversation and we know them, else what the row shows without one
- * (`fallback`).
+ * A row's picture when a member wrote it, in a bot's conversation: that member
+ * when we know them, else the row's kind glyph (`fallback`).
  *
  * The bell is outside every bot surface, so it reads the bot's environment's
  * members as far as Home, Tracy or voice has already loaded them, and asks for
