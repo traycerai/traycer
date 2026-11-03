@@ -91,14 +91,23 @@ const setsUpBefore = (job, step, action) =>
 // exactly the command pre-commit runs: its entry, then its `args`, with no
 // filenames (a skipped hook passes none). Another argument can change what it
 // checks (the ratchet's `--write` rewrites its baseline), and an `echo` of it, a
-// comment or a quoted copy is another line.
+// comment or a quoted copy is another line. Only the workspace build marker
+// may precede the command; arbitrary shell lines could disable exit-on-error.
 const commandOf = (hook) =>
   normalize([hook.entry, ...(hook.args ?? [])].join(" "));
-const runsCommand = (run, command) =>
-  String(run ?? "")
+const runsCommand = (run, command) => {
+  const lines = String(run ?? "")
+    .trim()
     .split("\n")
-    .map(normalize)
-    .includes(command);
+    .map(normalize);
+  if (
+    command === "scripts/pre_commit_workspace_checks.sh" &&
+    lines[0] === 'touch "$RUNNER_TEMP/build-start"'
+  ) {
+    lines.shift();
+  }
+  return lines.length === 1 && lines[0] === command;
+};
 
 // A step whose failure fails the required check on every run that runs the
 // hooks: no `if` or `continue-on-error` of its own, the implicit shell, and a
@@ -160,6 +169,10 @@ describe("every pre-commit hook runs in a pre-commit.yml job that can execute it
   it("workspace-checks runs every lane of its script", () => {
     const hook = hooks.find(({ id }) => id === "workspace-checks");
     const runner = runnerOf(hook);
+    expect(
+      setsUpBefore(runner.job, runner.step, SETUP_ACTION.bun),
+      `${runner.job.id} sets up Bun`,
+    ).toBe(true);
     expect(runner.step.env?.WORKSPACE_CHECK_LANE).toBe("${{ matrix.lane }}");
     const script = readFileSync(join(REPO_ROOT, normalize(hook.entry)), "utf8");
     const affected = script.slice(script.indexOf("\nrun_affected() {"));
