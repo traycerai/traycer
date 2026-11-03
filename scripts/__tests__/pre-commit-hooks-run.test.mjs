@@ -5,7 +5,8 @@
 // The `static` job runs the hooks through `pre-commit/action`. It provisions
 // only Python, from which pre-commit builds the remote hooks' environments
 // itself; it has no bun and no node_modules. So a local hook that runs a
-// program from the runner (`language: system` or `script`) is skipped there and
+// program from the runner (`language: system` or `script`, or their pre-commit
+// 4.4 names `unsupported` and `unsupported_script`) is skipped there and
 // runs as its own `entry` in a step of another job, one that runs whenever
 // `static` does and sets up the executable a `system` hook calls. Hooks at
 // other stages (`dco-signoff`, at `commit-msg`) are outside `pre-commit/action`
@@ -45,8 +46,12 @@ const hooks = config.repos.flatMap((repo) =>
 const preCommitHooks = hooks.filter((hook) =>
   (hook.stages ?? defaultStages).includes("pre-commit"),
 );
+// pre-commit 4.4 renamed `system` to `unsupported` and `script` to
+// `unsupported_script`, and accepts both names.
+const SYSTEM = new Set(["system", "unsupported"]);
+const RUNNER_PROGRAM = new Set([...SYSTEM, "script", "unsupported_script"]);
 const runsRunnerProgram = (hook) =>
-  hook.local && (hook.language === "system" || hook.language === "script");
+  hook.local && RUNNER_PROGRAM.has(hook.language);
 
 const jobs = Object.entries(workflow.jobs).map(([id, job]) => ({
   id,
@@ -112,7 +117,7 @@ describe("every pre-commit hook runs in a pre-commit.yml job that can execute it
         expect(runner.step.if).toBeUndefined();
       });
 
-      if (hook.local && hook.language === "system") {
+      if (hook.local && SYSTEM.has(hook.language)) {
         it("runs in a job that sets up its executable", () => {
           const executable = normalize(hook.entry).split(" ")[0];
           const action = SETUP_ACTION[executable];
