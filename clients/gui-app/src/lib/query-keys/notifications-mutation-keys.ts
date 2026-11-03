@@ -13,6 +13,7 @@ export const notificationsMutationKeys = {
   loadMoreAttention: () => ["notifications.loadMoreAttention"] as const,
   loadMoreUnreadRecent: () => ["notifications.loadMoreUnreadRecent"] as const,
   setConfig: () => ["host.notifications.setConfig"] as const,
+  setLongTurnAlert: () => ["host.notifications.setLongTurnAlert"] as const,
   testHook: () => ["host.notificationHooks.test"] as const,
   saveHooks: () => ["host.notificationHooks.save"] as const,
 };

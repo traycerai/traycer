@@ -24,9 +24,9 @@
  * Retry button to a channel that no longer exists.
  */
 import {
-  epicStatusSubscribeServerFrameSchemaV11,
+  epicStatusSubscribeServerFrameSchemaV12,
   EPIC_STATUS_DURABILITY_LEGS_MINOR,
-  type EpicStatusSubscribeServerFrameV11,
+  type EpicStatusSubscribeServerFrameV12,
 } from "@traycer/protocol/host/epic/status-subscribe";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type {
@@ -38,8 +38,8 @@ import type { IStreamClient } from "./i-stream-client";
 
 export const EPIC_STATUS_SUBSCRIBE_METHOD = "epic.status.subscribe";
 
-type StatusServerFrame<Kind extends EpicStatusSubscribeServerFrameV11["kind"]> =
-  Extract<EpicStatusSubscribeServerFrameV11, { readonly kind: Kind }>;
+type StatusServerFrame<Kind extends EpicStatusSubscribeServerFrameV12["kind"]> =
+  Extract<EpicStatusSubscribeServerFrameV12, { readonly kind: Kind }>;
 
 export type EpicStatusSnapshotFrame = StatusServerFrame<"snapshot">;
 
@@ -54,7 +54,7 @@ export type EpicStatusSnapshotFrame = StatusServerFrame<"snapshot">;
  * two is what makes a cursor-less lane lossy.
  */
 export type EpicStatusTransitionFrame = Exclude<
-  EpicStatusSubscribeServerFrameV11,
+  EpicStatusSubscribeServerFrameV12,
   { readonly kind: "snapshot" } | { readonly kind: "pong" }
 >;
 
@@ -139,12 +139,12 @@ export class EpicStatusStreamClient {
     if (this.closed) return;
     // Text-only by contract, exactly as on the records lane.
     if (binaryPayload !== null) return;
-    // The `@1.1` schema, deliberately, even on an `@1.0` session: zod STRIPS
-    // unknown keys, so parsing a negotiated-`@1.1` frame through the `@1.0`
+    // The top schema, deliberately, even on an `@1.0` session: zod STRIPS
+    // unknown keys, so parsing a negotiated-`@1.2` frame through an older
     // union would silently drop the very legs this lane negotiated for. The
-    // superset parses both, and the negotiated minor - not the frame - is what
+    // superset parses them all, and the negotiated minor - not the frame - is what
     // says whether an absent leg means unknown or unsupported.
-    const parsed = epicStatusSubscribeServerFrameSchemaV11.safeParse(envelope);
+    const parsed = epicStatusSubscribeServerFrameSchemaV12.safeParse(envelope);
     if (!parsed.success) return;
     const frame = parsed.data;
     if (frame.kind === "pong") return;
