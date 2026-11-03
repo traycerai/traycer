@@ -210,11 +210,12 @@ describe("sandboxDetailsEntry", () => {
     expect(entry.export().status.Resting).toBeUndefined();
   });
 
-  it("gives a withdrawn row no Resting row beside its own Idle row, even when it rests forever", () => {
+  it("gives a withdrawn row no Resting row, an Idle row, and a Destroyed-on row naming the announced day with no \"unless used\"", () => {
     const entry = sandboxDetailsEntry({
       summary: sandboxSummaryFixture({
         burst: false,
         destroyAfterRestingMinutes: null,
+        destroyAt: null,
         withdrawalEndsAt: Date.UTC(2026, 11, 1),
       }),
       cost: null,
@@ -223,8 +224,11 @@ describe("sandboxDetailsEntry", () => {
       personal: false,
       now: NOW,
     });
-    expect(entry.export().status.Idle).toMatch(/suspends after/);
-    expect(entry.export().status.Resting).toBeUndefined();
+    const status = entry.export().status;
+    expect(status.Idle).toMatch(/suspends after/);
+    expect(status.Resting).toBeUndefined();
+    expect(status["Destroyed on"]).toBe("Dec 1, 2026");
+    expect(status["Destroyed on"]).not.toContain("unless used");
   });
 });
 

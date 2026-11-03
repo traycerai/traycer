@@ -271,12 +271,13 @@ export interface SandboxSummary {
    * not end a withdrawn row for resting while this date stands. This date is
    * what the row is ended by.
    *
-   * It is an **announced calendar day in UTC**, carried as epoch
-   * milliseconds at that day's UTC start, not an instant anything acts on:
-   * nothing compares it to the clock, and the drain it announces is
-   * operational. So render the UTC day and no clock time — reading it in the
-   * reader's own zone names the day before for every reader west of UTC, and
-   * names two different days to two readers of one announcement.
+   * What it marks is an **announced calendar day in UTC**. The instant
+   * inside that day carries no meaning — nothing compares this value to the
+   * clock, and the drain it announces is operational — so render its UTC day
+   * and no clock time. Reading it in the reader's own zone names the day
+   * before for every reader west of UTC, and names two different days to two
+   * readers of one announcement; a clock time would promise a cutoff that
+   * nothing enforces.
    */
   readonly withdrawalEndsAt: number | null;
 }

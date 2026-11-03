@@ -466,6 +466,25 @@ export function formatSandboxDuration(ms: number): string {
   return rest === 0 ? `${hours} h` : `${hours} h ${rest} min`;
 }
 
+/**
+ * `Nov 7, 2026` for a date announced as a UTC calendar day, read in UTC.
+ *
+ * An announced day is one day for everyone, so it cannot be read in the
+ * reader's zone: midnight UTC shown locally is the day before for every
+ * reader west of it, which would show a date the announcement never named and
+ * a different date to two readers of the same notice. Its sibling
+ * `formatSandboxDate` stays local, because every other date here is an
+ * instant that happened rather than a day that was announced.
+ */
+export function formatSandboxUtcDay(at: number): string {
+  return new Date(at).toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    timeZone: "UTC",
+  });
+}
+
 /** `Oct 31`, `Oct 31 at 23:40` with a time. */
 export function formatSandboxDate(at: number, withTime: boolean): string {
   const date = new Date(at);
@@ -619,10 +638,24 @@ export function sandboxFrozenClock(frozenAt: number | null): string | null {
  * resting deadline. So the resting policy is no longer a claim about this row,
  * and a surface that states one says something the withdrawal contradicts —
  * `kept until you destroy it` above a notice giving the day it stops being
- * the worst of them. Every surface that reads a row's resting policy asks
- * this first; the surfaces that describe the POLICY itself, a catalogue
- * default or a shape being picked, do not, because no row's withdrawal bears
- * on what a new sandbox would do.
+ * the worst of them.
+ *
+ * Two mechanisms keep that out, and which one covers a surface depends on
+ * what the surface reads:
+ *
+ * - a surface that states a retention from the row's PERIOD asks this, because
+ *   the period is still set on a withdrawn row and still reads as a promise:
+ *   the resting and idle-policy clauses, the Resting detail row, and the
+ *   Stop, Keep and resting-setting dialogs;
+ * - a surface gated on `destroyAt` needs nothing, because the server sends a
+ *   withdrawn row none, so `sandboxGiveAnotherLabel` offers nothing to extend.
+ *   The `Destroyed on` detail row is the one place that then states the
+ *   withdrawal's own day instead, because a row that says when a sandbox ends
+ *   has an answer for a withdrawn one and would otherwise go silent.
+ *
+ * A surface that describes the POLICY rather than a row — a catalogue default,
+ * a shape being picked — asks neither, because no row's withdrawal bears on
+ * what a new sandbox would do.
  */
 export function sandboxRetentionIsWithdrawn(summary: SandboxSummary): boolean {
   return summary.withdrawalEndsAt !== null;

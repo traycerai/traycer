@@ -691,9 +691,20 @@ export const FILES_NOT_RECOVERABLE =
   "Files on this sandbox cannot be recovered; published chats stay readable.";
 
 /** Keep's preview before it acts. */
+const KEEP_STOPS_DELETING = "Stops deleting itself when idle.";
+const KEEP_PAID_WHILE_AWAKE = "Paid by you while awake.";
+
 export function keepPreviewLine(restingDays: number, date: string): string {
-  return `Stops deleting itself when idle. Destroyed after ${restingDays} resting days instead, on ${date} if it rests from now. Paid by you while awake.`;
+  return `${KEEP_STOPS_DELETING} Destroyed after ${restingDays} resting days instead, on ${date} if it rests from now. ${KEEP_PAID_WHILE_AWAKE}`;
 }
+
+/**
+ * The Keep preview for a row whose withdrawal, not its resting policy,
+ * decides how long it is kept: the resting sentence is left out rather than
+ * naming a destroy the resting pass will not perform. Both forms are built
+ * from the same two clauses so they cannot drift.
+ */
+export const KEEP_PREVIEW_WITHDRAWN = `${KEEP_STOPS_DELETING} ${KEEP_PAID_WHILE_AWAKE}`;
 
 export function alreadyDestroyedLine(name: string): string {
   return `${name} was already destroyed`;

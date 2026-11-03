@@ -20,6 +20,7 @@ import {
   SANDBOX_PUBLIC_STATE_LABEL,
   formatSandboxAge,
   formatSandboxDate,
+  formatSandboxUtcDay,
   sandboxFailedToStart,
   sandboxMemberName,
   sandboxPeriodLabel,
@@ -195,7 +196,17 @@ function statusRows(input: SandboxDetailsInput): SandboxDetailsRow[] {
     });
   }
   rows.push(...idleRows(summary));
-  if (summary.destroyAt !== null) {
+  // A withdrawn row ends on its announced day, so that is what this row
+  // says, and it says it without `unless used`: nothing the person does
+  // postpones a withdrawal, unlike a resting deadline a wake resets. The
+  // server sends such a row no `destroyAt`, so the two cases cannot both
+  // hold.
+  if (summary.withdrawalEndsAt !== null) {
+    rows.push({
+      label: "Destroyed on",
+      value: formatSandboxUtcDay(summary.withdrawalEndsAt),
+    });
+  } else if (summary.destroyAt !== null) {
     rows.push({
       label: "Destroyed on",
       value: `${formatSandboxDate(summary.destroyAt, true)} unless used`,

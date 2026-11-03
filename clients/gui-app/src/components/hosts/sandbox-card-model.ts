@@ -11,6 +11,7 @@ import type { HostHealthState } from "@/components/settings/host-scope/host-heal
 import { frozenDestroyAt } from "@/lib/sandboxes/sandbox-balance";
 import {
   formatSandboxDate,
+  formatSandboxUtcDay,
   sandboxFailedToStart,
 } from "@/lib/sandboxes/sandbox-row-lines";
 
@@ -133,23 +134,6 @@ export function formatSandboxDay(at: number): string {
     month: "short",
     day: "numeric",
     year: "numeric",
-  });
-}
-
-/**
- * "Nov 7, 2026" for a date announced as a UTC calendar day, read in UTC.
- *
- * An announced day is one day for everyone, so it cannot be read in the
- * reader's zone: midnight UTC shown locally is the day before for every
- * reader west of it, which would show a date the announcement never named
- * and a different date to two readers of the same notice.
- */
-function formatSandboxUtcDay(at: number): string {
-  return new Date(at).toLocaleDateString(undefined, {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-    timeZone: "UTC",
   });
 }
 

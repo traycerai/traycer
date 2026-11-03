@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   HOST_SANDBOX_STATES,
   type HostSandboxState,
@@ -319,23 +319,58 @@ describe("sandboxFrozenLine", () => {
 });
 
 describe("sandboxWithdrawalLine", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it("is null while no withdrawal is announced", () => {
     expect(sandboxWithdrawalLine(null)).toBeNull();
   });
 
-  // `withdrawalEndsAt` is an announced UTC calendar day, not an instant: the
-  // server never sends a local midnight. Both ends of the UTC day are
-  // checked, each against the day a LOCAL read would get wrong in a
-  // different direction, so the case fails on any non-UTC runner if the UTC
-  // reading is ever lost, in either direction, and holds trivially on a UTC
-  // one.
-  it.each([
-    ["the day's first instant, which a western zone would read as the day before", Date.UTC(2026, 11, 1)],
-    ["the day's last instant, which an eastern zone would read as the day after", Date.UTC(2026, 11, 1, 23, 59)],
-  ])("names December 1 for %s, read in UTC rather than the runner's own zone", (_label, endsAt) => {
-    expect(sandboxWithdrawalLine(endsAt)).toBe(
-      "This sandbox stops running on Dec 1, 2026 and is rebuilt from your environment. Files outside the repository are lost.",
+  // `withdrawalEndsAt` is an announced UTC calendar day, and the sentence has
+  // to read it in UTC whatever zone the runtime is in. Two things make that a
+  // real pin rather than a passing case:
+  //
+  // - the zone is PINNED to one that is not UTC. Left to the runner's own
+  //   zone, the case is vacuous on a UTC runner, where a local read and a UTC
+  //   read name the same day, and nothing in this repository pins a non-UTC
+  //   zone for tests;
+  // - the expected day is COMPUTED, in the runtime's own default locale,
+  //   rather than written out. `formatSandboxUtcDay` formats in that default
+  //   locale, so a literal `Dec 1, 2026` would fail under any other one while
+  //   the UTC reading was perfectly correct.
+  //
+  // Lose the UTC reading and the line carries the local rendering, a day
+  // earlier in this zone, failing both assertions on any runner.
+  it("names the UTC day, never the runtime's own zone's day, pinned to a zone that is not UTC", () => {
+    vi.stubEnv("TZ", "America/Los_Angeles");
+    // The pin itself has to take, or the case proves nothing.
+    expect(Intl.DateTimeFormat().resolvedOptions().timeZone).toBe(
+      "America/Los_Angeles",
     );
+
+    const endsAt = Date.UTC(2026, 11, 1);
+    const dayOptions: Intl.DateTimeFormatOptions = {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    };
+    const utcDay = new Date(endsAt).toLocaleDateString(undefined, {
+      ...dayOptions,
+      timeZone: "UTC",
+    });
+    const localDay = new Date(endsAt).toLocaleDateString(
+      undefined,
+      dayOptions,
+    );
+    // The pin only proves anything if the two readings actually diverge for
+    // this instant and zone; a runner where they coincide would pass this
+    // case for the wrong reason.
+    expect(utcDay).not.toBe(localDay);
+
+    const line = sandboxWithdrawalLine(endsAt);
+    expect(line).toContain(utcDay);
+    expect(line).not.toContain(localDay);
   });
 });
 
