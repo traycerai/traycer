@@ -266,10 +266,15 @@ export interface SandboxSummary {
   /**
    * When this sandbox stops running, because the control plane no longer
    * runs sandboxes of its kind after that date; `null` on every ordinary row
-   * and from a server before the field. While it is set the row has no
-   * resting deadline (`destroyAt` is `null`), because the control plane does
-   * not end a withdrawn row for resting while this date stands. This date is
-   * what the row is ended by.
+   * and from a server before the field.
+   *
+   * On an UNFROZEN row this comes with no resting deadline (`destroyAt` is
+   * `null`), because the control plane does not end a withdrawn row for
+   * resting while this date stands. A FROZEN row is the exception: it keeps
+   * its own day-30 `destroyAt`, which is decided ahead of the withdrawal, so
+   * a frozen withdrawn row carries BOTH fields. A surface that names one
+   * deadline must prefer `destroyAt` wherever it is set — that is the day the
+   * control plane acts on — and read this date only when it is `null`.
    *
    * What it marks is an **announced calendar day in UTC**. The instant
    * inside that day carries no meaning — nothing compares this value to the

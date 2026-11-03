@@ -634,8 +634,10 @@ export function sandboxFrozenClock(frozenAt: number | null): string | null {
  * Whether a withdrawal, not the resting policy, is what decides how long this
  * row is kept.
  *
- * A withdrawn row is ended by its announced date, and the server sends it no
- * resting deadline. So the resting policy is no longer a claim about this row,
+ * A withdrawn row is ended by its announced date, and the server sends an
+ * unfrozen one no resting deadline (a frozen row keeps its day-30 deadline;
+ * see the exception below). So the resting policy is no longer a claim about
+ * this row,
  * and a surface that states one says something the withdrawal contradicts —
  * `kept until you destroy it` above a notice giving the day it stops being
  * the worst of them.
