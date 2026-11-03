@@ -4,6 +4,9 @@
 // change used to compile protocol before desktop. Desktop compiles protocol
 // from source, and gui-app has no build script, so neither task belongs on
 // that run. Protocol's build still runs when a protocol input changes.
+// html-source is bundled from source and has no build of its own. It is an
+// implicit dependency of desktop, so a change to its production files still
+// selects desktop's build and nothing else.
 
 import { createRequire } from "node:module";
 import { join } from "node:path";
@@ -65,6 +68,11 @@ describe("pre-commit build lane", () => {
     const tasks = await scheduledBuilds([
       "clients/gui-app/src/components/auth/user-menu.tsx",
     ]);
+    expect(tasks).toEqual(["@traycer-clients/desktop:build"]);
+  }, 60_000);
+
+  it("an html-source change builds desktop and nothing else", async () => {
+    const tasks = await scheduledBuilds(["packages/html-source/src/index.ts"]);
     expect(tasks).toEqual(["@traycer-clients/desktop:build"]);
   }, 60_000);
 

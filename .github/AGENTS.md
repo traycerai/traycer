@@ -101,9 +101,11 @@ run.
   only the modules it changed. A failed compile is never stored. The build
   lane sets `NX_LEGACY_AFFECTED=false`, so it runs the build tasks whose own
   inputs changed rather than every target of a touched project. Desktop's
-  build depends on no other build: it compiles protocol and gui-app from
-  source, and gui-app has no build of its own. Protocol's build still runs
-  when a protocol input changes.
+  build depends on no other build: it compiles protocol, gui-app and
+  html-source from source, and neither gui-app nor html-source has a build
+  of its own. html-source is an implicit dependency of desktop, so a change
+  to its production files still selects desktop's build. Protocol's build
+  still runs when a protocol input changes.
 - A protocol test file over 10 s fails the `test (@traycer/protocol)` leg
   unless `protocol/test-budget-allowlist.json` names it with a reason. It runs
   once more alone first, because a file's time on the runner moves by half
