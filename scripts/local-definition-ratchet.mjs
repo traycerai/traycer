@@ -27,6 +27,7 @@ import { existsSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
+import { GIT_OUTPUT_MAX_BUFFER_BYTES } from "./git-output-limit.cjs";
 
 export const ACCEPT_INCREASE_FLAG = "--accept-increase";
 
@@ -352,7 +353,7 @@ function git(repoRoot, args) {
   return execFileSync("git", ["--no-literal-pathspecs", ...args], {
     cwd: repoRoot,
     encoding: "utf8",
-    maxBuffer: 1 << 30,
+    maxBuffer: GIT_OUTPUT_MAX_BUFFER_BYTES,
   });
 }
 
