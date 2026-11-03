@@ -1051,19 +1051,10 @@ export function scanThunkRules(input: ScanInput): ThunkScanResult {
   const fnMemo = new Map<ts.Node, WalkResult>();
   const inProgress = new Set<ts.Node>();
 
-  const load = (abs: string): LoadedFile | undefined => {
+  const remember = (abs: string, text: string): LoadedFile => {
     const cached = loadCache.get(abs);
     if (cached !== undefined) {
       return cached;
-    }
-    const overlayText = input.overlay.get(abs);
-    let text: string;
-    if (overlayText !== undefined) {
-      text = overlayText;
-    } else if (existsSync(abs)) {
-      text = readFileSync(abs, "utf8");
-    } else {
-      return undefined;
     }
     const sf = ts.createSourceFile(
       abs,
@@ -1075,6 +1066,21 @@ export function scanThunkRules(input: ScanInput): ThunkScanResult {
     const loaded = { sf, text };
     loadCache.set(abs, loaded);
     return loaded;
+  };
+
+  const load = (abs: string): LoadedFile | undefined => {
+    const cached = loadCache.get(abs);
+    if (cached !== undefined) {
+      return cached;
+    }
+    const overlayText = input.overlay.get(abs);
+    if (overlayText !== undefined) {
+      return remember(abs, overlayText);
+    }
+    if (!existsSync(abs)) {
+      return undefined;
+    }
+    return remember(abs, readFileSync(abs, "utf8"));
   };
 
   const lineOf = (abs: string, node: ts.Node): number => {
@@ -2536,10 +2542,21 @@ export function scanThunkRules(input: ScanInput): ThunkScanResult {
   const thunkFns: ThunkFn[] = [];
   let thunkCount = 0;
   for (const abs of input.files) {
-    const loaded = load(abs);
-    if (loaded === undefined || !loaded.text.includes("lazySchema(")) {
+    // createSourceFile of every listed file was most of this scan. The
+    // walk only reads a call site, so a file whose text has no
+    // `lazySchema(` is skipped here. Import resolution still calls load
+    // for a helper that does not contain the marker.
+    const overlayText = input.overlay.get(abs);
+    const markerText =
+      overlayText !== undefined
+        ? overlayText
+        : existsSync(abs)
+          ? readFileSync(abs, "utf8")
+          : undefined;
+    if (markerText === undefined || !markerText.includes("lazySchema(")) {
       continue;
     }
+    const loaded = remember(abs, markerText);
     const visit = (node: ts.Node): void => {
       if (
         ts.isCallExpression(node) &&

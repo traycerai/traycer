@@ -3378,19 +3378,39 @@ describe("performance on large documents", () => {
     expect(elapsedMs).toBeLessThan(LIMIT_MS);
   });
 
-  it("applies single-element edits within the limit", () => {
-    const operations: ReadonlyArray<() => EditResult> = [
-      () => setAttribute(large, lastRow, "title", "t"),
-      () => setAttribute(large, lastRow, "class", null),
-      () => setStyleDeclaration(large, lastRow, "color", "blue"),
-      () => setStyleDeclaration(large, lastRow, "margin", null),
-      () => setTextNode(large, lastRow, 0, "changed"),
-      () => insertTid(large, lastRow, "tid"),
+  it("keeps single-element edits linear in document size", () => {
+    const quarter = buildDocument(75_000);
+    const quarterRow: ElementLocator = {
+      kind: "position",
+      startTagOffset: quarter.lastIndexOf(`<div class="row"`),
+      tagName: "div",
+    };
+    const sizeRatio = large.length / quarter.length;
+    // buildDocument stops on the first row past the requested length, so
+    // the documents stay near a four-to-one ratio. The bound is three
+    // times that ratio (about twelve). Quadratic growth is the square
+    // (about sixteen). Both samples slow together when the runner is busy.
+    expect(sizeRatio).toBeGreaterThan(3);
+    expect(sizeRatio).toBeLessThan(5);
+
+    const edits: ReadonlyArray<
+      (text: string, locator: ElementLocator) => EditResult
+    > = [
+      (text, locator) => setAttribute(text, locator, "title", "t"),
+      (text, locator) => setAttribute(text, locator, "class", null),
+      (text, locator) => setStyleDeclaration(text, locator, "color", "blue"),
+      (text, locator) => setStyleDeclaration(text, locator, "margin", null),
+      (text, locator) => setTextNode(text, locator, 0, "changed"),
+      (text, locator) => insertTid(text, locator, "tid"),
     ];
-    for (const operation of operations) {
-      const { value, elapsedMs } = timed(operation);
-      expect(value.ok).toBe(true);
-      expect(elapsedMs).toBeLessThan(LIMIT_MS);
+    const linearBound = sizeRatio * 3;
+    for (const edit of edits) {
+      const small = timed(() => edit(quarter, quarterRow));
+      const big = timed(() => edit(large, lastRow));
+      expect(small.value.ok).toBe(true);
+      expect(big.value.ok).toBe(true);
+      expect(small.elapsedMs).toBeGreaterThan(0);
+      expect(big.elapsedMs).toBeLessThan(small.elapsedMs * linearBound);
     }
   });
 
