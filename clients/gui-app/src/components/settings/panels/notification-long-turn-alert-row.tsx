@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import { HOST_NOTIFICATIONS } from "@/components/settings/panels/notifications-settings.definitions";
 import { SettingsRow } from "@/components/settings/settings-row";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -41,7 +42,28 @@ export function NotificationLongTurnAlertRow(props: {
   readonly query: LongTurnAlertQuery;
   readonly setAlert: SetLongTurnAlertMutation;
 }) {
-  const { data } = props.query;
+  const { data, error, isFetching, refetch } = props.query;
+  if (error?.code === "E_HOST_UNSUPPORTED") return null;
+  if (error !== null) {
+    return (
+      <SettingsRow
+        row={HOST_NOTIFICATIONS.definitions.longTurnAlert}
+        status="Couldn't load the turn alert."
+        control={
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={isFetching}
+            onClick={() => {
+              void refetch();
+            }}
+          >
+            Retry
+          </Button>
+        }
+      />
+    );
+  }
   if (data === undefined) return null;
   const { thresholdMs } = data;
   return (

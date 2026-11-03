@@ -24,6 +24,7 @@ import {
   NotificationsSettingsPanelForClient,
 } from "@/components/settings/panels/notifications-settings-panel";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
+import { queryKeys } from "@/lib/query-keys";
 import { isConcealed } from "@/components/settings/host-scope/concealment-test-helpers";
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
 const hostScopeMocks: {
@@ -1138,16 +1139,24 @@ type LongTurnAlertSetRequest = RequestOfMethod<
   "host.notifications.setLongTurnAlert"
 >;
 
-function longTurnAlertClient(host: {
+type LongTurnAlertHost = {
+  readonly hostId: string;
   readonly supportsAlert: boolean;
   readonly initialThresholdMs: number | null;
   readonly failsSave: boolean;
-}): {
+  readError: "RPC_ERROR" | null;
+};
+
+function longTurnAlertClient(host: LongTurnAlertHost): {
   readonly client: HostClient<HostRpcRegistry>;
   readonly setRequests: LongTurnAlertSetRequest[];
+  readonly getAlertCalls: { value: number };
+  readonly queryClient: QueryClient;
   readonly wrapper: (props: { readonly children: ReactNode }) => ReactNode;
 } {
   const setRequests: LongTurnAlertSetRequest[] = [];
+  const getAlertCalls = { value: 0 };
+  const boundHost = { ...mockLocalHostEntry, hostId: host.hostId };
   let thresholdMs = host.initialThresholdMs;
   const rejected = (method: string, code: "E_HOST_UNSUPPORTED" | "RPC_ERROR") =>
     new HostRpcError({
@@ -1160,8 +1169,7 @@ function longTurnAlertClient(host: {
   const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: { invalidateHostScope: () => undefined },
-    findHostById: (hostId) =>
-      hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
+    findHostById: (hostId) => (hostId === boundHost.hostId ? boundHost : null),
     messenger: new MockHostMessenger<HostRpcRegistry>({
       registry: hostRpcRegistry,
       requestId: () => "req-1",
@@ -1169,10 +1177,17 @@ function longTurnAlertClient(host: {
         "host.notifications.getConfig": () => makeNotificationConfig(),
         "host.notificationHooks.status": () => makeHooksStatus(undefined),
         "host.notifications.getLongTurnAlert": () => {
+          getAlertCalls.value += 1;
           if (!host.supportsAlert) {
             throw rejected(
               "host.notifications.getLongTurnAlert",
               "E_HOST_UNSUPPORTED",
+            );
+          }
+          if (host.readError !== null) {
+            throw rejected(
+              "host.notifications.getLongTurnAlert",
+              host.readError,
             );
           }
           return { thresholdMs };
@@ -1198,24 +1213,30 @@ function longTurnAlertClient(host: {
     },
   });
   return {
-    client: spine.createRequester(mockLocalHostEntry),
+    client: spine.createRequester(boundHost),
     setRequests,
+    getAlertCalls,
+    queryClient,
     wrapper: (props: { readonly children: ReactNode }): ReactNode => (
       <Providers queryClient={queryClient}>{props.children}</Providers>
     ),
   };
 }
 
-function renderLongTurnAlert(host: {
-  readonly supportsAlert: boolean;
-  readonly initialThresholdMs: number | null;
-  readonly failsSave: boolean;
-}): { readonly setRequests: LongTurnAlertSetRequest[] } {
+function renderLongTurnAlert(host: LongTurnAlertHost): {
+  readonly setRequests: LongTurnAlertSetRequest[];
+  readonly getAlertCalls: { value: number };
+  readonly queryClient: QueryClient;
+} {
   const rig = longTurnAlertClient(host);
   render(<NotificationsSettingsPanelForClient client={rig.client} />, {
     wrapper: rig.wrapper,
   });
-  return { setRequests: rig.setRequests };
+  return {
+    setRequests: rig.setRequests,
+    getAlertCalls: rig.getAlertCalls,
+    queryClient: rig.queryClient,
+  };
 }
 
 function amountField(): HTMLInputElement {
@@ -1247,19 +1268,23 @@ async function amountShows(value: string): Promise<void> {
   });
 }
 
-/** Lets a request the code under test would have sent have been sent. */
-async function settle(): Promise<void> {
+/** Waits for a started mutation to finish before checking its RPC effect. */
+async function settle(queryClient: QueryClient): Promise<void> {
   await act(async () => {
-    await Promise.resolve();
+    await waitFor(() => {
+      expect(queryClient.isMutating()).toBe(0);
+    });
   });
 }
 
 describe("<NotificationsSettingsPanel /> long-turn alert", () => {
   it("is off by default, with no duration fields", async () => {
     renderLongTurnAlert({
+      hostId: "host-a",
       supportsAlert: true,
       initialThresholdMs: null,
       failsSave: false,
+      readError: null,
     });
 
     const toggle = await screen.findByRole("switch", {
@@ -1271,9 +1296,11 @@ describe("<NotificationsSettingsPanel /> long-turn alert", () => {
 
   it("switches on at four hours and off with null", async () => {
     const { setRequests } = renderLongTurnAlert({
+      hostId: "host-a",
       supportsAlert: true,
       initialThresholdMs: null,
       failsSave: false,
+      readError: null,
     });
 
     fireEvent.click(
@@ -1297,9 +1324,11 @@ describe("<NotificationsSettingsPanel /> long-turn alert", () => {
 
   it("sends the edited amount on Enter", async () => {
     const { setRequests } = renderLongTurnAlert({
+      hostId: "host-a",
       supportsAlert: true,
       initialThresholdMs: 4 * HOUR_MS,
       failsSave: false,
+      readError: null,
     });
     await amountShows("4");
 
@@ -1312,10 +1341,12 @@ describe("<NotificationsSettingsPanel /> long-turn alert", () => {
   });
 
   it("sends one request, the new amount in the new unit, when the unit is picked after typing", async () => {
-    const { setRequests } = renderLongTurnAlert({
+    const { setRequests, queryClient } = renderLongTurnAlert({
+      hostId: "host-a",
       supportsAlert: true,
       initialThresholdMs: 4 * HOUR_MS,
       failsSave: false,
+      readError: null,
     });
     await amountShows("4");
 
@@ -1328,21 +1359,23 @@ describe("<NotificationsSettingsPanel /> long-turn alert", () => {
     await waitFor(() => {
       expect(setRequests).toEqual([{ thresholdMs: 3 * DAY_MS }]);
     });
-    await settle();
+    await settle(queryClient);
     expect(setRequests).toHaveLength(1);
   });
 
   it("sends nothing while focus moves from the amount to the unit, and the value when focus leaves both", async () => {
-    const { setRequests } = renderLongTurnAlert({
+    const { setRequests, queryClient } = renderLongTurnAlert({
+      hostId: "host-a",
       supportsAlert: true,
       initialThresholdMs: 4 * HOUR_MS,
       failsSave: false,
+      readError: null,
     });
     await amountShows("4");
 
     fireEvent.change(amountField(), { target: { value: "6" } });
     fireEvent.blur(amountField(), { relatedTarget: unitTrigger() });
-    await settle();
+    await settle(queryClient);
     expect(setRequests).toEqual([]);
 
     fireEvent.blur(unitTrigger(), { relatedTarget: null });
@@ -1353,9 +1386,11 @@ describe("<NotificationsSettingsPanel /> long-turn alert", () => {
 
   it("sends the edited amount in the current unit when the unit menu closes without a pick", async () => {
     const { setRequests } = renderLongTurnAlert({
+      hostId: "host-a",
       supportsAlert: true,
       initialThresholdMs: 4 * HOUR_MS,
       failsSave: false,
+      readError: null,
     });
     await amountShows("4");
 
@@ -1370,9 +1405,11 @@ describe("<NotificationsSettingsPanel /> long-turn alert", () => {
 
   it("restores the host's value when a save fails", async () => {
     const { setRequests } = renderLongTurnAlert({
+      hostId: "host-a",
       supportsAlert: true,
       initialThresholdMs: 4 * HOUR_MS,
       failsSave: true,
+      readError: null,
     });
     await amountShows("4");
 
@@ -1387,9 +1424,11 @@ describe("<NotificationsSettingsPanel /> long-turn alert", () => {
 
   it("restores the value and sends nothing for an amount that is not a positive whole number", async () => {
     const { setRequests } = renderLongTurnAlert({
+      hostId: "host-a",
       supportsAlert: true,
       initialThresholdMs: 4 * HOUR_MS,
       failsSave: false,
+      readError: null,
     });
     await amountShows("4");
 
@@ -1403,9 +1442,11 @@ describe("<NotificationsSettingsPanel /> long-turn alert", () => {
 
   it("reads one as a singular unit and the rest as plural", async () => {
     renderLongTurnAlert({
+      hostId: "host-a",
       supportsAlert: true,
       initialThresholdMs: 4 * HOUR_MS,
       failsSave: false,
+      readError: null,
     });
     await amountShows("4");
     expect(unitTrigger().textContent).toBe("hours");
@@ -1416,9 +1457,11 @@ describe("<NotificationsSettingsPanel /> long-turn alert", () => {
 
   it("destroys the draft when the host changes, and sends nothing for it", async () => {
     const rig = longTurnAlertClient({
+      hostId: "host-a",
       supportsAlert: true,
       initialThresholdMs: 4 * HOUR_MS,
       failsSave: false,
+      readError: null,
     });
     hostScopeMocks.client = rig.client;
     hostScopeMocks.hostId = "host-a";
@@ -1429,20 +1472,39 @@ describe("<NotificationsSettingsPanel /> long-turn alert", () => {
     fireEvent.change(amountField(), { target: { value: "9" } });
     expect(amountField().value).toBe("9");
 
+    const { client: secondClient, setRequests: secondSetRequests } =
+      longTurnAlertClient({
+        hostId: "host-b",
+        supportsAlert: true,
+        initialThresholdMs: 4 * HOUR_MS,
+        failsSave: false,
+        readError: null,
+      });
+    rig.queryClient.setQueryData(
+      queryKeys.hostMethod<
+        HostRpcRegistry,
+        "host.notifications.getLongTurnAlert"
+      >("host-b", "host.notifications.getLongTurnAlert", {}),
+      { thresholdMs: 4 * HOUR_MS },
+    );
     hostScopeMocks.hostId = "host-b";
+    hostScopeMocks.client = secondClient;
     rerender(<NotificationsSettingsPanel />);
 
     await amountShows("4");
     fireEvent.blur(amountField(), { relatedTarget: null });
-    await settle();
+    await settle(rig.queryClient);
     expect(rig.setRequests).toEqual([]);
+    expect(secondSetRequests).toEqual([]);
   });
 
   it("draws no row for a host that answers E_HOST_UNSUPPORTED, and the rest of the panel stays", async () => {
     renderLongTurnAlert({
+      hostId: "host-a",
       supportsAlert: false,
       initialThresholdMs: null,
       failsSave: false,
+      readError: null,
     });
 
     await screen.findByRole("switch", {
@@ -1453,5 +1515,26 @@ describe("<NotificationsSettingsPanel /> long-turn alert", () => {
         screen.queryByRole("switch", { name: LONG_TURN_ALERT_LABEL }),
       ).toBeNull();
     });
+  });
+
+  it("shows a retryable error for an ordinary get failure and loads the row on retry", async () => {
+    const host: LongTurnAlertHost = {
+      hostId: "host-a",
+      supportsAlert: true,
+      initialThresholdMs: 4 * HOUR_MS,
+      failsSave: false,
+      readError: "RPC_ERROR",
+    };
+    const { getAlertCalls } = renderLongTurnAlert(host);
+
+    await screen.findByText("Couldn't load the turn alert.");
+    const retry = screen.getByRole("button", { name: "Retry" });
+    expect(getAlertCalls.value).toBe(1);
+
+    host.readError = null;
+    fireEvent.click(retry);
+
+    await screen.findByRole("switch", { name: LONG_TURN_ALERT_LABEL });
+    expect(getAlertCalls.value).toBe(2);
   });
 });
