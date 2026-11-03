@@ -92,7 +92,11 @@ run.
   answer depends on: `lint` is type-aware and lists `^production`, and lists
   every source extension the linters read. A rule that reads another file
   (`components.json`, a stylesheet) goes in the cache key too, because ESLint
-  hashes only the file it lints. `build` keeps no cache.
+  hashes only the file it lints. `build` keeps the desktop renderer's
+  React-compiled modules instead (`TRAYCER_REACT_COMPILER_CACHE_DIR`, read by
+  `clients/desktop/scripts/react-compiler-plugin.ts`), keyed on each module's
+  code, the compiler options and `bun.lock`, so a renderer change recompiles
+  only the modules it changed. A failed compile is never stored.
 - A protocol test file over 10 s fails the `test (@traycer/protocol)` leg
   unless `protocol/test-budget-allowlist.json` names it with a reason. It runs
   once more alone first, because a file's time on the runner moves by half
