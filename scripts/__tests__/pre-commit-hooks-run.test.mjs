@@ -12,6 +12,7 @@
 // other stages (`dco-signoff`, at `commit-msg`) are outside `pre-commit/action`
 // and this test.
 
+import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -150,6 +151,38 @@ describe("every pre-commit hook runs in a pre-commit.yml job that can execute it
     expect(normalize(hookStep.with?.extra_args ?? "--all-files")).toBe(
       "--all-files",
     );
+  });
+
+  it("the required check fails when any dependency did not succeed", () => {
+    const job = jobs.find(({ id }) => id === "pre-commit");
+    const step = job.steps.find(({ name }) => name === "Require every job");
+    expect(job.if).toBe(`always() && ( ${hookJob.if} )`);
+    expect(job.continueOnError).toBeUndefined();
+    expect(step.if).toBeUndefined();
+    expect(step["continue-on-error"]).toBeUndefined();
+    expect(step.shell ?? job.shell).toBeUndefined();
+    expect(step.env.RESULTS).toBe("${{ join(needs.*.result, ' ') }}");
+
+    const successful = required.map(() => "success");
+    const cases = [successful];
+    for (const result of ["failure", "cancelled", "skipped"]) {
+      for (const index of required.keys()) {
+        cases.push(
+          successful.map((value, i) => (i === index ? result : value)),
+        );
+      }
+    }
+    for (const results of cases) {
+      const execution = spawnSync("/bin/bash", ["-e", "-c", step.run], {
+        env: { RESULTS: results.join(" ") },
+        encoding: "utf8",
+        timeout: 5000,
+      });
+      expect(execution.error).toBeUndefined();
+      expect(execution.status, results.join(" ")).toBe(
+        results.every((result) => result === "success") ? 0 : 1,
+      );
+    }
   });
 
   it("skips only hooks the config declares", () => {
