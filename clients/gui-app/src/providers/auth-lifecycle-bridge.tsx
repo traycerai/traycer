@@ -8,6 +8,7 @@ import { clearSessionCreatedEpics } from "@/lib/epics/session-created-epics";
 import { draftRuntimeRegistry } from "@/stores/home/draft-runtime-registry";
 import { fileEditRuntimeRegistry } from "@/lib/workspace/file-edit-runtime-registry";
 import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
+import { useSoundtrackStore } from "@/stores/soundtrack/soundtrack-store";
 import { useAddHostDialogStore } from "@/stores/settings/add-host-dialog-store";
 import { useStagedSandboxStore } from "@/stores/composer/staged-sandbox-store";
 import { usePendingSandboxSendStore } from "@/stores/sandboxes/pending-sandbox-send-store";
@@ -148,6 +149,10 @@ export function EpicSessionLifecycleBridge(
       // to this boundary only: a chat or epic closing must NOT take it down,
       // because the text it holds is still the user's only copy.
       dismissRetainedDraftToasts();
+      // The signals bridge goes down with the session, so the music would go on
+      // sounding the outgoing account's last signals. The wish stays: it is
+      // this device's, and comes back on the next account's first gesture.
+      useSoundtrackStore.getState().disable();
       // The move reminder survives navigation, but its host belongs to the
       // outgoing identity. Retire the toast and any retained action callback.
       retireOnboardingReminder();

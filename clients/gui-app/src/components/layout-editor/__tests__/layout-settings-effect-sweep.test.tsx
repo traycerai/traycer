@@ -85,6 +85,7 @@ const AVAILABILITY: SettingsAvailabilityContext = {
   // Both windows are composed at a desktop width: the phone layout is not
   // drawn, so the rows only it draws (the small-screen footer) have no control.
   phoneLayout: false,
+  soundtrackOffered: false,
 };
 
 const WINDOWS: ReadonlyArray<SweepWindow> = ["sample", "epic"];
