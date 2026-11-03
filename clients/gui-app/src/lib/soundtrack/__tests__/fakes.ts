@@ -66,7 +66,7 @@ export class FakeOutput implements SoundtrackOutput {
   }
 }
 
-export class FakeGain implements OutputGain {
+class FakeGain implements OutputGain {
   private readonly name: string;
   private readonly output: FakeOutput;
   private children = 0;

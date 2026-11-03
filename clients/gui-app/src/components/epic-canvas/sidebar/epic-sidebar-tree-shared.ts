@@ -16,7 +16,7 @@ export const BASE_PAD_LEFT = 8;
 
 /**
  * The expansion state a tree row reads and drives: whether ITS branch is open,
- * and the two actions. One instance per panel, with a stable identity for the
+ * and the toggle action. One instance per panel, with a stable identity for the
  * panel's life.
  *
  * Rows used to receive the whole effective expanded `Set` as a prop. Every
@@ -33,7 +33,6 @@ export interface TreeRowExpansion {
   readonly subscribe: (listener: () => void) => () => void;
   readonly isExpanded: (id: string) => boolean;
   readonly toggleExpanded: (id: string) => void;
-  readonly ensureExpanded: (id: string) => void;
 }
 
 /** The panel-held store behind `TreeRowExpansion`. */

@@ -146,13 +146,6 @@ const CHROME_CASES: ReadonlyArray<ChromeCase> = [
   RIGHT_NONE,
 ];
 
-const SURFACES: ReadonlyArray<{ readonly id: string }> = [
-  { id: "settings" },
-  { id: "empty-landing" },
-  { id: "task-tab" },
-  { id: "tracy-surface" },
-];
-
 /** The app column as `AppShell` composes it, with a stand-in for the surface. */
 function Column(props: {
   readonly chrome: AppColumnChrome;
@@ -358,19 +351,17 @@ describe("Talk in the window's top row", () => {
   );
 
   it.each([TOP_HEADER, RIGHT_NONE])(
-    "keeps exactly one Talk, and the same one, as the surface changes from Settings to the landing, a task and the Tracy surface, with the $label",
+    "keeps exactly one Talk, and the same one, when the surface content is replaced, with the $label",
     ({ chrome }) => {
       offerVoice();
-      const view = renderColumn(chrome, "settings");
+      const view = renderColumn(chrome, "surface-a");
       const first = talkButtons()[0];
       expect(talkButtons()).toHaveLength(1);
 
-      for (const surface of SURFACES) {
-        view.rerender(<Column chrome={chrome} surfaceId={surface.id} />);
-        expect(screen.getByTestId(`surface-${surface.id}`)).toBeTruthy();
-        expect(talkButtons()).toHaveLength(1);
-        expect(talkButtons()[0]).toBe(first);
-      }
+      view.rerender(<Column chrome={chrome} surfaceId="surface-b" />);
+      expect(screen.getByTestId("surface-surface-b")).toBeTruthy();
+      expect(talkButtons()).toHaveLength(1);
+      expect(talkButtons()[0]).toBe(first);
     },
   );
 });

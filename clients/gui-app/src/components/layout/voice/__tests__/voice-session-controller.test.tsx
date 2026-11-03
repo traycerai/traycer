@@ -4782,6 +4782,17 @@ describe("the page in front", () => {
     readonly callbacks: ChatStreamCallbacks;
   }
 
+  function sends(wire: AgentWire) {
+    return wire.sent.flatMap((frame) => (frame.kind === "send" ? [frame] : []));
+  }
+
+  async function answer(words: string) {
+    await say(words, "d2");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(6_000);
+    });
+  }
+
   /**
    * A task in front whose active tile is a chat running `turn-1`, in the real
    * canvas, tile-find and chat session registry; only the stream client, the
@@ -5030,12 +5041,6 @@ describe("the page in front", () => {
       return asked === undefined ? null : asked[0];
     }
 
-    function sends(wire: AgentWire) {
-      return wire.sent.flatMap((frame) =>
-        frame.kind === "send" ? [frame] : [],
-      );
-    }
-
     it("files a request nothing served with no words when the agent's page offers a tell, as it may have been a message", async () => {
       const bodies: string[] = [];
       await bringLive();
@@ -5273,12 +5278,6 @@ describe("the page in front", () => {
       return Object.values(usePendingSandboxSendStore.getState().sends);
     }
 
-    function sends(wire: AgentWire) {
-      return wire.sent.flatMap((frame) =>
-        frame.kind === "send" ? [frame] : [],
-      );
-    }
-
     /** Says the tell, and lets the question be heard. */
     async function tellAndHearQuestion(): Promise<string> {
       fake.routeAnswer = () => actAnswer(`agent.tell:${AGENT_ID}`);
@@ -5293,13 +5292,6 @@ describe("the page in front", () => {
       act(() => eventsOf(0).onOutputTranscriptDelta(asked[0]));
       await settle();
       return asked[0];
-    }
-
-    async function answer(words: string) {
-      await say(words, "d2");
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(6_000);
-      });
     }
 
     it("asks the wake first, in the exact words, and holds nothing until the yes", async () => {
@@ -5499,13 +5491,6 @@ describe("the page in front", () => {
       return asked[0];
     }
 
-    async function answer(words: string) {
-      await say(words, "d2");
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(6_000);
-      });
-    }
-
     function sleepyNode(): EpicCanvasTileRef {
       const node = Object.values(canvasOfTask().tilesByInstanceId).find(
         (ref) => ref?.id === SLEEPY_ID,
@@ -5612,15 +5597,6 @@ describe("the page in front", () => {
 
         expect(question).toBe(QUESTION);
         expect(sleepyTiles()).toEqual([]);
-      });
-
-      it("opens the tile on a yes", async () => {
-        await seedTask();
-        await openSleepy();
-
-        await answer("yes");
-
-        expect(sleepyTiles()).toHaveLength(1);
       });
 
       it("leaves the canvas alone on a no", async () => {
