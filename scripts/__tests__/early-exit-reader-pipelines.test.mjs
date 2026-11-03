@@ -208,6 +208,12 @@ function pipelinesOf(source) {
     function openGroup(opener, stage) {
       const outer = inherited();
       const group = {
+        opener,
+        line,
+        // Whether the list the group starts in tests it; a condition the
+        // opener starts is its own.
+        tested:
+          listTested || openConditions - (CONDITIONS.has(opener) ? 1 : 0) > 0,
         closer: GROUP_CLOSERS.get(opener) ?? ")",
         input: stage ?? outer.input,
         loop: stage === null ? outer.loop : null,
@@ -246,9 +252,32 @@ function pipelinesOf(source) {
         ),
       ];
     }
-    // The group the last command closed, which a following `|` or `&` runs
-    // in its own process.
+    // The group closed since the last word, which a following `|` or `&` runs
+    // in its own process; a `|` makes it the first stage of its pipeline.
     let justClosed = null;
+    function pipeGroup(group) {
+      group.forked = true;
+      const producer = {
+        words: [group.opener],
+        line: group.line,
+        substitutions: [],
+        evaluated: [],
+        compound: true,
+      };
+      if (pipeline !== null) {
+        pipeline.commands.push(producer);
+        return;
+      }
+      const { input: groupInput, loop } = inherited();
+      pipeline = {
+        commands: [producer],
+        discarded: false,
+        tested: group.tested || listTested || openConditions > 0,
+        groupInput,
+        loop,
+        forked: false,
+      };
+    }
     function closeGroup(closer) {
       const at = groups.findLastIndex((group) => group.closer === closer);
       if (at >= base) {
@@ -296,6 +325,7 @@ function pipelinesOf(source) {
         operandPending = REDIRECT_OPERATOR.test(word);
         if (/^0?<(?!&)/.test(word)) command.stdinRedirected = true;
       } else {
+        justClosed = null;
         command.words.push(word);
         const head = command.words.findIndex(
           (each) => !RESERVED_WORDS.has(each) || each === "case",
@@ -421,9 +451,9 @@ function pipelinesOf(source) {
       if (!assignmentOnly) current.substitutions.forEach(discardAll);
     }
     function endPipeline(operator) {
-      justClosed = null;
       endCommand();
       if (operator === "&" && justClosed !== null) justClosed.forked = true;
+      justClosed = null;
       const andOr = operator === "&&" || operator === "||";
       if (pipeline !== null) {
         if (operator === "&" || pipeline.commands.length > 1) {
@@ -791,9 +821,9 @@ function pipelinesOf(source) {
         continue;
       }
       if (char === "|") {
-        justClosed = null;
         endCommand();
-        if (justClosed !== null) justClosed.forked = true;
+        if (justClosed !== null) pipeGroup(justClosed);
+        justClosed = null;
         lastOperator = "|";
         index += next === "&" ? 2 : 1;
         continue;
@@ -1903,6 +1933,18 @@ describe("an early-exit reader never reads a streaming producer through a pipe u
       "a read loop under a TMOUT built by printf's repeated format",
       "printf -v TMOUT %s 0 1\nseq 10 | while read -r x; do :; done",
     ],
+    ["a brace group producer", "{ seq 10; } | head -n 1"],
+    ["a subshell producer", "(seq 10) | head -n 1"],
+    ["a redirected subshell producer", "(seq 10) 2>/dev/null | head -n 1"],
+    ["a brace group producer before grep -q", "{ seq 10; } | grep -q 1"],
+    ["a for loop producer", "for i in 1; do seq 10; done | head -n 1"],
+    ["an if producer", "if :; then seq 10; fi | grep -q 1"],
+    ["a case producer", "case a in a) seq 10 ;; esac | head -n 1"],
+    ["a group stage that feeds a reader", "seq 10 | { cat; } | head -n 1"],
+    [
+      "a group producer before a loop that breaks",
+      "{ seq 10; } | while read -r x; do break; done",
+    ],
     [
       "a tested eval in an argument's substitution",
       `echo "$(if eval 'seq 10 | grep -q 1'; then printf yes; fi)"`,
@@ -2108,6 +2150,15 @@ describe("an early-exit reader never reads a streaming producer through a pipe u
     [
       "a read with a zero TMOUT prefix under a TMOUT",
       "TMOUT=5\nseq 10 | while TMOUT=0 read -r x; do :; done",
+    ],
+    ["a group producer before a draining reader", "{ seq 10; } | tail -n 1"],
+    [
+      "a group producer pipeline followed by || true",
+      "{ seq 10; } | head -n 1 || true",
+    ],
+    [
+      "a reader after a closed group on its own line",
+      "{ seq 10; }\ngrep -q 1 list.txt",
     ],
     [
       "an untested eval in an argument's substitution",
