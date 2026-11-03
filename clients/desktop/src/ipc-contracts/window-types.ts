@@ -400,7 +400,12 @@ export interface SupportPrivateDiagnosticsCause {
   readonly componentStack: string | null;
   readonly errorCode: string | null;
   readonly sourceAction: string | null;
+  /** When the cause was captured (renderer clock). */
   readonly timestamp: number;
+  /** When a persisted row's failure happened (Host clock); `null` otherwise. */
+  readonly hostTimestamp: number | null;
+  /** The Host turn (`turn:<uuid>`) a persisted row belongs to; `null` otherwise. */
+  readonly turnId: string | null;
 }
 
 /**
