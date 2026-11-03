@@ -560,7 +560,10 @@ describe("a job that narrows a push run compares against the last green push", (
       const manifest = JSON.parse(
         readFileSync(join(REPO_ROOT, project, "package.json"), "utf8"),
       );
-      const script = manifest.scripts?.["lint:files"] ?? "";
+      // `lint` runs ESLint itself or through `lint:files`.
+      const script = ["lint", "lint:files"]
+        .map((name) => manifest.scripts?.[name] ?? "")
+        .join("\n");
       // A project that runs its linters from a script (gui-app's
       // `scripts/lint-files.mjs`) passes the flags there, so the command
       // includes every file of the project the script names.
