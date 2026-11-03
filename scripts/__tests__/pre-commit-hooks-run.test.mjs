@@ -61,8 +61,9 @@ const jobs = Object.entries(workflow.jobs).map(([id, job]) => ({
 const isHookStep = (step) =>
   String(step.uses ?? "").startsWith("pre-commit/action@");
 const hookJob = jobs.find((job) => job.steps.some(isHookStep));
+const hookStep = hookJob.steps.find(isHookStep);
 const skipped = new Set(
-  String(hookJob.steps.find(isHookStep).env?.SKIP ?? "")
+  String(hookStep.env?.SKIP ?? "")
     .split(",")
     .map((id) => id.trim())
     .filter((id) => id !== ""),
@@ -76,13 +77,24 @@ const setsUp = (job, action) =>
       step.if === undefined && String(step.uses ?? "").startsWith(action),
   );
 
-// The job and step that run a skipped hook: the step whose `run` holds the
-// hook's own entry.
+// The commands a step's `run` executes: each line, split at `&&`, `||` and
+// `;`. An entry runs only where a command starts with it, so an `echo` of it,
+// a comment or a quoted copy does not count.
+const commandsOf = (run) =>
+  String(run ?? "")
+    .split("\n")
+    .flatMap((line) => line.split(/&&|\|\||;/))
+    .map(normalize);
+
+// The job and step that run a skipped hook: the step with a command that is the
+// hook's own entry, followed by nothing or by further arguments.
 function runnerOf(hook) {
   const entry = normalize(hook.entry);
   for (const job of jobs) {
     const step = job.steps.find((candidate) =>
-      normalize(candidate.run ?? "").includes(entry),
+      commandsOf(candidate.run).some(
+        (command) => command === entry || command.startsWith(`${entry} `),
+      ),
     );
     if (step !== undefined) return { job, step };
   }
@@ -93,6 +105,17 @@ describe("every pre-commit hook runs in a pre-commit.yml job that can execute it
   it("finds the hook job and the hooks", () => {
     expect(hookJob.id).toBe("static");
     expect(preCommitHooks.map((hook) => hook.id)).toContain("workspace-checks");
+  });
+
+  // `extra_args` defaults to `--all-files`; a hook id there would run that hook
+  // alone.
+  it("runs every hook on every run of static", () => {
+    expect(hookStep.if).toBeUndefined();
+    const args = normalize(hookStep.with?.extra_args ?? "--all-files").split(
+      " ",
+    );
+    expect(args).toContain("--all-files");
+    expect(args.filter((arg) => !arg.startsWith("--"))).toEqual([]);
   });
 
   it("skips only hooks the config declares", () => {
