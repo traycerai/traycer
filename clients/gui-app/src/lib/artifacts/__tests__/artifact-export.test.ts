@@ -43,11 +43,13 @@ describe("createArtifactExport", () => {
             id: "artifact-1",
             title: "First",
             markdown: createBody("# First"),
+            parentId: null,
           },
           {
             id: "artifact-2",
             title: "Second",
             markdown: createBody("# Second"),
+            parentId: null,
           },
         ],
         format: "markdown",
@@ -64,6 +66,7 @@ describe("createArtifactExport", () => {
           id: "artifact-1",
           title: "Release plan",
           markdown: createBody("# Release plan\n\n- [ ] Ship it"),
+          parentId: null,
         },
       ],
       format: "markdown",
@@ -83,16 +86,19 @@ describe("createArtifactExport", () => {
           id: "parent",
           title: "Roadmap?/Q3",
           markdown: createBody("# Parent"),
+          parentId: null,
         },
         {
           id: "child",
           title: "roadmap:/q3",
           markdown: createBody("# Child"),
+          parentId: null,
         },
         {
           id: "reserved",
           title: "CON",
           markdown: createBody("# Reserved"),
+          parentId: null,
         },
       ],
       format: "markdown",
@@ -115,6 +121,53 @@ describe("createArtifactExport", () => {
     expect(new TextDecoder().decode(entries["_CON.md"])).toBe("# Reserved");
   });
 
+  it("lays nested artifacts out as folders under their parent", async () => {
+    const source = (
+      id: string,
+      title: string,
+      parentId: string | null,
+    ): {
+      id: string;
+      title: string;
+      parentId: string | null;
+      markdown: string;
+    } => ({ id, title, parentId, markdown: `# ${id}` });
+    const result = await createArtifactExport({
+      artifacts: [
+        source("spec", "Spec", null),
+        source("story", "Story", "spec"),
+        source("ticket", "Ticket", "story"),
+        // Same stem as its parent: claims a distinct name in that folder.
+        source("echo", "spec", "spec"),
+        source("loose", "Loose", "not-in-export"),
+        // A parent cycle has no root; its members surface at the top level.
+        source("cycle-a", "Cycle A", "cycle-b"),
+        source("cycle-b", "Cycle B", "cycle-a"),
+      ],
+      format: "markdown",
+      archive: true,
+      archiveTitle: "Epic",
+    });
+
+    const entries = unzipSync(new Uint8Array(await result.blob.arrayBuffer()));
+    expect(
+      Object.fromEntries(
+        Object.entries(entries).map(([path, bytes]) => [
+          path,
+          new TextDecoder().decode(bytes),
+        ]),
+      ),
+    ).toEqual({
+      "Spec/Spec.md": "# spec",
+      "Spec/Story/Story.md": "# story",
+      "Spec/Story/Ticket.md": "# ticket",
+      "Spec/spec (2).md": "# echo",
+      "Loose.md": "# loose",
+      "Cycle A/Cycle A.md": "# cycle-a",
+      "Cycle A/Cycle B.md": "# cycle-b",
+    });
+  });
+
   it("preserves complete Unicode code points in exported filenames", async () => {
     const result = await createArtifactExport({
       artifacts: [
@@ -122,6 +175,7 @@ describe("createArtifactExport", () => {
           id: "unicode",
           title: `${"a".repeat(119)}🐇tail`,
           markdown: createBody("Unicode"),
+          parentId: null,
         },
       ],
       format: "markdown",
@@ -139,6 +193,7 @@ describe("createArtifactExport", () => {
           id: "artifact-pdf",
           title: "Design",
           markdown: createBody("# Design\n\nPortable content"),
+          parentId: null,
         },
       ],
       format: "pdf",
@@ -162,6 +217,7 @@ describe("createArtifactExport", () => {
             id: "missing",
             title: "Missing review",
             markdown: null,
+            parentId: null,
           },
         ],
         format: "markdown",

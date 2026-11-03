@@ -51,6 +51,9 @@ function PausedRemedies() {
       format: "markdown",
       archive: true,
       archiveTitle: meta?.epicLight?.title ?? "Traycer",
+      // Every artifact is already listed; nesting lays the archive out as the
+      // tree instead of one flat folder.
+      includeNested: true,
     });
   };
   return (

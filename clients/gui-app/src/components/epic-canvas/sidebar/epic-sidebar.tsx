@@ -168,6 +168,7 @@ import {
 import { useEpicStore } from "@/hooks/use-epic-store";
 import { isEditableRole, mutationDisabledHint } from "@/lib/epic-permissions";
 import { useEpicExportArtifacts } from "@/hooks/epic/use-epic-export-artifacts-mutation";
+import { hasNestedMarkdownArtifacts } from "@/lib/artifacts/artifact-export-selection";
 import {
   ARIA_DISABLED_TRIGGER_CLASS,
   resolveDisabledPresentation,
@@ -2654,6 +2655,20 @@ function SidebarSelectedChatArchiveButton(props: {
     </TooltipWrapper>
   );
 }
+/**
+ * Two picks make an archive. One pick does only when it carries nested
+ * artifacts; a lone leaf already has its own row export.
+ */
+function useCanArchiveSelectedArtifacts(
+  selected: ReadonlyArray<{ readonly id: string }>,
+): boolean {
+  const soleId = selected.length === 1 ? selected[0].id : null;
+  const soleHasNested = useEpicStore(
+    (state) => soleId !== null && hasNestedMarkdownArtifacts(state, soleId),
+  );
+  return selected.length >= 2 || soleHasNested;
+}
+
 function SidebarBulkSelectionActions() {
   const placement = useColumnOverlayPlacement("row") ?? {
     side: undefined,
@@ -2678,13 +2693,16 @@ function SidebarBulkSelectionActions() {
     if (record === undefined || !isMarkdownArtifactKind(record.type)) return [];
     return [{ id: record.id, title: record.name }];
   });
-  const canExportSelected = selectedArtifacts.length >= 2;
+  const canExportSelected = useCanArchiveSelectedArtifacts(selectedArtifacts);
   const exportSelected = (format: "markdown" | "pdf"): void => {
     exportArtifacts.mutate({
       artifacts: selectedArtifacts,
       format,
       archive: true,
       archiveTitle: meta?.epicLight?.title ?? "Traycer",
+      // A selected parent exports with everything nested under it, so a
+      // collapsed branch needs no row-by-row picking.
+      includeNested: true,
     });
   };
   return (

@@ -5,6 +5,7 @@ import {
   serializeArtifactMarkdown,
   type ArtifactExportFormat,
 } from "@/lib/artifacts/artifact-export";
+import { expandNestedArtifactExport } from "@/lib/artifacts/artifact-export-selection";
 import {
   ArtifactBodyUnavailableError,
   holdArtifactBody,
@@ -33,6 +34,12 @@ export interface EpicExportArtifactsInput {
   readonly format: ArtifactExportFormat;
   readonly archive: boolean;
   readonly archiveTitle: string | null;
+  /**
+   * Also export every Markdown artifact nested under the picked ones, laid out
+   * as folders in the archive. Resolved against the tree when the export runs,
+   * not when the menu rendered, so a child added since is included.
+   */
+  readonly includeNested: boolean;
 }
 
 export function useEpicExportArtifacts() {
@@ -58,12 +65,19 @@ export function useEpicExportArtifacts() {
       // every hold until the build made the whole selection hot at once, with
       // no bound on how much a user may select. Sequential MATERIALIZATION was
       // never the property that mattered - sequential RETENTION is.
+      const picked = input.includeNested
+        ? expandNestedArtifactExport(
+            epicHandle.store.getState(),
+            input.artifacts,
+          )
+        : input.artifacts.map((artifact) => ({ ...artifact, parentId: null }));
       const serialized: Array<{
         readonly id: string;
         readonly title: string;
+        readonly parentId: string | null;
         readonly markdown: string;
       }> = [];
-      for (const artifact of input.artifacts) {
+      for (const artifact of picked) {
         // A stale menu must not try to lease an object artifact as a Markdown body.
         const records = epicHandle.store.getState().artifacts.byId;
         if (

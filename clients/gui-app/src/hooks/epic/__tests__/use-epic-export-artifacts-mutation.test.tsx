@@ -26,7 +26,14 @@ const serializeArtifactMarkdown = vi.hoisted(() => vi.fn());
 // before this session has resolved the record) must not throw, only one
 // whose KIND is known and non-Markdown must.
 const artifactRecords = vi.hoisted(() => ({
-  current: {} as Record<string, { readonly kind: string }>,
+  current: {} as Record<string, { readonly kind: string; readonly title: string }>,
+}));
+const artifactTree = vi.hoisted(() => ({
+  current: {
+    rootIds: [] as string[],
+    childrenByParent: {},
+    nodeById: {},
+  },
 }));
 
 vi.mock("@/lib/artifacts/artifact-export", () => ({
@@ -49,6 +56,7 @@ vi.mock("@/providers/use-open-epic-handle", () => ({
         acquireResidentArtifactBodyLease,
         getArtifactFragment,
         artifacts: { byId: artifactRecords.current },
+        tree: artifactTree.current,
       }),
     },
   }),
@@ -67,6 +75,7 @@ function makeWrapper(): ({ children }: { children: ReactNode }) => ReactNode {
 describe("useEpicExportArtifacts", () => {
   beforeEach(() => {
     artifactRecords.current = {};
+    artifactTree.current = { rootIds: [], childrenByParent: {}, nodeById: {} };
     saveBlobToDisk.mockReset();
     saveBlobToDisk.mockResolvedValue(null);
     acquireResidentArtifactBodyLease.mockReset();
@@ -96,6 +105,7 @@ describe("useEpicExportArtifacts", () => {
         format: "markdown",
         archive: true,
         archiveTitle: null,
+        includeNested: false,
       }),
     ).rejects.toThrow("Select at least one artifact to export.");
   });
@@ -120,6 +130,7 @@ describe("useEpicExportArtifacts", () => {
         format: "markdown",
         archive: false,
         archiveTitle: null,
+        includeNested: false,
       }),
     ).rejects.toThrow("“Design” is still loading.");
     expect(release).toHaveBeenCalledTimes(1);
@@ -160,6 +171,7 @@ describe("useEpicExportArtifacts", () => {
         format: "markdown",
         archive: true,
         archiveTitle: null,
+        includeNested: false,
       }),
     ).rejects.toThrow("“Second” is still loading.");
     // THE REDDENING ONE. The first body must be RELEASED before the second is
@@ -183,7 +195,9 @@ describe("useEpicExportArtifacts", () => {
   it.each(["html", "canvas", "file"] as const)(
     "refuses a %s artifact before holding its body",
     async (kind) => {
-      artifactRecords.current = { "artifact-a": { kind } };
+      artifactRecords.current = {
+        "artifact-a": { kind, title: "Landing Page" },
+      };
       const { result } = renderHook(() => useEpicExportArtifacts(), {
         wrapper: makeWrapper(),
       });
@@ -194,6 +208,7 @@ describe("useEpicExportArtifacts", () => {
           format: "markdown",
           archive: false,
           archiveTitle: null,
+          includeNested: false,
         }),
       ).rejects.toThrow(
         "Only Markdown artifacts can be exported as documents.",
@@ -214,6 +229,7 @@ describe("useEpicExportArtifacts", () => {
       format: "markdown",
       archive: false,
       archiveTitle: null,
+      includeNested: false,
     });
 
     expect(acquireResidentArtifactBodyLease).toHaveBeenCalledWith(
@@ -221,5 +237,49 @@ describe("useEpicExportArtifacts", () => {
       "immediate",
     );
     expect(createArtifactExport).toHaveBeenCalledTimes(1);
+  });
+
+  it("exports nested artifacts resolved from the tree at export time", async () => {
+    artifactRecords.current = {
+      spec: { kind: "spec", title: "Spec" },
+      ticket: { kind: "ticket", title: "Ticket" },
+    };
+    artifactTree.current = {
+      rootIds: ["spec"],
+      childrenByParent: { spec: ["ticket"] },
+      nodeById: { spec: { parentId: null }, ticket: { parentId: "spec" } },
+    };
+    serializeArtifactMarkdown.mockImplementation(() => "# body");
+    const { result } = renderHook(() => useEpicExportArtifacts(), {
+      wrapper: makeWrapper(),
+    });
+
+    await result.current.mutateAsync({
+      artifacts: [{ id: "spec", title: "Spec" }],
+      format: "pdf",
+      archive: true,
+      archiveTitle: "Spec",
+      includeNested: true,
+    });
+
+    expect(acquireResidentArtifactBodyLease).toHaveBeenNthCalledWith(
+      1,
+      "spec",
+      "immediate",
+    );
+    expect(acquireResidentArtifactBodyLease).toHaveBeenNthCalledWith(
+      2,
+      "ticket",
+      "immediate",
+    );
+    expect(createArtifactExport).toHaveBeenCalledWith({
+      artifacts: [
+        { id: "spec", title: "Spec", parentId: null, markdown: "# body" },
+        { id: "ticket", title: "Ticket", parentId: "spec", markdown: "# body" },
+      ],
+      format: "pdf",
+      archive: true,
+      archiveTitle: "Spec",
+    });
   });
 });

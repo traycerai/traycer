@@ -26,6 +26,16 @@ export interface ArtifactExportSource {
    * by title rather than exporting an empty file.
    */
   readonly markdown: string | null;
+  /**
+   * The id of this artifact's parent WITHIN THE EXPORT, or `null` for a root.
+   *
+   * An archive places a parent's children in a folder named after it, next to
+   * the parent's own file inside that folder, so a nested export unpacks as the
+   * tree the sidebar shows. An id that names no other source in the request is
+   * treated as a root, as is any source a malformed cycle would orphan. Every
+   * `null` reproduces the flat archive.
+   */
+  readonly parentId: string | null;
 }
 
 export interface ArtifactExportRequest {
@@ -73,22 +83,88 @@ function safeFileStem(title: string): string {
   return WINDOWS_RESERVED_FILENAME.test(stem) ? `_${stem}` : stem;
 }
 
-function collisionSafeFilenames(
+/** Claims `stem` in one directory, suffixing ` (2)`, ` (3)`... on a clash. */
+function claimStem(stem: string, used: Set<string>): string {
+  let candidate = stem;
+  let suffix = 2;
+  while (used.has(candidate.toLocaleLowerCase("en-US"))) {
+    candidate = `${stem} (${suffix})`;
+    suffix += 1;
+  }
+  used.add(candidate.toLocaleLowerCase("en-US"));
+  return candidate;
+}
+
+/**
+ * One archive path per source, in request order.
+ *
+ * A leaf is `<stem>.<ext>` in its parent's directory. A source with children
+ * becomes a folder `<stem>/` holding its own `<stem>.<ext>` and its children,
+ * so the parent travels with what is nested under it. Names are unique per
+ * directory, case-insensitively, files and folders alike: a folder and a file
+ * of the same stem would collide on the case-insensitive filesystems most
+ * archives are unpacked onto.
+ */
+function archivePaths(
   artifacts: ReadonlyArray<ArtifactExportSource>,
   extension: "md" | "pdf",
 ): string[] {
-  const used = new Set<string>();
-  return artifacts.map((artifact) => {
-    const stem = safeFileStem(artifact.title);
-    let candidate = stem;
-    let suffix = 2;
-    while (used.has(candidate.toLocaleLowerCase("en-US"))) {
-      candidate = `${stem} (${suffix})`;
-      suffix += 1;
+  const ids = new Set(artifacts.map((artifact) => artifact.id));
+  const childrenByParent = new Map<string, number[]>();
+  const rootIndexes: number[] = [];
+  artifacts.forEach((artifact, index) => {
+    const { parentId } = artifact;
+    if (parentId === null || parentId === artifact.id || !ids.has(parentId)) {
+      rootIndexes.push(index);
+      return;
     }
-    used.add(candidate.toLocaleLowerCase("en-US"));
-    return `${candidate}.${extension}`;
+    const siblings = childrenByParent.get(parentId);
+    if (siblings === undefined) {
+      childrenByParent.set(parentId, [index]);
+    } else {
+      siblings.push(index);
+    }
   });
+
+  // Every placed path is non-empty, so "" doubles as "not placed yet".
+  const paths = artifacts.map(() => "");
+  const foldered = new Set<string>();
+  const place = (
+    indexes: readonly number[],
+    directory: string,
+    used: Set<string>,
+  ): void => {
+    for (const index of indexes) {
+      if (paths[index] !== "") continue;
+      const artifact = artifacts[index];
+      const stem = claimStem(safeFileStem(artifact.title), used);
+      // A repeated id is one artifact: its children go under the first copy.
+      // A child already placed (the far end of a cycle) earns no folder.
+      const children = foldered.has(artifact.id)
+        ? []
+        : (childrenByParent.get(artifact.id) ?? []).filter(
+            (child) => child !== index && paths[child] === "",
+          );
+      foldered.add(artifact.id);
+      if (children.length === 0) {
+        paths[index] = `${directory}${stem}.${extension}`;
+        continue;
+      }
+      const folder = `${directory}${stem}/`;
+      paths[index] = `${folder}${stem}.${extension}`;
+      place(children, folder, new Set([stem.toLocaleLowerCase("en-US")]));
+    }
+  };
+  const rootNames = new Set<string>();
+  place(rootIndexes, "", rootNames);
+  // A parent cycle has no root to be reached from; its members export at the
+  // top level rather than silently dropping out of the archive.
+  place(
+    artifacts.map((_, index) => index),
+    "",
+    rootNames,
+  );
+  return paths;
 }
 
 function requireAvailableMarkdown(artifact: ArtifactExportSource): string {
@@ -446,7 +522,7 @@ export async function createArtifactExport(
     throw new Error("Individual export requires exactly one artifact.");
   }
   const extension = request.format === "markdown" ? "md" : "pdf";
-  const filenames = collisionSafeFilenames(request.artifacts, extension);
+  const filenames = archivePaths(request.artifacts, extension);
   const markdownFiles = request.artifacts.map((artifact) =>
     requireAvailableMarkdown(artifact),
   );
