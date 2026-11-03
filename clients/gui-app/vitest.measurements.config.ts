@@ -8,5 +8,8 @@ export default {
   test: {
     ...baseConfig.test,
     include: ["src/**/__tests__/**/*.measure.ts"],
+    // The push run's config lets a run with unhandled errors pass; the nightly
+    // job has no fork-death check after it, so here a dead fork fails the run.
+    dangerouslyIgnoreUnhandledErrors: false,
   },
 };

@@ -5428,6 +5428,7 @@ describe("<HarnessModelPicker />", () => {
       });
 
       it("reports every visible open and close - trigger, Escape, an outside press and closeRef - and nothing on mount", async () => {
+        installLegendListTestClock();
         const closeRef: RefObject<(() => void) | null> = { current: null };
         const { spies } = renderFooter({ closeRef, footer: null });
         expect(spies.onOpenChange).not.toHaveBeenCalled();
@@ -5454,9 +5455,7 @@ describe("<HarnessModelPicker />", () => {
         await openPickerByTriggerName("Routing face");
         expect(spies.onOpenChange).toHaveBeenCalledTimes(5);
         // Radix arms its outside-press listener a tick after mounting.
-        await act(async () => {
-          await new Promise((resolve) => setTimeout(resolve, 0));
-        });
+        await advanceLegendListTime(0);
         const outside = document.createElement("div");
         document.body.append(outside);
         fireEvent.pointerDown(outside, { button: 0, pointerType: "mouse" });

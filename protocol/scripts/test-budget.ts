@@ -28,6 +28,9 @@ const PROTOCOL_DIRECTORY = join(import.meta.dirname, "..");
 const REPOSITORY_ROOT = join(PROTOCOL_DIRECTORY, "..");
 const ALLOWLIST_FILE = "test-budget-allowlist.json";
 
+/** The suite vitest's JUnit reporter records unhandled errors under. */
+const UNHANDLED_ERRORS_SUITE = "vitest unhandled errors";
+
 /** A test file's budget on the merge run. */
 export const TEST_FILE_BUDGET_MS = 10_000;
 
@@ -132,12 +135,17 @@ export function evaluateTestBudget(
  * What a second run measured. A run that did not exit cleanly measured nothing,
  * whatever its report says: a killed fork or a failed import still writes a
  * report, with the file at about zero, and that must not read as a fast file.
+ * A project that ignores unhandled errors (gui-app) exits 0 after a fork dies,
+ * so a report that records any unhandled error measured nothing either.
  */
 export function secondRunDurationsMs(
   exitStatus: number | null,
   reportXml: string | null,
 ): ReadonlyMap<string, number> {
   if (exitStatus !== 0 || reportXml === null) return new Map<string, number>();
+  if (reportXml.includes(`name="${UNHANDLED_ERRORS_SUITE}"`)) {
+    return new Map<string, number>();
+  }
   return junitFileDurationsMs(reportXml);
 }
 

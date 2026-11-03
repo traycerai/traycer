@@ -137,6 +137,15 @@ describe("secondRunDurationsMs", () => {
     expect(secondRunDurationsMs(status, report)).toEqual(new Map());
   });
 
+  it("measures nothing for a clean exit whose report records an unhandled error, as a dead fork leaves it", () => {
+    const deadFork = REPORT.replace(
+      "</testsuites>",
+      '<testsuite name="vitest unhandled errors" tests="1" failures="0" errors="1" skipped="0" time="0"><testcase classname="vitest unhandled errors" name="Worker exited unexpectedly" time="0"><error message="Worker exited unexpectedly" type="Error">Worker exited unexpectedly</error></testcase></testsuite></testsuites>',
+    );
+    expect(deadFork).not.toBe(REPORT);
+    expect(secondRunDurationsMs(0, deadFork)).toEqual(new Map());
+  });
+
   it("reads the report on exit 0", () => {
     expect(secondRunDurationsMs(0, REPORT)).toEqual(
       new Map([
