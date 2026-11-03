@@ -46,6 +46,7 @@ const isScan = (file, jobId) => file === SCAN.file && jobId === SCAN.jobId;
 const DISPATCHABLE = [
   "browser-regressions.yml",
   "formal-regressions.yml",
+  "gradle-wrapper.yml",
   "pre-commit.yml",
   "protocol-compat.yml",
   "real-supervisor.yml",
@@ -53,6 +54,19 @@ const DISPATCHABLE = [
 ];
 
 const LAST_GREEN = "scripts/ci-last-green-sha.sh";
+const PUSH_SCOPE = "scripts/ci-push-scope.sh";
+
+// The workflows whose push run decides inside itself, through a `changes` job
+// that calls `ci-push-scope.sh` and job-level `if`s that read its answer.
+const SCOPED = [
+  {
+    file: "protocol-compat.yml",
+    changes: "changes",
+    gated: ["protocol-compat"],
+  },
+  { file: "real-supervisor.yml", changes: "changes", gated: ["macos"] },
+  { file: "gradle-wrapper.yml", changes: "changes", gated: ["validate"] },
+];
 
 const normalize = (expression) =>
   String(expression)
@@ -387,13 +401,16 @@ describe("a job that narrows a push run compares against the last green push", (
     }
   }
 
-  it("finds the four jobs that narrow today", () => {
+  it("finds the seven jobs that narrow today", () => {
     expect(
       narrowing.map(({ file, jobId }) => `${file}/${jobId}`).sort(),
     ).toEqual([
       "browser-regressions.yml/changes",
       "formal-regressions.yml/changes",
+      "gradle-wrapper.yml/changes",
       "pre-commit.yml/workspace-checks",
+      "protocol-compat.yml/changes",
+      "real-supervisor.yml/changes",
       "test.yml/macos-packaging-changes",
     ]);
   });
@@ -514,6 +531,70 @@ describe("a job that narrows a push run compares against the last green push", (
     const filter = job.steps.find((step) => step.id === "filter");
     expect(filter.env.PUSH_BASE).toBe("${{ steps.base.outputs.sha }}");
   });
+});
+
+// A push to `main` must start a run of EVERY workflow that watches it, whatever
+// the change: `scripts/ci-push-checks-green.sh` in the internal repository
+// judges a pushed commit by each workflow's latest push run and refuses a commit
+// whose own push started none, and Scorecard's Binary-Artifacts check exempts a
+// committed `gradle-wrapper.jar` only while the latest commit has a successful
+// run of `gradle-wrapper.yml`. A `paths:` filter on the trigger starts no run at
+// all, so narrowing is only ever a job-level skip inside a run that happened.
+describe("no workflow filters its own push trigger by path", () => {
+  for (const { file, workflow } of pushWorkflows) {
+    it(`${file} starts a run on every push to main`, () => {
+      const push = triggers(workflow).push;
+      expect(push?.paths).toBeUndefined();
+      expect(push?.["paths-ignore"]).toBeUndefined();
+    });
+  }
+});
+
+// What keeps a scoped workflow a gate: its own relevance list in
+// `ci-push-scope.sh`, and a gated job that runs when the decision could not be
+// made. Without `!cancelled()` GitHub skips a job whose dependency failed, and
+// a skipped job satisfies a required check - so a failed `changes` job would
+// pass the gate instead of running it.
+describe("a workflow whose push run decides inside itself", () => {
+  it("covers the three workflows the design names", () => {
+    expect(SCOPED.map(({ file }) => file).sort()).toEqual([
+      "gradle-wrapper.yml",
+      "protocol-compat.yml",
+      "real-supervisor.yml",
+    ]);
+  });
+
+  for (const { file, changes, gated } of SCOPED) {
+    describe(file, () => {
+      const { workflow } = workflows.find((entry) => entry.file === file);
+
+      it(`${changes} asks ci-push-scope.sh about this workflow, and publishes the answer`, () => {
+        const job = workflow.jobs[changes];
+        const filter = job.steps.find((step) => step.id === "filter");
+        expect(String(filter.run)).not.toContain("${{");
+        expect(String(filter.run)).toContain(
+          `${PUSH_SCOPE} ${file} "$EVENT" "$PR_BASE" "$PUSH_BASE"`,
+        );
+        expect(filter.env.EVENT).toBe("${{ github.event_name }}");
+        expect(filter.env.PR_BASE).toBe(
+          "${{ github.event.pull_request.base.sha }}",
+        );
+        expect(filter.env.PUSH_BASE).toBe("${{ steps.base.outputs.sha }}");
+        expect(job.outputs.run).toBe(`\${{ steps.${filter.id}.outputs.run }}`);
+      });
+
+      for (const jobId of gated) {
+        it(`${jobId} runs when the change reaches it, and when the decision failed`, () => {
+          const condition = normalize(workflow.jobs[jobId].if);
+          expect(workflow.jobs[jobId].needs).toBe(changes);
+          expect(condition).toContain("!cancelled()");
+          expect(condition).toContain(
+            `(needs.${changes}.result != 'success' || needs.${changes}.outputs.run == 'true')`,
+          );
+        });
+      }
+    });
+  }
 });
 
 describe("test.yml `tests`", () => {

@@ -44,8 +44,9 @@ github.event_name != 'pull_request'
 
 ## The merge run
 
-The full suite runs once on the merged commit, on every push to `main`, and a
-later merge never cancels an earlier merge's run.
+Every push to `main` starts a run of every workflow, each running what the
+merged commit reaches, once, and a later merge never cancels an earlier merge's
+run.
 
 - A failed merge run is re-run once (`trunk-red.yml`, failed jobs only,
   because the test suites have known flakes). If the re-run fails too, the
@@ -53,11 +54,26 @@ later merge never cancels an earlier merge's run.
   summary. It sends nothing anywhere: a failed `trunk-red` run is the signal,
   and the one thing an alert has to watch.
 - A merge run that narrows to what changed (`nx affected` in `pre-commit.yml`,
-  the `changes` jobs of `browser-regressions.yml` and `formal-regressions.yml`,
+  the `changes` jobs of `browser-regressions.yml`, `formal-regressions.yml`,
+  `protocol-compat.yml`, `real-supervisor.yml` and `gradle-wrapper.yml`,
   `macos-packaging-changes` in `test.yml`)
   compares against the last push its own workflow passed on (`scripts/ci-last-green-sha.sh`), not the
   push before. So the next merge's range still holds a break, and `main`
   stays red until a run covering everything since the last green push passes.
+  The four rules that keep narrowing a gate are in the root `AGENTS.md`,
+  "When CI runs", and in the header of `scripts/ci-push-scope.sh`.
+- Narrowing is a job-level skip, never a `paths:` filter on the trigger. Two
+  readers outside this repository depend on the run existing at all: the
+  internal release gate judges a pushed commit by every workflow's latest push
+  run and refuses a commit whose own push started none, and Scorecard's
+  Binary-Artifacts check exempts a committed `gradle-wrapper.jar` only while the
+  latest commit has a successful run of `gradle-wrapper.yml`. A `changes` job
+  that skips the rest of its workflow still leaves a run that concludes
+  `success`, because the `changes` job itself passed.
+- A job gated on a `changes` job carries `!cancelled()` and
+  `needs.<changes>.result != 'success'` in its `if`. Without them GitHub skips
+  a job whose dependency failed, and a skipped job satisfies a required check -
+  so a failed detection would pass the gate instead of running it.
 - `pre-commit.yml`'s `lint` and `compile` jobs restore a cache only a passing
   push saves, so every run starts from the last green `main` entry. It holds
   `NX_CACHE_DIRECTORY`, the Nx database and gui-app's ESLint cache. A cached
