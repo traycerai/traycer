@@ -88,23 +88,24 @@ const setsUpBefore = (job, step, action) =>
 // The runner's implicit shell, `bash -e`, fails the step when any line's
 // command fails, but not a command in a pipeline (no pipefail), in an `&&` or
 // `||` list, or in the background. So a step runs a hook only on a line that is
-// the hook's entry alone, or with further arguments, and holds none of `|`, `&`
-// or `;`. An `echo` of it, a comment or a quoted copy starts with something
-// else.
-const runsEntry = (run, entry) =>
+// exactly the command pre-commit runs: its entry, then its `args`. Another
+// argument can change what it checks (the ratchet's `--write` rewrites its
+// baseline), and an `echo` of it, a comment or a quoted copy is another line.
+const commandOf = (hook) =>
+  normalize([hook.entry, ...(hook.args ?? [])].join(" "));
+const runsCommand = (run, command) =>
   String(run ?? "")
     .split("\n")
     .map(normalize)
-    .some(
-      (line) =>
-        !/[|&;]/.test(line) && (line === entry || line.startsWith(`${entry} `)),
-    );
+    .includes(command);
 
 // The job and step that run a skipped hook.
 function runnerOf(hook) {
-  const entry = normalize(hook.entry);
+  const command = commandOf(hook);
   for (const job of jobs) {
-    const step = job.steps.find((candidate) => runsEntry(candidate.run, entry));
+    const step = job.steps.find((candidate) =>
+      runsCommand(candidate.run, command),
+    );
     if (step !== undefined) return { job, step };
   }
   return undefined;
@@ -140,11 +141,41 @@ describe("every pre-commit hook runs in a pre-commit.yml job that can execute it
     expect(run.map((hook) => hook.id)).toEqual([]);
   });
 
+  // CI splits the hook into lanes: the matrix runs the script once per lane,
+  // and the format check its `all` lane runs is its own job.
+  it("workspace-checks runs every lane of its script", () => {
+    const hook = hooks.find(({ id }) => id === "workspace-checks");
+    const runner = runnerOf(hook);
+    expect(runner.step.env?.WORKSPACE_CHECK_LANE).toBe("${{ matrix.lane }}");
+    const script = readFileSync(join(REPO_ROOT, commandOf(hook)), "utf8");
+    const affected = script.slice(script.indexOf("\nrun_affected() {"));
+    const lanes = [
+      ...affected
+        .slice(0, affected.indexOf("\n}\n"))
+        .matchAll(/^\s+([a-z]+)\)/gm),
+    ]
+      .map(([, lane]) => lane)
+      .filter((lane) => lane !== "all");
+    const matrix = workflow.jobs[runner.job.id].strategy.matrix.include.map(
+      ({ lane }) => lane,
+    );
+    expect([...matrix].sort()).toEqual([...lanes].sort());
+    const format = jobs.find((job) =>
+      job.steps.some(
+        (step) =>
+          step.if === undefined &&
+          runsCommand(step.run, "bun run format:check"),
+      ),
+    );
+    expect(format?.if).toBe(hookJob.if);
+    expect(required).toContain(format.id);
+  });
+
   for (const hook of preCommitHooks.filter((hook) => skipped.has(hook.id))) {
     describe(hook.id, () => {
       it("runs as its own entry, and fails a job that runs whenever static does", () => {
         const runner = runnerOf(hook);
-        expect(runner, `no step runs: ${normalize(hook.entry)}`).toBeDefined();
+        expect(runner, `no step runs: ${commandOf(hook)}`).toBeDefined();
         expect(runner.job.id).not.toBe(hookJob.id);
         expect(runner.job.if).toBe(hookJob.if);
         expect(runner.step.if).toBeUndefined();
