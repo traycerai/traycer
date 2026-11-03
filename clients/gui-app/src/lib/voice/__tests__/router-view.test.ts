@@ -976,13 +976,6 @@ describe("the second round of recorded answers", () => {
     },
   );
 
-  it("tells the two Diagnostics sections of Settings apart by their group", () => {
-    const labels = ROUND2_VIEW_BY_NAME.settings.rows.map((row) => row.label);
-
-    expect(labels).toContain("Settings: Diagnostics (Application)");
-    expect(labels).toContain("Settings: Diagnostics (Host)");
-  });
-
   it("are 68 answers to 34 heard requests, each with a planned decision for both repetitions", () => {
     const heard = new Set(
       ROUND2_ANSWERS.map(

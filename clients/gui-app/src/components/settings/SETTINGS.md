@@ -1713,11 +1713,13 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
       bridge's `forgetLogins()` directly and therefore speaks for every host
       with a live browser stream; main owns both native destructive confirms.
 - `Sounds` (`panels/app-notifications-settings-panel.tsx`,
-  `/settings/app-notifications`): one group, **Chimes**
+  `/settings/app-notifications`): **Chimes**
   (`panels/notification-chime-settings-section.tsx`), one dropdown per kind
-  of alert. Untitled, because the page is already named for it. The id still
-  says notifications: the OS and push rows moved to Alerts, and ids do not
-  change.
+  of alert, untitled because the page is already named for it; and, in a build
+  with something to play, **Soundtrack**
+  (`panels/soundtrack-settings-section.tsx`), its volume and what it follows.
+  Its on and off is the toggle in the top row. The id still says notifications:
+  the OS and push rows moved to Alerts, and ids do not change.
 - `Alerts` (`panels/alerts-settings-panel.tsx`, `/settings/alerts`): one
   group, **Notifications** (anchor `alerts-notifications`), where the alerts
   themselves are configured. **OS notifications** on a desktop with the
@@ -4819,8 +4821,9 @@ min`): "The judge didn't finish in time, so it's asking you instead."
     fallback at all. The chat surfaces link in here from another host's chat
     (through `carryViewedHostIntoSettingsScope`), which is precisely when a
     panel that said nothing would be editing the wrong machine.
-  - **Groups**: Fallback (the `Automatic fallback` master switch, off by
-    default, and the `Try these in order` step editor), Behavior, Equivalent
+  - **Groups**: Fallback (the `Automatic fallback` master switch, on for a user
+    with no saved row and off over a row the host cannot read or after a reset,
+    and the `Try these in order` step editor), Behavior, Equivalent
     models, Advanced per-failure overrides, and a Danger Zone. Every policy
     field is compared by `fallbackPolicyValuesEqual`; a field missing from that
     function is equal to itself by omission, so an edit to it alone would
@@ -5351,8 +5354,8 @@ wrap`). Each row names the account its first usable match runs on, the
     change where an armed traversal can hop to. It says "keep the steps and
     timings they started with" and claims nothing more.
   - **Reset re-reads and remounts; restore writes in place.** The asymmetry is
-    the seed marker. `reset` clears it, so the default policy it returns is
-    stale the moment the next read re-seeds - writing that response into the
+    the seed marker. `reset` clears it, so the policy it returns is
+    stale the moment the next read re-seeds the groups - writing that response into the
     cache would show an empty model-group list while the engine resolves against
     a full seeded set. So the panel performs its own `refetchPolicy()` after the
     reset and remounts the editor (a `resetGeneration` in its key) onto what
@@ -5523,8 +5526,8 @@ wrap`). Each row names the account its first usable match runs on, the
     there. Both facts, or no in-force claim.
     The same rule bounds what may be said about the HOST's values at all. A
     reset that succeeded proves the host wrote something; it does not prove the
-    result differs from what is on screen - resetting an already-default policy
-    yields identical values back, and the follow-up read that would have shown
+    result differs from what is on screen - resetting a policy that already
+    matches what a reset writes yields identical values back, and the follow-up read that would have shown
     that is the request that failed. So the copy hedges ("may not be what this
     host is using now") instead of asserting an inequality no client can know.
     And a claim about DISPATCH comes from the request's own state - pending,
@@ -5576,7 +5579,7 @@ wrap`). Each row names the account its first usable match runs on, the
     itself, so the local check cannot drift from the host's - and this module
     only turns the failing path into a sentence.
   - **`storedPolicyUnreadable`** is surfaced, never swallowed. The host answers
-    a corrupt row with the default policy plus that flag instead of throwing,
+    a corrupt row with routing off, plus that flag, instead of throwing,
     so that this page still renders and a save can replace the bad row; the
     notice says what is on screen is not what is stored.
   - **`inFlightCount`** is rendered as a plain number in the master toggle's

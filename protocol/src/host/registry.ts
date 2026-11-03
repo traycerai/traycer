@@ -1020,6 +1020,7 @@ import {
 import {
   epicStatusSubscribeV10,
   epicStatusSubscribeV11,
+  epicStatusSubscribeV12,
 } from "@traycer/protocol/host/epic/status-subscribe";
 import {
   artifactSubscribeV10,
@@ -1194,6 +1195,7 @@ import {
   hostNotificationsClearAllUpgradeV10ToV11,
   hostNotificationsClearAllV11,
   hostNotificationsGetConfig,
+  hostNotificationsGetLongTurnAlert,
   hostNotificationsIndicatorStateUpgradeV10ToV11,
   hostNotificationsIndicatorStateUpgradeV11ToV12,
   hostNotificationsIndicatorStateV10,
@@ -1219,6 +1221,7 @@ import {
   hostNotificationsMarkRead,
   hostNotificationsResolve,
   hostNotificationsSetConfig,
+  hostNotificationsSetLongTurnAlert,
   hostNotificationsFeedSubscribeV10,
   hostNotificationsFeedSubscribeV11,
   hostNotificationsFeedSubscribeV12,
@@ -7511,6 +7514,32 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       versions: {
         0: {
           contract: hostNotificationsSetConfig,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "host.notifications.getLongTurnAlert": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostNotificationsGetLongTurnAlert,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "host.notifications.setLongTurnAlert": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostNotificationsSetLongTurnAlert,
           upgradeFromPreviousVersion: null,
         },
       },
@@ -15158,16 +15187,20 @@ const HOST_STREAM_RPC_REGISTRY_CORE_DEFINITION = {
   // `@1.0` shipped in cli-v1.3.0 and is frozen there. The durability legs this
   // branch carries on `snapshot` / `cloudSyncStatus` therefore live at `@1.1`;
   // the host gates them on the negotiated minor
-  // (`EPIC_STATUS_DURABILITY_LEGS_MINOR`).
+  // (`EPIC_STATUS_DURABILITY_LEGS_MINOR`). `@1.2` adds `artifactSync` the same
+  // way (`EPIC_STATUS_ARTIFACT_SYNC_MINOR`).
   "epic.status.subscribe": {
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: epicStatusSubscribeV10,
         },
         1: {
           contract: epicStatusSubscribeV11,
+        },
+        2: {
+          contract: epicStatusSubscribeV12,
         },
       },
     },

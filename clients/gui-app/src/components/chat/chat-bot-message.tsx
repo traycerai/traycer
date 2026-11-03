@@ -46,7 +46,7 @@ import { cn } from "@/lib/utils";
 import {
   AvatarStack,
   BotAvatar,
-  MemberAvatar,
+  PersonAvatar,
 } from "@/components/bots/bot-avatars";
 import { BotIdentityTrigger } from "@/components/bots/bot-identity-popover";
 import { BotSurfaceCard } from "@/components/bots/bot-surface-card";
@@ -170,7 +170,7 @@ function MemberRow(props: {
   return (
     <BotMessageFrame
       avatar={
-        <MemberAvatar
+        <PersonAvatar
           userId={message.senderUserId ?? null}
           name={name}
           avatarUrl={message.senderAvatarUrl ?? null}
@@ -1104,6 +1104,8 @@ const ANNOUNCEMENT_LABELS: Readonly<Record<BotAnnouncementKind, string>> = {
   automation: "Automation created",
   "bot-created": "New bot",
   policy: "Policy change",
+  // Rows a released host wrote before announcements stopped asking; no
+  // current host writes one.
   question: "Question",
 };
 

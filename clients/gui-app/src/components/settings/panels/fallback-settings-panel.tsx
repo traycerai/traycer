@@ -1433,10 +1433,11 @@ type UnrefreshedResetSubject = "pre-reset-values" | "own-edit" | "rollback";
 function unrefreshedResetBody(subject: UnrefreshedResetSubject): string {
   switch (subject) {
     // D330: a reset that succeeded proves the host WROTE something, not that
-    // what it wrote differs from this. Resetting an already-default policy
-    // yields the same values back, and the follow-up get that would have shown
-    // that is exactly the request that failed - so the old "not what this host
-    // is using now" asserted an inequality the client cannot know.
+    // what it wrote differs from this. Resetting a policy that already matches
+    // what a reset writes yields the same values back, and the follow-up get
+    // that would have shown that is exactly the request that failed - so the
+    // old "not what this host is using now" asserted an inequality the client
+    // cannot know.
     case "pre-reset-values":
       return "This page still shows the settings from before the reset. Select Reload settings to show what's now saved on this host.";
     case "own-edit":
@@ -1529,7 +1530,7 @@ function UnrefreshedResetNotice(props: {
 /**
  * What the panel says when the stored policy could not be read.
  *
- * The host answers a corrupt row with the DEFAULT policy plus this flag rather
+ * The host answers a corrupt row with routing off, plus this flag, rather
  * than throwing, precisely so this page still renders and the user can
  * overwrite it - a panel that failed to load would leave the bad row with no
  * way to replace it. So the copy has to be clear that what is on screen is not

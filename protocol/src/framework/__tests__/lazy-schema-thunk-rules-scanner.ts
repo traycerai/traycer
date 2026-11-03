@@ -10,7 +10,7 @@ import ts from "typescript";
  * both scans. Every root and prefix is a parameter of `scanThunkRules` and
  * `gitListedFiles`; nothing here names a repo.
  *
- * It parses every `lazySchema(` thunk and reports:
+ * It parses a file whose text names `lazySchema` and reports every call:
  *
  * R1 outermost `.describe(`/`.meta(`/`.register(` of a returned expression
  * R2 outermost `z.instanceof(`
@@ -35,6 +35,11 @@ import ts from "typescript";
  */
 
 export const UNANALYSED_KIND = "U unanalysed";
+
+/** A file that names `lazySchema` may hold a call. The walk decides which. */
+export function mentionsLazySchema(text: string): boolean {
+  return text.includes("lazySchema");
+}
 
 const SKIP_DIR_NAMES = new Set([
   "node_modules",
@@ -261,11 +266,6 @@ export type ScanInput = {
   readonly protoSrc: string;
   readonly commonSrc: string;
   readonly contentRoot: string;
-};
-
-type LoadedFile = {
-  readonly sf: ts.SourceFile;
-  readonly text: string;
 };
 
 type ImportBinding = {
@@ -1045,25 +1045,16 @@ function factoryReturnedFunctions(
 }
 
 export function scanThunkRules(input: ScanInput): ThunkScanResult {
-  const loadCache = new Map<string, LoadedFile>();
+  const loadCache = new Map<string, ts.SourceFile>();
   const declCache = new Map<string, TopDecls>();
   const localsCache = new Map<ts.SignatureDeclaration, Set<string>>();
   const fnMemo = new Map<ts.Node, WalkResult>();
   const inProgress = new Set<ts.Node>();
 
-  const load = (abs: string): LoadedFile | undefined => {
+  const remember = (abs: string, text: string): ts.SourceFile => {
     const cached = loadCache.get(abs);
     if (cached !== undefined) {
       return cached;
-    }
-    const overlayText = input.overlay.get(abs);
-    let text: string;
-    if (overlayText !== undefined) {
-      text = overlayText;
-    } else if (existsSync(abs)) {
-      text = readFileSync(abs, "utf8");
-    } else {
-      return undefined;
     }
     const sf = ts.createSourceFile(
       abs,
@@ -1072,30 +1063,47 @@ export function scanThunkRules(input: ScanInput): ThunkScanResult {
       true,
       abs.endsWith("x") ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
     );
-    const loaded = { sf, text };
-    loadCache.set(abs, loaded);
-    return loaded;
+    loadCache.set(abs, sf);
+    return sf;
+  };
+
+  const readText = (abs: string): string | undefined => {
+    const overlayText = input.overlay.get(abs);
+    if (overlayText !== undefined) {
+      return overlayText;
+    }
+    if (!existsSync(abs)) {
+      return undefined;
+    }
+    return readFileSync(abs, "utf8");
+  };
+
+  const load = (abs: string): ts.SourceFile | undefined => {
+    const cached = loadCache.get(abs);
+    if (cached !== undefined) {
+      return cached;
+    }
+    const text = readText(abs);
+    if (text === undefined) {
+      return undefined;
+    }
+    return remember(abs, text);
   };
 
   const lineOf = (abs: string, node: ts.Node): number => {
-    const loaded = load(abs);
-    if (loaded === undefined) {
+    const sf = load(abs);
+    if (sf === undefined) {
       return 0;
     }
-    return (
-      loaded.sf.getLineAndCharacterOfPosition(node.getStart(loaded.sf)).line + 1
-    );
+    return sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1;
   };
 
   const columnOf = (abs: string, node: ts.Node): number => {
-    const loaded = load(abs);
-    if (loaded === undefined) {
+    const sf = load(abs);
+    if (sf === undefined) {
       return 0;
     }
-    return (
-      loaded.sf.getLineAndCharacterOfPosition(node.getStart(loaded.sf))
-        .character + 1
-    );
+    return sf.getLineAndCharacterOfPosition(node.getStart(sf)).character + 1;
   };
 
   const rel = (abs: string): string => {
@@ -1180,11 +1188,11 @@ export function scanThunkRules(input: ScanInput): ThunkScanResult {
       star: [],
     };
     declCache.set(abs, out);
-    const loaded = load(abs);
-    if (loaded === undefined) {
+    const sf = load(abs);
+    if (sf === undefined) {
       return out;
     }
-    for (const st of loaded.sf.statements) {
+    for (const st of sf.statements) {
       if (ts.isFunctionDeclaration(st) && st.name !== undefined) {
         out.decls.set(st.name.text, st);
       } else if (ts.isClassDeclaration(st) && st.name !== undefined) {
@@ -2536,10 +2544,15 @@ export function scanThunkRules(input: ScanInput): ThunkScanResult {
   const thunkFns: ThunkFn[] = [];
   let thunkCount = 0;
   for (const abs of input.files) {
-    const loaded = load(abs);
-    if (loaded === undefined || !loaded.text.includes("lazySchema(")) {
+    // The walk counts a call, including a type argument, a space, `?.`,
+    // or a comment before `(`. Naming `lazySchema` is enough to parse.
+    // Import resolution still calls load for a helper that does not
+    // name it.
+    const markerText = readText(abs);
+    if (markerText === undefined || !mentionsLazySchema(markerText)) {
       continue;
     }
+    const sf = remember(abs, markerText);
     const visit = (node: ts.Node): void => {
       if (
         ts.isCallExpression(node) &&
@@ -2593,7 +2606,7 @@ export function scanThunkRules(input: ScanInput): ThunkScanResult {
       }
       ts.forEachChild(node, visit);
     };
-    visit(loaded.sf);
+    visit(sf);
   }
 
   const hits: ThunkRuleHit[] = [];

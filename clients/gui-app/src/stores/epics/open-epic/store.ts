@@ -34,6 +34,7 @@ import { replaceEqualDeep } from "@tanstack/react-query";
 import { persist, createJSONStorage } from "zustand/middleware";
 import type * as Y from "yjs";
 import type { Awareness } from "y-protocols/awareness";
+import type { EpicArtifactSync } from "@traycer/protocol/host/epic/status-subscribe";
 import type { PermissionRole } from "@traycer/protocol/host/epic/unary-schemas";
 import type {
   EpicCloudFreshness,
@@ -585,6 +586,11 @@ export interface OpenEpicState {
    * UNKNOWN, and unknown is not `current`.
    */
   readonly cloudFreshness: EpicCloudFreshness | null;
+  /**
+   * Whether this task's artifacts are reaching the cloud
+   * (`epic.status.subscribe@1.2`). `null` means the host did not say.
+   */
+  readonly artifactSync: EpicArtifactSync | null;
   /**
    * Whether the peer serving this stream negotiated the `@1.6` minor that
    * carries the three legs above - `s5-status-truthfulness`. Every one of

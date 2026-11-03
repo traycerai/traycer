@@ -187,6 +187,14 @@ export type HostNotificationEpicStoppedPayload = z.infer<
 >;
 
 /**
+ * `agent.stalled`'s `reason` for a turn that ran past the time its person set.
+ * The row says a turn is still going, not how one ended, so it stays out of the
+ * Error and Done glyphs on every plane; it reaches the person through the
+ * notification center and the push.
+ */
+export const HOST_NOTIFICATION_LONG_TURN_REASON = "long_turn";
+
+/**
  * `agent.stalled` payload. `agentName` carries the chat title. `reason` is
  * deliberately an open string (not a closed enum) so a future stall reason
  * degrades to generic copy instead of failing the parse.

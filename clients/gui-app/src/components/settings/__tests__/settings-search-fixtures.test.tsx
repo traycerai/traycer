@@ -12,6 +12,7 @@ import {
 } from "@/components/settings/__tests__/settings-search-targets";
 import { hostScopeFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import { AppDiagnosticsSettingsPanel } from "@/components/settings/panels/app-diagnostics-settings-panel";
+import { AppNotificationsSettingsPanel } from "@/components/settings/panels/app-notifications-settings-panel";
 import { AlertsSettingsPanel } from "@/components/settings/panels/alerts-settings-panel";
 import { AppearanceSettingsPanel } from "@/components/settings/panels/appearance-settings-panel";
 import { BrowserSettingsPanel } from "@/components/settings/panels/browser-settings-panel";
@@ -176,6 +177,7 @@ const MOUNTS: {
   permissions: <PermissionsSettingsPanel />,
   browser: <BrowserSettingsPanel />,
   alerts: <AlertsSettingsPanel />,
+  "app-notifications": <AppNotificationsSettingsPanel />,
   "app-diagnostics": <AppDiagnosticsSettingsPanel />,
   host: <HostSettingsPanel />,
 };
@@ -188,6 +190,7 @@ afterEach(() => {
   setMobileApp(false);
   setPhoneLayoutOnly(false);
   setFeatureSettingsBridge(null);
+  vi.unstubAllEnvs();
   useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
   useSettingsSearchStore.setState({
     query: "",
@@ -239,8 +242,9 @@ describe("settings search fixtures", () => {
 
 /**
  * Mounts `panel` in exactly the shell `context` describes: its runner host (or
- * none), the window-level feature-settings bridge, the mobile-app flag and
- * whether the phone layout is drawn (the installed app draws it at every width).
+ * none), the window-level feature-settings bridge, the mobile-app flag, whether
+ * the phone layout is drawn (the installed app draws it at every width), and
+ * whether the build has a soundtrack to play (a development build does).
  */
 function mountInShell(
   context: SettingsAvailabilityContext,
@@ -250,6 +254,7 @@ function mountInShell(
   setMobileApp(context.mobileApp);
   setPhoneLayoutOnly(context.phoneLayout);
   setFeatureSettingsBridge(context.featureSettings);
+  if (context.soundtrackOffered) vi.stubEnv("MODE", "development");
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false, gcTime: 0 },

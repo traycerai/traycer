@@ -6,6 +6,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -20,14 +21,14 @@ import { type MarkdownArtifactKind } from "@traycer/protocol/common/registry";
 import type { CommentThreadWire } from "@traycer/protocol/host/epic/unary-schemas";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { cn } from "@/lib/utils";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { PersonAvatar } from "@/components/bots/bot-avatars";
+import { usePersonIdentity } from "@/hooks/identity/use-person-identity";
 import { usePanePortalContainer } from "@/components/epic-tabs/pane-visibility-context";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useEpicCommentThreadsForClient } from "@/hooks/comments/use-epic-comment-threads";
 import { resolveArtifactCommentThreads } from "@/hooks/comments/use-lane-comment-threads";
 import { useCommentThreadsStore } from "@/stores/comments/comment-threads-store";
 import { CommentContent } from "./comment-content-renderer";
-import { deriveInitials } from "./mention-utils";
 
 const HOVER_DELAY_MS = 300;
 
@@ -301,24 +302,7 @@ export function ThreadAnchorHoverPopover(props: ThreadAnchorHoverPopoverProps) {
       {lastComment === null ? (
         <p className="text-ui-xs text-muted-foreground">No comments yet.</p>
       ) : (
-        <div className="flex items-start gap-2">
-          <Avatar size="sm">
-            <AvatarFallback>
-              {deriveInitials(
-                lastComment.author.fallbackHandle ?? lastComment.author.userId,
-              )}
-            </AvatarFallback>
-          </Avatar>
-          <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-            <span className="truncate text-ui-xs font-medium">
-              {lastComment.author.fallbackHandle ?? lastComment.author.userId}
-            </span>
-            <CommentContent
-              content={lastComment.content}
-              className="line-clamp-3 text-ui-xs"
-            />
-          </div>
-        </div>
+        <LastCommentPreview comment={lastComment} />
       )}
       <p className="mt-2 text-overline uppercase text-muted-foreground">
         {thread.comments.length} comment
@@ -352,4 +336,27 @@ function findThreadAnchor(target: EventTarget | null): HTMLElement | null {
 function findLinkAnchor(target: EventTarget | null): HTMLAnchorElement | null {
   if (!(target instanceof HTMLElement)) return null;
   return target.closest<HTMLAnchorElement>("a");
+}
+
+function LastCommentPreview(props: {
+  readonly comment: CommentThreadWire["comments"][number];
+}): ReactNode {
+  const { author, content } = props.comment;
+  const identity = usePersonIdentity(author.userId);
+  const authorLabel =
+    identity?.displayName ?? author.fallbackHandle ?? author.userId;
+  return (
+    <div className="flex items-start gap-2">
+      <PersonAvatar
+        userId={author.userId}
+        name={authorLabel}
+        avatarUrl={identity?.avatarUrl ?? null}
+        size="sm"
+      />
+      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <span className="truncate text-ui-xs font-medium">{authorLabel}</span>
+        <CommentContent content={content} className="line-clamp-3 text-ui-xs" />
+      </div>
+    </div>
+  );
 }
