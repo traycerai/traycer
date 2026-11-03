@@ -51,40 +51,59 @@ const RESERVED_WORDS = new Set([
 ]);
 const COMPOUND_STAGE = /^(?:while|until|for|if|case|select|\{)(?=[\s;]|$)/;
 const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*(?:\[[^\]]*\])?\+?=/;
-// Commands that run the command named in their arguments on the same stdin.
-const WRAPPERS = new Set([
-  "command",
-  "doas",
-  "env",
-  "exec",
-  "nice",
-  "nohup",
-  "runuser",
-  "stdbuf",
-  "sudo",
-  "timeout",
+// Commands that run the command their arguments name on the same input,
+// each with the options that take the next argument as their value.
+const WRAPPERS = new Map([
+  ["command", []],
+  ["doas", ["-u", "-C"]],
+  ["env", ["-u", "-C", "-S", "--unset", "--chdir", "--split-string"]],
+  ["exec", ["-a"]],
+  ["nice", ["-n", "--adjustment"]],
+  ["nohup", []],
+  ["runuser", ["-u", "-g", "-G", "--user", "--group", "--supp-group"]],
+  ["stdbuf", ["-i", "-o", "-e", "--input", "--output", "--error"]],
+  [
+    "sudo",
+    ["-u", "-g", "-C", "-D", "-h", "-p", "-r", "-t", "-T", "-U"].concat([
+      "--user",
+      "--group",
+      "--close-from",
+      "--chdir",
+      "--host",
+      "--prompt",
+      "--role",
+      "--type",
+      "--command-timeout",
+      "--other-user",
+    ]),
+  ],
+  ["timeout", ["-s", "-k", "--signal", "--kill-after"]],
 ]);
-const READERS = new Set([
-  "awk",
-  "egrep",
-  "fgrep",
-  "gawk",
-  "grep",
-  "head",
-  "mawk",
-  "nawk",
-  "read",
-  "rg",
-  "sed",
-  "zgrep",
+// The openers of a group or compound command, and the word that closes each.
+const GROUP_CLOSERS = new Map([
+  ["{", "}"],
+  ["if", "fi"],
+  ["case", "esac"],
+  ["for", "done"],
+  ["select", "done"],
+  ["until", "done"],
+  ["while", "done"],
 ]);
+const LOOPS = new Set(["for", "select", "until", "while"]);
 // The words that open a condition, whose lists run to `then` or `do`.
 const CONDITIONS = new Set(["elif", "if", "until", "while"]);
 // A redirection operator standing alone; its target is the next word.
 const REDIRECT_OPERATOR = /^\d*(?:[<>]|>>|>\||<>|&>>?|[<>]&)$/;
-// grep's long options that take the next argument as their value.
-const GREP_LONG_WITH_VALUE = new Set([
+// The readers' long options that take the next argument as their value.
+const LONG_WITH_VALUE = new Set([
   "--after-context",
+  "--assign",
+  "--bytes",
+  "--expression",
+  "--field-separator",
+  "--line-length",
+  "--lines",
+  "--source",
   "--before-context",
   "--binary-files",
   "--context",
@@ -148,8 +167,25 @@ function pipelinesOf(source) {
   // backtick substitution, null the source. Returns the list's pipelines;
   // a top-level list also adds them to `pipelines`, a substitution's are
   // added by the command that holds it, once its context is known.
-  function scanList(terminator) {
+  // `input` is the piped stage whose input a substitution inherits, or null.
+  function scanList(terminator, input) {
     const list = [];
+    // Open groups and compound commands, innermost last: the word that
+    // closes each, and the piped stage whose input its commands read.
+    const groups = input === null ? [] : [{ ...input, closer: null }];
+    const inherited = () => groups.at(-1) ?? { input: null, loop: false };
+    function openGroup(opener, stage) {
+      const outer = inherited();
+      groups.push({
+        closer: GROUP_CLOSERS.get(opener) ?? ")",
+        input: stage ?? outer.input,
+        loop: stage === null ? outer.loop : LOOPS.has(opener),
+      });
+    }
+    function closeGroup(closer) {
+      const at = groups.findLastIndex((group) => group.closer === closer);
+      if (at !== -1) groups.splice(at);
+    }
     let pipeline = null;
     let command = null;
     let word = null;
@@ -180,6 +216,7 @@ function pipelinesOf(source) {
       // an assignment.
       if (wordIsRedirect) {
         operandPending = REDIRECT_OPERATOR.test(word);
+        if (/^0?<(?!&)/.test(word)) command.stdinRedirected = true;
       } else {
         command.words.push(word);
         const head = command.words.findIndex(
@@ -198,7 +235,7 @@ function pipelinesOf(source) {
     }
     function substitution(closing) {
       startWord();
-      command.substitutions.push(...scanList(closing));
+      command.substitutions.push(...scanList(closing, inherited()));
       word += "$(…)";
     }
     function endCommand() {
@@ -221,15 +258,22 @@ function pipelinesOf(source) {
             openConditions = Math.max(0, openConditions - 1);
           }
           if (reserved === "!") listTested = true;
+          if (GROUP_CLOSERS.has(reserved)) openGroup(reserved, null);
+          if ([...GROUP_CLOSERS.values()].includes(reserved))
+            closeGroup(reserved);
         }
         if (current.words.length === 0 && current.substitutions.length === 0)
           return;
       }
       if (pipeline === null) {
+        // A pipeline inside a group fed by a pipe reads that pipe first.
+        const { input: groupInput, loop } = inherited();
         pipeline = {
           commands: [],
           discarded: false,
           tested: listTested || openConditions > 0,
+          groupInput,
+          inLoop: loop,
         };
       }
       pipeline.commands.push(current);
@@ -263,12 +307,23 @@ function pipelinesOf(source) {
     }
     // Walks an expansion or test that runs no command itself (`${ }`,
     // `[[ ]]`, `(( ))`, `$(( ))`) to its end, still reading the command
-    // substitutions inside it. `depth` of its opening characters are consumed.
+    // substitutions inside it. `depth` of its opening characters are consumed;
+    // a test has no nesting (`[[ '[' == [[] ]]`) and ends at its `]]` word.
     function walkRegion(open, close, depth) {
       let level = depth;
       let quoted = false;
       while (index < text.length) {
         const char = text[index];
+        if (
+          open === null &&
+          !quoted &&
+          text.startsWith(close, index) &&
+          /\s/.test(text[index - 1]) &&
+          /^(?:[\s;&|)]|$)/.test(text[index + close.length] ?? "")
+        ) {
+          index += close.length;
+          return;
+        }
         if (char === "\\") {
           if (text[index + 1] === "\n") line += 1;
           index += 2;
@@ -305,7 +360,9 @@ function pipelinesOf(source) {
         }
         index += 1;
       }
-      problems.push(`a ${open} opened before line ${line} is never closed`);
+      problems.push(
+        `a ${open ?? "[["} opened before line ${line} is never closed`,
+      );
     }
     // A case pattern: an optional `(`, then everything up to its `)`. Its
     // substitutions run, as a command's arguments do.
@@ -446,7 +503,7 @@ function pipelinesOf(source) {
         // A process substitution: bash keeps no status for it.
         index += 2;
         startWord();
-        const nested = scanList(")");
+        const nested = scanList(")", inherited());
         nested.forEach(discardAll);
         command.substitutions.push(...nested);
         word += `${char}(…)`;
@@ -472,6 +529,8 @@ function pipelinesOf(source) {
       }
       if (char === "<" && next === "<" && text[index + 2] === "<") {
         endWord();
+        ensureCommand(false);
+        command.stdinRedirected = true;
         operandPending = true;
         index += 3;
         continue;
@@ -498,6 +557,8 @@ function pipelinesOf(source) {
           }
         }
         pendingHeredocs.push({ delimiter, stripTabs });
+        ensureCommand(false);
+        command.stdinRedirected = true;
         index = cursor;
         continue;
       }
@@ -507,9 +568,11 @@ function pipelinesOf(source) {
         pipeline !== null &&
         lastOperator === "|"
       ) {
-        if (COMPOUND_STAGE.test(text.slice(index, index + 8)) || char === "(") {
-          ensureCommand(true);
-        }
+        // The group opens with its stage, so a substitution in its first
+        // command inherits the pipe too.
+        const opener = COMPOUND_STAGE.exec(text.slice(index, index + 8));
+        if (opener !== null || char === "(") ensureCommand(true);
+        if (opener !== null) openGroup(opener[0], command);
       }
       if (
         char === "[" &&
@@ -520,7 +583,7 @@ function pipelinesOf(source) {
         ensureCommand(command?.compound ?? false);
         const test = command;
         index += 2;
-        walkRegion("[", "]", 2);
+        walkRegion(null, "]]", 0);
         test.words.push("[[…]]");
         continue;
       }
@@ -594,11 +657,13 @@ function pipelinesOf(source) {
       }
       if (char === "(" && word === null) {
         if (command?.compound) {
+          openGroup("(", command);
           index += 1;
           subshellDepth += 1;
           continue;
         }
         endPipeline("(");
+        openGroup("(", null);
         subshellDepth += 1;
         index += 1;
         continue;
@@ -614,8 +679,12 @@ function pipelinesOf(source) {
         index += 1;
         if (subshellDepth > 0) {
           subshellDepth -= 1;
-          if (command?.compound) continue;
+          if (command?.compound) {
+            closeGroup(")");
+            continue;
+          }
           endPipeline(")");
+          closeGroup(")");
           continue;
         }
         if (terminator === ")") break;
@@ -632,9 +701,85 @@ function pipelinesOf(source) {
     return list;
   }
 
-  scanList(null);
+  scanList(null, null);
   skipHeredocBodies();
   return { pipelines, problems };
+}
+
+const nameOf = (word) => word.split("/").at(-1);
+const GREPS = new Set(["grep", "egrep", "fgrep", "zgrep", "rg"]);
+const AWKS = new Set(["awk", "gawk", "mawk", "nawk"]);
+
+/**
+ * The command a stage runs and its arguments: past assignments and wrappers,
+ * with each wrapper's own options and their values (`sudo -u user`,
+ * `env X=1`, `timeout 5`).
+ */
+function commandOf(words) {
+  let at = 0;
+  for (;;) {
+    while (at < words.length && ASSIGNMENT.test(words[at])) at += 1;
+    const wrapper = nameOf(words[at] ?? "");
+    const valued = WRAPPERS.get(wrapper);
+    if (valued === undefined) break;
+    at += 1;
+    while (at < words.length && /^-./.test(words[at])) {
+      if (words[at] === "--") {
+        at += 1;
+        break;
+      }
+      at += valued.includes(words[at]) ? 2 : 1;
+    }
+    if (wrapper === "timeout") at += 1;
+  }
+  return { name: nameOf(words[at] ?? ""), args: words.slice(at + 1) };
+}
+
+/**
+ * Whether a reader takes standard input: no `<` redirection and no file
+ * operand. A grep's first operand is its pattern, and a sed's or awk's its
+ * program, unless an option gave one.
+ */
+function readsStandardInput(stage) {
+  if (stage.stdinRedirected) return false;
+  const { name, args } = commandOf(stage.words);
+  if (name === "read") return !args.some((arg) => /^-[A-Za-z]*u/.test(arg));
+  let valued = "nc";
+  if (GREPS.has(name)) valued = "efABCdDm";
+  else if (name === "sed") valued = "efl";
+  else if (AWKS.has(name)) valued = "fvF";
+  const operands = [];
+  let programGiven = false;
+  for (let at = 0; at < args.length; at += 1) {
+    const arg = args[at];
+    if (arg === "--") {
+      operands.push(...args.slice(at + 1));
+      break;
+    }
+    if (arg.startsWith("--")) {
+      if (/^--(?:regexp|file|expression|source)\b/.test(arg)) {
+        programGiven = true;
+      }
+      if (LONG_WITH_VALUE.has(arg)) at += 1;
+    } else if (/^-./.test(arg)) {
+      for (let position = 1; position < arg.length; position += 1) {
+        const option = arg[position];
+        if (name !== "head" && (option === "e" || option === "f")) {
+          programGiven = true;
+        }
+        if (valued.includes(option)) {
+          if (position === arg.length - 1) at += 1;
+          break;
+        }
+      }
+    } else {
+      operands.push(arg);
+    }
+  }
+  const files = (
+    name === "head" || programGiven ? operands : operands.slice(1)
+  ).filter((operand) => !(AWKS.has(name) && ASSIGNMENT.test(operand)));
+  return files.length === 0 || files.includes("-");
 }
 
 /** The reader a pipeline stage is, when it stops before its input ends. */
@@ -645,24 +790,15 @@ function earlyExitReaderOf(stage) {
     const [opener] = stage.words;
     if (["while", "until", "for", "case", "select"].includes(opener))
       return null;
-    const words = stage.words.slice(["{", "if", "!"].includes(opener) ? 1 : 0);
-    return earlyExitReaderOf({ words, compound: false });
+    const first = {
+      words: stage.words.slice(["{", "if", "!"].includes(opener) ? 1 : 0),
+      compound: false,
+      stdinRedirected: stage.stdinRedirected,
+    };
+    return readsStandardInput(first) ? earlyExitReaderOf(first) : null;
   }
-  const nameOf = (word) => word.split("/").at(-1);
-  let at = 0;
-  while (at < stage.words.length && ASSIGNMENT.test(stage.words[at])) at += 1;
-  // A wrapper's own options may take values (`sudo -u user`, `timeout 5`), so
-  // the command it runs is the first reader among its arguments.
-  if (WRAPPERS.has(nameOf(stage.words[at] ?? ""))) {
-    const reader = stage.words.findIndex(
-      (word, position) => position > at && READERS.has(nameOf(word)),
-    );
-    if (reader === -1) return null;
-    at = reader;
-  }
-  const name = nameOf(stage.words[at] ?? "");
-  const args = stage.words.slice(at + 1);
-  if (["grep", "egrep", "fgrep", "zgrep", "rg"].includes(name)) {
+  const { name, args } = commandOf(stage.words);
+  if (GREPS.has(name)) {
     for (let at = 0; at < args.length; at += 1) {
       const arg = args[at];
       if (arg === "--") break;
@@ -674,7 +810,7 @@ function earlyExitReaderOf(stage) {
         return `${name} ${arg}`;
       }
       if (arg.startsWith("--")) {
-        if (GREP_LONG_WITH_VALUE.has(arg)) at += 1;
+        if (LONG_WITH_VALUE.has(arg)) at += 1;
       } else if (/^-[A-Za-z0-9]/.test(arg)) {
         // An option that takes a value takes the rest of the word, or the
         // next argument when it ends the word: `-e -q` searches for `-q`.
@@ -701,8 +837,8 @@ function earlyExitReaderOf(stage) {
     arg.startsWith("--file") ||
     (name === "sed"
       ? /^-[nrsuzE]*f/.test(arg)
-      : ["awk", "gawk", "mawk", "nawk"].includes(name) && arg.startsWith("-f"));
-  if (["sed", "awk", "gawk", "mawk", "nawk"].includes(name)) {
+      : AWKS.has(name) && arg.startsWith("-f"));
+  if (name === "sed" || AWKS.has(name)) {
     if (args.some(readsProgramFile)) return `${name} -f`;
   }
   if (name === "sed") {
@@ -712,7 +848,7 @@ function earlyExitReaderOf(stage) {
       ? "sed q"
       : null;
   }
-  if (["awk", "gawk", "mawk", "nawk"].includes(name)) {
+  if (AWKS.has(name)) {
     return args.some((arg) => /\bexit\b/.test(arg)) ? "awk exit" : null;
   }
   return name === "read" ? "read" : null;
@@ -726,20 +862,37 @@ function earlyExitReaderOf(stage) {
 function findingsIn(source) {
   const { pipelines, problems } = pipelinesOf(source);
   const findings = [...problems];
+  // A reader that a group's pipeline starts with reads the group's pipe; a
+  // loop's `read` reads it a line per pass.
+  const groupReaders = new Map();
+  for (const pipeline of pipelines) {
+    const [first] = pipeline.commands;
+    const reader =
+      pipeline.groupInput &&
+      (first.compound || readsStandardInput(first)) &&
+      earlyExitReaderOf(first);
+    if (!reader || (reader === "read" && pipeline.inLoop)) continue;
+    if (!groupReaders.has(pipeline.groupInput)) {
+      groupReaders.set(pipeline.groupInput, { line: first.line, reader });
+    }
+  }
+  const readerOf = (stage) =>
+    groupReaders.get(stage) ??
+    (earlyExitReaderOf(stage) === null
+      ? null
+      : { line: stage.line, reader: earlyExitReaderOf(stage) });
   for (const pipeline of pipelines) {
     if (pipeline.discarded) continue;
     const at = pipeline.commands.findIndex(
-      (stage, position) => position > 0 && earlyExitReaderOf(stage) !== null,
+      (stage, position) => position > 0 && readerOf(stage) !== null,
     );
     if (at === -1) continue;
-    const stage = pipeline.commands[at];
+    const { line, reader } = readerOf(pipeline.commands[at]);
     const producer = pipeline.commands[at - 1];
     const producerText = producer.compound
       ? "a compound command"
       : producer.words.join(" ");
-    findings.push(
-      `${stage.line}: ${earlyExitReaderOf(stage)} after \`${producerText}\``,
-    );
+    findings.push(`${line}: ${reader} after \`${producerText}\``);
   }
   return findings;
 }
@@ -958,6 +1111,19 @@ describe("an early-exit reader never reads a streaming producer through a pipe u
     ["a reader under env", "seq 10 | env LC_ALL=C grep -q 5"],
     ["a reader opening a group", "seq 10 | { head -n 1; }"],
     ["a reader opening an if", "seq 10 | if grep -q 5; then echo y; fi"],
+    ["a reader later in a group", "seq 10 | { :; head -n 1; }"],
+    ["a reader later in a subshell", "seq 10 | ( :; head -n 1 )"],
+    ["a reader in a loop body", "seq 10 | while read -r x; do head -n 1; done"],
+    ["a reader in an if body", "seq 10 | if :; then head -n 1; fi"],
+    ["a substitution in a group", "seq 10 | { x=$(head -n 1); }"],
+    [
+      "a loop body reader on standard input",
+      "seq 10 | while read -r x; do grep -q y; done",
+    ],
+    [
+      "a pipeline after a test with a bracket pattern",
+      "[[ '[' == [[] ]] && seq 10 | head -n 1",
+    ],
   ])("flags the reader in %s", (_, body) => {
     expect(pipefail(body)).toHaveLength(1);
   });
@@ -1006,6 +1172,32 @@ describe("an early-exit reader never reads a streaming producer through a pipe u
       'echo "$(if :; then seq 10 | grep -q 5; fi)"',
     ],
     ["a wrapper running no reader", "seq 10 | sudo -u nobody tee /dev/null"],
+    [
+      "a reader's name as a wrapped command's operand",
+      "seq 10 | env tr x head >/dev/null",
+    ],
+    [
+      "a reader's name as timeout's command operand",
+      "seq 10 | timeout 5 tr head x",
+    ],
+    ["a test with a bracket pattern", "[[ '[' == [[] ]] && echo bracket"],
+    [
+      "a loop that reads every line",
+      "seq 10 | while read -r a; do read -r b; done",
+    ],
+    ["a group that drains its input", "seq 10 | { cat >/dev/null; }"],
+    [
+      "a loop body reader with a file operand",
+      'seq 10 | while read -r x; do grep -qx "$x" list.txt; done',
+    ],
+    [
+      "a group reader with its input redirected",
+      "seq 10 | { head -n 1 </dev/null; cat >/dev/null; }",
+    ],
+    [
+      "a loop body reader on a here-string",
+      'seq 10 | while read -r x; do grep -q y <<<"$x"; done',
+    ],
     ["a descriptor redirection", "seq 10 | tail -n 1 2>&1 >/dev/null"],
     [
       "a case pattern holding a pipe",
