@@ -288,6 +288,9 @@
       "traycer-clients-gui-app"
     ],
     "targets": {
+      "build": {
+        "dependsOn": []
+      },
       "test": {
         "inputs": [
           "default",
