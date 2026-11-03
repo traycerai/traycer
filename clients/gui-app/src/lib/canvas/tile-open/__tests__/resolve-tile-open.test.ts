@@ -1177,6 +1177,23 @@ describe("mobile second tile", () => {
     ).toMatchObject({ kind: "open-in-pane", mode: "background" });
   });
 
+  it("seeds the empty canvas with a plain open instead of the second slot", () => {
+    expect(
+      resolveTileOpen({
+        intent: intentFor(SPEC_B, {}),
+        settings: DEFAULT_SETTINGS,
+        canvas: canvasOf({ root: null, activePaneId: null, tiles: [] }),
+        resolveTargetTabForEpic: (epicId) => `tab-for-${epicId}`,
+        singleTileViewport: true,
+        mobileSlots: {
+          target: "secondary",
+          primaryInstanceId: null,
+          secondaryInstanceId: null,
+        },
+      }),
+    ).toMatchObject({ kind: "open-in-pane", paneId: null });
+  });
+
   it("routes a beside placement to the second slot", () => {
     expect(
       resolveMobile(
