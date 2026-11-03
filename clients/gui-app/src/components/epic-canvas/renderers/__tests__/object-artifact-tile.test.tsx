@@ -1,4 +1,5 @@
 import { cleanup, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { useEffect, useRef, type ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SandboxSource } from "@/components/sandbox/sandbox-frame";
@@ -143,7 +144,7 @@ vi.mock("@/components/html-artifact/html-artifact-version-picker", () => ({
 }));
 
 vi.mock("@/components/html-artifact/html-artifact-download-button", () => ({
-  HtmlArtifactDownloadButton: (props: {
+  HtmlArtifactDownloadMenuItem: (props: {
     readonly source: SandboxSource;
     readonly title: string;
     readonly hostId: string;
@@ -341,11 +342,15 @@ describe("<ObjectArtifactTile />", () => {
       });
     }
 
-    it("serves the pinned bundle and entry page instead of the live head, and exports exactly that bundle on the tab's host", () => {
+    it("serves the pinned bundle and entry page instead of the live head, and exports exactly that bundle on the tab's host", async () => {
       setArtifacts([htmlWithNewerHead()]);
       mocks.pinned = PAST;
 
       render(tile("page"));
+      // Download is a row of the controls' "More actions" menu.
+      await userEvent.click(
+        screen.getByRole("button", { name: "More actions" }),
+      );
 
       const source = mocks.sandboxProps.at(-1)?.source;
       expect(source).toMatchObject({
