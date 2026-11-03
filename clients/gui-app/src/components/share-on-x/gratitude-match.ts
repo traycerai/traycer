@@ -86,11 +86,14 @@ function normaliseMessage(text: string): string {
 }
 
 /**
- * Words as the person typed them: whitespace-separated runs holding a letter
- * or digit, so "that's" is one word and a lone "-" is none.
+ * Words as a reader counts them: punctuation and spaces separate words
+ * ("ty/ruff" is two), and an apostrophe inside a contraction does not
+ * ("that's" is one).
  */
+const WORD = /[\p{L}\p{N}]+(?:['\u2019][\p{L}\p{N}]+)*/gu;
+
 function countWords(text: string): number {
-  return text.split(/\s+/u).filter((word) => /[\p{L}\p{N}]/u.test(word)).length;
+  return text.match(WORD)?.length ?? 0;
 }
 
 function containsPhrase(normalised: string, phrase: string): boolean {

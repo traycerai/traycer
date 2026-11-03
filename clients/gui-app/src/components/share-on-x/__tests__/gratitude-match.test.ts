@@ -40,6 +40,7 @@ describe("matchGratitude", () => {
     "use ty to check the stubs",
     "make the pixel perfect layout",
     "I'd love it if you also added tests",
+    "run ty/ruff on project",
   ])("ignores an instruction-like phrase in a longer message: %j", (text) => {
     expect(matchGratitude(text)).toBeNull();
   });

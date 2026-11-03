@@ -352,8 +352,9 @@ function ShareOnXDialogContent(props: ShareOnXDialogProps): ReactNode {
                   role="radio"
                   aria-checked="false"
                   aria-label={`Post ${String(position)}`}
+                  disabled={opening}
                   onClick={() => selectLine(line, position)}
-                  className="rounded-lg border border-border p-3 text-left text-ui-sm text-muted-foreground transition-colors hover:bg-foreground/5 hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
+                  className="rounded-lg border border-border p-3 text-left text-ui-sm text-muted-foreground transition-colors hover:bg-foreground/5 hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none disabled:pointer-events-none disabled:opacity-50"
                 >
                   <span className="line-clamp-2">
                     {edits[line.id] ?? line.text}
@@ -367,6 +368,7 @@ function ShareOnXDialogContent(props: ShareOnXDialogProps): ReactNode {
             size="sm"
             variant="ghost"
             className="self-start"
+            disabled={opening}
             onClick={() => {
               // The selection moves with the page, so the post on screen is
               // always the one "Post on X" sends.
@@ -400,6 +402,7 @@ function ShareOnXDialogContent(props: ShareOnXDialogProps): ReactNode {
                   image={image}
                   src={images[image]?.src ?? null}
                   selected={chosenImage === image}
+                  disabled={opening}
                   onSelect={() =>
                     setSelectedImage((current) =>
                       current === image ? null : image,
@@ -418,6 +421,7 @@ function ShareOnXDialogContent(props: ShareOnXDialogProps): ReactNode {
           <Checkbox
             id={checkboxId}
             checked={dontAskAgain}
+            disabled={opening}
             onCheckedChange={(checked) => setDontAskAgain(checked === true)}
           />
           <label
@@ -476,6 +480,8 @@ function ShareImageTile(props: {
   readonly image: AnalyticsShareImage;
   readonly src: string | null;
   readonly selected: boolean;
+  /** Choosing is held while X opens: the post is already decided. */
+  readonly disabled: boolean;
   readonly onSelect: () => void;
   readonly onCopy: () => void;
 }): ReactNode {
@@ -492,8 +498,9 @@ function ShareImageTile(props: {
         role="radio"
         aria-checked={props.selected}
         aria-label={label}
+        disabled={props.disabled}
         onClick={props.onSelect}
-        className="overflow-hidden rounded-md bg-foreground/5 focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
+        className="overflow-hidden rounded-md bg-foreground/5 focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none disabled:pointer-events-none"
       >
         {props.src === null ? null : (
           <img
