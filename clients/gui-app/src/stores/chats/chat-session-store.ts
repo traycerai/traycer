@@ -5,7 +5,7 @@ import {
   queueWithDrainingPrompts,
   type PendingTurn,
 } from "@/stores/chats/chat-send-state";
-import type { ChatMessageDelivery } from "@traycer/protocol/host/agent/gui/message-delivery";
+import type { ChatMessageDeliveryV142 } from "@traycer/protocol/host/agent/gui/message-delivery";
 import {
   addAcceptedAction,
   confirmAcceptedSendByMessageId,
@@ -1355,7 +1355,7 @@ export interface ChatSessionState {
    * composer is the view's own `restore`, through
    * `takeMessageDeliveryRestoration`.
    */
-  readonly messageDelivery: ChatMessageDelivery | null;
+  readonly messageDelivery: ChatMessageDeliveryV142 | null;
   /**
    * A withdrawn opening this client put back in its composer and has not yet
    * told the host about (`messageDeliveryRestored`). Kept until that action is
@@ -2967,13 +2967,13 @@ function rejectionRestoration(input: {
  */
 function snapshotMessageDelivery(
   snapshot: ChatSnapshotFrame["snapshot"],
-): ChatMessageDelivery | null {
+): ChatMessageDeliveryV142 | null {
   return snapshot.messageDelivery ?? null;
 }
 
 /** The message a delivery view names, or `null` without one. */
 function deliveryMessageIdOf(
-  delivery: ChatMessageDelivery | null,
+  delivery: ChatMessageDeliveryV142 | null,
 ): string | null {
   return delivery === null ? null : delivery.messageId;
 }
@@ -3058,7 +3058,7 @@ function rejectionSurfaces(input: {
  * {@link ChatSessionState.messageDelivery}.
  */
 function messageDeliveryNames(
-  delivery: ChatMessageDelivery | null,
+  delivery: ChatMessageDeliveryV142 | null,
   messageId: string | null,
 ): boolean {
   return delivery !== null && delivery.messageId === messageId;
@@ -3071,7 +3071,7 @@ function messageDeliveryNames(
  * and a resnapshot later.
  */
 export function withdrawnMessageDeliveryId(
-  delivery: ChatMessageDelivery | null,
+  delivery: ChatMessageDeliveryV142 | null,
 ): string | null {
   return delivery?.state.phase === "withdrawn" ? delivery.messageId : null;
 }
@@ -3083,7 +3083,7 @@ export function withdrawnMessageDeliveryId(
  * a composer has claimed it, an acknowledgement changes nothing.
  */
 function deliveryAwaitsRestoreAck(
-  delivery: ChatMessageDelivery,
+  delivery: ChatMessageDeliveryV142,
   messageId: string,
 ): boolean {
   if (delivery.messageId !== messageId) return false;
@@ -3121,7 +3121,7 @@ type OpeningCopySlices = Pick<
  */
 function withoutWithdrawnOpeningCopies(
   slices: OpeningCopySlices,
-  delivery: ChatMessageDelivery | null,
+  delivery: ChatMessageDeliveryV142 | null,
 ): Partial<OpeningCopySlices> {
   const messageId = withdrawnMessageDeliveryId(delivery);
   if (messageId === null) return {};
@@ -7204,7 +7204,7 @@ export function createChatSessionStoreWithNotificationDependencies(
      * and the view restores the prompt without it.
      */
     const noteMessageDelivery = (
-      delivery: ChatMessageDelivery | null,
+      delivery: ChatMessageDeliveryV142 | null,
     ): void => {
       if (delivery === null) return;
       const phase = delivery.state.phase;
@@ -13536,6 +13536,53 @@ export function dispatchedWorktreeIntentForDisplay(
     action = acceptedActions[clientActionId];
   }
   return action?.displayWorktreeIntent ?? null;
+}
+
+/**
+ * The worktrees a seeded opening is still waiting for, which the picker shows
+ * in place of the placeholder binding a deferred `epic.create` opens against.
+ * Render-only, like the dispatched overlay above.
+ *
+ * Only while the delivery is `pending` or `preparing`. The host keeps the intent
+ * after a withdrawal because the obligation is still the chat's, but by then the
+ * picker should show the real binding and the setup card carries the failure.
+ *
+ * Per folder: an entry drops out once the binding has a worktree for its path,
+ * so one landed folder never hides a sibling still pending. Other kinds are
+ * skipped, because the placeholder binding already shows a local folder.
+ */
+export function seededWorktreeIntentForDisplay(
+  delivery: ChatMessageDeliveryV142 | null,
+  binding: WorktreeBinding | null,
+): WorktreeIntent | null {
+  if (delivery === null || delivery.worktreeIntent === null) return null;
+  const { phase } = delivery.state;
+  if (phase !== "pending" && phase !== "preparing") return null;
+  const entries = delivery.worktreeIntent.entries.filter(
+    (entry) =>
+      entry.kind === "worktree" &&
+      !(binding?.entries ?? []).some(
+        (bound) =>
+          bound.workspacePath === entry.workspacePath &&
+          bound.mode === "worktree",
+      ),
+  );
+  return entries.length === 0 ? null : { entries };
+}
+
+/**
+ * The picker's in-flight overlay. Seeded entries come first because the picker
+ * lets a later entry for the same path win, so a newer send that re-targets a
+ * folder replaces the seed for that folder only. Returns a lone overlay as is,
+ * which keeps its identity stable for the picker's memos.
+ */
+export function mergeWorktreeIntentsForDisplay(
+  seeded: WorktreeIntent | null,
+  dispatched: WorktreeIntent | null,
+): WorktreeIntent | null {
+  if (seeded === null) return dispatched;
+  if (dispatched === null) return seeded;
+  return { entries: [...seeded.entries, ...dispatched.entries] };
 }
 
 function releasePendingWorktreeIntentDisplayByMessageId(

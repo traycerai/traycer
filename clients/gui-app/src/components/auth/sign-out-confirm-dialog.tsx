@@ -18,7 +18,7 @@ import { useMobileNavStore } from "@/stores/layout/mobile-nav-store";
  *
  * Mounted once by each frame the entry points live in, the app shell and the
  * host gate's header, and only one of those is ever up. So it outlives both
- * entry points when a rotation swaps the drawer and the strip.
+ * entry points when a window resize swaps the drawer and the account menu.
  */
 export function SignOutConfirmDialog(): ReactNode {
   const auth = useAuthService();

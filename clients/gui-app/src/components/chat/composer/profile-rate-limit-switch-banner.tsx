@@ -284,7 +284,7 @@ export function ProfileRateLimitSwitchBanner(
           className="mt-1.5 size-3.5 shrink-0 text-warning-foreground"
           aria-hidden
         />
-        <div className="grid min-w-0 flex-1 grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
+        <div className="grid min-w-0 flex-1 grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center max-md:short-landscape:grid-cols-[minmax(0,1fr)_auto] max-md:short-landscape:items-center">
           <div className="flex min-w-0 flex-wrap items-center gap-1.5 text-foreground/90">
             <ProfileRateLimitIdentity
               harnessId={props.harnessId}
@@ -311,7 +311,7 @@ export function ProfileRateLimitSwitchBanner(
             onSwitchProfile={executeSwitch}
           />
           {canIncludeOtherChats ? (
-            <div className="flex min-w-0 items-center gap-2 sm:col-start-2 sm:justify-self-end">
+            <div className="flex min-w-0 items-center gap-2 sm:col-start-2 sm:justify-self-end max-md:short-landscape:col-start-2 max-md:short-landscape:justify-self-end">
               <Checkbox
                 id={checkboxId}
                 checked={includeOtherChats}

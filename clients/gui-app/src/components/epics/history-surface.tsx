@@ -1,6 +1,7 @@
 import { useCallback, useState } from "react";
 import { useMatch, useNavigate } from "@tanstack/react-router";
 import { EpicsListPanel } from "@/components/epics/epics-list-panel";
+import { KEYBOARD_FOCUS_OWNER_PROPS } from "@/hooks/ui/use-keyboard-focus-layout";
 import {
   historyScopeToParams,
   parseHistoryScope,
@@ -47,6 +48,7 @@ export function HistorySurface() {
     <div
       className="[--history-surface:var(--canvas)] flex min-h-0 flex-1 flex-col"
       data-testid="history-surface"
+      {...KEYBOARD_FOCUS_OWNER_PROPS}
     >
       <EpicsListPanel
         scope={scope}

@@ -1383,7 +1383,7 @@ function PanelChromeBar(props: {
 }): ReactNode {
   return (
     <div
-      className="flex flex-wrap items-center justify-between gap-2 px-2 pb-2"
+      className="flex flex-wrap items-center justify-between gap-2 px-2 pb-2 max-md:[@media(max-height:240px)]:hidden"
       data-testid="panel-chrome-bar"
     >
       <div className="flex flex-1 items-center gap-2">

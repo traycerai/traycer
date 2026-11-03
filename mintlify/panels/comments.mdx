@@ -1,13 +1,13 @@
 ---
 title: "Comments"
-description: "Discuss artifact text in anchored comment threads, and have agents address them."
+description: "Discuss document text, HTML elements, and canvas boards in anchored comment threads."
 ---
 
 import { FeatureVideo } from "/snippets/feature-video.jsx";
 
 <FeatureVideo src="https://assets.traycer.ai/docs/videos/artifact-comments.mp4" label="Add and resolve an anchored artifact comment" />
 
-Comments are threads anchored to text in an artifact. Use them for questions, review notes, decisions, and follow-ups that belong to a specific passage. Everyone with access to the Task can comment, including Viewers.
+Comments are threads attached to an artifact: document text, an HTML element or text selection, a canvas board, or a point on a canvas. Use them for questions, review notes, decisions, and follow-ups that belong to a specific passage. Everyone with access to the Task can comment, including Viewers.
 
 ## The Comments Panel
 
@@ -17,7 +17,7 @@ The **Comments** panel lists the threads on the active artifact.
 - To keep it on the rail, right-click the rail and check **Comments**. While it is shown this way without an open artifact, the menu notes "Needs an open artifact".
 - Close it with **Close comments** in its header.
 
-Threads are listed in the order their text appears in the artifact. Switch between the **Open**, **Resolved**, and **All** tabs to filter them. Click a thread to expand it and scroll the artifact to its text.
+For documents, threads follow the text order. HTML and canvas threads show the element, text, board, or location they refer to. Switch between the **Open**, **Resolved**, and **All** tabs to filter them. Click a thread to expand it and reveal its location in the artifact.
 
 ## Start a Thread
 
@@ -27,6 +27,14 @@ Threads are listed in the order their text appears in the artifact. Switch betwe
 4. Click **Comment**, or press ⌘Enter / Ctrl+Enter.
 
 Press Esc to cancel. If you've typed something, Traycer asks before discarding it.
+
+## HTML and Canvas Comments
+
+Open the latest [HTML artifact](/panels/artifacts/html) or a [canvas](/panels/artifacts/canvases), then turn on **Comments** in its toolbar. Select an element or text to start a thread. On a canvas you can also comment on a board or click a point on the canvas. Numbered pins mark the discussions. Turn comments off to interact with the page normally.
+
+Use **Send to chat** on a selected element to attach its visual context to an existing agent chat's draft. This is separate from posting a comment: review the draft and send it yourself. If there are no chats, create one first.
+
+Saved HTML versions are previews, so return to **Latest** before commenting.
 
 ## Work in a Thread
 
@@ -87,7 +95,7 @@ To have an agent address feedback, ask it directly. For example:
 Address the open comments on the tech plan. Update the plan, and resolve each thread you've handled.
 ```
 
-The artifact's `comments:` frontmatter line gives a quick count, such as `comments: 2 open, 1 resolved`. See [Artifacts on Disk](/panels/artifacts#artifacts-on-disk).
+For Markdown documents, the `comments:` frontmatter line gives a quick count, such as `comments: 2 open, 1 resolved`. HTML and canvas comment counts appear in `status.txt` beside the artifacts folder instead. Their comment files also identify the board or page and describe the selected element, text, or canvas location. See [Artifacts on Disk](/panels/artifacts#artifacts-on-disk).
 
 ## Related
 

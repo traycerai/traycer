@@ -181,7 +181,7 @@ describe("<ChatMessage /> in a bot channel", () => {
     const row = screen.getByTestId("bot-member-row");
     expect(within(row).getByText("Tess Teammate")).toBeTruthy();
     expect(within(row).getByText("Please review the release")).toBeTruthy();
-    expect(avatarShape(within(row).getByTestId("chat-sender-avatar"))).toBe(
+    expect(avatarShape(within(row).getByTestId("person-avatar"))).toBe(
       "circle",
     );
     expect(screen.queryByTestId("conversation-request")).toBeNull();
@@ -482,7 +482,7 @@ describe("<ChatMessage /> in a bot channel", () => {
     const row = screen.getByTestId("bot-member-row");
     const stack = within(row).getByTestId("bot-thread-participants");
     const rowAvatar = within(row)
-      .getAllByTestId("chat-sender-avatar")
+      .getAllByTestId("person-avatar")
       .find((avatar) => !stack.contains(avatar));
     expect(rowAvatar).toBeDefined();
     if (rowAvatar === undefined) return;

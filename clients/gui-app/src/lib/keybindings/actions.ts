@@ -1,6 +1,7 @@
 import { canonicalChord, type ChordString } from "@/lib/keybindings/chord";
 import { isMac } from "@/lib/keybindings/platform";
 import { isMobileApp } from "@/lib/mobile-app";
+import { soundtrackOffered } from "@/lib/soundtrack/manifest";
 
 /**
  * Stable identifiers for every keyboard-bindable action in the app. Adding
@@ -73,6 +74,7 @@ export const ACTION_IDS = [
   "app.zoom.reset",
   "composer.dictation.toggle",
   "voice.talk.toggle",
+  "soundtrack.toggle",
   "composer.suggestion.accept",
   "composer.drafts",
   "composer.model-picker.toggle",
@@ -932,6 +934,21 @@ export const ACTION_META: Readonly<Record<ActionId, ActionMeta>> = {
     // The phone's Talk is its own surface (the mobile voice ticket).
     desktopOnly: true,
   },
+  "soundtrack.toggle": {
+    id: "soundtrack.toggle",
+    label: "Soundtrack",
+    description: "Play or stop the soundtrack.",
+    category: "app",
+    kind: "chord",
+    // Unbound by default: the control is always in the top row, so it earns a
+    // palette row rather than one of the few chords left.
+    defaultChord: null,
+    secondaryChord: undefined,
+    terminalPolicy: "app",
+    secondaryTerminalPolicy: undefined,
+    // Background audio and autoplay on the phone are still to be settled.
+    desktopOnly: true,
+  },
   "composer.suggestion.accept": {
     id: "composer.suggestion.accept",
     label: "Accept suggested reply",
@@ -1021,13 +1038,15 @@ export const ACTION_META: Readonly<Record<ActionId, ActionMeta>> = {
 };
 /**
  * Whether `id` can run in this app: it is not a desktop-only action in the
- * installed mobile app, where its handler is never registered. One that cannot
- * is bound to nothing, whatever a profile stored for it: it matches no key,
- * reserves no chord, is forwarded from no browser tile, conflicts with no
- * rebind and has no Settings row. The stored chord itself is kept, so an app
+ * installed mobile app, where its handler is never registered, nor the
+ * soundtrack's in a build with nothing to play. One that cannot is bound to
+ * nothing, whatever a profile stored for it: it matches no key, reserves no
+ * chord, is forwarded from no browser tile, conflicts with no rebind and has no
+ * Settings row. The stored chord itself is kept, so an app
  * that can run the action again finds it where the person left it.
  */
 export function isActionAvailable(id: ActionId): boolean {
+  if (id === "soundtrack.toggle" && !soundtrackOffered()) return false;
   return !(ACTION_META[id].desktopOnly && isMobileApp());
 }
 

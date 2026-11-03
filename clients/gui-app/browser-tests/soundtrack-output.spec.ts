@@ -290,3 +290,94 @@ test("a dim ramp turned round goes on from where the cutoff had got to", async (
     expect(afterTurn / beforeTurn, label).toBeLessThan(1.3);
   }
 });
+
+interface LevelRequest {
+  readonly seconds: number;
+  readonly volume: number;
+  readonly steps: readonly {
+    readonly kind: "volume" | "duck";
+    readonly at: number;
+    readonly value: number;
+  }[];
+  readonly readAt: readonly number[];
+}
+
+interface LevelRendered {
+  readonly readings: readonly number[];
+  readonly biggestStep: number;
+}
+
+interface DuckTuning {
+  readonly gain: number;
+  readonly attackSeconds: number;
+  readonly releaseSeconds: number;
+}
+
+function renderLevel(
+  page: Page,
+  request: LevelRequest,
+): Promise<LevelRendered> {
+  return page.evaluate<LevelRendered>(
+    `window.__soundtrackOutputProbe.renderLevel(${JSON.stringify(request)})`,
+  );
+}
+
+function duckTuning(page: Page): Promise<DuckTuning> {
+  return page.evaluate<DuckTuning>("window.__soundtrackOutputProbe.duckTuning");
+}
+
+// The person's volume and a chime's duck are two gains in a row: the volume
+// scales the music, the duck drops it under a chime, and neither disturbs the
+// other. A rendered sample is the product of both.
+test("the level is the volume, ducked under a chime and back once it is over", async ({
+  page,
+}) => {
+  const { gain, attackSeconds, releaseSeconds } = await duckTuning(page);
+  const duckAt = 0.5;
+  const chimeSeconds = 0.4;
+  const { readings, biggestStep } = await renderLevel(page, {
+    seconds: 3,
+    volume: 0.6,
+    steps: [{ kind: "duck", at: duckAt, value: chimeSeconds }],
+    readAt: [
+      0.3,
+      duckAt + attackSeconds + 0.05,
+      duckAt + chimeSeconds - 0.02,
+      duckAt + chimeSeconds + releaseSeconds + 0.1,
+    ],
+  });
+  const [before, held, endOfChime, after] = readings;
+  expect(before).toBeCloseTo(0.6, 3);
+  expect(held).toBeCloseTo(0.6 * gain, 3);
+  expect(endOfChime).toBeCloseTo(0.6 * gain, 3);
+  expect(after).toBeCloseTo(0.6, 3);
+  // Down over its attack and back over its release, never a jump.
+  expect(biggestStep).toBeLessThan(0.002);
+});
+
+test("a volume moved during a chime's duck leaves the duck alone", async ({
+  page,
+}) => {
+  const { gain, attackSeconds, releaseSeconds } = await duckTuning(page);
+  const duckAt = 0.5;
+  const chimeSeconds = 0.6;
+  const volumeAt = duckAt + 0.3;
+  const { readings, biggestStep } = await renderLevel(page, {
+    seconds: 3,
+    volume: 0.5,
+    steps: [
+      { kind: "duck", at: duckAt, value: chimeSeconds },
+      { kind: "volume", at: volumeAt, value: 0.9 },
+    ],
+    readAt: [
+      duckAt + attackSeconds + 0.05,
+      volumeAt + 0.2,
+      duckAt + chimeSeconds + releaseSeconds + 0.1,
+    ],
+  });
+  const [ducked, duckedLouder, released] = readings;
+  expect(ducked).toBeCloseTo(0.5 * gain, 3);
+  expect(duckedLouder).toBeCloseTo(0.9 * gain, 3);
+  expect(released).toBeCloseTo(0.9, 3);
+  expect(biggestStep).toBeLessThan(0.02);
+});

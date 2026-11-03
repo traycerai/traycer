@@ -140,6 +140,9 @@ export interface MergedNotificationRow {
    * row that mentions them: Attention's last class while unread. Absent or
    * `false` on every other row. */
   readonly botAnswer?: boolean;
+  /** The member who wrote the bot conversation row this notice is about.
+   * Absent or `null` on the bot's own rows and on every other row. */
+  readonly botAuthorUserId?: string | null;
   readonly hostKind: HostNotificationFeedEntry["kind"] | null;
   readonly appLocalKind: AppLocalNotificationEntry["kind"] | null;
   readonly globalEntry: NotificationEntry | null;
@@ -2101,6 +2104,7 @@ function rowFromHostEntryForOrigin(
     agentSurface: agentSurfaceFromHostEntry(entry),
     secrets: secretsNotificationDetail(entry.kind, entry.payload),
     botAnswer: isBotAttention(entry),
+    botAuthorUserId: botConversationAuthorUserId(entry),
     hostKind: entry.kind,
     appLocalKind: null,
     globalEntry: null,
@@ -2182,6 +2186,7 @@ export function rowFromCloudFeedRow(
     agentSurface: agentSurfaceFromHostEntry(row.entry),
     secrets: secretsNotificationDetail(row.entry.kind, row.entry.payload),
     botAnswer: isBotAttention(row.entry),
+    botAuthorUserId: botConversationAuthorUserId(row.entry),
     hostKind: row.entry.kind,
     appLocalKind: null,
     globalEntry: null,
@@ -2486,6 +2491,17 @@ function navigationPayloadForChatStopped(
     eventId: includeTranscriptAnchor ? known.eventId : undefined,
     ...(scrollToEnd ? { scrollToEnd: true as const } : {}),
   };
+}
+
+function botConversationAuthorUserId(entry: {
+  readonly kind: HostNotificationFeedEntry["kind"];
+  readonly payload: HostNotificationFeedEntry["payload"];
+}): string | null {
+  const known = parseKnownHostNotificationPayloadForKind(
+    entry.kind,
+    entry.payload,
+  );
+  return known?.kind === "bot_conversation" ? known.authorUserId : null;
 }
 
 const HOST_PAGE_LIMIT = 50;

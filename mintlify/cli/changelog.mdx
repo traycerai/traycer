@@ -5,6 +5,18 @@ description: "Track the latest updates and improvements to the Traycer CLI."
 rss: true
 ---
 
+<Update label="v1.5.2">
+Move your Windows data folder, start Tasks from the terminal, and recover more easily from setup and update problems.
+
+* **Windows data folder** - choose a folder for a new installation or move existing data to another fixed local NTFS drive. Preview the move, review its effect on sessions, and recover an interrupted move with [data folder commands](/cli/commands#data-folder).
+* **Tasks and agents** - start a Task with its first message using `traycer task create`, including an idempotency key for scheduled runs. Rename an agent with `traycer agent rename`.
+* **Host authorization** - `traycer login` also authorizes a Host already running on this machine, so CLI-only installations can recover cross-machine messaging without Desktop.
+* **Updates and diagnosis** - `host status` shows the last update result and any current update-lock holder. `host doctor` reports the running Host's checks and warns when a different CLI version comes first on PATH. A normal CLI upgrade never installs an older version.
+* **Setup and shutdown** - Windows service checks work on non-English systems, and denied launcher writes explain what to allow. Linux service commands explain when a systemd user session is missing; macOS stops give the Host time to finish saving.
+
+See the [GitHub release](https://github.com/traycerai/traycer/releases/tag/cli-v1.5.2).
+</Update>
+
 <Update label="v1.5.1">
 Starting the Host recovers from an abandoned update download or preparation attempt once it is stale and no updater holds it. An update still being applied remains protected.
 

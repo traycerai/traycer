@@ -18,7 +18,7 @@ import {
   epicGetChatRunSettingsBatchUpgradeV20ToV21,
   epicGetChatRunSettingsBatchDowngradeV21ToV10,
 } from "./epic/contracts";
-import { chatSubscribeV141 } from "./agent/gui/subscribe";
+import { chatSubscribeV141, chatSubscribeV142 } from "./agent/gui/subscribe";
 import type { RequiredHostMethodVersion } from "../host-transport/remote/rpc-types";
 import { chatPrestartRuntimeV10 } from "./agent/gui/prestart-runtime";
 import { PROFILE_SYNC_LINK_RPC_METHODS } from "./profile-sync-link-contracts";
@@ -476,12 +476,14 @@ import {
   hostStatusUpgradeV17ToV18,
   hostStatusUpgradeV18ToV19,
   hostStatusUpgradeV19ToV110,
+  hostStatusUpgradeV110ToV111,
   hostStatusV15,
   hostStatusV16,
   hostStatusV17,
   hostStatusV18,
   hostStatusV19,
   hostStatusV110,
+  hostStatusV111,
 } from "@traycer/protocol/host/status/contracts";
 import {
   hostRestartUpgradeV10ToV11,
@@ -13880,7 +13882,7 @@ const HOST_RPC_ID_CARRYING_REGISTRY_DEFINITION = {
   },
   "host.status": {
     1: {
-      latestMinor: 10,
+      latestMinor: 11,
       versions: {
         0: {
           contract: hostStatusV10,
@@ -13932,6 +13934,13 @@ const HOST_RPC_ID_CARRYING_REGISTRY_DEFINITION = {
         10: {
           contract: hostStatusV110,
           upgradeFromPreviousVersion: hostStatusUpgradeV19ToV110,
+        },
+        // @1.11 adds `previousExit`: how the host that ran before this one
+        // ended, from the supervisor's record (an out-of-memory abort above
+        // all, traycerai/traycer#2366).
+        11: {
+          contract: hostStatusV111,
+          upgradeFromPreviousVersion: hostStatusUpgradeV110ToV111,
         },
       },
       downgradePathsFromLatest: {},
@@ -15960,7 +15969,7 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
   ...HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION,
   "chat.subscribe": {
     1: {
-      latestMinor: 41,
+      latestMinor: 42,
       versions: {
         0: {
           contract: chatSubscribeV10,
@@ -16175,6 +16184,9 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
         // names its causes (`actionAck.steerRestartReasons`, stripped below).
         40: { contract: chatSubscribeV140 },
         41: { contract: chatSubscribeV141 },
+        // @1.42: the delivery carries the opening's `worktreeIntent`, on the
+        // snapshot and `messageDeliveryChanged` (stripped below).
+        42: { contract: chatSubscribeV142 },
       },
     },
   },

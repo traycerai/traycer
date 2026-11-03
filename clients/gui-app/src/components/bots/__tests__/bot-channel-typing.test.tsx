@@ -500,7 +500,6 @@ function ChannelHarness(props: { readonly directive: string }): ReactNode {
   const openThread = rail?.kind === "thread" ? rail : null;
   return (
     <BotChannelView
-      tiles={null}
       botId={BOT_ID}
       hostId={HOST_ID}
       boundHostId={HOST_ID}

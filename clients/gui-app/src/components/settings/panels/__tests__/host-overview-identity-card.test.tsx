@@ -293,6 +293,7 @@ describe("<HostSettingsPanel /> Overview identity card — busy chip", () => {
             crossHostMessaging: null,
             sessions: null,
             updatesExternallyManaged: null,
+            previousExit: null,
           };
         },
       },
@@ -354,6 +355,7 @@ describe("<HostSettingsPanel /> Overview identity card — busy chip", () => {
             crossHostMessaging: null,
             sessions: null,
             updatesExternallyManaged: null,
+            previousExit: null,
           };
         },
       },

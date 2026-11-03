@@ -70,9 +70,9 @@ const PRE_KEY_LINES = [
 ] as const;
 
 describe("chat.subscribe registry: 1.17 installed below the 1.18 through 1.22 lines, 1.16 still installed", () => {
-  it("binds 1.17 and 1.16 to their own contracts - the head has since moved to 1.41", () => {
+  it("binds 1.17 and 1.16 to their own contracts - the head has since moved to 1.42", () => {
     const line = hostStreamRpcRegistry["chat.subscribe"][1];
-    expect(line.latestMinor).toBe(41);
+    expect(line.latestMinor).toBe(42);
     expect(line.versions[37].contract).toBe(chatSubscribeV137);
     expect(line.versions[36].contract).toBe(chatSubscribeV136);
     expect(line.versions[35].contract).toBe(chatSubscribeV135);
@@ -234,9 +234,22 @@ describe("chat.subscribe registry: 1.17 installed below the 1.18 through 1.22 li
     );
   });
 
-  it("validates the stream registry as constructed", () => {
+  // Only these minors: the whole line is most of the stream registry's walk.
+  it("validates 1.17 over 1.16", () => {
+    const line = hostStreamRpcRegistry["chat.subscribe"][1];
     expect(() =>
-      validateVersionedStreamRpcRegistry(hostStreamRpcRegistry),
+      validateVersionedStreamRpcRegistry({
+        "chat.subscribe": {
+          1: {
+            ...line,
+            latestMinor: 17,
+            versions: {
+              16: line.versions[16],
+              17: line.versions[17],
+            },
+          },
+        },
+      }),
     ).not.toThrow();
   });
 });

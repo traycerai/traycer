@@ -47,9 +47,15 @@ import {
   describeFatalSignal,
   findCrashReportSince,
   isWindowsSessionEndExit,
+  NO_REPORT_MEMORY,
   prepareCrashReportsDir,
   StderrCaptureBuffer,
 } from "../host/crash-diagnostics";
+import {
+  buildPreviousExit,
+  crashKind,
+  writePreviousExitRecord,
+} from "../host/previous-exit-record";
 import {
   CRASH_REPORT_SCAN_TIMEOUT_MS,
   STDERR_END_WAIT_TIMEOUT_MS,
@@ -103,6 +109,7 @@ import {
 } from "../host/lifecycle-teardown";
 import { createLifecycleTeardownPlatform } from "../host/update-mutation";
 import { SUPERVISOR_CAPABILITY_LIFECYCLE_POLICY_V1 } from "@traycer/protocol/config/supervisor-record";
+import type { HostPreviousExit } from "@traycer/protocol/config/host-previous-exit";
 import type { ProcessStartIdentity } from "@traycer/protocol/host/lifecycle";
 import {
   isProcessAlive,
@@ -688,6 +695,9 @@ export interface RunHostStartDeps extends ResolveHostStartTargetDeps {
   readonly readEnvOverrides: () => Promise<Record<string, EnvOverrideValue>>;
   readonly writeMarker: typeof writeBootstrapMarker;
   readonly writeTerminalMarker: typeof writeBootstrapTerminalMarker;
+  // The previous-exit record the next host reads at boot
+  // (`host/previous-exit-record.ts`). Synchronous, like the marker.
+  readonly writePreviousExit: typeof writePreviousExitRecord;
   // `process.exit` itself returns `never`, but the dependency is typed
   // `void` so test stubs can record the requested exit code without
   // throwing from inside event-handler callbacks. Real callers should
@@ -915,6 +925,7 @@ const defaultRunDeps: RunHostStartDeps = {
   readEnvOverrides: async () => ({ ...(await listEnvOverrides()) }),
   writeMarker: writeBootstrapMarker,
   writeTerminalMarker: writeBootstrapTerminalMarker,
+  writePreviousExit: writePreviousExitRecord,
   exit: (code) => {
     process.exit(code);
   },
@@ -3014,6 +3025,23 @@ export async function runHostStart(
         stderrEnded,
       });
       disposeAttemptStderr(child.stderr);
+      // No crash marker, but still an exit the next host must not mistake for
+      // an older one: without this, the replacement reads whatever attempt
+      // last wrote the record (an out-of-memory crash days ago, say) as how
+      // its predecessor ended.
+      recordPreviousExit({
+        deps,
+        logger,
+        environment: opts.environment,
+        previousExit: buildPreviousExit({
+          attemptId,
+          endedAtMs: childEndedAtMs,
+          kind: "stopped",
+          exitCode: ending.code,
+          signal: null,
+          report: null,
+        }),
+      });
       // The relaunch below is the same either way; this only says it followed
       // a teardown that did not finish.
       const forcedShutdown = stderrTee.capture.forcedShutdownLine();
@@ -4301,6 +4329,28 @@ async function persistChildExit(input: {
             },
       ),
       exitCode: 128 + signalNumber(signal),
+      previousExit: buildPreviousExit({
+        attemptId,
+        endedAtMs: input.childEndedAtMs,
+        // A decodable fatal signal is a crash. Any other signal is a stop
+        // only when one was asked for (the latch or a stop intent): the
+        // signal name says nothing about intent, so an unsolicited SIGKILL
+        // (a kernel OOM kill) or SIGTERM is a crash, never "stopped".
+        kind:
+          fatalMeaning === null
+            ? input.stopRequested
+              ? "stopped"
+              : "crashed"
+            : crashKind(
+                input.stderrTee.capture.classifyFatal(
+                  input.stderrSettle.drained === true,
+                ),
+                crashReport,
+              ),
+        exitCode: null,
+        signal,
+        report: crashReport,
+      }),
       // EVERY signal death is abnormal here, and the deliberate-stop question
       // is answered where it is actually known - `decideRelaunch`, which reads
       // the `shuttingDown` latch and the stop-intent file.
@@ -4388,6 +4438,14 @@ async function persistChildExit(input: {
       ),
       exitCode: 0,
       abnormal: false,
+      previousExit: buildPreviousExit({
+        attemptId,
+        endedAtMs: input.childEndedAtMs,
+        kind: "stopped",
+        exitCode: code,
+        signal: null,
+        report: null,
+      }),
     });
   }
   if (code === null || code === 0) {
@@ -4416,6 +4474,14 @@ async function persistChildExit(input: {
       ),
       exitCode: code ?? 0,
       abnormal: false,
+      previousExit: buildPreviousExit({
+        attemptId,
+        endedAtMs: input.childEndedAtMs,
+        kind: "exited",
+        exitCode: code ?? 0,
+        signal: null,
+        report: null,
+      }),
     });
   }
   if (
@@ -4457,6 +4523,14 @@ async function persistChildExit(input: {
       ),
       exitCode: code,
       abnormal: true,
+      previousExit: buildPreviousExit({
+        attemptId,
+        endedAtMs: input.childEndedAtMs,
+        kind: "stopped",
+        exitCode: code,
+        signal: null,
+        report: null,
+      }),
     });
   }
   logger.error(
@@ -4514,6 +4588,23 @@ async function persistChildExit(input: {
     ),
     exitCode: code,
     abnormal: true,
+    previousExit: buildPreviousExit({
+      attemptId,
+      endedAtMs: input.childEndedAtMs,
+      // A Windows session end is the logoff, not a crash.
+      kind:
+        input.platform === "win32" && isWindowsSessionEndExit(code)
+          ? "stopped"
+          : crashKind(
+              input.stderrTee.capture.classifyFatal(
+                input.stderrSettle.drained === true,
+              ),
+              crashReport,
+            ),
+      exitCode: code,
+      signal: null,
+      report: crashReport,
+    }),
   });
   // After the marker, never before it: the marker is readiness authority and
   // a telemetry stall must not delay it. Not awaited either: the relaunch
@@ -4611,9 +4702,7 @@ async function settlePendingCrashTelemetry(): Promise<void> {
 
 /** The report's memory numbers, every field `null` when there was no report. */
 function crashReportMemory(report: CrashReportMatch | null): CrashReportMemory {
-  return report === null
-    ? { heapLimitBytes: null, heapUsedBytes: null, rssBytes: null }
-    : report.memory;
+  return report === null ? NO_REPORT_MEMORY : report.memory;
 }
 
 /**
@@ -4757,6 +4846,29 @@ function isReadable(value: unknown): value is Readable {
  * the SUPERVISOR - which now outlives individual attempts. Collapsing the two
  * is what made a crash necessarily fatal to the supervisor.
  */
+/**
+ * Replace `previous-exit.json` with how this attempt ended. Every child exit
+ * the supervisor observes writes one, including a requested restart that
+ * writes no terminal marker, so the next host never reads an older attempt's
+ * exit as its predecessor's. Best effort: a failure is logged, never thrown.
+ */
+function recordPreviousExit(options: {
+  readonly deps: RunHostStartDeps;
+  readonly logger: ILogger;
+  readonly environment: Environment;
+  readonly previousExit: HostPreviousExit;
+}): void {
+  try {
+    options.deps.writePreviousExit(options.environment, options.previousExit);
+  } catch (cause) {
+    options.logger.warn("Host supervisor could not record the previous exit", {
+      environment: options.environment,
+      kind: options.previousExit.kind,
+      cause: errorFromUnknown(cause).name,
+    });
+  }
+}
+
 function persistTerminalMarker(options: {
   readonly deps: RunHostStartDeps;
   readonly logger: ILogger;
@@ -4765,6 +4877,8 @@ function persistTerminalMarker(options: {
   readonly fields: BootstrapMarkerFields;
   readonly exitCode: number;
   readonly abnormal: boolean;
+  /** How the child ended, for the next host (`previous-exit.json`). */
+  readonly previousExit: HostPreviousExit;
 }): ChildExitOutcome {
   try {
     options.deps.writeTerminalMarker(
@@ -4783,6 +4897,9 @@ function persistTerminalMarker(options: {
       errorFromUnknown(cause),
     );
   }
+  // After the marker, never before it: the marker is readiness authority, and
+  // this record only tells the next host what to say about this exit.
+  recordPreviousExit(options);
   // Marker persistence is best effort; it must never replace the child's
   // actual exit code or cause a spurious service-manager restart.
   return { exitCode: options.exitCode, abnormal: options.abnormal };

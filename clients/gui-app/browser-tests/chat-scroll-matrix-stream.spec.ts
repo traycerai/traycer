@@ -268,7 +268,7 @@ for (const line of ["legacy", "windowed"] as const) {
     });
 
     for (const flavour of ["plain", "paragraphs"] as const) {
-      test(`A1 following, idle, then a ${flavour} stream for 5s: stays at the tail`, async ({
+      test(`A1 following, idle, then a ${flavour} stream: stays at the tail`, async ({
         page,
       }) => {
         await open(page);
@@ -279,7 +279,7 @@ for (const line of ["legacy", "windowed"] as const) {
             if (f === "plain") window.__chatScrollProbe.startStream(40);
             else window.__chatScrollProbe.startParagraphStream(200);
           }, flavour);
-          await page.waitForTimeout(5000);
+          await nextFrames(page, 60);
           const stretch = await longest();
           await stopStream(page);
           expect(
@@ -297,10 +297,10 @@ for (const line of ["legacy", "windowed"] as const) {
       await open(page);
       await withTimeline(page, async () => {
         await page.evaluate(() => window.__chatScrollProbe.startStream(40));
-        await page.waitForTimeout(400);
+        await nextFrames(page, 15);
         for (let i = 0; i < 3; i += 1) {
           await page.evaluate(() => window.__chatScrollProbe.appendTurn());
-          await page.waitForTimeout(500);
+          await nextFrames(page, 20);
         }
         await stopStream(page);
         await expectAtRest(page, TAIL, "after three turns");
@@ -314,7 +314,7 @@ for (const line of ["legacy", "windowed"] as const) {
         await open(page);
         await withTimeline(page, async () => {
           await page.evaluate(() => window.__chatScrollProbe.startStream(40));
-          await page.waitForTimeout(500);
+          await nextFrames(page, 20);
           if (afterAppendMs !== null) {
             await page.evaluate(() => window.__chatScrollProbe.appendTurn());
             if (afterAppendMs > 0) await page.waitForTimeout(afterAppendMs);
@@ -329,7 +329,7 @@ for (const line of ["legacy", "windowed"] as const) {
           await nextFrames(page, 2);
           const intent = intentOf(await readView(page));
           expect(intent.kind, "the wheel left the tail").toBe("at");
-          await page.waitForTimeout(1500);
+          await nextFrames(page, 30);
           await stopStream(page);
           await expectAtRest(page, intent, "after the stream");
         });
@@ -346,7 +346,7 @@ for (const line of ["legacy", "windowed"] as const) {
         await wheel(page, [20000]);
         await expectAtRest(page, TAIL, "wheeled back to the bottom");
         await page.evaluate(() => window.__chatScrollProbe.startStream(40));
-        await page.waitForTimeout(2000);
+        await nextFrames(page, 60);
         await stopStream(page);
         await expectAtRest(page, TAIL, "after the stream");
       });
@@ -365,7 +365,13 @@ for (const line of ["legacy", "windowed"] as const) {
         const card = page.locator(CARD);
         await card.click();
         await expectAtRest(page, TAIL, "after opening the card");
-        await card.click();
+        // At the tail, the open card's toggle is above the viewport. A pointer
+        // click would first scroll the transcript up to it, which is the
+        // reader leaving the tail, not a card changing height. The toggle is
+        // pressed where it is, as a card that collapses on its own would.
+        await card.evaluate((button: HTMLElement) => {
+          button.click();
+        });
         await expectAtRest(page, TAIL, "after closing the card");
       });
     });
@@ -396,12 +402,12 @@ for (const line of ["legacy", "windowed"] as const) {
       await open(page);
       await withTimeline(page, async () => {
         await page.evaluate(() => window.__chatScrollProbe.startStream(40));
-        await page.waitForTimeout(500);
+        await nextFrames(page, 20);
         await wheel(page, [-100]);
         await nextFrames(page, 2);
         const intent = intentOf(await readView(page));
         expect(intent.kind, "the notch left the tail").toBe("at");
-        await page.waitForTimeout(1500);
+        await nextFrames(page, 30);
         await stopStream(page);
         await expectAtRest(page, intent, "after the stream");
       });
@@ -500,7 +506,7 @@ for (const line of ["legacy", "windowed"] as const) {
             try {
               await withTimeline(page, async () => {
                 await stream.start(page);
-                await page.waitForTimeout(300);
+                await nextFrames(page, 12);
                 if (afterAppendMs !== null) {
                   await page.evaluate(() =>
                     window.__chatScrollProbe.appendTurn(),
@@ -509,7 +515,7 @@ for (const line of ["legacy", "windowed"] as const) {
                     await page.waitForTimeout(afterAppendMs);
                 }
                 await wheelDownLikeATrackpad(page);
-                await page.waitForTimeout(2000);
+                await nextFrames(page, 30);
                 await stopStream(page);
                 await expectAtRest(
                   page,
@@ -517,7 +523,7 @@ for (const line of ["legacy", "windowed"] as const) {
                   "after the reader stopped and the stream ended",
                 );
                 await stream.start(page);
-                await page.waitForTimeout(1000);
+                await nextFrames(page, 15);
                 await stopStream(page);
                 await expectAtRest(page, TAIL, "after a second stream");
               });
@@ -545,9 +551,9 @@ for (const line of ["legacy", "windowed"] as const) {
         const intent = await detach(page, -1500);
         await expectAtRest(page, intent, "detached");
         await page.evaluate(() =>
-          window.__chatScrollProbe.startParagraphStream(100),
+          window.__chatScrollProbe.startParagraphStream(50),
         );
-        await page.waitForTimeout(9000);
+        await nextFrames(page, 180);
         await stopStream(page);
         await expectAtRest(
           page,
@@ -695,7 +701,7 @@ for (const line of ["legacy", "windowed"] as const) {
         (ms) => window.__chatScrollProbe.startStream(ms),
         streamMs,
       );
-      await page.waitForTimeout(500);
+      await nextFrames(page, 15);
 
       const box = await page
         .locator('[data-testid="chat-messages-scroll"]')

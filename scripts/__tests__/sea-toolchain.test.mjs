@@ -83,7 +83,8 @@ describe("this project is actually called by CI", () => {
   // running the tests from printing them.
   const EXPECTED_TEST_COMMAND =
     'bunx nx run-many --target=test --projects="${{ matrix.project }}" ' +
-    "--outputStyle=stream ${{ matrix.test_args }}";
+    "--outputStyle=stream ${{ matrix.test_args }} $TEST_EVIDENCE_ARGS " +
+    "2>&1 | tee test-output.log";
 
   it("test.yml's matrix carries a row for the scripts project", () => {
     const workflow = parseYaml(readFileSync(WORKFLOW, "utf8"));
@@ -106,6 +107,11 @@ describe("this project is actually called by CI", () => {
       (step) => step.run === EXPECTED_TEST_COMMAND,
     );
     expect(testSteps).toHaveLength(1);
+
+    // `tee` exits 0 whatever it reads, so the pipeline above reports the tests'
+    // status only under `pipefail`, and `shell: bash` is what sets it: the
+    // implicit shell runs with `-e` alone.
+    expect(testSteps[0].shell).toBe("bash");
 
     // And it must be switched on and gating, read as PARSED values. `if: false`
     // and `continue-on-error: true` are how work is actually disabled, and a

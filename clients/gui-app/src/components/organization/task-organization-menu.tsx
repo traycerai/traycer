@@ -266,7 +266,7 @@ export function TaskOrganizationDropdown(props: {
           <MoreHorizontal />
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end">
+      <DropdownMenuContent align="end" className="w-max min-w-40">
         <TaskOrganizationMenu {...props} dropdown onEditGroup={null} />
       </DropdownMenuContent>
     </DropdownMenu>

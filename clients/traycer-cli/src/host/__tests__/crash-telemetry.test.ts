@@ -3,7 +3,11 @@ import { arch, platform, release, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Environment } from "../../runner/environment";
-import { STDERR_FATAL_KINDS } from "../crash-diagnostics";
+import {
+  NO_HEAP_SPACE_USED_BYTES,
+  NO_REPORT_MEMORY,
+  STDERR_FATAL_KINDS,
+} from "../crash-diagnostics";
 import type {
   HostCrashEvent,
   HostCrashIdentity,
@@ -137,7 +141,7 @@ function sampleTelemetry(
     stopRequested: false,
     stderrEmpty: false,
     stderrFatal: "other",
-    reportMemory: { heapLimitBytes: null, heapUsedBytes: null, rssBytes: null },
+    reportMemory: NO_REPORT_MEMORY,
     ...overrides,
   };
 }
@@ -427,6 +431,7 @@ describe("buildHostCrashEvent", () => {
           heapLimitBytes: 4831838208,
           heapUsedBytes: 4100000000,
           rssBytes: 4750000000,
+          heapSpaceUsedBytes: NO_HEAP_SPACE_USED_BYTES,
         },
       }),
       null,
@@ -443,6 +448,7 @@ describe("buildHostCrashEvent", () => {
           heapLimitBytes: 4831838208,
           heapUsedBytes: null,
           rssBytes: null,
+          heapSpaceUsedBytes: NO_HEAP_SPACE_USED_BYTES,
         },
       }),
       null,
@@ -450,6 +456,34 @@ describe("buildHostCrashEvent", () => {
     expect(event.extra.heapLimitBytes).toBe(4831838208);
     expect("heapUsedBytes" in event.extra).toBe(false);
     expect("rssBytes" in event.extra).toBe(false);
+  });
+
+  it("carries only the non-null heap spaces under heapSpaceUsedBytes.<space>", () => {
+    const event = buildHostCrashEvent(
+      sampleTelemetry({
+        reportMemory: {
+          ...NO_REPORT_MEMORY,
+          heapSpaceUsedBytes: {
+            ...NO_HEAP_SPACE_USED_BYTES,
+            old_space: 3000,
+            new_space: 0,
+          },
+        },
+      }),
+      null,
+    );
+    expect(event.extra["heapSpaceUsedBytes.old_space"]).toBe(3000);
+    expect(event.extra["heapSpaceUsedBytes.new_space"]).toBe(0);
+    expect("heapSpaceUsedBytes.code_space" in event.extra).toBe(false);
+  });
+
+  it("adds no heapSpaceUsedBytes key when every space is null", () => {
+    const event = buildHostCrashEvent(sampleTelemetry({}), null);
+    expect(
+      Object.keys(event.extra).filter((k) =>
+        k.startsWith("heapSpaceUsedBytes."),
+      ),
+    ).toEqual([]);
   });
 
   it("puts the telemetry's childPid in extra.childPid, and -1 when the spawn yielded no pid", () => {

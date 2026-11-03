@@ -4,7 +4,7 @@ import { admitsLocalPlane, useAuthStore } from "@/stores/auth/auth-store";
 /**
  * Whether the sign-out confirmation is up. A store because the controls that
  * ask for it (the drawer's icon, the account menu's item) can unmount under it
- * when a rotation changes the phone shell's form, and the question must outlive
+ * when a window resize crosses the phone layout, and the question must outlive
  * them. It must not outlive the session it was asked in: a session that ends
  * elsewhere (another window signing out) takes the dialog's seat away without an
  * answer, and the next sign-in would otherwise find the old question still open.

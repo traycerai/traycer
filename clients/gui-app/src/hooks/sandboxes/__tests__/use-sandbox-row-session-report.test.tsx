@@ -9,7 +9,7 @@ import {
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
-import { hostStatusV110 } from "@traycer/protocol/host/status/contracts";
+import { hostStatusV111 } from "@traycer/protocol/host/status/contracts";
 import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
@@ -35,7 +35,7 @@ import {
 } from "@/hooks/sandboxes/use-sandbox-session-report";
 
 const HOST_ID = mockLocalHostEntry.hostId;
-const STATUS = hostStatusV110.responseSchema.parse({
+const STATUS = hostStatusV111.responseSchema.parse({
   ready: true,
   hostVersion: "1.2.3",
   protocolVersion: { major: 1, minor: 0 },
@@ -51,6 +51,7 @@ const STATUS = hostStatusV110.responseSchema.parse({
   crossHostMessaging: null,
   sessions: { agents: [], terminals: [] },
   updatesExternallyManaged: null,
+  previousExit: null,
 });
 
 function resumed(at: number, phase: "resuming" | "awake"): SandboxSummary {
@@ -82,7 +83,7 @@ function mount(
       "host.status": async () => {
         const answer = answers[Math.min(reads, answers.length - 1)];
         reads += 1;
-        return hostStatusV110.responseSchema.parse(await answer());
+        return hostStatusV111.responseSchema.parse(await answer());
       },
     },
   });

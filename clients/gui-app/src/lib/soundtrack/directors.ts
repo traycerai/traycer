@@ -130,3 +130,10 @@ export const MIX_DIRECTORS = {
 } satisfies Record<string, MixDirector>;
 
 export type MixDirectorId = keyof typeof MIX_DIRECTORS;
+
+/** Until the listening test settles the default, the honest one. */
+export const DEFAULT_MIX_DIRECTOR: MixDirectorId = "static";
+
+export function isMixDirectorId(value: unknown): value is MixDirectorId {
+  return typeof value === "string" && Object.hasOwn(MIX_DIRECTORS, value);
+}

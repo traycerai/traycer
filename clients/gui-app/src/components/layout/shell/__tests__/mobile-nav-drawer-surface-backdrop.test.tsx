@@ -81,3 +81,23 @@ describe("MobileNavDrawerSurface scrim backdrop blur", () => {
     ).toBe(true);
   });
 });
+
+describe("MobileNavDrawerSurface document marker", () => {
+  const isMarked = () =>
+    document.documentElement.hasAttribute("data-mobile-menu-open");
+
+  it("marks the document only while the menu is open, and clears it on unmount", () => {
+    const { rerender, unmount } = render(<Harness open={false} />);
+    expect(isMarked()).toBe(false);
+
+    rerender(<Harness open />);
+    expect(isMarked()).toBe(true);
+
+    rerender(<Harness open={false} />);
+    expect(isMarked()).toBe(false);
+
+    rerender(<Harness open />);
+    unmount();
+    expect(isMarked()).toBe(false);
+  });
+});

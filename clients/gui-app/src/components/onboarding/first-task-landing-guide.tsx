@@ -1,6 +1,5 @@
 import { useMemo, useRef, type ReactNode, type RefObject } from "react";
 import { FirstTaskCoachmark } from "./first-task-coachmark";
-import { useMobileStripForm } from "@/components/layout/tabs/mobile-strip-form-context";
 import { SessionImportOpenTaskButton } from "@/components/session-import/session-import-open-task-button";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
@@ -29,7 +28,6 @@ export function FirstTaskLandingGuide(props: {
   // desktop window is on this branch too, and the installed app is not a
   // separate case.
   const isMobile = useIsMobileViewport();
-  const stripMounted = useMobileStripForm() !== null;
   const globalFolders = useWorkspaceFoldersStore(
     (state) => selectWorkspaceFoldersBucket(state, hostId).folders,
   );
@@ -115,9 +113,7 @@ export function FirstTaskLandingGuide(props: {
       selector={selector}
     />
   );
-  // The strip keeps the tasks in view, so nothing needs teaching about the
-  // hamburger, which it replaces.
-  if (!isMobile || stripMounted) return folderFlow;
+  if (!isMobile) return folderFlow;
   return <MobileTasksGuide fallback={folderFlow} />;
 }
 

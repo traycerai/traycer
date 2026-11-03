@@ -19,6 +19,8 @@ import type {
   BrowserViewGuestMountRequested,
   BrowserViewGuestReleaseRequested,
   BrowserViewGuestViewportRequested,
+  BrowserViewGuestDrawHoldRequested,
+  BrowserViewGuestDrawHoldReleased,
   LoginImportResult,
   LoginImportScan,
   LoginImportSource,
@@ -250,6 +252,21 @@ export function buildBrowserViewBridge(): { browserView: BrowserViewBridge } {
       reportGuestViewportResult: (input) =>
         ipcRenderer.invoke(
           RunnerHostInvoke.browserViewGuestViewportResult,
+          input,
+        ) as Promise<void>,
+      onGuestDrawHoldRequested: (handler) =>
+        subscribe<BrowserViewGuestDrawHoldRequested>(
+          RunnerHostEvent.browserViewGuestDrawHoldRequested,
+          handler,
+        ),
+      onGuestDrawHoldReleased: (handler) =>
+        subscribe<BrowserViewGuestDrawHoldReleased>(
+          RunnerHostEvent.browserViewGuestDrawHoldReleased,
+          handler,
+        ),
+      reportGuestDrawHoldApplied: (input) =>
+        ipcRenderer.invoke(
+          RunnerHostInvoke.browserViewGuestDrawHoldApplied,
           input,
         ) as Promise<void>,
     },

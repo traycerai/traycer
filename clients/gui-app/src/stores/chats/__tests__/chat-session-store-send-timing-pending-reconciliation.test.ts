@@ -22,7 +22,7 @@
  * per call. `SendTimings` only BUFFERS on `mark()`; the batch is not visible on
  * the spy until the ~1s auto-flush actually emits it (there is no public flush
  * hook on `ChatSessionStoreHandle`), so every phase assertion here waits for it
- * via `vi.waitFor` under real timers rather than reading the spy synchronously.
+ * via `vi.waitFor` on the fake clock rather than reading the spy synchronously.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
@@ -353,6 +353,7 @@ let harness: Harness | null = null;
 let infoCalls: readonly (readonly unknown[])[] = [];
 
 beforeEach(() => {
+  vi.useFakeTimers();
   const info = vi.spyOn(appLogger, "info").mockImplementation(() => {});
   infoCalls = info.mock.calls;
 });
@@ -360,6 +361,7 @@ beforeEach(() => {
 afterEach(() => {
   harness?.handle.dispose();
   harness = null;
+  vi.useRealTimers();
   vi.restoreAllMocks();
   infoCalls = [];
   if (ORIGINAL_SEND_TIMING_LOCAL_STORAGE_VALUE === null) {
@@ -376,8 +378,17 @@ function loggedCalls(): readonly (readonly unknown[])[] {
   return infoCalls;
 }
 
-/** Waits (real timers) for `messageId` to have recorded `phase` at least once. */
+/**
+ * Lets the recorder's one-second batch flush elapse on the fake clock, so the
+ * marks buffered so far reach the logger spy.
+ */
+async function elapseFlushWindow(): Promise<void> {
+  await vi.advanceTimersByTimeAsync(1_000);
+}
+
+/** Waits (fake clock) for `messageId` to have recorded `phase` at least once. */
 async function waitForPhase(messageId: string, phase: string): Promise<void> {
+  await elapseFlushWindow();
   await vi.waitFor(
     () => {
       expect(sendTimingPhasesFor(loggedCalls(), messageId)).toContain(phase);
@@ -398,6 +409,7 @@ async function waitForOccurrenceCount(
   phase: string,
   count: number,
 ): Promise<void> {
+  await elapseFlushWindow();
   await vi.waitFor(
     () => {
       const occurrences = sendTimingPhasesFor(loggedCalls(), messageId).filter(

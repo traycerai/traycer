@@ -32,12 +32,17 @@ import type { DesktopLocalHostSnapshot } from "../../../ipc-contracts/host-types
 import type { HostFsLayout } from "../host-paths";
 
 // The retry scenarios use a stable synthetic pid while the test controls the
-// endpoint probe. A platform liveness probe has no positive result for that
-// pid, so model the indeterminate branch locally: the handshake remains
-// authoritative while a positively dead/recycled pid is rejected elsewhere.
-function useIndeterminateProcessLiveness(): () => void {
-  const restore = __setAsyncProcessLivenessReaderForTest(
-    async () => "indeterminate",
+// endpoint probe, so every scenario that reads it also sets what the OS says
+// about that pid. Left to the real reader, the verdict depends on the machine:
+// a CI runner where pid 18841 happened to be alive published the host as busy.
+// Most scenarios model the indeterminate branch, where the handshake stays
+// authoritative. A dead process is the only verdict that keeps a parsed,
+// unreachable file unpublished while the ladder retries it.
+function useProcessLiveness(
+  verdictOf: () => ProcessLivenessVerdict,
+): () => void {
+  const restore = __setAsyncProcessLivenessReaderForTest(async () =>
+    verdictOf(),
   );
   return () => __setAsyncProcessLivenessReaderForTest(restore);
 }
@@ -175,7 +180,7 @@ describe("HostLifecycle reachability retry ladder", () => {
           return probeResult;
         },
       });
-      const restoreLiveness = useIndeterminateProcessLiveness();
+      const restoreLiveness = useProcessLiveness(() => "indeterminate");
       const changes: (DesktopLocalHostSnapshot | null)[] = [];
       lifecycle.on("change", (snapshot: DesktopLocalHostSnapshot | null) => {
         changes.push(snapshot);
@@ -249,12 +254,15 @@ describe("HostLifecycle reachability retry ladder", () => {
       changes.push(snapshot);
     });
     lifecycle.on("error", () => {});
+    const restoreLiveness = useProcessLiveness(() => "dead");
 
     try {
       // pid.json is present but the endpoint refuses: bootstrap times out and
-      // the ladder ARMS, so this test actually exercises the clear path (the
-      // previous version left the probe reachable, so no ladder ever armed and
-      // deleting the clear would not have failed it).
+      // the ladder ARMS, so the stop below lands on a live ladder. What this
+      // pins is that the stop never resurfaces the host. Every read after the
+      // unlink finds no file, so it would pass even if the ladder kept running;
+      // that the ladder stops re-reading is pinned by "clears on absence and
+      // does not resurface a later valid file without a new reload" below.
       await writeFile(layout.pidMetadataFile, PID_METADATA, "utf8");
       await lifecycle.bootstrap({ hostInstalled: true });
       expect(lifecycle.getSnapshot()).toBeNull();
@@ -269,6 +277,7 @@ describe("HostLifecycle reachability retry ladder", () => {
       expect(lifecycle.getSnapshot()).toBeNull();
       expect(changes.every((snapshot) => snapshot === null)).toBe(true);
     } finally {
+      restoreLiveness();
       lifecycle.dispose();
       await rm(dir, { recursive: true, force: true });
     }
@@ -297,7 +306,7 @@ describe("HostLifecycle reachability retry ladder (predicate, no bootstrap)", ()
         return true;
       },
     });
-    const restoreLiveness = useIndeterminateProcessLiveness();
+    const restoreLiveness = useProcessLiveness(() => "indeterminate");
     try {
       // Malformed: present but INDETERMINATE, not absent - the ladder must
       // arm without ever reaching the probe (there is no URL to probe yet).
@@ -337,6 +346,8 @@ describe("HostLifecycle reachability retry ladder (predicate, no bootstrap)", ()
         return reachable;
       },
     });
+    let liveness: ProcessLivenessVerdict = "dead";
+    const restoreLiveness = useProcessLiveness(() => liveness);
     try {
       // Parsed but unreachable: arms the ladder.
       await writeFile(layout.pidMetadataFile, PID_METADATA, "utf8");
@@ -353,12 +364,15 @@ describe("HostLifecycle reachability retry ladder (predicate, no bootstrap)", ()
       // A later valid, reachable file appears - but with the ladder cleared
       // and no watcher installed (bootstrap() was never called), nothing
       // re-reads it. The snapshot must stay null; only an explicit reload (a
-      // real watcher event in production) would surface it.
+      // real watcher event in production) would surface it. The process is no
+      // longer dead, so a stray re-read WOULD publish it and fail this test.
+      liveness = "indeterminate";
       reachable = true;
       await writeFile(layout.pidMetadataFile, PID_METADATA, "utf8");
       await sleep(1_500);
       expect(lifecycle.getSnapshot()).toBeNull();
     } finally {
+      restoreLiveness();
       lifecycle.dispose();
       await rm(dir, { recursive: true, force: true });
     }
@@ -711,7 +725,7 @@ describe("HostLifecycle pid.json read outcomes", () => {
       readyTimeoutMs: 300,
       reachabilityProbe: () => Promise.resolve(true),
     });
-    const restoreLiveness = useIndeterminateProcessLiveness();
+    const restoreLiveness = useProcessLiveness(() => "indeterminate");
     const changes: (DesktopLocalHostSnapshot | null)[] = [];
     lifecycle.on("change", (snapshot: DesktopLocalHostSnapshot | null) => {
       changes.push(snapshot);
@@ -757,7 +771,7 @@ describe("HostLifecycle pid.json read outcomes", () => {
       readyTimeoutMs: 300,
       reachabilityProbe: () => Promise.resolve(true),
     });
-    const restoreLiveness = useIndeterminateProcessLiveness();
+    const restoreLiveness = useProcessLiveness(() => "indeterminate");
     const changes: (DesktopLocalHostSnapshot | null)[] = [];
     lifecycle.on("change", (snapshot: DesktopLocalHostSnapshot | null) => {
       changes.push(snapshot);
@@ -806,7 +820,7 @@ describe("HostLifecycle respawn re-arm", () => {
         return Promise.resolve(false);
       },
     });
-    const restoreLiveness = useIndeterminateProcessLiveness();
+    const restoreLiveness = useProcessLiveness(() => "indeterminate");
 
     try {
       await writeFile(layout.pidMetadataFile, PID_METADATA, "utf8");

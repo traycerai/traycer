@@ -2,7 +2,6 @@ import { collectPanes, findPaneById } from "@/stores/epics/canvas/tile-tree";
 import type {
   EpicCanvasState,
   EpicCanvasTileRef,
-  MobileSecondaryTile,
   TilePane,
   TilesByInstanceId,
 } from "@/stores/epics/canvas/types";
@@ -72,26 +71,6 @@ export function selectMobileTile(
     if (ref !== undefined) return { paneId: pane.id, ref };
   }
   return null;
-}
-
-/**
- * The tile the second slot names, while it is on the canvas and is not the one
- * the first slot already shows. Derived, like the first slot's: a tile closed
- * from anywhere just stops being the second tile.
- */
-export function selectMobileSecondaryTile(
-  canvas: EpicCanvasState,
-  slot: MobileSecondaryTile | undefined,
-  primary: MobileTileSelection | null,
-): MobileTileSelection | null {
-  if (slot === undefined || slot.instanceId === primary?.ref.instanceId) {
-    return null;
-  }
-  return (
-    flattenMobileTiles(canvas).find(
-      (tile) => tile.instanceId === slot.instanceId,
-    ) ?? null
-  );
 }
 
 function resolvePaneTileInstanceId(

@@ -1,7 +1,5 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { MobileStripFormContext } from "@/components/layout/tabs/mobile-strip-form-context";
-import { MobileStripFormScope } from "@/components/layout/tabs/mobile-strip-form-scope";
 import { NotificationsBell } from "@/components/notifications/notifications-bell";
 import { NotificationsMobileSheet } from "@/components/notifications/notifications-mobile-sheet";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -41,7 +39,6 @@ describe("NotificationsMobileSheet", () => {
   });
   afterEach(() => {
     cleanup();
-    document.getElementById("root")?.remove();
     useNotificationsPopoverStore.getState().setOpen(false);
   });
 
@@ -51,32 +48,15 @@ describe("NotificationsMobileSheet", () => {
     expect(await screen.findByTestId("notifications-center")).not.toBeNull();
   });
 
-  it.each(["rail", "expanded"] as const)(
-    "draws nothing where the strip stands at level 1 (%s)",
-    (form) => {
-      render(
-        <MobileStripFormContext.Provider value={form}>
-          <NotificationsMobileSheet />
-        </MobileStripFormContext.Provider>,
-      );
-
-      expect(screen.queryByTestId("notifications-center")).toBeNull();
-    },
-  );
-
-  it("leaves the popover as the only center in a narrow window with desktop chrome", async () => {
+  it("leaves the popover as the only center in a window with desktop chrome", async () => {
     shell.desktopMenus = true;
-    const root = document.createElement("div");
-    root.id = "root";
-    root.getBoundingClientRect = () => new DOMRect(0, 0, 750, 402);
-    document.body.append(root);
     render(
-      <MobileStripFormScope>
+      <>
         <TooltipProvider>
           <NotificationsBell />
         </TooltipProvider>
         <NotificationsMobileSheet />
-      </MobileStripFormScope>,
+      </>,
     );
 
     expect(await screen.findAllByTestId("notifications-center")).toHaveLength(

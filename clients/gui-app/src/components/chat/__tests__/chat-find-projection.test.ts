@@ -1817,6 +1817,7 @@ describe("chat find projection", () => {
           {
             id: "settled-error",
             kind: "error",
+            hostTimestamp: null,
             message: ERROR_MESSAGE,
             recoverable: true,
             code: ERROR_CODE,
@@ -1952,6 +1953,7 @@ describe("chat find projection", () => {
       return {
         id,
         kind: "error" as const,
+        hostTimestamp: null,
         message: HELD,
         recoverable: true,
         code,

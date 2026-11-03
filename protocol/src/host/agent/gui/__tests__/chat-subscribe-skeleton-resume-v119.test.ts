@@ -52,9 +52,9 @@ function skeletonChunkFrame(extra: Record<string, number>) {
 }
 
 describe("chat.subscribe registry: 1.19 installed below the 1.20 head, 1.18 still installed", () => {
-  it("binds 1.19 and the lines around it - the head has since moved to 1.41", () => {
+  it("binds 1.19 and the lines around it - the head has since moved to 1.42", () => {
     const line = hostStreamRpcRegistry["chat.subscribe"][1];
-    expect(line.latestMinor).toBe(41);
+    expect(line.latestMinor).toBe(42);
     expect(line.versions[23].contract).toBe(chatSubscribeV123);
     expect(line.versions[22].contract).toBe(chatSubscribeV122);
     expect(line.versions[21].contract).toBe(chatSubscribeV121);
@@ -64,9 +64,23 @@ describe("chat.subscribe registry: 1.19 installed below the 1.20 head, 1.18 stil
     expect(line.versions[17].contract).toBe(chatSubscribeV117);
   });
 
-  it("validates the stream registry as constructed", () => {
+  // Only these minors: the whole line is most of the stream registry's walk.
+  it("validates 1.19 between 1.18 and 1.20", () => {
+    const line = hostStreamRpcRegistry["chat.subscribe"][1];
     expect(() =>
-      validateVersionedStreamRpcRegistry(hostStreamRpcRegistry),
+      validateVersionedStreamRpcRegistry({
+        "chat.subscribe": {
+          1: {
+            ...line,
+            latestMinor: 20,
+            versions: {
+              18: line.versions[18],
+              19: line.versions[19],
+              20: line.versions[20],
+            },
+          },
+        },
+      }),
     ).not.toThrow();
   });
 });

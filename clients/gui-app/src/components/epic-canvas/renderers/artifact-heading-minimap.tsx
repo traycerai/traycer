@@ -174,7 +174,7 @@ export function ArtifactHeadingMinimap(props: ArtifactHeadingMinimapProps) {
 
   return (
     <div
-      className="pointer-events-none absolute inset-0 z-30 hidden [container-type:size] [@media(pointer:fine)]:block"
+      className="pointer-events-none absolute inset-0 z-30 hidden [container-type:size] pointer-fine:block"
       data-side={side}
       data-testid="artifact-heading-minimap"
     >

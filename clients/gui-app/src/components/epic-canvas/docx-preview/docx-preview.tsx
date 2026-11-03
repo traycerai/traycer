@@ -37,6 +37,7 @@ import { currentPageAmong, scrollTopForPage } from "./docx-page-position";
 import { documentPointUnder, scrollOffsetPlacing } from "./docx-zoom-anchor";
 import { useOpenLink } from "@/lib/links/open-link";
 import { usePinchZoom, type PinchFocal } from "@/hooks/ui/use-pinch-zoom";
+import { useWheelZoom } from "@/hooks/ui/use-wheel-zoom";
 
 const ZOOM_STEP = 1.1;
 const MIN_SCALE = 0.25;
@@ -468,21 +469,8 @@ function DocxDocument(props: DocumentViewerProps): ReactNode {
     }
   }, [closeSearch, searchOpen]);
 
-  // Desktop zoom affordance beyond the buttons. A NATIVE non-passive
-  // listener, because React registers `wheel` passively - its preventDefault
-  // is a no-op there, letting the browser's own ctrl+wheel page zoom run
-  // alongside the viewer's.
-  useEffect(() => {
-    const zone = scrollContainerRef.current;
-    if (zone === null) return;
-    const handleWheel = (event: WheelEvent): void => {
-      if (!event.ctrlKey && !event.metaKey) return;
-      event.preventDefault();
-      zoomBy(event.deltaY < 0 ? ZOOM_STEP : 1 / ZOOM_STEP);
-    };
-    zone.addEventListener("wheel", handleWheel, { passive: false });
-    return () => zone.removeEventListener("wheel", handleWheel);
-  }, [zoomBy]);
+  // Desktop zoom affordance beyond the buttons (touch has the pinch above).
+  useWheelZoom(scrollContainerRef, zoomBy);
 
   const handleZoomIn = useCallback(() => zoomBy(ZOOM_STEP), [zoomBy]);
   const handleZoomOut = useCallback(() => zoomBy(1 / ZOOM_STEP), [zoomBy]);

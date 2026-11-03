@@ -49,6 +49,8 @@ interface ChatFollowDriver {
     ) => void;
     readonly streamBursty: (tokens: number, blockId: string) => void;
     readonly streamParts: (parts: number) => void;
+    readonly deltasDelivered: () => number;
+    readonly streaming: () => boolean;
   };
 }
 

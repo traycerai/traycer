@@ -253,6 +253,37 @@ function hostBotAnswer(
   };
 }
 
+function hostBotConversation(
+  id: string,
+  updatedAt: number,
+  authorUserId: string,
+): HostNotificationFeedEntry {
+  return {
+    id,
+    updatedAt,
+    readAt: null,
+    kind: "host.operation.finished",
+    sourceRef: id,
+    severity: "done",
+    outcome: "completed",
+    epicId: "bot-1",
+    chatId: "thread-1",
+    payload: {
+      kind: "bot_conversation",
+      event: "bot.conversation.post",
+      operation: "bot.conversation.post",
+      title: "Tracy",
+      message: "A question for Tracy",
+      botId: "bot-1",
+      conversationId: "conversation-1",
+      threadId: "thread-1",
+      messageId: id,
+      authorUserId,
+      mention: false,
+    },
+  };
+}
+
 function cloudDone(
   entryId: string,
   createdAt: number,
@@ -1379,6 +1410,26 @@ describe("row category and resolvedAt projection fields", () => {
       expect(item.row?.category).toBe(item.category);
       expect(item.row?.resolvedAt).toBe(item.resolvedAt);
     }
+  });
+
+  it("projects the member who wrote a bot conversation row, and none on the bot's own verdict", () => {
+    applyHostSnapshot(
+      [
+        hostBotConversation("post", 30, "user-2"),
+        hostBotAnswer("verdict", 20, null),
+      ],
+      { unreadCount: 2, attentionCount: 0 },
+    );
+
+    const { result: post } = renderHook(() =>
+      useMergedNotificationRow(hostFeedId("post")),
+    );
+    const { result: verdict } = renderHook(() =>
+      useMergedNotificationRow(hostFeedId("verdict")),
+    );
+
+    expect(post.current?.botAuthorUserId).toBe("user-2");
+    expect(verdict.current?.botAuthorUserId).toBeNull();
   });
 
   it("hides all seeded local sources while upgrade is required", () => {

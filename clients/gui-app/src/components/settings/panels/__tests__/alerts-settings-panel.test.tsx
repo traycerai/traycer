@@ -41,16 +41,14 @@ describe("<AlertsSettingsPanel />", () => {
     renderPanel({ pushPermission: null, systemSettings: null });
 
     expect(screen.getByRole("heading", { name: "Alerts" })).toBeTruthy();
-    expect(
-      screen.getByText("How this app alerts you across hosts."),
-    ).toBeTruthy();
+    expect(screen.getByText("How this app alerts you.")).toBeTruthy();
     expect(screen.getByTestId("alerts-notifications-section")).toBeTruthy();
     expect(
       screen.getByRole("heading", { level: 2, name: "Notifications" }),
     ).toBeTruthy();
     expect(screen.getByText("Notification events")).toBeTruthy();
     expect(screen.queryByText("OS notifications")).toBeNull();
-    expect(screen.queryByText("Push notifications on this phone")).toBeNull();
+    expect(screen.queryByText("Push notifications")).toBeNull();
   });
 
   it("draws the OS row on the desktop and never the push rows", () => {
@@ -62,7 +60,7 @@ describe("<AlertsSettingsPanel />", () => {
     const section = screen.getByTestId("alerts-notifications-section");
     expect(section.contains(screen.getByText("OS notifications"))).toBe(true);
     expect(screen.getByText("Notification events")).toBeTruthy();
-    expect(screen.queryByText("Push notifications on this phone")).toBeNull();
+    expect(screen.queryByText("Push notifications")).toBeNull();
     expect(screen.queryAllByRole("switch")).toEqual([]);
   });
 
@@ -74,9 +72,7 @@ describe("<AlertsSettingsPanel />", () => {
 
     const section = screen.getByTestId("alerts-notifications-section");
     expect(
-      section.contains(
-        await screen.findByText("Push notifications on this phone"),
-      ),
+      section.contains(await screen.findByText("Push notifications")),
     ).toBe(true);
     for (const name of SEVERITY_SWITCHES) {
       expect(section.contains(screen.getByRole("switch", { name }))).toBe(true);
@@ -110,9 +106,7 @@ describe("<AlertsSettingsPanel />", () => {
   it("points event-level controls to the selected host", () => {
     renderPanel({ pushPermission: null, systemSettings: null });
 
-    fireEvent.click(
-      screen.getByRole("button", { name: "Open Host Notifications" }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Open Notifications" }));
 
     expect(navigateToSettingsSectionMock).toHaveBeenCalledWith("notifications");
   });

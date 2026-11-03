@@ -16,6 +16,8 @@ import {
   goBack as goBackAction,
   goForward as goForwardAction,
 } from "@/lib/commands/actions";
+import { readConnectableHostsSnapshot } from "@/hooks/host/use-connectable-host-ids";
+import { openBotChannel } from "@/lib/bots/open-bot-channel";
 import { getHistoryController } from "@/lib/persistent-history";
 import { historyNavChromeAvailable } from "@/lib/history-navigation/use-history-nav-available";
 import { LANDING_ROUTE } from "@/lib/routes";
@@ -115,6 +117,16 @@ export function routerAdapterFor(
         return;
       }
       navigateToTabIntent(router.navigate, intent, undefined);
+    },
+    // Read when the row runs, not when the adapter is built: the adapter
+    // outlives every directory answer, and a surface on a host this client can
+    // no longer dial moves to the window's host as Home's rows move it.
+    openBotChannel: (botId) => {
+      openBotChannel(router.navigate, botId, {
+        landing: null,
+        isConnectable: readConnectableHostsSnapshot(),
+        onRejected: null,
+      });
     },
     navigateNestedFocus: (epicId, tabId, prepare) =>
       navigateNestedFocus(

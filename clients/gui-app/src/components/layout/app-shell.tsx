@@ -12,11 +12,9 @@ import { AppColumnFrame } from "@/components/layout/app-column-frame";
 import { AppHeader } from "@/components/layout/header/app-header";
 import {
   appColumnChrome,
-  PHONE_SHELL_STRIP_CHROME,
   sideStripOwnsTitleBar,
 } from "@/components/layout/header/app-title-band-kind";
 import { useAppColumnChromeInput } from "@/components/layout/use-app-column-chrome-input";
-import { useMobileStripForm } from "@/components/layout/tabs/mobile-strip-form-context";
 import { SideTabStrip } from "@/components/layout/tabs/side-strip/side-tab-strip";
 import { TabStripKeybindingBridge } from "@/components/layout/tabs/tab-strip-keybinding-bridge";
 import { MobileNavDrawer } from "@/components/layout/shell/mobile-nav-drawer";
@@ -36,6 +34,7 @@ import { TopLevelSurfaceActivationProvider } from "@/components/layout/top-level
 import { HostScopeReady } from "@/components/layout/host-readiness-controller";
 import { MigrationRunController } from "@/components/migration/migration-run-controller";
 import { TracyEntryController } from "@/components/layout/tabs/tracy-entry-controller";
+import { SoundtrackShortcutBridge } from "@/components/layout/soundtrack/soundtrack-control";
 import { TalkShortcutBridge } from "@/components/layout/voice/talk-control";
 import { VoiceSessionController } from "@/components/layout/voice/voice-session-controller";
 import { VoiceSessionChrome } from "@/components/layout/voice/voice-session-chrome";
@@ -115,11 +114,7 @@ function AppShellBody(props: AppShellProps) {
   // because the editor has to re-run its effects when the node arrives.
   const [appColumn, setAppColumn] = useState<HTMLDivElement | null>(null);
   const chromeInput = useAppColumnChromeInput();
-  const mobileStripForm = useMobileStripForm();
-  const chrome =
-    mobileStripForm === null
-      ? appColumnChrome(chromeInput)
-      : PHONE_SHELL_STRIP_CHROME;
+  const chrome = appColumnChrome(chromeInput);
   const stripEdge = sideTabStripEdge(chromeInput.placement);
 
   return (
@@ -141,10 +136,7 @@ function AppShellBody(props: AppShellProps) {
                 stripEdge === null ? null : (
                   <SideTabStrip
                     edge={stripEdge}
-                    ownsTitleBar={
-                      mobileStripForm === null &&
-                      sideStripOwnsTitleBar(chromeInput)
-                    }
+                    ownsTitleBar={sideStripOwnsTitleBar(chromeInput)}
                   />
                 )
               }
@@ -232,15 +224,14 @@ function AppShellBody(props: AppShellProps) {
                     top row and the phone's channel header. */}
                   <VoiceSessionController />
                   <TalkShortcutBridge />
+                  <SoundtrackShortcutBridge />
                   <MigrationRunController />
                   <MigrationBlockingModalHost />
-                  {/* Above the drawer's mount gate: a rotation that replaces
-                    the drawer with the strip must not take a pending
-                    confirmation with it. */}
+                  {/* Above the drawer's mount gate: a window resize that
+                    unmounts the drawer must not take a pending confirmation
+                    with it. */}
                   <SignOutConfirmDialog />
-                  {isMobile && mobileStripForm === null ? (
-                    <MobileNavDrawer />
-                  ) : null}
+                  {isMobile ? <MobileNavDrawer /> : null}
                   {/* Test-only probe: binds the active hostId to a hidden DOM
                     attribute so the mobile-cardinality integration tests can
                     assert the runner-host auto-bind machinery without

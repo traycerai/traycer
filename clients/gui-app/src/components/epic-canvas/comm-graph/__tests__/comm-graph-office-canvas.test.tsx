@@ -5695,7 +5695,7 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
    * there before. Driven through the same `officeElementWithView` +
    * `painter.floor` override F5 and F10 use above, rather than a real
    * isometric plan and camera zoom, because what is under test is the
-   * SWITCH in `drawDrawableLayer` - `office-plan-perf.test.ts` and
+   * SWITCH in `drawDrawableLayer` - `office-plan-perf.measure.ts` and
    * `office-overview-coverage.test.ts` already cover the isometric painter
    * producing the right quads from a real Campus/City plan.
    */

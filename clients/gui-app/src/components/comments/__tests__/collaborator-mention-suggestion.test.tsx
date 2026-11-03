@@ -1,4 +1,5 @@
 import { act, cleanup, render, screen } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { SurfacePresentationBoundary } from "@/components/layout/surface-presentation-boundary";
@@ -23,11 +24,13 @@ describe("MentionSuggestionList portal routing (HIGH3)", () => {
   it("renders into the pane portal host, not document.body", () => {
     render(
       <SurfacePresentationBoundary visible focused>
-        <MentionSuggestionList
-          items={[{ userId: "u1", displayName: "Alice", email: "a@x.io" }]}
-          command={() => undefined}
-          getReferenceClientRect={() => new DOMRect(0, 0, 0, 0)}
-        />
+        <QueryClientProvider client={new QueryClient()}>
+          <MentionSuggestionList
+            items={[{ userId: "u1", displayName: "Alice", email: "a@x.io" }]}
+            command={() => undefined}
+            getReferenceClientRect={() => new DOMRect(0, 0, 0, 0)}
+          />
+        </QueryClientProvider>
       </SurfacePresentationBoundary>,
     );
     const list = screen.getByRole("listbox");
@@ -43,11 +46,13 @@ describe("MentionSuggestionList", () => {
     // `null`, so the guard didn't catch it and `undefined.scrollIntoView`
     // threw during commit, crashing before the empty state could render.
     render(
-      <MentionSuggestionList
-        items={[]}
-        command={vi.fn()}
-        getReferenceClientRect={null}
-      />,
+      <QueryClientProvider client={new QueryClient()}>
+        <MentionSuggestionList
+          items={[]}
+          command={vi.fn()}
+          getReferenceClientRect={null}
+        />
+      </QueryClientProvider>,
     );
     await flush();
 

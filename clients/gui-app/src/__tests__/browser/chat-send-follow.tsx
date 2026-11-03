@@ -134,6 +134,10 @@ interface SendDriver {
     streamBursty: (tokens: number, blockId: string) => void;
     /** Reasoning, text, then a tool call, `cycles` times, one event per tick. */
     streamRich: (prefix: string, cycles: number, intervalMs: number) => void;
+    /** Deltas every stream has delivered so far. */
+    deltasDelivered: () => number;
+    /** Whether a stream is still delivering. */
+    streaming: () => boolean;
   };
   probe: () => ScrollProbe;
   /** The message id of the last send the composer made, or `null`. */
@@ -493,6 +497,13 @@ function richEvents(prefix: string, cycles: number): RichEvent[] {
 }
 
 let replyTimer: number | null = null;
+let deltasDelivered = 0;
+function deliverDelta(
+  delta: Parameters<ChatStreamCallbacks["onBlockDelta"]>[0],
+): void {
+  deltasDelivered += 1;
+  liveCallbacks().onBlockDelta(delta);
+}
 function stopReply(): void {
   if (replyTimer === null) return;
   window.clearInterval(replyTimer);
@@ -658,7 +669,7 @@ const driver: SendDriver = {
             ? " end of paragraph.\n\nNext paragraph"
             : ` word${String(sent)}`;
         sent += 1;
-        liveCallbacks().onBlockDelta({
+        deliverDelta({
           kind: "blockDelta",
           hasBinaryPayload: false,
           epicId: EPIC_ID,
@@ -673,6 +684,8 @@ const driver: SendDriver = {
       }, intervalMs);
     },
     stopReply,
+    deltasDelivered: () => deltasDelivered,
+    streaming: () => replyTimer !== null,
     streamParts: (parts) => {
       stopReply();
       const queue: { delay: number; event: RichEvent }[] = [];
@@ -725,7 +738,7 @@ const driver: SendDriver = {
         }
         const item = queue[at];
         at += 1;
-        liveCallbacks().onBlockDelta({
+        deliverDelta({
           kind: "blockDelta",
           hasBinaryPayload: false,
           epicId: EPIC_ID,
@@ -751,7 +764,7 @@ const driver: SendDriver = {
         const gap =
           sent % 9 === 8 ? 80 + ((sent * 37) % 71) : 30 + ((sent * 13) % 31);
         sent += 1;
-        liveCallbacks().onBlockDelta({
+        deliverDelta({
           kind: "blockDelta",
           hasBinaryPayload: false,
           epicId: EPIC_ID,
@@ -778,7 +791,7 @@ const driver: SendDriver = {
         }
         const event = events[index];
         index += 1;
-        liveCallbacks().onBlockDelta({
+        deliverDelta({
           kind: "blockDelta",
           hasBinaryPayload: false,
           epicId: EPIC_ID,

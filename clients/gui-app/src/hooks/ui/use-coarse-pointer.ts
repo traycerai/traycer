@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react";
+import { isPhoneLayoutOnly } from "@/lib/mobile-app";
 
 /**
  * INPUT signal: "is a touch-grade pointer driving this window?"
@@ -21,7 +22,13 @@ function subscribeToCoarsePointerQuery(onChange: () => void): () => void {
   return () => mediaQuery.removeEventListener("change", onChange);
 }
 
+/**
+ * The installed app is touch-first whatever else the device reports: Android
+ * ranks a stylus as a fine pointer, so a phone with a pen would otherwise lose
+ * the touch floors and summon the keyboard over every picker.
+ */
 function readCoarsePointerSnapshot(): boolean {
+  if (isPhoneLayoutOnly()) return true;
   return window.matchMedia(COARSE_POINTER_QUERY).matches;
 }
 

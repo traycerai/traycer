@@ -1848,6 +1848,7 @@ describe("fallbackNoticeAnnouncements", () => {
           {
             id: "queue-paused:a5",
             kind: "error",
+            hostTimestamp: null,
             message:
               "1 queued message was held because this turn ended with an error, and it was not sent. Resume the queue to send it.",
             recoverable: true,

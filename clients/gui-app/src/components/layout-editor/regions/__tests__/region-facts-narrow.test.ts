@@ -48,7 +48,12 @@ function contextFor(shell: Shell): LayoutFormContext {
       DEFAULT_LAYOUT_SNAPSHOT.overrides,
     ),
     arrangement: DEFAULT_ARRANGEMENT,
-    shell: { runnerHost: null, featureSettings: null, ...shell },
+    shell: {
+      runnerHost: null,
+      featureSettings: null,
+      soundtrackOffered: false,
+      ...shell,
+    },
     facts: { voiceInputEnabled: true },
   };
 }

@@ -1033,6 +1033,7 @@ describe("RunnerIpcBridge", () => {
           RunnerHostInvoke.browserViewSessionsClose,
           RunnerHostInvoke.browserViewSessionsSend,
           RunnerHostInvoke.browserViewGuestViewportResult,
+          RunnerHostInvoke.browserViewGuestDrawHoldApplied,
           RunnerHostInvoke.browserViewAttachSurface,
           RunnerHostInvoke.browserViewDetachSurface,
           RunnerHostInvoke.browserViewControlElectronTab,

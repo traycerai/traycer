@@ -47,7 +47,7 @@ import {
   visibleEpicIds,
 } from "@/lib/browser-view/tiles/surface-host-opened-tab";
 import {
-  isDocumentVisible,
+  isWindowOnScreen,
   subscribeDocumentVisibility,
 } from "@/lib/dom/document-visibility";
 import { createBoundedRetry } from "@/lib/epics/bounded-retry";
@@ -147,14 +147,15 @@ export function installCrossWindowEpicVisibility(
   // cannot see the window - so reporting it unconditionally left every other
   // window believing these Epics were on screen here, and holding off parking
   // them, for as long as this one stayed hidden. A hidden window claims
-  // nothing.
+  // nothing. "Hidden" is `isWindowOnScreen()`, the same answer this window's
+  // own parking reads: a macOS window that is only covered keeps its claim.
   //
   // Both halves are read HERE, at attempt time, for the same reason the ids
   // already were: a retry that fires after the window was minimized (or
   // restored) must send what is true when it sends, not what was true when it
   // was armed.
   const reportableEpicIds = (): readonly string[] =>
-    isDocumentVisible() ? visibleEpicIds() : [];
+    isWindowOnScreen() ? visibleEpicIds() : [];
   const reportLeg = createBoundedRetry("cross-window report", () =>
     channel.report(reportableEpicIds()),
   );

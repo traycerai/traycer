@@ -7,7 +7,7 @@ import {
   type ReactNode,
   type RefObject,
 } from "react";
-import { MemberAvatar } from "@/components/bots/bot-avatars";
+import { PersonAvatar } from "@/components/bots/bot-avatars";
 import { useBotIdentity } from "@/components/bots/bot-identity-context";
 import {
   activeMentionQuery,
@@ -225,7 +225,7 @@ export function useBotMentionCompletion(args: {
             index === active && "bg-foreground/8",
           )}
         >
-          <MemberAvatar
+          <PersonAvatar
             userId={candidate.userId}
             name={candidate.name}
             avatarUrl={candidate.avatarUrl}

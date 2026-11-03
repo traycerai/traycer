@@ -38,4 +38,11 @@ export const MIX_TUNING = {
   fadeInSeconds: 0.5,
   /** Turning the soundtrack off. */
   stopFadeSeconds: 0.4,
+  /** The soundtrack's level as a gain, until the person moves it. */
+  volume: { initial: 0.5, rampSeconds: 0.05 },
+  /**
+   * Under a chime: the gain the music drops to, how fast it gets there, and how
+   * slowly it comes back once the chime is over.
+   */
+  duck: { gain: 0.25, attackSeconds: 0.08, releaseSeconds: 0.8 },
 } as const;

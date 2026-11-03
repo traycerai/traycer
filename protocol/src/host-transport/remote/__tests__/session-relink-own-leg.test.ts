@@ -103,12 +103,59 @@ const STATUS_METHOD = "host.status";
 const STREAM_METHOD = "cursor.subscribe";
 const RELINK_CLOSE_CODE = 4007;
 
-/** Captured before fake timers: the real event loop lets Noise's async work finish. */
-const realSetTimeout = globalThis.setTimeout;
-function realDelay(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    realSetTimeout(resolve, ms);
+/** Captured before fake timers: a real turn lets WebCrypto's completions in. */
+const realSetImmediate = globalThis.setImmediate;
+
+/**
+ * The fake clock moves everything here but Noise, which runs on WebCrypto's
+ * thread pool. These count its operations, so a test awaits them finishing
+ * rather than sleeping for as long as they usually take.
+ */
+let webCryptoInFlight = 0;
+
+function countedWebCrypto<T>(operation: Promise<T>): Promise<T> {
+  webCryptoInFlight += 1;
+  return operation.finally(() => {
+    webCryptoInFlight -= 1;
   });
+}
+
+function countWebCrypto(): void {
+  const subtle = globalThis.crypto.subtle;
+  const decrypt = subtle.decrypt.bind(subtle);
+  const digest = subtle.digest.bind(subtle);
+  const encrypt = subtle.encrypt.bind(subtle);
+  const importKey = subtle.importKey.bind(subtle);
+  const sign = subtle.sign.bind(subtle);
+  vi.spyOn(subtle, "decrypt").mockImplementation((...args) =>
+    countedWebCrypto(decrypt(...args)),
+  );
+  vi.spyOn(subtle, "digest").mockImplementation((...args) =>
+    countedWebCrypto(digest(...args)),
+  );
+  vi.spyOn(subtle, "encrypt").mockImplementation((...args) =>
+    countedWebCrypto(encrypt(...args)),
+  );
+  vi.spyOn(subtle, "importKey").mockImplementation((...args) =>
+    countedWebCrypto(importKey(...args)),
+  );
+  vi.spyOn(subtle, "sign").mockImplementation((...args) =>
+    countedWebCrypto(sign(...args)),
+  );
+}
+
+/**
+ * Returns once no Noise operation is running. It takes two quiet turns because
+ * the continuation of a finished operation can start the next one.
+ */
+async function settleNoise(): Promise<void> {
+  let quietTurns = 0;
+  while (quietTurns < 2) {
+    await new Promise((resolve) => {
+      realSetImmediate(resolve);
+    });
+    quietTurns = webCryptoInFlight === 0 ? quietTurns + 1 : 0;
+  }
 }
 
 /** The handlers the session gave each relay socket, in dial order. */
@@ -734,19 +781,16 @@ interface Fixture {
 const opened: Session[] = [];
 
 async function until(condition: () => boolean): Promise<void> {
-  for (let attempt = 0; attempt < 2_500; attempt += 1) {
-    if (condition()) {
-      return;
-    }
-    await realDelay(2);
+  await settleNoise();
+  if (!condition()) {
+    throw new Error("condition was not reached");
   }
-  throw new Error("condition was not reached");
 }
 
 /** Moves the fake clock, then lets the real async work it started finish. */
 async function step(ms: number): Promise<void> {
   await vi.advanceTimersByTimeAsync(ms);
-  await realDelay(20);
+  await settleNoise();
 }
 
 /** Moves the fake clock in quarter-second steps until `condition` holds. */
@@ -880,7 +924,7 @@ async function untilResumed(fixture: Fixture, resumes: number): Promise<void> {
   await advanceUntil(() => fixture.relay.resumes.length === resumes, 30_000);
   await until(() => fixture.session.isReady());
   await fixture.relay.host().queue;
-  await realDelay(20);
+  await settleNoise();
 }
 
 interface Deferred<T> {
@@ -908,7 +952,7 @@ async function advanceFeedingHost(
   for (let elapsed = 0; elapsed < totalMs; elapsed += stroke) {
     await vi.advanceTimersByTimeAsync(Math.min(stroke, totalMs - elapsed));
     await relay.tick(1_000 + elapsed);
-    await realDelay(20);
+    await settleNoise();
   }
 }
 
@@ -962,6 +1006,7 @@ const OK_GRANT: AttachGrantProvision = {
 describe("RemoteSession relink on an own-leg loss", () => {
   beforeEach(() => {
     vi.useFakeTimers();
+    countWebCrypto();
     capturedLegs.handlers.length = 0;
     vi.spyOn(console, "info").mockImplementation(() => undefined);
     vi.spyOn(console, "warn").mockImplementation(() => undefined);

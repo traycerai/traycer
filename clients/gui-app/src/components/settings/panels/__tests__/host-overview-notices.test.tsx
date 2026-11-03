@@ -1020,6 +1020,7 @@ const DOWNLOADING_STATUS: ResponseOfMethod<HostRpcRegistry, "host.status"> = {
   crossHostMessaging: null,
   sessions: null,
   updatesExternallyManaged: null,
+  previousExit: null,
 };
 
 function completeStatus(
@@ -1058,6 +1059,7 @@ function completeStatus(
     crossHostMessaging: null,
     sessions: null,
     updatesExternallyManaged: null,
+    previousExit: null,
   };
 }
 
@@ -1080,6 +1082,7 @@ function pendingDrainStatus(
     crossHostMessaging: null,
     sessions: null,
     updatesExternallyManaged: null,
+    previousExit: null,
   };
 }
 
@@ -1307,6 +1310,7 @@ describe("the one-wait rule: the account's drain gate withdraws once the host re
           crossHostMessaging: null,
           sessions: null,
           updatesExternallyManaged: null,
+          previousExit: null,
         }),
       },
     });
@@ -1724,6 +1728,7 @@ describe("the bound activation offer's auto-open reaches a person who has moved 
           crossHostMessaging: null,
           sessions: null,
           updatesExternallyManaged: null,
+          previousExit: null,
         }),
         "host.update.check": () => ({
           outcome: "ok" as const,
@@ -1843,6 +1848,7 @@ describe("the staged-wait Force update… dialog dispatches through the same bus
           crossHostMessaging: null,
           sessions: null,
           updatesExternallyManaged: null,
+          previousExit: null,
         }),
         "host.update.check": () => ({
           outcome: "ok" as const,

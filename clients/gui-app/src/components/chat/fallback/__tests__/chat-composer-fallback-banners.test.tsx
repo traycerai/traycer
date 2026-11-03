@@ -114,7 +114,7 @@ function bannersTree(input: {
 }) {
   return (
     <TooltipProvider>
-      <ChatComposerBannerPortalProvider>
+      <ChatComposerBannerPortalProvider hidden={false}>
         <ChatComposerFallbackBanners
           topBannerKind={input.topBannerKind}
           fallback={{

@@ -45,7 +45,7 @@ import { cn } from "@/lib/utils";
 import {
   AvatarStack,
   BotAvatar,
-  MemberAvatar,
+  PersonAvatar,
 } from "@/components/bots/bot-avatars";
 import { BotIdentityTrigger } from "@/components/bots/bot-identity-popover";
 import { BotSurfaceCard } from "@/components/bots/bot-surface-card";
@@ -168,7 +168,7 @@ function MemberRow(props: {
   return (
     <BotMessageFrame
       avatar={
-        <MemberAvatar
+        <PersonAvatar
           userId={message.senderUserId ?? null}
           name={name}
           avatarUrl={message.senderAvatarUrl ?? null}
