@@ -1075,6 +1075,9 @@ const ANNOUNCEMENT_LABELS: Readonly<Record<BotAnnouncementKind, string>> = {
   automation: "Automation created",
   "bot-created": "New bot",
   policy: "Policy change",
+  // Rows a released host wrote before announcements stopped asking; no
+  // current host writes one.
+  question: "Question",
 };
 
 const ANNOUNCEMENT_BARS: Readonly<Record<BotAnnouncementKind, string>> = {
@@ -1082,6 +1085,7 @@ const ANNOUNCEMENT_BARS: Readonly<Record<BotAnnouncementKind, string>> = {
   automation: "border-l-success",
   "bot-created": "border-l-primary",
   policy: "border-l-warning",
+  question: "border-l-chart-2",
 };
 
 /**

@@ -922,27 +922,31 @@ describe("<ChatMessage /> bot rows", () => {
     expect(screen.queryByTestId("bot-reply-options")).toBeNull();
   });
 
-  const KIND_LABELS: ReadonlyArray<readonly [BotAnnouncementKind, string]> = [
-    ["proposal", "New proposal"],
-    ["automation", "Automation created"],
-    ["bot-created", "New bot"],
-    ["policy", "Policy change"],
+  // Every kind the schema accepts, with its label and bar colour. `question`
+  // is a row a released host wrote before announcements stopped asking; no
+  // current host writes one, but a stored one must still draw.
+  const KIND_PRESENTATIONS: ReadonlyArray<
+    readonly [BotAnnouncementKind, string, string]
+  > = [
+    ["proposal", "New proposal", "border-l-info"],
+    ["automation", "Automation created", "border-l-success"],
+    ["bot-created", "New bot", "border-l-primary"],
+    ["policy", "Policy change", "border-l-warning"],
+    ["question", "Question", "border-l-chart-2"],
   ];
 
-  it.each(KIND_LABELS)(
-    "draws a %s announcement under the label %s",
-    (kind, label) => {
+  it.each(KIND_PRESENTATIONS)(
+    "draws a %s announcement under the label %s with the bar %s",
+    (kind, label, bar) => {
       renderRow(botRow({ kind, link: null }), presentation);
 
       const row = screen.getByTestId("bot-announcement");
       expect(screen.queryByTestId("bot-reply-row")).toBeNull();
       expect(within(row).getByText(label)).toBeTruthy();
       expect(within(row).getByText("The bot says hello")).toBeTruthy();
-      expect(
-        row
-          .querySelector("[data-announcement-kind]")
-          ?.getAttribute("data-announcement-kind"),
-      ).toBe(kind);
+      const body = row.querySelector("[data-announcement-kind]");
+      expect(body?.getAttribute("data-announcement-kind")).toBe(kind);
+      expect(body?.classList.contains(bar)).toBe(true);
       expect(screen.queryByTestId("bot-announcement-link")).toBeNull();
     },
   );
