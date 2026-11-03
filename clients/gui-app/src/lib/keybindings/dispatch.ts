@@ -99,6 +99,13 @@ export interface KeybindingRouter {
   readonly navigateNestedFocus?: NavigateNestedFocus;
   readonly navigateNestedFocusToPrimaryEditor?: NavigateNestedFocus;
   /**
+   * Opens the Tracy surface on `botId`'s channel (`openBotChannel`, decision
+   * 150), with this client's dialable hosts as the directory answers them
+   * when it runs. Optional, as the nested-focus members are, so the router
+   * fixtures of callers that open no bot need no stub of it.
+   */
+  readonly openBotChannel?: (botId: string) => void;
+  /**
    * In-app history back/forward. Delegate to the shared
    * `goBack`/`goForward` actions on the CURRENT router (the live
    * instance in `<RouterProvider>`), so keybinding, mouse, header, and

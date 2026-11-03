@@ -52,14 +52,15 @@ jobs:
         env:
           PR_HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
         run: node scripts/release-train-promotion-guard.cjs
+      # This job has no bun and no node_modules; the ratchet runs in `format`.
       - uses: pre-commit/action@2c7b3805fd2a0fd8c1884dcaebf91fc102a13ecd # v3.0.1
         env:
-          SKIP: workspace-checks
+          SKIP: workspace-checks,local-definition-ratchet
 
-  # `oxfmt --check .` and the git output buffer guard read the whole tree on
-  # every run: no history and no Nx. Nx keys the guard's project, `scripts`,
-  # on its own files, so under Nx it would replay a cached pass over a new git
-  # call elsewhere.
+  # `oxfmt --check .`, the git output buffer guard and the local-definition
+  # ratchet read the whole tree on every run: no history and no Nx. Nx keys the
+  # guard's project, `scripts`, on its own files, so under Nx it would replay a
+  # cached pass over a new git call elsewhere.
   format:
     name: format
     # A team PR into `main`, `integration/*` or `land/*` skips this job: the
@@ -94,6 +95,8 @@ jobs:
           bun x vitest run --config scripts/vitest.config.ts
           scripts/__tests__/early-exit-reader-pipelines.test.mjs
           --maxWorkers=1
+      - name: No new local sleep, isRecord, errorMessage, source walker or stream-session lifecycle
+        run: bun scripts/local-definition-ratchet.mjs scripts/local-definition-ratchet.json
 
   workspace-checks:
     name: ${{ matrix.lane }}
@@ -119,6 +122,8 @@ jobs:
               .nx/cache
               .nx/workspace-data/*.db
               clients/gui-app/.eslintcache
+              protocol/.eslintcache
+              packages/html-source/.eslintcache
           - lane: compile
             cache: |
               .nx/cache

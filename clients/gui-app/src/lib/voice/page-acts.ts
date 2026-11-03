@@ -246,6 +246,8 @@ function tellAgent(
     null,
   );
   // Only the composer's own send wakes a sandbox and holds the message for it.
+  // A send the folder dialog holds is handed over too: the person answers
+  // it on screen.
   if (composer.restingSandbox) {
     return composer.submit({
       content,
@@ -255,9 +257,9 @@ function tellAgent(
       deliveryPolicy: deliveryPolicyOf(chat, settings),
       restore: { content, browserAnnotations: [] },
       restartConfirmed: false,
-    })
-      ? EXECUTED
-      : refused(NOT_DELIVERED_NOTICE);
+    }) === false
+      ? refused(NOT_DELIVERED_NOTICE)
+      : EXECUTED;
   }
   const marksTitlePending = shouldGenerateChatTitleForSubmittedMessage({
     chat: chat.chat,

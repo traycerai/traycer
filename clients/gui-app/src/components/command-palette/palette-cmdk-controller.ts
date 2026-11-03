@@ -215,6 +215,7 @@ function analyticsCommandForItem(
   if (item.id.startsWith("open:terminals:")) return "open_terminal";
   if (item.id.startsWith("open:tui:")) return "open_terminal";
   if (item.id.startsWith("epic:")) return "open_task";
+  if (item.id.startsWith("bot:")) return "open_bot";
   if (item.id === "help:report-issue") return "report_issue";
   if (item.actionId === "epic.new") return "create_task";
   if (item.actionId === "epic.duplicate-tab") return "duplicate_tab";
