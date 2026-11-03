@@ -952,16 +952,24 @@ function timeoutOf(words) {
     return args.includes("TMOUT") && !args.includes("-f") ? false : null;
   }
   if (name !== "printf") return null;
-  const at = args.findIndex(
-    (arg, position) =>
-      arg === "-vTMOUT" || (arg === "-v" && args[position + 1] === "TMOUT"),
-  );
-  if (at === -1) return null;
-  const [format = "", ...values] = args.slice(at + (args[at] === "-v" ? 2 : 1));
-  // A format with no conversion prints itself, and `%s` or `%d` its first
-  // argument; any other format may print a timeout.
+  // printf's options come before its format and end at `--`.
+  let at = 0;
+  let variable = null;
+  while (/^-./.test(args[at] ?? "")) {
+    if (args[at] === "--") {
+      at += 1;
+      break;
+    }
+    if (!args[at].startsWith("-v")) break;
+    variable = args[at] === "-v" ? args[at + 1] : args[at].slice(2);
+    at += args[at] === "-v" ? 2 : 1;
+  }
+  if (variable !== "TMOUT") return null;
+  const [format = "", ...values] = args.slice(at);
+  // A format with no conversion prints itself once, and a lone `%s` or `%d`
+  // repeats over every argument; any other format may print a timeout.
   let printed = null;
-  if (/^%[sd]$/.test(format)) printed = values[0] ?? "";
+  if (/^%[sd]$/.test(format)) printed = values.join("");
   else if (!format.includes("%") && !format.includes("\\")) printed = format;
   return printed === null || !/^0*$/.test(printed);
 }
@@ -1892,6 +1900,10 @@ describe("an early-exit reader never reads a streaming producer through a pipe u
       "printf -v TMOUT %s 5\nseq 10 | while read -r x; do :; done",
     ],
     [
+      "a read loop under a TMOUT built by printf's repeated format",
+      "printf -v TMOUT %s 0 1\nseq 10 | while read -r x; do :; done",
+    ],
+    [
       "a tested eval in an argument's substitution",
       `echo "$(if eval 'seq 10 | grep -q 1'; then printf yes; fi)"`,
     ],
@@ -2084,6 +2096,14 @@ describe("an early-exit reader never reads a streaming producer through a pipe u
     [
       "TMOUT printf sets to zero",
       "printf -v TMOUT %s 0\nseq 10 | while read -r x; do :; done",
+    ],
+    [
+      "TMOUT printf sets to zero after --",
+      "printf -v TMOUT -- %s 0\nseq 10 | while read -r x; do :; done",
+    ],
+    [
+      "-v TMOUT as printf's data before a read loop",
+      "printf '%s\\n' -v TMOUT 5 >/dev/null\nseq 10 | while read -r x; do :; done",
     ],
     [
       "a read with a zero TMOUT prefix under a TMOUT",
