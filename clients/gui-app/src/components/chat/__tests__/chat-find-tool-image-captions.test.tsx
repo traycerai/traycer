@@ -196,7 +196,6 @@ describe("Chat Find over generic tool image captions", () => {
     render(
       <Providers>
         <AssistantSegment
-          reportTurnId={null}
           id={segment.id}
           segment={segment}
           backgroundToolBlockIds={new Set()}
@@ -395,7 +394,6 @@ describe("Chat Find highlighter over the generic tool gallery", () => {
       view: render(
         <Providers>
           <AssistantSegment
-            reportTurnId={null}
             id={segment.id}
             segment={segment}
             backgroundToolBlockIds={new Set()}

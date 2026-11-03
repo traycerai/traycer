@@ -253,7 +253,6 @@ describe.each([
       render(
         <Providers>
           <AssistantSegment
-            reportTurnId={null}
             id={card.id}
             segment={card}
             backgroundToolBlockIds={new Set()}
@@ -304,7 +303,6 @@ describe.each([
       render(
         <Providers>
           <AssistantSegment
-            reportTurnId={null}
             id={card.id}
             segment={card}
             backgroundToolBlockIds={new Set()}
@@ -401,7 +399,6 @@ describe.each([
     render(
       <Providers>
         <AssistantSegment
-          reportTurnId={null}
           id={card.id}
           segment={card}
           backgroundToolBlockIds={new Set()}

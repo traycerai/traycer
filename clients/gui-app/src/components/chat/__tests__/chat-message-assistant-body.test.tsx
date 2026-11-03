@@ -19,6 +19,7 @@ import {
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { formatMessageTimeWithSeconds } from "@/lib/relative-time";
 import type { AutonomousResumeTrigger } from "@traycer/protocol/persistence/epic/content-blocks";
+import { useSubagentOpenStore } from "@/stores/chats/subagent-open-store";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import type {
   AssistantTurnMeta,
@@ -48,6 +49,7 @@ afterEach(() => {
   restoreClipboardMock = () => undefined;
   cleanup();
   useDesktopDialogStore.getState().close();
+  useSubagentOpenStore.getState().reset("assistant-body-test-tile");
   useDesktopDialogStore.setState({ reportIssueAvailable: false });
 });
 
@@ -675,6 +677,44 @@ describe("AssistantMessageBody stopped turn rendering", () => {
 
     expect(cause?.turnId).toBe("turn:x");
     expect(cause?.hostTimestamp).toBe(1_700_000_123_456);
+  });
+
+  it("hands its row's turn to an error nested inside a subagent card's conversation", () => {
+    useDesktopDialogStore.setState({ reportIssueAvailable: true });
+    render(
+      <AssistantMessageBody
+        turnId="turn:x"
+        {...bodyProps({
+          segments: [
+            {
+              ...PROMOTED_SUBAGENT_SEGMENT,
+              children: [
+                {
+                  id: "nested-error",
+                  kind: "error",
+                  message: "Nested boom",
+                  recoverable: false,
+                  code: null,
+                  failure: null,
+                  hostTimestamp: 1_700_000_456_789,
+                  parentId: PROMOTED_SUBAGENT_SEGMENT.id,
+                },
+              ],
+            },
+          ],
+        })}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Subagent" }));
+    fireEvent.click(screen.getByRole("button", { name: "Report issue" }));
+    const cause =
+      useDesktopDialogStore.getState().reportIssueDraftContext
+        ?.privateDiagnostics.cause;
+
+    expect(cause?.message).toBe("Nested boom");
+    expect(cause?.turnId).toBe("turn:x");
+    expect(cause?.hostTimestamp).toBe(1_700_000_456_789);
   });
 
   it("surfaces the stop reason and time in the elapsed footer's tooltip", async () => {
