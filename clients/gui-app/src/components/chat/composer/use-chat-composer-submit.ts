@@ -422,8 +422,17 @@ export function useChatComposerSubmit(
       // then clears it as an immediate accept would, and a dismissed one
       // keeps it. Without this the confirmed send left its text behind as a
       // second copy of the queued message.
+      //
+      // Cleared only while the draft is still the one that was sent. The
+      // dialog is modal, so this editor cannot move it, but another window's
+      // mirror can replace it meanwhile; `revision` moves on every real
+      // change (see `DraftState.revision`), and a newer draft is not the
+      // sent text, so it stays.
+      const sentRevision = readComposerDraftSnapshot(taskId).revision;
       void accepted.then((confirmed) => {
-        if (confirmed) clearAcceptedDraft();
+        if (!confirmed) return;
+        if (readComposerDraftSnapshot(taskId).revision !== sentRevision) return;
+        clearAcceptedDraft();
       });
       return true;
     },

@@ -3430,6 +3430,14 @@ function useChatTileSessionViewModel(
         stopTargets: snapshot.stopTargets,
       };
       if (snapshot.holders.length > 0) {
+        // One armed send at a time: a second one arriving while the dialog
+        // asks about the first (a composer send whose image preparation
+        // finished after a next-step click armed it) would replace the send
+        // the dialog is about, and "Send and switch" would dispatch the
+        // wrong prompt. It is refused instead, so its text stays put.
+        if (pendingSubmitRef.current !== null) {
+          return { kind: "dispatched", accepted: false };
+        }
         let settle: (accepted: boolean) => void = () => undefined;
         const accepted = new Promise<boolean>((resolve) => {
           settle = resolve;

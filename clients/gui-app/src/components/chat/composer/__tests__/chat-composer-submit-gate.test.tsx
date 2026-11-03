@@ -370,6 +370,29 @@ describe("chat-composer submit deferred acceptance", () => {
     );
   });
 
+  it("leaves a draft that was replaced while the dialog was open", async () => {
+    const taskId = "task-deferred-replaced";
+    const deferred = mountDeferred(taskId);
+    const newer: JsonContent = {
+      type: "doc",
+      content: [
+        { type: "paragraph", content: [{ type: "text", text: "newer" }] },
+      ],
+    };
+
+    deferred.submit();
+    // Another window's mirror lands a different draft under the dialog.
+    act(() => {
+      useComposerDraftStore.getState().setSnapshot(taskId, newer, null);
+    });
+    await deferred.settle(true);
+
+    expect(deferred.clear).not.toHaveBeenCalled();
+    expect(useComposerDraftStore.getState().drafts[taskId]?.content).toEqual(
+      newer,
+    );
+  });
+
   it("keeps the draft when the dialog is dismissed", async () => {
     const taskId = "task-deferred-dismissed";
     const deferred = mountDeferred(taskId);
