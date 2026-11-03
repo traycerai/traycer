@@ -6,6 +6,7 @@ import {
   evaluateTestBudget,
   junitFileDurationsMs,
   parseTestBudgetAllowlist,
+  parseTestBudgetArgs,
   secondRunDurationsMs,
 } from "../test-budget";
 
@@ -136,6 +137,15 @@ describe("secondRunDurationsMs", () => {
     expect(secondRunDurationsMs(status, report)).toEqual(new Map());
   });
 
+  it("measures nothing for a clean exit whose report records an unhandled error, as a dead fork leaves it", () => {
+    const deadFork = REPORT.replace(
+      "</testsuites>",
+      '<testsuite name="vitest unhandled errors" tests="1" failures="0" errors="1" skipped="0" time="0"><testcase classname="vitest unhandled errors" name="Worker exited unexpectedly" time="0"><error message="Worker exited unexpectedly" type="Error">Worker exited unexpectedly</error></testcase></testsuite></testsuites>',
+    );
+    expect(deadFork).not.toBe(REPORT);
+    expect(secondRunDurationsMs(0, deadFork)).toEqual(new Map());
+  });
+
   it("reads the report on exit 0", () => {
     expect(secondRunDurationsMs(0, REPORT)).toEqual(
       new Map([
@@ -163,5 +173,30 @@ describe("describeBudgetReading", () => {
         "over",
       ),
     ).toBe("budget src/a.test.ts first=12.3s second=none verdict=over");
+  });
+});
+
+describe("parseTestBudgetArgs", () => {
+  it("reads a bare report as the protocol leg's and --project as another project's", () => {
+    expect(parseTestBudgetArgs(["protocol/test-results/junit.xml"])).toEqual({
+      project: "protocol",
+      report: "protocol/test-results/junit.xml",
+    });
+    expect(
+      parseTestBudgetArgs(["--project", "clients/gui-app", "test-junit.xml"]),
+    ).toEqual({ project: "clients/gui-app", report: "test-junit.xml" });
+  });
+
+  it("refuses a flag in a report's place, a missing argument and a stray one", () => {
+    expect(
+      parseTestBudgetArgs(["--project=clients/gui-app", "test-junit.xml"]),
+    ).toBeNull();
+    expect(parseTestBudgetArgs(["--project=clients/gui-app"])).toBeNull();
+    expect(parseTestBudgetArgs(["--project", "clients/gui-app"])).toBeNull();
+    expect(parseTestBudgetArgs(["a.xml", "b.xml"])).toBeNull();
+    expect(
+      parseTestBudgetArgs(["--project", "clients/gui-app", "a.xml", "b.xml"]),
+    ).toBeNull();
+    expect(parseTestBudgetArgs([])).toBeNull();
   });
 });

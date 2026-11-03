@@ -202,6 +202,11 @@ export function resetToShippedLayout(): void {
 
 const REDUCED_MOTION_QUERY = "(prefers-reduced-motion: reduce)";
 
+let frozenNowMs: number | null = null;
+
+/** One browser frame of virtual time: what a settle gives a queued write. */
+const FRAME_MS = 16;
+
 /**
  * Holds every clock the column draws from still, so the only thing that can
  * change its HTML is a setting.
@@ -214,7 +219,10 @@ const REDUCED_MOTION_QUERY = "(prefers-reduced-motion: reduce)";
  * user prefers reduced motion - the product's own switch, which stops its
  * interval and leaves the resting look - motion is told to skip its
  * animations, and `Date` is frozen, so a countdown does not tick over a minute
- * boundary in the middle of a run. Timers stay real, so `settle()` still waits.
+ * boundary in the middle of a run. Timers run on a fake clock the sweep
+ * advances itself (`tick`, `advanceSweepTime`), so `settle()` waits in virtual
+ * time; every advance puts `Date` back where it was, so time that passes for
+ * timers and frames never reaches a relative time.
  */
 export function holdClocksStill(): () => void {
   const originalMatchMedia = window.matchMedia.bind(window);
@@ -233,8 +241,20 @@ export function holdClocksStill(): () => void {
   });
   const skipped = MotionGlobalConfig.skipAnimations;
   MotionGlobalConfig.skipAnimations = true;
-  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.useFakeTimers({
+    toFake: [
+      "Date",
+      "setTimeout",
+      "clearTimeout",
+      "setInterval",
+      "clearInterval",
+      "requestAnimationFrame",
+      "cancelAnimationFrame",
+    ],
+  });
+  frozenNowMs = Date.now();
   return () => {
+    frozenNowMs = null;
     vi.useRealTimers();
     MotionGlobalConfig.skipAnimations = skipped;
     vi.unstubAllGlobals();
@@ -464,13 +484,20 @@ export interface SweepMount {
   readonly unmount: () => void;
 }
 
-/** One macrotask, inside `act`, so promises and timers a write queued run. */
-export async function tick(): Promise<void> {
+/**
+ * Advances the sweep's fake clock inside `act`, so timers, animation frames
+ * and the promises they release run, then puts `Date` back where it was held.
+ */
+export async function advanceSweepTime(ms: number): Promise<void> {
   await act(async () => {
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 0);
-    });
+    await vi.advanceTimersByTimeAsync(ms);
   });
+  if (frozenNowMs !== null) vi.setSystemTime(frozenNowMs);
+}
+
+/** One frame of virtual time, so a write queued for the next frame lands. */
+export async function tick(): Promise<void> {
+  await advanceSweepTime(FRAME_MS);
 }
 
 /**

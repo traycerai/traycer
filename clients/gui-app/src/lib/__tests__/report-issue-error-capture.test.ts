@@ -30,6 +30,8 @@ describe("capturePersistedAgentError", () => {
       message: "Boom went the host",
       code: "RUNTIME_THROWN",
       recoverable: false,
+      hostTimestamp: null,
+      turnId: null,
     });
 
     expect(captureException).not.toHaveBeenCalled();
@@ -48,6 +50,8 @@ describe("capturePersistedAgentError", () => {
       message: "Boom went the host",
       code: "RUNTIME_THROWN",
       recoverable: false,
+      hostTimestamp: null,
+      turnId: null,
     });
 
     expect(capture.cause).toEqual(
@@ -71,6 +75,8 @@ describe("capturePersistedAgentError", () => {
       message: "Please re-authenticate",
       code: "auth",
       recoverable: true,
+      hostTimestamp: null,
+      turnId: null,
     });
 
     expect(capture.cause.type).toBe("AgentErrorRecoverable");
@@ -85,10 +91,72 @@ describe("capturePersistedAgentError", () => {
       message: "Something failed",
       code: null,
       recoverable: false,
+      hostTimestamp: null,
+      turnId: null,
     });
 
     expect(capture.cause.errorCode).toBeNull();
     expect(capture.fingerprint).toMatch(/^fp:v1:/);
+  });
+});
+
+describe("host row identity on the cause", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("carries the row's Host timestamp and turn id, leaving timestamp as the click time", () => {
+    const hostTimestamp = 1_700_000_000_000;
+    const clickTime = 1_700_000_600_000;
+    vi.useFakeTimers();
+    vi.setSystemTime(clickTime);
+
+    const capture = capturePersistedAgentError({
+      message: "Boom",
+      code: "RUNTIME_THROWN",
+      recoverable: false,
+      hostTimestamp,
+      turnId: "turn:abc",
+    });
+
+    expect(capture.cause.hostTimestamp).toBe(hostTimestamp);
+    expect(capture.cause.turnId).toBe("turn:abc");
+    expect(capture.cause.timestamp).toBe(clickTime);
+  });
+
+  it("gives nulls out for nulls in", () => {
+    const capture = capturePersistedAgentError({
+      message: "Boom",
+      code: null,
+      recoverable: true,
+      hostTimestamp: null,
+      turnId: null,
+    });
+
+    expect(capture.cause.hostTimestamp).toBeNull();
+    expect(capture.cause.turnId).toBeNull();
+  });
+
+  it("captureReportIssueError has no Host row identity", () => {
+    const capture = captureReportIssueError({
+      error: new Error("live"),
+      componentStack: null,
+      errorCode: null,
+      sourceAction: "test",
+    });
+
+    expect(capture.cause.hostTimestamp).toBeNull();
+    expect(capture.cause.turnId).toBeNull();
+  });
+
+  it("captureDictationFailure has no Host row identity", () => {
+    const capture = captureDictationFailure({
+      failureClass: "not_connected",
+      message: "Not connected",
+    });
+
+    expect(capture.cause.hostTimestamp).toBeNull();
+    expect(capture.cause.turnId).toBeNull();
   });
 });
 

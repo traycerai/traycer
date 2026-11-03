@@ -165,6 +165,7 @@ const QUEUE_NOTICE_MESSAGE =
 const QUEUE_NOTICE: MessageSegment = {
   id: "queue-paused:u1",
   kind: "error",
+  hostTimestamp: null,
   message: QUEUE_NOTICE_MESSAGE,
   recoverable: true,
   code: QUEUE_PAUSED_AFTER_ERROR_CODE,
@@ -435,6 +436,7 @@ describe("elapsed footer", () => {
     const ERROR_SEGMENT: MessageSegment = {
       id: "error-f1",
       kind: "error",
+      hostTimestamp: null,
       message: "The turn failed.",
       recoverable: true,
       code: "RUNTIME",
@@ -454,6 +456,7 @@ describe("elapsed footer", () => {
     const ERROR_SEGMENT: MessageSegment = {
       id: "queue-paused:u1",
       kind: "error",
+      hostTimestamp: null,
       message: "The turn failed.",
       recoverable: true,
       code: "RUNTIME",
@@ -518,6 +521,7 @@ describe("elapsed footer", () => {
     const ERROR_SEGMENT: MessageSegment = {
       id: "error-f3",
       kind: "error",
+      hostTimestamp: null,
       message: "The turn failed.",
       recoverable: true,
       code: "RUNTIME",
@@ -552,6 +556,7 @@ describe("elapsed footer", () => {
     const ERROR_SEGMENT: MessageSegment = {
       id: "error-f4",
       kind: "error",
+      hostTimestamp: null,
       message: "The turn failed.",
       recoverable: true,
       code: "RUNTIME",

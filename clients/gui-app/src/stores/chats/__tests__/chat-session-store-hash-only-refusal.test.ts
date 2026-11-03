@@ -1642,28 +1642,39 @@ describe("chat session store - hash-only refusal (T5)", () => {
     // someone tuned it, which is the failure mode a mirrored literal always
     // has.
     const hash2 = await seedSecondConfirmedImage();
-    const second = sendHashOnlyMessage(harness, hash2);
-    rejectMissingAttachmentBytes(harness, second.clientActionId, "not-on-host");
-    await vi.waitFor(() => {
-      expect(harness?.sent).toHaveLength(4);
-    });
-    await new Promise((resolve) =>
-      setTimeout(resolve, POST_DISPATCH_NOTICE_SUPPRESSION_MS + 100),
-    );
-    harness.callbacks().onErrorNotice({
-      kind: "errorNotice",
-      hasBinaryPayload: false,
-      epicId: EPIC_ID,
-      chatId: CHAT_ID,
-      notice: {
-        code: "MISSING_ATTACHMENT_BYTES",
-        message: "Host still does not hold this digest.",
-        severity: "warning",
-        clientActionId: second.clientActionId,
-      },
-    });
-    expect(harness.handle.store.getState().errorNotices).toHaveLength(2);
-  }, 15_000);
+    // Installed BEFORE the second rejection: the suppression window's timer is
+    // armed when the retry dispatches, so it must already be a fake timer.
+    vi.useFakeTimers();
+    try {
+      const second = sendHashOnlyMessage(harness, hash2);
+      rejectMissingAttachmentBytes(
+        harness,
+        second.clientActionId,
+        "not-on-host",
+      );
+      await vi.waitFor(() => {
+        expect(harness?.sent).toHaveLength(4);
+      });
+      await vi.advanceTimersByTimeAsync(
+        POST_DISPATCH_NOTICE_SUPPRESSION_MS + 100,
+      );
+      harness.callbacks().onErrorNotice({
+        kind: "errorNotice",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        notice: {
+          code: "MISSING_ATTACHMENT_BYTES",
+          message: "Host still does not hold this digest.",
+          severity: "warning",
+          clientActionId: second.clientActionId,
+        },
+      });
+      expect(harness.handle.store.getState().errorNotices).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 
   it("R7 (9): a recovering send's browser-annotation crop hash stays rooted for the whole of the await", async () => {
     // Pre-fix, `collectPendingAnnotationImageHashes` (the GC root source for
@@ -3105,7 +3116,15 @@ describe("chat session store - hash-only refusal (T5)", () => {
     ).toHaveLength(2);
     expect(harness.handle.store.getState().failedSendRestoration).toBeNull();
 
-    harness.handle.dispose();
+    // Installed BEFORE disposal: each handoff arms its image-resolution
+    // deadline at disposal, so that timer must already be a fake one.
+    vi.useFakeTimers();
+    try {
+      harness.handle.dispose();
+      await vi.advanceTimersByTimeAsync(HANDOFF_IMAGE_RESOLUTION_TIMEOUT_MS);
+    } finally {
+      vi.useRealTimers();
+    }
 
     // Exactly one of the two could take the single restoration slot; the
     // other is the "displaced" loser this case is about.
@@ -3131,19 +3150,12 @@ describe("chat session store - hash-only refusal (T5)", () => {
     // this one, making any exact count a flake.
     const stashedTexts = (): ReadonlyArray<string> =>
       handedOffDrafts().map((draft) => draftPlainText(draft.content));
-    await vi.waitFor(
-      () => {
-        expect(stashedTexts().some((text) => text.includes(TEXT_A))).toBe(true);
-        expect(stashedTexts().some((text) => text.includes(TEXT_B))).toBe(true);
-      },
-      // These recoveries' image reads never settle, so each handoff waits out
-      // its own deadline before saving the text alone. DERIVED from the
-      // production constant: a restated literal would silently become a flake
-      // the day that window moves.
-      // Both handoffs run concurrently, so the wait is one deadline, not two -
-      // the doubling is headroom for a loaded machine, not a second window.
-      { timeout: HANDOFF_IMAGE_RESOLUTION_TIMEOUT_MS * 2 + 2_000 },
-    );
+    // These recoveries' image reads never settle, so each handoff saves the
+    // text alone once its deadline (advanced above) has passed.
+    await vi.waitFor(() => {
+      expect(stashedTexts().some((text) => text.includes(TEXT_A))).toBe(true);
+      expect(stashedTexts().some((text) => text.includes(TEXT_B))).toBe(true);
+    });
     for (const text of stashedTexts()) {
       expect(text).toContain("Unsent");
     }

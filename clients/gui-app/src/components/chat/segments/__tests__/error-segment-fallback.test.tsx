@@ -227,6 +227,8 @@ function renderError(failure: AgentFailure | null) {
     <TooltipProvider>
       <TabHostProvider hostId="tab-host-b">
         <ErrorSegment
+          hostTimestamp={null}
+          reportTurnId={null}
           turnId={null}
           message="The turn failed."
           code="RUNTIME"
@@ -271,6 +273,8 @@ describe("ErrorSegment failed-turn card", () => {
       render(
         <TooltipProvider>
           <ErrorSegment
+            hostTimestamp={null}
+            reportTurnId={null}
             turnId={null}
             message="The turn failed."
             code="RUNTIME"
@@ -300,6 +304,8 @@ describe("ErrorSegment failed-turn card", () => {
       <TooltipProvider>
         <TabHostProvider hostId="tab-host-b">
           <ErrorSegment
+            hostTimestamp={null}
+            reportTurnId={null}
             turnId={null}
             message="Hit a rate limit."
             code="rate_limit"
@@ -334,6 +340,8 @@ describe("ErrorSegment failed-turn card", () => {
       <TooltipProvider>
         <TabHostProvider hostId="tab-host-b">
           <ErrorSegment
+            hostTimestamp={null}
+            reportTurnId={null}
             turnId={null}
             message="The request was rejected."
             code="REQUEST_REJECTED"
@@ -364,6 +372,8 @@ describe("ErrorSegment failed-turn card", () => {
       <TooltipProvider>
         <TabHostProvider hostId="tab-host-b">
           <ErrorSegment
+            hostTimestamp={null}
+            reportTurnId={null}
             turnId={null}
             message="Something went wrong."
             code="LEGACY"
@@ -393,6 +403,8 @@ describe("ErrorSegment failed-turn card", () => {
       render(
         <TooltipProvider>
           <ErrorSegment
+            hostTimestamp={null}
+            reportTurnId={null}
             turnId="turn-a"
             message="The turn failed."
             code="RUNTIME"
@@ -437,6 +449,8 @@ function renderErrorRowWithFallbackAttempt(row: ErrorRowShape) {
           }}
         >
           <ErrorSegment
+            hostTimestamp={null}
+            reportTurnId={null}
             turnId={FALLBACK_LIVE_GATE_TURN_ID}
             message="Hit a rate limit."
             code={row.code}
@@ -710,6 +724,8 @@ describe("ErrorSegment failed-turn card, through the transcript row", () => {
             }}
           >
             <ErrorSegment
+              hostTimestamp={null}
+              reportTurnId={null}
               turnId={null}
               message="1 queued message was held because this turn ended with an error, and it was not sent. Resume the queue to send it."
               code={QUEUE_PAUSED_AFTER_ERROR_CODE}
@@ -816,6 +832,8 @@ describe("ErrorSegment failed-turn card, through the transcript row", () => {
             }}
           >
             <ErrorSegment
+              hostTimestamp={null}
+              reportTurnId={null}
               turnId={FALLBACK_LIVE_GATE_TURN_ID}
               message="Hit a rate limit."
               code="rate_limit"
@@ -874,6 +892,8 @@ describe("ErrorSegment across the settle: the settled card takes the row's actio
             }}
           >
             <ErrorSegment
+              hostTimestamp={null}
+              reportTurnId={null}
               turnId={FALLBACK_LIVE_GATE_TURN_ID}
               message="Hit a rate limit."
               code="rate_limit"

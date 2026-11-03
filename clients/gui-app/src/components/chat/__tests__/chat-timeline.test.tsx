@@ -1294,6 +1294,7 @@ describe("ChatTimeline", () => {
 
 describe("ChatTimeline LegendList strict-edge policy config", () => {
   beforeEach(() => {
+    installLegendListTestClock();
     legendListPolicyProps.last = null;
     installLegendListViewportMetrics();
   });

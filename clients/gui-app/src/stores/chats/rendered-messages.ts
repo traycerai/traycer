@@ -2130,6 +2130,7 @@ function buildNotificationAnchorMessages(
             // carry - and inventing one would put fallback affordances on a
             // row no turn produced.
             failure: null,
+            hostTimestamp: event.timestamp,
           },
         ],
         structuredContent: null,
@@ -4700,6 +4701,9 @@ function toolCardFailure(tool: ToolSegment): MessageSegment | null {
     recoverable: false,
     code: null,
     failure: null,
+    // The tool row keeps when the call started, not when its error landed;
+    // its start is not the failure time, so the report carries none.
+    hostTimestamp: null,
     parentId: tool.id,
   };
 }
@@ -5484,6 +5488,9 @@ const BLOCK_HANDLERS: {
     // affordances turn on it - so reading it here and inferring it from
     // `message`/`code` anywhere else would be two answers to one question.
     failure: block.failure,
+    // The Host's time on the `error` event, which the accumulator writes onto
+    // the block - the fault time, not the time this row was drawn or reported.
+    hostTimestamp: block.timestamp,
     ...parentIdField(block.parentBlockId),
   }),
   compaction: (block) => ({

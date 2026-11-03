@@ -16,6 +16,10 @@ import type {
 } from "@traycer/protocol/host/auto-mode/contracts";
 import type { GuiAgentModelOption } from "@traycer/protocol/host/agent/gui/unary-schemas";
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
+import {
+  advanceLegendListTime,
+  installLegendListTestClock,
+} from "@/components/chat/__tests__/legend-list-test-environment";
 import { SurfaceActivityProvider } from "@/components/home/composer/surface-activity-context";
 import { hostScopeFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import {
@@ -341,10 +345,17 @@ async function pressArrow(
   key: "ArrowDown" | "ArrowUp" | "ArrowRight" | "ArrowLeft",
 ): Promise<void> {
   await user.keyboard(`{${key}>}`);
-  await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 20));
-  });
+  await advanceLegendListTime(0);
   await user.keyboard(`{/${key}}`);
+}
+
+/**
+ * A user on the fake clock, set up before the tab renders so every timer it
+ * arms is fake: Radix's focus move, and any write a model update schedules.
+ */
+function userOnClock(): UserEvent {
+  installLegendListTestClock();
+  return userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
 }
 
 /** Rows whose second tile has a last pick that can run, cannot run, or none. */
@@ -387,10 +398,9 @@ async function switchToCodexAndClose(user: UserEvent): Promise<void> {
   await closePicker(user);
 }
 
-async function flushTicks(): Promise<void> {
-  await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 20));
-  });
+/** A negative assertion's wait: well past any timer a model update arms. */
+async function advancePastScheduledWork(): Promise<void> {
+  await advanceLegendListTime(1_000);
 }
 
 describe("JudgeTab", () => {
@@ -665,8 +675,8 @@ describe("JudgeTab", () => {
   describe("the keyboard", () => {
     it("an arrow from Automatic onto the second tile, in last-runs, restores the last pick", async () => {
       lastRuns();
+      const user = userOnClock();
       renderTab();
-      const user = userEvent.setup();
 
       act(() => {
         automaticRadio().focus();
@@ -678,8 +688,8 @@ describe("JudgeTab", () => {
 
     it("ArrowRight does the same", async () => {
       lastRuns();
+      const user = userOnClock();
       renderTab();
-      const user = userEvent.setup();
 
       act(() => {
         automaticRadio().focus();
@@ -696,8 +706,8 @@ describe("JudgeTab", () => {
       "an arrow onto the second tile in %s only moves focus: no write, no picker",
       async (_row, setUp) => {
         setUp();
+        const user = userOnClock();
         renderTab();
-        const user = userEvent.setup();
 
         act(() => {
           automaticRadio().focus();
@@ -736,8 +746,8 @@ describe("JudgeTab", () => {
 
     it("an arrow from the picked tile onto Automatic writes a null selection", async () => {
       picked();
+      const user = userOnClock();
       renderTab();
-      const user = userEvent.setup();
 
       act(() => {
         pickRadio().focus();
@@ -1360,8 +1370,8 @@ describe("JudgeTab", () => {
           selection: CLAUDE_STORED,
           lastSelection: CLAUDE_STORED,
         };
+        const user = userOnClock();
         renderTab();
-        const user = userEvent.setup();
         await switchToCodexAndClose(user);
 
         await user.click(screen.getByTestId("auto-judge-tile-automatic"));
@@ -1381,15 +1391,15 @@ describe("JudgeTab", () => {
             models: [model("codex", "gpt-mini", "GPT Mini", {})],
           });
         });
-        await flushTicks();
+        await advancePastScheduledWork();
 
         expect(writes()).toEqual([null]);
       });
 
       it("Automatic already on: choosing it again still ends the pending switch", async () => {
         judgeRecord.current = { selection: CLAUDE_STORED };
+        const user = userOnClock();
         renderTab();
-        const user = userEvent.setup();
         await switchToCodexAndClose(user);
         // Another window moves the judge to Automatic: nothing to write here.
         judgeRecord.current = { selection: null, lastSelection: CLAUDE_STORED };
@@ -1403,15 +1413,15 @@ describe("JudgeTab", () => {
             models: [model("codex", "gpt-mini", "GPT Mini", {})],
           });
         });
-        await flushTicks();
+        await advancePastScheduledWork();
 
         expect(writes()).toEqual([]);
       });
 
       it("◎: restoring the last pick from its tile ends the pending switch", async () => {
         judgeRecord.current = { selection: CLAUDE_STORED };
+        const user = userOnClock();
         renderTab();
-        const user = userEvent.setup();
         await switchToCodexAndClose(user);
         // Another window moves the judge to Automatic; the row is now last-runs.
         judgeRecord.current = { selection: null, lastSelection: CLAUDE_STORED };
@@ -1426,7 +1436,7 @@ describe("JudgeTab", () => {
             models: [model("codex", "gpt-mini", "GPT Mini", {})],
           });
         });
-        await flushTicks();
+        await advancePastScheduledWork();
 
         expect(writes()).toEqual([CLAUDE_STORED]);
       });
@@ -1447,8 +1457,8 @@ describe("JudgeTab", () => {
 
       it("clicking the already-checked model row writes nothing", async () => {
         judgeRecord.current = { selection: OPUS };
+        const user = userOnClock();
         renderTab();
-        const user = userEvent.setup();
 
         await user.click(face());
         await user.click(
@@ -1479,7 +1489,7 @@ describe("JudgeTab", () => {
       async function expectOpusOnShowAndNextOpen(
         user: UserEvent,
       ): Promise<void> {
-        await flushTicks();
+        await advancePastScheduledWork();
         expect(screen.queryByTestId("auto-judge-pending-switch")).toBeNull();
         expect(face().textContent).toContain("Claude Opus");
         expect(screen.getByTestId("auto-judge-picked-status").textContent).toBe(
@@ -1504,8 +1514,8 @@ describe("JudgeTab", () => {
 
       it("P4: models that fail after the close settle the switch, and the judge another window set shows", async () => {
         judgeRecord.current = { selection: CLAUDE_STORED };
+        const user = userOnClock();
         renderTab();
-        const user = userEvent.setup();
         await switchToCodexAndClose(user);
 
         act(() => {
@@ -1518,8 +1528,8 @@ describe("JudgeTab", () => {
 
       it("models that arrive empty after the close settle the switch the same way", async () => {
         judgeRecord.current = { selection: CLAUDE_STORED };
+        const user = userOnClock();
         renderTab();
-        const user = userEvent.setup();
         await switchToCodexAndClose(user);
 
         act(() => {
@@ -1532,8 +1542,8 @@ describe("JudgeTab", () => {
 
       it("a provider that stops being available settles the switch, and coming back with models writes nothing", async () => {
         judgeRecord.current = { selection: CLAUDE_STORED };
+        const user = userOnClock();
         renderTab();
-        const user = userEvent.setup();
         await switchToCodexAndClose(user);
 
         judgeCatalog.harnesses = [
@@ -1550,7 +1560,7 @@ describe("JudgeTab", () => {
           }),
         ];
         nudge();
-        await flushTicks();
+        await advancePastScheduledWork();
         expect(screen.queryByTestId("auto-judge-pending-switch")).toBeNull();
 
         judgeCatalog.harnesses = [
@@ -1567,7 +1577,7 @@ describe("JudgeTab", () => {
             models: [model("codex", "gpt-mini", "GPT Mini", {})],
           });
         });
-        await flushTicks();
+        await advancePastScheduledWork();
 
         expect(writes()).toEqual([]);
         expect(face().textContent).toContain("Claude Sonnet");
@@ -1753,8 +1763,8 @@ describe("JudgeTab", () => {
         };
         setModels("claude", { kind: "pending" });
         judgeRecord.current = { selection: OPUS };
+        const user = userOnClock();
         renderTab();
-        const user = userEvent.setup();
 
         await user.click(face());
         await user.click(await screen.findByRole("tab", { name: /Claude/ }));
@@ -1767,7 +1777,7 @@ describe("JudgeTab", () => {
             ],
           });
         });
-        await flushTicks();
+        await advancePastScheduledWork();
 
         expect(writes()).toEqual([]);
         expect(face().textContent).toContain("Claude Opus");
@@ -1781,8 +1791,8 @@ describe("JudgeTab", () => {
 
       it("P6: a click on the already-checked Automatic radio circle ends a switch still waiting for its models", async () => {
         judgeRecord.current = { selection: CLAUDE_STORED };
+        const user = userOnClock();
         renderTab();
-        const user = userEvent.setup();
         await switchToCodexAndClose(user);
 
         // Another window moves the judge to Automatic while Codex still
@@ -1801,15 +1811,15 @@ describe("JudgeTab", () => {
             models: [model("codex", "gpt-mini", "GPT Mini", {})],
           });
         });
-        await flushTicks();
+        await advancePastScheduledWork();
 
         expect(writes()).toEqual([]);
       });
 
       it("Space on the focused, already-checked Automatic radio ends the switch the same way", async () => {
         judgeRecord.current = { selection: CLAUDE_STORED };
+        const user = userOnClock();
         renderTab();
-        const user = userEvent.setup();
         await switchToCodexAndClose(user);
 
         judgeRecord.current = {
@@ -1829,7 +1839,7 @@ describe("JudgeTab", () => {
             models: [model("codex", "gpt-mini", "GPT Mini", {})],
           });
         });
-        await flushTicks();
+        await advancePastScheduledWork();
 
         expect(writes()).toEqual([]);
       });
@@ -1842,8 +1852,8 @@ describe("JudgeTab", () => {
 
       it("P7: pins existing behaviour - a click on the already-selected pick tile body does not end a switch, which still lands once its models arrive", async () => {
         judgeRecord.current = { selection: CLAUDE_STORED };
+        const user = userOnClock();
         renderTab();
-        const user = userEvent.setup();
         await switchToCodexAndClose(user);
 
         await user.click(screen.getByText(/Always the model you choose/));
@@ -1855,7 +1865,7 @@ describe("JudgeTab", () => {
             models: [model("codex", "gpt-mini", "GPT Mini", {})],
           });
         });
-        await flushTicks();
+        await advancePastScheduledWork();
 
         expect(writes()).toEqual([CODEX_GPT_MINI]);
       });
@@ -1886,11 +1896,11 @@ describe("JudgeTab", () => {
               : { kind: "error" },
           );
         });
-        await flushTicks();
+        await advancePastScheduledWork();
       }
 
       it("failed: the second tile keeps the failed sentence, the store is no longer pending, and the picked status still shows", async () => {
-        const user = userEvent.setup();
+        const user = userOnClock();
         await switchToCodexThenAfterClose(user, "error");
 
         expect(droppedLine()?.textContent).toBe(judgeModelsFailedLine("Codex"));
@@ -1905,12 +1915,12 @@ describe("JudgeTab", () => {
             models: [model("codex", "gpt-mini", "GPT Mini", {})],
           });
         });
-        await flushTicks();
+        await advancePastScheduledWork();
         expect(writes()).toEqual([]);
       });
 
       it("empty: the second tile keeps the no-models sentence, the store is no longer pending, and the picked status still shows", async () => {
-        const user = userEvent.setup();
+        const user = userOnClock();
         await switchToCodexThenAfterClose(user, "empty");
 
         expect(droppedLine()?.textContent).toBe(judgeNoModelsLine("Codex"));
@@ -1925,12 +1935,12 @@ describe("JudgeTab", () => {
             models: [model("codex", "gpt-mini", "GPT Mini", {})],
           });
         });
-        await flushTicks();
+        await advancePastScheduledWork();
         expect(writes()).toEqual([]);
       });
 
       it("clears on the next open, and stays gone after closing again", async () => {
-        const user = userEvent.setup();
+        const user = userOnClock();
         await switchToCodexThenAfterClose(user, "error");
         expect(droppedLine()).not.toBeNull();
 
@@ -1943,7 +1953,7 @@ describe("JudgeTab", () => {
       });
 
       it("clears on a tile choice: choosing Automatic drops the line", async () => {
-        const user = userEvent.setup();
+        const user = userOnClock();
         await switchToCodexThenAfterClose(user, "error");
         expect(droppedLine()).not.toBeNull();
 
@@ -1953,8 +1963,8 @@ describe("JudgeTab", () => {
 
       it("stays behind when the models fail while the picker is open, after it closes", async () => {
         judgeRecord.current = { selection: CLAUDE_STORED };
+        const user = userOnClock();
         renderTab();
-        const user = userEvent.setup();
         await user.click(face());
         await user.click(await screen.findByRole("tab", { name: /Codex/ }));
         expect(screen.getByTestId("auto-judge-pending-switch")).not.toBeNull();
@@ -1965,15 +1975,15 @@ describe("JudgeTab", () => {
         expect(droppedLine()).toBeNull();
 
         await closePicker(user);
-        await flushTicks();
+        await advancePastScheduledWork();
 
         expect(droppedLine()?.textContent).toBe(judgeModelsFailedLine("Codex"));
       });
 
       it("a provider that stops being available while pending leaves no dropped-switch line", async () => {
         judgeRecord.current = { selection: CLAUDE_STORED };
+        const user = userOnClock();
         renderTab();
-        const user = userEvent.setup();
         await switchToCodexAndClose(user);
 
         judgeCatalog.harnesses = [
@@ -1990,7 +2000,7 @@ describe("JudgeTab", () => {
           }),
         ];
         nudge();
-        await flushTicks();
+        await advancePastScheduledWork();
 
         expect(screen.queryByTestId("auto-judge-pending-switch")).toBeNull();
         expect(droppedLine()).toBeNull();

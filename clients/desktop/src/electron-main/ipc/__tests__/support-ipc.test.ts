@@ -127,6 +127,8 @@ const VALID_CAUSE = {
   errorCode: "E_BOUNDS",
   sourceAction: "chat.subscribe",
   timestamp: 1_700_000_000_000,
+  hostTimestamp: null,
+  turnId: null,
 };
 
 const KNOWN_STRING = { status: "known", value: "epic-1" };
@@ -627,6 +629,59 @@ describe("parseSupportSubmitReportRequest", () => {
         privateDiagnostics: {
           ...VALID_PRIVATE_DIAGNOSTICS,
           cause: { ...VALID_CAUSE, timestamp: Number.NaN },
+        },
+      }),
+    ).toThrow();
+  });
+
+  it.each([
+    { hostTimestamp: 1_700_000_123_456, turnId: "turn:5f0c" },
+    { hostTimestamp: null, turnId: null },
+  ])(
+    "accepts Host row identity in privateDiagnostics.cause: %o",
+    (identity) => {
+      const result = parseSupportSubmitReportRequest({
+        ...VALID_FORM,
+        privateDiagnostics: {
+          ...VALID_PRIVATE_DIAGNOSTICS,
+          cause: { ...VALID_CAUSE, ...identity },
+        },
+      });
+
+      expect(result.privateDiagnostics?.cause).toEqual(
+        expect.objectContaining(identity),
+      );
+    },
+  );
+
+  it.each([
+    { hostTimestamp: "x", turnId: null },
+    { hostTimestamp: null, turnId: 5 },
+    { hostTimestamp: Number.NaN, turnId: null },
+  ])("rejects a malformed Host row identity: %o", (identity) => {
+    expect(() =>
+      parseSupportSubmitReportRequest({
+        ...VALID_FORM,
+        privateDiagnostics: {
+          ...VALID_PRIVATE_DIAGNOSTICS,
+          cause: { ...VALID_CAUSE, ...identity },
+        },
+      }),
+    ).toThrow();
+  });
+
+  it("still rejects an unknown key beside Host row identity", () => {
+    expect(() =>
+      parseSupportSubmitReportRequest({
+        ...VALID_FORM,
+        privateDiagnostics: {
+          ...VALID_PRIVATE_DIAGNOSTICS,
+          cause: {
+            ...VALID_CAUSE,
+            hostTimestamp: null,
+            turnId: null,
+            workspacePath: "/work/secret",
+          },
         },
       }),
     ).toThrow();

@@ -98,6 +98,17 @@ interface ErrorSegmentProps {
    */
   turnId: string | null;
   /**
+   * When the failure happened, in the Host's clock (the segment's
+   * `hostTimestamp`), or `null` where the row has no Host time of its own.
+   */
+  hostTimestamp: number | null;
+  /**
+   * The Host turn this row belongs to, for a report filed from it - set on
+   * every row of the turn, unlike {@link turnId}, which only the manual-rung
+   * anchor gets. `null` where the row has no turn identity.
+   */
+  reportTurnId: string | null;
+  /**
    * The settled routing notice this row absorbs, or `null` - set only on the
    * anchor error of a row the projection paired with a receipt-carrying notice
    * (`ChatMessage.routingSettledNoticeId`). The row then renders the settled
@@ -195,6 +206,8 @@ export function ErrorSegment({
   harnessId,
   failure,
   turnId,
+  hostTimestamp,
+  reportTurnId,
   settledNotice,
   settledNoticeFindUnitId,
 }: ErrorSegmentProps) {
@@ -221,6 +234,11 @@ export function ErrorSegment({
   // hops and detail rows still go. Appended to the message rather than given
   // a field of its own because `PrivateErrorCause` is the fixed shape desktop
   // main forwards.
+  //
+  // The row's own identity - the Host's time on it and its turn - rides the
+  // private cause beside the click time, so the report can be found in the
+  // Host log however long after the failure it was filed. Neither reaches the
+  // public prefill.
   const buildReportContext = useCallback(
     () =>
       buildReportIssueDraftContext(
@@ -237,9 +255,11 @@ export function ErrorSegment({
               : `${message}\n\n${routingSettledReportText(settledNotice)}`,
           code,
           recoverable,
+          hostTimestamp,
+          turnId: reportTurnId,
         }),
       ),
-    [code, message, recoverable, settledNotice],
+    [code, hostTimestamp, message, recoverable, reportTurnId, settledNotice],
   );
   const reportAction = (
     <ReportIssueAction

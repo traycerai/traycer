@@ -214,6 +214,8 @@ function renderRows(
           <ChatTranscriptProvider value={{ chatId: "chat-1", hostId: HOST_ID }}>
             {turnIds.map((turnId) => (
               <ErrorSegment
+                hostTimestamp={null}
+                reportTurnId={null}
                 key={turnId}
                 turnId={turnId}
                 message={message}

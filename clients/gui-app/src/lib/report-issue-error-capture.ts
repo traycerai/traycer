@@ -102,6 +102,8 @@ export function captureReportIssueError(
       errorCode: input.errorCode,
       sourceAction: input.sourceAction,
       timestamp,
+      hostTimestamp: null,
+      turnId: null,
     },
     correlationId,
     fingerprint,
@@ -143,6 +145,8 @@ export function captureDictationFailure(input: {
       errorCode: input.failureClass,
       sourceAction: "dictation",
       timestamp: Date.now(),
+      hostTimestamp: null,
+      turnId: null,
     },
     correlationId: crypto.randomUUID(),
     fingerprint,
@@ -162,14 +166,20 @@ export function captureDictationFailure(input: {
  * Both `message` and `code` are host/harness-supplied free text; they belong
  * ONLY in this private cause, never in the public prefill (see the hostile
  * transcript-code test on `<ErrorSegment />`). `recoverable` rides in the
- * `type` discriminant rather than a new field: `PrivateErrorCause` is the
- * fixed shape desktop main forwards (`SupportPrivateDiagnostics`), so this
- * surface does not widen it.
+ * `type` discriminant rather than a new field.
+ *
+ * `timestamp` is the moment of capture, which for this row is the report
+ * click, often long after the turn failed. The row's own identity therefore
+ * travels beside it: `hostTimestamp`, the failure time the Host stamped on the
+ * row, and `turnId`. Together they find the failure in the Host log after the
+ * attached log tail no longer reaches back to it.
  */
 export function capturePersistedAgentError(input: {
   readonly message: string;
   readonly code: string | null;
   readonly recoverable: boolean;
+  readonly hostTimestamp: number | null;
+  readonly turnId: string | null;
 }): ReportIssueErrorCapture {
   const type = input.recoverable ? "AgentErrorRecoverable" : "AgentError";
   const registry = getSupportContextSnapshot();
@@ -192,6 +202,8 @@ export function capturePersistedAgentError(input: {
       errorCode: input.code,
       sourceAction: "agent-turn",
       timestamp: Date.now(),
+      hostTimestamp: input.hostTimestamp,
+      turnId: input.turnId,
     },
     correlationId: crypto.randomUUID(),
     fingerprint,

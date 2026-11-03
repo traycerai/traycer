@@ -36,7 +36,26 @@ export interface PrivateErrorCause {
   readonly errorCode: string | null;
   /** The action/operation in flight when the error occurred. */
   readonly sourceAction: string | null;
+  /**
+   * When this cause was captured, in this renderer's clock: the catch for a
+   * caught error, the toast for a dictation failure, the report click for a
+   * persisted agent error row. For that last one it is NOT when the failure
+   * happened - see {@link hostTimestamp}.
+   */
   readonly timestamp: number;
+  /**
+   * When the failure happened, in the Host's clock, as the Host stamped it on
+   * the persisted error row. This is the time to look for in the Host log; a
+   * report is often filed long after the turn failed. `null` for a cause not
+   * built from a Host row.
+   */
+  readonly hostTimestamp: number | null;
+  /**
+   * The Host turn the failed row belongs to (`turn:<uuid>`, the id the Host
+   * logs as `turn=`). `null` where the cause did not come from a turn's row,
+   * or the row carries none.
+   */
+  readonly turnId: string | null;
 }
 
 export interface ReportIssuePrivateDiagnostics {
@@ -144,7 +163,7 @@ export function createReportIssueDraftContext(input: {
  * separately (rather than trusting callers to serialize the interface ad
  * hoc) so the exact field list is a single, testable contract for the
  * IPC wire shape to match: `cause` (type/message/stack/componentStack/
- * errorCode/sourceAction/timestamp), `registry`, `fingerprint`, `stackFamily`,
+ * errorCode/sourceAction/timestamp/hostTimestamp/turnId), `registry`, `fingerprint`, `stackFamily`,
  * `correlationId`, `environment`.
  */
 export type SerializedReportIssuePrivateDiagnostics =
