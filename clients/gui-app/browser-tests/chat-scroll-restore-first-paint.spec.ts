@@ -179,7 +179,17 @@ function installWriteLog(page: Page): Promise<void> {
         Reflect.set(Element.prototype, "scrollTop", value, this);
       },
     });
-    const noteGesture = (): void => {
+    // A wheel whose target is outside the transcript did not scroll it. The
+    // reopen leaves the pane without the list for two frames; recording that
+    // wheel would count a miss as a hit.
+    const noteGesture = (event: Event): void => {
+      const target = event.target;
+      if (
+        !(target instanceof Element) ||
+        target.closest('[data-testid="chat-messages-scroll"]') === null
+      ) {
+        return;
+      }
       const facts: unknown = Reflect.get(window, "__firstPaint");
       if (
         typeof facts === "object" &&
@@ -197,52 +207,72 @@ function installWriteLog(page: Page): Promise<void> {
 }
 
 /** Resets the log, then reopens through production's two-commit eviction path
- *  and runs the remeasure pump that widens the first-paint window. */
-function reopenWithPump(page: Page): Promise<void> {
-  return page.evaluate((windowMs) => {
-    const facts = {
-      gestureAt: null,
-      reopenAt: performance.now(),
-      pumpEnd: performance.now() + windowMs,
-      writes: [],
-    };
-    Reflect.set(window, "__firstPaint", facts);
+ *  and runs the remeasure pump that widens the first-paint window. When
+ *  `requestWheel` is set, the wheel is requested on the next frame, in this
+ *  same turn. A round trip after the transcript is back is too late: the
+ *  first-paint write has already run. Requested on the frame before the
+ *  remount, the wheel arrives as the list returns. */
+function reopenWithPump(page: Page, requestWheel: boolean): Promise<void> {
+  return page.evaluate(
+    (options: {
+      readonly windowMs: number;
+      readonly requestWheel: boolean;
+    }) => {
+      const facts = {
+        gestureAt: null,
+        reopenAt: performance.now(),
+        pumpEnd: performance.now() + options.windowMs,
+        writes: [],
+      };
+      Reflect.set(window, "__firstPaint", facts);
 
-    const method: unknown = Reflect.get(
-      window.__chatScrollProbe,
-      "remountLater",
-    );
-    if (typeof method !== "function") {
-      throw new Error("probe has no remountLater");
-    }
-    Reflect.apply(method, window.__chatScrollProbe, [true]);
-
-    // Each frame resizes the row just above the viewport top, so the list
-    // keeps remeasuring while it restores.
-    let remeasurements = 0;
-    const pump = (): void => {
-      if (performance.now() > facts.pumpEnd) return;
-      const node = document.querySelector<HTMLElement>(
-        '[data-testid="chat-messages-scroll"]',
-      );
-      if (node !== null) {
-        const rows = Array.from(
-          node.querySelectorAll<HTMLElement>("[data-message-id]"),
-        );
-        const edge = node.getBoundingClientRect().top;
-        const above =
-          rows
-            .filter((row) => row.getBoundingClientRect().bottom <= edge + 3)
-            .at(-1) ?? rows.at(0);
-        if (above !== undefined) {
-          above.style.paddingBottom = `${String(24 + (remeasurements % 3) * 12)}px`;
-          remeasurements += 1;
-        }
+      if (options.requestWheel) {
+        requestAnimationFrame(() => {
+          const send: unknown = Reflect.get(window, "__sendWheel");
+          if (typeof send !== "function") {
+            throw new Error("the wheel binding is not installed");
+          }
+          Reflect.apply(send, window, []);
+        });
       }
+
+      const method: unknown = Reflect.get(
+        window.__chatScrollProbe,
+        "remountLater",
+      );
+      if (typeof method !== "function") {
+        throw new Error("probe has no remountLater");
+      }
+      Reflect.apply(method, window.__chatScrollProbe, [true]);
+
+      // Each frame resizes the row just above the viewport top, so the list
+      // keeps remeasuring while it restores.
+      let remeasurements = 0;
+      const pump = (): void => {
+        if (performance.now() > facts.pumpEnd) return;
+        const node = document.querySelector<HTMLElement>(
+          '[data-testid="chat-messages-scroll"]',
+        );
+        if (node !== null) {
+          const rows = Array.from(
+            node.querySelectorAll<HTMLElement>("[data-message-id]"),
+          );
+          const edge = node.getBoundingClientRect().top;
+          const above =
+            rows
+              .filter((row) => row.getBoundingClientRect().bottom <= edge + 3)
+              .at(-1) ?? rows.at(0);
+          if (above !== undefined) {
+            above.style.paddingBottom = `${String(24 + (remeasurements % 3) * 12)}px`;
+            remeasurements += 1;
+          }
+        }
+        requestAnimationFrame(pump);
+      };
       requestAnimationFrame(pump);
-    };
-    requestAnimationFrame(pump);
-  }, WINDOW_MS);
+    },
+    { windowMs: WINDOW_MS, requestWheel },
+  );
 }
 
 /** Chrome delivers a wheel on the next frame, so the page-side clock may read
@@ -453,9 +483,9 @@ function noteOf(facts: WindowFacts): string {
 }
 
 /**
- * One reopen: park, send the gesture (ahead of the reopen for the
- * before-dispatch placement, together with it otherwise), let the restore and
- * the pump finish, then hide and show the tile and compare.
+ * One reopen: park, send the gesture (as the transcript returns, ahead of
+ * the first-paint write, or after that write), let the restore and the pump
+ * finish, then hide and show the tile and compare.
  */
 async function attempt(
   page: Page,
@@ -464,13 +494,15 @@ async function attempt(
 ): Promise<Attempt> {
   const parked = await park(page);
   await installWriteLog(page);
-  // A wheel queues behind the main thread's work: sent after the reopen call
-  // returns, it is handled once the first-paint write has run; sent with it,
-  // before.
+  // A wheel queues behind the main thread's work. Sent after the reopen has
+  // had its delay, it is handled once the first-paint write has run. Requested
+  // on the frame before the remount, it is handled as the list returns, before
+  // that write. A wheel while the pane is blank is not recorded: it never
+  // reaches the list.
   if (placement === "before-dispatch") {
-    await Promise.all([reopenWithPump(page), gesture(page)]);
+    await reopenWithPump(page, true);
   } else {
-    await reopenWithPump(page);
+    await reopenWithPump(page, false);
     await page.waitForTimeout(AFTER_DISPATCH_DELAY_MS);
     await gesture(page);
   }
@@ -528,6 +560,7 @@ async function expectKeptInWindow(
 ): Promise<void> {
   test.setTimeout(240_000);
   await open(page);
+  await page.exposeFunction("__sendWheel", () => page.mouse.wheel(0, -400));
   let hits = 0;
   let attempts = 0;
   const notes: string[] = [];
@@ -551,7 +584,7 @@ async function expectKeptInWindow(
   }
   expect(
     hits,
-    `window missed: ${String(hits)} of ${String(HITS_REQUIRED)} required hits in ${String(attempts)} attempts`,
+    `window missed: ${String(hits)} of ${String(HITS_REQUIRED)} required hits in ${String(attempts)} attempts\n${notes.join("\n")}`,
   ).toBe(HITS_REQUIRED);
 }
 
