@@ -17,7 +17,9 @@ function stayOpen(): void {}
 /**
  * The bots list beside a bot tab's channel. The tab's own container decides
  * and the person drags the width; the installed app draws no column, and a
- * channel's title is its picker there.
+ * channel's title is its picker there. It paints the sidebar's fill, as a
+ * task's panel does, so a side strip's Tracy row runs into it in that fill
+ * (`surfaceJoinPane`).
  */
 export function BotChannelColumn(props: {
   /** The channel shown; `null` while the surface shows none. */
@@ -33,7 +35,7 @@ export function BotChannelColumn(props: {
       pane="sidebar"
       edge="right"
       label="Resize channels"
-      className="hidden min-h-0 w-(--bot-pane-width) max-w-[40%] shrink-0 flex-col border-r border-canvas-border/70 @3xl:flex"
+      className="hidden min-h-0 w-(--bot-pane-width) max-w-[40%] shrink-0 flex-col border-r border-canvas-border/70 bg-(--sidebar) @3xl:flex"
       handleClassName=""
       testId="bot-channel-sidebar-pane"
     >
