@@ -1603,6 +1603,47 @@ function findingsIn(source) {
   return findings;
 }
 
+/**
+ * Whether a job may run on a Windows runner: a `runs-on` label naming one,
+ * directly or through a `matrix` value (its own or an `include` entry's), or
+ * an expression the workflow alone cannot resolve.
+ */
+function mayRunOnWindows(job) {
+  const runsOn = JSON.stringify(job?.["runs-on"] ?? "");
+  const matrix = job?.strategy?.matrix;
+  const valuesAt = (value, keys) =>
+    keys.reduce(
+      (values, key) =>
+        values.flatMap((each) =>
+          Array.isArray(each) ? each.map((item) => item?.[key]) : [each?.[key]],
+        ),
+      [value],
+    );
+  const expressions = [...runsOn.matchAll(/\$\{\{(.*?)\}\}/g)].map((match) =>
+    match[1].trim(),
+  );
+  return (
+    /windows/i.test(runsOn.replace(/\$\{\{.*?\}\}/g, "")) ||
+    expressions.some((expression) => {
+      const path = /^matrix\.([\w-]+(?:\.[\w-]+)*)$/.exec(expression);
+      if (path === null || typeof matrix !== "object" || matrix === null) {
+        return true;
+      }
+      const [first, ...rest] = path[1].split(".");
+      const values = [
+        ...valuesAt(matrix[first], rest),
+        ...valuesAt(matrix.include ?? [], path[1].split(".")),
+      ]
+        .flat()
+        .filter((value) => value !== undefined);
+      return (
+        values.length === 0 ||
+        values.some((value) => /windows|\$\{\{/i.test(JSON.stringify(value)))
+      );
+    })
+  );
+}
+
 /** The `run:` steps of a workflow or composite action that run under pipefail. */
 function pipefailStepsOf(text) {
   const lineCounter = new LineCounter();
@@ -1614,7 +1655,7 @@ function pipefailStepsOf(text) {
       path: ["jobs", jobName, "steps"],
       shell: job?.defaults?.run?.shell ?? workflow.defaults?.run?.shell,
       // GitHub's default shell is bash, and pwsh on a Windows runner.
-      windows: /windows/i.test(JSON.stringify(job?.["runs-on"] ?? "")),
+      windows: mayRunOnWindows(job),
     });
   }
   if (Array.isArray(workflow.runs?.steps))
@@ -2309,6 +2350,56 @@ describe("an early-exit reader never reads a streaming producer through a pipe u
       "            -Recurse",
     ].join("\n");
     expect(findingsInWorkflow(workflow)).toEqual([]);
+  });
+
+  it.each([
+    [
+      "a matrix list",
+      ["      matrix:", "        os: [windows-latest]"],
+      "${{ matrix.os }}",
+    ],
+    [
+      "a matrix include entry",
+      ["      matrix:", "        include:", "          - runner: windows-2022"],
+      "${{ matrix.runner }}",
+    ],
+    ["an expression the workflow cannot resolve", [], "${{ inputs.runner }}"],
+  ])(
+    "reads no default-shell step whose runner may be Windows through %s",
+    (_, matrix, runsOn) => {
+      const workflow = [
+        "on: push",
+        "jobs:",
+        "  test:",
+        "    strategy:",
+        ...(matrix.length > 0 ? matrix : ["      fail-fast: false"]),
+        `    runs-on: ${runsOn}`,
+        "    steps:",
+        "      - run: |",
+        "          Get-ChildItem -Path . `",
+        "            -Recurse",
+      ].join("\n");
+      expect(findingsInWorkflow(workflow)).toEqual([]);
+    },
+  );
+
+  it("reads a default-shell step whose matrix runners are all POSIX", () => {
+    const workflow = [
+      "on: push",
+      "jobs:",
+      "  test:",
+      "    strategy:",
+      "      matrix:",
+      "        include:",
+      "          - runner: ubuntu-24.04",
+      "          - runner: macos-15",
+      "    runs-on: ${{ matrix.runner }}",
+      "    steps:",
+      "      - run: |",
+      "          set -o pipefail",
+      "          seq 10 | head -n 1",
+    ].join("\n");
+    expect(findingsInWorkflow(workflow)).toEqual(["13: head after `seq 10`"]);
   });
 
   it("applies a workflow's default bash shell to every step, composite actions included", () => {
