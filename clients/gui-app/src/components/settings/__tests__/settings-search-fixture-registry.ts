@@ -59,6 +59,8 @@ const DESKTOP_ZOOM: DesktopZoomBridge = {
 
 const PUSH_PERMISSION: IPushPermissionHost = {
   get: () => Promise.resolve("granted"),
+  getRegistrationState: () => "registered",
+  retryRegistration: () => Promise.resolve(),
   request: () => Promise.resolve("granted"),
   openSettings: () => Promise.resolve(),
   getMutedSeverities: () => Promise.resolve([]),

@@ -5,15 +5,23 @@ import {
   useQueryClient,
   type UseQueryResult,
 } from "@tanstack/react-query";
-import type { PushPermissionState } from "@traycer-clients/shared/platform/runner-host";
+import type {
+  PushPermissionState,
+  PushRegistrationState,
+} from "@traycer-clients/shared/platform/runner-host";
 import { runnerQueryKeys } from "@/lib/query-keys/runner-mutation-keys";
 import { useRunnerHost } from "@/providers/use-runner-host";
 
-export type PushPermissionQuery = UseQueryResult<PushPermissionState>;
+export interface PushPermissionStatus {
+  readonly permission: PushPermissionState;
+  readonly registration: PushRegistrationState;
+}
+
+export type PushPermissionQuery = UseQueryResult<PushPermissionStatus>;
 
 /**
- * This phone's OS push permission, for the Settings → Alerts push
- * permission row. Disabled - and therefore never fetched - on the shells that
+ * This app's OS permission and last registration result, for Settings → Alerts.
+ * Disabled - and therefore never fetched - on the shells that
  * have no OS push at all (desktop, dev web, tests), where the row is hidden
  * outright.
  *
@@ -48,13 +56,17 @@ export function usePushPermissionQuery(): PushPermissionQuery {
     // TanStack's structural hash would serialize every instance to `{}` and
     // discriminate nothing anyway.
     // eslint-disable-next-line @tanstack/query/exhaustive-deps
-    queryOptions<PushPermissionState>({
+    queryOptions<PushPermissionStatus>({
       queryKey: runnerQueryKeys.pushPermission(),
-      queryFn: () => {
+      queryFn: async () => {
         if (pushPermission === null) {
-          throw new Error("This phone has no OS push permission to read.");
+          throw new Error("Push notifications are unavailable.");
         }
-        return pushPermission.get();
+        const permission = await pushPermission.get();
+        return {
+          permission,
+          registration: pushPermission.getRegistrationState(),
+        };
       },
       enabled: pushPermission !== null,
       // Never serve this from cache without asking. The app default holds a

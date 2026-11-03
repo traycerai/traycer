@@ -42,6 +42,8 @@ const MOBILE: SettingsAvailabilityContext = {
   runnerHost: createFakeRunnerHost({
     pushPermission: {
       get: () => Promise.resolve("granted"),
+      getRegistrationState: () => "registered",
+      retryRegistration: () => Promise.resolve(),
       request: () => Promise.resolve("granted"),
       openSettings: () => Promise.resolve(),
       getMutedSeverities: () => Promise.resolve([]),
