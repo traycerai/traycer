@@ -29,7 +29,7 @@ import { fileURLToPath } from "node:url";
 import ts from "typescript";
 import { GIT_OUTPUT_MAX_BUFFER_BYTES } from "./git-output-limit.cjs";
 
-export const ACCEPT_INCREASE_FLAG = "--accept-increase";
+const ACCEPT_INCREASE_FLAG = "--accept-increase";
 
 const SOURCE_PATHSPECS = [
   "*.ts",

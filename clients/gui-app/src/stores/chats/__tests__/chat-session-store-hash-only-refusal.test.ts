@@ -14,7 +14,7 @@ import type {
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport/chat-stream-client";
 import type { Chat } from "@traycer/protocol/persistence/epic/schemas";
-import type { ChatMessageDelivery } from "@traycer/protocol/host/agent/gui/message-delivery";
+import type { ChatMessageDeliveryV142 } from "@traycer/protocol/host/agent/gui/message-delivery";
 import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
 import type { AccountContext } from "@traycer/protocol/common/schemas";
 import type { HostRpcRegistry } from "@/lib/host";
@@ -631,10 +631,11 @@ describe("chat session store - hash-only refusal (T5)", () => {
     // The gated send: the delivery view already names this exact message
     // before its rejection arrives.
     const gated = sendHashOnlyMessage(harness, gatedHash);
-    const delivery: ChatMessageDelivery = {
+    const delivery: ChatMessageDeliveryV142 = {
       messageId: gated.messageId,
       revision: 1,
       state: { phase: "pending" },
+      worktreeIntent: null,
     };
     harness.callbacks().onMessageDeliveryChanged({
       kind: "messageDeliveryChanged",

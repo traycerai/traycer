@@ -17,7 +17,6 @@ import {
   surfaceHostSelectionKey,
   interviewDraftKeyPrefix,
   landingTerminalsKey,
-  mobileWindowIdKey,
   openEpicKey,
   persistKey,
   readingPositionKeyPrefix,
@@ -302,11 +301,6 @@ describe("persist key builders — output-preserving against current source", ()
 
   it("emits the machine-level last-local-host-id localStorage key", () => {
     expect(lastLocalHostIdKey()).toBe("traycer-gui-app:last-local-host-id");
-  });
-
-  it("emits the installed app's per-install window id localStorage key", () => {
-    // Source: src/lib/browser-tab-identity.ts.
-    expect(mobileWindowIdKey()).toBe("traycer-gui-app:mobile-window");
   });
 
   it("has no two catalog entries sharing a leaf", () => {
