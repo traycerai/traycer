@@ -532,7 +532,14 @@ function SandboxProgressLine(props: {
     stageConfigurationCopy(stage.target.configuration),
   );
   const elapsedSeconds = useElapsedSeconds(props.startedAt, 0, null);
-  const takingLonger = isTakingLonger(failure, elapsedSeconds);
+  const now = props.startedAt + elapsedSeconds * 1000;
+  const rateLimit = stage.rateLimit;
+  const queued =
+    failure === null &&
+    rateLimit !== null &&
+    rateLimit !== undefined &&
+    (rateLimit.retryAfterAt === null || rateLimit.retryAfterAt > now);
+  const takingLonger = isTakingLonger(failure, elapsedSeconds, queued);
   const [manualExpanded, setManualExpanded] = useState<boolean | null>(null);
   const expanded = manualExpanded ?? (failure !== null || takingLonger);
   const view: ProgressView = {
@@ -541,6 +548,7 @@ function SandboxProgressLine(props: {
     resuming,
     configuration,
     takingLonger,
+    queued,
     sandboxAwake: props.facts.sandboxAwake,
     sandboxStoppable: props.facts.sandboxStoppable,
   };
@@ -581,6 +589,7 @@ interface ProgressView {
   readonly resuming: boolean;
   readonly configuration: string;
   readonly takingLonger: boolean;
+  readonly queued: boolean;
   readonly sandboxAwake: boolean | null;
   readonly sandboxStoppable: boolean;
 }
@@ -588,7 +597,9 @@ interface ProgressView {
 function isTakingLonger(
   failure: StagedSandboxFailure | null,
   elapsedSeconds: number,
+  queued: boolean,
 ): boolean {
+  if (queued) return false;
   if (failure !== null) return waitEnded(failure);
   return elapsedSeconds * 1000 >= STAGED_TAKING_LONGER_MS;
 }
@@ -615,6 +626,7 @@ function progressTitle(view: ProgressView, name: string): string {
       : sandboxSettingsFailureLine(name, view.configuration, reference);
   }
   if (view.sandboxStoppable) return SANDBOX_AWAKE;
+  if (view.queued) return "Queued";
   if (view.takingLonger) {
     return resuming ? RESUMING_TAKING_LONGER : STARTING_TAKING_LONGER;
   }
@@ -629,6 +641,7 @@ function ProgressHead(props: {
   const { failure } = props.view;
   const waiting = stillWaiting(failure);
   const code = failureCode(failure);
+  const retryAfterAt = props.view.stage.rateLimit?.retryAfterAt;
   // A failure's title already names the sandbox.
   const namesSandbox =
     failure?.kind !== "failed" && failure?.kind !== "settings";
@@ -653,6 +666,13 @@ function ProgressHead(props: {
       {code === null || failure?.kind === "settings" ? null : (
         <HeadPart text={code} />
       )}
+      {props.view.queued &&
+      retryAfterAt !== null &&
+      retryAfterAt !== undefined ? (
+        <HeadPart
+          text={`Retrying at ${new Date(retryAfterAt).toLocaleTimeString()}`}
+        />
+      ) : null}
       {waiting ? (
         <HeadPart text={formatStopwatch(props.elapsedSeconds)} />
       ) : null}

@@ -14,6 +14,10 @@ import {
 } from "@/components/composer/sandbox-setup-line";
 import { sandboxSettingsStepsLine } from "@traycer/protocol/host/sandbox-settings";
 import type { StageConfiguration } from "@/lib/sandboxes/sandbox-stage-model";
+import {
+  STARTING_SANDBOX,
+  STARTING_TAKING_LONGER,
+} from "@/lib/sandboxes/sandbox-strings";
 import type {
   StagedSandbox,
   StagedSandboxFailure,
@@ -622,6 +626,82 @@ describe("SandboxSetupLine when the sandbox rested on its own", () => {
     expect(screen.getByTestId("sandbox-setup-line").textContent).toContain(
       "Resuming",
     );
+  });
+});
+
+describe("SandboxProgressLine's queued state", () => {
+  const NOW = Date.now();
+  // Beyond STAGED_TAKING_LONGER_MS (90 s): the ordinary rule alone would
+  // already be showing "taking longer" by this point.
+  const PAST_THRESHOLD_STARTED_AT = NOW - 120_000;
+  const NOT_STOPPABLE = { ...facts(false), sandboxStoppable: false };
+
+  it("says Queued, with the retry time, while the vendor's quota wait is still ahead, even past the ordinary taking-longer threshold", () => {
+    render(
+      <SandboxSetupLine
+        stage={{
+          ...created(),
+          startedAt: PAST_THRESHOLD_STARTED_AT,
+          rateLimit: { limited: true, retryAfterAt: NOW + 30_000 },
+        }}
+        name="api-refactor"
+        facts={NOT_STOPPABLE}
+        actions={ACTIONS}
+      />,
+    );
+
+    const line = screen.getByTestId("sandbox-setup-line");
+    expect(line.textContent).toContain("Queued");
+    expect(line.textContent).toContain("Retrying at");
+    expect(line.textContent).not.toContain(STARTING_TAKING_LONGER);
+  });
+
+  it.each([
+    [
+      "an expired quota wait",
+      { limited: true, retryAfterAt: NOW - 5_000 } as const,
+    ],
+    ["no recorded quota wait", undefined],
+  ])(
+    "falls back to the ordinary elapsed rule for %s, taking longer past the threshold exactly as before",
+    (_label, rateLimit) => {
+      render(
+        <SandboxSetupLine
+          stage={{
+            ...created(),
+            startedAt: PAST_THRESHOLD_STARTED_AT,
+            rateLimit,
+          }}
+          name="api-refactor"
+          facts={NOT_STOPPABLE}
+          actions={ACTIONS}
+        />,
+      );
+
+      const line = screen.getByTestId("sandbox-setup-line");
+      expect(line.textContent).not.toContain("Queued");
+      expect(line.textContent).not.toContain("Retrying at");
+      expect(line.textContent).toContain(STARTING_TAKING_LONGER);
+    },
+  );
+
+  it("stays on the ordinary not-yet-taking-longer line for an expired quota wait before the elapsed threshold", () => {
+    render(
+      <SandboxSetupLine
+        stage={{
+          ...created(),
+          startedAt: NOW - 5_000,
+          rateLimit: { limited: true, retryAfterAt: NOW - 2_000 },
+        }}
+        name="api-refactor"
+        facts={NOT_STOPPABLE}
+        actions={ACTIONS}
+      />,
+    );
+
+    const line = screen.getByTestId("sandbox-setup-line");
+    expect(line.textContent).not.toContain("Queued");
+    expect(line.textContent).toContain(STARTING_SANDBOX);
   });
 });
 
