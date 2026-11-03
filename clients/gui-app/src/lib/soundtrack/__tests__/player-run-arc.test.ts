@@ -103,7 +103,7 @@ const STORM_PHASE: Phase = {
   fadeSeconds: 6,
 };
 
-function makePhasedTrack(): VariableTrack {
+function makePhasedTrack(phases: readonly Phase[]): VariableTrack {
   const layersProperties = [
     properties(null, 0, 4, null),
     properties(null, 0.2, 4, null),
@@ -117,7 +117,7 @@ function makePhasedTrack(): VariableTrack {
     ],
     intro: null,
     outro: null,
-    phases: [STORM_PHASE],
+    phases,
   });
 }
 
@@ -218,7 +218,12 @@ describe("TrackPlayer run arc", () => {
 
   it("moves to a phase's state at its drawn time and fades the layers over the phase's length", async () => {
     const output = new FakeOutput();
-    const player = makePlayer(output, new FakeStems(2.2), makePhasedTrack(), 0);
+    const player = makePlayer(
+      output,
+      new FakeStems(2.2),
+      makePhasedTrack([STORM_PHASE]),
+      0,
+    );
     player.start(0, 0.1);
 
     await vi.advanceTimersByTimeAsync(4900);
@@ -245,7 +250,7 @@ describe("TrackPlayer run arc", () => {
     const player = makePlayer(
       output,
       new FakeStems(2.2),
-      makePhasedTrack(),
+      makePhasedTrack([STORM_PHASE]),
       10,
     );
     player.start(player.elapsed(), 0.1);
@@ -258,9 +263,72 @@ describe("TrackPlayer run arc", () => {
     }
   });
 
+  it("drops every phase a resume has passed, so a later phase back to the first state does not replay them", async () => {
+    const output = new FakeOutput();
+    const player = makePlayer(
+      output,
+      new FakeStems(2.2),
+      makePhasedTrack([
+        STORM_PHASE,
+        { afterSeconds: [8, 8], state: "calm", fadeSeconds: 6 },
+      ]),
+      10,
+    );
+    player.start(player.elapsed(), 0.1);
+    expect(player.currentState()?.name).toBe("calm");
+
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(player.currentState()?.name).toBe("calm");
+    for (const gain of ["bus0/0", "bus0/1"]) {
+      expect(output.ramps(gain).map((ramp) => ramp.seconds)).toEqual([0.01]);
+    }
+  });
+
+  it("starts the layers only once the intro has loaded, from its end", async () => {
+    const output = new FakeOutput();
+    const intro = Promise.withResolvers<AudioBuffer>();
+    const stems: StemSource = {
+      load: (_track, layer) =>
+        layer.name === "I"
+          ? intro.promise
+          : Promise.resolve(makeAudioBuffer(1, 10)),
+    };
+    const track = buildTrack({
+      lengthSeconds: 60,
+      layers: [layerOf("A", 2, null)],
+      states: [stateOf("only", [properties(null, 0.4, 4, null)], 1)],
+      intro: { name: "I", variants: 1, pan: null },
+      outro: null,
+      phases: [],
+    });
+    const player = makePlayer(output, stems, track, 0);
+    player.start(0, 0.1);
+
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(output.allPlays()).toEqual([]);
+
+    // Loaded at 3 s, the intro takes the next free tick, 3 s into the run; the
+    // layer waits out its 2.3 s and its 0.4 s pause, 5.7 s, snapped to 6 s.
+    intro.resolve(makeAudioBuffer(2.3, 10));
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(4000);
+    const introPlays = output.plays("bus0/1");
+    expect(introPlays).toHaveLength(1);
+    expect(introPlays[0].when).toBeCloseTo(START_LEAD_SECONDS + 3, 6);
+    expect(output.plays("bus0/0")[0].when - introPlays[0].when).toBeCloseTo(
+      3,
+      6,
+    );
+  });
+
   it("keeps a long fade's end when a layer's target is restated and ramps a changed target over 1.5 s", async () => {
     const output = new FakeOutput();
-    const player = makePlayer(output, new FakeStems(2.2), makePhasedTrack(), 0);
+    const player = makePlayer(
+      output,
+      new FakeStems(2.2),
+      makePhasedTrack([STORM_PHASE]),
+      0,
+    );
     player.start(0, 0.1);
     await vi.advanceTimersByTimeAsync(8000);
     const fade = output.ramps("bus0/0")[1];

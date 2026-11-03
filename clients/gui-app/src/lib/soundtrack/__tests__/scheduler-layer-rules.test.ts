@@ -159,13 +159,25 @@ describe("TrackScheduler grouped layer", () => {
       );
       const scheduler = schedulerFor(track, mulberry32(seed));
       const variants: number[] = [];
+      const starts: number[] = [];
+      let refused = 0;
       for (let until = 0; until <= 60; until += 0.5) {
         for (const play of scheduler.advance(until)) {
-          if (scheduler.confirm(play, 1, 0) !== null) {
-            variants.push(play.variant);
+          const startAt = scheduler.confirm(play, 1, 0);
+          if (startAt === null) {
+            refused += 1;
+            continue;
           }
+          variants.push(play.variant);
+          starts.push(startAt);
         }
       }
+
+      // A draw the confirm refused would leave a hole in the 1 s cadence.
+      expect(refused).toBe(0);
+      expect(
+        starts.slice(1).map((start, index) => start - starts[index]),
+      ).toEqual(starts.slice(1).map(() => 1));
 
       const groupOf = (variant: number): string =>
         variant <= EA1_VARIANTS ? "EA1" : "EA2";
