@@ -18,11 +18,10 @@
  * `@traycer/protocol/utils/text/sentry-scrub`. What lives here is the client
  * Sentry policy: which fields to walk and what to drop outright.
  *
- * Deliberately does NOT reach into the desktop's
- * `electron-main/app/support-scrubber.ts`. That module is the support-bundle
- * policy (path pseudonymization, no length cap, line-wise application);
- * telemetry egress must not inherit whatever it decides next, and neither the
- * renderer nor the mobile shell can import from `electron-main/` at all.
+ * Deliberately does NOT use `@traycer/protocol/utils/text/support-scrub`.
+ * That module is the support-bundle policy (path pseudonymization, no length
+ * cap, line-wise application); telemetry egress must not inherit whatever it
+ * decides next.
  */
 
 import {
