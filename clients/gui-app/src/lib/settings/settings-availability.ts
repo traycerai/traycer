@@ -31,6 +31,7 @@
  */
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import type { FeatureSettingsBridge } from "@/lib/desktop-feature-settings";
+import { soundtrackOffered } from "@/lib/soundtrack/manifest";
 import { resolveDesktopZoomBridge } from "@/lib/windows/desktop-capabilities";
 
 export interface SettingsAvailabilityContext {
@@ -96,6 +97,16 @@ export function isLinkOpenRowAvailable(
   context: SettingsAvailabilityContext,
 ): boolean {
   return !context.mobileApp;
+}
+
+/**
+ * Sounds › Soundtrack — a build with nothing to play has nothing to set, and on
+ * the phone its background audio and autoplay are still to be settled.
+ */
+export function isSoundtrackRowAvailable(
+  context: SettingsAvailabilityContext,
+): boolean {
+  return !context.mobileApp && soundtrackOffered();
 }
 
 /**

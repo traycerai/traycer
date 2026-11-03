@@ -115,12 +115,18 @@ function harness(manifest: SoundtrackManifest, random: () => number) {
       output,
       stems: new FakeStems(SAMPLE_SECONDS),
       setDimmed,
+      setVolume: vi.fn<(volume: number) => void>(),
+      duck: vi.fn<(chimeSeconds: number) => void>(),
       close,
     };
     opened.push({ output, ports, setDimmed, close });
     return ports;
   });
-  const store = createSoundtrackStore({ manifest, openPorts, random });
+  const store = createSoundtrackStore({
+    readManifest: () => manifest,
+    openPorts,
+    random,
+  });
   return { store, openPorts, opened };
 }
 

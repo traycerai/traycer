@@ -526,6 +526,8 @@ const REPEAT_SENSITIVE_ACTIONS: ReadonlySet<ActionId> = new Set([
   "app.tabs.vertical.collapse",
   // A held chord would start and end a voice session once per repeat.
   "voice.talk.toggle",
+  // A held chord would open and close the audio device once per repeat.
+  "soundtrack.toggle",
 ]);
 
 export function isRepeatSensitiveAction(id: ActionId): boolean {

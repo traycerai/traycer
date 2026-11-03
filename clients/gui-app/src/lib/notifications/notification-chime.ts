@@ -186,22 +186,30 @@ export function prepareNotificationChimeAudio(): void {
   }
 }
 
+/**
+ * Runs `run` once, on the person's next press or key anywhere in the window,
+ * which is the moment audio is allowed to start. Answers how to call it off.
+ */
+export function onNextAudioGesture(run: () => void): () => void {
+  const removeListeners = (): void => {
+    window.removeEventListener("pointerdown", runAndRemove, true);
+    window.removeEventListener("keydown", runAndRemove, true);
+  };
+  const runAndRemove = (): void => {
+    run();
+    removeListeners();
+  };
+  window.addEventListener("pointerdown", runAndRemove, true);
+  window.addEventListener("keydown", runAndRemove, true);
+  return removeListeners;
+}
+
 export function installNotificationChimeAudioWarmup(): () => void {
   if (typeof window === "undefined") return () => undefined;
   // HTML media opens its audio backend asynchronously. AudioContext's native
   // constructor can block this thread for 20 seconds on a Mac with no output.
   prepareNotificationChimeAudio();
-  const removeListeners = (): void => {
-    window.removeEventListener("pointerdown", prepareAndRemove, true);
-    window.removeEventListener("keydown", prepareAndRemove, true);
-  };
-  const prepareAndRemove = (): void => {
-    prepareNotificationChimeAudio();
-    removeListeners();
-  };
-  window.addEventListener("pointerdown", prepareAndRemove, true);
-  window.addEventListener("keydown", prepareAndRemove, true);
-  return removeListeners;
+  return onNextAudioGesture(prepareNotificationChimeAudio);
 }
 
 function releaseAudio(audio: HTMLAudioElement): void {
@@ -213,6 +221,15 @@ function releaseAudio(audio: HTMLAudioElement): void {
 export function disposeNotificationChimeAudio(): void {
   for (const { audio } of players.values()) releaseAudio(audio);
   players.clear();
+}
+
+const chimeListeners = new Set<(chimeSeconds: number) => void>();
+
+/** Hears every chime that starts, with how long it lasts, for good. */
+export function listenToNotificationChimes(
+  listener: (chimeSeconds: number) => void,
+): void {
+  chimeListeners.add(listener);
 }
 
 export function playNotificationChimeSound(
@@ -240,7 +257,10 @@ export function playNotificationChimeSound(
     audio.onended = release;
     audio.onerror = release;
     void audio.play().then(() => {
-      if (player.operation === operation) player.warmed = true;
+      if (player.operation !== operation) return;
+      player.warmed = true;
+      // Known by now: an element that has started playing has read its length.
+      for (const listener of chimeListeners) listener(audio.duration);
     }, release);
   } catch {
     // Autoplay and missing devices must not interrupt notification delivery.

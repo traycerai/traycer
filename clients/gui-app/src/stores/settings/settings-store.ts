@@ -62,6 +62,12 @@ import {
   type NotificationChimeSound,
   type NotificationChimeSoundsByEvent,
 } from "@/lib/notifications/notification-chime";
+import {
+  DEFAULT_MIX_DIRECTOR,
+  isMixDirectorId,
+  type MixDirectorId,
+} from "@/lib/soundtrack/directors";
+import { MIX_TUNING } from "@/lib/soundtrack/mix-tuning";
 import type { DefaultOpenTarget } from "@/lib/editor/editor-menu-catalog";
 import type { TilePlacementCategory } from "@/lib/canvas/tile-open/intent";
 export type ThemeMode = "system" | "light" | "dark";
@@ -352,6 +358,16 @@ export interface SettingsState {
   chatDockPanelHeight: number;
   /** App-wide audible cues selected for each notification event type. */
   notificationChimeSounds: NotificationChimeSoundsByEvent;
+  /**
+   * Whether the person wants the soundtrack on. A window's session follows it,
+   * but not always at once: a launch or a sign-in opens the audio device on the
+   * next gesture (`SoundtrackWarmupBridge`), and a sign-out ends the session and
+   * leaves this set.
+   */
+  soundtrackEnabled: boolean;
+  soundtrackDirector: MixDirectorId;
+  /** A gain from 0 to 1. */
+  soundtrackVolume: number;
   setTheme: (theme: ThemeMode) => void;
   setThemePreset: (preset: ThemePreset) => void;
   /**
@@ -406,6 +422,9 @@ export interface SettingsState {
     eventType: NotificationChimeEventType,
     value: NotificationChimeSound,
   ) => void;
+  setSoundtrackEnabled: (value: boolean) => void;
+  setSoundtrackDirector: (value: MixDirectorId) => void;
+  setSoundtrackVolume: (value: number) => void;
 }
 
 type PersistedSettingsState = Pick<
@@ -450,6 +469,9 @@ type PersistedSettingsState = Pick<
   | "workspaceFileWordWrap"
   | "chatDockPanelHeight"
   | "notificationChimeSounds"
+  | "soundtrackEnabled"
+  | "soundtrackDirector"
+  | "soundtrackVolume"
 >;
 
 type SetFn = (
@@ -484,6 +506,10 @@ function clampUiFontSize(value: number): number {
 
 function clampCodeFontSize(value: number): number {
   return Math.max(10, Math.min(24, Math.round(value)));
+}
+
+function clampSoundtrackVolume(value: number): number {
+  return Math.max(0, Math.min(1, value));
 }
 
 function partializeSettingsState(state: SettingsState): PersistedSettingsState {
@@ -528,6 +554,9 @@ function partializeSettingsState(state: SettingsState): PersistedSettingsState {
     workspaceFileWordWrap: state.workspaceFileWordWrap,
     chatDockPanelHeight: state.chatDockPanelHeight,
     notificationChimeSounds: state.notificationChimeSounds,
+    soundtrackEnabled: state.soundtrackEnabled,
+    soundtrackDirector: state.soundtrackDirector,
+    soundtrackVolume: state.soundtrackVolume,
   };
 }
 
@@ -578,6 +607,9 @@ export const useSettingsStore = create<SettingsState>()(
       workspaceFileWordWrap: null,
       chatDockPanelHeight: CHAT_DOCK_PANEL_DEFAULT_HEIGHT_RATIO,
       notificationChimeSounds: DEFAULT_NOTIFICATION_CHIME_SOUNDS,
+      soundtrackEnabled: false,
+      soundtrackDirector: DEFAULT_MIX_DIRECTOR,
+      soundtrackVolume: MIX_TUNING.volume.initial,
       setTheme: makeSetter(set, "theme"),
       setThemePreset: (themePreset) => {
         if (useThemeLibraryStore.getState().clearSelection())
@@ -712,6 +744,14 @@ export const useSettingsStore = create<SettingsState>()(
               },
         );
       },
+      setSoundtrackEnabled: makeSetter(set, "soundtrackEnabled"),
+      setSoundtrackDirector: makeSetter(set, "soundtrackDirector"),
+      setSoundtrackVolume: (value) => {
+        const next = clampSoundtrackVolume(value);
+        set((s) =>
+          s.soundtrackVolume === next ? s : { soundtrackVolume: next },
+        );
+      },
     }),
     {
       ...basePersistOptions(persistKey(STORE_KEYS.settings)),
@@ -798,6 +838,15 @@ export const useSettingsStore = create<SettingsState>()(
             persisted.notificationChimeSounds,
             persisted.notificationChimeSound,
           ),
+          soundtrackEnabled: persisted.soundtrackEnabled === true,
+          soundtrackDirector: isMixDirectorId(persisted.soundtrackDirector)
+            ? persisted.soundtrackDirector
+            : DEFAULT_MIX_DIRECTOR,
+          soundtrackVolume:
+            typeof persisted.soundtrackVolume === "number" &&
+            Number.isFinite(persisted.soundtrackVolume)
+              ? clampSoundtrackVolume(persisted.soundtrackVolume)
+              : MIX_TUNING.volume.initial,
         };
       },
     },
