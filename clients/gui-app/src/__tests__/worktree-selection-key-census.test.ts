@@ -198,6 +198,22 @@ function propertyKeyName(name: ts.PropertyName): string | null {
   return null;
 }
 
+/** Both censuses walk the same files, so each is read and parsed once. */
+const parsedSources = new Map<string, ts.SourceFile>();
+function parsedSource(file: string): ts.SourceFile {
+  const parsed = parsedSources.get(file);
+  if (parsed !== undefined) return parsed;
+  const sourceFile = ts.createSourceFile(
+    file,
+    readFileSync(file, "utf8"),
+    ts.ScriptTarget.Latest,
+    true,
+    file.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
+  );
+  parsedSources.set(file, sourceFile);
+  return sourceFile;
+}
+
 function findPropertySites(
   root: ScanRoot,
   file: string,
@@ -205,14 +221,7 @@ function findPropertySites(
   allowedLiteralKind: ts.SyntaxKind,
 ): readonly Site[] {
   if (!isFile(file)) return [];
-  const source = readFileSync(file, "utf8");
-  const sourceFile = ts.createSourceFile(
-    file,
-    source,
-    ts.ScriptTarget.Latest,
-    true,
-    file.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
-  );
+  const sourceFile = parsedSource(file);
   const sites: Site[] = [];
   const visit = (node: ts.Node): void => {
     if (ts.isPropertyAssignment(node)) {
