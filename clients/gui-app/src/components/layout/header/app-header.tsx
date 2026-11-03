@@ -163,11 +163,16 @@ function tabStripBoxClass(
     // the width the zone needs, and it gives way before the zone's controls do.
     // Its shrink weight is what makes it give way first: flex shrinks by weight
     // times base size, so at weight 1 the tabs' wide base would also squeeze the
-    // header's controls out past the window's edge. The box has no floor: in a
-    // window too narrow for everything, the strip's fixed controls slide under
-    // the zone, because a floor would make the window scroll sideways instead.
-    centreZone ? "flex-[0_1000_auto]" : "flex-1",
-    showTabStrip && !centreZone ? "min-w-[30%]" : "min-w-0",
+    // header's controls out past the window's edge. From md it keeps the same
+    // floor as a header with no zone, so readings the person moved up here
+    // shrink before the tabs do: past the floor the centre gap gives way, then
+    // the readings' cluster (`HeaderCentreZone`). Below md there is no floor: a
+    // zoomed Windows or Linux window that narrow has no room for one, so the
+    // strip's fixed controls slide under the zone, where a floor would make the
+    // window scroll sideways instead.
+    centreZone ? "flex-[0_1000_auto] min-w-0 md:min-w-[30%]" : "flex-1",
+    showTabStrip && !centreZone ? "min-w-[30%]" : null,
+    !showTabStrip && "min-w-0",
     draggable && "[-webkit-app-region:drag]",
   );
 }
@@ -193,9 +198,13 @@ function trailingSpacerClass(
  * width to it. The zone starts at its minimum (Talk, or the strip's controls)
  * and grows to the whole strip with the room left over, so the tabs keep their
  * width before the focus line and Waiting keep theirs. Its grow weight only says
- * it fills before the trailing drag spacer, which takes what its cap leaves. Measured because that gap depends on how wide the tabs
- * are, which CSS cannot subtract from half the header. Direct children of
- * `<header>`, for the drag-region reason given in `DesktopAppHeader`.
+ * it fills before the trailing drag spacer, which takes what its cap leaves.
+ * Measured because that gap depends on how wide the tabs are, which CSS cannot
+ * subtract from half the header. The gap's shrink weight matches the tab box's:
+ * once the tabs are at their floor, centring is what gives way next, before
+ * the readings on the right lose any of their room; the measured basis is
+ * inline, so the class leaves it `auto`. Direct children of `<header>`, for
+ * the drag-region reason given in `DesktopAppHeader`.
  */
 function HeaderCentreZone(props: {
   readonly tabStripBoxRef: RefObject<HTMLDivElement | null>;
@@ -246,7 +255,7 @@ function HeaderCentreZone(props: {
         ref={gapRef}
         aria-hidden
         data-testid="app-header-centre-gap"
-        className="relative z-10 h-full"
+        className="relative z-10 h-full flex-[0_1000_auto]"
         style={titleBarSpacerStyle(
           props.framelessDesktop,
           props.dragSuppressed,
