@@ -6760,6 +6760,98 @@ describe("<ChatTile />", () => {
     expect(chatHarness.sent[0]?.kind).toBe("send");
   });
 
+  // The composer's own text through the dialog: kept while it asks, cleared
+  // by the confirmed send (which used to leave it behind as a duplicate of
+  // the queued message), kept by a dismiss.
+  it("clears the composer once Send and switch dispatches its send", async () => {
+    stageChatWorktreeDraft("/wt/a");
+    await loadBusyChatWithShell();
+
+    submitComposerWithEnter();
+
+    expect(await screen.findByTestId("teardown-commit-dialog")).toBeTruthy();
+    expect(chatHarness.sent).toHaveLength(0);
+    expect(
+      useComposerDraftStore.getState().drafts[CHAT_ARTIFACT.id]?.content,
+    ).toEqual(PENDING_DRAFT_CONTENT);
+
+    fireEvent.click(screen.getByTestId("teardown-commit-immediate"));
+
+    await waitFor(() => {
+      expect(chatHarness.sent).toHaveLength(1);
+    });
+    const frame = chatHarness.sent[0];
+    if (frame.kind !== "send") throw new Error("expected send frame");
+    expect(frame.worktreeIntent?.entries[0]).toMatchObject({
+      kind: "import",
+      worktreePath: "/wt/a",
+    });
+    await waitFor(() => {
+      expect(
+        useComposerDraftStore.getState().drafts[CHAT_ARTIFACT.id]?.content,
+      ).toEqual({ type: "doc", content: [{ type: "paragraph" }] });
+    });
+  });
+
+  it("refuses a second gated send while the folder dialog asks about the first", async () => {
+    stageChatWorktreeDraft("/wt/a");
+    renderChatTile();
+    await waitForChatTileLoaded();
+    act(() => {
+      emitChatSnapshotWithMessages({
+        callbacks: chatHarness.callbacks(),
+        access: "owner",
+        queueItems: [],
+        settings: SESSION_SETTINGS,
+        messages: [hostUserMessage(), nextStepsAssistantMessage()],
+        activeTurn: runningActiveTurn(),
+        managedCommands: [runningShellOnProject()],
+      });
+    });
+
+    submitComposerWithEnter();
+    expect(await screen.findByTestId("teardown-commit-dialog")).toBeTruthy();
+
+    // A next-step send arriving under the dialog must not replace the
+    // composer send the dialog is about.
+    fireEvent.click(getButtonContainingText("/implementation-validation all"));
+    expect(chatHarness.sent).toHaveLength(0);
+    expect(screen.getByTestId("teardown-commit-dialog")).toBeTruthy();
+
+    fireEvent.click(screen.getByTestId("teardown-commit-immediate"));
+    await waitFor(() => {
+      expect(chatHarness.sent).toHaveLength(1);
+    });
+    const frame = chatHarness.sent[0];
+    if (frame.kind !== "send") throw new Error("expected send frame");
+    expect(JSON.stringify(frame.content)).not.toContain(
+      "/implementation-validation",
+    );
+    await waitFor(() => {
+      expect(
+        useComposerDraftStore.getState().drafts[CHAT_ARTIFACT.id]?.content,
+      ).toEqual({ type: "doc", content: [{ type: "paragraph" }] });
+    });
+  });
+
+  it("keeps the composer text when the folder dialog is dismissed", async () => {
+    stageChatWorktreeDraft("/wt/a");
+    await loadBusyChatWithShell();
+
+    submitComposerWithEnter();
+    expect(await screen.findByTestId("teardown-commit-dialog")).toBeTruthy();
+
+    fireEvent.click(screen.getByTestId("teardown-commit-cancel"));
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("teardown-commit-dialog")).toBeNull();
+    });
+    expect(chatHarness.sent).toHaveLength(0);
+    expect(
+      useComposerDraftStore.getState().drafts[CHAT_ARTIFACT.id]?.content,
+    ).toEqual(PENDING_DRAFT_CONTENT);
+  });
+
   it("gates a next-step click on a staged rebind with the teardown dialog", async () => {
     stageChatWorktreeDraft("/wt/a");
     renderChatTile();
