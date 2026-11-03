@@ -1,8 +1,13 @@
 import { useMemo } from "react";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import { hasReadyRemoteSession } from "@traycer-clients/shared/host-transport/remote/index";
 import { isAdministrableRoute } from "@/components/settings/host-scope/host-scope-model";
 import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
+import { registerHostPickerDirectory } from "@/hooks/host/use-host-picker-list";
 import { useRemoteSessionsPollReadiness } from "@/hooks/host/use-remote-sessions-poll-readiness";
+import { getHostBindingSnapshot } from "@/lib/host/runtime";
+import { queryClient } from "@/lib/query-client";
+import { uiQueryKeys } from "@/lib/query-keys";
 
 const EMPTY_ENTRIES: readonly HostDirectoryEntry[] = [];
 const EMPTY_HOST_IDS: readonly string[] = [];
@@ -68,4 +73,31 @@ export function useConnectableHostIds(): ConnectableHosts {
     // ways "the directory has said what it is going to say" can be true.
     resolved: !directory.isLoading,
   };
+}
+
+/**
+ * {@link useConnectableHostIds} read once, outside React, by a caller that
+ * acts on the answer as it runs (the router adapter's bot opener): whether
+ * this client can dial a host, from the same cached directory list and the
+ * same session readiness the hook subscribes to, or `null` while the
+ * directory has not answered. No binding is an answer, as it is to the hook:
+ * there is no route to anything.
+ */
+export function readConnectableHostsSnapshot():
+  | ((hostId: string) => boolean)
+  | null {
+  const binding = getHostBindingSnapshot();
+  if (binding === null) return () => false;
+  const directory = queryClient.getQueryState<readonly HostDirectoryEntry[]>(
+    uiQueryKeys.hostPicker(registerHostPickerDirectory(binding.directory)),
+  );
+  if (directory === undefined || directory.status === "pending") return null;
+  const connectable = new Set(
+    (directory.data ?? EMPTY_ENTRIES).flatMap((entry) =>
+      isAdministrableRoute(entry, hasReadyRemoteSession(entry.hostId))
+        ? [entry.hostId]
+        : [],
+    ),
+  );
+  return (hostId) => connectable.has(hostId);
 }
