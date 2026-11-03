@@ -9,15 +9,18 @@ import { fixture, nextFrames, wheelsDelivered } from "./support/fixtures";
  * list withholds every scroll report from the controller, so a gesture the
  * restore overwrote is never mirrored, and hiding saves nothing new.
  *
- * Two cells aim a real wheel at that window while a pump keeps
- * remeasuring the row above the viewport, the way the iOS page did:
- * one lands just AFTER the list's first-paint write
- * (`dispatchInitialScroll`), the other BEFORE it. The window is
- * a few frames wide and the input is handled at a frame boundary, so each
- * cell repeats the whole reopen until it has HITS_REQUIRED attempts that
- * landed in the window, and fails on the first hit that shows the defect. A
- * cell that cannot land enough hits FAILS ("window missed"): a green run
- * always exercised the window.
+ * Two cells aim a wheel at that window while a pump keeps remeasuring the
+ * row above the viewport, the way the iOS page did: one lands just AFTER
+ * the list's first-paint write (`dispatchInitialScroll`), the other BEFORE
+ * it. The one after is a real wheel, sent once that write has had time to
+ * run. The one before is dispatched on the transcript in the commit that
+ * mounts it. A CDP wheel requested at that commit is delivered after the
+ * write, so it cannot land in the window. The window is a few frames wide
+ * and the input is handled at a frame boundary, so each cell repeats the
+ * whole reopen until it has HITS_REQUIRED attempts that landed in the
+ * window, and fails on the first hit that shows the defect. A cell that
+ * cannot land enough hits FAILS ("window missed"): a green run always
+ * exercised the window.
  */
 
 const WINDOW_MS = 800;
@@ -208,10 +211,10 @@ function installWriteLog(page: Page): Promise<void> {
 
 /** Resets the log, then reopens through production's two-commit eviction path
  *  and runs the remeasure pump that widens the first-paint window. When
- *  `requestWheel` is set, the wheel is requested on the next frame, in this
- *  same turn. A round trip after the transcript is back is too late: the
- *  first-paint write has already run. Requested on the frame before the
- *  remount, the wheel arrives as the list returns. */
+ *  `requestWheel` is set, the wheel is dispatched on the transcript in the
+ *  commit that mounts it. That is before the first-paint write, and the
+ *  event's target is the list. A CDP wheel requested at that commit is
+ *  delivered after the write. */
 function reopenWithPump(page: Page, requestWheel: boolean): Promise<void> {
   return page.evaluate(
     (options: {
@@ -226,22 +229,43 @@ function reopenWithPump(page: Page, requestWheel: boolean): Promise<void> {
       };
       Reflect.set(window, "__firstPaint", facts);
 
-      if (options.requestWheel) {
-        requestAnimationFrame(() => {
-          const send: unknown = Reflect.get(window, "__sendWheel");
-          if (typeof send !== "function") {
-            throw new Error("the wheel binding is not installed");
-          }
-          Reflect.apply(send, window, []);
-        });
-      }
-
       const method: unknown = Reflect.get(
         window.__chatScrollProbe,
         "remountLater",
       );
       if (typeof method !== "function") {
         throw new Error("probe has no remountLater");
+      }
+      // Watch before the reopen, so the blank commit cannot land unobserved.
+      // The wheel goes out when the transcript is back in the document, not
+      // on the blank frame that precedes it.
+      if (options.requestWheel) {
+        const selector = '[data-testid="chat-messages-scroll"]';
+        let sawBlank = document.querySelector(selector) === null;
+        const observer = new MutationObserver(() => {
+          const scroller = document.querySelector(selector);
+          if (scroller === null) {
+            sawBlank = true;
+            return;
+          }
+          if (!sawBlank) return;
+          observer.disconnect();
+          // Dispatched here, in the commit that mounts the transcript. A CDP
+          // wheel requested at this moment is delivered after the first-paint
+          // write, so it cannot land in the window. The list handles this
+          // event on the node that is already in the document.
+          scroller.dispatchEvent(
+            new WheelEvent("wheel", {
+              bubbles: true,
+              cancelable: true,
+              deltaY: -400,
+            }),
+          );
+        });
+        observer.observe(document.documentElement, {
+          childList: true,
+          subtree: true,
+        });
       }
       Reflect.apply(method, window.__chatScrollProbe, [true]);
 
@@ -495,10 +519,10 @@ async function attempt(
   const parked = await park(page);
   await installWriteLog(page);
   // A wheel queues behind the main thread's work. Sent after the reopen has
-  // had its delay, it is handled once the first-paint write has run. Requested
-  // on the frame before the remount, it is handled as the list returns, before
-  // that write. A wheel while the pane is blank is not recorded: it never
-  // reaches the list.
+  // had its delay, it is handled once the first-paint write has run. The
+  // before-dispatch wheel is dispatched on the transcript in the commit that
+  // mounts it, so its target is the list and it is ahead of that write. A
+  // wheel while the pane is blank is not recorded: it never reaches the list.
   if (placement === "before-dispatch") {
     await reopenWithPump(page, true);
   } else {
@@ -560,7 +584,6 @@ async function expectKeptInWindow(
 ): Promise<void> {
   test.setTimeout(240_000);
   await open(page);
-  await page.exposeFunction("__sendWheel", () => page.mouse.wheel(0, -400));
   let hits = 0;
   let attempts = 0;
   const notes: string[] = [];
