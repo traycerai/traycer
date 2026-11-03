@@ -11,6 +11,7 @@ import {
   sandboxRefusalBodySchema,
   sandboxSupportReference,
 } from "@traycer/protocol/host/sandbox-control";
+import { SANDBOX_RATE_LIMIT_FIXTURE } from "./sandbox-rate-limit-fixture";
 
 /**
  * Fixtures copied from traycer-server's `toSandboxView`, `buildCatalogue` and
@@ -62,6 +63,48 @@ describe("sandbox control plane mirror", () => {
         sandboxes: [{ ...SANDBOX_VIEW, state: "hibernating" }],
       }).success,
     ).toBe(false);
+  });
+
+  describe("rateLimit", () => {
+    it("is absent for a row with no quota wait, and carries the shared fixture's exact wire shape when the row has one", () => {
+      const absent = sandboxListResponseSchema.parse({
+        sandboxes: [SANDBOX_VIEW],
+      });
+      expect(absent.sandboxes[0]?.rateLimit).toBeUndefined();
+
+      const limited = sandboxListResponseSchema.parse({
+        sandboxes: [{ ...SANDBOX_VIEW, ...SANDBOX_RATE_LIMIT_FIXTURE }],
+      });
+      expect(limited.sandboxes[0]?.rateLimit).toEqual(
+        SANDBOX_RATE_LIMIT_FIXTURE.rateLimit,
+      );
+    });
+
+    it("refuses a rateLimit that is not the literal limited: true, or a non-finite retryAfterAt", () => {
+      expect(
+        sandboxListResponseSchema.safeParse({
+          sandboxes: [
+            {
+              ...SANDBOX_VIEW,
+              rateLimit: { limited: false, retryAfterAt: null },
+            },
+          ],
+        }).success,
+      ).toBe(false);
+      expect(
+        sandboxListResponseSchema.safeParse({
+          sandboxes: [
+            {
+              ...SANDBOX_VIEW,
+              rateLimit: {
+                limited: true,
+                retryAfterAt: Number.POSITIVE_INFINITY,
+              },
+            },
+          ],
+        }).success,
+      ).toBe(false);
+    });
   });
 
   it("preserves offered agents with the catalogue's shape bounds and from-prices", () => {
