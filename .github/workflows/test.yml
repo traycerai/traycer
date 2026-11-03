@@ -522,7 +522,8 @@ jobs:
       # and every script the pack runs; the pack copies a README out of it, so
       # not even Markdown there is free), the release-target stamp those
       # scripts read (`clients/scripts/`), `@traycer-clients/shared` and the
-      # parts of `@traycer/protocol` the darwin-only files import, the Electron
+      # parts of `@traycer/protocol` the darwin-only files import (not that
+      # package's own tests, which no file here runs), the Electron
       # and electron-builder pins and everything else that can move them
       # (`package.json`, `bun.lock`), the one patch in the pack's own toolchain
       # (`app-builder-lib`), and this workflow.
@@ -563,6 +564,7 @@ jobs:
               exit 0 ;;
           esac
           relevant=$(git diff --name-only --no-renames "$range" | awk '
+            /^protocol\/.*\/__tests__\// { next }
             /^clients\/desktop\// || /^clients\/scripts\// ||
             /^clients\/shared\// ||
             /^protocol\/src\/(auth|config|framework)\// ||
