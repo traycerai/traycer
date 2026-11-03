@@ -1,26 +1,13 @@
-import babel from "@rolldown/plugin-babel";
 import { sentryVitePlugin } from "@sentry/vite-plugin";
 import tailwindcss from "@tailwindcss/vite";
 import { tanstackRouter } from "@tanstack/router-plugin/vite";
-import react, { reactCompilerPreset } from "@vitejs/plugin-react";
-import { createHash } from "node:crypto";
-import {
-  mkdirSync,
-  readFileSync,
-  renameSync,
-  utimesSync,
-  writeFileSync,
-} from "node:fs";
-import { join, resolve } from "path";
-import {
-  defineConfig,
-  type HtmlTagDescriptor,
-  type Plugin,
-  type UserConfig,
-} from "vite";
+import react from "@vitejs/plugin-react";
+import { resolve } from "path";
+import { defineConfig, type HtmlTagDescriptor, type UserConfig } from "vite";
 import { asciiOnlyOutput } from "../gui-app/vite/ascii-only-output";
 import { pdfjsAssets } from "../gui-app/vite/pdfjs-assets";
 import { sandboxAssets } from "../gui-app/vite/sandbox-assets";
+import { reactCompilerPlugin } from "./scripts/react-compiler-plugin";
 import { CONTENT_SECURITY_POLICY } from "./src/shared/content-security-policy";
 
 const rendererEnvPrefix = [
@@ -32,59 +19,6 @@ const rendererEnvPrefix = [
   "VITE_TRAYCER_OSS_REPO",
   "VITE_TRAYCER_SIGN_IN_URL",
 ];
-
-/**
- * Keeps each module's compiled output in `dir`, so a build compiles only the
- * modules that changed since the build that filled it. CI's `build` check sets
- * `TRAYCER_REACT_COMPILER_CACHE_DIR`; without it the plugin is returned as it
- * came, so a release build always compiles everything.
- *
- * An entry is keyed on everything the output depends on: the module's code and
- * path, the environment and module type the hook is given, this config file
- * (the compiler options) and `bun.lock` (the compiler, Babel and plugin
- * versions). The compiler reads one module at a time. A module that fails to
- * compile throws, so it is never stored and fails every build that reaches it.
- * A hit refreshes the entry's modification time, which is how CI keeps only the
- * entries its last build used.
- */
-function cacheCompiledModules(plugin: Plugin, dir: string | undefined): Plugin {
-  const transform = plugin.transform;
-  if (dir === undefined || dir === "" || typeof transform !== "object") {
-    return plugin;
-  }
-  mkdirSync(dir, { recursive: true });
-  const salt = createHash("sha256")
-    .update(readFileSync(__filename))
-    .update(readFileSync(resolve(__dirname, "..", "..", "bun.lock")))
-    .digest("hex");
-  const compile = transform.handler;
-  transform.handler = async function (code, id, options) {
-    const key = createHash("sha256")
-      .update(
-        [salt, this.environment?.name, options?.moduleType, id].join("\0"),
-      )
-      .update("\0")
-      .update(code)
-      .digest("hex");
-    const entry = join(dir, `${key}.json`);
-    try {
-      const hit = readFileSync(entry, "utf8");
-      const now = new Date();
-      utimesSync(entry, now, now);
-      return JSON.parse(hit);
-    } catch {
-      // A miss: compile below.
-    }
-    const result = await compile.call(this, code, id, options);
-    if (result !== undefined && result !== null && typeof result === "object") {
-      const partial = `${entry}.${process.pid}`;
-      writeFileSync(partial, JSON.stringify(result));
-      renameSync(partial, entry);
-    }
-    return result;
-  };
-  return plugin;
-}
 
 /**
  * Desktop renderer Vite config.
@@ -151,13 +85,14 @@ export default defineConfig((): UserConfig => {
       // Emitted JS as pure ASCII: one character above U+00FF makes the engine
       // keep a whole chunk's source as UTF-16 (see the plugin).
       asciiOnlyOutput(),
-      babel({ presets: [reactCompilerPreset()] }).then((plugin) => ({
-        ...cacheCompiledModules(
-          plugin,
-          process.env.TRAYCER_REACT_COMPILER_CACHE_DIR,
-        ),
-        enforce: "post" as const,
-      })),
+      // CI's `build` check sets TRAYCER_REACT_COMPILER_CACHE_DIR so a build
+      // compiles only the modules that changed; a release build leaves it
+      // unset and compiles every module.
+      reactCompilerPlugin({
+        compilerOptions: {},
+        cacheDir: process.env.TRAYCER_REACT_COMPILER_CACHE_DIR,
+        keyFiles: [__filename, resolve(__dirname, "..", "..", "bun.lock")],
+      }).then((plugin) => ({ ...plugin, enforce: "post" as const })),
       sentryVitePlugin({
         org: process.env.SENTRY_ORG,
         project: process.env.SENTRY_PROJECT,

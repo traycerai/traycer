@@ -67,8 +67,9 @@ later merge never cancels an earlier merge's run.
   (`components.json`, a stylesheet) goes in the cache key too, because ESLint
   hashes only the file it lints. `build` keeps the desktop renderer's
   React-compiled modules instead (`TRAYCER_REACT_COMPILER_CACHE_DIR`, read by
-  `clients/desktop/vite.renderer.config.ts`), keyed on each module's code, so a
-  renderer change recompiles only the modules it changed.
+  `clients/desktop/scripts/react-compiler-plugin.ts`), keyed on each module's
+  code, the compiler options and `bun.lock`, so a renderer change recompiles
+  only the modules it changed. A failed compile is never stored.
 - A protocol test file over 10 s fails the `test (@traycer/protocol)` leg
   unless `protocol/test-budget-allowlist.json` names it with a reason. It runs
   once more alone first, because a file's time on the runner moves by half

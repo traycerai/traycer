@@ -494,7 +494,10 @@ describe("a job that narrows a push run compares against the last green push", (
     const save = job.steps.find((step) =>
       String(step.uses ?? "").startsWith("actions/cache/save@"),
     );
+    // A push runs only on `main`, so nothing a pull request or a dispatched
+    // branch run builds becomes an entry `main` restores.
     expect(save.if).toBe("github.event_name == 'push'");
+    expect(triggers(workflow).push).toEqual({ branches: ["main"] });
     expect(restore.with.path).toBe("${{ matrix.cache }}");
     expect(save.with.path).toBe(restore.with.path);
     const lanes = Object.fromEntries(
