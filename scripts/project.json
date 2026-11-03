@@ -19,6 +19,7 @@
         "{projectRoot}/vitest.config.*",
         "{workspaceRoot}/.github/workflows/*.yml",
         "{workspaceRoot}/.github/workflows/*.yaml",
+        "{workspaceRoot}/.pre-commit-config.yaml",
         "sharedGlobals"
       ]
     }
