@@ -409,6 +409,34 @@ Prefer integrated tests (real stores/docs/watchers) over isolated units. Fake
 only external/nondeterministic boundaries. Reset stores between tests; use
 Testing Library role queries.
 
+A test waits on a fake clock or on an event the code emits, never on real time;
+a negative assertion is a fake-clock advance past its budget. A suite that
+mounts the real chat list uses `installLegendListTestClock`. A test file over
+10 s on its shard runs once more alone, and over 10 s again fails CI unless
+`test-budget-allowlist.json` names it with a reason. A time
+or size budget too long for that goes in a `*.measure.ts` file, which
+`measurements.yml` runs nightly.
+
+Files share a worker (`isolate: false`), and `__tests__/test-file-reset.ts`
+resets what one leaves for the next: the module graph and mock registry (so a
+store needs no reset of its own for this), timers and frames, listeners on the
+window, document, `<html>` and `<body>`, globals, `console`, every constructor
+and namespace with its prototype (`URL.createObjectURL`, `Date.now`), immediates,
+open `BroadcastChannel`s, the DOM, storage, cookies, selection, URL, and
+`hasFocus()`. It also waits for an
+import the file left in flight, which would otherwise land in the next file's
+graph ahead of its `vi.mock`. A new leak gets a line there and a case in
+`test-file-reset.test.ts`. What it cannot reset, a test must
+allow for:
+
+- A module Node loads natively (`node_modules`) is evaluated once per worker. A
+  library that keeps state at module level goes in `server.deps.inline` in
+  `vitest.config.ts`, as `sonner`'s toast queue does.
+- `customElements.define` outlives the file, so a fixture creating a defined tag
+  may get the real element, shadow root included.
+- ProseMirror's `preventScroll` probe is settled once per worker. Every file
+  sees "supported" because `test-browser-apis.ts` makes `focus` read its options.
+
 A claim jsdom cannot decide - real layout, painted pixels, real input
 dispatch - is a Playwright spec in `browser-tests/` against a fixture page in
 `src/__tests__/browser/`; read `browser-tests/README.md` first. Run one file

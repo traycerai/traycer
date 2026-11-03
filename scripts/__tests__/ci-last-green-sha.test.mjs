@@ -5,6 +5,7 @@
 // expression is what selects the head SHAs.
 
 import { spawnSync } from "node:child_process";
+import { GIT_OUTPUT_MAX_BUFFER_BYTES } from "../git-output-limit.cjs";
 import {
   chmodSync,
   existsSync,
@@ -42,6 +43,7 @@ let commits;
 
 const git = (...args) => {
   const result = spawnSync("git", args, {
+    maxBuffer: GIT_OUTPUT_MAX_BUFFER_BYTES,
     cwd: repo,
     encoding: "utf8",
     env: {

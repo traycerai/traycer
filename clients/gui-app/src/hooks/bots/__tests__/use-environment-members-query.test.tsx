@@ -23,7 +23,10 @@ import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { queryKeys } from "@/lib/query-keys";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import type { BotMemberResolver } from "@/lib/bots/bot-member-names";
-import { useEnvironmentMembers } from "@/hooks/bots/use-environment-members-query";
+import {
+  useEnvironmentMembers,
+  useLoadedEnvironmentMembers,
+} from "@/hooks/bots/use-environment-members-query";
 
 vi.mock("@/hooks/host/use-reactive-host-readiness", () => ({
   useReactiveHostReadiness: (client: HostRequester<HostRpcRegistry> | null) => {
@@ -80,12 +83,36 @@ function fortyPages(): Map<string | null, EnvironmentMembersResponseV12> {
 
 const LAST_FORTY_USER_ID = FORTY_USER_IDS[FORTY_USER_IDS.length - 1];
 
+type ObserveMembers = (
+  client: HostClient<HostRpcRegistry>,
+  environmentId: string,
+  gate: boolean,
+) => BotMemberResolver;
+
 function mountMembers(
   answerPage: (cursor: string | null) => EnvironmentMembersResponseV12,
   enabled: boolean,
   /** Pages already in the cache when the hook mounts, by cursor. */
   warm: ReadonlyMap<string | null, EnvironmentMembersResponseV12>,
-): {
+): MountedMembers {
+  return mountObservedMembers(useEnvironmentMembers, answerPage, enabled, warm);
+}
+
+/** The cache-only read: `readable` is its gate, and it never asks. */
+function mountLoadedMembers(
+  answerPage: (cursor: string | null) => EnvironmentMembersResponseV12,
+  readable: boolean,
+  warm: ReadonlyMap<string | null, EnvironmentMembersResponseV12>,
+): MountedMembers {
+  return mountObservedMembers(
+    useLoadedEnvironmentMembers,
+    answerPage,
+    readable,
+    warm,
+  );
+}
+
+interface MountedMembers {
   readonly resolver: () => BotMemberResolver;
   readonly cursorsAsked: () => ReadonlyArray<string | null>;
   /** Re-renders the hook with another capability gate. */
@@ -101,7 +128,14 @@ function mountMembers(
     readonly status: string;
     readonly fetchStatus: string;
   }>;
-} {
+}
+
+function mountObservedMembers(
+  observe: ObserveMembers,
+  answerPage: (cursor: string | null) => EnvironmentMembersResponseV12,
+  enabled: boolean,
+  warm: ReadonlyMap<string | null, EnvironmentMembersResponseV12>,
+): MountedMembers {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
@@ -152,7 +186,7 @@ function mountMembers(
   );
   const { result, rerender } = renderHook(
     (props: { readonly enabled: boolean }) =>
-      useEnvironmentMembers(client, ENVIRONMENT, props.enabled),
+      observe(client, ENVIRONMENT, props.enabled),
     { wrapper, initialProps: { enabled } },
   );
   const pageQueries = () =>
@@ -429,5 +463,62 @@ describe("useEnvironmentMembers", () => {
     });
 
     expect(mounted.cursorsAsked()).toEqual([null, "user-a"]);
+  });
+});
+
+describe("useLoadedEnvironmentMembers", () => {
+  /** Three chained pages, each naming the next, by the cursor that asks. */
+  function threePages(): Map<string | null, EnvironmentMembersResponseV12> {
+    return new Map([
+      [null, page("user-a", "user-a")],
+      ["user-a", page("user-b", "user-b")],
+      ["user-b", page("user-c", null)],
+    ]);
+  }
+
+  function neverAsked(): EnvironmentMembersResponseV12 {
+    throw new Error("a cache-only read asked the host");
+  }
+
+  it("resolves members from every page of a warm cache without a request", async () => {
+    const mounted = mountLoadedMembers(neverAsked, true, threePages());
+
+    await waitFor(() => {
+      expect(mounted.resolver()("user-c")?.displayName).toBe("Name of user-c");
+    });
+    expect(mounted.resolver()("user-a")?.displayName).toBe("Name of user-a");
+    expect(mounted.resolver()("user-b")?.displayName).toBe("Name of user-b");
+    expect(mounted.cursorsAsked()).toEqual([]);
+    expect(
+      mounted.pageQueries().every((query) => query.fetchStatus === "idle"),
+    ).toBe(true);
+  });
+
+  it("resolves nobody from a cold cache and asks for nothing", () => {
+    const mounted = mountLoadedMembers(neverAsked, true, new Map());
+
+    expect(mounted.resolver()("user-a")).toBeNull();
+    expect(mounted.pageQueries()).toEqual([
+      { status: "pending", fetchStatus: "idle" },
+    ]);
+    expect(mounted.cursorsAsked()).toEqual([]);
+  });
+
+  it("resolves members from pages another reader publishes later", async () => {
+    const mounted = mountLoadedMembers(neverAsked, true, new Map());
+
+    await mounted.publish(threePages());
+
+    await waitFor(() => {
+      expect(mounted.resolver()("user-c")?.displayName).toBe("Name of user-c");
+    });
+    expect(mounted.cursorsAsked()).toEqual([]);
+  });
+
+  it("resolves nobody while the caller's verdict is withheld, whatever the cache holds", () => {
+    const mounted = mountLoadedMembers(neverAsked, false, threePages());
+
+    expect(mounted.resolver()("user-a")).toBeNull();
+    expect(mounted.cursorsAsked()).toEqual([]);
   });
 });

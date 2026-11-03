@@ -60,8 +60,14 @@ export interface ComposerSendState {
   readonly restingSandbox: boolean;
   /** That sandbox can't be woken, whoever asks. */
   readonly sandboxFrozen: boolean;
-  /** What the composer's own send hands over, leaving its draft alone. */
-  readonly submit: (input: ChatComposerSubmitInput) => boolean;
+  /**
+   * What the composer's own send hands over, leaving its draft alone. A
+   * promise is a send the folder dialog holds; it resolves to whether the
+   * person let it go.
+   */
+  readonly submit: (
+    input: ChatComposerSubmitInput,
+  ) => boolean | Promise<boolean>;
   /** Read when sending: the toolbar moves without a render of this state. */
   readonly modelSlug: () => string;
   readonly runSettings: () => ChatRunSettings;

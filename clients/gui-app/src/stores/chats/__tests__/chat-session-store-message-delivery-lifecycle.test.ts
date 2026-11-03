@@ -24,7 +24,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { BUDGET_PLANE_IDS } from "@traycer-clients/shared/replica-runtime";
 import type { JsonContent } from "@traycer/protocol/common/registry";
-import type { ChatMessageDelivery } from "@traycer/protocol/host/agent/gui/message-delivery";
+import type { ChatMessageDeliveryV142 } from "@traycer/protocol/host/agent/gui/message-delivery";
 import type {
   ChatRunSettings,
   ChatSubscribeClientFrame,
@@ -113,7 +113,7 @@ function createHarness(): Harness {
 function emitSnapshot(
   callbacks: ChatStreamCallbacks,
   options: {
-    readonly messageDelivery?: ChatMessageDelivery | null;
+    readonly messageDelivery?: ChatMessageDeliveryV142 | null;
     readonly role?: "owner" | "viewer";
     readonly canAct?: boolean;
   },
@@ -168,7 +168,7 @@ function emitSnapshot(
 
 function emitMessageDeliveryChanged(
   callbacks: ChatStreamCallbacks,
-  value: ChatMessageDelivery | null,
+  value: ChatMessageDeliveryV142 | null,
 ): void {
   callbacks.onMessageDeliveryChanged({
     kind: "messageDeliveryChanged",
@@ -183,8 +183,8 @@ function pendingDelivery(
   messageId: string,
   revision: number,
   phase: "pending" | "preparing",
-): ChatMessageDelivery {
-  return { messageId, revision, state: { phase } };
+): ChatMessageDeliveryV142 {
+  return { messageId, revision, state: { phase }, worktreeIntent: null };
 }
 
 function withdrawnDelivery(
@@ -194,7 +194,7 @@ function withdrawnDelivery(
     readonly restore: JsonContent | null;
     readonly restoreClaimed: boolean;
   },
-): ChatMessageDelivery {
+): ChatMessageDeliveryV142 {
   return {
     messageId,
     revision,
@@ -206,6 +206,7 @@ function withdrawnDelivery(
       restore: options.restore === null ? null : { content: options.restore },
       restoreClaimed: options.restoreClaimed,
     },
+    worktreeIntent: null,
   };
 }
 

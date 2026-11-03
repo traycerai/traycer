@@ -43,8 +43,9 @@ jobs:
     # so the extra cores were never used. Public-repo standard runners are
     # 4 vCPU / 16 GB, which covers two forks plus the parent comfortably.
     runs-on: ubuntu-24.04
-    # The GUI suite deliberately runs isolated two-worker forks: disabling
-    # isolation makes tests leak state. Twenty deterministic Vitest shards run
+    # The GUI suite runs two fork workers, and files share a worker
+    # (`isolate: false`): `clients/gui-app/__tests__/test-file-reset.ts` resets
+    # what one file leaves for the next. Twenty deterministic Vitest shards run
     # as parallel matrix jobs; the twelve-shard bodies measured 2m20–4m20 on
     # the 8-core runner, so the narrower units hold wall-clock on the smaller
     # runner. Shards are free here, so more of them costs only queue slots.
@@ -283,6 +284,13 @@ jobs:
           if deaths:
               print("::error::A test fork died, so its test file did not finish. vitest exited 0 because gui-app ignores unhandled errors.")
               sys.exit(1)
+      # The same 10 s budget on the gui-app files, read from the shard's main
+      # report and checked against `clients/gui-app/test-budget-allowlist.json`.
+      # Shard 1's react-compiler runs (`test-junit-*.xml`) are single files under
+      # their own config, which a second run alone would not reproduce.
+      - name: Test file budget (gui-app)
+        if: matrix.project == 'traycer-clients-gui-app'
+        run: bun protocol/scripts/test-budget.ts --project clients/gui-app test-junit.xml
       # `always()`, so a red shard can be compared with a green one. vitest
       # writes the file when the run ends: a fork's death still leaves a report,
       # a killed vitest parent leaves an empty file. A replay from the Nx cache

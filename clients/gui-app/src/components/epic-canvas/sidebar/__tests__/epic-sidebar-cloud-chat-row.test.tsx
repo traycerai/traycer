@@ -194,7 +194,6 @@ function staticExpansion(
     subscribe: () => () => undefined,
     isExpanded: (id) => expandedIds.has(id),
     toggleExpanded,
-    ensureExpanded: () => undefined,
   };
 }
 

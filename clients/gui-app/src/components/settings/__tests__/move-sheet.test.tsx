@@ -1,5 +1,9 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
+  advanceLegendListTime,
+  installLegendListTestClock,
+} from "@/components/chat/__tests__/legend-list-test-environment";
+import {
   act,
   cleanup,
   fireEvent,
@@ -191,12 +195,11 @@ function mountWithRunning(
 }
 
 async function settle(): Promise<void> {
-  await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 50));
-  });
+  await advanceLegendListTime(50);
 }
 
 beforeEach(() => {
+  installLegendListTestClock();
   useMoveSheetStore.setState({ target: null });
 });
 

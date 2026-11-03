@@ -87,12 +87,18 @@ run.
   refuses a cancelled run.
 - `pre-commit.yml`'s `lint` and `compile` jobs restore a cache only a passing
   push saves, so every run starts from the last green `main` entry. It holds
-  `NX_CACHE_DIRECTORY`, the Nx database and gui-app's ESLint cache. A cached
+  `NX_CACHE_DIRECTORY`, the Nx database and the ESLint cache of every project
+  that lints with ESLint. Each uses `--cache-strategy content`, because a fresh
+  checkout gives every file a new mtime. A cached
   result replays as a pass, so a target's `inputs` must name everything its
   answer depends on: `lint` is type-aware and lists `^production`, and lists
   every source extension the linters read. A rule that reads another file
   (`components.json`, a stylesheet) goes in the cache key too, because ESLint
-  hashes only the file it lints. `build` keeps no cache.
+  hashes only the file it lints. `build` keeps the desktop renderer's
+  React-compiled modules instead (`TRAYCER_REACT_COMPILER_CACHE_DIR`, read by
+  `clients/desktop/scripts/react-compiler-plugin.ts`), keyed on each module's
+  code, the compiler options and `bun.lock`, so a renderer change recompiles
+  only the modules it changed. A failed compile is never stored.
 - A protocol test file over 10 s fails the `test (@traycer/protocol)` leg
   unless `protocol/test-budget-allowlist.json` names it with a reason. It runs
   once more alone first, because a file's time on the runner moves by half
@@ -102,3 +108,8 @@ run.
 - The internal repository's nightly staging train and its promotion to
   production both refuse a pinned commit of this repository whose push checks
   are not all green.
+- Each gui-app shard holds its test files to the same 10 s, through the same
+  script (`protocol/scripts/test-budget.ts --project clients/gui-app`, on the
+  shard's JUnit report), unless `clients/gui-app/test-budget-allowlist.json`
+  names the file with a reason. A gui-app time or size measurement too long for
+  that budget is a `*.measure.ts` file, run by the same nightly workflow.

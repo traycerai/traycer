@@ -72,6 +72,7 @@ import {
   type BackgroundEventCardEnding,
 } from "./segments/autonomous-resume-segment";
 import { ErrorSegment } from "./segments/error-segment";
+import { ChatRowTurnContext, useChatRowTurnId } from "./chat-row-turn-context";
 import type { RoutingSettledNotice } from "@/components/chat/fallback/routing-settled-card";
 import { FileChangeGroupSegment } from "./segments/file-change-group-segment";
 import { FileChangeSegment } from "./segments/file-change-segment";
@@ -447,100 +448,104 @@ export function AssistantMessageBody({
     }
   }
   return (
-    <div
-      className="flex w-full max-w-none flex-col gap-2 py-1 @container"
-      data-assistant-turn
-    >
-      {partItems.map(({ item, key }) => {
-        if (item.kind === "activity_group") {
-          return <ActivityGroupSegment key={key} group={item.group} />;
-        }
-        if (item.kind === "promoted_subagent") {
-          return (
-            <PromotedSubagentItem
-              key={key}
-              id={item.id}
-              segment={item.segment}
-            />
-          );
-        }
-        const recovery = recoveryRoleOf(item.id, {
-          manualRungAnchorId,
-          turnId,
-          settled,
-        });
-        // The settled notice is painted inside the anchor's settled card.
-        if (recovery === "absorbed") return null;
-        return (
-          <ChatBlockNavigationAnchor key={key} blockId={item.id}>
-            <AssistantSegment
-              id={item.id}
-              segment={item.segment}
-              backgroundToolBlockIds={backgroundToolBlockIds}
-              nextStepActions={nextStepActions}
-              forkAction={forkAction}
-              interviewDeliveryRetry={interviewDeliveryRetry}
-              // The turn's OWN harness, for an error row that offers to open that
-              // provider's settings. Taken from the row rather than from ambient
-              // app state so the link points at the provider that actually failed,
-              // even when the transcript is scrolled back to a turn from a harness
-              // the chat has since switched away from. `null` on legacy turns with
-              // no metadata; the affordance then falls back to the section root.
-              harnessId={meta === null ? null : knownHarnessId(meta.provider)}
-              // ONE segment, not every error row on the turn, and not one per
-              // row of a split turn. A failed turn routinely carries several
-              // error blocks that all share this `turnId` - the queue-pause
-              // notice the host appends beside the failure, a non-terminal
-              // extension error before the real terminal - and handing the id to
-              // each of them rendered a full recovery group under each,
-              // including under "Resume the queue to send them", where Retry
-              // retried the failed prompt instead.
-              //
-              // The anchor names the segment that describes the failed ATTEMPT.
-              // It is resolved over the WHOLE turn, but not before the split -
-              // `planAssistantTurnRows` splits first and the rows are built, then
-              // `withManualRungAnchor` runs LAST and rebuilds the ordered
-              // whole-turn segment list from those finished rows
-              // (`assistantTurnSegments`). Whole-turn is a claim about the INPUT
-              // to the walk, not about its position in the pipeline. Either way a
-              // turn rendered as several rows still names exactly one. On every
-              // other row `manualRungAnchorId` is null and nothing here matches
-              // - the same answer a row with no turn identity already gets.
-              turnId={recovery.turnId}
-              settledNotice={recovery.settledNotice}
-              settledNoticeFindUnitId={recovery.settledNoticeFindUnitId}
-              backgroundCard={
-                item.id === backgroundCardSegmentId ? backgroundCard : null
-              }
-            />
-          </ChatBlockNavigationAnchor>
-        );
-      })}
-      {partView.isLast ? (
-        <AssistantTurnEnding
-          runState={runState}
-          messageId={messageId}
-          workingVerbSeed={workingVerbSeed}
-          elapsedStartedAt={elapsedStartedAt}
-          pausedDurationMs={pausedDurationMs}
-          pausedSinceMs={pausedSinceMs}
-          completedAt={completedAt}
-          stopped={stopped}
-          stoppedBeforeResponding={stoppedBeforeResponding}
-          showElapsedFooter={showElapsedFooter}
-          meta={meta}
-          replyText={replyText}
-          // A split turn's earlier parts can be unmounted while its footer is
-          // on screen, so speech projects the reply from the segments instead
-          // of reading the rendered DOM - the same path, and the same reason,
-          // as a stopped boundary row whose reply its earlier rows draw.
-          boundaryReplySegments={
-            boundaryReplySegments ?? (partView.isSplit ? segments : null)
+    // The row's own turn, for a report from an error anywhere inside it -
+    // nested subagent cards included (`ChatRowTurnContext`).
+    <ChatRowTurnContext value={turnId}>
+      <div
+        className="flex w-full max-w-none flex-col gap-2 py-1 @container"
+        data-assistant-turn
+      >
+        {partItems.map(({ item, key }) => {
+          if (item.kind === "activity_group") {
+            return <ActivityGroupSegment key={key} group={item.group} />;
           }
-          forkAction={forkAction}
-        />
-      ) : null}
-    </div>
+          if (item.kind === "promoted_subagent") {
+            return (
+              <PromotedSubagentItem
+                key={key}
+                id={item.id}
+                segment={item.segment}
+              />
+            );
+          }
+          const recovery = recoveryRoleOf(item.id, {
+            manualRungAnchorId,
+            turnId,
+            settled,
+          });
+          // The settled notice is painted inside the anchor's settled card.
+          if (recovery === "absorbed") return null;
+          return (
+            <ChatBlockNavigationAnchor key={key} blockId={item.id}>
+              <AssistantSegment
+                id={item.id}
+                segment={item.segment}
+                backgroundToolBlockIds={backgroundToolBlockIds}
+                nextStepActions={nextStepActions}
+                forkAction={forkAction}
+                interviewDeliveryRetry={interviewDeliveryRetry}
+                // The turn's OWN harness, for an error row that offers to open that
+                // provider's settings. Taken from the row rather than from ambient
+                // app state so the link points at the provider that actually failed,
+                // even when the transcript is scrolled back to a turn from a harness
+                // the chat has since switched away from. `null` on legacy turns with
+                // no metadata; the affordance then falls back to the section root.
+                harnessId={meta === null ? null : knownHarnessId(meta.provider)}
+                // ONE segment, not every error row on the turn, and not one per
+                // row of a split turn. A failed turn routinely carries several
+                // error blocks that all share this `turnId` - the queue-pause
+                // notice the host appends beside the failure, a non-terminal
+                // extension error before the real terminal - and handing the id to
+                // each of them rendered a full recovery group under each,
+                // including under "Resume the queue to send them", where Retry
+                // retried the failed prompt instead.
+                //
+                // The anchor names the segment that describes the failed ATTEMPT.
+                // It is resolved over the WHOLE turn, but not before the split -
+                // `planAssistantTurnRows` splits first and the rows are built, then
+                // `withManualRungAnchor` runs LAST and rebuilds the ordered
+                // whole-turn segment list from those finished rows
+                // (`assistantTurnSegments`). Whole-turn is a claim about the INPUT
+                // to the walk, not about its position in the pipeline. Either way a
+                // turn rendered as several rows still names exactly one. On every
+                // other row `manualRungAnchorId` is null and nothing here matches
+                // - the same answer a row with no turn identity already gets.
+                turnId={recovery.turnId}
+                settledNotice={recovery.settledNotice}
+                settledNoticeFindUnitId={recovery.settledNoticeFindUnitId}
+                backgroundCard={
+                  item.id === backgroundCardSegmentId ? backgroundCard : null
+                }
+              />
+            </ChatBlockNavigationAnchor>
+          );
+        })}
+        {partView.isLast ? (
+          <AssistantTurnEnding
+            runState={runState}
+            messageId={messageId}
+            workingVerbSeed={workingVerbSeed}
+            elapsedStartedAt={elapsedStartedAt}
+            pausedDurationMs={pausedDurationMs}
+            pausedSinceMs={pausedSinceMs}
+            completedAt={completedAt}
+            stopped={stopped}
+            stoppedBeforeResponding={stoppedBeforeResponding}
+            showElapsedFooter={showElapsedFooter}
+            meta={meta}
+            replyText={replyText}
+            // A split turn's earlier parts can be unmounted while its footer is
+            // on screen, so speech projects the reply from the segments instead
+            // of reading the rendered DOM - the same path, and the same reason,
+            // as a stopped boundary row whose reply its earlier rows draw.
+            boundaryReplySegments={
+              boundaryReplySegments ?? (partView.isSplit ? segments : null)
+            }
+            forkAction={forkAction}
+          />
+        ) : null}
+      </div>
+    </ChatRowTurnContext>
   );
 }
 
@@ -1538,6 +1543,9 @@ export function AssistantSegment({
   backgroundCard,
 }: AssistantSegmentProps) {
   const findUnitId = chatFindSegmentUnitId(id);
+  // Read here rather than taken as a prop: this renderer also draws every
+  // subagent card's conversation, at any depth, under the same row.
+  const reportTurnId = useChatRowTurnId();
   switch (segment.kind) {
     case "text":
       if (segment.browserSession !== undefined) {
@@ -1693,6 +1701,8 @@ export function AssistantSegment({
           harnessId={harnessId}
           failure={segment.failure}
           turnId={turnId}
+          hostTimestamp={segment.hostTimestamp}
+          reportTurnId={reportTurnId}
           settledNotice={settledNotice}
           settledNoticeFindUnitId={settledNoticeFindUnitId}
         />

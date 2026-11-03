@@ -291,7 +291,9 @@ export interface ChatLowerComposerState {
   readonly mentionRoots: ReadonlyArray<string>;
   readonly fallbackToGlobalMentionRoots: boolean;
   readonly currentEpicId: string;
-  readonly onSubmitMessage: (input: ChatComposerSubmitInput) => boolean;
+  readonly onSubmitMessage: (
+    input: ChatComposerSubmitInput,
+  ) => boolean | Promise<boolean>;
   /** `/btw` / `/side`: fork this chat and ask there (`startSideChat`). */
   readonly onSideChat: (input: ChatComposerSideChatInput) => boolean;
   readonly onSettingsChange: ((settings: ChatRunSettings) => void) | null;

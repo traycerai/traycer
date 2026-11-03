@@ -494,6 +494,15 @@ export type MessageSegment =
        * one the engine acted on.
        */
       failure: AgentFailure | null;
+      /**
+       * When the failure happened, in the Host's clock: the persisted block's
+       * own `timestamp`, which the Host stamps on the `error` event at the
+       * fault. A report filed from this row carries it, since the report
+       * click can come long after. `null` where the row has no Host time of
+       * its own (a tool's failure, projected from a tool row that keeps only
+       * its start).
+       */
+      hostTimestamp: number | null;
       // Owning subagent block id when the error ended a subagent's own thread;
       // absent for a turn-level error. See `ReasoningSegment.parentId`.
       parentId?: string;

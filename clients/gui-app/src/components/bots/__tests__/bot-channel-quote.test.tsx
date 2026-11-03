@@ -41,6 +41,8 @@ import {
 import { MountedChannel } from "@/components/bots/__tests__/bot-turn-channel-harness";
 import { BotSessionView } from "@/components/bots/bot-session-view";
 import {
+  advanceLegendListFrames,
+  installLegendListTestClock,
   installLegendListViewportMetrics,
   settleLegendList,
 } from "@/components/chat/__tests__/legend-list-test-environment";
@@ -148,14 +150,13 @@ function clientRectsOf(rect: DOMRect): DOMRectList {
 }
 
 function flushFrame(): Promise<void> {
-  return new Promise((resolve) => {
-    requestAnimationFrame(() => resolve());
-  });
+  return advanceLegendListFrames(1);
 }
 
 let scene: Scene;
 
 beforeEach(() => {
+  installLegendListTestClock();
   installLegendListViewportMetrics();
   // jsdom has no layout: give every range a paintable rect, or the popover's
   // anchor guard dismisses it.
@@ -254,7 +255,7 @@ function expectSelectionCleared(): void {
 
 describe("select-to-quote in a bot's channel with no thread open", () => {
   it("quotes a selection of the channel after what the channel's box holds, focuses the box with the caret after the quote and clears the selection", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     await mountChannel();
     await user.type(channelBox(), TYPED);
 
@@ -289,7 +290,7 @@ describe("select-to-quote in a bot's channel with no thread open", () => {
 
 describe("select-to-quote in a bot's channel while its box edits a failed message", () => {
   it("adds the quote after the failed message's text, keeps the edit and focuses the box", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     // The viewer's post went unanswered: the trunk failed on its request.
     scene.channel.setState({
       messages: [
@@ -344,7 +345,7 @@ describe("select-to-quote in a bot's channel while its box edits a failed messag
 
 describe("select-to-quote with a thread open beside the channel", () => {
   it("quotes a selection of the channel into the thread's box, kept under the bot, and leaves the channel's box alone", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     await mountChannelWithThread();
     await user.type(channelBox(), TYPED);
 
@@ -361,7 +362,7 @@ describe("select-to-quote with a thread open beside the channel", () => {
   });
 
   it("quotes a selection of the thread's own transcript into the thread's box", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     await mountChannelWithThread();
     await user.type(threadBox(), TYPED);
 
@@ -403,7 +404,7 @@ describe("select-to-quote while the open thread's box is not drawn", () => {
   });
 
   it("holds the quotes for the thread's box, in order, until it is drawn", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     await mountChannelWithThread();
     expect(screen.queryByTestId("bot-thread-composer-input")).toBeNull();
 
@@ -426,7 +427,7 @@ describe("select-to-quote while the open thread's box is not drawn", () => {
   });
 
   it("keeps a quote for the thread's box when the thread is closed and the channel is quoted, each reaching its own box", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     await mountChannelWithThread();
     await quoteChannelText(user, CHANNEL_TEXT);
 

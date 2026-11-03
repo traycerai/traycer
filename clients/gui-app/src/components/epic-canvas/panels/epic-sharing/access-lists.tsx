@@ -1,5 +1,6 @@
 import { Trash2, UserPlus, Users } from "lucide-react";
 import type { ReactNode } from "react";
+import { PersonAvatar } from "@/components/bots/bot-avatars";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -23,7 +24,6 @@ import type {
   SharingAccessPermission,
 } from "./types";
 import type { EpicCollaboratorView } from "@/hooks/epics/use-epic-collaborators-query";
-import { computeInitials } from "@/lib/auth/compute-initials";
 import { type AssignableCollaboratorRole } from "@/lib/epic-collaborator-roles";
 import { formatGithubHandle } from "@/lib/epic-invites";
 
@@ -306,10 +306,6 @@ function CollaboratorRow(props: {
     isRoleUpdatePending,
     isRevokePending,
   } = props;
-  const initials = computeInitials(
-    collaborator.displayName,
-    collaborator.email,
-  );
   const secondaryText =
     collaborator.email || formatGithubHandle(collaborator.handle);
   const canChangeRole = isOwner && !isLastOwner && collaborator.userId !== null;
@@ -321,12 +317,12 @@ function CollaboratorRow(props: {
       className="flex items-center gap-3 py-2.5 first:pt-0 last:pb-0"
       data-testid="epic-sharing-row"
     >
-      <Avatar size="sm">
-        {collaborator.avatarUrl !== null ? (
-          <AvatarImage src={collaborator.avatarUrl} alt="" />
-        ) : null}
-        <AvatarFallback>{initials}</AvatarFallback>
-      </Avatar>
+      <PersonAvatar
+        userId={collaborator.userId}
+        name={collaborator.displayName}
+        avatarUrl={collaborator.avatarUrl}
+        size="sm"
+      />
       <div className="min-w-0 flex-1">
         <p className="truncate text-ui-sm text-foreground">
           {collaborator.displayName}

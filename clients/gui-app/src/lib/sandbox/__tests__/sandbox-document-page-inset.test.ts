@@ -1,0 +1,184 @@
+import { JSDOM, VirtualConsole, type DOMWindow } from "jsdom";
+import { afterEach, describe, expect, it } from "vitest";
+import { buildDocument, type ArtifactPageRole } from "../sandbox-document";
+import { PAGE_INSET_TOP_VARIABLE } from "../theme-map";
+
+// An artifact page in a tile opens below the app's floating controls, by
+// padding on its own root. The padding is the bootstrap's work, so these run
+// the document `buildDocument` composes, the way the frame does, in a window
+// of its own that is its own parent.
+
+const windows: DOMWindow[] = [];
+
+afterEach(() => {
+  for (const window of windows.splice(0)) window.close();
+});
+
+function between(text: string, open: string, close: string): string {
+  const start = text.indexOf(open);
+  const end = text.indexOf(close, start + open.length);
+  if (start === -1 || end === -1) throw new Error(`no ${open} in the document`);
+  return text.slice(start + open.length, end);
+}
+
+/** A full set of theme variables, with the page inset when the app has one. */
+function variablesWith(inset: string | null): Record<string, string> {
+  const variables: Record<string, string> = {
+    "--color-background-primary": "#111111",
+    "--color-text-primary": "#eeeeee",
+  };
+  if (inset !== null) variables[PAGE_INSET_TOP_VARIABLE] = inset;
+  return variables;
+}
+
+function startPage(options: {
+  readonly artifactPage: ArtifactPageRole;
+  readonly inset: string | null;
+}): DOMWindow {
+  const composed = buildDocument({
+    html: "",
+    csp: null,
+    nonce: "n-1",
+    theme: {
+      appliesToRoot: true,
+      colorScheme: "dark",
+      background: null,
+      variables: Object.entries(variablesWith(options.inset)),
+    },
+    shortcuts: [],
+    artifactPage: options.artifactPage,
+  });
+  const { window } = new JSDOM("<!doctype html><html><body></body></html>", {
+    runScripts: "dangerously",
+    url: "traycer-artifact://artifact-a1--m1/site/index.html",
+    virtualConsole: new VirtualConsole(),
+  });
+  windows.push(window);
+  // The bootstrap announces itself to its parent, which is this window.
+  window.postMessage = () => undefined;
+  window.eval(between(composed, "<script>", "</script>"));
+  return window;
+}
+
+/** What the app sends when its host context changes: only the keys that did. */
+function hostContextChanged(
+  window: DOMWindow,
+  params: Record<string, unknown>,
+): void {
+  const event = new window.MessageEvent("message", {
+    data: {
+      jsonrpc: "2.0",
+      method: "ui/notifications/host-context-changed",
+      params,
+    },
+  });
+  Object.defineProperty(event, "source", { value: window });
+  window.dispatchEvent(event);
+}
+
+function themeChanged(window: DOMWindow, inset: string | null): void {
+  hostContextChanged(window, { styles: { variables: variablesWith(inset) } });
+}
+
+function pageRoot(window: DOMWindow): HTMLElement {
+  return window.document.documentElement;
+}
+
+/** The root's top padding in px as the page lays it out, whatever set it. */
+function rootPadding(window: DOMWindow): number {
+  return (
+    Number.parseFloat(window.getComputedStyle(pageRoot(window)).paddingTop) || 0
+  );
+}
+
+describe("an artifact page's room for the app's floating controls", () => {
+  it("opens with the room as padding on the page's root", () => {
+    const window = startPage({ artifactPage: "found", inset: "44px" });
+
+    expect(rootPadding(window)).toBe(44);
+    expect(window.document.body.style.paddingTop).toBe("");
+  });
+
+  it("follows the app when its controls change size", () => {
+    const window = startPage({ artifactPage: "found", inset: "44px" });
+
+    themeChanged(window, "62px");
+
+    expect(rootPadding(window)).toBe(62);
+  });
+
+  it("is added when the controls appear after the page, and cleared with its variable once they go", () => {
+    const window = startPage({ artifactPage: "found", inset: null });
+    expect(rootPadding(window)).toBe(0);
+
+    themeChanged(window, "62px");
+    expect(rootPadding(window)).toBe(62);
+    expect(
+      pageRoot(window).style.getPropertyValue(PAGE_INSET_TOP_VARIABLE),
+    ).toBe("62px");
+
+    themeChanged(window, null);
+    expect(rootPadding(window)).toBe(0);
+    expect(
+      pageRoot(window).style.getPropertyValue(PAGE_INSET_TOP_VARIABLE),
+    ).toBe("");
+  });
+
+  // The app sends only the keys that changed, so a change of display mode
+  // arrives with no variables and says nothing about the controls.
+  it("keeps the padding through a host context that carries no variables", () => {
+    const window = startPage({ artifactPage: "found", inset: "44px" });
+
+    hostContextChanged(window, { displayMode: "fullscreen" });
+
+    expect(rootPadding(window)).toBe(44);
+  });
+
+  it("leaves the page's own padding on its root through a theme change with no room in it", () => {
+    const window = startPage({ artifactPage: "found", inset: null });
+    pageRoot(window).style.paddingTop = "12px";
+
+    themeChanged(window, null);
+
+    expect(rootPadding(window)).toBe(12);
+  });
+
+  // The bootstrap runs before the page's own markup, so the room must not
+  // come from the root's inline style: claiming that attribute mid-parse
+  // makes the parser drop the one on the page's own <html> tag.
+  it("keeps the page's own style on its root when it opens with the room", () => {
+    const composed = buildDocument({
+      html: '<html style="--page-accent: red"><body><h1>Title</h1></body></html>',
+      csp: null,
+      nonce: "n-1",
+      theme: {
+        appliesToRoot: true,
+        colorScheme: "dark",
+        background: null,
+        variables: Object.entries(variablesWith("44px")),
+      },
+      shortcuts: [],
+      artifactPage: "found",
+    });
+    const { window } = new JSDOM(composed, {
+      runScripts: "dangerously",
+      url: "traycer-artifact://artifact-a1--m1/site/index.html",
+      virtualConsole: new VirtualConsole(),
+    });
+    windows.push(window);
+
+    expect(pageRoot(window).getAttribute("style")).toContain(
+      "--page-accent: red",
+    );
+    expect(rootPadding(window)).toBe(44);
+  });
+
+  it("never pads a document that is not an artifact page, at boot or later", () => {
+    const window = startPage({ artifactPage: null, inset: "44px" });
+    expect(rootPadding(window)).toBe(0);
+
+    themeChanged(window, "62px");
+
+    expect(rootPadding(window)).toBe(0);
+  });
+});
