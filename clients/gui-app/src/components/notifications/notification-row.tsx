@@ -526,6 +526,7 @@ const HOST_KIND_GLYPHS: Record<
   "agent.stalled": FAILED_CHAT,
   "approval.requested": NEUTRAL_BELL,
   "interview.requested": NEUTRAL_BELL,
+  "feedback.drafted": NEUTRAL_BELL,
   "workspace.operation.failed": FAILED_CHAT,
   // Only reachable for an `info` row: the severity branches above already
   // claim every `done`/`failure`/`needs_action` host-operation row, and the

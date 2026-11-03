@@ -96,7 +96,7 @@ import {
   type HostNotificationSeverity,
   type HostNotificationsAttentionCursor,
   type HostNotificationsChronologicalCursor,
-  type HostNotificationsCloudFeedRowV16,
+  type HostNotificationsCloudFeedRowV17,
   type HostNotificationsCloudFeedEntryRequest,
   type HostNotificationsEntityRef,
   type HostNotificationsSummary,
@@ -357,7 +357,7 @@ export function useMergedNotificationRows(): ReadonlyArray<MergedNotificationRow
         ...orderedGlobalEntries.map((entry) => rowFromGlobalEntry(entry)),
         ...Object.values(cloudRows)
           .filter(
-            (row): row is HostNotificationsCloudFeedRowV16 => row !== undefined,
+            (row): row is HostNotificationsCloudFeedRowV17 => row !== undefined,
           )
           .filter((row) => !isAutomaticAgentRecovery(row.entry))
           .map(rowFromCloudFeedRow),
@@ -577,7 +577,7 @@ function rowFromLocalFeedId(input: {
 
 function rowFromCloudFeedId(input: {
   readonly feedMode: "local" | "cloud" | "upgrade-required";
-  readonly cloudRow: HostNotificationsCloudFeedRowV16 | undefined;
+  readonly cloudRow: HostNotificationsCloudFeedRowV17 | undefined;
 }): MergedNotificationRow | null {
   if (
     input.feedMode !== "cloud" ||
@@ -1728,7 +1728,7 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
           if (cloudState.version !== cloudVersion) return;
           const fallbackEntryIds = Object.values(cloudState.rows)
             .filter(
-              (row): row is HostNotificationsCloudFeedRowV16 =>
+              (row): row is HostNotificationsCloudFeedRowV17 =>
                 row !== undefined && row.entry.readAt === null,
             )
             .map((row) => row.entryId);
@@ -2162,7 +2162,7 @@ export function rowFromGlobalEntry(
 }
 
 export function rowFromCloudFeedRow(
-  row: HostNotificationsCloudFeedRowV16,
+  row: HostNotificationsCloudFeedRowV17,
 ): MergedNotificationRow {
   const fallback = formatHostNotificationPresentation(row.entry);
   const title =
@@ -2413,6 +2413,13 @@ function navigationPayloadFromKnown(
         epicId: known.epicId,
         chatId: known.chatId,
         interviewBlockId: known.interviewBlockId,
+      };
+    case "feedback_draft":
+      return {
+        kind: "feedbackDraft",
+        epicId: known.epicId,
+        chatId: known.chatId,
+        blockId: known.blockId,
       };
     case "browser_human_needed":
       return {

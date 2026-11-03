@@ -188,6 +188,7 @@ function toolCallBlock(input: ToolCallInput): ContentBlock {
     botSendReceipt: null,
     artifact: null,
     mcpApp: null,
+    feedbackDraft: null,
     progress: null,
     backgroundOutput: null,
     backgroundTask: false,

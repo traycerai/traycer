@@ -157,21 +157,23 @@ describe("visibility of the five environments-redesign kinds", () => {
         );
       }
       // `notification.hooks.removed` is origin-store only from list @2.5 /
-      // feed @1.7; past the retired kinds, nothing else is hidden.
+      // feed @1.7, and `feedback.drafted` arrives at list @2.6 / feed @1.8 /
+      // cloudFeed @1.7; past the retired kinds, nothing else is hidden.
       expect(
         hidden.filter(
           (kind) =>
             !RETIRED_HOST_NOTIFICATION_KINDS.includes(kind) &&
-            kind !== "notification.hooks.removed",
+            kind !== "notification.hooks.removed" &&
+            kind !== "feedback.drafted",
         ),
       ).toEqual([]);
     },
   );
 
   it.each([
-    ["list 2.5", LIST, { major: 2, minor: 5 }],
-    ["feed 1.7", FEED, { major: 1, minor: 7 }],
-    ["cloudFeed 1.6", CLOUD_FEED, { major: 1, minor: 6 }],
+    ["list 2.6", LIST, { major: 2, minor: 6 }],
+    ["feed 1.8", FEED, { major: 1, minor: 8 }],
+    ["cloudFeed 1.7", CLOUD_FEED, { major: 1, minor: 7 }],
     [
       "subscribe 1.0",
       { method: "host.notifications.subscribe" } as const,
@@ -195,9 +197,9 @@ describe("visibility of the five environments-redesign kinds", () => {
     expect(RETIRED_HOST_NOTIFICATION_KINDS).not.toContain("team.role.changed");
 
     for (const [surface, version] of [
-      [LIST, { major: 2, minor: 5 }],
-      [FEED, { major: 1, minor: 7 }],
-      [CLOUD_FEED, { major: 1, minor: 6 }],
+      [LIST, { major: 2, minor: 6 }],
+      [FEED, { major: 1, minor: 8 }],
+      [CLOUD_FEED, { major: 1, minor: 7 }],
     ] as const) {
       expect(visibleHostNotificationKinds(surface, version)).toContain(
         "team.role.changed",
