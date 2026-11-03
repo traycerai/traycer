@@ -48,11 +48,12 @@ Every push to `main` starts a run of every workflow, each running what the
 merged commit reaches, once, and a later merge never cancels an earlier merge's
 run.
 
-- A failed merge run is re-run once (`trunk-red.yml`, failed jobs only,
-  because the test suites have known flakes). If the re-run fails too, the
-  `trunk-red` run itself fails, with the commit, its author and the run in its
-  summary. It sends nothing anywhere: a failed `trunk-red` run is the signal,
-  and the one thing an alert has to watch.
+- No test may need a retry: a test passes on its first attempt (owner ruling,
+  3 Nov 2026). `trunk-red.yml` re-runs nothing. A failed merge run is red on
+  attempt 1: the `trunk-red` run itself fails, with the commit, its author and
+  the run in its summary, and the failure is fixed forward. It sends nothing
+  anywhere: a failed `trunk-red` run is the signal, and the one thing an alert
+  has to watch.
 - A merge run that narrows to what changed (`nx affected` in `pre-commit.yml`,
   the `changes` jobs of `browser-regressions.yml`, `formal-regressions.yml`,
   `protocol-compat.yml`, `real-supervisor.yml` and `gradle-wrapper.yml`,

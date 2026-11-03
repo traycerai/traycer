@@ -6,26 +6,22 @@ name: Trunk red
 # `main`, so a red merge run has to be noticed by something other than whoever
 # happens to look.
 #
-# When a push run on `main` fails, its failed jobs are re-run once, and only a
-# second failure is reported. The test suites have known flakes, and one retry
-# separates a flake from a break without a person: a flake passes the retry, a
-# break fails it again.
+# NO RETRY: A FAILURE IS RED ON ATTEMPT 1. No test may need a retry; a test
+# passes on its first attempt (owner ruling, 3 Nov 2026). This workflow re-runs
+# nothing: a failed push run on `main` is reported as it stands, and the
+# failure is fixed forward.
 #
 # REPORTED MEANS THIS JOB FAILS, with the workflow, the commit, its author and
 # the run in its summary. It sends nothing anywhere. So this workflow's own
-# result is the signal: a green run of it absorbed a flake or had nothing to
-# do, a red run of it means `main` is really red. Whatever tells people (a
-# Slack automation, a notification rule) has that one thing to watch.
+# result is the signal: a green run of it had nothing to do, a red run of it
+# means `main` is red. Whatever tells people (a Slack automation, a
+# notification rule) has that one thing to watch.
 #
-# The job WAITS FOR ITS OWN RETRY instead of reacting to the retry's
-# completion. The retry is started with this job's token, and GitHub starts no
-# workflow run from an event that token caused, so a second `workflow_run` for
-# attempt two is not something to build on. Attempts after the first are
-# ignored here (the `if:` below), and the job that started the retry polls it
-# to the end. Every conclusion other than success, skipped and cancelled is
-# answered, so one nobody thought to list cannot leave `main` red in silence.
-# A cancelled run is ignored: a person cancelled it. A run that cannot be
-# retried (`startup_failure`, a broken workflow file) is reported as such.
+# Every conclusion other than success, skipped and cancelled is answered, so
+# one nobody thought to list cannot leave `main` red in silence. A cancelled
+# run is ignored: a person cancelled it. A `startup_failure` (a broken
+# workflow file) is reported with its conclusion. Attempt 1 only: a person's
+# re-run of a reported run is not reported again.
 #
 # Only push runs count. A pull-request run is its author's to read, a schedule
 # run (CodeQL's weekly scan) has no commit to blame, and a manual run is
@@ -37,8 +33,8 @@ name: Trunk red
 # commits. `scripts/__tests__/ci-pull-request-gate.test.mjs` fails when this
 # list and the workflows' push triggers disagree.
 #
-# No secret, no checkout and no third-party action: `gh` is on the runner, and
-# nothing here runs repository code with a write token.
+# No secret, no token scope, no checkout and no third-party action: the job
+# reads only the event.
 
 on:
   workflow_run:
@@ -59,8 +55,8 @@ on:
 permissions: {}
 
 jobs:
-  retry-or-report:
-    name: Retry once, then report
+  report:
+    name: Report
     if: >-
       github.event.workflow_run.event == 'push'
       && github.event.workflow_run.run_attempt == 1
@@ -68,18 +64,14 @@ jobs:
       && github.event.workflow_run.conclusion != 'skipped'
       && github.event.workflow_run.conclusion != 'cancelled'
     runs-on: ubuntu-24.04
-    # The longest retried leg is the macOS packaging job; the poll below gives
-    # up, and reports, before this does.
-    timeout-minutes: 60
-    permissions:
-      actions: write # `gh run rerun` is a write on the Actions API; nothing else is needed
+    timeout-minutes: 5
+    permissions: {}
     steps:
-      - name: Retry the failed jobs once, and fail if the run is still red
+      - name: Fail with the red run's report
         env:
-          GH_TOKEN: ${{ github.token }}
-          RUN_ID: ${{ github.event.workflow_run.id }}
           RUN_URL: ${{ github.event.workflow_run.html_url }}
           WORKFLOW_NAME: ${{ github.event.workflow_run.name }}
+          CONCLUSION: ${{ github.event.workflow_run.conclusion }}
           BRANCH: ${{ github.event.workflow_run.head_branch }}
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
           COMMIT_MESSAGE: ${{ github.event.workflow_run.head_commit.message }}
@@ -92,67 +84,12 @@ jobs:
           # squash merge.
           title="${COMMIT_MESSAGE%%$'\n'*}"
 
-          # $1 says what happened to the run. Nothing is sent anywhere: the
-          # line goes to this job's summary and the job FAILS, so a failed run
-          # of this workflow means the branch is really red, and that is the
-          # one thing an alert has to watch. The title and the author are text
-          # somebody else wrote, so they go to the summary only, never into a
-          # workflow command.
-          report() {
-            printf '%s is red: %s %s on %s "%s" by %s: %s\n' \
-              "${BRANCH}" "${WORKFLOW_NAME}" "$1" "${short}" "${title}" "${COMMIT_AUTHOR}" "${RUN_URL}" >> "$GITHUB_STEP_SUMMARY"
-            echo "::error::${BRANCH} is red: ${WORKFLOW_NAME} $1 on ${short}."
-            exit 1
-          }
-
-          # One retry in all, whoever starts it. The attempt is read before
-          # every request: once a person has re-run the run, theirs is the
-          # retry, and asking again would start a third attempt whose pass
-          # would hide two failures. The API can also refuse a re-run for a
-          # few seconds after a run completes, hence the three tries.
-          attempt_now() {
-            gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}" --jq '.run_attempt' || echo 1
-          }
-          retry_exists=false
-          for try in 1 2 3; do
-            if [ "$(attempt_now)" -ge 2 ]; then
-              retry_exists=true
-              break
-            fi
-            if gh run rerun "${RUN_ID}" --failed --repo "${GITHUB_REPOSITORY}"; then
-              retry_exists=true
-              break
-            fi
-            echo "Re-run request ${try} was refused; waiting before the next."
-            sleep 15
-          done
-          if [ "${retry_exists}" != "true" ] && [ "$(attempt_now)" -lt 2 ]; then
-            report "failed and could not be retried"
-          fi
-
-          # Poll the retry to its end. The run's status goes back to queued once
-          # the retry is accepted, so require the attempt to have moved before
-          # trusting a `completed`.
-          deadline=$((SECONDS + 45 * 60))
-          while :; do
-            sleep 30
-            state="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}" \
-              --jq '[.run_attempt, .status, (.conclusion // "")] | @tsv')" || state=""
-            IFS=$'\t' read -r attempt status conclusion <<<"${state}"
-            if [ "${attempt:-1}" -ge 2 ] && [ "${status:-}" = "completed" ]; then
-              break
-            fi
-            if [ "${SECONDS}" -ge "${deadline}" ]; then
-              report "failed, and its retry has not finished after 45 minutes"
-            fi
-          done
-
-          if [ "${conclusion}" = "success" ]; then
-            echo "${WORKFLOW_NAME} on ${short} passed on its retry: a flake." >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
-          if [ "${conclusion}" = "cancelled" ]; then
-            echo "The retry of ${WORKFLOW_NAME} on ${short} was cancelled by a person; not reported." >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
-          report "failed twice (${conclusion})"
+          # Nothing is sent anywhere: the line goes to this job's summary and
+          # the job FAILS, so a failed run of this workflow means the branch is
+          # red, and that is the one thing an alert has to watch. The title and
+          # the author are text somebody else wrote, so they go to the summary
+          # only, never into a workflow command.
+          printf '%s is red: %s failed (%s) on %s "%s" by %s: %s\n' \
+            "${BRANCH}" "${WORKFLOW_NAME}" "${CONCLUSION}" "${short}" "${title}" "${COMMIT_AUTHOR}" "${RUN_URL}" >> "$GITHUB_STEP_SUMMARY"
+          echo "::error::${BRANCH} is red: ${WORKFLOW_NAME} failed (${CONCLUSION}) on ${short}."
+          exit 1

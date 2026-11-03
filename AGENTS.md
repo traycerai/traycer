@@ -103,10 +103,11 @@ No workflow filters its own push trigger by path. Narrowing is always a
 job-level skip inside a run that happened, because the internal repository's
 release gate refuses a commit whose own push started no run.
 
-`trunk-red.yml` re-runs failed jobs once; a failed `trunk-red` run means `main`
-is really red, a break to fix or revert, not a flake. A red merge stays red
-until a run covering it passes, and a red `main` blocks the internal
-repository's staging train and promotion.
+No test may need a retry: a test passes on its first attempt (owner ruling,
+3 Nov 2026). `trunk-red.yml` re-runs nothing, so a failed `trunk-red` run means
+a merge run failed on attempt 1 and `main` is red, to be fixed forward. A red
+merge stays red until a run covering it passes, and a red `main` blocks the
+internal repository's staging train and promotion.
 
 How the gate works and how a new workflow carries it:
 [`.github/AGENTS.md`](.github/AGENTS.md).

@@ -696,18 +696,24 @@ describe("trunk-red.yml", () => {
     expect(workflow.on.workflow_run.types).toEqual(["completed"]);
   });
 
-  it("holds no permission at the top and actions: write on its one job", () => {
+  // The owner ruled that no test may need a retry: a test passes on its first
+  // attempt (3 Nov 2026), so a failure is red on attempt 1 and is fixed
+  // forward. Re-running a run needs `actions: write`; the one job holds no
+  // scope, so it cannot re-run anything.
+  it("holds no permission at the top or on its one job, so it re-runs nothing", () => {
     expect(workflow.permissions).toEqual({});
     const jobs = Object.values(workflow.jobs);
     expect(jobs).toHaveLength(1);
-    expect(jobs[0].permissions).toEqual({ actions: "write" });
+    expect(jobs[0].permissions).toEqual({});
+    expect(jobs[0].steps).toHaveLength(1);
+    expect(String(jobs[0].steps[0].run)).not.toMatch(/\bgh\b|rerun/);
   });
 
   it("acts only on a first-attempt push run", () => {
     const condition = normalize(Object.values(workflow.jobs)[0].if);
     expect(condition).toContain("github.event.workflow_run.event == 'push'");
-    // Its own retry is attempt two: the job that started it waits for it, so
-    // a second run of this workflow must not retry or report again.
+    // A later attempt is a person's re-run of a run whose attempt 1 was
+    // already reported.
     expect(condition).toContain("github.event.workflow_run.run_attempt == 1");
   });
 
@@ -732,22 +738,6 @@ describe("trunk-red.yml", () => {
     expect(condition).not.toContain("timed_out");
   });
 
-  // One retry in all, whoever starts it: the attempt is read before every
-  // re-run request, so a person's re-run is the retry and no third attempt
-  // starts.
-  it("reads the run attempt before every re-run request", () => {
-    const run = Object.values(workflow.jobs)[0]
-      .steps.map((step) => String(step.run ?? ""))
-      .join("\n");
-    expect(run).toContain("attempt_now()");
-    const loop = run.slice(run.indexOf("for try in 1 2 3"));
-    const read = loop.indexOf("attempt_now");
-    const rerun = loop.indexOf("gh run rerun");
-    expect(read).toBeGreaterThan(-1);
-    expect(rerun).toBeGreaterThan(-1);
-    expect(read).toBeLessThan(rerun);
-  });
-
   it("interpolates no expression into a run body", () => {
     for (const step of Object.values(workflow.jobs)[0].steps) {
       expect(String(step.run ?? "")).not.toContain("${{");
@@ -756,30 +746,13 @@ describe("trunk-red.yml", () => {
 
   // The owner decided a red `main` is reported by FAILING, not by a message:
   // the failed `trunk-red` run is the one signal an alert has to watch. So
-  // nothing here may carry a webhook or a secret, and every route to "still
-  // red" has to end the job non-zero, while a flake that passed its retry and
-  // a retry a person cancelled stay green. Asserted on the parsed step, so a
-  // reformat of the YAML cannot hide a path that went quiet.
+  // nothing here may carry a webhook or a secret, and every run of the job
+  // ends non-zero. Asserted on the parsed step, so a reformat of the YAML
+  // cannot hide a path that went quiet.
   describe("reports a red main by failing the job and sends nothing anywhere", () => {
-    const step = Object.values(workflow.jobs)[0].steps.find((candidate) =>
-      String(candidate.run ?? "").includes("gh run rerun"),
-    );
+    const step = Object.values(workflow.jobs)[0].steps[0];
     const env = step?.env ?? {};
     const run = String(step?.run ?? "");
-    const reportBody = /\breport\(\) \{\n([\s\S]*?)\n\s*\}\n/.exec(run)?.[1];
-    const successBlock =
-      /if \[ "\$\{conclusion\}" = "success" \]; then\n([\s\S]*?)\n\s*fi\n/.exec(
-        run,
-      )?.[1];
-    const cancelledBlock =
-      /if \[ "\$\{conclusion\}" = "cancelled" \]; then\n([\s\S]*?)\n\s*fi\n/.exec(
-        run,
-      )?.[1];
-
-    it("finds the step that re-runs the run, and its report()", () => {
-      expect(step).toBeDefined();
-      expect(reportBody).toBeDefined();
-    });
 
     it("holds no Slack or webhook env key and reads no secret, in the step or anywhere in the workflow", () => {
       expect(Object.keys(env).length).toBeGreaterThan(0);
@@ -800,32 +773,15 @@ describe("trunk-red.yml", () => {
       expect(run).not.toMatch(/slack|webhook/i);
     });
 
-    it("ends report() in exit 1, after writing its line to the job summary", () => {
-      const body = String(reportBody);
-      expect(body).toContain('>> "$GITHUB_STEP_SUMMARY"');
-      expect(body).toContain("::error::");
-      expect(body.trim().endsWith("exit 1")).toBe(true);
-      expect(body).not.toMatch(/exit 0/);
-    });
-
-    it("exits 0 for a flake that passed its retry and for a retry a person cancelled", () => {
-      expect(successBlock).toBeDefined();
-      expect(cancelledBlock).toBeDefined();
-      for (const block of [String(successBlock), String(cancelledBlock)]) {
-        expect(block.trim().endsWith("exit 0")).toBe(true);
-        expect(block).not.toMatch(/\breport\b/);
-      }
-    });
-
-    it("reports a retry that is still red: the last statement is a report call, after both exit-0 branches", () => {
+    it("writes its line to the job summary and an error annotation, then exits 1 on every path", () => {
       const lines = run
         .split("\n")
         .map((line) => line.trim())
         .filter((line) => line.length > 0);
-      expect(lines.at(-1)).toMatch(/^report "failed twice/);
-      expect(run.lastIndexOf("report ")).toBeGreaterThan(
-        run.indexOf('"${conclusion}" = "cancelled"'),
-      );
+      expect(run).toContain('>> "$GITHUB_STEP_SUMMARY"');
+      expect(run).toContain("::error::");
+      expect(lines.at(-1)).toBe("exit 1");
+      expect(run).not.toMatch(/exit 0/);
     });
   });
 });

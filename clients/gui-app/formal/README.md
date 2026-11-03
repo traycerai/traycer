@@ -670,7 +670,7 @@ Team PRs into main skip the workflow under the repository's normal gate.
 A merge to main runs the selected jobs when model or mapped source paths
 changed, comparing against this workflow's last green push. The workflow
 pins TLC v1.7.4 by checksum, uploads traces, and aggregates the jobs into
-`formal regressions`; `trunk-red` retries a failed merge run once.
+`formal regressions`; `trunk-red` reports a failed merge run.
 
 `trace.py` prints one line per step: the scroll offset over the maximum,
 each row as `r<id>@<top>:<size>` (`~n` is the size its next measurement
