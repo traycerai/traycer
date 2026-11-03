@@ -1499,7 +1499,7 @@ describe("<NotificationsSettingsPanel /> long-turn alert", () => {
   });
 
   it("draws no row for a host that answers E_HOST_UNSUPPORTED, and the rest of the panel stays", async () => {
-    renderLongTurnAlert({
+    const { queryClient } = renderLongTurnAlert({
       hostId: "host-a",
       supportsAlert: false,
       initialThresholdMs: null,
@@ -1507,13 +1507,22 @@ describe("<NotificationsSettingsPanel /> long-turn alert", () => {
       readError: null,
     });
 
+    const alertKey = queryKeys.hostMethod<
+      HostRpcRegistry,
+      "host.notifications.getLongTurnAlert"
+    >("host-a", "host.notifications.getLongTurnAlert", {});
+    await waitFor(() => {
+      const query = queryClient.getQueryCache().find({
+        queryKey: alertKey,
+        exact: true,
+      });
+      expect(query?.state.status).toBe("error");
+    });
+    expect(
+      screen.queryByText(LONG_TURN_ALERT_LABEL, { exact: true }),
+    ).toBeNull();
     await screen.findByRole("switch", {
       name: "Needs action In-app notifications",
-    });
-    await waitFor(() => {
-      expect(
-        screen.queryByRole("switch", { name: LONG_TURN_ALERT_LABEL }),
-      ).toBeNull();
     });
   });
 
