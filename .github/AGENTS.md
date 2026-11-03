@@ -58,6 +58,14 @@ later merge never cancels an earlier merge's run.
   compares against the last push its own workflow passed on (`scripts/ci-last-green-sha.sh`), not the
   push before. So the next merge's range still holds a break, and `main`
   stays red until a run covering everything since the last green push passes.
+- `pre-commit.yml`'s `lint` and `compile` jobs restore a cache only a passing
+  push saves, so every run starts from the last green `main` entry. It holds
+  `NX_CACHE_DIRECTORY`, the Nx database and gui-app's ESLint cache. A cached
+  result replays as a pass, so a target's `inputs` must name everything its
+  answer depends on: `lint` is type-aware and lists `^production`, and lists
+  every source extension the linters read. A rule that reads another file
+  (`components.json`, a stylesheet) goes in the cache key too, because ESLint
+  hashes only the file it lints. `build` keeps no cache.
 - A protocol test file over 10 s fails the `test (@traycer/protocol)` leg
   unless `protocol/test-budget-allowlist.json` names it with a reason. It runs
   once more alone first, because a file's time on the runner moves by half

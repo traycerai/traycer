@@ -22,13 +22,21 @@
       "inputs": [
         "{projectRoot}/**/*.ts",
         "{projectRoot}/**/*.tsx",
+        "{projectRoot}/**/*.mts",
+        "{projectRoot}/**/*.cts",
         "{projectRoot}/**/*.js",
         "{projectRoot}/**/*.jsx",
+        "{projectRoot}/**/*.mjs",
+        "{projectRoot}/**/*.cjs",
         "{projectRoot}/.eslintrc*",
         "{projectRoot}/eslint.config.*",
         "{projectRoot}/.oxlintrc*",
         "{projectRoot}/oxlint.config.*",
-        "{workspaceRoot}/eslint/*.mjs"
+        "{projectRoot}/package.json",
+        "{projectRoot}/tsconfig*.json",
+        "{workspaceRoot}/package.json",
+        "{workspaceRoot}/eslint/*.mjs",
+        "^production"
       ]
     },
     "test": {
@@ -76,7 +84,10 @@
       "!{projectRoot}/**/*.test.tsx",
       "!{projectRoot}/**/*.md"
     ],
-    "sharedGlobals": []
+    "sharedGlobals": [
+      "{workspaceRoot}/package.json",
+      "{workspaceRoot}/scripts/tsrs.mjs"
+    ]
   },
   "analytics": false
 }
