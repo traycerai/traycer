@@ -334,6 +334,14 @@ function GroupBlock(props: GroupBlockProps) {
               pinned={pinnedIdSet.has(item.id)}
               onToggle={() => onTogglePin(item.id)}
             />
+            {item.hint !== undefined ? (
+              <span
+                data-slot="command-item-hint"
+                className="ml-auto shrink-0 text-ui-xs text-muted-foreground"
+              >
+                {item.hint}
+              </span>
+            ) : null}
             {item.shortcut !== null ? (
               <CommandShortcut>
                 {formatChordForDisplay(item.shortcut)}
