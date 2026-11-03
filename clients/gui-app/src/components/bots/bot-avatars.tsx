@@ -155,8 +155,12 @@ export function NamedBotAvatar(props: {
   );
 }
 
-/** A person's picture: a member of a bot's environment, or its owner. */
-export function MemberAvatar(props: {
+/**
+ * The one picture of a person in the app: their picture, else their initials
+ * on the colour hashed from their id. Every surface shows or labels the name
+ * beside it, so the picture itself is decoration.
+ */
+export function PersonAvatar(props: {
   readonly userId: string | null;
   readonly name: string;
   readonly avatarUrl: string | null;
@@ -169,7 +173,7 @@ export function MemberAvatar(props: {
       seed={props.userId ?? props.name}
       avatarUrl={props.avatarUrl}
       size={props.size}
-      testId="chat-sender-avatar"
+      testId="person-avatar"
     />
   );
 }
@@ -205,7 +209,7 @@ export function AvatarStack(props: {
         identity.kind === "bot" ? (
           <BotAvatar key="bot" size={size} />
         ) : (
-          <MemberAvatar
+          <PersonAvatar
             // A stack never lists one person twice; the index keeps two
             // unnamed members apart.
             key={identity.userId ?? `member-${String(index)}`}
