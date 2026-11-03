@@ -89,6 +89,11 @@ jobs:
           bun x vitest run --config scripts/vitest.config.ts
           scripts/__tests__/git-output-max-buffer.test.mjs
           --maxWorkers=1
+      - name: Check that early-exit readers never read through a pipe under pipefail
+        run: >-
+          bun x vitest run --config scripts/vitest.config.ts
+          scripts/__tests__/early-exit-reader-pipelines.test.mjs
+          --maxWorkers=1
 
   workspace-checks:
     name: ${{ matrix.lane }}
