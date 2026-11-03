@@ -62,10 +62,18 @@ async function setCarried(page: Page, carried: boolean): Promise<void> {
   }
 }
 
+/**
+ * The row's first frames are the panel zooming in (`duration-100`, scale
+ * 0.95 and a short slide). A geometry read in that window is not the resting
+ * seam.
+ */
 async function open(page: Page, query: string): Promise<void> {
   await page.goto(`${fixture("ultracode-picker-row")}${query}`);
   await expect(page.getByTestId("picker-ultracode-row")).toBeVisible();
-  await nextFrames(page, 2);
+  await page.evaluate(async () => {
+    await document.fonts.ready;
+  });
+  await settled(page.getByRole("dialog", { name: "Select model" }));
 }
 
 interface Box {
@@ -186,14 +194,24 @@ function effortOf(page: Page): Locator {
 /**
  * The chip's text changes its width, which moves the panel's transform origin;
  * the panel transitions that for a moment before it is back in place. Measure
- * once its own animations have finished.
+ * once that animation, and any still running inside the dialog, has finished.
+ * The dialog's own animation list misses the thumb's slide.
  */
 async function settled(locator: Locator): Promise<void> {
-  await locator.evaluate(async (element) => {
-    await Promise.all(
-      element.getAnimations().map((animation) => animation.finished),
-    );
-  });
+  await expect
+    .poll(
+      () =>
+        locator.evaluate(
+          (element) =>
+            !element.getAnimations({ subtree: true }).some((animation) => {
+              if (animation.playState !== "running") return false;
+              const end = animation.effect?.getComputedTiming().endTime;
+              return end !== Infinity;
+            }),
+        ),
+      { intervals: [16], message: "the picker was still animating" },
+    )
+    .toBe(true);
 }
 
 async function frameOf(page: Page): Promise<Frame> {
