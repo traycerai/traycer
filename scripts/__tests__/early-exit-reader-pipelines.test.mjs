@@ -192,7 +192,9 @@ function pipelinesOf(source) {
         input: stage ?? outer.input,
         loop: outer.loop,
       };
-      if (LOOPS.has(opener)) group.loop = { kind: opener, stops: false };
+      if (LOOPS.has(opener)) {
+        group.loop = { kind: opener, stops: false, inCondition: true };
+      }
       if (stage !== null) stage.loop = group.loop;
       groups.push(group);
     }
@@ -271,6 +273,8 @@ function pipelinesOf(source) {
           if (reserved === "then" || reserved === "do") {
             openConditions = Math.max(0, openConditions - 1);
           }
+          const loop = inherited().loop;
+          if (reserved === "do" && loop) loop.inCondition = false;
           if (reserved === "!") listTested = true;
           if (GROUP_CLOSERS.has(reserved)) openGroup(reserved, null);
           if ([...GROUP_CLOSERS.values()].includes(reserved))
@@ -316,6 +320,10 @@ function pipelinesOf(source) {
           }
         }
         if (andOr) pipeline.tested = true;
+        // A loop condition with another predicate (`read -r x && [ -n "$x" ]`)
+        // can end the loop before its input does.
+        const loop = inherited().loop;
+        if (andOr && loop?.inCondition) loop.stops = true;
         list.push(pipeline);
         pipeline = null;
       }
@@ -1186,6 +1194,14 @@ describe("an early-exit reader never reads a streaming producer through a pipe u
     ],
     ["a read in a for loop", "seq 10 | for x in a; do read -r line; done"],
     [
+      "a while read loop whose condition has another predicate",
+      'seq 10 | while IFS= read -r line && [ -n "$line" ]; do :; done',
+    ],
+    [
+      "a bounded while read loop",
+      'seq 10 | while read -r x && [ "$x" -lt 3 ]; do :; done',
+    ],
+    [
       "a group reader naming /dev/stdin",
       "seq 10 | { :; head -n 1 /dev/stdin; }",
     ],
@@ -1253,6 +1269,10 @@ describe("an early-exit reader never reads a streaming producer through a pipe u
     [
       "a loop that reads every line",
       "seq 10 | while read -r a; do read -r b; done",
+    ],
+    [
+      "a loop with an and-list in its body",
+      'seq 10 | while read -r x; do if [ -n "$x" ] && [ "$x" ]; then :; fi; done',
     ],
     ["a group that drains its input", "seq 10 | { cat >/dev/null; }"],
     [
