@@ -23,8 +23,15 @@ vi.mock("../../../host/pid-metadata", () => ({
  * cmd.exe does not honour `\"`; it saw a leading literal backslash, could not
  * resolve the command token, and returned non-zero. The `If` was therefore
  * always false and the task started the host UNLABELLED at every login,
- * permanently and silently. The fix drops cmd.exe entirely - `shell.Run`
+ * permanently and silently. The fix drops cmd.exe from the probes - `shell.Run`
  * takes CreateProcess argv rules, the same dialect as the line beside it.
+ *
+ * The one cmd.exe line left is the adoption-nonce read, which needs a
+ * redirect: `shell.Exec` is the only call with a stdout stream and, from
+ * `wscript.exe`, it opens a visible console window. It is a hidden `shell.Run`
+ * of `cmd.exe /d /s /c "<plain-quoted argv> > "<file>" 2>NUL"` whose output
+ * file the launcher then reads and deletes, and the tests below decode it the
+ * way cmd.exe does.
  */
 
 /**
@@ -130,24 +137,24 @@ function assignmentLiteral(script: string, statement: string): string {
 }
 
 /**
- * Evaluates the nonce-read expression the launcher emits, with VBScript's
- * semantics for the pieces it uses: nested `Trim(...)` / `Replace(s, a, b)`
- * calls over string literals, the `vbCr` / `vbLf` constants, and the probe's
- * `nonceProbe.StdOut.ReadAll`, which is bound to `probeStdout`. The one
- * semantic that matters is pinned rather than assumed: VBScript `Trim`
- * strips SPACES only - not CR, not LF - which is exactly why `Trim` alone
- * never yielded a nonce the pattern accepted.
+ * Evaluates a VBScript string expression the launcher emits, with VBScript's
+ * semantics for the pieces it uses: `&` concatenation, string literals,
+ * `Chr(n)`, nested `Trim(...)` / `Replace(s, a, b)` calls, the `vbCr` / `vbLf`
+ * constants, and the variables named in `bindings` (`nonceStream.ReadAll`
+ * among them). The one semantic that matters is pinned rather than assumed:
+ * VBScript `Trim` strips SPACES only - not CR, not LF - which is exactly why
+ * `Trim` alone never yielded a nonce the pattern accepted.
  */
 function evaluateVbsStringExpression(
   expression: string,
-  probeStdout: string,
+  bindings: Readonly<Record<string, string>>,
 ): string {
   let index = 0;
   const peek = (): string => expression[index] ?? "";
   const skipSpaces = (): void => {
     while (peek() === " ") index += 1;
   };
-  const parse = (): string => {
+  const parseTerm = (): string => {
     skipSpaces();
     if (peek() === '"') {
       const start = index;
@@ -170,9 +177,11 @@ function evaluateVbsStringExpression(
     const name = expression.slice(start, index);
     skipSpaces();
     if (peek() !== "(") {
+      if (/^[0-9]+$/.test(name)) return name;
       if (name === "vbCr") return "\r";
       if (name === "vbLf") return "\n";
-      if (name === "nonceProbe.StdOut.ReadAll") return probeStdout;
+      const bound = bindings[name];
+      if (bound !== undefined) return bound;
       throw new Error(`unknown VBScript identifier: ${name}`);
     }
     index += 1;
@@ -197,10 +206,22 @@ function evaluateVbsStringExpression(
       const [subject, find, replacement] = args;
       return (subject ?? "").split(find ?? "").join(replacement ?? "");
     }
+    if (name === "Chr" && args.length === 1) {
+      return String.fromCharCode(Number(args[0]));
+    }
     throw new Error(`unsupported VBScript call: ${name}/${args.length}`);
   };
+  const parse = (): string => {
+    let value = parseTerm();
+    skipSpaces();
+    while (peek() === "&") {
+      index += 1;
+      value += parseTerm();
+      skipSpaces();
+    }
+    return value;
+  };
   const value = parse();
-  skipSpaces();
   if (index !== expression.length) {
     throw new Error(`trailing input in: ${expression}`);
   }
@@ -220,6 +241,17 @@ function shellRunLiteral(script: string, marker: string): string {
   const end = literal.lastIndexOf(", 0, True)");
   if (end < 0) throw new Error(`malformed shell.Run call: ${line}`);
   return literal.slice(0, end);
+}
+
+/** The trimmed script lines. */
+function trimmedLines(script: string): readonly string[] {
+  return script.split("\r\n").map((line) => line.trim());
+}
+
+function indexOfLine(lines: readonly string[], prefix: string): number {
+  const found = lines.findIndex((line) => line.startsWith(prefix));
+  if (found < 0) throw new Error(`no line starting with ${prefix}`);
+  return found;
 }
 
 describe("reference CommandLineToArgvW", () => {
@@ -261,11 +293,22 @@ describe("Windows hidden host launcher — decoded as Windows decodes it", () =>
     ]);
   });
 
-  it("no longer shells through cmd.exe or findstr for the probe", () => {
+  it("keeps cmd.exe, findstr and help parsing out of the capability probes", () => {
     const script = buildWindowsHiddenHostLauncher(cli, serviceLabel);
-    expect(script).not.toContain("cmd.exe");
+    const probes = script
+      .split("\r\n")
+      .filter((line) =>
+        /(probeStatus|adoptionCapabilityStatus) = shell/.test(line),
+      );
+    expect(probes).toHaveLength(2);
+    for (const probe of probes) expect(probe).not.toContain("cmd.exe");
     expect(script).not.toContain("findstr");
     expect(script).not.toContain("--help");
+  });
+
+  it("never calls shell.Exec, which opens a visible console window from wscript.exe", () => {
+    const script = buildWindowsHiddenHostLauncher(cli, serviceLabel);
+    expect(script).not.toMatch(/\.Exec\b/);
   });
 
   it("decodes the unlabelled start line to the exact argv", () => {
@@ -314,7 +357,7 @@ describe("Windows hidden host launcher — decoded as Windows decodes it", () =>
     expect(script).toContain("noncePattern.Pattern");
   });
 
-  it("still passes the nonce to the pattern when the probe's stdout ends in LF or CRLF", () => {
+  it("still passes the nonce to the pattern when the nonce file ends in LF or CRLF", () => {
     // `traycer host adoption-nonce` writes `${nonce}\n`. VBScript `Trim`
     // removes spaces only, and `noncePattern` is anchored with `$` on a
     // single-line RegExp, which does not match before a trailing LF - so a
@@ -333,8 +376,8 @@ describe("Windows hidden host launcher — decoded as Windows decodes it", () =>
     const readLine = script
       .split("\r\n")
       .map((line) => line.trim())
-      .find((line) => line.includes("nonceProbe.StdOut.ReadAll"));
-    const prefix = "If nonceProbe.ExitCode = 0 Then adoptionNonce = ";
+      .find((line) => line.includes("nonceStream.ReadAll"));
+    const prefix = "adoptionNonce = ";
     expect(readLine?.startsWith(prefix)).toBe(true);
     const expression = (readLine ?? "").slice(prefix.length);
     // A JS RegExp without the `m` flag and a VBScript RegExp without
@@ -354,7 +397,11 @@ describe("Windows hidden host launcher — decoded as Windows decodes it", () =>
       nonce,
     ]) {
       expect(
-        pattern.test(evaluateVbsStringExpression(expression, stdout)),
+        pattern.test(
+          evaluateVbsStringExpression(expression, {
+            "nonceStream.ReadAll": stdout,
+          }),
+        ),
       ).toBe(true);
     }
     // Control for the evaluator: with the pre-fix expression the same input
@@ -362,16 +409,131 @@ describe("Windows hidden host launcher — decoded as Windows decodes it", () =>
     // newline and this test would be passing for the wrong reason.
     expect(
       pattern.test(
-        evaluateVbsStringExpression(
-          "Trim(nonceProbe.StdOut.ReadAll)",
-          `${nonce}\n`,
-        ),
+        evaluateVbsStringExpression("Trim(nonceStream.ReadAll)", {
+          "nonceStream.ReadAll": `${nonce}\n`,
+        }),
       ),
     ).toBe(false);
     // The strip must not widen what the pattern accepts.
     expect(
-      pattern.test(evaluateVbsStringExpression(expression, "not a nonce\n")),
+      pattern.test(
+        evaluateVbsStringExpression(expression, {
+          "nonceStream.ReadAll": "not a nonce\n",
+        }),
+      ),
     ).toBe(false);
+  });
+
+  describe("the adoption nonce read", () => {
+    const nonce = "0f6c1b2e-8a44-4d19-9c3e-5b7a0d21f8ac";
+    const nonceFile =
+      "C:\\Users\\Traycer Dev\\.traycer\\cli\\host-start-nonce-rad1.tmp";
+    const script = buildWindowsHiddenHostLauncher(cli, serviceLabel);
+    const lines = trimmedLines(script);
+
+    it("runs the nonce command hidden through cmd.exe, redirected to the nonce file", () => {
+      const line = lines[indexOfLine(lines, "nonceStatus = shell.Run(")] ?? "";
+      const end = line.lastIndexOf(", 0, True)");
+      expect(end).toBeGreaterThan(0);
+      const commandLine = evaluateVbsStringExpression(
+        line.slice("nonceStatus = shell.Run(".length, end),
+        { nonceFile },
+      );
+      // The `, 0, True)` above is the hidden window style and the wait; the
+      // command is cmd.exe's own `/s` form: the outer quotes are stripped and
+      // the plain-quoted argv inside is left alone.
+      const match = /^"([^"]*\\cmd\.exe)" \/d \/s \/c "(.*)"$/.exec(
+        commandLine,
+      );
+      expect(match).not.toBeNull();
+      expect(match?.[2]).toBe(
+        `"${cli.command}" "host" "adoption-nonce" "--service-label" "ai.traycer.host.prod" > "${nonceFile}" 2>NUL`,
+      );
+    });
+
+    it("puts a unique nonce file beside the launcher", () => {
+      const line = lines[indexOfLine(lines, "nonceFile = ")] ?? "";
+      expect(line).toContain("GetParentFolderName(WScript.ScriptFullName)");
+      expect(line).toContain('"host-start-nonce-" & fileSystem.GetTempName');
+    });
+
+    it("reads the file only when the command succeeded, and deletes it on both paths", () => {
+      const run = indexOfLine(lines, "nonceStatus = shell.Run(");
+      const guard = indexOfLine(
+        lines,
+        "If Err.Number = 0 And nonceStatus = 0 Then",
+      );
+      const open = indexOfLine(
+        lines,
+        "Set nonceStream = fileSystem.OpenTextFile(nonceFile",
+      );
+      const read = lines.findIndex((line) =>
+        line.includes("nonceStream.ReadAll"),
+      );
+      const closeGuard = lines.indexOf("End If", guard);
+      const remove = indexOfLine(lines, "fileSystem.DeleteFile nonceFile");
+      expect(run).toBeLessThan(guard);
+      expect(guard).toBeLessThan(open);
+      expect(open).toBeLessThan(read);
+      expect(read).toBeLessThan(closeGuard);
+      // After the guard's own `End If`, so a non-zero status deletes it too.
+      expect(closeGuard).toBeLessThan(remove);
+      const raw = script.split("\r\n");
+      expect(raw[remove]?.startsWith("    fileSystem.DeleteFile")).toBe(true);
+    });
+
+    it("passes a nonce it read as --adoption-nonce", () => {
+      const line = lines.find((candidate) =>
+        candidate.includes('" --adoption-nonce "'),
+      );
+      const expression = (line ?? "")
+        .slice((line ?? "").indexOf("=") + 1)
+        .trim();
+      expect(
+        commandLineToArgv(
+          evaluateVbsStringExpression(expression, { adoptionNonce: nonce }),
+        ),
+      ).toEqual([
+        cli.command,
+        "host",
+        "start",
+        "--service-label",
+        "ai.traycer.host.prod",
+        "--adoption-nonce",
+        nonce,
+      ]);
+    });
+
+    it("starts labelled with no nonce when the command fails", () => {
+      // A non-zero status skips the read, so `adoptionNonce` keeps the empty
+      // string it was given before the block; the pattern rejects that and the
+      // `Else` start carries no nonce.
+      const declared = indexOfLine(lines, 'adoptionNonce = ""');
+      expect(declared).toBeLessThan(
+        indexOfLine(lines, "nonceStatus = shell.Run("),
+      );
+      const pattern = new RegExp(
+        decodeVbsStringLiteral(
+          assignmentLiteral(script, "noncePattern.Pattern ="),
+        ),
+      );
+      expect(pattern.test("")).toBe(false);
+      const elseLine =
+        lines[indexOfLine(lines, "If noncePattern.Test") + 3] ?? "";
+      expect(
+        commandLineToArgv(
+          decodeVbsStringLiteral(
+            elseLine.slice(elseLine.indexOf("=") + 1).trim(),
+          ),
+        ),
+      ).toEqual([
+        cli.command,
+        "host",
+        "start",
+        "--service-label",
+        "ai.traycer.host.prod",
+      ]);
+    });
   });
 
   it("degrades to the unlabelled start when the probe cannot even be launched", () => {
