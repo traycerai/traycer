@@ -114,9 +114,12 @@ jobs:
               echo "A $EVENT run always runs the suite."
               exit 0 ;;
           esac
-          # `--no-renames`: rename detection would fetch the contents the
-          # blobless clone left out, and a rename lists both paths this way.
-          relevant=$(git diff --name-only --no-renames "$range" | awk '
+          # `-z`, so a path that is not plain ASCII arrives as its raw bytes
+          # rather than in git's display quoting, which every match below
+          # would fail on. `--no-renames`: rename detection would fetch the
+          # contents the blobless clone left out, and a rename lists both
+          # paths this way.
+          relevant=$(git diff -z --name-only --no-renames "$range" | tr '\0' '\n' | awk '
             /\.md$/ || /\.test\.tsx?$/ { next }
             /^clients\/gui-app\// || /^clients\/shared\// || /^protocol\// ||
             /^packages\/html-source\// ||
