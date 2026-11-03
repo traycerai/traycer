@@ -4821,8 +4821,9 @@ min`): "The judge didn't finish in time, so it's asking you instead."
     fallback at all. The chat surfaces link in here from another host's chat
     (through `carryViewedHostIntoSettingsScope`), which is precisely when a
     panel that said nothing would be editing the wrong machine.
-  - **Groups**: Fallback (the `Automatic fallback` master switch, off by
-    default, and the `Try these in order` step editor), Behavior, Equivalent
+  - **Groups**: Fallback (the `Automatic fallback` master switch, on for a user
+    with no saved row and off over a row the host cannot read or after a reset,
+    and the `Try these in order` step editor), Behavior, Equivalent
     models, Advanced per-failure overrides, and a Danger Zone. Every policy
     field is compared by `fallbackPolicyValuesEqual`; a field missing from that
     function is equal to itself by omission, so an edit to it alone would

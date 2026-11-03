@@ -669,10 +669,17 @@ export const fallbackPolicySchemaV10 = lazySchema(() =>
 );
 export type FallbackPolicyV10 = z.infer<typeof fallbackPolicySchemaV10>;
 
-/** Fresh data on every read; no caller can mutate another user's defaults. */
+/**
+ * What a user with no stored policy gets: automatic routing on.
+ *
+ * Only for "no row". A row that could not be read is not one: the host answers
+ * that with routing off, and never with this.
+ *
+ * Fresh data on every read; no caller can mutate another user's defaults.
+ */
 export function createDefaultFallbackPolicy(): FallbackPolicy {
   return {
-    enabled: false,
+    enabled: true,
     ladder: ["profile", "tier", "wait", "notify"],
     graceWindowSeconds: 15,
     maxWaitMinutes: 360,
