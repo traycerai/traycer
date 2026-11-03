@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { GIT_OUTPUT_MAX_BUFFER_BYTES } from "../../../../scripts/git-output-limit.cjs";
 import { resolve } from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
@@ -598,7 +599,7 @@ describe("compatibility fence — the call-site contract", () => {
     const { stdout } = await promisify(execFile)(
       "git",
       ["grep", "-l", "decideCompatibilityFence(", "--", "clients", "protocol"],
-      { cwd: repoRoot },
+      { maxBuffer: GIT_OUTPUT_MAX_BUFFER_BYTES, cwd: repoRoot },
     );
 
     const callSites = stdout

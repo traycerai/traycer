@@ -13,6 +13,7 @@
  *   bun run protocol/scripts/compat/resolve-baselines.ts [<remote-or-url>]
  */
 import { spawnSync } from "node:child_process";
+import { GIT_OUTPUT_MAX_BUFFER_BYTES } from "../../../scripts/git-output-limit.cjs";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
@@ -34,7 +35,7 @@ function listRemoteTags() {
   let result = spawnSync("git", ["ls-remote", "--tags", remote], {
     encoding: "utf8",
     timeout: 30_000,
-    maxBuffer: 16 * 1024 * 1024,
+    maxBuffer: GIT_OUTPUT_MAX_BUFFER_BYTES,
   });
 
   while (attempt < 3 && result.error?.message.includes("ETIMEDOUT")) {
@@ -45,7 +46,7 @@ function listRemoteTags() {
     result = spawnSync("git", ["ls-remote", "--tags", remote], {
       encoding: "utf8",
       timeout: 30_000,
-      maxBuffer: 16 * 1024 * 1024,
+      maxBuffer: GIT_OUTPUT_MAX_BUFFER_BYTES,
     });
   }
 
