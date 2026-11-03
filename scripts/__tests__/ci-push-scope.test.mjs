@@ -347,6 +347,27 @@ it("compares a pull request against the merge base, not the base branch's tip", 
   ).toBe("false");
 });
 
+// ONE `[[ ]]` test of `$1` against a pattern, and nothing else on the line.
+//
+// The inside is held to a CLOSED WHITELIST of characters rather than to a list
+// of banned openers, because the banned list kept being one shape short: first
+// `$(cmd)`, then `[[ a ]] || cmd || [[ b ]]`, which ends in `]]` like a single
+// test, then `[[ -e <(cmd) ]]`, where process substitution runs a command with
+// no `$(` in sight. A whitelist rejects the shape nobody has thought of yet
+// instead of waiting for it to be found. `<`, `>`, a backtick, `;`, `&`, `{`
+// and both quotes are all outside it, so none of those expansions can be
+// written at all. `[` and `]` have to be inside it for a bracket expression, so
+// `[[` and `]]` are excluded separately: either would end this test and start
+// another, with room for a command between them.
+const BRACKET_TEST = (line) => {
+  if (!/^\[\[ .* \]\]$/.test(line)) return false;
+  const inside = line.slice("[[ ".length, -" ]]".length);
+  return (
+    /^[A-Za-z0-9 !$=~^|()/.,_+*[\]-]*$/.test(inside) &&
+    !/\[\[|\]\]|\$\(/.test(inside)
+  );
+};
+
 // Every per-workflow `reaches` is called as the condition of an `if`, and bash
 // suspends `errexit` for the whole body of a function called there. A command
 // that failed inside one would not abort the script: it would leave its
@@ -374,15 +395,7 @@ it("decides every path by pattern alone, with nothing in it that can fail", () =
     /^esac$/,
     /^return [01]$/,
     /^;;$/,
-    // ONE `[[ ]]` test and nothing else on the line. Anchoring on the first
-    // `[[` and the last `]]` is not enough: `[[ a ]] || cmd || [[ b ]]` ends in
-    // `]]` and would run `cmd` between the two tests. So the inside must hold
-    // no further `[[` or `]]`, and no command substitution either.
-    (line) => {
-      if (!/^\[\[ .* \]\]$/.test(line)) return false;
-      const inside = line.slice("[[ ".length, -" ]]".length);
-      return !/\[\[|\]\]|\$\(|`/.test(inside);
-    },
+    BRACKET_TEST,
     // A `case` pattern - globs, bracket expressions and alternation only -
     // alone, or with its whole body on the same line.
     /^[A-Za-z0-9*.[\]/| -]+\)$/,
@@ -400,6 +413,32 @@ it("decides every path by pattern alone, with nothing in it that can fail", () =
         `${line} is not a pattern test`,
       ).toBe(true);
     }
+  }
+});
+
+// The guard above is only worth having if it rejects the shapes that would run
+// something. Each of these was found to execute under bash 3.2 while passing an
+// earlier version of it.
+it("rejects every bracket-test line that would run a command", () => {
+  for (const line of [
+    "[[ $(printf '%s' \"$1\") =~ ^protocol/ ]]",
+    "[[ `false` ]]",
+    "[[ $1 == *.md ]] || /usr/bin/false || [[ $1 =~ ^protocol/ ]]",
+    "[[ -e <(printf executed >&2) ]]",
+    "[[ -e >(false) ]]",
+    "[[ $1 =~ ^protocol/ ]] && /usr/bin/true",
+    "[[ -n ${x:=$(false)} ]]",
+  ]) {
+    expect(BRACKET_TEST(line), `${line} would run something`).toBe(false);
+  }
+});
+
+it("accepts a plain pattern test of the path", () => {
+  for (const line of [
+    "[[ $1 =~ ^(protocol|clients/shared)/ ]]",
+    "[[ ! $1 =~ ^[A-Za-z0-9._/+-]+$ ]]",
+  ]) {
+    expect(BRACKET_TEST(line), `${line} is a plain pattern test`).toBe(true);
   }
 });
 
