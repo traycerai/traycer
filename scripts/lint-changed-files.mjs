@@ -20,8 +20,7 @@
 // to whole-project lint: a project's own lint config, tsconfig or
 // package.json switches that project to `lint`; a repo-level one switches
 // the run to `nx affected --target=lint`. The config list mirrors the
-// `lint` target inputs in nx.json, plus tsconfig (type-aware rules read it)
-// and package.json (plugin versions).
+// `lint` target inputs in nx.json.
 
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
