@@ -8,6 +8,7 @@ import {
   useLayoutEffect,
   useRef,
   useState,
+  type ReactElement,
   type Ref,
 } from "react";
 import { createPortal } from "react-dom";
@@ -19,11 +20,11 @@ import {
   shift,
 } from "@floating-ui/dom";
 import type { MentionCollaborator } from "@/hooks/comments/use-mention-collaborators";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { PersonAvatar } from "@/components/bots/bot-avatars";
+import { usePersonIdentity } from "@/hooks/identity/use-person-identity";
 import { usePanePortalContainer } from "@/components/epic-tabs/pane-visibility-context";
 import { listNavigationKey } from "@/lib/keybindings/list-navigation-key";
 import { cn } from "@/lib/utils";
-import { deriveInitials } from "./mention-utils";
 
 /**
  * Imperative handle the Tiptap suggestion `render()` lifecycle calls into so
@@ -203,11 +204,7 @@ function MentionSuggestionListContent({
                 command({ id: item.userId, label: item.displayName });
               }}
             >
-              <Avatar size="sm">
-                <AvatarFallback>
-                  {deriveInitials(item.displayName)}
-                </AvatarFallback>
-              </Avatar>
+              <MentionCandidateAvatar item={item} />
               <div className="flex min-w-0 flex-1 flex-col">
                 <span className="truncate text-ui-sm leading-tight">
                   {item.displayName}
@@ -224,6 +221,21 @@ function MentionSuggestionListContent({
       )}
     </div>,
     portalContainer ?? document.body,
+  );
+}
+
+function MentionCandidateAvatar(props: {
+  readonly item: MentionCollaborator;
+}): ReactElement {
+  const { item } = props;
+  const identity = usePersonIdentity(item.userId);
+  return (
+    <PersonAvatar
+      userId={item.userId}
+      name={identity?.displayName ?? item.displayName}
+      avatarUrl={identity?.avatarUrl ?? null}
+      size="sm"
+    />
   );
 }
 

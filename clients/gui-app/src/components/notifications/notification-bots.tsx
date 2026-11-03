@@ -5,21 +5,35 @@ import {
   type ReactElement,
   type ReactNode,
 } from "react";
-import { BotAvatar } from "@/components/bots/bot-avatars";
+import { BotAvatar, PersonAvatar } from "@/components/bots/bot-avatars";
 import {
   BotIdentityContext,
   type BotIdentity,
 } from "@/components/bots/bot-identity-context";
 import { useBotListQuery } from "@/hooks/bots/use-bot-list-query";
+import { useLoadedEnvironmentMembers } from "@/hooks/bots/use-environment-members-query";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
+import {
+  PersonMembersContext,
+  usePersonIdentity,
+} from "@/hooks/identity/use-person-identity";
 import { useNotificationResolveHost } from "@/hooks/notifications/use-notification-host";
 import type { NotificationPayload } from "@/lib/notifications/payload";
+import {
+  authorizesCloudCapability,
+  useAuthStore,
+} from "@/stores/auth/auth-store";
 
-const NO_BOTS: ReadonlyMap<string, string> = new Map();
+interface NotificationBot {
+  readonly title: string;
+  readonly environmentId: string;
+}
 
-/** The person's bots by id, with their titles, for the feed's rows. */
+const NO_BOTS: ReadonlyMap<string, NotificationBot> = new Map();
+
+/** The person's bots by id, for the feed's rows. */
 const NotificationBotsContext =
-  createContext<ReadonlyMap<string, string>>(NO_BOTS);
+  createContext<ReadonlyMap<string, NotificationBot>>(NO_BOTS);
 
 /**
  * Names the person's bots to the feed below it, so a row about a bot (its
@@ -33,15 +47,20 @@ export function NotificationBotsProvider(props: {
   const { hostId, client } = useNotificationResolveHost();
   const supported = useHostMethodSupport(hostId, "bot.list") === true;
   const bots = useBotListQuery(client, supported);
-  const titles = useMemo(
-    (): ReadonlyMap<string, string> =>
+  const byId = useMemo(
+    (): ReadonlyMap<string, NotificationBot> =>
       bots.data === undefined
         ? NO_BOTS
-        : new Map(bots.data.bots.map((bot) => [bot.botId, bot.title])),
+        : new Map(
+            bots.data.bots.map((bot) => [
+              bot.botId,
+              { title: bot.title, environmentId: bot.environmentId },
+            ]),
+          ),
     [bots.data],
   );
   return (
-    <NotificationBotsContext value={titles}>
+    <NotificationBotsContext value={byId}>
       {props.children}
     </NotificationBotsContext>
   );
@@ -55,9 +74,9 @@ export function NotificationRowBotAvatar(props: {
   readonly payload: NotificationPayload | null;
   readonly fallback: ReactNode;
 }): ReactNode {
-  const titles = use(NotificationBotsContext);
+  const bots = use(NotificationBotsContext);
   const botId = props.payload?.kind === "chat" ? props.payload.epicId : null;
-  const title = botId === null ? undefined : titles.get(botId);
+  const title = botId === null ? undefined : bots.get(botId)?.title;
   const identity = useMemo(
     (): BotIdentity | null =>
       botId === null || title === undefined
@@ -70,5 +89,64 @@ export function NotificationRowBotAvatar(props: {
     <BotIdentityContext value={identity}>
       <BotAvatar size="sm" />
     </BotIdentityContext>
+  );
+}
+
+/**
+ * A row's picture: the member who wrote it when the row is a member's post in
+ * a bot's conversation and we know them, else what the row shows without one
+ * (`fallback`).
+ *
+ * The bell is outside every bot surface, so it reads the bot's environment's
+ * members as far as Home, Tracy or voice has already loaded them, and asks for
+ * nothing itself. A member not loaded yet is a member we do not know.
+ */
+export function NotificationRowAuthorAvatar(props: {
+  readonly authorUserId: string;
+  readonly payload: NotificationPayload | null;
+  readonly fallback: ReactNode;
+}): ReactNode {
+  const bots = use(NotificationBotsContext);
+  const botId = props.payload?.kind === "chat" ? props.payload.epicId : null;
+  const environmentId =
+    botId === null ? null : (bots.get(botId)?.environmentId ?? null);
+  const { client } = useNotificationResolveHost();
+  const cloudAuthorized = useAuthStore((state) =>
+    authorizesCloudCapability(state.status),
+  );
+  const resolveMember = useLoadedEnvironmentMembers(
+    client,
+    environmentId,
+    cloudAuthorized,
+  );
+  return (
+    <PersonMembersContext value={resolveMember}>
+      <KnownPersonAvatar
+        userId={props.authorUserId}
+        fallback={props.fallback}
+      />
+    </PersonMembersContext>
+  );
+}
+
+function KnownPersonAvatar(props: {
+  readonly userId: string;
+  readonly fallback: ReactNode;
+}): ReactNode {
+  const identity = usePersonIdentity(props.userId);
+  // Known by id alone is not known: there is nothing to draw but the id.
+  if (
+    identity === null ||
+    (identity.displayName === null && identity.avatarUrl === null)
+  ) {
+    return props.fallback;
+  }
+  return (
+    <PersonAvatar
+      userId={props.userId}
+      name={identity.displayName ?? ""}
+      avatarUrl={identity.avatarUrl}
+      size="sm"
+    />
   );
 }

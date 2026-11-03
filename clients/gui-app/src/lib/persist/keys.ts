@@ -480,6 +480,14 @@ export const PERSIST_STORES = [
     leaf: "sandbox-shape-memory",
     kind: "static",
   },
+  // The last verified picture and name of each account signed in here, for a
+  // restored session the credentials file cannot name
+  // (`verified-profile-cache-store.ts`).
+  {
+    camelName: "verifiedProfileCache",
+    leaf: "verified-profile-cache",
+    kind: "static",
+  },
   // The teams whose "Continue on a <team> host" caution each person has
   // confirmed (`team-continue-caution-seen-store.ts`).
   {
