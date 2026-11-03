@@ -71,13 +71,16 @@ const skipped = new Set(
     .filter((id) => id !== ""),
 );
 
-// A step with its own `if` may not run when the job does: `static` sets node up
-// only for pull requests.
-const setsUp = (job, action) =>
-  job.steps.some(
-    (step) =>
-      step.if === undefined && String(step.uses ?? "").startsWith(action),
-  );
+// A setup step counts only before the step that runs the hook, and only with
+// no `if` of its own, which may not run when the job does: `static` sets node
+// up only for pull requests.
+const setsUpBefore = (job, step, action) =>
+  job.steps
+    .slice(0, job.steps.indexOf(step))
+    .some(
+      (setup) =>
+        setup.if === undefined && String(setup.uses ?? "").startsWith(action),
+    );
 
 // The runner's implicit shell, `bash -e`, fails the step when any line's
 // command fails, but not a command in a pipeline (no pipefail), in an `&&` or
@@ -157,7 +160,8 @@ describe("every pre-commit hook runs in a pre-commit.yml job that can execute it
           ).toBeDefined();
           const runner = runnerOf(hook);
           expect(
-            runner !== undefined && setsUp(runner.job, action),
+            runner !== undefined &&
+              setsUpBefore(runner.job, runner.step, action),
             `${runner?.job.id} sets up ${executable}`,
           ).toBe(true);
         });
