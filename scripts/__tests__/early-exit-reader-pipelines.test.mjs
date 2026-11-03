@@ -177,16 +177,24 @@ function pipelinesOf(source) {
           problems.push(`the heredoc ending at ${delimiter} is never closed`);
           return;
         }
-        const end = text.indexOf("\n", index);
-        const raw = text.slice(index, end === -1 ? text.length : end);
-        if (
-          (stripTabs ? raw.replace(/^\t+/, "") : raw) === delimiter ||
-          !expands ||
-          scanSubstitution === null
-        ) {
+        // An unquoted body joins a line ending in an unescaped backslash to
+        // the next before it compares the delimiter.
+        let end = text.indexOf("\n", index);
+        let lines = 1;
+        const continues = (to) =>
+          to !== -1 && /(?:^|[^\\])(?:\\\\)*\\$/.test(text.slice(index, to));
+        while (expands && continues(end)) {
+          end = text.indexOf("\n", end + 1);
+          lines += 1;
+        }
+        const span = text.slice(index, end === -1 ? text.length : end);
+        const raw = expands ? span.replace(/\\\n/g, "") : span;
+        const closes =
+          (stripTabs ? raw.replace(/^\t+/, "") : raw) === delimiter;
+        if (closes || !expands || scanSubstitution === null) {
           index = end === -1 ? text.length : end + 1;
-          line += 1;
-          if ((stripTabs ? raw.replace(/^\t+/, "") : raw) === delimiter) break;
+          line += lines;
+          if (closes) break;
           continue;
         }
         while (index < text.length && text[index] !== "\n") {
@@ -209,7 +217,9 @@ function pipelinesOf(source) {
             index += 1;
           }
           if (nested !== null) {
-            nested.forEach(discardAll);
+            // The owner decides, as for its other substitutions: a command
+            // that already ended applied its rule then.
+            if (owner.discardsSubstitutions) nested.forEach(discardAll);
             owner.substitutions.push(...nested);
           }
         }
@@ -349,6 +359,7 @@ function pipelinesOf(source) {
           line,
           substitutions: [],
           evaluated: [],
+          discardsSubstitutions: false,
           compound,
         };
     }
@@ -488,10 +499,14 @@ function pipelinesOf(source) {
         });
         ({ text, index, line } = host);
       }
-      const assignmentOnly =
-        current.words.length > 0 &&
-        current.words.every((each) => ASSIGNMENT.test(each));
-      if (!assignmentOnly) current.substitutions.forEach(discardAll);
+      // A command with no name, only assignments and redirections, takes its
+      // status from its last substitution; any other discards theirs.
+      current.discardsSubstitutions = !current.words.every((each) =>
+        ASSIGNMENT.test(each),
+      );
+      if (current.discardsSubstitutions) {
+        current.substitutions.forEach(discardAll);
+      }
     }
     function endPipeline(operator) {
       endCommand();
@@ -2082,6 +2097,18 @@ describe("an early-exit reader never reads a streaming producer through a pipe u
     [
       "a branch test in an unquoted heredoc's substitution",
       "cat <<EOF\nstatus=$(if seq 10 | grep -q 1; then printf present; fi)\nEOF",
+    ],
+    [
+      "an assignment-only command's heredoc substitution",
+      "value= <<EOF\n$(seq 10 | head -n 1)\nEOF",
+    ],
+    [
+      "a nameless command's redirection substitution",
+      '>"out-$(seq 10 | head -n 1).txt"',
+    ],
+    [
+      "a pipeline after a heredoc whose continued line is its delimiter",
+      "cat <<EOF\n\\\nEOF\nseq 10 | head -n 1\n: <<'EOF'\nEOF",
     ],
     [
       "a branch test in an unquoted heredoc's backtick substitution",
