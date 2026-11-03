@@ -56,7 +56,10 @@ jobs:
         env:
           SKIP: workspace-checks
 
-  # `oxfmt --check .` reads the whole tree on every run: no history and no Nx.
+  # `oxfmt --check .` and the git output buffer guard read the whole tree on
+  # every run: no history and no Nx. Nx keys the guard's project, `scripts`,
+  # on its own files, so under Nx it would replay a cached pass over a new git
+  # call elsewhere.
   format:
     name: format
     # A team PR into `main`, `integration/*` or `land/*` skips this job: the
@@ -81,6 +84,11 @@ jobs:
         run: bun install --frozen-lockfile
       - name: Check formatting
         run: bun run format:check
+      - name: Check that git calls name the shared output buffer
+        run: >-
+          bun x vitest run --config scripts/vitest.config.ts
+          scripts/__tests__/git-output-max-buffer.test.mjs
+          --maxWorkers=1
 
   workspace-checks:
     name: ${{ matrix.lane }}
