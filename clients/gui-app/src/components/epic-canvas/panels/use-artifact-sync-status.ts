@@ -116,6 +116,8 @@ export function useArtifactSyncStatus(
   if (outstanding && warned) return warningFor(rooms, waiting);
   // A warning cleared by the link going down is not a recovery, and only a
   // standing `synced` says the artifacts arrived.
-  if (recovered && pillState === "synced") return RECOVERED;
+  if (recovered && pillState === "synced" && rooms === "current") {
+    return RECOVERED;
+  }
   return CALM;
 }

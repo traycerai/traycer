@@ -62,6 +62,26 @@ describe("useArtifactSyncStatus", () => {
     expect(result.current).toEqual({ kind: "calm" });
   });
 
+  it.each([
+    { name: "missing reading", reading: null },
+    { name: "unknown rooms", reading: { ...current, rooms: null } },
+  ] satisfies ReadonlyArray<{
+    name: string;
+    reading: ArtifactSyncReading | null;
+  }>)(
+    "does not claim recovery after a warning clears to $name",
+    ({ reading }) => {
+      const { result, rerender } = renderHook<
+        ArtifactSyncStatus,
+        ArtifactSyncReading | null
+      >((value) => useArtifactSyncStatus(value), { initialProps: retrying });
+      advance(15_000);
+      expect(result.current.kind).toBe("warning");
+      rerender(reading);
+      expect(result.current).toEqual({ kind: "calm" });
+    },
+  );
+
   it("does not show recovery when the issue clears within the grace", () => {
     const { result, rerender } = renderHook(
       (reading: ArtifactSyncReading) => useArtifactSyncStatus(reading),

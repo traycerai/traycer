@@ -641,8 +641,9 @@ function indicatorForArtifactSync(
   }
   return {
     severity: "warning",
-    containerClassName: AMBER_CONTAINER_CLASS,
-    dotClassName: "bg-amber-500",
+    containerClassName:
+      "rounded-md bg-warning/10 px-2 py-0.5 text-warning-foreground",
+    dotClassName: "bg-warning",
     label: status.label,
     showAgentSpinner: false,
     pulse: null,
