@@ -96,6 +96,9 @@ export function SubagentConversation(props: SubagentConversationProps) {
                 interviewDeliveryRetry={null}
                 harnessId={null}
                 turnId={null}
+                // Not threaded into a card's conversation; a report from an
+                // error here still carries the row's Host time.
+                reportTurnId={null}
                 settledNotice={null}
                 settledNoticeFindUnitId={null}
                 // A subagent's run has no turns of its own for a background

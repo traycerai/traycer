@@ -19,6 +19,8 @@ const captureReportIssueError = vi.hoisted(() =>
       errorCode: null,
       sourceAction: input.sourceAction,
       timestamp: 1,
+      hostTimestamp: null,
+      turnId: null,
     },
     correlationId: "correlation-1",
     fingerprint: "fp:v1:test",

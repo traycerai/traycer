@@ -721,6 +721,7 @@ function queuePausedNotice(id: string, message: string): MessageSegment {
   return {
     id,
     kind: "error",
+    hostTimestamp: null,
     message,
     recoverable: true,
     code: QUEUE_PAUSED_AFTER_ERROR_CODE,
@@ -1150,6 +1151,7 @@ describe("chat find: an older index hit is a candidate until confirmed (F14)", (
     const errorSegment: MessageSegment = {
       id: "error-both",
       kind: "error",
+      hostTimestamp: null,
       message: `The turn failed near the ${QUERY}.`,
       recoverable: true,
       code: "RUNTIME",
@@ -2431,6 +2433,7 @@ const CENSUS_ROWS: ReadonlyArray<CensusRow> = [
         {
           id: "anchor-error-1",
           kind: "error",
+          hostTimestamp: null,
           message: "Failed with a needle in the response",
           recoverable: true,
           code: "RUNTIME",

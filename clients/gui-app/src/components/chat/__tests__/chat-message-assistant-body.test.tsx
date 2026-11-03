@@ -19,6 +19,7 @@ import {
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { formatMessageTimeWithSeconds } from "@/lib/relative-time";
 import type { AutonomousResumeTrigger } from "@traycer/protocol/persistence/epic/content-blocks";
+import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import type {
   AssistantTurnMeta,
   ChatMessageRunState,
@@ -46,6 +47,8 @@ afterEach(() => {
   restoreClipboardMock();
   restoreClipboardMock = () => undefined;
   cleanup();
+  useDesktopDialogStore.getState().close();
+  useDesktopDialogStore.setState({ reportIssueAvailable: false });
 });
 
 interface ClipboardMock {
@@ -116,6 +119,7 @@ const MCP_FAILED_RESUME_SEGMENT: MessageSegment = {
 const ERROR_SEGMENT: MessageSegment = {
   id: "seg-2",
   kind: "error",
+  hostTimestamp: null,
   message: "The provider stream ended unexpectedly.",
   recoverable: true,
   code: "PROVIDER_STREAM_ERROR",
@@ -641,6 +645,36 @@ describe("AssistantMessageBody stopped turn rendering", () => {
     );
 
     expect(screen.queryByTestId("assistant-elapsed-footer")).toBeNull();
+  });
+
+  it("hands its row's turn to a non-anchor error segment's report", () => {
+    useDesktopDialogStore.setState({ reportIssueAvailable: true });
+    render(
+      <AssistantMessageBody
+        turnId="turn:x"
+        {...bodyProps({
+          segments: [
+            {
+              id: "seg-host-row",
+              kind: "error",
+              message: "Boom",
+              recoverable: false,
+              code: null,
+              failure: null,
+              hostTimestamp: 1_700_000_123_456,
+            },
+          ],
+        })}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Report issue" }));
+    const cause =
+      useDesktopDialogStore.getState().reportIssueDraftContext
+        ?.privateDiagnostics.cause;
+
+    expect(cause?.turnId).toBe("turn:x");
+    expect(cause?.hostTimestamp).toBe(1_700_000_123_456);
   });
 
   it("surfaces the stop reason and time in the elapsed footer's tooltip", async () => {

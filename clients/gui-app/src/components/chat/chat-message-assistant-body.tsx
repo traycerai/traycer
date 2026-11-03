@@ -507,6 +507,9 @@ export function AssistantMessageBody({
               // other row `manualRungAnchorId` is null and nothing here matches
               // - the same answer a row with no turn identity already gets.
               turnId={recovery.turnId}
+              // The row's own turn on every item, rung anchor or not: a
+              // report from any error here names the turn it failed in.
+              reportTurnId={turnId}
               settledNotice={recovery.settledNotice}
               settledNoticeFindUnitId={recovery.settledNoticeFindUnitId}
               backgroundCard={
@@ -1451,6 +1454,11 @@ export interface AssistantSegmentProps {
   harnessId: GuiHarnessId | null;
   /** See `AssistantBodyProps.turnId`. */
   turnId: string | null;
+  /**
+   * The Host turn this row is, on EVERY item - for a report filed from an
+   * error on it. Unlike `turnId`, which only the manual-rung anchor gets.
+   */
+  reportTurnId: string | null;
   /** The settled notice the anchor error absorbs; `null` on every other item. */
   settledNotice: RoutingSettledNotice | null;
   settledNoticeFindUnitId: string | null;
@@ -1533,6 +1541,7 @@ export function AssistantSegment({
   interviewDeliveryRetry,
   harnessId,
   turnId,
+  reportTurnId,
   settledNotice,
   settledNoticeFindUnitId,
   backgroundCard,
@@ -1693,6 +1702,8 @@ export function AssistantSegment({
           harnessId={harnessId}
           failure={segment.failure}
           turnId={turnId}
+          hostTimestamp={segment.hostTimestamp}
+          reportTurnId={reportTurnId}
           settledNotice={settledNotice}
           settledNoticeFindUnitId={settledNoticeFindUnitId}
         />

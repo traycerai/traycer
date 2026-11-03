@@ -416,6 +416,8 @@ export interface DesktopPrivateDiagnosticsCause {
   readonly errorCode: string | null;
   readonly sourceAction: string | null;
   readonly timestamp: number;
+  readonly hostTimestamp: number | null;
+  readonly turnId: string | null;
 }
 
 /**

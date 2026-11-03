@@ -2636,6 +2636,76 @@ describe("Report issue capture dialog (deep interactions)", () => {
   });
 });
 
+describe("a persisted agent error row's Host identity", () => {
+  const HOST_TIMESTAMP = 1_700_000_123_456;
+  const CLICK_TIME = 1_700_000_999_000;
+  const TURN_ID = "turn:5f0c9a1e-row-identity";
+
+  beforeEach(() => {
+    window.localStorage.clear();
+    resetStores();
+  });
+
+  afterEach(() => {
+    cleanup();
+    resetStores();
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it("reaches the private cause and never the public prefill or public fields", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(CLICK_TIME);
+    const draft = buildReportIssueDraftContext(
+      createReportIssueContext({
+        title: "Agent error",
+        message: null,
+        code: null,
+        source: "Chat",
+      }),
+      capturePersistedAgentError({
+        message: "Rate limited.",
+        code: "rate_limit",
+        recoverable: false,
+        hostTimestamp: HOST_TIMESTAMP,
+        turnId: TURN_ID,
+      }),
+    );
+    vi.useRealTimers();
+    useDesktopDialogStore.getState().openReportIssueDraft(draft);
+    const harness = createSupportBridgeHarness({
+      snapshot: undefined,
+      submitReport: undefined,
+      buildPublicDraft: undefined,
+      openExternalLink: undefined,
+      frozenDesktopLines: undefined,
+      frozenHostLines: undefined,
+    });
+    renderReportIssueDialog(createRunnerHost(harness));
+    await flushDialogEffects();
+    fireEvent.click(screen.getByRole("button", { name: "Review" }));
+    fireEvent.click(screen.getByRole("button", { name: "Send report" }));
+    await screen.findByRole("heading", { name: "Report sent" });
+
+    const form = lastSubmittedForm(harness);
+    expect(form.privateDiagnostics?.cause).toEqual(
+      expect.objectContaining({
+        hostTimestamp: HOST_TIMESTAMP,
+        turnId: TURN_ID,
+        timestamp: CLICK_TIME,
+      }),
+    );
+
+    const { privateDiagnostics: _private, ...publicFields } = form;
+    const publicPart = JSON.stringify({
+      prefill: draft.publicPrefill,
+      fields: publicFields,
+    });
+    expect(publicPart).not.toContain(TURN_ID);
+    expect(publicPart).not.toContain(String(HOST_TIMESTAMP));
+  });
+});
+
 describe("evidence review shows the whole error message", () => {
   const SETTLED_NOTICE: RoutingSettledNotice = {
     title: "Routing stopped",
@@ -2689,6 +2759,8 @@ describe("evidence review shows the whole error message", () => {
         message,
         code: "rate_limit",
         recoverable: false,
+        hostTimestamp: null,
+        turnId: null,
       }),
     );
     useDesktopDialogStore.getState().openReportIssueDraft(draft);
