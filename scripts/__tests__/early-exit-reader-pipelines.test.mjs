@@ -54,6 +54,7 @@ const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*(?:\[[^\]]*\])?\+?=/;
 // Commands that run the command their arguments name on the same input,
 // each with the options that take the next argument as their value.
 const WRAPPERS = new Map([
+  ["builtin", []],
   ["command", []],
   ["doas", ["-u", "-C"]],
   ["env", ["-u", "-C", "-S", "--unset", "--chdir", "--split-string"]],
@@ -183,16 +184,17 @@ function pipelinesOf(source) {
     // closes each, and the piped stage whose input its commands read.
     const groups = input === null ? [] : [{ ...input, closer: null }];
     const inherited = () => groups.at(-1) ?? { input: null, loop: null };
-    // `loop` is the innermost loop open. A loop keeps the pipelines of its
-    // condition until `do`, and each `break`, `exit` or `return` that leaves
-    // it. A group is `forked` when it runs in its own process: a `( )`
-    // subshell, or a stage of a pipeline or background job.
+    // `loop` is the innermost loop open on the group's input; a group a pipe
+    // feeds starts a new input, and its loops' `parent` chain ends there. A
+    // loop keeps the pipelines of its condition until `do`, and each leave
+    // that takes it. A group is `forked` when it runs in its own process: a
+    // `( )` subshell, or a stage of a pipeline or background job.
     function openGroup(opener, stage) {
       const outer = inherited();
       const group = {
         closer: GROUP_CLOSERS.get(opener) ?? ")",
         input: stage ?? outer.input,
-        loop: outer.loop,
+        loop: stage === null ? outer.loop : null,
         opensLoop: LOOPS.has(opener),
         forked: opener === "(" || stage !== null,
       };
@@ -200,6 +202,7 @@ function pipelinesOf(source) {
         group.loop = {
           kind: opener,
           stage,
+          parent: group.loop,
           stops: false,
           inCondition: true,
           conditions: [],
@@ -323,15 +326,13 @@ function pipelinesOf(source) {
           loop,
           forked: false,
         };
-        // A `break`, `exit` or `return` leaves each loop it names, with the
-        // groups it crosses on the way; `stopsEarly` drops a leave that a
-        // process boundary contains.
-        const [leave, count] = current.words;
-        if (["break", "exit", "return"].includes(leave)) {
-          let left =
-            leave === "break"
-              ? Number.parseInt(count ?? "1", 10) || 1
-              : Number.POSITIVE_INFINITY;
+        // A leave takes each loop it names, with the groups it crosses on the
+        // way; `stopsEarly` drops a leave that a process boundary contains.
+        const leave = leaveOf(current.words);
+        if (leave !== null) {
+          let left = Number.POSITIVE_INFINITY;
+          if (leave.name === "break") left = leave.count;
+          if (leave.name === "continue") left = leave.count - 1;
           const crossed = [];
           for (const group of ownGroups().toReversed()) {
             if (left === 0) break;
@@ -792,6 +793,75 @@ const nameOf = (word) => word.split("/").at(-1);
 const GREPS = new Set(["grep", "egrep", "fgrep", "zgrep", "rg"]);
 const AWKS = new Set(["awk", "gawk", "mawk", "nawk"]);
 
+/**
+ * The builtin a command runs and its arguments: past assignments, `builtin`
+ * and `command` (`command -v` and `-V` only describe their operand).
+ */
+function builtinOf(stageWords) {
+  let at = 0;
+  while (ASSIGNMENT.test(stageWords[at] ?? "")) at += 1;
+  for (;;) {
+    const name = stageWords[at] ?? "";
+    if (name !== "builtin" && name !== "command") break;
+    at += 1;
+    while (/^-./.test(stageWords[at] ?? "")) {
+      if (name === "command" && /[vV]/.test(stageWords[at])) {
+        return { name, args: [] };
+      }
+      at += 1;
+      if (stageWords[at - 1] === "--") break;
+    }
+  }
+  return { name: stageWords[at] ?? "", args: stageWords.slice(at + 1) };
+}
+
+/**
+ * The loops a command leaves: `break N` and `exit` or `return` (all), and
+ * `continue N` the N - 1 inside the one it continues, run directly or through
+ * `builtin`, `command` or `eval`. An `exec` with a command replaces the shell,
+ * so it leaves them all; an `exec` with only redirections leaves none.
+ */
+function leaveOf(stageWords) {
+  let words = stageWords;
+  for (;;) {
+    const { name, args } = builtinOf(words);
+    if (name === "eval") {
+      words = splitStringWords(args.join(" "));
+      continue;
+    }
+    if (["break", "continue", "exit", "return"].includes(name)) {
+      return { name, count: Number.parseInt(args[0] ?? "1", 10) || 1 };
+    }
+    if (name !== "exec") return null;
+    let at = 0;
+    while (/^-./.test(args[at] ?? "")) {
+      at += 1;
+      if (args[at - 1] === "--") break;
+      if (args[at - 1].endsWith("a")) at += 1;
+    }
+    return at < args.length ? { name: "exit", count: 1 } : null;
+  }
+}
+
+/**
+ * Whether a `read`'s own options let it give up before its input ends: a
+ * `-t` timeout, alone or among other options.
+ */
+function readTimesOut(args) {
+  for (let at = 0; at < args.length; at += 1) {
+    const arg = args[at];
+    if (arg === "--" || !/^-./.test(arg)) return false;
+    for (let position = 1; position < arg.length; position += 1) {
+      if (arg[position] === "t") return true;
+      if ("adinNpu".includes(arg[position])) {
+        if (position === arg.length - 1) at += 1;
+        break;
+      }
+    }
+  }
+  return false;
+}
+
 /** The words of an `env -S` string, with its quotes and backslashes read. */
 function splitStringWords(text) {
   const words = [];
@@ -1042,11 +1112,14 @@ const AWK_EXPRESSION_KEYWORDS = new Set([
 
 /**
  * Whether an awk program can exit before its input ends: an `exit` outside
- * strings, regular expressions, comments and `END` actions. A `/` divides
+ * strings, regular expressions, comments and `END` actions, with its continued
+ * lines joined. A `/` divides
  * after an operand (a name, a number, a string or regex, `)`, `]`, `$` or a
  * postfix `++`/`--`) and opens a regular expression anywhere else.
  */
-function awkExitsEarly(program) {
+function awkExitsEarly(text) {
+  // A backslash before a newline continues the line.
+  const program = text.replaceAll("\\\n", "");
   let code = "";
   let regexAllowed = true;
   for (let at = 0; at < program.length; at += 1) {
@@ -1178,14 +1251,38 @@ function stopsEarly(loop) {
 
 /**
  * Whether a loop reads its input to the end: a `while` loop whose whole
- * condition is one `read`, which nothing in its body leaves early. An `until`
- * loop ends on the first line read, and a `for` loop reads no line itself.
+ * condition is one `read` of its standard input with no timeout, which nothing
+ * in its body leaves early. An `until` loop ends on the first line read, and
+ * a `for` loop reads no line itself. A loop inside one that drains the same
+ * input may stop early: the outer loop reads on. `timed` is a source that sets
+ * TMOUT, which times out every `read`.
  */
-function drains(loop) {
-  if (loop === null || loop.kind !== "while" || stopsEarly(loop)) return false;
-  const isRead = (words) => commandOf(words).name === "read";
+function drains(loop, timed) {
+  for (let each = loop; each !== null; each = each.parent) {
+    if (drainsItself(each, timed)) return true;
+  }
+  return false;
+}
+
+function drainsItself(loop, timed) {
+  if (loop.kind !== "while" || stopsEarly(loop)) return false;
+  const reads = (command) => {
+    const { name, args } = commandOf(command.words);
+    return (
+      name === "read" &&
+      !timed &&
+      !readTimesOut(args) &&
+      readsStandardInput(command)
+    );
+  };
   if (loop.stage !== null) {
-    return loop.conditions.length === 0 && isRead(loop.stage.words.slice(1));
+    return (
+      loop.conditions.length === 0 &&
+      reads({
+        words: loop.stage.words.slice(1),
+        stdinRedirected: loop.stage.stdinRedirected,
+      })
+    );
   }
   const [condition, ...more] = loop.conditions;
   return (
@@ -1193,25 +1290,43 @@ function drains(loop) {
     more.length === 0 &&
     condition.commands.length === 1 &&
     !condition.commands[0].compound &&
-    isRead(condition.commands[0].words)
+    reads(condition.commands[0])
   );
 }
 
-/** Whether shell source runs a `set` command that turns pipefail on. */
+/**
+ * Whether a command turns pipefail on: `set -o pipefail` among `set`'s options,
+ * which end at `--`, `-` or the first positional argument, or
+ * `shopt -s -o pipefail`.
+ */
+function turnsPipefailOn(words) {
+  const { name, args } = builtinOf(words);
+  if (name === "set") {
+    for (let at = 0; at < args.length; at += 1) {
+      const arg = args[at];
+      if (!/^[-+]./.test(arg) || arg === "--") return false;
+      if (/o$/.test(arg)) {
+        if (arg.startsWith("-") && args[at + 1] === "pipefail") return true;
+        at += 1;
+      }
+    }
+    return false;
+  }
+  if (name !== "shopt") return false;
+  const options = args.filter((arg) => /^-./.test(arg)).join("");
+  return (
+    options.includes("s") && options.includes("o") && args.includes("pipefail")
+  );
+}
+
+/** Whether shell source runs a command that turns pipefail on. */
 function setsPipefail(source) {
   const { pipelines, problems } = pipelinesOf(source);
   // A source the scan cannot read stays in scope, so the test reports it.
   return (
     problems.length > 0 ||
     pipelines.some((pipeline) =>
-      pipeline.commands.some(
-        ({ words }) =>
-          words[0] === "set" &&
-          words.some(
-            (word, at) =>
-              word === "pipefail" && /^-[A-Za-z]*o$/.test(words[at - 1] ?? ""),
-          ),
-      ),
+      pipeline.commands.some(({ words }) => turnsPipefailOn(words)),
     )
   );
 }
@@ -1224,6 +1339,12 @@ function setsPipefail(source) {
 function findingsIn(source) {
   const { pipelines, problems } = pipelinesOf(source);
   const findings = [...problems];
+  // A non-zero TMOUT anywhere times out every `read` after it.
+  const timed = pipelines.some((pipeline) =>
+    pipeline.commands.some(({ words }) =>
+      words.some((word) => /^TMOUT=(?!0*$)/.test(word)),
+    ),
+  );
   // A reader that a group's pipeline starts with reads the group's pipe; a
   // loop's `read` reads it a line per pass.
   const groupReaders = new Map();
@@ -1233,7 +1354,9 @@ function findingsIn(source) {
       pipeline.groupInput &&
       (first.compound || readsStandardInput(first)) &&
       earlyExitReaderOf(first);
-    if (!reader || (reader === "read" && drains(pipeline.loop))) continue;
+    if (!reader || (reader === "read" && drains(pipeline.loop, timed))) {
+      continue;
+    }
     if (!groupReaders.has(pipeline.groupInput)) {
       groupReaders.set(pipeline.groupInput, { line: first.line, reader });
     }
@@ -1241,7 +1364,7 @@ function findingsIn(source) {
   const ownReader = (stage) => {
     // A loop that may stop early reads its `while read` condition's line and
     // closes the pipe.
-    if (stage.compound && stage.loop && !drains(stage.loop)) {
+    if (stage.compound && stage.loop && !drains(stage.loop, timed)) {
       const condition = { words: stage.words.slice(1), compound: false };
       if (readsStandardInput(condition)) return earlyExitReaderOf(condition);
     }
@@ -1556,6 +1679,39 @@ describe("an early-exit reader never reads a streaming producer through a pipe u
       "a read loop left by an exit after a subshell",
       "seq 10 | while read -r x; do (cd /tmp); exit 0; done",
     ],
+    ["a timed read loop", "seq 10 | while read -t 1 -r x; do :; done"],
+    [
+      "a read loop with its timeout among combined options",
+      "seq 10 | while read -rt1 x; do :; done",
+    ],
+    [
+      "a read loop under a TMOUT the script sets",
+      "TMOUT=5\nseq 10 | while read -r x; do :; done",
+    ],
+    [
+      "a read loop on another descriptor around a read",
+      "seq 10 | while read -r -u 3 x; do read -r y; done",
+    ],
+    [
+      "a read loop left by command break",
+      "seq 10 | while read -r x; do command break; done",
+    ],
+    [
+      "a read loop left by builtin exit",
+      "seq 10 | while read -r x; do builtin exit 0; done",
+    ],
+    [
+      "a read loop left by an evaluated break",
+      "seq 10 | while read -r x; do eval 'break'; done",
+    ],
+    [
+      "a read loop replaced by exec",
+      "seq 10 | while read -r x; do exec true; done",
+    ],
+    [
+      "a read in a piped group inside a read loop",
+      "while read -r x; do seq 10 | { :; read -r y; }; done",
+    ],
   ])("flags the reader in %s", (_, body) => {
     expect(pipefail(body)).toHaveLength(1);
   });
@@ -1673,6 +1829,26 @@ describe("an early-exit reader never reads a streaming producer through a pipe u
       "a numbered break in a piped inner loop",
       "seq 10 | while read -r x; do while :; do break 2; done | cat; done",
     ],
+    [
+      "an awk END action after a continued line",
+      "seq 10 | awk 'END \\\n{ exit 0 }'",
+    ],
+    [
+      "an inner read loop the outer read loop continues past",
+      "seq 10 | while read -r a; do while read -r b; do continue 2; done; done",
+    ],
+    [
+      "a read in an inner for loop of a read loop",
+      "seq 10 | while read -r a; do for i in 1; do read -r b; done; done",
+    ],
+    [
+      "a command -v naming break in a read loop",
+      "seq 10 | while read -r x; do command -v break; done",
+    ],
+    [
+      "a redirection-only exec in a read loop",
+      "seq 10 | while read -r x; do exec 3>&1; done",
+    ],
   ])("passes %s", (_, body) => {
     expect(pipefail(body)).toEqual([]);
   });
@@ -1680,6 +1856,11 @@ describe("an early-exit reader never reads a streaming producer through a pipe u
   it("takes a script into scope only when it runs a set that turns pipefail on", () => {
     expect(setsPipefail("set -euo pipefail\nseq 10 | head -n 1\n")).toBe(true);
     expect(setsPipefail("set -o errexit -o pipefail\n")).toBe(true);
+    expect(setsPipefail("shopt -so pipefail\n")).toBe(true);
+    expect(setsPipefail("command set -o pipefail\n")).toBe(true);
+    expect(setsPipefail("set -- bash -euo pipefail\n")).toBe(false);
+    expect(setsPipefail("set -e run -o pipefail\n")).toBe(false);
+    expect(setsPipefail("set +o pipefail\n")).toBe(false);
     expect(
       setsPipefail(
         "set -eu\n# Do not set -o pipefail here.\nseq 10 | head -n 1\n",
