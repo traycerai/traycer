@@ -1603,70 +1603,230 @@ function findingsIn(source) {
   return findings;
 }
 
+// A value an expression cannot know before the workflow runs.
+const UNKNOWN = Symbol("unknown");
+
 /**
- * The kinds of runner a job may run on, `posix` and `windows`: each `runs-on`
- * label, with a `matrix` value resolved from the job's matrix (its own values
- * and its `include` entries'). An expression the workflow alone cannot
- * resolve may be either.
+ * The legs a job's matrix runs: each combination of its axes less its
+ * `exclude` entries, with each `include` entry added to the legs whose axis
+ * values it matches, or as a leg of its own. A matrix the workflow cannot
+ * resolve runs legs of unknown values (null).
  */
-function runnerKinds(job) {
-  const runsOn = JSON.stringify(job?.["runs-on"] ?? "");
-  const matrix = job?.strategy?.matrix;
-  const valuesAt = (value, keys) =>
-    keys.reduce(
-      (values, key) =>
-        values.flatMap((each) =>
-          Array.isArray(each) ? each.map((item) => item?.[key]) : [each?.[key]],
-        ),
-      [value],
-    );
-  const kinds = { posix: false, windows: false };
-  const add = (label) => {
-    if (/\$\{\{/.test(label)) {
-      kinds.posix = true;
-      kinds.windows = true;
-    } else if (/windows/i.test(label)) kinds.windows = true;
-    else kinds.posix = true;
-  };
-  const literal = runsOn.replace(/\$\{\{.*?\}\}/g, "");
-  if (/windows/i.test(literal)) kinds.windows = true;
-  const expressions = [...runsOn.matchAll(/\$\{\{(.*?)\}\}/g)].map((match) =>
-    match[1].trim(),
+function matrixLegs(matrix) {
+  if (matrix === undefined || matrix === null) return [{}];
+  if (typeof matrix !== "object" || Array.isArray(matrix)) return [null];
+  const axes = Object.entries(matrix).filter(
+    ([key]) => key !== "include" && key !== "exclude",
   );
-  if (expressions.length === 0 && !kinds.windows) kinds.posix = true;
-  for (const expression of expressions) {
-    const path = /^matrix\.([\w-]+(?:\.[\w-]+)*)$/.exec(expression);
-    const keys = path === null ? [] : path[1].split(".");
-    const values =
-      path === null || typeof matrix !== "object" || matrix === null
-        ? []
-        : [
-            ...valuesAt(matrix[keys[0]], keys.slice(1)),
-            ...valuesAt(matrix.include ?? [], keys),
-          ]
-            .flat()
-            .filter((value) => value !== undefined);
-    if (values.length === 0) add("${{ }}");
-    for (const value of values) add(JSON.stringify(value));
+  if (axes.some(([, values]) => !Array.isArray(values))) return [null];
+  const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  let legs = [{}];
+  for (const [key, values] of axes) {
+    legs = legs.flatMap((leg) =>
+      values.map((value) => ({ ...leg, [key]: value })),
+    );
   }
-  return kinds;
+  if (axes.length === 0) legs = [];
+  const excluded = Array.isArray(matrix.exclude) ? matrix.exclude : [];
+  legs = legs.filter(
+    (leg) =>
+      !excluded.some((entry) =>
+        Object.entries(entry ?? {}).every(([key, value]) =>
+          same(leg[key], value),
+        ),
+      ),
+  );
+  const axisKeys = new Set(axes.map(([key]) => key));
+  const original = legs.map((leg) => ({ ...leg }));
+  for (const entry of Array.isArray(matrix.include) ? matrix.include : []) {
+    const matched = legs.filter((_, at) =>
+      Object.entries(entry ?? {}).every(
+        ([key, value]) => !axisKeys.has(key) || same(original[at][key], value),
+      ),
+    );
+    if (axes.length > 0 && matched.length > 0) {
+      for (const leg of matched) Object.assign(leg, entry);
+    } else {
+      legs.push({ ...entry });
+      original.push({ ...entry });
+    }
+  }
+  return legs.length > 0 ? legs : [{}];
 }
 
 /**
- * Whether a step's `if:` runs it only on Windows: an and-list (no `||`) with
- * `runner.os == 'Windows'`, or a matrix value equal to, starting with or
- * containing a Windows runner's name.
+ * The `runner.os` values a POSIX runner may report for a leg: from its
+ * resolved `runs-on` labels, none for a Windows runner, and both for a runner
+ * the workflow cannot resolve.
  */
-function windowsOnly(condition) {
-  if (typeof condition !== "string" || condition.includes("||")) return false;
-  return (
-    /runner\.os\s*==\s*'windows'|'windows'\s*==\s*runner\.os/i.test(
-      condition,
-    ) ||
-    /matrix\.[\w.-]+\s*==\s*'[^']*windows[^']*'/i.test(condition) ||
-    /(?<!!)\b(?:startsWith|contains)\(\s*matrix\.[\w.-]+\s*,\s*'[^']*windows[^']*'\s*\)/i.test(
-      condition,
-    )
+function posixRunnerOs(runsOn, leg) {
+  const label = JSON.stringify(runsOn ?? "").replace(
+    /\$\{\{\s*matrix\.([\w.-]+)\s*\}\}/g,
+    (whole, path) => {
+      const value = path
+        .split(".")
+        .reduce(
+          (each, key) => (each === null ? null : (each?.[key] ?? null)),
+          leg,
+        );
+      return value === null || typeof value === "object"
+        ? whole
+        : String(value);
+    },
+  );
+  if (/\$\{\{/.test(label)) return ["Linux", "macOS"];
+  if (/windows/i.test(label)) return [];
+  return /mac/i.test(label) ? ["macOS"] : ["Linux"];
+}
+
+/**
+ * The value of a GitHub Actions expression for one leg on one runner, or
+ * UNKNOWN: literals, `matrix.*` and `runner.os`, `== != ! && ||`,
+ * parentheses, and `contains`, `startsWith` and `endsWith`. Any other
+ * context or function, and any syntax it does not read, is UNKNOWN.
+ */
+function expressionValue(source, leg, os) {
+  const text = source.replace(/\$\{\{|\}\}/g, " ");
+  const tokens = [];
+  const pattern =
+    /\s*(?:('(?:[^']|'')*')|(\d+(?:\.\d+)?)|([A-Za-z_][\w-]*(?:\.[\w-]+|\[\d+\]|\.\*)*)|(==|!=|<=|>=|&&|\|\||[!<>(),]))/y;
+  for (let cursor = 0; ;) {
+    if (/^\s*$/.test(text.slice(cursor))) break;
+    pattern.lastIndex = cursor;
+    const match = pattern.exec(text);
+    if (match === null) return UNKNOWN;
+    cursor = pattern.lastIndex;
+    if (match[1] !== undefined) {
+      tokens.push({ value: match[1].slice(1, -1).replaceAll("''", "'") });
+    } else if (match[2] !== undefined) tokens.push({ value: Number(match[2]) });
+    else if (match[3] !== undefined) tokens.push({ name: match[3] });
+    else tokens.push({ operator: match[4] });
+  }
+  let at = 0;
+  const truthy = (value) =>
+    value === UNKNOWN
+      ? UNKNOWN
+      : !(value === false || value === null || value === 0 || value === "");
+  const fold = (value) =>
+    typeof value === "string" ? value.toLowerCase() : value;
+  const lookUp = (name) => {
+    if (name === "true" || name === "false") return name === "true";
+    if (name === "null") return null;
+    if (name === "runner.os") return os;
+    if (!name.startsWith("matrix.") || leg === null) return UNKNOWN;
+    let value = leg;
+    for (const key of name.slice("matrix.".length).split(".")) {
+      value = value?.[key];
+    }
+    if (typeof value === "string" && value.includes("${{")) return UNKNOWN;
+    return value ?? null;
+  };
+  const call = (name, args) => {
+    if (args.includes(UNKNOWN)) return UNKNOWN;
+    const [haystack, needle] = args;
+    if (name === "contains") {
+      return Array.isArray(haystack)
+        ? haystack.some((each) => fold(each) === fold(needle))
+        : String(haystack ?? "")
+            .toLowerCase()
+            .includes(String(needle ?? "").toLowerCase());
+    }
+    const [whole, part] = [haystack, needle].map((each) =>
+      String(each ?? "").toLowerCase(),
+    );
+    if (name === "startsWith") return whole.startsWith(part);
+    if (name === "endsWith") return whole.endsWith(part);
+    return ["success", "always"].includes(name) ? true : UNKNOWN;
+  };
+  const primary = () => {
+    const token = tokens[at];
+    at += 1;
+    if (token === undefined) throw new Error("expression ends early");
+    if (token.operator === "!") {
+      const value = truthy(primary());
+      return value === UNKNOWN ? UNKNOWN : !value;
+    }
+    if (token.operator === "(") {
+      const value = or();
+      if (tokens[at]?.operator !== ")") throw new Error("unclosed (");
+      at += 1;
+      return value;
+    }
+    if (token.name !== undefined && tokens[at]?.operator === "(") {
+      at += 1;
+      const args = [];
+      while (tokens[at]?.operator !== ")") {
+        args.push(or());
+        if (tokens[at]?.operator === ",") at += 1;
+        else if (tokens[at]?.operator !== ")") throw new Error("bad call");
+      }
+      at += 1;
+      return call(token.name, args);
+    }
+    if (token.name !== undefined) return lookUp(token.name);
+    if ("value" in token) return token.value;
+    throw new Error("unexpected operator");
+  };
+  const comparison = () => {
+    let value = primary();
+    while (["==", "!=", "<", ">", "<=", ">="].includes(tokens[at]?.operator)) {
+      const { operator } = tokens[at];
+      at += 1;
+      const right = primary();
+      if (
+        value === UNKNOWN ||
+        right === UNKNOWN ||
+        !["==", "!="].includes(operator)
+      ) {
+        value = UNKNOWN;
+      } else {
+        value = (fold(value) === fold(right)) === (operator === "==");
+      }
+    }
+    return value;
+  };
+  const and = () => {
+    let value = comparison();
+    while (tokens[at]?.operator === "&&") {
+      at += 1;
+      const right = comparison();
+      if (truthy(value) === false) continue;
+      if (truthy(right) === false) value = false;
+      else value = value === UNKNOWN || right === UNKNOWN ? UNKNOWN : right;
+    }
+    return value;
+  };
+  const or = () => {
+    let value = and();
+    while (tokens[at]?.operator === "||") {
+      at += 1;
+      const right = and();
+      if (truthy(value) === true) continue;
+      if (truthy(right) === true) value = right;
+      else value = value === UNKNOWN || right === UNKNOWN ? UNKNOWN : right;
+    }
+    return value;
+  };
+  try {
+    const value = or();
+    return at === tokens.length ? value : UNKNOWN;
+  } catch {
+    return UNKNOWN;
+  }
+}
+
+/**
+ * Whether a step with no `shell:` may run under bash: on some leg of its job
+ * with a POSIX runner, its `if:` is true or cannot be known.
+ */
+function mayRunUnderBash(job, condition) {
+  return matrixLegs(job?.strategy?.matrix).some((leg) =>
+    posixRunnerOs(job?.["runs-on"], leg).some((os) => {
+      if (condition === undefined || condition === null) return true;
+      if (typeof condition === "boolean") return condition;
+      const value = expressionValue(String(condition), leg, os);
+      return value === UNKNOWN || ![false, null, 0, ""].includes(value);
+    }),
   );
 }
 
@@ -1681,17 +1841,17 @@ function pipefailStepsOf(text) {
       path: ["jobs", jobName, "steps"],
       shell: job?.defaults?.run?.shell ?? workflow.defaults?.run?.shell,
       // GitHub's default shell is bash, and pwsh on a Windows runner.
-      kinds: runnerKinds(job),
+      job,
     });
   }
   if (Array.isArray(workflow.runs?.steps))
     lists.push({
       path: ["runs", "steps"],
       shell: undefined,
-      kinds: { posix: true, windows: false },
+      job: null,
     });
   const steps = [];
-  for (const { path, shell, kinds } of lists) {
+  for (const { path, shell, job } of lists) {
     const items = document.getIn(path, true)?.items ?? [];
     items.forEach((_, position) => {
       const node = document.getIn([...path, position, "run"], true);
@@ -1699,12 +1859,11 @@ function pipefailStepsOf(text) {
       const effective = document.getIn([...path, position, "shell"]) ?? shell;
       // Only a POSIX shell's script is read as shell: a Python, PowerShell,
       // Node or cmd step holds none. A default-shell step runs under bash on
-      // any POSIX runner the job may take, unless its `if:` keeps it to
-      // Windows.
+      // each POSIX runner its job may take where its `if:` may hold.
       const posixShell =
         effective === undefined
-          ? kinds.posix &&
-            !windowsOnly(document.getIn([...path, position, "if"]))
+          ? job === null ||
+            mayRunUnderBash(job, document.getIn([...path, position, "if"]))
           : /^(?:\S*\/)?(?:ba|da|k|z)?sh\b/.test(effective);
       const pipefail =
         effective === "bash" ||
@@ -2439,6 +2598,18 @@ describe("an early-exit reader never reads a streaming producer through a pipe u
       "${{ inputs.runner }}",
       "runner.os == 'Windows'",
     ],
+    [
+      "a matrix condition on an include entry tied to the Windows runner",
+      [
+        "      matrix:",
+        "        include:",
+        "          - { os: windows-latest, target: win }",
+        "          - { os: ubuntu-latest, target: linux }",
+      ],
+      "${{ matrix.os }}",
+      "matrix.target == 'win'",
+    ],
+    ["a step that never runs", MIXED, "${{ matrix.os }}", "false"],
   ])(
     "reads no default-shell step that only Windows runs: %s",
     (_, strategy, runsOn, condition) => {
@@ -2485,6 +2656,30 @@ describe("an early-exit reader never reads a streaming producer through a pipe u
       MIXED,
       "${{ matrix.os }}",
       "runner.os == 'Windows' || runner.os == 'Linux'",
+    ],
+    [
+      "a negated Windows comparison",
+      MIXED,
+      "${{ matrix.os }}",
+      "${{ !(runner.os == 'Windows') }}",
+    ],
+    [
+      "a negated contains with a space",
+      MIXED,
+      "${{ matrix.os }}",
+      "${{ ! contains(matrix.os, 'windows') }}",
+    ],
+    [
+      "a Windows target built on a Linux runner",
+      ["      matrix:", "        target: [linux, windows]"],
+      "ubuntu-latest",
+      "matrix.target == 'windows'",
+    ],
+    [
+      "a condition on a context the workflow cannot resolve",
+      MIXED,
+      "${{ matrix.os }}",
+      "github.event_name == 'push'",
     ],
   ])(
     "reads a default-shell step a POSIX runner may run: %s",
